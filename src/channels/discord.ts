@@ -207,6 +207,7 @@ export class DiscordChannel implements Channel {
         tools: this.tools,
         extraInstructions: this.config.agent.extraInstructions,
         maxToolRounds: this.config.agent.maxToolRounds,
+        maxHistoryTokens: this.config.agent.maxHistoryTokens,
         temperature: this.config.agent.temperature,
         contextDir: this.contextDir,
         onToolCall: (name, args) => {

@@ -93,6 +93,7 @@ export class CronScheduler {
       tools: resolved.tools,
       extraInstructions: resolved.instructions,
       maxToolRounds: resolved.maxToolRounds,
+      maxHistoryTokens: this.config.agent.maxHistoryTokens,
       temperature: resolved.temperature,
       contextDir: this.contextDir,
       onToolCall: (name, args) => {

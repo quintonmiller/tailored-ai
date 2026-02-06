@@ -73,6 +73,7 @@ export function createServer(opts: ServerOptions) {
           tools,
           extraInstructions: config.agent.extraInstructions,
           maxToolRounds: config.agent.maxToolRounds,
+          maxHistoryTokens: config.agent.maxHistoryTokens,
           temperature: config.agent.temperature,
           contextDir,
           onToolCall: (name, args) => {

@@ -191,6 +191,7 @@ async function main() {
     tools,
     extraInstructions: resolved.instructions,
     maxToolRounds: resolved.maxToolRounds,
+    maxHistoryTokens: config.agent.maxHistoryTokens,
     temperature: resolved.temperature,
     contextDir,
   };

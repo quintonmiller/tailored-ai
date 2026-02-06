@@ -13,10 +13,40 @@ export interface AgentLoopOptions {
   tools: Tool[];
   extraInstructions: string;
   maxToolRounds: number;
+  maxHistoryTokens: number;
   temperature: number;
   contextDir?: string;
   onToolCall?: (name: string, args: Record<string, unknown>) => void;
   onToolResult?: (name: string, result: string) => void;
+}
+
+function estimateTokens(msg: Message): number {
+  let length = (msg.content ?? '').length;
+  if (msg.toolCalls) {
+    for (const tc of msg.toolCalls) {
+      length += tc.name.length + JSON.stringify(tc.arguments).length;
+    }
+  }
+  return Math.ceil(length / 4);
+}
+
+function trimHistory(messages: Message[], maxTokens: number): Message[] {
+  let total = 0;
+  for (const msg of messages) total += estimateTokens(msg);
+
+  if (total <= maxTokens) return messages;
+
+  const trimmed = [...messages];
+  while (trimmed.length > 1 && total > maxTokens) {
+    total -= estimateTokens(trimmed[0]);
+    trimmed.shift();
+    // Skip past orphaned tool messages to keep tool-call groups intact
+    while (trimmed.length > 1 && trimmed[0].role === 'tool') {
+      total -= estimateTokens(trimmed[0]);
+      trimmed.shift();
+    }
+  }
+  return trimmed;
 }
 
 function toolsToSchemas(tools: Tool[]): ToolSchema[] {
@@ -34,7 +64,7 @@ export async function runAgentLoop(
   userMessage: string,
   opts: AgentLoopOptions
 ): Promise<string> {
-  const { provider, session, db, tools, extraInstructions, maxToolRounds, temperature, contextDir } = opts;
+  const { provider, session, db, tools, extraInstructions, maxToolRounds, maxHistoryTokens, temperature, contextDir } = opts;
 
   const contextContent = contextDir ? await loadContextFiles(contextDir) : '';
   const fullSystemPrompt = BASE_SYSTEM_PROMPT + extraInstructions + contextContent;
@@ -59,9 +89,10 @@ export async function runAgentLoop(
   while (rounds < maxToolRounds) {
     rounds++;
 
+    const trimmed = trimHistory(history, maxHistoryTokens);
     const messages: Message[] = [
       { role: 'system', content: fullSystemPrompt },
-      ...history,
+      ...trimmed,
     ];
 
     const response = await provider.chat({
