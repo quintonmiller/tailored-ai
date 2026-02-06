@@ -71,6 +71,14 @@ export interface AgentConfig {
       enabled: boolean;
       account: string;
     };
+    claude_code?: {
+      enabled: boolean;
+      allowedTools?: string[];
+      disallowedTools?: string[];
+      maxTurns?: number;
+      model?: string;
+      timeoutMs?: number;
+    };
   };
 }
 

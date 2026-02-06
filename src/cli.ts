@@ -15,6 +15,7 @@ import { WebSearchTool } from './tools/web-search.js';
 import { TrelloTool } from './tools/trello.js';
 import { GmailTool } from './tools/gmail.js';
 import { GoogleCalendarTool } from './tools/google-calendar.js';
+import { ClaudeCodeTool } from './tools/claude-code.js';
 import { runAgentLoop } from './agent/loop.js';
 import { newSession, loadSession } from './agent/session.js';
 import { DiscordChannel } from './channels/discord.js';
@@ -76,6 +77,9 @@ function createTools(config: ReturnType<typeof loadConfig>): Tool[] {
   }
   if (config.tools.google_calendar?.enabled && config.tools.google_calendar.account) {
     tools.push(new GoogleCalendarTool(config.tools.google_calendar.account, gogPassword));
+  }
+  if (config.tools.claude_code?.enabled) {
+    tools.push(new ClaudeCodeTool(config.tools.claude_code));
   }
   return tools;
 }

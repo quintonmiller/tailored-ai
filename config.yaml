@@ -53,3 +53,9 @@ tools:
   google_calendar:
     enabled: true
     account: "${GOG_ACCOUNT}"
+  claude_code:
+    enabled: false
+    # allowedTools: ["Read", "Glob", "Grep", "Bash(git *)"]
+    # disallowedTools: []
+    # maxTurns: 10
+    # model: "sonnet"

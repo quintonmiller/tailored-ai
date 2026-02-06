@@ -9,6 +9,7 @@ export { WebSearchTool } from './tools/web-search.js';
 export { TrelloTool } from './tools/trello.js';
 export { GmailTool } from './tools/gmail.js';
 export { GoogleCalendarTool } from './tools/google-calendar.js';
+export { ClaudeCodeTool } from './tools/claude-code.js';
 export { DiscordChannel } from './channels/discord.js';
 export { runAgentLoop } from './agent/loop.js';
 export { newSession, loadSession, findOrCreateSession } from './agent/session.js';
