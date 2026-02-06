@@ -1,0 +1,228 @@
+#!/usr/bin/env node
+
+import 'dotenv/config';
+import { createInterface } from 'node:readline';
+import { resolve } from 'node:path';
+import { parseArgs } from 'node:util';
+import { loadConfig } from './config.js';
+import { initDatabase } from './db/schema.js';
+import { OllamaProvider } from './providers/ollama.js';
+import { ExecTool } from './tools/exec.js';
+import { ReadTool } from './tools/read.js';
+import { WriteTool } from './tools/write.js';
+import { runAgentLoop } from './agent/loop.js';
+import { newSession, loadSession } from './agent/session.js';
+import { DiscordChannel } from './channels/discord.js';
+import type { AIProvider } from './providers/interface.js';
+import type { Tool } from './tools/interface.js';
+
+const USAGE = `
+Usage: agent [options]
+
+Modes:
+  (default)               Interactive REPL
+  --message <text>        Send a single message and exit
+  --serve                 Start as a service (Discord bot, etc.)
+
+Options:
+  -c, --config <path>     Path to config.yaml (default: ./config.yaml)
+  -m, --message <text>    Send a single message and exit (non-interactive mode)
+  -s, --session <id>      Resume an existing session by ID
+  -j, --json              Output response as JSON (useful for scripting)
+      --serve             Run as a service with configured channels
+  -h, --help              Show this help message
+`.trim();
+
+function createProvider(config: ReturnType<typeof loadConfig>): { provider: AIProvider; model: string } {
+  if (config.agent.defaultProvider === 'ollama' && config.providers.ollama) {
+    return {
+      provider: new OllamaProvider(config.providers.ollama.baseUrl),
+      model: config.providers.ollama.defaultModel,
+    };
+  }
+  throw new Error(
+    `No supported provider configured for "${config.agent.defaultProvider}". Currently only Ollama is supported.`
+  );
+}
+
+function createTools(config: ReturnType<typeof loadConfig>): Tool[] {
+  const tools: Tool[] = [];
+  if (config.tools.exec?.enabled !== false) {
+    tools.push(new ExecTool(config.tools.exec?.allowedCommands));
+  }
+  if (config.tools.read?.enabled !== false) {
+    tools.push(new ReadTool(config.tools.read?.allowedPaths));
+  }
+  if (config.tools.write?.enabled !== false) {
+    tools.push(new WriteTool(config.tools.write?.allowedPaths));
+  }
+  return tools;
+}
+
+async function runServe(config: ReturnType<typeof loadConfig>, db: ReturnType<typeof initDatabase>, provider: AIProvider, model: string, tools: Tool[]) {
+  const channels: { name: string; disconnect: () => Promise<void> }[] = [];
+
+  if (config.channels.discord?.enabled) {
+    const discord = new DiscordChannel({ config, db, provider, model, tools });
+    await discord.connect();
+    channels.push({ name: 'discord', disconnect: () => discord.disconnect() });
+  }
+
+  if (channels.length === 0) {
+    console.error('No channels enabled. Enable at least one channel in config.yaml (e.g., channels.discord.enabled: true)');
+    process.exit(1);
+  }
+
+  console.log(`autonomous-agent v0.1.0 (service mode)`);
+  console.log(`Provider: ${provider.name} | Model: ${model}`);
+  console.log(`Tools: ${tools.map((t) => t.name).join(', ')}`);
+  console.log(`Channels: ${channels.map((c) => c.name).join(', ')}`);
+  console.log(`Listening for messages...`);
+
+  // Graceful shutdown
+  const shutdown = async () => {
+    console.log('\nShutting down...');
+    for (const ch of channels) {
+      await ch.disconnect();
+    }
+    db.close();
+    process.exit(0);
+  };
+
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+}
+
+async function main() {
+  const { values } = parseArgs({
+    options: {
+      config: { type: 'string', short: 'c' },
+      message: { type: 'string', short: 'm' },
+      session: { type: 'string', short: 's' },
+      json: { type: 'boolean', short: 'j', default: false },
+      serve: { type: 'boolean', default: false },
+      help: { type: 'boolean', short: 'h', default: false },
+    },
+    strict: true,
+  });
+
+  if (values.help) {
+    console.log(USAGE);
+    process.exit(0);
+  }
+
+  const config = loadConfig(values.config);
+  const dbPath = resolve(process.cwd(), config.database.path);
+  const db = initDatabase(dbPath);
+
+  const { provider, model } = createProvider(config);
+  const tools = createTools(config);
+
+  // Service mode
+  if (values.serve) {
+    await runServe(config, db, provider, model, tools);
+    return;
+  }
+
+  const session = values.session
+    ? loadSession(db, values.session) ?? (() => { throw new Error(`Session "${values.session}" not found`); })()
+    : newSession(db, model, config.agent.defaultProvider);
+
+  const loopOpts = {
+    provider,
+    session,
+    db,
+    tools,
+    systemPrompt: config.agent.systemPrompt,
+    maxToolRounds: config.agent.maxToolRounds,
+    temperature: config.agent.temperature,
+  };
+
+  // Non-interactive mode: send one message and exit
+  if (values.message) {
+    try {
+      const response = await runAgentLoop(values.message, {
+        ...loopOpts,
+        onToolCall: values.json
+          ? undefined
+          : (name, args) => {
+              process.stderr.write(`  [tool] ${name}(${JSON.stringify(args)})\n`);
+            },
+        onToolResult: values.json
+          ? undefined
+          : (name, result) => {
+              const preview = result.length > 200 ? result.slice(0, 200) + '...' : result;
+              process.stderr.write(`  [result] ${name}: ${preview}\n`);
+            },
+      });
+
+      if (values.json) {
+        console.log(JSON.stringify({ sessionId: session.id, response }));
+      } else {
+        console.log(response);
+      }
+    } catch (err) {
+      if (values.json) {
+        console.log(JSON.stringify({ sessionId: session.id, error: (err as Error).message }));
+        process.exit(1);
+      }
+      console.error(`Error: ${(err as Error).message}`);
+      process.exit(1);
+    } finally {
+      db.close();
+    }
+    return;
+  }
+
+  // Interactive mode
+  console.log(`autonomous-agent v0.1.0`);
+  console.log(`Provider: ${provider.name} | Model: ${model}`);
+  console.log(`Tools: ${tools.map((t) => t.name).join(', ')}`);
+  console.log(`Session: ${session.id}`);
+  console.log(`Type your message (Ctrl+C to quit)\n`);
+
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    prompt: '> ',
+  });
+
+  rl.prompt();
+
+  rl.on('line', async (line) => {
+    const input = line.trim();
+    if (!input) {
+      rl.prompt();
+      return;
+    }
+
+    try {
+      const response = await runAgentLoop(input, {
+        ...loopOpts,
+        onToolCall: (name, args) => {
+          console.log(`  [tool] ${name}(${JSON.stringify(args)})`);
+        },
+        onToolResult: (name, result) => {
+          const preview = result.length > 200 ? result.slice(0, 200) + '...' : result;
+          console.log(`  [result] ${name}: ${preview}`);
+        },
+      });
+
+      console.log(`\n${response}\n`);
+    } catch (err) {
+      console.error(`Error: ${(err as Error).message}`);
+    }
+
+    rl.prompt();
+  });
+
+  rl.on('close', () => {
+    db.close();
+    process.exit(0);
+  });
+}
+
+main().catch((err) => {
+  console.error('Fatal:', err);
+  process.exit(1);
+});

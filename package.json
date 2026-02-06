@@ -1,0 +1,30 @@
+{
+  "name": "autonomous-agent",
+  "version": "0.1.0",
+  "description": "Lightweight, modular AI agent framework optimized for local LLMs",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "agent": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "dev:msg": "tsx src/cli.ts --message",
+    "start": "node dist/cli.js",
+    "serve": "tsx src/cli.ts --serve",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.7.0",
+    "discord.js": "^14.25.1",
+    "dotenv": "^17.2.4",
+    "yaml": "^2.6.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
