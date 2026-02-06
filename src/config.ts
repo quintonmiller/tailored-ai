@@ -58,6 +58,11 @@ export interface AgentConfig {
       apiKey: string;
       maxResults: number;
     };
+    trello?: {
+      enabled: boolean;
+      apiKey: string;
+      token: string;
+    };
   };
 }
 

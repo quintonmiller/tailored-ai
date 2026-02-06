@@ -12,6 +12,7 @@ import { ReadTool } from './tools/read.js';
 import { WriteTool } from './tools/write.js';
 import { WebFetchTool } from './tools/web-fetch.js';
 import { WebSearchTool } from './tools/web-search.js';
+import { TrelloTool } from './tools/trello.js';
 import { runAgentLoop } from './agent/loop.js';
 import { newSession, loadSession } from './agent/session.js';
 import { DiscordChannel } from './channels/discord.js';
@@ -63,6 +64,9 @@ function createTools(config: ReturnType<typeof loadConfig>): Tool[] {
   }
   if (config.tools.web_search?.enabled && config.tools.web_search.apiKey) {
     tools.push(new WebSearchTool(config.tools.web_search.apiKey, config.tools.web_search.maxResults));
+  }
+  if (config.tools.trello?.enabled && config.tools.trello.apiKey && config.tools.trello.token) {
+    tools.push(new TrelloTool(config.tools.trello.apiKey, config.tools.trello.token));
   }
   return tools;
 }

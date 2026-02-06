@@ -43,3 +43,7 @@ tools:
     provider: "brave"
     apiKey: "${BRAVE_API_KEY}"
     maxResults: 5
+  trello:
+    enabled: true
+    apiKey: "${TRELLO_API_KEY}"
+    token: "${TRELLO_TOKEN}"
