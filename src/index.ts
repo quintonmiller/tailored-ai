@@ -14,6 +14,7 @@ export { ClaudeCodeTool } from './tools/claude-code.js';
 export { MemoryTool } from './tools/memory.js';
 export { DelegateTool } from './tools/delegate.js';
 export { TaskStatusTool } from './tools/task-status.js';
+export { AgentRuntime } from './runtime.js';
 export { startTask, getTask, listTasks } from './agent/tasks.js';
 export { resolveProfile } from './agent/profiles.js';
 export { ensureContextDir, loadContextFiles } from './context.js';
@@ -25,6 +26,7 @@ export { BASE_SYSTEM_PROMPT } from './agent/prompt.js';
 export { newSession, loadSession, findOrCreateSession } from './agent/session.js';
 
 export type { AgentConfig, AgentProfile, CronJobConfig } from './config.js';
+export type { RuntimeOptions } from './runtime.js';
 export type { ResolvedProfile } from './agent/profiles.js';
 export type { AIProvider, ChatParams, ChatResponse, Message, ToolCall, ToolSchema } from './providers/interface.js';
 export type { Tool, ToolContext, ToolResult } from './tools/interface.js';

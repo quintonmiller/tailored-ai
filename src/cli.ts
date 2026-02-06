@@ -27,7 +27,9 @@ import { newSession, loadSession } from './agent/session.js';
 import { DiscordChannel } from './channels/discord.js';
 import { CronScheduler } from './cron/scheduler.js';
 import { createServer } from './server.js';
+import { AgentRuntime } from './runtime.js';
 import type { AIProvider } from './providers/interface.js';
+import type { AgentConfig } from './config.js';
 import type { Tool } from './tools/interface.js';
 
 const USAGE = `
@@ -48,7 +50,7 @@ Options:
   -h, --help              Show this help message
 `.trim();
 
-function createProvider(config: ReturnType<typeof loadConfig>): { provider: AIProvider; model: string } {
+function createProvider(config: AgentConfig): { provider: AIProvider; model: string } {
   if (config.agent.defaultProvider === 'ollama' && config.providers.ollama) {
     return {
       provider: new OllamaProvider(config.providers.ollama.baseUrl),
@@ -66,7 +68,7 @@ function createProvider(config: ReturnType<typeof loadConfig>): { provider: AIPr
   );
 }
 
-function createTools(config: ReturnType<typeof loadConfig>, contextDir: string): Tool[] {
+function createTools(config: AgentConfig, contextDir: string): Tool[] {
   const tools: Tool[] = [];
   if (config.tools.memory?.enabled !== false) {
     tools.push(new MemoryTool(contextDir));
@@ -102,32 +104,35 @@ function createTools(config: ReturnType<typeof loadConfig>, contextDir: string):
   return tools;
 }
 
-async function runServe(config: ReturnType<typeof loadConfig>, configPath: string, db: ReturnType<typeof initDatabase>, provider: AIProvider, model: string, tools: Tool[], contextDir: string) {
+async function runServe(runtime: AgentRuntime) {
   const channels: { name: string; disconnect: () => Promise<void> }[] = [];
 
   // Always start the HTTP server
-  const { start } = createServer({ config, configPath, db, provider, model, tools, contextDir });
+  const { start } = createServer({ runtime });
   const httpServer = start();
   channels.push({
-    name: `http(:${config.server.port})`,
+    name: `http(:${runtime.getConfig().server.port})`,
     disconnect: () => new Promise<void>((res) => httpServer.close(() => res())),
   });
 
   let discord: DiscordChannel | undefined;
-  if (config.channels.discord?.enabled) {
-    discord = new DiscordChannel({ config, db, provider, model, tools, contextDir });
+  if (runtime.getConfig().channels.discord?.enabled) {
+    discord = new DiscordChannel({ runtime });
     await discord.connect();
     channels.push({ name: 'discord', disconnect: () => discord!.disconnect() });
   }
 
   let scheduler: CronScheduler | undefined;
+  const config = runtime.getConfig();
   if (config.cron.enabled && config.cron.jobs.length) {
-    scheduler = new CronScheduler({ config, db, provider, model, tools, contextDir, discord });
+    scheduler = new CronScheduler({ runtime, discord });
     scheduler.start();
   }
 
+  const model = runtime.getModel();
+  const tools = runtime.getTools();
   console.log(`autonomous-agent v0.1.0 (service mode)`);
-  console.log(`Provider: ${provider.name} | Model: ${model}`);
+  console.log(`Provider: ${runtime.getProvider().name} | Model: ${model}`);
   console.log(`Tools: ${tools.map((t) => t.name).join(', ')}`);
   console.log(`Channels: ${channels.map((c) => c.name).join(', ')}`);
   console.log(`Listening for messages...`);
@@ -135,11 +140,12 @@ async function runServe(config: ReturnType<typeof loadConfig>, configPath: strin
   // Graceful shutdown
   const shutdown = async () => {
     console.log('\nShutting down...');
+    runtime.stopWatching();
     scheduler?.stop();
     for (const ch of channels) {
       await ch.disconnect();
     }
-    db.close();
+    runtime.db.close();
     process.exit(0);
   };
 
@@ -173,20 +179,39 @@ async function main() {
 
   const contextDir = await ensureContextDir(resolve(process.cwd(), config.context.directory));
 
-  const { provider, model } = createProvider(config);
-  const allTools = createTools(config, contextDir);
+  const runtime = new AgentRuntime(
+    { configPath, db, contextDir, createTools, createProvider },
+    (path) => loadConfig(path),
+    config,
+  );
 
-  const delegateTool = new DelegateTool({ config, db, provider, allTools, contextDir });
+  const delegateTool = new DelegateTool({
+    getConfig: () => runtime.getConfig(),
+    db,
+    getProvider: () => runtime.getProvider(),
+    getTools: () => runtime.getTools(),
+    contextDir,
+  });
   const taskStatusTool = new TaskStatusTool();
 
   // Service mode
   if (values.serve) {
-    const serveTools = [...allTools, delegateTool, taskStatusTool];
-    await runServe(config, configPath, db, provider, model, serveTools, contextDir);
+    runtime.startWatching();
+    await runServe(runtime);
     return;
   }
 
-  const resolved = resolveProfile(values.profile, config, allTools);
+  const makeGetTools = (profileName?: string) => {
+    if (profileName) {
+      return () => {
+        const resolved = resolveProfile(profileName, runtime.getConfig(), runtime.getTools());
+        return [...resolved.tools, delegateTool, taskStatusTool];
+      };
+    }
+    return () => [...runtime.getTools(), delegateTool, taskStatusTool];
+  };
+
+  const resolved = resolveProfile(values.profile, runtime.getConfig(), runtime.getTools());
   const tools = [...resolved.tools, delegateTool, taskStatusTool];
 
   const session = values.session
@@ -194,15 +219,17 @@ async function main() {
     : newSession(db, resolved.model, resolved.provider);
 
   const loopOpts = {
-    provider,
+    provider: runtime.getProvider(),
     session,
     db,
     tools,
     extraInstructions: resolved.instructions,
     maxToolRounds: resolved.maxToolRounds,
-    maxHistoryTokens: config.agent.maxHistoryTokens,
+    maxHistoryTokens: runtime.getConfig().agent.maxHistoryTokens,
     temperature: resolved.temperature,
     contextDir,
+    getTools: makeGetTools(values.profile),
+    getProvider: () => runtime.getProvider(),
   };
 
   // Non-interactive mode: send one message and exit
@@ -242,8 +269,10 @@ async function main() {
   }
 
   // Interactive mode
+  runtime.startWatching();
+
   console.log(`autonomous-agent v0.1.0`);
-  console.log(`Provider: ${provider.name} | Model: ${model}`);
+  console.log(`Provider: ${runtime.getProvider().name} | Model: ${runtime.getModel()}`);
   console.log(`Tools: ${tools.map((t) => t.name).join(', ')}`);
   console.log(`Session: ${session.id}`);
   console.log(`Type your message (Ctrl+C to quit)\n`);
@@ -284,6 +313,7 @@ async function main() {
   });
 
   rl.on('close', () => {
+    runtime.stopWatching();
     db.close();
     process.exit(0);
   });

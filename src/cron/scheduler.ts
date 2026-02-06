@@ -1,47 +1,30 @@
 import { Cron } from 'croner';
 import { randomUUID } from 'node:crypto';
-import type Database from 'better-sqlite3';
-import type { AIProvider } from '../providers/interface.js';
-import type { Tool } from '../tools/interface.js';
-import type { AgentConfig, CronJobConfig } from '../config.js';
+import type { CronJobConfig } from '../config.js';
 import type { DiscordChannel } from '../channels/discord.js';
+import type { AgentRuntime } from '../runtime.js';
 import { findOrCreateSession } from '../agent/session.js';
 import { resolveProfile } from '../agent/profiles.js';
 import { runAgentLoop } from '../agent/loop.js';
 import { saveMessage } from '../db/queries.js';
 
 export interface CronSchedulerOptions {
-  config: AgentConfig;
-  db: Database.Database;
-  provider: AIProvider;
-  model: string;
-  tools: Tool[];
-  contextDir: string;
+  runtime: AgentRuntime;
   discord?: DiscordChannel;
 }
 
 export class CronScheduler {
   private timers: Cron[] = [];
-  private config: AgentConfig;
-  private db: Database.Database;
-  private provider: AIProvider;
-  private model: string;
-  private tools: Tool[];
-  private contextDir: string;
+  private runtime: AgentRuntime;
   private discord?: DiscordChannel;
 
   constructor(opts: CronSchedulerOptions) {
-    this.config = opts.config;
-    this.db = opts.db;
-    this.provider = opts.provider;
-    this.model = opts.model;
-    this.tools = opts.tools;
-    this.contextDir = opts.contextDir;
+    this.runtime = opts.runtime;
     this.discord = opts.discord;
   }
 
   start(): void {
-    const jobs = this.config.cron.jobs;
+    const jobs = this.runtime.getConfig().cron.jobs;
     if (!jobs.length) return;
 
     for (const job of jobs) {
@@ -69,7 +52,9 @@ export class CronScheduler {
   private async runJob(job: CronJobConfig): Promise<void> {
     const wakeAgent = job.wakeAgent !== false; // default true
     const sessionKey = job.sessionKey ?? `cron:${job.name}`;
-    const resolved = resolveProfile(job.profile, this.config, this.tools, job.model);
+    const config = this.runtime.getConfig();
+    const tools = this.runtime.getTools();
+    const resolved = resolveProfile(job.profile, config, tools, job.model);
 
     console.log(`[cron] Running "${job.name}" (${wakeAgent ? 'wake' : 'note'} mode)`);
 
@@ -80,22 +65,24 @@ export class CronScheduler {
     }
 
     const session = findOrCreateSession(
-      this.db,
+      this.runtime.db,
       sessionKey,
       resolved.model,
       resolved.provider
     );
 
     const response = await runAgentLoop(job.prompt, {
-      provider: this.provider,
+      provider: this.runtime.getProvider(),
       session,
-      db: this.db,
+      db: this.runtime.db,
       tools: resolved.tools,
       extraInstructions: resolved.instructions,
       maxToolRounds: resolved.maxToolRounds,
-      maxHistoryTokens: this.config.agent.maxHistoryTokens,
+      maxHistoryTokens: config.agent.maxHistoryTokens,
       temperature: resolved.temperature,
-      contextDir: this.contextDir,
+      contextDir: this.runtime.contextDir,
+      getTools: () => this.runtime.getTools(),
+      getProvider: () => this.runtime.getProvider(),
       onToolCall: (name, args) => {
         console.log(`[cron] [${job.name}] tool: ${name}(${JSON.stringify(args)})`);
       },
@@ -109,14 +96,15 @@ export class CronScheduler {
   }
 
   private addNote(job: CronJobConfig, sessionKey: string, jobModel: string): void {
+    const config = this.runtime.getConfig();
     const session = findOrCreateSession(
-      this.db,
+      this.runtime.db,
       sessionKey,
       jobModel,
-      this.config.agent.defaultProvider
+      config.agent.defaultProvider
     );
 
-    saveMessage(this.db, session.id, {
+    saveMessage(this.runtime.db, session.id, {
       role: 'user',
       content: job.prompt,
     });
@@ -148,23 +136,23 @@ export class CronScheduler {
 
   private upsertJobRow(job: CronJobConfig): void {
     const sessionKey = job.sessionKey ?? `cron:${job.name}`;
-    const existing = this.db
+    const existing = this.runtime.db
       .prepare('SELECT id FROM cron_jobs WHERE name = ?')
       .get(job.name) as { id: string } | undefined;
 
     if (existing) {
-      this.db.prepare(
+      this.runtime.db.prepare(
         'UPDATE cron_jobs SET schedule = ?, task = ?, model = ?, session_key = ?, enabled = 1 WHERE name = ?'
       ).run(job.schedule, job.prompt, job.model ?? null, sessionKey, job.name);
     } else {
-      this.db.prepare(
+      this.runtime.db.prepare(
         'INSERT INTO cron_jobs (id, name, schedule, task, model, session_key, enabled) VALUES (?, ?, ?, ?, ?, ?, 1)'
       ).run(randomUUID(), job.name, job.schedule, job.prompt, job.model ?? null, sessionKey);
     }
   }
 
   private updateLastRun(name: string): void {
-    this.db.prepare(
+    this.runtime.db.prepare(
       "UPDATE cron_jobs SET last_run = datetime('now') WHERE name = ?"
     ).run(name);
   }

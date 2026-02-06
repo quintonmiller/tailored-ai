@@ -5,28 +5,19 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import type Database from 'better-sqlite3';
-import type { AgentConfig } from './config.js';
-import type { AIProvider } from './providers/interface.js';
-import type { Tool } from './tools/interface.js';
+import type { AgentRuntime } from './runtime.js';
 import { listSessions, getSessionMessages } from './db/queries.js';
 import { findOrCreateSession } from './agent/session.js';
 import { runAgentLoop } from './agent/loop.js';
 
 export interface ServerOptions {
-  config: AgentConfig;
-  configPath: string;
-  db: Database.Database;
-  provider: AIProvider;
-  model: string;
-  tools: Tool[];
-  contextDir: string;
+  runtime: AgentRuntime;
 }
 
 const startTime = Date.now();
 
 export function createServer(opts: ServerOptions) {
-  const { config, configPath, db, provider, model, tools, contextDir } = opts;
+  const { runtime } = opts;
 
   const app = new Hono();
 
@@ -36,20 +27,21 @@ export function createServer(opts: ServerOptions) {
     return c.json({
       status: 'ok',
       uptime: Math.floor((Date.now() - startTime) / 1000),
-      provider: provider.name,
-      model,
-      tools: tools.length,
+      provider: runtime.getProvider().name,
+      model: runtime.getModel(),
+      tools: runtime.getTools().length,
+      generation: runtime.generation,
     });
   });
 
   app.get('/api/sessions', (c) => {
-    const sessions = listSessions(db);
+    const sessions = listSessions(runtime.db);
     return c.json(sessions);
   });
 
   app.get('/api/sessions/:id/messages', (c) => {
     const { id } = c.req.param();
-    const messages = getSessionMessages(db, id);
+    const messages = getSessionMessages(runtime.db, id);
     return c.json(messages);
   });
 
@@ -61,21 +53,25 @@ export function createServer(opts: ServerOptions) {
       return c.json({ error: 'message is required' }, 400);
     }
 
+    const config = runtime.getConfig();
+    const model = runtime.getModel();
     const key = sessionKey ?? `web:${Date.now()}`;
-    const session = findOrCreateSession(db, key, model, config.agent.defaultProvider);
+    const session = findOrCreateSession(runtime.db, key, model, config.agent.defaultProvider);
 
     return streamSSE(c, async (stream) => {
       try {
         const response = await runAgentLoop(message, {
-          provider,
+          provider: runtime.getProvider(),
           session,
-          db,
-          tools,
+          db: runtime.db,
+          tools: runtime.getTools(),
           extraInstructions: config.agent.extraInstructions,
           maxToolRounds: config.agent.maxToolRounds,
           maxHistoryTokens: config.agent.maxHistoryTokens,
           temperature: config.agent.temperature,
-          contextDir,
+          contextDir: runtime.contextDir,
+          getTools: () => runtime.getTools(),
+          getProvider: () => runtime.getProvider(),
           onToolCall: (name, args) => {
             stream.writeSSE({
               event: 'tool_call',
@@ -106,11 +102,11 @@ export function createServer(opts: ServerOptions) {
   // --- Config endpoints ---
 
   app.get('/api/config', (c) => {
-    if (existsSync(configPath)) {
-      const raw = readFileSync(configPath, 'utf-8');
-      return c.json({ path: configPath, content: raw });
+    if (existsSync(runtime.configPath)) {
+      const raw = readFileSync(runtime.configPath, 'utf-8');
+      return c.json({ path: runtime.configPath, content: raw });
     }
-    return c.json({ path: configPath, content: '' });
+    return c.json({ path: runtime.configPath, content: '' });
   });
 
   app.put('/api/config', async (c) => {
@@ -119,8 +115,9 @@ export function createServer(opts: ServerOptions) {
       return c.json({ error: 'content is required' }, 400);
     }
     try {
-      writeFileSync(configPath, body.content, 'utf-8');
-      return c.json({ ok: true, message: 'Config saved. Restart the server for changes to take effect.' });
+      writeFileSync(runtime.configPath, body.content, 'utf-8');
+      runtime.reload();
+      return c.json({ ok: true, message: 'Config saved and reloaded.' });
     } catch (err) {
       return c.json({ error: (err as Error).message }, 500);
     }
@@ -136,6 +133,7 @@ export function createServer(opts: ServerOptions) {
   }
 
   function start() {
+    const config = runtime.getConfig();
     const port = config.server.port;
     const hostname = config.server.host;
     const server = serve({ fetch: app.fetch, port, hostname }, () => {

@@ -16,6 +16,8 @@ export interface AgentLoopOptions {
   maxHistoryTokens: number;
   temperature: number;
   contextDir?: string;
+  getTools?: () => Tool[];
+  getProvider?: () => AIProvider;
   onToolCall?: (name: string, args: Record<string, unknown>) => void;
   onToolResult?: (name: string, result: string) => void;
 }
@@ -75,9 +77,6 @@ export async function runAgentLoop(
   saveMessage(db, session.id, userMsg);
   history.push(userMsg);
 
-  const toolSchemas = tools.length > 0 ? toolsToSchemas(tools) : undefined;
-  const toolMap = new Map(tools.map((t) => [t.name, t]));
-
   const context: ToolContext = {
     sessionId: session.id,
     workingDirectory: process.cwd(),
@@ -85,9 +84,21 @@ export async function runAgentLoop(
   };
 
   let rounds = 0;
+  let prevToolNames: string[] | undefined;
 
   while (rounds < maxToolRounds) {
     rounds++;
+
+    const currentTools = opts.getTools ? opts.getTools() : tools;
+    const currentProvider = opts.getProvider ? opts.getProvider() : provider;
+    const toolSchemas = currentTools.length > 0 ? toolsToSchemas(currentTools) : undefined;
+    const toolMap = new Map(currentTools.map((t) => [t.name, t]));
+
+    const currentToolNames = currentTools.map((t) => t.name);
+    if (prevToolNames && (prevToolNames.length !== currentToolNames.length || prevToolNames.some((n, i) => n !== currentToolNames[i]))) {
+      history.push({ role: 'system', content: `[System: available tools have been updated. Current tools: ${currentToolNames.join(', ')}]` });
+    }
+    prevToolNames = currentToolNames;
 
     const trimmed = trimHistory(history, maxHistoryTokens);
     const messages: Message[] = [
@@ -95,7 +106,7 @@ export async function runAgentLoop(
       ...trimmed,
     ];
 
-    const response = await provider.chat({
+    const response = await currentProvider.chat({
       model: session.model,
       messages,
       tools: toolSchemas,

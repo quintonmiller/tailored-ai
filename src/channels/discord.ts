@@ -5,10 +5,7 @@ import {
   Events,
   type Message as DiscordMessage,
 } from 'discord.js';
-import type Database from 'better-sqlite3';
-import type { AIProvider } from '../providers/interface.js';
-import type { Tool } from '../tools/interface.js';
-import type { AgentConfig } from '../config.js';
+import type { AgentRuntime } from '../runtime.js';
 import { findOrCreateSession } from '../agent/session.js';
 import { runAgentLoop } from '../agent/loop.js';
 import type { Channel, IncomingMessage } from './interface.js';
@@ -46,12 +43,7 @@ function splitMessage(text: string): string[] {
 }
 
 export interface DiscordChannelOptions {
-  config: AgentConfig;
-  db: Database.Database;
-  provider: AIProvider;
-  model: string;
-  tools: Tool[];
-  contextDir: string;
+  runtime: AgentRuntime;
 }
 
 export class DiscordChannel implements Channel {
@@ -59,22 +51,12 @@ export class DiscordChannel implements Channel {
   type = 'discord';
 
   private client: Client;
-  private config: AgentConfig;
-  private db: Database.Database;
-  private provider: AIProvider;
-  private model: string;
-  private tools: Tool[];
-  private contextDir: string;
+  private runtime: AgentRuntime;
   private messageHandler?: (msg: IncomingMessage) => void;
   private processing = new Set<string>();
 
   constructor(opts: DiscordChannelOptions) {
-    this.config = opts.config;
-    this.db = opts.db;
-    this.provider = opts.provider;
-    this.model = opts.model;
-    this.tools = opts.tools;
-    this.contextDir = opts.contextDir;
+    this.runtime = opts.runtime;
 
     this.client = new Client({
       intents: [
@@ -88,7 +70,7 @@ export class DiscordChannel implements Channel {
   }
 
   async connect(): Promise<void> {
-    const token = this.config.channels.discord?.token;
+    const token = this.runtime.getConfig().channels.discord?.token;
     if (!token) {
       throw new Error('Discord token not configured');
     }
@@ -126,7 +108,7 @@ export class DiscordChannel implements Channel {
     // Never respond to other bots
     if (msg.author.bot) return false;
 
-    const discordConfig = this.config.channels.discord;
+    const discordConfig = this.runtime.getConfig().channels.discord;
     if (!discordConfig) return false;
 
     // DMs
@@ -193,23 +175,28 @@ export class DiscordChannel implements Channel {
           }, 8_000)
         : undefined;
 
+      const config = this.runtime.getConfig();
+      const model = this.runtime.getModel();
+
       const session = findOrCreateSession(
-        this.db,
+        this.runtime.db,
         userKey,
-        this.model,
-        this.config.agent.defaultProvider
+        model,
+        config.agent.defaultProvider
       );
 
       const response = await runAgentLoop(content, {
-        provider: this.provider,
+        provider: this.runtime.getProvider(),
         session,
-        db: this.db,
-        tools: this.tools,
-        extraInstructions: this.config.agent.extraInstructions,
-        maxToolRounds: this.config.agent.maxToolRounds,
-        maxHistoryTokens: this.config.agent.maxHistoryTokens,
-        temperature: this.config.agent.temperature,
-        contextDir: this.contextDir,
+        db: this.runtime.db,
+        tools: this.runtime.getTools(),
+        extraInstructions: config.agent.extraInstructions,
+        maxToolRounds: config.agent.maxToolRounds,
+        maxHistoryTokens: config.agent.maxHistoryTokens,
+        temperature: config.agent.temperature,
+        contextDir: this.runtime.contextDir,
+        getTools: () => this.runtime.getTools(),
+        getProvider: () => this.runtime.getProvider(),
         onToolCall: (name, args) => {
           console.log(`[discord] [${msg.author.username}] tool: ${name}(${JSON.stringify(args)})`);
         },

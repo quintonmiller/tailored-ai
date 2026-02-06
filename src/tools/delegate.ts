@@ -9,10 +9,10 @@ import { runAgentLoop } from '../agent/loop.js';
 import { startTask } from '../agent/tasks.js';
 
 export interface DelegateToolOptions {
-  config: AgentConfig;
+  getConfig: () => AgentConfig;
   db: Database.Database;
-  provider: AIProvider;
-  allTools: Tool[];
+  getProvider: () => AIProvider;
+  getTools: () => Tool[];
   contextDir: string;
 }
 
@@ -29,17 +29,17 @@ export class DelegateTool implements Tool {
     required: ['profile', 'task'],
   };
 
-  private config: AgentConfig;
+  private getConfig: () => AgentConfig;
   private db: Database.Database;
-  private provider: AIProvider;
-  private allTools: Tool[];
+  private getProvider: () => AIProvider;
+  private getTools: () => Tool[];
   private contextDir: string;
 
   constructor(opts: DelegateToolOptions) {
-    this.config = opts.config;
+    this.getConfig = opts.getConfig;
     this.db = opts.db;
-    this.provider = opts.provider;
-    this.allTools = opts.allTools;
+    this.getProvider = opts.getProvider;
+    this.getTools = opts.getTools;
     this.contextDir = opts.contextDir;
   }
 
@@ -52,9 +52,12 @@ export class DelegateTool implements Tool {
       return { success: false, output: '', error: 'Both "profile" and "task" are required.' };
     }
 
+    const config = this.getConfig();
+    const allTools = this.getTools();
+
     let resolved;
     try {
-      resolved = resolveProfile(profileName, this.config, this.allTools);
+      resolved = resolveProfile(profileName, config, allTools);
     } catch (err) {
       return { success: false, output: '', error: (err as Error).message };
     }
@@ -64,13 +67,13 @@ export class DelegateTool implements Tool {
       const session = newSession(this.db, resolved.model, resolved.provider, sessionKey);
 
       return runAgentLoop(task, {
-        provider: this.provider,
+        provider: this.getProvider(),
         session,
         db: this.db,
         tools: resolved.tools,
         extraInstructions: resolved.instructions,
         maxToolRounds: resolved.maxToolRounds,
-        maxHistoryTokens: this.config.agent.maxHistoryTokens,
+        maxHistoryTokens: config.agent.maxHistoryTokens,
         temperature: resolved.temperature,
         contextDir: this.contextDir,
       });
