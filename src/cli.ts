@@ -21,6 +21,7 @@ import { MemoryTool } from './tools/memory.js';
 import { DelegateTool } from './tools/delegate.js';
 import { TaskStatusTool } from './tools/task-status.js';
 import { AdminTool } from './tools/admin.js';
+import { createCustomTools } from './tools/custom.js';
 import { ensureContextDir } from './context.js';
 import { runAgentLoop } from './agent/loop.js';
 import { resolveProfile } from './agent/profiles.js';
@@ -101,6 +102,9 @@ function createTools(config: AgentConfig, contextDir: string): Tool[] {
   }
   if (config.tools.claude_code?.enabled) {
     tools.push(new ClaudeCodeTool(config.tools.claude_code));
+  }
+  if (config.custom_tools) {
+    tools.push(...createCustomTools(config.custom_tools));
   }
   return tools;
 }

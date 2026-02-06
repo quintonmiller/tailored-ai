@@ -25,6 +25,13 @@ export interface CronJobConfig {
   wakeAgent?: boolean;
 }
 
+export interface CustomToolConfig {
+  description: string;
+  parameters: Record<string, { type: string; description: string }>;
+  command: string;
+  timeout_ms?: number;
+}
+
 export interface AgentConfig {
   server: {
     port: number;
@@ -114,6 +121,7 @@ export interface AgentConfig {
       timeoutMs?: number;
     };
   };
+  custom_tools: Record<string, CustomToolConfig>;
 }
 
 const DEFAULT_CONFIG: AgentConfig = {
@@ -154,6 +162,7 @@ const DEFAULT_CONFIG: AgentConfig = {
     web_fetch: { enabled: true },
     web_search: { enabled: false, provider: 'brave', apiKey: '', maxResults: 5 },
   },
+  custom_tools: {},
 };
 
 function interpolateEnv(value: string): string {
