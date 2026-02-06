@@ -22,19 +22,22 @@ export interface HealthInfo {
   tools: number;
 }
 
-export async function fetchHealth(): Promise<HealthInfo> {
-  const res = await fetch('/api/health');
+async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, init);
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return res.json();
 }
 
-export async function fetchSessions(): Promise<SessionRow[]> {
-  const res = await fetch('/api/sessions');
-  return res.json();
+export function fetchHealth(): Promise<HealthInfo> {
+  return jsonFetch('/api/health');
 }
 
-export async function fetchMessages(sessionId: string): Promise<Message[]> {
-  const res = await fetch(`/api/sessions/${sessionId}/messages`);
-  return res.json();
+export function fetchSessions(): Promise<SessionRow[]> {
+  return jsonFetch('/api/sessions');
+}
+
+export function fetchMessages(sessionId: string): Promise<Message[]> {
+  return jsonFetch(`/api/sessions/${sessionId}/messages`);
 }
 
 export interface ConfigData {
@@ -42,18 +45,87 @@ export interface ConfigData {
   content: string;
 }
 
-export async function fetchConfig(): Promise<ConfigData> {
-  const res = await fetch('/api/config');
-  return res.json();
+export function fetchConfig(): Promise<ConfigData> {
+  return jsonFetch('/api/config');
 }
 
-export async function saveConfig(content: string): Promise<{ ok?: boolean; message?: string; error?: string }> {
-  const res = await fetch('/api/config', {
+export function saveConfig(content: string): Promise<{ ok?: boolean; message?: string; error?: string }> {
+  return jsonFetch('/api/config', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ content }),
   });
-  return res.json();
+}
+
+export interface ToolInfo {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+}
+
+export interface ProfileInfo {
+  model?: string;
+  provider?: string;
+  instructions?: string;
+  tools?: string[];
+  temperature?: number;
+  maxToolRounds?: number;
+}
+
+export interface CronJobRow {
+  id: string;
+  name: string;
+  schedule: string;
+  task: string;
+  model: string | null;
+  session_key: string | null;
+  enabled: number;
+  last_run: string | null;
+}
+
+export interface CronData {
+  enabled: boolean;
+  jobs: CronJobRow[];
+}
+
+export interface TaskInfo {
+  id: string;
+  description: string;
+  status: 'running' | 'completed' | 'failed';
+  startedAt: number;
+  completedAt?: number;
+  result?: string;
+  error?: string;
+}
+
+export interface ContextFile {
+  name: string;
+  content: string;
+}
+
+export interface ContextData {
+  directory: string;
+  files: ContextFile[];
+}
+
+export function fetchTools(): Promise<ToolInfo[]> {
+  return jsonFetch('/api/tools');
+}
+
+export function fetchProfiles(): Promise<Record<string, ProfileInfo>> {
+  return jsonFetch('/api/profiles');
+}
+
+export function fetchCron(): Promise<CronData> {
+  return jsonFetch('/api/cron');
+}
+
+export function fetchTasks(): Promise<TaskInfo[]> {
+  return jsonFetch('/api/tasks');
+}
+
+export function fetchContext(): Promise<ContextData> {
+  return jsonFetch('/api/context');
 }
 
 export interface ChatEvent {

@@ -1,26 +1,42 @@
-export async function fetchHealth() {
-    const res = await fetch('/api/health');
+async function jsonFetch(url, init) {
+    const res = await fetch(url, init);
+    if (!res.ok)
+        throw new Error(`${res.status} ${res.statusText}`);
     return res.json();
 }
-export async function fetchSessions() {
-    const res = await fetch('/api/sessions');
-    return res.json();
+export function fetchHealth() {
+    return jsonFetch('/api/health');
 }
-export async function fetchMessages(sessionId) {
-    const res = await fetch(`/api/sessions/${sessionId}/messages`);
-    return res.json();
+export function fetchSessions() {
+    return jsonFetch('/api/sessions');
 }
-export async function fetchConfig() {
-    const res = await fetch('/api/config');
-    return res.json();
+export function fetchMessages(sessionId) {
+    return jsonFetch(`/api/sessions/${sessionId}/messages`);
 }
-export async function saveConfig(content) {
-    const res = await fetch('/api/config', {
+export function fetchConfig() {
+    return jsonFetch('/api/config');
+}
+export function saveConfig(content) {
+    return jsonFetch('/api/config', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content }),
     });
-    return res.json();
+}
+export function fetchTools() {
+    return jsonFetch('/api/tools');
+}
+export function fetchProfiles() {
+    return jsonFetch('/api/profiles');
+}
+export function fetchCron() {
+    return jsonFetch('/api/cron');
+}
+export function fetchTasks() {
+    return jsonFetch('/api/tasks');
+}
+export function fetchContext() {
+    return jsonFetch('/api/context');
 }
 export function sendChat(message, sessionKey, onEvent) {
     const controller = new AbortController();

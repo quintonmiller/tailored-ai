@@ -1,0 +1,5 @@
+import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+export function ProfileCard(props) {
+    const { name, profile } = props;
+    return (_jsxs("div", { className: "profile-card", children: [_jsx("div", { className: "profile-name", children: name }), profile.model && (_jsxs("div", { className: "profile-field", children: [_jsx("span", { className: "profile-label", children: "Model" }), _jsx("span", { children: profile.model })] })), profile.tools && profile.tools.length > 0 && (_jsxs("div", { className: "profile-field", children: [_jsx("span", { className: "profile-label", children: "Tools" }), _jsx("span", { children: profile.tools.join(', ') })] })), profile.temperature !== undefined && (_jsxs("div", { className: "profile-field", children: [_jsx("span", { className: "profile-label", children: "Temperature" }), _jsx("span", { children: profile.temperature })] })), profile.instructions && (_jsxs("div", { className: "profile-field", children: [_jsx("span", { className: "profile-label", children: "Instructions" }), _jsx("span", { className: "profile-instructions", children: profile.instructions })] }))] }));
+}

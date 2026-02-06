@@ -2,12 +2,14 @@ import { useState, useEffect } from 'react';
 import { Dashboard } from './pages/Dashboard';
 import { Chat } from './pages/Chat';
 import { Config } from './pages/Config';
+import { Tools } from './pages/Tools';
 import './styles.css';
 
 type Route =
   | { page: 'dashboard' }
   | { page: 'chat'; sessionKey?: string; sessionId?: string }
-  | { page: 'config' };
+  | { page: 'config' }
+  | { page: 'tools' };
 
 function parseHash(): Route {
   const hash = window.location.hash.slice(1);
@@ -21,6 +23,9 @@ function parseHash(): Route {
   }
   if (hash.startsWith('/config')) {
     return { page: 'config' };
+  }
+  if (hash.startsWith('/tools')) {
+    return { page: 'tools' };
   }
   return { page: 'dashboard' };
 }
@@ -40,6 +45,7 @@ export function App() {
         <a href="#/" className="app-title">autonomous-agent</a>
         <nav>
           <a href="#/">Dashboard</a>
+          <a href="#/tools">Tools</a>
           <a href="#/chat">New Chat</a>
           <a href="#/config">Config</a>
         </nav>
@@ -49,6 +55,7 @@ export function App() {
         {route.page === 'chat' && (
           <Chat sessionKey={route.sessionKey} sessionId={route.sessionId} />
         )}
+        {route.page === 'tools' && <Tools />}
         {route.page === 'config' && <Config />}
       </main>
     </div>

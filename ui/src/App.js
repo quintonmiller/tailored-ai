@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { Dashboard } from './pages/Dashboard';
 import { Chat } from './pages/Chat';
 import { Config } from './pages/Config';
+import { Tools } from './pages/Tools';
 import './styles.css';
 function parseHash() {
     const hash = window.location.hash.slice(1);
@@ -17,6 +18,9 @@ function parseHash() {
     if (hash.startsWith('/config')) {
         return { page: 'config' };
     }
+    if (hash.startsWith('/tools')) {
+        return { page: 'tools' };
+    }
     return { page: 'dashboard' };
 }
 export function App() {
@@ -26,5 +30,5 @@ export function App() {
         window.addEventListener('hashchange', onHash);
         return () => window.removeEventListener('hashchange', onHash);
     }, []);
-    return (_jsxs("div", { className: "app", children: [_jsxs("header", { className: "app-header", children: [_jsx("a", { href: "#/", className: "app-title", children: "autonomous-agent" }), _jsxs("nav", { children: [_jsx("a", { href: "#/", children: "Dashboard" }), _jsx("a", { href: "#/chat", children: "New Chat" }), _jsx("a", { href: "#/config", children: "Config" })] })] }), _jsxs("main", { className: "app-main", children: [route.page === 'dashboard' && _jsx(Dashboard, {}), route.page === 'chat' && (_jsx(Chat, { sessionKey: route.sessionKey, sessionId: route.sessionId })), route.page === 'config' && _jsx(Config, {})] })] }));
+    return (_jsxs("div", { className: "app", children: [_jsxs("header", { className: "app-header", children: [_jsx("a", { href: "#/", className: "app-title", children: "autonomous-agent" }), _jsxs("nav", { children: [_jsx("a", { href: "#/", children: "Dashboard" }), _jsx("a", { href: "#/tools", children: "Tools" }), _jsx("a", { href: "#/chat", children: "New Chat" }), _jsx("a", { href: "#/config", children: "Config" })] })] }), _jsxs("main", { className: "app-main", children: [route.page === 'dashboard' && _jsx(Dashboard, {}), route.page === 'chat' && (_jsx(Chat, { sessionKey: route.sessionKey, sessionId: route.sessionId })), route.page === 'tools' && _jsx(Tools, {}), route.page === 'config' && _jsx(Config, {})] })] }));
 }

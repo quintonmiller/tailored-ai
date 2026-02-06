@@ -5,10 +5,12 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { readdir, readFile } from 'node:fs/promises';
 import type { AgentRuntime } from './runtime.js';
 import { listSessions, getSessionMessages } from './db/queries.js';
 import { findOrCreateSession } from './agent/session.js';
 import { runAgentLoop } from './agent/loop.js';
+import { listTasks } from './agent/tasks.js';
 
 export interface ServerOptions {
   runtime: AgentRuntime;
@@ -97,6 +99,54 @@ export function createServer(opts: ServerOptions) {
         });
       }
     });
+  });
+
+  // --- Read-only data endpoints ---
+
+  app.get('/api/tools', (c) => {
+    const tools = runtime.getTools().map((t) => ({
+      name: t.name,
+      description: t.description,
+      parameters: t.parameters,
+    }));
+    return c.json(tools);
+  });
+
+  app.get('/api/profiles', (c) => {
+    return c.json(runtime.getConfig().profiles);
+  });
+
+  app.get('/api/cron', (c) => {
+    const config = runtime.getConfig();
+    const rows = runtime.db
+      .prepare('SELECT id, name, schedule, task, model, session_key, enabled, last_run FROM cron_jobs ORDER BY name')
+      .all() as { id: string; name: string; schedule: string; task: string; model: string | null; session_key: string | null; enabled: number; last_run: string | null }[];
+    return c.json({
+      enabled: config.cron.enabled,
+      jobs: rows,
+    });
+  });
+
+  app.get('/api/tasks', (c) => {
+    return c.json(listTasks());
+  });
+
+  app.get('/api/context', async (c) => {
+    const dir = runtime.contextDir;
+    try {
+      const entries = await readdir(dir);
+      const files = await Promise.all(
+        entries
+          .filter((f) => !f.startsWith('.'))
+          .map(async (name) => {
+            const content = await readFile(resolve(dir, name), 'utf-8');
+            return { name, content };
+          }),
+      );
+      return c.json({ directory: dir, files });
+    } catch {
+      return c.json({ directory: dir, files: [] });
+    }
   });
 
   // --- Config endpoints ---
