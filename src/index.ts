@@ -8,6 +8,7 @@ export { WebFetchTool } from './tools/web-fetch.js';
 export { WebSearchTool } from './tools/web-search.js';
 export { TrelloTool } from './tools/trello.js';
 export { GmailTool } from './tools/gmail.js';
+export { GoogleCalendarTool } from './tools/google-calendar.js';
 export { DiscordChannel } from './channels/discord.js';
 export { runAgentLoop } from './agent/loop.js';
 export { newSession, loadSession, findOrCreateSession } from './agent/session.js';

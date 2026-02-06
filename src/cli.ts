@@ -14,6 +14,7 @@ import { WebFetchTool } from './tools/web-fetch.js';
 import { WebSearchTool } from './tools/web-search.js';
 import { TrelloTool } from './tools/trello.js';
 import { GmailTool } from './tools/gmail.js';
+import { GoogleCalendarTool } from './tools/google-calendar.js';
 import { runAgentLoop } from './agent/loop.js';
 import { newSession, loadSession } from './agent/session.js';
 import { DiscordChannel } from './channels/discord.js';
@@ -69,12 +70,12 @@ function createTools(config: ReturnType<typeof loadConfig>): Tool[] {
   if (config.tools.trello?.enabled && config.tools.trello.apiKey && config.tools.trello.token) {
     tools.push(new TrelloTool(config.tools.trello.apiKey, config.tools.trello.token));
   }
-  if (config.tools.gmail?.enabled && config.tools.gmail.refreshToken) {
-    tools.push(new GmailTool({
-      clientId: config.tools.gmail.clientId,
-      clientSecret: config.tools.gmail.clientSecret,
-      refreshToken: config.tools.gmail.refreshToken,
-    }));
+  const gogPassword = process.env.GOG_KEYRING_PASSWORD ?? '';
+  if (config.tools.gmail?.enabled && config.tools.gmail.account) {
+    tools.push(new GmailTool(config.tools.gmail.account, gogPassword));
+  }
+  if (config.tools.google_calendar?.enabled && config.tools.google_calendar.account) {
+    tools.push(new GoogleCalendarTool(config.tools.google_calendar.account, gogPassword));
   }
   return tools;
 }

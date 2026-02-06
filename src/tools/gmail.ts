@@ -1,47 +1,67 @@
+import { execFile } from 'node:child_process';
 import type { Tool, ToolContext, ToolResult } from './interface.js';
-import { getAccessToken, type GoogleCredentials } from './google-auth.js';
-
-const BASE_URL = 'https://gmail.googleapis.com/gmail/v1/users/me';
 
 export class GmailTool implements Tool {
   name = 'gmail';
-  description = 'Read and search Gmail. Actions: list_messages, read_message, search_messages.';
+  description = 'Read and search Gmail. Actions: search, read, send.';
   parameters = {
     type: 'object',
     properties: {
       action: {
         type: 'string',
-        description: 'The action: list_messages, read_message, search_messages.',
+        description: 'The action: search, read, send.',
       },
       query: {
         type: 'string',
-        description: 'Search query for search_messages (Gmail search syntax).',
+        description: 'Gmail search query for search action (e.g. "is:unread", "from:someone@example.com").',
       },
       message_id: {
         type: 'string',
-        description: 'Message ID for read_message.',
+        description: 'Message ID for read action.',
       },
-      max_results: {
-        type: 'number',
-        description: 'Max results to return (default 5).',
+      to: {
+        type: 'string',
+        description: 'Recipient email for send action.',
+      },
+      subject: {
+        type: 'string',
+        description: 'Email subject for send action.',
+      },
+      body: {
+        type: 'string',
+        description: 'Email body for send action.',
       },
     },
     required: ['action'],
   };
 
-  private creds: GoogleCredentials;
+  private account: string;
+  private gogKeyringPassword: string;
 
-  constructor(creds: GoogleCredentials) {
-    this.creds = creds;
+  constructor(account: string, gogKeyringPassword: string) {
+    this.account = account;
+    this.gogKeyringPassword = gogKeyringPassword;
   }
 
-  private async request(path: string): Promise<{ ok: boolean; data: unknown; status: number }> {
-    const token = await getAccessToken(this.creds);
-    const resp = await fetch(`${BASE_URL}${path}`, {
-      headers: { Authorization: `Bearer ${token}` },
+  private gog(args: string[], timeoutMs: number = 30_000): Promise<{ stdout: string; stderr: string; code: number }> {
+    return new Promise((resolve) => {
+      execFile(
+        'gog',
+        args,
+        {
+          timeout: timeoutMs,
+          maxBuffer: 1024 * 1024,
+          env: { ...process.env, GOG_KEYRING_PASSWORD: this.gogKeyringPassword },
+        },
+        (error, stdout, stderr) => {
+          resolve({
+            stdout,
+            stderr,
+            code: error ? (error as unknown as { code?: number }).code ?? 1 : 0,
+          });
+        }
+      );
     });
-    const data = await resp.json();
-    return { ok: resp.ok, data, status: resp.status };
   }
 
   async execute(
@@ -55,139 +75,80 @@ export class GmailTool implements Tool {
 
     try {
       switch (action) {
-        case 'list_messages':
-          return this.listMessages(args.max_results as number | undefined);
-        case 'search_messages':
-          return this.searchMessages(args.query as string, args.max_results as number | undefined);
-        case 'read_message':
-          return this.readMessage(args.message_id as string);
+        case 'search':
+          return this.search(args.query as string);
+        case 'read':
+          return this.read(args.message_id as string);
+        case 'send':
+          return this.send(args.to as string, args.subject as string, args.body as string);
         default:
-          return { success: false, output: '', error: `Unknown action: ${action}` };
+          return { success: false, output: '', error: `Unknown action: ${action}. Use: search, read, send.` };
       }
     } catch (err) {
       return { success: false, output: '', error: (err as Error).message };
     }
   }
 
-  private async listMessages(maxResults?: number): Promise<ToolResult> {
-    const limit = maxResults ?? 5;
-    const { ok, data, status } = await this.request(`/messages?maxResults=${limit}`);
-    if (!ok) return { success: false, output: '', error: `API error ${status}: ${JSON.stringify(data)}` };
+  private async search(query: string): Promise<ToolResult> {
+    if (!query) return { success: false, output: '', error: 'query is required for search.' };
 
-    const msgs = (data as { messages?: { id: string; threadId: string }[] }).messages ?? [];
-    if (msgs.length === 0) return { success: true, output: 'No messages found.' };
+    const { stdout, stderr, code } = await this.gog([
+      'gmail', 'search', query,
+      '--account', this.account,
+      '--json', '--no-input',
+    ]);
 
-    return this.fetchMessageSummaries(msgs.map((m) => m.id));
-  }
+    if (code !== 0) return { success: false, output: '', error: stderr || 'gog gmail search failed' };
 
-  private async searchMessages(query: string, maxResults?: number): Promise<ToolResult> {
-    if (!query) return { success: false, output: '', error: 'query is required for search_messages.' };
+    try {
+      const data = JSON.parse(stdout) as { threads?: { id: string; date: string; from: string; subject: string; labels: string[] }[] };
+      const threads = data.threads ?? [];
+      if (threads.length === 0) return { success: true, output: `No results for "${query}".` };
 
-    const limit = maxResults ?? 5;
-    const params = new URLSearchParams({ q: query, maxResults: String(limit) });
-    const { ok, data, status } = await this.request(`/messages?${params}`);
-    if (!ok) return { success: false, output: '', error: `API error ${status}: ${JSON.stringify(data)}` };
-
-    const msgs = (data as { messages?: { id: string }[] }).messages ?? [];
-    if (msgs.length === 0) return { success: true, output: `No messages found for "${query}".` };
-
-    return this.fetchMessageSummaries(msgs.map((m) => m.id));
-  }
-
-  private async readMessage(messageId: string): Promise<ToolResult> {
-    if (!messageId) return { success: false, output: '', error: 'message_id is required for read_message.' };
-
-    const { ok, data, status } = await this.request(`/messages/${messageId}?format=full`);
-    if (!ok) return { success: false, output: '', error: `API error ${status}: ${JSON.stringify(data)}` };
-
-    const msg = data as GmailMessage;
-    return { success: true, output: formatFullMessage(msg) };
-  }
-
-  private async fetchMessageSummaries(ids: string[]): Promise<ToolResult> {
-    const summaries: string[] = [];
-
-    for (const id of ids) {
-      const { ok, data } = await this.request(`/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`);
-      if (!ok) continue;
-
-      const msg = data as GmailMessage;
-      const from = getHeader(msg, 'From') ?? 'Unknown';
-      const subject = getHeader(msg, 'Subject') ?? '(no subject)';
-      const date = getHeader(msg, 'Date') ?? '';
-
-      summaries.push(`- ${subject}\n  From: ${from}\n  Date: ${date}\n  ID: ${id}`);
-    }
-
-    return { success: true, output: summaries.join('\n\n') || 'No messages.' };
-  }
-}
-
-interface GmailMessage {
-  id: string;
-  payload: {
-    headers: { name: string; value: string }[];
-    mimeType: string;
-    body?: { data?: string; size: number };
-    parts?: GmailPart[];
-  };
-  snippet: string;
-}
-
-interface GmailPart {
-  mimeType: string;
-  body?: { data?: string; size: number };
-  parts?: GmailPart[];
-}
-
-function getHeader(msg: GmailMessage, name: string): string | undefined {
-  return msg.payload.headers.find(
-    (h) => h.name.toLowerCase() === name.toLowerCase()
-  )?.value;
-}
-
-function decodeBase64Url(data: string): string {
-  const base64 = data.replace(/-/g, '+').replace(/_/g, '/');
-  return Buffer.from(base64, 'base64').toString('utf-8');
-}
-
-function extractTextBody(part: GmailPart): string {
-  if (part.mimeType === 'text/plain' && part.body?.data) {
-    return decodeBase64Url(part.body.data);
-  }
-  if (part.parts) {
-    for (const sub of part.parts) {
-      const text = extractTextBody(sub);
-      if (text) return text;
-    }
-  }
-  return '';
-}
-
-function formatFullMessage(msg: GmailMessage): string {
-  const from = getHeader(msg, 'From') ?? 'Unknown';
-  const to = getHeader(msg, 'To') ?? '';
-  const subject = getHeader(msg, 'Subject') ?? '(no subject)';
-  const date = getHeader(msg, 'Date') ?? '';
-
-  let body = '';
-  if (msg.payload.body?.data) {
-    body = decodeBase64Url(msg.payload.body.data);
-  } else if (msg.payload.parts) {
-    for (const part of msg.payload.parts) {
-      body = extractTextBody(part);
-      if (body) break;
+      const formatted = threads.map((t) =>
+        `- ${t.subject}\n  From: ${t.from}\n  Date: ${t.date}\n  ID: ${t.id}\n  Labels: ${t.labels.join(', ')}`
+      ).join('\n\n');
+      return { success: true, output: formatted };
+    } catch {
+      // If JSON parsing fails, return raw output
+      return { success: true, output: stdout.slice(0, 4000) };
     }
   }
 
-  if (!body) {
-    body = msg.snippet ?? '(no body)';
+  private async read(messageId: string): Promise<ToolResult> {
+    if (!messageId) return { success: false, output: '', error: 'message_id is required for read.' };
+
+    const { stdout, stderr, code } = await this.gog([
+      'gmail', 'get', messageId,
+      '--account', this.account,
+      '--json', '--no-input',
+    ]);
+
+    if (code !== 0) return { success: false, output: '', error: stderr || 'gog gmail get failed' };
+
+    // Truncate very long messages
+    const output = stdout.length > 6000 ? stdout.slice(0, 6000) + '\n\n[Truncated]' : stdout;
+    return { success: true, output };
   }
 
-  // Truncate very long emails
-  if (body.length > 4000) {
-    body = body.slice(0, 4000) + '\n\n[Truncated]';
-  }
+  private async send(to: string, subject: string, body: string): Promise<ToolResult> {
+    if (!to) return { success: false, output: '', error: 'to is required for send.' };
+    if (!subject) return { success: false, output: '', error: 'subject is required for send.' };
+    if (!body) return { success: false, output: '', error: 'body is required for send.' };
 
-  return `From: ${from}\nTo: ${to}\nDate: ${date}\nSubject: ${subject}\n\n${body}`;
+    const sendArgs = [
+      'gmail', 'send',
+      '--to', to,
+      '--subject', subject,
+      '--body', body,
+      '--account', this.account,
+      '--json', '--no-input',
+    ];
+
+    const { stdout, stderr, code } = await this.gog(sendArgs);
+
+    if (code !== 0) return { success: false, output: '', error: stderr || 'gog gmail send failed' };
+
+    return { success: true, output: stdout || `Email sent to ${to}.` };
+  }
 }

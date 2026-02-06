@@ -65,9 +65,11 @@ export interface AgentConfig {
     };
     gmail?: {
       enabled: boolean;
-      clientId: string;
-      clientSecret: string;
-      refreshToken: string;
+      account: string;
+    };
+    google_calendar?: {
+      enabled: boolean;
+      account: string;
     };
   };
 }
