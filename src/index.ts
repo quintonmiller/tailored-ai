@@ -14,6 +14,7 @@ export { ClaudeCodeTool } from './tools/claude-code.js';
 export { MemoryTool } from './tools/memory.js';
 export { DelegateTool } from './tools/delegate.js';
 export { TaskStatusTool } from './tools/task-status.js';
+export { AdminTool } from './tools/admin.js';
 export { AgentRuntime } from './runtime.js';
 export { startTask, getTask, listTasks } from './agent/tasks.js';
 export { resolveProfile } from './agent/profiles.js';

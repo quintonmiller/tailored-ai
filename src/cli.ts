@@ -20,6 +20,7 @@ import { ClaudeCodeTool } from './tools/claude-code.js';
 import { MemoryTool } from './tools/memory.js';
 import { DelegateTool } from './tools/delegate.js';
 import { TaskStatusTool } from './tools/task-status.js';
+import { AdminTool } from './tools/admin.js';
 import { ensureContextDir } from './context.js';
 import { runAgentLoop } from './agent/loop.js';
 import { resolveProfile } from './agent/profiles.js';
@@ -193,6 +194,7 @@ async function main() {
     contextDir,
   });
   const taskStatusTool = new TaskStatusTool();
+  const adminTool = new AdminTool(runtime);
 
   // Service mode
   if (values.serve) {
@@ -201,18 +203,20 @@ async function main() {
     return;
   }
 
+  const metaTools = [delegateTool, taskStatusTool, adminTool];
+
   const makeGetTools = (profileName?: string) => {
     if (profileName) {
       return () => {
         const resolved = resolveProfile(profileName, runtime.getConfig(), runtime.getTools());
-        return [...resolved.tools, delegateTool, taskStatusTool];
+        return [...resolved.tools, ...metaTools];
       };
     }
-    return () => [...runtime.getTools(), delegateTool, taskStatusTool];
+    return () => [...runtime.getTools(), ...metaTools];
   };
 
   const resolved = resolveProfile(values.profile, runtime.getConfig(), runtime.getTools());
-  const tools = [...resolved.tools, delegateTool, taskStatusTool];
+  const tools = [...resolved.tools, ...metaTools];
 
   const session = values.session
     ? loadSession(db, values.session) ?? (() => { throw new Error(`Session "${values.session}" not found`); })()
