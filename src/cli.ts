@@ -16,9 +16,12 @@ import { TrelloTool } from './tools/trello.js';
 import { GmailTool } from './tools/gmail.js';
 import { GoogleCalendarTool } from './tools/google-calendar.js';
 import { ClaudeCodeTool } from './tools/claude-code.js';
+import { MemoryTool } from './tools/memory.js';
+import { ensureContextDir } from './context.js';
 import { runAgentLoop } from './agent/loop.js';
 import { newSession, loadSession } from './agent/session.js';
 import { DiscordChannel } from './channels/discord.js';
+import { createServer } from './server.js';
 import type { AIProvider } from './providers/interface.js';
 import type { Tool } from './tools/interface.js';
 
@@ -51,8 +54,11 @@ function createProvider(config: ReturnType<typeof loadConfig>): { provider: AIPr
   );
 }
 
-function createTools(config: ReturnType<typeof loadConfig>): Tool[] {
+function createTools(config: ReturnType<typeof loadConfig>, contextDir: string): Tool[] {
   const tools: Tool[] = [];
+  if (config.tools.memory?.enabled !== false) {
+    tools.push(new MemoryTool(contextDir));
+  }
   if (config.tools.exec?.enabled !== false) {
     tools.push(new ExecTool(config.tools.exec?.allowedCommands));
   }
@@ -84,18 +90,21 @@ function createTools(config: ReturnType<typeof loadConfig>): Tool[] {
   return tools;
 }
 
-async function runServe(config: ReturnType<typeof loadConfig>, db: ReturnType<typeof initDatabase>, provider: AIProvider, model: string, tools: Tool[]) {
+async function runServe(config: ReturnType<typeof loadConfig>, configPath: string, db: ReturnType<typeof initDatabase>, provider: AIProvider, model: string, tools: Tool[], contextDir: string) {
   const channels: { name: string; disconnect: () => Promise<void> }[] = [];
 
+  // Always start the HTTP server
+  const { start } = createServer({ config, configPath, db, provider, model, tools, contextDir });
+  const httpServer = start();
+  channels.push({
+    name: `http(:${config.server.port})`,
+    disconnect: () => new Promise<void>((res) => httpServer.close(() => res())),
+  });
+
   if (config.channels.discord?.enabled) {
-    const discord = new DiscordChannel({ config, db, provider, model, tools });
+    const discord = new DiscordChannel({ config, db, provider, model, tools, contextDir });
     await discord.connect();
     channels.push({ name: 'discord', disconnect: () => discord.disconnect() });
-  }
-
-  if (channels.length === 0) {
-    console.error('No channels enabled. Enable at least one channel in config.yaml (e.g., channels.discord.enabled: true)');
-    process.exit(1);
   }
 
   console.log(`autonomous-agent v0.1.0 (service mode)`);
@@ -136,16 +145,19 @@ async function main() {
     process.exit(0);
   }
 
+  const configPath = resolve(process.cwd(), values.config ?? 'config.yaml');
   const config = loadConfig(values.config);
   const dbPath = resolve(process.cwd(), config.database.path);
   const db = initDatabase(dbPath);
 
+  const contextDir = await ensureContextDir(resolve(process.cwd(), config.context.directory));
+
   const { provider, model } = createProvider(config);
-  const tools = createTools(config);
+  const tools = createTools(config, contextDir);
 
   // Service mode
   if (values.serve) {
-    await runServe(config, db, provider, model, tools);
+    await runServe(config, configPath, db, provider, model, tools, contextDir);
     return;
   }
 
@@ -158,9 +170,10 @@ async function main() {
     session,
     db,
     tools,
-    systemPrompt: config.agent.systemPrompt,
+    extraInstructions: config.agent.extraInstructions,
     maxToolRounds: config.agent.maxToolRounds,
     temperature: config.agent.temperature,
+    contextDir,
   };
 
   // Non-interactive mode: send one message and exit

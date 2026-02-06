@@ -12,10 +12,7 @@ providers:
 
 agent:
   defaultProvider: "ollama"
-  systemPrompt: |
-    You are a helpful assistant with access to tools.
-    Use them when you need real information.
-    After getting results, summarize for the user.
+  extraInstructions: ""
   maxHistoryTokens: 2000
   temperature: 0.3
   maxToolRounds: 10
@@ -32,6 +29,7 @@ channels:
 tools:
   exec:
     enabled: true
+    allowedCommands: ["ls"]
   read:
     enabled: true
   write:

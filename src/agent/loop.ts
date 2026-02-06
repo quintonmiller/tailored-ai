@@ -3,15 +3,18 @@ import type { AIProvider, Message, ToolSchema } from '../providers/interface.js'
 import type { Tool, ToolContext } from '../tools/interface.js';
 import type { Session } from './session.js';
 import { getSessionMessages, saveMessage } from '../db/queries.js';
+import { loadContextFiles } from '../context.js';
+import { BASE_SYSTEM_PROMPT } from './prompt.js';
 
 export interface AgentLoopOptions {
   provider: AIProvider;
   session: Session;
   db: Database.Database;
   tools: Tool[];
-  systemPrompt: string;
+  extraInstructions: string;
   maxToolRounds: number;
   temperature: number;
+  contextDir?: string;
   onToolCall?: (name: string, args: Record<string, unknown>) => void;
   onToolResult?: (name: string, result: string) => void;
 }
@@ -31,7 +34,10 @@ export async function runAgentLoop(
   userMessage: string,
   opts: AgentLoopOptions
 ): Promise<string> {
-  const { provider, session, db, tools, systemPrompt, maxToolRounds, temperature } = opts;
+  const { provider, session, db, tools, extraInstructions, maxToolRounds, temperature, contextDir } = opts;
+
+  const contextContent = contextDir ? await loadContextFiles(contextDir) : '';
+  const fullSystemPrompt = BASE_SYSTEM_PROMPT + extraInstructions + contextContent;
 
   const history = getSessionMessages(db, session.id);
 
@@ -54,7 +60,7 @@ export async function runAgentLoop(
     rounds++;
 
     const messages: Message[] = [
-      { role: 'system', content: systemPrompt },
+      { role: 'system', content: fullSystemPrompt },
       ...history,
     ];
 

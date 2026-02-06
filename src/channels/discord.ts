@@ -51,6 +51,7 @@ export interface DiscordChannelOptions {
   provider: AIProvider;
   model: string;
   tools: Tool[];
+  contextDir: string;
 }
 
 export class DiscordChannel implements Channel {
@@ -63,6 +64,7 @@ export class DiscordChannel implements Channel {
   private provider: AIProvider;
   private model: string;
   private tools: Tool[];
+  private contextDir: string;
   private messageHandler?: (msg: IncomingMessage) => void;
   private processing = new Set<string>();
 
@@ -72,6 +74,7 @@ export class DiscordChannel implements Channel {
     this.provider = opts.provider;
     this.model = opts.model;
     this.tools = opts.tools;
+    this.contextDir = opts.contextDir;
 
     this.client = new Client({
       intents: [
@@ -202,9 +205,10 @@ export class DiscordChannel implements Channel {
         session,
         db: this.db,
         tools: this.tools,
-        systemPrompt: this.config.agent.systemPrompt,
+        extraInstructions: this.config.agent.extraInstructions,
         maxToolRounds: this.config.agent.maxToolRounds,
         temperature: this.config.agent.temperature,
+        contextDir: this.contextDir,
         onToolCall: (name, args) => {
           console.log(`[discord] [${msg.author.username}] tool: ${name}(${JSON.stringify(args)})`);
         },

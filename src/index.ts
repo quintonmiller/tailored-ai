@@ -10,8 +10,12 @@ export { TrelloTool } from './tools/trello.js';
 export { GmailTool } from './tools/gmail.js';
 export { GoogleCalendarTool } from './tools/google-calendar.js';
 export { ClaudeCodeTool } from './tools/claude-code.js';
+export { MemoryTool } from './tools/memory.js';
+export { ensureContextDir, loadContextFiles } from './context.js';
 export { DiscordChannel } from './channels/discord.js';
+export { createServer } from './server.js';
 export { runAgentLoop } from './agent/loop.js';
+export { BASE_SYSTEM_PROMPT } from './agent/prompt.js';
 export { newSession, loadSession, findOrCreateSession } from './agent/session.js';
 
 export type { AgentConfig } from './config.js';

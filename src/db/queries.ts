@@ -70,6 +70,12 @@ export function saveMessage(
   ).run(sessionId);
 }
 
+export function listSessions(db: Database.Database): SessionRow[] {
+  return db
+    .prepare('SELECT * FROM sessions ORDER BY updated_at DESC')
+    .all() as SessionRow[];
+}
+
 export function getSessionMessages(
   db: Database.Database,
   sessionId: string

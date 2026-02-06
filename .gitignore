@@ -1,5 +1,9 @@
 node_modules/
 dist/
+data/
 *.db
+*.db-shm
+*.db-wal
+*.db.backup*
 .env
 config.local.yaml

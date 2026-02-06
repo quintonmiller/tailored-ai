@@ -22,7 +22,7 @@ export interface AgentConfig {
   };
   agent: {
     defaultProvider: string;
-    systemPrompt: string;
+    extraInstructions: string;
     maxHistoryTokens: number;
     temperature: number;
     maxToolRounds: number;
@@ -36,7 +36,13 @@ export interface AgentConfig {
       respondToMentions: boolean;
     };
   };
+  context: {
+    directory: string;
+  };
   tools: {
+    memory?: {
+      enabled: boolean;
+    };
     exec?: {
       enabled: boolean;
       allowedCommands?: string[];
@@ -85,7 +91,7 @@ export interface AgentConfig {
 const DEFAULT_CONFIG: AgentConfig = {
   server: {
     port: 3000,
-    host: '127.0.0.1',
+    host: '0.0.0.0',
   },
   database: {
     path: './agent.db',
@@ -98,14 +104,17 @@ const DEFAULT_CONFIG: AgentConfig = {
   },
   agent: {
     defaultProvider: 'ollama',
-    systemPrompt:
-      'You are a helpful assistant with access to tools. Use them when you need real information. After getting results, summarize for the user.',
+    extraInstructions: '',
     maxHistoryTokens: 2000,
     temperature: 0.3,
     maxToolRounds: 10,
   },
+  context: {
+    directory: './data/context',
+  },
   channels: {},
   tools: {
+    memory: { enabled: true },
     exec: { enabled: true },
     read: { enabled: true },
     write: { enabled: true },
