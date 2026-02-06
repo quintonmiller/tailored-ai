@@ -24,13 +24,21 @@
 - [ ] Cron job scheduler
 - [ ] Background task management
 
+## Phase 3.5: Tools
+- [x] `web_fetch` tool (URL fetching + HTML stripping)
+- [x] `web_search` tool (Brave API)
+- [x] `trello` tool (boards, lists, cards, comments)
+- [x] `gmail` tool via gog CLI (search, read, send)
+- [x] `google_calendar` tool via gog CLI (list_events, search, create_event)
+- [x] `exec` tool (shell commands with optional allowlist)
+- [x] `read` tool (file reading with optional path restrictions)
+- [x] `write` tool (file writing with optional path restrictions)
+
 ## Phase 4: Web UI + Polish
 - [ ] HTTP server (Fastify/Hono)
 - [ ] REST API for management (sessions, config, health)
 - [ ] Minimal dashboard (status, logs, active sessions)
 - [ ] OpenAI provider
-- [ ] `web_search` tool (Brave API)
-- [ ] `web_fetch` tool (URL fetching + HTML parsing)
 
 ## Phase 5: Extensibility
 - [ ] YAML/JSON skill definitions with per-skill prompts
