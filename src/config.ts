@@ -49,6 +49,9 @@ export interface AgentConfig {
       enabled: boolean;
       allowedPaths?: string[];
     };
+    web_fetch?: {
+      enabled: boolean;
+    };
   };
 }
 
@@ -79,6 +82,7 @@ const DEFAULT_CONFIG: AgentConfig = {
     exec: { enabled: true },
     read: { enabled: true },
     write: { enabled: true },
+    web_fetch: { enabled: true },
   },
 };
 

@@ -10,6 +10,7 @@ import { OllamaProvider } from './providers/ollama.js';
 import { ExecTool } from './tools/exec.js';
 import { ReadTool } from './tools/read.js';
 import { WriteTool } from './tools/write.js';
+import { WebFetchTool } from './tools/web-fetch.js';
 import { runAgentLoop } from './agent/loop.js';
 import { newSession, loadSession } from './agent/session.js';
 import { DiscordChannel } from './channels/discord.js';
@@ -55,6 +56,9 @@ function createTools(config: ReturnType<typeof loadConfig>): Tool[] {
   }
   if (config.tools.write?.enabled !== false) {
     tools.push(new WriteTool(config.tools.write?.allowedPaths));
+  }
+  if (config.tools.web_fetch?.enabled !== false) {
+    tools.push(new WebFetchTool());
   }
   return tools;
 }
