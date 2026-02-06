@@ -13,6 +13,7 @@ import { WriteTool } from './tools/write.js';
 import { WebFetchTool } from './tools/web-fetch.js';
 import { WebSearchTool } from './tools/web-search.js';
 import { TrelloTool } from './tools/trello.js';
+import { GmailTool } from './tools/gmail.js';
 import { runAgentLoop } from './agent/loop.js';
 import { newSession, loadSession } from './agent/session.js';
 import { DiscordChannel } from './channels/discord.js';
@@ -67,6 +68,13 @@ function createTools(config: ReturnType<typeof loadConfig>): Tool[] {
   }
   if (config.tools.trello?.enabled && config.tools.trello.apiKey && config.tools.trello.token) {
     tools.push(new TrelloTool(config.tools.trello.apiKey, config.tools.trello.token));
+  }
+  if (config.tools.gmail?.enabled && config.tools.gmail.refreshToken) {
+    tools.push(new GmailTool({
+      clientId: config.tools.gmail.clientId,
+      clientSecret: config.tools.gmail.clientSecret,
+      refreshToken: config.tools.gmail.refreshToken,
+    }));
   }
   return tools;
 }

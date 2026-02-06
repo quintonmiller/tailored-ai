@@ -63,6 +63,12 @@ export interface AgentConfig {
       apiKey: string;
       token: string;
     };
+    gmail?: {
+      enabled: boolean;
+      clientId: string;
+      clientSecret: string;
+      refreshToken: string;
+    };
   };
 }
 
