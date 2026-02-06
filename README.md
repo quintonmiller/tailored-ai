@@ -64,9 +64,12 @@ providers:
   ollama:
     baseUrl: "http://localhost:11434"
     defaultModel: "devstral-small-2:latest"
+  # openai:
+  #   apiKey: "${OPENAI_API_KEY}"
+  #   defaultModel: "gpt-4o-mini"
 
 agent:
-  defaultProvider: "ollama"
+  defaultProvider: "ollama"   # or "openai"
   systemPrompt: |
     You are a helpful assistant with access to tools.
     Use them when you need real information.
@@ -118,12 +121,18 @@ src/
 ├── cli.ts                 # CLI entry point (interactive + non-interactive)
 ├── index.ts               # Library exports
 ├── config.ts              # YAML config loader with env var interpolation
+├── context.ts             # Context/memory file loader
+├── server.ts              # Hono HTTP server (REST API + SSE chat)
 ├── agent/
-│   ├── loop.ts            # Agent loop: chat → tool calls → chat → ...
-│   └── session.ts         # Session creation and resumption
+│   ├── loop.ts            # Agent loop with history compaction
+│   ├── session.ts         # Session creation and resumption
+│   ├── profiles.ts        # Named agent profile resolution
+│   ├── prompt.ts          # Base system prompt
+│   └── tasks.ts           # In-memory background task tracking
 ├── providers/
 │   ├── interface.ts       # AIProvider, Message, ChatParams types
-│   └── ollama.ts          # Ollama /api/chat implementation
+│   ├── ollama.ts          # Ollama /api/chat implementation
+│   └── openai.ts          # OpenAI chat completions implementation
 ├── channels/
 │   ├── interface.ts       # Channel interface
 │   └── discord.ts         # Discord bot (DMs + @mentions)
@@ -131,7 +140,16 @@ src/
 │   ├── interface.ts       # Tool interface
 │   ├── exec.ts            # Run shell commands
 │   ├── read.ts            # Read files
-│   └── write.ts           # Write files
+│   ├── write.ts           # Write files
+│   ├── web-fetch.ts       # Fetch URLs
+│   ├── web-search.ts      # Brave web search
+│   ├── memory.ts          # Persistent notes
+│   ├── trello.ts          # Trello integration
+│   ├── gmail.ts           # Gmail via gog CLI
+│   ├── google-calendar.ts # Google Calendar via gog CLI
+│   ├── claude-code.ts     # Claude Code CLI delegation
+│   ├── delegate.ts        # Sub-agent spawning (sync + async)
+│   └── task-status.ts     # Background task inspection
 ├── cron/
 │   └── scheduler.ts       # Config-driven cron job scheduler
 └── db/
@@ -144,17 +162,19 @@ src/
 The core loop is simple by design (local models struggle with complex flows):
 
 1. Append user message to session history
-2. Send system prompt + history + tool schemas to the LLM
-3. If the LLM returns tool calls, execute them and append results
-4. Repeat until the LLM returns a final text response (or max rounds hit)
+2. Trim history to fit within `maxHistoryTokens` (drops oldest messages, keeps tool-call groups intact)
+3. Send system prompt + trimmed history + tool schemas to the LLM
+4. If the LLM returns tool calls, execute them and append results
+5. Repeat until the LLM returns a final text response (or max rounds hit)
 
 ### Providers
 
 Providers implement `AIProvider` and handle LLM API communication. Currently implemented:
 
 - **Ollama** - Native `/api/chat` with tool calling support
+- **OpenAI** - Chat completions API with tool calling (also works with OpenAI-compatible APIs via custom `baseUrl`)
 
-Planned: OpenAI, Anthropic, OpenRouter
+Planned: Anthropic, OpenRouter
 
 ### Tools
 
@@ -165,8 +185,15 @@ Tools implement `Tool` with a `name`, `description`, JSON schema `parameters`, a
 | `exec` | Run shell commands (with optional command allowlist) |
 | `read` | Read file contents (with optional path restrictions) |
 | `write` | Write/create files (with optional path restrictions) |
-
-Planned: `web_search`, `web_fetch`
+| `web_fetch` | Fetch URLs and strip HTML |
+| `web_search` | Search the web (Brave API) |
+| `memory` | Persistent notes in the context directory |
+| `trello` | Trello boards, lists, cards, and comments |
+| `gmail` | Search, read, and send email via gog CLI |
+| `google_calendar` | List, search, and create calendar events via gog CLI |
+| `claude_code` | Delegate to the Claude Code CLI |
+| `delegate` | Spawn a sub-agent with a named profile (supports `async: true` for background execution) |
+| `task_status` | List or inspect background tasks started via async delegate |
 
 ### Channels
 
@@ -188,7 +215,7 @@ Job state (last run time) is tracked in the `cron_jobs` SQLite table. Scheduling
 ## Prerequisites
 
 - Node.js 20+
-- Ollama running locally (or configure a different provider)
+- Ollama running locally **or** an OpenAI API key (or any OpenAI-compatible API)
 - Discord bot token (for `--serve` mode)
 
 ### Hardware (for local LLMs)
@@ -197,12 +224,16 @@ Tested with:
 - RTX 5090 (32GB VRAM)
 - Models: devstral-small-2 (~15GB), qwen3-coder:30b (~18GB)
 
+### Background Tasks
+
+The delegate tool supports `async: true` to fire sub-agents in the background. Tasks are tracked in-memory (intentionally ephemeral — they don't survive restarts). The `task_status` tool lets the agent list all tasks or check on a specific one by ID.
+
 ## Roadmap
 
 See [SPEC.md](./SPEC.md) for the full specification. Phase summary:
 
 1. **Core Agent** - Ollama provider, tools, agent loop, CLI (done)
 2. **Discord + Persistence** - Bot integration, session management (done)
-3. **Sub-agents + Cron** - Parallel tasks, scheduled jobs (cron done)
-4. **Web UI** - Dashboard, REST API, OpenAI provider
+3. **Sub-agents + Cron** - Profiles, delegation, cron scheduler, background tasks (done)
+4. **Web UI + Polish** - HTTP server, REST API, OpenAI provider, history compaction (done except dashboard UI)
 5. **Extensibility** - Skill definitions, more channels

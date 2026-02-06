@@ -50,6 +50,28 @@ npm start                # run compiled CLI
 3. Add provider creation in `src/cli.ts` in the `createProvider()` function
 4. Export from `src/index.ts`
 
+## History Compaction
+
+The agent loop trims conversation history before each LLM call to stay within `config.agent.maxHistoryTokens` (default 2000). Token count is estimated at ~4 chars per token. Trimming drops the oldest messages first, but always skips past orphaned `tool` messages so tool-call/response groups stay intact. See `estimateTokens()` and `trimHistory()` in `src/agent/loop.ts`.
+
+## Providers
+
+Two providers are supported — set `agent.defaultProvider` in config:
+
+- **Ollama** (`src/providers/ollama.ts`) — local `/api/chat`, tool arguments are native objects
+- **OpenAI** (`src/providers/openai.ts`) — `POST /v1/chat/completions`, tool arguments are JSON strings (serialized on send, parsed on receive). Constructor accepts an optional `baseUrl` for OpenAI-compatible APIs.
+
+To add a new provider, see the "Adding a New Provider" section below.
+
+## Background Tasks
+
+`src/agent/tasks.ts` provides an in-memory task registry (intentionally ephemeral).
+
+- `delegate` tool accepts `async: true` — fires the sub-agent as an unresolved promise, returns a task ID immediately
+- `task_status` tool lets the agent list all tasks or check one by ID
+- Task IDs are `task_<uuid-slice>` format
+- Tasks track status (`running` / `completed` / `failed`), timing, and result/error
+
 ## Agent Profiles & Delegation
 
 Profiles are named agent configurations defined in `config.yaml` under `profiles:`. They can override model, instructions, tools (allowlist), temperature, and maxToolRounds.

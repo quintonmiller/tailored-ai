@@ -19,10 +19,13 @@
 - [ ] Guild channel allowlist testing (currently only DMs tested end-to-end)
 
 ## Phase 3: Sub-agents + Cron
-- [ ] Sub-agent spawning (isolated context, cheaper model)
-- [ ] Model routing (different models for different task types)
-- [ ] Cron job scheduler
-- [ ] Background task management
+- [x] Cron job scheduler (`src/cron/scheduler.ts`, wake + note modes, delivery to log/discord)
+- [x] Agent profiles (`src/agent/profiles.ts`, config-driven model/tools/instructions per profile)
+- [x] Delegate tool (`src/tools/delegate.ts`, depth-1 sub-agent spawning with profiles)
+- [x] Model routing via profiles (different models for different task types)
+- [x] `--profile` CLI flag for using named profiles
+- [x] Cron jobs support `profile` field for per-job configuration
+- [x] Background task management (`src/agent/tasks.ts`, async delegate + `task_status` tool)
 
 ## Phase 3.5: Tools
 - [x] `web_fetch` tool (URL fetching + HTML stripping)
@@ -33,12 +36,16 @@
 - [x] `exec` tool (shell commands with optional allowlist)
 - [x] `read` tool (file reading with optional path restrictions)
 - [x] `write` tool (file writing with optional path restrictions)
+- [x] `memory` tool (persistent notes in context directory)
+- [x] `claude_code` tool (delegate to Claude Code CLI)
+- [x] `delegate` tool (spawn sub-agents with profiles)
 
 ## Phase 4: Web UI + Polish
-- [ ] HTTP server (Fastify/Hono)
-- [ ] REST API for management (sessions, config, health)
-- [ ] Minimal dashboard (status, logs, active sessions)
-- [ ] OpenAI provider
+- [x] HTTP server (Hono with SSE-based `/api/chat`)
+- [x] REST API for management (sessions, config)
+- [x] Context/memory system (`src/context.ts`, loads `.md` files into system prompt)
+- [ ] Minimal dashboard (status, logs, active sessions) — static files served but UI is stub
+- [x] OpenAI provider (`src/providers/openai.ts`, raw fetch, configurable base URL)
 
 ## Phase 5: Extensibility
 - [ ] YAML/JSON skill definitions with per-skill prompts
@@ -48,6 +55,6 @@
 
 ## Bugs / Tech Debt
 - [ ] Database path resolves relative to CWD, not project root - consider making it absolute or relative to config file location
-- [ ] No history compaction yet - sessions will grow unbounded (spec says max 2000 tokens history)
+- [x] ~~No history compaction yet~~ — `trimHistory()` in `loop.ts` now enforces `maxHistoryTokens`
 - [ ] Both OpenClaw and autonomous-agent share the same Discord bot token - will need separate bot apps for production use
 - [ ] No unit tests yet

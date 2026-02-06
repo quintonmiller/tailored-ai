@@ -36,12 +36,12 @@ OpenClaw is excellent for frontier models (GPT-4, Claude) but has issues with lo
 - Model management and switching
 - Temperature and parameter control
 
-**Priority 2: OpenAI**
+**Priority 2: OpenAI** ✅
 - Chat completions API
 - Tool/function calling
-- Streaming support
+- Configurable base URL for OpenAI-compatible APIs
 
-**Future**: Anthropic, OpenRouter, Azure OpenAI, local llama.cpp
+**Future**: Anthropic, OpenRouter, Azure OpenAI, local llama.cpp, streaming support
 
 ### 3. Skills / Tools System
 
@@ -324,29 +324,30 @@ vibe of the conversation before responding...
 ## Implementation Priorities
 
 ### Phase 1: Core Agent (Week 1-2)
-- [ ] Project setup (TypeScript, SQLite, basic structure)
-- [ ] Ollama provider implementation
-- [ ] Core tools: exec, read, write
-- [ ] Basic agent loop with tool calling
-- [ ] CLI interface for testing
+- [x] Project setup (TypeScript, SQLite, basic structure)
+- [x] Ollama provider implementation
+- [x] Core tools: exec, read, write
+- [x] Basic agent loop with tool calling
+- [x] CLI interface for testing
 
 ### Phase 2: Discord + Persistence (Week 2-3)
-- [ ] Discord bot integration
-- [ ] Session management in SQLite
-- [ ] Message history persistence
-- [ ] Basic configuration system
+- [x] Discord bot integration
+- [x] Session management in SQLite
+- [x] Message history persistence
+- [x] Basic configuration system
 
 ### Phase 3: Sub-agents + Cron (Week 3-4)
-- [ ] Sub-agent spawning
-- [ ] Model routing (different models for different tasks)
-- [ ] Cron job scheduler
-- [ ] Background task management
+- [x] Sub-agent spawning (delegate tool with profiles)
+- [x] Model routing (different models for different tasks via profiles)
+- [x] Cron job scheduler
+- [x] Background task management (async delegate + task_status tool)
 
 ### Phase 4: Web UI + Polish (Week 4-5)
-- [ ] Minimal dashboard (status, logs)
-- [ ] REST API for management
-- [ ] OpenAI provider
-- [ ] web_search, web_fetch tools
+- [ ] Minimal dashboard (status, logs) — static files served but UI is stub
+- [x] REST API for management (Hono HTTP server with SSE chat)
+- [x] OpenAI provider
+- [x] web_search, web_fetch tools
+- [x] History compaction (trimHistory enforces maxHistoryTokens)
 
 ### Phase 5: Extensibility (Future)
 - [ ] Skill definition system
@@ -423,13 +424,17 @@ cron:
 ```
 autonomous-agent/
 ├── src/
-│   ├── index.ts              # Entry point
+│   ├── cli.ts                # CLI entry point
+│   ├── index.ts              # Library exports
 │   ├── config.ts             # Configuration loading
-│   ├── server.ts             # HTTP server (webhooks, API, UI)
+│   ├── context.ts            # Context/memory file loader
+│   ├── server.ts             # Hono HTTP server (REST API + SSE chat)
 │   ├── agent/
-│   │   ├── loop.ts           # Main agent loop
+│   │   ├── loop.ts           # Agent loop with history compaction
 │   │   ├── session.ts        # Session management
-│   │   └── profiles.ts       # Agent profile resolution
+│   │   ├── profiles.ts       # Agent profile resolution
+│   │   ├── prompt.ts         # Base system prompt
+│   │   └── tasks.ts          # In-memory background task tracking
 │   ├── providers/
 │   │   ├── interface.ts      # Provider interface
 │   │   ├── ollama.ts         # Ollama implementation
@@ -444,13 +449,19 @@ autonomous-agent/
 │   │   ├── write.ts
 │   │   ├── web-search.ts
 │   │   ├── web-fetch.ts
-│   │   └── delegate.ts       # Sub-agent delegation tool
+│   │   ├── memory.ts
+│   │   ├── trello.ts
+│   │   ├── gmail.ts
+│   │   ├── google-calendar.ts
+│   │   ├── claude-code.ts
+│   │   ├── delegate.ts       # Sub-agent delegation (sync + async)
+│   │   └── task-status.ts    # Background task inspection
 │   ├── cron/
 │   │   └── scheduler.ts      # Cron job runner
 │   └── db/
 │       ├── schema.ts         # SQLite schema
 │       └── queries.ts        # Database queries
-├── ui/                       # Dashboard (React/Svelte)
+├── ui/                       # Dashboard (static files)
 ├── config.yaml
 ├── package.json
 └── tsconfig.json
