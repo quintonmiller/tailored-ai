@@ -5,6 +5,7 @@ export { ExecTool } from './tools/exec.js';
 export { ReadTool } from './tools/read.js';
 export { WriteTool } from './tools/write.js';
 export { WebFetchTool } from './tools/web-fetch.js';
+export { WebSearchTool } from './tools/web-search.js';
 export { DiscordChannel } from './channels/discord.js';
 export { runAgentLoop } from './agent/loop.js';
 export { newSession, loadSession, findOrCreateSession } from './agent/session.js';

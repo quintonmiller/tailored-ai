@@ -52,6 +52,12 @@ export interface AgentConfig {
     web_fetch?: {
       enabled: boolean;
     };
+    web_search?: {
+      enabled: boolean;
+      provider: string;
+      apiKey: string;
+      maxResults: number;
+    };
   };
 }
 
@@ -83,6 +89,7 @@ const DEFAULT_CONFIG: AgentConfig = {
     read: { enabled: true },
     write: { enabled: true },
     web_fetch: { enabled: true },
+    web_search: { enabled: false, provider: 'brave', apiKey: '', maxResults: 5 },
   },
 };
 

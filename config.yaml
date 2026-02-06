@@ -36,3 +36,10 @@ tools:
     enabled: true
   write:
     enabled: true
+  web_fetch:
+    enabled: true
+  web_search:
+    enabled: true
+    provider: "brave"
+    apiKey: "${BRAVE_API_KEY}"
+    maxResults: 5
