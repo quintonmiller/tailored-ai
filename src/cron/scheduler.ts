@@ -6,6 +6,7 @@ import type { Tool } from '../tools/interface.js';
 import type { AgentConfig, CronJobConfig } from '../config.js';
 import type { DiscordChannel } from '../channels/discord.js';
 import { findOrCreateSession } from '../agent/session.js';
+import { resolveProfile } from '../agent/profiles.js';
 import { runAgentLoop } from '../agent/loop.js';
 import { saveMessage } from '../db/queries.js';
 
@@ -68,12 +69,12 @@ export class CronScheduler {
   private async runJob(job: CronJobConfig): Promise<void> {
     const wakeAgent = job.wakeAgent !== false; // default true
     const sessionKey = job.sessionKey ?? `cron:${job.name}`;
-    const jobModel = job.model ?? this.model;
+    const resolved = resolveProfile(job.profile, this.config, this.tools, job.model);
 
     console.log(`[cron] Running "${job.name}" (${wakeAgent ? 'wake' : 'note'} mode)`);
 
     if (!wakeAgent) {
-      this.addNote(job, sessionKey, jobModel);
+      this.addNote(job, sessionKey, resolved.model);
       this.updateLastRun(job.name);
       return;
     }
@@ -81,18 +82,18 @@ export class CronScheduler {
     const session = findOrCreateSession(
       this.db,
       sessionKey,
-      jobModel,
-      this.config.agent.defaultProvider
+      resolved.model,
+      resolved.provider
     );
 
     const response = await runAgentLoop(job.prompt, {
       provider: this.provider,
       session,
       db: this.db,
-      tools: this.tools,
-      extraInstructions: this.config.agent.extraInstructions,
-      maxToolRounds: this.config.agent.maxToolRounds,
-      temperature: this.config.agent.temperature,
+      tools: resolved.tools,
+      extraInstructions: resolved.instructions,
+      maxToolRounds: resolved.maxToolRounds,
+      temperature: resolved.temperature,
       contextDir: this.contextDir,
       onToolCall: (name, args) => {
         console.log(`[cron] [${job.name}] tool: ${name}(${JSON.stringify(args)})`);

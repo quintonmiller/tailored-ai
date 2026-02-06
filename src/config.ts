@@ -2,12 +2,22 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import YAML from 'yaml';
 
+export interface AgentProfile {
+  model?: string;
+  provider?: string;
+  instructions?: string;
+  tools?: string[];
+  temperature?: number;
+  maxToolRounds?: number;
+}
+
 export interface CronJobConfig {
   name: string;
   schedule: string;
   prompt: string;
   sessionKey?: string;
   model?: string;
+  profile?: string;
   delivery?: {
     channel: 'log' | 'discord';
     target?: string;
@@ -53,6 +63,7 @@ export interface AgentConfig {
     enabled: boolean;
     jobs: CronJobConfig[];
   };
+  profiles: Record<string, AgentProfile>;
   context: {
     directory: string;
   };
@@ -126,6 +137,7 @@ const DEFAULT_CONFIG: AgentConfig = {
     temperature: 0.3,
     maxToolRounds: 10,
   },
+  profiles: {},
   cron: {
     enabled: false,
     jobs: [],

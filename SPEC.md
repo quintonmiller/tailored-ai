@@ -429,7 +429,7 @@ autonomous-agent/
 │   ├── agent/
 │   │   ├── loop.ts           # Main agent loop
 │   │   ├── session.ts        # Session management
-│   │   └── subagent.ts       # Sub-agent spawning
+│   │   └── profiles.ts       # Agent profile resolution
 │   ├── providers/
 │   │   ├── interface.ts      # Provider interface
 │   │   ├── ollama.ts         # Ollama implementation
@@ -443,7 +443,8 @@ autonomous-agent/
 │   │   ├── read.ts
 │   │   ├── write.ts
 │   │   ├── web-search.ts
-│   │   └── web-fetch.ts
+│   │   ├── web-fetch.ts
+│   │   └── delegate.ts       # Sub-agent delegation tool
 │   ├── cron/
 │   │   └── scheduler.ts      # Cron job runner
 │   └── db/

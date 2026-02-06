@@ -50,6 +50,42 @@ npm start                # run compiled CLI
 3. Add provider creation in `src/cli.ts` in the `createProvider()` function
 4. Export from `src/index.ts`
 
+## Agent Profiles & Delegation
+
+Profiles are named agent configurations defined in `config.yaml` under `profiles:`. They can override model, instructions, tools (allowlist), temperature, and maxToolRounds.
+
+- `src/agent/profiles.ts` — `resolveProfile()` merges a named profile with agent defaults
+- `src/tools/delegate.ts` — `DelegateTool` lets the agent spawn a sub-agent with a specific profile
+- Sub-agents are depth-1 only (they don't get the delegate tool)
+- Each delegation creates an ephemeral session keyed `delegate:<parentSessionId>:<uuid>`
+
+**CLI usage:**
+```bash
+npm run dev -- -p researcher -m "Find AI news"   # use a named profile
+```
+
+**Config example:**
+```yaml
+profiles:
+  researcher:
+    instructions: "You are a research assistant."
+    tools: ["web_search", "web_fetch", "memory"]
+    temperature: 0.5
+    maxToolRounds: 5
+  coder:
+    model: "qwen3-coder:30b"
+    instructions: "You are a code assistant."
+    tools: ["exec", "read", "write", "memory"]
+    maxToolRounds: 15
+
+cron:
+  jobs:
+    - name: "daily-research"
+      schedule: "0 9 * * *"
+      prompt: "Research today's AI news"
+      profile: "researcher"
+```
+
 ## Adding a Cron Job
 
 1. Add job config under `cron.jobs` in `config.yaml` (see `CronJobConfig` in `src/config.ts`)

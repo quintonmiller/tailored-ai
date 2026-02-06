@@ -11,6 +11,8 @@ export { GmailTool } from './tools/gmail.js';
 export { GoogleCalendarTool } from './tools/google-calendar.js';
 export { ClaudeCodeTool } from './tools/claude-code.js';
 export { MemoryTool } from './tools/memory.js';
+export { DelegateTool } from './tools/delegate.js';
+export { resolveProfile } from './agent/profiles.js';
 export { ensureContextDir, loadContextFiles } from './context.js';
 export { DiscordChannel } from './channels/discord.js';
 export { CronScheduler } from './cron/scheduler.js';
@@ -19,7 +21,8 @@ export { runAgentLoop } from './agent/loop.js';
 export { BASE_SYSTEM_PROMPT } from './agent/prompt.js';
 export { newSession, loadSession, findOrCreateSession } from './agent/session.js';
 
-export type { AgentConfig, CronJobConfig } from './config.js';
+export type { AgentConfig, AgentProfile, CronJobConfig } from './config.js';
+export type { ResolvedProfile } from './agent/profiles.js';
 export type { AIProvider, ChatParams, ChatResponse, Message, ToolCall, ToolSchema } from './providers/interface.js';
 export type { Tool, ToolContext, ToolResult } from './tools/interface.js';
 export type { Channel, IncomingMessage } from './channels/interface.js';

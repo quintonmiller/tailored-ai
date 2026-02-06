@@ -17,8 +17,10 @@ import { GmailTool } from './tools/gmail.js';
 import { GoogleCalendarTool } from './tools/google-calendar.js';
 import { ClaudeCodeTool } from './tools/claude-code.js';
 import { MemoryTool } from './tools/memory.js';
+import { DelegateTool } from './tools/delegate.js';
 import { ensureContextDir } from './context.js';
 import { runAgentLoop } from './agent/loop.js';
+import { resolveProfile } from './agent/profiles.js';
 import { newSession, loadSession } from './agent/session.js';
 import { DiscordChannel } from './channels/discord.js';
 import { CronScheduler } from './cron/scheduler.js';
@@ -38,6 +40,7 @@ Options:
   -c, --config <path>     Path to config.yaml (default: ./config.yaml)
   -m, --message <text>    Send a single message and exit (non-interactive mode)
   -s, --session <id>      Resume an existing session by ID
+  -p, --profile <name>    Use a named agent profile
   -j, --json              Output response as JSON (useful for scripting)
       --serve             Run as a service with configured channels
   -h, --help              Show this help message
@@ -142,6 +145,7 @@ async function main() {
       config: { type: 'string', short: 'c' },
       message: { type: 'string', short: 'm' },
       session: { type: 'string', short: 's' },
+      profile: { type: 'string', short: 'p' },
       json: { type: 'boolean', short: 'j', default: false },
       serve: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
@@ -162,26 +166,32 @@ async function main() {
   const contextDir = await ensureContextDir(resolve(process.cwd(), config.context.directory));
 
   const { provider, model } = createProvider(config);
-  const tools = createTools(config, contextDir);
+  const allTools = createTools(config, contextDir);
+
+  const delegateTool = new DelegateTool({ config, db, provider, allTools, contextDir });
 
   // Service mode
   if (values.serve) {
-    await runServe(config, configPath, db, provider, model, tools, contextDir);
+    const serveTools = [...allTools, delegateTool];
+    await runServe(config, configPath, db, provider, model, serveTools, contextDir);
     return;
   }
 
+  const resolved = resolveProfile(values.profile, config, allTools);
+  const tools = [...resolved.tools, delegateTool];
+
   const session = values.session
     ? loadSession(db, values.session) ?? (() => { throw new Error(`Session "${values.session}" not found`); })()
-    : newSession(db, model, config.agent.defaultProvider);
+    : newSession(db, resolved.model, resolved.provider);
 
   const loopOpts = {
     provider,
     session,
     db,
     tools,
-    extraInstructions: config.agent.extraInstructions,
-    maxToolRounds: config.agent.maxToolRounds,
-    temperature: config.agent.temperature,
+    extraInstructions: resolved.instructions,
+    maxToolRounds: resolved.maxToolRounds,
+    temperature: resolved.temperature,
     contextDir,
   };
 
