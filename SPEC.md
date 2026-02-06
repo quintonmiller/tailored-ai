@@ -349,8 +349,10 @@ vibe of the conversation before responding...
 - [x] web_search, web_fetch tools
 - [x] History compaction (trimHistory enforces maxHistoryTokens)
 
-### Phase 5: Extensibility (Future)
-- [ ] Skill definition system
+### Phase 5: Extensibility
+- [x] Hot-reloadable runtime (`AgentRuntime` with `fs.watch`, dynamic tool/provider resolution per loop iteration)
+- [x] Admin tool (runtime config reads/writes, profile management)
+- [x] Custom tools (config-defined shell command templates with `{{param}}` interpolation)
 - [ ] Additional channels (Slack, Telegram)
 - [ ] Webhook improvements
 - [ ] Chat UI in dashboard
@@ -427,6 +429,7 @@ autonomous-agent/
 │   ├── cli.ts                # CLI entry point
 │   ├── index.ts              # Library exports
 │   ├── config.ts             # Configuration loading
+│   ├── runtime.ts            # AgentRuntime: hot-reloadable state
 │   ├── context.ts            # Context/memory file loader
 │   ├── server.ts             # Hono HTTP server (REST API + SSE chat)
 │   ├── agent/
@@ -455,7 +458,9 @@ autonomous-agent/
 │   │   ├── google-calendar.ts
 │   │   ├── claude-code.ts
 │   │   ├── delegate.ts       # Sub-agent delegation (sync + async)
-│   │   └── task-status.ts    # Background task inspection
+│   │   ├── task-status.ts    # Background task inspection
+│   │   ├── admin.ts          # Runtime config and profile management
+│   │   └── custom.ts         # Config-defined shell command tools
 │   ├── cron/
 │   │   └── scheduler.ts      # Cron job runner
 │   └── db/
@@ -496,7 +501,7 @@ Current setup:
 
 ## Open Questions
 
-1. **Skill hot-reloading** - Should skills be loadable at runtime or require restart?
+1. ~~**Skill hot-reloading** - Should skills be loadable at runtime or require restart?~~ — Resolved: `AgentRuntime` hot-reloads config, tools, and provider. Custom tools can be defined in `config.yaml` and appear immediately. The admin tool lets the agent modify its own config at runtime.
 2. **Multi-user** - Is this single-user or should it support multiple Discord users with separate contexts?
 3. **Sandboxing** - How strict should exec sandboxing be? Docker? Allowlists only?
 4. **Memory/RAG** - Should there be a vector store for long-term memory retrieval?

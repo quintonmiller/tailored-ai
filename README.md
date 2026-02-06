@@ -1,6 +1,6 @@
 # autonomous-agent
 
-Lightweight, modular AI agent framework optimized for local LLMs while supporting cloud providers. Designed from scratch to work well with smaller models (30B parameter quantized models on consumer GPUs) by keeping system prompts short, tool counts low, and context tight.
+Lightweight, modular AI agent framework optimized for local LLMs while supporting cloud providers. Designed from scratch to work well with smaller models (30B parameter quantized models on consumer GPUs) by keeping system prompts short, tool counts low, and context tight. Configuration, tools, and providers hot-reload at runtime — the agent can modify its own capabilities without restarting.
 
 ## Quick Start
 
@@ -110,6 +110,13 @@ tools:
   write:
     enabled: true
     allowedPaths: ["/home/user/repos"]
+
+custom_tools:
+  hello:
+    description: "Say hello to someone"
+    parameters:
+      name: { type: "string", description: "Name to greet" }
+    command: "echo Hello {{name}}"
 ```
 
 If no config file is found, built-in defaults are used (Ollama on localhost:11434, all tools enabled with no restrictions).
@@ -121,10 +128,11 @@ src/
 ├── cli.ts                 # CLI entry point (interactive + non-interactive)
 ├── index.ts               # Library exports
 ├── config.ts              # YAML config loader with env var interpolation
+├── runtime.ts             # AgentRuntime: hot-reloadable config, tools, provider
 ├── context.ts             # Context/memory file loader
 ├── server.ts              # Hono HTTP server (REST API + SSE chat)
 ├── agent/
-│   ├── loop.ts            # Agent loop with history compaction
+│   ├── loop.ts            # Agent loop with history compaction + dynamic tools
 │   ├── session.ts         # Session creation and resumption
 │   ├── profiles.ts        # Named agent profile resolution
 │   ├── prompt.ts          # Base system prompt
@@ -149,7 +157,9 @@ src/
 │   ├── google-calendar.ts # Google Calendar via gog CLI
 │   ├── claude-code.ts     # Claude Code CLI delegation
 │   ├── delegate.ts        # Sub-agent spawning (sync + async)
-│   └── task-status.ts     # Background task inspection
+│   ├── task-status.ts     # Background task inspection
+│   ├── admin.ts           # Runtime config and profile management
+│   └── custom.ts          # Config-defined shell command tools
 ├── cron/
 │   └── scheduler.ts       # Config-driven cron job scheduler
 └── db/
@@ -162,10 +172,13 @@ src/
 The core loop is simple by design (local models struggle with complex flows):
 
 1. Append user message to session history
-2. Trim history to fit within `maxHistoryTokens` (drops oldest messages, keeps tool-call groups intact)
-3. Send system prompt + trimmed history + tool schemas to the LLM
-4. If the LLM returns tool calls, execute them and append results
-5. Repeat until the LLM returns a final text response (or max rounds hit)
+2. Re-resolve tools and provider (via optional runtime getters — enables hot-reload)
+3. Trim history to fit within `maxHistoryTokens` (drops oldest messages, keeps tool-call groups intact)
+4. Send system prompt + trimmed history + tool schemas to the LLM
+5. If the LLM returns tool calls, execute them and append results
+6. Repeat until the LLM returns a final text response (or max rounds hit)
+
+If the available tool set changes between iterations (e.g. a custom tool was added), the loop injects a transient system message notifying the LLM of the updated tools.
 
 ### Providers
 
@@ -194,6 +207,8 @@ Tools implement `Tool` with a `name`, `description`, JSON schema `parameters`, a
 | `claude_code` | Delegate to the Claude Code CLI |
 | `delegate` | Spawn a sub-agent with a named profile (supports `async: true` for background execution) |
 | `task_status` | List or inspect background tasks started via async delegate |
+| `admin` | Read/update agent configuration and manage profiles at runtime |
+| *(custom)* | User-defined shell command tools declared in `config.yaml` under `custom_tools` |
 
 ### Channels
 
@@ -236,4 +251,4 @@ See [SPEC.md](./SPEC.md) for the full specification. Phase summary:
 2. **Discord + Persistence** - Bot integration, session management (done)
 3. **Sub-agents + Cron** - Profiles, delegation, cron scheduler, background tasks (done)
 4. **Web UI + Polish** - HTTP server, REST API, OpenAI provider, history compaction (done except dashboard UI)
-5. **Extensibility** - Skill definitions, more channels
+5. **Extensibility** - Hot-reloadable runtime, admin tool, custom tools (done), more channels

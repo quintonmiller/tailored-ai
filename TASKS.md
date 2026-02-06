@@ -48,7 +48,9 @@
 - [x] OpenAI provider (`src/providers/openai.ts`, raw fetch, configurable base URL)
 
 ## Phase 5: Extensibility
-- [ ] YAML/JSON skill definitions with per-skill prompts
+- [x] Hot-reloadable runtime (`src/runtime.ts`, `fs.watch` with 500ms debounce, dynamic tool/provider per loop iteration)
+- [x] Admin tool (`src/tools/admin.ts`, runtime config reads/writes, profile management)
+- [x] Custom tools (`src/tools/custom.ts`, config-defined shell command templates with `{{param}}` interpolation)
 - [ ] Additional channels (Slack, Telegram)
 - [ ] Webhook receiver (Gmail, GitHub, etc.)
 - [ ] Chat UI in dashboard

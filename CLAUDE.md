@@ -27,13 +27,39 @@ npm start                # run compiled CLI
 - **Low temperature**: Default 0.3 for deterministic tool selection.
 - **No conditional response tokens**: Never use patterns like "reply NO_REPLY if..." - local models misinterpret these.
 - **Simple agent loop**: No complex state machines. Loop: chat → tool calls → chat → stop.
+- **Hot-reloadable runtime**: Config, tools, and provider are mutable at runtime. The agent loop re-resolves tools each iteration so changes take effect immediately without restart.
+
+## AgentRuntime
+
+`src/runtime.ts` holds all mutable state (config, tools, provider) and provides getters that return the current values. Key behaviors:
+
+- **`reload()`** — re-reads `config.yaml`, rebuilds tools and provider. All-or-nothing: keeps previous state on failure.
+- **`startWatching()`** — uses `fs.watch` with 500ms debounce to auto-reload on config file changes.
+- **`generation`** — monotonic counter that increments on each successful reload.
+- Factory functions (`createTools`, `createProvider`) are injected from `cli.ts` so `runtime.ts` stays free of tool/provider imports.
+- The agent loop accepts optional `getTools`/`getProvider` closures to re-resolve per iteration. Tool-change detection injects a transient system message when the tool set changes mid-loop.
+- All subsystems (server, discord, cron, delegate) hold a runtime reference and read state at request time.
 
 ## Adding a New Tool
 
+**Code-level tool** (requires TypeScript):
 1. Create `src/tools/<name>.ts` implementing the `Tool` interface from `src/tools/interface.ts`
 2. Add config type in `src/config.ts` under `AgentConfig.tools`
 3. Wire it up in `src/cli.ts` in the `createTools()` function
 4. Export from `src/index.ts`
+
+**Custom tool** (config-only, no code):
+Add an entry under `custom_tools` in `config.yaml`. Custom tools are shell command templates with `{{param}}` interpolation. They are rebuilt on every runtime reload, so adding one via the admin tool or editing `config.yaml` makes it available immediately.
+
+```yaml
+custom_tools:
+  hello:
+    description: "Say hello to someone"
+    parameters:
+      name: { type: "string", description: "Name to greet" }
+    command: "echo Hello {{name}}"
+    timeout_ms: 5000  # optional, default 30s
+```
 
 ## Adding a New Channel
 
@@ -71,6 +97,14 @@ To add a new provider, see the "Adding a New Provider" section below.
 - `task_status` tool lets the agent list all tasks or check one by ID
 - Task IDs are `task_<uuid-slice>` format
 - Tasks track status (`running` / `completed` / `failed`), timing, and result/error
+
+## Admin Tool
+
+`src/tools/admin.ts` lets the agent read/modify its own configuration at runtime:
+
+- Reads the raw YAML file for updates (not the merged config) so defaults don't pollute the user's file
+- Writes trigger `runtime.reload()` for immediate effect
+- Available in all tool closures alongside delegate and task_status (meta tools)
 
 ## Agent Profiles & Delegation
 
