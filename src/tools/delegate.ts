@@ -6,6 +6,7 @@ import type { Tool, ToolContext, ToolResult } from './interface.js';
 import { resolveProfile } from '../agent/profiles.js';
 import { newSession } from '../agent/session.js';
 import { runAgentLoop } from '../agent/loop.js';
+import { startTask } from '../agent/tasks.js';
 
 export interface DelegateToolOptions {
   config: AgentConfig;
@@ -23,6 +24,7 @@ export class DelegateTool implements Tool {
     properties: {
       profile: { type: 'string', description: 'Profile name to use for the sub-agent.' },
       task: { type: 'string', description: 'The task to delegate to the sub-agent.' },
+      async: { type: 'boolean', description: 'If true, run in background and return a task ID.' },
     },
     required: ['profile', 'task'],
   };
@@ -44,6 +46,7 @@ export class DelegateTool implements Tool {
   async execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     const profileName = args.profile as string;
     const task = args.task as string;
+    const runAsync = args.async === true;
 
     if (!profileName || !task) {
       return { success: false, output: '', error: 'Both "profile" and "task" are required.' };
@@ -56,11 +59,11 @@ export class DelegateTool implements Tool {
       return { success: false, output: '', error: (err as Error).message };
     }
 
-    const sessionKey = `delegate:${context.sessionId}:${randomUUID()}`;
-    const session = newSession(this.db, resolved.model, resolved.provider, sessionKey);
+    const runDelegate = (): Promise<string> => {
+      const sessionKey = `delegate:${context.sessionId}:${randomUUID()}`;
+      const session = newSession(this.db, resolved.model, resolved.provider, sessionKey);
 
-    try {
-      const response = await runAgentLoop(task, {
+      return runAgentLoop(task, {
         provider: this.provider,
         session,
         db: this.db,
@@ -71,7 +74,15 @@ export class DelegateTool implements Tool {
         temperature: resolved.temperature,
         contextDir: this.contextDir,
       });
+    };
 
+    if (runAsync) {
+      const info = startTask(task, runDelegate);
+      return { success: true, output: `Background task started: ${info.id}` };
+    }
+
+    try {
+      const response = await runDelegate();
       return { success: true, output: response };
     } catch (err) {
       return { success: false, output: '', error: `Sub-agent error: ${(err as Error).message}` };

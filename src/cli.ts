@@ -19,6 +19,7 @@ import { GoogleCalendarTool } from './tools/google-calendar.js';
 import { ClaudeCodeTool } from './tools/claude-code.js';
 import { MemoryTool } from './tools/memory.js';
 import { DelegateTool } from './tools/delegate.js';
+import { TaskStatusTool } from './tools/task-status.js';
 import { ensureContextDir } from './context.js';
 import { runAgentLoop } from './agent/loop.js';
 import { resolveProfile } from './agent/profiles.js';
@@ -176,16 +177,17 @@ async function main() {
   const allTools = createTools(config, contextDir);
 
   const delegateTool = new DelegateTool({ config, db, provider, allTools, contextDir });
+  const taskStatusTool = new TaskStatusTool();
 
   // Service mode
   if (values.serve) {
-    const serveTools = [...allTools, delegateTool];
+    const serveTools = [...allTools, delegateTool, taskStatusTool];
     await runServe(config, configPath, db, provider, model, serveTools, contextDir);
     return;
   }
 
   const resolved = resolveProfile(values.profile, config, allTools);
-  const tools = [...resolved.tools, delegateTool];
+  const tools = [...resolved.tools, delegateTool, taskStatusTool];
 
   const session = values.session
     ? loadSession(db, values.session) ?? (() => { throw new Error(`Session "${values.session}" not found`); })()

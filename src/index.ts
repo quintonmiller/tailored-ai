@@ -13,6 +13,8 @@ export { GoogleCalendarTool } from './tools/google-calendar.js';
 export { ClaudeCodeTool } from './tools/claude-code.js';
 export { MemoryTool } from './tools/memory.js';
 export { DelegateTool } from './tools/delegate.js';
+export { TaskStatusTool } from './tools/task-status.js';
+export { startTask, getTask, listTasks } from './agent/tasks.js';
 export { resolveProfile } from './agent/profiles.js';
 export { ensureContextDir, loadContextFiles } from './context.js';
 export { DiscordChannel } from './channels/discord.js';
@@ -28,3 +30,4 @@ export type { AIProvider, ChatParams, ChatResponse, Message, ToolCall, ToolSchem
 export type { Tool, ToolContext, ToolResult } from './tools/interface.js';
 export type { Channel, IncomingMessage } from './channels/interface.js';
 export type { Session } from './agent/session.js';
+export type { TaskInfo } from './agent/tasks.js';
