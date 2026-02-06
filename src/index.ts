@@ -1,6 +1,7 @@
 export { loadConfig } from './config.js';
 export { initDatabase } from './db/schema.js';
 export { OllamaProvider } from './providers/ollama.js';
+export { OpenAIProvider } from './providers/openai.js';
 export { ExecTool } from './tools/exec.js';
 export { ReadTool } from './tools/read.js';
 export { WriteTool } from './tools/write.js';

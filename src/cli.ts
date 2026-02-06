@@ -7,6 +7,7 @@ import { parseArgs } from 'node:util';
 import { loadConfig } from './config.js';
 import { initDatabase } from './db/schema.js';
 import { OllamaProvider } from './providers/ollama.js';
+import { OpenAIProvider } from './providers/openai.js';
 import { ExecTool } from './tools/exec.js';
 import { ReadTool } from './tools/read.js';
 import { WriteTool } from './tools/write.js';
@@ -53,8 +54,14 @@ function createProvider(config: ReturnType<typeof loadConfig>): { provider: AIPr
       model: config.providers.ollama.defaultModel,
     };
   }
+  if (config.agent.defaultProvider === 'openai' && config.providers.openai) {
+    return {
+      provider: new OpenAIProvider(config.providers.openai.apiKey),
+      model: config.providers.openai.defaultModel,
+    };
+  }
   throw new Error(
-    `No supported provider configured for "${config.agent.defaultProvider}". Currently only Ollama is supported.`
+    `No supported provider configured for "${config.agent.defaultProvider}".`
   );
 }
 
