@@ -13,12 +13,13 @@ export { ClaudeCodeTool } from './tools/claude-code.js';
 export { MemoryTool } from './tools/memory.js';
 export { ensureContextDir, loadContextFiles } from './context.js';
 export { DiscordChannel } from './channels/discord.js';
+export { CronScheduler } from './cron/scheduler.js';
 export { createServer } from './server.js';
 export { runAgentLoop } from './agent/loop.js';
 export { BASE_SYSTEM_PROMPT } from './agent/prompt.js';
 export { newSession, loadSession, findOrCreateSession } from './agent/session.js';
 
-export type { AgentConfig } from './config.js';
+export type { AgentConfig, CronJobConfig } from './config.js';
 export type { AIProvider, ChatParams, ChatResponse, Message, ToolCall, ToolSchema } from './providers/interface.js';
 export type { Tool, ToolContext, ToolResult } from './tools/interface.js';
 export type { Channel, IncomingMessage } from './channels/interface.js';

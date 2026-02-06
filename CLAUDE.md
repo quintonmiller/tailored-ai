@@ -50,6 +50,15 @@ npm start                # run compiled CLI
 3. Add provider creation in `src/cli.ts` in the `createProvider()` function
 4. Export from `src/index.ts`
 
+## Adding a Cron Job
+
+1. Add job config under `cron.jobs` in `config.yaml` (see `CronJobConfig` in `src/config.ts`)
+2. Set `cron.enabled: true`
+3. Run with `--serve` — the scheduler starts automatically
+4. Two modes: `wakeAgent: true` (default) runs agent loop; `wakeAgent: false` injects a note into the session
+5. Delivery channels: `log` (default, stdout) or `discord` (requires `delivery.target` channel ID)
+6. Job state is tracked in the `cron_jobs` DB table
+
 ## Conventions
 
 - No default parameter values that duplicate config defaults (config.ts `DEFAULT_CONFIG` is the single source of truth)

@@ -84,6 +84,19 @@ channels:
     # allowedGuilds:             # optional guild allowlist
     #   - "123456789"
 
+cron:
+  enabled: true
+  jobs:
+    - name: "daily-email-summary"
+      schedule: "0 9 * * *"          # standard 5-field cron expression
+      prompt: "Summarize my unread emails from the last 24 hours"
+      # sessionKey: "cron:daily-email-summary"  # optional, defaults to "cron:<name>"
+      # model: "devstral-small-2:latest"        # optional model override
+      wakeAgent: true                 # true = run agent loop, false = just add note
+      delivery:
+        channel: "log"               # "log" | "discord"
+        # target: "123456789"        # discord channel ID (required for discord)
+
 tools:
   exec:
     enabled: true
@@ -119,7 +132,8 @@ src/
 │   ├── exec.ts            # Run shell commands
 │   ├── read.ts            # Read files
 │   └── write.ts           # Write files
-├── cron/                  # Cron scheduler (future)
+├── cron/
+│   └── scheduler.ts       # Config-driven cron job scheduler
 └── db/
     ├── schema.ts          # SQLite schema
     └── queries.ts         # Database operations
@@ -162,6 +176,15 @@ Channels connect the agent to messaging platforms. Currently implemented:
 
 Planned: Slack, Telegram
 
+### Cron Jobs
+
+Scheduled jobs run inside `--serve` mode and support two execution modes:
+
+- **Wake agent** (`wakeAgent: true`, default) — Runs the full agent loop with the configured prompt, then delivers the response via the configured delivery channel (`log` or `discord`).
+- **Add note** (`wakeAgent: false`) — Injects the prompt as a user message into the target session. The agent sees it as context on the next real interaction. No agent loop runs.
+
+Job state (last run time) is tracked in the `cron_jobs` SQLite table. Scheduling uses the `croner` library with standard 5-field cron expressions.
+
 ## Prerequisites
 
 - Node.js 20+
@@ -180,6 +203,6 @@ See [SPEC.md](./SPEC.md) for the full specification. Phase summary:
 
 1. **Core Agent** - Ollama provider, tools, agent loop, CLI (done)
 2. **Discord + Persistence** - Bot integration, session management (done)
-3. **Sub-agents + Cron** - Parallel tasks, scheduled jobs
+3. **Sub-agents + Cron** - Parallel tasks, scheduled jobs (cron done)
 4. **Web UI** - Dashboard, REST API, OpenAI provider
 5. **Extensibility** - Skill definitions, more channels

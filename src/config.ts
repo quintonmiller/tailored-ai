@@ -2,6 +2,19 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import YAML from 'yaml';
 
+export interface CronJobConfig {
+  name: string;
+  schedule: string;
+  prompt: string;
+  sessionKey?: string;
+  model?: string;
+  delivery?: {
+    channel: 'log' | 'discord';
+    target?: string;
+  };
+  wakeAgent?: boolean;
+}
+
 export interface AgentConfig {
   server: {
     port: number;
@@ -35,6 +48,10 @@ export interface AgentConfig {
       respondToDMs: boolean;
       respondToMentions: boolean;
     };
+  };
+  cron: {
+    enabled: boolean;
+    jobs: CronJobConfig[];
   };
   context: {
     directory: string;
@@ -108,6 +125,10 @@ const DEFAULT_CONFIG: AgentConfig = {
     maxHistoryTokens: 2000,
     temperature: 0.3,
     maxToolRounds: 10,
+  },
+  cron: {
+    enabled: false,
+    jobs: [],
   },
   context: {
     directory: './data/context',

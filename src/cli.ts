@@ -21,6 +21,7 @@ import { ensureContextDir } from './context.js';
 import { runAgentLoop } from './agent/loop.js';
 import { newSession, loadSession } from './agent/session.js';
 import { DiscordChannel } from './channels/discord.js';
+import { CronScheduler } from './cron/scheduler.js';
 import { createServer } from './server.js';
 import type { AIProvider } from './providers/interface.js';
 import type { Tool } from './tools/interface.js';
@@ -101,10 +102,17 @@ async function runServe(config: ReturnType<typeof loadConfig>, configPath: strin
     disconnect: () => new Promise<void>((res) => httpServer.close(() => res())),
   });
 
+  let discord: DiscordChannel | undefined;
   if (config.channels.discord?.enabled) {
-    const discord = new DiscordChannel({ config, db, provider, model, tools, contextDir });
+    discord = new DiscordChannel({ config, db, provider, model, tools, contextDir });
     await discord.connect();
-    channels.push({ name: 'discord', disconnect: () => discord.disconnect() });
+    channels.push({ name: 'discord', disconnect: () => discord!.disconnect() });
+  }
+
+  let scheduler: CronScheduler | undefined;
+  if (config.cron.enabled && config.cron.jobs.length) {
+    scheduler = new CronScheduler({ config, db, provider, model, tools, contextDir, discord });
+    scheduler.start();
   }
 
   console.log(`autonomous-agent v0.1.0 (service mode)`);
@@ -116,6 +124,7 @@ async function runServe(config: ReturnType<typeof loadConfig>, configPath: strin
   // Graceful shutdown
   const shutdown = async () => {
     console.log('\nShutting down...');
+    scheduler?.stop();
     for (const ch of channels) {
       await ch.disconnect();
     }
