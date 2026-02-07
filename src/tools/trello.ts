@@ -4,7 +4,7 @@ const BASE_URL = 'https://api.trello.com/1';
 
 export class TrelloTool implements Tool {
   name = 'trello';
-  description = 'Manage Trello boards, lists, and cards. Actions: list_boards, list_lists, list_cards, create_card, move_card, comment_card, archive_card.';
+  description = 'Manage Trello boards, lists, and cards. All IDs are alphanumeric Trello IDs — use list_boards and list_lists first to look them up. Actions: list_boards, list_lists, list_cards, create_card, move_card, comment_card, archive_card.';
   parameters = {
     type: 'object',
     properties: {
@@ -67,7 +67,13 @@ export class TrelloTool implements Tool {
     }
 
     const resp = await fetch(url, opts);
-    const data = await resp.json();
+    const text = await resp.text();
+    let data: unknown;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = text;
+    }
     return { ok: resp.ok, data, status: resp.status };
   }
 
