@@ -25,6 +25,7 @@ export class AgentRuntime {
   private _watcher: FSWatcher | undefined;
   private _debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
+  private _reloadListeners: Array<() => void> = [];
   private _createTools: RuntimeOptions['createTools'];
   private _createProvider: RuntimeOptions['createProvider'];
   private _loadConfig: (path: string) => AgentConfig;
@@ -65,9 +66,18 @@ export class AgentRuntime {
       this._model = model;
       this._generation++;
       console.log(`[runtime] Reloaded config (generation ${this._generation})`);
+      for (const cb of this._reloadListeners) {
+        try { cb(); } catch (e) {
+          console.error('[runtime] Reload listener error:', (e as Error).message);
+        }
+      }
     } catch (err) {
       console.error(`[runtime] Reload failed, keeping previous state:`, (err as Error).message);
     }
+  }
+
+  onReload(cb: () => void): void {
+    this._reloadListeners.push(cb);
   }
 
   startWatching(): void {

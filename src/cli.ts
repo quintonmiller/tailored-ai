@@ -127,12 +127,11 @@ async function runServe(runtime: AgentRuntime) {
     channels.push({ name: 'discord', disconnect: () => discord!.disconnect() });
   }
 
-  let scheduler: CronScheduler | undefined;
-  const config = runtime.getConfig();
-  if (config.cron.enabled && config.cron.jobs.length) {
-    scheduler = new CronScheduler({ runtime, discord });
+  const scheduler = new CronScheduler({ runtime, discord });
+  if (runtime.getConfig().cron.enabled) {
     scheduler.start();
   }
+  runtime.onReload(() => scheduler.restart());
 
   const model = runtime.getModel();
   const tools = runtime.getTools();
@@ -146,7 +145,7 @@ async function runServe(runtime: AgentRuntime) {
   const shutdown = async () => {
     console.log('\nShutting down...');
     runtime.stopWatching();
-    scheduler?.stop();
+    scheduler.stop();
     for (const ch of channels) {
       await ch.disconnect();
     }

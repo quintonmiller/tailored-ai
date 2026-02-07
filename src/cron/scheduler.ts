@@ -24,7 +24,9 @@ export class CronScheduler {
   }
 
   start(): void {
-    const jobs = this.runtime.getConfig().cron.jobs;
+    const config = this.runtime.getConfig();
+    if (!config.cron.enabled) return;
+    const jobs = config.cron.jobs;
     if (!jobs.length) return;
 
     for (const job of jobs) {
@@ -47,6 +49,11 @@ export class CronScheduler {
     }
     this.timers = [];
     console.log('[cron] Stopped all jobs');
+  }
+
+  restart(): void {
+    this.stop();
+    this.start();
   }
 
   private async runJob(job: CronJobConfig): Promise<void> {
