@@ -147,23 +147,30 @@ export async function runAgentLoop(
       return response.content ?? '';
     }
 
-    for (const call of response.toolCalls) {
-      opts.onToolCall?.(call.name, call.arguments);
+    // Execute all tool calls in parallel
+    const results = await Promise.all(
+      response.toolCalls.map(async (call) => {
+        opts.onToolCall?.(call.name, call.arguments);
 
-      const tool = toolMap.get(call.name);
-      let resultOutput: string;
+        const tool = toolMap.get(call.name);
+        let resultOutput: string;
 
-      if (!tool) {
-        resultOutput = `Error: Unknown tool "${call.name}"`;
-      } else {
-        const result = await tool.execute(call.arguments, context);
-        resultOutput = result.success
-          ? result.output
-          : `Error: ${result.error ?? 'Unknown error'}`;
-      }
+        if (!tool) {
+          resultOutput = `Error: Unknown tool "${call.name}"`;
+        } else {
+          const result = await tool.execute(call.arguments, context);
+          resultOutput = result.success
+            ? result.output
+            : `Error: ${result.error ?? 'Unknown error'}`;
+        }
 
-      opts.onToolResult?.(call.name, resultOutput);
+        opts.onToolResult?.(call.name, resultOutput);
+        return { call, resultOutput };
+      })
+    );
 
+    // Add all tool results to history in original order
+    for (const { call, resultOutput } of results) {
       const toolMsg: Message = {
         role: 'tool',
         content: resultOutput,
