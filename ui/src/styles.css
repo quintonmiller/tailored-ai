@@ -67,6 +67,10 @@ body {
   color: var(--text);
 }
 
+.app-header nav a.active {
+  color: var(--accent);
+}
+
 .app-main {
   flex: 1;
   display: flex;
@@ -158,6 +162,7 @@ body {
   text-align: center;
   padding: 48px 0;
   font-size: 13px;
+  margin-bottom: 32px;
 }
 
 /* Chat */

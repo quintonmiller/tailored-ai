@@ -64,10 +64,6 @@ export function saveMessage(
     msg.toolCalls ? JSON.stringify(msg.toolCalls) : null,
     msg.toolCallId ?? null
   );
-
-  db.prepare(
-    "UPDATE sessions SET updated_at = datetime('now') WHERE id = ?"
-  ).run(sessionId);
 }
 
 export function listSessions(db: Database.Database): SessionRow[] {

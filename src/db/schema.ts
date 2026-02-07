@@ -29,6 +29,12 @@ export function initDatabase(dbPath: string): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_messages_session
       ON messages(session_id, id);
 
+    CREATE TRIGGER IF NOT EXISTS trg_messages_update_session
+      AFTER INSERT ON messages
+      BEGIN
+        UPDATE sessions SET updated_at = datetime('now') WHERE id = NEW.session_id;
+      END;
+
     CREATE TABLE IF NOT EXISTS cron_jobs (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,

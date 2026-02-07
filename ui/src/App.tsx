@@ -44,10 +44,10 @@ export function App() {
       <header className="app-header">
         <a href="#/" className="app-title">autonomous-agent</a>
         <nav>
-          <a href="#/">Dashboard</a>
-          <a href="#/tools">Tools</a>
-          <a href="#/chat">New Chat</a>
-          <a href="#/config">Config</a>
+          <a href="#/" className={route.page === 'dashboard' ? 'active' : ''}>Dashboard</a>
+          <a href="#/tools" className={route.page === 'tools' ? 'active' : ''}>Tools</a>
+          <a href="#/chat" className={route.page === 'chat' ? 'active' : ''}>New Chat</a>
+          <a href="#/config" className={route.page === 'config' ? 'active' : ''}>Config</a>
         </nav>
       </header>
       <main className="app-main">
