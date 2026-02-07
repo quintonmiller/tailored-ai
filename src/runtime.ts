@@ -8,7 +8,7 @@ export interface RuntimeOptions {
   configPath: string;
   db: Database.Database;
   contextDir: string;
-  createTools: (config: AgentConfig, contextDir: string) => Tool[];
+  createTools: (config: AgentConfig, contextDir: string, configPath?: string) => Tool[];
   createProvider: (config: AgentConfig) => { provider: AIProvider; model: string };
 }
 
@@ -44,7 +44,7 @@ export class AgentRuntime {
     this._loadConfig = loadConfig;
 
     this._config = initialConfig;
-    this._tools = opts.createTools(initialConfig, opts.contextDir);
+    this._tools = opts.createTools(initialConfig, opts.contextDir, opts.configPath);
     const { provider, model } = opts.createProvider(initialConfig);
     this._provider = provider;
     this._model = model;
@@ -59,7 +59,7 @@ export class AgentRuntime {
   reload(): void {
     try {
       const config = this._loadConfig(this.configPath);
-      const tools = this._createTools(config, this.contextDir);
+      const tools = this._createTools(config, this.contextDir, this.configPath);
       const { provider, model } = this._createProvider(config);
       // Clean up old tools that have a destroy hook (e.g. browser processes)
       const oldTools = this._tools;

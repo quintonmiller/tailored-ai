@@ -9,6 +9,7 @@ export interface AgentProfile {
   tools?: string[];
   temperature?: number;
   maxToolRounds?: number;
+  contextDir?: string;
 }
 
 export interface CronJobConfig {
@@ -31,6 +32,15 @@ export interface CustomToolConfig {
   parameters: Record<string, { type: string; description: string }>;
   command: string;
   timeout_ms?: number;
+}
+
+export interface CommandConfig {
+  description: string;
+  command?: string;       // Shell command template ({{input}} interpolated)
+  prompt?: string;        // Prompt template sent through agent loop ({{input}}, {{output}})
+  profile?: string;       // Named profile to use
+  new_session?: boolean;  // Start fresh session (default: false)
+  timeout_ms?: number;    // Shell timeout (default: 30s)
 }
 
 export interface AgentConfig {
@@ -130,8 +140,18 @@ export interface AgentConfig {
       screenshotDir?: string;
       timeoutMs?: number;
     };
+    md_to_pdf?: {
+      enabled: boolean;
+    };
+    google_drive?: {
+      enabled: boolean;
+      account: string;
+      folder_name?: string;
+      folder_id?: string;
+    };
   };
   custom_tools: Record<string, CustomToolConfig>;
+  commands: Record<string, CommandConfig>;
 }
 
 const DEFAULT_CONFIG: AgentConfig = {
@@ -173,6 +193,7 @@ const DEFAULT_CONFIG: AgentConfig = {
     web_search: { enabled: false, provider: 'brave', apiKey: '', maxResults: 5 },
   },
   custom_tools: {},
+  commands: {},
 };
 
 function interpolateEnv(value: string): string {

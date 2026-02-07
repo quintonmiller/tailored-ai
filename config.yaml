@@ -12,7 +12,7 @@ agent:
   extraInstructions: ""
   maxHistoryTokens: 2000
   temperature: 0.3
-  maxToolRounds: 10
+  maxToolRounds: 50
 channels:
   discord:
     enabled: true
@@ -51,6 +51,13 @@ tools:
   browser:
     enabled: true
     headless: true
+  md_to_pdf:
+    enabled: true
+  google_drive:
+    enabled: true
+    account: ${GOG_ACCOUNT}
+    folder_name: "Aeger uploads"
+    folder_id: 1S5s3nDdvpJoAc6h_q8vQ7VHpjoB9ABY4
 profiles:
   researcher:
     instructions: You are a research assistant. Search the web, fetch pages, and
@@ -108,9 +115,8 @@ cron:
         channel: log
       enabled: false
     - name: email-summary
-      enabled: false
+      enabled: true
       schedule: "*/5 * * * *"
-      prompt: Check my recent emails and give me a brief summary of anything new or
-        important.
+      prompt: Check my recent emails. Tell me if there are any that are IMPORTANT and require     ACTION.
       delivery:
         channel: discord-dm

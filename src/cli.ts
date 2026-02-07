@@ -18,15 +18,18 @@ import { GmailTool } from './tools/gmail.js';
 import { GoogleCalendarTool } from './tools/google-calendar.js';
 import { ClaudeCodeTool } from './tools/claude-code.js';
 import { BrowserTool } from './tools/browser.js';
+import { MdToPdfTool } from './tools/md-to-pdf.js';
+import { GoogleDriveTool } from './tools/google-drive.js';
 import { MemoryTool } from './tools/memory.js';
 import { DelegateTool } from './tools/delegate.js';
 import { TaskStatusTool } from './tools/task-status.js';
 import { AdminTool } from './tools/admin.js';
 import { createCustomTools } from './tools/custom.js';
-import { ensureContextDir } from './context.js';
+import { ensureContextDir, migrateContextDir } from './context.js';
 import { runAgentLoop } from './agent/loop.js';
 import { resolveProfile } from './agent/profiles.js';
-import { newSession, loadSession } from './agent/session.js';
+import { newSession, loadSession, resetSession } from './agent/session.js';
+import { isCommand, executeCommand } from './commands.js';
 import { DiscordChannel } from './channels/discord.js';
 import { CronScheduler } from './cron/scheduler.js';
 import { createServer } from './server.js';
@@ -71,10 +74,11 @@ function createProvider(config: AgentConfig): { provider: AIProvider; model: str
   );
 }
 
-function createTools(config: AgentConfig, contextDir: string): Tool[] {
+function createTools(config: AgentConfig, contextDir: string, configPath?: string): Tool[] {
+  const globalDir = resolve(contextDir, 'global');
   const tools: Tool[] = [];
   if (config.tools.memory?.enabled !== false) {
-    tools.push(new MemoryTool(contextDir));
+    tools.push(new MemoryTool(globalDir));
   }
   if (config.tools.exec?.enabled !== false) {
     tools.push(new ExecTool(config.tools.exec?.allowedCommands));
@@ -106,6 +110,18 @@ function createTools(config: AgentConfig, contextDir: string): Tool[] {
   }
   if (config.tools.browser?.enabled) {
     tools.push(new BrowserTool(config.tools.browser));
+  }
+  if (config.tools.md_to_pdf?.enabled) {
+    tools.push(new MdToPdfTool());
+  }
+  if (config.tools.google_drive?.enabled && config.tools.google_drive.account) {
+    tools.push(new GoogleDriveTool(
+      config.tools.google_drive.account,
+      gogPassword,
+      config.tools.google_drive.folder_name,
+      config.tools.google_drive.folder_id,
+      configPath,
+    ));
   }
   if (config.custom_tools) {
     tools.push(...createCustomTools(config.custom_tools));
@@ -186,6 +202,8 @@ async function main() {
   const db = initDatabase(dbPath);
 
   const contextDir = await ensureContextDir(resolve(process.cwd(), config.context.directory));
+  await migrateContextDir(contextDir);
+  await ensureContextDir(resolve(contextDir, 'global'));
 
   const runtime = new AgentRuntime(
     { configPath, db, contextDir, createTools, createProvider },
@@ -215,17 +233,17 @@ async function main() {
   const makeGetTools = (profileName?: string) => {
     if (profileName) {
       return () => {
-        const resolved = resolveProfile(profileName, runtime.getConfig(), runtime.getTools());
+        const resolved = resolveProfile(profileName, runtime.getConfig(), runtime.getTools(), undefined, contextDir);
         return [...resolved.tools, ...metaTools];
       };
     }
     return () => [...runtime.getTools(), ...metaTools];
   };
 
-  const resolved = resolveProfile(values.profile, runtime.getConfig(), runtime.getTools());
+  const resolved = resolveProfile(values.profile, runtime.getConfig(), runtime.getTools(), undefined, contextDir);
   const tools = [...resolved.tools, ...metaTools];
 
-  const session = values.session
+  let session = values.session
     ? loadSession(db, values.session) ?? (() => { throw new Error(`Session "${values.session}" not found`); })()
     : newSession(db, resolved.model, resolved.provider);
 
@@ -239,6 +257,7 @@ async function main() {
     maxHistoryTokens: runtime.getConfig().agent.maxHistoryTokens,
     temperature: resolved.temperature,
     contextDir,
+    profileContextDir: resolved.contextDir,
     getTools: makeGetTools(values.profile),
     getProvider: () => runtime.getProvider(),
   };
@@ -282,6 +301,8 @@ async function main() {
   // Interactive mode
   runtime.startWatching();
 
+  let activeProfile = values.profile as string | undefined;
+
   console.log(`autonomous-agent v0.1.0`);
   console.log(`Provider: ${runtime.getProvider().name} | Model: ${runtime.getModel()}`);
   console.log(`Tools: ${tools.map((t) => t.name).join(', ')}`);
@@ -296,6 +317,32 @@ async function main() {
 
   rl.prompt();
 
+  const runAgentMessage = async (message: string) => {
+    const response = await runAgentLoop(message, {
+      ...loopOpts,
+      onToolCall: (name, args) => {
+        console.log(`  [tool] ${name}(${JSON.stringify(args)})`);
+      },
+      onToolResult: (name, result) => {
+        const preview = result.length > 200 ? result.slice(0, 200) + '...' : result;
+        console.log(`  [result] ${name}: ${preview}`);
+      },
+    });
+    console.log(`\n${response}\n`);
+  };
+
+  const applyProfile = (profileName: string | undefined) => {
+    activeProfile = profileName;
+    const r = resolveProfile(profileName, runtime.getConfig(), runtime.getTools(), undefined, contextDir);
+    loopOpts.tools = [...r.tools, ...metaTools];
+    loopOpts.extraInstructions = r.instructions;
+    loopOpts.temperature = r.temperature;
+    loopOpts.maxToolRounds = r.maxToolRounds;
+    loopOpts.contextDir = contextDir;
+    loopOpts.profileContextDir = r.contextDir;
+    loopOpts.getTools = makeGetTools(profileName);
+  };
+
   rl.on('line', async (line) => {
     const input = line.trim();
     if (!input) {
@@ -303,19 +350,70 @@ async function main() {
       return;
     }
 
-    try {
-      const response = await runAgentLoop(input, {
-        ...loopOpts,
-        onToolCall: (name, args) => {
-          console.log(`  [tool] ${name}(${JSON.stringify(args)})`);
-        },
-        onToolResult: (name, result) => {
-          const preview = result.length > 200 ? result.slice(0, 200) + '...' : result;
-          console.log(`  [result] ${name}: ${preview}`);
-        },
+    if (isCommand(input)) {
+      const result = await executeCommand(input, {
+        config: runtime.getConfig(),
+        currentProfile: activeProfile,
       });
 
-      console.log(`\n${response}\n`);
+      switch (result.type) {
+        case 'new_session': {
+          session = newSession(db, resolved.model, resolved.provider);
+          loopOpts.session = session;
+          console.log(`\nStarted new session: ${session.id}\n`);
+          break;
+        }
+        case 'switch_profile': {
+          try {
+            applyProfile(result.profile);
+            session = newSession(db, resolved.model, resolved.provider);
+            loopOpts.session = session;
+            console.log(`\nSwitched to profile "${result.profile}" (new session: ${session.id})\n`);
+          } catch (err) {
+            console.error(`Error: ${(err as Error).message}`);
+          }
+          break;
+        }
+        case 'help': {
+          console.log(`\n${result.text}\n`);
+          break;
+        }
+        case 'shell_output': {
+          console.log(`\n${result.output}\n`);
+          break;
+        }
+        case 'agent_prompt':
+        case 'shell_then_prompt': {
+          try {
+            const prevProfile = activeProfile;
+            if (result.profile) applyProfile(result.profile);
+            if (result.newSession) {
+              session = newSession(db, resolved.model, resolved.provider);
+              loopOpts.session = session;
+            }
+            await runAgentMessage(result.prompt);
+            if (result.profile && result.profile !== prevProfile) applyProfile(prevProfile);
+          } catch (err) {
+            console.error(`Error: ${(err as Error).message}`);
+          }
+          break;
+        }
+        case 'error': {
+          console.error(`\n${result.message}\n`);
+          break;
+        }
+        case 'unknown_command': {
+          console.error(`\nUnknown command "/${result.name}". Type /help for available commands.\n`);
+          break;
+        }
+      }
+
+      rl.prompt();
+      return;
+    }
+
+    try {
+      await runAgentMessage(input);
     } catch (err) {
       console.error(`Error: ${(err as Error).message}`);
     }

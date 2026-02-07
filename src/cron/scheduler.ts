@@ -76,7 +76,7 @@ export class CronScheduler {
     const sessionKey = job.sessionKey ?? `cron:${job.name}`;
     const config = this.runtime.getConfig();
     const tools = this.runtime.getTools();
-    const resolved = resolveProfile(job.profile, config, tools, job.model);
+    const resolved = resolveProfile(job.profile, config, tools, job.model, this.runtime.contextDir);
 
     console.log(`[cron] Running "${job.name}" (${wakeAgent ? 'wake' : 'note'} mode)`);
 
@@ -103,6 +103,7 @@ export class CronScheduler {
       maxHistoryTokens: config.agent.maxHistoryTokens,
       temperature: resolved.temperature,
       contextDir: this.runtime.contextDir,
+      profileContextDir: resolved.contextDir,
       getTools: () => this.runtime.getTools(),
       getProvider: () => this.runtime.getProvider(),
       onToolCall: (name, args) => {

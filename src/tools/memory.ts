@@ -1,12 +1,22 @@
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve, basename } from 'node:path';
 import type { Tool, ToolContext, ToolResult } from './interface.js';
+import { ensureContextDir } from '../context.js';
 
 const FILENAME_RE = /^[a-zA-Z0-9_-]+\.md$/;
 
 function sanitizeFilename(name: string): string | null {
   const base = basename(name);
   return FILENAME_RE.test(base) ? base : null;
+}
+
+async function listDir(dir: string): Promise<string[]> {
+  try {
+    const entries = await readdir(dir);
+    return entries.filter((f) => f.endsWith('.md')).sort();
+  } catch {
+    return [];
+  }
 }
 
 export class MemoryTool implements Tool {
@@ -28,21 +38,28 @@ export class MemoryTool implements Tool {
         type: 'string',
         description: 'Content to write. Required for write.',
       },
+      scope: {
+        type: 'string',
+        enum: ['global', 'profile'],
+        description: 'Target scope. Default: profile if available, otherwise global.',
+      },
     },
     required: ['action'],
   };
 
-  private contextDir: string;
+  private globalDir: string;
 
-  constructor(contextDir: string) {
-    this.contextDir = contextDir;
+  constructor(globalDir: string) {
+    this.globalDir = globalDir;
   }
 
-  async execute(args: Record<string, unknown>): Promise<ToolResult> {
+  async execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     const action = args.action as string;
+    const scope = args.scope as 'global' | 'profile' | undefined;
+    const profileDir = context.profileContextDir;
 
     if (action === 'list') {
-      return this.list();
+      return this.list(scope, profileDir);
     }
 
     const filename = sanitizeFilename((args.filename as string) ?? '');
@@ -51,7 +68,7 @@ export class MemoryTool implements Tool {
     }
 
     if (action === 'read') {
-      return this.read(filename);
+      return this.read(filename, scope, profileDir);
     }
 
     if (action === 'write') {
@@ -59,37 +76,67 @@ export class MemoryTool implements Tool {
       if (!content) {
         return { success: false, output: '', error: 'content is required for write.' };
       }
-      return this.write(filename, content);
+      return this.write(filename, content, scope, profileDir);
     }
 
     return { success: false, output: '', error: `Unknown action "${action}".` };
   }
 
-  private async list(): Promise<ToolResult> {
-    try {
-      const entries = await readdir(this.contextDir);
-      const mdFiles = entries.filter((f) => f.endsWith('.md')).sort();
-      return { success: true, output: mdFiles.length ? mdFiles.join('\n') : '(no context files)' };
-    } catch {
-      return { success: true, output: '(no context files)' };
+  private async list(scope: 'global' | 'profile' | undefined, profileDir?: string): Promise<ToolResult> {
+    const lines: string[] = [];
+
+    if (!scope || scope === 'global') {
+      const globalFiles = await listDir(this.globalDir);
+      for (const f of globalFiles) lines.push(`[global] ${f}`);
     }
+
+    if ((!scope || scope === 'profile') && profileDir) {
+      const profileFiles = await listDir(profileDir);
+      for (const f of profileFiles) lines.push(`[profile] ${f}`);
+    }
+
+    return { success: true, output: lines.length ? lines.join('\n') : '(no context files)' };
   }
 
-  private async read(filename: string): Promise<ToolResult> {
+  private async read(filename: string, scope: 'global' | 'profile' | undefined, profileDir?: string): Promise<ToolResult> {
+    // Determine which directory to read from
+    const defaultDir = this.resolveDefaultDir(scope, profileDir);
+    const fallbackDir = scope ? undefined : (defaultDir === profileDir ? this.globalDir : profileDir);
+
     try {
-      const content = await readFile(resolve(this.contextDir, filename), 'utf-8');
+      const content = await readFile(resolve(defaultDir, filename), 'utf-8');
       return { success: true, output: content };
-    } catch (err) {
-      return { success: false, output: '', error: `Failed to read: ${(err as Error).message}` };
+    } catch {
+      // Try fallback if no explicit scope was given
+      if (fallbackDir) {
+        try {
+          const content = await readFile(resolve(fallbackDir, filename), 'utf-8');
+          return { success: true, output: content };
+        } catch (err) {
+          return { success: false, output: '', error: `Failed to read: ${(err as Error).message}` };
+        }
+      }
+      return { success: false, output: '', error: `File not found: ${filename}` };
     }
   }
 
-  private async write(filename: string, content: string): Promise<ToolResult> {
+  private async write(filename: string, content: string, scope: 'global' | 'profile' | undefined, profileDir?: string): Promise<ToolResult> {
+    const targetDir = this.resolveDefaultDir(scope, profileDir);
+
     try {
-      await writeFile(resolve(this.contextDir, filename), content, 'utf-8');
-      return { success: true, output: `Saved ${filename}` };
+      await ensureContextDir(targetDir);
+      await writeFile(resolve(targetDir, filename), content, 'utf-8');
+      const label = targetDir === this.globalDir ? 'global' : 'profile';
+      return { success: true, output: `Saved ${filename} [${label}]` };
     } catch (err) {
       return { success: false, output: '', error: `Failed to write: ${(err as Error).message}` };
     }
+  }
+
+  private resolveDefaultDir(scope: 'global' | 'profile' | undefined, profileDir?: string): string {
+    if (scope === 'global') return this.globalDir;
+    if (scope === 'profile' && profileDir) return profileDir;
+    // Default: profile dir if available, otherwise global
+    return profileDir ?? this.globalDir;
   }
 }

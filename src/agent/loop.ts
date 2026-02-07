@@ -3,7 +3,7 @@ import type { AIProvider, Message, ToolSchema } from '../providers/interface.js'
 import type { Tool, ToolContext } from '../tools/interface.js';
 import type { Session } from './session.js';
 import { getSessionMessages, saveMessage } from '../db/queries.js';
-import { loadContextFiles } from '../context.js';
+import { loadContextFiles, loadAllContext } from '../context.js';
 import { BASE_SYSTEM_PROMPT } from './prompt.js';
 
 const MAX_RETRIES = 1;
@@ -35,6 +35,7 @@ export interface AgentLoopOptions {
   maxHistoryTokens: number;
   temperature: number;
   contextDir?: string;
+  profileContextDir?: string;
   getTools?: () => Tool[];
   getProvider?: () => AIProvider;
   onToolCall?: (name: string, args: Record<string, unknown>) => void;
@@ -85,9 +86,9 @@ export async function runAgentLoop(
   userMessage: string,
   opts: AgentLoopOptions
 ): Promise<string> {
-  const { provider, session, db, tools, extraInstructions, maxToolRounds, maxHistoryTokens, temperature, contextDir } = opts;
+  const { provider, session, db, tools, extraInstructions, maxToolRounds, maxHistoryTokens, temperature, contextDir, profileContextDir } = opts;
 
-  const contextContent = contextDir ? await loadContextFiles(contextDir) : '';
+  const contextContent = contextDir ? await loadAllContext(contextDir, profileContextDir) : '';
   const fullSystemPrompt = BASE_SYSTEM_PROMPT + extraInstructions + contextContent;
   const systemPromptTokens = estimateTokens({ role: 'system', content: fullSystemPrompt });
 
@@ -101,6 +102,7 @@ export async function runAgentLoop(
     sessionId: session.id,
     workingDirectory: process.cwd(),
     env: {},
+    profileContextDir,
   };
 
   let rounds = 0;

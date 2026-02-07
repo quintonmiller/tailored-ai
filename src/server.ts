@@ -10,9 +10,11 @@ import YAML from 'yaml';
 import type { AgentRuntime } from './runtime.js';
 import type { CronScheduler } from './cron/scheduler.js';
 import { listSessions, getSessionMessages } from './db/queries.js';
-import { findOrCreateSession } from './agent/session.js';
+import { findOrCreateSession, resetSession } from './agent/session.js';
 import { runAgentLoop } from './agent/loop.js';
 import { listTasks } from './agent/tasks.js';
+import { isCommand, executeCommand } from './commands.js';
+import { resolveProfile } from './agent/profiles.js';
 
 export interface ServerOptions {
   runtime: AgentRuntime;
@@ -63,6 +65,20 @@ export function createServer(opts: ServerOptions) {
     const { id } = c.req.param();
     const messages = getSessionMessages(runtime.db, id);
     return c.json(messages);
+  });
+
+  app.post('/api/sessions/new', async (c) => {
+    const body = await c.req.json<{ sessionKey: string }>();
+    const { sessionKey } = body;
+
+    if (!sessionKey?.trim()) {
+      return c.json({ error: 'sessionKey is required' }, 400);
+    }
+
+    const config = runtime.getConfig();
+    const model = runtime.getModel();
+    const session = resetSession(runtime.db, sessionKey, model, config.agent.defaultProvider);
+    return c.json({ sessionId: session.id, sessionKey });
   });
 
   app.post('/api/chat', async (c) => {
@@ -193,22 +209,167 @@ export function createServer(opts: ServerOptions) {
     return c.json(listTasks());
   });
 
+  // --- Command endpoints ---
+
+  app.get('/api/commands', (c) => {
+    const config = runtime.getConfig();
+    const builtins = [
+      { name: 'new', description: 'Start a new session', builtin: true },
+      { name: 'agent', description: 'Switch to a named profile (usage: /agent <name>)', builtin: true },
+      { name: 'help', description: 'List available commands', builtin: true },
+    ];
+    const custom = Object.entries(config.commands).map(([name, cmd]) => ({
+      name,
+      description: cmd.description,
+      builtin: false,
+      hasCommand: !!cmd.command,
+      hasPrompt: !!cmd.prompt,
+      profile: cmd.profile,
+      newSession: cmd.new_session,
+    }));
+    return c.json([...builtins, ...custom]);
+  });
+
+  app.post('/api/command', async (c) => {
+    const body = await c.req.json<{ input: string; sessionKey?: string }>();
+    const { input, sessionKey } = body;
+
+    if (!input?.trim()) {
+      return c.json({ error: 'input is required' }, 400);
+    }
+
+    if (!isCommand(input)) {
+      return c.json({ error: 'Input must start with /' }, 400);
+    }
+
+    const config = runtime.getConfig();
+    const result = await executeCommand(input, { config });
+
+    switch (result.type) {
+      case 'new_session': {
+        const model = runtime.getModel();
+        const key = sessionKey ?? `web:${Date.now()}`;
+        const session = resetSession(runtime.db, key, model, config.agent.defaultProvider);
+        return c.json({ type: 'new_session', sessionId: session.id, sessionKey: key });
+      }
+      case 'switch_profile':
+        return c.json({ type: 'switch_profile', profile: result.profile });
+      case 'help':
+        return c.json({ type: 'help', text: result.text });
+      case 'shell_output':
+        return c.json({ type: 'shell_output', output: result.output });
+      case 'error':
+        return c.json({ type: 'error', message: result.message }, 400);
+      case 'unknown_command':
+        return c.json({ type: 'error', message: `Unknown command "/${result.name}"` }, 404);
+      case 'agent_prompt':
+      case 'shell_then_prompt': {
+        // Send through agent loop via SSE
+        const model = runtime.getModel();
+        const key = sessionKey ?? `web:${Date.now()}`;
+
+        if (result.newSession) {
+          resetSession(runtime.db, key, model, config.agent.defaultProvider);
+        }
+
+        const session = findOrCreateSession(runtime.db, key, model, config.agent.defaultProvider);
+
+        const resolved = result.profile
+          ? resolveProfile(result.profile, config, runtime.getTools(), undefined, runtime.contextDir)
+          : undefined;
+
+        return streamSSE(c, async (stream) => {
+          try {
+            if (result.type === 'shell_then_prompt') {
+              await stream.writeSSE({
+                event: 'shell_output',
+                data: JSON.stringify({ output: result.output }),
+              });
+            }
+
+            const response = await runAgentLoop(result.prompt, {
+              provider: runtime.getProvider(),
+              session,
+              db: runtime.db,
+              tools: resolved?.tools ?? runtime.getTools(),
+              extraInstructions: resolved?.instructions ?? config.agent.extraInstructions,
+              maxToolRounds: resolved?.maxToolRounds ?? config.agent.maxToolRounds,
+              maxHistoryTokens: config.agent.maxHistoryTokens,
+              temperature: resolved?.temperature ?? config.agent.temperature,
+              contextDir: runtime.contextDir,
+              profileContextDir: resolved?.contextDir,
+              getTools: () => runtime.getTools(),
+              getProvider: () => runtime.getProvider(),
+              onToolCall: (name, args) => {
+                stream.writeSSE({
+                  event: 'tool_call',
+                  data: JSON.stringify({ name, args }),
+                });
+              },
+              onToolResult: (name, output) => {
+                stream.writeSSE({
+                  event: 'tool_result',
+                  data: JSON.stringify({ name, output: output.slice(0, 1000) }),
+                });
+              },
+            });
+
+            await stream.writeSSE({
+              event: 'response',
+              data: JSON.stringify({ content: response, sessionId: session.id, sessionKey: key }),
+            });
+          } catch (err) {
+            await stream.writeSSE({
+              event: 'error',
+              data: JSON.stringify({ message: (err as Error).message }),
+            });
+          }
+        });
+      }
+      default:
+        return c.json({ type: 'error', message: 'Unexpected result' }, 500);
+    }
+  });
+
   app.get('/api/context', async (c) => {
     const dir = runtime.contextDir;
+    const globalDir = resolve(dir, 'global');
+    const profilesDir = resolve(dir, 'profiles');
+
+    const readMdFiles = async (d: string) => {
+      try {
+        const entries = await readdir(d);
+        return await Promise.all(
+          entries
+            .filter((f) => f.endsWith('.md'))
+            .sort()
+            .map(async (name) => {
+              const content = await readFile(resolve(d, name), 'utf-8');
+              return { name, content };
+            }),
+        );
+      } catch {
+        return [];
+      }
+    };
+
+    const globalFiles = await readMdFiles(globalDir);
+
+    const profiles: Record<string, { name: string; content: string }[]> = {};
     try {
-      const entries = await readdir(dir);
-      const files = await Promise.all(
-        entries
-          .filter((f) => !f.startsWith('.'))
-          .map(async (name) => {
-            const content = await readFile(resolve(dir, name), 'utf-8');
-            return { name, content };
-          }),
-      );
-      return c.json({ directory: dir, files });
+      const profileDirs = await readdir(profilesDir);
+      for (const pName of profileDirs) {
+        const pDir = resolve(profilesDir, pName);
+        const files = await readMdFiles(pDir);
+        if (files.length > 0) {
+          profiles[pName] = files;
+        }
+      }
     } catch {
-      return c.json({ directory: dir, files: [] });
+      // profiles dir may not exist
     }
+
+    return c.json({ directory: dir, global: globalFiles, profiles });
   });
 
   // --- Config endpoints ---

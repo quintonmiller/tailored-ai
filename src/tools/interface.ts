@@ -2,6 +2,7 @@ export interface ToolContext {
   sessionId: string;
   workingDirectory: string;
   env: Record<string, string>;
+  profileContextDir?: string;
 }
 
 export interface ToolResult {

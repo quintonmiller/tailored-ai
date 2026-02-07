@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import type { AgentConfig, AgentProfile } from '../config.js';
 import type { Tool } from '../tools/interface.js';
 
@@ -8,13 +9,15 @@ export interface ResolvedProfile {
   tools: Tool[];
   temperature: number;
   maxToolRounds: number;
+  contextDir: string | undefined;
 }
 
 export function resolveProfile(
   profileName: string | undefined,
   config: AgentConfig,
   allTools: Tool[],
-  modelOverride?: string
+  modelOverride?: string,
+  baseContextDir?: string
 ): ResolvedProfile {
   const providerCfg = config.providers[config.agent.defaultProvider as keyof typeof config.providers];
   const defaultModel = providerCfg && 'defaultModel' in providerCfg ? providerCfg.defaultModel : '';
@@ -26,6 +29,7 @@ export function resolveProfile(
     tools: allTools,
     temperature: config.agent.temperature,
     maxToolRounds: config.agent.maxToolRounds,
+    contextDir: undefined,
   };
 
   let profile: AgentProfile | undefined;
@@ -44,7 +48,13 @@ export function resolveProfile(
     tools: defaults.tools,
     temperature: profile?.temperature ?? defaults.temperature,
     maxToolRounds: profile?.maxToolRounds ?? defaults.maxToolRounds,
+    contextDir: undefined,
   };
+
+  // Derive contextDir when a profile is active
+  if (profileName && baseContextDir) {
+    resolved.contextDir = profile?.contextDir ?? join(baseContextDir, 'profiles', profileName);
+  }
 
   if (profile?.tools) {
     const toolMap = new Map(allTools.map((t) => [t.name, t]));

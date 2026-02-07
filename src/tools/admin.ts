@@ -29,6 +29,7 @@ function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
 const ALLOWED_WRITE_PREFIXES = [
   'profiles.',
   'custom_tools.',
+  'commands.',
   'cron.jobs',
   'cron.enabled',
   'agent.extraInstructions',

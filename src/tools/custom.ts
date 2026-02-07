@@ -1,13 +1,8 @@
-import { execFile } from 'node:child_process';
+import { shellEscape, runShellCommand } from '../shell.js';
 import type { CustomToolConfig } from '../config.js';
 import type { Tool, ToolContext, ToolResult } from './interface.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-const MAX_BUFFER = 1024 * 1024; // 1MB
-
-function shellEscape(value: string): string {
-  return "'" + value.replace(/'/g, "'\\''") + "'";
-}
 
 export class CustomTool implements Tool {
   name: string;
@@ -54,15 +49,7 @@ export class CustomTool implements Tool {
       return { success: false, output: '', error: `Unresolved placeholders: ${unresolved.join(', ')}` };
     }
 
-    return new Promise((resolve) => {
-      execFile('bash', ['-c', cmd], { timeout: this.timeoutMs, maxBuffer: MAX_BUFFER }, (err, stdout, stderr) => {
-        if (err) {
-          resolve({ success: false, output: stdout, error: stderr || (err as Error).message });
-        } else {
-          resolve({ success: true, output: stdout + (stderr ? `\n[stderr] ${stderr}` : '') });
-        }
-      });
-    });
+    return runShellCommand(cmd, this.timeoutMs);
   }
 }
 

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
-import { createSession, getSession, getSessionByKey } from '../db/queries.js';
+import { createSession, getSession, getSessionByKey, clearSessionKey } from '../db/queries.js';
 
 export interface Session {
   id: string;
@@ -38,5 +38,16 @@ export function findOrCreateSession(
   if (existing) {
     return { id: existing.id, model: existing.model, provider: existing.provider };
   }
+  return newSession(db, model, provider, key);
+}
+
+/** Detach the key from the current session and create a fresh one with the same key. */
+export function resetSession(
+  db: Database.Database,
+  key: string,
+  model: string,
+  provider: string
+): Session {
+  clearSessionKey(db, key);
   return newSession(db, model, provider, key);
 }

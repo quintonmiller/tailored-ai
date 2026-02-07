@@ -66,6 +66,13 @@ export function saveMessage(
   );
 }
 
+export function clearSessionKey(
+  db: Database.Database,
+  key: string
+): void {
+  db.prepare('UPDATE sessions SET key = NULL WHERE key = ?').run(key);
+}
+
 export function listSessions(db: Database.Database): SessionRow[] {
   return db
     .prepare('SELECT * FROM sessions ORDER BY updated_at DESC')

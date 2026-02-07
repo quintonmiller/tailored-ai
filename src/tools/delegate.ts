@@ -7,6 +7,7 @@ import { resolveProfile } from '../agent/profiles.js';
 import { newSession } from '../agent/session.js';
 import { runAgentLoop } from '../agent/loop.js';
 import { startTask } from '../agent/tasks.js';
+import { ensureContextDir } from '../context.js';
 
 export interface DelegateToolOptions {
   getConfig: () => AgentConfig;
@@ -57,9 +58,14 @@ export class DelegateTool implements Tool {
 
     let resolved;
     try {
-      resolved = resolveProfile(profileName, config, allTools);
+      resolved = resolveProfile(profileName, config, allTools, undefined, this.contextDir);
     } catch (err) {
       return { success: false, output: '', error: (err as Error).message };
+    }
+
+    // Ensure profile context dir exists before running sub-agent
+    if (resolved.contextDir) {
+      await ensureContextDir(resolved.contextDir);
     }
 
     const runDelegate = (): Promise<string> => {
@@ -76,6 +82,7 @@ export class DelegateTool implements Tool {
         maxHistoryTokens: config.agent.maxHistoryTokens,
         temperature: resolved.temperature,
         contextDir: this.contextDir,
+        profileContextDir: resolved.contextDir,
       });
     };
 
