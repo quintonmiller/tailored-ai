@@ -18,8 +18,9 @@ export interface CronJobConfig {
   sessionKey?: string;
   model?: string;
   profile?: string;
+  enabled?: boolean;
   delivery?: {
-    channel: 'log' | 'discord';
+    channel: 'log' | 'discord' | 'discord-dm';
     target?: string;
   };
   wakeAgent?: boolean;
@@ -61,6 +62,7 @@ export interface AgentConfig {
     discord?: {
       enabled: boolean;
       token: string;
+      owner?: string;
       allowedGuilds?: string[];
       respondToDMs: boolean;
       respondToMentions: boolean;

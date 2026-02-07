@@ -112,14 +112,6 @@ function createTools(config: AgentConfig, contextDir: string): Tool[] {
 async function runServe(runtime: AgentRuntime) {
   const channels: { name: string; disconnect: () => Promise<void> }[] = [];
 
-  // Always start the HTTP server
-  const { start } = createServer({ runtime });
-  const httpServer = start();
-  channels.push({
-    name: `http(:${runtime.getConfig().server.port})`,
-    disconnect: () => new Promise<void>((res) => httpServer.close(() => res())),
-  });
-
   let discord: DiscordChannel | undefined;
   if (runtime.getConfig().channels.discord?.enabled) {
     discord = new DiscordChannel({ runtime });
@@ -132,6 +124,14 @@ async function runServe(runtime: AgentRuntime) {
     scheduler.start();
   }
   runtime.onReload(() => scheduler.restart());
+
+  // Start the HTTP server (after scheduler so it can trigger jobs)
+  const { start } = createServer({ runtime, scheduler });
+  const httpServer = start();
+  channels.push({
+    name: `http(:${runtime.getConfig().server.port})`,
+    disconnect: () => new Promise<void>((res) => httpServer.close(() => res())),
+  });
 
   const model = runtime.getModel();
   const tools = runtime.getTools();

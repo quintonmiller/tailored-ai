@@ -120,6 +120,18 @@ export function fetchCron(): Promise<CronData> {
   return jsonFetch('/api/cron');
 }
 
+export function toggleCronJob(name: string, enabled: boolean): Promise<{ ok?: boolean; error?: string }> {
+  return jsonFetch(`/api/cron/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+}
+
+export function triggerCronJob(name: string): Promise<{ ok?: boolean; error?: string }> {
+  return jsonFetch(`/api/cron/${encodeURIComponent(name)}/run`, { method: 'POST' });
+}
+
 export function fetchTasks(): Promise<TaskInfo[]> {
   return jsonFetch('/api/tasks');
 }

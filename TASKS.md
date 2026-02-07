@@ -44,7 +44,7 @@
 - [x] HTTP server (Hono with SSE-based `/api/chat`)
 - [x] REST API for management (sessions, config)
 - [x] Context/memory system (`src/context.ts`, loads `.md` files into system prompt)
-- [ ] Minimal dashboard (status, logs, active sessions) — static files served but UI is stub
+- [x] Dashboard upgrade — 6-section layout (status, profiles, cron, tasks, context, sessions), tools page, 5 new API endpoints
 - [x] OpenAI provider (`src/providers/openai.ts`, raw fetch, configurable base URL)
 
 ## Phase 5: Extensibility
@@ -60,3 +60,13 @@
 - [x] ~~No history compaction yet~~ — `trimHistory()` in `loop.ts` now enforces `maxHistoryTokens`
 - [ ] Both OpenClaw and autonomous-agent share the same Discord bot token - will need separate bot apps for production use
 - [ ] No unit tests yet
+
+## Dashboard Improvements
+- [ ] Active nav highlighting — indicate current page in header nav
+- [ ] Dashboard section spacing — empty states lack `margin-bottom`, sit tight against next heading
+- [ ] Context file lazy loading — `/api/context` reads all file contents upfront; defer to on-expand to avoid bloating response with large files
+- [ ] Cron config+DB merge — endpoint only reads `cron_jobs` DB table; jobs defined in config that haven't run yet won't appear. Merge config jobs with DB rows
+- [ ] Tool search/filter — search input on Tools page to filter long tool lists
+- [ ] Relative time auto-refresh — "3m ago" timestamps are static from page load; add a timer to keep them accurate
+- [ ] Loading skeletons — dashboard flashes empty states before data arrives; add skeleton placeholders
+- [ ] Responsive breakpoints — profile grid and health grid need explicit mobile breakpoints below ~480px

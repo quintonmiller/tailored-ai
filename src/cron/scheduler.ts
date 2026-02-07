@@ -30,7 +30,13 @@ export class CronScheduler {
     if (!jobs.length) return;
 
     for (const job of jobs) {
+      const jobEnabled = job.enabled !== false;
       this.upsertJobRow(job);
+
+      if (!jobEnabled) {
+        console.log(`[cron] Skipping disabled job "${job.name}"`);
+        continue;
+      }
 
       const timer = new Cron(job.schedule, () => {
         this.runJob(job).catch((err) => {
@@ -54,6 +60,15 @@ export class CronScheduler {
   restart(): void {
     this.stop();
     this.start();
+  }
+
+  triggerJob(name: string): void {
+    const config = this.runtime.getConfig();
+    const job = config.cron.jobs.find((j) => j.name === name);
+    if (!job) throw new Error(`Unknown job: ${name}`);
+    this.runJob(job).catch((err) => {
+      console.error(`[cron] Error running triggered job "${name}":`, err);
+    });
   }
 
   private async runJob(job: CronJobConfig): Promise<void> {
@@ -137,24 +152,40 @@ export class CronScheduler {
       return;
     }
 
+    if (channel === 'discord-dm') {
+      const target = job.delivery?.target ?? this.runtime.getConfig().channels.discord?.owner;
+      if (!target) {
+        console.error(`[cron] Job "${job.name}" has discord-dm delivery but no target user ID or discord owner configured`);
+        return;
+      }
+      if (!this.discord) {
+        console.error(`[cron] Job "${job.name}" wants discord-dm delivery but Discord is not connected`);
+        return;
+      }
+      await this.discord.sendDM(target, response);
+      console.log(`[cron] Delivered "${job.name}" response as DM to user ${target}`);
+      return;
+    }
+
     // Default: log
     console.log(`[cron] [${job.name}] ${response}`);
   }
 
   private upsertJobRow(job: CronJobConfig): void {
     const sessionKey = job.sessionKey ?? `cron:${job.name}`;
+    const enabled = job.enabled !== false ? 1 : 0;
     const existing = this.runtime.db
       .prepare('SELECT id FROM cron_jobs WHERE name = ?')
       .get(job.name) as { id: string } | undefined;
 
     if (existing) {
       this.runtime.db.prepare(
-        'UPDATE cron_jobs SET schedule = ?, task = ?, model = ?, session_key = ?, enabled = 1 WHERE name = ?'
-      ).run(job.schedule, job.prompt, job.model ?? null, sessionKey, job.name);
+        'UPDATE cron_jobs SET schedule = ?, task = ?, model = ?, session_key = ?, enabled = ? WHERE name = ?'
+      ).run(job.schedule, job.prompt, job.model ?? null, sessionKey, enabled, job.name);
     } else {
       this.runtime.db.prepare(
-        'INSERT INTO cron_jobs (id, name, schedule, task, model, session_key, enabled) VALUES (?, ?, ?, ?, ?, ?, 1)'
-      ).run(randomUUID(), job.name, job.schedule, job.prompt, job.model ?? null, sessionKey);
+        'INSERT INTO cron_jobs (id, name, schedule, task, model, session_key, enabled) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).run(randomUUID(), job.name, job.schedule, job.prompt, job.model ?? null, sessionKey, enabled);
     }
   }
 

@@ -102,6 +102,13 @@ export class DiscordChannel implements Channel {
     }
   }
 
+  async sendDM(userId: string, content: string): Promise<void> {
+    const user = await this.client.users.fetch(userId);
+    for (const chunk of splitMessage(content)) {
+      await user.send(chunk);
+    }
+  }
+
   private shouldRespond(msg: DiscordMessage): boolean {
     // Never respond to ourselves
     if (msg.author.id === this.client.user?.id) return false;

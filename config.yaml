@@ -1,35 +1,30 @@
 server:
   port: 3000
-  host: "127.0.0.1"
-
+  host: 127.0.0.1
 database:
-  path: "./agent.db"
-
+  path: ./agent.db
 providers:
   ollama:
-    baseUrl: "http://localhost:11434"
-    defaultModel: "devstral-small-2:latest"
-
+    baseUrl: http://localhost:11434
+    defaultModel: devstral-small-2:latest
 agent:
-  defaultProvider: "ollama"
+  defaultProvider: ollama
   extraInstructions: ""
   maxHistoryTokens: 2000
   temperature: 0.3
   maxToolRounds: 10
-
 channels:
   discord:
     enabled: true
-    token: "${DISCORD_BOT_TOKEN}"
+    token: ${DISCORD_BOT_TOKEN}
+    owner: ${DISCORD_OWNER_ID}
     respondToDMs: true
     respondToMentions: true
-    # allowedGuilds:
-    #   - "guild-id-here"
-
 tools:
   exec:
     enabled: true
-    allowedCommands: ["ls"]
+    allowedCommands:
+      - ls
   read:
     enabled: true
   write:
@@ -38,22 +33,81 @@ tools:
     enabled: true
   web_search:
     enabled: true
-    provider: "brave"
-    apiKey: "${BRAVE_API_KEY}"
+    provider: brave
+    apiKey: ${BRAVE_API_KEY}
     maxResults: 5
   trello:
     enabled: true
-    apiKey: "${TRELLO_API_KEY}"
-    token: "${TRELLO_TOKEN}"
+    apiKey: ${TRELLO_API_KEY}
+    token: ${TRELLO_TOKEN}
   gmail:
     enabled: true
-    account: "${GOG_ACCOUNT}"
+    account: ${GOG_ACCOUNT}
   google_calendar:
     enabled: true
-    account: "${GOG_ACCOUNT}"
+    account: ${GOG_ACCOUNT}
   claude_code:
     enabled: false
-    # allowedTools: ["Read", "Glob", "Grep", "Bash(git *)"]
-    # disallowedTools: []
-    # maxTurns: 10
-    # model: "sonnet"
+profiles:
+  researcher:
+    instructions: You are a research assistant. Search the web, fetch pages, and
+      summarize findings concisely.
+    tools:
+      - web_search
+      - web_fetch
+      - memory
+    temperature: 0.5
+    maxToolRounds: 8
+  planner:
+    instructions: You are a planning assistant. Check the calendar, review Trello
+      boards, and help organize tasks.
+    tools:
+      - google_calendar
+      - trello
+      - memory
+    temperature: 0.3
+    maxToolRounds: 5
+  writer:
+    instructions: You are a writing assistant. Read files for context, then draft or
+      edit content. Save results with the write tool.
+    tools:
+      - read
+      - write
+      - memory
+    temperature: 0.7
+    maxToolRounds: 10
+  ops:
+    instructions: You are a sysops assistant. Run allowed commands and read files to
+      diagnose issues.
+    tools:
+      - exec
+      - read
+      - memory
+    temperature: 0.2
+    maxToolRounds: 5
+cron:
+  enabled: true
+  jobs:
+    - name: morning-briefing
+      schedule: 0 8 * * *
+      prompt: "Give me a morning briefing: check my calendar for today's events,
+        review any Trello cards due today, and summarize."
+      profile: planner
+      delivery:
+        channel: log
+      enabled: false
+    - name: weekly-news
+      schedule: 0 9 * * 1
+      prompt: Search for the latest AI and tech news from the past week. Summarize the
+        top 5 stories.
+      profile: researcher
+      delivery:
+        channel: log
+      enabled: false
+    - name: email-summary
+      enabled: false
+      schedule: "*/5 * * * *"
+      prompt: Check my recent emails and give me a brief summary of anything new or
+        important.
+      delivery:
+        channel: discord-dm

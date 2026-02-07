@@ -91,7 +91,7 @@ export function Dashboard() {
       )}
 
       <h2>Cron Jobs</h2>
-      {cron ? <CronJobList data={cron} /> : <div className="empty-state">Loading...</div>}
+      {cron ? <CronJobList data={cron} onJobTriggered={() => fetchCron().then(setCron)} /> : <div className="empty-state">Loading...</div>}
 
       <h2>Background Tasks</h2>
       <TaskList tasks={tasks} />

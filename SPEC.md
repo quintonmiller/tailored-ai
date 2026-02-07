@@ -90,6 +90,8 @@ Use cases:
 
 - Schedule recurring agent tasks
 - Configurable model/context per job
+- **Manual trigger support** - run any cron job immediately via API or UI
+- Job status tracking (last run, next run, success/failure)
 - Examples: daily email summary, weekly report generation
 
 ### 7. Web UI (Minimal Dashboard)
@@ -97,6 +99,7 @@ Use cases:
 - Agent status and health
 - Active sessions list
 - Recent logs/activity
+- **Cron job management** - list jobs, view status, trigger immediately
 - Basic configuration
 - Future: chat interface
 
@@ -150,7 +153,7 @@ Use cases:
                                   ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                      SQLite Database                             │
-│  sessions | messages | tool_results | cron_jobs | config        │
+│  sessions | messages | tool_results | cron_jobs | cron_runs | config │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -417,6 +420,26 @@ cron:
       schedule: "0 9 * * *"
       task: "Summarize my unread emails from the last 24 hours"
       model: "devstral-small-2:latest"
+```
+
+---
+
+## REST API Endpoints
+
+```
+GET  /api/status              # Agent health and status
+GET  /api/sessions            # List active sessions
+GET  /api/sessions/:id        # Get session details + history
+
+GET  /api/cron                # List all cron jobs with status
+POST /api/cron/:name/trigger  # Trigger a cron job immediately
+GET  /api/cron/:name/history  # Get run history for a job
+
+POST /api/chat                # Send message, get response (SSE stream)
+POST /api/webhooks/:route     # Webhook receiver
+
+GET  /api/config              # Get current config (redacted secrets)
+PUT  /api/config              # Update config (hot-reload)
 ```
 
 ---

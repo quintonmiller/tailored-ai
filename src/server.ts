@@ -6,7 +6,9 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
+import YAML from 'yaml';
 import type { AgentRuntime } from './runtime.js';
+import type { CronScheduler } from './cron/scheduler.js';
 import { listSessions, getSessionMessages } from './db/queries.js';
 import { findOrCreateSession } from './agent/session.js';
 import { runAgentLoop } from './agent/loop.js';
@@ -14,6 +16,7 @@ import { listTasks } from './agent/tasks.js';
 
 export interface ServerOptions {
   runtime: AgentRuntime;
+  scheduler?: CronScheduler;
 }
 
 const startTime = Date.now();
@@ -125,6 +128,48 @@ export function createServer(opts: ServerOptions) {
       enabled: config.cron.enabled,
       jobs: rows,
     });
+  });
+
+  app.patch('/api/cron/:name', async (c) => {
+    const { name } = c.req.param();
+    const body = await c.req.json<{ enabled: boolean }>();
+    if (typeof body.enabled !== 'boolean') {
+      return c.json({ error: '"enabled" (boolean) is required' }, 400);
+    }
+
+    try {
+      const raw = readFileSync(runtime.configPath, 'utf-8');
+      const doc = (YAML.parse(raw) as Record<string, unknown>) ?? {};
+      const cron = doc.cron as Record<string, unknown> | undefined;
+      const jobs = (cron?.jobs as Record<string, unknown>[]) ?? [];
+      const job = jobs.find((j) => j.name === name);
+      if (!job) {
+        return c.json({ error: `Job "${name}" not found in config` }, 404);
+      }
+
+      if (body.enabled) {
+        delete job.enabled; // default is true, keep config clean
+      } else {
+        job.enabled = false;
+      }
+
+      writeFileSync(runtime.configPath, YAML.stringify(doc), 'utf-8');
+      runtime.reload();
+      return c.json({ ok: true });
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 500);
+    }
+  });
+
+  app.post('/api/cron/:name/run', (c) => {
+    if (!opts.scheduler) return c.json({ error: 'Scheduler not available' }, 503);
+    const { name } = c.req.param();
+    try {
+      opts.scheduler.triggerJob(name);
+      return c.json({ ok: true });
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 404);
+    }
   });
 
   app.get('/api/tasks', (c) => {

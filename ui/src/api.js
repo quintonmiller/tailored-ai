@@ -32,6 +32,16 @@ export function fetchProfiles() {
 export function fetchCron() {
     return jsonFetch('/api/cron');
 }
+export function toggleCronJob(name, enabled) {
+    return jsonFetch(`/api/cron/${encodeURIComponent(name)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+    });
+}
+export function triggerCronJob(name) {
+    return jsonFetch(`/api/cron/${encodeURIComponent(name)}/run`, { method: 'POST' });
+}
 export function fetchTasks() {
     return jsonFetch('/api/tasks');
 }
