@@ -33,6 +33,14 @@ export class ExecTool implements Tool {
     }
 
     if (this.allowedCommands.length > 0) {
+      // Reject shell metacharacters to prevent chaining/piping past the allowlist
+      if (/[;|&`$(){}<>!#\n]/.test(command)) {
+        return {
+          success: false,
+          output: '',
+          error: `Command rejected: shell operators are not allowed when an allowlist is active.`,
+        };
+      }
       const bin = command.split(/\s+/)[0];
       if (!this.allowedCommands.includes(bin)) {
         return {

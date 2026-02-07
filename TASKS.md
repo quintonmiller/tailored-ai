@@ -55,11 +55,43 @@
 - [ ] Webhook receiver (Gmail, GitHub, etc.)
 - [ ] Chat UI in dashboard
 
+## Security
+- [x] ~~Exec tool allowlist is bypassable~~ — now rejects shell metacharacters (`; | & $ ...`) when an allowlist is active
+- [x] ~~HTTP API has no authentication~~ — added `server.apiKey` config option; mutating endpoints require `Bearer` token when set
+- [x] ~~Admin tool has no path restrictions~~ — added allowlist of writable path prefixes (profiles, custom_tools, cron, agent tuning); everything else is blocked
+- [x] ~~Custom tool interpolation order~~ — switched from sequential `replaceAll` to single-pass regex replace using a pre-built map
+
 ## Bugs / Tech Debt
 - [ ] Database path resolves relative to CWD, not project root - consider making it absolute or relative to config file location
 - [x] ~~No history compaction yet~~ — `trimHistory()` in `loop.ts` now enforces `maxHistoryTokens`
 - [ ] Both OpenClaw and autonomous-agent share the same Discord bot token - will need separate bot apps for production use
 - [ ] No unit tests yet
+- [x] ~~`trimHistory` is O(n²)~~ — replaced `shift()` loop with index pointer + final `slice()`
+- [x] ~~System prompt not counted in token budget~~ — system prompt tokens are now subtracted from the history budget before trimming
+- [x] ~~Concurrent config writes~~ — added `runtime.withConfigLock()` mutex; admin tool and server endpoints serialize config read-modify-write
+- [x] ~~Browser tool leaks processes on reload~~ — added optional `destroy()` hook to `Tool` interface; runtime calls it on old tools during reload. `BrowserTool` closes chromium in `destroy()`
+- [x] ~~Task registry grows unboundedly~~ — added eviction: finished tasks older than 1 hour are pruned, capped at 100 finished tasks
+- [x] ~~`OpenAIProvider` doesn't handle empty `choices`~~ — added guard with descriptive error
+- [x] ~~`loadConfig` path inconsistency~~ — now passes the resolved absolute `configPath` to `loadConfig()` instead of the raw CLI value
+- [ ] Session model/provider never updates — resuming a session after changing the default model keeps using the old model stored at creation time
+- [ ] `saveMessage` does two DB writes — INSERT + UPDATE `updated_at` could be a single transaction or handled by a trigger
+- [x] ~~`startTime` is module-level in `server.ts`~~ — moved inside `createServer()` so it captures actual server start time
+
+## Architecture
+- [ ] Extract `AgentLoopOptions` factory — Discord, Cron, Server, and CLI all manually build the same ~12-field options object. Add `runtime.buildLoopOptions(session, overrides?)` to eliminate duplication
+- [ ] Meta tools not in tool registry — delegate, task_status, admin are instantiated separately in `cli.ts` and concatenated. They bypass profile filtering and aren't available in service mode (cron/Discord can't delegate)
+- [x] ~~`createProvider` ignores OpenAI `baseUrl`~~ — now passes `config.providers.openai.baseUrl` to the constructor
+- [x] ~~Add `baseUrl` to OpenAI config type~~ — added optional `baseUrl` field to `AgentConfig.providers.openai`
+- [ ] No streaming in agent loop — `chatStream` exists in the provider interface but is never used. SSE endpoint only streams tool events; LLM response arrives as one block
+- [x] ~~No retry/backoff on provider calls~~ — added `withRetry()` wrapper (1 retry after 1s delay) around `provider.chat()` in the agent loop
+- [ ] No graceful shutdown for in-flight loops — `SIGINT` handler calls `db.close()` immediately; mid-execution agent loops may partially write messages
+- [ ] File watcher fragility — `fs.watch` is unreliable on network mounts and some Linux setups. No fallback polling
+- [ ] Discord reconnection handling — no `Events.Error` or `Events.ShardDisconnect` handlers; typing intervals and processing set may become stale after reconnect
+
+## DX
+- [ ] No test framework — zero test files, no test script in package.json. Core logic (profile resolution, history trimming, config merging) needs unit tests
+- [ ] No linting/formatting — no ESLint, Prettier, or Biome config
+- [ ] No `engines` field in package.json — project requires Node 18+ (top-level await, fetch, ESM) but nothing enforces it
 
 ## Dashboard Improvements
 - [ ] Active nav highlighting — indicate current page in header nav

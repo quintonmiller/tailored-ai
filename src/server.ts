@@ -19,12 +19,27 @@ export interface ServerOptions {
   scheduler?: CronScheduler;
 }
 
-const startTime = Date.now();
-
 export function createServer(opts: ServerOptions) {
+  const startTime = Date.now();
   const { runtime } = opts;
 
   const app = new Hono();
+
+  // --- Auth middleware: protect mutating endpoints when server.apiKey is set ---
+  app.use('/api/*', async (c, next) => {
+    const method = c.req.method;
+    if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') {
+      return next();
+    }
+    const apiKey = runtime.getConfig().server.apiKey;
+    if (!apiKey) return next();
+
+    const auth = c.req.header('Authorization');
+    if (auth !== `Bearer ${apiKey}`) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+    return next();
+  });
 
   // --- API routes ---
 
@@ -138,24 +153,26 @@ export function createServer(opts: ServerOptions) {
     }
 
     try {
-      const raw = readFileSync(runtime.configPath, 'utf-8');
-      const doc = (YAML.parse(raw) as Record<string, unknown>) ?? {};
-      const cron = doc.cron as Record<string, unknown> | undefined;
-      const jobs = (cron?.jobs as Record<string, unknown>[]) ?? [];
-      const job = jobs.find((j) => j.name === name);
-      if (!job) {
-        return c.json({ error: `Job "${name}" not found in config` }, 404);
-      }
+      return await runtime.withConfigLock(() => {
+        const raw = readFileSync(runtime.configPath, 'utf-8');
+        const doc = (YAML.parse(raw) as Record<string, unknown>) ?? {};
+        const cron = doc.cron as Record<string, unknown> | undefined;
+        const jobs = (cron?.jobs as Record<string, unknown>[]) ?? [];
+        const job = jobs.find((j) => j.name === name);
+        if (!job) {
+          return c.json({ error: `Job "${name}" not found in config` }, 404);
+        }
 
-      if (body.enabled) {
-        delete job.enabled; // default is true, keep config clean
-      } else {
-        job.enabled = false;
-      }
+        if (body.enabled) {
+          delete job.enabled; // default is true, keep config clean
+        } else {
+          job.enabled = false;
+        }
 
-      writeFileSync(runtime.configPath, YAML.stringify(doc), 'utf-8');
-      runtime.reload();
-      return c.json({ ok: true });
+        writeFileSync(runtime.configPath, YAML.stringify(doc), 'utf-8');
+        runtime.reload();
+        return c.json({ ok: true });
+      });
     } catch (err) {
       return c.json({ error: (err as Error).message }, 500);
     }
@@ -210,9 +227,11 @@ export function createServer(opts: ServerOptions) {
       return c.json({ error: 'content is required' }, 400);
     }
     try {
-      writeFileSync(runtime.configPath, body.content, 'utf-8');
-      runtime.reload();
-      return c.json({ ok: true, message: 'Config saved and reloaded.' });
+      return await runtime.withConfigLock(() => {
+        writeFileSync(runtime.configPath, body.content, 'utf-8');
+        runtime.reload();
+        return c.json({ ok: true, message: 'Config saved and reloaded.' });
+      });
     } catch (err) {
       return c.json({ error: (err as Error).message }, 500);
     }

@@ -178,4 +178,12 @@ export class BrowserTool implements Tool {
     }
     return { success: true, output: 'Browser closed.' };
   }
+
+  async destroy(): Promise<void> {
+    if (this.browser) {
+      await this.browser.close().catch(() => {});
+      this.browser = null;
+      this.page = null;
+    }
+  }
 }

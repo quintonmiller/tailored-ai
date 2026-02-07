@@ -26,6 +26,7 @@ export class AgentRuntime {
   private _debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
   private _reloadListeners: Array<() => void> = [];
+  private _configLock: Promise<void> = Promise.resolve();
   private _createTools: RuntimeOptions['createTools'];
   private _createProvider: RuntimeOptions['createProvider'];
   private _loadConfig: (path: string) => AgentConfig;
@@ -60,6 +61,13 @@ export class AgentRuntime {
       const config = this._loadConfig(this.configPath);
       const tools = this._createTools(config, this.contextDir);
       const { provider, model } = this._createProvider(config);
+      // Clean up old tools that have a destroy hook (e.g. browser processes)
+      const oldTools = this._tools;
+      for (const tool of oldTools) {
+        tool.destroy?.().catch((e) => {
+          console.error(`[runtime] Error destroying tool "${tool.name}":`, (e as Error).message);
+        });
+      }
       this._config = config;
       this._tools = tools;
       this._provider = provider;
@@ -97,5 +105,13 @@ export class AgentRuntime {
     if (this._debounceTimer) clearTimeout(this._debounceTimer);
     this._watcher?.close();
     this._watcher = undefined;
+  }
+
+  /** Serialize config read-modify-write operations to prevent lost writes. */
+  withConfigLock<T>(fn: () => T | Promise<T>): Promise<T> {
+    const prev = this._configLock;
+    let resolve: (v: void) => void;
+    this._configLock = new Promise<void>((r) => { resolve = r; });
+    return prev.then(fn).finally(() => resolve!());
   }
 }

@@ -62,7 +62,7 @@ function createProvider(config: AgentConfig): { provider: AIProvider; model: str
   }
   if (config.agent.defaultProvider === 'openai' && config.providers.openai) {
     return {
-      provider: new OpenAIProvider(config.providers.openai.apiKey),
+      provider: new OpenAIProvider(config.providers.openai.apiKey, config.providers.openai.baseUrl),
       model: config.providers.openai.defaultModel,
     };
   }
@@ -181,7 +181,7 @@ async function main() {
   }
 
   const configPath = resolve(process.cwd(), values.config ?? 'config.yaml');
-  const config = loadConfig(values.config);
+  const config = loadConfig(configPath);
   const dbPath = resolve(process.cwd(), config.database.path);
   const db = initDatabase(dbPath);
 

@@ -38,12 +38,15 @@ export class CustomTool implements Tool {
   }
 
   async execute(args: Record<string, unknown>, _context: ToolContext): Promise<ToolResult> {
-    let cmd = this.command;
-
+    // Build replacement map first, then substitute in one pass to prevent
+    // a param value containing {{other}} from being interpolated again.
+    const replacements = new Map<string, string>();
     for (const name of this.paramNames) {
-      const value = String(args[name] ?? '');
-      cmd = cmd.replaceAll(`{{${name}}}`, shellEscape(value));
+      replacements.set(`{{${name}}}`, shellEscape(String(args[name] ?? '')));
     }
+
+    const pattern = /\{\{\w+\}\}/g;
+    let cmd = this.command.replace(pattern, (match) => replacements.get(match) ?? match);
 
     // Check for unresolved placeholders
     const unresolved = cmd.match(/\{\{(\w+)\}\}/g);

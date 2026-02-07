@@ -114,7 +114,10 @@ export class OpenAIProvider implements AIProvider {
     }
 
     const data = (await resp.json()) as OpenAIChatResponse;
-    const choice = data.choices[0];
+    const choice = data.choices?.[0];
+    if (!choice) {
+      throw new Error('OpenAI API returned no choices');
+    }
 
     const toolCalls: ToolCall[] | undefined = choice.message.tool_calls?.map(
       (tc) => ({

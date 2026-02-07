@@ -37,6 +37,7 @@ export interface AgentConfig {
   server: {
     port: number;
     host: string;
+    apiKey?: string;
   };
   database: {
     path: string;
@@ -49,6 +50,7 @@ export interface AgentConfig {
     openai?: {
       apiKey: string;
       defaultModel: string;
+      baseUrl?: string;
     };
   };
   agent: {

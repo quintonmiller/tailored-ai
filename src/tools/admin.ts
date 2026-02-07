@@ -25,6 +25,25 @@ function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
   return current;
 }
 
+// Paths the agent is allowed to modify. Anything else is blocked.
+const ALLOWED_WRITE_PREFIXES = [
+  'profiles.',
+  'custom_tools.',
+  'cron.jobs',
+  'cron.enabled',
+  'agent.extraInstructions',
+  'agent.temperature',
+  'agent.maxToolRounds',
+  'agent.maxHistoryTokens',
+  'context.',
+];
+
+function isWriteAllowed(path: string): boolean {
+  return ALLOWED_WRITE_PREFIXES.some(
+    (prefix) => path === prefix || path.startsWith(prefix + '.') || path.startsWith(prefix + '[')
+  );
+}
+
 export class AdminTool implements Tool {
   name = 'admin';
   description = 'Read or update agent configuration, and manage profiles.';
@@ -77,37 +96,43 @@ export class AdminTool implements Tool {
     return { success: true, output: YAML.stringify(data) };
   }
 
-  private updateConfig(path: string, value: unknown): ToolResult {
+  private async updateConfig(path: string, value: unknown): Promise<ToolResult> {
     if (!path) {
       return { success: false, output: '', error: '"path" is required for update_config.' };
     }
 
-    let raw: Record<string, unknown>;
-    try {
-      const content = readFileSync(this.runtime.configPath, 'utf-8');
-      raw = (YAML.parse(content) as Record<string, unknown>) ?? {};
-    } catch {
-      raw = {};
+    if (!isWriteAllowed(path)) {
+      return { success: false, output: '', error: `Cannot modify "${path}": path is not in the allowed set. Writable prefixes: ${ALLOWED_WRITE_PREFIXES.join(', ')}` };
     }
 
-    setNestedValue(raw, path, value);
+    return this.runtime.withConfigLock(() => {
+      let raw: Record<string, unknown>;
+      try {
+        const content = readFileSync(this.runtime.configPath, 'utf-8');
+        raw = (YAML.parse(content) as Record<string, unknown>) ?? {};
+      } catch {
+        raw = {};
+      }
 
-    // Validate round-trip
-    const yaml = YAML.stringify(raw);
-    try {
-      YAML.parse(yaml);
-    } catch (err) {
-      return { success: false, output: '', error: `Generated invalid YAML: ${(err as Error).message}` };
-    }
+      setNestedValue(raw, path, value);
 
-    writeFileSync(this.runtime.configPath, yaml, 'utf-8');
-    console.log(`[admin] Updated config path "${path}"`);
-    this.runtime.reload();
+      // Validate round-trip
+      const yaml = YAML.stringify(raw);
+      try {
+        YAML.parse(yaml);
+      } catch (err) {
+        return { success: false, output: '', error: `Generated invalid YAML: ${(err as Error).message}` } as ToolResult;
+      }
 
-    return { success: true, output: `Config updated at "${path}" and reloaded.` };
+      writeFileSync(this.runtime.configPath, yaml, 'utf-8');
+      console.log(`[admin] Updated config path "${path}"`);
+      this.runtime.reload();
+
+      return { success: true, output: `Config updated at "${path}" and reloaded.` } as ToolResult;
+    });
   }
 
-  private createProfile(name: string, profile: Record<string, unknown>): ToolResult {
+  private async createProfile(name: string, profile: Record<string, unknown>): Promise<ToolResult> {
     if (!name) {
       return { success: false, output: '', error: '"name" is required for create_profile.' };
     }

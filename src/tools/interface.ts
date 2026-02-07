@@ -16,4 +16,7 @@ export interface Tool {
   parameters: Record<string, unknown>;
 
   execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult>;
+
+  /** Optional cleanup hook called when the tool is being replaced (e.g. on config reload). */
+  destroy?(): Promise<void>;
 }

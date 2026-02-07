@@ -6,6 +6,25 @@ import { getSessionMessages, saveMessage } from '../db/queries.js';
 import { loadContextFiles } from '../context.js';
 import { BASE_SYSTEM_PROMPT } from './prompt.js';
 
+const MAX_RETRIES = 1;
+const RETRY_DELAY_MS = 1000;
+
+async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+  let lastError: Error | undefined;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err as Error;
+      if (attempt < MAX_RETRIES) {
+        console.warn(`[agent] Provider call failed (attempt ${attempt + 1}), retrying in ${RETRY_DELAY_MS}ms: ${lastError.message}`);
+        await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+      }
+    }
+  }
+  throw lastError;
+}
+
 export interface AgentLoopOptions {
   provider: AIProvider;
   session: Session;
@@ -38,17 +57,17 @@ function trimHistory(messages: Message[], maxTokens: number): Message[] {
 
   if (total <= maxTokens) return messages;
 
-  const trimmed = [...messages];
-  while (trimmed.length > 1 && total > maxTokens) {
-    total -= estimateTokens(trimmed[0]);
-    trimmed.shift();
+  let start = 0;
+  while (start < messages.length - 1 && total > maxTokens) {
+    total -= estimateTokens(messages[start]);
+    start++;
     // Skip past orphaned tool messages to keep tool-call groups intact
-    while (trimmed.length > 1 && trimmed[0].role === 'tool') {
-      total -= estimateTokens(trimmed[0]);
-      trimmed.shift();
+    while (start < messages.length - 1 && messages[start].role === 'tool') {
+      total -= estimateTokens(messages[start]);
+      start++;
     }
   }
-  return trimmed;
+  return messages.slice(start);
 }
 
 function toolsToSchemas(tools: Tool[]): ToolSchema[] {
@@ -70,6 +89,7 @@ export async function runAgentLoop(
 
   const contextContent = contextDir ? await loadContextFiles(contextDir) : '';
   const fullSystemPrompt = BASE_SYSTEM_PROMPT + extraInstructions + contextContent;
+  const systemPromptTokens = estimateTokens({ role: 'system', content: fullSystemPrompt });
 
   const history = getSessionMessages(db, session.id);
 
@@ -100,18 +120,20 @@ export async function runAgentLoop(
     }
     prevToolNames = currentToolNames;
 
-    const trimmed = trimHistory(history, maxHistoryTokens);
+    // Reserve token budget for the system prompt so history + prompt fits in context
+    const historyBudget = Math.max(0, maxHistoryTokens - systemPromptTokens);
+    const trimmed = trimHistory(history, historyBudget);
     const messages: Message[] = [
       { role: 'system', content: fullSystemPrompt },
       ...trimmed,
     ];
 
-    const response = await currentProvider.chat({
+    const response = await withRetry(() => currentProvider.chat({
       model: session.model,
       messages,
       tools: toolSchemas,
       temperature,
-    });
+    }));
 
     const assistantMsg: Message = {
       role: 'assistant',
