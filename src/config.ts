@@ -122,6 +122,12 @@ export interface AgentConfig {
       model?: string;
       timeoutMs?: number;
     };
+    browser?: {
+      enabled: boolean;
+      headless?: boolean;
+      screenshotDir?: string;
+      timeoutMs?: number;
+    };
   };
   custom_tools: Record<string, CustomToolConfig>;
 }

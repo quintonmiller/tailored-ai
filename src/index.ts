@@ -15,6 +15,7 @@ export { MemoryTool } from './tools/memory.js';
 export { DelegateTool } from './tools/delegate.js';
 export { TaskStatusTool } from './tools/task-status.js';
 export { AdminTool } from './tools/admin.js';
+export { BrowserTool } from './tools/browser.js';
 export { CustomTool, createCustomTools } from './tools/custom.js';
 export { AgentRuntime } from './runtime.js';
 export { startTask, getTask, listTasks } from './agent/tasks.js';
@@ -31,6 +32,7 @@ export type { AgentConfig, AgentProfile, CronJobConfig, CustomToolConfig } from 
 export type { RuntimeOptions } from './runtime.js';
 export type { ResolvedProfile } from './agent/profiles.js';
 export type { AIProvider, ChatParams, ChatResponse, Message, ToolCall, ToolSchema } from './providers/interface.js';
+export type { BrowserToolConfig } from './tools/browser.js';
 export type { Tool, ToolContext, ToolResult } from './tools/interface.js';
 export type { Channel, IncomingMessage } from './channels/interface.js';
 export type { Session } from './agent/session.js';

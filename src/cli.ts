@@ -17,6 +17,7 @@ import { TrelloTool } from './tools/trello.js';
 import { GmailTool } from './tools/gmail.js';
 import { GoogleCalendarTool } from './tools/google-calendar.js';
 import { ClaudeCodeTool } from './tools/claude-code.js';
+import { BrowserTool } from './tools/browser.js';
 import { MemoryTool } from './tools/memory.js';
 import { DelegateTool } from './tools/delegate.js';
 import { TaskStatusTool } from './tools/task-status.js';
@@ -102,6 +103,9 @@ function createTools(config: AgentConfig, contextDir: string): Tool[] {
   }
   if (config.tools.claude_code?.enabled) {
     tools.push(new ClaudeCodeTool(config.tools.claude_code));
+  }
+  if (config.tools.browser?.enabled) {
+    tools.push(new BrowserTool(config.tools.browser));
   }
   if (config.custom_tools) {
     tools.push(...createCustomTools(config.custom_tools));
