@@ -71,6 +71,28 @@ export class CronScheduler {
     });
   }
 
+  private resolvePrompt(job: CronJobConfig): string {
+    let prompt = job.prompt;
+    if (!prompt.includes('{{')) return prompt;
+
+    const row = this.runtime.db
+      .prepare('SELECT last_run FROM cron_jobs WHERE name = ?')
+      .get(job.name) as { last_run: string | null } | undefined;
+
+    // SQLite datetime('now') stores as 'YYYY-MM-DD HH:MM:SS' in UTC
+    const lastRunStr = row?.last_run;
+    const lastRunDate = lastRunStr ? new Date(lastRunStr + 'Z') : null;
+
+    // For first run, default to 1 hour ago
+    const effectiveDate = lastRunDate ?? new Date(Date.now() - 3600_000);
+    const isoString = effectiveDate.toISOString();
+    const epochSeconds = Math.floor(effectiveDate.getTime() / 1000);
+
+    prompt = prompt.replaceAll('{{last_run}}', isoString);
+    prompt = prompt.replaceAll('{{last_run_epoch}}', String(epochSeconds));
+    return prompt;
+  }
+
   private async runJob(job: CronJobConfig): Promise<void> {
     const wakeAgent = job.wakeAgent !== false; // default true
     const sessionKey = job.sessionKey ?? `cron:${job.name}`;
@@ -93,7 +115,8 @@ export class CronScheduler {
       resolved.provider
     );
 
-    const response = await runAgentLoop(job.prompt, {
+    const prompt = this.resolvePrompt(job);
+    const response = await runAgentLoop(prompt, {
       provider: this.runtime.getProvider(),
       session,
       db: this.runtime.db,
@@ -113,8 +136,10 @@ export class CronScheduler {
 
     this.updateLastRun(job.name);
 
-    if (response) {
+    if (response && !response.trim().toUpperCase().includes('NO_ACTION')) {
       await this.deliver(job, response);
+    } else {
+      console.log(`[cron] "${job.name}" returned NO_ACTION, skipping delivery`);
     }
   }
 
@@ -127,12 +152,13 @@ export class CronScheduler {
       config.agent.defaultProvider
     );
 
+    const prompt = this.resolvePrompt(job);
     saveMessage(this.runtime.db, session.id, {
       role: 'user',
-      content: job.prompt,
+      content: prompt,
     });
 
-    console.log(`[cron] Added note to session "${sessionKey}": "${job.prompt.slice(0, 80)}"`);
+    console.log(`[cron] Added note to session "${sessionKey}": "${prompt.slice(0, 80)}"`);
   }
 
   private async deliver(job: CronJobConfig, response: string): Promise<void> {
