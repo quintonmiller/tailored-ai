@@ -149,6 +149,9 @@ export interface AgentConfig {
       folder_name?: string;
       folder_id?: string;
     };
+    ask_user?: {
+      enabled: boolean;
+    };
   };
   custom_tools: Record<string, CustomToolConfig>;
   commands: Record<string, CommandConfig>;

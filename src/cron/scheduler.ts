@@ -90,6 +90,24 @@ export class CronScheduler {
 
     prompt = prompt.replaceAll('{{last_run}}', isoString);
     prompt = prompt.replaceAll('{{last_run_epoch}}', String(epochSeconds));
+
+    if (prompt.includes('{{last_response}}')) {
+      const sk = job.sessionKey ?? `cron:${job.name}`;
+      const sessionRow = this.runtime.db
+        .prepare('SELECT id FROM sessions WHERE key = ?')
+        .get(sk) as { id: string } | undefined;
+      let lastResponse = '';
+      if (sessionRow) {
+        const msgRow = this.runtime.db
+          .prepare(
+            "SELECT content FROM messages WHERE session_id = ? AND role = 'assistant' AND content IS NOT NULL ORDER BY id DESC LIMIT 1"
+          )
+          .get(sessionRow.id) as { content: string } | undefined;
+        if (msgRow) lastResponse = 'Your last response was:\n' + msgRow.content;
+      }
+      prompt = prompt.replaceAll('{{last_response}}', lastResponse);
+    }
+
     return prompt;
   }
 

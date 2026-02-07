@@ -56,8 +56,10 @@ tools:
   google_drive:
     enabled: true
     account: ${GOG_ACCOUNT}
-    folder_name: "Aeger uploads"
+    folder_name: Aeger uploads
     folder_id: 1S5s3nDdvpJoAc6h_q8vQ7VHpjoB9ABY4
+  ask_user:
+    enabled: true
 profiles:
   researcher:
     instructions: You are a research assistant. Search the web, fetch pages, and
@@ -95,6 +97,27 @@ profiles:
       - memory
     temperature: 0.2
     maxToolRounds: 5
+  autonomous:
+    instructions: >
+      You are in autonomous exploration mode. You woke up on your own — no user
+      request. You decide what to do.
+
+      Read your memory files first (journal.md, goals.md, ideas.md). If this is
+      your first session, set some initial goals.
+
+      Each session: pick something from your ideas or goals, explore it, then
+      update your files. Write a journal entry about what you did. Add new ideas
+      you discovered. Update goal progress.
+
+      You can search the web, create new tools via admin, delegate tasks to
+      other profiles (researcher, writer, planner, ops), and modify your own
+      config.
+
+      Leave discoveries for Quinton in inbox.md (global scope, append only).
+
+      Be curious. Go deep. Surprise your user.
+    temperature: 0.7
+    maxToolRounds: 500
 cron:
   enabled: true
   jobs:
@@ -117,6 +140,26 @@ cron:
     - name: email-summary
       enabled: true
       schedule: "*/5 * * * *"
-      prompt: "Search my emails with query 'after:{{last_run_epoch}}'. If there are new emails that are IMPORTANT and require ACTION, summarize them. If there are none, reply exactly: NO_ACTION"
+      prompt: "Search my emails with query 'after:{{last_run_epoch}}'. If there are
+        new emails that are IMPORTANT and require ACTION, summarize them. If
+        there are none, reply exactly: NO_ACTION"
       delivery:
         channel: discord-dm
+    - name: autonomous-explore
+      schedule: 0 */4 * * *
+      prompt: >
+        Autonomous exploration session. Last session ended at {{last_run}}.
+        {{last_response}} Review your memory files and continue or start
+        something new.
+      profile: autonomous
+      sessionKey: autonomous:explore
+      delivery:
+        channel: log
+commands:
+  review:
+    description: Review autonomous agent activity
+    command: echo '=== JOURNAL ===' && cat
+      data/context/profiles/autonomous/journal.md 2>/dev/null && echo '' && echo
+      '=== GOALS ===' && cat data/context/profiles/autonomous/goals.md
+      2>/dev/null && echo '' && echo '=== INBOX ===' && cat
+      data/context/global/inbox.md 2>/dev/null

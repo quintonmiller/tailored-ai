@@ -20,6 +20,7 @@ import { ClaudeCodeTool } from './tools/claude-code.js';
 import { BrowserTool } from './tools/browser.js';
 import { MdToPdfTool } from './tools/md-to-pdf.js';
 import { GoogleDriveTool } from './tools/google-drive.js';
+import { AskUserTool } from './tools/ask-user.js';
 import { MemoryTool } from './tools/memory.js';
 import { DelegateTool } from './tools/delegate.js';
 import { TaskStatusTool } from './tools/task-status.js';
@@ -37,6 +38,8 @@ import { AgentRuntime } from './runtime.js';
 import type { AIProvider } from './providers/interface.js';
 import type { AgentConfig } from './config.js';
 import type { Tool } from './tools/interface.js';
+
+let _discordChannel: DiscordChannel | undefined;
 
 const USAGE = `
 Usage: agent [options]
@@ -123,6 +126,13 @@ function createTools(config: AgentConfig, contextDir: string, configPath?: strin
       configPath,
     ));
   }
+  if (config.tools.ask_user?.enabled !== false) {
+    tools.push(new AskUserTool({
+      contextDir,
+      getDiscord: () => _discordChannel,
+      getOwnerId: () => config.channels.discord?.owner,
+    }));
+  }
   if (config.custom_tools) {
     tools.push(...createCustomTools(config.custom_tools));
   }
@@ -136,6 +146,7 @@ async function runServe(runtime: AgentRuntime) {
   if (runtime.getConfig().channels.discord?.enabled) {
     discord = new DiscordChannel({ runtime });
     await discord.connect();
+    _discordChannel = discord;
     channels.push({ name: 'discord', disconnect: () => discord!.disconnect() });
   }
 

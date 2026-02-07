@@ -18,6 +18,7 @@ export { AdminTool } from './tools/admin.js';
 export { BrowserTool } from './tools/browser.js';
 export { MdToPdfTool } from './tools/md-to-pdf.js';
 export { GoogleDriveTool } from './tools/google-drive.js';
+export { AskUserTool } from './tools/ask-user.js';
 export { CustomTool, createCustomTools } from './tools/custom.js';
 export { AgentRuntime } from './runtime.js';
 export { startTask, getTask, listTasks } from './agent/tasks.js';
