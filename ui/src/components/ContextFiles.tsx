@@ -3,15 +3,30 @@ import type { ContextData } from '../api';
 
 export function ContextFiles(props: { data: ContextData }) {
   const { data } = props;
+  const hasGlobal = data.global.length > 0;
+  const profileNames = Object.keys(data.profiles);
 
-  if (data.files.length === 0) {
+  if (!hasGlobal && profileNames.length === 0) {
     return <div className="empty-state">No context files in {data.directory}</div>;
   }
 
   return (
     <div className="context-list">
-      {data.files.map((f) => (
-        <ContextFileItem key={f.name} name={f.name} content={f.content} />
+      {hasGlobal && (
+        <div className="context-section">
+          <h3>Global</h3>
+          {data.global.map((f) => (
+            <ContextFileItem key={f.name} name={f.name} content={f.content} />
+          ))}
+        </div>
+      )}
+      {profileNames.map((profile) => (
+        <div key={profile} className="context-section">
+          <h3>{profile}</h3>
+          {data.profiles[profile].map((f) => (
+            <ContextFileItem key={f.name} name={f.name} content={f.content} />
+          ))}
+        </div>
       ))}
     </div>
   );

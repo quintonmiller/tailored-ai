@@ -105,7 +105,8 @@ export interface ContextFile {
 
 export interface ContextData {
   directory: string;
-  files: ContextFile[];
+  global: ContextFile[];
+  profiles: Record<string, ContextFile[]>;
 }
 
 export function fetchTools(): Promise<ToolInfo[]> {
