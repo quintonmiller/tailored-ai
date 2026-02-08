@@ -73,12 +73,12 @@
 - [x] ~~Task registry grows unboundedly~~ — added eviction: finished tasks older than 1 hour are pruned, capped at 100 finished tasks
 - [x] ~~`OpenAIProvider` doesn't handle empty `choices`~~ — added guard with descriptive error
 - [x] ~~`loadConfig` path inconsistency~~ — now passes the resolved absolute `configPath` to `loadConfig()` instead of the raw CLI value
-- [ ] Session model/provider never updates — resuming a session after changing the default model keeps using the old model stored at creation time
-- [ ] `saveMessage` does two DB writes — INSERT + UPDATE `updated_at` could be a single transaction or handled by a trigger
+- [x] ~~Session model/provider never updates~~ — `findOrCreateSession` now updates model/provider to current defaults when resuming an existing session
+- [x] ~~`saveMessage` does two DB writes~~ — `saveMessage` only does a single INSERT; session `updated_at` is handled by `trg_messages_update_session` trigger
 - [x] ~~`startTime` is module-level in `server.ts`~~ — moved inside `createServer()` so it captures actual server start time
 
 ## Architecture
-- [ ] Extract `AgentLoopOptions` factory — Discord, Cron, Server, and CLI all manually build the same ~12-field options object. Add `runtime.buildLoopOptions(session, overrides?)` to eliminate duplication
+- [x] ~~Extract `AgentLoopOptions` factory~~ — added `runtime.buildLoopOptions({ session, profileName?, modelOverride?, extraTools? })` used by CLI, Discord, Server, and Cron
 - [ ] Meta tools not in tool registry — delegate, task_status, admin are instantiated separately in `cli.ts` and concatenated. They bypass profile filtering and aren't available in service mode (cron/Discord can't delegate)
 - [x] ~~`createProvider` ignores OpenAI `baseUrl`~~ — now passes `config.providers.openai.baseUrl` to the constructor
 - [x] ~~Add `baseUrl` to OpenAI config type~~ — added optional `baseUrl` field to `AgentConfig.providers.openai`

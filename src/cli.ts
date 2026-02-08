@@ -241,37 +241,13 @@ async function main() {
 
   const metaTools = [delegateTool, taskStatusTool, adminTool];
 
-  const makeGetTools = (profileName?: string) => {
-    if (profileName) {
-      return () => {
-        const resolved = resolveProfile(profileName, runtime.getConfig(), runtime.getTools(), undefined, contextDir);
-        return [...resolved.tools, ...metaTools];
-      };
-    }
-    return () => [...runtime.getTools(), ...metaTools];
-  };
-
   const resolved = resolveProfile(values.profile, runtime.getConfig(), runtime.getTools(), undefined, contextDir);
-  const tools = [...resolved.tools, ...metaTools];
 
   let session = values.session
     ? loadSession(db, values.session) ?? (() => { throw new Error(`Session "${values.session}" not found`); })()
     : newSession(db, resolved.model, resolved.provider);
 
-  const loopOpts = {
-    provider: runtime.getProvider(),
-    session,
-    db,
-    tools,
-    extraInstructions: resolved.instructions,
-    maxToolRounds: resolved.maxToolRounds,
-    maxHistoryTokens: runtime.getConfig().agent.maxHistoryTokens,
-    temperature: resolved.temperature,
-    contextDir,
-    profileContextDir: resolved.contextDir,
-    getTools: makeGetTools(values.profile),
-    getProvider: () => runtime.getProvider(),
-  };
+  let loopOpts = runtime.buildLoopOptions({ session, profileName: values.profile, extraTools: metaTools });
 
   // Non-interactive mode: send one message and exit
   if (values.message) {
@@ -316,7 +292,7 @@ async function main() {
 
   console.log(`autonomous-agent v0.1.0`);
   console.log(`Provider: ${runtime.getProvider().name} | Model: ${runtime.getModel()}`);
-  console.log(`Tools: ${tools.map((t) => t.name).join(', ')}`);
+  console.log(`Tools: ${loopOpts.tools.map((t) => t.name).join(', ')}`);
   console.log(`Session: ${session.id}`);
   console.log(`Type your message (Ctrl+C to quit)\n`);
 
@@ -344,14 +320,7 @@ async function main() {
 
   const applyProfile = (profileName: string | undefined) => {
     activeProfile = profileName;
-    const r = resolveProfile(profileName, runtime.getConfig(), runtime.getTools(), undefined, contextDir);
-    loopOpts.tools = [...r.tools, ...metaTools];
-    loopOpts.extraInstructions = r.instructions;
-    loopOpts.temperature = r.temperature;
-    loopOpts.maxToolRounds = r.maxToolRounds;
-    loopOpts.contextDir = contextDir;
-    loopOpts.profileContextDir = r.contextDir;
-    loopOpts.getTools = makeGetTools(profileName);
+    loopOpts = runtime.buildLoopOptions({ session: loopOpts.session, profileName, extraTools: metaTools });
   };
 
   rl.on('line', async (line) => {
@@ -367,18 +336,23 @@ async function main() {
         currentProfile: activeProfile,
       });
 
+      const newSessionForProfile = (profileName?: string) => {
+        const r = resolveProfile(profileName, runtime.getConfig(), runtime.getTools(), undefined, contextDir);
+        return newSession(db, r.model, r.provider);
+      };
+
       switch (result.type) {
         case 'new_session': {
-          session = newSession(db, resolved.model, resolved.provider);
-          loopOpts.session = session;
+          session = newSessionForProfile(activeProfile);
+          loopOpts = runtime.buildLoopOptions({ session, profileName: activeProfile, extraTools: metaTools });
           console.log(`\nStarted new session: ${session.id}\n`);
           break;
         }
         case 'switch_profile': {
           try {
             applyProfile(result.profile);
-            session = newSession(db, resolved.model, resolved.provider);
-            loopOpts.session = session;
+            session = newSessionForProfile(result.profile);
+            loopOpts = runtime.buildLoopOptions({ session, profileName: result.profile, extraTools: metaTools });
             console.log(`\nSwitched to profile "${result.profile}" (new session: ${session.id})\n`);
           } catch (err) {
             console.error(`Error: ${(err as Error).message}`);
@@ -399,8 +373,8 @@ async function main() {
             const prevProfile = activeProfile;
             if (result.profile) applyProfile(result.profile);
             if (result.newSession) {
-              session = newSession(db, resolved.model, resolved.provider);
-              loopOpts.session = session;
+              session = newSessionForProfile(activeProfile);
+              loopOpts = runtime.buildLoopOptions({ session, profileName: activeProfile, extraTools: metaTools });
             }
             await runAgentMessage(result.prompt);
             if (result.profile && result.profile !== prevProfile) applyProfile(prevProfile);

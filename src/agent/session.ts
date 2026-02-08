@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
-import { createSession, getSession, getSessionByKey, clearSessionKey } from '../db/queries.js';
+import { createSession, getSession, getSessionByKey, clearSessionKey, updateSessionModelProvider } from '../db/queries.js';
 
 export interface Session {
   id: string;
@@ -36,7 +36,11 @@ export function findOrCreateSession(
 ): Session {
   const existing = getSessionByKey(db, key);
   if (existing) {
-    return { id: existing.id, model: existing.model, provider: existing.provider };
+    // Update model/provider to current defaults so resumed sessions pick up config changes
+    if (existing.model !== model || existing.provider !== provider) {
+      updateSessionModelProvider(db, existing.id, model, provider);
+    }
+    return { id: existing.id, model, provider };
   }
   return newSession(db, model, provider, key);
 }

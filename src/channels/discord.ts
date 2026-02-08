@@ -12,7 +12,6 @@ import {
 import { createHash } from 'node:crypto';
 import type { AgentRuntime } from '../runtime.js';
 import { findOrCreateSession, resetSession } from '../agent/session.js';
-import { resolveProfile } from '../agent/profiles.js';
 import { runAgentLoop } from '../agent/loop.js';
 import { isCommand, executeCommand } from '../commands.js';
 import type { Channel, IncomingMessage } from './interface.js';
@@ -309,30 +308,8 @@ export class DiscordChannel implements Channel {
       config.agent.defaultProvider
     );
 
-    // Resolve profile if active
-    const resolved = profileName
-      ? resolveProfile(profileName, config, this.runtime.getTools(), undefined, this.runtime.contextDir)
-      : undefined;
-
     const response = await runAgentLoop(content, {
-      provider: this.runtime.getProvider(),
-      session,
-      db: this.runtime.db,
-      tools: resolved?.tools ?? this.runtime.getTools(),
-      extraInstructions: resolved?.instructions ?? config.agent.extraInstructions,
-      maxToolRounds: resolved?.maxToolRounds ?? config.agent.maxToolRounds,
-      maxHistoryTokens: config.agent.maxHistoryTokens,
-      temperature: resolved?.temperature ?? config.agent.temperature,
-      contextDir: this.runtime.contextDir,
-      profileContextDir: resolved?.contextDir,
-      getTools: () => {
-        if (profileName) {
-          const r = resolveProfile(profileName, this.runtime.getConfig(), this.runtime.getTools(), undefined, this.runtime.contextDir);
-          return r.tools;
-        }
-        return this.runtime.getTools();
-      },
-      getProvider: () => this.runtime.getProvider(),
+      ...this.runtime.buildLoopOptions({ session, profileName }),
       onToolCall: (name, args) => {
         console.log(`[discord] [${msg.author.username}] tool: ${name}(${JSON.stringify(args)})`);
       },
@@ -545,29 +522,8 @@ export class DiscordChannel implements Channel {
       config.agent.defaultProvider,
     );
 
-    const resolved = profileName
-      ? resolveProfile(profileName, config, this.runtime.getTools(), undefined, this.runtime.contextDir)
-      : undefined;
-
     return runAgentLoop(content, {
-      provider: this.runtime.getProvider(),
-      session,
-      db: this.runtime.db,
-      tools: resolved?.tools ?? this.runtime.getTools(),
-      extraInstructions: resolved?.instructions ?? config.agent.extraInstructions,
-      maxToolRounds: resolved?.maxToolRounds ?? config.agent.maxToolRounds,
-      maxHistoryTokens: config.agent.maxHistoryTokens,
-      temperature: resolved?.temperature ?? config.agent.temperature,
-      contextDir: this.runtime.contextDir,
-      profileContextDir: resolved?.contextDir,
-      getTools: () => {
-        if (profileName) {
-          const r = resolveProfile(profileName, this.runtime.getConfig(), this.runtime.getTools(), undefined, this.runtime.contextDir);
-          return r.tools;
-        }
-        return this.runtime.getTools();
-      },
-      getProvider: () => this.runtime.getProvider(),
+      ...this.runtime.buildLoopOptions({ session, profileName }),
       onToolCall: (name, args) => {
         console.log(`[discord] [${interaction.user.username}] tool: ${name}(${JSON.stringify(args)})`);
       },

@@ -114,9 +114,7 @@ export class CronScheduler {
   private async runJob(job: CronJobConfig): Promise<void> {
     const wakeAgent = job.wakeAgent !== false; // default true
     const sessionKey = job.sessionKey ?? `cron:${job.name}`;
-    const config = this.runtime.getConfig();
-    const tools = this.runtime.getTools();
-    const resolved = resolveProfile(job.profile, config, tools, job.model, this.runtime.contextDir);
+    const resolved = resolveProfile(job.profile, this.runtime.getConfig(), this.runtime.getTools(), job.model, this.runtime.contextDir);
 
     console.log(`[cron] Running "${job.name}" (${wakeAgent ? 'wake' : 'note'} mode)`);
 
@@ -135,18 +133,7 @@ export class CronScheduler {
 
     const prompt = this.resolvePrompt(job);
     const response = await runAgentLoop(prompt, {
-      provider: this.runtime.getProvider(),
-      session,
-      db: this.runtime.db,
-      tools: resolved.tools,
-      extraInstructions: resolved.instructions,
-      maxToolRounds: resolved.maxToolRounds,
-      maxHistoryTokens: config.agent.maxHistoryTokens,
-      temperature: resolved.temperature,
-      contextDir: this.runtime.contextDir,
-      profileContextDir: resolved.contextDir,
-      getTools: () => this.runtime.getTools(),
-      getProvider: () => this.runtime.getProvider(),
+      ...this.runtime.buildLoopOptions({ session, profileName: job.profile, modelOverride: job.model }),
       onToolCall: (name, args) => {
         console.log(`[cron] [${job.name}] tool: ${name}(${JSON.stringify(args)})`);
       },

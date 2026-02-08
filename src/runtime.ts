@@ -3,6 +3,9 @@ import type Database from 'better-sqlite3';
 import type { AgentConfig } from './config.js';
 import type { AIProvider } from './providers/interface.js';
 import type { Tool } from './tools/interface.js';
+import type { AgentLoopOptions } from './agent/loop.js';
+import type { Session } from './agent/session.js';
+import { resolveProfile } from './agent/profiles.js';
 
 export interface RuntimeOptions {
   configPath: string;
@@ -113,5 +116,38 @@ export class AgentRuntime {
     let resolve: (v: void) => void;
     this._configLock = new Promise<void>((r) => { resolve = r; });
     return prev.then(fn).finally(() => resolve!());
+  }
+
+  /**
+   * Build a standard AgentLoopOptions from the current runtime state.
+   * Callers can spread additional fields (onToolCall, onToolResult, etc.) on top.
+   */
+  buildLoopOptions(opts: {
+    session: Session;
+    profileName?: string;
+    modelOverride?: string;
+    extraTools?: Tool[];
+  }): AgentLoopOptions {
+    const config = this._config;
+    const resolved = resolveProfile(opts.profileName, config, this._tools, opts.modelOverride, this.contextDir);
+    const extraTools = opts.extraTools ?? [];
+
+    return {
+      provider: this._provider,
+      session: opts.session,
+      db: this.db,
+      tools: [...resolved.tools, ...extraTools],
+      extraInstructions: resolved.instructions,
+      maxToolRounds: resolved.maxToolRounds,
+      maxHistoryTokens: config.agent.maxHistoryTokens,
+      temperature: resolved.temperature,
+      contextDir: this.contextDir,
+      profileContextDir: resolved.contextDir,
+      getTools: () => {
+        const r = resolveProfile(opts.profileName, this._config, this._tools, opts.modelOverride, this.contextDir);
+        return [...r.tools, ...extraTools];
+      },
+      getProvider: () => this._provider,
+    };
   }
 }

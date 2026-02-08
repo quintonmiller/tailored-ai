@@ -14,7 +14,6 @@ import { findOrCreateSession, resetSession } from './agent/session.js';
 import { runAgentLoop } from './agent/loop.js';
 import { listTasks } from './agent/tasks.js';
 import { isCommand, executeCommand } from './commands.js';
-import { resolveProfile } from './agent/profiles.js';
 
 export interface ServerOptions {
   runtime: AgentRuntime;
@@ -97,17 +96,7 @@ export function createServer(opts: ServerOptions) {
     return streamSSE(c, async (stream) => {
       try {
         const response = await runAgentLoop(message, {
-          provider: runtime.getProvider(),
-          session,
-          db: runtime.db,
-          tools: runtime.getTools(),
-          extraInstructions: config.agent.extraInstructions,
-          maxToolRounds: config.agent.maxToolRounds,
-          maxHistoryTokens: config.agent.maxHistoryTokens,
-          temperature: config.agent.temperature,
-          contextDir: runtime.contextDir,
-          getTools: () => runtime.getTools(),
-          getProvider: () => runtime.getProvider(),
+          ...runtime.buildLoopOptions({ session }),
           onToolCall: (name, args) => {
             stream.writeSSE({
               event: 'tool_call',
@@ -274,10 +263,6 @@ export function createServer(opts: ServerOptions) {
 
         const session = findOrCreateSession(runtime.db, key, model, config.agent.defaultProvider);
 
-        const resolved = result.profile
-          ? resolveProfile(result.profile, config, runtime.getTools(), undefined, runtime.contextDir)
-          : undefined;
-
         return streamSSE(c, async (stream) => {
           try {
             if (result.type === 'shell_then_prompt') {
@@ -288,18 +273,7 @@ export function createServer(opts: ServerOptions) {
             }
 
             const response = await runAgentLoop(result.prompt, {
-              provider: runtime.getProvider(),
-              session,
-              db: runtime.db,
-              tools: resolved?.tools ?? runtime.getTools(),
-              extraInstructions: resolved?.instructions ?? config.agent.extraInstructions,
-              maxToolRounds: resolved?.maxToolRounds ?? config.agent.maxToolRounds,
-              maxHistoryTokens: config.agent.maxHistoryTokens,
-              temperature: resolved?.temperature ?? config.agent.temperature,
-              contextDir: runtime.contextDir,
-              profileContextDir: resolved?.contextDir,
-              getTools: () => runtime.getTools(),
-              getProvider: () => runtime.getProvider(),
+              ...runtime.buildLoopOptions({ session, profileName: result.profile }),
               onToolCall: (name, args) => {
                 stream.writeSSE({
                   event: 'tool_call',

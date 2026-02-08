@@ -66,6 +66,15 @@ export function saveMessage(
   );
 }
 
+export function updateSessionModelProvider(
+  db: Database.Database,
+  id: string,
+  model: string,
+  provider: string
+): void {
+  db.prepare('UPDATE sessions SET model = ?, provider = ? WHERE id = ?').run(model, provider, id);
+}
+
 export function clearSessionKey(
   db: Database.Database,
   key: string
