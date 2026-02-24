@@ -1,0 +1,100 @@
+# Tools
+
+Tools implement the `Tool` interface with a `name`, `description`, JSON schema `parameters`, and `execute` method.
+TAI includes 18+ built-in tools plus support for config-defined custom tools.
+
+## Built-in tools
+
+| Tool | Description |
+|------|-------------|
+| `exec` | Run shell commands (with optional command allowlist) |
+| `read` | Read file contents (with optional path restrictions) |
+| `write` | Write/create files (with optional path restrictions) |
+| `web_fetch` | Fetch URLs and extract text content |
+| `web_search` | Search the web (Brave API) |
+| `memory` | Persistent notes in the context directory (supports knowledge base search) |
+| `browser` | Playwright-based browser automation (navigate, click, type, screenshot) |
+| `tasks` | Native project task management — create, update, delete, and comment on tasks (SQLite-backed) |
+| `task_query` | Filter and search project tasks by status, author, tags, or text |
+| `gmail` | Search, read, and send email via gog CLI |
+| `google_calendar` | List, search, and create calendar events via gog CLI |
+| `google_drive` | Upload files and list Google Drive contents via gog CLI |
+| `md_to_pdf` | Convert markdown files to PDF |
+| `ask_user` | Prompt the user for input (works in CLI and Discord) |
+| `claude_code` | Delegate to the Claude Code CLI |
+| `delegate` | Spawn a sub-agent with a named profile (supports async execution) |
+| `task_status` | List or inspect background tasks started via async delegate |
+| `admin` | Read/update agent configuration and manage profiles at runtime |
+
+## Enabling tools
+
+Each tool can be enabled/disabled in `config.yaml`:
+
+```yaml
+tools:
+  exec:
+    enabled: true
+    allowedCommands: ["git", "npm", "date", "ls"]
+  read:
+    enabled: true
+  write:
+    enabled: true
+    allowedPrefixes: ["data/", "output/"]
+  web_search:
+    enabled: true
+    provider: brave
+    apiKey: "${BRAVE_API_KEY}"
+```
+
+## Custom tools
+
+Define shell command tools without writing TypeScript. Custom tools use `{{param}}` template
+interpolation and are rebuilt on every runtime reload.
+
+```yaml
+custom_tools:
+  weather:
+    description: "Get weather for a city"
+    parameters:
+      city: { type: "string", description: "City name" }
+    command: "curl -s wttr.in/{{city}}?format=3"
+    timeout_ms: 5000
+```
+
+## Memory tool
+
+The memory tool provides persistent notes stored as files in the agent's context directory.
+It supports three scopes:
+
+- **`profile`** (default) — files in the active profile's context directory
+- **`global`** — files in the global context directory
+- **`knowledge`** — read-only access to the knowledge base (`data/kb/`)
+
+Actions: `read`, `write`, `append`, `list`, `search`.
+
+The `search` action performs a text search across the knowledge base for relevant information.
+
+## Tool interface
+
+To create a new tool programmatically:
+
+```typescript
+import { Tool } from "@agent/core";
+
+const myTool: Tool = {
+  name: "my_tool",
+  description: "Does something useful",
+  parameters: {
+    type: "object",
+    properties: {
+      input: { type: "string", description: "The input" },
+    },
+    required: ["input"],
+  },
+  execute: async (args) => {
+    return `Result: ${args.input}`;
+  },
+};
+```
+
+See [Extending](/docs/extending) for the full guide on adding tools to the codebase.

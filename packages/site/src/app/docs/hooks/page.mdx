@@ -1,0 +1,86 @@
+# Hooks
+
+Hooks run tool calls before and/or after the agent loop. They are a first-class feature
+of profiles and work across all entry points: CLI, Discord, HTTP API, webhooks, cron, and delegate.
+
+## Configuration
+
+Hooks can be defined at two levels:
+
+1. **Profile-level** — in `profiles.<name>.hooks` (runs everywhere the profile is used)
+2. **Cron job-level** — in `cron.jobs[].hooks` (runs only for that cron job)
+
+When both are present, profile hooks run first, then cron job hooks are appended.
+
+```yaml
+profiles:
+  researcher:
+    instructions: "You are a research assistant."
+    tools: ["web_search", "web_fetch", "memory"]
+    hooks:
+      beforeRun:
+        - tool: memory
+          args: { action: "read", file: "research-context.md" }
+      afterRun:
+        - tool: memory
+          args: { action: "append", file: "research-log.md", content: "{{response}}" }
+
+cron:
+  jobs:
+    - name: "daily-research"
+      schedule: "0 9 * * *"
+      prompt: "Research today's AI news"
+      profile: "researcher"
+      hooks:
+        beforeRun:
+          - tool: gmail
+            args: { action: "check", query: "newer_than:1d" }
+            skipIf: "no new messages"
+```
+
+## Hook shape
+
+Each hook has the following fields:
+
+```yaml
+tool: "tool_name"            # required — name of any registered tool
+args:                        # optional — arguments passed to the tool
+  key: "value"               # string values support {{template}} interpolation
+skipIf: "regex_pattern"      # optional — skip remaining hooks if output matches
+```
+
+- **`tool`** — the tool to execute (must exist in the full tool set, not profile-filtered)
+- **`args`** — key/value pairs passed to the tool. String values support `{{var}}` template interpolation.
+- **`skipIf`** — a regex tested against the tool output. If it matches, the remaining hooks and
+  the agent loop are skipped (for `beforeRun`), or remaining `afterRun` hooks are skipped.
+
+## Execution flow
+
+1. **beforeRun hooks** execute sequentially before the agent loop
+   - If any hook's `skipIf` matches, the agent loop is skipped entirely
+   - In cron, non-empty hook outputs are prepended to the prompt as context
+2. The agent loop runs normally
+3. **afterRun hooks** execute sequentially after the agent loop
+   - The `{{response}}` template variable contains the agent's final response
+
+## Template variables
+
+Available template variables vary by entry point:
+
+| Entry Point | beforeRun vars | afterRun vars |
+|---|---|---|
+| Cron | `last_run`, `last_run_epoch`, `last_response`, `next_task` | same + `response` |
+| CLI, Discord, HTTP, Webhooks, Delegate | `{}` (empty) | `{ response }` |
+
+## Architecture
+
+The hooks system is implemented in `packages/core/src/agent/hooks.ts`:
+
+- **`normalizeHooks(hooks)`** — converts `undefined | AgentHook | AgentHook[]` to `AgentHook[]`
+- **`mergeHooks(profileHooks?, overrideHooks?)`** — returns `ResolvedHooks` (profile first, overrides appended)
+- **`executeHooks(hooks, allTools, templateVars, sessionId, logPrefix?)`** — runs hooks sequentially
+- **`applyTemplates(text, vars)`** — replaces `{{key}}` placeholders
+
+`AgentRuntime.resolveHooks()` is the main entry point for callers. It reads the profile's hooks
+from config and merges with any overrides. Each entry point wraps its `runAgentLoop` call with
+a few lines of beforeRun/afterRun hook execution.

@@ -1,0 +1,93 @@
+# Profiles & Delegation
+
+## Profiles
+
+Profiles are named agent configurations defined under `profiles:` in config.
+Each profile can override:
+
+- **model** — use a different LLM
+- **instructions** — custom system prompt
+- **tools** — allowlist of available tools
+- **temperature** — LLM temperature
+- **maxToolRounds** — max tool call iterations
+- **hooks** — beforeRun/afterRun tool calls
+
+```yaml
+profiles:
+  researcher:
+    instructions: "Search the web and summarize findings."
+    tools: ["web_search", "web_fetch", "memory"]
+    temperature: 0.5
+    maxToolRounds: 8
+
+  coder:
+    model: "qwen3-coder:30b"
+    instructions: "You are a code assistant."
+    tools: ["exec", "read", "write", "memory"]
+    maxToolRounds: 15
+    hooks:
+      afterRun:
+        - tool: memory
+          args: { action: "append", file: "work-log.md", content: "{{response}}" }
+```
+
+### Using profiles
+
+From the CLI:
+
+```bash
+pnpm run start -- --profile researcher --message "Find AI news"
+```
+
+From cron jobs:
+
+```yaml
+cron:
+  jobs:
+    - name: "daily-research"
+      schedule: "0 9 * * *"
+      prompt: "Research today's AI news"
+      profile: "researcher"
+```
+
+### Profile resolution
+
+`resolveProfile()` merges a named profile with the agent defaults. The profile's tool list
+acts as an allowlist — only the named tools (from the full set) are made available.
+Other settings fall back to the agent-level defaults.
+
+## Delegation
+
+The `delegate` tool lets the agent spawn a sub-agent with a specific profile.
+Sub-agents are depth-1 only (they don't get the delegate tool themselves).
+
+Each delegation creates an ephemeral session keyed `delegate:<parentSessionId>:<uuid>`.
+
+### Synchronous delegation
+
+By default, the delegate tool blocks until the sub-agent completes:
+
+```
+delegate({ profile: "researcher", message: "Find the latest AI papers" })
+```
+
+### Async delegation
+
+Set `async: true` to fire the sub-agent in the background and get a task ID back immediately:
+
+```
+delegate({ profile: "researcher", message: "Research topic X", async: true })
+→ "Task task_abc123 started"
+```
+
+## Background tasks
+
+Tasks are tracked in-memory (intentionally ephemeral — they don't survive restarts).
+The `task_status` tool lets the agent list all tasks or check on a specific one:
+
+```
+task_status({ action: "list" })
+task_status({ action: "get", task_id: "task_abc123" })
+```
+
+Tasks track status (`running`, `completed`, `failed`), timing, and result/error.

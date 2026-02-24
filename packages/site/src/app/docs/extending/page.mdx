@@ -1,0 +1,100 @@
+# Extending TAI
+
+TAI is designed to be extended with custom tools, channels, and providers.
+
+## Adding a new tool (code)
+
+1. Create `packages/core/src/tools/<name>.ts` implementing the `Tool` interface:
+
+```typescript
+import type { Tool } from "./interface.js";
+
+export function createMyTool(config: any): Tool {
+  return {
+    name: "my_tool",
+    description: "Does something useful",
+    parameters: {
+      type: "object",
+      properties: {
+        input: { type: "string", description: "The input" },
+      },
+      required: ["input"],
+    },
+    execute: async (args) => {
+      return `Result: ${args.input}`;
+    },
+  };
+}
+```
+
+2. Add config type in `packages/core/src/config.ts` under `AgentConfig.tools`
+
+3. Wire it up in `packages/core/src/factories.ts` in the `createTools()` function
+
+4. Export from `packages/core/src/index.ts`
+
+## Adding a custom tool (config-only)
+
+No code needed — add an entry under `custom_tools` in `config.yaml`:
+
+```yaml
+custom_tools:
+  hello:
+    description: "Say hello to someone"
+    parameters:
+      name: { type: "string", description: "Name to greet" }
+    command: "echo Hello {{name}}"
+    timeout_ms: 5000
+```
+
+Custom tools are rebuilt on every runtime reload, so adding one makes it available immediately.
+
+## Adding a new channel
+
+1. Create `packages/core/src/channels/<name>.ts` implementing `Channel`:
+
+```typescript
+import type { Channel } from "./interface.js";
+
+export class MyChannel implements Channel {
+  async start(): Promise<void> { /* ... */ }
+  async stop(): Promise<void> { /* ... */ }
+}
+```
+
+2. Add config type in `packages/core/src/config.ts` under `AgentConfig.channels`
+
+3. Wire it up in `packages/cli/src/index.ts` in the `runServe()` function
+
+4. Export from `packages/core/src/index.ts`
+
+5. Sessions are keyed per-user: use `findOrCreateSession(db, "channelname:userId", model, provider)`
+
+## Adding a new provider
+
+1. Create `packages/core/src/providers/<name>.ts` implementing `AIProvider`:
+
+```typescript
+import type { AIProvider, ChatParams, Message } from "./interface.js";
+
+export class MyProvider implements AIProvider {
+  async chat(params: ChatParams): Promise<Message> {
+    // Call your LLM API
+  }
+}
+```
+
+2. Add config type in `packages/core/src/config.ts` under `AgentConfig.providers`
+
+3. Add provider creation in `packages/core/src/factories.ts` in the `createProvider()` function
+
+4. Export from `packages/core/src/index.ts`
+
+## Conventions
+
+- **Tool descriptions**: 1-2 sentences max (for local model compatibility)
+- **ESM imports**: Use relative `.js` extensions within packages
+- **Cross-package imports**: Use `@agent/*` workspace specifiers
+- **Config defaults**: Use `DEFAULT_CONFIG` in `config.ts` as the single source of truth
+- **All configurable values** go in `config.yaml` / `AgentConfig`
+- **Node.js built-ins**: Prefer `node:` prefixed imports

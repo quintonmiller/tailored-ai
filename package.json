@@ -1,37 +1,49 @@
 {
   "name": "autonomous-agent",
-  "version": "0.1.0",
+  "private": true,
   "description": "Lightweight, modular AI agent framework optimized for local LLMs",
   "type": "module",
-  "main": "dist/index.js",
-  "bin": {
-    "agent": "dist/cli.js"
-  },
   "scripts": {
-    "build": "tsc",
-    "dev": "tsx src/cli.ts",
-    "dev:msg": "tsx src/cli.ts --message",
-    "start": "node dist/cli.js",
-    "serve": "tsx src/cli.ts --serve",
-    "typecheck": "tsc --noEmit",
-    "build:ui": "npm --prefix ui run build",
-    "dev:ui": "npm --prefix ui run dev"
+    "build": "pnpm --filter @agent/core run build && pnpm --filter @agent/server run build && pnpm --filter @tailored-ai/cli run build && pnpm --filter @agent/ui run build && pnpm --filter @agent/site run build",
+    "dev": "pnpm --filter @agent/core run build && pnpm --filter @agent/server run build && pnpm --filter @tailored-ai/cli run dev",
+    "dev:msg": "pnpm --filter @agent/core run build && pnpm --filter @agent/server run build && pnpm --filter @tailored-ai/cli run dev -- --message",
+    "dev:ui": "pnpm --filter @agent/ui run dev",
+    "dev:site": "pnpm --filter @agent/site run dev",
+    "start": "pnpm --filter @tailored-ai/cli run start",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm -r run test",
+    "test:watch": "pnpm --filter @agent/core run test -- --watch",
+    "lint": "biome check packages/",
+    "lint:fix": "biome check --write packages/",
+    "format": "biome format --write packages/",
+    "build:ui": "pnpm --filter @agent/ui run build",
+    "publish:cli": "pnpm --filter @tailored-ai/cli publish --access public"
   },
-  "dependencies": {
-    "@hono/node-server": "^1.19.9",
-    "better-sqlite3": "^11.7.0",
-    "croner": "^10.0.1",
-    "discord.js": "^14.25.1",
-    "dotenv": "^17.2.4",
-    "hono": "^4.11.8",
-    "md-to-pdf": "^5.2.4",
-    "playwright": "^1.58.2",
-    "yaml": "^2.6.0"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/quintushr/autonomous-agent.git"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "llm",
+    "ollama",
+    "openai",
+    "tools",
+    "local-llm",
+    "discord-bot"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.12",
-    "@types/node": "^22.10.0",
-    "tsx": "^4.19.0",
-    "typescript": "^5.7.0"
+    "@biomejs/biome": "2.3.14"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild"
+    ]
   }
 }

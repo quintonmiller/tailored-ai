@@ -1,0 +1,27 @@
+# Documentation
+
+Welcome to the **Tailored AI** documentation. TAI is a lightweight, modular AI agent framework
+optimized for local LLMs while supporting cloud providers like OpenAI and Anthropic.
+
+## Why TAI?
+
+- **Local-first**: Designed from scratch to work with smaller models (30B parameter quantized models
+  on consumer GPUs) by keeping system prompts short, tool counts low, and context tight.
+- **Hot-reloadable**: Configuration, tools, and providers reload at runtime — the agent can modify
+  its own capabilities without restarting.
+- **Simple by design**: No complex state machines. The agent loop is straightforward:
+  chat → tool calls → chat → stop.
+
+## What's in the box
+
+- **3 providers**: Ollama, OpenAI (+ compatible APIs), Anthropic
+- **18+ built-in tools**: Shell, file I/O, web search, browser automation, Gmail, Calendar, Drive, project tasks, and more
+- **Agent profiles**: Named configurations with model/tool/behavior overrides and sub-agent delegation
+- **Multi-channel**: CLI REPL, Discord bot, HTTP API with SSE, webhooks, cron scheduler
+- **Hooks system**: Run tool calls before/after the agent loop for automation pipelines
+- **Custom tools**: Define shell command tools in YAML config — no code needed
+
+## Get started
+
+Head to [Getting Started](/docs/getting-started) to install and run your first agent,
+or explore the sidebar to learn about specific features.

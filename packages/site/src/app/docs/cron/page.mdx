@@ -1,0 +1,88 @@
+# Cron Jobs
+
+Scheduled jobs run inside `--serve` mode alongside the Discord bot and HTTP API.
+
+## Configuration
+
+Add jobs under `cron.jobs` in `config.yaml`:
+
+```yaml
+cron:
+  enabled: true
+  jobs:
+    - name: "daily-email-summary"
+      schedule: "0 9 * * *"          # standard cron syntax
+      prompt: "Summarize my unread emails from the last 24 hours"
+      profile: "email-checker"
+      delivery:
+        channel: "log"               # or "discord" / "discord-dm"
+```
+
+Set `cron.enabled: true` and run with `--serve` — the scheduler starts automatically.
+
+## Job modes
+
+### Wake agent (default)
+
+`wakeAgent: true` runs the full agent loop with the configured prompt, then delivers
+the response via the configured delivery channel.
+
+### Add note
+
+`wakeAgent: false` injects the prompt as a user message into the session without
+running the agent loop. Useful for queuing context for the next interaction.
+
+## Delivery channels
+
+- **`log`** (default) — prints the response to stdout
+- **`discord`** — sends to a Discord channel (requires `delivery.target` channel ID)
+- **`discord-dm`** — sends as a DM to the bot owner
+
+## Job options
+
+| Field | Description |
+|-------|-------------|
+| `name` | Unique job identifier |
+| `schedule` | Cron expression (standard 5-field syntax) |
+| `prompt` | The message sent to the agent |
+| `profile` | Named profile to use (optional) |
+| `wakeAgent` | Run agent loop (default `true`) or just inject message |
+| `newSession` | Start a fresh session each run (default `false`) |
+| `delivery.channel` | Output channel: `log`, `discord`, or `discord-dm` |
+| `delivery.target` | Discord channel ID (required for `discord` delivery) |
+| `hooks` | Job-specific hooks (appended to profile hooks) |
+
+## Prompt templating
+
+Cron prompts support template variables:
+
+| Variable | Description |
+|----------|-------------|
+| `{{last_run}}` | ISO timestamp of the last run |
+| `{{last_run_epoch}}` | Unix timestamp of the last run |
+| `{{last_response}}` | The agent's response from the last run |
+| `{{next_task}}` | First "Next:" line from the profile's `goals.md` |
+
+## Example with hooks
+
+```yaml
+cron:
+  enabled: true
+  jobs:
+    - name: "morning-briefing"
+      schedule: "0 8 * * *"
+      prompt: "Give me a morning briefing based on the context below."
+      profile: "researcher"
+      hooks:
+        beforeRun:
+          - tool: gmail
+            args: { action: "check", query: "newer_than:1d" }
+            skipIf: "no new messages"
+          - tool: web_search
+            args: { query: "AI news today" }
+```
+
+## Job state
+
+Job state (last run time, last response) is tracked in the `cron_jobs` database table
+and persists across restarts.

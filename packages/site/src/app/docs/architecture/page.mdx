@@ -1,0 +1,89 @@
+# Architecture
+
+TAI is a pnpm monorepo with 4 packages:
+
+| Package | Path | Purpose |
+|---------|------|---------|
+| `@agent/core` | `packages/core/` | Agent library: runtime, config, tools, providers, channels, db, cron, hooks, factories |
+| `@agent/server` | `packages/server/` | HTTP API server (Hono routes, SSE, webhooks, static UI serving) |
+| `@agent/cli` | `packages/cli/` | CLI entry point (arg parsing, REPL, service orchestration) |
+| `@agent/ui` | `packages/ui/` | React frontend (Vite SPA) |
+
+## Project layout
+
+```
+packages/
+├── core/src/
+│   ├── index.ts               # Barrel re-exports
+│   ├── factories.ts           # createTools, createProvider, createMetaTools
+│   ├── config.ts              # YAML config loader with env var interpolation
+│   ├── runtime.ts             # AgentRuntime: hot-reloadable config, tools, provider
+│   ├── context.ts             # Context/memory file loader
+│   ├── agent/
+│   │   ├── loop.ts            # Agent loop with history compaction
+│   │   ├── session.ts         # Session creation and resumption
+│   │   ├── profiles.ts        # Named agent profile resolution
+│   │   ├── prompt.ts          # Base system prompt
+│   │   ├── hooks.ts           # beforeRun/afterRun hook execution engine
+│   │   ├── compact.ts         # Session compaction
+│   │   └── tasks.ts           # In-memory background task tracking
+│   ├── providers/             # Ollama, OpenAI, Anthropic implementations
+│   ├── channels/              # Discord bot
+│   ├── tools/                 # 18+ built-in tools
+│   ├── cron/                  # Cron job scheduler
+│   └── db/                    # SQLite schema, queries, and project task CRUD
+├── server/src/
+│   └── index.ts               # Hono HTTP server
+├── cli/src/
+│   └── index.ts               # CLI entry point
+└── ui/src/                    # React SPA
+```
+
+## AgentRuntime
+
+`AgentRuntime` (`packages/core/src/runtime.ts`) holds all mutable state — config, tools, and provider.
+All subsystems (server, Discord, cron, delegate) hold a runtime reference and read state at request time.
+
+Key behaviors:
+
+- **`reload()`** — re-reads `config.yaml`, rebuilds tools and provider. All-or-nothing: keeps previous state on failure.
+- **`startWatching()`** — uses `fs.watch` with 500ms debounce to auto-reload on config file changes.
+- **`resolveHooks()`** — resolves merged hooks for a profile with optional overrides (e.g. cron job hooks).
+- **`generation`** — monotonic counter that increments on each successful reload.
+
+## Factories
+
+`packages/core/src/factories.ts` is the composition layer:
+
+- **`createTools(config, contextDir, configPath?, opts?)`** — builds the tool array from config
+- **`createProvider(config)`** — creates the AI provider + model from config
+- **`createMetaTools(runtime, contextDir, kbDir)`** — creates delegate, task_status, and admin tools
+
+## Agent loop
+
+The core loop is simple by design (local models struggle with complex flows):
+
+1. Append user message to session history
+2. Re-resolve tools and provider (via optional runtime getters — enables hot-reload)
+3. Trim history to fit within `maxHistoryTokens` (drops oldest messages, keeps tool-call groups intact)
+4. Send system prompt + trimmed history + tool schemas to the LLM
+5. If the LLM returns tool calls, execute them and append results
+6. Repeat until the LLM returns a final text response (or max rounds hit)
+
+If the available tool set changes between iterations (e.g. a custom tool was added), the loop
+injects a transient system message notifying the LLM of the updated tools.
+
+## History compaction
+
+The agent loop trims conversation history before each LLM call to stay within `maxHistoryTokens`
+(default 2000). Token count is estimated at ~4 chars per token. Trimming drops the oldest messages
+first, but always skips past orphaned `tool` messages so tool-call/response groups stay intact.
+
+## Design principles
+
+- **Short system prompts**: Local models degrade with prompts &gt;500 tokens. Keep them concise.
+- **Few tools per request**: Max ~5 tools. Local models struggle to pick from large sets.
+- **Low temperature**: Default 0.3 for deterministic tool selection.
+- **No conditional response tokens**: Never use patterns like "reply NO_REPLY if..." — local models misinterpret these.
+- **Simple agent loop**: No complex state machines.
+- **Hot-reloadable runtime**: Changes take effect immediately without restart.

@@ -1,0 +1,137 @@
+# Configuration
+
+All settings live in `config.yaml`. Environment variables can be referenced with `${VAR_NAME}` syntax.
+If no config file is found, built-in defaults are used (Ollama on localhost:11434, basic tools enabled).
+
+See `config.example.yaml` in the repository for a complete starter template.
+
+## Server
+
+```yaml
+server:
+  port: 3000
+  host: "127.0.0.1"
+```
+
+## Database
+
+```yaml
+database:
+  path: "./agent.db"
+```
+
+SQLite via `better-sqlite3` (synchronous API). Sessions, messages, and cron job state are persisted here.
+
+## Providers
+
+Configure one or more LLM providers. Set `agent.defaultProvider` to choose the active one.
+
+```yaml
+providers:
+  ollama:
+    baseUrl: "http://localhost:11434"
+    defaultModel: "devstral-small-2:latest"
+  openai:
+    apiKey: "${OPENAI_API_KEY}"
+    defaultModel: "gpt-4o-mini"
+    baseUrl: "https://api.openai.com/v1"   # optional, for compatible APIs
+  anthropic:
+    apiKey: "${ANTHROPIC_API_KEY}"
+    defaultModel: "claude-sonnet-4-5-20250929"
+```
+
+## Agent settings
+
+```yaml
+agent:
+  defaultProvider: "ollama"
+  extraInstructions: ""
+  maxHistoryTokens: 2000
+  temperature: 0.3
+  maxToolRounds: 10
+```
+
+- **`defaultProvider`** — which provider to use (`ollama`, `openai`, or `anthropic`)
+- **`extraInstructions`** — appended to the system prompt
+- **`maxHistoryTokens`** — history is trimmed to this budget before each LLM call
+- **`temperature`** — lower values (0.3) produce more deterministic tool selection
+- **`maxToolRounds`** — safety limit on tool call iterations per message
+
+## Channels
+
+```yaml
+channels:
+  discord:
+    enabled: true
+    token: "${DISCORD_BOT_TOKEN}"
+    owner: "${DISCORD_OWNER_ID}"
+    respondToDMs: true
+    respondToMentions: true
+```
+
+## Tools
+
+Enable or disable individual tools and configure their options:
+
+```yaml
+tools:
+  exec:
+    enabled: true
+    allowedCommands: ["git", "npm", "date", "ls"]
+  read:
+    enabled: true
+  write:
+    enabled: true
+  web_fetch:
+    enabled: true
+  web_search:
+    enabled: true
+    provider: brave
+    apiKey: "${BRAVE_API_KEY}"
+  browser:
+    enabled: true
+    headless: true
+  gmail:
+    enabled: true
+    account: "${GOG_ACCOUNT}"
+  google_calendar:
+    enabled: true
+    account: "${GOG_ACCOUNT}"
+  google_drive:
+    enabled: true
+    account: "${GOG_ACCOUNT}"
+  md_to_pdf:
+    enabled: true
+  tasks:
+    enabled: true
+  ask_user:
+    enabled: true
+```
+
+## Custom tools
+
+Define shell command tools without writing any TypeScript:
+
+```yaml
+custom_tools:
+  weather:
+    description: "Get weather for a city"
+    parameters:
+      city: { type: "string", description: "City name" }
+    command: "curl -s wttr.in/{{city}}?format=3"
+    timeout_ms: 5000   # optional, default 30s
+```
+
+Custom tools use `{{param}}` template interpolation. They are rebuilt on every runtime reload,
+so adding one via the admin tool or editing config makes it available immediately.
+
+## Commands
+
+Config-defined shell commands or prompts exposed as slash commands in Discord and CLI:
+
+```yaml
+commands:
+  review:
+    description: "Review agent activity"
+    command: "cat data/context/profiles/autonomous/journal.md"
+```

@@ -1,0 +1,113 @@
+# Getting Started
+
+## Prerequisites
+
+- **Node.js 18+**
+- One of the following LLM backends:
+  - [Ollama](https://ollama.ai) running locally
+  - An OpenAI API key (or any OpenAI-compatible API)
+  - An Anthropic API key
+
+### Hardware (for local LLMs)
+
+Tested with an RTX 5090 (32GB VRAM) running models like `devstral-small-2` (~15GB) and `qwen3-coder:30b` (~18GB).
+
+## Installation
+
+Install globally via npm:
+
+```bash
+npm install -g tailored-ai
+```
+
+Or with your preferred package manager:
+
+```bash
+pnpm add -g tailored-ai
+yarn global add tailored-ai
+```
+
+You can also install it as a project dependency:
+
+```bash
+npm install tailored-ai
+```
+
+## Setup
+
+Create a config file and environment variables in your working directory:
+
+```bash
+tai init                          # creates config.yaml and .env
+```
+
+Or manually:
+
+```bash
+cp config.example.yaml config.yaml   # edit with your settings
+cp .env.example .env                  # add your API keys
+```
+
+## Quick start
+
+### Interactive REPL
+
+```bash
+tai
+```
+
+### Single message (non-interactive)
+
+```bash
+tai -m "What is the current date?"
+```
+
+### Use a named profile
+
+```bash
+tai -p researcher -m "Find AI news"
+```
+
+### JSON output for scripting
+
+```bash
+tai -m "List files in /tmp" --json
+```
+
+### Run as a service
+
+Start the Discord bot, cron scheduler, and HTTP API together:
+
+```bash
+tai --serve
+```
+
+### Resume a previous session
+
+```bash
+tai -s <session-id>
+```
+
+## CLI options
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--config <path>` | `-c` | Path to config.yaml (default: `./config.yaml`) |
+| `--message <text>` | `-m` | Send a single message and exit |
+| `--session <id>` | `-s` | Resume an existing session |
+| `--profile <name>` | `-p` | Use a named agent profile |
+| `--json` | `-j` | Output as JSON (for scripting) |
+| `--serve` | | Run as a service (Discord bot, cron, HTTP API) |
+| `--help` | `-h` | Show help |
+
+## Development
+
+If you want to contribute or run from source:
+
+```bash
+git clone https://github.com/quintushr/autonomous-agent.git
+cd autonomous-agent
+pnpm install
+pnpm run build
+pnpm run dev -- -m "Hello"
+```

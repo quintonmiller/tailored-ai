@@ -1,9 +1,24 @@
+# Build & deps
 node_modules/
 dist/
+packages/*/dist/
+.next/
+*.tsbuildinfo
+
+# Runtime data
+local/
 data/
 *.db
 *.db-shm
 *.db-wal
 *.db.backup*
+
+# Config & secrets
 .env
+config.yaml
 config.local.yaml
+
+# IDE & tools
+.claude/
+.ralph/
+.ralphrc
