@@ -1,7 +1,7 @@
 export const SITE_NAME = "Tailored AI";
 export const SITE_DESCRIPTION =
   "A configurable AI agent that runs locally, in the cloud, or both. Automate tasks, extend with custom tools, and reach it from anywhere.";
-export const REPO_URL = "https://github.com/quintushr/autonomous-agent";
+export const REPO_URL = "https://github.com/quintonmiller/tailored-ai";
 
 export const NAV_LINKS = [
   { label: "Home", href: "/" },
