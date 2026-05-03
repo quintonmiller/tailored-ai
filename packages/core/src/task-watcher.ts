@@ -1,4 +1,5 @@
-import { applyTemplates, executeHooks } from "./agent/hooks.js";
+import { executeHooks } from "./agent/hooks.js";
+import { expandPrompt } from "./prompts/expand.js";
 import { runAgentLoop } from "./agent/loop.js";
 import { resolveAgent } from "./agent/agents.js";
 import { findOrCreateSession, resetSession } from "./agent/session.js";
@@ -97,9 +98,18 @@ export class TaskWatcher {
     const hooks = this.runtime.resolveHooks({ agentName, overrideHooks: config.hooks });
     const allTools = this.runtime.getTools();
 
+    const promptsConfig = this.runtime.getConfig().prompts;
+
     // --- beforeRun hooks ---
     if (hooks.beforeRun.length > 0) {
-      const { skipped } = await executeHooks(hooks.beforeRun, allTools, templateVars, session.id, logPrefix);
+      const { skipped } = await executeHooks(
+        hooks.beforeRun,
+        allTools,
+        templateVars,
+        session.id,
+        logPrefix,
+        promptsConfig,
+      );
       if (skipped) {
         console.log(`${logPrefix} Skipped by beforeRun hook`);
         return;
@@ -107,7 +117,7 @@ export class TaskWatcher {
     }
 
     // Build prompt: structured task context + user-configured prompt
-    const configPrompt = applyTemplates(config.prompt, templateVars);
+    const configPrompt = await expandPrompt(config.prompt, templateVars, promptsConfig);
     const prompt = [
       "Task event received. Details:",
       `- Task ID: ${event.task.id}`,
@@ -135,7 +145,7 @@ export class TaskWatcher {
     // --- afterRun hooks ---
     if (hooks.afterRun.length > 0) {
       const afterVars = { ...templateVars, response: response ?? "" };
-      await executeHooks(hooks.afterRun, allTools, afterVars, session.id, logPrefix);
+      await executeHooks(hooks.afterRun, allTools, afterVars, session.id, logPrefix, promptsConfig);
     }
 
     if (response) {

@@ -64,10 +64,16 @@ export interface AgentLoopOptions {
   onToolResult?: (name: string, result: string) => void;
   /** Fires with a short description when the agent emits reasoning text before tool calls. Fires null when the loop ends. */
   onActivity?: (description: string | null) => void;
+  /** Fires after each provider.chat() with token counts from the response. */
+  onUsage?: (usage: { input: number; output: number }) => void;
+  /** Extra fields merged into the ToolContext passed to every tool execution. */
+  toolContextExtras?: Partial<import("../tools/interface.js").ToolContext>;
   permissions?: PermissionsConfig;
   approvalHandler?: ApprovalHandler;
   onApprovalRequest?: (request: ApprovalRequest) => void;
   onApprovalResponse?: (request: ApprovalRequest, response: ApprovalResponse) => void;
+  /** Sandbox to route shell/file tool ops through. Prepared on loop entry, cleaned up on exit. */
+  sandbox?: import("../sandboxes/interface.js").Sandbox;
 }
 
 export function estimateTokens(msg: Message): number {
@@ -367,16 +373,59 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
   saveMessage(db, session.id, userMsg);
   history.push(userMsg);
 
+  const workingDirectory = process.cwd();
+  const sandboxHandle = opts.sandbox
+    ? await opts.sandbox.prepare({ cwd: workingDirectory })
+    : undefined;
+  const cleanupSandbox = async () => {
+    if (opts.sandbox && sandboxHandle) {
+      try {
+        await opts.sandbox.cleanup(sandboxHandle);
+      } catch (err) {
+        console.error("[loop] sandbox cleanup failed:", (err as Error).message);
+      }
+    }
+  };
+
   const context: ToolContext = {
     sessionId: session.id,
-    workingDirectory: process.cwd(),
+    workingDirectory,
     env: {},
     agentContextDir,
     kbDir: opts.kbDir,
     agentKbDir: opts.agentKbDir,
     approvalHandler: opts.approvalHandler,
     permissions: opts.permissions,
+    db,
+    sandbox: opts.sandbox,
+    sandboxHandle,
+    ...opts.toolContextExtras,
   };
+
+  try {
+    return await _runAgentLoopBody(userMessage, opts, context, fullSystemPrompt, systemPromptTokens, history);
+  } finally {
+    await cleanupSandbox();
+  }
+}
+
+async function _runAgentLoopBody(
+  _userMessage: string,
+  opts: AgentLoopOptions,
+  context: ToolContext,
+  fullSystemPrompt: string,
+  systemPromptTokens: number,
+  history: Message[],
+): Promise<string> {
+  const {
+    provider,
+    session,
+    db,
+    tools,
+    maxToolRounds,
+    maxHistoryTokens,
+    temperature,
+  } = opts;
 
   let rounds = 0;
   let prevToolNames: string[] | undefined;
@@ -430,6 +479,14 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
         temperature,
       }),
     );
+
+    if (opts.onUsage && response.usage) {
+      try {
+        opts.onUsage(response.usage);
+      } catch (e) {
+        console.error("[agent] onUsage callback error:", (e as Error).message);
+      }
+    }
 
     const assistantMsg: Message = {
       role: "assistant",

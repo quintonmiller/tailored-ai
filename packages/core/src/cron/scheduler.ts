@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Cron } from "croner";
-import { applyTemplates, executeHooks } from "../agent/hooks.js";
+import { executeHooks } from "../agent/hooks.js";
+import { expandPrompt } from "../prompts/expand.js";
 import { runAgentLoop } from "../agent/loop.js";
 import { resolveAgent } from "../agent/agents.js";
 import { findOrCreateSession, resetSession } from "../agent/session.js";
@@ -127,9 +128,9 @@ export class CronScheduler {
     return vars;
   }
 
-  private resolvePrompt(job: CronJobConfig, vars?: Record<string, string>): string {
+  private async resolvePrompt(job: CronJobConfig, vars?: Record<string, string>): Promise<string> {
     const templateVars = vars ?? this.buildTemplateVars(job);
-    return applyTemplates(job.prompt, templateVars);
+    return expandPrompt(job.prompt, templateVars, this.runtime.getConfig().prompts);
   }
 
   private async runJob(job: CronJobConfig): Promise<void> {
@@ -146,7 +147,7 @@ export class CronScheduler {
     console.log(`[cron] Running "${job.name}" (${wakeAgent ? "wake" : "note"} mode)`);
 
     if (!wakeAgent) {
-      this.addNote(job, sessionKey, resolved.model);
+      await this.addNote(job, sessionKey, resolved.model);
       this.updateLastRun(job.name);
       return;
     }
@@ -162,7 +163,14 @@ export class CronScheduler {
 
     // --- beforeRun hooks ---
     if (hooks.beforeRun.length > 0) {
-      const { outputs, skipped } = await executeHooks(hooks.beforeRun, allTools, templateVars, session.id, logPrefix);
+      const { outputs, skipped } = await executeHooks(
+        hooks.beforeRun,
+        allTools,
+        templateVars,
+        session.id,
+        logPrefix,
+        this.runtime.getConfig().prompts,
+      );
       if (skipped) {
         console.log(`[cron] "${job.name}" skipped by beforeRun hook`);
         this.updateLastRun(job.name);
@@ -175,7 +183,7 @@ export class CronScheduler {
       }
     }
 
-    let prompt = this.resolvePrompt(job, templateVars);
+    let prompt = await this.resolvePrompt(job, templateVars);
     if (templateVars._hook_context) {
       prompt = `${templateVars._hook_context}\n\n---\n\n${prompt}`;
     }
@@ -192,7 +200,14 @@ export class CronScheduler {
     // --- afterRun hooks ---
     if (hooks.afterRun.length > 0) {
       const afterVars = { ...templateVars, response: response ?? "" };
-      await executeHooks(hooks.afterRun, allTools, afterVars, session.id, logPrefix);
+      await executeHooks(
+        hooks.afterRun,
+        allTools,
+        afterVars,
+        session.id,
+        logPrefix,
+        this.runtime.getConfig().prompts,
+      );
     }
 
     if (response && !response.trim().toUpperCase().includes("NO_ACTION")) {
@@ -202,11 +217,11 @@ export class CronScheduler {
     }
   }
 
-  private addNote(job: CronJobConfig, sessionKey: string, jobModel: string): void {
+  private async addNote(job: CronJobConfig, sessionKey: string, jobModel: string): Promise<void> {
     const config = this.runtime.getConfig();
     const session = findOrCreateSession(this.runtime.db, sessionKey, jobModel, config.agent.defaultProvider);
 
-    const prompt = this.resolvePrompt(job);
+    const prompt = await this.resolvePrompt(job);
     saveMessage(this.runtime.db, session.id, {
       role: "user",
       content: prompt,

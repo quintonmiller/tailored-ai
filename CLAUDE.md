@@ -298,6 +298,102 @@ Shared module used by all entry points:
 
 `AgentRuntime.resolveHooks({ agentName?, overrideHooks? })` is the main entry point for callers. It reads the agent's hooks from config and merges with any overrides. Each entry point (CLI, Discord, server, delegate, cron) wraps its `runAgentLoop` call with ~5-8 lines of beforeRun/afterRun hook execution.
 
+## Prompt Expansion
+
+`packages/core/src/prompts/expand.ts` provides `expandPrompt(text, vars, options?)` for rendering prompt templates. Three forms, applied in order:
+
+1. **`{{include:path}}`** — file inclusion. Relative paths resolve against `options.baseDir` (default `process.cwd()`). Included content is itself expanded recursively, with depth capped by `options.maxIncludeDepth` (default 5). Missing files become an inline `[include error: ...]` marker rather than throwing.
+2. **`{{var}}`** — variable substitution from `vars`. Same shape as the legacy `applyTemplates` (which is now an alias for `applyVars`).
+3. **`` !`shell cmd` ``** — inline shell expansion. Runs the command via `bash -c`, substitutes its trimmed stdout. Off by default; enable with `prompts.allowShellExpansion: true` in config. Errors become `[!shell error: ...]` so the agent can see what failed.
+
+Wired into:
+- `cron/scheduler.ts` — full expansion for `job.prompt` (cron prompts can pull in `!`git log -3``, etc.)
+- `task-watcher.ts` — full expansion for `config.prompt`
+- `agent/hooks.ts` — `executeHooks` expands string-valued hook args (so a hook `args: { content: "!`date`" }` works)
+
+Static agent instructions (`agents.<name>.instructions`) are *not* currently expanded — they're loaded once and don't benefit from per-iteration shell calls. If you need dynamic instructions, use a cron `beforeRun` hook to write to a memory file and reference it.
+
+Config:
+
+```yaml
+prompts:
+  allowShellExpansion: false   # gate shell expansion behind this
+  shellTimeoutMs: 5000
+  maxIncludeDepth: 5
+```
+
+## Worktrees
+
+`packages/core/src/worktree.ts` is a thin wrapper over `git worktree` for running an agent in an isolated branch and merging back. Built for the workflow runner (S5) but usable directly.
+
+```ts
+import { createWorktree } from "@agent/core";
+
+const wt = await createWorktree({
+  repoDir: ".",
+  strategy: { type: "merge-to-head", branch: "agent/fix-42" },
+});
+// ...agent runs in wt.path...
+const merged = await wt.mergeToHead?.();
+if (!merged?.ok) console.log(`branch preserved: ${merged?.branchPreserved}`);
+await wt.cleanup(); // removes if clean; preserves if dirty
+```
+
+Three strategies:
+- `head` — no worktree; runs in `repoDir` on current branch. Cleanup is a no-op.
+- `branch` — fresh worktree on a named branch. Cleanup removes if clean, preserves if dirty.
+- `merge-to-head` — same as `branch` plus `mergeToHead()` that runs `git merge --no-ff <branch>` against the host repo. On conflict, aborts the merge (host left clean) and preserves the branch.
+
+`autoStash(repoDir)` stashes only modified-tracked files (deliberately not untracked — matches the mmo sandcastle autostash pattern, so a `.worktrees/` dir doesn't get swept up). Returns `{ stashed, pop() }` for a try/finally.
+
+## Sandboxes
+
+Tool side-effects (shell, file IO) can be routed through a `Sandbox` defined in `packages/core/src/sandboxes/interface.ts`. Today:
+
+- **`host`** (default) — `packages/core/src/sandboxes/host.ts`. Runs commands directly on the host. No isolation; preserves current behavior.
+- **`docker`**, **`podman`** — config slots reserved; throws "not yet implemented" if selected (see follow-up beans).
+
+Lifecycle: the runtime calls `createSandbox(config, agent)` in `buildLoopOptions()` and threads the result into `AgentLoopOptions.sandbox`. `runAgentLoop` calls `sandbox.prepare({ cwd })` before the loop body and `sandbox.cleanup(handle)` in a finally block. The handle lands on `ToolContext` as `sandbox` + `sandboxHandle`.
+
+Tools opt in by checking for both fields and routing through `context.sandbox.exec(handle, cmd, opts)` / `readFile` / `writeFile`. `exec.ts` is wired today. `read.ts` and `write.ts` still go straight to the host filesystem — wiring them is a follow-up.
+
+Config:
+
+```yaml
+agent:
+  sandbox: host          # default for all agents
+agents:
+  coder:
+    sandbox: docker      # per-agent override (when implemented)
+```
+
+## Task Backends
+
+Project tasks (and the autopilot worker) read/write through a pluggable `TaskBackend` interface defined in `packages/core/src/tasks/interface.ts`. Today:
+
+- **`native`** (default) — `packages/core/src/tasks/native.ts`, wraps the existing SQLite `project_tasks` table. Zero behavior change vs. before the refactor.
+- **`github`**, **`beans`**, **`beads`** — config slots reserved; adapters not yet implemented (see follow-up beans).
+
+Backend resolution: `createTaskBackend(config, db)` in `packages/core/src/tasks/factory.ts`. The autopilot worker constructs its own backend in the constructor; pass `taskBackend` in `AutopilotWorkerOptions` to override (used by tests).
+
+Every backend declares its native status enum via `statuses: { backlog, inProgress, blocked, done }` and an `isDone(status)` predicate, so autopilot logic ("claim a backlog task", "mark blocked due to budget") is portable.
+
+The `tasks` and `task_query` agent tools still go directly to SQLite — migrating them to the backend interface is tracked as a follow-up bean.
+
+Config:
+
+```yaml
+tasks:
+  backend: native           # native | github | beans | beads
+  github:                   # only used when backend: github
+    repo: owner/repo
+    token: ${GITHUB_TOKEN}
+  beans:
+    path: ./.beans
+  beads:
+    path: ./.beads
+```
+
 ## Adding a Cron Job
 
 1. Add job config under `cron.jobs` in `config.yaml` (see `CronJobConfig` in `packages/core/src/config.ts`)

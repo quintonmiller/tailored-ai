@@ -4,6 +4,31 @@ export type { CompactResult } from "./agent/compact.js";
 export { compactSession, formatCompactResult } from "./agent/compact.js";
 export type { ResolvedHooks } from "./agent/hooks.js";
 export { applyTemplates, EMPTY_HOOKS, executeHooks, hasHooks, mergeHooks, normalizeHooks } from "./agent/hooks.js";
+export type { ExpandOptions } from "./prompts/expand.js";
+export { applyVars, expandPrompt } from "./prompts/expand.js";
+export type { BranchStrategy, CreateWorktreeOptions, Worktree } from "./worktree.js";
+export { autoStash, createWorktree } from "./worktree.js";
+export type {
+  Mount,
+  Sandbox,
+  SandboxExecOptions,
+  SandboxExecResult,
+  SandboxHandle,
+  SandboxKind,
+  SandboxPrepareOptions,
+} from "./sandboxes/interface.js";
+export { HostSandbox } from "./sandboxes/host.js";
+export { createSandbox } from "./sandboxes/factory.js";
+export type {
+  Task,
+  TaskBackend,
+  TaskCreateInput,
+  TaskFilter,
+  TaskStatusMap,
+  TaskUpdateInput,
+} from "./tasks/interface.js";
+export { createTaskBackend } from "./tasks/factory.js";
+export { NativeTaskBackend } from "./tasks/native.js";
 export { runAgentLoop } from "./agent/loop.js";
 export type { AgentLoopOptions } from "./agent/loop.js";
 export type { ResolvedAgent, ResolvedProfile } from "./agent/agents.js";
@@ -36,9 +61,34 @@ export { TaskWatcher } from "./task-watcher.js";
 export { initDatabase } from "./db/schema.js";
 export { getSessionMessages, listSessions } from "./db/queries.js";
 export type { ProjectTask, ProjectTaskWithComments, TaskComment, TaskQueryFilter, TaskQueryResult } from "./db/task-queries.js";
-export { addTaskComment, createProjectTask, deleteProjectTask, getProjectTask, queryProjectTasks, updateProjectTask } from "./db/task-queries.js";
+export {
+  addTaskComment,
+  claimBacklogTask,
+  createProjectTask,
+  deleteProjectTask,
+  getProjectTask,
+  nextBacklogTaskForAssignees,
+  queryProjectTasks,
+  unblockBudgetTasks,
+  updateProjectTask,
+} from "./db/task-queries.js";
 export type { Project, ProjectWithCounts, ProjectQueryFilter, ProjectQueryResult } from "./db/project-queries.js";
 export { createProject, getProject, updateProject, deleteProject, queryProjects, getDefaultProjectId } from "./db/project-queries.js";
+export { AutopilotWorker, buildTaskPrompt } from "./autopilot/worker.js";
+export type { AutopilotWorkerOptions } from "./autopilot/worker.js";
+export { buildMorningDigest, recordDigestRun } from "./autopilot/digest.js";
+export type { DigestResult, DigestSection } from "./autopilot/digest.js";
+export type { AutopilotSettings, TokenUsageInput, BudgetStatus } from "./db/autopilot-queries.js";
+export {
+  getAutopilotSettings,
+  updateAutopilotSettings,
+  recordTokenUsage,
+  getTokenUsageInWindow,
+  checkBudget,
+  isInTimeWindow,
+  isInDisabledHours,
+  isInQuietHours,
+} from "./db/autopilot-queries.js";
 export type { DocumentMeta } from "./db/document-queries.js";
 export { createDocument, getDocument, updateDocument, deleteDocument, listDocuments } from "./db/document-queries.js";
 export type { AIProvider, ChatParams, ChatResponse, Message, ToolCall, ToolSchema } from "./providers/interface.js";

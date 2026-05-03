@@ -32,6 +32,8 @@ export interface AgentDefinition {
     beforeRun?: AgentHook | AgentHook[];
     afterRun?: AgentHook | AgentHook[];
   };
+  /** Sandbox kind to run shell/file tools in. Defaults to host (no isolation). */
+  sandbox?: "host" | "docker" | "podman";
 }
 
 /** @deprecated Use AgentDefinition instead. */
@@ -152,6 +154,8 @@ export interface AgentConfig {
     maxContextTokens: number;
     temperature: number;
     maxToolRounds: number;
+    /** Default sandbox kind for agents that don't set their own. Defaults to host. */
+    sandbox?: "host" | "docker" | "podman";
   };
   channels: {
     discord?: {
@@ -251,6 +255,24 @@ export interface AgentConfig {
   custom_tools: Record<string, CustomToolConfig>;
   commands: Record<string, CommandConfig>;
   permissions?: PermissionsConfig;
+  prompts?: {
+    /** Allow `!`cmd`` shell expansion in prompt templates. Off by default. */
+    allowShellExpansion?: boolean;
+    /** Timeout per shell expansion (ms). Default 5000. */
+    shellTimeoutMs?: number;
+    /** Max nested {{include:...}} depth. Default 5. */
+    maxIncludeDepth?: number;
+    /** Base directory for relative include paths. Defaults to the config file directory. */
+    includeBaseDir?: string;
+  };
+  tasks?: {
+    /** Which task backend to use for project tasks and autopilot. Default "native". */
+    backend?: "native" | "github" | "beans" | "beads";
+    /** Backend-specific options keyed by backend name. */
+    github?: { repo?: string; token?: string };
+    beans?: { path?: string };
+    beads?: { path?: string };
+  };
 }
 
 const DEFAULT_CONFIG: AgentConfig = {
@@ -308,6 +330,14 @@ const DEFAULT_CONFIG: AgentConfig = {
   },
   custom_tools: {},
   commands: {},
+  prompts: {
+    allowShellExpansion: false,
+    shellTimeoutMs: 5000,
+    maxIncludeDepth: 5,
+  },
+  tasks: {
+    backend: "native",
+  },
 };
 
 function interpolateEnv(value: string): string {

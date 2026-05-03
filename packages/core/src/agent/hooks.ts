@@ -1,4 +1,5 @@
-import type { AgentHook } from "../config.js";
+import type { AgentConfig, AgentHook } from "../config.js";
+import { applyVars, expandPrompt } from "../prompts/expand.js";
 import type { Tool, ToolContext } from "../tools/interface.js";
 
 export interface ResolvedHooks {
@@ -30,15 +31,11 @@ export function mergeHooks(
   };
 }
 
-/** Replace all {{key}} placeholders in text with values from vars. */
-export function applyTemplates(text: string, vars: Record<string, string>): string {
-  if (!text.includes("{{")) return text;
-  let result = text;
-  for (const [key, value] of Object.entries(vars)) {
-    result = result.replaceAll(`{{${key}}}`, value);
-  }
-  return result;
-}
+/**
+ * Sync alias for the legacy {{key}}-only substitution. Kept for back-compat;
+ * for full prompt expansion (includes + shell), use `expandPrompt` from `../prompts/expand.js`.
+ */
+export const applyTemplates = applyVars;
 
 /** Execute a list of hooks sequentially. Returns outputs and whether a skipIf matched. */
 export async function executeHooks(
@@ -47,6 +44,7 @@ export async function executeHooks(
   templateVars: Record<string, string>,
   sessionId: string,
   logPrefix = "[hooks]",
+  promptsConfig?: AgentConfig["prompts"],
 ): Promise<{ outputs: string[]; skipped: boolean }> {
   const outputs: string[] = [];
 
@@ -63,11 +61,13 @@ export async function executeHooks(
       continue;
     }
 
-    // Resolve templates in string-valued args
+    // Resolve templates in string-valued args. Uses full expandPrompt so hook args
+    // can pull in {{include:...}} files or !`cmd` shell output (when allowed).
     const resolvedArgs: Record<string, unknown> = {};
     if (hook.args) {
       for (const [key, value] of Object.entries(hook.args)) {
-        resolvedArgs[key] = typeof value === "string" ? applyTemplates(value, templateVars) : value;
+        resolvedArgs[key] =
+          typeof value === "string" ? await expandPrompt(value, templateVars, promptsConfig) : value;
       }
     }
 

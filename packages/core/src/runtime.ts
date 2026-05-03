@@ -7,6 +7,7 @@ import { resolveAgent } from "./agent/agents.js";
 import type { Session } from "./agent/session.js";
 import type { AgentConfig, AgentHook } from "./config.js";
 import type { AIProvider } from "./providers/interface.js";
+import { createSandbox } from "./sandboxes/factory.js";
 import type { Tool } from "./tools/interface.js";
 
 export interface RuntimeOptions {
@@ -235,6 +236,9 @@ export class AgentRuntime {
       });
     };
 
+    const agent = agentName ? config.agents?.[agentName] : undefined;
+    const sandbox = createSandbox(config, agent);
+
     return {
       provider: this._provider,
       session: opts.session,
@@ -254,6 +258,7 @@ export class AgentRuntime {
       skipGlobalContext: resolved.skipGlobalContext,
       summarizeOnTrim: resolved.summarizeOnTrim,
       permissions: config.permissions,
+      sandbox,
       getTools: () => {
         const r = resolveAgent(
           agentName,

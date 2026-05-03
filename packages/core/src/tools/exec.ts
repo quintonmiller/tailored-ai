@@ -48,6 +48,21 @@ export class ExecTool implements Tool {
       }
     }
 
+    if (context.sandbox && context.sandboxHandle) {
+      const result = await context.sandbox.exec(context.sandboxHandle, command, {
+        cwd: context.workingDirectory,
+        env: context.env,
+        timeoutMs: this.timeoutMs,
+      });
+      if (result.exitCode !== 0) {
+        return { success: false, output: result.stdout, error: result.stderr || `exit code ${result.exitCode}` };
+      }
+      return {
+        success: true,
+        output: result.stdout + (result.stderr ? `\n[stderr]: ${result.stderr}` : ""),
+      };
+    }
+
     return new Promise((resolve) => {
       execFile(
         "bash",
