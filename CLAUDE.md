@@ -371,8 +371,9 @@ agents:
 
 Project tasks (and the autopilot worker) read/write through a pluggable `TaskBackend` interface defined in `packages/core/src/tasks/interface.ts`. Today:
 
-- **`native`** (default) — `packages/core/src/tasks/native.ts`, wraps the existing SQLite `project_tasks` table. Zero behavior change vs. before the refactor.
-- **`github`**, **`beans`**, **`beads`** — config slots reserved; adapters not yet implemented (see follow-up beans).
+- **`native`** (default) — `packages/core/src/tasks/native.ts`, wraps the existing SQLite `project_tasks` table.
+- **`github`** — `packages/core/src/tasks/github.ts`, drives an arbitrary GitHub repo's Issues. Status maps to labels: `status:backlog`, `status:in_progress`, `status:blocked`, `status:in_review`. A closed issue means done. Tags are non-status, non-reason labels. Rank is the issue number (lower = older = higher priority for the autopilot). Assignee is the first `assignees[]` entry. Blocked reason maps to `reason:<value>` labels. Comments use the GH commenter as author (the agent's `agentName` is currently dropped — the gh user attribution wins).
+- **`beans`**, **`beads`** — config slots reserved; adapters not yet implemented.
 
 Backend resolution: `createTaskBackend(config, db)` in `packages/core/src/tasks/factory.ts`. The autopilot worker constructs its own backend in the constructor; pass `taskBackend` in `AutopilotWorkerOptions` to override (used by tests).
 
@@ -384,8 +385,8 @@ Config:
 
 ```yaml
 tasks:
-  backend: native           # native | github | beans | beads
-  github:                   # only used when backend: github
+  backend: github           # native | github | beans | beads
+  github:                   # required when backend: github
     repo: owner/repo
     token: ${GITHUB_TOKEN}
   beans:
@@ -393,6 +394,8 @@ tasks:
   beads:
     path: ./.beads
 ```
+
+When using the `github` backend, the autopilot expects status labels (`status:backlog` etc.) to exist on the repo. The first run will create them implicitly via `update()` calls, but you may want to pre-create them with sensible colors.
 
 ## Adding a Cron Job
 
