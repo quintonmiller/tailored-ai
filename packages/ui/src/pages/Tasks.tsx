@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  type AgentInfo,
   type ProjectTask,
   type ProjectTaskWithComments,
   type TaskComment,
   addProjectTaskComment,
   createProjectTask,
   deleteProjectTask,
+  fetchAgents,
   fetchProjectTask,
   fetchProjectTasks,
   updateProjectTask,
@@ -40,9 +42,32 @@ interface TaskFormData {
   status: string;
   author: string;
   tags: string;
+  assignee: string;
+  rank: string;
 }
 
-const emptyForm: TaskFormData = { title: "", description: "", status: "backlog", author: "", tags: "" };
+const emptyForm: TaskFormData = {
+  title: "",
+  description: "",
+  status: "backlog",
+  author: "",
+  tags: "",
+  assignee: "",
+  rank: "",
+};
+
+function blockedReasonLabel(reason: string | null): string {
+  switch (reason) {
+    case "question":
+      return "Waiting on you";
+    case "budget":
+      return "Budget-deferred";
+    case "error":
+      return "Errored";
+    default:
+      return "Blocked";
+  }
+}
 
 export function Tasks({
   taskId,
@@ -64,6 +89,14 @@ export function Tasks({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
+  const [agents, setAgents] = useState<Record<string, AgentInfo>>({});
+  const [answerText, setAnswerText] = useState("");
+
+  useEffect(() => {
+    fetchAgents()
+      .then(setAgents)
+      .catch(() => setAgents({}));
+  }, []);
 
   // Drag state
   const [dragTaskId, setDragTaskId] = useState<string | null>(null);
@@ -140,6 +173,8 @@ export function Tasks({
       status: task.status,
       author: task.author,
       tags: task.tags.join(", "),
+      assignee: task.assignee ?? "",
+      rank: String(task.rank ?? ""),
     });
     setEditingId(task.id);
     setShowForm(true);
@@ -152,6 +187,8 @@ export function Tasks({
       .map((t) => t.trim())
       .filter(Boolean);
 
+    const parsedRank = form.rank.trim() ? Number.parseInt(form.rank, 10) : undefined;
+
     try {
       if (editingId) {
         const updated = await updateProjectTask(editingId, {
@@ -160,6 +197,8 @@ export function Tasks({
           status: form.status,
           author: form.author,
           tags,
+          assignee: form.assignee || null,
+          rank: parsedRank,
         });
         if (detail && detail.id === editingId) {
           setDetail({ ...detail, ...updated });
@@ -172,6 +211,8 @@ export function Tasks({
           tags: tags.length ? tags : undefined,
           status: form.status,
           project_id: projectId,
+          assignee: form.assignee || null,
+          rank: parsedRank,
         });
       }
       setShowForm(false);
@@ -280,7 +321,30 @@ export function Tasks({
     }
   }
 
+  // Sort backlog by rank ascending, in_progress/blocked/in_review by updated_at.
+  const backlog = tasksByStatus.get("backlog");
+  if (backlog) backlog.sort((a, b) => (a.rank ?? 9999) - (b.rank ?? 9999));
+
   const archivedCount = tasks.filter((t) => t.status === "archived").length;
+
+  const handleResumeFromQuestion = async () => {
+    if (!detail || !answerText.trim()) return;
+    try {
+      await addProjectTaskComment(detail.id, { author: "user", content: answerText });
+      // Back to backlog — autopilot only scans backlog, so this is what puts the
+      // task back in the queue for the next worker tick.
+      const updated = await updateProjectTask(detail.id, {
+        status: "backlog",
+        blocked_reason: null,
+      });
+      const fresh = await fetchProjectTask(detail.id);
+      setDetail(fresh);
+      setAnswerText("");
+      setTasks((prev) => prev.map((t) => (t.id === detail.id ? { ...t, ...updated } : t)));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
 
   return (
     <div className="tasks-page">
@@ -350,6 +414,34 @@ export function Tasks({
                 />
               </div>
             </div>
+            <div className="tasks-form-row">
+              <div className="field-group" style={{ flex: 2 }}>
+                <label className="field-label">Assignee</label>
+                <select
+                  className="field-select"
+                  value={form.assignee}
+                  onChange={(e) => setForm({ ...form, assignee: e.target.value })}
+                >
+                  <option value="">(unassigned)</option>
+                  {Object.keys(agents).map((name) => (
+                    <option key={name} value={name}>
+                      @{name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="field-group" style={{ flex: 1 }}>
+                <label className="field-label">Rank</label>
+                <input
+                  className="field-input"
+                  type="number"
+                  min={1}
+                  placeholder="auto"
+                  value={form.rank}
+                  onChange={(e) => setForm({ ...form, rank: e.target.value })}
+                />
+              </div>
+            </div>
             <div className="field-group">
               <label className="field-label">Tags (comma-separated)</label>
               <input
@@ -393,12 +485,41 @@ export function Tasks({
             </div>
             <div className="tasks-detail-meta">
               <span className={`ptask-status-badge ${detail.status}`}>
-                {STATUS_LABELS[detail.status] ?? detail.status}
+                {detail.status === "blocked"
+                  ? blockedReasonLabel(detail.blocked_reason)
+                  : STATUS_LABELS[detail.status] ?? detail.status}
               </span>
+              {detail.assignee && (
+                <span className="tasks-detail-author" title="Assignee">
+                  @{detail.assignee}
+                </span>
+              )}
               {detail.author && <span className="tasks-detail-author">{detail.author}</span>}
               <span className="tasks-detail-time">{relativeTime(detail.updated_at)}</span>
               <span className="tasks-detail-id">{detail.id}</span>
             </div>
+            {detail.status === "blocked" && detail.blocked_reason === "question" && (
+              <div className="tasks-form-row" style={{ background: "rgba(255,170,0,0.08)", padding: 12, borderRadius: 6, marginBottom: 12 }}>
+                <div className="field-group" style={{ flex: 1 }}>
+                  <label className="field-label">Answer — unblocks the agent and resumes work</label>
+                  <input
+                    className="field-input"
+                    placeholder="Your answer..."
+                    value={answerText}
+                    onChange={(e) => setAnswerText(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") handleResumeFromQuestion(); }}
+                  />
+                </div>
+                <button
+                  className="tasks-submit-btn"
+                  onClick={handleResumeFromQuestion}
+                  disabled={!answerText.trim()}
+                  style={{ alignSelf: "flex-end" }}
+                >
+                  Resume
+                </button>
+              </div>
+            )}
             {detail.tags.length > 0 && (
               <div className="tasks-detail-tags">
                 {detail.tags.map((tag) => (
@@ -495,7 +616,18 @@ export function Tasks({
                       onClick={() => openDetail(task.id)}
                     >
                       <div className="board-card-title">{task.title}</div>
+                      {task.status === "blocked" && task.blocked_reason && (
+                        <div className={`board-card-blocked-reason reason-${task.blocked_reason}`}>
+                          {blockedReasonLabel(task.blocked_reason)}
+                        </div>
+                      )}
                       <div className="board-card-meta">
+                        {status === "backlog" && task.rank ? (
+                          <span className="board-card-rank" title="Rank">#{task.rank}</span>
+                        ) : null}
+                        {task.assignee && (
+                          <span className="board-card-assignee" title="Assignee">@{task.assignee}</span>
+                        )}
                         {task.tags.length > 0 && (
                           <span className="ptask-card-tags">
                             {task.tags.map((tag) => (
@@ -503,7 +635,7 @@ export function Tasks({
                             ))}
                           </span>
                         )}
-                        {task.author && <span className="board-card-author">{task.author}</span>}
+                        {task.author && !task.assignee && <span className="board-card-author">{task.author}</span>}
                       </div>
                     </div>
                   ))}

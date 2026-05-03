@@ -157,6 +157,10 @@ export interface ProjectTask {
   status: string;
   author: string;
   tags: string[];
+  project_id: string | null;
+  assignee: string | null;
+  rank: number;
+  blocked_reason: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -173,18 +177,22 @@ export interface ProjectTasksResponse {
 export function fetchProjectTasks(params?: {
   status?: string;
   author?: string;
+  assignee?: string;
   tags?: string;
   search?: string;
   project_id?: string;
+  order_by?: "rank" | "updated_at";
   limit?: number;
   offset?: number;
 }): Promise<ProjectTasksResponse> {
   const qs = new URLSearchParams();
   if (params?.status) qs.set("status", params.status);
   if (params?.author) qs.set("author", params.author);
+  if (params?.assignee) qs.set("assignee", params.assignee);
   if (params?.tags) qs.set("tags", params.tags);
   if (params?.search) qs.set("search", params.search);
   if (params?.project_id) qs.set("project_id", params.project_id);
+  if (params?.order_by) qs.set("order_by", params.order_by);
   if (params?.limit) qs.set("limit", String(params.limit));
   if (params?.offset) qs.set("offset", String(params.offset));
   const q = qs.toString();
@@ -202,6 +210,8 @@ export function createProjectTask(data: {
   tags?: string[];
   status?: string;
   project_id?: string;
+  assignee?: string | null;
+  rank?: number;
 }): Promise<ProjectTask> {
   return jsonFetch("/api/project-tasks", {
     method: "POST",
@@ -212,7 +222,16 @@ export function createProjectTask(data: {
 
 export function updateProjectTask(
   id: string,
-  data: { title?: string; description?: string; status?: string; author?: string; tags?: string[] },
+  data: {
+    title?: string;
+    description?: string;
+    status?: string;
+    author?: string;
+    tags?: string[];
+    assignee?: string | null;
+    rank?: number;
+    blocked_reason?: string | null;
+  },
 ): Promise<ProjectTask> {
   return jsonFetch(`/api/project-tasks/${encodeURIComponent(id)}`, {
     method: "PATCH",
@@ -244,6 +263,7 @@ export interface Project {
   description: string;
   status: string;
   due_date: string | null;
+  default_assignee: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -294,6 +314,7 @@ export function createProject(data: {
   title: string;
   description?: string;
   due_date?: string;
+  default_assignee?: string | null;
 }): Promise<Project> {
   return jsonFetch("/api/projects", {
     method: "POST",
@@ -304,7 +325,13 @@ export function createProject(data: {
 
 export function updateProject(
   id: string,
-  data: { title?: string; description?: string; status?: string; due_date?: string | null },
+  data: {
+    title?: string;
+    description?: string;
+    status?: string;
+    due_date?: string | null;
+    default_assignee?: string | null;
+  },
 ): Promise<Project> {
   return jsonFetch(`/api/projects/${encodeURIComponent(id)}`, {
     method: "PATCH",
@@ -425,6 +452,62 @@ export interface SessionActivity {
 
 export function fetchActivity(): Promise<SessionActivity[]> {
   return jsonFetch("/api/activity");
+}
+
+// --- Autopilot ---
+
+export interface AutopilotSettings {
+  token_cap_1h: number | null;
+  token_cap_5h: number | null;
+  token_cap_24h: number | null;
+  quiet_start: string | null;
+  quiet_end: string | null;
+  disabled_start: string | null;
+  disabled_end: string | null;
+  paused: boolean;
+  digest_time: string | null;
+  updated_at: string;
+}
+
+export interface AutopilotActivity {
+  current: { taskId: string; title: string } | null;
+}
+
+export function fetchAutopilotSettings(): Promise<AutopilotSettings> {
+  return jsonFetch("/api/autopilot/settings");
+}
+
+export function updateAutopilotSettings(
+  data: Partial<AutopilotSettings>,
+): Promise<AutopilotSettings> {
+  return jsonFetch("/api/autopilot/settings", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+}
+
+export function fetchAutopilotActivity(): Promise<AutopilotActivity> {
+  return jsonFetch("/api/autopilot/activity");
+}
+
+export function runAutopilotDigest(): Promise<{ ok: boolean }> {
+  return jsonFetch("/api/autopilot/digest/run", { method: "POST" });
+}
+
+export interface AutopilotUsage {
+  usage: { "1h": number; "5h": number; "24h": number };
+  budget: {
+    exceeded: boolean;
+    window?: "1h" | "5h" | "24h";
+    usage?: number;
+    cap?: number;
+    nextWindowRollAt?: string;
+  };
+}
+
+export function fetchAutopilotUsage(): Promise<AutopilotUsage> {
+  return jsonFetch("/api/autopilot/usage");
 }
 
 export interface ChatEvent {

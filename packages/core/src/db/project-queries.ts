@@ -7,6 +7,7 @@ export interface Project {
   description: string;
   status: string;
   due_date: string | null;
+  default_assignee: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -34,12 +35,19 @@ function generateId(): string {
 
 export function createProject(
   db: Database.Database,
-  input: { title: string; description?: string; status?: string; due_date?: string },
+  input: { title: string; description?: string; status?: string; due_date?: string; default_assignee?: string | null },
 ): Project {
   const id = generateId();
   db.prepare(
-    "INSERT INTO projects (id, title, description, status, due_date) VALUES (?, ?, ?, ?, ?)",
-  ).run(id, input.title, input.description ?? "", input.status ?? "active", input.due_date ?? null);
+    "INSERT INTO projects (id, title, description, status, due_date, default_assignee) VALUES (?, ?, ?, ?, ?, ?)",
+  ).run(
+    id,
+    input.title,
+    input.description ?? "",
+    input.status ?? "active",
+    input.due_date ?? null,
+    input.default_assignee ?? null,
+  );
 
   return db.prepare("SELECT * FROM projects WHERE id = ?").get(id) as Project;
 }
@@ -58,7 +66,13 @@ export function getProject(db: Database.Database, id: string): ProjectWithCounts
 export function updateProject(
   db: Database.Database,
   id: string,
-  updates: { title?: string; description?: string; status?: string; due_date?: string | null },
+  updates: {
+    title?: string;
+    description?: string;
+    status?: string;
+    due_date?: string | null;
+    default_assignee?: string | null;
+  },
 ): Project | undefined {
   const fields: string[] = [];
   const values: unknown[] = [];
@@ -78,6 +92,10 @@ export function updateProject(
   if (updates.due_date !== undefined) {
     fields.push("due_date = ?");
     values.push(updates.due_date);
+  }
+  if (updates.default_assignee !== undefined) {
+    fields.push("default_assignee = ?");
+    values.push(updates.default_assignee);
   }
 
   if (fields.length === 0) return getProject(db, id);

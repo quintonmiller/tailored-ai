@@ -9,6 +9,9 @@ export interface ProjectTask {
   author: string;
   tags: string[];
   project_id: string | null;
+  assignee: string | null;
+  rank: number;
+  blocked_reason: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -28,10 +31,12 @@ export interface ProjectTaskWithComments extends ProjectTask {
 export interface TaskQueryFilter {
   status?: string | string[];
   author?: string;
+  assignee?: string;
   tags?: string[];
   updatedAfter?: string;
   search?: string;
   project_id?: string;
+  orderBy?: "rank" | "updated_at";
   limit?: number;
   offset?: number;
 }
@@ -49,6 +54,9 @@ interface ProjectTaskRow {
   author: string;
   tags: string;
   project_id: string | null;
+  assignee: string | null;
+  rank: number;
+  blocked_reason: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -58,6 +66,9 @@ function rowToTask(row: ProjectTaskRow): ProjectTask {
     ...row,
     tags: JSON.parse(row.tags) as string[],
     project_id: row.project_id,
+    assignee: row.assignee,
+    rank: row.rank,
+    blocked_reason: row.blocked_reason,
   };
 }
 
@@ -67,13 +78,51 @@ function generateId(): string {
 
 export function createProjectTask(
   db: Database.Database,
-  input: { title: string; description?: string; author?: string; tags?: string[]; status?: string; project_id?: string },
+  input: {
+    title: string;
+    description?: string;
+    author?: string;
+    tags?: string[];
+    status?: string;
+    project_id?: string;
+    assignee?: string | null;
+    rank?: number;
+  },
 ): ProjectTask {
   const id = generateId();
   const tags = JSON.stringify(input.tags ?? []);
+
+  let resolvedAssignee: string | null = input.assignee ?? null;
+  if (resolvedAssignee === null && input.project_id) {
+    const proj = db
+      .prepare("SELECT default_assignee FROM projects WHERE id = ?")
+      .get(input.project_id) as { default_assignee: string | null } | undefined;
+    resolvedAssignee = proj?.default_assignee ?? null;
+  }
+
+  let resolvedRank = input.rank;
+  if (resolvedRank === undefined) {
+    const row = input.project_id
+      ? (db
+          .prepare("SELECT COALESCE(MAX(rank), 0) AS m FROM project_tasks WHERE project_id = ?")
+          .get(input.project_id) as { m: number })
+      : (db.prepare("SELECT COALESCE(MAX(rank), 0) AS m FROM project_tasks").get() as { m: number });
+    resolvedRank = row.m + 1;
+  }
+
   db.prepare(
-    "INSERT INTO project_tasks (id, title, description, author, tags, status, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-  ).run(id, input.title, input.description ?? "", input.author ?? "", tags, input.status ?? "backlog", input.project_id ?? null);
+    "INSERT INTO project_tasks (id, title, description, author, tags, status, project_id, assignee, rank) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  ).run(
+    id,
+    input.title,
+    input.description ?? "",
+    input.author ?? "",
+    tags,
+    input.status ?? "backlog",
+    input.project_id ?? null,
+    resolvedAssignee,
+    resolvedRank,
+  );
 
   return getProjectTask(db, id)! as ProjectTask;
 }
@@ -92,7 +141,16 @@ export function getProjectTask(db: Database.Database, id: string): ProjectTaskWi
 export function updateProjectTask(
   db: Database.Database,
   id: string,
-  updates: { title?: string; description?: string; status?: string; author?: string; tags?: string[] },
+  updates: {
+    title?: string;
+    description?: string;
+    status?: string;
+    author?: string;
+    tags?: string[];
+    assignee?: string | null;
+    rank?: number;
+    blocked_reason?: string | null;
+  },
 ): ProjectTask | undefined {
   const fields: string[] = [];
   const values: unknown[] = [];
@@ -116,6 +174,18 @@ export function updateProjectTask(
   if (updates.tags !== undefined) {
     fields.push("tags = ?");
     values.push(JSON.stringify(updates.tags));
+  }
+  if (updates.assignee !== undefined) {
+    fields.push("assignee = ?");
+    values.push(updates.assignee);
+  }
+  if (updates.rank !== undefined) {
+    fields.push("rank = ?");
+    values.push(updates.rank);
+  }
+  if (updates.blocked_reason !== undefined) {
+    fields.push("blocked_reason = ?");
+    values.push(updates.blocked_reason);
   }
 
   if (fields.length === 0) return getProjectTask(db, id);
@@ -154,6 +224,52 @@ export function addTaskComment(
   return db.prepare("SELECT * FROM task_comments WHERE id = ?").get(result.lastInsertRowid) as TaskComment;
 }
 
+/**
+ * Atomically claim a backlog task: transitions status to 'in_progress' only if
+ * it is currently 'backlog'. Returns the updated task on success, undefined if
+ * the task is already claimed or does not exist.
+ */
+export function claimBacklogTask(db: Database.Database, id: string): ProjectTask | undefined {
+  const result = db
+    .prepare("UPDATE project_tasks SET status = 'in_progress', updated_at = datetime('now') WHERE id = ? AND status = 'backlog'")
+    .run(id);
+  if (result.changes === 0) return undefined;
+
+  const row = db.prepare("SELECT * FROM project_tasks WHERE id = ?").get(id) as ProjectTaskRow | undefined;
+  return row ? rowToTask(row) : undefined;
+}
+
+/**
+ * Returns the top-ranked backlog task whose assignee is in the given set, or
+ * undefined if none exist. Ordered by rank ascending, then creation time.
+ */
+export function nextBacklogTaskForAssignees(
+  db: Database.Database,
+  assignees: string[],
+): ProjectTask | undefined {
+  if (assignees.length === 0) return undefined;
+  const placeholders = assignees.map(() => "?").join(", ");
+  const row = db
+    .prepare(
+      `SELECT * FROM project_tasks
+       WHERE status = 'backlog' AND assignee IN (${placeholders})
+       ORDER BY rank ASC, created_at ASC
+       LIMIT 1`,
+    )
+    .get(...assignees) as ProjectTaskRow | undefined;
+  return row ? rowToTask(row) : undefined;
+}
+
+/** Unblock tasks currently blocked by budget, moving them back to 'backlog' with reason cleared. */
+export function unblockBudgetTasks(db: Database.Database): number {
+  const result = db
+    .prepare(
+      "UPDATE project_tasks SET status = 'backlog', blocked_reason = NULL, updated_at = datetime('now') WHERE status = 'blocked' AND blocked_reason = 'budget'",
+    )
+    .run();
+  return result.changes;
+}
+
 export function queryProjectTasks(db: Database.Database, filter?: TaskQueryFilter): TaskQueryResult {
   const conditions: string[] = [];
   const params: unknown[] = [];
@@ -167,6 +283,11 @@ export function queryProjectTasks(db: Database.Database, filter?: TaskQueryFilte
   if (filter?.author) {
     conditions.push("author = ?");
     params.push(filter.author);
+  }
+
+  if (filter?.assignee) {
+    conditions.push("assignee = ?");
+    params.push(filter.assignee);
   }
 
   if (filter?.tags && filter.tags.length > 0) {
@@ -203,8 +324,9 @@ export function queryProjectTasks(db: Database.Database, filter?: TaskQueryFilte
   const limit = filter?.limit ?? 50;
   const offset = filter?.offset ?? 0;
 
+  const orderSql = filter?.orderBy === "rank" ? "ORDER BY rank ASC, created_at ASC" : "ORDER BY updated_at DESC";
   const rows = db
-    .prepare(`SELECT * FROM project_tasks ${where} ORDER BY updated_at DESC LIMIT ? OFFSET ?`)
+    .prepare(`SELECT * FROM project_tasks ${where} ${orderSql} LIMIT ? OFFSET ?`)
     .all(...params, limit, offset) as ProjectTaskRow[];
 
   return {

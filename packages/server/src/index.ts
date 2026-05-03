@@ -35,6 +35,12 @@ import {
   updateDocument,
   deleteDocument,
   listDocuments,
+  checkBudget,
+  getAutopilotSettings,
+  getTokenUsageInWindow,
+  updateAutopilotSettings,
+  type AutopilotSettings,
+  type AutopilotWorker,
   type CronScheduler,
   type AgentRuntime,
   type TaskWatcher,
@@ -53,6 +59,7 @@ export interface ServerOptions {
   runtime: AgentRuntime;
   scheduler?: CronScheduler;
   taskWatcher?: TaskWatcher;
+  autopilot?: AutopilotWorker;
   uiDistPath?: string;
 }
 
@@ -421,6 +428,8 @@ export function createServer(opts: ServerOptions) {
     }
     const author = c.req.query("author");
     if (author) filter.author = author;
+    const assignee = c.req.query("assignee");
+    if (assignee) filter.assignee = assignee;
     const tags = c.req.query("tags");
     if (tags) filter.tags = tags.split(",").map((t) => t.trim()).filter(Boolean);
     const updatedAfter = c.req.query("updated_after");
@@ -429,6 +438,8 @@ export function createServer(opts: ServerOptions) {
     if (search) filter.search = search;
     const projectId = c.req.query("project_id");
     if (projectId) filter.project_id = projectId;
+    const orderBy = c.req.query("order_by");
+    if (orderBy === "rank") filter.orderBy = "rank";
     const limit = c.req.query("limit");
     if (limit) filter.limit = Number.parseInt(limit, 10);
     const offset = c.req.query("offset");
@@ -452,6 +463,8 @@ export function createServer(opts: ServerOptions) {
       tags?: string[];
       status?: string;
       project_id?: string;
+      assignee?: string | null;
+      rank?: number;
     }>();
 
     if (!body.title?.trim()) {
@@ -476,6 +489,9 @@ export function createServer(opts: ServerOptions) {
       status?: string;
       author?: string;
       tags?: string[];
+      assignee?: string | null;
+      rank?: number;
+      blocked_reason?: string | null;
     }>();
 
     try {
@@ -554,6 +570,7 @@ export function createServer(opts: ServerOptions) {
       title: string;
       description?: string;
       due_date?: string;
+      default_assignee?: string | null;
     }>();
 
     if (!body.title?.trim()) {
@@ -575,6 +592,7 @@ export function createServer(opts: ServerOptions) {
       description?: string;
       status?: string;
       due_date?: string | null;
+      default_assignee?: string | null;
     }>();
 
     try {
@@ -701,6 +719,40 @@ export function createServer(opts: ServerOptions) {
     } catch (err) {
       return c.json({ error: (err as Error).message }, 500);
     }
+  });
+
+  // --- Autopilot ---
+
+  app.get("/api/autopilot/settings", (c) => {
+    return c.json(getAutopilotSettings(runtime.db));
+  });
+
+  app.patch("/api/autopilot/settings", async (c) => {
+    const body = await c.req.json<Partial<AutopilotSettings>>();
+    const updated = updateAutopilotSettings(runtime.db, body);
+    opts.autopilot?.syncDigestSchedule();
+    return c.json(updated);
+  });
+
+  app.post("/api/autopilot/digest/run", async (c) => {
+    if (!opts.autopilot) return c.json({ error: "Autopilot not available" }, 503);
+    await opts.autopilot.runDigest();
+    return c.json({ ok: true });
+  });
+
+  app.get("/api/autopilot/activity", (c) => {
+    return c.json({ current: opts.autopilot?.getActivity() ?? null });
+  });
+
+  app.get("/api/autopilot/usage", (c) => {
+    const settings = getAutopilotSettings(runtime.db);
+    const usage = {
+      "1h": getTokenUsageInWindow(runtime.db, 1),
+      "5h": getTokenUsageInWindow(runtime.db, 5),
+      "24h": getTokenUsageInWindow(runtime.db, 24),
+    };
+    const budget = checkBudget(runtime.db, settings);
+    return c.json({ usage, budget });
   });
 
   // --- Command endpoints ---

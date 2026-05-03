@@ -10,6 +10,7 @@ import { ProviderSetup } from "../components/ProviderSetup";
 import { ToolConfigEditor } from "../components/ToolConfigEditor";
 import { TaskWatcherEditor } from "../components/TaskWatcherEditor";
 import { WebhookEditor } from "../components/WebhookEditor";
+import { Autopilot } from "./Autopilot";
 
 interface Props {
   section?: string;
@@ -70,6 +71,8 @@ export function Config({ section }: Props) {
         return <AgentEditor />;
       case "profiles": // deprecated route, redirect to agents
         return <AgentEditor />;
+      case "autopilot":
+        return <Autopilot />;
       case "tools":
         return <ToolConfigEditor />;
       case "custom_tools":

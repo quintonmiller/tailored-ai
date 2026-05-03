@@ -19,6 +19,7 @@ import {
   TaskWatcher,
   initDatabase,
   AgentRuntime,
+  AutopilotWorker,
   createTools,
   createProvider,
   createMetaTools,
@@ -101,6 +102,13 @@ async function runServer(runtime: AgentRuntime) {
 
   const taskWatcher = new TaskWatcher({ runtime, discord });
 
+  const autopilot = new AutopilotWorker({
+    runtime,
+    getDiscord: () => discord,
+    getOwnerId: () => runtime.getConfig().channels.discord?.owner,
+  });
+  autopilot.start();
+
   // Reconnect/disconnect Discord when config changes
   runtime.onReload(() => {
     scheduler.restart();
@@ -138,7 +146,7 @@ async function runServer(runtime: AgentRuntime) {
   });
 
   const uiDistPath = resolveUiDistPath();
-  const { start } = createServer({ runtime, scheduler, taskWatcher, uiDistPath });
+  const { start } = createServer({ runtime, scheduler, taskWatcher, autopilot, uiDistPath });
   const httpServer = start();
   channels.push({
     name: `http(:${runtime.getConfig().server.port})`,
@@ -162,6 +170,7 @@ async function runServer(runtime: AgentRuntime) {
     runtime.stopWatching();
     scheduler.stop();
     taskWatcher.stop();
+    autopilot.stop();
     for (const ch of channels) {
       await ch.disconnect();
     }

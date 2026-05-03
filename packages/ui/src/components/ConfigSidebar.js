@@ -3,6 +3,7 @@ const SECTIONS = [
     { key: "providers", label: "Providers" },
     { key: "discord", label: "Discord" },
     { key: "agents", label: "Agents" },
+    { key: "autopilot", label: "Autopilot" },
     { key: "tools", label: "Tools" },
     { key: "custom_tools", label: "Custom Tools" },
     { key: "cron", label: "Cron" },

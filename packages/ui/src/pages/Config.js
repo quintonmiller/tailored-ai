@@ -11,6 +11,7 @@ import { ProviderSetup } from "../components/ProviderSetup";
 import { ToolConfigEditor } from "../components/ToolConfigEditor";
 import { TaskWatcherEditor } from "../components/TaskWatcherEditor";
 import { WebhookEditor } from "../components/WebhookEditor";
+import { Autopilot } from "./Autopilot";
 export function Config({ section }) {
     const active = section || "providers";
     function setSection(s) {
@@ -62,6 +63,8 @@ export function Config({ section }) {
                 return _jsx(AgentEditor, {});
             case "profiles": // deprecated route, redirect to agents
                 return _jsx(AgentEditor, {});
+            case "autopilot":
+                return _jsx(Autopilot, {});
             case "tools":
                 return _jsx(ToolConfigEditor, {});
             case "custom_tools":

@@ -53,12 +53,16 @@ export function fetchProjectTasks(params) {
         qs.set("status", params.status);
     if (params?.author)
         qs.set("author", params.author);
+    if (params?.assignee)
+        qs.set("assignee", params.assignee);
     if (params?.tags)
         qs.set("tags", params.tags);
     if (params?.search)
         qs.set("search", params.search);
     if (params?.project_id)
         qs.set("project_id", params.project_id);
+    if (params?.order_by)
+        qs.set("order_by", params.order_by);
     if (params?.limit)
         qs.set("limit", String(params.limit));
     if (params?.offset)
@@ -189,6 +193,25 @@ export function saveConfigSection(key, data) {
 }
 export function fetchActivity() {
     return jsonFetch("/api/activity");
+}
+export function fetchAutopilotSettings() {
+    return jsonFetch("/api/autopilot/settings");
+}
+export function updateAutopilotSettings(data) {
+    return jsonFetch("/api/autopilot/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+    });
+}
+export function fetchAutopilotActivity() {
+    return jsonFetch("/api/autopilot/activity");
+}
+export function runAutopilotDigest() {
+    return jsonFetch("/api/autopilot/digest/run", { method: "POST" });
+}
+export function fetchAutopilotUsage() {
+    return jsonFetch("/api/autopilot/usage");
 }
 export function sendChat(message, sessionKey, onEvent, agent) {
     const controller = new AbortController();

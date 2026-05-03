@@ -2,7 +2,9 @@ import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { DiscordChannel } from "../channels/discord.js";
 import { ensureContextDir } from "../context.js";
-import type { Tool, ToolResult } from "./interface.js";
+import { getAutopilotSettings, isInQuietHours } from "../db/autopilot-queries.js";
+import { addTaskComment, updateProjectTask } from "../db/task-queries.js";
+import type { Tool, ToolContext, ToolResult } from "./interface.js";
 
 export interface AskUserToolOptions {
   contextDir: string;
@@ -34,10 +36,46 @@ export class AskUserTool implements Tool {
     this.getOwnerId = opts.getOwnerId;
   }
 
-  async execute(args: Record<string, unknown>): Promise<ToolResult> {
+  async execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     const question = args.question as string;
     if (!question) {
       return { success: false, output: "", error: "question is required." };
+    }
+
+    // Autopilot path: block the task, record the question as a comment, stop.
+    if (context.autopilotTaskId && context.db) {
+      try {
+        addTaskComment(context.db, context.autopilotTaskId, {
+          author: context.agentName ?? "agent",
+          content: `**Question for user:** ${question}`,
+        });
+        updateProjectTask(context.db, context.autopilotTaskId, {
+          status: "blocked",
+          blocked_reason: "question",
+        });
+      } catch (err) {
+        return { success: false, output: "", error: `Failed to block task: ${(err as Error).message}` };
+      }
+
+      const discord = this.getDiscord();
+      const ownerId = this.getOwnerId();
+      const settings = getAutopilotSettings(context.db);
+      const quiet = isInQuietHours(settings);
+      if (discord && ownerId && !quiet) {
+        try {
+          await discord.sendDM(
+            ownerId,
+            `Task ${context.autopilotTaskId} is blocked — agent needs input:\n${question}`,
+          );
+        } catch {
+          // Best-effort notification; don't fail the tool on DM failure.
+        }
+      }
+
+      return {
+        success: true,
+        output: `Task ${context.autopilotTaskId} set to blocked(question). Stop working on this task now — the user will answer and resume it.`,
+      };
     }
 
     const channels: string[] = [];

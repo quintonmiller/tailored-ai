@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { fetchHealth } from "./api";
+import { type AutopilotActivity, fetchAutopilotActivity, fetchHealth } from "./api";
 import { BRAND } from "./brand";
 import { Chat } from "./pages/Chat";
 import { Config } from "./pages/Config";
@@ -68,6 +68,11 @@ function parseHash(): Route {
   if (hash.startsWith("/tools")) {
     return { page: "tools" };
   }
+  if (hash.startsWith("/autopilot")) {
+    // Moved under Config — redirect for back-compat.
+    window.location.hash = "/config/autopilot";
+    return { page: "config", section: "autopilot" };
+  }
   if (hash.startsWith("/help")) {
     return { page: "help" };
   }
@@ -77,6 +82,7 @@ function parseHash(): Route {
 export function App() {
   const [route, setRoute] = useState<Route>(parseHash);
   const [connected, setConnected] = useState<boolean | null>(null);
+  const [activity, setActivity] = useState<AutopilotActivity["current"] | null>(null);
 
   useEffect(() => {
     const onHash = () => setRoute(parseHash());
@@ -93,6 +99,18 @@ export function App() {
     };
     check();
     const id = setInterval(check, 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Poll autopilot activity every 5s
+  useEffect(() => {
+    const check = () => {
+      fetchAutopilotActivity()
+        .then((a) => setActivity(a.current))
+        .catch(() => setActivity(null));
+    };
+    check();
+    const id = setInterval(check, 5_000);
     return () => clearInterval(id);
   }, []);
 
@@ -144,6 +162,15 @@ export function App() {
         {route.page === "config" && <Config section={route.section} />}
         {route.page === "help" && <Help />}
       </main>
+      {activity && (
+        <div className="autopilot-activity-strip" role="status">
+          <span className="autopilot-activity-dot" />
+          <span className="autopilot-activity-label">Agent working on:</span>
+          <a href={`#/tasks/${activity.taskId}`} className="autopilot-activity-link">
+            {activity.title}
+          </a>
+        </div>
+      )}
       <footer className="app-footer">
         <span className="app-footer-brand">{BRAND.name}</span>
         <span className="app-footer-sep" />

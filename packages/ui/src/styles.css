@@ -2210,6 +2210,185 @@ select.model-entry-model {
   color: var(--text-dim);
 }
 
+.board-card-assignee {
+  font-size: 10px;
+  color: var(--accent, #4a9eff);
+  font-weight: 600;
+}
+
+.board-card-rank {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.board-card-blocked-reason {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin: 4px 0;
+}
+
+.board-card-blocked-reason.reason-question {
+  background: rgba(255, 170, 0, 0.15);
+  color: #c78200;
+}
+
+.board-card-blocked-reason.reason-budget {
+  background: rgba(100, 150, 255, 0.15);
+  color: #4078d4;
+}
+
+.board-card-blocked-reason.reason-error {
+  background: rgba(255, 80, 80, 0.15);
+  color: #d04040;
+}
+
+.autopilot-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid var(--border);
+  margin-right: 4px;
+}
+
+.autopilot-pill-on {
+  color: #4ade80;
+  border-color: rgba(74, 222, 128, 0.4);
+  background: rgba(74, 222, 128, 0.08);
+}
+
+.autopilot-pill-off {
+  color: var(--text-dim);
+}
+
+.autopilot-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.autopilot-pill-settings {
+  color: inherit;
+  opacity: 0.6;
+  text-decoration: underline;
+  margin-left: 4px;
+  font-size: 10px;
+}
+
+.autopilot-pill-settings:hover {
+  opacity: 1;
+}
+
+.autopilot-pill-cta {
+  margin-left: 6px;
+  padding: 2px 8px;
+  font-size: 10px;
+  background: var(--accent, #4a9eff);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: var(--font);
+}
+
+.autopilot-pill-cta:hover {
+  opacity: 0.85;
+}
+
+.autopilot-hint {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  margin-bottom: 16px;
+  background: rgba(74, 158, 255, 0.04);
+}
+
+.autopilot-hint strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+.autopilot-hint p {
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0 0 12px 0;
+}
+
+.autopilot-hint-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.autopilot-hint-link {
+  color: var(--text-dim);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.autopilot-hint-link:hover {
+  color: var(--text);
+}
+
+.autopilot-activity-strip {
+  position: fixed;
+  bottom: 48px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--bg-elevated, #1a1a1a);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  z-index: 100;
+}
+
+.autopilot-activity-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #4ade80;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.autopilot-activity-label {
+  color: var(--text-dim);
+}
+
+.autopilot-activity-link {
+  color: var(--text);
+  font-weight: 500;
+  text-decoration: none;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.autopilot-activity-link:hover {
+  text-decoration: underline;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
 .board-show-archived {
   background: none;
   border: 1px dashed var(--border);

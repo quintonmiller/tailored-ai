@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  type AgentInfo,
   type ProjectWithCounts,
   createProject,
   deleteProject,
+  fetchAgents,
   fetchProjects,
   updateProject,
 } from "../api";
@@ -36,8 +38,16 @@ export function Projects({
   const [formDesc, setFormDesc] = useState("");
   const [formDue, setFormDue] = useState("");
   const [formStatus, setFormStatus] = useState("active");
+  const [formAssignee, setFormAssignee] = useState("");
+  const [agents, setAgents] = useState<Record<string, AgentInfo>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchAgents()
+      .then(setAgents)
+      .catch(() => setAgents({}));
+  }, []);
 
   const loadProjects = useCallback(async () => {
     try {
@@ -99,6 +109,7 @@ export function Projects({
     setFormDesc("");
     setFormDue("");
     setFormStatus("active");
+    setFormAssignee("");
     setShowForm(true);
   };
 
@@ -108,6 +119,7 @@ export function Projects({
     setFormDesc(p.description);
     setFormDue(p.due_date ?? "");
     setFormStatus(p.status);
+    setFormAssignee(p.default_assignee ?? "");
     setShowForm(true);
   };
 
@@ -120,12 +132,14 @@ export function Projects({
           description: formDesc,
           status: formStatus,
           due_date: formDue || null,
+          default_assignee: formAssignee || null,
         });
       } else {
         const created = await createProject({
           title: formTitle,
           description: formDesc || undefined,
           due_date: formDue || undefined,
+          default_assignee: formAssignee || null,
         });
         setSelectedId(created.id);
         window.location.hash = `#/projects/${created.id}/${activeTab}`;
@@ -219,12 +233,49 @@ export function Projects({
                 </button>
               </div>
               <div className="project-subtab-actions">
+                {selected.default_assignee ? (
+                  <span className="autopilot-pill autopilot-pill-on" title="Autopilot agent for this project">
+                    <span className="autopilot-pill-dot" /> Autopilot: @{selected.default_assignee}
+                    <a href="#/config/autopilot" className="autopilot-pill-settings">settings</a>
+                  </span>
+                ) : (
+                  <span className="autopilot-pill autopilot-pill-off">
+                    Autopilot: off
+                    <button
+                      type="button"
+                      className="autopilot-pill-cta"
+                      onClick={() => openEdit(selected)}
+                    >
+                      Set agent
+                    </button>
+                  </span>
+                )}
                 <button className="tasks-edit-btn" onClick={() => openEdit(selected)}>
                   Edit
                 </button>
                 <button className="tasks-delete-btn" onClick={() => handleDelete(selected.id)}>
                   Delete
                 </button>
+              </div>
+            </div>
+          )}
+
+          {selected && !selected.default_assignee && activeTab === "tasks" && (
+            <div className="autopilot-hint">
+              <strong>Autopilot isn't set up for this project.</strong>
+              <p>
+                Assign a default agent and the agent will automatically work your
+                backlog — top-ranked card first, asking you when stuck, reporting
+                progress on each card. You can still assign specific tasks to other
+                agents (or to yourself) from each task's form.
+              </p>
+              <div className="autopilot-hint-actions">
+                <button className="tasks-new-btn" onClick={() => openEdit(selected)}>
+                  Set default agent
+                </button>
+                <a href="#/config/autopilot" className="autopilot-hint-link">
+                  Autopilot settings →
+                </a>
               </div>
             </div>
           )}
@@ -293,6 +344,21 @@ export function Projects({
                   onChange={(e) => setFormDue(e.target.value)}
                 />
               </div>
+            </div>
+            <div className="field-group">
+              <label className="field-label">Default assignee (autopilot agent)</label>
+              <select
+                className="field-select"
+                value={formAssignee}
+                onChange={(e) => setFormAssignee(e.target.value)}
+              >
+                <option value="">(none — tasks unassigned by default)</option>
+                {Object.keys(agents).map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
             </div>
             <div className="tasks-form-actions">
               <button className="tasks-cancel-btn" onClick={() => setShowForm(false)}>

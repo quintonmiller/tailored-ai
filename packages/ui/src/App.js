@@ -1,6 +1,6 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { useEffect, useState } from "react";
-import { fetchHealth } from "./api";
+import { fetchAutopilotActivity, fetchHealth } from "./api";
 import { BRAND } from "./brand";
 import { Chat } from "./pages/Chat";
 import { Config } from "./pages/Config";
@@ -58,6 +58,11 @@ function parseHash() {
     if (hash.startsWith("/tools")) {
         return { page: "tools" };
     }
+    if (hash.startsWith("/autopilot")) {
+        // Moved under Config — redirect for back-compat.
+        window.location.hash = "/config/autopilot";
+        return { page: "config", section: "autopilot" };
+    }
     if (hash.startsWith("/help")) {
         return { page: "help" };
     }
@@ -66,6 +71,7 @@ function parseHash() {
 export function App() {
     const [route, setRoute] = useState(parseHash);
     const [connected, setConnected] = useState(null);
+    const [activity, setActivity] = useState(null);
     useEffect(() => {
         const onHash = () => setRoute(parseHash());
         window.addEventListener("hashchange", onHash);
@@ -82,5 +88,16 @@ export function App() {
         const id = setInterval(check, 30_000);
         return () => clearInterval(id);
     }, []);
-    return (_jsxs("div", { className: "app", children: [_jsxs("header", { className: "app-header", children: [_jsx("a", { href: "#/", className: "app-title", children: BRAND.name }), _jsxs("nav", { children: [_jsx("a", { href: "#/", className: route.page === "dashboard" ? "active" : "", children: "Dashboard" }), _jsx("a", { href: "#/projects", className: route.page === "projects" || route.page === "tasks" ? "active" : "", children: "Projects" }), _jsx("a", { href: "#/tools", className: route.page === "tools" ? "active" : "", children: "Tools" }), _jsx("a", { href: "#/chat", className: route.page === "chat" ? "active" : "", children: "Chat" }), _jsx("a", { href: "#/config", className: route.page === "config" ? "active" : "", children: "Config" }), _jsx("a", { href: "#/help", className: route.page === "help" ? "active" : "", children: "Help" }), connected !== null && (_jsx("span", { className: "header-status", title: connected ? "Connected" : "Disconnected", children: _jsx("span", { className: `status-dot${connected ? "" : " error"}` }) }))] })] }), _jsxs("main", { className: "app-main", children: [route.page === "dashboard" && _jsx(Dashboard, {}), route.page === "projects" && (_jsx(Projects, { projectId: route.projectId, tab: route.tab, taskId: route.taskId, docId: route.docId })), route.page === "tasks" && _jsx(Tasks, { taskId: route.taskId, initialStatus: route.status }), route.page === "chat" && _jsx(Chat, { sessionKey: route.sessionKey, sessionId: route.sessionId }), route.page === "tools" && _jsx(Tools, {}), route.page === "config" && _jsx(Config, { section: route.section }), route.page === "help" && _jsx(Help, {})] }), _jsxs("footer", { className: "app-footer", children: [_jsx("span", { className: "app-footer-brand", children: BRAND.name }), _jsx("span", { className: "app-footer-sep" }), _jsx("a", { href: BRAND.docs, target: "_blank", rel: "noopener noreferrer", children: "Docs" }), _jsx("a", { href: BRAND.github, target: "_blank", rel: "noopener noreferrer", children: "GitHub" }), _jsx("a", { href: BRAND.website, target: "_blank", rel: "noopener noreferrer", children: "Website" })] })] }));
+    // Poll autopilot activity every 5s
+    useEffect(() => {
+        const check = () => {
+            fetchAutopilotActivity()
+                .then((a) => setActivity(a.current))
+                .catch(() => setActivity(null));
+        };
+        check();
+        const id = setInterval(check, 5_000);
+        return () => clearInterval(id);
+    }, []);
+    return (_jsxs("div", { className: "app", children: [_jsxs("header", { className: "app-header", children: [_jsx("a", { href: "#/", className: "app-title", children: BRAND.name }), _jsxs("nav", { children: [_jsx("a", { href: "#/", className: route.page === "dashboard" ? "active" : "", children: "Dashboard" }), _jsx("a", { href: "#/projects", className: route.page === "projects" || route.page === "tasks" ? "active" : "", children: "Projects" }), _jsx("a", { href: "#/tools", className: route.page === "tools" ? "active" : "", children: "Tools" }), _jsx("a", { href: "#/chat", className: route.page === "chat" ? "active" : "", children: "Chat" }), _jsx("a", { href: "#/config", className: route.page === "config" ? "active" : "", children: "Config" }), _jsx("a", { href: "#/help", className: route.page === "help" ? "active" : "", children: "Help" }), connected !== null && (_jsx("span", { className: "header-status", title: connected ? "Connected" : "Disconnected", children: _jsx("span", { className: `status-dot${connected ? "" : " error"}` }) }))] })] }), _jsxs("main", { className: "app-main", children: [route.page === "dashboard" && _jsx(Dashboard, {}), route.page === "projects" && (_jsx(Projects, { projectId: route.projectId, tab: route.tab, taskId: route.taskId, docId: route.docId })), route.page === "tasks" && _jsx(Tasks, { taskId: route.taskId, initialStatus: route.status }), route.page === "chat" && _jsx(Chat, { sessionKey: route.sessionKey, sessionId: route.sessionId }), route.page === "tools" && _jsx(Tools, {}), route.page === "config" && _jsx(Config, { section: route.section }), route.page === "help" && _jsx(Help, {})] }), activity && (_jsxs("div", { className: "autopilot-activity-strip", role: "status", children: [_jsx("span", { className: "autopilot-activity-dot" }), _jsx("span", { className: "autopilot-activity-label", children: "Agent working on:" }), _jsx("a", { href: `#/tasks/${activity.taskId}`, className: "autopilot-activity-link", children: activity.title })] })), _jsxs("footer", { className: "app-footer", children: [_jsx("span", { className: "app-footer-brand", children: BRAND.name }), _jsx("span", { className: "app-footer-sep" }), _jsx("a", { href: BRAND.docs, target: "_blank", rel: "noopener noreferrer", children: "Docs" }), _jsx("a", { href: BRAND.github, target: "_blank", rel: "noopener noreferrer", children: "GitHub" }), _jsx("a", { href: BRAND.website, target: "_blank", rel: "noopener noreferrer", children: "Website" })] })] }));
 }
