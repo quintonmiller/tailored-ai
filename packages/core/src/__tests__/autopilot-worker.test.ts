@@ -7,6 +7,7 @@ import {
 } from "../db/autopilot-queries.js";
 import { createProjectTask, getProjectTask, updateProjectTask } from "../db/task-queries.js";
 import { initDatabase } from "../db/schema.js";
+import { NativeTaskBackend } from "../tasks/native.js";
 import { TasksTool } from "../tools/tasks.js";
 import type { ToolContext } from "../tools/interface.js";
 
@@ -72,7 +73,7 @@ describe("TasksTool update — status-change audit trail", () => {
 
   it("rejects a status change without a comment", async () => {
     const task = createProjectTask(db, { title: "Do a thing", assignee: "default" });
-    const tool = new TasksTool(db);
+    const tool = new TasksTool(new NativeTaskBackend(db), db);
 
     const result = await tool.execute(
       { action: "update", id: task.id, status: "done" },
@@ -88,7 +89,7 @@ describe("TasksTool update — status-change audit trail", () => {
 
   it("allows status change with a comment and authors it as the agent", async () => {
     const task = createProjectTask(db, { title: "Do a thing", assignee: "default" });
-    const tool = new TasksTool(db);
+    const tool = new TasksTool(new NativeTaskBackend(db), db);
 
     const result = await tool.execute(
       {
@@ -110,7 +111,7 @@ describe("TasksTool update — status-change audit trail", () => {
 
   it("does not require a comment when status is unchanged", async () => {
     const task = createProjectTask(db, { title: "Tag me", assignee: "default" });
-    const tool = new TasksTool(db);
+    const tool = new TasksTool(new NativeTaskBackend(db), db);
 
     const result = await tool.execute(
       { action: "update", id: task.id, tags: "a,b" },
@@ -125,7 +126,7 @@ describe("TasksTool update — status-change audit trail", () => {
 
   it("falls back to 'agent' author when no agentName in context", async () => {
     const task = createProjectTask(db, { title: "x" });
-    const tool = new TasksTool(db);
+    const tool = new TasksTool(new NativeTaskBackend(db), db);
 
     await tool.execute(
       { action: "update", id: task.id, status: "done", comment: "finished" },

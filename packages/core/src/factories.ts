@@ -1,6 +1,8 @@
 import { resolve } from "node:path";
 import type { AgentConfig } from "./config.js";
 import type { AIProvider } from "./providers/interface.js";
+import { createTaskBackend } from "./tasks/factory.js";
+import type { TaskBackend } from "./tasks/interface.js";
 import type { Tool } from "./tools/interface.js";
 import { AdminTool } from "./tools/admin.js";
 import { AskUserTool } from "./tools/ask-user.js";
@@ -31,6 +33,8 @@ export interface CreateToolsOptions {
   getDiscord?: () => any;
   getOwnerId?: () => string | undefined;
   db?: import("better-sqlite3").Database;
+  /** Override the task backend. Defaults to `createTaskBackend(config, db)` when `db` is provided. */
+  taskBackend?: TaskBackend;
 }
 
 export function createTools(
@@ -59,8 +63,11 @@ export function createTools(
   if (config.tools.web_search?.enabled && config.tools.web_search.apiKey) {
     tools.push(new WebSearchTool(config.tools.web_search.apiKey, config.tools.web_search.maxResults));
   }
-  if (config.tools.tasks?.enabled !== false && opts?.db) {
-    tools.push(new TasksTool(opts.db), new TaskQueryTool(opts.db));
+  if (config.tools.tasks?.enabled !== false) {
+    const backend = opts?.taskBackend ?? (opts?.db ? createTaskBackend(config, opts.db) : undefined);
+    if (backend) {
+      tools.push(new TasksTool(backend, opts?.db), new TaskQueryTool(backend));
+    }
   }
   const gogPassword = process.env.GOG_KEYRING_PASSWORD ?? "";
   if (config.tools.gmail?.enabled && config.tools.gmail.account) {

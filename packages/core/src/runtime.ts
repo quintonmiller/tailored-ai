@@ -8,6 +8,8 @@ import type { Session } from "./agent/session.js";
 import type { AgentConfig, AgentHook } from "./config.js";
 import type { AIProvider } from "./providers/interface.js";
 import { createSandbox } from "./sandboxes/factory.js";
+import { createTaskBackend } from "./tasks/factory.js";
+import type { TaskBackend } from "./tasks/interface.js";
 import type { Tool } from "./tools/interface.js";
 
 export interface RuntimeOptions {
@@ -15,7 +17,7 @@ export interface RuntimeOptions {
   db: Database.Database;
   contextDir: string;
   kbDir: string;
-  createTools: (config: AgentConfig, contextDir: string, configPath?: string, opts?: { db?: Database.Database; getDiscord?: () => any; getOwnerId?: () => string | undefined }) => Tool[];
+  createTools: (config: AgentConfig, contextDir: string, configPath?: string, opts?: { db?: Database.Database; getDiscord?: () => any; getOwnerId?: () => string | undefined; taskBackend?: TaskBackend }) => Tool[];
   createProvider: (config: AgentConfig) => { provider: AIProvider; model: string };
 }
 
@@ -29,6 +31,7 @@ export class AgentRuntime {
   private _tools: Tool[];
   private _provider: AIProvider;
   private _model: string;
+  private _taskBackend: TaskBackend;
   private _generation = 0;
   private _watcher: FSWatcher | undefined;
   private _debounceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -51,7 +54,11 @@ export class AgentRuntime {
     this._loadConfig = loadConfig;
 
     this._config = initialConfig;
-    this._tools = opts.createTools(initialConfig, opts.contextDir, opts.configPath, { db: opts.db });
+    this._taskBackend = createTaskBackend(initialConfig, opts.db);
+    this._tools = opts.createTools(initialConfig, opts.contextDir, opts.configPath, {
+      db: opts.db,
+      taskBackend: this._taskBackend,
+    });
     const { provider, model } = opts.createProvider(initialConfig);
     this._provider = provider;
     this._model = model;
@@ -68,6 +75,9 @@ export class AgentRuntime {
   }
   getModel(): string {
     return this._model;
+  }
+  getTaskBackend(): TaskBackend {
+    return this._taskBackend;
   }
   get generation(): number {
     return this._generation;
@@ -89,7 +99,11 @@ export class AgentRuntime {
   reload(): void {
     try {
       const config = this._loadConfig(this.configPath);
-      const tools = this._createTools(config, this.contextDir, this.configPath, { db: this.db });
+      const taskBackend = createTaskBackend(config, this.db);
+      const tools = this._createTools(config, this.contextDir, this.configPath, {
+        db: this.db,
+        taskBackend,
+      });
       const { provider, model } = this._createProvider(config);
       // Clean up old tools that have a destroy hook (e.g. browser processes)
       const oldTools = this._tools;
@@ -100,6 +114,7 @@ export class AgentRuntime {
       }
       this._config = config;
       this._tools = tools;
+      this._taskBackend = taskBackend;
       this._provider = provider;
       this._model = model;
       this._generation++;

@@ -10,7 +10,6 @@ import {
   recordTokenUsage,
 } from "../db/autopilot-queries.js";
 import type { AgentRuntime } from "../runtime.js";
-import { createTaskBackend } from "../tasks/factory.js";
 import type { Task, TaskBackend } from "../tasks/interface.js";
 import { buildMorningDigest, recordDigestRun } from "./digest.js";
 
@@ -49,7 +48,7 @@ export class AutopilotWorker {
     this.onActivity = opts.onActivity;
     this.getDiscord = opts.getDiscord;
     this.getOwnerId = opts.getOwnerId;
-    this.tasks = opts.taskBackend ?? createTaskBackend(this.runtime.getConfig(), this.runtime.db);
+    this.tasks = opts.taskBackend ?? this.runtime.getTaskBackend();
   }
 
   start(): void {

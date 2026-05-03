@@ -1,14 +1,6 @@
 import type Database from "better-sqlite3";
-import {
-  addTaskComment,
-  createProjectTask,
-  deleteProjectTask,
-  getProjectTask,
-  queryProjectTasks,
-  updateProjectTask,
-  type TaskQueryFilter,
-} from "../db/task-queries.js";
 import { getDefaultProjectId } from "../db/project-queries.js";
+import type { TaskBackend, TaskFilter } from "../tasks/interface.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
 
 export class TasksTool implements Tool {
@@ -45,9 +37,11 @@ export class TasksTool implements Tool {
     required: ["action"],
   };
 
-  private db: Database.Database;
+  private backend: TaskBackend;
+  private db: Database.Database | undefined;
 
-  constructor(db: Database.Database) {
+  constructor(backend: TaskBackend, db?: Database.Database) {
+    this.backend = backend;
     this.db = db;
   }
 
@@ -71,7 +65,7 @@ export class TasksTool implements Tool {
     try {
       switch (action) {
         case "create":
-          return this.create(
+          return await this.create(
             title,
             args.description as string | undefined,
             authorArg,
@@ -82,9 +76,9 @@ export class TasksTool implements Tool {
             rank,
           );
         case "get":
-          return this.get(id);
+          return await this.get(id);
         case "update":
-          return this.update(
+          return await this.update(
             id,
             title,
             args.description as string | undefined,
@@ -98,9 +92,9 @@ export class TasksTool implements Tool {
             agentAuthor,
           );
         case "delete":
-          return this.delete(id);
+          return await this.delete(id);
         case "comment":
-          return this.comment(id, text, authorArg ?? agentAuthor);
+          return await this.comment(id, text, authorArg ?? agentAuthor);
         default:
           return { success: false, output: "", error: `Unknown action: ${action}` };
       }
@@ -109,7 +103,7 @@ export class TasksTool implements Tool {
     }
   }
 
-  private create(
+  private async create(
     title?: string,
     description?: string,
     author?: string,
@@ -118,12 +112,12 @@ export class TasksTool implements Tool {
     projectId?: string,
     assignee?: string,
     rank?: number,
-  ): ToolResult {
+  ): Promise<ToolResult> {
     if (!title) return { success: false, output: "", error: "title is required for create." };
 
-    const resolvedProjectId = projectId ?? getDefaultProjectId(this.db);
+    const resolvedProjectId = projectId ?? (this.db ? getDefaultProjectId(this.db) : undefined);
     const parsedTags = tags ? tags.split(",").map((t) => t.trim()).filter(Boolean) : undefined;
-    const task = createProjectTask(this.db, {
+    const task = await this.backend.create({
       title,
       description,
       author,
@@ -143,10 +137,10 @@ export class TasksTool implements Tool {
     return { success: true, output: lines.join("\n") };
   }
 
-  private get(id?: string): ToolResult {
+  private async get(id?: string): Promise<ToolResult> {
     if (!id) return { success: false, output: "", error: "id is required for get." };
 
-    const task = getProjectTask(this.db, id);
+    const task = await this.backend.get(id);
     if (!task) return { success: false, output: "", error: `Task ${id} not found.` };
 
     const lines = [
@@ -159,9 +153,10 @@ export class TasksTool implements Tool {
     if (task.blocked_reason) lines.push(`Blocked reason: ${task.blocked_reason}`);
     if (task.tags.length) lines.push(`Tags: ${task.tags.join(", ")}`);
     if (task.description) lines.push(`\n${task.description}`);
-    if (task.comments.length > 0) {
-      lines.push(`\nComments (${task.comments.length}):`);
-      for (const c of task.comments) {
+    const comments = task.comments ?? [];
+    if (comments.length > 0) {
+      lines.push(`\nComments (${comments.length}):`);
+      for (const c of comments) {
         const prefix = c.author ? `[${c.author}]` : "";
         lines.push(`  ${prefix} ${c.content}`);
       }
@@ -170,7 +165,7 @@ export class TasksTool implements Tool {
     return { success: true, output: lines.join("\n") };
   }
 
-  private update(
+  private async update(
     id?: string,
     title?: string,
     description?: string,
@@ -182,12 +177,12 @@ export class TasksTool implements Tool {
     blockedReason?: string,
     commentText?: string,
     agentAuthor?: string,
-  ): ToolResult {
+  ): Promise<ToolResult> {
     if (!id) return { success: false, output: "", error: "id is required for update." };
 
     // If the caller is changing status, require a comment explaining why.
     // This is how the teammate audit trail is built.
-    const existing = getProjectTask(this.db, id);
+    const existing = await this.backend.get(id);
     if (!existing) return { success: false, output: "", error: `Task ${id} not found.` };
 
     const statusChanging = status !== undefined && status !== existing.status;
@@ -206,13 +201,10 @@ export class TasksTool implements Tool {
 
     // Post the comment FIRST so it appears before the status change in the log.
     if (trimmedComment) {
-      addTaskComment(this.db, id, {
-        content: trimmedComment,
-        author: author ?? agentAuthor ?? "agent",
-      });
+      await this.backend.comment(id, trimmedComment, author ?? agentAuthor ?? "agent");
     }
 
-    const task = updateProjectTask(this.db, id, {
+    const task = await this.backend.update(id, {
       title: title ?? undefined,
       description: description ?? undefined,
       status: status ?? undefined,
@@ -227,19 +219,19 @@ export class TasksTool implements Tool {
     return { success: true, output: `Updated task "${task.title}" (${task.id}) — status: ${task.status}` };
   }
 
-  private delete(id?: string): ToolResult {
+  private async delete(id?: string): Promise<ToolResult> {
     if (!id) return { success: false, output: "", error: "id is required for delete." };
 
-    const deleted = deleteProjectTask(this.db, id);
+    const deleted = await this.backend.delete(id);
     if (!deleted) return { success: false, output: "", error: `Task ${id} not found.` };
     return { success: true, output: `Deleted task ${id}.` };
   }
 
-  private comment(id?: string, text?: string, author?: string): ToolResult {
+  private async comment(id?: string, text?: string, author?: string): Promise<ToolResult> {
     if (!id) return { success: false, output: "", error: "id is required for comment." };
     if (!text) return { success: false, output: "", error: "text is required for comment." };
 
-    const comment = addTaskComment(this.db, id, { content: text, author });
+    const comment = await this.backend.comment(id, text, author);
     if (!comment) return { success: false, output: "", error: `Task ${id} not found.` };
     return { success: true, output: `Added comment to task ${id}.` };
   }
@@ -267,15 +259,15 @@ export class TaskQueryTool implements Tool {
     required: [],
   };
 
-  private db: Database.Database;
+  private backend: TaskBackend;
 
-  constructor(db: Database.Database) {
-    this.db = db;
+  constructor(backend: TaskBackend) {
+    this.backend = backend;
   }
 
   async execute(args: Record<string, unknown>, _context: ToolContext): Promise<ToolResult> {
     try {
-      const filter: TaskQueryFilter = {};
+      const filter: TaskFilter = {};
 
       if (args.status) {
         const s = (args.status as string).split(",").map((v) => v.trim()).filter(Boolean);
@@ -293,7 +285,7 @@ export class TaskQueryTool implements Tool {
       if (args.order_by === "rank") filter.orderBy = "rank";
       filter.limit = typeof args.limit === "number" ? args.limit : 20;
 
-      const { tasks, total } = queryProjectTasks(this.db, filter);
+      const { tasks, total } = await this.backend.query(filter);
 
       if (tasks.length === 0) {
         return { success: true, output: "No tasks found." };

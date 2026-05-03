@@ -3,9 +3,9 @@
 title: 'S4 follow-up: GitHub Issues task backend'
 status: todo
 type: task
-priority: normal
+priority: high
 created_at: 2026-05-03T22:54:30Z
-updated_at: 2026-05-03T22:54:30Z
+updated_at: 2026-05-03T23:51:44Z
 parent: autonomous-agent-qrlk
 ---
 
