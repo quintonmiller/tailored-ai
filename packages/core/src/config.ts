@@ -501,11 +501,11 @@ export function validateConfig(config: AgentConfig): string[] {
       `agent.sandbox "${defaultSandbox}" is not valid (use ${validSandboxes.map((s) => `"${s}"`).join(", ")})`,
     );
   }
-  if (defaultSandbox === "podman") {
-    warnings.push(`agent.sandbox "podman" is not yet implemented`);
-  }
   if (defaultSandbox === "docker" && !config.sandboxes?.docker?.imageName) {
     warnings.push(`agent.sandbox is "docker" but sandboxes.docker.imageName is not set`);
+  }
+  if (defaultSandbox === "podman" && !config.sandboxes?.podman?.imageName) {
+    warnings.push(`agent.sandbox is "podman" but sandboxes.podman.imageName is not set`);
   }
   for (const [agentName, agent] of Object.entries(config.agents)) {
     const kind = agent.sandbox;
@@ -514,11 +514,11 @@ export function validateConfig(config: AgentConfig): string[] {
         `Agent "${agentName}" sandbox "${kind}" is not valid (use ${validSandboxes.map((s) => `"${s}"`).join(", ")})`,
       );
     }
-    if (kind === "podman") {
-      warnings.push(`Agent "${agentName}" sandbox "podman" is not yet implemented`);
-    }
     if (kind === "docker" && !config.sandboxes?.docker?.imageName) {
       warnings.push(`Agent "${agentName}" uses sandbox "docker" but sandboxes.docker.imageName is not set`);
+    }
+    if (kind === "podman" && !config.sandboxes?.podman?.imageName) {
+      warnings.push(`Agent "${agentName}" uses sandbox "podman" but sandboxes.podman.imageName is not set`);
     }
   }
 

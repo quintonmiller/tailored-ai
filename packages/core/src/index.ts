@@ -19,6 +19,14 @@ export type {
 } from "./sandboxes/interface.js";
 export { HostSandbox } from "./sandboxes/host.js";
 export { DockerSandbox, type DockerRunner, type DockerRunResult, type DockerSandboxOptions } from "./sandboxes/docker.js";
+export { PodmanSandbox, type PodmanSandboxOptions } from "./sandboxes/podman.js";
+export {
+  ContainerSandbox,
+  type ContainerHandle,
+  type ContainerRunner,
+  type ContainerRunResult,
+  type ContainerSandboxOptions,
+} from "./sandboxes/container.js";
 export { createSandbox } from "./sandboxes/factory.js";
 export type {
   Task,

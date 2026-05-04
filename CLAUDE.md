@@ -352,7 +352,7 @@ Tool side-effects (shell, file IO) can be routed through a `Sandbox` defined in 
 
 - **`host`** (default) — `packages/core/src/sandboxes/host.ts`. Runs commands directly on the host. No isolation.
 - **`docker`** — `packages/core/src/sandboxes/docker.ts`. Long-running container with the host cwd bind-mounted at `/work` (configurable). `prepare()` runs `docker run -d --rm -v <cwd>:/work -w /work --entrypoint sleep <image> infinity`; `exec()` runs `docker exec`; file IO goes through the bind-mount path on the host. `cleanup()` is best-effort `docker rm -f`.
-- **`podman`** — config slot reserved; not yet implemented.
+- **`podman`** — `packages/core/src/sandboxes/podman.ts`. Same surface as `DockerSandbox` (rootless/CLI-compatible); both extend a shared `ContainerSandbox` base in `container.ts`. Config goes under `sandboxes.podman.{imageName, mounts, env, network, sandboxWorkdir}`.
 
 Lifecycle: the runtime calls `createSandbox(config, agent)` in `buildLoopOptions()` and threads the result into `AgentLoopOptions.sandbox`. `runAgentLoop` calls `sandbox.prepare({ cwd })` before the loop body and `sandbox.cleanup(handle)` in a finally block. The handle lands on `ToolContext` as `sandbox` + `sandboxHandle`.
 

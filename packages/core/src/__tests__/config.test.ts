@@ -152,10 +152,17 @@ describe("validateConfig — sandbox block", () => {
     expect(ws.some((w) => w.includes(`agent.sandbox "firecracker" is not valid`))).toBe(true);
   });
 
-  it("warns about podman sandbox (not implemented)", () => {
+  it("warns when podman sandbox is selected without imageName", () => {
     const c = baseConfig();
     c.agent.sandbox = "podman";
-    expect(validateConfig(c).some((w) => w.includes(`agent.sandbox "podman" is not yet implemented`))).toBe(true);
+    expect(validateConfig(c).some((w) => w.includes(`sandboxes.podman.imageName is not set`))).toBe(true);
+  });
+
+  it("does not warn when podman is selected with imageName", () => {
+    const c = baseConfig();
+    c.agent.sandbox = "podman";
+    c.sandboxes = { podman: { imageName: "alpine" } };
+    expect(validateConfig(c).some((w) => w.toLowerCase().includes("podman"))).toBe(false);
   });
 
   it("warns when docker sandbox is selected without imageName", () => {
@@ -181,7 +188,7 @@ describe("validateConfig — sandbox block", () => {
     const ws = validateConfig(c);
     expect(ws.some((w) => w.includes(`Agent "coder" uses sandbox "docker"`))).toBe(true);
     expect(ws.some((w) => w.includes(`Agent "bad" sandbox "wat" is not valid`))).toBe(true);
-    expect(ws.some((w) => w.includes(`Agent "pman" sandbox "podman" is not yet implemented`))).toBe(true);
+    expect(ws.some((w) => w.includes(`Agent "pman" uses sandbox "podman"`))).toBe(true);
   });
 });
 
