@@ -29,6 +29,17 @@ export interface AutopilotWorkerOptions {
 
 const DEFAULT_INTERVAL_MS = 30_000;
 
+const WORKFLOW_TAG_PREFIX = "workflow:";
+
+function findWorkflowTag(tags: string[]): string | null {
+  for (const tag of tags) {
+    if (typeof tag === "string" && tag.startsWith(WORKFLOW_TAG_PREFIX)) {
+      return tag.slice(WORKFLOW_TAG_PREFIX.length).trim() || null;
+    }
+  }
+  return null;
+}
+
 export class AutopilotWorker {
   private runtime: AgentRuntime;
   private intervalMs: number;
@@ -227,6 +238,26 @@ export class AutopilotWorker {
     const db = this.runtime.db;
     const agentName = task.assignee ?? undefined;
 
+    const taskWithComments = (await this.tasks.get(task.id)) ?? task;
+
+    // Workflow trigger: when a task tag matches "workflow:<name>" and the
+    // workflow is registered, route through the engine instead of the
+    // standard agent loop.
+    const workflowName = findWorkflowTag(taskWithComments.tags);
+    if (workflowName) {
+      const engine = this.runtime.getWorkflowEngine();
+      const reg = this.runtime.getWorkflows().get(workflowName);
+      if (engine && reg) {
+        await this.runTaskViaWorkflow(task, taskWithComments, agentName, workflowName);
+        return;
+      }
+      console.warn(
+        `[autopilot] task ${task.id} tagged workflow:${workflowName} but ${
+          !engine ? "no engine configured" : "workflow not registered"
+        } — falling back to agent loop`,
+      );
+    }
+
     // Fresh session per run. The task's comments are the durable memory; keeping
     // session history around across runs accumulates stale context (e.g. old
     // "Task blocked. Stop working" messages from the last ask_user call).
@@ -234,7 +265,6 @@ export class AutopilotWorker {
     const { provider, model } = await this.resolveSessionModel(agentName);
     const session = resetSession(db, sessionKey, model, provider);
 
-    const taskWithComments = (await this.tasks.get(task.id)) ?? task;
     const prompt = buildTaskPrompt(taskWithComments);
 
     // Per-task abort controller: lets us stop *this* task when the budget is hit,
@@ -284,6 +314,50 @@ export class AutopilotWorker {
       });
     } finally {
       runtimeSignal.removeEventListener("abort", onRuntimeAbort);
+    }
+  }
+
+  private async runTaskViaWorkflow(
+    task: Task,
+    taskWithComments: Task,
+    agentName: string | undefined,
+    workflowName: string,
+  ): Promise<void> {
+    const engine = this.runtime.getWorkflowEngine();
+    if (!engine) return;
+
+    const startedAt = Date.now();
+    console.log(`[autopilot] [${task.id}] -> workflow:${workflowName}`);
+    try {
+      const run = await engine.runWorkflow(
+        workflowName,
+        { task: taskWithComments, agent: agentName ?? null },
+        "tool",
+      );
+      const response =
+        run.status === "completed"
+          ? typeof run.output === "string"
+            ? run.output
+            : JSON.stringify(run.output ?? null)
+          : `[workflow ${run.status}: ${run.error ?? "no error message"}]`;
+      await this.finalizeTask(task, {
+        response,
+        toolCalls: [`workflow:${workflowName}`],
+        durationMs: Date.now() - startedAt,
+        promptTokens: 0,
+        completionTokens: 0,
+      });
+    } catch (err) {
+      console.error(
+        `[autopilot] workflow ${workflowName} threw for task ${task.id}: ${(err as Error).message}`,
+      );
+      await this.finalizeTask(task, {
+        response: `[workflow error: ${(err as Error).message}]`,
+        toolCalls: [`workflow:${workflowName}`],
+        durationMs: Date.now() - startedAt,
+        promptTokens: 0,
+        completionTokens: 0,
+      });
     }
   }
 
