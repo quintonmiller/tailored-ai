@@ -468,6 +468,72 @@ export function validateConfig(config: AgentConfig): string[] {
     warnings.push(`Default provider "${defaultProvider}" is not configured in providers`);
   }
 
+  // Validate tasks block
+  if (config.tasks) {
+    const validBackends = ["native", "github", "beans", "beads"];
+    const backend = config.tasks.backend;
+    if (backend && !validBackends.includes(backend)) {
+      warnings.push(
+        `tasks.backend "${backend}" is not valid (use ${validBackends.map((b) => `"${b}"`).join(", ")})`,
+      );
+    }
+    if (backend === "github") {
+      const gh = config.tasks.github;
+      if (!gh?.repo) {
+        warnings.push(`tasks.backend is "github" but tasks.github.repo is not set`);
+      } else if (!/^[^/\s]+\/[^/\s]+$/.test(gh.repo)) {
+        warnings.push(`tasks.github.repo "${gh.repo}" is not in "owner/repo" format`);
+      }
+      if (!gh?.token) {
+        warnings.push(`tasks.backend is "github" but tasks.github.token is not set`);
+      }
+    }
+    if (backend === "beans" || backend === "beads") {
+      warnings.push(`tasks.backend "${backend}" is not yet implemented`);
+    }
+  }
+
+  // Validate sandbox kinds
+  const validSandboxes = ["host", "docker", "podman"];
+  const defaultSandbox = config.agent.sandbox;
+  if (defaultSandbox && !validSandboxes.includes(defaultSandbox)) {
+    warnings.push(
+      `agent.sandbox "${defaultSandbox}" is not valid (use ${validSandboxes.map((s) => `"${s}"`).join(", ")})`,
+    );
+  }
+  if (defaultSandbox === "podman") {
+    warnings.push(`agent.sandbox "podman" is not yet implemented`);
+  }
+  if (defaultSandbox === "docker" && !config.sandboxes?.docker?.imageName) {
+    warnings.push(`agent.sandbox is "docker" but sandboxes.docker.imageName is not set`);
+  }
+  for (const [agentName, agent] of Object.entries(config.agents)) {
+    const kind = agent.sandbox;
+    if (kind && !validSandboxes.includes(kind)) {
+      warnings.push(
+        `Agent "${agentName}" sandbox "${kind}" is not valid (use ${validSandboxes.map((s) => `"${s}"`).join(", ")})`,
+      );
+    }
+    if (kind === "podman") {
+      warnings.push(`Agent "${agentName}" sandbox "podman" is not yet implemented`);
+    }
+    if (kind === "docker" && !config.sandboxes?.docker?.imageName) {
+      warnings.push(`Agent "${agentName}" uses sandbox "docker" but sandboxes.docker.imageName is not set`);
+    }
+  }
+
+  // Validate prompts block
+  if (config.prompts) {
+    const depth = config.prompts.maxIncludeDepth;
+    if (depth !== undefined && (!Number.isInteger(depth) || depth < 1)) {
+      warnings.push(`prompts.maxIncludeDepth "${depth}" must be a positive integer`);
+    }
+    const timeout = config.prompts.shellTimeoutMs;
+    if (timeout !== undefined && (typeof timeout !== "number" || timeout <= 0)) {
+      warnings.push(`prompts.shellTimeoutMs "${timeout}" must be greater than 0`);
+    }
+  }
+
   // Validate permissions config
   if (config.permissions) {
     const validModes = ["auto", "approve"];

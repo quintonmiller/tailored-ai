@@ -1,11 +1,11 @@
 ---
 # autonomous-agent-vo5b
 title: validateConfig coverage for tasks/sandbox/prompts blocks
-status: todo
+status: completed
 type: task
 priority: normal
 created_at: 2026-05-04T00:14:18Z
-updated_at: 2026-05-04T00:14:18Z
+updated_at: 2026-05-04T00:43:32Z
 parent: autonomous-agent-6p6y
 ---
 
