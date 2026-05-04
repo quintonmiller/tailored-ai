@@ -131,15 +131,11 @@ describe("validateConfig — tasks block", () => {
     expect(ws.some((w) => w.toLowerCase().includes("tasks."))).toBe(false);
   });
 
-  it("warns when beads backend is selected (not implemented)", () => {
-    const c = baseConfig();
-    c.tasks = { backend: "beads" };
-    expect(validateConfig(c).some((w) => w.includes(`"beads" is not yet implemented`))).toBe(true);
-  });
-
-  it("does not warn 'not implemented' for the beans backend", () => {
+  it("does not warn 'not implemented' for beans or beads backends", () => {
     const c = baseConfig();
     c.tasks = { backend: "beans" };
+    expect(validateConfig(c).some((w) => w.includes("not yet implemented"))).toBe(false);
+    c.tasks = { backend: "beads" };
     expect(validateConfig(c).some((w) => w.includes("not yet implemented"))).toBe(false);
   });
 });

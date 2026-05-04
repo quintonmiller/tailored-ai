@@ -488,9 +488,6 @@ export function validateConfig(config: AgentConfig): string[] {
         warnings.push(`tasks.backend is "github" but tasks.github.token is not set`);
       }
     }
-    if (backend === "beads") {
-      warnings.push(`tasks.backend "${backend}" is not yet implemented`);
-    }
   }
 
   // Validate sandbox kinds

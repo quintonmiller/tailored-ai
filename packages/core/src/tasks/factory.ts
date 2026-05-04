@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import type { AgentConfig } from "../config.js";
+import { BeadsTaskBackend } from "./beads.js";
 import { BeansTaskBackend } from "./beans.js";
 import { GitHubTaskBackend } from "./github.js";
 import type { TaskBackend } from "./interface.js";
@@ -23,9 +24,9 @@ export function createTaskBackend(config: AgentConfig, db: Database.Database): T
     }
     case "beans":
       return new BeansTaskBackend({ path: config.tasks?.beans?.path });
+    case "beads":
+      return new BeadsTaskBackend({ db: config.tasks?.beads?.path });
     default:
-      throw new Error(
-        `Unsupported tasks.backend "${kind}". Supported: native, github, beans. (beads adapter not yet implemented.)`,
-      );
+      throw new Error(`Unsupported tasks.backend "${kind}". Supported: native, github, beans, beads.`);
   }
 }
