@@ -86,3 +86,12 @@ export interface RegisteredWorkflow {
   /** Runtime generation when registered. */
   generation: number;
 }
+
+/**
+ * Typed identity function for declaring workflows in TypeScript. The runtime
+ * doesn't need this — but TS callers get autocomplete + step-type checking
+ * by going through it instead of building a plain object.
+ */
+export function defineWorkflow(workflow: WorkflowDefinition): WorkflowDefinition {
+  return workflow;
+}

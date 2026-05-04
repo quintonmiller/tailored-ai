@@ -140,6 +140,7 @@ export type {
   WorkflowDefinition,
   WorkflowStepDef,
 } from "./workflows/types.js";
+export { defineWorkflow } from "./workflows/types.js";
 export { WorkflowRegistry } from "./workflows/registry.js";
 export {
   loadWorkflowsFromDir,
@@ -194,6 +195,7 @@ export { MemoryTool } from "./tools/memory.js";
 export { ReadTool } from "./tools/read.js";
 export { TaskStatusTool } from "./tools/task-status.js";
 export { TasksTool, TaskQueryTool } from "./tools/tasks.js";
+export { RunWorkflowTool } from "./tools/run-workflow.js";
 export { ProjectsTool } from "./tools/projects.js";
 export { DocumentsTool } from "./tools/documents.js";
 export { withRetry, isTransientError } from "./tools/retry.js";

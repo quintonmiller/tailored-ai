@@ -47,6 +47,7 @@ export class AgentRuntime {
   private _createProvider: RuntimeOptions["createProvider"];
   private _loadConfig: (path: string) => AgentConfig;
   private _workflows: WorkflowRegistry = new WorkflowRegistry();
+  private _workflowEngine: import("./workflows/engine.js").WorkflowEngine | undefined;
 
   constructor(opts: RuntimeOptions, loadConfig: (path: string) => AgentConfig, initialConfig: AgentConfig) {
     this.configPath = opts.configPath;
@@ -76,6 +77,14 @@ export class AgentRuntime {
 
   registerWorkflow(workflow: WorkflowDefinition): void {
     this._workflows.register(workflow);
+  }
+
+  setWorkflowEngine(engine: import("./workflows/engine.js").WorkflowEngine | undefined): void {
+    this._workflowEngine = engine;
+  }
+
+  getWorkflowEngine(): import("./workflows/engine.js").WorkflowEngine | undefined {
+    return this._workflowEngine;
   }
 
   getConfig(): AgentConfig {

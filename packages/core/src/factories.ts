@@ -18,6 +18,7 @@ import { MdToPdfTool } from "./tools/md-to-pdf.js";
 import { MemoryTool } from "./tools/memory.js";
 import { ReadTool } from "./tools/read.js";
 import { TaskStatusTool } from "./tools/task-status.js";
+import { RunWorkflowTool } from "./tools/run-workflow.js";
 import { TasksTool, TaskQueryTool } from "./tools/tasks.js";
 import { ProjectsTool } from "./tools/projects.js";
 import { DocumentsTool } from "./tools/documents.js";
@@ -151,5 +152,9 @@ export function createMetaTools(runtime: AgentRuntime, contextDir: string, kbDir
   });
   const taskStatusTool = new TaskStatusTool();
   const adminTool = new AdminTool(runtime);
-  return [delegateTool, taskStatusTool, adminTool];
+  const runWorkflowTool = new RunWorkflowTool({
+    getEngine: () => runtime.getWorkflowEngine(),
+    getRegistry: () => runtime.getWorkflows(),
+  });
+  return [delegateTool, taskStatusTool, adminTool, runWorkflowTool];
 }

@@ -148,6 +148,7 @@ async function runServer(runtime: AgentRuntime) {
 
   const uiDistPath = resolveUiDistPath();
   const workflowEngine = createWorkflowEngine({ runtime, db: runtime.db });
+  runtime.setWorkflowEngine(workflowEngine);
   runtime.startWatchingWorkflows();
   scheduler.setWorkflowEngine(workflowEngine);
   const { start } = createServer({
