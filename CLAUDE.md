@@ -10,6 +10,11 @@ pnpm run test             # run unit tests (vitest)
 pnpm run test:watch       # run core tests in watch mode
 pnpm run dev              # run CLI via tsx (builds core+server first)
 pnpm run dev -- -m "msg"  # non-interactive single message
+pnpm run dev -- -a NAME -m "msg"  # use a named agent
+pnpm run dev -- --list-agents     # list configured agents
+pnpm run dev -- --list-sessions   # list recent sessions
+pnpm run dev -- project init      # register cwd as a project
+pnpm run dev -- project list      # show registered projects
 pnpm run serve            # run Discord bot service (needs DISCORD_BOT_TOKEN env)
 pnpm run dev:ui           # Vite dev server with proxy
 pnpm run start            # run compiled CLI
@@ -345,6 +350,61 @@ Three strategies:
 - `merge-to-head` — same as `branch` plus `mergeToHead()` that runs `git merge --no-ff <branch>` against the host repo. On conflict, aborts the merge (host left clean) and preserves the branch.
 
 `autoStash(repoDir)` stashes only modified-tracked files (deliberately not untracked — matches the mmo sandcastle autostash pattern, so a `.worktrees/` dir doesn't get swept up). Returns `{ stashed, pop() }` for a try/finally.
+
+## Workflows
+
+`packages/core/src/workflows/` is a programmatic + declarative orchestration engine built on the agent loop. Workflows are sequences of named steps that thread outputs through a typed scope. Full design: [`docs/workflows.md`](./docs/workflows.md).
+
+Step types:
+- `agent_run` — runs the agent loop with a prompt and optional agent override
+- `tool_call` — invokes a single tool with literal args
+- `shell` — `bash -c` (only when `prompts.allowShellExpansion: true`)
+- `condition` — branches on a JS-style expression evaluated against scope
+- `loop` — repeats an inner pipeline over an array
+- `parallel` — runs branches concurrently, waits for all
+
+Storage: `workflow_runs` and `workflow_steps` tables in SQLite. Per-step logs under `data/workflow-runs/<run-id>/<step>.log` (retention configurable). Triggers: CLI (`run_workflow` tool), cron (`workflow:` field on a job), HTTP (`POST /api/workflows/:name/run` + SSE progress on `GET /api/workflow-runs/:id/events`), webhook routes, and the `dispatch_workflow` agent tool for fire-and-forget.
+
+Workflow files live under `data/workflows/*.yaml` (configurable via `workflows.directory`). The `WorkflowRegistry` hot-reloads them from disk; `runtime.startWatchingWorkflows()` enables fs.watch.
+
+Programmatic definition (TypeScript):
+```ts
+import { defineWorkflow, type WorkflowDefinition } from "@agent/core";
+
+const wf: WorkflowDefinition = defineWorkflow({
+  name: "review-pr",
+  steps: [
+    { name: "summarize", type: "agent_run", agent: "researcher", prompt: "Summarize PR ${input.pr_url}" },
+    { name: "comment",   type: "tool_call", tool: "gh-comment",   args: { url: "${input.pr_url}", body: "${steps.summarize.output}" } },
+  ],
+});
+```
+
+The `AutopilotWorker` can route a claimed task tagged `workflow:<name>` through the engine instead of the standard agent loop — opt-in per task via tag.
+
+## Autopilot
+
+`packages/core/src/autopilot/worker.ts` is a long-running worker that wakes on an interval (default 30s), claims one backlog task per tick from the configured `TaskBackend`, and runs it through the agent loop or a workflow. Started by the CLI in server mode.
+
+What it does each tick:
+1. Read `autopilot_settings` (paused / quiet hours / disabled hours / token budget)
+2. If past a budget cap, skip; if quiet hours, suppress notifications
+3. Promote any tasks blocked due to budget back to backlog when the window rolls forward
+4. Pick one backlog task whose `assignee` matches a configured agent name; claim atomically
+5. Resolve the task's `project_id` to a `ProjectContext` (S7) so cwd + session scope match the project
+6. Build a fresh session keyed `autopilot:<task.id>` (no carry-over history; comments are the durable memory)
+7. Run the loop with a per-task `AbortController` so a single overrun doesn't cascade
+8. On success, mark task `done` (or `in_review` if the agent flagged uncertainty); on error, comment + status `blocked` + DM the owner
+
+Token usage is recorded per session/task in `token_usage`. Mid-task budget exhaustion aborts that task only; sibling conversations (chats, other autopilot runs) keep going.
+
+Morning digest: a daily Cron (configurable via `digest_time` setting) runs `buildMorningDigest()` over `digest_runs` + recent activity and DMs the result to the Discord owner. Runs are persisted in `digest_runs`.
+
+Notifications:
+- `notifyNeedsHuman` DMs the owner when a task errors or is blocked, suppressed during quiet hours
+- The web UI's "working on" strip subscribes via `getActivity()` for live status
+
+The autopilot uses `runtime.getTaskBackend()` by default; tests override via `AutopilotWorkerOptions.taskBackend`. As of S7.5 the worker still claims one task per tick from a single backend — multi-project iteration with per-project backends is a follow-up bean.
 
 ## Sandboxes
 

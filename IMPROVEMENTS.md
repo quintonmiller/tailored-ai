@@ -1,5 +1,7 @@
 # Improvement Plan
 
+> **Historical improvement plan — superseded.** Most items here shipped during the pre-monorepo and Sandcastle slices (S1–S6). New planning happens in the beans tracker (`.beans/`). For current architecture and how subsystems work today, see [CLAUDE.md](./CLAUDE.md).
+
 Identified opportunities to make TAI more user-friendly, robust, and capable.
 
 ## Quick Wins

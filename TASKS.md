@@ -1,5 +1,7 @@
 # Tasks
 
+> **Historical task list — superseded.** Active work tracking lives in the [beans](https://github.com/hmans/beans) issue tracker under `.beans/` (run `beans list` from the repo root). The phases below are kept as a record of what shipped pre-monorepo and pre-Slice-1; everything in them is done.
+
 ## Phase 1: Core Agent
 - [x] Project setup (TypeScript, ESM, SQLite, config system)
 - [x] Ollama provider (`/api/chat` with tool calling)

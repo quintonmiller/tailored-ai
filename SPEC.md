@@ -1,5 +1,7 @@
 # Autonomous Agent Framework - Specification
 
+> **Historical document — design rationale from project inception (Feb 2026).** Terminology and scope have moved on: this doc still references "profiles" (now `agents`) and predates sandboxes, workflows, autopilot, pluggable task backends, and per-project mode. For current, accurate references see [README.md](./README.md) and [CLAUDE.md](./CLAUDE.md). Active work lives in `.beans/`.
+
 ## Project Overview
 
 Build a lightweight, modular AI agent framework optimized for **local LLMs** while supporting cloud providers. This is inspired by OpenClaw but designed from scratch to be simpler and more compatible with smaller models (30B parameter quantized models running on consumer GPUs).

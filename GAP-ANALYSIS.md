@@ -1,5 +1,7 @@
 # TAI vs OpenClaw: Feature Gap Analysis
 
+> **Historical comparison — snapshot from Feb 2026.** Many "Missing" or "Partial" entries here have since shipped (workflows, sandboxes, pluggable task backends, autopilot, per-project mode). This doc is preserved as a record of where TAI started; for current capabilities see [README.md](./README.md) and [CLAUDE.md](./CLAUDE.md).
+
 ## Legend
 
 - **Has** = TAI has this feature fully
