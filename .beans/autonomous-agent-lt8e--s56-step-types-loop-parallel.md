@@ -1,11 +1,11 @@
 ---
 # autonomous-agent-lt8e
 title: 'S5.6: Step types — loop + parallel'
-status: todo
+status: completed
 type: task
 priority: normal
 created_at: 2026-05-04T01:08:17Z
-updated_at: 2026-05-04T01:08:29Z
+updated_at: 2026-05-04T03:16:50Z
 parent: autonomous-agent-jgev
 blocked_by:
     - autonomous-agent-sj5u

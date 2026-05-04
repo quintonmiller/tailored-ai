@@ -23,6 +23,7 @@ import {
   createTools,
   createProvider,
   createMetaTools,
+  createWorkflowEngine,
   listSessions,
   validateConfig,
 } from "@agent/core";
@@ -146,7 +147,16 @@ async function runServer(runtime: AgentRuntime) {
   });
 
   const uiDistPath = resolveUiDistPath();
-  const { start } = createServer({ runtime, scheduler, taskWatcher, autopilot, uiDistPath });
+  const workflowEngine = createWorkflowEngine({ runtime, db: runtime.db });
+  runtime.startWatchingWorkflows();
+  const { start } = createServer({
+    runtime,
+    scheduler,
+    taskWatcher,
+    autopilot,
+    workflowEngine,
+    uiDistPath,
+  });
   const httpServer = start();
   channels.push({
     name: `http(:${runtime.getConfig().server.port})`,

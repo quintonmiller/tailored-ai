@@ -73,6 +73,37 @@ interface RunHandle {
   workflowName: string;
 }
 
+export type EngineEvent =
+  | { type: "run.started"; runId: string; workflowName: string }
+  | { type: "run.completed"; runId: string; output: unknown }
+  | { type: "run.failed"; runId: string; error: string }
+  | { type: "run.cancelled"; runId: string }
+  | {
+      type: "step.started";
+      runId: string;
+      stepId: string;
+      stepName: string;
+      stepType: StepType;
+      attempt: number;
+    }
+  | {
+      type: "step.completed";
+      runId: string;
+      stepId: string;
+      stepName: string;
+      output: unknown;
+    }
+  | {
+      type: "step.failed";
+      runId: string;
+      stepId: string;
+      stepName: string;
+      error: string;
+    }
+  | { type: "step.skipped"; runId: string; stepId: string; stepName: string };
+
+type EventListener = (event: EngineEvent) => void;
+
 export class WorkflowEngine {
   private db: Database.Database;
   private registry: WorkflowRegistry;
@@ -81,6 +112,7 @@ export class WorkflowEngine {
   private agentSemaphores: KeyedSemaphore;
   private active = new Map<string, RunHandle>();
   private now: () => Date;
+  private listeners = new Set<EventListener>();
 
   constructor(opts: EngineOptions) {
     this.db = opts.db;
@@ -98,6 +130,27 @@ export class WorkflowEngine {
 
   hasExecutor(type: StepType): boolean {
     return this.executors.has(type);
+  }
+
+  /** Subscribe to engine events. Returns unsubscribe. */
+  onEvent(cb: EventListener): () => void {
+    this.listeners.add(cb);
+    return () => this.listeners.delete(cb);
+  }
+
+  private emit(event: EngineEvent): void {
+    for (const cb of this.listeners) {
+      try {
+        cb(event);
+      } catch (err) {
+        console.error(`[workflow] event listener error: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  /** True iff the run is currently in flight in this engine instance. */
+  isActive(runId: string): boolean {
+    return this.active.has(runId);
   }
 
   /** Cancel a running workflow run. Idempotent. */
@@ -137,6 +190,7 @@ export class WorkflowEngine {
       runRelease = await this.runSemaphore.acquire();
       if (abort.signal.aborted) throw new CancelledError();
       updateWorkflowRun(this.db, run.id, { status: "running" });
+      this.emit({ type: "run.started", runId: run.id, workflowName: name });
 
       if (def.deadlineMs) {
         workflowDeadlineTimer = setTimeout(() => abort.abort(), def.deadlineMs);
@@ -155,15 +209,19 @@ export class WorkflowEngine {
         output: finalOutput,
         finished_at: this.now().toISOString(),
       });
+      this.emit({ type: "run.completed", runId: run.id, output: finalOutput });
       return finished!;
     } catch (err) {
       const isCancel = err instanceof CancelledError || abort.signal.aborted;
       const status = isCancel ? "cancelled" : "failed";
+      const message = (err as Error).message;
       const finished = updateWorkflowRun(this.db, run.id, {
         status,
-        error: (err as Error).message,
+        error: message,
         finished_at: this.now().toISOString(),
       });
+      if (isCancel) this.emit({ type: "run.cancelled", runId: run.id });
+      else this.emit({ type: "run.failed", runId: run.id, error: message });
       return finished!;
     } finally {
       if (workflowDeadlineTimer) clearTimeout(workflowDeadlineTimer);
@@ -202,6 +260,12 @@ export class WorkflowEngine {
         updateWorkflowStep(this.db, stepRow.id, {
           status: "skipped",
           finished_at: this.now().toISOString(),
+        });
+        this.emit({
+          type: "step.skipped",
+          runId,
+          stepId: stepRow.id,
+          stepName: step.name,
         });
         outputs[step.name] = null;
         continue;
@@ -255,6 +319,14 @@ export class WorkflowEngine {
         attempt,
         started_at: this.now().toISOString(),
       });
+      this.emit({
+        type: "step.started",
+        runId,
+        stepId: stepRow.id,
+        stepName: step.name,
+        stepType: step.type,
+        attempt,
+      });
       try {
         const result = await this.executeWithDeadline(step, {
           runId,
@@ -268,6 +340,13 @@ export class WorkflowEngine {
           status: "completed",
           output: result.output,
           finished_at: this.now().toISOString(),
+        });
+        this.emit({
+          type: "step.completed",
+          runId,
+          stepId: stepRow.id,
+          stepName: step.name,
+          output: result.output,
         });
         return result;
       } catch (err) {
@@ -291,6 +370,13 @@ export class WorkflowEngine {
           status: "failed",
           error: lastError.message,
           finished_at: this.now().toISOString(),
+        });
+        this.emit({
+          type: "step.failed",
+          runId,
+          stepId: stepRow.id,
+          stepName: step.name,
+          error: lastError.message,
         });
         if (onError === "continue") {
           return { output: null };

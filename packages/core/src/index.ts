@@ -153,6 +153,7 @@ export {
   WorkflowError,
   CancelledError,
   DeadlineError,
+  type EngineEvent,
   type EngineOptions,
   type StepContext,
   type StepExecutor,

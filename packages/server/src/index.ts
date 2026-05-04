@@ -43,9 +43,15 @@ import {
   type AutopilotWorker,
   type CronScheduler,
   type AgentRuntime,
+  type EngineEvent,
   type TaskWatcher,
   type TaskQueryFilter,
   type ProjectQueryFilter,
+  type WorkflowEngine,
+  type WorkflowTrigger,
+  getWorkflowRun,
+  listWorkflowRuns,
+  listWorkflowSteps,
 } from "@agent/core";
 import {
   HttpApprovalHandler,
@@ -60,6 +66,7 @@ export interface ServerOptions {
   scheduler?: CronScheduler;
   taskWatcher?: TaskWatcher;
   autopilot?: AutopilotWorker;
+  workflowEngine?: WorkflowEngine;
   uiDistPath?: string;
 }
 
@@ -1338,6 +1345,143 @@ export function createServer(opts: ServerOptions) {
     } catch (err) {
       return c.json({ error: (err as Error).message }, 500);
     }
+  });
+
+  // --- Workflows ---
+
+  app.get("/api/workflows", (c) => {
+    const list = runtime.getWorkflows().list().map((w) => ({
+      name: w.definition.name,
+      description: w.definition.description,
+      source: w.source,
+      stepCount: w.definition.steps.length,
+    }));
+    return c.json({ workflows: list, errors: runtime.getWorkflows().getErrors() });
+  });
+
+  app.get("/api/workflows/:name", (c) => {
+    const reg = runtime.getWorkflows().get(c.req.param("name"));
+    if (!reg) return c.json({ error: "Workflow not found" }, 404);
+    return c.json(reg.definition);
+  });
+
+  app.post("/api/workflows/:name/run", async (c) => {
+    if (!opts.workflowEngine) {
+      return c.json({ error: "Workflow engine not configured" }, 503);
+    }
+    const name = c.req.param("name");
+    let body: { input?: unknown; trigger?: WorkflowTrigger } = {};
+    try {
+      const text = await c.req.text();
+      body = text ? JSON.parse(text) : {};
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+    if (!runtime.getWorkflows().get(name)) {
+      return c.json({ error: `Unknown workflow "${name}"` }, 404);
+    }
+    // Fire and forget — return the runId immediately. Errors are reported
+    // through the run row and SSE events.
+    const promise = opts.workflowEngine.runWorkflow(name, body.input ?? {}, body.trigger ?? "http");
+    const run = await Promise.race([
+      promise,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 25)),
+    ]);
+    if (run) return c.json(run, 202);
+    // Run is still in flight — fetch its current row by polling once.
+    const recent = listWorkflowRuns(runtime.db, { workflow_name: name, limit: 1 });
+    return c.json(recent[0] ?? { workflow_name: name, status: "pending" }, 202);
+  });
+
+  app.get("/api/workflow-runs", (c) => {
+    const status = c.req.query("status") as
+      | "pending"
+      | "running"
+      | "completed"
+      | "failed"
+      | "interrupted"
+      | "cancelled"
+      | undefined;
+    const workflowName = c.req.query("workflow") || undefined;
+    const limit = c.req.query("limit") ? Number(c.req.query("limit")) : 50;
+    const runs = listWorkflowRuns(runtime.db, { workflow_name: workflowName, status, limit });
+    return c.json(runs);
+  });
+
+  app.get("/api/workflow-runs/:id", (c) => {
+    const id = c.req.param("id");
+    const run = getWorkflowRun(runtime.db, id);
+    if (!run) return c.json({ error: "Run not found" }, 404);
+    const steps = listWorkflowSteps(runtime.db, id);
+    return c.json({ run, steps });
+  });
+
+  app.post("/api/workflow-runs/:id/cancel", (c) => {
+    if (!opts.workflowEngine) {
+      return c.json({ error: "Workflow engine not configured" }, 503);
+    }
+    const id = c.req.param("id");
+    const run = getWorkflowRun(runtime.db, id);
+    if (!run) return c.json({ error: "Run not found" }, 404);
+    const ok = opts.workflowEngine.cancel(id);
+    return c.json({ ok, runId: id });
+  });
+
+  app.get("/api/workflow-runs/:id/events", async (c) => {
+    const id = c.req.param("id");
+    const engine = opts.workflowEngine;
+    return streamSSE(c, async (stream) => {
+      // Send the initial snapshot.
+      const initial = getWorkflowRun(runtime.db, id);
+      if (initial) {
+        await stream.writeSSE({
+          event: "snapshot",
+          data: JSON.stringify({
+            run: initial,
+            steps: listWorkflowSteps(runtime.db, id),
+          }),
+        });
+      } else {
+        await stream.writeSSE({ event: "error", data: JSON.stringify({ error: "Run not found" }) });
+        return;
+      }
+      if (initial.status === "completed" || initial.status === "failed" || initial.status === "cancelled") {
+        return;
+      }
+
+      let closed = false;
+      const onClose = () => {
+        closed = true;
+      };
+      c.req.raw.signal.addEventListener("abort", onClose);
+      let unsubscribe: (() => void) | undefined;
+      if (engine) {
+        unsubscribe = engine.onEvent((event: EngineEvent) => {
+          if (closed) return;
+          if (!("runId" in event) || event.runId !== id) return;
+          stream.writeSSE({ event: event.type, data: JSON.stringify(event) }).catch(() => {});
+          if (
+            event.type === "run.completed" ||
+            event.type === "run.failed" ||
+            event.type === "run.cancelled"
+          ) {
+            closed = true;
+          }
+        });
+      }
+      // Keep the connection open until terminal event or client disconnect.
+      while (!closed) {
+        await new Promise((r) => setTimeout(r, 250));
+        // Defensive poll: if the engine is in another instance, we still
+        // emit progress from the DB.
+        const fresh = getWorkflowRun(runtime.db, id);
+        if (fresh && (fresh.status === "completed" || fresh.status === "failed" || fresh.status === "cancelled")) {
+          await stream.writeSSE({ event: `run.${fresh.status}`, data: JSON.stringify({ run: fresh }) });
+          closed = true;
+        }
+      }
+      unsubscribe?.();
+    });
   });
 
   // --- Static file serving (production build) ---
