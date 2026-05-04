@@ -9,6 +9,8 @@ import {
   isInQuietHours,
   recordTokenUsage,
 } from "../db/autopilot-queries.js";
+import { getProject } from "../db/project-queries.js";
+import type { ProjectContext } from "../projects/resolve.js";
 import type { AgentRuntime } from "../runtime.js";
 import type { Task, TaskBackend } from "../tasks/interface.js";
 import { buildMorningDigest, recordDigestRun } from "./digest.js";
@@ -234,6 +236,23 @@ export class AutopilotWorker {
     }
   }
 
+  /**
+   * Resolve a task's `project_id` to a `ProjectContext` if the project is registered
+   * with a path. Returns null for global/legacy tasks so they run in the host cwd.
+   */
+  private resolveTaskProject(task: Task): ProjectContext | null {
+    if (!task.project_id) return null;
+    const row = getProject(this.runtime.db, task.project_id);
+    if (!row || !row.path) return null;
+    return {
+      id: row.id,
+      name: row.title,
+      path: row.path,
+      overlayPath: "",
+      overlay: {},
+    };
+  }
+
   private async runTask(task: Task): Promise<void> {
     const db = this.runtime.db;
     const agentName = task.assignee ?? undefined;
@@ -258,12 +277,17 @@ export class AutopilotWorker {
       );
     }
 
+    // Resolve the project context from task.project_id. Tasks tied to a registered
+    // project run in that project's path; tasks with no project_id (or pointing at
+    // an unregistered/legacy "Default" project) run in the host cwd.
+    const projectCtx = this.resolveTaskProject(task);
+
     // Fresh session per run. The task's comments are the durable memory; keeping
     // session history around across runs accumulates stale context (e.g. old
     // "Task blocked. Stop working" messages from the last ask_user call).
     const sessionKey = `autopilot:${task.id}`;
     const { provider, model } = await this.resolveSessionModel(agentName);
-    const session = resetSession(db, sessionKey, model, provider);
+    const session = resetSession(db, sessionKey, model, provider, projectCtx?.id ?? null);
 
     const prompt = buildTaskPrompt(taskWithComments);
 
@@ -279,7 +303,7 @@ export class AutopilotWorker {
     let promptTokens = 0;
     let completionTokens = 0;
 
-    const loopOpts = this.runtime.buildLoopOptions({ session, agentName });
+    const loopOpts = this.runtime.buildLoopOptions({ session, agentName, project: projectCtx });
     try {
       const response = await runAgentLoop(prompt, {
         ...loopOpts,

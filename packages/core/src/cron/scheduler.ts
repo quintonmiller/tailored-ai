@@ -10,6 +10,8 @@ import { findOrCreateSession, resetSession } from "../agent/session.js";
 import type { DiscordChannel } from "../channels/discord.js";
 import type { CronJobConfig } from "../config.js";
 import { saveMessage } from "../db/queries.js";
+import { getProject } from "../db/project-queries.js";
+import type { ProjectContext } from "../projects/resolve.js";
 import type { AgentRuntime } from "../runtime.js";
 import type { WorkflowEngine } from "../workflows/engine.js";
 
@@ -136,6 +138,37 @@ export class CronScheduler {
     return vars;
   }
 
+  /**
+   * Resolve the per-job project context.
+   *
+   * Priority:
+   *   1. job.project — explicit binding in config.yaml
+   *   2. runtime.getActiveProject() — if the job came from an active project's overlay,
+   *      the runtime is already scoped to it, so no extra work needed
+   *
+   * Returns null when the job is global. Returns null (with a warning) if `job.project`
+   * names a project that doesn't exist or has no path.
+   */
+  private resolveJobProject(job: CronJobConfig): ProjectContext | null {
+    if (!job.project) return null;
+    const row = getProject(this.runtime.db, job.project);
+    if (!row) {
+      console.warn(`[cron] "${job.name}" references unknown project "${job.project}" — running global`);
+      return null;
+    }
+    if (!row.path) {
+      console.warn(`[cron] "${job.name}" references project "${job.project}" with no registered path — running global`);
+      return null;
+    }
+    return {
+      id: row.id,
+      name: row.title,
+      path: row.path,
+      overlayPath: "",
+      overlay: {},
+    };
+  }
+
   private async resolvePrompt(job: CronJobConfig, vars?: Record<string, string>): Promise<string> {
     const templateVars = vars ?? this.buildTemplateVars(job);
     return expandPrompt(job.prompt, templateVars, this.runtime.getConfig().prompts);
@@ -177,7 +210,9 @@ export class CronScheduler {
       return;
     }
     const wakeAgent = job.wakeAgent !== false; // default true
-    const sessionKey = job.sessionKey ?? `cron:${job.name}`;
+    const projectCtx = this.resolveJobProject(job);
+    const projectId = projectCtx?.id ?? null;
+    const sessionKey = job.sessionKey ?? (projectId ? `cron:${projectId}:${job.name}` : `cron:${job.name}`);
     const resolved = resolveAgent(
       job.agent ?? job.profile,
       this.runtime.getConfig(),
@@ -195,8 +230,8 @@ export class CronScheduler {
     }
 
     const session = job.newSession
-      ? resetSession(this.runtime.db, sessionKey, resolved.model, resolved.provider)
-      : findOrCreateSession(this.runtime.db, sessionKey, resolved.model, resolved.provider);
+      ? resetSession(this.runtime.db, sessionKey, resolved.model, resolved.provider, projectId)
+      : findOrCreateSession(this.runtime.db, sessionKey, resolved.model, resolved.provider, projectId);
 
     const templateVars = this.buildTemplateVars(job);
     const hooks = this.runtime.resolveHooks({ agentName: job.agent ?? job.profile, overrideHooks: job.hooks });
@@ -231,7 +266,12 @@ export class CronScheduler {
     }
 
     const response = await runAgentLoop(prompt, {
-      ...this.runtime.buildLoopOptions({ session, agentName: job.agent ?? job.profile, modelOverride: job.model }),
+      ...this.runtime.buildLoopOptions({
+        session,
+        agentName: job.agent ?? job.profile,
+        modelOverride: job.model,
+        project: projectCtx,
+      }),
       onToolCall: (name, args) => {
         console.log(`[cron] [${job.name}] tool: ${name}(${JSON.stringify(args)})`);
       },
@@ -312,7 +352,8 @@ export class CronScheduler {
   }
 
   private upsertJobRow(job: CronJobConfig): void {
-    const sessionKey = job.sessionKey ?? `cron:${job.name}`;
+    const projectId = job.project ?? null;
+    const sessionKey = job.sessionKey ?? (projectId ? `cron:${projectId}:${job.name}` : `cron:${job.name}`);
     const enabled = job.enabled !== false ? 1 : 0;
     const existing = this.runtime.db.prepare("SELECT id FROM cron_jobs WHERE name = ?").get(job.name) as
       | { id: string }
@@ -320,14 +361,16 @@ export class CronScheduler {
 
     if (existing) {
       this.runtime.db
-        .prepare("UPDATE cron_jobs SET schedule = ?, task = ?, model = ?, session_key = ?, enabled = ? WHERE name = ?")
-        .run(job.schedule, job.prompt, job.model ?? null, sessionKey, enabled, job.name);
+        .prepare(
+          "UPDATE cron_jobs SET schedule = ?, task = ?, model = ?, session_key = ?, project_id = ?, enabled = ? WHERE name = ?",
+        )
+        .run(job.schedule, job.prompt, job.model ?? null, sessionKey, projectId, enabled, job.name);
     } else {
       this.runtime.db
         .prepare(
-          "INSERT INTO cron_jobs (id, name, schedule, task, model, session_key, enabled) VALUES (?, ?, ?, ?, ?, ?, ?)",
+          "INSERT INTO cron_jobs (id, name, schedule, task, model, session_key, project_id, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
-        .run(randomUUID(), job.name, job.schedule, job.prompt, job.model ?? null, sessionKey, enabled);
+        .run(randomUUID(), job.name, job.schedule, job.prompt, job.model ?? null, sessionKey, projectId, enabled);
     }
   }
 

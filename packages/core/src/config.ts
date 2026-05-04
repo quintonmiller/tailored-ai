@@ -72,6 +72,13 @@ export interface CronJobConfig {
     beforeRun?: AgentHook | AgentHook[];
     afterRun?: AgentHook | AgentHook[];
   };
+  /**
+   * Bind this job to a registered project. When set, the job runs with the
+   * project's path as cwd and tasks/sessions are scoped to it. Jobs declared
+   * inside a project's `.tai.yaml` overlay only fire when that project is the
+   * runtime's active project (single-tenant constraint of S7).
+   */
+  project?: string;
 }
 
 export interface CustomToolConfig {

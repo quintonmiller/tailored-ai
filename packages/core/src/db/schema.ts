@@ -44,6 +44,7 @@ export function initDatabase(dbPath: string): Database.Database {
       task TEXT NOT NULL,
       model TEXT,
       session_key TEXT,
+      project_id TEXT,
       enabled INTEGER NOT NULL DEFAULT 1,
       last_run TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -177,6 +178,13 @@ export function initDatabase(dbPath: string): Database.Database {
   // Safe migration for existing DBs that lack session_key
   try {
     db.exec("ALTER TABLE cron_jobs ADD COLUMN session_key TEXT");
+  } catch {
+    // Column already exists
+  }
+
+  // Safe migration: per-job project binding
+  try {
+    db.exec("ALTER TABLE cron_jobs ADD COLUMN project_id TEXT");
   } catch {
     // Column already exists
   }

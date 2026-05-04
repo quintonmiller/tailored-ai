@@ -296,6 +296,8 @@ export class AgentRuntime {
     profileName?: string;
     modelOverride?: string;
     extraTools?: Tool[];
+    /** Per-call project override. When set, the loop's `cwd` comes from this project rather than the runtime's active project. */
+    project?: ProjectContext | null;
   }): AgentLoopOptions {
     const agentName = opts.agentName ?? opts.profileName;
     const config = this._config;
@@ -326,11 +328,12 @@ export class AgentRuntime {
       sessionId: opts.session.id,
     });
 
+    const callProject = opts.project !== undefined ? opts.project : this._activeProject;
     return {
       provider: this._provider,
       session: opts.session,
       db: this.db,
-      cwd: this._activeProject?.path,
+      cwd: callProject?.path,
       tools: dedup([...resolved.tools, ...extraTools]),
       extraInstructions: resolved.instructions,
       maxToolRounds: resolved.maxToolRounds,
