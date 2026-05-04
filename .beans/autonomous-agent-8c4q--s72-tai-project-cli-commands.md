@@ -1,31 +1,27 @@
 ---
 # autonomous-agent-8c4q
 title: 'S7.2: tai project CLI commands'
-status: todo
+status: completed
 type: task
 priority: normal
 created_at: 2026-05-04T06:21:00Z
-updated_at: 2026-05-04T06:21:00Z
+updated_at: 2026-05-04T06:40:47Z
 parent: autonomous-agent-bv73
 ---
 
-## Goal
-`tai project` subcommand for managing the project registry.
+Implemented:
+- New file `packages/cli/src/commands/project.ts` exposing `runProjectCommand(args)`
+- Subcommands: `init`, `list`, `show`, `add`, `remove`, `help`
+- `init` writes `.tai.yaml` and registers in DB (with `path` + `config_overlay_path`)
+- `add` registers an existing path without writing `.tai.yaml` (lazy mode)
+- `list` marks the current cwd's project with `*`; archived projects tagged `[archived]`
+- `show [<id>]` defaults to the current cwd's project (uses S7.1 ancestor resolution)
+- `remove <id>` soft-deletes (status=archived); `--hard` does a real DELETE
+- Errors: init when `.tai.yaml` exists, init when path already registered, add when path registered, unknown subcommand, missing positional, etc.
+- `index.ts` peels off `argv[0] === "project"` before `parseArgs` and routes to the subcommand handler
 
-## Commands
+Verified end-to-end in a temp home dir: help, init, add (lazy), list with active marker, show from cwd, ancestor lookup from deep nested dir, double-init error, double-register error, soft-delete + [archived] display, unknown subcommand.
 
-- `tai project init [--name <n>]` — drops `.tai.yaml` in cwd, generates `proj_*` id, registers row in `projects` table with absolute cwd. Errors if `.tai.yaml` already exists.
-- `tai project list` — table of registered projects (id, name, path, status). Marks current cwd's project with `*`.
-- `tai project show [<id>]` — full record; defaults to current project from cwd.
-- `tai project add <path> [--name <n>]` — register an existing repo without writing `.tai.yaml` there (lazy mode — `tai` from inside still resolves via the path-match fallback).
-- `tai project remove <id>` — soft-delete (set status=archived); does NOT delete `.tai.yaml` or any data.
+No CLI-level vitest infra exists in this package; the underlying primitives (`createProject`, `getProjectByPath`, `buildProjectFile`, `resolveProjectFromCwd`) are covered by the S7.1 test file. Integration test for the full CLI flow is bundled into S7.8.
 
-## CLI plumbing
-- New file `packages/cli/src/commands/project.ts`
-- Wire as subcommand in `packages/cli/src/index.ts` arg dispatch
-- Use existing `createProject`/`queryProjects`/`updateProject` from `@agent/core` (`packages/core/src/db/project-queries.ts`)
-
-## Tests
-- Each command end-to-end against a temp DB + temp dir
-- Init twice in the same dir → error
-- Init in a dir that's already inside a registered project → warn (nested projects discouraged)
+Next: S7.3 (per-project config overlay).

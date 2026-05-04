@@ -31,6 +31,7 @@ import { createServer } from "@agent/server";
 import { CliApprovalHandler } from "./approval.js";
 import { resolveHomeDir, isSetupDone, resolveHomePaths, ensureHomeStructure } from "./home.js";
 import { runSetupWizard } from "./setup.js";
+import { runProjectCommand } from "./commands/project.js";
 
 let _discordChannel: DiscordChannel | undefined;
 
@@ -40,6 +41,7 @@ Usage: tai [options]
 Modes:
   (default)               Start server (HTTP + UI + Discord + cron)
   -m, --message <text>    Send a single message and exit
+  project <cmd>           Manage registered projects (run \`tai project help\`)
 
 Options:
   -c, --config <path>     Path to config.yaml (uses its directory as home)
@@ -267,6 +269,14 @@ async function runSingleMessage(
 }
 
 async function main() {
+  // Subcommand routing — peel off any leading positional verbs (e.g. `tai project ...`)
+  // before parseArgs, which is strict and rejects positionals.
+  const argv = process.argv.slice(2);
+  if (argv[0] === "project") {
+    await runProjectCommand(argv.slice(1));
+    return;
+  }
+
   const { values } = parseArgs({
     options: {
       config: { type: "string", short: "c" },
