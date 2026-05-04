@@ -1,11 +1,11 @@
 ---
 # autonomous-agent-bv73
 title: 'Slice 7: Per-project mode'
-status: todo
+status: completed
 type: epic
 priority: normal
 created_at: 2026-05-04T06:19:38Z
-updated_at: 2026-05-04T06:19:38Z
+updated_at: 2026-05-04T07:06:07Z
 ---
 
 TAI today is a global, single-tenant tool: one home dir (`~/.tailored-ai/` or `TAI_HOME`), one config, one DB, one Discord bot, one cron scheduler, one autopilot worker. This slice lets a single TAI brain manage N registered repos by threading `project_id` through sessions, tasks, cron, autopilot, and channels — without forking the install or going multi-process.
