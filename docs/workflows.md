@@ -324,27 +324,35 @@ workflow exists, the worker invokes it instead, with `input = { task,
 agent }`. This keeps the existing autopilot working and lets users
 dial in workflows incrementally.
 
-## Open questions
+## Resolved decisions
 
-These need user input before implementation:
-
-1. **Cancellation**. Does cancelling a run hard-kill an in-flight
-   `agent_run`, or wait for the current tool round to finish? v1
-   proposal: wait, with a 30s grace period before SIGKILL on shell
-   steps and a no-op on agent_run (the loop will see the cancel flag
-   on the next iteration).
-2. **Concurrency limits**. Do we cap concurrent runs per workflow?
-   System-wide? v1 proposal: no caps — it's the user's machine; if
-   they overload it, that's a config tuning problem, not a runner
-   problem.
-3. **Secrets**. How do step args get secrets without putting them in
-   the YAML? v1 proposal: continue using `${ENV_VAR}` interpolation
-   that already works for `config.yaml`. Reuse `deepInterpolate`.
-4. **Logs retention**. Per-step logs grow without bound. v1 proposal:
-   keep last 100 runs per workflow on disk; older runs purge their
-   log files but keep their DB rows.
-5. **UI scope**. The S6 epic covers this. For S5 we ship the API and
-   SSE; the UI editor is a follow-up.
+1. **Cancellation** — wait with grace period. Cancel sets a flag the
+   engine checks between steps and (for `agent_run`) between tool
+   rounds. `shell` steps get a 30s grace window after SIGTERM before
+   SIGKILL. `agent_run` is a no-op cancel until the loop's next
+   iteration boundary; we do not interrupt in-flight provider calls.
+2. **Concurrency limits** — both global and per-agent caps are
+   configurable. Defaults:
+   ```yaml
+   workflows:
+     maxConcurrent: 4              # global cap on concurrent runs
+     maxConcurrentByAgent:
+       researcher: 2               # cap on concurrent agent_run steps
+       coder: 1                    # by agent name; overrides default
+       _default: 2                 # default for any agent not listed
+   ```
+   The engine holds two semaphores: a workflow-level run gate
+   acquired when a run leaves `pending`, and a per-agent gate
+   acquired on entry to each `agent_run` step (released on the step's
+   `finally`). Steps blocked on the agent gate stay in `pending`
+   status with a `blocked_on: agent:<name>` annotation so the UI can
+   surface the queue.
+3. **Secrets** — `${ENV_VAR}` interpolation via `deepInterpolate` (the
+   same path `config.yaml` already uses). No new mechanism.
+4. **Logs retention** — keep the last 100 runs per workflow on disk;
+   older runs purge log files but keep DB rows.
+5. **UI scope** — S5 ships the HTTP API and SSE only; the UI editor
+   and run viewer are deferred to S6 (`autonomous-agent-38od`).
 
 ## Decomposition
 
