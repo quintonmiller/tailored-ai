@@ -273,6 +273,22 @@ export interface AgentConfig {
     beans?: { path?: string };
     beads?: { path?: string };
   };
+  sandboxes?: {
+    docker?: {
+      imageName?: string;
+      mounts?: Array<{ hostPath: string; sandboxPath: string; readonly?: boolean }>;
+      env?: Record<string, string>;
+      network?: string;
+      sandboxWorkdir?: string;
+    };
+    podman?: {
+      imageName?: string;
+      mounts?: Array<{ hostPath: string; sandboxPath: string; readonly?: boolean }>;
+      env?: Record<string, string>;
+      network?: string;
+      sandboxWorkdir?: string;
+    };
+  };
 }
 
 const DEFAULT_CONFIG: AgentConfig = {

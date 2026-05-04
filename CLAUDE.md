@@ -350,8 +350,9 @@ Three strategies:
 
 Tool side-effects (shell, file IO) can be routed through a `Sandbox` defined in `packages/core/src/sandboxes/interface.ts`. Today:
 
-- **`host`** (default) — `packages/core/src/sandboxes/host.ts`. Runs commands directly on the host. No isolation; preserves current behavior.
-- **`docker`**, **`podman`** — config slots reserved; throws "not yet implemented" if selected (see follow-up beans).
+- **`host`** (default) — `packages/core/src/sandboxes/host.ts`. Runs commands directly on the host. No isolation.
+- **`docker`** — `packages/core/src/sandboxes/docker.ts`. Long-running container with the host cwd bind-mounted at `/work` (configurable). `prepare()` runs `docker run -d --rm -v <cwd>:/work -w /work --entrypoint sleep <image> infinity`; `exec()` runs `docker exec`; file IO goes through the bind-mount path on the host. `cleanup()` is best-effort `docker rm -f`.
+- **`podman`** — config slot reserved; not yet implemented.
 
 Lifecycle: the runtime calls `createSandbox(config, agent)` in `buildLoopOptions()` and threads the result into `AgentLoopOptions.sandbox`. `runAgentLoop` calls `sandbox.prepare({ cwd })` before the loop body and `sandbox.cleanup(handle)` in a finally block. The handle lands on `ToolContext` as `sandbox` + `sandboxHandle`.
 
@@ -361,11 +362,22 @@ Config:
 
 ```yaml
 agent:
-  sandbox: host          # default for all agents
+  sandbox: host                # default for all agents
 agents:
   coder:
-    sandbox: docker      # per-agent override (when implemented)
+    sandbox: docker            # per-agent override
+sandboxes:
+  docker:                      # required when any agent uses docker
+    imageName: node:22-bookworm
+    network: host              # optional
+    sandboxWorkdir: /work      # optional, default /work
+    mounts:                    # optional extras beyond cwd bind
+      - { hostPath: ~/.npm, sandboxPath: /home/agent/.npm, readonly: true }
+    env:                       # optional defaults
+      NODE_ENV: development
 ```
+
+`DockerSandbox` accepts an injected `runner: DockerRunner` for testability — tests substitute a fake; production uses `execFile('docker', ...)` directly.
 
 ## Task Backends
 

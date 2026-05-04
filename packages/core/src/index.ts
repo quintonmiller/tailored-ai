@@ -18,6 +18,7 @@ export type {
   SandboxPrepareOptions,
 } from "./sandboxes/interface.js";
 export { HostSandbox } from "./sandboxes/host.js";
+export { DockerSandbox, type DockerRunner, type DockerRunResult, type DockerSandboxOptions } from "./sandboxes/docker.js";
 export { createSandbox } from "./sandboxes/factory.js";
 export type {
   Task,
