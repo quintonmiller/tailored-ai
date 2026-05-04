@@ -304,8 +304,10 @@ export function updateWorkflowStep(
 }
 
 export function listWorkflowSteps(db: Database.Database, runId: string): WorkflowStep[] {
+  // ORDER BY rowid: created_at is second-resolution, so steps recorded in
+  // the same second would otherwise tie-break by random UUID id.
   const rows = db
-    .prepare("SELECT * FROM workflow_steps WHERE run_id = ? ORDER BY created_at ASC, id ASC")
+    .prepare("SELECT * FROM workflow_steps WHERE run_id = ? ORDER BY rowid ASC")
     .all(runId) as StepRow[];
   return rows.map(rowToStep);
 }

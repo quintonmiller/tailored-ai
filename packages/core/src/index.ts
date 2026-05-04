@@ -148,6 +148,19 @@ export {
   validateWorkflow,
   type LoadResult,
 } from "./workflows/loader.js";
+export {
+  WorkflowEngine,
+  WorkflowError,
+  CancelledError,
+  DeadlineError,
+  type EngineOptions,
+  type StepContext,
+  type StepExecutor,
+  type StepResult,
+} from "./workflows/engine.js";
+export { evaluateExpression } from "./workflows/expression.js";
+export { lookup, resolveString, resolveValue, type Scope } from "./workflows/scope.js";
+export { KeyedSemaphore, Semaphore } from "./workflows/semaphore.js";
 export type { AIProvider, ChatParams, ChatResponse, Message, ToolCall, ToolSchema } from "./providers/interface.js";
 export { AnthropicProvider } from "./providers/anthropic.js";
 export { OllamaProvider } from "./providers/ollama.js";
