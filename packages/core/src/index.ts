@@ -31,6 +31,7 @@ export type {
 export { createTaskBackend } from "./tasks/factory.js";
 export { NativeTaskBackend } from "./tasks/native.js";
 export { GitHubTaskBackend, type GitHubBackendOptions } from "./tasks/github.js";
+export { BeansTaskBackend, type BeansBackendOptions, type BeansRunner } from "./tasks/beans.js";
 export { runAgentLoop } from "./agent/loop.js";
 export type { AgentLoopOptions } from "./agent/loop.js";
 export type { ResolvedAgent, ResolvedProfile } from "./agent/agents.js";
