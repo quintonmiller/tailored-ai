@@ -1,3 +1,29 @@
+const ACTIVE_PROJECT_KEY = "tai.activeProjectId";
+/**
+ * Currently-selected project id from the UI's localStorage. The string "global"
+ * means "show only un-scoped data". null/undefined means "no filter".
+ */
+export function getActiveProjectId() {
+    try {
+        return localStorage.getItem(ACTIVE_PROJECT_KEY);
+    }
+    catch {
+        return null;
+    }
+}
+export function setActiveProjectId(id) {
+    try {
+        if (id === null)
+            localStorage.removeItem(ACTIVE_PROJECT_KEY);
+        else
+            localStorage.setItem(ACTIVE_PROJECT_KEY, id);
+    }
+    catch {
+        // localStorage unavailable — ignore
+    }
+    // Notify listeners so subscribed components re-render.
+    window.dispatchEvent(new CustomEvent("tai:active-project-change", { detail: id }));
+}
 async function jsonFetch(url, init) {
     const res = await fetch(url, init);
     if (!res.ok)
@@ -7,8 +33,10 @@ async function jsonFetch(url, init) {
 export function fetchHealth() {
     return jsonFetch("/api/health");
 }
-export function fetchSessions() {
-    return jsonFetch("/api/sessions");
+export function fetchSessions(opts) {
+    const project = opts?.project ?? getActiveProjectId();
+    const qs = project ? `?project=${encodeURIComponent(project)}` : "";
+    return jsonFetch(`/api/sessions${qs}`);
 }
 export function fetchMessages(sessionId) {
     return jsonFetch(`/api/sessions/${sessionId}/messages`);

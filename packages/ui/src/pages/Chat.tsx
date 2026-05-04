@@ -10,6 +10,7 @@ import {
   type SessionRow,
 } from "../api";
 import { MessageBubble } from "../components/MessageBubble";
+import { useActiveProject } from "../hooks/useActiveProject";
 
 export function Chat(props: { sessionKey?: string; sessionId?: string }) {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -34,12 +35,14 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
     fetchAgents().then(setAgents).catch(() => {});
   }, []);
 
-  // Load sessions when sidebar opens
+  const activeProject = useActiveProject();
+
+  // Load sessions when sidebar opens or project filter changes
   useEffect(() => {
     if (sidebarOpen) {
       fetchSessions().then(setSessions).catch(() => {});
     }
-  }, [sidebarOpen]);
+  }, [sidebarOpen, activeProject]);
 
   // Load messages for initial session
   useEffect(() => {

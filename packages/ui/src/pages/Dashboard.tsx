@@ -22,6 +22,7 @@ import { ContextFiles } from "../components/ContextFiles";
 import { CronJobList } from "../components/CronJobList";
 import { SessionList } from "../components/SessionList";
 import { TaskList } from "../components/TaskList";
+import { useActiveProject } from "../hooks/useActiveProject";
 
 const PROJECT_STATUS_LABELS: Record<string, string> = {
   active: "Active",
@@ -42,6 +43,8 @@ export function Dashboard() {
   const pollRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const activityPollRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
+  const activeProject = useActiveProject();
+
   useEffect(() => {
     const onError = (e: Error) => setError(e.message);
 
@@ -53,7 +56,7 @@ export function Dashboard() {
     fetchProjects({ limit: 10 }).then(setProjects).catch(onError);
     fetchContext().then(setContext).catch(onError);
     fetchActivity().then(setActivity).catch(() => {});
-  }, []);
+  }, [activeProject]);
 
   // Poll activity every 3s
   useEffect(() => {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { type AutopilotActivity, fetchAutopilotActivity, fetchHealth } from "./api";
 import { BRAND } from "./brand";
+import { ProjectSwitcher } from "./components/ProjectSwitcher";
 import { Chat } from "./pages/Chat";
 import { Config } from "./pages/Config";
 import { Dashboard } from "./pages/Dashboard";
@@ -164,6 +165,7 @@ export function App() {
           <a href="#/help" className={route.page === "help" ? "active" : ""}>
             Help
           </a>
+          <ProjectSwitcher />
           {connected !== null && (
             <span className="header-status" title={connected ? "Connected" : "Disconnected"}>
               <span className={`status-dot${connected ? "" : " error"}`} />

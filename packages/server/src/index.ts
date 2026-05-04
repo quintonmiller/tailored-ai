@@ -122,7 +122,12 @@ export function createServer(opts: ServerOptions) {
   });
 
   app.get("/api/sessions", (c) => {
-    const sessions = listSessions(runtime.db);
+    const project = c.req.query("project");
+    const limit = c.req.query("limit");
+    const sessions = listSessions(runtime.db, {
+      projectId: project as string | "global" | undefined,
+      limit: limit ? Number.parseInt(limit, 10) : undefined,
+    });
     return c.json(sessions);
   });
 
@@ -583,6 +588,9 @@ export function createServer(opts: ServerOptions) {
       description?: string;
       due_date?: string;
       default_assignee?: string | null;
+      path?: string | null;
+      config_overlay_path?: string | null;
+      id?: string;
     }>();
 
     if (!body.title?.trim()) {
@@ -605,6 +613,8 @@ export function createServer(opts: ServerOptions) {
       status?: string;
       due_date?: string | null;
       default_assignee?: string | null;
+      path?: string | null;
+      config_overlay_path?: string | null;
     }>();
 
     try {

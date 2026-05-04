@@ -77,6 +77,22 @@ body {
   margin-left: 4px;
 }
 
+.project-switcher {
+  margin-left: 12px;
+  padding: 4px 8px;
+  background: var(--bg-secondary, #1a1a1a);
+  color: var(--text-primary, #ddd);
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  font-size: 0.85em;
+  cursor: pointer;
+}
+
+.project-switcher:focus {
+  outline: 1px solid var(--accent, #4a9eff);
+  outline-offset: 1px;
+}
+
 .app-main {
   flex: 1;
   display: flex;

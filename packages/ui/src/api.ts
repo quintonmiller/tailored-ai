@@ -3,8 +3,34 @@ export interface SessionRow {
   key: string | null;
   model: string;
   provider: string;
+  project_id: string | null;
   created_at: string;
   updated_at: string;
+}
+
+const ACTIVE_PROJECT_KEY = "tai.activeProjectId";
+
+/**
+ * Currently-selected project id from the UI's localStorage. The string "global"
+ * means "show only un-scoped data". null/undefined means "no filter".
+ */
+export function getActiveProjectId(): string | null {
+  try {
+    return localStorage.getItem(ACTIVE_PROJECT_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setActiveProjectId(id: string | null): void {
+  try {
+    if (id === null) localStorage.removeItem(ACTIVE_PROJECT_KEY);
+    else localStorage.setItem(ACTIVE_PROJECT_KEY, id);
+  } catch {
+    // localStorage unavailable — ignore
+  }
+  // Notify listeners so subscribed components re-render.
+  window.dispatchEvent(new CustomEvent("tai:active-project-change", { detail: id }));
 }
 
 export interface Message {
@@ -32,8 +58,10 @@ export function fetchHealth(): Promise<HealthInfo> {
   return jsonFetch("/api/health");
 }
 
-export function fetchSessions(): Promise<SessionRow[]> {
-  return jsonFetch("/api/sessions");
+export function fetchSessions(opts?: { project?: string | "global" | null }): Promise<SessionRow[]> {
+  const project = opts?.project ?? getActiveProjectId();
+  const qs = project ? `?project=${encodeURIComponent(project)}` : "";
+  return jsonFetch(`/api/sessions${qs}`);
 }
 
 export function fetchMessages(sessionId: string): Promise<Message[]> {
@@ -264,6 +292,8 @@ export interface Project {
   status: string;
   due_date: string | null;
   default_assignee: string | null;
+  path: string | null;
+  config_overlay_path: string | null;
   created_at: string;
   updated_at: string;
 }

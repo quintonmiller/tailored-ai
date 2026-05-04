@@ -2,6 +2,7 @@ import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { useEffect, useRef, useState } from "react";
 import { fetchAgents, fetchMessages, fetchSessions, sendChat, } from "../api";
 import { MessageBubble } from "../components/MessageBubble";
+import { useActiveProject } from "../hooks/useActiveProject";
 export function Chat(props) {
     const [messages, setMessages] = useState([]);
     const [input, setInput] = useState("");
@@ -21,12 +22,13 @@ export function Chat(props) {
     useEffect(() => {
         fetchAgents().then(setAgents).catch(() => { });
     }, []);
-    // Load sessions when sidebar opens
+    const activeProject = useActiveProject();
+    // Load sessions when sidebar opens or project filter changes
     useEffect(() => {
         if (sidebarOpen) {
             fetchSessions().then(setSessions).catch(() => { });
         }
-    }, [sidebarOpen]);
+    }, [sidebarOpen, activeProject]);
     // Load messages for initial session
     useEffect(() => {
         if (props.sessionId) {
