@@ -330,6 +330,7 @@ export class AgentRuntime {
       provider: this._provider,
       session: opts.session,
       db: this.db,
+      cwd: this._activeProject?.path,
       tools: dedup([...resolved.tools, ...extraTools]),
       extraInstructions: resolved.instructions,
       maxToolRounds: resolved.maxToolRounds,

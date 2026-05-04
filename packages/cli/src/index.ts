@@ -25,7 +25,9 @@ import {
   createMetaTools,
   createWorkflowEngine,
   listSessions,
+  resolveProjectFromCwd,
   validateConfig,
+  type ProjectContext,
 } from "@agent/core";
 import { createServer } from "@agent/server";
 import { CliApprovalHandler } from "./approval.js";
@@ -49,10 +51,12 @@ Options:
   -s, --session <id>      Resume an existing session by ID
   -a, --agent <name>      Use a named agent
   -j, --json              Output response as JSON (useful for scripting)
+      --project <id>      Run scoped to a specific project (overrides cwd resolution)
+      --global            Force global mode even inside a registered project
       --port <number>     Override server port
       --init              Re-run the setup wizard
       --list-agents       List available agents
-      --list-sessions     List recent sessions
+      --list-sessions     List recent sessions (use --project <id> or --global to filter)
   -h, --help              Show this help message
 `.trim();
 
@@ -207,12 +211,13 @@ async function runSingleMessage(
 
   const resolved = resolveAgent(agentName, runtime.getConfig(), runtime.getTools(), undefined, contextDir);
 
+  const projectId = runtime.getActiveProject()?.id ?? null;
   const session = opts.sessionId
     ? (loadSession(runtime.db, opts.sessionId) ??
       (() => {
         throw new Error(`Session "${opts.sessionId}" not found`);
       })())
-    : newSession(runtime.db, resolved.model, resolved.provider);
+    : newSession(runtime.db, resolved.model, resolved.provider, undefined, projectId);
 
   const loopOpts = runtime.buildLoopOptions({ session, agentName });
   const cliHooks = runtime.resolveHooks({ agentName });
@@ -285,6 +290,8 @@ async function main() {
       agent: { type: "string", short: "a" },
       profile: { type: "string", short: "p" }, // deprecated alias for --agent
       json: { type: "boolean", short: "j", default: false },
+      project: { type: "string" },
+      global: { type: "boolean", default: false },
       port: { type: "string" },
       init: { type: "boolean", default: false },
       "list-agents": { type: "boolean", default: false },
@@ -346,16 +353,19 @@ async function main() {
       process.exit(0);
     }
     const db = initDatabase(dbPath);
-    const sessions = listSessions(db);
+    const filter = values.global ? "global" : values.project;
+    const sessions = listSessions(db, filter ? { projectId: filter as string | "global" } : undefined);
     db.close();
     if (sessions.length === 0) {
       console.log("No sessions found.");
     } else {
-      console.log("Recent sessions:\n");
+      const scope = filter === "global" ? " (global only)" : filter ? ` (project ${filter})` : "";
+      console.log(`Recent sessions${scope}:\n`);
       const shown = sessions.slice(0, 20);
       for (const s of shown) {
         const key = s.key ? ` (${s.key})` : "";
-        console.log(`  ${s.id}${key}`);
+        const proj = s.project_id ? ` [proj:${s.project_id}]` : "";
+        console.log(`  ${s.id}${key}${proj}`);
         console.log(`    ${s.provider}/${s.model} | updated: ${s.updated_at}`);
       }
       if (sessions.length > 20) {
@@ -424,6 +434,43 @@ async function main() {
 
   const metaTools = createMetaTools(runtime, contextDir, kbDir);
   runtime.setMetaTools(metaTools);
+
+  // --- Resolve active project from cwd unless --global / --project overrides ---
+  let activeProject: ProjectContext | null = null;
+  if (values.global) {
+    // Forced global mode — leave activeProject null
+  } else if (values.project) {
+    const ctx = resolveProjectFromCwd(db, { cwd: process.cwd(), warn: () => {} });
+    if (ctx && ctx.id === values.project) {
+      activeProject = ctx;
+    } else {
+      // Look up the project by id directly so --project works from any cwd
+      const row = db
+        .prepare("SELECT * FROM projects WHERE id = ?")
+        .get(values.project) as { id: string; title: string; path: string | null } | undefined;
+      if (!row) {
+        console.error(`Project not found: ${values.project}`);
+        process.exit(1);
+      }
+      if (!row.path) {
+        console.error(`Project ${values.project} has no registered path; cannot scope to it.`);
+        process.exit(1);
+      }
+      activeProject = {
+        id: row.id,
+        name: row.title,
+        path: row.path,
+        overlayPath: "",
+        overlay: {},
+      };
+    }
+  } else {
+    activeProject = resolveProjectFromCwd(db, { cwd: process.cwd() });
+  }
+  if (activeProject) {
+    runtime.setActiveProject(activeProject);
+    console.log(`[project] active: ${activeProject.id} (${activeProject.name}) at ${activeProject.path}`);
+  }
 
   // --- Single message mode ---
   if (values.message) {

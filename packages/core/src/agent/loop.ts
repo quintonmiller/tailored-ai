@@ -74,6 +74,8 @@ export interface AgentLoopOptions {
   onApprovalResponse?: (request: ApprovalRequest, response: ApprovalResponse) => void;
   /** Sandbox to route shell/file tool ops through. Prepared on loop entry, cleaned up on exit. */
   sandbox?: import("../sandboxes/interface.js").Sandbox;
+  /** Working directory for tool execution. Defaults to `process.cwd()`. Set by the runtime to an active project's path. */
+  cwd?: string;
 }
 
 export function estimateTokens(msg: Message): number {
@@ -373,7 +375,7 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
   saveMessage(db, session.id, userMsg);
   history.push(userMsg);
 
-  const workingDirectory = process.cwd();
+  const workingDirectory = opts.cwd ?? process.cwd();
   const sandboxHandle = opts.sandbox
     ? await opts.sandbox.prepare({ cwd: workingDirectory })
     : undefined;

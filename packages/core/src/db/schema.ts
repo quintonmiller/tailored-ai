@@ -13,6 +13,7 @@ export function initDatabase(dbPath: string): Database.Database {
       key TEXT UNIQUE,
       model TEXT NOT NULL,
       provider TEXT NOT NULL,
+      project_id TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -179,6 +180,18 @@ export function initDatabase(dbPath: string): Database.Database {
   } catch {
     // Column already exists
   }
+
+  // Safe migration: project scoping on sessions
+  try {
+    db.exec("ALTER TABLE sessions ADD COLUMN project_id TEXT REFERENCES projects(id)");
+  } catch {
+    // Column already exists
+  }
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_sessions_project_updated
+      ON sessions(project_id, updated_at);
+  `);
 
   // Safe migration: add project_id to project_tasks
   try {

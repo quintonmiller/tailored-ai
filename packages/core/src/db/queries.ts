@@ -6,8 +6,15 @@ export interface SessionRow {
   key: string | null;
   model: string;
   provider: string;
+  project_id: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface ListSessionsOptions {
+  /** Filter to a specific project. Use the literal string "global" to fetch only un-scoped sessions. */
+  projectId?: string | "global";
+  limit?: number;
 }
 
 interface MessageRow {
@@ -20,12 +27,20 @@ interface MessageRow {
   created_at: string;
 }
 
-export function createSession(db: Database.Database, id: string, model: string, provider: string, key?: string): void {
-  db.prepare("INSERT INTO sessions (id, key, model, provider) VALUES (?, ?, ?, ?)").run(
+export function createSession(
+  db: Database.Database,
+  id: string,
+  model: string,
+  provider: string,
+  key?: string,
+  projectId?: string | null,
+): void {
+  db.prepare("INSERT INTO sessions (id, key, model, provider, project_id) VALUES (?, ?, ?, ?, ?)").run(
     id,
     key ?? null,
     model,
     provider,
+    projectId ?? null,
   );
 }
 
@@ -55,8 +70,20 @@ export function clearSessionKey(db: Database.Database, key: string): void {
   db.prepare("UPDATE sessions SET key = NULL WHERE key = ?").run(key);
 }
 
-export function listSessions(db: Database.Database): SessionRow[] {
-  return db.prepare("SELECT * FROM sessions ORDER BY updated_at DESC").all() as SessionRow[];
+export function listSessions(db: Database.Database, opts?: ListSessionsOptions): SessionRow[] {
+  const params: unknown[] = [];
+  let where = "";
+  if (opts?.projectId === "global") {
+    where = "WHERE project_id IS NULL";
+  } else if (opts?.projectId) {
+    where = "WHERE project_id = ?";
+    params.push(opts.projectId);
+  }
+  const limit = opts?.limit ?? 200;
+  params.push(limit);
+  return db
+    .prepare(`SELECT * FROM sessions ${where} ORDER BY updated_at DESC LIMIT ?`)
+    .all(...params) as SessionRow[];
 }
 
 export function deleteSessionMessages(db: Database.Database, sessionId: string): number {
