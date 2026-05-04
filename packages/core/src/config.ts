@@ -176,6 +176,15 @@ export interface AgentConfig {
       allowedGuilds?: string[];
       respondToDMs: boolean;
       respondToMentions: boolean;
+      /**
+       * Route messages to a specific project based on channel id or DM origin.
+       * Each entry may set `channel: <id>` to bind a guild channel, or `dm: true`
+       * to bind direct messages. The first matching entry wins. Unmapped messages
+       * fall back to global mode.
+       */
+      projectMappings?: Array<
+        ({ channel: string } | { dm: true }) & { project: string }
+      >;
     };
   };
   cron: {

@@ -18,8 +18,10 @@ import { BASE_SYSTEM_PROMPT } from "../agent/prompt.js";
 import { findOrCreateSession, resetSession } from "../agent/session.js";
 import { executeCommand, isCommand } from "../commands.js";
 import { loadAllContext, loadContextFiles } from "../context.js";
+import { getProject } from "../db/project-queries.js";
 import { getSessionMessages } from "../db/queries.js";
 import { createProjectTask, queryProjectTasks } from "../db/task-queries.js";
+import type { ProjectContext } from "../projects/resolve.js";
 import type { AgentRuntime } from "../runtime.js";
 import { DiscordApprovalHandler } from "./discord-approval.js";
 import type { Channel, IncomingMessage } from "./interface.js";
@@ -190,6 +192,43 @@ export class DiscordChannel implements Channel {
     return false;
   }
 
+  /**
+   * Map an incoming Discord message to a project context using config's
+   * `channels.discord.projectMappings`. Returns null when no mapping matches —
+   * such messages stay in global mode.
+   */
+  private resolveMessageProject(msg: DiscordMessage): ProjectContext | null {
+    const mappings = this.runtime.getConfig().channels.discord?.projectMappings;
+    if (!mappings || mappings.length === 0) return null;
+
+    const isDM = !msg.guild;
+    let mapped: string | null = null;
+    for (const m of mappings) {
+      if ("channel" in m && m.channel === msg.channelId) {
+        mapped = m.project;
+        break;
+      }
+      if ("dm" in m && m.dm === true && isDM) {
+        mapped = m.project;
+        break;
+      }
+    }
+    if (!mapped) return null;
+
+    const row = getProject(this.runtime.db, mapped);
+    if (!row || !row.path) {
+      console.warn(`[discord] projectMappings names "${mapped}" but it is unknown or has no path — using global`);
+      return null;
+    }
+    return {
+      id: row.id,
+      name: row.title,
+      path: row.path,
+      overlayPath: "",
+      overlay: {},
+    };
+  }
+
   private async handleMessage(msg: DiscordMessage): Promise<void> {
     if (!this.shouldRespond(msg)) return;
 
@@ -211,8 +250,13 @@ export class DiscordChannel implements Channel {
       });
     }
 
-    // Deduplicate: don't process if we're already handling a message from this user
-    const userKey = `discord:${msg.author.id}`;
+    // Deduplicate: don't process if we're already handling a message from this user.
+    // Project-scoped sessions are namespaced under their project id so the same user
+    // in two different mapped channels gets isolated history (and parallel processing).
+    const projectCtx = this.resolveMessageProject(msg);
+    const userKey = projectCtx
+      ? `discord:${projectCtx.id}:${msg.author.id}`
+      : `discord:${msg.author.id}`;
     if (this.processing.has(userKey)) {
       await msg.reply("I'm still working on your previous message, hold on...");
       return;
@@ -305,7 +349,7 @@ export class DiscordChannel implements Channel {
           resetSession(this.runtime.db, userKey, model, config.agent.defaultProvider);
         }
 
-        await this.runAgentAndReply(msg, userKey, agentResult.prompt, agentName);
+        await this.runAgentAndReply(msg, userKey, agentResult.prompt, agentName, projectCtx);
       } catch (err) {
         console.error(`[discord] Error handling command from ${msg.author.username}:`, err);
         await msg.reply("Sorry, I encountered an error processing your command.").catch(() => {});
@@ -318,7 +362,7 @@ export class DiscordChannel implements Channel {
     // Regular message — send through agent loop
     try {
       const agentName = this.userAgents.get(msg.author.id);
-      await this.runAgentAndReply(msg, userKey, content, agentName);
+      await this.runAgentAndReply(msg, userKey, content, agentName, projectCtx);
     } catch (err) {
       console.error(`[discord] Error handling message from ${msg.author.username}:`, err);
       await msg.reply("Sorry, I encountered an error processing your message.").catch(() => {});
@@ -332,6 +376,7 @@ export class DiscordChannel implements Channel {
     userKey: string,
     content: string,
     agentName?: string,
+    project?: ProjectContext | null,
   ): Promise<void> {
     const canType = "sendTyping" in msg.channel;
     if (canType) {
@@ -346,7 +391,13 @@ export class DiscordChannel implements Channel {
     const config = this.runtime.getConfig();
     const model = this.runtime.getModel();
 
-    const session = findOrCreateSession(this.runtime.db, userKey, model, config.agent.defaultProvider);
+    const session = findOrCreateSession(
+      this.runtime.db,
+      userKey,
+      model,
+      config.agent.defaultProvider,
+      project?.id ?? null,
+    );
     const hooks = this.runtime.resolveHooks({ agentName });
     const logPrefix = `[discord] [${msg.author.username}]`;
 
@@ -359,7 +410,7 @@ export class DiscordChannel implements Channel {
       }
     }
 
-    const loopOpts = this.runtime.buildLoopOptions({ session, agentName });
+    const loopOpts = this.runtime.buildLoopOptions({ session, agentName, project });
     const approvalHandler = loopOpts.permissions
       ? new DiscordApprovalHandler((opts) => msg.reply(opts), msg.author.id)
       : undefined;
