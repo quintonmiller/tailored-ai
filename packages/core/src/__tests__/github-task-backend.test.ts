@@ -245,14 +245,55 @@ describe("GitHubTaskBackend.update", () => {
 });
 
 describe("GitHubTaskBackend.comment", () => {
-  it("posts a comment prefixed with the author and surfaces it on get()", async () => {
-    const { backend } = build();
+  it("preserves agentName via [agent: name] prefix and strips it on get()", async () => {
+    const { backend, oct } = build();
     const t = await backend.create({ title: "T1" });
-    await backend.comment(t.id, "looking at it", "alice");
+    await backend.comment(t.id, "looking at it", "researcher");
+
+    // Raw body in storage carries the prefix so it survives the GH user attribution.
+    const stored = oct.comments.get(1)?.[0]?.body;
+    expect(stored).toBe("[agent: researcher] looking at it");
 
     const fetched = await backend.get(t.id);
     expect(fetched?.comments?.length).toBe(1);
+    expect(fetched?.comments?.[0].author).toBe("researcher");
     expect(fetched?.comments?.[0].content).toBe("looking at it");
+  });
+
+  it("falls back to GH commenter when no agentName is provided", async () => {
+    const { backend, oct } = build();
+    const t = await backend.create({ title: "T1" });
+    await backend.comment(t.id, "plain comment");
+
+    expect(oct.comments.get(1)?.[0]?.body).toBe("plain comment");
+    const fetched = await backend.get(t.id);
+    expect(fetched?.comments?.[0].author).toBe("commenter");
+    expect(fetched?.comments?.[0].content).toBe("plain comment");
+  });
+
+  it("does not prefix when author is not a safe agent-name shape", async () => {
+    const { backend, oct } = build();
+    const t = await backend.create({ title: "T1" });
+    // Spaces would break the regex round-trip; back off to plain.
+    await backend.comment(t.id, "hi", "Some Person");
+    expect(oct.comments.get(1)?.[0]?.body).toBe("hi");
+  });
+
+  it("strips a pre-existing [agent: name] prefix on read even if the comment was not posted by us", async () => {
+    const { backend, oct } = build();
+    const t = await backend.create({ title: "T1" });
+    // Simulate a comment authored externally with the same prefix shape.
+    oct.comments.set(1, [
+      {
+        id: 9999,
+        body: "[agent: coder] manual entry",
+        user: { login: "external" },
+        created_at: new Date().toISOString(),
+      },
+    ]);
+    const fetched = await backend.get(t.id);
+    expect(fetched?.comments?.[0].author).toBe("coder");
+    expect(fetched?.comments?.[0].content).toBe("manual entry");
   });
 });
 

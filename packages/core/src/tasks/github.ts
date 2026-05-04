@@ -163,13 +163,17 @@ export class GitHubTaskBackend implements TaskBackend {
         issue_number: num,
       });
       const task = this.toTask(r.data as IssueLike);
-      task.comments = c.data.map((cm) => ({
-        id: cm.id,
-        task_id: id,
-        author: cm.user?.login ?? "",
-        content: cm.body ?? "",
-        created_at: cm.created_at,
-      }));
+      task.comments = c.data.map((cm) => {
+        const ghAuthor = cm.user?.login ?? "";
+        const parsed = parseAgentPrefix(cm.body ?? "");
+        return {
+          id: cm.id,
+          task_id: id,
+          author: parsed.agent ?? ghAuthor,
+          content: parsed.content,
+          created_at: cm.created_at,
+        };
+      });
       return task;
     } catch (err) {
       if (isNotFound(err)) return undefined;
@@ -238,12 +242,13 @@ export class GitHubTaskBackend implements TaskBackend {
   async comment(id: string, content: string, author?: string): Promise<TaskComment | undefined> {
     const num = parseId(id);
     if (num === null) return undefined;
+    const body = author && isAgentName(author) ? `[agent: ${author}] ${content}` : content;
     try {
       const r = await this.octokit.rest.issues.createComment({
         owner: this.owner,
         repo: this.repo,
         issue_number: num,
-        body: content,
+        body,
       });
       return {
         id: r.data.id,
@@ -479,4 +484,18 @@ function deriveBlockedReason(labels: string[]): string | null {
 
 function isNotFound(err: unknown): boolean {
   return typeof err === "object" && err !== null && "status" in err && (err as { status: number }).status === 404;
+}
+
+const AGENT_PREFIX_RE = /^\[agent: ([A-Za-z0-9._-]+)\] ([\s\S]*)$/;
+
+/** Pull `[agent: name] ` off the front of a comment body if present. */
+function parseAgentPrefix(body: string): { agent: string | null; content: string } {
+  const m = AGENT_PREFIX_RE.exec(body);
+  if (!m) return { agent: null, content: body };
+  return { agent: m[1], content: m[2] };
+}
+
+/** Conservative shape for an "agent name" prefix to embed in comment bodies. */
+function isAgentName(s: string): boolean {
+  return /^[A-Za-z0-9._-]+$/.test(s);
 }

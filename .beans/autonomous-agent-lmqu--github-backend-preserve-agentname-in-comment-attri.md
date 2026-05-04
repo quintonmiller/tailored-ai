@@ -1,13 +1,13 @@
 ---
 # autonomous-agent-lmqu
 title: 'GitHub backend: preserve agentName in comment attribution'
-status: todo
+status: completed
 type: task
 priority: low
 tags:
     - github-backend
 created_at: 2026-05-04T00:14:43Z
-updated_at: 2026-05-04T00:14:43Z
+updated_at: 2026-05-04T00:48:16Z
 parent: autonomous-agent-6p6y
 ---
 
