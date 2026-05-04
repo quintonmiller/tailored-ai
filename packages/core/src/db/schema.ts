@@ -80,6 +80,8 @@ export function initDatabase(dbPath: string): Database.Database {
       status TEXT NOT NULL DEFAULT 'active'
         CHECK(status IN ('active','completed','archived')),
       due_date TEXT,
+      path TEXT,
+      config_overlay_path TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -206,6 +208,22 @@ export function initDatabase(dbPath: string): Database.Database {
   } catch {
     // Column already exists
   }
+
+  try {
+    db.exec("ALTER TABLE projects ADD COLUMN path TEXT");
+  } catch {
+    // Column already exists
+  }
+
+  try {
+    db.exec("ALTER TABLE projects ADD COLUMN config_overlay_path TEXT");
+  } catch {
+    // Column already exists
+  }
+
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_path ON projects(path) WHERE path IS NOT NULL;
+  `);
 
   try {
     db.exec("ALTER TABLE autopilot_settings ADD COLUMN digest_time TEXT DEFAULT '08:00'");

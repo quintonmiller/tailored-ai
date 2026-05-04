@@ -86,7 +86,16 @@ export {
   updateProjectTask,
 } from "./db/task-queries.js";
 export type { Project, ProjectWithCounts, ProjectQueryFilter, ProjectQueryResult } from "./db/project-queries.js";
-export { createProject, getProject, updateProject, deleteProject, queryProjects, getDefaultProjectId } from "./db/project-queries.js";
+export { createProject, getProject, getProjectByPath, updateProject, deleteProject, queryProjects, getDefaultProjectId } from "./db/project-queries.js";
+export type { ProjectContext, ProjectFile, ResolveOptions as ProjectResolveOptions } from "./projects/resolve.js";
+export {
+  PROJECT_FILE,
+  assertAbsolutePath,
+  buildProjectFile,
+  findProjectFile,
+  readProjectFile,
+  resolveProjectFromCwd,
+} from "./projects/resolve.js";
 export { AutopilotWorker, buildTaskPrompt } from "./autopilot/worker.js";
 export type { AutopilotWorkerOptions } from "./autopilot/worker.js";
 export { buildMorningDigest, recordDigestRun } from "./autopilot/digest.js";

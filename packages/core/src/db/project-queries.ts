@@ -8,6 +8,8 @@ export interface Project {
   status: string;
   due_date: string | null;
   default_assignee: string | null;
+  path: string | null;
+  config_overlay_path: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -35,11 +37,20 @@ function generateId(): string {
 
 export function createProject(
   db: Database.Database,
-  input: { title: string; description?: string; status?: string; due_date?: string; default_assignee?: string | null },
+  input: {
+    title: string;
+    description?: string;
+    status?: string;
+    due_date?: string;
+    default_assignee?: string | null;
+    path?: string | null;
+    config_overlay_path?: string | null;
+    id?: string;
+  },
 ): Project {
-  const id = generateId();
+  const id = input.id ?? generateId();
   db.prepare(
-    "INSERT INTO projects (id, title, description, status, due_date, default_assignee) VALUES (?, ?, ?, ?, ?, ?)",
+    "INSERT INTO projects (id, title, description, status, due_date, default_assignee, path, config_overlay_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
   ).run(
     id,
     input.title,
@@ -47,9 +58,16 @@ export function createProject(
     input.status ?? "active",
     input.due_date ?? null,
     input.default_assignee ?? null,
+    input.path ?? null,
+    input.config_overlay_path ?? null,
   );
 
   return db.prepare("SELECT * FROM projects WHERE id = ?").get(id) as Project;
+}
+
+export function getProjectByPath(db: Database.Database, path: string): Project | undefined {
+  const row = db.prepare("SELECT * FROM projects WHERE path = ?").get(path) as Project | undefined;
+  return row ?? undefined;
 }
 
 export function getProject(db: Database.Database, id: string): ProjectWithCounts | undefined {
@@ -72,6 +90,8 @@ export function updateProject(
     status?: string;
     due_date?: string | null;
     default_assignee?: string | null;
+    path?: string | null;
+    config_overlay_path?: string | null;
   },
 ): Project | undefined {
   const fields: string[] = [];
@@ -96,6 +116,14 @@ export function updateProject(
   if (updates.default_assignee !== undefined) {
     fields.push("default_assignee = ?");
     values.push(updates.default_assignee);
+  }
+  if (updates.path !== undefined) {
+    fields.push("path = ?");
+    values.push(updates.path);
+  }
+  if (updates.config_overlay_path !== undefined) {
+    fields.push("config_overlay_path = ?");
+    values.push(updates.config_overlay_path);
   }
 
   if (fields.length === 0) return getProject(db, id);
