@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import type Database from "better-sqlite3";
 import type { AgentRuntime } from "../runtime.js";
 import { WorkflowEngine } from "./engine.js";
@@ -6,6 +7,7 @@ import { LoopExecutor } from "./executors/loop.js";
 import { ParallelExecutor } from "./executors/parallel.js";
 import { ShellExecutor } from "./executors/shell.js";
 import { ToolCallExecutor } from "./executors/tool-call.js";
+import { FileLogStore } from "./logs.js";
 
 /**
  * Build a WorkflowEngine pre-wired with the standard executors and
@@ -40,5 +42,17 @@ export function createWorkflowEngine(opts: {
       new ParallelExecutor(),
     ],
   });
+
+  // Attach on-disk logging + apply retention sweep on startup.
+  const logDir = resolve(process.cwd(), "data/workflow-runs");
+  const store = new FileLogStore(logDir);
+  store.attach(engine);
+  const retain = wfCfg.retainRuns ?? 100;
+  try {
+    store.pruneOldRuns(db, retain);
+  } catch (err) {
+    console.warn(`[workflows] retention sweep failed: ${(err as Error).message}`);
+  }
+
   return engine;
 }

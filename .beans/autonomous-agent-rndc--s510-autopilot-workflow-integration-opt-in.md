@@ -1,11 +1,11 @@
 ---
 # autonomous-agent-rndc
 title: 'S5.10: Autopilot workflow integration (opt-in)'
-status: todo
+status: completed
 type: task
 priority: low
 created_at: 2026-05-04T01:08:17Z
-updated_at: 2026-05-04T01:08:30Z
+updated_at: 2026-05-04T03:28:30Z
 parent: autonomous-agent-jgev
 blocked_by:
     - autonomous-agent-c81v

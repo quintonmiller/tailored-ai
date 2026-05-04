@@ -169,6 +169,7 @@ export { ParallelExecutor } from "./workflows/executors/parallel.js";
 export { ShellExecutor } from "./workflows/executors/shell.js";
 export { ToolCallExecutor } from "./workflows/executors/tool-call.js";
 export { createWorkflowEngine } from "./workflows/factory.js";
+export { FileLogStore } from "./workflows/logs.js";
 export type { AIProvider, ChatParams, ChatResponse, Message, ToolCall, ToolSchema } from "./providers/interface.js";
 export { AnthropicProvider } from "./providers/anthropic.js";
 export { OllamaProvider } from "./providers/ollama.js";
