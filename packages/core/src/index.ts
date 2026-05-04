@@ -103,6 +103,29 @@ export {
 } from "./db/autopilot-queries.js";
 export type { DocumentMeta } from "./db/document-queries.js";
 export { createDocument, getDocument, updateDocument, deleteDocument, listDocuments } from "./db/document-queries.js";
+export type {
+  WorkflowRun,
+  WorkflowStep,
+  WorkflowRunStatus,
+  WorkflowStepStatus,
+  WorkflowTrigger,
+  CreateRunInput,
+  UpdateRunInput,
+  RecordStepInput,
+  UpdateStepInput,
+} from "./db/workflow-queries.js";
+export {
+  createWorkflowRun,
+  getWorkflowRun,
+  updateWorkflowRun,
+  listWorkflowRuns,
+  deleteWorkflowRun,
+  recordWorkflowStep,
+  getWorkflowStep,
+  updateWorkflowStep,
+  listWorkflowSteps,
+  listInterruptibleRuns,
+} from "./db/workflow-queries.js";
 export type { AIProvider, ChatParams, ChatResponse, Message, ToolCall, ToolSchema } from "./providers/interface.js";
 export { AnthropicProvider } from "./providers/anthropic.js";
 export { OllamaProvider } from "./providers/ollama.js";

@@ -131,6 +131,44 @@ export function initDatabase(dbPath: string): Database.Database {
 
     CREATE INDEX IF NOT EXISTS idx_token_usage_created ON token_usage(created_at);
     CREATE INDEX IF NOT EXISTS idx_token_usage_task ON token_usage(task_id);
+
+    CREATE TABLE IF NOT EXISTS workflow_runs (
+      id TEXT PRIMARY KEY,
+      workflow_name TEXT NOT NULL,
+      status TEXT NOT NULL
+        CHECK(status IN ('pending','running','completed','failed','interrupted','cancelled')),
+      trigger TEXT NOT NULL,
+      input_json TEXT NOT NULL DEFAULT '{}',
+      output_json TEXT,
+      error TEXT,
+      started_at TEXT NOT NULL DEFAULT (datetime('now')),
+      finished_at TEXT,
+      generation INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON workflow_runs(status);
+    CREATE INDEX IF NOT EXISTS idx_workflow_runs_name_started
+      ON workflow_runs(workflow_name, started_at);
+
+    CREATE TABLE IF NOT EXISTS workflow_steps (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+      step_name TEXT NOT NULL,
+      step_type TEXT NOT NULL,
+      status TEXT NOT NULL
+        CHECK(status IN ('pending','running','completed','failed','skipped')),
+      attempt INTEGER NOT NULL DEFAULT 1,
+      output_json TEXT,
+      error TEXT,
+      started_at TEXT,
+      finished_at TEXT,
+      parent_step_id TEXT REFERENCES workflow_steps(id) ON DELETE CASCADE,
+      blocked_on TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_workflow_steps_run ON workflow_steps(run_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_workflow_steps_parent ON workflow_steps(parent_step_id);
   `);
 
   // Safe migration for existing DBs that lack session_key
