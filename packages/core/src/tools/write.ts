@@ -51,8 +51,12 @@ export class WriteTool implements Tool {
     }
 
     try {
-      await mkdir(dirname(fullPath), { recursive: true });
-      await writeFile(fullPath, content, "utf-8");
+      if (context.sandbox && context.sandboxHandle) {
+        await context.sandbox.writeFile(context.sandboxHandle, fullPath, content);
+      } else {
+        await mkdir(dirname(fullPath), { recursive: true });
+        await writeFile(fullPath, content, "utf-8");
+      }
       return { success: true, output: `Wrote ${content.length} bytes to ${fullPath}` };
     } catch (err) {
       return {

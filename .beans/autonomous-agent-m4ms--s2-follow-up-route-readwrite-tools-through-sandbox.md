@@ -1,11 +1,11 @@
 ---
 # autonomous-agent-m4ms
 title: 'S2 follow-up: route read/write tools through sandbox'
-status: todo
+status: completed
 type: task
 priority: normal
 created_at: 2026-05-03T22:59:31Z
-updated_at: 2026-05-03T22:59:31Z
+updated_at: 2026-05-04T00:45:07Z
 parent: autonomous-agent-objy
 ---
 

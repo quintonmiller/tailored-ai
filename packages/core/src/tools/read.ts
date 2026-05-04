@@ -42,7 +42,10 @@ export class ReadTool implements Tool {
     }
 
     try {
-      const content = await readFile(fullPath, "utf-8");
+      const content =
+        context.sandbox && context.sandboxHandle
+          ? await context.sandbox.readFile(context.sandboxHandle, fullPath)
+          : await readFile(fullPath, "utf-8");
       return { success: true, output: content };
     } catch (err) {
       return {

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import type {
   Sandbox,
   SandboxExecOptions,
@@ -58,7 +58,9 @@ export class HostSandbox implements Sandbox {
   }
 
   async writeFile(handle: SandboxHandle, path: string, content: string): Promise<void> {
-    await fs.writeFile(this.resolve(handle, path), content, "utf8");
+    const target = this.resolve(handle, path);
+    await fs.mkdir(dirname(target), { recursive: true });
+    await fs.writeFile(target, content, "utf8");
   }
 
   async cleanup(): Promise<void> {

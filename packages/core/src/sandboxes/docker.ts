@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import type {
   Mount,
   Sandbox,
@@ -130,6 +130,7 @@ export class DockerSandbox implements Sandbox {
   async writeFile(handle: SandboxHandle, path: string, content: string): Promise<void> {
     const h = handle as DockerHandle;
     const hostPath = isAbsolute(path) ? path : resolve(h.hostCwd, path);
+    await fs.mkdir(dirname(hostPath), { recursive: true });
     await fs.writeFile(hostPath, content, "utf8");
   }
 

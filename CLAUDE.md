@@ -356,7 +356,7 @@ Tool side-effects (shell, file IO) can be routed through a `Sandbox` defined in 
 
 Lifecycle: the runtime calls `createSandbox(config, agent)` in `buildLoopOptions()` and threads the result into `AgentLoopOptions.sandbox`. `runAgentLoop` calls `sandbox.prepare({ cwd })` before the loop body and `sandbox.cleanup(handle)` in a finally block. The handle lands on `ToolContext` as `sandbox` + `sandboxHandle`.
 
-Tools opt in by checking for both fields and routing through `context.sandbox.exec(handle, cmd, opts)` / `readFile` / `writeFile`. `exec.ts` is wired today. `read.ts` and `write.ts` still go straight to the host filesystem — wiring them is a follow-up.
+Tools opt in by checking for both fields and routing through `context.sandbox.exec(handle, cmd, opts)` / `readFile` / `writeFile`. `exec.ts`, `read.ts`, and `write.ts` are wired today. `HostSandbox.writeFile` and `DockerSandbox.writeFile` auto-create parent directories so tools don't need to mkdir themselves.
 
 Config:
 
