@@ -1,11 +1,11 @@
 ---
 # autonomous-agent-38od
 title: 'Slice 6: UI workflow editor + run viewer'
-status: todo
+status: completed
 type: epic
 priority: low
 created_at: 2026-05-03T22:42:54Z
-updated_at: 2026-05-03T22:43:58Z
+updated_at: 2026-05-04T05:45:24Z
 parent: autonomous-agent-6p6y
 blocked_by:
     - autonomous-agent-jgev

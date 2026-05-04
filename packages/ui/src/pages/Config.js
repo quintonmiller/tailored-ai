@@ -10,6 +10,7 @@ import { AgentEditor } from "../components/AgentEditor";
 import { ProviderSetup } from "../components/ProviderSetup";
 import { ToolConfigEditor } from "../components/ToolConfigEditor";
 import { TaskWatcherEditor } from "../components/TaskWatcherEditor";
+import { TasksBackendEditor } from "../components/TasksBackendEditor";
 import { WebhookEditor } from "../components/WebhookEditor";
 import { Autopilot } from "./Autopilot";
 export function Config({ section }) {
@@ -73,6 +74,8 @@ export function Config({ section }) {
                 return _jsx(CronEditor, {});
             case "task_watcher":
                 return _jsx(TaskWatcherEditor, {});
+            case "tasks":
+                return _jsx(TasksBackendEditor, {});
             case "webhooks":
                 return _jsx(WebhookEditor, {});
             case "commands":

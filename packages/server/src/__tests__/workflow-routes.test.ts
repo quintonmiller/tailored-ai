@@ -65,11 +65,14 @@ let runtime: AgentRuntime;
 let engine: WorkflowEngine;
 let app: ReturnType<typeof createServer>["app"];
 let tmpDir: string;
+let originalCwd: string;
 
 beforeEach(() => {
+  originalCwd = process.cwd();
   tmpDir = mkdtempSync(join(tmpdir(), "wf-routes-"));
   db = initDatabase(":memory:");
   const cfg = buildConfig();
+  cfg.workflows = { directory: join(tmpDir, "workflows") };
   runtime = new AgentRuntime(
     {
       configPath: join(tmpDir, "config.yaml"),
@@ -97,6 +100,7 @@ beforeEach(() => {
 
 afterEach(() => {
   db.close();
+  process.chdir(originalCwd);
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -196,5 +200,50 @@ describe("workflow HTTP routes", () => {
       new Request("http://t/api/workflows/demo/run", { method: "POST" }),
     );
     expect(res.status).toBe(503);
+  });
+
+  it("PUT /api/workflows/:name writes YAML and reloads registry", async () => {
+const res = await call("PUT", "/api/workflows/written", {
+      definition: {
+        name: "written",
+        steps: [{ name: "first", type: "shell", command: "echo wrote" }],
+      },
+    });
+    expect(res.status).toBe(200);
+    expect((res.body as { ok: boolean }).ok).toBe(true);
+    const list = await call("GET", "/api/workflows");
+    const names = (list.body as { workflows: Array<{ name: string }> }).workflows.map((w) => w.name);
+    expect(names).toContain("written");
+  });
+
+  it("PUT /api/workflows/:name rejects mismatched name", async () => {
+const res = await call("PUT", "/api/workflows/aaa", {
+      definition: { name: "bbb", steps: [{ name: "x", type: "shell", command: "echo" }] },
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("PUT /api/workflows/:name rejects invalid definition", async () => {
+const res = await call("PUT", "/api/workflows/bad", {
+      definition: { name: "bad", steps: [{ type: "shell" }] }, // missing step name + command
+    });
+    expect(res.status).toBe(400);
+    expect((res.body as { details: string[] }).details.length).toBeGreaterThan(0);
+  });
+
+  it("DELETE /api/workflows/:name removes the YAML", async () => {
+await call("PUT", "/api/workflows/tmpwf", {
+      definition: { name: "tmpwf", steps: [{ name: "x", type: "shell", command: "echo" }] },
+    });
+    const del = await call("DELETE", "/api/workflows/tmpwf");
+    expect(del.status).toBe(200);
+    const second = await call("DELETE", "/api/workflows/tmpwf");
+    expect(second.status).toBe(404);
+  });
+
+  it("GET /api/sandboxes returns the registry contents", async () => {
+    const res = await call("GET", "/api/sandboxes");
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty("sandboxes");
   });
 });

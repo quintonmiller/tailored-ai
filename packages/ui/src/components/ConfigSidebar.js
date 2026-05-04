@@ -8,6 +8,7 @@ const SECTIONS = [
     { key: "custom_tools", label: "Custom Tools" },
     { key: "cron", label: "Cron" },
     { key: "task_watcher", label: "Task Watcher" },
+    { key: "tasks", label: "Task Backend" },
     { key: "webhooks", label: "Webhooks" },
     { key: "commands", label: "Commands" },
     { key: "yaml", label: "Raw YAML" },

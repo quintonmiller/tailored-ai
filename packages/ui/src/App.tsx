@@ -6,8 +6,11 @@ import { Config } from "./pages/Config";
 import { Dashboard } from "./pages/Dashboard";
 import { Help } from "./pages/Help";
 import { Projects } from "./pages/Projects";
+import { Sandboxes } from "./pages/Sandboxes";
 import { Tasks } from "./pages/Tasks";
 import { Tools } from "./pages/Tools";
+import { Workflows } from "./pages/Workflows";
+import { WorkflowRuns } from "./pages/WorkflowRuns";
 import "./styles.css";
 
 type Route =
@@ -17,6 +20,9 @@ type Route =
   | { page: "chat"; sessionKey?: string; sessionId?: string }
   | { page: "config"; section?: string }
   | { page: "tools" }
+  | { page: "workflows" }
+  | { page: "workflow-runs"; runId?: string }
+  | { page: "sandboxes" }
   | { page: "help" };
 
 function parseHash(): Route {
@@ -67,6 +73,16 @@ function parseHash(): Route {
   }
   if (hash.startsWith("/tools")) {
     return { page: "tools" };
+  }
+  if (hash.startsWith("/workflow-runs")) {
+    const parts = hash.split("?")[0].split("/");
+    return { page: "workflow-runs", runId: parts[2] || undefined };
+  }
+  if (hash.startsWith("/workflows")) {
+    return { page: "workflows" };
+  }
+  if (hash.startsWith("/sandboxes")) {
+    return { page: "sandboxes" };
   }
   if (hash.startsWith("/autopilot")) {
     // Moved under Config — redirect for back-compat.
@@ -130,6 +146,15 @@ export function App() {
           <a href="#/tools" className={route.page === "tools" ? "active" : ""}>
             Tools
           </a>
+          <a
+            href="#/workflows"
+            className={route.page === "workflows" || route.page === "workflow-runs" ? "active" : ""}
+          >
+            Workflows
+          </a>
+          <a href="#/sandboxes" className={route.page === "sandboxes" ? "active" : ""}>
+            Sandboxes
+          </a>
           <a href="#/chat" className={route.page === "chat" ? "active" : ""}>
             Chat
           </a>
@@ -159,6 +184,9 @@ export function App() {
         {route.page === "tasks" && <Tasks taskId={route.taskId} initialStatus={route.status} />}
         {route.page === "chat" && <Chat sessionKey={route.sessionKey} sessionId={route.sessionId} />}
         {route.page === "tools" && <Tools />}
+        {route.page === "workflows" && <Workflows />}
+        {route.page === "workflow-runs" && <WorkflowRuns runId={route.runId} />}
+        {route.page === "sandboxes" && <Sandboxes />}
         {route.page === "config" && <Config section={route.section} />}
         {route.page === "help" && <Help />}
       </main>

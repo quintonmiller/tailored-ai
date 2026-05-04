@@ -8,6 +8,7 @@ import type { Session } from "./agent/session.js";
 import type { AgentConfig, AgentHook } from "./config.js";
 import type { AIProvider } from "./providers/interface.js";
 import { createSandbox } from "./sandboxes/factory.js";
+import { globalSandboxRegistry } from "./sandboxes/registry.js";
 import { createTaskBackend } from "./tasks/factory.js";
 import type { TaskBackend } from "./tasks/interface.js";
 import type { Tool } from "./tools/interface.js";
@@ -282,7 +283,10 @@ export class AgentRuntime {
     };
 
     const agent = agentName ? config.agents?.[agentName] : undefined;
-    const sandbox = createSandbox(config, agent);
+    const sandbox = globalSandboxRegistry.track(createSandbox(config, agent), {
+      agentName,
+      sessionId: opts.session.id,
+    });
 
     return {
       provider: this._provider,

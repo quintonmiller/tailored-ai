@@ -28,6 +28,7 @@ export {
   type ContainerSandboxOptions,
 } from "./sandboxes/container.js";
 export { createSandbox } from "./sandboxes/factory.js";
+export { SandboxRegistry, globalSandboxRegistry, type ActiveSandbox } from "./sandboxes/registry.js";
 export type {
   Task,
   TaskBackend,

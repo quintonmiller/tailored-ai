@@ -3225,3 +3225,220 @@ select.model-entry-model {
     width: 95%;
   }
 }
+
+/* --- Workflows / WorkflowRuns / Sandboxes (Slice 6) --- */
+
+.btn-secondary {
+  padding: 4px 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.btn-secondary:hover { background: var(--bg-hover); }
+
+.btn-danger {
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid #b04444;
+  border-radius: 4px;
+  color: #d97777;
+  font-size: 12px;
+  cursor: pointer;
+}
+.btn-danger:hover { background: rgba(176, 68, 68, 0.12); }
+
+.btn-ghost,
+.btn-danger-ghost {
+  padding: 2px 6px;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.btn-ghost:hover { color: var(--text); }
+.btn-danger-ghost:hover { color: #d97777; }
+
+.config-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 16px 12px;
+  font-size: 12px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.workflow-list-name { font-weight: 500; color: var(--text); }
+.workflow-list-meta { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+
+.workflow-errors {
+  margin: 16px 16px 0;
+  padding: 8px;
+  background: rgba(217, 119, 119, 0.08);
+  border: 1px solid #5a3030;
+  border-radius: 4px;
+  font-size: 11px;
+}
+.workflow-errors-header { font-weight: 600; margin-bottom: 4px; color: #d97777; }
+.workflow-error-row { color: var(--text-dim); }
+
+.workflow-steps { display: flex; flex-direction: column; gap: 12px; }
+
+.workflow-step {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  padding: 12px;
+}
+
+.workflow-step-header {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.workflow-step-name { flex: 1; }
+.workflow-step-actions { display: flex; gap: 4px; }
+
+.workflow-step-body { margin-top: 12px; }
+.workflow-step-advanced { margin-top: 8px; }
+.workflow-step-advanced summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 4px 0;
+}
+
+.workflow-nested {
+  margin-top: 8px;
+  padding: 8px;
+  background: var(--bg-surface);
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+}
+.workflow-nested-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+/* Run viewer */
+.run-list-name { font-weight: 500; display: flex; align-items: center; gap: 6px; }
+.run-list-meta { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+
+.run-detail-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.run-steps-list { display: flex; flex-direction: column; gap: 4px; }
+.run-step-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+  font-size: 12px;
+  color: var(--text);
+}
+.run-step-row.active { border-color: var(--accent); }
+.run-step-row:hover { background: var(--bg-hover); }
+.run-step-name { flex: 1; }
+.run-step-type { font-size: 10px; color: var(--text-dim); }
+.run-step-attempt { font-size: 10px; color: #d97777; }
+
+.run-step-log {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 12px;
+  min-height: 240px;
+}
+.run-step-log-body {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+  margin: 0;
+  max-height: 480px;
+  overflow: auto;
+}
+
+.run-status-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.run-status-badge.status-running { background: #2c4a6e; color: #9bc6ff; }
+.run-status-badge.status-completed { background: #2a4a30; color: #8bd99c; }
+.run-status-badge.status-failed { background: #5a3030; color: #d97777; }
+.run-status-badge.status-cancelled { background: #4a3a2c; color: #d9a877; }
+.run-status-badge.status-skipped { background: #3a3a3a; color: var(--text-dim); }
+.run-status-badge.status-pending { background: #2a2a2a; color: var(--text-dim); }
+
+/* Sandboxes */
+.sandbox-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+.sandbox-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+}
+.sandbox-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.sandbox-kind {
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.sandbox-kind-host { background: #3a3a3a; color: var(--text-dim); }
+.sandbox-kind-docker { background: #1d4a6e; color: #9bc6ff; }
+.sandbox-kind-podman { background: #4a2a5a; color: #c89bd9; }
+.sandbox-id {
+  flex: 1;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.sandbox-meta {
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  gap: 4px 12px;
+  font-size: 12px;
+  margin: 0;
+}
+.sandbox-meta dt { color: var(--text-dim); }
+.sandbox-meta dd {
+  margin: 0;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

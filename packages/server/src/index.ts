@@ -1,6 +1,6 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
@@ -52,6 +52,11 @@ import {
   getWorkflowRun,
   listWorkflowRuns,
   listWorkflowSteps,
+  globalSandboxRegistry,
+  parseWorkflow,
+  validateWorkflow,
+  resolveWorkflowsDir,
+  FileLogStore,
 } from "@agent/core";
 import {
   HttpApprovalHandler,
@@ -994,6 +999,8 @@ export function createServer(opts: ServerOptions) {
     commands: ["commands"],
     tools: ["tools"],
     permissions: ["permissions"],
+    tasks: ["tasks"],
+    workflows: ["workflows"],
   };
 
   app.get("/api/config/section/:key", (c) => {
@@ -1507,6 +1514,110 @@ export function createServer(opts: ServerOptions) {
       }
       unsubscribe?.();
     });
+  });
+
+  // Workflow YAML CRUD on the workflows/ directory.
+  app.get("/api/workflows/:name/source", (c) => {
+    const name = c.req.param("name");
+    const dir = resolveWorkflowsDir(runtime.getConfig().workflows?.directory);
+    for (const ext of [".yaml", ".yml"]) {
+      const full = join(dir, `${name}${ext}`);
+      if (existsSync(full)) {
+        return c.json({ name, path: full, content: readFileSync(full, "utf-8") });
+      }
+    }
+    const reg = runtime.getWorkflows().get(name);
+    if (reg) {
+      return c.json({ name, path: null, content: YAML.stringify(reg.definition) });
+    }
+    return c.json({ error: "Workflow not found" }, 404);
+  });
+
+  app.put("/api/workflows/:name", async (c) => {
+    const name = c.req.param("name");
+    if (!/^[a-zA-Z0-9._-]+$/.test(name)) {
+      return c.json({ error: "Invalid workflow name" }, 400);
+    }
+    let body: { content?: string; definition?: unknown };
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+
+    let content: string;
+    let parsed: unknown;
+    try {
+      if (typeof body.content === "string") {
+        content = body.content;
+        parsed = parseWorkflow(content);
+      } else if (body.definition !== undefined) {
+        parsed = body.definition;
+        content = YAML.stringify(parsed);
+      } else {
+        return c.json({ error: "Either content or definition is required" }, 400);
+      }
+    } catch (err) {
+      return c.json({ error: `Parse error: ${(err as Error).message}` }, 400);
+    }
+
+    if ((parsed as { name?: string })?.name !== name) {
+      return c.json({ error: `Workflow name mismatch — body name "${(parsed as { name?: string })?.name}" does not match URL "${name}"` }, 400);
+    }
+
+    const errors = validateWorkflow(parsed);
+    if (errors.length > 0) {
+      return c.json({ error: "Validation failed", details: errors }, 400);
+    }
+
+    const dir = resolveWorkflowsDir(runtime.getConfig().workflows?.directory);
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, `${name}.yaml`);
+    writeFileSync(path, content, "utf-8");
+    runtime.getWorkflows().reloadFromDisk();
+    return c.json({ ok: true, name, path });
+  });
+
+  app.delete("/api/workflows/:name", (c) => {
+    const name = c.req.param("name");
+    const dir = resolveWorkflowsDir(runtime.getConfig().workflows?.directory);
+    let removed = false;
+    for (const ext of [".yaml", ".yml"]) {
+      const full = join(dir, `${name}${ext}`);
+      if (existsSync(full)) {
+        unlinkSync(full);
+        removed = true;
+      }
+    }
+    if (!removed) return c.json({ error: "Workflow file not found" }, 404);
+    runtime.getWorkflows().reloadFromDisk();
+    return c.json({ ok: true });
+  });
+
+  // Per-step log file content (tail or full).
+  app.get("/api/workflow-runs/:id/steps/:step/log", async (c) => {
+    const id = c.req.param("id");
+    const step = c.req.param("step");
+    const baseDir = resolve(process.cwd(), "data/workflow-runs");
+    const store = new FileLogStore(baseDir);
+    const path = store.stepLogPath(id, step);
+    if (!existsSync(path)) {
+      return c.json({ error: "Log file not found" }, 404);
+    }
+    const text = await readFile(path, "utf-8");
+    return c.json({ runId: id, step, path, content: text });
+  });
+
+  // Active sandboxes panel.
+  app.get("/api/sandboxes", (c) => {
+    return c.json({ sandboxes: globalSandboxRegistry.list() });
+  });
+
+  app.delete("/api/sandboxes/:id", async (c) => {
+    const id = c.req.param("id");
+    const ok = await globalSandboxRegistry.kill(id);
+    if (!ok) return c.json({ error: "Sandbox not found" }, 404);
+    return c.json({ ok: true });
   });
 
   // --- Static file serving (production build) ---

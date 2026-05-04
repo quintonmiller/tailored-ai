@@ -213,6 +213,58 @@ export function runAutopilotDigest() {
 export function fetchAutopilotUsage() {
     return jsonFetch("/api/autopilot/usage");
 }
+export function fetchWorkflows() {
+    return jsonFetch("/api/workflows");
+}
+export function fetchWorkflow(name) {
+    return jsonFetch(`/api/workflows/${encodeURIComponent(name)}`);
+}
+export function fetchWorkflowSource(name) {
+    return jsonFetch(`/api/workflows/${encodeURIComponent(name)}/source`);
+}
+export function saveWorkflow(name, data) {
+    return jsonFetch(`/api/workflows/${encodeURIComponent(name)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+    });
+}
+export function deleteWorkflow(name) {
+    return jsonFetch(`/api/workflows/${encodeURIComponent(name)}`, { method: "DELETE" });
+}
+export function runWorkflow(name, input) {
+    return jsonFetch(`/api/workflows/${encodeURIComponent(name)}/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ input: input ?? {} }),
+    });
+}
+export function fetchWorkflowRuns(params) {
+    const qs = new URLSearchParams();
+    if (params?.workflow)
+        qs.set("workflow", params.workflow);
+    if (params?.status)
+        qs.set("status", params.status);
+    if (params?.limit)
+        qs.set("limit", String(params.limit));
+    const q = qs.toString();
+    return jsonFetch(`/api/workflow-runs${q ? `?${q}` : ""}`);
+}
+export function fetchWorkflowRun(id) {
+    return jsonFetch(`/api/workflow-runs/${encodeURIComponent(id)}`);
+}
+export function cancelWorkflowRun(id) {
+    return jsonFetch(`/api/workflow-runs/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+}
+export function fetchWorkflowStepLog(runId, step) {
+    return jsonFetch(`/api/workflow-runs/${encodeURIComponent(runId)}/steps/${encodeURIComponent(step)}/log`);
+}
+export function fetchSandboxes() {
+    return jsonFetch("/api/sandboxes");
+}
+export function killSandbox(id) {
+    return jsonFetch(`/api/sandboxes/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
 export function sendChat(message, sessionKey, onEvent, agent) {
     const controller = new AbortController();
     const body = { message, sessionKey };

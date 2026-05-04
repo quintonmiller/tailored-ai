@@ -510,6 +510,184 @@ export function fetchAutopilotUsage(): Promise<AutopilotUsage> {
   return jsonFetch("/api/autopilot/usage");
 }
 
+// --- Workflows ---
+
+export type WorkflowStepType =
+  | "agent_run"
+  | "tool_call"
+  | "shell"
+  | "condition"
+  | "loop"
+  | "parallel";
+
+export interface WorkflowStepDef {
+  name: string;
+  type: WorkflowStepType;
+  deadlineMs?: number;
+  onError?: "fail" | "continue" | "retry";
+  retry?: { maxAttempts: number; backoffMs?: number };
+  // agent_run
+  agent?: string;
+  prompt?: string;
+  maxToolRounds?: number;
+  modelOverride?: string;
+  // tool_call
+  tool?: string;
+  args?: Record<string, unknown>;
+  // shell
+  command?: string;
+  cwd?: string;
+  env?: Record<string, string>;
+  timeoutMs?: number;
+  // condition
+  if?: string;
+  then?: string[];
+  else?: string[];
+  // loop
+  over?: string;
+  as?: string;
+  body?: WorkflowStepDef[];
+  parallel?: boolean;
+  maxConcurrency?: number;
+  // parallel
+  steps?: WorkflowStepDef[];
+}
+
+export interface WorkflowDefinition {
+  name: string;
+  description?: string;
+  deadlineMs?: number;
+  steps: WorkflowStepDef[];
+}
+
+export interface WorkflowSummary {
+  name: string;
+  description?: string;
+  source: string;
+  stepCount: number;
+}
+
+export interface WorkflowsResponse {
+  workflows: WorkflowSummary[];
+  errors: Array<{ path: string; error: string }>;
+}
+
+export function fetchWorkflows(): Promise<WorkflowsResponse> {
+  return jsonFetch("/api/workflows");
+}
+
+export function fetchWorkflow(name: string): Promise<WorkflowDefinition> {
+  return jsonFetch(`/api/workflows/${encodeURIComponent(name)}`);
+}
+
+export function fetchWorkflowSource(
+  name: string,
+): Promise<{ name: string; path: string | null; content: string }> {
+  return jsonFetch(`/api/workflows/${encodeURIComponent(name)}/source`);
+}
+
+export function saveWorkflow(
+  name: string,
+  data: { content?: string; definition?: WorkflowDefinition },
+): Promise<{ ok?: boolean; error?: string; details?: string[] }> {
+  return jsonFetch(`/api/workflows/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+}
+
+export function deleteWorkflow(name: string): Promise<{ ok?: boolean; error?: string }> {
+  return jsonFetch(`/api/workflows/${encodeURIComponent(name)}`, { method: "DELETE" });
+}
+
+export function runWorkflow(
+  name: string,
+  input?: unknown,
+): Promise<WorkflowRunRow> {
+  return jsonFetch(`/api/workflows/${encodeURIComponent(name)}/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ input: input ?? {} }),
+  });
+}
+
+export interface WorkflowRunRow {
+  id: string;
+  workflow_name: string;
+  status: "pending" | "running" | "completed" | "failed" | "interrupted" | "cancelled";
+  trigger?: string;
+  input?: unknown;
+  output?: unknown;
+  error?: string | null;
+  started_at: string;
+  completed_at: string | null;
+}
+
+export interface WorkflowStepRow {
+  id: string;
+  run_id: string;
+  step_name: string;
+  step_type: string;
+  status: string;
+  attempt: number;
+  started_at: string | null;
+  completed_at: string | null;
+  output: unknown;
+  error: string | null;
+}
+
+export function fetchWorkflowRuns(params?: {
+  workflow?: string;
+  status?: string;
+  limit?: number;
+}): Promise<WorkflowRunRow[]> {
+  const qs = new URLSearchParams();
+  if (params?.workflow) qs.set("workflow", params.workflow);
+  if (params?.status) qs.set("status", params.status);
+  if (params?.limit) qs.set("limit", String(params.limit));
+  const q = qs.toString();
+  return jsonFetch(`/api/workflow-runs${q ? `?${q}` : ""}`);
+}
+
+export function fetchWorkflowRun(
+  id: string,
+): Promise<{ run: WorkflowRunRow; steps: WorkflowStepRow[] }> {
+  return jsonFetch(`/api/workflow-runs/${encodeURIComponent(id)}`);
+}
+
+export function cancelWorkflowRun(id: string): Promise<{ ok?: boolean }> {
+  return jsonFetch(`/api/workflow-runs/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+}
+
+export function fetchWorkflowStepLog(
+  runId: string,
+  step: string,
+): Promise<{ runId: string; step: string; path: string; content: string }> {
+  return jsonFetch(
+    `/api/workflow-runs/${encodeURIComponent(runId)}/steps/${encodeURIComponent(step)}/log`,
+  );
+}
+
+// --- Sandboxes ---
+
+export interface ActiveSandbox {
+  id: string;
+  kind: "host" | "docker" | "podman";
+  cwd: string;
+  agentName?: string;
+  sessionId?: string;
+  startedAt: string;
+}
+
+export function fetchSandboxes(): Promise<{ sandboxes: ActiveSandbox[] }> {
+  return jsonFetch("/api/sandboxes");
+}
+
+export function killSandbox(id: string): Promise<{ ok?: boolean }> {
+  return jsonFetch(`/api/sandboxes/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
 export interface ChatEvent {
   type: "tool_call" | "tool_result" | "response" | "error" | "activity";
   data: Record<string, unknown>;
