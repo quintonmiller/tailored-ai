@@ -11,20 +11,28 @@ import type { DiscordChannel } from "../channels/discord.js";
 import type { CronJobConfig } from "../config.js";
 import { saveMessage } from "../db/queries.js";
 import type { AgentRuntime } from "../runtime.js";
+import type { WorkflowEngine } from "../workflows/engine.js";
 
 export interface CronSchedulerOptions {
   runtime: AgentRuntime;
   discord?: DiscordChannel;
+  workflowEngine?: WorkflowEngine;
 }
 
 export class CronScheduler {
   private timers: Cron[] = [];
   private runtime: AgentRuntime;
   private discord?: DiscordChannel;
+  private workflowEngine: WorkflowEngine | undefined;
 
   constructor(opts: CronSchedulerOptions) {
     this.runtime = opts.runtime;
     this.discord = opts.discord;
+    this.workflowEngine = opts.workflowEngine;
+  }
+
+  setWorkflowEngine(engine: WorkflowEngine | undefined): void {
+    this.workflowEngine = engine;
   }
 
   setDiscord(discord: DiscordChannel | undefined): void {
@@ -133,7 +141,41 @@ export class CronScheduler {
     return expandPrompt(job.prompt, templateVars, this.runtime.getConfig().prompts);
   }
 
+  private async runWorkflowJob(job: CronJobConfig): Promise<void> {
+    if (!this.workflowEngine) {
+      console.warn(`[cron] "${job.name}" references workflow "${job.workflow}" but no engine is configured`);
+      return;
+    }
+    const reg = this.runtime.getWorkflows().get(job.workflow!);
+    if (!reg) {
+      console.warn(`[cron] "${job.name}" references unknown workflow "${job.workflow}"`);
+      return;
+    }
+    const templateVars = this.buildTemplateVars(job);
+    const prompt = await this.resolvePrompt(job, templateVars);
+    const input = {
+      prompt,
+      job_name: job.name,
+      agent: job.agent ?? job.profile,
+      ...templateVars,
+    };
+    console.log(`[cron] Running "${job.name}" -> workflow:${job.workflow}`);
+    try {
+      const run = await this.workflowEngine.runWorkflow(job.workflow!, input, "cron");
+      this.updateLastRun(job.name);
+      if (run.status === "failed") {
+        console.warn(`[cron] workflow ${run.workflow_name} failed: ${run.error}`);
+      }
+    } catch (err) {
+      console.error(`[cron] workflow ${job.workflow} threw: ${(err as Error).message}`);
+    }
+  }
+
   private async runJob(job: CronJobConfig): Promise<void> {
+    if (job.workflow) {
+      await this.runWorkflowJob(job);
+      return;
+    }
     const wakeAgent = job.wakeAgent !== false; // default true
     const sessionKey = job.sessionKey ?? `cron:${job.name}`;
     const resolved = resolveAgent(

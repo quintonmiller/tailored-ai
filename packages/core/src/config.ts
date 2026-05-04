@@ -58,6 +58,8 @@ export interface CronJobConfig {
   agent?: string;
   /** @deprecated Use agent instead. */
   profile?: string;
+  /** When set, the cron job triggers a workflow run instead of an agent loop. The expanded prompt becomes the workflow input prompt. */
+  workflow?: string;
   enabled?: boolean;
   delivery?: {
     channel: "log" | "discord" | "discord-dm";
@@ -111,11 +113,13 @@ export interface TaskWatcherConfig {
 
 export interface WebhookRouteConfig {
   path: string;
-  action: "agent" | "log";
+  action: "agent" | "log" | "workflow";
   messageTemplate: string;
   agent?: string;
   /** @deprecated Use agent instead. */
   profile?: string;
+  /** When set (and action="workflow"), this webhook triggers the named workflow with input = { message, payload }. */
+  workflow?: string;
   sessionKey?: string;
   newSession?: boolean;
 }

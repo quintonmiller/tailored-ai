@@ -1311,6 +1311,31 @@ export function createServer(opts: ServerOptions) {
       return c.json({ ok: true, action: "log", message });
     }
 
+    if (route.action === "workflow" || route.workflow) {
+      if (!opts.workflowEngine) {
+        return c.json({ error: "Workflow engine not configured" }, 503);
+      }
+      const wfName = route.workflow;
+      if (!wfName) {
+        return c.json({ error: "webhook route has action 'workflow' but no 'workflow:' name set" }, 400);
+      }
+      if (!runtime.getWorkflows().get(wfName)) {
+        return c.json({ error: `Unknown workflow "${wfName}"` }, 404);
+      }
+      const promise = opts.workflowEngine.runWorkflow(
+        wfName,
+        { message, payload, route: routePath },
+        "webhook",
+      );
+      // Don't block the webhook on workflow completion — kick it off and report ack.
+      const run = await Promise.race([
+        promise,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 25)),
+      ]);
+      if (run) return c.json({ ok: true, action: "workflow", run }, 202);
+      return c.json({ ok: true, action: "workflow", workflow: wfName, status: "pending" }, 202);
+    }
+
     // action === 'agent' — send through agent loop
     const model = runtime.getModel();
     const sessionKey = route.sessionKey ?? `webhook:${routePath}`;
