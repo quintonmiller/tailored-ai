@@ -66,6 +66,7 @@ interface IssueLike {
 export class GitHubTaskBackend implements TaskBackend {
   readonly name = "github";
   readonly statuses = STATUSES;
+  readonly extraStatuses = ["in_review"] as const;
 
   private octokit: Octokit;
   private owner: string;

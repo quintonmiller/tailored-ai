@@ -92,6 +92,13 @@ export interface TaskBackend {
   /** Native status names mapped onto autopilot's normalized roles. */
   readonly statuses: TaskStatusMap;
 
+  /**
+   * Additional status values the backend accepts beyond the four normalized
+   * ones in `statuses` (e.g. native SQLite has "in_review" and "archived").
+   * The full accepted set is `Object.values(statuses) ∪ extraStatuses`.
+   */
+  readonly extraStatuses?: readonly string[];
+
   /** True if `status` represents a terminal/done state for this backend. */
   isDone(status: string): boolean;
 

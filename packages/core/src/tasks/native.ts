@@ -60,6 +60,7 @@ function toTask(row: ProjectTask | ProjectTaskWithComments): Task {
 export class NativeTaskBackend implements TaskBackend {
   readonly name = "native";
   readonly statuses = STATUSES;
+  readonly extraStatuses = ["in_review", "archived"] as const;
 
   constructor(private db: Database.Database) {}
 

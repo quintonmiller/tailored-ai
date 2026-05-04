@@ -3,46 +3,62 @@ import { getDefaultProjectId } from "../db/project-queries.js";
 import type { TaskBackend, TaskFilter } from "../tasks/interface.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
 
+/** Full status list for a backend: the four normalized values plus any extras the backend declares. */
+function collectStatuses(backend: TaskBackend): string[] {
+  const seen = new Set<string>(Object.values(backend.statuses));
+  for (const s of backend.extraStatuses ?? []) seen.add(s);
+  return [...seen];
+}
+
 export class TasksTool implements Tool {
   name = "tasks";
-  description =
-    "Manage project tasks. Actions: create, get, update, delete, comment. Changing status via update REQUIRES a `comment` explaining why.";
-  parameters = {
-    type: "object",
-    properties: {
-      action: {
-        type: "string",
-        description: "Action: create, get, update, delete, comment.",
-      },
-      id: { type: "string", description: "Task ID (for get, update, delete, comment)." },
-      title: { type: "string", description: "Task title (for create, update)." },
-      description: { type: "string", description: "Task description (for create, update)." },
-      status: {
-        type: "string",
-        description: "Status: backlog, in_progress, blocked, in_review, done, archived.",
-      },
-      author: { type: "string", description: "Author name." },
-      tags: { type: "string", description: "Comma-separated tags." },
-      text: { type: "string", description: "Comment text (for comment action)." },
-      comment: {
-        type: "string",
-        description:
-          "Required when update changes status. Short note explaining what you did or why you're blocked.",
-      },
-      project_id: { type: "string", description: "Project ID (for create)." },
-      assignee: { type: "string", description: "Assignee name (agent or user)." },
-      rank: { type: "number", description: "Rank in backlog — lower = higher priority." },
-      blocked_reason: { type: "string", description: "Reason when status=blocked (e.g. question, budget)." },
-    },
-    required: ["action"],
-  };
+  description: string;
+  parameters: Record<string, unknown>;
 
   private backend: TaskBackend;
   private db: Database.Database | undefined;
+  private validStatuses: Set<string>;
 
   constructor(backend: TaskBackend, db?: Database.Database) {
     this.backend = backend;
     this.db = db;
+
+    const statusList = collectStatuses(backend);
+    this.validStatuses = new Set(statusList);
+    const statusEnum = statusList.join(", ");
+
+    this.description = `Manage project tasks (backend: ${backend.name}). Actions: create, get, update, delete, comment. Changing status via update REQUIRES a \`comment\` explaining why.`;
+
+    this.parameters = {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          description: "Action: create, get, update, delete, comment.",
+        },
+        id: { type: "string", description: "Task ID (for get, update, delete, comment)." },
+        title: { type: "string", description: "Task title (for create, update)." },
+        description: { type: "string", description: "Task description (for create, update)." },
+        status: {
+          type: "string",
+          description: `Status: ${statusEnum}.`,
+          enum: statusList,
+        },
+        author: { type: "string", description: "Author name." },
+        tags: { type: "string", description: "Comma-separated tags." },
+        text: { type: "string", description: "Comment text (for comment action)." },
+        comment: {
+          type: "string",
+          description:
+            "Required when update changes status. Short note explaining what you did or why you're blocked.",
+        },
+        project_id: { type: "string", description: "Project ID (for create)." },
+        assignee: { type: "string", description: "Assignee name (agent or user)." },
+        rank: { type: "number", description: "Rank in backlog — lower = higher priority." },
+        blocked_reason: { type: "string", description: "Reason when status=blocked (e.g. question, budget)." },
+      },
+      required: ["action"],
+    };
   }
 
   async execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
@@ -115,6 +131,14 @@ export class TasksTool implements Tool {
   ): Promise<ToolResult> {
     if (!title) return { success: false, output: "", error: "title is required for create." };
 
+    if (status !== undefined && !this.validStatuses.has(status)) {
+      return {
+        success: false,
+        output: "",
+        error: `Invalid status "${status}" for ${this.backend.name} backend. Valid: ${[...this.validStatuses].join(", ")}.`,
+      };
+    }
+
     const resolvedProjectId = projectId ?? (this.db ? getDefaultProjectId(this.db) : undefined);
     const parsedTags = tags ? tags.split(",").map((t) => t.trim()).filter(Boolean) : undefined;
     const task = await this.backend.create({
@@ -179,6 +203,14 @@ export class TasksTool implements Tool {
     agentAuthor?: string,
   ): Promise<ToolResult> {
     if (!id) return { success: false, output: "", error: "id is required for update." };
+
+    if (status !== undefined && !this.validStatuses.has(status)) {
+      return {
+        success: false,
+        output: "",
+        error: `Invalid status "${status}" for ${this.backend.name} backend. Valid: ${[...this.validStatuses].join(", ")}.`,
+      };
+    }
 
     // If the caller is changing status, require a comment explaining why.
     // This is how the teammate audit trail is built.
