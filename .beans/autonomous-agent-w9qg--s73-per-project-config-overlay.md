@@ -1,37 +1,22 @@
 ---
 # autonomous-agent-w9qg
 title: 'S7.3: Per-project config overlay'
-status: todo
+status: completed
 type: task
 priority: normal
 created_at: 2026-05-04T06:21:00Z
-updated_at: 2026-05-04T06:21:00Z
+updated_at: 2026-05-04T06:43:37Z
 parent: autonomous-agent-bv73
 ---
 
-## Goal
-Per-project config overlay: `.tai.yaml`'s `config:` block merges over the global `config.yaml`, so a project can extend agents, override tools, define its own task backend, etc.
+Implemented:
+- `mergeProjectOverlay(base, overlay)` in `packages/core/src/config.ts` — wraps existing `deepMerge` with the right types, returns base unchanged for empty overlays, leaves base un-mutated.
+- Semantics: maps deep-merge (including `agents.<name>` so a project can override one field without redefining the whole agent), arrays replace wholesale.
+- `AgentRuntime` carries an `_activeProject?: ProjectContext`. Constructor accepts `initialProject` and merges its overlay into the initial config + tools + provider.
+- `getActiveProject()` / `setActiveProject(p | null)` accessors. `setActiveProject` triggers `reload()` so the new merged config takes effect across all subsystems holding a runtime ref.
+- `reload()` re-merges the overlay on each call (so file-watcher reloads pick up the live overlay too) and emits validation warnings introduced by the overlay with a `[project:<id>] Warning:` prefix — diff'd against base validation so users only see overlay-specific issues.
+- Reload log line now includes `[project:<id>]` when active.
 
-## Merge semantics
+Tests: 11 new (`project-overlay.test.ts`) covering merge semantics (empty/scalars/agents/arrays/no-mutation), constructor with initial project, `setActiveProject` switch + clear, validation prefix on reload. 412 total passing.
 
-Deep merge with project-wins precedence:
-- Top-level keys merged (`agent`, `agents`, `tools`, `tasks`, etc.)
-- Maps: project keys override global keys at the same path; new keys added
-- Arrays: replace, not concat (least surprising default; documented)
-- `agents.<name>` maps deep-merge so a project can override one field of an agent without redefining it
-
-## Wiring
-
-- `AgentRuntime` gains optional `activeProject?: ProjectContext`
-- `runtime.reload()` re-reads global config, reads overlay if active project, deep-merges, builds tools/provider
-- `runtime.setActiveProject(project | null)` triggers a reload
-- New helper `mergeConfig(base, overlay): AgentConfig` in `packages/core/src/config.ts` with explicit semantics
-
-## Validation
-`validateConfig` runs against the merged config. Project overlays that introduce dangling tool refs surface as warnings prefixed `[project:<id>] Warning: ...`.
-
-## Tests
-- Merge unit tests covering each top-level section
-- Overlay adds new agent → resolveAgent finds it
-- Overlay overrides tool config → tool factory picks up the override
-- No overlay → identical to no-project behavior
+Next: S7.4 (thread project_id through sessions and the agent loop). Then the `tai` CLI startup needs a tiny addition to call `runtime.setActiveProject(resolveProjectFromCwd(...))` before launching server/single-message mode — that wiring lands in S7.4 alongside session changes.

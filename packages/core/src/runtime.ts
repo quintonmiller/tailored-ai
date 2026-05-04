@@ -5,7 +5,8 @@ import { EMPTY_HOOKS, mergeHooks, type ResolvedHooks } from "./agent/hooks.js";
 import type { AgentLoopOptions } from "./agent/loop.js";
 import { resolveAgent } from "./agent/agents.js";
 import type { Session } from "./agent/session.js";
-import type { AgentConfig, AgentHook } from "./config.js";
+import { mergeProjectOverlay, validateConfig, type AgentConfig, type AgentHook } from "./config.js";
+import type { ProjectContext } from "./projects/resolve.js";
 import type { AIProvider } from "./providers/interface.js";
 import { createSandbox } from "./sandboxes/factory.js";
 import { globalSandboxRegistry } from "./sandboxes/registry.js";
@@ -49,8 +50,14 @@ export class AgentRuntime {
   private _loadConfig: (path: string) => AgentConfig;
   private _workflows: WorkflowRegistry = new WorkflowRegistry();
   private _workflowEngine: import("./workflows/engine.js").WorkflowEngine | undefined;
+  private _activeProject: ProjectContext | null = null;
 
-  constructor(opts: RuntimeOptions, loadConfig: (path: string) => AgentConfig, initialConfig: AgentConfig) {
+  constructor(
+    opts: RuntimeOptions,
+    loadConfig: (path: string) => AgentConfig,
+    initialConfig: AgentConfig,
+    initialProject?: ProjectContext | null,
+  ) {
     this.configPath = opts.configPath;
     this.db = opts.db;
     this.contextDir = opts.contextDir;
@@ -58,17 +65,19 @@ export class AgentRuntime {
     this._createTools = opts.createTools;
     this._createProvider = opts.createProvider;
     this._loadConfig = loadConfig;
+    this._activeProject = initialProject ?? null;
 
-    this._config = initialConfig;
-    this._taskBackend = createTaskBackend(initialConfig, opts.db);
-    this._tools = opts.createTools(initialConfig, opts.contextDir, opts.configPath, {
+    const merged = mergeProjectOverlay(initialConfig, this._activeProject?.overlay);
+    this._config = merged;
+    this._taskBackend = createTaskBackend(merged, opts.db);
+    this._tools = opts.createTools(merged, opts.contextDir, opts.configPath, {
       db: opts.db,
       taskBackend: this._taskBackend,
     });
-    const { provider, model } = opts.createProvider(initialConfig);
+    const { provider, model } = opts.createProvider(merged);
     this._provider = provider;
     this._model = model;
-    this._workflows.setDirectory(resolveWorkflowsDir(initialConfig.workflows?.directory));
+    this._workflows.setDirectory(resolveWorkflowsDir(merged.workflows?.directory));
     this._workflows.reloadFromDisk();
   }
 
@@ -115,6 +124,21 @@ export class AgentRuntime {
     this._shutdownController.abort();
   }
 
+  /** The project whose `.tai.yaml` overlay is merged into the active config (or null in global mode). */
+  getActiveProject(): ProjectContext | null {
+    return this._activeProject;
+  }
+
+  /**
+   * Switch the active project. Triggers a `reload()` so the new overlay (or its
+   * removal, when set to null) takes effect immediately. Subsystems that hold
+   * a runtime reference will see the new config on their next read.
+   */
+  setActiveProject(project: ProjectContext | null): void {
+    this._activeProject = project;
+    this.reload();
+  }
+
   /** Register meta tools (delegate, task_status, admin) to be included in all loop options. */
   setMetaTools(tools: Tool[]): void {
     this._metaTools = tools;
@@ -122,7 +146,20 @@ export class AgentRuntime {
 
   reload(): void {
     try {
-      const config = this._loadConfig(this.configPath);
+      const baseConfig = this._loadConfig(this.configPath);
+      const config = mergeProjectOverlay(baseConfig, this._activeProject?.overlay);
+
+      // Project-scoped validation: emit overlay warnings with a project prefix so
+      // the user can tell which file introduced a dangling tool/agent reference.
+      if (this._activeProject?.overlay && Object.keys(this._activeProject.overlay).length > 0) {
+        const baseWarnings = new Set(validateConfig(baseConfig));
+        for (const w of validateConfig(config)) {
+          if (!baseWarnings.has(w)) {
+            console.warn(`[project:${this._activeProject.id}] Warning: ${w}`);
+          }
+        }
+      }
+
       const taskBackend = createTaskBackend(config, this.db);
       const tools = this._createTools(config, this.contextDir, this.configPath, {
         db: this.db,
@@ -144,7 +181,8 @@ export class AgentRuntime {
       this._generation++;
       this._workflows.setDirectory(resolveWorkflowsDir(config.workflows?.directory));
       this._workflows.reloadFromDisk();
-      console.log(`[runtime] Reloaded config (generation ${this._generation})`);
+      const projectTag = this._activeProject ? ` [project:${this._activeProject.id}]` : "";
+      console.log(`[runtime] Reloaded config (generation ${this._generation})${projectTag}`);
       for (const cb of this._reloadListeners) {
         try {
           cb();

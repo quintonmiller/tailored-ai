@@ -406,6 +406,21 @@ export function deepMerge(target: Record<string, unknown>, source: Record<string
   return result;
 }
 
+/**
+ * Merge a per-project `.tai.yaml` overlay on top of the global config.
+ *
+ * Semantics: deep merge with project-wins precedence.
+ *   - Maps: project keys override global keys at the same path; new keys are added
+ *   - Arrays: replaced wholesale (no concat) — least-surprising default; documented
+ *   - `agents.<name>` deep-merges so a project can tweak one field without redefining the agent
+ *
+ * Returns a new object; inputs are not mutated.
+ */
+export function mergeProjectOverlay(base: AgentConfig, overlay: Record<string, unknown> | undefined | null): AgentConfig {
+  if (!overlay || Object.keys(overlay).length === 0) return base;
+  return deepMerge(base as unknown as Record<string, unknown>, overlay) as unknown as AgentConfig;
+}
+
 /** Validate config and return warnings. Does not throw — issues are advisory. */
 export function validateConfig(config: AgentConfig): string[] {
   const warnings: string[] = [];

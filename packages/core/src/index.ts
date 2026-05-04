@@ -87,6 +87,7 @@ export {
 } from "./db/task-queries.js";
 export type { Project, ProjectWithCounts, ProjectQueryFilter, ProjectQueryResult } from "./db/project-queries.js";
 export { createProject, getProject, getProjectByPath, updateProject, deleteProject, queryProjects, getDefaultProjectId } from "./db/project-queries.js";
+export { mergeProjectOverlay } from "./config.js";
 export type { ProjectContext, ProjectFile, ResolveOptions as ProjectResolveOptions } from "./projects/resolve.js";
 export {
   PROJECT_FILE,
