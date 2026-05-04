@@ -289,6 +289,16 @@ export interface AgentConfig {
       sandboxWorkdir?: string;
     };
   };
+  workflows?: {
+    /** Directory containing workflow YAML files. Default "./workflows". */
+    directory?: string;
+    /** Global cap on concurrent workflow runs. Default 4. */
+    maxConcurrent?: number;
+    /** Per-agent cap on concurrent agent_run steps. Use "_default" for fallback. */
+    maxConcurrentByAgent?: Record<string, number>;
+    /** Retain log files for the last N runs per workflow. Default 100. */
+    retainRuns?: number;
+  };
 }
 
 const DEFAULT_CONFIG: AgentConfig = {
@@ -516,6 +526,29 @@ export function validateConfig(config: AgentConfig): string[] {
     }
     if (kind === "podman" && !config.sandboxes?.podman?.imageName) {
       warnings.push(`Agent "${agentName}" uses sandbox "podman" but sandboxes.podman.imageName is not set`);
+    }
+  }
+
+  // Validate workflows block
+  if (config.workflows) {
+    if (
+      config.workflows.maxConcurrent !== undefined &&
+      (typeof config.workflows.maxConcurrent !== "number" || config.workflows.maxConcurrent < 1)
+    ) {
+      warnings.push(`workflows.maxConcurrent must be a positive integer`);
+    }
+    if (
+      config.workflows.retainRuns !== undefined &&
+      (typeof config.workflows.retainRuns !== "number" || config.workflows.retainRuns < 0)
+    ) {
+      warnings.push(`workflows.retainRuns must be a non-negative integer`);
+    }
+    if (config.workflows.maxConcurrentByAgent) {
+      for (const [k, v] of Object.entries(config.workflows.maxConcurrentByAgent)) {
+        if (typeof v !== "number" || v < 1) {
+          warnings.push(`workflows.maxConcurrentByAgent["${k}"] must be a positive integer`);
+        }
+      }
     }
   }
 

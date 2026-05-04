@@ -126,6 +126,28 @@ export {
   listWorkflowSteps,
   listInterruptibleRuns,
 } from "./db/workflow-queries.js";
+export type {
+  AgentRunStep,
+  ConditionStep,
+  LoopStep,
+  OnErrorPolicy,
+  ParallelStep,
+  RegisteredWorkflow,
+  RetryPolicy,
+  ShellStep,
+  StepType,
+  ToolCallStep,
+  WorkflowDefinition,
+  WorkflowStepDef,
+} from "./workflows/types.js";
+export { WorkflowRegistry } from "./workflows/registry.js";
+export {
+  loadWorkflowsFromDir,
+  parseWorkflow,
+  resolveWorkflowsDir,
+  validateWorkflow,
+  type LoadResult,
+} from "./workflows/loader.js";
 export type { AIProvider, ChatParams, ChatResponse, Message, ToolCall, ToolSchema } from "./providers/interface.js";
 export { AnthropicProvider } from "./providers/anthropic.js";
 export { OllamaProvider } from "./providers/ollama.js";

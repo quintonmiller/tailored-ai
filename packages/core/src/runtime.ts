@@ -11,6 +11,9 @@ import { createSandbox } from "./sandboxes/factory.js";
 import { createTaskBackend } from "./tasks/factory.js";
 import type { TaskBackend } from "./tasks/interface.js";
 import type { Tool } from "./tools/interface.js";
+import { WorkflowRegistry } from "./workflows/registry.js";
+import { resolveWorkflowsDir } from "./workflows/loader.js";
+import type { WorkflowDefinition } from "./workflows/types.js";
 
 export interface RuntimeOptions {
   configPath: string;
@@ -43,6 +46,7 @@ export class AgentRuntime {
   private _createTools: RuntimeOptions["createTools"];
   private _createProvider: RuntimeOptions["createProvider"];
   private _loadConfig: (path: string) => AgentConfig;
+  private _workflows: WorkflowRegistry = new WorkflowRegistry();
 
   constructor(opts: RuntimeOptions, loadConfig: (path: string) => AgentConfig, initialConfig: AgentConfig) {
     this.configPath = opts.configPath;
@@ -62,6 +66,16 @@ export class AgentRuntime {
     const { provider, model } = opts.createProvider(initialConfig);
     this._provider = provider;
     this._model = model;
+    this._workflows.setDirectory(resolveWorkflowsDir(initialConfig.workflows?.directory));
+    this._workflows.reloadFromDisk();
+  }
+
+  getWorkflows(): WorkflowRegistry {
+    return this._workflows;
+  }
+
+  registerWorkflow(workflow: WorkflowDefinition): void {
+    this._workflows.register(workflow);
   }
 
   getConfig(): AgentConfig {
@@ -118,6 +132,8 @@ export class AgentRuntime {
       this._provider = provider;
       this._model = model;
       this._generation++;
+      this._workflows.setDirectory(resolveWorkflowsDir(config.workflows?.directory));
+      this._workflows.reloadFromDisk();
       console.log(`[runtime] Reloaded config (generation ${this._generation})`);
       for (const cb of this._reloadListeners) {
         try {
@@ -188,6 +204,11 @@ export class AgentRuntime {
       clearInterval(this._pollTimer);
       this._pollTimer = undefined;
     }
+    this._workflows.stopWatching();
+  }
+
+  startWatchingWorkflows(): void {
+    this._workflows.startWatching();
   }
 
   /** Serialize config read-modify-write operations to prevent lost writes. */

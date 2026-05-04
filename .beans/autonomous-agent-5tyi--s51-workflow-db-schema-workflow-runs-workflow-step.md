@@ -1,11 +1,11 @@
 ---
 # autonomous-agent-5tyi
 title: 'S5.1: Workflow DB schema (workflow_runs + workflow_steps)'
-status: todo
+status: completed
 type: task
 priority: high
 created_at: 2026-05-04T01:08:16Z
-updated_at: 2026-05-04T01:08:16Z
+updated_at: 2026-05-04T03:02:03Z
 parent: autonomous-agent-jgev
 ---
 
