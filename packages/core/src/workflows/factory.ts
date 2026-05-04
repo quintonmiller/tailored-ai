@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 import type { AgentRuntime } from "../runtime.js";
 import { WorkflowEngine } from "./engine.js";
 import { AgentRunExecutor } from "./executors/agent-run.js";
+import { ShellExecutor } from "./executors/shell.js";
 import { ToolCallExecutor } from "./executors/tool-call.js";
 
 /**
@@ -32,6 +33,7 @@ export function createWorkflowEngine(opts: {
         workingDirectory: process.cwd(),
         env: process.env as Record<string, string>,
       }),
+      new ShellExecutor({ cwd: process.cwd() }),
     ],
   });
   return engine;

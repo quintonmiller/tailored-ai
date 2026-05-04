@@ -162,6 +162,7 @@ export { evaluateExpression } from "./workflows/expression.js";
 export { lookup, resolveString, resolveValue, type Scope } from "./workflows/scope.js";
 export { KeyedSemaphore, Semaphore } from "./workflows/semaphore.js";
 export { AgentRunExecutor } from "./workflows/executors/agent-run.js";
+export { ShellExecutor } from "./workflows/executors/shell.js";
 export { ToolCallExecutor } from "./workflows/executors/tool-call.js";
 export { createWorkflowEngine } from "./workflows/factory.js";
 export type { AIProvider, ChatParams, ChatResponse, Message, ToolCall, ToolSchema } from "./providers/interface.js";

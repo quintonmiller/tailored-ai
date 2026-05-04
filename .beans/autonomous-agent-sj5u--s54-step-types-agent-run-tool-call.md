@@ -1,11 +1,11 @@
 ---
 # autonomous-agent-sj5u
 title: 'S5.4: Step types — agent_run + tool_call'
-status: todo
+status: completed
 type: task
 priority: high
 created_at: 2026-05-04T01:08:16Z
-updated_at: 2026-05-04T01:08:29Z
+updated_at: 2026-05-04T03:13:35Z
 parent: autonomous-agent-jgev
 blocked_by:
     - autonomous-agent-47tt
