@@ -110,6 +110,13 @@ export interface TaskBackend {
   comment(id: string, content: string, author?: string): Promise<TaskComment | undefined>;
   query(filter?: TaskFilter): Promise<TaskQueryResult>;
 
+  /**
+   * Optional one-time setup the backend needs before serving requests
+   * (e.g. creating GitHub status:* labels). Idempotent. Callers should
+   * invoke this once at startup; failures are non-fatal.
+   */
+  bootstrap?(): Promise<{ created: string[] }>;
+
   // ---- Autopilot helpers ----
   /** Top-ranked backlog task whose assignee is in the given set. */
   nextBacklogTask(assignees: string[]): Promise<Task | undefined>;

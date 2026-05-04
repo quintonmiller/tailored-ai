@@ -25,9 +25,16 @@ interface CommentRow {
  * backend actually calls. Returns shapes structurally compatible with the
  * real Octokit responses (`{ data: ... }`).
  */
+interface LabelRow {
+  name: string;
+  color: string;
+  description?: string;
+}
+
 class FakeOctokit {
   issues = new Map<number, IssueRow>();
   comments = new Map<number, CommentRow[]>();
+  labels = new Map<string, LabelRow>();
   nextNumber = 1;
   nextCommentId = 1000;
   calls: string[] = [];
@@ -106,6 +113,23 @@ class FakeOctokit {
 
       listComments: async (p: { issue_number: number }) => {
         return { data: this.comments.get(p.issue_number) ?? [] };
+      },
+
+      listLabelsForRepo: async () => {
+        this.calls.push("listLabelsForRepo");
+        return { data: [...this.labels.values()] };
+      },
+
+      createLabel: async (p: { name: string; color: string; description?: string }) => {
+        this.calls.push(`createLabel:${p.name}`);
+        if (this.labels.has(p.name)) {
+          const err = new Error("already_exists") as Error & { status?: number };
+          err.status = 422;
+          throw err;
+        }
+        const row: LabelRow = { name: p.name, color: p.color, description: p.description };
+        this.labels.set(p.name, row);
+        return { data: row };
       },
 
       listForRepo: async (p: { state?: string; labels?: string; assignee?: string }) => {
@@ -229,6 +253,64 @@ describe("GitHubTaskBackend.comment", () => {
     const fetched = await backend.get(t.id);
     expect(fetched?.comments?.length).toBe(1);
     expect(fetched?.comments?.[0].content).toBe("looking at it");
+  });
+});
+
+describe("GitHubTaskBackend.bootstrap", () => {
+  it("creates the four status:* labels and reason:budget when missing", async () => {
+    const { backend, oct } = build();
+    const r = await backend.bootstrap();
+    expect(r.created).toEqual([
+      "status:backlog",
+      "status:in_progress",
+      "status:blocked",
+      "status:in_review",
+      "reason:budget",
+    ]);
+    expect(oct.labels.has("status:backlog")).toBe(true);
+    expect(oct.labels.get("status:in_progress")?.color).toBe("1d76db");
+  });
+
+  it("is idempotent — re-running creates nothing new", async () => {
+    const { backend, oct } = build();
+    await backend.bootstrap();
+    oct.calls.length = 0;
+    const r = await backend.bootstrap();
+    expect(r.created).toEqual([]);
+    expect(oct.calls.filter((c) => c.startsWith("createLabel:"))).toEqual([]);
+  });
+
+  it("preserves pre-existing labels (only fills the gaps)", async () => {
+    const { backend, oct } = build();
+    oct.labels.set("status:backlog", { name: "status:backlog", color: "abcdef" });
+    const r = await backend.bootstrap();
+    expect(r.created).toEqual([
+      "status:in_progress",
+      "status:blocked",
+      "status:in_review",
+      "reason:budget",
+    ]);
+    // Pre-existing label color was not overwritten.
+    expect(oct.labels.get("status:backlog")?.color).toBe("abcdef");
+  });
+
+  it("swallows 422 'already exists' races during createLabel", async () => {
+    const { backend, oct } = build();
+    // Force createLabel to look like a race: label appears between list and create.
+    const orig = oct.rest.issues.createLabel;
+    let firstCall = true;
+    oct.rest.issues.createLabel = async (p) => {
+      if (firstCall) {
+        firstCall = false;
+        const err = new Error("already_exists") as Error & { status?: number };
+        err.status = 422;
+        throw err;
+      }
+      return orig.call(oct.rest.issues, p);
+    };
+    await expect(backend.bootstrap()).resolves.toEqual({
+      created: ["status:in_progress", "status:blocked", "status:in_review", "reason:budget"],
+    });
   });
 });
 

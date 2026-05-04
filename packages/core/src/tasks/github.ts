@@ -86,6 +86,55 @@ export class GitHubTaskBackend implements TaskBackend {
     return status === "done";
   }
 
+  /**
+   * Create the status:* and reason:budget labels if missing. Idempotent and
+   * non-fatal: a 422 (label already exists) is swallowed so concurrent
+   * bootstraps don't fight. Other errors propagate to the caller.
+   */
+  async bootstrap(): Promise<{ created: string[] }> {
+    const desired: Array<{ name: string; color: string; description: string }> = [
+      { name: STATUS_LABEL.backlog, color: "ededed", description: "autopilot: queued for an agent" },
+      { name: STATUS_LABEL.in_progress, color: "1d76db", description: "autopilot: claimed by an agent" },
+      { name: STATUS_LABEL.blocked, color: "d93f0b", description: "autopilot: blocked, see reason:* label" },
+      { name: STATUS_LABEL.in_review, color: "fbca04", description: "autopilot: awaiting review" },
+      { name: `${REASON_LABEL_PREFIX}budget`, color: "5319e7", description: "autopilot: blocked by budget" },
+    ];
+
+    let existingNames: Set<string>;
+    try {
+      const r = await this.octokit.rest.issues.listLabelsForRepo({
+        owner: this.owner,
+        repo: this.repo,
+        per_page: 100,
+      });
+      existingNames = new Set(r.data.map((l: { name: string }) => l.name));
+    } catch {
+      existingNames = new Set();
+    }
+
+    const created: string[] = [];
+    for (const label of desired) {
+      if (existingNames.has(label.name)) continue;
+      try {
+        await this.octokit.rest.issues.createLabel({
+          owner: this.owner,
+          repo: this.repo,
+          name: label.name,
+          color: label.color,
+          description: label.description,
+        });
+        created.push(label.name);
+      } catch (err) {
+        // 422 = label already exists (race). Anything else, surface.
+        if (typeof err === "object" && err !== null && "status" in err && (err as { status: number }).status === 422) {
+          continue;
+        }
+        throw err;
+      }
+    }
+    return { created };
+  }
+
   async create(input: TaskCreateInput): Promise<Task> {
     const labels = this.buildLabels(input.tags, input.status, undefined);
     const r = await this.octokit.rest.issues.create({

@@ -407,7 +407,7 @@ tasks:
     path: ./.beads
 ```
 
-When using the `github` backend, the autopilot expects status labels (`status:backlog` etc.) to exist on the repo. The first run will create them implicitly via `update()` calls, but you may want to pre-create them with sensible colors.
+When using the `github` backend, `AutopilotWorker.start()` calls `backend.bootstrap()` once on launch — this creates the four `status:*` labels (`backlog`, `in_progress`, `blocked`, `in_review`) and `reason:budget` with sensible colors if they're missing. Idempotent and non-fatal: missing-permissions or 422-already-exists errors are swallowed. Backends declare bootstrap as optional on `TaskBackend`; only `github` implements it today.
 
 ## Adding a Cron Job
 

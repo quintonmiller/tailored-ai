@@ -54,6 +54,17 @@ export class AutopilotWorker {
   start(): void {
     if (this.timer) return;
     console.log(`[autopilot] Started (interval ${this.intervalMs}ms)`);
+    if (this.tasks.bootstrap) {
+      this.tasks.bootstrap()
+        .then((r) => {
+          if (r.created.length > 0) {
+            console.log(`[autopilot] Bootstrapped ${this.tasks.name} backend: created ${r.created.join(", ")}`);
+          }
+        })
+        .catch((err) => {
+          console.warn(`[autopilot] ${this.tasks.name} bootstrap failed:`, (err as Error).message);
+        });
+    }
     this.timer = setInterval(() => {
       this.tick().catch((err) => {
         console.error("[autopilot] Tick error:", (err as Error).message);
