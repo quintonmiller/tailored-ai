@@ -5,7 +5,7 @@ status: todo
 type: epic
 priority: normal
 created_at: 2026-05-03T22:42:53Z
-updated_at: 2026-05-03T22:43:57Z
+updated_at: 2026-05-04T01:08:45Z
 parent: autonomous-agent-6p6y
 blocked_by:
     - autonomous-agent-klz6
@@ -31,3 +31,26 @@ Programmatic + declarative workflow engine. Step types: agent_run, tool_call, sh
 - [ ] Per-step logs under `data/workflow-runs/<run-id>/<step>.log`
 - [ ] Tests: linear flow, condition, loop, parallel, deadline abort
 - [ ] Document in CLAUDE.md
+
+
+
+## Design
+
+See [docs/workflows.md](../docs/workflows.md) for the design doc covering step types, scope, error policies, restart semantics, storage, and triggers.
+
+## Sub-beans (in execution order)
+
+1. autonomous-agent-5tyi — S5.1: Workflow DB schema
+2. autonomous-agent-6vw5 — S5.2: Workflow loader and registry
+3. autonomous-agent-47tt — S5.3: Workflow engine core
+4. autonomous-agent-sj5u — S5.4: Step types — agent_run + tool_call
+5. autonomous-agent-nnju — S5.5: Step types — shell + condition
+6. autonomous-agent-lt8e — S5.6: Step types — loop + parallel
+7. autonomous-agent-kopa — S5.7: HTTP triggers + SSE stream
+8. autonomous-agent-qdjk — S5.8: Cron and webhook triggers
+9. autonomous-agent-c81v — S5.9: defineWorkflow + run_workflow tool
+10. autonomous-agent-rndc — S5.10: Autopilot workflow integration
+11. autonomous-agent-q79w — S5.11: Per-step logs and retention
+12. autonomous-agent-u7o3 — S5.12: Workflow integration tests
+
+Slices 1–4 are the critical path: after them you can already run a linear agent_run-only workflow from HTTP. Everything else is incremental.
