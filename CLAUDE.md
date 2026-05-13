@@ -180,7 +180,7 @@ Both `openai_compatible` and `openai` share `OpenAIProvider`; the only differenc
 
 Design lives in [`docs/memory-tiers.md`](./docs/memory-tiers.md). Three tiers (working, short-term, long-term) sit alongside the existing `facts` and `memory` tools. Implementation lands across M1–M7 slices; the `recall` tool is the new unified surface.
 
-**M1 + M2 + M3 status (shipped):** schema, write surface, unified keyword retrieval, and loop injection.
+**M1 + M2 + M3 + M4 status (shipped):** schema, write surface, unified keyword retrieval, loop injection, and end-of-session summarization.
 
 - `packages/core/src/tools/recall.ts` — `RecallTool` with `query` / `note` / `forget` / `list` actions
 - `packages/core/src/tools/recall-query.ts` — `recallQuery()` ranks notes (short-term) and facts (long-term) by term coverage with small bonuses for tag/key/entity matches. Scores are a ranking signal, not capped at 1.0
@@ -194,8 +194,12 @@ Design lives in [`docs/memory-tiers.md`](./docs/memory-tiers.md). Three tiers (w
 - Loop injection: set `agents.<name>.injectMemory: true` (default false) to prepend a `[Relevant memory]` block to the system prompt. Memory is searched by `recallQuery` against the current user message and capped at `memoryInjectBudgetTokens` (default 800). See `packages/core/src/agent/memory-inject.ts`.
 - `ToolContext.workingMemory: Map<string,string>` — per-loop scratch shared across tool calls within a single agent run. Cleared when the loop ends. Use for "stash so the next tool call can pick it up" patterns.
 - `ToolContext.projectId` — mirrors `session.projectId`, available to tools that need project scope without poking at the db.
+- `packages/core/src/agent/summarize-session.ts` — `summarizeSession(db, sessionId, provider, model, opts)` writes a note tagged `session-summary` capturing the transcript. Idempotent (skipped if a summary already exists; `force: true` overrides). Importance scales with message count + tool calls. Default TTL 30 days.
+- `sweepIdleSessions(db, provider, model, opts)` — batch helper finds sessions where `updated_at <= now - idleMinutes` and runs `summarizeSession` on each. Supports `keyPrefixes` to target specific session kinds (e.g. `["autopilot:", "cron:"]`).
+- `deleteSession(db, sessionId)` — removes the session row + all its messages.
+- HTTP: `DELETE /api/sessions/:id` summarizes (unless `?summarize=0`) then deletes. Pass `?force=1` to re-summarize.
 
-Summarization (M4), embeddings + chunks (M5), promotion + sweep cron (M6), UI (M7) are tracked as separate beans `ptask_mem_m4`–`ptask_mem_m7`.
+Embeddings + chunks (M5), promotion + sweep cron (M6), UI (M7) are tracked as separate beans `ptask_mem_m5`–`ptask_mem_m7`.
 
 ## Admin Tool
 

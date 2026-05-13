@@ -352,6 +352,18 @@ export {
   deleteNote,
   sweepExpiredNotes,
 } from "./db/note-queries.js";
+export {
+  summarizeSession,
+  sweepIdleSessions,
+  getSessionSummary,
+  computeImportance,
+  SESSION_SUMMARY_TAG,
+  type SummarizeSessionOptions,
+  type SummarizeSessionResult,
+  type SweepIdleSessionsOptions,
+  type SweepResult,
+} from "./agent/summarize-session.js";
+export { deleteSession, countSessionMessages, findIdleSessions } from "./db/queries.js";
 export { ReadTool } from "./tools/read.js";
 export { TaskStatusTool } from "./tools/task-status.js";
 export { TasksTool, TaskQueryTool } from "./tools/tasks.js";

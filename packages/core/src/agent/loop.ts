@@ -166,8 +166,9 @@ function validateToolArgs(tool: Tool, args: Record<string, unknown>): string | n
   return null;
 }
 
-/** Summarize messages that would be dropped during trimming. */
-async function summarizeMessages(
+/** Summarize messages that would be dropped during trimming. Exported so the
+ * end-of-session summarizer (M4) can reuse the same renderer + prompt. */
+export async function summarizeMessages(
   messages: Message[],
   provider: AIProvider,
   model: string,

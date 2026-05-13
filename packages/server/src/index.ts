@@ -18,6 +18,8 @@ import {
   isCommand,
   getSessionMessages,
   listSessions,
+  deleteSession,
+  summarizeSession,
   createProjectTask,
   getProjectTask,
   updateProjectTask,
@@ -161,6 +163,35 @@ export function createServer(opts: ServerOptions) {
     const { id } = c.req.param();
     const messages = getSessionMessages(runtime.db, id);
     return c.json(messages);
+  });
+
+  app.delete("/api/sessions/:id", async (c) => {
+    const { id } = c.req.param();
+    // ?summarize=0 opts out (default on). ?force=1 re-summarizes even if a
+    // prior session-summary note exists.
+    const summarizeFlag = c.req.query("summarize");
+    const force = c.req.query("force") === "1";
+    const wantSummary = summarizeFlag !== "0";
+
+    let noteId: string | null = null;
+    if (wantSummary) {
+      try {
+        const result = await summarizeSession(
+          runtime.db,
+          id,
+          runtime.getProvider(),
+          runtime.getModel(),
+          { force },
+        );
+        if (result) noteId = result.noteId;
+      } catch (err) {
+        console.error("[server] session summary failed:", (err as Error).message);
+      }
+    }
+
+    const deleted = deleteSession(runtime.db, id);
+    if (!deleted) return c.json({ error: "session not found" }, 404);
+    return c.json({ deleted: true, summaryNoteId: noteId });
   });
 
   app.post("/api/sessions/new", async (c) => {

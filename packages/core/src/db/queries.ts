@@ -90,6 +90,48 @@ export function deleteSessionMessages(db: Database.Database, sessionId: string):
   return db.prepare("DELETE FROM messages WHERE session_id = ?").run(sessionId).changes;
 }
 
+/** Delete the session row + all its messages. Returns true if a row was removed. */
+export function deleteSession(db: Database.Database, sessionId: string): boolean {
+  db.prepare("DELETE FROM messages WHERE session_id = ?").run(sessionId);
+  const res = db.prepare("DELETE FROM sessions WHERE id = ?").run(sessionId);
+  return res.changes > 0;
+}
+
+/** Count messages in a session (cheap, used for size-based summary importance). */
+export function countSessionMessages(db: Database.Database, sessionId: string): number {
+  const row = db
+    .prepare("SELECT COUNT(*) AS c FROM messages WHERE session_id = ?")
+    .get(sessionId) as { c: number };
+  return row.c;
+}
+
+/** Find sessions whose updated_at is older than the cutoff, optionally key-prefix filtered. */
+export function findIdleSessions(
+  db: Database.Database,
+  cutoffIso: string,
+  opts: { keyPrefixes?: string[]; minMessages?: number; limit?: number } = {},
+): SessionRow[] {
+  const clauses: string[] = ["updated_at <= ?"];
+  const params: unknown[] = [cutoffIso];
+
+  if (opts.keyPrefixes && opts.keyPrefixes.length > 0) {
+    const ors = opts.keyPrefixes.map(() => "key LIKE ?").join(" OR ");
+    clauses.push(`(${ors})`);
+    for (const p of opts.keyPrefixes) params.push(`${p}%`);
+  }
+
+  if (opts.minMessages && opts.minMessages > 0) {
+    clauses.push("(SELECT COUNT(*) FROM messages WHERE messages.session_id = sessions.id) >= ?");
+    params.push(opts.minMessages);
+  }
+
+  const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+  const limit = opts.limit && opts.limit > 0 ? Math.floor(opts.limit) : 50;
+  return db
+    .prepare(`SELECT * FROM sessions ${where} ORDER BY updated_at ASC LIMIT ?`)
+    .all(...params, limit) as SessionRow[];
+}
+
 export function getSessionMessages(db: Database.Database, sessionId: string): Message[] {
   const rows = db.prepare("SELECT * FROM messages WHERE session_id = ? ORDER BY id ASC").all(sessionId) as MessageRow[];
 
