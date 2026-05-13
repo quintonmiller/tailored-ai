@@ -50,6 +50,7 @@ const DEFAULT_MAX_INTERVAL_MINUTES = 240;
 const DEFAULT_RUNS_PER_DAY_CAP = 12;
 const DEFAULT_TOOL_CALLS_PER_TICK = 8;
 const DEFAULT_TOKENS_PER_TICK = 8000;
+const DEFAULT_IDLE_BACKOFF_MULTIPLIER = 2.0;
 
 export type SkipReason =
   | "config-disabled"
@@ -160,6 +161,10 @@ export class ExploratoryWorker {
       startedAt: run.started_at,
     };
 
+    // Snapshot pre-run state — anything created with created_at >= cutoffIso
+    // and matching the agent (notes) is attributed to this run.
+    const cutoffIso = (db.prepare("SELECT datetime('now') AS t").get() as { t: string }).t;
+
     let status: ExploratoryRunStatus = "ok";
     let summary: string | undefined;
     let errorMsg: string | undefined;
@@ -238,26 +243,111 @@ export class ExploratoryWorker {
       runtimeSignal.removeEventListener("abort", onRuntimeAbort);
     }
 
+    // Detect outputs created during this run (agent-scoped notes; project_id
+    // and global facts/tasks by cutoff). Drives the noop/ok classification.
+    const outputs = this.detectOutputs(agentName, cutoffIso);
+
+    // Only reclassify ok ↔ noop. error/budget statuses stand as-is.
+    if (status === "ok" && outputs.totalCount === 0) {
+      status = "noop";
+    }
+
     const completed = completeExploratoryRun(db, run.id, {
       status,
       tokensUsed: promptTokens + completionTokens,
       toolCalls: toolCalls.length,
+      noteIds: outputs.noteIds,
+      factIds: outputs.factIds,
+      taskIds: outputs.taskIds,
       summary,
       error: errorMsg,
     });
 
     // Update state counters. Daily counters were reset at the top of evaluate().
     const state = ensureExploratoryState(db, agentName);
+    const nextInterval = this.computeNextInterval(state, online, status);
     updateExploratoryState(db, agentName, {
       last_tick_at: new Date(startedAt).toISOString(),
       last_tick_status: status,
       runs_today: state.runs_today + 1,
       tokens_today: state.tokens_today + (promptTokens + completionTokens),
+      current_interval_ms: nextInterval,
     });
 
     this.currentActivity = undefined;
     this.onRunFinished?.(completed);
     return completed;
+  }
+
+  /**
+   * Snapshot of artifacts created during a run. Notes use the agent column so
+   * concurrent agent activity on the same db doesn't bleed in; facts and
+   * project tasks are attributed by timestamp only (best-effort).
+   */
+  private detectOutputs(
+    agentName: string,
+    cutoffIso: string,
+  ): {
+    noteIds: string[];
+    factIds: string[];
+    taskIds: string[];
+    totalCount: number;
+  } {
+    const db = this.runtime.db;
+    const noteRows = db
+      .prepare(
+        "SELECT id FROM notes WHERE agent = ? AND datetime(created_at) >= datetime(?) ORDER BY created_at ASC",
+      )
+      .all(agentName, cutoffIso) as Array<{ id: string }>;
+    const factRows = db
+      .prepare(
+        "SELECT id FROM facts WHERE datetime(created_at) >= datetime(?) ORDER BY created_at ASC",
+      )
+      .all(cutoffIso) as Array<{ id: string }>;
+    const taskRows = db
+      .prepare(
+        "SELECT id FROM project_tasks WHERE datetime(created_at) >= datetime(?) ORDER BY created_at ASC",
+      )
+      .all(cutoffIso) as Array<{ id: string }>;
+    const noteIds = noteRows.map((r) => r.id);
+    const factIds = factRows.map((r) => r.id);
+    const taskIds = taskRows.map((r) => r.id);
+    return {
+      noteIds,
+      factIds,
+      taskIds,
+      totalCount: noteIds.length + factIds.length + taskIds.length,
+    };
+  }
+
+  /**
+   * Idle backoff. Activity (ok) resets to base; no-op multiplies the current
+   * interval by `idle_backoff_multiplier` (default 2.0), capped at
+   * `max_interval_minutes`. error / budget statuses leave the interval alone.
+   */
+  private computeNextInterval(
+    state: ExploratoryState,
+    online: OnlineAgentConfig,
+    status: ExploratoryRunStatus,
+  ): number | null {
+    const cadence = online.cadence;
+    const baseMs = (cadence?.interval_minutes ?? DEFAULT_TICK_INTERVAL_MINUTES) * 60_000;
+    const maxMs = (cadence?.max_interval_minutes ?? DEFAULT_MAX_INTERVAL_MINUTES) * 60_000;
+    const multiplier = cadence?.idle_backoff_multiplier ?? DEFAULT_IDLE_BACKOFF_MULTIPLIER;
+
+    if (status === "ok") {
+      // Reset to base by clearing the override.
+      return null;
+    }
+    if (status === "noop") {
+      const current = state.current_interval_ms && state.current_interval_ms > 0
+        ? state.current_interval_ms
+        : baseMs;
+      const next = Math.min(Math.round(current * multiplier), maxMs);
+      return next;
+    }
+    // error / budget — leave the current interval alone.
+    return state.current_interval_ms ?? null;
   }
 
   /**

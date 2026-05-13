@@ -294,7 +294,8 @@ describe("ExploratoryWorker.tick", () => {
     expect(wouldRun).toHaveBeenCalledWith({ agentName: "watcher", reason: "due" });
     const state = getExploratoryState(db, "watcher")!;
     expect(state.last_tick_at).not.toBeNull();
-    expect(state.last_tick_status).toBe("ok");
+    // Stub didn't create any artifacts, so the run classifies as a no-op.
+    expect(state.last_tick_status).toBe("noop");
     expect(state.runs_today).toBe(1);
   });
 
@@ -332,11 +333,14 @@ describe("ExploratoryWorker.tick", () => {
 });
 
 describe("ExploratoryWorker.runAgent", () => {
-  it("creates and completes an xrun row with status=ok on success", async () => {
+  it("creates and completes an xrun row with status=ok when the agent writes a note", async () => {
     const config = baseConfig({
       agents: { watcher: { tools: ["recall"], online: { enabled: true } } },
     });
-    const stubLoop = vi.fn().mockResolvedValue("looked at HN, nothing new");
+    const stubLoop = vi.fn(async () => {
+      createNote(db, { content: "found something useful", agent: "watcher" });
+      return "looked at HN, found something useful";
+    });
     const worker = new ExploratoryWorker({
       runtime: mockRuntime(config),
       runLoop: stubLoop as never,
@@ -345,6 +349,7 @@ describe("ExploratoryWorker.runAgent", () => {
     expect(run.status).toBe("ok");
     expect(run.ended_at).not.toBeNull();
     expect(run.summary).toContain("looked at HN");
+    expect(run.note_ids).toHaveLength(1);
     expect(getExploratoryRun(db, run.id)?.status).toBe("ok");
   });
 
@@ -507,7 +512,10 @@ describe("ExploratoryWorker.runAgent", () => {
     const config = baseConfig({
       agents: { watcher: { tools: ["recall"], online: { enabled: true } } },
     });
-    const stubLoop = vi.fn().mockResolvedValue("ok");
+    const stubLoop = vi.fn(async () => {
+      createNote(db, { content: "activity", agent: "watcher" });
+      return "ok";
+    });
     const onRunFinished = vi.fn();
     const worker = new ExploratoryWorker({
       runtime: mockRuntime(config),
@@ -536,6 +544,226 @@ describe("ExploratoryWorker.runAgent", () => {
     await worker.runAgent("watcher", config.agents.watcher);
     expect(duringRun?.agentName).toBe("watcher");
     expect(worker.getActivity()).toBeUndefined();
+  });
+});
+
+describe("ExploratoryWorker A4 — outputs + backoff", () => {
+  it("classifies status=noop when no notes/facts/tasks are created", async () => {
+    const config = baseConfig({
+      agents: { watcher: { tools: ["recall"], online: { enabled: true } } },
+    });
+    const stubLoop = vi.fn().mockResolvedValue("nothing to report");
+    const worker = new ExploratoryWorker({
+      runtime: mockRuntime(config),
+      runLoop: stubLoop as never,
+    });
+    const run = await worker.runAgent("watcher", config.agents.watcher);
+    expect(run.status).toBe("noop");
+    expect(run.note_ids).toHaveLength(0);
+  });
+
+  it("classifies status=ok and records note_ids when the agent writes notes", async () => {
+    const config = baseConfig({
+      agents: { watcher: { tools: ["recall"], online: { enabled: true } } },
+    });
+    const stubLoop = vi.fn(async () => {
+      createNote(db, { content: "found", agent: "watcher", tags: ["finding"] });
+      createNote(db, { content: "also found", agent: "watcher" });
+      return "found two things";
+    });
+    const worker = new ExploratoryWorker({
+      runtime: mockRuntime(config),
+      runLoop: stubLoop as never,
+    });
+    const run = await worker.runAgent("watcher", config.agents.watcher);
+    expect(run.status).toBe("ok");
+    expect(run.note_ids).toHaveLength(2);
+  });
+
+  it("does not attribute another agent's notes to this run", async () => {
+    const config = baseConfig({
+      agents: {
+        watcher: { tools: ["recall"], online: { enabled: true } },
+        scout: { tools: ["recall"], online: { enabled: true } },
+      },
+    });
+    const stubLoop = vi.fn(async () => {
+      // Simulates a concurrent agent writing during the same window
+      createNote(db, { content: "scout's note", agent: "scout" });
+      return "watcher did nothing";
+    });
+    const worker = new ExploratoryWorker({
+      runtime: mockRuntime(config),
+      runLoop: stubLoop as never,
+    });
+    const run = await worker.runAgent("watcher", config.agents.watcher);
+    expect(run.status).toBe("noop");
+    expect(run.note_ids).toHaveLength(0);
+  });
+
+  it("backs off the interval after a noop", async () => {
+    const config = baseConfig({
+      agents: {
+        watcher: {
+          tools: ["recall"],
+          online: {
+            enabled: true,
+            cadence: {
+              interval_minutes: 10,
+              idle_backoff_multiplier: 2.0,
+              max_interval_minutes: 240,
+            },
+          },
+        },
+      },
+    });
+    const stubLoop = vi.fn().mockResolvedValue("nothing");
+    const worker = new ExploratoryWorker({
+      runtime: mockRuntime(config),
+      runLoop: stubLoop as never,
+    });
+    await worker.runAgent("watcher", config.agents.watcher);
+    const state = getExploratoryState(db, "watcher")!;
+    // base 10min = 600_000ms, *2 = 1_200_000ms
+    expect(state.current_interval_ms).toBe(1_200_000);
+  });
+
+  it("compounds backoff across consecutive noops", async () => {
+    const config = baseConfig({
+      agents: {
+        watcher: {
+          tools: ["recall"],
+          online: {
+            enabled: true,
+            cadence: { interval_minutes: 10, idle_backoff_multiplier: 2.0 },
+          },
+        },
+      },
+    });
+    const stubLoop = vi.fn().mockResolvedValue("nothing");
+    const worker = new ExploratoryWorker({
+      runtime: mockRuntime(config),
+      runLoop: stubLoop as never,
+    });
+    await worker.runAgent("watcher", config.agents.watcher);
+    await worker.runAgent("watcher", config.agents.watcher);
+    const state = getExploratoryState(db, "watcher")!;
+    // 10min → 20min → 40min
+    expect(state.current_interval_ms).toBe(2_400_000);
+  });
+
+  it("caps backoff at max_interval_minutes", async () => {
+    const config = baseConfig({
+      agents: {
+        watcher: {
+          tools: ["recall"],
+          online: {
+            enabled: true,
+            cadence: {
+              interval_minutes: 60,
+              idle_backoff_multiplier: 10.0, // pathologically aggressive
+              max_interval_minutes: 120,
+            },
+          },
+        },
+      },
+    });
+    const stubLoop = vi.fn().mockResolvedValue("nothing");
+    const worker = new ExploratoryWorker({
+      runtime: mockRuntime(config),
+      runLoop: stubLoop as never,
+    });
+    await worker.runAgent("watcher", config.agents.watcher);
+    const state = getExploratoryState(db, "watcher")!;
+    expect(state.current_interval_ms).toBe(120 * 60_000); // capped
+  });
+
+  it("resets current_interval_ms back to base on ok", async () => {
+    const config = baseConfig({
+      agents: {
+        watcher: {
+          tools: ["recall"],
+          online: {
+            enabled: true,
+            cadence: { interval_minutes: 10, idle_backoff_multiplier: 2.0 },
+          },
+        },
+      },
+    });
+    // Pre-seed a backed-off interval
+    ensureExploratoryState(db, "watcher");
+    updateExploratoryState(db, "watcher", { current_interval_ms: 30 * 60_000 });
+
+    const stubLoop = vi.fn(async () => {
+      createNote(db, { content: "found", agent: "watcher" });
+      return "ok";
+    });
+    const worker = new ExploratoryWorker({
+      runtime: mockRuntime(config),
+      runLoop: stubLoop as never,
+    });
+    await worker.runAgent("watcher", config.agents.watcher);
+    const state = getExploratoryState(db, "watcher")!;
+    expect(state.current_interval_ms).toBeNull();
+  });
+
+  it("leaves current_interval_ms unchanged on budget abort", async () => {
+    const config = baseConfig({
+      agents: {
+        watcher: {
+          tools: ["recall"],
+          online: {
+            enabled: true,
+            cadence: { interval_minutes: 10 },
+            budgets: { tokens_per_tick: 100 },
+          },
+        },
+      },
+    });
+    ensureExploratoryState(db, "watcher");
+    updateExploratoryState(db, "watcher", { current_interval_ms: 20 * 60_000 });
+
+    const stubLoop = vi.fn(
+      async (
+        _prompt: string,
+        opts: { onUsage?: (u: { input: number; output: number }) => void; signal?: AbortSignal },
+      ) => {
+        opts.onUsage?.({ input: 200, output: 100 });
+        if (opts.signal?.aborted) throw new Error("aborted");
+        return "ok";
+      },
+    );
+    const worker = new ExploratoryWorker({
+      runtime: mockRuntime(config),
+      runLoop: stubLoop as never,
+    });
+    const run = await worker.runAgent("watcher", config.agents.watcher);
+    expect(run.status).toBe("budget");
+    const state = getExploratoryState(db, "watcher")!;
+    expect(state.current_interval_ms).toBe(20 * 60_000);
+  });
+
+  it("records fact and task creations in the xrun row", async () => {
+    const config = baseConfig({
+      agents: { watcher: { tools: ["recall"], online: { enabled: true } } },
+    });
+    const stubLoop = vi.fn(async () => {
+      db.prepare(
+        "INSERT INTO facts (id, category, entity, key, value) VALUES (?, ?, ?, ?, ?)",
+      ).run("fact_test_1", "watcher", "", "k1", "v1");
+      db.prepare(
+        "INSERT INTO project_tasks (id, title, status) VALUES (?, ?, ?)",
+      ).run("ptask_test_xyz", "follow up", "backlog");
+      return "filed a fact and a task";
+    });
+    const worker = new ExploratoryWorker({
+      runtime: mockRuntime(config),
+      runLoop: stubLoop as never,
+    });
+    const run = await worker.runAgent("watcher", config.agents.watcher);
+    expect(run.status).toBe("ok");
+    expect(run.fact_ids).toContain("fact_test_1");
+    expect(run.task_ids).toContain("ptask_test_xyz");
   });
 });
 
