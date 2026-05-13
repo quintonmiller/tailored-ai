@@ -27,6 +27,9 @@ export interface ResolvedAgent {
   nudgeMessage: string;
   skipGlobalContext: boolean;
   summarizeOnTrim: boolean;
+  injectMemory: boolean;
+  memoryInjectBudgetTokens: number | undefined;
+  memoryInjectLimit: number | undefined;
   hooks: ResolvedHooks;
   /**
    * Set to "progressive" when the agent uses agentskills.io-style on-demand
@@ -94,6 +97,9 @@ export function resolveAgent(
     nudgeMessage: "",
     skipGlobalContext: false,
     summarizeOnTrim: false,
+    injectMemory: false,
+    memoryInjectBudgetTokens: undefined,
+    memoryInjectLimit: undefined,
     hooks: EMPTY_HOOKS,
     skillLoading: "eager",
     skillCatalog: [],
@@ -131,6 +137,9 @@ export function resolveAgent(
     nudgeMessage: agent?.nudgeMessage ?? "",
     skipGlobalContext: agent?.skipGlobalContext ?? false,
     summarizeOnTrim: agent?.summarizeOnTrim ?? false,
+    injectMemory: agent?.injectMemory ?? false,
+    memoryInjectBudgetTokens: agent?.memoryInjectBudgetTokens,
+    memoryInjectLimit: agent?.memoryInjectLimit,
     hooks: agent?.hooks ? mergeHooks(agent.hooks) : EMPTY_HOOKS,
     skillLoading: agent?.skillLoading ?? "eager",
     skillCatalog: [],

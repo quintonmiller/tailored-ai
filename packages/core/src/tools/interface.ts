@@ -22,6 +22,18 @@ export interface ToolContext {
    * (read, exec) can inspect this too.
    */
   activeSkill?: import("../agent/active-skill.js").ActiveSkillState;
+  /**
+   * Per-loop scratch shared across tool calls within a single agent run.
+   * Cleared when the loop ends. Use for "I'll stash this so the next tool
+   * call can pick it up" patterns. Distinct from notes (durable) and from
+   * conversation history (visible to the model).
+   */
+  workingMemory?: Map<string, string>;
+  /**
+   * Project the loop is running against, when known. Memory injection and
+   * project-scoped tool reads use this. Mirrors session.projectId.
+   */
+  projectId?: string | null;
 }
 
 export interface ToolResult {

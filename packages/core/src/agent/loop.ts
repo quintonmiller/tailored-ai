@@ -15,6 +15,7 @@ import type { Tool, ToolContext } from "../tools/interface.js";
 import { BASE_SYSTEM_PROMPT } from "./prompt.js";
 import type { Session } from "./session.js";
 import { createActiveSkillState, type ActiveSkillState } from "./active-skill.js";
+import { buildMemoryBlock } from "./memory-inject.js";
 import type { SkillCatalogEntry } from "./agents.js";
 
 const MAX_RETRIES = 1;
@@ -84,6 +85,16 @@ export interface AgentLoopOptions {
    * allowed-tools list (when one is active) are rejected.
    */
   skillCatalog?: import("./agents.js").SkillCatalogEntry[];
+  /**
+   * Enable tiered-memory injection (M3 in docs/memory-tiers.md). When true,
+   * the loop runs `recallQuery` over the user message and prepends a
+   * `[Relevant memory]` block to the system prompt, capped at
+   * `memoryInjectBudgetTokens`. Defaults to false to keep behavior unchanged
+   * for callers that don't opt in.
+   */
+  injectMemory?: boolean;
+  memoryInjectBudgetTokens?: number;
+  memoryInjectLimit?: number;
 }
 
 export function estimateTokens(msg: Message): number {
@@ -389,7 +400,16 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
     contextContent = await loadAllContext(contextDir, agentContextDir);
   }
   const catalogBlock = renderSkillCatalog(opts.skillCatalog);
-  const fullSystemPrompt = BASE_SYSTEM_PROMPT + extraInstructions + contextContent + catalogBlock;
+  const memoryBlock = opts.injectMemory
+    ? buildMemoryBlock(db, {
+        userMessage,
+        projectId: session.projectId ?? null,
+        budgetTokens: opts.memoryInjectBudgetTokens,
+        limit: opts.memoryInjectLimit,
+      })
+    : "";
+  const fullSystemPrompt =
+    BASE_SYSTEM_PROMPT + extraInstructions + contextContent + catalogBlock + memoryBlock;
   const systemPromptTokens = estimateTokens({ role: "system", content: fullSystemPrompt });
 
   const history = getSessionMessages(db, session.id);
@@ -413,6 +433,7 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
   };
 
   const activeSkill: ActiveSkillState = createActiveSkillState();
+  const workingMemory = new Map<string, string>();
   const context: ToolContext = {
     sessionId: session.id,
     workingDirectory,
@@ -426,6 +447,8 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
     sandbox: opts.sandbox,
     sandboxHandle,
     activeSkill,
+    workingMemory,
+    projectId: session.projectId ?? null,
     ...opts.toolContextExtras,
   };
 

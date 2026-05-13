@@ -33,6 +33,12 @@ export interface AgentDefinition {
   skipGlobalContext?: boolean;
   /** When true, summarize dropped history instead of silently discarding it. */
   summarizeOnTrim?: boolean;
+  /** When true, prepend a `[Relevant memory]` block built from recall hits to the system prompt. */
+  injectMemory?: boolean;
+  /** Token budget for the injected memory block. Default 800. */
+  memoryInjectBudgetTokens?: number;
+  /** Max number of recall hits to consider for injection. Default 5. */
+  memoryInjectLimit?: number;
   /** Hooks to run before/after the agent loop when using this agent. */
   hooks?: {
     beforeRun?: AgentHook | AgentHook[];
