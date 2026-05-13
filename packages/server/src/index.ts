@@ -60,6 +60,12 @@ import {
   updateAutopilotSettings,
   type AutopilotSettings,
   type AutopilotWorker,
+  type ExploratoryWorker,
+  listExploratoryRuns,
+  getExploratoryRun,
+  listExploratoryStates,
+  ensureExploratoryState,
+  updateExploratoryState,
   type CronScheduler,
   type AgentRuntime,
   type EngineEvent,
@@ -108,6 +114,7 @@ export interface ServerOptions {
   scheduler?: CronScheduler;
   taskWatcher?: TaskWatcher;
   autopilot?: AutopilotWorker;
+  exploratory?: ExploratoryWorker;
   workflowEngine?: WorkflowEngine;
   uiDistPath?: string;
 }
@@ -326,6 +333,98 @@ export function createServer(opts: ServerOptions) {
   app.post("/api/memory/sweep", (c) => {
     const report = runMemorySweep(runtime.db);
     return c.json(report);
+  });
+
+  // === Always-on / exploratory agents ===
+
+  app.get("/api/exploratory/agents", (c) => {
+    const config = runtime.getConfig();
+    const states = listExploratoryStates(runtime.db);
+    const stateByName = new Map(states.map((s) => [s.agent_name, s]));
+    const agents = Object.entries(config.agents ?? {})
+      .filter(([, def]) => def.online?.enabled)
+      .map(([name, def]) => {
+        const state = stateByName.get(name);
+        return {
+          name,
+          enabled_in_config: true,
+          enabled_in_state: state?.enabled ?? true,
+          paused_until: state?.paused_until ?? null,
+          last_tick_at: state?.last_tick_at ?? null,
+          last_tick_status: state?.last_tick_status ?? null,
+          current_interval_ms: state?.current_interval_ms ?? null,
+          tokens_today: state?.tokens_today ?? 0,
+          runs_today: state?.runs_today ?? 0,
+          cadence: def.online?.cadence ?? null,
+          budgets: def.online?.budgets ?? null,
+        };
+      });
+    return c.json({
+      enabled: !!config.exploratory?.enabled,
+      activity: opts.exploratory?.getActivity() ?? null,
+      agents,
+    });
+  });
+
+  app.get("/api/exploratory/runs", (c) => {
+    const agentName = c.req.query("agent") || undefined;
+    const limit = Number.parseInt(c.req.query("limit") || "20", 10);
+    const runs = listExploratoryRuns(runtime.db, {
+      agentName,
+      limit: Number.isFinite(limit) && limit > 0 ? Math.min(limit, 200) : 20,
+    });
+    return c.json({ runs });
+  });
+
+  app.get("/api/exploratory/runs/:id", (c) => {
+    const run = getExploratoryRun(runtime.db, c.req.param("id"));
+    if (!run) return c.json({ error: "not found" }, 404);
+    return c.json(run);
+  });
+
+  app.post("/api/exploratory/agents/:name/pause", async (c) => {
+    const name = c.req.param("name");
+    const body = await c.req.json().catch(() => ({})) as { hours?: number };
+    const hours = body.hours && body.hours > 0 ? Math.min(body.hours, 24 * 7) : 4;
+    const until = new Date(Date.now() + hours * 3_600_000).toISOString();
+    ensureExploratoryState(runtime.db, name);
+    const state = updateExploratoryState(runtime.db, name, { paused_until: until });
+    return c.json({ ok: true, paused_until: state.paused_until });
+  });
+
+  app.post("/api/exploratory/agents/:name/resume", (c) => {
+    const name = c.req.param("name");
+    ensureExploratoryState(runtime.db, name);
+    const state = updateExploratoryState(runtime.db, name, {
+      paused_until: null,
+      enabled: true,
+    });
+    return c.json({ ok: true, state });
+  });
+
+  app.post("/api/exploratory/agents/:name/disable", (c) => {
+    const name = c.req.param("name");
+    ensureExploratoryState(runtime.db, name);
+    const state = updateExploratoryState(runtime.db, name, { enabled: false });
+    return c.json({ ok: true, state });
+  });
+
+  app.post("/api/exploratory/agents/:name/run", async (c) => {
+    if (!opts.exploratory) {
+      return c.json({ error: "exploratory worker not configured" }, 503);
+    }
+    const name = c.req.param("name");
+    const def = runtime.getConfig().agents?.[name];
+    if (!def) return c.json({ error: `unknown agent: ${name}` }, 404);
+    if (!def.online?.enabled) {
+      return c.json({ error: `agent "${name}" does not have online.enabled` }, 400);
+    }
+    try {
+      const run = await opts.exploratory.runAgent(name, def);
+      return c.json({ ok: true, run });
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 500);
+    }
   });
 
   app.post("/api/sessions/new", async (c) => {

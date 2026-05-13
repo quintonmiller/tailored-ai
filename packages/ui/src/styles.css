@@ -5566,3 +5566,40 @@ select.model-entry-model {
 .dash-memory-top li { font-size: 12px; }
 .dash-memory-snippet { color: var(--text); }
 .dash-memory-link { font-size: 12px; align-self: flex-start; }
+
+/* Watchers panel (A5) */
+.dash-watchers { display: flex; flex-direction: column; gap: 8px; }
+.dash-watchers-activity {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--text-muted);
+  padding: 4px 8px; background: rgba(74, 144, 80, 0.08);
+  border-left: 2px solid #4a9050; border-radius: 2px;
+}
+.dash-watchers-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: #4a9050;
+  animation: pulse 1.5s infinite ease-in-out;
+}
+.dash-watchers-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.dash-watcher-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) 2fr auto;
+  gap: 10px; align-items: center;
+  font-size: 13px;
+  padding: 6px 8px; border-radius: 4px;
+  background: var(--surface);
+}
+.dash-watcher-name { display: flex; align-items: center; gap: 8px; font-weight: 500; }
+.dash-watcher-state {
+  display: inline-block; font-size: 10px; padding: 2px 6px; border-radius: 8px;
+  background: var(--surface-alt); color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.dash-watcher-state.state-ok    { background: rgba(74, 144, 80, 0.15); color: #4a9050; }
+.dash-watcher-state.state-noop  { background: rgba(150, 150, 150, 0.15); color: var(--text-muted); }
+.dash-watcher-state.state-error { background: rgba(192, 80, 80, 0.15); color: #c05050; }
+.dash-watcher-state.state-budget{ background: rgba(192, 144, 80, 0.15); color: #c09050; }
+.dash-watcher-state.paused      { background: rgba(192, 144, 80, 0.15); color: #c09050; }
+.dash-watcher-state.disabled    { background: rgba(150, 150, 150, 0.2);  color: var(--text-muted); opacity: 0.6; }
+.dash-watcher-meta { color: var(--text-muted); font-size: 11px; }
+.dash-watcher-actions { display: flex; gap: 4px; }
+.dash-watcher-actions button { font-size: 11px; padding: 3px 8px; }

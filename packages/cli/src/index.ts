@@ -20,6 +20,7 @@ import {
   initDatabase,
   AgentRuntime,
   AutopilotWorker,
+  ExploratoryWorker,
   createTools,
   createProvider,
   createEmbedder,
@@ -117,6 +118,9 @@ async function runServer(runtime: AgentRuntime) {
     getOwnerId: () => runtime.getConfig().channels.discord?.owner,
   });
   autopilot.start();
+
+  const exploratory = new ExploratoryWorker({ runtime });
+  exploratory.start();
 
   // Reconnect/disconnect Discord when config changes
   runtime.onReload(() => {
@@ -325,6 +329,7 @@ async function runServer(runtime: AgentRuntime) {
     scheduler,
     taskWatcher,
     autopilot,
+    exploratory,
     workflowEngine,
     uiDistPath,
   });
@@ -352,6 +357,7 @@ async function runServer(runtime: AgentRuntime) {
     scheduler.stop();
     taskWatcher.stop();
     autopilot.stop();
+    exploratory.stop();
     for (const ch of channels) {
       await ch.disconnect();
     }

@@ -119,6 +119,11 @@ export function Dashboard() {
         <MemoryPanel projectId={activeProject} />
       </DashboardSection>
 
+      {/* WATCHERS — always-on / exploratory agents (A5) */}
+      <DashboardSection title="Watchers">
+        <WatchersPanel />
+      </DashboardSection>
+
       {/* Compact health footer */}
       <HealthFooter health={health} />
     </div>
@@ -436,6 +441,112 @@ function MemoryPanel(props: { projectId: string | null }) {
       <a className="dash-memory-link" href="#/memory">
         Open Memory →
       </a>
+    </div>
+  );
+}
+
+function WatchersPanel() {
+  const [data, setData] = useState<{
+    enabled: boolean;
+    activity: import("../api").ExploratoryActivity | null;
+    agents: import("../api").ExploratoryAgent[];
+  } | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const reload = () => {
+    import("../api").then((m) => m.fetchExploratoryAgents().then(setData).catch(() => {}));
+  };
+  useEffect(() => {
+    reload();
+    const id = setInterval(reload, 15_000);
+    return () => clearInterval(id);
+  }, []);
+
+  if (!data) return <div className="dash-empty">Loading…</div>;
+
+  if (!data.enabled) {
+    return (
+      <div className="dash-empty">
+        Exploratory worker disabled. Set <code>exploratory.enabled: true</code> in config to enable.
+      </div>
+    );
+  }
+
+  if (data.agents.length === 0) {
+    return (
+      <div className="dash-empty">
+        No agents have <code>online.enabled: true</code>. Add it to an agent (with <code>recall</code>{" "}
+        in its tools) to start a watcher.
+      </div>
+    );
+  }
+
+  const handle = async (name: string, action: "pause" | "resume" | "run") => {
+    setBusy(name);
+    try {
+      const api = await import("../api");
+      if (action === "pause") await api.pauseExploratoryAgent(name, 4);
+      else if (action === "resume") await api.resumeExploratoryAgent(name);
+      else if (action === "run") await api.runExploratoryAgent(name);
+      reload();
+    } catch (e) {
+      alert(`Failed: ${(e as Error).message}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="dash-watchers">
+      {data.activity && (
+        <div className="dash-watchers-activity">
+          <span className="dash-watchers-dot" /> {data.activity.agentName} running ({data.activity.runId})
+        </div>
+      )}
+      <ul className="dash-watchers-list">
+        {data.agents.map((a) => {
+          const paused = a.paused_until && new Date(a.paused_until) > new Date();
+          return (
+            <li key={a.name} className="dash-watcher-row">
+              <div className="dash-watcher-name">
+                <span className={`dash-watcher-state state-${a.last_tick_status ?? "idle"}${paused ? " paused" : ""}${a.enabled_in_state ? "" : " disabled"}`}>
+                  {!a.enabled_in_state
+                    ? "off"
+                    : paused
+                      ? "paused"
+                      : data.activity?.agentName === a.name
+                        ? "running"
+                        : a.last_tick_status ?? "idle"}
+                </span>
+                {a.name}
+              </div>
+              <div className="dash-watcher-meta">
+                {a.runs_today} runs · {a.tokens_today.toLocaleString()} tok today
+                {a.current_interval_ms && (
+                  <> · interval {Math.round(a.current_interval_ms / 60_000)}m</>
+                )}
+                {a.last_tick_at && (
+                  <> · last {a.last_tick_at.slice(11, 16)}</>
+                )}
+              </div>
+              <div className="dash-watcher-actions">
+                <button type="button" disabled={busy === a.name} onClick={() => handle(a.name, "run")}>
+                  Run now
+                </button>
+                {paused ? (
+                  <button type="button" disabled={busy === a.name} onClick={() => handle(a.name, "resume")}>
+                    Resume
+                  </button>
+                ) : (
+                  <button type="button" disabled={busy === a.name} onClick={() => handle(a.name, "pause")}>
+                    Pause 4h
+                  </button>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }

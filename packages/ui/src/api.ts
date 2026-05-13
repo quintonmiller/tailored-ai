@@ -1342,3 +1342,98 @@ export function runMemorySweepHttp(): Promise<{
 }> {
   return fetch(`/api/memory/sweep`, { method: "POST" }).then((r) => r.json());
 }
+
+export interface ExploratoryAgent {
+  name: string;
+  enabled_in_config: boolean;
+  enabled_in_state: boolean;
+  paused_until: string | null;
+  last_tick_at: string | null;
+  last_tick_status: string | null;
+  current_interval_ms: number | null;
+  tokens_today: number;
+  runs_today: number;
+  cadence: {
+    interval_minutes?: number;
+    idle_backoff_multiplier?: number;
+    max_interval_minutes?: number;
+    window?: { start: string; end: string };
+  } | null;
+  budgets: {
+    tokens_per_tick?: number;
+    tokens_per_day?: number;
+    tool_calls_per_tick?: number;
+    stop_after_runs_per_day?: number;
+  } | null;
+}
+
+export interface ExploratoryActivity {
+  agentName: string;
+  runId: string;
+  startedAt: string;
+}
+
+export interface ExploratoryRun {
+  id: string;
+  agent_name: string;
+  project_id: string | null;
+  started_at: string;
+  ended_at: string | null;
+  status: "running" | "ok" | "noop" | "budget" | "error";
+  tokens_used: number | null;
+  tool_calls: number | null;
+  note_ids: string[];
+  fact_ids: string[];
+  task_ids: string[];
+  notified_owner: boolean;
+  summary: string | null;
+  error: string | null;
+}
+
+export function fetchExploratoryAgents(): Promise<{
+  enabled: boolean;
+  activity: ExploratoryActivity | null;
+  agents: ExploratoryAgent[];
+}> {
+  return fetch(`/api/exploratory/agents`).then((r) => r.json());
+}
+
+export function fetchExploratoryRuns(params: {
+  agent?: string;
+  limit?: number;
+} = {}): Promise<{ runs: ExploratoryRun[] }> {
+  const qs = new URLSearchParams();
+  if (params.agent) qs.set("agent", params.agent);
+  if (params.limit) qs.set("limit", String(params.limit));
+  return fetch(`/api/exploratory/runs?${qs}`).then((r) => r.json());
+}
+
+export function fetchExploratoryRun(id: string): Promise<ExploratoryRun> {
+  return fetch(`/api/exploratory/runs/${id}`).then((r) => r.json());
+}
+
+export function pauseExploratoryAgent(name: string, hours = 4): Promise<{ ok: boolean; paused_until: string }> {
+  return fetch(`/api/exploratory/agents/${encodeURIComponent(name)}/pause`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ hours }),
+  }).then((r) => r.json());
+}
+
+export function resumeExploratoryAgent(name: string): Promise<{ ok: boolean }> {
+  return fetch(`/api/exploratory/agents/${encodeURIComponent(name)}/resume`, {
+    method: "POST",
+  }).then((r) => r.json());
+}
+
+export function disableExploratoryAgent(name: string): Promise<{ ok: boolean }> {
+  return fetch(`/api/exploratory/agents/${encodeURIComponent(name)}/disable`, {
+    method: "POST",
+  }).then((r) => r.json());
+}
+
+export function runExploratoryAgent(name: string): Promise<{ ok: boolean; run: ExploratoryRun }> {
+  return fetch(`/api/exploratory/agents/${encodeURIComponent(name)}/run`, {
+    method: "POST",
+  }).then((r) => r.json());
+}
