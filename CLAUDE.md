@@ -180,7 +180,7 @@ Both `openai_compatible` and `openai` share `OpenAIProvider`; the only differenc
 
 Design lives in [`docs/memory-tiers.md`](./docs/memory-tiers.md). Three tiers (working, short-term, long-term) sit alongside the existing `facts` and `memory` tools. Implementation lands across M1–M7 slices; the `recall` tool is the new unified surface.
 
-**M1 + M2 + M3 + M4 + M5 status (shipped):** schema, write surface, keyword retrieval, loop injection, end-of-session summarization, and embeddings + semantic search.
+**M1 + M2 + M3 + M4 + M5 + M6 status (shipped):** schema, write surface, keyword retrieval, loop injection, end-of-session summarization, embeddings + semantic search, and ref-count-driven promotion + daily sweep.
 
 - `packages/core/src/tools/recall.ts` — `RecallTool` with `query` / `note` / `forget` / `list` actions
 - `packages/core/src/tools/recall-query.ts` — `recallQuery()` ranks notes (short-term) and facts (long-term) by term coverage with small bonuses for tag/key/entity matches. Scores are a ranking signal, not capped at 1.0
@@ -206,8 +206,13 @@ Design lives in [`docs/memory-tiers.md`](./docs/memory-tiers.md). Three tiers (w
 - `agent/memory-index.ts`: `chunkText(text, {maxChunkChars, overlap})` sliding-window splitter; `indexNote(db, embedder, note)` is idempotent (replaces prior chunks); `indexKbDir(db, embedder, kbDir, {projectId})` backfills KB.
 - `recallQueryAsync(db, opts)` is the async sibling of `recallQuery` that merges semantic + keyword hits by source. Falls back to keyword-only when the embedder throws.
 - `RecallTool.query` action automatically uses semantic when the runtime has an embedder configured.
+- `notes.ref_count` (M6): every note surfaced by `recall query` increments this counter. Auto-promotion (`recallQuery({trackRefs:true, autoPromote:true, embedder})`) clones a note into `memory_chunks` once `ref_count >= 3` so semantic search finds it. Idempotent: existing chunks short-circuit the promotion.
+- `recall action: promote` — manual promotion of a specific note id. Requires an embedder. Pass `force: true` to re-index.
+- `promoteNote(db, embedder, noteId, opts)` — programmatic API. `recordNoteHit(db, noteId, {embedder, threshold, onPromote})` — ref-tracker + fire-and-forget promotion.
+- `runMemorySweep(db, opts)` — daily hygiene pass: extends TTL on referenced-but-expiring notes (`ref_count >= 3`, ttl ≤ now+1d → +7 days), then deletes expired low-importance notes. Returns `{deletedExpired, extendedTtl, remainingNotes, totalChunks}`.
+- AutopilotWorker schedules the sweep daily at 03:14 (via croner). Started/stopped with the worker.
 
-Promotion + sweep cron (M6), UI (M7) are tracked as separate beans `ptask_mem_m6`–`ptask_mem_m7`.
+UI (M7) is tracked as `ptask_mem_m7`.
 
 ## Admin Tool
 

@@ -375,6 +375,19 @@ export {
   type IndexResult,
   type ChunkOptions,
 } from "./agent/memory-index.js";
+export {
+  promoteNote,
+  recordNoteHit,
+  runMemorySweep,
+  type PromoteOptions,
+  type PromoteResult,
+  type SweepOptions,
+  type SweepReport,
+} from "./agent/memory-promotion.js";
+export {
+  incrementNoteRef,
+  extendNoteTtl,
+} from "./db/note-queries.js";
 export type { Note, NoteInput, NoteQuery } from "./db/note-queries.js";
 export {
   createNote,

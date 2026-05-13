@@ -254,7 +254,7 @@ describe("RecallTool", () => {
 
   it("unknown action errors", async () => {
     const tool = new RecallTool(db);
-    const res = await tool.execute({ action: "promote" }, makeCtx());
+    const res = await tool.execute({ action: "bogus" }, makeCtx());
     expect(res.success).toBe(false);
     expect(res.error).toMatch(/unknown action/);
   });

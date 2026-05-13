@@ -14,6 +14,7 @@ import type { ProjectContext } from "../projects/resolve.js";
 import type { AgentRuntime } from "../runtime.js";
 import type { Task, TaskBackend } from "../tasks/interface.js";
 import { buildMorningDigest, recordDigestRun } from "./digest.js";
+import { runMemorySweep } from "../agent/memory-promotion.js";
 
 export interface AutopilotWorkerOptions {
   runtime: AgentRuntime;
@@ -47,6 +48,7 @@ export class AutopilotWorker {
   private intervalMs: number;
   private timer: ReturnType<typeof setInterval> | undefined;
   private digestCron: Cron | undefined;
+  private memorySweepCron: Cron | undefined;
   private currentDigestTime: string | null = null;
   private running = false;
   private currentTask: { taskId: string; title: string } | undefined;
@@ -84,10 +86,31 @@ export class AutopilotWorker {
       });
     }, this.intervalMs);
     this.syncDigestSchedule();
+    this.startMemorySweepCron();
     // Fire once immediately.
     this.tick().catch((err) => {
       console.error("[autopilot] Initial tick error:", (err as Error).message);
     });
+  }
+
+  /**
+   * Daily memory hygiene sweep — runs at 03:14 every day, extending TTL on
+   * referenced notes and deleting expired low-importance ones.
+   */
+  private startMemorySweepCron(): void {
+    if (this.memorySweepCron) return;
+    this.memorySweepCron = new Cron("14 3 * * *", () => {
+      try {
+        const report = runMemorySweep(this.runtime.db);
+        console.log(
+          `[autopilot] Memory sweep: extended ${report.extendedTtl}, deleted ${report.deletedExpired}, ` +
+            `remaining notes=${report.remainingNotes}, chunks=${report.totalChunks}`,
+        );
+      } catch (err) {
+        console.error("[autopilot] Memory sweep error:", (err as Error).message);
+      }
+    });
+    console.log("[autopilot] Memory sweep scheduled daily at 03:14");
   }
 
   stop(): void {
@@ -96,6 +119,10 @@ export class AutopilotWorker {
     if (this.digestCron) {
       this.digestCron.stop();
       this.digestCron = undefined;
+    }
+    if (this.memorySweepCron) {
+      this.memorySweepCron.stop();
+      this.memorySweepCron = undefined;
     }
     console.log("[autopilot] Stopped");
   }

@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { recordNoteHit } from "../agent/memory-promotion.js";
 import { semanticSearch } from "../db/chunk-queries.js";
 import { listFacts, type Fact } from "../db/fact-queries.js";
 import { listNotes, type Note } from "../db/note-queries.js";
@@ -26,6 +27,12 @@ export interface RecallQueryOptions {
   embedModel?: string;
   /** Minimum cosine similarity to consider a chunk match (default 0.3). */
   semanticMinScore?: number;
+  /** When true, ref_count is incremented on each surfaced note hit. Default false. */
+  trackRefs?: boolean;
+  /** When true (and embedder present), notes crossing the threshold are auto-promoted. */
+  autoPromote?: boolean;
+  /** ref_count threshold for auto-promotion. Default 3. */
+  promoteThreshold?: number;
 }
 
 /**
@@ -151,7 +158,21 @@ export function recallQuery(db: Database.Database, opts: RecallQueryOptions): Re
     if (b.score !== a.score) return b.score - a.score;
     return b.createdAt.localeCompare(a.createdAt);
   });
-  return hits.slice(0, limit);
+  const top = hits.slice(0, limit);
+  trackHits(db, top, opts);
+  return top;
+}
+
+function trackHits(db: Database.Database, hits: RecallHit[], opts: RecallQueryOptions): void {
+  if (!opts.trackRefs) return;
+  for (const h of hits) {
+    if (h.tier !== "short") continue;
+    if (!h.source.startsWith("note_")) continue;
+    recordNoteHit(db, h.source, {
+      embedder: opts.autoPromote ? opts.embedder : undefined,
+      threshold: opts.promoteThreshold,
+    });
+  }
 }
 
 /**
@@ -163,6 +184,8 @@ export async function recallQueryAsync(
   db: Database.Database,
   opts: RecallQueryOptions,
 ): Promise<RecallHit[]> {
+  // recallQuery already tracks keyword note hits when trackRefs is set;
+  // we don't want to double-track them at the merge stage.
   const keyword = recallQuery(db, opts);
 
   if (!opts.embedder || !opts.query.trim()) return keyword;

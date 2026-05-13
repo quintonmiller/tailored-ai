@@ -14,6 +14,7 @@ export interface Note {
   content: string;
   tags: string[];
   importance: number | null;
+  ref_count: number;
   created_at: string;
   ttl_at: string | null;
 }
@@ -47,6 +48,7 @@ interface NoteRow {
   content: string;
   tags: string;
   importance: number | null;
+  ref_count: number;
   created_at: string;
   ttl_at: string | null;
 }
@@ -138,6 +140,36 @@ export function listNotes(db: Database.Database, q: NoteQuery = {}): Note[] {
 export function deleteNote(db: Database.Database, id: string): boolean {
   const res = db.prepare("DELETE FROM notes WHERE id = ?").run(id);
   return res.changes > 0;
+}
+
+/**
+ * Increment a note's ref_count. Used as the auto-promotion signal — every
+ * time a note is surfaced by recall, this ticks up. Returns the new count
+ * (or null if the note doesn't exist).
+ */
+export function incrementNoteRef(db: Database.Database, id: string): number | null {
+  const res = db
+    .prepare("UPDATE notes SET ref_count = ref_count + 1 WHERE id = ? RETURNING ref_count")
+    .get(id) as { ref_count: number } | undefined;
+  return res?.ref_count ?? null;
+}
+
+/**
+ * Extend a note's ttl_at by N days. No-op when the note has no TTL set
+ * (durable note). Returns the new ttl_at string or null when unchanged.
+ */
+export function extendNoteTtl(
+  db: Database.Database,
+  id: string,
+  extraDays: number,
+): string | null {
+  const note = getNote(db, id);
+  if (!note || !note.ttl_at) return null;
+  const newTtl = new Date(
+    new Date(note.ttl_at).getTime() + extraDays * 86_400_000,
+  ).toISOString();
+  db.prepare("UPDATE notes SET ttl_at = ? WHERE id = ?").run(newTtl, id);
+  return newTtl;
 }
 
 /** Delete notes whose ttl_at has passed unless importance >= keepThreshold. */

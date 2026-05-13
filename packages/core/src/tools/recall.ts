@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { promoteNote } from "../agent/memory-promotion.js";
 import {
   createNote,
   deleteNote,
@@ -28,8 +29,8 @@ export class RecallTool implements Tool {
     properties: {
       action: {
         type: "string",
-        enum: ["query", "note", "forget", "list"],
-        description: "query: ranked search. note: write prose. forget: delete by id. list: show recent notes.",
+        enum: ["query", "note", "forget", "list", "promote"],
+        description: "query: ranked search. note: write prose. forget: delete by id. list: show recent notes. promote: clone a note into long-term semantic memory.",
       },
       query: {
         type: "string",
@@ -58,7 +59,11 @@ export class RecallTool implements Tool {
       },
       id: {
         type: "string",
-        description: "Note id (required for action=forget).",
+        description: "Note id (required for action=forget and action=promote).",
+      },
+      force: {
+        type: "boolean",
+        description: "For promote: re-index even when chunks already exist.",
       },
       project_id: {
         type: "string",
@@ -109,6 +114,8 @@ export class RecallTool implements Tool {
           return this.forget(args);
         case "list":
           return this.list(args, context, projectId);
+        case "promote":
+          return this.promote(args);
         default:
           return { success: false, output: "", error: `unknown action "${action}"` };
       }
@@ -139,14 +146,44 @@ export class RecallTool implements Tool {
           limit,
           embedder,
           embedModel: this.embedModel,
+          trackRefs: true,
+          autoPromote: true,
         })
       : recallQuery(this.db, {
           query,
           tier: tierArg as "any" | Tier,
           projectId,
           limit,
+          trackRefs: true,
         });
     return { success: true, output: formatHits(hits) };
+  }
+
+  private async promote(args: Record<string, unknown>): Promise<ToolResult> {
+    const id = typeof args.id === "string" ? args.id : "";
+    if (!id) {
+      return { success: false, output: "", error: "id is required for action=promote" };
+    }
+    const embedder = this.getEmbedder?.();
+    if (!embedder) {
+      return {
+        success: false,
+        output: "",
+        error: "memory.embeddings is not enabled — cannot promote to semantic memory",
+      };
+    }
+    const force = args.force === true;
+    const result = await promoteNote(this.db, embedder, id, {
+      force,
+      model: this.embedModel,
+    });
+    if (!result) {
+      return { success: true, output: `(no note with id ${id})` };
+    }
+    if (result.alreadyPromoted) {
+      return { success: true, output: `${id} is already promoted (${result.chunkCount} chunks; use force to re-index)` };
+    }
+    return { success: true, output: `promoted ${id} → ${result.chunkCount} chunks` };
   }
 
   private note(

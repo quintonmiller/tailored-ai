@@ -250,6 +250,7 @@ export function initDatabase(dbPath: string): Database.Database {
       content     TEXT NOT NULL,
       tags        TEXT NOT NULL DEFAULT '[]',
       importance  REAL,
+      ref_count   INTEGER NOT NULL DEFAULT 0,
       created_at  TEXT NOT NULL DEFAULT (datetime('now')),
       ttl_at      TEXT
     );
@@ -346,6 +347,13 @@ export function initDatabase(dbPath: string): Database.Database {
 
   try {
     db.exec("ALTER TABLE autopilot_settings ADD COLUMN digest_time TEXT DEFAULT '08:00'");
+  } catch {
+    // Column already exists
+  }
+
+  // Safe migration: ref_count on notes (M6 — reference-count promotion).
+  try {
+    db.exec("ALTER TABLE notes ADD COLUMN ref_count INTEGER NOT NULL DEFAULT 0");
   } catch {
     // Column already exists
   }
