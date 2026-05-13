@@ -1,12 +1,22 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { AgentDefinition, OnlineAgentConfig } from "../config.js";
+import { runAgentLoop } from "../agent/loop.js";
+import { resetSession } from "../agent/session.js";
 import { isInTimeWindow } from "../db/autopilot-queries.js";
+import { recordTokenUsage } from "../db/autopilot-queries.js";
 import {
+  completeExploratoryRun,
+  createExploratoryRun,
   ensureExploratoryState,
+  type ExploratoryRun,
+  type ExploratoryRunStatus,
   type ExploratoryState,
   listExploratoryStates,
   maybeResetDailyCounters,
   updateExploratoryState,
 } from "../db/exploratory-queries.js";
+import { listNotes } from "../db/note-queries.js";
 import type { AgentRuntime } from "../runtime.js";
 
 export interface ExploratoryWorkerOptions {
@@ -15,22 +25,31 @@ export interface ExploratoryWorkerOptions {
   intervalMs?: number;
   /** Injectable clock for testability. */
   now?: () => Date;
-  /** Hook called when a tick *would* run an agent. Used by A2 (dry-run) and tests. */
+  /** Hook called when a tick *would* run an agent. */
   onWouldRun?: (info: { agentName: string; reason: string }) => void;
   /** Hook called when a tick was skipped, with the reason. */
   onSkip?: (info: { agentName: string; reason: string }) => void;
+  /** Hook called when an agent run finishes. Used by tests + UI. */
+  onRunFinished?: (run: ExploratoryRun) => void;
+  /**
+   * Override the loop runner. Useful for tests that don't want to spin up a
+   * provider; defaults to `runAgentLoop` from `../agent/loop.js`.
+   */
+  runLoop?: typeof runAgentLoop;
 }
 
 export interface ExploratoryActivity {
   agentName: string;
+  runId: string;
   startedAt: string;
-  runId?: string;
 }
 
 const DEFAULT_INTERVAL_MS = 60_000;
 const DEFAULT_TICK_INTERVAL_MINUTES = 30;
 const DEFAULT_MAX_INTERVAL_MINUTES = 240;
 const DEFAULT_RUNS_PER_DAY_CAP = 12;
+const DEFAULT_TOOL_CALLS_PER_TICK = 8;
+const DEFAULT_TOKENS_PER_TICK = 8000;
 
 export type SkipReason =
   | "config-disabled"
@@ -42,18 +61,21 @@ export type SkipReason =
   | "cadence-not-elapsed";
 
 /**
- * A2 — worker shell. The class wakes on `intervalMs`, scans agents with
- * `online.enabled`, and for each due agent it currently *logs* what it would
- * do without actually running the agent loop. A3 wires the loop in.
+ * A3 — wires the agent loop into the worker shell from A2. Each due tick now
+ * actually runs the agent against a recall-built prompt with narrowed tools,
+ * abort + tokens-per-tick guard, and records an `xrun_*` row.
  */
 export class ExploratoryWorker {
   private runtime: AgentRuntime;
   private intervalMs: number;
   private now: () => Date;
   private timer: ReturnType<typeof setInterval> | undefined;
-  private activity: ExploratoryActivity | undefined;
+  private currentActivity: ExploratoryActivity | undefined;
+  private running = false;
   private onWouldRun?: ExploratoryWorkerOptions["onWouldRun"];
   private onSkip?: ExploratoryWorkerOptions["onSkip"];
+  private onRunFinished?: ExploratoryWorkerOptions["onRunFinished"];
+  private runLoop: typeof runAgentLoop;
 
   constructor(opts: ExploratoryWorkerOptions) {
     this.runtime = opts.runtime;
@@ -62,6 +84,8 @@ export class ExploratoryWorker {
     this.now = opts.now ?? (() => new Date());
     this.onWouldRun = opts.onWouldRun;
     this.onSkip = opts.onSkip;
+    this.onRunFinished = opts.onRunFinished;
+    this.runLoop = opts.runLoop ?? runAgentLoop;
   }
 
   start(): void {
@@ -88,38 +112,207 @@ export class ExploratoryWorker {
   }
 
   getActivity(): ExploratoryActivity | undefined {
-    return this.activity;
+    return this.currentActivity;
   }
 
   /** Public for tests / manual triggers. */
   async tick(): Promise<void> {
+    if (this.running) return; // never re-enter
     const config = this.runtime.getConfig();
     if (!config.exploratory?.enabled) {
       this.skip("(global)", "config-disabled");
       return;
     }
-    const agents = config.agents ?? {};
-    const now = this.now();
-    for (const [name, def] of Object.entries(agents)) {
-      const decision = this.evaluate(name, def, now);
-      if (decision.kind === "skip") {
-        this.skip(name, decision.reason);
-        continue;
+    this.running = true;
+    try {
+      const agents = config.agents ?? {};
+      const now = this.now();
+      for (const [name, def] of Object.entries(agents)) {
+        const decision = this.evaluate(name, def, now);
+        if (decision.kind === "skip") {
+          this.skip(name, decision.reason);
+          continue;
+        }
+        this.onWouldRun?.({ agentName: name, reason: decision.reason });
+        try {
+          await this.runAgent(name, def);
+        } catch (err) {
+          console.error(`[exploratory] ${name} run failed:`, (err as Error).message);
+        }
       }
-      // A2: don't actually run; emit "would run" and stamp last_tick_at so
-      // we don't burn cycles re-evaluating the same agent every tick.
-      this.wouldRun(name, decision.reason);
-      updateExploratoryState(this.runtime.db, name, {
-        last_tick_at: now.toISOString(),
-        last_tick_status: "noop",
-      });
+    } finally {
+      this.running = false;
     }
   }
 
   /**
-   * Decide whether `agentName` should fire on a tick at `now`. Exposed for
-   * tests so the worker logic can be exercised without the timer.
+   * Run a single agent. Public for tests/manual triggers, but normally driven
+   * by `tick()`.
    */
+  async runAgent(agentName: string, def: AgentDefinition): Promise<ExploratoryRun> {
+    const db = this.runtime.db;
+    const online = def.online ?? {};
+    const projectId = this.runtime.getConfig().exploratory ? null : null; // S7: project-scoped exploratory deferred
+    const run = createExploratoryRun(db, { agentName, projectId });
+    this.currentActivity = {
+      agentName,
+      runId: run.id,
+      startedAt: run.started_at,
+    };
+
+    let status: ExploratoryRunStatus = "ok";
+    let summary: string | undefined;
+    let errorMsg: string | undefined;
+    let promptTokens = 0;
+    let completionTokens = 0;
+    const toolCalls: string[] = [];
+    const startedAt = Date.now();
+
+    const abortController = new AbortController();
+    const runtimeSignal = this.runtime.shutdownSignal;
+    const onRuntimeAbort = () => abortController.abort();
+    runtimeSignal.addEventListener("abort", onRuntimeAbort);
+
+    const tokenCap = online.budgets?.tokens_per_tick ?? DEFAULT_TOKENS_PER_TICK;
+    const toolCallCap = online.budgets?.tool_calls_per_tick ?? DEFAULT_TOOL_CALLS_PER_TICK;
+
+    try {
+      const prompt = await this.buildTickPrompt(agentName, def);
+
+      const sessionKey = `exploratory:${agentName}:${run.id}`;
+      const provider = this.runtime.getProvider().id;
+      const model = this.runtime.getModel();
+      const session = resetSession(db, sessionKey, model, provider, null);
+
+      const baseOpts = this.runtime.buildLoopOptions({ session, agentName });
+
+      // Narrow the tool set if the agent declared online.tools (a subset of
+      // its main tools). Subset semantics: each entry must be a name in
+      // baseOpts.tools.
+      let tools = baseOpts.tools;
+      let getTools = baseOpts.getTools;
+      if (online.tools && online.tools.length > 0) {
+        const want = new Set(online.tools);
+        tools = baseOpts.tools.filter((t) => want.has(t.name));
+        getTools = () => (baseOpts.getTools?.() ?? tools).filter((t) => want.has(t.name));
+      }
+
+      const response = await this.runLoop(prompt, {
+        ...baseOpts,
+        tools,
+        getTools,
+        maxToolRounds: toolCallCap,
+        signal: abortController.signal,
+        toolContextExtras: { agentName, exploratoryRunId: run.id },
+        onUsage: (usage) => {
+          promptTokens += usage.input;
+          completionTokens += usage.output;
+          recordTokenUsage(db, {
+            sessionId: session.id,
+            promptTokens: usage.input,
+            completionTokens: usage.output,
+          });
+          if (promptTokens + completionTokens >= tokenCap) {
+            console.log(
+              `[exploratory] ${agentName} hit per-tick token cap (${tokenCap}) — aborting`,
+            );
+            status = "budget";
+            abortController.abort();
+          }
+        },
+        onToolCall: (name) => {
+          toolCalls.push(name);
+        },
+      });
+      summary = response.slice(0, 1000);
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (abortController.signal.aborted && status === "ok") {
+        status = "budget";
+      } else if (status === "ok") {
+        status = "error";
+        errorMsg = msg;
+      }
+      console.error(`[exploratory] ${agentName} run ${run.id}: ${msg}`);
+    } finally {
+      runtimeSignal.removeEventListener("abort", onRuntimeAbort);
+    }
+
+    const completed = completeExploratoryRun(db, run.id, {
+      status,
+      tokensUsed: promptTokens + completionTokens,
+      toolCalls: toolCalls.length,
+      summary,
+      error: errorMsg,
+    });
+
+    // Update state counters. Daily counters were reset at the top of evaluate().
+    const state = ensureExploratoryState(db, agentName);
+    updateExploratoryState(db, agentName, {
+      last_tick_at: new Date(startedAt).toISOString(),
+      last_tick_status: status,
+      runs_today: state.runs_today + 1,
+      tokens_today: state.tokens_today + (promptTokens + completionTokens),
+    });
+
+    this.currentActivity = undefined;
+    this.onRunFinished?.(completed);
+    return completed;
+  }
+
+  /**
+   * Build the per-tick prompt. Layers: goals.md text + recent recall results +
+   * a fixed pick-one-thing instruction.
+   */
+  async buildTickPrompt(agentName: string, def: AgentDefinition): Promise<string> {
+    const goals = await this.readGoals(agentName, def);
+    const recall = await this.readRecentRecall(agentName);
+    const sections: string[] = [];
+    sections.push("[Goals]");
+    sections.push(goals.trim() || "(no goals.md — agent should re-read its own instructions)");
+    sections.push("");
+    sections.push("[Recent notes]");
+    sections.push(recall || "(no recent notes)");
+    sections.push("");
+    sections.push(
+      "Pick the single most useful thing to do this tick toward those goals. " +
+        "If nothing new is worth doing, write a brief note explaining why and stop.",
+    );
+    return sections.join("\n");
+  }
+
+  private async readGoals(agentName: string, def: AgentDefinition): Promise<string> {
+    const file = def.online?.goals_file ?? "goals.md";
+    const agentContextDir = def.contextDir ?? join(this.runtime.contextDir, "agents", agentName);
+    const path = join(agentContextDir, file);
+    try {
+      return await readFile(path, "utf8");
+    } catch {
+      return "";
+    }
+  }
+
+  private async readRecentRecall(agentName: string): Promise<string> {
+    try {
+      const notes = listNotes(this.runtime.db, {
+        agent: agentName,
+        limit: 5,
+        excludeExpired: true,
+      });
+      if (notes.length === 0) return "";
+      return notes
+        .map((n) => {
+          const stamp = n.created_at.slice(0, 16).replace("T", " ");
+          const tags = n.tags.length > 0 ? ` [${n.tags.join(",")}]` : "";
+          return `- ${stamp}${tags}: ${n.content.slice(0, 200)}`;
+        })
+        .join("\n");
+    } catch (err) {
+      console.warn(`[exploratory] recall failed: ${(err as Error).message}`);
+      return "";
+    }
+  }
+
   evaluate(
     agentName: string,
     def: AgentDefinition,
@@ -157,7 +350,6 @@ export class ExploratoryWorker {
     return { kind: "run", reason: "due" };
   }
 
-  /** Effective interval for the next tick: backoff or base. */
   private cadenceElapsed(state: ExploratoryState, online: OnlineAgentConfig, now: Date): boolean {
     if (!state.last_tick_at) return true;
     const last = new Date(state.last_tick_at);
@@ -173,11 +365,6 @@ export class ExploratoryWorker {
     const base = (online.cadence?.interval_minutes ?? DEFAULT_TICK_INTERVAL_MINUTES) * 60_000;
     const max = (online.cadence?.max_interval_minutes ?? DEFAULT_MAX_INTERVAL_MINUTES) * 60_000;
     return Math.min(base, max);
-  }
-
-  private wouldRun(agentName: string, reason: string): void {
-    console.log(`[exploratory] would-run ${agentName} (${reason})`);
-    this.onWouldRun?.({ agentName, reason });
   }
 
   private skip(agentName: string, reason: SkipReason | string): void {

@@ -9,6 +9,8 @@ export interface ToolContext {
   permissions?: import("../approval.js").PermissionsConfig;
   /** When set, the tool is executing inside the autopilot worker for this project task. */
   autopilotTaskId?: string;
+  /** When set, the tool is executing inside an ExploratoryWorker tick. The id matches `exploratory_runs.id`. */
+  exploratoryRunId?: string;
   /** Name of the agent currently running. Used as the author on tool-initiated records (comments, etc.). */
   agentName?: string;
   db?: import("better-sqlite3").Database;
