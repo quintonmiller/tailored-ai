@@ -241,6 +241,36 @@ export function initDatabase(dbPath: string): Database.Database {
       ON workflow_form_pending(status);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_form_pending_step
       ON workflow_form_pending(run_id, step_name);
+
+    CREATE TABLE IF NOT EXISTS notes (
+      id          TEXT PRIMARY KEY,
+      session_id  TEXT,
+      project_id  TEXT,
+      agent       TEXT,
+      content     TEXT NOT NULL,
+      tags        TEXT NOT NULL DEFAULT '[]',
+      importance  REAL,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      ttl_at      TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_notes_session ON notes(session_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_notes_project ON notes(project_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_notes_ttl ON notes(ttl_at) WHERE ttl_at IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS memory_chunks (
+      id          TEXT PRIMARY KEY,
+      project_id  TEXT,
+      source      TEXT NOT NULL,
+      content     TEXT NOT NULL,
+      embedding   BLOB,
+      embed_model TEXT,
+      metadata    TEXT NOT NULL DEFAULT '{}',
+      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_chunks_project ON memory_chunks(project_id);
+    CREATE INDEX IF NOT EXISTS idx_chunks_source ON memory_chunks(source);
   `);
 
   // Safe migration for existing DBs that lack session_key

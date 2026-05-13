@@ -335,6 +335,15 @@ export {
   forgetFact,
   getFact,
 } from "./db/fact-queries.js";
+export { RecallTool } from "./tools/recall.js";
+export type { Note, NoteInput, NoteQuery } from "./db/note-queries.js";
+export {
+  createNote,
+  getNote,
+  listNotes,
+  deleteNote,
+  sweepExpiredNotes,
+} from "./db/note-queries.js";
 export { ReadTool } from "./tools/read.js";
 export { TaskStatusTool } from "./tools/task-status.js";
 export { TasksTool, TaskQueryTool } from "./tools/tasks.js";

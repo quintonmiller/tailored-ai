@@ -176,6 +176,22 @@ Both `openai_compatible` and `openai` share `OpenAIProvider`; the only differenc
 - Discord: `/tasks` slash command for quick list/create (handled directly, no agent loop)
 - UI: Kanban board at `#/tasks` with drag-and-drop between status columns
 
+## Tiered Memory
+
+Design lives in [`docs/memory-tiers.md`](./docs/memory-tiers.md). Three tiers (working, short-term, long-term) sit alongside the existing `facts` and `memory` tools. Implementation lands across M1–M7 slices; the `recall` tool is the new unified surface.
+
+**M1 status (shipped):** schema (`notes`, `memory_chunks` tables) and the `recall` tool with write actions only.
+
+- `packages/core/src/tools/recall.ts` — `RecallTool` with `note` / `forget` / `list` actions
+- `packages/core/src/db/note-queries.ts` — `createNote`, `getNote`, `listNotes`, `deleteNote`, `sweepExpiredNotes`
+- Note IDs: `note_<8-char-uuid>` format
+- Tags stored as JSON arrays, filtered via SQLite `json_each()`
+- TTLs stored as ISO 8601; compared via `datetime(ttl_at) > datetime('now')` to normalize formats
+- Default TTL: 14 days. Notes with `importance >= 0.8` survive sweeps
+- Project-scoped by default: pass `project_id: "global"` for cross-project notes
+
+Retrieval (M2), loop injection (M3), summarization (M4), embeddings (M5), promotion + sweep cron (M6), UI (M7) are tracked as separate beans `ptask_mem_m2`–`ptask_mem_m7`.
+
 ## Admin Tool
 
 `packages/core/src/tools/admin.ts` lets the agent read/modify its own configuration at runtime:

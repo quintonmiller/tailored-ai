@@ -14,6 +14,7 @@ import { LoadSkillTool } from "./tools/load-skill.js";
 import { ResourceAdminTool } from "./tools/resource-admin.js";
 import { ExecTool } from "./tools/exec.js";
 import { FactsTool } from "./tools/facts.js";
+import { RecallTool } from "./tools/recall.js";
 import { GmailTool } from "./tools/gmail.js";
 import { GoogleCalendarTool } from "./tools/google-calendar.js";
 import { GoogleDriveTool } from "./tools/google-drive.js";
@@ -69,6 +70,9 @@ export function createTools(
   }
   if (config.tools.facts?.enabled !== false && opts?.db) {
     tools.push(new FactsTool(opts.db));
+  }
+  if (config.tools.recall?.enabled !== false && opts?.db) {
+    tools.push(new RecallTool(opts.db, { defaultTtlDays: config.tools.recall?.defaultTtlDays }));
   }
   if (config.tools.tasks?.enabled !== false) {
     const backend = opts?.taskBackend ?? (opts?.db ? createTaskBackend(config, opts.db) : undefined);

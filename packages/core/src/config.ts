@@ -263,6 +263,10 @@ export interface AgentConfig {
     facts?: {
       enabled: boolean;
     };
+    recall?: {
+      enabled: boolean;
+      defaultTtlDays?: number;
+    };
     gmail?: {
       enabled: boolean;
       account: string;
@@ -404,6 +408,7 @@ const DEFAULT_CONFIG: AgentConfig = {
     web_search: { enabled: false, provider: "brave", apiKey: "", maxResults: 5 },
     tasks: { enabled: true },
     facts: { enabled: true },
+    recall: { enabled: true, defaultTtlDays: 14 },
     projects: { enabled: true, directory: "./data/projects" },
     documents: { enabled: true },
     extract_document: { enabled: false },

@@ -22,3 +22,4 @@ config.local.yaml
 .claude/
 .ralph/
 .ralphrc
+packages/cli/tai.lock
