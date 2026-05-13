@@ -180,7 +180,7 @@ Both `openai_compatible` and `openai` share `OpenAIProvider`; the only differenc
 
 Design lives in [`docs/memory-tiers.md`](./docs/memory-tiers.md). Three tiers (working, short-term, long-term) sit alongside the existing `facts` and `memory` tools. Implementation lands across M1–M7 slices; the `recall` tool is the new unified surface.
 
-**M1 + M2 + M3 + M4 + M5 + M6 status (shipped):** schema, write surface, keyword retrieval, loop injection, end-of-session summarization, embeddings + semantic search, and ref-count-driven promotion + daily sweep.
+**Tiered memory complete (M1–M7).** Schema, write surface, keyword retrieval, loop injection, end-of-session summarization, embeddings + semantic search, ref-count-driven promotion + daily sweep, and HTTP/UI surface.
 
 - `packages/core/src/tools/recall.ts` — `RecallTool` with `query` / `note` / `forget` / `list` actions
 - `packages/core/src/tools/recall-query.ts` — `recallQuery()` ranks notes (short-term) and facts (long-term) by term coverage with small bonuses for tag/key/entity matches. Scores are a ranking signal, not capped at 1.0
@@ -211,8 +211,15 @@ Design lives in [`docs/memory-tiers.md`](./docs/memory-tiers.md). Three tiers (w
 - `promoteNote(db, embedder, noteId, opts)` — programmatic API. `recordNoteHit(db, noteId, {embedder, threshold, onPromote})` — ref-tracker + fire-and-forget promotion.
 - `runMemorySweep(db, opts)` — daily hygiene pass: extends TTL on referenced-but-expiring notes (`ref_count >= 3`, ttl ≤ now+1d → +7 days), then deletes expired low-importance notes. Returns `{deletedExpired, extendedTtl, remainingNotes, totalChunks}`.
 - AutopilotWorker schedules the sweep daily at 03:14 (via croner). Started/stopped with the worker.
-
-UI (M7) is tracked as `ptask_mem_m7`.
+- HTTP API (M7) — under `/api/memory/`:
+  - `GET /notes?project=&tag=&search=&limit=` — list live (non-expired) notes
+  - `GET /notes/:id` — single note
+  - `DELETE /notes/:id` — delete
+  - `POST /notes/:id/promote` (body: `{ force?: boolean }`) — manual semantic promotion
+  - `GET /recall?q=&project=&tier=&limit=` — ranked search, formatted output included
+  - `GET /stats?project=` — `{ counts, topReferenced, embeddingsEnabled, embeddingModel }`
+  - `POST /sweep` — runs `runMemorySweep` on demand
+- UI (M7): new `#/memory` page with stats tiles, recall search, most-referenced panel, full note list with delete/promote actions. Dashboard gains a `Memory` section showing the same stats + top-referenced links to `#/memory`. See `packages/ui/src/pages/Memory.tsx`.
 
 ## Admin Tool
 

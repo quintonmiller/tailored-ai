@@ -6,6 +6,7 @@ import { Chat } from "./pages/Chat";
 import { Config } from "./pages/Config";
 import { Dashboard } from "./pages/Dashboard";
 import { Help } from "./pages/Help";
+import { Memory } from "./pages/Memory";
 import { Projects } from "./pages/Projects";
 import { Resources } from "./pages/Resources";
 import { Sandboxes } from "./pages/Sandboxes";
@@ -28,6 +29,7 @@ type Route =
   | { page: "workflow-analytics" }
   | { page: "sandboxes" }
   | { page: "resources" }
+  | { page: "memory" }
   | { page: "help" };
 
 function parseHash(): Route {
@@ -94,6 +96,9 @@ function parseHash(): Route {
   }
   if (hash.startsWith("/resources")) {
     return { page: "resources" };
+  }
+  if (hash.startsWith("/memory")) {
+    return { page: "memory" };
   }
   if (hash.startsWith("/autopilot")) {
     // Moved under Config — redirect for back-compat.
@@ -169,6 +174,9 @@ export function App() {
           <a href="#/resources" className={route.page === "resources" ? "active" : ""}>
             Resources
           </a>
+          <a href="#/memory" className={route.page === "memory" ? "active" : ""}>
+            Memory
+          </a>
           <a href="#/chat" className={route.page === "chat" ? "active" : ""}>
             Chat
           </a>
@@ -204,6 +212,7 @@ export function App() {
         {route.page === "workflow-analytics" && <WorkflowAnalytics />}
         {route.page === "sandboxes" && <Sandboxes />}
         {route.page === "resources" && <Resources />}
+        {route.page === "memory" && <Memory />}
         {route.page === "config" && <Config section={route.section} />}
         {route.page === "help" && <Help />}
       </main>

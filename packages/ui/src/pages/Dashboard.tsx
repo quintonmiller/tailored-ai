@@ -114,6 +114,11 @@ export function Dashboard() {
         <RecentPanel runs={recentFinishedRuns} tasks={recentDone} />
       </DashboardSection>
 
+      {/* MEMORY (M7) */}
+      <DashboardSection title="Memory">
+        <MemoryPanel projectId={activeProject} />
+      </DashboardSection>
+
       {/* Compact health footer */}
       <HealthFooter health={health} />
     </div>
@@ -382,4 +387,55 @@ function formatUptime(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
   return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+}
+
+function MemoryPanel(props: { projectId: string | null }) {
+  const [stats, setStats] = useState<import("../api").MemoryStats | null>(null);
+  useEffect(() => {
+    import("../api").then((m) =>
+      m.fetchMemoryStats(props.projectId ?? undefined).then(setStats).catch(() => {}),
+    );
+  }, [props.projectId]);
+
+  if (!stats) return <div className="dash-empty">Loading…</div>;
+  const { counts, topReferenced, embeddingsEnabled, embeddingModel } = stats;
+  if (counts.notes === 0 && counts.chunks === 0) {
+    return (
+      <div className="dash-empty">
+        No memory yet. <a href="#/memory">Open Memory →</a>
+      </div>
+    );
+  }
+
+  return (
+    <div className="dash-memory">
+      <div className="dash-memory-stats">
+        <span>{counts.notes} notes</span>
+        <span>·</span>
+        <span>{counts.sessionSummaries} summaries</span>
+        <span>·</span>
+        <span>{counts.chunks} chunks</span>
+        <span>·</span>
+        <span className={embeddingsEnabled ? "dash-memory-on" : "dash-memory-off"}>
+          embeddings {embeddingsEnabled ? `on${embeddingModel ? ` (${embeddingModel})` : ""}` : "off"}
+        </span>
+      </div>
+      {topReferenced.length > 0 && (
+        <div className="dash-memory-top">
+          <div className="dash-memory-top-label">Most referenced</div>
+          <ul>
+            {topReferenced.slice(0, 3).map((n) => (
+              <li key={n.id}>
+                <span className="memory-ref-badge">{n.ref_count}×</span>{" "}
+                <span className="dash-memory-snippet">{truncate(n.content, 100)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <a className="dash-memory-link" href="#/memory">
+        Open Memory →
+      </a>
+    </div>
+  );
 }

@@ -1247,3 +1247,98 @@ export function sendChat(
 
   return controller;
 }
+
+// -----------------------------------------------------------------------------
+// Memory (tiered memory M7)
+// -----------------------------------------------------------------------------
+
+export interface MemoryNote {
+  id: string;
+  session_id: string | null;
+  project_id: string | null;
+  agent: string | null;
+  content: string;
+  tags: string[];
+  importance: number | null;
+  ref_count: number;
+  created_at: string;
+  ttl_at: string | null;
+}
+
+export interface MemoryRecallHit {
+  tier: "short" | "long";
+  source: string;
+  score: number;
+  snippet: string;
+  createdAt: string;
+}
+
+export interface MemoryStats {
+  counts: { notes: number; sessionSummaries: number; chunks: number };
+  topReferenced: Array<{
+    id: string;
+    content: string;
+    ref_count: number;
+    importance: number | null;
+    tags: string[];
+  }>;
+  embeddingsEnabled: boolean;
+  embeddingModel: string | null;
+}
+
+export function fetchMemoryNotes(params: {
+  project?: string | "global" | null;
+  tag?: string;
+  search?: string;
+  limit?: number;
+}): Promise<MemoryNote[]> {
+  const qs = new URLSearchParams();
+  if (params.project !== undefined && params.project !== null) qs.set("project", params.project);
+  if (params.tag) qs.set("tag", params.tag);
+  if (params.search) qs.set("search", params.search);
+  if (params.limit) qs.set("limit", String(params.limit));
+  return fetch(`/api/memory/notes?${qs}`).then((r) => r.json());
+}
+
+export function fetchMemoryStats(project?: string | "global" | null): Promise<MemoryStats> {
+  const qs = new URLSearchParams();
+  if (project !== undefined && project !== null) qs.set("project", project);
+  return fetch(`/api/memory/stats?${qs}`).then((r) => r.json());
+}
+
+export function fetchMemoryRecall(params: {
+  q: string;
+  project?: string | "global" | null;
+  tier?: "any" | "short" | "long";
+  limit?: number;
+}): Promise<{ hits: MemoryRecallHit[]; formatted: string }> {
+  const qs = new URLSearchParams({ q: params.q });
+  if (params.project !== undefined && params.project !== null) qs.set("project", params.project);
+  if (params.tier) qs.set("tier", params.tier);
+  if (params.limit) qs.set("limit", String(params.limit));
+  return fetch(`/api/memory/recall?${qs}`).then((r) => r.json());
+}
+
+export function deleteMemoryNote(id: string): Promise<{ deleted: boolean }> {
+  return fetch(`/api/memory/notes/${id}`, { method: "DELETE" }).then((r) => r.json());
+}
+
+export function promoteMemoryNote(
+  id: string,
+  force = false,
+): Promise<{ noteId: string; chunkCount: number; alreadyPromoted: boolean }> {
+  return fetch(`/api/memory/notes/${id}/promote`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ force }),
+  }).then((r) => r.json());
+}
+
+export function runMemorySweepHttp(): Promise<{
+  deletedExpired: number;
+  extendedTtl: number;
+  remainingNotes: number;
+  totalChunks: number;
+}> {
+  return fetch(`/api/memory/sweep`, { method: "POST" }).then((r) => r.json());
+}

@@ -20,6 +20,15 @@ import {
   listSessions,
   deleteSession,
   summarizeSession,
+  listNotes,
+  getNote,
+  deleteNote,
+  countChunks,
+  promoteNote,
+  runMemorySweep,
+  recallQueryAsync,
+  formatHits,
+  SESSION_SUMMARY_TAG,
   createProjectTask,
   getProjectTask,
   updateProjectTask,
@@ -192,6 +201,131 @@ export function createServer(opts: ServerOptions) {
     const deleted = deleteSession(runtime.db, id);
     if (!deleted) return c.json({ error: "session not found" }, 404);
     return c.json({ deleted: true, summaryNoteId: noteId });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Memory: notes + chunks + recall (M7).
+  // ---------------------------------------------------------------------------
+
+  app.get("/api/memory/notes", (c) => {
+    const project = c.req.query("project");
+    const tag = c.req.query("tag");
+    const search = c.req.query("search");
+    const limitParam = c.req.query("limit");
+    const limit = limitParam ? Number.parseInt(limitParam, 10) : 50;
+    // ?project=global → un-scoped (null). Omitted → no project filter.
+    const projectFilter =
+      project === undefined
+        ? undefined
+        : project === "global"
+          ? null
+          : project;
+    const notes = listNotes(runtime.db, {
+      project_id: projectFilter,
+      tag,
+      search,
+      limit,
+      excludeExpired: true,
+    });
+    return c.json(notes);
+  });
+
+  app.get("/api/memory/notes/:id", (c) => {
+    const { id } = c.req.param();
+    const note = getNote(runtime.db, id);
+    if (!note) return c.json({ error: "note not found" }, 404);
+    return c.json(note);
+  });
+
+  app.delete("/api/memory/notes/:id", (c) => {
+    const { id } = c.req.param();
+    const ok = deleteNote(runtime.db, id);
+    if (!ok) return c.json({ error: "note not found" }, 404);
+    return c.json({ deleted: true });
+  });
+
+  app.post("/api/memory/notes/:id/promote", async (c) => {
+    const { id } = c.req.param();
+    const embedder = runtime.getEmbedder();
+    if (!embedder) {
+      return c.json(
+        { error: "memory.embeddings is not enabled — set memory.embeddings.enabled and baseUrl/model" },
+        409,
+      );
+    }
+    const body = (await c.req.json<{ force?: boolean }>().catch(() => ({}))) as { force?: boolean };
+    const result = await promoteNote(runtime.db, embedder, id, { force: body.force === true });
+    if (!result) return c.json({ error: "note not found" }, 404);
+    return c.json(result);
+  });
+
+  app.get("/api/memory/recall", async (c) => {
+    const q = c.req.query("q");
+    if (!q) return c.json({ error: "q is required" }, 400);
+    const project = c.req.query("project");
+    const projectFilter =
+      project === undefined || project === "global" ? null : project;
+    const limit = Number.parseInt(c.req.query("limit") ?? "5", 10);
+    const tier = c.req.query("tier") as "any" | "short" | "long" | undefined;
+    const embedder = runtime.getEmbedder();
+    const hits = await recallQueryAsync(runtime.db, {
+      query: q,
+      projectId: projectFilter,
+      tier: tier ?? "any",
+      limit,
+      embedder,
+      embedModel: runtime.getConfig().memory?.embeddings?.model,
+    });
+    return c.json({ hits, formatted: formatHits(hits) });
+  });
+
+  app.get("/api/memory/stats", (c) => {
+    const project = c.req.query("project");
+    const projectFilter =
+      project === undefined
+        ? undefined
+        : project === "global"
+          ? null
+          : project;
+
+    // Three counts: live notes, session summaries, chunks.
+    const liveNotes = listNotes(runtime.db, {
+      project_id: projectFilter,
+      excludeExpired: true,
+      limit: 10_000,
+    });
+    const summaries = liveNotes.filter((n) => n.tags.includes(SESSION_SUMMARY_TAG));
+    const chunks = countChunks(runtime.db, projectFilter as string | null | undefined);
+
+    // Most-referenced (live) notes.
+    const topReferenced = [...liveNotes]
+      .filter((n) => n.ref_count > 0)
+      .sort((a, b) => b.ref_count - a.ref_count)
+      .slice(0, 5)
+      .map((n) => ({
+        id: n.id,
+        content: n.content.slice(0, 200),
+        ref_count: n.ref_count,
+        importance: n.importance,
+        tags: n.tags,
+      }));
+
+    const embedder = runtime.getEmbedder();
+    return c.json({
+      counts: {
+        notes: liveNotes.length,
+        sessionSummaries: summaries.length,
+        chunks,
+      },
+      topReferenced,
+      embeddingsEnabled: !!embedder,
+      embeddingModel: embedder?.defaultModel ?? null,
+    });
+  });
+
+  app.post("/api/memory/sweep", (c) => {
+    const report = runMemorySweep(runtime.db);
+    return c.json(report);
   });
 
   app.post("/api/sessions/new", async (c) => {
