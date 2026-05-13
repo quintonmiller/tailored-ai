@@ -1,0 +1,76 @@
+name: coding-pipeline
+description: |
+  End-to-end coding workflow: takes a task description on a manual trigger,
+  spins up an isolated git worktree, hands the change to the `coder` agent,
+  runs the test suite inside the worktree, then either merges the branch
+  back into HEAD (tests green) or pings the owner for review (tests red).
+
+  Demonstrates: worktree step type, nested body steps that share the
+  worktree path via `${worktree.path}`, agent_run that operates on the
+  isolated working copy, and a post-body condition that drives the merge
+  decision.
+
+  Run locally:
+    pnpm run dev -- workflow run coding-pipeline --input task="Add a header comment to README.md"
+
+executionMode: linear
+
+triggers:
+  - kind: manual
+
+inputs:
+  task:
+    type: string
+    label: Task description
+    description: "Plain-English instruction handed to the coder agent."
+    required: true
+  branch:
+    type: string
+    label: Branch name
+    description: "Optional branch override; defaults to agent/<runId>."
+    required: false
+
+steps:
+  - name: pipeline
+    type: worktree
+    strategy: merge-to-head
+    branch: ${input.branch}
+    body:
+      - name: implement
+        type: agent_run
+        agent: coder
+        maxToolRounds: 12
+        prompt: |
+          You are working inside an isolated git worktree at ${worktree.path}.
+          Your task: ${input.task}
+
+          When done, stage and commit your changes locally with:
+            git add -A && git commit -m "agent: <one-line summary>"
+          Do not push.
+      - name: test
+        type: shell
+        command: pnpm test --silent || true
+        cwd: ${worktree.path}
+        timeoutMs: 600000
+        # Soft-pass: shell still captures stdout, the next step branches on it.
+
+  - name: route
+    type: condition
+    if: 'steps.pipeline.merged == true'
+    then: ["merged_note"]
+    else: ["review_note"]
+
+  - name: merged_note
+    type: notify
+    channel: discord
+    message: |
+      ✅ Branch `${steps.pipeline.branch}` merged into HEAD.
+      Task: ${input.task}
+
+  - name: review_note
+    type: notify
+    channel: discord
+    message: |
+      🧐 Branch `${steps.pipeline.branch}` ready for review (merge skipped or failed).
+      Path: ${steps.pipeline.preservedPath}
+      Task: ${input.task}

@@ -42,9 +42,9 @@ function buildConfig(): AgentConfig {
   return {
     server: { port: 0, host: "x" },
     database: { path: ":memory:" },
-    providers: { ollama: { baseUrl: "x", defaultModel: "fake" } },
+    providers: { openai_compatible: { baseUrl: "x", defaultModel: "fake" } },
     agent: {
-      defaultProvider: "ollama",
+      defaultProvider: "openai_compatible",
       extraInstructions: "",
       maxHistoryTokens: 100,
       maxContextTokens: 4096,
@@ -148,7 +148,7 @@ describe("autopilot -> workflow trigger", () => {
       worker as unknown as { resolveSessionModel: (n: string) => Promise<{ provider: string; model: string }> },
       "resolveSessionModel",
     );
-    fallback.mockResolvedValue({ provider: "ollama", model: "fake" });
+    fallback.mockResolvedValue({ provider: "openai_compatible", model: "fake" });
     // Will fall back to runAgentLoop path but our runtime.getProvider returns
     // a fake; we only care that the workflow path was NOT taken.
     try {

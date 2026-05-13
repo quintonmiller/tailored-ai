@@ -7,10 +7,12 @@ import { Config } from "./pages/Config";
 import { Dashboard } from "./pages/Dashboard";
 import { Help } from "./pages/Help";
 import { Projects } from "./pages/Projects";
+import { Resources } from "./pages/Resources";
 import { Sandboxes } from "./pages/Sandboxes";
 import { Tasks } from "./pages/Tasks";
 import { Tools } from "./pages/Tools";
 import { Workflows } from "./pages/Workflows";
+import { WorkflowAnalytics } from "./pages/WorkflowAnalytics";
 import { WorkflowRuns } from "./pages/WorkflowRuns";
 import "./styles.css";
 
@@ -23,7 +25,9 @@ type Route =
   | { page: "tools" }
   | { page: "workflows" }
   | { page: "workflow-runs"; runId?: string }
+  | { page: "workflow-analytics" }
   | { page: "sandboxes" }
+  | { page: "resources" }
   | { page: "help" };
 
 function parseHash(): Route {
@@ -75,6 +79,9 @@ function parseHash(): Route {
   if (hash.startsWith("/tools")) {
     return { page: "tools" };
   }
+  if (hash.startsWith("/workflow-analytics")) {
+    return { page: "workflow-analytics" };
+  }
   if (hash.startsWith("/workflow-runs")) {
     const parts = hash.split("?")[0].split("/");
     return { page: "workflow-runs", runId: parts[2] || undefined };
@@ -84,6 +91,9 @@ function parseHash(): Route {
   }
   if (hash.startsWith("/sandboxes")) {
     return { page: "sandboxes" };
+  }
+  if (hash.startsWith("/resources")) {
+    return { page: "resources" };
   }
   if (hash.startsWith("/autopilot")) {
     // Moved under Config — redirect for back-compat.
@@ -156,6 +166,9 @@ export function App() {
           <a href="#/sandboxes" className={route.page === "sandboxes" ? "active" : ""}>
             Sandboxes
           </a>
+          <a href="#/resources" className={route.page === "resources" ? "active" : ""}>
+            Resources
+          </a>
           <a href="#/chat" className={route.page === "chat" ? "active" : ""}>
             Chat
           </a>
@@ -188,7 +201,9 @@ export function App() {
         {route.page === "tools" && <Tools />}
         {route.page === "workflows" && <Workflows />}
         {route.page === "workflow-runs" && <WorkflowRuns runId={route.runId} />}
+        {route.page === "workflow-analytics" && <WorkflowAnalytics />}
         {route.page === "sandboxes" && <Sandboxes />}
+        {route.page === "resources" && <Resources />}
         {route.page === "config" && <Config section={route.section} />}
         {route.page === "help" && <Help />}
       </main>

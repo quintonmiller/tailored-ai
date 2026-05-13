@@ -1,0 +1,66 @@
+name: receipt-ingest
+description: |
+  Drop a receipt (PDF or image) into ./inbox/receipts. The agent reads it,
+  extracts vendor/date/amount/category, saves the structured record to the
+  facts store, and DMs you a confirmation.
+
+  Demonstrates: file_drop trigger with extension filter and stabilisation
+  window, agent_run with read tool for OCR-by-LLM, facts.set for structured
+  durable storage, notify.
+
+executionMode: graph
+
+triggers:
+  - kind: file_drop
+    path: ./inbox/receipts
+    extensions: pdf,jpg,jpeg,png
+    stableForMs: 2500
+
+steps:
+  - name: extract
+    type: agent_run
+    agent: default
+    maxToolRounds: 5
+    prompt: |
+      A new receipt is at ${input.file_path} (basename: ${input.file_name}).
+
+      Use the read tool to inspect it. Extract:
+        Vendor: <name>
+        Date: <YYYY-MM-DD>
+        Amount: <number, no currency symbol>
+        Currency: <ISO code, e.g. USD>
+        Category: <one of food/transport/utilities/entertainment/health/other>
+
+      If the file is an image you can't OCR with the read tool, reply with:
+        UNREADABLE: <one-line reason>
+
+      Output: ONLY the field lines (or the UNREADABLE marker). No prose.
+
+  - name: save
+    type: tool_call
+    tool: facts
+    args:
+      action: set
+      category: receipt
+      entity: ${input.file_name}
+      key: extracted
+      value: ${steps.extract}
+      source: file_drop:${input.file_path}
+
+  - name: send
+    type: notify
+    channel: discord
+    message: |
+      🧾 Receipt ingested: ${input.file_name}
+
+      ${steps.extract}
+
+graph:
+  nodes:
+    - { stepName: extract, position: { x: 240, y: 100 } }
+    - { stepName: save,    position: { x: 540, y: 100 } }
+    - { stepName: send,    position: { x: 820, y: 100 } }
+  edges:
+    - { from: __trigger__, to: extract }
+    - { from: extract,     to: save }
+    - { from: save,        to: send }

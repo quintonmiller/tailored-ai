@@ -33,8 +33,8 @@ function makeRuntime(): AgentRuntime {
   const config = {
     server: { port: 3000, host: "127.0.0.1" },
     database: { path: ":memory:" },
-    providers: { ollama: { baseUrl: "http://x", defaultModel: "x" } },
-    agent: { defaultProvider: "ollama", maxToolRounds: 1, maxHistoryTokens: 2000, temperature: 0.3, extraInstructions: "" },
+    providers: { openai_compatible: { baseUrl: "http://x", defaultModel: "x" } },
+    agent: { defaultProvider: "openai_compatible", maxToolRounds: 1, maxHistoryTokens: 2000, temperature: 0.3, extraInstructions: "" },
     agents: {},
     channels: {},
     tools: {},
@@ -143,7 +143,7 @@ describe("buildLoopOptions — per-call project override", () => {
       overlay: {},
     });
 
-    const session = { id: "s1", model: "x", provider: "ollama" };
+    const session = { id: "s1", model: "x", provider: "openai_compatible" };
     const optsHost = runtime.buildLoopOptions({ session });
     expect(optsHost.cwd).toBe("/host/active");
 
@@ -169,7 +169,7 @@ describe("buildLoopOptions — per-call project override", () => {
       overlayPath: "",
       overlay: {},
     });
-    const session = { id: "s1", model: "x", provider: "ollama" };
+    const session = { id: "s1", model: "x", provider: "openai_compatible" };
     const opts = runtime.buildLoopOptions({ session, project: null });
     expect(opts.cwd).toBeUndefined();
   });

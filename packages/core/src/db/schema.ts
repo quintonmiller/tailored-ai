@@ -173,6 +173,74 @@ export function initDatabase(dbPath: string): Database.Database {
 
     CREATE INDEX IF NOT EXISTS idx_workflow_steps_run ON workflow_steps(run_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_workflow_steps_parent ON workflow_steps(parent_step_id);
+
+    CREATE TABLE IF NOT EXISTS facts (
+      id TEXT PRIMARY KEY,
+      category TEXT NOT NULL,
+      entity TEXT NOT NULL DEFAULT '',
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      asof TEXT,
+      source TEXT,
+      confidence REAL,
+      project_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(project_id, category, entity, key)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_facts_lookup
+      ON facts(project_id, category, entity, key);
+    CREATE INDEX IF NOT EXISTS idx_facts_updated ON facts(updated_at);
+
+    CREATE TRIGGER IF NOT EXISTS trg_facts_updated_at
+      AFTER UPDATE ON facts
+      BEGIN
+        UPDATE facts SET updated_at = datetime('now') WHERE id = NEW.id;
+      END;
+
+    CREATE TABLE IF NOT EXISTS workflow_secrets (
+      workflow_name TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value_encrypted TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (workflow_name, key)
+    );
+
+    CREATE TABLE IF NOT EXISTS workflow_versions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workflow_name TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      yaml TEXT NOT NULL,
+      saved_by TEXT,
+      saved_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE (workflow_name, version)
+    );
+    CREATE INDEX IF NOT EXISTS idx_workflow_versions_name
+      ON workflow_versions(workflow_name, version DESC);
+
+    CREATE TABLE IF NOT EXISTS workflow_form_pending (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+      step_id TEXT NOT NULL REFERENCES workflow_steps(id) ON DELETE CASCADE,
+      step_name TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      fields_json TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending','submitted','expired','cancelled')),
+      submitted_json TEXT,
+      expires_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_workflow_form_pending_run
+      ON workflow_form_pending(run_id);
+    CREATE INDEX IF NOT EXISTS idx_workflow_form_pending_status
+      ON workflow_form_pending(status);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_form_pending_step
+      ON workflow_form_pending(run_id, step_name);
   `);
 
   // Safe migration for existing DBs that lack session_key

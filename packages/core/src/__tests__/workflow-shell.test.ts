@@ -2,9 +2,15 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initDatabase } from "../db/schema.js";
 import { listWorkflowSteps } from "../db/workflow-queries.js";
+import type {
+  Sandbox,
+  SandboxExecOptions,
+  SandboxExecResult,
+  SandboxHandle,
+} from "../sandboxes/interface.js";
 import { WorkflowEngine } from "../workflows/engine.js";
 import { ShellExecutor } from "../workflows/executors/shell.js";
 import { WorkflowRegistry } from "../workflows/registry.js";
@@ -99,6 +105,54 @@ describe("ShellExecutor", () => {
     const run = await engine.runWorkflow("wf");
     expect(run.status).toBe("completed");
     expect(run.output).toBe("got: raw");
+  });
+
+  it("routes shell commands through a run-level sandbox when configured", async () => {
+    const calls: Array<{ command: string; cwd?: string }> = [];
+    const handle: SandboxHandle = { kind: "docker", cwd: "/work" };
+    const fakeSandbox: Sandbox = {
+      kind: "docker",
+      prepare: vi.fn(async () => handle),
+      cleanup: vi.fn(async () => {}),
+      exec: vi.fn(
+        async (
+          _h: SandboxHandle,
+          command: string,
+          opts?: SandboxExecOptions,
+        ): Promise<SandboxExecResult> => {
+          calls.push({ command, cwd: opts?.cwd });
+          return { exitCode: 0, stdout: "sandboxed-stdout", stderr: "" };
+        },
+      ),
+      readFile: vi.fn(async () => ""),
+      writeFile: vi.fn(async () => {}),
+    };
+
+    db.close();
+    db = initDatabase(":memory:");
+    registry = new WorkflowRegistry();
+    engine = new WorkflowEngine({
+      db,
+      registry,
+      createSandbox: () => fakeSandbox,
+      executors: [new ShellExecutor({ cwd: tmpDir, defaultTimeoutMs: 5000 })],
+    });
+
+    registry.register({
+      name: "wf",
+      sandbox: "docker",
+      steps: [
+        { name: "first", type: "shell", command: "echo a" },
+        { name: "second", type: "shell", command: "echo b" },
+      ],
+    });
+
+    const run = await engine.runWorkflow("wf");
+    expect(run.status).toBe("completed");
+    expect(run.output).toBe("sandboxed-stdout");
+    expect(calls.map((c) => c.command)).toEqual(["echo a", "echo b"]);
+    expect(fakeSandbox.prepare).toHaveBeenCalledTimes(1);
+    expect(fakeSandbox.cleanup).toHaveBeenCalledTimes(1);
   });
 
   it("step deadline cancels a hanging shell", async () => {

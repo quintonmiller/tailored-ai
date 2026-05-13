@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchConfigSection, fetchModels, fetchProviders, saveConfigSection } from "../api";
+import { ResourcePicker } from "./ResourcePicker";
 
 interface ModelEntry {
   provider: string;
@@ -26,7 +27,11 @@ type AgentMap = Record<string, AgentDefinition>;
 const CUSTOM_VALUE = "__custom__";
 
 function providerLabel(name: string): string {
-  const labels: Record<string, string> = { ollama: "Ollama", openai: "OpenAI", anthropic: "Anthropic" };
+  const labels: Record<string, string> = {
+    openai_compatible: "OpenAI-compatible",
+    openai: "OpenAI",
+    anthropic: "Anthropic",
+  };
   return labels[name] ?? name;
 }
 
@@ -41,6 +46,8 @@ export function AgentEditor() {
   const [providerNames, setProviderNames] = useState<string[]>([]);
   const [providerModels, setProviderModels] = useState<Record<string, string[]>>({});
   const [customMode, setCustomMode] = useState<Set<string>>(new Set());
+
+  const [showPicker, setShowPicker] = useState(false);
 
   const loadModels = useCallback((providerName: string) => {
     if (providerModels[providerName]) return;
@@ -172,7 +179,7 @@ export function AgentEditor() {
 
   // --- Model list helpers ---
 
-  const providerOptions = providerNames.length > 0 ? providerNames : ["ollama", "openai", "anthropic"];
+  const providerOptions = providerNames.length > 0 ? providerNames : ["openai_compatible", "openai", "anthropic"];
 
   function getModels(agentName: string): ModelEntry[] {
     return agents[agentName]?.models ?? [];
@@ -450,7 +457,31 @@ export function AgentEditor() {
         </div>
       ))}
 
-      <button type="button" className="section-add-btn" onClick={addAgent}>+ Add Agent</button>
+      <div className="agent-editor-actions">
+        <button type="button" className="section-add-btn" onClick={addAgent}>
+          + Blank Agent
+        </button>
+        <button
+          type="button"
+          className="section-add-btn"
+          onClick={() => setShowPicker(true)}
+        >
+          + Install Agent…
+        </button>
+      </div>
+      {showPicker && (
+        <ResourcePicker
+          kind="agent"
+          onClose={() => setShowPicker(false)}
+          onInstalled={() => {
+            // Reload from the agents config so the freshly-installed agent
+            // (now in the registry / authored-resources) shows up.
+            fetchConfigSection<AgentMap | null>("agents")
+              .then((r) => setAgents(r.data ?? {}))
+              .catch(() => {});
+          }}
+        />
+      )}
     </div>
   );
 }

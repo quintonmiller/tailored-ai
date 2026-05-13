@@ -1,0 +1,42 @@
+name: capture-to-task
+description: |
+  Inbound webhook for "capture" payloads — accepts free-form text from any
+  client (mobile share-target, Discord slash command, Apple Shortcut,
+  curl from a terminal) and turns it into a structured project task.
+
+  Body shape (POST application/json):
+    { "text": "Buy birthday card for mom by Friday #personal" }
+
+  The agent parses out title/tags/due-hints and inserts a row via the
+  `tasks` tool. Returns the created task ID for the caller's UI.
+
+executionMode: linear
+
+triggers:
+  - kind: webhook
+    # No token here — assume the webhook URL is private. For exposure to
+    # the open internet, add: token: ${secrets.CAPTURE_TOKEN}
+
+steps:
+  - name: parse
+    type: agent_run
+    agent: default
+    maxToolRounds: 4
+    prompt: |
+      Convert this capture into a project task. Extract:
+        - title (concise, imperative — what to do)
+        - description (any extra context after the first sentence)
+        - tags (parse `#tag` tokens out of the text)
+        - assignee (parse `@user` tokens; default to "human" if missing)
+
+      Then call the `tasks` tool with action=create and the parsed fields.
+      Reply with just the new task's ID, nothing else.
+
+      Capture: "${input.text}"
+
+  - name: ack
+    type: notify
+    channel: discord
+    message: |
+      📥 Captured: ${input.text}
+      Task: ${steps.parse}

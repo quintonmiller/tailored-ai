@@ -1,0 +1,84 @@
+name: dependency-update
+description: |
+  Weekly Sunday-evening dependency check. Runs `pnpm outdated`, picks
+  the safe (patch/minor) bumps, opens a worktree, applies them, runs the
+  test suite, and merges-or-notifies based on result. Major version
+  bumps are listed but never auto-applied — they get DM'd for manual review.
+
+  Demonstrates layering: worktree step + shell + condition + notify, all
+  using existing primitives. No new code needed for this to work.
+
+executionMode: linear
+
+triggers:
+  - kind: cron
+    schedule: "0 20 * * SUN"
+
+steps:
+  - name: check_outdated
+    type: shell
+    command: "pnpm outdated --format json || true"
+    timeoutMs: 60000
+
+  - name: plan
+    type: agent_run
+    agent: default
+    maxToolRounds: 1
+    prompt: |
+      Given this `pnpm outdated` JSON, list the patch/minor bumps that
+      should be applied this week and the major bumps to flag for human
+      review.
+
+      Output two markdown sections:
+        ## Auto-apply
+          - package: from → to
+        ## Manual review
+          - package: from → to (reason if known)
+
+      Outdated: ${steps.check_outdated}
+
+  - name: apply_branch
+    type: worktree
+    strategy: merge-to-head
+    body:
+      - name: bump
+        type: agent_run
+        agent: coder
+        maxToolRounds: 12
+        prompt: |
+          You are inside an isolated worktree at ${worktree.path}.
+          Apply the patch/minor dependency bumps listed below using
+          `pnpm up --latest <pkg>` (one at a time so failures are
+          contained). Commit each successful bump separately with
+          `chore(deps): bump <pkg> to <version>`.
+
+          Plan: ${steps.plan}
+      - name: test
+        type: shell
+        command: pnpm test --silent
+        cwd: ${worktree.path}
+        timeoutMs: 600000
+
+  - name: deliver
+    type: condition
+    if: 'steps.apply_branch.merged == true'
+    then: ["merged_note"]
+    else: ["review_note"]
+
+  - name: merged_note
+    type: notify
+    channel: discord
+    message: |
+      ✅ Dependency bumps merged for the week.
+      Plan:
+      ${steps.plan}
+
+  - name: review_note
+    type: notify
+    channel: discord
+    message: |
+      🧐 Dependency bumps need review — branch preserved.
+      Branch: `${steps.apply_branch.branch}`
+      Path: ${steps.apply_branch.preservedPath}
+      Plan:
+      ${steps.plan}

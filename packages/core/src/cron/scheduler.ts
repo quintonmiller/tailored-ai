@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Cron } from "croner";
+import { compileSchedule } from "./schedule-dsl.js";
 import { executeHooks } from "../agent/hooks.js";
 import { expandPrompt } from "../prompts/expand.js";
 import { runAgentLoop } from "../agent/loop.js";
@@ -56,14 +57,23 @@ export class CronScheduler {
         continue;
       }
 
-      const timer = new Cron(job.schedule, () => {
+      let compiledCron: string;
+      try {
+        compiledCron = compileSchedule(job.schedule).cron;
+      } catch (err) {
+        console.error(`[cron] Skipping "${job.name}": ${(err as Error).message}`);
+        continue;
+      }
+
+      const timer = new Cron(compiledCron, () => {
         this.runJob(job).catch((err) => {
           console.error(`[cron] Error running job "${job.name}":`, err);
         });
       });
 
       this.timers.push(timer);
-      console.log(`[cron] Scheduled "${job.name}" (${job.schedule})`);
+      const friendly = compiledCron === job.schedule ? job.schedule : `${job.schedule} → ${compiledCron}`;
+      console.log(`[cron] Scheduled "${job.name}" (${friendly})`);
     }
   }
 

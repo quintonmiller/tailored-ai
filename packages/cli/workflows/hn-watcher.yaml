@@ -1,0 +1,34 @@
+name: hn-watcher
+description: |
+  Polls Hacker News' RSS frontpage every 10 minutes and DMs the owner when
+  a story title matches a saved keyword. Demonstrates the new `rss`
+  trigger plus matchTitle filtering.
+
+  To extend: add more triggers for other feeds (subreddit RSS, blog feeds,
+  GitHub releases atom feeds) and they'll all funnel through this same
+  workflow with the matching entry as input.
+
+executionMode: graph
+
+triggers:
+  - kind: rss
+    url: https://news.ycombinator.com/rss
+    intervalSeconds: 600
+    matchTitle: claude
+
+steps:
+  - name: notify
+    type: notify
+    channel: discord
+    message: |
+      📰 HN match: ${input.title}
+
+      ${input.link}
+
+      ${input.summary}
+
+graph:
+  nodes:
+    - { stepName: notify, position: { x: 200, y: 100 } }
+  edges:
+    - { from: __trigger__, to: notify }

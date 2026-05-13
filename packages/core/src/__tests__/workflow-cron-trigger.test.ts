@@ -40,9 +40,9 @@ function buildConfig(jobs: AgentConfig["cron"]["jobs"]): AgentConfig {
   return {
     server: { port: 0, host: "x" },
     database: { path: ":memory:" },
-    providers: { ollama: { baseUrl: "x", defaultModel: "fake" } },
+    providers: { openai_compatible: { baseUrl: "x", defaultModel: "fake" } },
     agent: {
-      defaultProvider: "ollama",
+      defaultProvider: "openai_compatible",
       extraInstructions: "",
       maxHistoryTokens: 100,
       maxContextTokens: 4096,

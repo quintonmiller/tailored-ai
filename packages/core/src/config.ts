@@ -6,6 +6,12 @@ import type { PermissionsConfig } from "./approval.js";
 export interface ModelEntry {
   provider: string;
   model: string;
+  /**
+   * Context window this model supports, in tokens. Surfaced in the
+   * `/context` display and used as a per-model override of
+   * `agent.maxContextTokens`. Falls back to the global default when unset.
+   */
+  maxContextTokens?: number;
 }
 
 export interface AgentDefinition {
@@ -34,6 +40,28 @@ export interface AgentDefinition {
   };
   /** Sandbox kind to run shell/file tools in. Defaults to host (no isolation). */
   sandbox?: "host" | "docker" | "podman";
+  /**
+   * Skills to layer into this agent. Each entry is a skill resource id (e.g.
+   * "my-org/code-reviewer"). Skill instructions append to the agent's; skill
+   * tools merge into the agent's effective tool set; skill hooks append after
+   * the agent's own hooks. Skills must be registered in the skill registry
+   * before they take effect — unknown ids are ignored with a warning.
+   *
+   * Pass the literal `"*"` to expose every registered skill to the agent's
+   * skill catalog (progressive mode only).
+   */
+  skills?: string[];
+  /**
+   * How `skills` is loaded:
+   *   - "eager"        (default, deprecated) — skill instructions / tools /
+   *     hooks merge into the agent at resolve time and ride along in every
+   *     prompt. Simple but bloats the system prompt.
+   *   - "progressive"  — agentskills.io model. A skill catalog (name +
+   *     description) is injected into the system prompt and the agent calls
+   *     `load_skill(name)` to activate a skill on demand. The skill's body
+   *     and allowed-tools are loaded only when needed.
+   */
+  skillLoading?: "eager" | "progressive";
 }
 
 /** @deprecated Use AgentDefinition instead. */
@@ -141,9 +169,17 @@ export interface AgentConfig {
     path: string;
   };
   providers: {
-    ollama?: {
+    /**
+     * Generic OpenAI-compatible HTTP provider. Use for vLLM, Ollama's /v1
+     * endpoint, LM Studio, text-generation-webui, llama.cpp server, etc.
+     * `apiKey` is optional — when omitted, no Authorization header is sent.
+     */
+    openai_compatible?: {
       baseUrl: string;
       defaultModel: string;
+      apiKey?: string;
+      /** Optional human-friendly label shown in logs/UI. Defaults to "OpenAI-compatible". */
+      name?: string;
     };
     openai?: {
       apiKey: string;
@@ -224,6 +260,9 @@ export interface AgentConfig {
     tasks?: {
       enabled: boolean;
     };
+    facts?: {
+      enabled: boolean;
+    };
     gmail?: {
       enabled: boolean;
       account: string;
@@ -263,6 +302,9 @@ export interface AgentConfig {
       directory?: string;
     };
     documents?: {
+      enabled: boolean;
+    };
+    extract_document?: {
       enabled: boolean;
     };
   };
@@ -330,13 +372,13 @@ const DEFAULT_CONFIG: AgentConfig = {
     path: "./agent.db",
   },
   providers: {
-    ollama: {
-      baseUrl: "http://localhost:11434",
+    openai_compatible: {
+      baseUrl: "http://localhost:11434/v1",
       defaultModel: "devstral-small-2:latest",
     },
   },
   agent: {
-    defaultProvider: "ollama",
+    defaultProvider: "openai_compatible",
     extraInstructions: "",
     maxHistoryTokens: 2000,
     maxContextTokens: 32768,
@@ -361,8 +403,10 @@ const DEFAULT_CONFIG: AgentConfig = {
     web_fetch: { enabled: true },
     web_search: { enabled: false, provider: "brave", apiKey: "", maxResults: 5 },
     tasks: { enabled: true },
+    facts: { enabled: true },
     projects: { enabled: true, directory: "./data/projects" },
     documents: { enabled: true },
+    extract_document: { enabled: false },
   },
   taskWatcher: {
     enabled: false,
@@ -640,5 +684,49 @@ export function loadConfig(configPath?: string): AgentConfig {
     delete interpolated.profiles;
   }
 
+  migrateOllamaProvider(interpolated);
+
   return deepMerge(DEFAULT_CONFIG as unknown as Record<string, unknown>, interpolated) as unknown as AgentConfig;
+}
+
+/**
+ * Back-compat: the old `providers.ollama` config (native /api/chat) is folded
+ * into the generic `openai_compatible` provider that talks to Ollama's /v1
+ * OpenAI-compatible endpoint instead. Mutates `interpolated` in place.
+ */
+function migrateOllamaProvider(interpolated: Record<string, unknown>): void {
+  const providers = interpolated.providers as Record<string, unknown> | undefined;
+  const ollama = providers?.ollama as { baseUrl?: string; defaultModel?: string } | undefined;
+  if (!providers || !ollama) {
+    // Still translate a stale defaultProvider so old configs don't validate-error.
+    const agent = interpolated.agent as Record<string, unknown> | undefined;
+    if (agent && agent.defaultProvider === "ollama") {
+      console.warn(
+        "[config] Warning: agent.defaultProvider \"ollama\" is deprecated; using \"openai_compatible\" instead",
+      );
+      agent.defaultProvider = "openai_compatible";
+    }
+    return;
+  }
+
+  console.warn(
+    "[config] Warning: providers.ollama is deprecated; migrate to providers.openai_compatible with baseUrl ending in /v1",
+  );
+
+  // Don't clobber an explicit openai_compatible block — user wins.
+  if (!providers.openai_compatible) {
+    const base = (ollama.baseUrl ?? "http://localhost:11434").replace(/\/$/, "");
+    const baseUrl = base.endsWith("/v1") ? base : `${base}/v1`;
+    providers.openai_compatible = {
+      baseUrl,
+      defaultModel: ollama.defaultModel ?? "devstral-small-2:latest",
+      name: "Ollama",
+    };
+  }
+  delete providers.ollama;
+
+  const agent = interpolated.agent as Record<string, unknown> | undefined;
+  if (agent && agent.defaultProvider === "ollama") {
+    agent.defaultProvider = "openai_compatible";
+  }
 }

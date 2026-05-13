@@ -40,9 +40,9 @@ function buildConfig(routes: AgentConfig["webhooks"]["routes"]): AgentConfig {
   return {
     server: { port: 0, host: "127.0.0.1" },
     database: { path: ":memory:" },
-    providers: { ollama: { baseUrl: "x", defaultModel: "fake" } },
+    providers: { openai_compatible: { baseUrl: "x", defaultModel: "fake" } },
     agent: {
-      defaultProvider: "ollama",
+      defaultProvider: "openai_compatible",
       extraInstructions: "",
       maxHistoryTokens: 100,
       maxContextTokens: 4096,

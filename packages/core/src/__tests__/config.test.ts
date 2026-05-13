@@ -1,13 +1,16 @@
-import { describe, expect, it } from "vitest";
-import { deepInterpolate, deepMerge, validateConfig, type AgentConfig } from "../config.js";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { deepInterpolate, deepMerge, loadConfig, validateConfig, type AgentConfig } from "../config.js";
 
 function baseConfig(): AgentConfig {
   return {
     server: { port: 3000, host: "0.0.0.0" },
     database: { path: "./agent.db" },
-    providers: { ollama: { baseUrl: "http://localhost:11434", defaultModel: "x" } },
+    providers: { openai_compatible: { baseUrl: "http://localhost:11434/v1", defaultModel: "x" } },
     agent: {
-      defaultProvider: "ollama",
+      defaultProvider: "openai_compatible",
       extraInstructions: "",
       maxHistoryTokens: 2000,
       maxContextTokens: 32768,
@@ -211,5 +214,115 @@ describe("validateConfig — prompts block", () => {
     const c = baseConfig();
     c.prompts = { maxIncludeDepth: 3, shellTimeoutMs: 1000, allowShellExpansion: true };
     expect(validateConfig(c).some((w) => w.toLowerCase().includes("prompts."))).toBe(false);
+  });
+});
+
+describe("loadConfig — ollama back-compat shim", () => {
+  let dir: string;
+  const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "tai-config-"));
+  });
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+    warnSpy.mockRestore();
+  });
+  beforeEach(() => {
+    warnSpy.mockClear();
+  });
+
+  it("translates providers.ollama into providers.openai_compatible with /v1 appended", () => {
+    const path = join(dir, "config-ollama.yaml");
+    writeFileSync(
+      path,
+      [
+        "providers:",
+        "  ollama:",
+        "    baseUrl: http://localhost:11434",
+        "    defaultModel: my-model",
+        "agent:",
+        "  defaultProvider: ollama",
+        "  extraInstructions: \"\"",
+        "  maxHistoryTokens: 2000",
+        "  temperature: 0.3",
+        "  maxToolRounds: 10",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const config = loadConfig(path);
+    expect((config.providers as Record<string, unknown>).ollama).toBeUndefined();
+    expect(config.providers.openai_compatible).toEqual({
+      baseUrl: "http://localhost:11434/v1",
+      defaultModel: "my-model",
+      name: "Ollama",
+    });
+    expect(config.agent.defaultProvider).toBe("openai_compatible");
+    expect(warnSpy.mock.calls.some((args) => String(args[0]).includes("providers.ollama is deprecated"))).toBe(true);
+  });
+
+  it("preserves /v1 suffix when already present", () => {
+    const path = join(dir, "config-ollama-v1.yaml");
+    writeFileSync(
+      path,
+      [
+        "providers:",
+        "  ollama:",
+        "    baseUrl: http://localhost:11434/v1",
+        "    defaultModel: m",
+        "agent:",
+        "  defaultProvider: ollama",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const config = loadConfig(path);
+    expect(config.providers.openai_compatible?.baseUrl).toBe("http://localhost:11434/v1");
+  });
+
+  it("does not clobber an explicit openai_compatible block", () => {
+    const path = join(dir, "config-both.yaml");
+    writeFileSync(
+      path,
+      [
+        "providers:",
+        "  ollama:",
+        "    baseUrl: http://localhost:11434",
+        "    defaultModel: old",
+        "  openai_compatible:",
+        "    baseUrl: http://127.0.0.1:8000/v1",
+        "    defaultModel: vllm-llama",
+        "agent:",
+        "  defaultProvider: openai_compatible",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const config = loadConfig(path);
+    expect((config.providers as Record<string, unknown>).ollama).toBeUndefined();
+    expect(config.providers.openai_compatible).toEqual({
+      baseUrl: "http://127.0.0.1:8000/v1",
+      defaultModel: "vllm-llama",
+    });
+  });
+
+  it("translates a stale defaultProvider: ollama even without a providers.ollama block", () => {
+    const path = join(dir, "config-stale-default.yaml");
+    writeFileSync(
+      path,
+      [
+        "providers:",
+        "  openai_compatible:",
+        "    baseUrl: http://127.0.0.1:8000/v1",
+        "    defaultModel: m",
+        "agent:",
+        "  defaultProvider: ollama",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const config = loadConfig(path);
+    expect(config.agent.defaultProvider).toBe("openai_compatible");
   });
 });

@@ -1,0 +1,58 @@
+name: subscription-audit
+description: |
+  Monthly scan of the last 90 days of inbox + receipts for recurring
+  charges. Identifies subscriptions (anything billed at a regular cadence),
+  flags ones that haven't seen usage, and DMs a cancellation candidate list.
+
+  Reads from Gmail (receipts) and the documents store (manually-imported
+  receipts) and merges them through one agent_run for de-duplication.
+
+executionMode: linear
+
+triggers:
+  - kind: cron
+    schedule: "0 9 1 * *"
+
+steps:
+  - name: gather_emails
+    type: tool_call
+    tool: gmail
+    args:
+      action: search
+      query: "subject:(receipt OR invoice OR payment OR subscription) newer_than:90d"
+      maxResults: 200
+
+  - name: gather_docs
+    type: tool_call
+    tool: documents
+    args:
+      action: list
+      tag: receipt
+
+  - name: analyze
+    type: agent_run
+    agent: default
+    maxToolRounds: 2
+    prompt: |
+      You're auditing 90 days of receipts to find recurring subscriptions.
+      List each subscription with:
+        - merchant
+        - cadence (monthly / annual / other)
+        - last seen amount
+        - status guess (active / unclear / likely-cancelled)
+
+      Then propose 3-5 candidates for cancellation, with reasoning.
+
+      Email receipts:
+      ${steps.gather_emails}
+
+      Document receipts:
+      ${steps.gather_docs}
+
+  - name: deliver
+    type: notify
+    channel: discord
+    message: |
+      🔁 **Monthly subscription audit**
+
+      ${steps.analyze}

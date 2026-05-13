@@ -1,0 +1,41 @@
+name: inbox-digest
+description: |
+  Daily 7:30am summary of yesterday's inbox — grouped by category with the
+  most important threads called out. Sent to Discord DM. Complements
+  email-triage: triage fires per-message, digest gives the daily birds-eye.
+
+executionMode: linear
+
+triggers:
+  - kind: cron
+    schedule: "30 7 * * *"
+
+steps:
+  - name: fetch
+    type: tool_call
+    tool: gmail
+    args:
+      action: search
+      query: "newer_than:1d"
+      maxResults: 50
+
+  - name: summarize
+    type: agent_run
+    agent: default
+    maxToolRounds: 1
+    prompt: |
+      Summarize yesterday's inbox in 6-8 bullets. Group by category
+      (personal, bills, work, newsletters). For personal/bill items,
+      include sender + one-line gist. Skip promotional mail entirely.
+
+      Messages:
+      ${steps.fetch}
+
+  - name: deliver
+    type: notify
+    channel: discord
+    subject: "📬 Yesterday's inbox"
+    message: |
+      📬 **Yesterday's inbox digest**
+
+      ${steps.summarize}

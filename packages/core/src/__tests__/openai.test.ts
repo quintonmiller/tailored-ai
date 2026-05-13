@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Message, ToolSchema } from "../providers/interface.js";
-import { toOpenAIMessages, toOpenAITools } from "../providers/openai.js";
+import { OpenAIProvider, toOpenAIMessages, toOpenAITools } from "../providers/openai.js";
 
 describe("toOpenAIMessages", () => {
   it("converts a plain user message", () => {
@@ -162,5 +162,56 @@ describe("toOpenAITools", () => {
 
   it("returns empty array for empty input", () => {
     expect(toOpenAITools([])).toEqual([]);
+  });
+});
+
+describe("OpenAIProvider auth header", () => {
+  let originalFetch: typeof fetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  function stubFetch() {
+    const calls: { url: string; init: RequestInit }[] = [];
+    globalThis.fetch = vi.fn(async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return {
+        ok: true,
+        json: async () => ({ choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }] }),
+      } as Response;
+    }) as unknown as typeof fetch;
+    return calls;
+  }
+
+  it("sends Authorization header when apiKey is provided", async () => {
+    const calls = stubFetch();
+    const p = new OpenAIProvider("sk-test", "https://api.openai.com/v1");
+    await p.chat({ model: "gpt-4o", messages: [{ role: "user", content: "hi" }] });
+    expect((calls[0].init.headers as Record<string, string>).Authorization).toBe("Bearer sk-test");
+  });
+
+  it("omits Authorization header when apiKey is undefined (vLLM/Ollama case)", async () => {
+    const calls = stubFetch();
+    const p = new OpenAIProvider(undefined, "http://127.0.0.1:8000/v1", {
+      id: "openai_compatible",
+      name: "vLLM",
+    });
+    await p.chat({ model: "llama-3-8b", messages: [{ role: "user", content: "hi" }] });
+    expect((calls[0].init.headers as Record<string, string>).Authorization).toBeUndefined();
+    expect(p.id).toBe("openai_compatible");
+    expect(p.name).toBe("vLLM");
+  });
+
+  it("omits Authorization header when apiKey is an empty string", async () => {
+    const calls = stubFetch();
+    const p = new OpenAIProvider("", "http://localhost:11434/v1");
+    await p.chat({ model: "x", messages: [{ role: "user", content: "hi" }] });
+    expect((calls[0].init.headers as Record<string, string>).Authorization).toBeUndefined();
   });
 });

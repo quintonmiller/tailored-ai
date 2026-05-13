@@ -110,7 +110,7 @@ describe("Slice 7 — end-to-end project flow", () => {
       overlay: {},
     });
 
-    findOrCreateSession(db, "discord:user1", "x", "ollama", a.id);
+    findOrCreateSession(db, "discord:user1", "x", "openai_compatible", a.id);
 
     runtime.setActiveProject({
       id: b.id,
@@ -119,7 +119,7 @@ describe("Slice 7 — end-to-end project flow", () => {
       overlayPath: "",
       overlay: {},
     });
-    findOrCreateSession(db, "discord:b:user1", "x", "ollama", b.id);
+    findOrCreateSession(db, "discord:b:user1", "x", "openai_compatible", b.id);
 
     const allFromA = listSessions(db, { projectId: a.id });
     const allFromB = listSessions(db, { projectId: b.id });
@@ -235,7 +235,7 @@ describe("Slice 7 — end-to-end project flow", () => {
     expect(runtime.getActiveProject()).toBeNull();
 
     // Sessions created without a project remain global
-    const s = findOrCreateSession(db, "global:user", "x", "ollama");
+    const s = findOrCreateSession(db, "global:user", "x", "openai_compatible");
     expect(s.projectId).toBeNull();
 
     const onlyGlobal = listSessions(db, { projectId: "global" });

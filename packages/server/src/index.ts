@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { serve } from "@hono/node-server";
@@ -30,6 +30,14 @@ import {
   deleteProject,
   queryProjects,
   getDefaultProjectId,
+  upsertFact,
+  findFact,
+  listFacts,
+  deleteFact,
+  forgetFact,
+  setSecret,
+  listSecrets,
+  deleteSecret,
   createDocument,
   getDocument,
   updateDocument,
@@ -52,11 +60,29 @@ import {
   getWorkflowRun,
   listWorkflowRuns,
   listWorkflowSteps,
+  listFormPending,
   globalSandboxRegistry,
   parseWorkflow,
   validateWorkflow,
   resolveWorkflowsDir,
   FileLogStore,
+  type FormEvent,
+  ResourceLoader,
+  FileResourceSource,
+  HttpResourceSource,
+  GitResourceSource,
+  NpmResourceSource,
+  TaiRegistrySource,
+  Lockfile,
+  TrustStore,
+  ApprovalGate,
+  defaultLockfilePath,
+  hashManifest,
+  parseSkillMd,
+  renderSkillMd,
+  readSkillMd,
+  type Resource,
+  type ResourceKind,
 } from "@agent/core";
 import {
   HttpApprovalHandler,
@@ -545,6 +571,70 @@ export function createServer(opts: ServerOptions) {
     }
 
     return c.json(comment, 201);
+  });
+
+  // --- Facts ---
+
+  app.get("/api/facts", (c) => {
+    const projectIdRaw = c.req.query("project_id");
+    const projectId = projectIdRaw === "global" || projectIdRaw == null ? null : projectIdRaw;
+    const limit = c.req.query("limit");
+    const facts = listFacts(runtime.db, {
+      project_id: projectId,
+      category: c.req.query("category"),
+      entity: c.req.query("entity"),
+      key: c.req.query("key"),
+      search: c.req.query("search"),
+      limit: limit ? Number.parseInt(limit, 10) : undefined,
+    });
+    return c.json({ facts });
+  });
+
+  app.get("/api/facts/:category/:entity/:key", (c) => {
+    const { category, entity, key } = c.req.param();
+    const projectIdRaw = c.req.query("project_id");
+    const projectId = projectIdRaw === "global" || projectIdRaw == null ? null : projectIdRaw;
+    const fact = findFact(runtime.db, category, entity, key, projectId);
+    if (!fact) return c.json({ error: "Fact not found" }, 404);
+    return c.json(fact);
+  });
+
+  app.post("/api/facts", async (c) => {
+    const body = await c.req.json<{
+      category: string;
+      entity?: string;
+      key: string;
+      value: string;
+      asof?: string | null;
+      source?: string | null;
+      confidence?: number | null;
+      project_id?: string | null;
+    }>();
+    if (!body.category || !body.key || body.value === undefined) {
+      return c.json({ error: "category, key, and value are required" }, 400);
+    }
+    try {
+      const fact = upsertFact(runtime.db, body);
+      return c.json(fact, 201);
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 400);
+    }
+  });
+
+  app.delete("/api/facts/:id", (c) => {
+    const { id } = c.req.param();
+    const ok = deleteFact(runtime.db, id);
+    if (!ok) return c.json({ error: "Fact not found" }, 404);
+    return c.json({ ok: true });
+  });
+
+  app.delete("/api/facts/:category/:entity/:key", (c) => {
+    const { category, entity, key } = c.req.param();
+    const projectIdRaw = c.req.query("project_id");
+    const projectId = projectIdRaw === "global" || projectIdRaw == null ? null : projectIdRaw;
+    const ok = forgetFact(runtime.db, category, entity, key, projectId);
+    if (!ok) return c.json({ error: "Fact not found" }, 404);
+    return c.json({ ok: true });
   });
 
   // --- Projects ---
@@ -1247,13 +1337,28 @@ export function createServer(opts: ServerOptions) {
 
     try {
       let models: string[] = [];
+      // Optional per-model metadata (context window, etc.). vLLM populates
+      // `max_model_len`; most other servers don't advertise it.
+      const modelInfo: Record<string, { maxContextTokens?: number }> = {};
 
-      if (providerName === "ollama") {
-        const baseUrl = (provCfg as { baseUrl: string }).baseUrl.replace(/\/$/, "");
-        const resp = await fetch(`${baseUrl}/api/tags`);
-        if (!resp.ok) throw new Error(`Ollama returned ${resp.status}`);
-        const data = (await resp.json()) as { models?: { name: string }[] };
-        models = (data.models ?? []).map((m) => m.name);
+      if (providerName === "openai_compatible") {
+        const cfg = provCfg as { baseUrl?: string; apiKey?: string };
+        if (!cfg.baseUrl) {
+          return c.json({ provider: providerName, models: [], modelInfo: {} });
+        }
+        const baseUrl = cfg.baseUrl.replace(/\/$/, "");
+        const headers: Record<string, string> = {};
+        if (cfg.apiKey) headers.Authorization = `Bearer ${cfg.apiKey}`;
+        const resp = await fetch(`${baseUrl}/models`, { headers });
+        if (!resp.ok) throw new Error(`Provider returned ${resp.status}`);
+        const data = (await resp.json()) as { data?: { id: string; max_model_len?: number }[] };
+        const entries = data.data ?? [];
+        models = entries.map((m) => m.id).sort();
+        for (const m of entries) {
+          if (typeof m.max_model_len === "number" && m.max_model_len > 0) {
+            modelInfo[m.id] = { maxContextTokens: m.max_model_len };
+          }
+        }
       } else if (providerName === "openai") {
         const cfg = provCfg as { apiKey: string; baseUrl?: string };
         const baseUrl = (cfg.baseUrl ?? "https://api.openai.com/v1").replace(/\/$/, "");
@@ -1273,9 +1378,9 @@ export function createServer(opts: ServerOptions) {
         ];
       }
 
-      return c.json({ provider: providerName, models });
+      return c.json({ provider: providerName, models, modelInfo });
     } catch (err) {
-      return c.json({ provider: providerName, models: [], error: (err as Error).message });
+      return c.json({ provider: providerName, models: [], modelInfo: {}, error: (err as Error).message });
     }
   });
 
@@ -1412,19 +1517,40 @@ export function createServer(opts: ServerOptions) {
       return c.json({ error: "Workflow engine not configured" }, 503);
     }
     const name = c.req.param("name");
-    let body: { input?: unknown; trigger?: WorkflowTrigger } = {};
+    let body: { input?: unknown; trigger?: WorkflowTrigger; dryRun?: boolean } = {};
     try {
       const text = await c.req.text();
       body = text ? JSON.parse(text) : {};
     } catch {
       return c.json({ error: "Invalid JSON body" }, 400);
     }
-    if (!runtime.getWorkflows().get(name)) {
+    const registered = runtime.getWorkflows().get(name);
+    if (!registered) {
       return c.json({ error: `Unknown workflow "${name}"` }, 404);
+    }
+    // Bearer-token enforcement for webhook triggers. When a workflow declares
+    // a webhook trigger with a token, every run-endpoint call must present
+    // `Authorization: Bearer <token>` regardless of where it comes from.
+    const webhookTrigger = registered.definition.triggers?.find((t) => t.kind === "webhook");
+    if (webhookTrigger && "token" in webhookTrigger && webhookTrigger.token) {
+      const auth = c.req.header("Authorization") ?? "";
+      if (auth !== `Bearer ${webhookTrigger.token}`) {
+        return c.json({ error: "Unauthorized" }, 401);
+      }
+    }
+    const { validateWorkflowInputs } = await import("@agent/core");
+    const validation = validateWorkflowInputs(registered.definition.inputs, body.input);
+    if (validation.errors.length > 0) {
+      return c.json({ error: "Invalid input", details: validation.errors }, 400);
     }
     // Fire and forget — return the runId immediately. Errors are reported
     // through the run row and SSE events.
-    const promise = opts.workflowEngine.runWorkflow(name, body.input ?? {}, body.trigger ?? "http");
+    const promise = opts.workflowEngine.runWorkflow(
+      name,
+      validation.values,
+      body.trigger ?? "http",
+      { dryRun: body.dryRun === true },
+    );
     const run = await Promise.race([
       promise,
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 25)),
@@ -1469,6 +1595,48 @@ export function createServer(opts: ServerOptions) {
     return c.json({ ok, runId: id });
   });
 
+  // Pending forms for a given run — used by the run-detail page to surface
+  // any human-input checkpoints the workflow has paused on.
+  app.get("/api/workflow-runs/:id/forms", (c) => {
+    const id = c.req.param("id");
+    const run = getWorkflowRun(runtime.db, id);
+    if (!run) return c.json({ error: "Run not found" }, 404);
+    const forms = listFormPending(runtime.db, { run_id: id });
+    return c.json({ forms });
+  });
+
+  // Submit values for a pending form. Validates against the form's schema
+  // (same validator as workflow inputs), resolves the in-process waiter, and
+  // the engine resumes from the form step's completion.
+  app.post("/api/workflow-runs/:id/forms/:stepName", async (c) => {
+    if (!opts.workflowEngine) {
+      return c.json({ error: "Workflow engine not configured" }, 503);
+    }
+    const id = c.req.param("id");
+    const stepName = c.req.param("stepName");
+    const run = getWorkflowRun(runtime.db, id);
+    if (!run) return c.json({ error: "Run not found" }, 404);
+    let payload: unknown = {};
+    try {
+      payload = await c.req.json();
+    } catch {
+      // Empty body is acceptable — schema validator will surface missing
+      // required fields.
+    }
+    const result = opts.workflowEngine.forms.submit(id, stepName, payload);
+    if (!result.ok) {
+      return c.json({ error: result.error, details: result.details }, result.status as 400 | 404 | 409 | 410);
+    }
+    return c.json({ ok: true, values: result.values });
+  });
+
+  // Global pending-forms list — handy for the home page badge ("3 forms
+  // waiting") without paying for a per-run scan.
+  app.get("/api/workflow-forms", (c) => {
+    const forms = listFormPending(runtime.db, { status: "pending" });
+    return c.json({ forms });
+  });
+
   app.get("/api/workflow-runs/:id/events", async (c) => {
     const id = c.req.param("id");
     const engine = opts.workflowEngine;
@@ -1497,6 +1665,7 @@ export function createServer(opts: ServerOptions) {
       };
       c.req.raw.signal.addEventListener("abort", onClose);
       let unsubscribe: (() => void) | undefined;
+      let unsubscribeForms: (() => void) | undefined;
       if (engine) {
         unsubscribe = engine.onEvent((event: EngineEvent) => {
           if (closed) return;
@@ -1509,6 +1678,13 @@ export function createServer(opts: ServerOptions) {
           ) {
             closed = true;
           }
+        });
+        // Forward form lifecycle events on the same channel so the UI doesn't
+        // need a separate stream. Only emit events for this run.
+        unsubscribeForms = engine.forms.onEvent((event: FormEvent) => {
+          if (closed) return;
+          if (event.runId !== id) return;
+          stream.writeSSE({ event: event.type, data: JSON.stringify(event) }).catch(() => {});
         });
       }
       // Keep the connection open until terminal event or client disconnect.
@@ -1523,6 +1699,7 @@ export function createServer(opts: ServerOptions) {
         }
       }
       unsubscribe?.();
+      unsubscribeForms?.();
     });
   });
 
@@ -1585,7 +1762,64 @@ export function createServer(opts: ServerOptions) {
     const path = join(dir, `${name}.yaml`);
     writeFileSync(path, content, "utf-8");
     runtime.getWorkflows().reloadFromDisk();
+    // Snapshot for version history. Best-effort — surface a warning if it
+    // fails but don't fail the save.
+    try {
+      const { recordVersion } = await import("@agent/core");
+      recordVersion(runtime.db, { workflowName: name, yaml: content });
+    } catch (err) {
+      console.warn(`[workflow-versions] failed to record snapshot: ${(err as Error).message}`);
+    }
     return c.json({ ok: true, name, path });
+  });
+
+  // --- Workflow version history ---
+  app.get("/api/workflows/:name/versions", async (c) => {
+    const name = c.req.param("name");
+    const limit = Number.parseInt(c.req.query("limit") ?? "20", 10);
+    const { listVersions } = await import("@agent/core");
+    const versions = listVersions(runtime.db, name, Number.isFinite(limit) ? limit : 20);
+    // Don't ship every YAML body in the list — they can be hefty. Caller
+    // fetches one at a time when they want to diff or restore.
+    return c.json({
+      versions: versions.map((v) => ({
+        version: v.version,
+        saved_by: v.saved_by,
+        saved_at: v.saved_at,
+        bytes: v.yaml.length,
+      })),
+    });
+  });
+
+  app.get("/api/workflows/:name/versions/:version", async (c) => {
+    const { name, version } = c.req.param();
+    const { getVersion } = await import("@agent/core");
+    const v = getVersion(runtime.db, name, Number(version));
+    if (!v) return c.json({ error: "Version not found" }, 404);
+    return c.json(v);
+  });
+
+  app.post("/api/workflows/:name/versions/:version/restore", async (c) => {
+    const { name, version } = c.req.param();
+    const { getVersion, recordVersion } = await import("@agent/core");
+    const v = getVersion(runtime.db, name, Number(version));
+    if (!v) return c.json({ error: "Version not found" }, 404);
+
+    const dir = resolveWorkflowsDir(runtime.getConfig().workflows?.directory);
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, `${name}.yaml`);
+    writeFileSync(path, v.yaml, "utf-8");
+    runtime.getWorkflows().reloadFromDisk();
+    try {
+      recordVersion(runtime.db, {
+        workflowName: name,
+        yaml: v.yaml,
+        savedBy: `restore-from-v${version}`,
+      });
+    } catch (err) {
+      console.warn(`[workflow-versions] restore snapshot failed: ${(err as Error).message}`);
+    }
+    return c.json({ ok: true, restoredFrom: Number(version) });
   });
 
   app.delete("/api/workflows/:name", (c) => {
@@ -1601,6 +1835,63 @@ export function createServer(opts: ServerOptions) {
     }
     if (!removed) return c.json({ error: "Workflow file not found" }, 404);
     runtime.getWorkflows().reloadFromDisk();
+    return c.json({ ok: true });
+  });
+
+  // --- Workflow analytics ---
+  app.get("/api/workflow-analytics", async (c) => {
+    const since = c.req.query("since");
+    const until = c.req.query("until");
+    const w = { since: since || undefined, until: until || undefined };
+    const {
+      summarizeWorkflowAnalytics,
+      perWorkflowMetrics,
+      stepHotspots,
+      tokenUsageByWorkflow,
+    } = await import("@agent/core");
+    return c.json({
+      summary: summarizeWorkflowAnalytics(runtime.db, w),
+      perWorkflow: perWorkflowMetrics(runtime.db, w),
+      hotspots: stepHotspots(runtime.db, w),
+      tokens: tokenUsageByWorkflow(runtime.db, w),
+    });
+  });
+
+  // --- Per-workflow secrets ---
+  // Values are write-only — GET returns the list of keys plus timestamps,
+  // never the decrypted value. Use ${secrets.NAME} in any string field to
+  // reference one at run time.
+  app.get("/api/workflows/:name/secrets", (c) => {
+    const name = c.req.param("name");
+    return c.json({ secrets: listSecrets(runtime.db, name) });
+  });
+
+  app.put("/api/workflows/:name/secrets/:key", async (c) => {
+    const { name, key } = c.req.param();
+    let body: { value?: string } = {};
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+    if (typeof body.value !== "string") {
+      return c.json({ error: "value (string) is required" }, 400);
+    }
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+      return c.json({ error: "key must be a valid identifier (letters/digits/underscore)" }, 400);
+    }
+    try {
+      setSecret(runtime.db, name, key, body.value);
+      return c.json({ ok: true });
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 500);
+    }
+  });
+
+  app.delete("/api/workflows/:name/secrets/:key", (c) => {
+    const { name, key } = c.req.param();
+    const ok = deleteSecret(runtime.db, name, key);
+    if (!ok) return c.json({ error: "Secret not found" }, 404);
     return c.json({ ok: true });
   });
 
@@ -1627,6 +1918,548 @@ export function createServer(opts: ServerOptions) {
     const id = c.req.param("id");
     const ok = await globalSandboxRegistry.kill(id);
     if (!ok) return c.json({ error: "Sandbox not found" }, 404);
+    return c.json({ ok: true });
+  });
+
+  // --- Federation / resources (S10.1) ---
+  //
+  // HTTP mirror of the `tai resources` CLI. Each request reads fresh state from
+  // disk (lockfile + trust store) — these are file-backed and cheap, and we
+  // want changes made via CLI to show up immediately. The approval flow here
+  // is a two-step "preflight then confirm" handshake: an install that needs
+  // human approval returns 409 with the resolved manifest; the UI then re-POSTs
+  // with `approve: true` once the user clicks through. S10.3 swaps this for a
+  // proper SSE-backed flow via the existing /api/approvals queue.
+
+  function buildResourceLoader(): ResourceLoader {
+    const loader = new ResourceLoader();
+    loader.addSource(new FileResourceSource());
+    loader.addSource(new HttpResourceSource());
+    loader.addSource(new GitResourceSource());
+    loader.addSource(new NpmResourceSource());
+    loader.addSource(new TaiRegistrySource());
+    return loader;
+  }
+
+  /**
+   * Register an installed resource into the appropriate live runtime registry.
+   * Without this step, an install would land in `tai.lock` but the skill /
+   * prompt / KB / etc. wouldn't be reachable from agents until a process
+   * restart re-bootstrapped it.
+   *
+   * Bodies for kinds that ship as data (skill / prompt / kb) are derived from
+   * `manifest.data` so agents can use them immediately. Kinds that need
+   * compiled bodies (tool / provider / step_executor) only get the manifest
+   * record — actually executing them requires the worker-sandbox slice
+   * (ptask_s8_6_b).
+   */
+  function registerInstalledResource(res: Resource): void {
+    const { manifest } = res;
+    const origin = res.origin;
+    switch (manifest.kind) {
+      case "skill": {
+        const data = (manifest.data ?? {}) as Record<string, unknown>;
+        runtime.getSkillRegistry().asResources().register({
+          manifest,
+          origin,
+          body: { manifest, definition: data as never },
+        });
+        break;
+      }
+      case "prompt": {
+        const data = (manifest.data ?? {}) as Record<string, unknown>;
+        const text = typeof data.text === "string" ? data.text : "";
+        runtime.getPromptRegistry().asResources().register({
+          manifest,
+          origin,
+          body: { text },
+        });
+        break;
+      }
+      case "kb": {
+        const data = (manifest.data ?? {}) as Record<string, unknown>;
+        const rootPath = typeof data.rootPath === "string" ? data.rootPath : "";
+        runtime.getKbRegistry().asResources().register({
+          manifest,
+          origin,
+          body: { rootPath, description: manifest.description },
+        });
+        break;
+      }
+      case "tool":
+        runtime.getToolRegistry().asResources().register(res);
+        break;
+      case "provider":
+        runtime.getProviderRegistry().asResources().register(res);
+        break;
+      case "step_executor":
+        runtime.getStepExecutorRegistry().asResources().register(res);
+        break;
+      case "trigger":
+        runtime.getTriggerRegistry().asResources().register(res);
+        break;
+      // workflow / agent / channel / sandbox / task_backend kinds have their
+      // own registration surfaces that aren't reachable from this layer yet.
+    }
+  }
+
+  /**
+   * Bootstrap: re-register every lockfile entry into the live runtime
+   * registries at server start. Without this, restarting the process would
+   * forget every previously-installed resource even though `tai.lock` still
+   * lists them.
+   */
+  (async () => {
+    try {
+      const lock = Lockfile.read(defaultLockfilePath());
+      if (lock.list().length === 0) return;
+      const loader = buildResourceLoader();
+      for (const entry of lock.list()) {
+        try {
+          const res = await loader.load(entry.uri);
+          registerInstalledResource(res);
+        } catch (err) {
+          console.warn(
+            `[resources] failed to re-register ${entry.kind}/${entry.id} from ${entry.uri}: ${(err as Error).message}`,
+          );
+        }
+      }
+    } catch (err) {
+      console.warn(`[resources] lockfile bootstrap failed: ${(err as Error).message}`);
+    }
+  })();
+
+  app.get("/api/resources", (c) => {
+    const lock = Lockfile.read(defaultLockfilePath());
+    return c.json({ resources: lock.list(), lockfilePath: lock.filePath });
+  });
+
+  app.get("/api/resources/:kind/:id{.+}", (c) => {
+    const kind = c.req.param("kind") as ResourceKind;
+    const id = decodeURIComponent(c.req.param("id"));
+    const lock = Lockfile.read(defaultLockfilePath());
+    const entry = lock.get(kind, id);
+    if (!entry) return c.json({ error: "not_found" }, 404);
+    const trust = new TrustStore();
+    const trusted = trust.getTrustedResource(kind, id, entry.manifestHash);
+    return c.json({ entry, trusted: trusted ?? null });
+  });
+
+  app.post("/api/resources/install", async (c) => {
+    const body = await c
+      .req
+      .json<{ uri?: string; frozen?: boolean; approve?: boolean; useApprovalQueue?: boolean }>()
+      .catch(() => null);
+    if (!body?.uri) return c.json({ error: "uri is required" }, 400);
+
+    const loader = buildResourceLoader();
+    let res: Resource;
+    try {
+      res = await loader.load(body.uri);
+    } catch (err) {
+      return c.json({ error: `failed to fetch: ${(err as Error).message}` }, 400);
+    }
+
+    const lockfilePath = defaultLockfilePath();
+    const lock = Lockfile.read(lockfilePath);
+
+    // Queue-driven approval path: register an HttpApprovalHandler in the global
+    // approvals queue, let ApprovalGate route the prompt through it, and hold
+    // the request open until the UI (or another approver) resolves it via
+    // POST /api/approvals/:id. Same mechanism tool approvals use.
+    if (body.useApprovalQueue && !body.frozen) {
+      const trust = new TrustStore();
+      const handler = new HttpApprovalHandler();
+      const handlerKey = `install_${res.manifest.kind}_${res.manifest.id.replace(/[^a-zA-Z0-9_-]/g, "_")}_${Date.now()}`;
+      registerHandler(handlerKey, handler);
+      try {
+        const gate = new ApprovalGate({ trust, handler, sessionId: handlerKey });
+        const decision = await gate.decide({ resource: res });
+        if (decision.approved) {
+          lock.upsertResource(res);
+          lock.save();
+          registerInstalledResource(res);
+          return c.json({
+            ok: true,
+            mode: decision.cached ? "cached" : "approved",
+            resource: { manifest: res.manifest, origin: res.origin },
+            decision,
+          });
+        }
+        return c.json(
+          {
+            ok: false,
+            mode: "denied",
+            resource: { manifest: res.manifest, origin: res.origin },
+            reason: decision.reason,
+          },
+          403,
+        );
+      } finally {
+        unregisterHandler(handlerKey);
+      }
+    }
+
+    if (body.frozen) {
+      const entry = lock.get(res.manifest.kind, res.manifest.id);
+      if (!entry) {
+        return c.json(
+          { error: `--frozen: no lockfile entry for ${res.manifest.kind}/${res.manifest.id}` },
+          400,
+        );
+      }
+      if (entry.manifestHash !== hashManifest(res.manifest)) {
+        return c.json(
+          { error: "manifest hash does not match lockfile", expected: entry.manifestHash, got: hashManifest(res.manifest) },
+          409,
+        );
+      }
+      return c.json({
+        ok: true,
+        mode: "frozen",
+        resource: { manifest: res.manifest, origin: res.origin },
+      });
+    }
+
+    const trust = new TrustStore();
+    const gate = new ApprovalGate({ trust });
+    const decision = await gate.decide({ resource: res });
+
+    if (decision.approved) {
+      lock.upsertResource(res);
+      lock.save();
+      registerInstalledResource(res);
+      return c.json({
+        ok: true,
+        mode: decision.cached ? "cached" : "auto",
+        resource: { manifest: res.manifest, origin: res.origin },
+        decision,
+      });
+    }
+
+    // Untrusted — caller must opt in via approve:true after reviewing.
+    if (!body.approve) {
+      return c.json(
+        {
+          ok: false,
+          mode: "needs_approval",
+          resource: { manifest: res.manifest, origin: res.origin },
+          requestedPermissions: res.manifest.permissions ?? {},
+          reason: decision.reason,
+        },
+        409,
+      );
+    }
+
+    // Caller explicitly approves — record + install.
+    trust.approveResource(res.manifest, res.origin.uri, res.manifest.permissions ?? {});
+    lock.upsertResource(res);
+    lock.save();
+    registerInstalledResource(res);
+    return c.json({
+      ok: true,
+      mode: "approved",
+      resource: { manifest: res.manifest, origin: res.origin },
+    });
+  });
+
+  app.delete("/api/resources/:kind/:id{.+}", (c) => {
+    const kind = c.req.param("kind") as ResourceKind;
+    const id = decodeURIComponent(c.req.param("id"));
+    const lock = Lockfile.read(defaultLockfilePath());
+    const removed = lock.remove(kind, id);
+    if (!removed) return c.json({ error: "not_found" }, 404);
+    lock.save();
+    new TrustStore().revokeResource(kind, id);
+    // Also drop it from the live runtime registry so an agent referencing it
+    // immediately stops resolving the now-uninstalled resource.
+    switch (kind) {
+      case "skill": runtime.getSkillRegistry().unregister(id); break;
+      case "prompt": runtime.getPromptRegistry().unregister(id); break;
+      case "kb": runtime.getKbRegistry().unregister(id); break;
+      case "tool": runtime.getToolRegistry().asResources().unregister({ kind, id }); break;
+      case "provider": runtime.getProviderRegistry().asResources().unregister({ kind, id }); break;
+      case "step_executor": runtime.getStepExecutorRegistry().asResources().unregister({ kind, id }); break;
+      case "trigger": runtime.getTriggerRegistry().unregister(id); break;
+    }
+    return c.json({ ok: true });
+  });
+
+  app.get("/api/registry/search", async (c) => {
+    const q = c.req.query("q") ?? "";
+    if (!q.trim()) return c.json({ results: [] });
+    try {
+      const src = new TaiRegistrySource();
+      const results = await src.search(q.trim());
+      return c.json({ results });
+    } catch (err) {
+      return c.json({ error: (err as Error).message, results: [] }, 200);
+    }
+  });
+
+  app.get("/api/trust", (c) => {
+    const trust = new TrustStore();
+    return c.json({
+      publishers: trust.listPublishers(),
+      resources: trust.listResources(),
+    });
+  });
+
+  app.post("/api/trust/publisher", async (c) => {
+    const body = await c
+      .req
+      .json<{ publicKey?: string; publisher?: string }>()
+      .catch(() => null);
+    if (!body?.publicKey || !body?.publisher) {
+      return c.json({ error: "publicKey and publisher are required" }, 400);
+    }
+    const trust = new TrustStore();
+    trust.trustPublisher(body.publicKey, body.publisher);
+    return c.json({ ok: true });
+  });
+
+  app.delete("/api/trust/publisher/:key{.+}", (c) => {
+    const key = decodeURIComponent(c.req.param("key"));
+    const trust = new TrustStore();
+    const removed = trust.revokePublisher(key);
+    if (!removed) return c.json({ error: "not_found" }, 404);
+    return c.json({ ok: true });
+  });
+
+  // --- Authored resources (S10.4) ---
+  //
+  // Lightweight CRUD for user-authored skills + prompts. Persists to
+  // `<contextDir>/../authored-resources/<kind>/<id>/manifest.yaml` so the
+  // resource survives a runtime reload. Loaded on demand each request — there
+  // is no in-process cache here, so external changes to the YAML files take
+  // effect immediately. Resource registration into the live runtime registries
+  // is best-effort: missing pieces (e.g. body for prompts) are derived from
+  // the manifest data block at register time.
+
+  const SUPPORTED_AUTHORED_KINDS = new Set(["skill", "prompt", "agent"]);
+
+  function authoredRoot(): string {
+    return resolve(runtime.contextDir, "..", "authored-resources");
+  }
+
+  function authoredDir(kind: string, id: string): string {
+    // ID may include a "/" namespace (e.g. acme/widget). Encode that as a
+    // subdirectory so the filesystem layout matches the id naturally.
+    return resolve(authoredRoot(), kind, id);
+  }
+
+  function authoredManifestPath(kind: string, id: string): string {
+    return join(authoredDir(kind, id), "manifest.yaml");
+  }
+
+  function authoredSkillMdPath(id: string): string {
+    return join(authoredDir("skill", id), "SKILL.md");
+  }
+
+  function authoredSafeId(id: string): boolean {
+    return /^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(id) && !id.includes("..");
+  }
+
+  function listAuthoredForKind(kind: string): Array<{ kind: string; id: string; manifest: Record<string, unknown> }> {
+    const dir = resolve(authoredRoot(), kind);
+    if (!existsSync(dir)) return [];
+    const out: Array<{ kind: string; id: string; manifest: Record<string, unknown> }> = [];
+    function walk(rel: string) {
+      const abs = resolve(dir, rel);
+      const entries = readdirSync(abs, { withFileTypes: true });
+      let hasManifest = false;
+      // Prefer SKILL.md when authoring a skill.
+      if (kind === "skill") {
+        for (const e of entries) {
+          if (e.isFile() && /^skill\.md$/i.test(e.name)) {
+            hasManifest = true;
+            try {
+              const text = readFileSync(join(abs, e.name), "utf8");
+              const parsed = parseSkillMd(text, { dirName: e.name === "SKILL.md" ? rel.split(/[\\/]/).pop() : undefined });
+              out.push({ kind, id: rel.split(/[\\/]/).join("/"), manifest: parsed.manifest as unknown as Record<string, unknown> });
+            } catch (err) {
+              console.warn(`[authored] failed to parse ${join(abs, e.name)}: ${(err as Error).message}`);
+            }
+          }
+        }
+      }
+      for (const e of entries) {
+        if (e.isFile() && e.name === "manifest.yaml") {
+          hasManifest = true;
+          const text = readFileSync(join(abs, "manifest.yaml"), "utf8");
+          const manifest = YAML.parse(text) as Record<string, unknown>;
+          if (kind === "skill") {
+            console.warn(
+              `[skill] DEPRECATION: ${manifest.id ?? rel} uses manifest.yaml at ${join(abs, "manifest.yaml")}. ` +
+                `Migrate to the agentskills.io SKILL.md format.`,
+            );
+          }
+          out.push({ kind, id: rel.split(/[\\/]/).join("/"), manifest });
+        }
+      }
+      if (hasManifest) return;
+      for (const e of entries) {
+        if (e.isDirectory()) walk(join(rel, e.name));
+      }
+    }
+    walk(".");
+    return out;
+  }
+
+  function registerAuthored(kind: string, manifest: Record<string, unknown>): void {
+    const sourcePath =
+      kind === "skill" ? authoredSkillMdPath(manifest.id as string) : authoredManifestPath(kind, manifest.id as string);
+    const origin = {
+      scheme: "file" as const,
+      uri: `file://${sourcePath}`,
+      loadedAt: Date.now(),
+    };
+    if (kind === "skill") {
+      const def = manifest.data ?? {};
+      runtime.getSkillRegistry().asResources().register({
+        manifest: manifest as never,
+        origin,
+        body: { manifest: manifest as never, definition: def as never },
+      });
+    } else if (kind === "prompt") {
+      const text = ((manifest.data as Record<string, unknown> | undefined)?.text as string | undefined) ?? "";
+      runtime.getPromptRegistry().asResources().register({
+        manifest: manifest as never,
+        origin,
+        body: { text },
+      });
+    } else if (kind === "agent") {
+      const definition = (manifest.data ?? {}) as Record<string, unknown>;
+      runtime.getAgentRegistry().asResources().register({
+        manifest: manifest as never,
+        origin,
+        body: { manifest: manifest as never, definition: definition as never },
+      });
+    }
+  }
+
+  function unregisterAuthored(kind: string, id: string): boolean {
+    if (kind === "skill") return runtime.getSkillRegistry().unregister(id);
+    if (kind === "prompt") return runtime.getPromptRegistry().unregister(id);
+    if (kind === "agent") return runtime.getAgentRegistry().unregister(id);
+    return false;
+  }
+
+  // Bootstrap: scan the authored-resources directory once and register everything.
+  for (const kind of SUPPORTED_AUTHORED_KINDS) {
+    try {
+      for (const entry of listAuthoredForKind(kind)) {
+        registerAuthored(kind, entry.manifest);
+      }
+    } catch (err) {
+      console.warn(`[authored] failed to load ${kind}: ${(err as Error).message}`);
+    }
+  }
+
+  app.get("/api/authored", (c) => {
+    const kind = c.req.query("kind");
+    const kinds = kind ? [kind] : [...SUPPORTED_AUTHORED_KINDS];
+    const out: Array<{ kind: string; id: string; manifest: Record<string, unknown> }> = [];
+    for (const k of kinds) {
+      if (!SUPPORTED_AUTHORED_KINDS.has(k)) continue;
+      out.push(...listAuthoredForKind(k));
+    }
+    return c.json({ resources: out, supportedKinds: [...SUPPORTED_AUTHORED_KINDS] });
+  });
+
+  app.post("/api/authored/:kind", async (c) => {
+    const kind = c.req.param("kind");
+    if (!SUPPORTED_AUTHORED_KINDS.has(kind)) {
+      return c.json({ error: `unsupported kind "${kind}"; supported: ${[...SUPPORTED_AUTHORED_KINDS].join(", ")}` }, 400);
+    }
+    const body = await c.req.json<{
+      id?: string;
+      version?: string;
+      description?: string;
+      data?: Record<string, unknown>;
+      // agentskills.io SKILL.md fields (skill kind only):
+      instructions?: string;
+      allowedTools?: string[];
+      license?: unknown;
+      compatibility?: unknown;
+      metadata?: unknown;
+    }>().catch(() => null);
+    if (!body?.id) return c.json({ error: "id is required" }, 400);
+    if (!authoredSafeId(body.id)) {
+      return c.json({ error: "id must be alphanumeric with . _ - / characters" }, 400);
+    }
+
+    const dir = authoredDir(kind, body.id);
+    mkdirSync(dir, { recursive: true });
+
+    let manifest: Record<string, unknown>;
+    if (kind === "skill") {
+      // Accept either the new SKILL.md shape or a legacy data block.
+      const data = (body.data ?? {}) as Record<string, unknown>;
+      const instructions =
+        typeof body.instructions === "string"
+          ? body.instructions
+          : typeof data.instructions === "string"
+            ? (data.instructions as string)
+            : "";
+      const allowedTools =
+        body.allowedTools ?? (Array.isArray(data.toolRefs) ? (data.toolRefs as string[]) : undefined);
+      const skillMdText = renderSkillMd({
+        name: body.id,
+        description: body.description ?? "",
+        body: instructions,
+        version: body.version,
+        license: body.license ?? data.license,
+        compatibility: body.compatibility ?? data.compatibility,
+        metadata: body.metadata ?? data.metadata,
+        allowedTools,
+      });
+      writeFileSync(authoredSkillMdPath(body.id), skillMdText, "utf8");
+      // If a legacy manifest.yaml is still sitting next to the new SKILL.md,
+      // remove it so subsequent listings don't double-register.
+      const legacy = authoredManifestPath(kind, body.id);
+      if (existsSync(legacy)) {
+        try {
+          unlinkSync(legacy);
+        } catch {
+          /* best effort */
+        }
+      }
+      manifest = parseSkillMd(skillMdText).manifest as unknown as Record<string, unknown>;
+    } else {
+      manifest = {
+        kind,
+        id: body.id,
+        version: body.version ?? "0.0.0",
+        description: body.description,
+        data: body.data ?? {},
+      };
+      writeFileSync(authoredManifestPath(kind, body.id), YAML.stringify(manifest), "utf8");
+    }
+    // Replace any prior registration before re-registering.
+    unregisterAuthored(kind, body.id);
+    registerAuthored(kind, manifest);
+    return c.json({ ok: true, resource: { kind, id: body.id, manifest } });
+  });
+
+  app.delete("/api/authored/:kind/:id{.+}", (c) => {
+    const kind = c.req.param("kind");
+    const id = decodeURIComponent(c.req.param("id"));
+    if (!SUPPORTED_AUTHORED_KINDS.has(kind)) return c.json({ error: "unsupported kind" }, 400);
+    if (!authoredSafeId(id)) return c.json({ error: "invalid id" }, 400);
+    const skillMd = kind === "skill" ? authoredSkillMdPath(id) : null;
+    const manifestYaml = authoredManifestPath(kind, id);
+    let removedFiles = 0;
+    if (skillMd && existsSync(skillMd)) {
+      unlinkSync(skillMd);
+      removedFiles++;
+    }
+    if (existsSync(manifestYaml)) {
+      unlinkSync(manifestYaml);
+      removedFiles++;
+    }
+    if (removedFiles === 0) return c.json({ error: "not_found" }, 404);
+    unregisterAuthored(kind, id);
     return c.json({ ok: true });
   });
 

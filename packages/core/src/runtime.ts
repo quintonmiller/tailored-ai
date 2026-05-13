@@ -13,6 +13,19 @@ import { globalSandboxRegistry } from "./sandboxes/registry.js";
 import { createTaskBackend } from "./tasks/factory.js";
 import type { TaskBackend } from "./tasks/interface.js";
 import type { Tool } from "./tools/interface.js";
+import { KbRegistry, populateBuiltinKbs } from "./resources/kb-registry.js";
+import { PromptRegistry } from "./resources/prompt-registry.js";
+import { ProviderRegistry } from "./resources/provider-registry.js";
+import { SkillRegistry } from "./resources/skill.js";
+import { AgentRegistry } from "./resources/agent.js";
+import { BundleRegistry } from "./resources/bundle.js";
+import {
+  migrateConfigAgentsToResources,
+  populateAgentsFromDisk,
+} from "./resources/agent-migration.js";
+import { StepExecutorRegistry } from "./resources/step-executor-registry.js";
+import { ToolRegistry } from "./resources/tool-registry.js";
+import { TriggerKindRegistry, populateBuiltinTriggers } from "./resources/trigger-registry.js";
 import { WorkflowRegistry } from "./workflows/registry.js";
 import { resolveWorkflowsDir } from "./workflows/loader.js";
 import type { WorkflowDefinition } from "./workflows/types.js";
@@ -48,6 +61,19 @@ export class AgentRuntime {
   private _createTools: RuntimeOptions["createTools"];
   private _createProvider: RuntimeOptions["createProvider"];
   private _loadConfig: (path: string) => AgentConfig;
+  private _toolRegistry: ToolRegistry = new ToolRegistry();
+  private _providerRegistry: ProviderRegistry = new ProviderRegistry();
+  private _skillRegistry: SkillRegistry = new SkillRegistry();
+  private _agentRegistry: AgentRegistry = new AgentRegistry();
+  private _bundleRegistry: BundleRegistry = new BundleRegistry();
+  private _stepExecutorRegistry: StepExecutorRegistry = new StepExecutorRegistry();
+  private _kbRegistry: KbRegistry = new KbRegistry();
+  private _promptRegistry: PromptRegistry = new PromptRegistry();
+  private _triggerRegistry: TriggerKindRegistry = (() => {
+    const r = new TriggerKindRegistry();
+    populateBuiltinTriggers(r);
+    return r;
+  })();
   private _workflows: WorkflowRegistry = new WorkflowRegistry();
   private _workflowEngine: import("./workflows/engine.js").WorkflowEngine | undefined;
   private _activeProject: ProjectContext | null = null;
@@ -73,12 +99,35 @@ export class AgentRuntime {
     this._tools = opts.createTools(merged, opts.contextDir, opts.configPath, {
       db: opts.db,
       taskBackend: this._taskBackend,
-    });
+    }) ?? [];
+    for (const tool of this._tools) this._toolRegistry.registerBuiltin(tool);
     const { provider, model } = opts.createProvider(merged);
     this._provider = provider;
     this._model = model;
+    this._providerRegistry.registerBuiltin({
+      id: merged.agent.defaultProvider,
+      provider,
+      defaultModel: model,
+    });
     this._workflows.setDirectory(resolveWorkflowsDir(merged.workflows?.directory));
     this._workflows.reloadFromDisk();
+    populateBuiltinKbs(this._kbRegistry, this.kbDir);
+
+    // S11.4: agents-as-resources migration. Exports any config.yaml agents to
+    // data/authored-resources/agent/<id>/manifest.yaml on first run, then
+    // populates the AgentRegistry from disk. config.yaml agents still resolve
+    // through the legacy fallback in resolveAgent for back-compat.
+    try {
+      const migrated = migrateConfigAgentsToResources(merged, this.contextDir);
+      if (migrated.length > 0) {
+        console.log(
+          `[agents] migrated ${migrated.length} agent(s) from config.yaml to authored-resources: ${migrated.join(", ")}`,
+        );
+      }
+      populateAgentsFromDisk(this._agentRegistry, this.contextDir);
+    } catch (err) {
+      console.warn(`[agents] migration step failed: ${(err as Error).message}`);
+    }
   }
 
   getWorkflows(): WorkflowRegistry {
@@ -111,6 +160,42 @@ export class AgentRuntime {
   }
   getTaskBackend(): TaskBackend {
     return this._taskBackend;
+  }
+  /** Expose the underlying tool resource registry for skills, agent-authored tools, and inspection. */
+  getToolRegistry(): ToolRegistry {
+    return this._toolRegistry;
+  }
+  /** Expose the provider resource registry. Multiple providers can be registered for switching. */
+  getProviderRegistry(): ProviderRegistry {
+    return this._providerRegistry;
+  }
+  /** Expose the skill registry. Agents can layer skills via `agents.<name>.skills: [...]`. */
+  getSkillRegistry(): SkillRegistry {
+    return this._skillRegistry;
+  }
+  /** Expose the agent registry. As of S11.4 agents are first-class resources, parallel to skills/tools/etc. */
+  getAgentRegistry(): AgentRegistry {
+    return this._agentRegistry;
+  }
+  /** Expose the bundle registry. Bundles are curated collections; their members are opt-in. */
+  getBundleRegistry(): BundleRegistry {
+    return this._bundleRegistry;
+  }
+  /** Expose the workflow step-executor registry — surfaces both built-ins and any agent-authored ones. */
+  getStepExecutorRegistry(): StepExecutorRegistry {
+    return this._stepExecutorRegistry;
+  }
+  /** Expose the trigger-kind catalog (built-ins + community/agent-authored). */
+  getTriggerRegistry(): TriggerKindRegistry {
+    return this._triggerRegistry;
+  }
+  /** Knowledge-base resource registry. */
+  getKbRegistry(): KbRegistry {
+    return this._kbRegistry;
+  }
+  /** Prompt resource registry. */
+  getPromptRegistry(): PromptRegistry {
+    return this._promptRegistry;
   }
   get generation(): number {
     return this._generation;
@@ -164,17 +249,27 @@ export class AgentRuntime {
       const tools = this._createTools(config, this.contextDir, this.configPath, {
         db: this.db,
         taskBackend,
-      });
+      }) ?? [];
       const { provider, model } = this._createProvider(config);
-      // Clean up old tools that have a destroy hook (e.g. browser processes)
-      const oldTools = this._tools;
-      for (const tool of oldTools) {
-        tool.destroy?.().catch((e) => {
-          console.error(`[runtime] Error destroying tool "${tool.name}":`, (e as Error).message);
-        });
-      }
+      // Clean up old tools that have a destroy hook (e.g. browser processes).
+      // destroyAll() runs in parallel and swallows individual errors so one
+      // bad tool can't block reload.
+      const oldRegistry = this._toolRegistry;
+      oldRegistry.destroyAll().catch((e) => {
+        console.error("[runtime] destroyAll failed:", (e as Error).message);
+      });
+      const newToolRegistry = new ToolRegistry();
+      for (const tool of tools) newToolRegistry.registerBuiltin(tool);
+      const newProviderRegistry = new ProviderRegistry();
+      newProviderRegistry.registerBuiltin({
+        id: config.agent.defaultProvider,
+        provider,
+        defaultModel: model,
+      });
       this._config = config;
+      this._toolRegistry = newToolRegistry;
       this._tools = tools;
+      this._providerRegistry = newProviderRegistry;
       this._taskBackend = taskBackend;
       this._provider = provider;
       this._model = model;
@@ -301,6 +396,15 @@ export class AgentRuntime {
   }): AgentLoopOptions {
     const agentName = opts.agentName ?? opts.profileName;
     const config = this._config;
+    const resolveSkill = (id: string) => this._skillRegistry.get(id);
+    const describeSkill = (id: string) => {
+      const entry = this._skillRegistry.listWithManifests().find((r) => r.manifest.id === id);
+      return entry ? { description: entry.manifest.description } : undefined;
+    };
+    const listSkillIds = () =>
+      this._skillRegistry.listWithManifests().map((r) => r.manifest.id);
+    const resolveAgentDef = (id: string) => this._agentRegistry.get(id);
+    const resolveOpts = { resolveSkill, describeSkill, listSkillIds, resolveAgentDef };
     const resolved = resolveAgent(
       agentName,
       config,
@@ -308,6 +412,7 @@ export class AgentRuntime {
       opts.modelOverride,
       this.contextDir,
       this.kbDir,
+      resolveOpts,
     );
     const extraTools = [...this._metaTools, ...(opts.extraTools ?? [])];
     const globalKbDir = resolve(this.kbDir, "global");
@@ -350,6 +455,7 @@ export class AgentRuntime {
       summarizeOnTrim: resolved.summarizeOnTrim,
       permissions: config.permissions,
       sandbox,
+      skillCatalog: resolved.skillCatalog,
       getTools: () => {
         const r = resolveAgent(
           agentName,
@@ -358,6 +464,7 @@ export class AgentRuntime {
           opts.modelOverride,
           this.contextDir,
           this.kbDir,
+          resolveOpts,
         );
         return dedup([...r.tools, ...extraTools]);
       },

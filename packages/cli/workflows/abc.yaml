@@ -1,0 +1,73 @@
+name: abc
+description: "Daily 8am: research news + markets in parallel, synthesize,
+  publish to Discord."
+triggers:
+  - kind: cron
+    schedule: 0 9 * * *
+steps:
+  - name: news
+    type: agent_run
+    agent: researcher
+    prompt: Use web_search (one call) for "top AI news today", then summarize the
+      top 3 results as a short bulleted list. Do not fetch full pages. Stop
+      after the summary.
+    maxToolRounds: 3
+  - name: markets
+    type: agent_run
+    agent: researcher
+    prompt: Use web_search (one call) for "tech sector market today", then summarize
+      today's tech-sector moves in 2-3 sentences. Do not fetch full pages. Stop
+      after the summary.
+    maxToolRounds: 3
+  - name: synthesize
+    type: agent_run
+    agent: default
+    prompt: >-
+      Write a 5-bullet morning digest from these inputs. Reply with only the
+      bullets, no preamble, no tool calls.
+
+
+      NEWS:
+
+      ${steps.news}
+
+
+      MARKETS:
+
+      ${steps.markets}
+    maxToolRounds: 1
+  - name: publish
+    type: discord_message
+    message: |-
+      🌅 Morning digest:
+
+      ${steps.synthesize}
+graph:
+  nodes:
+    - stepName: news
+      position:
+        x: 240
+        y: 0
+    - stepName: markets
+      position:
+        x: 240
+        y: 200
+    - stepName: synthesize
+      position:
+        x: 540
+        y: 100
+    - stepName: publish
+      position:
+        x: 820
+        y: 100
+  edges:
+    - from: __trigger__
+      to: news
+    - from: __trigger__
+      to: markets
+    - from: news
+      to: synthesize
+    - from: markets
+      to: synthesize
+    - from: synthesize
+      to: publish

@@ -1,0 +1,74 @@
+name: weekly-summary
+description: |
+  Monday 8am: triggers the research-brief workflow as a sub-workflow with a
+  preset topic, then layers on a personal recap before delivering. Shows how
+  to compose existing workflows instead of duplicating their steps.
+
+  Demonstrates: schedule DSL, trigger_workflow (sub-workflow invocation),
+  graph mode for sequential composition.
+
+executionMode: graph
+
+triggers:
+  - kind: cron
+    schedule: every monday at 8am
+
+steps:
+  - name: research
+    type: trigger_workflow
+    workflow: research-brief
+    input:
+      topic: "trends in personal AI assistants this week"
+      depth: deep
+
+  - name: stats
+    type: tool_call
+    tool: facts
+    args:
+      action: list
+      category: weekly_metric
+      limit: 50
+
+  - name: compose
+    type: agent_run
+    agent: default
+    maxToolRounds: 1
+    prompt: |
+      Weekly recap. Two inputs:
+
+      INDUSTRY BRIEF (from sub-workflow):
+      ${steps.research}
+
+      PERSONAL METRICS (facts: category=weekly_metric):
+      ${steps.stats}
+
+      Combine into a single Monday-morning recap:
+
+        ## This week in the world
+        <1-2 sentences distilling the industry brief>
+
+        ## You this week
+        <bullets per personal metric; "(none on file)" if empty>
+
+        ## Suggested focus
+        <one suggestion the metrics + brief together imply>
+
+      No tool calls.
+
+  - name: send
+    type: notify
+    channel: discord
+    message: "📊 Monday recap\n\n${steps.compose}"
+
+graph:
+  nodes:
+    - { stepName: research, position: { x: 200, y: 60 } }
+    - { stepName: stats,    position: { x: 200, y: 200 } }
+    - { stepName: compose,  position: { x: 500, y: 130 } }
+    - { stepName: send,     position: { x: 800, y: 130 } }
+  edges:
+    - { from: __trigger__, to: research }
+    - { from: __trigger__, to: stats }
+    - { from: research,    to: compose }
+    - { from: stats,       to: compose }
+    - { from: compose,     to: send }

@@ -1,0 +1,98 @@
+name: expense-approval
+description: |
+  Workflow pauses on a form step asking for approval details (amount,
+  category, reason). After submission, classifies the expense via the
+  agent loop and either auto-approves small claims or DMs the owner for
+  manual review.
+
+  Demonstrates: form step (pause/resume), form notify hook, condition
+  routing on submitted form values.
+
+executionMode: graph
+
+triggers:
+  - kind: manual
+
+steps:
+  - name: collect
+    type: form
+    prompt: |
+      An expense was flagged. Fill in the details so the workflow can route it.
+    fields:
+      amount:
+        type: number
+        label: Amount (USD)
+        required: true
+        min: 0
+      category:
+        type: string
+        label: Category
+        enum: ["meals", "travel", "supplies", "software", "other"]
+        required: true
+      reason:
+        type: string
+        label: Reason / context
+        required: true
+      receipt_attached:
+        type: boolean
+        label: Receipt attached?
+        default: false
+    notify:
+      channel: discord
+      message: "💸 Expense form is open — please fill it in to continue."
+    timeoutMs: 86400000
+
+  - name: classify
+    type: agent_run
+    agent: default
+    maxToolRounds: 1
+    prompt: |
+      Classify this expense submission:
+
+        Amount: ${steps.collect.fields.amount}
+        Category: ${steps.collect.fields.category}
+        Reason: ${steps.collect.fields.reason}
+        Receipt attached: ${steps.collect.fields.receipt_attached}
+
+      Reply with exactly one lowercase word: auto_approve, needs_review,
+      or reject. No explanation. No tool calls.
+
+      Heuristics:
+        - amount < 25 AND receipt_attached → auto_approve
+        - amount < 100 AND category in {meals, supplies} → auto_approve
+        - amount > 500 → needs_review
+        - otherwise → needs_review
+
+  - name: route
+    type: condition
+    if: 'steps.classify == "auto_approve"'
+    then: ["auto_note"]
+    else: ["review_note"]
+
+  - name: auto_note
+    type: notify
+    channel: discord
+    message: |
+      ✅ Expense auto-approved (${steps.collect.fields.amount} USD,
+      ${steps.collect.fields.category}). Reason: ${steps.collect.fields.reason}
+
+  - name: review_note
+    type: notify
+    channel: discord
+    message: |
+      🧐 Expense needs review (${steps.collect.fields.amount} USD,
+      ${steps.collect.fields.category}). Reason: ${steps.collect.fields.reason}
+
+graph:
+  nodes:
+    - { stepName: collect,      position: { x: 200, y: 140 } }
+    - { stepName: classify,     position: { x: 460, y: 140 } }
+    - { stepName: route,        position: { x: 720, y: 140 } }
+    - { stepName: auto_note,    position: { x: 980, y: 60 } }
+    - { stepName: review_note,  position: { x: 980, y: 240 } }
+  edges:
+    - { from: __trigger__, to: collect }
+    - { from: collect,     to: classify }
+    - { from: classify,    to: route }
+    - { from: route,       to: auto_note,   sourceHandle: "true" }
+    - { from: route,       to: review_note, sourceHandle: "false" }

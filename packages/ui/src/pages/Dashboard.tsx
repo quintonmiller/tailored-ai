@@ -1,237 +1,381 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  type AgentInfo,
-  type ContextData,
-  type CronData,
-  type ProjectsResponse,
-  fetchContext,
+  fetchActivity,
+  fetchAllPendingForms,
+  fetchAutopilotActivity,
   fetchCron,
   fetchHealth,
-  fetchAgents,
-  fetchProjects,
-  fetchSessions,
-  fetchBackgroundTasks,
-  fetchActivity,
+  fetchPendingApprovals,
+  fetchProjectTasks,
+  fetchWorkflowRuns,
+  type AutopilotActivity,
+  type CronData,
+  type CronJobRow,
   type HealthInfo,
-  type SessionRow,
+  type PendingApprovalRequest,
+  type ProjectTask,
   type SessionActivity,
-  type TaskInfo,
+  type WorkflowFormPendingRow,
+  type WorkflowRunRow,
 } from "../api";
-import { AgentCard } from "../components/AgentCard";
-import { ContextFiles } from "../components/ContextFiles";
-import { CronJobList } from "../components/CronJobList";
-import { SessionList } from "../components/SessionList";
-import { TaskList } from "../components/TaskList";
 import { useActiveProject } from "../hooks/useActiveProject";
 
-const PROJECT_STATUS_LABELS: Record<string, string> = {
-  active: "Active",
-  completed: "Completed",
-  archived: "Archived",
-};
+const ACTIVITY_POLL_MS = 3000;
+const SLOW_POLL_MS = 30000;
+const RECENT_LIMIT = 8;
+const UPCOMING_LIMIT = 5;
 
 export function Dashboard() {
-  const [health, setHealth] = useState<HealthInfo | null>(null);
-  const [sessions, setSessions] = useState<SessionRow[] | null>(null);
-  const [agents, setAgents] = useState<Record<string, AgentInfo> | null>(null);
-  const [cron, setCron] = useState<CronData | null>(null);
-  const [tasks, setTasks] = useState<TaskInfo[] | null>(null);
-  const [projects, setProjects] = useState<ProjectsResponse | null>(null);
-  const [context, setContext] = useState<ContextData | null>(null);
   const [activity, setActivity] = useState<SessionActivity[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
-  const activityPollRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
-
+  const [autopilot, setAutopilot] = useState<AutopilotActivity | null>(null);
+  const [backlog, setBacklog] = useState<ProjectTask[]>([]);
+  const [blocked, setBlocked] = useState<ProjectTask[]>([]);
+  const [recentDone, setRecentDone] = useState<ProjectTask[]>([]);
+  const [pendingForms, setPendingForms] = useState<WorkflowFormPendingRow[]>([]);
+  const [pendingApprovals, setPendingApprovals] = useState<PendingApprovalRequest[]>([]);
+  const [recentRuns, setRecentRuns] = useState<WorkflowRunRow[]>([]);
+  const [cron, setCron] = useState<CronData | null>(null);
+  const [health, setHealth] = useState<HealthInfo | null>(null);
   const activeProject = useActiveProject();
 
   useEffect(() => {
-    const onError = (e: Error) => setError(e.message);
-
-    fetchHealth().then(setHealth).catch(onError);
-    fetchSessions().then(setSessions).catch(onError);
-    fetchAgents().then(setAgents).catch(onError);
-    fetchCron().then(setCron).catch(onError);
-    fetchBackgroundTasks().then(setTasks).catch(onError);
-    fetchProjects({ limit: 10 }).then(setProjects).catch(onError);
-    fetchContext().then(setContext).catch(onError);
-    fetchActivity().then(setActivity).catch(() => {});
+    refreshActivity();
+    refreshSlow();
+    const a = setInterval(refreshActivity, ACTIVITY_POLL_MS);
+    const s = setInterval(refreshSlow, SLOW_POLL_MS);
+    return () => {
+      clearInterval(a);
+      clearInterval(s);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProject]);
 
-  // Poll activity every 3s
-  useEffect(() => {
-    activityPollRef.current = setInterval(() => {
-      fetchActivity().then(setActivity).catch(() => {});
-    }, 3000);
-    return () => {
-      if (activityPollRef.current) clearInterval(activityPollRef.current);
-    };
-  }, []);
+  function refreshActivity() {
+    fetchActivity().then(setActivity).catch(() => {});
+    fetchAutopilotActivity().then(setAutopilot).catch(() => {});
+  }
 
-  // Auto-poll tasks when any are running
-  useEffect(() => {
-    if (!tasks) return;
-    const hasRunning = tasks.some((t) => t.status === "running");
-    if (hasRunning && !pollRef.current) {
-      pollRef.current = setInterval(() => {
-        fetchBackgroundTasks()
-          .then(setTasks)
-          .catch(() => {});
-      }, 5000);
-    } else if (!hasRunning && pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = undefined;
-    }
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, [tasks]);
+  function refreshSlow() {
+    fetchHealth().then(setHealth).catch(() => {});
+    fetchCron().then(setCron).catch(() => {});
+    fetchProjectTasks({ status: "backlog", order_by: "rank", limit: UPCOMING_LIMIT })
+      .then((r) => setBacklog(r.tasks))
+      .catch(() => {});
+    fetchProjectTasks({ status: "blocked", order_by: "updated_at", limit: 10 })
+      .then((r) => setBlocked(r.tasks))
+      .catch(() => {});
+    fetchProjectTasks({ status: "done", order_by: "updated_at", limit: RECENT_LIMIT })
+      .then((r) => setRecentDone(r.tasks))
+      .catch(() => {});
+    fetchAllPendingForms().then((r) => setPendingForms(r.forms)).catch(() => {});
+    fetchPendingApprovals().then(setPendingApprovals).catch(() => {});
+    fetchWorkflowRuns({ limit: RECENT_LIMIT })
+      .then(setRecentRuns)
+      .catch(() => {});
+  }
 
-  const agentEntries = agents ? Object.entries(agents) : [];
-  const activityByName = new Map(activity.map((a) => [a.agentName, a]));
+  const liveAgents = activity.filter((a) => a.status !== "idle");
+  const failedRuns = recentRuns.filter((r) => r.status === "failed");
+  const recentFinishedRuns = recentRuns.filter((r) =>
+    ["completed", "failed", "cancelled", "interrupted"].includes(r.status),
+  );
+  const needsHumanCount =
+    blocked.length + pendingForms.length + pendingApprovals.length + failedRuns.length;
+  const enabledCron = (cron?.jobs ?? []).filter((j) => j.enabled).slice(0, UPCOMING_LIMIT);
 
   return (
-    <div className="dashboard">
-      <div className="dashboard-section-header">
-        <h2>Status</h2>
-        <a href="#/config" className="dashboard-section-link">Configure providers</a>
-      </div>
-      {health ? (
-        <div className="health-grid">
-          <div className="health-card">
-            <div className="label">Status</div>
-            <div className={`value ${health.status === "ok" ? "ok" : ""}`}>{health.status}</div>
-          </div>
-          <div className="health-card">
-            <div className="label">Provider</div>
-            <div className="value">{health.provider}</div>
-          </div>
-          <div className="health-card">
-            <div className="label">Model</div>
-            <div className="value">{health.model}</div>
-          </div>
-          <div className="health-card">
-            <div className="label">Tools</div>
-            <div className="value">
-              <a href="#/tools" className="health-link">
-                {health.tools}
-              </a>
-            </div>
-          </div>
-          <div className="health-card">
-            <div className="label">Uptime</div>
-            <div className="value">{formatUptime(health.uptime)}</div>
-          </div>
-        </div>
-      ) : (
-        <div className="health-grid">
-          {[...Array(5)].map((_, i) => (
-            <div key={i} className="health-card skeleton-pulse">
-              <div className="label">&nbsp;</div>
-              <div className="value">&nbsp;</div>
-            </div>
-          ))}
-        </div>
-      )}
+    <div className="dashboard dashboard-home">
+      {/* NOW: live activity */}
+      <DashboardSection title="Now">
+        <NowPanel liveAgents={liveAgents} autopilot={autopilot} />
+      </DashboardSection>
 
-      <div className="dashboard-section-header">
-        <h2>Agents</h2>
-        <a href="#/config/agents" className="dashboard-section-link">+ Add agent</a>
-      </div>
-      {agents === null ? (
-        <div className="skeleton-list">
-          <div className="skeleton-card" />
-          <div className="skeleton-card" />
-        </div>
-      ) : agentEntries.length === 0 ? (
-        <div className="empty-state">No agents configured. <a href="#/config/agents" className="dashboard-section-link">Add one</a></div>
-      ) : (
-        <div className="agent-grid">
-          {agentEntries.map(([name, agentDef]) => (
-            <AgentCard key={name} name={name} agent={agentDef} activity={activityByName.get(name)} />
-          ))}
-        </div>
-      )}
+      {/* NEEDS HUMAN */}
+      <DashboardSection
+        title="Needs Human"
+        count={needsHumanCount}
+        emphasized={needsHumanCount > 0}
+      >
+        <NeedsHumanPanel
+          blocked={blocked}
+          pendingForms={pendingForms}
+          pendingApprovals={pendingApprovals}
+          failedRuns={failedRuns}
+        />
+      </DashboardSection>
 
-      <div className="dashboard-section-header">
-        <h2>Cron Jobs</h2>
-        <a href="#/config/cron" className="dashboard-section-link">+ Add job</a>
-      </div>
-      {cron ? (
-        <CronJobList data={cron} onJobTriggered={() => fetchCron().then(setCron)} />
-      ) : (
-        <div className="skeleton-list">
-          <div className="skeleton-card" />
-        </div>
-      )}
+      {/* UPCOMING */}
+      <DashboardSection title="Upcoming">
+        <UpcomingPanel backlog={backlog} cron={enabledCron} />
+      </DashboardSection>
 
-      <div className="dashboard-section-header">
-        <h2>Projects</h2>
-        <a href="#/projects" className="dashboard-section-link">View all</a>
-      </div>
-      {projects ? (
-        projects.total === 0 ? (
-          <div className="empty-state">No projects yet. <a href="#/projects" className="dashboard-section-link">Create one</a></div>
-        ) : (
-          <div className="project-card-grid">
-            {projects.projects.slice(0, 5).map((p) => (
-              <a key={p.id} href={`#/projects/${p.id}`} className="project-card">
-                <div className="project-card-header">
-                  <span className={`project-status-dot ${p.status}`} />
-                  <span className="project-card-title">{p.title}</span>
-                  <span className="project-card-status">{PROJECT_STATUS_LABELS[p.status] ?? p.status}</span>
-                </div>
-                {p.description && (
-                  <div className="project-card-desc">{p.description}</div>
-                )}
-                <div className="project-card-counts">
-                  <span>{p.task_count} tasks</span>
-                  <span>{p.document_count} docs</span>
-                </div>
-              </a>
+      {/* RECENT */}
+      <DashboardSection title="Recent">
+        <RecentPanel runs={recentFinishedRuns} tasks={recentDone} />
+      </DashboardSection>
+
+      {/* Compact health footer */}
+      <HealthFooter health={health} />
+    </div>
+  );
+}
+
+function DashboardSection(props: {
+  title: string;
+  count?: number;
+  emphasized?: boolean;
+  children: React.ReactNode;
+}) {
+  const { title, count, emphasized, children } = props;
+  return (
+    <section className={`dash-section ${emphasized ? "dash-section-alert" : ""}`}>
+      <header className="dash-section-header">
+        <h3>{title}</h3>
+        {typeof count === "number" && count > 0 && (
+          <span className="dash-section-badge">{count}</span>
+        )}
+      </header>
+      {children}
+    </section>
+  );
+}
+
+function NowPanel(props: {
+  liveAgents: SessionActivity[];
+  autopilot: AutopilotActivity | null;
+}) {
+  const { liveAgents, autopilot } = props;
+  const items: { label: string; description: string; status?: string }[] = [];
+  for (const a of liveAgents) {
+    items.push({
+      label: a.agentName ?? "(unnamed)",
+      description: a.description ?? a.status,
+      status: a.status,
+    });
+  }
+  if (autopilot?.current) {
+    items.push({
+      label: "autopilot",
+      description: autopilot.current.title,
+      status: "running",
+    });
+  }
+  if (items.length === 0) {
+    return <div className="dash-empty">Nothing running right now.</div>;
+  }
+  return (
+    <ul className="dash-now-list">
+      {items.map((it, i) => (
+        <li key={i} className="dash-now-item">
+          <span className="dash-now-pulse" />
+          <span className="dash-now-label">{it.label}</span>
+          <span className="dash-now-desc">{it.description}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function NeedsHumanPanel(props: {
+  blocked: ProjectTask[];
+  pendingForms: WorkflowFormPendingRow[];
+  pendingApprovals: PendingApprovalRequest[];
+  failedRuns: WorkflowRunRow[];
+}) {
+  const { blocked, pendingForms, pendingApprovals, failedRuns } = props;
+  if (
+    blocked.length === 0 &&
+    pendingForms.length === 0 &&
+    pendingApprovals.length === 0 &&
+    failedRuns.length === 0
+  ) {
+    return <div className="dash-empty">Nothing waiting on you.</div>;
+  }
+  return (
+    <ul className="dash-needs-list">
+      {pendingForms.map((f) => (
+        <li key={`form-${f.id}`} className="dash-needs-item dash-needs-form">
+          <span className="dash-needs-kind">Form</span>
+          <a
+            href={`#/workflow-runs/${encodeURIComponent(f.run_id)}`}
+            className="dash-needs-title"
+          >
+            {f.prompt || `${f.step_name} input required`}
+          </a>
+          <span className="dash-needs-meta">{relTime(f.created_at)}</span>
+        </li>
+      ))}
+      {pendingApprovals.map((a) => (
+        <li key={`approval-${a.requestId}`} className="dash-needs-item dash-needs-approval">
+          <span className="dash-needs-kind">Approve</span>
+          <a href="#/resources" className="dash-needs-title">
+            {a.description || a.toolName}
+          </a>
+          <span className="dash-needs-meta">{a.toolName}</span>
+        </li>
+      ))}
+      {blocked.map((t) => (
+        <li key={`blocked-${t.id}`} className="dash-needs-item dash-needs-blocked">
+          <span className="dash-needs-kind">Blocked</span>
+          <a href={`#/tasks/${encodeURIComponent(t.id)}`} className="dash-needs-title">
+            {t.title}
+          </a>
+          <span className="dash-needs-meta">
+            {t.blocked_reason ? `${t.blocked_reason} · ` : ""}
+            {relTime(t.updated_at)}
+          </span>
+        </li>
+      ))}
+      {failedRuns.map((r) => (
+        <li key={`run-${r.id}`} className="dash-needs-item dash-needs-failed">
+          <span className="dash-needs-kind">Failed</span>
+          <a href={`#/workflow-runs/${encodeURIComponent(r.id)}`} className="dash-needs-title">
+            {r.workflow_name}
+          </a>
+          <span className="dash-needs-meta">
+            {r.error ? truncate(r.error, 40) : "no error message"}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function UpcomingPanel(props: { backlog: ProjectTask[]; cron: CronJobRow[] }) {
+  const { backlog, cron } = props;
+  if (backlog.length === 0 && cron.length === 0) {
+    return <div className="dash-empty">Nothing scheduled or queued.</div>;
+  }
+  return (
+    <div className="dash-upcoming">
+      {backlog.length > 0 && (
+        <div className="dash-upcoming-group">
+          <h4>Next up</h4>
+          <ul className="dash-upcoming-list">
+            {backlog.map((t) => (
+              <li key={t.id}>
+                <a href={`#/tasks/${encodeURIComponent(t.id)}`}>
+                  <span className="dash-upcoming-title">{t.title}</span>
+                  {t.assignee && (
+                    <span className="dash-upcoming-assignee">{t.assignee}</span>
+                  )}
+                </a>
+              </li>
             ))}
-            {projects.total > 5 && (
-              <a href="#/projects" className="ptask-recent-more">
-                +{projects.total - 5} more
-              </a>
-            )}
-          </div>
-        )
-      ) : (
-        <div className="skeleton-list"><div className="skeleton-card" /></div>
-      )}
-
-      <h2>Background Tasks</h2>
-      {tasks ? (
-        <TaskList tasks={tasks} />
-      ) : (
-        <div className="skeleton-list">
-          <div className="skeleton-card" />
+          </ul>
         </div>
       )}
-
-      <div className="dashboard-section-header">
-        <h2>Context Files</h2>
-      </div>
-      {context ? (
-        <ContextFiles data={context} />
-      ) : (
-        <div className="skeleton-list">
-          <div className="skeleton-card" />
-        </div>
-      )}
-
-      <h2>Sessions</h2>
-      {sessions ? (
-        <SessionList sessions={sessions} />
-      ) : (
-        <div className="skeleton-list">
-          <div className="skeleton-card" />
-          <div className="skeleton-card" />
+      {cron.length > 0 && (
+        <div className="dash-upcoming-group">
+          <h4>Scheduled</h4>
+          <ul className="dash-upcoming-list">
+            {cron.map((j) => (
+              <li key={j.name}>
+                <a href="#/config/cron">
+                  <span className="dash-upcoming-title">{j.name}</span>
+                  <span className="dash-upcoming-assignee">{j.schedule}</span>
+                </a>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
     </div>
   );
+}
+
+function RecentPanel(props: { runs: WorkflowRunRow[]; tasks: ProjectTask[] }) {
+  const { runs, tasks } = props;
+  const merged: {
+    key: string;
+    when: string;
+    kind: "run" | "task";
+    title: string;
+    detail: string;
+    href: string;
+    status: string;
+  }[] = [];
+  for (const r of runs) {
+    merged.push({
+      key: `run-${r.id}`,
+      when: r.completed_at ?? r.started_at,
+      kind: "run",
+      title: r.workflow_name,
+      detail: r.status,
+      href: `#/workflow-runs/${encodeURIComponent(r.id)}`,
+      status: r.status,
+    });
+  }
+  for (const t of tasks) {
+    merged.push({
+      key: `task-${t.id}`,
+      when: t.updated_at,
+      kind: "task",
+      title: t.title,
+      detail: "done",
+      href: `#/tasks/${encodeURIComponent(t.id)}`,
+      status: "completed",
+    });
+  }
+  merged.sort((a, b) => (a.when < b.when ? 1 : -1));
+  const top = merged.slice(0, RECENT_LIMIT);
+  if (top.length === 0) {
+    return <div className="dash-empty">No recent activity.</div>;
+  }
+  return (
+    <ul className="dash-recent-list">
+      {top.map((it) => (
+        <li key={it.key} className={`dash-recent-item dash-recent-${it.status}`}>
+          <a href={it.href}>
+            <span className="dash-recent-title">{it.title}</span>
+            <span className="dash-recent-meta">
+              {it.kind === "run" ? "workflow" : "task"} · {it.detail} · {relTime(it.when)}
+            </span>
+          </a>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function HealthFooter(props: { health: HealthInfo | null }) {
+  const { health } = props;
+  if (!health) return null;
+  return (
+    <div className="dash-health-footer">
+      <span className={`dash-health-pip ${health.status === "ok" ? "ok" : ""}`} />
+      <span>{health.provider}/{health.model}</span>
+      <span className="dash-health-sep">·</span>
+      <a href="#/tools">{health.tools} tools</a>
+      <span className="dash-health-sep">·</span>
+      <span>up {formatUptime(health.uptime)}</span>
+      <span className="dash-health-sep">·</span>
+      <a href="#/config">configure</a>
+    </div>
+  );
+}
+
+function relTime(iso: string | null): string {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    const diffMs = Date.now() - d.getTime();
+    const m = Math.floor(diffMs / 60000);
+    if (m < 1) return "just now";
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    const day = Math.floor(h / 24);
+    if (day < 7) return `${day}d ago`;
+    return d.toLocaleDateString();
+  } catch {
+    return iso;
+  }
+}
+
+function truncate(s: string, max: number): string {
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1) + "…";
 }
 
 function formatUptime(seconds: number): string {

@@ -53,10 +53,25 @@ export class AgentRunExecutor implements StepExecutor {
       const model = modelOverride ?? agent.model ?? defaultModel;
 
       const session = newSession(this.db, model, provider, sessionKey);
+      // When the agent_run is nested inside a worktree step, the worktree
+      // executor sets `scope.vars.worktree`. Pass that through as a synthetic
+      // project context so the agent loop's cwd lands inside the worktree
+      // rather than the repo root.
+      const worktree = (ctx.scope.vars?.worktree ?? null) as { path?: string } | null;
+      const projectOverride = worktree?.path
+        ? {
+            id: `worktree:${ctx.runId}:${s.name}`,
+            name: `worktree-${s.name}`,
+            path: worktree.path,
+            overlayPath: worktree.path,
+            overlay: {},
+          }
+        : undefined;
       const loopOpts = this.runtime.buildLoopOptions({
         session,
         agentName,
         modelOverride,
+        ...(projectOverride ? { project: projectOverride } : {}),
       });
       if (s.maxToolRounds !== undefined) {
         loopOpts.maxToolRounds = s.maxToolRounds;

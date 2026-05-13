@@ -7,6 +7,7 @@ import {
   type WorkflowRunRow,
   type WorkflowStepRow,
 } from "../api";
+import { PendingFormPanel } from "../components/PendingFormPanel";
 
 interface Props {
   runId?: string;
@@ -20,6 +21,7 @@ export function WorkflowRuns({ runId }: Props) {
   const [steps, setSteps] = useState<WorkflowStepRow[]>([]);
   const [selectedStep, setSelectedStep] = useState<string | null>(null);
   const [stepLog, setStepLog] = useState<string>("");
+  const [formsRefresh, setFormsRefresh] = useState(0);
   const eventsRef = useRef<EventSource | null>(null);
 
   // Load list of runs
@@ -75,6 +77,13 @@ export function WorkflowRuns({ runId }: Props) {
         };
         for (const t of ["step.started", "step.completed", "step.failed", "step.skipped", "run.started", "run.completed", "run.failed", "run.cancelled"]) {
           es.addEventListener(t, refresh);
+        }
+        const bumpForms = () => setFormsRefresh((n) => n + 1);
+        for (const t of ["form.pending", "form.submitted"]) {
+          es.addEventListener(t, () => {
+            bumpForms();
+            refresh();
+          });
         }
         es.onerror = () => {
           es.close();
@@ -132,6 +141,13 @@ export function WorkflowRuns({ runId }: Props) {
       <nav className="config-sidebar">
         <div className="config-sidebar-header">
           <span>Recent runs</span>
+          <a
+            href="#/workflows"
+            className="wf-runs-back-link"
+            title="Back to workflow editor"
+          >
+            ← Editor
+          </a>
         </div>
         {runs.map((r) => (
           <button
@@ -169,6 +185,20 @@ export function WorkflowRuns({ runId }: Props) {
             </div>
 
             {run.error && <div className="config-error">{run.error}</div>}
+
+            <PendingFormPanel
+              runId={run.id}
+              refreshKey={formsRefresh}
+              onSubmitted={() => {
+                setFormsRefresh((n) => n + 1);
+                fetchWorkflowRun(run.id)
+                  .then((data) => {
+                    setRun(data.run);
+                    setSteps(data.steps);
+                  })
+                  .catch(() => {});
+              }}
+            />
 
             <div className="run-detail-layout">
               <div className="run-steps-list">

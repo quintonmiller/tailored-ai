@@ -1,0 +1,61 @@
+name: meeting-prep
+description: |
+  Fires 15 minutes before any calendar event whose title contains "interview"
+  or "1:1". Pulls relevant facts (about the person, the topic), generates a
+  quick prep brief, and DMs it on Discord.
+
+  Demonstrates: calendar_event trigger, facts.search by event content,
+  agent_run synthesis, notify channel.
+
+executionMode: graph
+
+triggers:
+  - kind: calendar_event
+    beforeMinutes: 15
+    titleContains: interview
+
+steps:
+  - name: lookup
+    type: tool_call
+    tool: facts
+    args:
+      action: search
+      query: ${input.summary}
+      limit: 25
+
+  - name: prep
+    type: agent_run
+    agent: default
+    maxToolRounds: 1
+    prompt: |
+      You have ${input.minutes_until} minutes until this event:
+
+        ${input.summary}  (starts ${input.start})
+
+      Relevant facts from the personal store:
+      ${steps.lookup}
+
+      Produce a tight prep note. Sections:
+        ## Who/what
+        ## Talking points (3)
+        ## Open questions (2-3)
+
+      Keep it scannable. No tool calls.
+
+  - name: send
+    type: notify
+    channel: discord
+    message: |
+      🗓️ Meeting in ${input.minutes_until} min — ${input.summary}
+
+      ${steps.prep}
+
+graph:
+  nodes:
+    - { stepName: lookup, position: { x: 240, y: 100 } }
+    - { stepName: prep,   position: { x: 540, y: 100 } }
+    - { stepName: send,   position: { x: 820, y: 100 } }
+  edges:
+    - { from: __trigger__, to: lookup }
+    - { from: lookup,      to: prep }
+    - { from: prep,        to: send }

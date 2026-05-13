@@ -14,17 +14,22 @@ interface ProviderAnswers {
   envLines: string[];
 }
 
-/** Fetch available models from an Ollama instance and return as select options. */
-async function fetchOllamaModels(baseUrl: string): Promise<{ value: string; label: string }[] | null> {
+/** Fetch available models from an OpenAI-compatible server's /models endpoint. */
+async function fetchCompatibleModels(
+  baseUrl: string,
+  apiKey?: string,
+): Promise<{ value: string; label: string }[] | null> {
   try {
-    const res = await fetch(`${baseUrl.replace(/\/$/, "")}/api/tags`, { signal: AbortSignal.timeout(5000) });
+    const headers: Record<string, string> = {};
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+    const res = await fetch(`${baseUrl.replace(/\/$/, "")}/models`, {
+      headers,
+      signal: AbortSignal.timeout(5000),
+    });
     if (!res.ok) return null;
-    const data = (await res.json()) as { models?: { name: string; size: number }[] };
-    if (!data.models?.length) return null;
-    return data.models.map((m) => ({
-      value: m.name,
-      label: m.name,
-    }));
+    const data = (await res.json()) as { data?: { id: string }[] };
+    if (!data.data?.length) return null;
+    return data.data.map((m) => ({ value: m.id, label: m.id }));
   } catch {
     return null;
   }
@@ -39,14 +44,16 @@ async function testProviderConnection(
   s.start("Testing connection...");
 
   try {
-    if (provider === "ollama") {
-      const url = (opts.baseUrl ?? "http://localhost:11434").replace(/\/$/, "");
-      const res = await fetch(`${url}/api/tags`, { signal: AbortSignal.timeout(5000) });
+    if (provider === "openai_compatible") {
+      const url = (opts.baseUrl ?? "http://localhost:11434/v1").replace(/\/$/, "");
+      const headers: Record<string, string> = {};
+      if (opts.apiKey) headers.Authorization = `Bearer ${opts.apiKey}`;
+      const res = await fetch(`${url}/models`, { headers, signal: AbortSignal.timeout(5000) });
       if (!res.ok) {
         s.stop("Connection failed");
-        return `Ollama returned HTTP ${res.status}. Is it running at ${url}?`;
+        return `Server returned HTTP ${res.status}. Is it running at ${url}?`;
       }
-      s.stop("Connected to Ollama");
+      s.stop("Connected");
       return null;
     }
 
@@ -104,7 +111,11 @@ async function askProvider(): Promise<ProviderAnswers> {
   const provider = await p.select({
     message: "Which AI provider will you use?",
     options: [
-      { value: "ollama", label: "Ollama", hint: "local, free" },
+      {
+        value: "openai_compatible",
+        label: "OpenAI-compatible (local)",
+        hint: "Ollama, vLLM, LM Studio, llama.cpp, text-gen-webui",
+      },
       { value: "openai", label: "OpenAI", hint: "GPT-4o, etc." },
       { value: "anthropic", label: "Anthropic", hint: "Claude" },
     ],
@@ -117,18 +128,68 @@ async function askProvider(): Promise<ProviderAnswers> {
 
   const envLines: string[] = [];
 
-  if (provider === "ollama") {
+  if (provider === "openai_compatible") {
+    const preset = await p.select({
+      message: "Which server?",
+      options: [
+        { value: "vllm", label: "vLLM", hint: "http://127.0.0.1:8000/v1" },
+        { value: "ollama", label: "Ollama", hint: "http://localhost:11434/v1" },
+        { value: "lmstudio", label: "LM Studio", hint: "http://localhost:1234/v1" },
+        { value: "custom", label: "Custom URL" },
+      ],
+    });
+    if (p.isCancel(preset)) {
+      p.cancel("Setup cancelled.");
+      process.exit(0);
+    }
+
+    const presetUrls: Record<string, string> = {
+      vllm: "http://127.0.0.1:8000/v1",
+      ollama: "http://localhost:11434/v1",
+      lmstudio: "http://localhost:1234/v1",
+      custom: "http://localhost:8000/v1",
+    };
+    const presetNames: Record<string, string> = {
+      vllm: "vLLM",
+      ollama: "Ollama",
+      lmstudio: "LM Studio",
+      custom: "OpenAI-compatible",
+    };
+
     const baseUrl = await p.text({
-      message: "Ollama URL:",
-      initialValue: "http://localhost:11434",
+      message: "Base URL (must include /v1):",
+      initialValue: presetUrls[preset as string],
     });
     if (p.isCancel(baseUrl)) {
       p.cancel("Setup cancelled.");
       process.exit(0);
     }
 
+    const needsKey = await p.confirm({
+      message: "Does this server require an API key?",
+      initialValue: false,
+    });
+    if (p.isCancel(needsKey)) {
+      p.cancel("Setup cancelled.");
+      process.exit(0);
+    }
+
+    let apiKey: string | undefined;
+    if (needsKey) {
+      const entered = await p.text({
+        message: "API key:",
+        validate: (v) => (v.trim() ? undefined : "API key is required"),
+      });
+      if (p.isCancel(entered)) {
+        p.cancel("Setup cancelled.");
+        process.exit(0);
+      }
+      apiKey = entered;
+      envLines.push(`OPENAI_COMPATIBLE_API_KEY=${apiKey}`);
+    }
+
     // Test connectivity
-    const connError = await testProviderConnection("ollama", { baseUrl });
+    const connError = await testProviderConnection("openai_compatible", { baseUrl, apiKey });
     if (connError) {
       p.log.warn(connError);
       const proceed = await p.confirm({ message: "Continue anyway?" });
@@ -140,7 +201,7 @@ async function askProvider(): Promise<ProviderAnswers> {
 
     // Try to fetch available models for selection
     let model: string;
-    const models = connError ? null : await fetchOllamaModels(baseUrl);
+    const models = connError ? null : await fetchCompatibleModels(baseUrl, apiKey);
     if (models && models.length > 0) {
       const selected = await p.select({
         message: "Select a model:",
@@ -178,19 +239,25 @@ async function askProvider(): Promise<ProviderAnswers> {
       model = entered;
     }
 
-    const block = [
+    const lines = [
       "providers:",
-      "  ollama:",
+      "  openai_compatible:",
       `    baseUrl: ${baseUrl}`,
       `    defaultModel: ${model}`,
+      `    name: ${presetNames[preset as string]}`,
+    ];
+    if (apiKey) {
+      lines.push("    apiKey: ${OPENAI_COMPATIBLE_API_KEY}");
+    }
+    lines.push(
       "  # openai:",
       "  #   apiKey: ${OPENAI_API_KEY}",
       "  #   defaultModel: gpt-4o",
-      "  #   baseUrl: https://api.openai.com/v1   # optional, for OpenAI-compatible APIs",
       "  # anthropic:",
       "  #   apiKey: ${ANTHROPIC_API_KEY}",
       "  #   defaultModel: claude-sonnet-4-5-20250929",
-    ].join("\n");
+    );
+    const block = lines.join("\n");
 
     return { provider, providerBlock: block, envLines };
   }
@@ -258,8 +325,8 @@ async function askProvider(): Promise<ProviderAnswers> {
       "    apiKey: ${OPENAI_API_KEY}",
       `    defaultModel: ${modelName}`,
       `    baseUrl: ${baseUrl}`,
-      "  # ollama:",
-      "  #   baseUrl: http://localhost:11434",
+      "  # openai_compatible:           # vLLM, Ollama /v1, LM Studio, etc.",
+      "  #   baseUrl: http://localhost:11434/v1",
       "  #   defaultModel: devstral-small-2:latest",
       "  # anthropic:",
       "  #   apiKey: ${ANTHROPIC_API_KEY}",
@@ -322,8 +389,8 @@ async function askProvider(): Promise<ProviderAnswers> {
     "  anthropic:",
     "    apiKey: ${ANTHROPIC_API_KEY}",
     `    defaultModel: ${modelName}`,
-    "  # ollama:",
-    "  #   baseUrl: http://localhost:11434",
+    "  # openai_compatible:           # vLLM, Ollama /v1, LM Studio, etc.",
+    "  #   baseUrl: http://localhost:11434/v1",
     "  #   defaultModel: devstral-small-2:latest",
     "  # openai:",
     "  #   apiKey: ${OPENAI_API_KEY}",

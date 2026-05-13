@@ -71,17 +71,26 @@ export function toOpenAITools(tools: ToolSchema[]): object[] {
   }));
 }
 
+export interface OpenAIProviderOptions {
+  /** Provider id, useful when wrapping an OpenAI-compatible server (e.g. "openai_compatible", "vllm"). */
+  id?: string;
+  /** Human-readable name shown in UIs and logs. */
+  name?: string;
+}
+
 export class OpenAIProvider implements AIProvider {
-  id = "openai";
-  name = "OpenAI";
+  id: string;
+  name: string;
   supportsTools = true;
 
   private apiKey: string;
   private baseUrl: string;
 
-  constructor(apiKey: string, baseUrl = "https://api.openai.com/v1") {
-    this.apiKey = apiKey;
+  constructor(apiKey: string | undefined, baseUrl = "https://api.openai.com/v1", opts: OpenAIProviderOptions = {}) {
+    this.apiKey = apiKey ?? "";
     this.baseUrl = baseUrl.replace(/\/$/, "");
+    this.id = opts.id ?? "openai";
+    this.name = opts.name ?? "OpenAI";
   }
 
   async chat(params: ChatParams): Promise<ChatResponse> {
@@ -99,18 +108,20 @@ export class OpenAIProvider implements AIProvider {
       body.max_tokens = params.maxTokens;
     }
 
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (this.apiKey) {
+      headers.Authorization = `Bearer ${this.apiKey}`;
+    }
+
     const resp = await fetch(`${this.baseUrl}/chat/completions`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.apiKey}`,
-      },
+      headers,
       body: JSON.stringify(body),
     });
 
     if (!resp.ok) {
       const text = await resp.text();
-      throw new Error(`OpenAI API error ${resp.status}: ${text}`);
+      throw new Error(`${this.name} API error ${resp.status}: ${text}`);
     }
 
     const data = (await resp.json()) as OpenAIChatResponse;

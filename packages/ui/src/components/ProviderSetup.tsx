@@ -4,15 +4,20 @@ import {
   fetchModels,
   saveProviders,
   type ModelEntry,
+  type ModelInfo,
   type ProviderConnection,
   type ProvidersData,
 } from "../api";
 
 /** Known provider definitions — fields needed for each provider type. */
 const KNOWN_PROVIDERS: Record<string, { label: string; fields: { key: string; label: string; type: string; placeholder?: string }[] }> = {
-  ollama: {
-    label: "Ollama",
-    fields: [{ key: "baseUrl", label: "Base URL", type: "text", placeholder: "http://localhost:11434" }],
+  openai_compatible: {
+    label: "OpenAI-compatible (vLLM, Ollama, LM Studio)",
+    fields: [
+      { key: "baseUrl", label: "Base URL", type: "text", placeholder: "http://127.0.0.1:8000/v1" },
+      { key: "apiKey", label: "API Key (optional)", type: "password" },
+      { key: "name", label: "Display Name (optional)", type: "text", placeholder: "vLLM" },
+    ],
   },
   openai: {
     label: "OpenAI",
@@ -50,15 +55,29 @@ export function ProviderSetup({ onSaved }: Props) {
 
   // model lists fetched from providers: { [providerName]: string[] }
   const [providerModels, setProviderModels] = useState<Record<string, string[]>>({});
+  // per-model metadata (context window, etc.) keyed by `${provider}:${modelId}`
+  const [modelInfo, setModelInfo] = useState<Record<string, ModelInfo>>({});
   // tracks which model entries are in "custom" mode (typing a free-form name)
   // key format: `${listId}:${index}` where listId is "default" or profile name
   const [customMode, setCustomMode] = useState<Set<string>>(new Set());
+
+  function ingestModelInfo(provider: string, info: Record<string, ModelInfo> | undefined) {
+    if (!info) return;
+    setModelInfo((prev) => {
+      const next = { ...prev };
+      for (const [modelId, meta] of Object.entries(info)) {
+        next[`${provider}:${modelId}`] = meta;
+      }
+      return next;
+    });
+  }
 
   const loadModels = useCallback((providerName: string) => {
     if (providerModels[providerName]) return; // already loaded
     fetchModels(providerName)
       .then((data) => {
         setProviderModels((prev) => ({ ...prev, [providerName]: data.models }));
+        ingestModelInfo(providerName, data.modelInfo);
       })
       .catch(() => {
         setProviderModels((prev) => ({ ...prev, [providerName]: [] }));
@@ -76,6 +95,7 @@ export function ProviderSetup({ onSaved }: Props) {
           fetchModels(name)
             .then((data) => {
               setProviderModels((prev) => ({ ...prev, [name]: data.models }));
+              ingestModelInfo(name, data.modelInfo);
               // Mark entries whose current model is not in the fetched list as custom
               const initCustom = new Set<string>();
               provData.defaultModels.forEach((entry, i) => {
@@ -99,6 +119,25 @@ export function ProviderSetup({ onSaved }: Props) {
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // When server-side modelInfo arrives, backfill maxContextTokens on entries
+  // that don't already have one set. Only fills in known providers/models.
+  useEffect(() => {
+    if (Object.keys(modelInfo).length === 0) return;
+    setDefaultModels((prev) => {
+      let changed = false;
+      const next = prev.map((entry) => {
+        if (entry.maxContextTokens !== undefined) return entry;
+        const meta = modelInfo[`${entry.provider}:${entry.model}`];
+        if (meta?.maxContextTokens) {
+          changed = true;
+          return { ...entry, maxContextTokens: meta.maxContextTokens };
+        }
+        return entry;
+      });
+      return changed ? next : prev;
+    });
+  }, [modelInfo]);
 
   // --- Provider connection helpers ---
 
@@ -127,7 +166,8 @@ export function ProviderSetup({ onSaved }: Props) {
       }
     }
     setProviders((prev) => ({ ...prev, [name]: initial }));
-    loadModels(name);
+    // Don't fetch models yet — server doesn't know about this provider until save.
+    // Models will load after handleSave() invalidates the cache.
   }
 
   function removeProvider(name: string) {
@@ -153,12 +193,25 @@ export function ProviderSetup({ onSaved }: Props) {
   }
 
   function addModel(list: ModelEntry[]): ModelEntry[] {
-    const firstProvider = configuredProviders[0] ?? "ollama";
+    const firstProvider = configuredProviders[0] ?? "openai_compatible";
     return [...list, { provider: firstProvider, model: "" }];
   }
 
   function updateModel(list: ModelEntry[], index: number, field: keyof ModelEntry, value: string): ModelEntry[] {
-    return list.map((entry, i) => (i === index ? { ...entry, [field]: value } : entry));
+    return list.map((entry, i) => {
+      if (i !== index) return entry;
+      const next = { ...entry, [field]: value } as ModelEntry;
+      // When the model id changes, auto-populate maxContextTokens from server
+      // metadata (e.g. vLLM's max_model_len) — but only if the user hasn't
+      // already set one for this entry.
+      if (field === "model" && entry.maxContextTokens === undefined) {
+        const meta = modelInfo[`${entry.provider}:${value}`];
+        if (meta?.maxContextTokens) {
+          next.maxContextTokens = meta.maxContextTokens;
+        }
+      }
+      return next;
+    });
   }
 
   // --- Custom mode helpers ---
@@ -195,6 +248,14 @@ export function ProviderSetup({ onSaved }: Props) {
       } else {
         setStatus({ type: "saved", message: "Saved" });
         setTimeout(() => setStatus({ type: "idle" }), 3000);
+        // Invalidate cached model lists so dropdowns refetch against the
+        // freshly-saved provider config (new baseUrl, apiKey, etc.).
+        setProviderModels({});
+        for (const name of Object.keys(providers)) {
+          fetchModels(name)
+            .then((data) => setProviderModels((prev) => ({ ...prev, [name]: data.models })))
+            .catch(() => setProviderModels((prev) => ({ ...prev, [name]: [] })));
+        }
         onSaved?.();
       }
     } catch (e) {
@@ -292,6 +353,28 @@ export function ProviderSetup({ onSaved }: Props) {
               )}
             </select>
             {renderModelSelector(entry, i, listId, models, onChange)}
+            <input
+              className="model-entry-context"
+              type="number"
+              min={1}
+              step={1024}
+              value={entry.maxContextTokens ?? ""}
+              placeholder={
+                modelInfo[`${entry.provider}:${entry.model}`]?.maxContextTokens
+                  ? `auto: ${modelInfo[`${entry.provider}:${entry.model}`]!.maxContextTokens}`
+                  : "ctx (tokens)"
+              }
+              title="Context window for this model, in tokens. Auto-detected from the provider's /models response (vLLM advertises this as max_model_len); editable to override."
+              onChange={(e) => {
+                const raw = e.target.value;
+                const num = raw === "" ? undefined : Number(raw);
+                onChange(
+                  models.map((m, idx) =>
+                    idx === i ? { ...m, maxContextTokens: Number.isFinite(num) ? num : undefined } : m,
+                  ),
+                );
+              }}
+            />
             <div className="model-entry-actions">
               <button type="button" title="Move up" disabled={i === 0} onClick={() => onChange(moveModel(models, i, -1))}>
                 &#x25B2;

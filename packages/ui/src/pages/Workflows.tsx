@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   deleteWorkflow,
   fetchWorkflow,
@@ -8,7 +8,12 @@ import {
   type WorkflowDefinition,
   type WorkflowSummary,
 } from "../api";
-import { blankStep, WorkflowStepEditor } from "../components/WorkflowStepEditor";
+import { WorkflowGraph } from "../components/WorkflowGraph";
+import { RunWorkflowDialog } from "../components/RunWorkflowDialog";
+import { WORKFLOW_TEMPLATES, getTemplate, resolveTemplateContext } from "../workflow-templates";
+import { useWorkflowMetadata } from "../workflow-metadata";
+
+const NAME_PATTERN = /^[a-zA-Z0-9._-]+$/;
 
 export function Workflows() {
   const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
@@ -19,6 +24,23 @@ export function Workflows() {
     type: "idle",
   });
   const [reloadTick, setReloadTick] = useState(0);
+
+  // Inline "new workflow" input state.
+  const [newName, setNewName] = useState<string | null>(null);
+  const [newNameError, setNewNameError] = useState<string | null>(null);
+  const [newTemplateId, setNewTemplateId] = useState<string>("blank");
+  const newNameInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Names of in-memory drafts that haven't been saved yet.
+  const [unsavedDrafts, setUnsavedDrafts] = useState<Set<string>>(new Set());
+
+  // User's actually-configured agents — feeds the template builders so they
+  // can pick agent names that resolve (vs. hardcoded "primary").
+  const meta = useWorkflowMetadata();
+
+  const [pendingDelete, setPendingDelete] = useState(false);
+  const [runDialogOpen, setRunDialogOpen] = useState(false);
+  const [runDryRun, setRunDryRun] = useState(false);
 
   useEffect(() => {
     fetchWorkflows()
@@ -34,28 +56,48 @@ export function Workflows() {
       setEditing(null);
       return;
     }
+    if (unsavedDrafts.has(selected)) return;
     fetchWorkflow(selected)
       .then(setEditing)
       .catch(() => setEditing(null));
-  }, [selected, reloadTick]);
+  }, [selected, reloadTick, unsavedDrafts]);
 
-  function handleNew() {
-    const name = prompt("New workflow name (alphanumerics, .-_):");
-    if (!name) return;
-    if (!/^[a-zA-Z0-9._-]+$/.test(name)) {
-      alert("Invalid name");
+  useEffect(() => {
+    if (newName !== null) newNameInputRef.current?.focus();
+  }, [newName]);
+
+  function startNew() {
+    setNewName("");
+    setNewNameError(null);
+    setNewTemplateId("blank");
+  }
+
+  function cancelNew() {
+    setNewName(null);
+    setNewNameError(null);
+  }
+
+  function confirmNew() {
+    const name = (newName ?? "").trim();
+    if (!name) {
+      cancelNew();
       return;
     }
-    if (workflows.find((w) => w.name === name)) {
-      alert("A workflow with that name already exists");
+    if (!NAME_PATTERN.test(name)) {
+      setNewNameError("Use letters, numbers, dot, dash, or underscore.");
       return;
     }
-    setEditing({
-      name,
-      description: "",
-      steps: [blankStep("agent_run")],
-    });
+    if (workflows.find((w) => w.name === name) || unsavedDrafts.has(name)) {
+      setNewNameError("A workflow with that name already exists.");
+      return;
+    }
+    const template = getTemplate(newTemplateId) ?? getTemplate("blank")!;
+    const ctx = resolveTemplateContext(meta.agents);
+    setUnsavedDrafts((prev) => new Set(prev).add(name));
+    setEditing(template.build(name, ctx));
     setSelected(name);
+    setNewName(null);
+    setNewNameError(null);
   }
 
   async function handleSave() {
@@ -69,6 +111,12 @@ export function Workflows() {
       });
     } else {
       setStatus({ type: "saved", message: "Saved" });
+      setUnsavedDrafts((prev) => {
+        if (!prev.has(editing.name)) return prev;
+        const next = new Set(prev);
+        next.delete(editing.name);
+        return next;
+      });
       setReloadTick((n) => n + 1);
       setTimeout(() => setStatus({ type: "idle" }), 2000);
     }
@@ -76,7 +124,24 @@ export function Workflows() {
 
   async function handleDelete() {
     if (!editing) return;
-    if (!confirm(`Delete workflow "${editing.name}"?`)) return;
+    if (!pendingDelete) {
+      setPendingDelete(true);
+      setTimeout(() => setPendingDelete(false), 4000);
+      return;
+    }
+    setPendingDelete(false);
+
+    if (unsavedDrafts.has(editing.name)) {
+      setUnsavedDrafts((prev) => {
+        const next = new Set(prev);
+        next.delete(editing.name);
+        return next;
+      });
+      setSelected(null);
+      setEditing(null);
+      return;
+    }
+
     const result = await deleteWorkflow(editing.name);
     if (result.error) {
       setStatus({ type: "error", message: result.error });
@@ -87,11 +152,24 @@ export function Workflows() {
     }
   }
 
-  async function handleRun() {
+  async function handleRun(dryRun = false) {
     if (!editing) return;
-    setStatus({ type: "saving", message: "Running..." });
+    setRunDryRun(dryRun);
+    // If the workflow declares inputs, surface the dialog so the user can
+    // populate them. Bare workflows fire immediately.
+    if (editing.inputs && Object.keys(editing.inputs).length > 0) {
+      setRunDialogOpen(true);
+      return;
+    }
+    await launchRun({}, dryRun);
+  }
+
+  async function launchRun(input: Record<string, unknown>, dryRun = runDryRun) {
+    if (!editing) return;
+    setStatus({ type: "saving", message: dryRun ? "Dry-running..." : "Running..." });
+    setRunDialogOpen(false);
     try {
-      const run = await runWorkflow(editing.name);
+      const run = await runWorkflow(editing.name, input, { dryRun });
       setStatus({ type: "saved", message: `Started ${run.id}` });
       window.location.hash = `/workflow-runs/${run.id}`;
     } catch (e) {
@@ -99,146 +177,148 @@ export function Workflows() {
     }
   }
 
+  // All known workflows, including in-memory drafts.
+  const allWorkflowNames = [
+    ...workflows.map((w) => w.name),
+    ...Array.from(unsavedDrafts).filter((n) => !workflows.find((w) => w.name === n)),
+  ];
+
   return (
-    <div className="config-layout">
-      <nav className="config-sidebar">
-        <div className="config-sidebar-header">
-          <span>Workflows ({workflows.length})</span>
-          <button type="button" className="btn-secondary" onClick={handleNew}>+ New</button>
-        </div>
-        {workflows.map((w) => (
-          <button
-            type="button"
-            key={w.name}
-            className={`config-sidebar-item${selected === w.name ? " active" : ""}`}
-            onClick={() => setSelected(w.name)}
+    <div className="wf-page">
+      <header className="wf-page-header">
+        <div className="wf-page-header-left">
+          <label className="wf-page-picker-label">Workflow</label>
+          <select
+            className="wf-page-picker"
+            value={selected ?? ""}
+            onChange={(e) => setSelected(e.target.value || null)}
           >
-            <div className="workflow-list-name">{w.name}</div>
-            <div className="workflow-list-meta">{w.stepCount} steps · {w.source}</div>
-          </button>
-        ))}
-        {errors.length > 0 && (
-          <div className="workflow-errors">
-            <div className="workflow-errors-header">Load errors</div>
-            {errors.map((e, i) => (
-              <div key={i} className="workflow-error-row" title={e.path}>
-                {e.path.split("/").pop()}: {e.error}
-              </div>
+            <option value="">— none —</option>
+            {allWorkflowNames.map((n) => (
+              <option key={n} value={n}>
+                {n}
+                {unsavedDrafts.has(n) ? " (unsaved)" : ""}
+              </option>
             ))}
-          </div>
-        )}
-      </nav>
-      <div className="config-content">
-        {!editing && (
-          <div className="empty-state">Select a workflow to edit, or create a new one.</div>
-        )}
-        {editing && (
-          <>
-            <div className="config-header">
-              <div>
-                <h2>{editing.name}</h2>
-                <span className="config-path">{editing.steps.length} steps</span>
-              </div>
-              <div className="config-actions">
-                {status.type === "saved" && <span className="config-saved">{status.message}</span>}
-                {status.type === "error" && <span className="config-error">{status.message}</span>}
-                <button type="button" className="btn-secondary" onClick={handleRun} disabled={status.type === "saving"}>
-                  Run
-                </button>
-                <button type="button" className="btn-danger" onClick={handleDelete}>
-                  Delete
-                </button>
-                <button
-                  type="button"
-                  className="config-save-btn"
-                  onClick={handleSave}
-                  disabled={status.type === "saving"}
-                >
-                  {status.type === "saving" ? "Saving..." : "Save"}
-                </button>
-              </div>
-            </div>
-
-            <div className="section-card">
-              <div className="field-group">
-                <label className="field-label">Description</label>
-                <input
-                  className="field-input"
-                  value={editing.description ?? ""}
-                  onChange={(e) => setEditing({ ...editing, description: e.target.value })}
-                />
-              </div>
-              <div className="field-group">
-                <label className="field-label">deadlineMs (optional)</label>
-                <input
-                  className="field-input"
-                  type="number"
-                  value={editing.deadlineMs ?? ""}
-                  onChange={(e) =>
-                    setEditing({
-                      ...editing,
-                      deadlineMs: e.target.value ? Number(e.target.value) : undefined,
-                    })
+          </select>
+          {newName === null ? (
+            <button type="button" className="btn-secondary" onClick={startNew}>
+              + New
+            </button>
+          ) : (
+            <div className="wf-page-new-input">
+              <input
+                ref={newNameInputRef}
+                className={`field-input${newNameError ? " field-input-error" : ""}`}
+                value={newName}
+                placeholder="workflow-name"
+                onChange={(e) => {
+                  setNewName(e.target.value);
+                  if (newNameError) setNewNameError(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    confirmNew();
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    cancelNew();
                   }
-                />
-              </div>
-            </div>
-
-            <div className="section-card">
-              <div className="section-header">
-                <h3>Steps</h3>
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() =>
-                    setEditing({ ...editing, steps: [...editing.steps, blankStep("agent_run")] })
-                  }
-                >
-                  + Add step
-                </button>
-              </div>
-              <div className="workflow-steps">
-                {editing.steps.map((s, idx) => (
-                  <WorkflowStepEditor
-                    key={idx}
-                    step={s}
-                    onChange={(next) =>
-                      setEditing({
-                        ...editing,
-                        steps: editing.steps.map((cur, i) => (i === idx ? next : cur)),
-                      })
-                    }
-                    onRemove={() =>
-                      setEditing({
-                        ...editing,
-                        steps: editing.steps.filter((_, i) => i !== idx),
-                      })
-                    }
-                    onMoveUp={
-                      idx > 0
-                        ? () => {
-                            const copy = [...editing.steps];
-                            [copy[idx], copy[idx - 1]] = [copy[idx - 1], copy[idx]];
-                            setEditing({ ...editing, steps: copy });
-                          }
-                        : undefined
-                    }
-                    onMoveDown={
-                      idx < editing.steps.length - 1
-                        ? () => {
-                            const copy = [...editing.steps];
-                            [copy[idx], copy[idx + 1]] = [copy[idx + 1], copy[idx]];
-                            setEditing({ ...editing, steps: copy });
-                          }
-                        : undefined
-                    }
-                  />
+                }}
+              />
+              <select
+                className="wf-page-template-picker"
+                value={newTemplateId}
+                onChange={(e) => setNewTemplateId(e.target.value)}
+                title={getTemplate(newTemplateId)?.description ?? ""}
+              >
+                {WORKFLOW_TEMPLATES.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.label}
+                  </option>
                 ))}
+              </select>
+              <button type="button" className="btn-secondary" onClick={confirmNew}>
+                Create
+              </button>
+              <button type="button" className="btn-ghost" onClick={cancelNew}>
+                Cancel
+              </button>
+              {newNameError && <div className="wf-page-new-error">{newNameError}</div>}
+              <div className="wf-page-template-hint">
+                {getTemplate(newTemplateId)?.description}
               </div>
             </div>
-          </>
-        )}
-      </div>
+          )}
+        </div>
+        <div className="wf-page-header-right">
+          {status.type === "saved" && <span className="config-saved">{status.message}</span>}
+          {status.type === "error" && <span className="config-error" title={status.message}>{status.message}</span>}
+          <a href="#/workflow-analytics" className="btn-ghost wf-page-history-link">
+            Analytics
+          </a>
+          <a href="#/workflow-runs" className="btn-ghost wf-page-history-link">
+            Run history →
+          </a>
+          {editing && (
+            <>
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => handleRun(true)}
+                disabled={status.type === "saving"}
+                title="Skips side-effecting steps (no Discord/email/POSTs/shell). Useful for testing."
+              >
+                Dry run
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => handleRun(false)}
+                disabled={status.type === "saving"}
+              >
+                Run
+              </button>
+              <button type="button" className="btn-danger" onClick={handleDelete}>
+                {pendingDelete ? "Click again to confirm" : "Delete"}
+              </button>
+              <button
+                type="button"
+                className="config-save-btn"
+                onClick={handleSave}
+                disabled={status.type === "saving"}
+              >
+                {status.type === "saving" ? "Saving..." : "Save"}
+              </button>
+            </>
+          )}
+        </div>
+      </header>
+
+      {!editing && (
+        <div className="wf-page-empty">
+          <p>Pick a workflow above, or click <strong>+ New</strong>.</p>
+          {errors.length > 0 && (
+            <div className="workflow-errors">
+              <div className="workflow-errors-header">Load errors</div>
+              {errors.map((e, i) => (
+                <div key={i} className="workflow-error-row" title={e.path}>
+                  {e.path.split("/").pop()}: {e.error}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {editing && <WorkflowGraph workflow={editing} onChange={setEditing} />}
+      {editing && runDialogOpen && (
+        <RunWorkflowDialog
+          workflow={editing}
+          onCancel={() => setRunDialogOpen(false)}
+          onSubmit={launchRun}
+        />
+      )}
     </div>
   );
 }

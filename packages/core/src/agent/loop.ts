@@ -14,6 +14,8 @@ import type { AIProvider, Message, ToolCall, ToolSchema } from "../providers/int
 import type { Tool, ToolContext } from "../tools/interface.js";
 import { BASE_SYSTEM_PROMPT } from "./prompt.js";
 import type { Session } from "./session.js";
+import { createActiveSkillState, type ActiveSkillState } from "./active-skill.js";
+import type { SkillCatalogEntry } from "./agents.js";
 
 const MAX_RETRIES = 1;
 const RETRY_DELAY_MS = 1000;
@@ -76,6 +78,12 @@ export interface AgentLoopOptions {
   sandbox?: import("../sandboxes/interface.js").Sandbox;
   /** Working directory for tool execution. Defaults to `process.cwd()`. Set by the runtime to an active project's path. */
   cwd?: string;
+  /**
+   * Progressive-skill catalog. When non-empty, an `Available skills` block is
+   * injected into the system prompt and tool calls outside the active skill's
+   * allowed-tools list (when one is active) are rejected.
+   */
+  skillCatalog?: import("./agents.js").SkillCatalogEntry[];
 }
 
 export function estimateTokens(msg: Message): number {
@@ -277,6 +285,20 @@ async function executeToolCall(
     return `Error: Unknown tool "${call.name}". Available tools: ${currentToolNames.join(", ")}`;
   }
 
+  // --- Active-skill allowed-tools gate ---
+  // When a skill is active and declares an `allowed-tools` list, every tool
+  // call outside that list is rejected. `load_skill` is always permitted so
+  // the agent can deactivate or swap skills.
+  const active = context.activeSkill?.current;
+  if (
+    active &&
+    active.allowedTools.length > 0 &&
+    call.name !== "load_skill" &&
+    !active.allowedTools.includes(call.name)
+  ) {
+    return `Error: tool "${call.name}" is not in skill "${active.id}"'s allowed-tools list (${active.allowedTools.join(", ")}). Deactivate the skill with load_skill(name: "__deactivate__") to access other tools.`;
+  }
+
   const validationError = validateToolArgs(tool, call.arguments);
   if (validationError) {
     return `Error: ${validationError}. Expected parameters: ${JSON.stringify(Object.keys((tool.parameters as { properties?: Record<string, unknown> }).properties ?? {}))}`;
@@ -366,7 +388,8 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
   } else if (contextDir) {
     contextContent = await loadAllContext(contextDir, agentContextDir);
   }
-  const fullSystemPrompt = BASE_SYSTEM_PROMPT + extraInstructions + contextContent;
+  const catalogBlock = renderSkillCatalog(opts.skillCatalog);
+  const fullSystemPrompt = BASE_SYSTEM_PROMPT + extraInstructions + contextContent + catalogBlock;
   const systemPromptTokens = estimateTokens({ role: "system", content: fullSystemPrompt });
 
   const history = getSessionMessages(db, session.id);
@@ -389,6 +412,7 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
     }
   };
 
+  const activeSkill: ActiveSkillState = createActiveSkillState();
   const context: ToolContext = {
     sessionId: session.id,
     workingDirectory,
@@ -401,6 +425,7 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
     db,
     sandbox: opts.sandbox,
     sandboxHandle,
+    activeSkill,
     ...opts.toolContextExtras,
   };
 
@@ -564,4 +589,27 @@ async function _runAgentLoopBody(
   }
 
   return "[Agent stopped: max tool rounds reached]";
+}
+
+
+/**
+ * Render the agentskills.io progressive-disclosure catalog into a system-prompt
+ * suffix. Empty / undefined input returns an empty string so back-compat
+ * (eager-merged or skill-less agents) carries no extra prompt overhead.
+ */
+function renderSkillCatalog(catalog: SkillCatalogEntry[] | undefined): string {
+  if (!catalog || catalog.length === 0) return "";
+  const lines: string[] = [
+    "",
+    "",
+    "## Available skills",
+    "Activate one with `load_skill(name: <id>)`. The skill's full instructions and tool allowlist load only when activated.",
+    "",
+  ];
+  for (const s of catalog) {
+    const desc = s.description ? `: ${s.description}` : "";
+    lines.push(`- ${s.id}${desc}`);
+  }
+  lines.push("");
+  return lines.join("\n");
 }

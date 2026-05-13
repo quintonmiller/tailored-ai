@@ -104,7 +104,7 @@ describe("AgentRuntime + active project", () => {
       },
       createProvider: (_cfg: AgentConfig) => {
         providerCalls++;
-        return { provider: fakeProvider, model: _cfg.providers?.ollama?.defaultModel ?? "x" };
+        return { provider: fakeProvider, model: _cfg.providers?.openai_compatible?.defaultModel ?? "x" };
       },
     };
     const runtime = new AgentRuntime(opts, () => baseConfig(), config, initialProject);

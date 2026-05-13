@@ -11,9 +11,24 @@ export interface ExpandOptions {
   shellTimeoutMs?: number;
   /** Max nested {{include:...}} depth. Default 5. */
   maxIncludeDepth?: number;
+  /**
+   * Resolves `{{include:resource://<scheme>/<id>}}` references by id. When
+   * provided, the loader looks up the resource and returns its body text.
+   * Today this is used for `prompt:` ids; future kinds (kb, workflow) can
+   * register additional schemes here.
+   */
+  resolveResource?: (uri: string) => string | undefined;
 }
 
-const DEFAULTS: Required<Omit<ExpandOptions, "baseDir">> & { baseDir: string } = {
+type ResolvedExpandOptions = {
+  baseDir: string;
+  allowShellExpansion: boolean;
+  shellTimeoutMs: number;
+  maxIncludeDepth: number;
+  resolveResource?: (uri: string) => string | undefined;
+};
+
+const DEFAULTS: ResolvedExpandOptions = {
   baseDir: process.cwd(),
   allowShellExpansion: false,
   shellTimeoutMs: 5000,
@@ -53,7 +68,7 @@ export async function expandPrompt(
 async function expandIncludes(
   text: string,
   baseDir: string,
-  opts: Required<Omit<ExpandOptions, "baseDir">> & { baseDir: string },
+  opts: ResolvedExpandOptions,
   depth: number,
 ): Promise<string> {
   if (!text.includes("{{include:")) return text;
@@ -70,6 +85,19 @@ async function expandIncludes(
   const replacements = await Promise.all(
     matches.map(async (m) => {
       const rawPath = m[1].trim();
+
+      // resource://<scheme>/<id> — handed off to the resolveResource callback.
+      if (rawPath.startsWith("resource://")) {
+        if (!opts.resolveResource) {
+          return `[include error: no resolveResource handler for ${rawPath}]`;
+        }
+        const text = opts.resolveResource(rawPath);
+        if (text === undefined) {
+          return `[include error: resource not found: ${rawPath}]`;
+        }
+        return expandIncludes(text, baseDir, opts, depth + 1);
+      }
+
       const fullPath = isAbsolute(rawPath) ? rawPath : resolve(baseDir, rawPath);
       try {
         const content = await fs.readFile(fullPath, "utf8");

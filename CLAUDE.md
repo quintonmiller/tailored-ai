@@ -144,9 +144,13 @@ Tools taking >= 100ms have `[completed in Xms]` appended to their output, giving
 
 Three providers are supported — set `agent.defaultProvider` in config:
 
-- **Ollama** (`packages/core/src/providers/ollama.ts`) — local `/api/chat`, tool arguments are native objects
-- **OpenAI** (`packages/core/src/providers/openai.ts`) — `POST /v1/chat/completions`, tool arguments are JSON strings (serialized on send, parsed on receive). Constructor accepts an optional `baseUrl` for OpenAI-compatible APIs.
+- **OpenAI-compatible** (`packages/core/src/providers/openai.ts`, `id: "openai_compatible"`) — generic `POST /v1/chat/completions` client for any OpenAI-wire-format server: **vLLM**, **Ollama** (`/v1` endpoint), **LM Studio**, **llama.cpp server**, **text-generation-webui**. `apiKey` is optional — when omitted no `Authorization` header is sent. Configure under `providers.openai_compatible` with required `baseUrl` (must include `/v1`) and `defaultModel`. Optional `name` controls the label shown in logs/UI.
+- **OpenAI** (`packages/core/src/providers/openai.ts`, `id: "openai"`) — hosted OpenAI; requires `apiKey`. Same wire format as openai_compatible but always sends auth.
 - **Anthropic** (`packages/core/src/providers/anthropic.ts`) — Anthropic Messages API.
+
+Both `openai_compatible` and `openai` share `OpenAIProvider`; the only differences are auth-header behavior and the `id`/`name` reported on the instance.
+
+**Back-compat**: configs that still use `providers.ollama` (the removed native `/api/chat` provider) are auto-migrated to `providers.openai_compatible` at load time by appending `/v1` to the base URL. A deprecation warning is printed.
 
 ## Background Tasks
 

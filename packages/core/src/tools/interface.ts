@@ -15,6 +15,13 @@ export interface ToolContext {
   /** Sandbox handle to route shell/file operations through. When unset, tools execute on the host. */
   sandbox?: import("../sandboxes/interface.js").Sandbox;
   sandboxHandle?: import("../sandboxes/interface.js").SandboxHandle;
+  /**
+   * Mutable container used by progressive skill loading. The `load_skill`
+   * tool writes into `current` when a skill activates; the agent loop reads
+   * it to enforce per-skill tool allowlists. Tools that care about scope
+   * (read, exec) can inspect this too.
+   */
+  activeSkill?: import("../agent/active-skill.js").ActiveSkillState;
 }
 
 export interface ToolResult {

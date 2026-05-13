@@ -10,7 +10,10 @@ import { BrowserTool } from "./tools/browser.js";
 import { ClaudeCodeTool } from "./tools/claude-code.js";
 import { createCustomTools } from "./tools/custom.js";
 import { DelegateTool } from "./tools/delegate.js";
+import { LoadSkillTool } from "./tools/load-skill.js";
+import { ResourceAdminTool } from "./tools/resource-admin.js";
 import { ExecTool } from "./tools/exec.js";
+import { FactsTool } from "./tools/facts.js";
 import { GmailTool } from "./tools/gmail.js";
 import { GoogleCalendarTool } from "./tools/google-calendar.js";
 import { GoogleDriveTool } from "./tools/google-drive.js";
@@ -22,10 +25,10 @@ import { RunWorkflowTool } from "./tools/run-workflow.js";
 import { TasksTool, TaskQueryTool } from "./tools/tasks.js";
 import { ProjectsTool } from "./tools/projects.js";
 import { DocumentsTool } from "./tools/documents.js";
+import { ExtractDocumentTool } from "./tools/extract-document.js";
 import { WebFetchTool } from "./tools/web-fetch.js";
 import { WebSearchTool } from "./tools/web-search.js";
 import { WriteTool } from "./tools/write.js";
-import { OllamaProvider } from "./providers/ollama.js";
 import { OpenAIProvider } from "./providers/openai.js";
 import { AnthropicProvider } from "./providers/anthropic.js";
 import type { AgentRuntime } from "./runtime.js";
@@ -63,6 +66,9 @@ export function createTools(
   }
   if (config.tools.web_search?.enabled && config.tools.web_search.apiKey) {
     tools.push(new WebSearchTool(config.tools.web_search.apiKey, config.tools.web_search.maxResults));
+  }
+  if (config.tools.facts?.enabled !== false && opts?.db) {
+    tools.push(new FactsTool(opts.db));
   }
   if (config.tools.tasks?.enabled !== false) {
     const backend = opts?.taskBackend ?? (opts?.db ? createTaskBackend(config, opts.db) : undefined);
@@ -104,6 +110,10 @@ export function createTools(
     const dir = resolve(config.tools.projects?.directory ?? "./data/projects");
     tools.push(new DocumentsTool(opts.db, dir));
   }
+  if (config.tools.extract_document?.enabled) {
+    const dir = resolve(config.tools.projects?.directory ?? "./data/projects");
+    tools.push(new ExtractDocumentTool({ db: opts?.db, projectsDir: dir }));
+  }
   if (config.tools.ask_user?.enabled !== false) {
     tools.push(
       new AskUserTool({
@@ -120,10 +130,14 @@ export function createTools(
 }
 
 export function createProvider(config: AgentConfig): { provider: AIProvider; model: string } {
-  if (config.agent.defaultProvider === "ollama" && config.providers.ollama) {
+  if (config.agent.defaultProvider === "openai_compatible" && config.providers.openai_compatible) {
+    const cfg = config.providers.openai_compatible;
     return {
-      provider: new OllamaProvider(config.providers.ollama.baseUrl),
-      model: config.providers.ollama.defaultModel,
+      provider: new OpenAIProvider(cfg.apiKey, cfg.baseUrl, {
+        id: "openai_compatible",
+        name: cfg.name ?? "OpenAI-compatible",
+      }),
+      model: cfg.defaultModel,
     };
   }
   if (config.agent.defaultProvider === "openai" && config.providers.openai) {
@@ -156,5 +170,7 @@ export function createMetaTools(runtime: AgentRuntime, contextDir: string, kbDir
     getEngine: () => runtime.getWorkflowEngine(),
     getRegistry: () => runtime.getWorkflows(),
   });
-  return [delegateTool, taskStatusTool, adminTool, runWorkflowTool];
+  const resourceAdminTool = new ResourceAdminTool({ runtime });
+  const loadSkillTool = new LoadSkillTool({ getSkillRegistry: () => runtime.getSkillRegistry() });
+  return [delegateTool, taskStatusTool, adminTool, runWorkflowTool, resourceAdminTool, loadSkillTool];
 }

@@ -34,6 +34,7 @@ import { CliApprovalHandler } from "./approval.js";
 import { resolveHomeDir, isSetupDone, resolveHomePaths, ensureHomeStructure } from "./home.js";
 import { runSetupWizard } from "./setup.js";
 import { runProjectCommand } from "./commands/project.js";
+import { runResourcesCommand } from "./commands/resources.js";
 
 let _discordChannel: DiscordChannel | undefined;
 
@@ -153,10 +154,171 @@ async function runServer(runtime: AgentRuntime) {
   });
 
   const uiDistPath = resolveUiDistPath();
-  const workflowEngine = createWorkflowEngine({ runtime, db: runtime.db });
+  const workflowEngine = createWorkflowEngine({
+    runtime,
+    db: runtime.db,
+    getDiscord: () => _discordChannel,
+    getOwnerId: () => runtime.getConfig().channels.discord?.owner,
+  });
   runtime.setWorkflowEngine(workflowEngine);
   runtime.startWatchingWorkflows();
   scheduler.setWorkflowEngine(workflowEngine);
+
+  // Register async triggers (file_drop, email, calendar, rss, geofence, weather, sensor, finance, home_assistant) from all loaded workflows.
+  const {
+    FileDropWatcher,
+    EmailPoller,
+    CalendarPoller,
+    RssPoller,
+    GeofencePoller,
+    WeatherPoller,
+    SensorPoller,
+    FinancePoller,
+    HomeAssistantPoller,
+  } = await import("@agent/core");
+  const fileDropWatcher = new FileDropWatcher({ workflowEngine });
+  const emailPoller = new EmailPoller({
+    workflowEngine,
+    getTools: () => runtime.getTools(),
+  });
+  const calendarPoller = new CalendarPoller({
+    workflowEngine,
+    getTools: () => runtime.getTools(),
+  });
+  const rssPoller = new RssPoller({ workflowEngine });
+  const geofencePoller = new GeofencePoller({ workflowEngine });
+  const weatherPoller = new WeatherPoller({ workflowEngine });
+  const sensorPoller = new SensorPoller({ workflowEngine });
+  const financePoller = new FinancePoller({ workflowEngine });
+  const homeAssistantPoller = new HomeAssistantPoller({ workflowEngine });
+  for (const wf of runtime.getWorkflows().list()) {
+    for (const trig of wf.definition.triggers ?? []) {
+      if (trig.kind === "file_drop") {
+        try {
+          fileDropWatcher.register(wf.definition.name, trig);
+          console.log(`[file_drop] watching ${trig.path} for workflow "${wf.definition.name}"`);
+        } catch (err) {
+          console.warn(`[file_drop] failed to register ${wf.definition.name}: ${(err as Error).message}`);
+        }
+      }
+      if (trig.kind === "email_message") {
+        try {
+          emailPoller.register(wf.definition.name, trig.query, trig.intervalSeconds);
+          console.log(
+            `[email-poll] polling "${trig.query}" every ${trig.intervalSeconds ?? 300}s for workflow "${wf.definition.name}"`,
+          );
+        } catch (err) {
+          console.warn(`[email-poll] failed to register ${wf.definition.name}: ${(err as Error).message}`);
+        }
+      }
+      if (trig.kind === "calendar_event") {
+        try {
+          calendarPoller.register(wf.definition.name, trig);
+          console.log(
+            `[calendar-poll] polling calendar for workflow "${wf.definition.name}" (window: ${trig.beforeMinutes ?? 15}m)`,
+          );
+        } catch (err) {
+          console.warn(`[calendar-poll] failed to register ${wf.definition.name}: ${(err as Error).message}`);
+        }
+      }
+      if (trig.kind === "rss") {
+        try {
+          rssPoller.register(wf.definition.name, trig);
+          console.log(
+            `[rss-poll] polling ${trig.url} every ${trig.intervalSeconds ?? 600}s for workflow "${wf.definition.name}"`,
+          );
+        } catch (err) {
+          console.warn(`[rss-poll] failed to register ${wf.definition.name}: ${(err as Error).message}`);
+        }
+      }
+      if (trig.kind === "geofence") {
+        try {
+          geofencePoller.register(wf.definition.name, trig);
+          console.log(
+            `[geofence] watching ${trig.center.lat},${trig.center.lng} r=${trig.radiusMeters}m for workflow "${wf.definition.name}"`,
+          );
+        } catch (err) {
+          console.warn(`[geofence] failed to register ${wf.definition.name}: ${(err as Error).message}`);
+        }
+      }
+      if (trig.kind === "weather") {
+        try {
+          weatherPoller.register(wf.definition.name, trig);
+          console.log(
+            `[weather] polling ${trig.lat},${trig.lng} field=${trig.field} ${trig.op} ${trig.threshold} for workflow "${wf.definition.name}"`,
+          );
+        } catch (err) {
+          console.warn(`[weather] failed to register ${wf.definition.name}: ${(err as Error).message}`);
+        }
+      }
+      if (trig.kind === "sensor") {
+        try {
+          sensorPoller.register(wf.definition.name, trig);
+          console.log(
+            `[sensor] polling ${trig.url} ${trig.valuePath} ${trig.op} ${trig.threshold} for workflow "${wf.definition.name}"`,
+          );
+        } catch (err) {
+          console.warn(`[sensor] failed to register ${wf.definition.name}: ${(err as Error).message}`);
+        }
+      }
+      if (trig.kind === "finance") {
+        try {
+          financePoller.register(wf.definition.name, trig);
+          console.log(
+            `[finance] watching ${trig.symbol} cross ${trig.cross} ${trig.threshold} for workflow "${wf.definition.name}"`,
+          );
+        } catch (err) {
+          console.warn(`[finance] failed to register ${wf.definition.name}: ${(err as Error).message}`);
+        }
+      }
+      if (trig.kind === "home_assistant") {
+        try {
+          homeAssistantPoller.register(wf.definition.name, trig);
+          console.log(
+            `[home_assistant] watching ${trig.entityId} for workflow "${wf.definition.name}"`,
+          );
+        } catch (err) {
+          console.warn(`[home_assistant] failed to register ${wf.definition.name}: ${(err as Error).message}`);
+        }
+      }
+    }
+  }
+  channels.push({
+    name: "file_drop",
+    disconnect: async () => fileDropWatcher.stop(),
+  });
+  channels.push({
+    name: "email_poll",
+    disconnect: async () => emailPoller.stop(),
+  });
+  channels.push({
+    name: "calendar_poll",
+    disconnect: async () => calendarPoller.stop(),
+  });
+  channels.push({
+    name: "rss_poll",
+    disconnect: async () => rssPoller.stop(),
+  });
+  channels.push({
+    name: "geofence_poll",
+    disconnect: async () => geofencePoller.stop(),
+  });
+  channels.push({
+    name: "weather_poll",
+    disconnect: async () => weatherPoller.stop(),
+  });
+  channels.push({
+    name: "sensor_poll",
+    disconnect: async () => sensorPoller.stop(),
+  });
+  channels.push({
+    name: "finance_poll",
+    disconnect: async () => financePoller.stop(),
+  });
+  channels.push({
+    name: "home_assistant_poll",
+    disconnect: async () => homeAssistantPoller.stop(),
+  });
   const { start } = createServer({
     runtime,
     scheduler,
@@ -281,6 +443,10 @@ async function main() {
     await runProjectCommand(argv.slice(1));
     return;
   }
+  if (argv[0] === "resources" || argv[0] === "resource") {
+    await runResourcesCommand(argv.slice(1));
+    return;
+  }
 
   const { values } = parseArgs({
     options: {
@@ -318,18 +484,32 @@ async function main() {
       process.exit(1);
     }
     const config = loadConfig(configPath);
-    const agents = config.agents ?? {};
-    const names = Object.keys(agents);
+    // Merge config-yaml agents + authored-resources agents (registry takes
+    // precedence). Mirrors what `resolveAgent` does at runtime.
+    const contextDirForList = resolve(homeDir, "context");
+    const authoredAgents: Record<string, import("@agent/core").AgentDefinition> = {};
+    try {
+      const { AgentRegistry, populateAgentsFromDisk } = await import("@agent/core");
+      const reg = new AgentRegistry();
+      populateAgentsFromDisk(reg, contextDirForList);
+      for (const { id, definition } of reg.list()) authoredAgents[id] = definition;
+    } catch {
+      // Best-effort — fall back to config-only if anything goes wrong.
+    }
+    const merged: Record<string, { def: import("@agent/core").AgentDefinition; source: string }> = {};
+    for (const [id, def] of Object.entries(config.agents ?? {})) merged[id] = { def, source: "config.yaml" };
+    for (const [id, def] of Object.entries(authoredAgents)) merged[id] = { def, source: "authored-resources" };
+    const names = Object.keys(merged);
     if (names.length === 0) {
-      console.log("No agents configured. Add agents to config.yaml under `agents:`.");
+      console.log("No agents configured. Add one via the UI's Resources page or under `agents:` in config.yaml.");
     } else {
       console.log("Available agents:\n");
       for (const name of names) {
-        const agentDef = agents[name];
+        const { def: agentDef, source } = merged[name];
         const model = agentDef.model ? ` (model: ${agentDef.model})` : "";
         const tools = agentDef.tools?.length ? ` [${agentDef.tools.join(", ")}]` : "";
         const desc = agentDef.description ? ` — ${agentDef.description}` : "";
-        console.log(`  ${name}${model}${tools}${desc}`);
+        console.log(`  ${name}${model}${tools}${desc}  [${source}]`);
         if (agentDef.instructions && !agentDef.description) {
           const preview =
             agentDef.instructions.length > 80 ? `${agentDef.instructions.slice(0, 80)}...` : agentDef.instructions;

@@ -1,0 +1,138 @@
+import { describe, expect, it } from "vitest";
+import { existsSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  Lockfile,
+  ResourceLoader,
+  TaiRegistrySource,
+  defaultLockfilePath,
+  hashManifest,
+} from "../resources/index.js";
+import type { Resource, RegistryIndexShape } from "../resources/index.js";
+
+function tempLockfile(): string {
+  return join(mkdtempSync(join(tmpdir(), "lock-")), "tai.lock");
+}
+
+function fakeResource(kind: any, id: string, version: string): Resource {
+  return {
+    manifest: { kind, id, version, description: `desc ${id}` },
+    origin: { scheme: "https", uri: `https://example.com/${id}`, loadedAt: Date.now() },
+    body: null,
+  };
+}
+
+describe("Lockfile", () => {
+  it("round-trips entries through disk", () => {
+    const path = tempLockfile();
+    const a = Lockfile.read(path);
+    a.upsertResource(fakeResource("tool", "my/foo", "1.0.0"));
+    a.upsertResource(fakeResource("skill", "my/bar", "2.1.0"));
+    a.save();
+    expect(existsSync(path)).toBe(true);
+
+    const b = Lockfile.read(path);
+    const entries = b.list();
+    expect(entries.length).toBe(2);
+    expect(entries.find((e) => e.id === "my/foo")?.version).toBe("1.0.0");
+    expect(entries.find((e) => e.id === "my/bar")?.kind).toBe("skill");
+  });
+
+  it("upsert replaces an existing entry for the same kind:id", () => {
+    const path = tempLockfile();
+    const lock = Lockfile.read(path);
+    lock.upsertResource(fakeResource("tool", "my/foo", "1.0.0"));
+    lock.upsertResource(fakeResource("tool", "my/foo", "1.1.0"));
+    expect(lock.list().length).toBe(1);
+    expect(lock.list()[0].version).toBe("1.1.0");
+  });
+
+  it("remove drops an entry and reports whether it existed", () => {
+    const path = tempLockfile();
+    const lock = Lockfile.read(path);
+    lock.upsertResource(fakeResource("tool", "x/y", "1.0.0"));
+    expect(lock.remove("tool", "x/y")).toBe(true);
+    expect(lock.remove("tool", "x/y")).toBe(false);
+    expect(lock.list().length).toBe(0);
+  });
+
+  it("sorts entries deterministically for stable diffs", () => {
+    const path = tempLockfile();
+    const lock = Lockfile.read(path);
+    lock.upsertResource(fakeResource("tool", "z/x", "1.0.0"));
+    lock.upsertResource(fakeResource("tool", "a/x", "1.0.0"));
+    lock.upsertResource(fakeResource("provider", "m/x", "1.0.0"));
+    const ids = lock.list().map((e) => `${e.kind}:${e.id}`);
+    expect(ids).toEqual(["provider:m/x", "tool:a/x", "tool:z/x"]);
+  });
+
+  it("survives a corrupted file by returning an empty lock", async () => {
+    const fs = await import("node:fs");
+    const path = tempLockfile();
+    fs.mkdirSync(join(path, ".."), { recursive: true });
+    fs.writeFileSync(path, "not json {{{");
+    const lock = Lockfile.read(path);
+    expect(lock.list()).toEqual([]);
+  });
+
+  it("hashes match independently of installedAt", () => {
+    const r = fakeResource("tool", "h/x", "1.0.0");
+    const h1 = hashManifest(r.manifest);
+    const lock = Lockfile.read(tempLockfile());
+    lock.upsertResource(r);
+    expect(lock.list()[0].manifestHash).toBe(h1);
+  });
+
+  it("defaultLockfilePath uses tai.lock under the given cwd", () => {
+    expect(defaultLockfilePath("/tmp/xyz")).toBe("/tmp/xyz/tai.lock");
+  });
+});
+
+describe("TaiRegistrySource", () => {
+  const staticIndex: RegistryIndexShape = {
+    version: 1,
+    entries: [
+      {
+        kind: "tool",
+        id: "my-org/web-scraper",
+        version: "1.0.0",
+        description: "Scrapes web pages",
+        source: "https://example.com/web-scraper.tar.gz",
+        tags: ["scraping", "web"],
+      },
+      {
+        kind: "skill",
+        id: "my-org/code-reviewer",
+        version: "2.1.0",
+        description: "Reviews pull requests against project conventions",
+        source: "https://example.com/code-reviewer.tar.gz",
+        tags: ["review", "pr"],
+      },
+    ],
+  };
+
+  it("resolve() returns the entry for a known id", async () => {
+    const src = new TaiRegistrySource({ staticIndex });
+    const hit = await src.resolve("tai-registry:my-org/web-scraper");
+    expect(hit?.source).toBe("https://example.com/web-scraper.tar.gz");
+  });
+
+  it("search() matches by id, description, and tags", async () => {
+    const src = new TaiRegistrySource({ staticIndex });
+    expect((await src.search("scrap")).length).toBe(1);
+    expect((await src.search("review")).length).toBe(1);
+    expect((await src.search("pr")).length).toBe(1);
+    expect((await src.search("nonexistent")).length).toBe(0);
+  });
+
+  it("loader re-dispatches via RegistryDispatchError to the resolved URI", async () => {
+    const src = new TaiRegistrySource({ staticIndex });
+    const loader = new ResourceLoader({ sources: [src] });
+    // No https source registered → expect the loader to fail on the
+    // dispatched URI rather than silently swallow it.
+    await expect(loader.load("tai-registry:my-org/web-scraper")).rejects.toThrow(
+      /no resource source registered for scheme "https"/,
+    );
+  });
+});

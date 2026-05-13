@@ -6,10 +6,12 @@ import {
   deleteProject,
   fetchAgents,
   fetchProjects,
+  setActiveProjectId,
   updateProject,
 } from "../api";
 import { DocumentList } from "../components/DocumentList";
 import { DocumentViewer } from "../components/DocumentViewer";
+import { useActiveProject } from "../hooks/useActiveProject";
 import { Tasks } from "./Tasks";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -30,7 +32,10 @@ export function Projects({
   docId?: string;
 }) {
   const [projects, setProjects] = useState<ProjectWithCounts[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(projectId ?? null);
+  const headerActiveProject = useActiveProject();
+  const [selectedId, setSelectedId] = useState<string | null>(
+    projectId ?? (headerActiveProject && headerActiveProject !== "global" ? headerActiveProject : null),
+  );
   const [activeTab, setActiveTab] = useState<"tasks" | "documents">(tab ?? "tasks");
   const [showForm, setShowForm] = useState(false);
   const [editingProject, setEditingProject] = useState<ProjectWithCounts | null>(null);
@@ -93,8 +98,19 @@ export function Projects({
 
   const selectProject = (id: string) => {
     setSelectedId(id);
+    // Sync to the header dropdown so the rest of the UI scopes consistently.
+    setActiveProjectId(id);
     window.location.hash = `#/projects/${id}/${activeTab}`;
   };
+
+  // React to header dropdown changes.
+  useEffect(() => {
+    if (headerActiveProject && headerActiveProject !== "global" && headerActiveProject !== selectedId) {
+      setSelectedId(headerActiveProject);
+      window.location.hash = `#/projects/${headerActiveProject}/${activeTab}`;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [headerActiveProject]);
 
   const switchTab = (t: "tasks" | "documents") => {
     setActiveTab(t);

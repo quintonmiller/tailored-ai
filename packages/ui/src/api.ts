@@ -33,11 +33,30 @@ export function setActiveProjectId(id: string | null): void {
   window.dispatchEvent(new CustomEvent("tai:active-project-change", { detail: id }));
 }
 
+export interface ToolLogToolEntry {
+  kind?: "tool";
+  id?: string;
+  name: string;
+  args: Record<string, unknown>;
+  output?: string;
+}
+
+export interface ToolLogTextEntry {
+  kind: "text";
+  content: string;
+}
+
+export type ToolLogEntry = ToolLogToolEntry | ToolLogTextEntry;
+
 export interface Message {
   role: "system" | "user" | "assistant" | "tool";
   content: string | null;
   toolCalls?: { id: string; name: string; arguments: Record<string, unknown> }[];
   toolCallId?: string;
+  // UI-only: collapsed log of tool calls + results that preceded this assistant
+  // text message. Populated by groupTurns() when grouping historical messages,
+  // and by the chat streaming loop when committing the final response.
+  toolLog?: ToolLogEntry[];
 }
 
 export interface HealthInfo {
@@ -432,11 +451,14 @@ export function fetchContextFile(
 export interface ModelEntry {
   provider: string;
   model: string;
+  /** Optional per-model context window (tokens). Drives the `/context` display. */
+  maxContextTokens?: number;
 }
 
 export interface ProviderConnection {
   baseUrl?: string;
   apiKey?: string;
+  name?: string;
 }
 
 export interface ProvidersData {
@@ -457,7 +479,13 @@ export function saveProviders(data: ProvidersData): Promise<{ ok?: boolean; mess
   });
 }
 
-export function fetchModels(provider: string): Promise<{ provider: string; models: string[]; error?: string }> {
+export interface ModelInfo {
+  maxContextTokens?: number;
+}
+
+export function fetchModels(
+  provider: string,
+): Promise<{ provider: string; models: string[]; modelInfo?: Record<string, ModelInfo>; error?: string }> {
   return jsonFetch(`/api/config/providers/${encodeURIComponent(provider)}/models`);
 }
 
@@ -548,7 +576,20 @@ export type WorkflowStepType =
   | "shell"
   | "condition"
   | "loop"
-  | "parallel";
+  | "parallel"
+  | "discord_message"
+  | "trigger_workflow"
+  | "http_request"
+  | "notify"
+  | "form"
+  | "worktree";
+
+/** Contract for what flows between two steps. UI-enforced for v1. */
+export type StepContract =
+  | { kind: "raw_text" }
+  | { kind: "number" }
+  | { kind: "choice"; choices: string[] }
+  | { kind: "json_schema"; schema: Record<string, unknown> };
 
 export interface WorkflowStepDef {
   name: string;
@@ -556,6 +597,8 @@ export interface WorkflowStepDef {
   deadlineMs?: number;
   onError?: "fail" | "continue" | "retry";
   retry?: { maxAttempts: number; backoffMs?: number };
+  inputContract?: StepContract;
+  outputContract?: StepContract;
   // agent_run
   agent?: string;
   prompt?: string;
@@ -573,14 +616,141 @@ export interface WorkflowStepDef {
   if?: string;
   then?: string[];
   else?: string[];
-  // loop
+  // loop  (also used by http_request as the request body — disambiguated by step.type)
   over?: string;
   as?: string;
-  body?: WorkflowStepDef[];
+  body?: unknown;
   parallel?: boolean;
   maxConcurrency?: number;
   // parallel
   steps?: WorkflowStepDef[];
+  // discord_message
+  message?: string;
+  channelId?: string;
+  userId?: string;
+  // trigger_workflow
+  workflow?: string;
+  input?: Record<string, unknown>;
+  fireAndForget?: boolean;
+  // http_request  (body is shared with loop above — disambiguated by step.type)
+  url?: string;
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS";
+  headers?: Record<string, string>;
+  parseAs?: "json" | "text" | "raw";
+  expectStatus?: number[];
+  // notify
+  channel?: "discord" | "email" | "log";
+  subject?: string;
+  to?: string;
+  // form
+  fields?: Record<string, WorkflowInputSchema>;
+  notify?: {
+    channel: "discord" | "log";
+    channelId?: string;
+    userId?: string;
+    message?: string;
+  };
+  // worktree
+  strategy?: "head" | "branch" | "merge-to-head";
+  branch?: string;
+  repoDir?: string;
+  worktreePath?: string;
+  mergeOnSuccess?: boolean;
+}
+
+export type WorkflowTriggerDef =
+  | { kind: "manual" }
+  | { kind: "cron"; schedule: string }
+  | { kind: "tool_called"; tool: string }
+  | { kind: "document_event"; events: ("created" | "updated" | "deleted")[] }
+  | { kind: "config_event"; path?: string }
+  | { kind: "file_drop"; path: string; extensions?: string; stableForMs?: number }
+  | { kind: "webhook"; token?: string }
+  | { kind: "email_message"; query: string; intervalSeconds?: number }
+  | {
+      kind: "calendar_event";
+      beforeMinutes?: number;
+      titleContains?: string;
+      calendarId?: string;
+      intervalSeconds?: number;
+    }
+  | { kind: "rss"; url: string; intervalSeconds?: number; matchTitle?: string }
+  | {
+      kind: "geofence";
+      locationUrl: string;
+      center: { lat: number; lng: number };
+      radiusMeters: number;
+      direction?: "enter" | "exit" | "both";
+      intervalSeconds?: number;
+      authToken?: string;
+    }
+  | {
+      kind: "weather";
+      lat: number;
+      lng: number;
+      field: string;
+      op: "gt" | "lt" | "gte" | "lte" | "eq";
+      threshold: number;
+      intervalSeconds?: number;
+      apiBaseUrl?: string;
+    }
+  | {
+      kind: "sensor";
+      url: string;
+      valuePath: string;
+      op: "gt" | "lt" | "gte" | "lte" | "eq";
+      threshold: number;
+      intervalSeconds?: number;
+      headers?: Record<string, string>;
+    }
+  | {
+      kind: "finance";
+      symbol: string;
+      cross: "above" | "below";
+      threshold: number;
+      intervalSeconds?: number;
+      apiBaseUrl?: string;
+    }
+  | {
+      kind: "home_assistant";
+      baseUrl: string;
+      token: string;
+      entityId: string;
+      stateEquals?: string;
+      numericAbove?: number;
+      numericBelow?: number;
+      onAnyChange?: boolean;
+      intervalSeconds?: number;
+    };
+
+export interface WorkflowGraphNode {
+  stepName: string;
+  position: { x: number; y: number };
+}
+
+export interface WorkflowGraphEdge {
+  from: string;
+  to: string;
+  /** "true" / "false" for branches off a condition step; unset otherwise. */
+  sourceHandle?: string;
+}
+
+export interface WorkflowGraph {
+  nodes: WorkflowGraphNode[];
+  edges: WorkflowGraphEdge[];
+}
+
+export type WorkflowInputType = "string" | "number" | "boolean" | "date" | "file" | "json";
+
+export interface WorkflowInputSchema {
+  type: WorkflowInputType;
+  label?: string;
+  description?: string;
+  required?: boolean;
+  default?: unknown;
+  enum?: string[];
+  min?: number;
+  max?: number;
 }
 
 export interface WorkflowDefinition {
@@ -588,6 +758,12 @@ export interface WorkflowDefinition {
   description?: string;
   deadlineMs?: number;
   steps: WorkflowStepDef[];
+  triggers?: WorkflowTriggerDef[];
+  graph?: WorkflowGraph;
+  /** "graph" enables real parallel fan-out via edges. Default "linear". */
+  executionMode?: "linear" | "graph";
+  /** Declarative inputs surfaced as a run-dialog form + payload validation. */
+  inputs?: Record<string, WorkflowInputSchema>;
 }
 
 export interface WorkflowSummary {
@@ -631,14 +807,72 @@ export function deleteWorkflow(name: string): Promise<{ ok?: boolean; error?: st
   return jsonFetch(`/api/workflows/${encodeURIComponent(name)}`, { method: "DELETE" });
 }
 
+export interface SecretRecord {
+  workflow_name: string;
+  key: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export function listWorkflowSecrets(name: string): Promise<{ secrets: SecretRecord[] }> {
+  return jsonFetch(`/api/workflows/${encodeURIComponent(name)}/secrets`);
+}
+
+export function setWorkflowSecret(name: string, key: string, value: string): Promise<{ ok?: boolean; error?: string }> {
+  return jsonFetch(`/api/workflows/${encodeURIComponent(name)}/secrets/${encodeURIComponent(key)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ value }),
+  });
+}
+
+export function deleteWorkflowSecret(name: string, key: string): Promise<{ ok?: boolean; error?: string }> {
+  return jsonFetch(`/api/workflows/${encodeURIComponent(name)}/secrets/${encodeURIComponent(key)}`, {
+    method: "DELETE",
+  });
+}
+
+export interface WorkflowVersionSummary {
+  version: number;
+  saved_by: string | null;
+  saved_at: string;
+  bytes: number;
+}
+
+export function listWorkflowVersions(name: string): Promise<{ versions: WorkflowVersionSummary[] }> {
+  return jsonFetch(`/api/workflows/${encodeURIComponent(name)}/versions`);
+}
+
+export function restoreWorkflowVersion(
+  name: string,
+  version: number,
+): Promise<{ ok?: boolean; error?: string; restoredFrom?: number }> {
+  return jsonFetch(
+    `/api/workflows/${encodeURIComponent(name)}/versions/${version}/restore`,
+    { method: "POST" },
+  );
+}
+
 export function runWorkflow(
   name: string,
   input?: unknown,
+  options: { dryRun?: boolean } = {},
 ): Promise<WorkflowRunRow> {
-  return jsonFetch(`/api/workflows/${encodeURIComponent(name)}/run`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ input: input ?? {} }),
+  return jsonFetch<WorkflowRunRow | { error: string; details?: string[] }>(
+    `/api/workflows/${encodeURIComponent(name)}/run`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ input: input ?? {}, dryRun: options.dryRun === true }),
+    },
+  ).then((r) => {
+    // Server returns { error, details } on 400 — surface to caller.
+    const errBag = r as { error?: string; details?: string[] };
+    if (errBag.error) {
+      const details = errBag.details ?? [];
+      throw new Error(details.length > 0 ? `${errBag.error}: ${details.join("; ")}` : errBag.error);
+    }
+    return r as WorkflowRunRow;
   });
 }
 
@@ -699,6 +933,55 @@ export function fetchWorkflowStepLog(
   );
 }
 
+export interface WorkflowFormPendingRow {
+  id: string;
+  run_id: string;
+  step_id: string;
+  step_name: string;
+  prompt: string;
+  fields: Record<string, {
+    type: "string" | "number" | "boolean" | "date" | "file" | "json";
+    label?: string;
+    description?: string;
+    required?: boolean;
+    default?: unknown;
+    enum?: string[];
+    min?: number;
+    max?: number;
+  }>;
+  status: "pending" | "submitted" | "expired" | "cancelled";
+  submitted: Record<string, unknown> | null;
+  expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export function fetchPendingForms(
+  runId: string,
+): Promise<{ forms: WorkflowFormPendingRow[] }> {
+  return jsonFetch(`/api/workflow-runs/${encodeURIComponent(runId)}/forms`);
+}
+
+/** Global pending forms across every workflow run — used by the home dashboard. */
+export function fetchAllPendingForms(): Promise<{ forms: WorkflowFormPendingRow[] }> {
+  return jsonFetch("/api/workflow-forms");
+}
+
+export function submitWorkflowForm(
+  runId: string,
+  stepName: string,
+  values: Record<string, unknown>,
+): Promise<{ ok?: boolean; values?: Record<string, unknown>; error?: string; details?: string[] }> {
+  return jsonFetch(
+    `/api/workflow-runs/${encodeURIComponent(runId)}/forms/${encodeURIComponent(stepName)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(values),
+    },
+  );
+}
+
 // --- Sandboxes ---
 
 export interface ActiveSandbox {
@@ -712,6 +995,192 @@ export interface ActiveSandbox {
 
 export function fetchSandboxes(): Promise<{ sandboxes: ActiveSandbox[] }> {
   return jsonFetch("/api/sandboxes");
+}
+
+// --- Resources / federation (S10) ---
+
+export interface ResourcePermissions {
+  network?: string[];
+  filesystem?: string[];
+  tools?: string[];
+  env?: string[];
+}
+
+export interface ResourceManifestSummary {
+  kind: string;
+  id: string;
+  version: string;
+  description?: string;
+  permissions?: ResourcePermissions;
+  trust?: { signedBy?: string; publisher?: string; signature?: string };
+  data?: Record<string, unknown>;
+}
+
+export interface LockfileEntry {
+  kind: string;
+  id: string;
+  version: string;
+  manifestHash: string;
+  uri: string;
+  installedAt: string;
+}
+
+export interface TrustedPublisher {
+  publicKey: string;
+  publisher: string;
+  trustedAt: string;
+}
+
+export interface TrustedResourceEntry {
+  key: string;
+  manifestHash: string;
+  grantedPermissions: ResourcePermissions;
+  trustedAt: string;
+  origin: string;
+}
+
+export interface RegistryIndexEntry {
+  kind: string;
+  id: string;
+  version: string;
+  description?: string;
+  source: string;
+  tags?: string[];
+}
+
+export interface ResourceInstallResponse {
+  ok: boolean;
+  mode: "auto" | "cached" | "frozen" | "approved" | "needs_approval" | "denied";
+  resource: { manifest: ResourceManifestSummary; origin: { scheme: string; uri: string } };
+  decision?: { reason: string; cached: boolean };
+  requestedPermissions?: ResourcePermissions;
+  reason?: string;
+  error?: string;
+}
+
+export interface ResourceDetail {
+  entry: LockfileEntry;
+  trusted: TrustedResourceEntry | null;
+}
+
+export function fetchResources(): Promise<{ resources: LockfileEntry[]; lockfilePath: string }> {
+  return jsonFetch("/api/resources");
+}
+
+export function fetchResourceDetail(kind: string, id: string): Promise<ResourceDetail> {
+  return jsonFetch(`/api/resources/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`);
+}
+
+export async function installResource(
+  uri: string,
+  opts?: { approve?: boolean; frozen?: boolean; useApprovalQueue?: boolean },
+): Promise<{ status: number; body: ResourceInstallResponse }> {
+  const res = await fetch("/api/resources/install", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ uri, ...opts }),
+  });
+  const body = (await res.json()) as ResourceInstallResponse;
+  return { status: res.status, body };
+}
+
+// --- Approvals queue (shared with tool approvals) ---
+
+export interface PendingApprovalRequest {
+  requestId: string;
+  toolName: string;
+  toolArgs?: Record<string, unknown>;
+  sessionId?: string;
+  description?: string;
+}
+
+export function fetchPendingApprovals(): Promise<PendingApprovalRequest[]> {
+  return jsonFetch("/api/approvals");
+}
+
+export function resolveApproval(
+  requestId: string,
+  approved: boolean,
+  reason?: string,
+): Promise<{ ok: boolean }> {
+  return jsonFetch(`/api/approvals/${encodeURIComponent(requestId)}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ approved, reason }),
+  });
+}
+
+export function uninstallResource(kind: string, id: string): Promise<{ ok: boolean }> {
+  return jsonFetch(`/api/resources/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export function searchRegistry(query: string): Promise<{ results: RegistryIndexEntry[]; error?: string }> {
+  return jsonFetch(`/api/registry/search?q=${encodeURIComponent(query)}`);
+}
+
+export function fetchTrust(): Promise<{ publishers: TrustedPublisher[]; resources: TrustedResourceEntry[] }> {
+  return jsonFetch("/api/trust");
+}
+
+export function trustPublisher(publicKey: string, publisher: string): Promise<{ ok: boolean }> {
+  return jsonFetch("/api/trust/publisher", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ publicKey, publisher }),
+  });
+}
+
+export function revokePublisher(publicKey: string): Promise<{ ok: boolean }> {
+  return jsonFetch(`/api/trust/publisher/${encodeURIComponent(publicKey)}`, { method: "DELETE" });
+}
+
+// --- Authored resources (skills / prompts) ---
+
+export interface AuthoredResource {
+  kind: string;
+  id: string;
+  manifest: {
+    kind: string;
+    id: string;
+    version: string;
+    description?: string;
+    data?: Record<string, unknown>;
+  };
+}
+
+export function fetchAuthored(kind?: string): Promise<{ resources: AuthoredResource[]; supportedKinds: string[] }> {
+  const qs = kind ? `?kind=${encodeURIComponent(kind)}` : "";
+  return jsonFetch(`/api/authored${qs}`);
+}
+
+export function saveAuthored(
+  kind: string,
+  body: {
+    id: string;
+    version?: string;
+    description?: string;
+    data?: Record<string, unknown>;
+    // agentskills.io SKILL.md fields (skill kind only):
+    instructions?: string;
+    allowedTools?: string[];
+    license?: unknown;
+    compatibility?: unknown;
+    metadata?: unknown;
+  },
+): Promise<{ ok: boolean; resource: AuthoredResource }> {
+  return jsonFetch(`/api/authored/${encodeURIComponent(kind)}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function deleteAuthored(kind: string, id: string): Promise<{ ok: boolean }> {
+  return jsonFetch(`/api/authored/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
 }
 
 export function killSandbox(id: string): Promise<{ ok?: boolean }> {

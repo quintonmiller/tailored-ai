@@ -1,0 +1,66 @@
+name: daily-standup
+description: |
+  Generates a daily standup post at 8:45am: yesterday's commits, today's
+  open in_progress tasks, and any blockers. Delivered to Discord.
+
+executionMode: graph
+
+triggers:
+  - kind: cron
+    schedule: "45 8 * * MON-FRI"
+
+steps:
+  - name: recent_commits
+    type: shell
+    command: "git log --since=yesterday --pretty=format:'- %s' || true"
+    timeoutMs: 10000
+
+  - name: open_tasks
+    type: tool_call
+    tool: task_query
+    args:
+      status: ["in_progress", "blocked"]
+      limit: 30
+
+  - name: write
+    type: agent_run
+    agent: default
+    maxToolRounds: 1
+    prompt: |
+      Write a 3-section daily standup:
+
+        ## Yesterday
+        (summarize commits in 2-4 bullets)
+
+        ## Today
+        (list each in_progress task in one line)
+
+        ## Blockers
+        (list each blocked task with its blocked_reason; if none, write "none")
+
+      Commits:
+      ${steps.recent_commits}
+
+      Tasks:
+      ${steps.open_tasks}
+
+  - name: deliver
+    type: notify
+    channel: discord
+    message: |
+      📋 **Daily standup**
+
+      ${steps.write}
+
+graph:
+  nodes:
+    - { stepName: recent_commits, position: { x: 120, y: 100 } }
+    - { stepName: open_tasks,     position: { x: 120, y: 240 } }
+    - { stepName: write,          position: { x: 400, y: 170 } }
+    - { stepName: deliver,        position: { x: 660, y: 170 } }
+  edges:
+    - { from: __trigger__,    to: recent_commits }
+    - { from: __trigger__,    to: open_tasks }
+    - { from: recent_commits, to: write }
+    - { from: open_tasks,     to: write }
+    - { from: write,          to: deliver }

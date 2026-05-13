@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { resolveString, resolveValue } from "../scope.js";
 import type { StepContext, StepExecutor, StepResult } from "../engine.js";
 import type { ShellStep, WorkflowStepDef } from "../types.js";
-import type { Sandbox, SandboxHandle } from "../../sandboxes/interface.js";
+import type { Sandbox } from "../../sandboxes/interface.js";
 
 export interface ShellExecutorOptions {
   /** When set, commands route through this sandbox. The handle is shared across all shell steps in a run; the engine prepares/cleans it up. */
@@ -44,14 +44,23 @@ export class ShellExecutor implements StepExecutor {
   async execute(step: WorkflowStepDef, ctx: StepContext): Promise<StepResult> {
     const s = step as ShellStep;
     const command = String(resolveString(s.command, ctx.scope));
+
+    if (ctx.dryRun) {
+      console.log(`[dry-run] shell "${s.name}" skipped: ${command}`);
+      return { output: `[dry-run] would run: ${command}` };
+    }
     const cwd = s.cwd ? String(resolveString(s.cwd, ctx.scope)) : this.cwd;
     const stepEnv = (resolveValue(s.env ?? {}, ctx.scope) as Record<string, string>) ?? {};
     const env = { ...this.baseEnv, ...stepEnv };
     const timeoutMs = s.timeoutMs ?? this.defaultTimeoutMs;
 
-    const sandboxHandle = (ctx as StepContext & { sandboxHandle?: SandboxHandle }).sandboxHandle;
-    if (this.sandbox && sandboxHandle) {
-      const result = await this.sandbox.exec(sandboxHandle, command, {
+    // Prefer the run-level sandbox threaded onto ctx (set by the engine when
+    // WorkflowDefinition.sandbox is configured). Fall back to the executor's
+    // constructor sandbox for back-compat.
+    const sandbox = ctx.sandbox ?? this.sandbox;
+    const sandboxHandle = ctx.sandboxHandle;
+    if (sandbox && sandboxHandle) {
+      const result = await sandbox.exec(sandboxHandle, command, {
         cwd,
         env,
         timeoutMs,

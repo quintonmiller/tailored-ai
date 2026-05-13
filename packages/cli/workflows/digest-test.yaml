@@ -1,0 +1,62 @@
+name: digest-test
+description: "Smoke test of the morning-digest pattern: two parallel agent_runs,
+  a synthesize step, and a Discord message. Uses the default agent so it works
+  without web tools."
+triggers:
+  - kind: manual
+steps:
+  - name: cats
+    type: agent_run
+    agent: default
+    prompt: Write one short, fun, made-up fact about cats. Reply with just the fact,
+      no preamble.
+    maxToolRounds: 1
+  - name: dogs
+    type: agent_run
+    agent: default
+    prompt: Write one short, fun, made-up fact about dogs. Reply with just the fact,
+      no preamble.
+    maxToolRounds: 1
+  - name: synthesize
+    type: agent_run
+    agent: default
+    prompt: |-
+      Combine these two facts into a single playful sentence:
+      CATS: ${steps.cats}
+      DOGS: ${steps.dogs}
+      Reply with just the sentence.
+    maxToolRounds: 1
+  - name: publish
+    type: discord_message
+    message: |-
+      🌅 Digest smoke-test:
+      ${steps.synthesize}
+graph:
+  nodes:
+    - stepName: cats
+      position:
+        x: 240
+        y: 0
+    - stepName: dogs
+      position:
+        x: 240
+        y: 200
+    - stepName: synthesize
+      position:
+        x: 540
+        y: 100
+    - stepName: publish
+      position:
+        x: 820
+        y: 100
+  edges:
+    - from: __trigger__
+      to: cats
+    - from: __trigger__
+      to: dogs
+    - from: cats
+      to: synthesize
+    - from: dogs
+      to: synthesize
+    - from: synthesize
+      to: publish

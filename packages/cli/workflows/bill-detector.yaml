@@ -1,0 +1,106 @@
+name: bill-detector
+description: |
+  Polls Gmail every 30 minutes for new messages that look like bills. The
+  agent classifies each one as urgent / routine / probably-junk; condition
+  step branches and notify fans out accordingly. Urgent bills also get
+  recorded in the facts store so the morning-briefing picks them up.
+
+  Demonstrates: email_message trigger, condition routing, parallel notify
+  fan-out (graph mode), facts.set for cross-workflow durable state.
+executionMode: graph
+triggers:
+  - kind: email_message
+    query: newer_than:1d (subject:invoice OR subject:bill OR subject:payment OR
+      subject:"past due")
+    intervalSeconds: 1800
+steps:
+  - name: classify
+    type: agent_run
+    agent: default
+    maxToolRounds: 1
+    prompt: |
+      The following email arrived (query: "${input.query}"). Classify it as
+      exactly one of: urgent, routine, junk.
+
+      Email body:
+      ${input.message_body}
+
+      Reply with exactly one lowercase word: urgent, routine, or junk. No
+      explanation. No tool calls.
+  - name: route
+    type: condition
+    if: steps.classify == "urgent"
+    then:
+      - urgent_note
+      - save_urgent
+    else:
+      - routine_note
+      - junk_note
+  - name: urgent_note
+    type: notify
+    channel: discord
+    message: |
+      🚨 Urgent bill detected (message ${input.message_id}):
+
+      ${input.message_body}
+  - name: save_urgent
+    type: tool_call
+    tool: facts
+    args:
+      action: set
+      category: deadline
+      entity: bill_${input.message_id}
+      key: source
+      value: gmail:${input.message_id}
+      source: bill-detector
+  - name: routine_note
+    type: notify
+    channel: log
+    message: "📨 Routine bill noted: ${input.message_id}"
+  - name: junk_note
+    type: notify
+    channel: log
+    message: "🗑️ Skipped probable junk: ${input.message_id}"
+graph:
+  nodes:
+    - stepName: classify
+      position:
+        x: 307.0924293685825
+        y: 80.7421890827177
+    - stepName: route
+      position:
+        x: 532.1089024415122
+        y: 72.888744262355
+    - stepName: urgent_note
+      position:
+        x: 838.5250350190959
+        y: -44.96940715027336
+    - stepName: save_urgent
+      position:
+        x: 882.7899058247766
+        y: 78.60034049534606
+    - stepName: routine_note
+      position:
+        x: 836.3831864317242
+        y: 195.74454237885053
+    - stepName: junk_note
+      position:
+        x: 827.8157920822376
+        y: 332.86991789329244
+  edges:
+    - from: __trigger__
+      to: classify
+    - from: classify
+      to: route
+    - from: route
+      to: urgent_note
+      sourceHandle: "true"
+    - from: route
+      to: save_urgent
+      sourceHandle: "true"
+    - from: route
+      to: routine_note
+      sourceHandle: "false"
+    - from: route
+      to: junk_note
+      sourceHandle: "false"

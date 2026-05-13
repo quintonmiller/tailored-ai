@@ -17,10 +17,10 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
     server: { port: 3000, host: "0.0.0.0" },
     database: { path: "./agent.db" },
     providers: {
-      ollama: { baseUrl: "http://localhost:11434", defaultModel: "test-model" },
+      openai_compatible: { baseUrl: "http://localhost:11434/v1", defaultModel: "test-model" },
     },
     agent: {
-      defaultProvider: "ollama",
+      defaultProvider: "openai_compatible",
       extraInstructions: "Be helpful.",
       maxHistoryTokens: 2000,
       temperature: 0.3,
@@ -46,7 +46,7 @@ describe("resolveAgent", () => {
     const resolved = resolveAgent(undefined, config, tools);
 
     expect(resolved.model).toBe("test-model");
-    expect(resolved.provider).toBe("ollama");
+    expect(resolved.provider).toBe("openai_compatible");
     expect(resolved.instructions).toBe("Be helpful.");
     expect(resolved.tools).toEqual(tools);
     expect(resolved.temperature).toBe(0.3);

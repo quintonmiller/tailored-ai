@@ -1,0 +1,66 @@
+name: research-brief
+description: |
+  Manual workflow with typed inputs. The UI Run dialog renders a form
+  collecting topic and depth before kicking off. The researcher agent then
+  produces a structured brief and DMs it on Discord.
+
+  Demonstrates: inputs schema (required string + enum dropdown), Run dialog
+  rendering, payload validation on the HTTP route.
+
+executionMode: graph
+
+triggers:
+  - kind: manual
+
+inputs:
+  topic:
+    type: string
+    label: Topic to research
+    required: true
+    description: Free-form prompt. The researcher agent will run 1-2 web searches.
+  depth:
+    type: string
+    label: Depth
+    enum: ["quick", "deep"]
+    default: quick
+    description: "quick = single search, summary only. deep = follow-ups + open-questions list."
+
+steps:
+  - name: research
+    type: agent_run
+    agent: researcher
+    maxToolRounds: 5
+    prompt: |
+      Research the topic with ${input.depth} depth: ${input.topic}
+
+      Use web_search (1 call for quick, 2 for deep). Produce:
+
+        ## Summary
+        <1-2 sentences>
+
+        ## Key facts
+        - <bullet>
+        - <bullet>
+        - <bullet>
+
+        ## Open questions
+        - <bullet>
+        - <bullet>
+
+      No tool calls after composing the brief.
+
+  - name: deliver
+    type: notify
+    channel: discord
+    message: |
+      📚 Research brief — ${input.topic}
+
+      ${steps.research}
+
+graph:
+  nodes:
+    - { stepName: research, position: { x: 240, y: 100 } }
+    - { stepName: deliver,  position: { x: 540, y: 100 } }
+  edges:
+    - { from: __trigger__, to: research }
+    - { from: research,    to: deliver }

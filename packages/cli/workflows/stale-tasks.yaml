@@ -1,0 +1,66 @@
+name: stale-tasks
+description: |
+  Weekly Monday-morning sweep: surfaces tasks that have been in `backlog`
+  or `in_progress` without any update for > 7 days, and asks the user
+  which to keep / archive / promote.
+
+  Uses the form step so the response is captured as structured input
+  rather than free-text that the agent has to re-parse.
+
+executionMode: linear
+
+triggers:
+  - kind: cron
+    schedule: "0 8 * * MON"
+
+steps:
+  - name: list_stale
+    type: tool_call
+    tool: task_query
+    args:
+      status: ["backlog", "in_progress"]
+      updatedBefore: "7d"
+      limit: 25
+
+  - name: summarize
+    type: agent_run
+    agent: default
+    maxToolRounds: 1
+    prompt: |
+      Format this list of stale tasks as a numbered markdown list with
+      `[id] title — Nd idle, status` per line. Keep it scannable; no commentary.
+
+      Tasks: ${steps.list_stale}
+
+  - name: ask
+    type: form
+    prompt: |
+      Stale tasks (idle > 7d). Type a comma-separated list of task IDs to
+      take action on, plus the action.
+
+      ${steps.summarize}
+    fields:
+      ids:
+        type: string
+        label: Task IDs (comma-separated)
+        required: true
+      action:
+        type: string
+        label: Action
+        enum: ["archive", "promote", "keep"]
+        required: true
+    notify:
+      channel: discord
+      message: "🗓 Weekly stale-task review is ready in the UI."
+
+  - name: apply
+    type: agent_run
+    agent: default
+    maxToolRounds: 5
+    prompt: |
+      Apply the user's action to each of these tasks: ${steps.ask.fields.ids}
+      Action: ${steps.ask.fields.action}
+
+      For "archive": call `tasks` with action=update, status=archived
+      For "promote": status=in_progress
+      For "keep":   no-op (just confirm in the response)

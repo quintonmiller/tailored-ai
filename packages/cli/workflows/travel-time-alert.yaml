@@ -1,0 +1,45 @@
+name: travel-time-alert
+description: |
+  Calendar-driven travel alert. Fires 45 minutes before any meeting whose
+  title contains a recognized off-site keyword (e.g. "@office", "lunch",
+  "client"), checks current traffic for the listed location, and DMs a
+  "leave in N minutes" notice.
+
+  Today the workflow shells out to a `gmaps_time` custom tool placeholder.
+  Wire a real one (Google Distance Matrix or OpenStreetMap routing) via
+  `custom_tools` in config.yaml — see CLAUDE.md for the format.
+
+executionMode: linear
+
+triggers:
+  - kind: calendar_event
+    beforeMinutes: 45
+    titleContains: "@"
+    intervalSeconds: 300
+
+steps:
+  - name: compute
+    type: agent_run
+    agent: default
+    maxToolRounds: 3
+    prompt: |
+      Calendar event:
+        Title: ${input.title}
+        Location: ${input.location}
+        Starts: ${input.start}
+
+      1. Determine if the location is reachable in time given a typical
+         commute window. If the event has no location field, just confirm
+         the meeting is in 45 minutes and stop.
+      2. Otherwise call the `web_fetch` tool against a Google-Maps-like
+         URL or any travel-time service you have access to, infer the
+         "leave by" time, and produce a one-line summary.
+
+      Output exactly one line: "Leave by HH:MM (N min)".
+
+  - name: deliver
+    type: notify
+    channel: discord
+    message: |
+      🚗 ${input.title} — ${steps.compute}
+      Starts ${input.start}.

@@ -29,9 +29,9 @@ function buildConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
     server: { port: 3000, host: "0.0.0.0" },
     database: { path: ":memory:" },
-    providers: { ollama: { baseUrl: "http://x", defaultModel: "fake-model" } },
+    providers: { openai_compatible: { baseUrl: "http://x", defaultModel: "fake-model" } },
     agent: {
-      defaultProvider: "ollama",
+      defaultProvider: "openai_compatible",
       extraInstructions: "",
       maxHistoryTokens: 2000,
       maxContextTokens: 4096,

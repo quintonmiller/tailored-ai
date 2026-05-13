@@ -16,6 +16,8 @@ export interface Scope {
   env?: Record<string, string | undefined>;
   /** Loop iteration bindings, keyed by `loop.as`. */
   vars?: Record<string, unknown>;
+  /** Per-workflow encrypted secrets, decrypted at run start. Use `${secrets.NAME}`. */
+  secrets?: Record<string, string>;
 }
 
 const PLACEHOLDER = /\$\{([^}]+)\}/g;
@@ -62,6 +64,7 @@ export function lookup(path: string, scope: Scope): unknown {
   else if (head === "steps") current = scope.steps ?? {};
   else if (head === "prev") current = scope.prev;
   else if (head === "env") current = scope.env ?? {};
+  else if (head === "secrets") current = scope.secrets ?? {};
   else if (scope.vars && head in scope.vars) current = scope.vars[head];
   else return undefined;
   for (let i = 1; i < parts.length; i++) {

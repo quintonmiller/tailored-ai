@@ -34,31 +34,32 @@ export function ProjectSwitcher() {
     return null;
   }
 
+  // Simplified to two semantically-distinct states: "All" (no filter) or a
+  // specific project. The old "Global only" mode (un-scoped data only) was
+  // a confusing edge case that overlapped with "All" in practice — removed.
   return (
-    <select
-      className="project-switcher"
-      value={active ?? ""}
-      onChange={(e) => {
-        const v = e.target.value;
-        if (v === "") {
-          setActiveProjectId(null);
-          setActive(null);
-        } else {
-          setActiveProjectId(v);
-          setActive(v);
-        }
-      }}
-      title="Filter UI by project"
-    >
-      <option value="">All projects</option>
-      <option value="global">Global only</option>
-      <optgroup label="Projects">
-        {projects.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.title}
-          </option>
-        ))}
-      </optgroup>
-    </select>
+    <label className="project-switcher-wrap">
+      <span className="project-switcher-label">Scope:</span>
+      <select
+        className="project-switcher"
+        value={active ?? ""}
+        onChange={(e) => {
+          const v = e.target.value;
+          const next = v === "" ? null : v;
+          setActiveProjectId(next);
+          setActive(next);
+        }}
+        title="Scope the UI to a specific project"
+      >
+        <option value="">All projects</option>
+        <optgroup label="Projects">
+          {projects.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.title}
+            </option>
+          ))}
+        </optgroup>
+      </select>
+    </label>
   );
 }

@@ -9,7 +9,10 @@ import {
   type WorkflowRun,
   type WorkflowTrigger,
 } from "../db/workflow-queries.js";
+import { cancelOrphanedForms } from "../db/form-queries.js";
 import { evaluateExpression } from "./expression.js";
+import { FormRegistry } from "./form-registry.js";
+import { loadSecretsMap } from "./secrets.js";
 import { resolveValue, type Scope } from "./scope.js";
 import { KeyedSemaphore, Semaphore } from "./semaphore.js";
 import type { WorkflowRegistry } from "./registry.js";
@@ -19,8 +22,10 @@ import type {
   RetryPolicy,
   StepType,
   WorkflowDefinition,
+  WorkflowGraph,
   WorkflowStepDef,
 } from "./types.js";
+import type { Sandbox, SandboxHandle, SandboxKind } from "../sandboxes/interface.js";
 
 export interface StepContext {
   runId: string;
@@ -29,6 +34,26 @@ export interface StepContext {
   signal: AbortSignal;
   engine: WorkflowEngine;
   parentStepId: string | null;
+  /**
+   * Dry-run mode: side-effecting executors (notify, discord_message,
+   * http_request with mutating method, shell, tool_call) check this and
+   * log-only instead of executing. Read-only ops still run normally so the
+   * pipeline produces realistic intermediate values.
+   */
+  dryRun?: boolean;
+  /**
+   * Run-level sandbox + handle when `WorkflowDefinition.sandbox` is set.
+   * Steps that route through a sandbox (shell, worktree) read these to share
+   * one container across the whole run. Undefined for `host` (default) so the
+   * existing direct-execution paths stay.
+   */
+  sandbox?: Sandbox;
+  sandboxHandle?: SandboxHandle;
+}
+
+export interface RunOptions {
+  /** When true, side-effecting executors log instead of executing. */
+  dryRun?: boolean;
 }
 
 export interface StepResult {
@@ -50,6 +75,12 @@ export interface EngineOptions {
   maxConcurrent?: number;
   /** Per-agent cap on concurrent agent_run steps. Looked up by agent name. */
   agentConcurrency?: (agentName: string) => number;
+  /**
+   * Factory for run-level sandboxes. Called once per run when the workflow
+   * definition sets `sandbox`. Omitting it (or returning a HostSandbox) keeps
+   * the existing host-only behavior. Tests usually leave it unset.
+   */
+  createSandbox?: (kind: SandboxKind) => Sandbox;
   /** Override clock for tests. */
   now?: () => Date;
 }
@@ -71,6 +102,7 @@ export class DeadlineError extends WorkflowError {
 interface RunHandle {
   abort: AbortController;
   workflowName: string;
+  dryRun: boolean;
 }
 
 export type EngineEvent =
@@ -113,6 +145,10 @@ export class WorkflowEngine {
   private active = new Map<string, RunHandle>();
   private now: () => Date;
   private listeners = new Set<EventListener>();
+  private createSandbox: ((kind: SandboxKind) => Sandbox) | undefined;
+  /** Sandbox + handle prepared for an active run; cleaned up in `runWorkflow`'s finally. */
+  private runSandboxes = new Map<string, { sandbox: Sandbox; handle: SandboxHandle }>();
+  readonly forms: FormRegistry;
 
   constructor(opts: EngineOptions) {
     this.db = opts.db;
@@ -121,6 +157,8 @@ export class WorkflowEngine {
     const cap = opts.agentConcurrency ?? (() => 2);
     this.agentSemaphores = new KeyedSemaphore(cap);
     this.now = opts.now ?? (() => new Date());
+    this.createSandbox = opts.createSandbox;
+    this.forms = new FormRegistry(this.db);
     for (const exec of opts.executors ?? []) this.registerExecutor(exec);
   }
 
@@ -130,6 +168,11 @@ export class WorkflowEngine {
 
   hasExecutor(type: StepType): boolean {
     return this.executors.has(type);
+  }
+
+  /** Snapshot of currently-registered executors. Used by the resource registry mirror. */
+  listExecutors(): StepExecutor[] {
+    return Array.from(this.executors.values());
   }
 
   /** Subscribe to engine events. Returns unsubscribe. */
@@ -158,6 +201,9 @@ export class WorkflowEngine {
     const handle = this.active.get(runId);
     if (!handle) return false;
     handle.abort.abort();
+    // Best-effort: tear down any pending-form waiters tied to this run so
+    // the executor unblocks immediately instead of waiting on the abort hook.
+    this.forms.cancelRun(runId);
     return true;
   }
 
@@ -169,6 +215,7 @@ export class WorkflowEngine {
     name: string,
     input: unknown = {},
     trigger: WorkflowTrigger = "programmatic",
+    options: RunOptions = {},
   ): Promise<WorkflowRun> {
     const reg = this.registry.get(name);
     if (!reg) throw new WorkflowError(`unknown workflow: ${name}`);
@@ -182,7 +229,7 @@ export class WorkflowEngine {
     });
 
     const abort = new AbortController();
-    this.active.set(run.id, { abort, workflowName: name });
+    this.active.set(run.id, { abort, workflowName: name, dryRun: options.dryRun === true });
 
     let runRelease: (() => void) | null = null;
     let workflowDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
@@ -196,12 +243,18 @@ export class WorkflowEngine {
         workflowDeadlineTimer = setTimeout(() => abort.abort(), def.deadlineMs);
       }
 
+      await this.prepareRunSandbox(run.id, def);
+
       const scope: Scope = {
         input,
         steps: {},
         env: process.env as Record<string, string | undefined>,
+        secrets: this.loadSecretsForRun(name),
       };
-      const outputs = await this.runStepList(def.steps, scope, abort.signal, run.id, null);
+      const outputs =
+        def.executionMode === "graph" && def.graph
+          ? await this.runStepGraph(def.steps, def.graph, scope, abort.signal, run.id, null)
+          : await this.runStepList(def.steps, scope, abort.signal, run.id, null);
 
       const finalOutput = outputs[def.steps[def.steps.length - 1]?.name] ?? null;
       const finished = updateWorkflowRun(this.db, run.id, {
@@ -225,8 +278,37 @@ export class WorkflowEngine {
       return finished!;
     } finally {
       if (workflowDeadlineTimer) clearTimeout(workflowDeadlineTimer);
+      await this.cleanupRunSandbox(run.id);
       runRelease?.();
       this.active.delete(run.id);
+    }
+  }
+
+  /**
+   * Prepare a run-level sandbox when the workflow declares one. Container
+   * setup happens once per run; the handle is shared with every step via
+   * `StepContext`. Missing factory or "host" kind is a no-op.
+   */
+  private async prepareRunSandbox(runId: string, def: WorkflowDefinition): Promise<void> {
+    if (!def.sandbox || def.sandbox === "host") return;
+    if (!this.createSandbox) {
+      throw new WorkflowError(
+        `workflow "${def.name}" requests sandbox "${def.sandbox}" but no sandbox factory was provided to the engine`,
+      );
+    }
+    const sandbox = this.createSandbox(def.sandbox);
+    const handle = await sandbox.prepare({ cwd: process.cwd() });
+    this.runSandboxes.set(runId, { sandbox, handle });
+  }
+
+  private async cleanupRunSandbox(runId: string): Promise<void> {
+    const entry = this.runSandboxes.get(runId);
+    if (!entry) return;
+    this.runSandboxes.delete(runId);
+    try {
+      await entry.sandbox.cleanup(entry.handle);
+    } catch (err) {
+      console.warn(`[workflow] sandbox cleanup failed: ${(err as Error).message}`);
     }
   }
 
@@ -285,6 +367,150 @@ export class WorkflowEngine {
   }
 
   /**
+   * Execute steps as a DAG derived from `graph.edges`. Steps whose
+   * dependencies have all completed run concurrently as a "wave"; the next
+   * wave starts only once the current one settles.
+   *
+   * Differences from runStepList:
+   * - Sibling steps within a wave do NOT see each other on `scope.steps`
+   *   (matches the explicit `parallel` step's semantics — prevents race-y
+   *   cross-reads). Downstream waves see all prior outputs.
+   * - `prev` is set to the most-recently-completed step's output (best effort;
+   *   ambiguous when a wave has multiple completions, so callers should use
+   *   `steps.NAME` rather than `prev` in graph mode).
+   * - Condition steps still set skipNames; the `__trigger__` source is treated
+   *   as always-resolved.
+   */
+  async runStepGraph(
+    steps: WorkflowStepDef[],
+    graph: WorkflowGraph,
+    parentScope: Scope,
+    signal: AbortSignal,
+    runId: string,
+    parentStepId: string | null,
+  ): Promise<Record<string, unknown>> {
+    const byName = new Map(steps.map((s) => [s.name, s] as const));
+    const deps = buildDependencyMap(steps, graph);
+
+    const outputs: Record<string, unknown> = { ...(parentScope.steps ?? {}) };
+    const skipNames = new Set<string>();
+    const completed = new Set<string>(["__trigger__"]);
+    let prev: unknown = parentScope.prev;
+
+    while (completed.size - 1 < steps.length) {
+      if (signal.aborted) throw new CancelledError();
+
+      // Steps whose deps are all satisfied (or skipped) and that haven't run.
+      const ready: WorkflowStepDef[] = [];
+      for (const step of steps) {
+        if (completed.has(step.name)) continue;
+        const need = deps.get(step.name) ?? new Set();
+        let ok = true;
+        for (const d of need) {
+          if (!completed.has(d)) {
+            ok = false;
+            break;
+          }
+        }
+        if (ok) ready.push(step);
+      }
+
+      if (ready.length === 0) {
+        // Either a cycle or unreachable nodes — mark the remainder skipped.
+        for (const s of steps) {
+          if (!completed.has(s.name)) {
+            const stepRow = recordWorkflowStep(this.db, {
+              run_id: runId,
+              step_name: s.name,
+              step_type: s.type,
+              parent_step_id: parentStepId,
+            });
+            updateWorkflowStep(this.db, stepRow.id, {
+              status: "skipped",
+              finished_at: this.now().toISOString(),
+            });
+            this.emit({ type: "step.skipped", runId, stepId: stepRow.id, stepName: s.name });
+            outputs[s.name] = null;
+            completed.add(s.name);
+          }
+        }
+        break;
+      }
+
+      // Skipped steps don't run — record + emit + mark completed in this pass.
+      const toRun: WorkflowStepDef[] = [];
+      for (const step of ready) {
+        if (skipNames.has(step.name)) {
+          const stepRow = recordWorkflowStep(this.db, {
+            run_id: runId,
+            step_name: step.name,
+            step_type: step.type,
+            parent_step_id: parentStepId,
+          });
+          updateWorkflowStep(this.db, stepRow.id, {
+            status: "skipped",
+            finished_at: this.now().toISOString(),
+          });
+          this.emit({ type: "step.skipped", runId, stepId: stepRow.id, stepName: step.name });
+          outputs[step.name] = null;
+          completed.add(step.name);
+        } else {
+          toRun.push(step);
+        }
+      }
+
+      if (toRun.length === 0) continue;
+
+      // Snapshot scope shared by everyone in this wave — they don't see each
+      // other's outputs (deliberate; same posture as ParallelExecutor).
+      const waveScope: Scope = {
+        ...parentScope,
+        steps: { ...outputs },
+        prev,
+      };
+
+      const results = await Promise.allSettled(
+        toRun.map((step) => this.runStep(step, waveScope, signal, runId, parentStepId)),
+      );
+
+      const errors: string[] = [];
+      for (let i = 0; i < toRun.length; i++) {
+        const step = toRun[i];
+        const result = results[i];
+        if (result.status === "fulfilled") {
+          outputs[step.name] = result.value.output;
+          prev = result.value.output;
+          if (result.value.skip) for (const n of result.value.skip) skipNames.add(n);
+          completed.add(step.name);
+        } else {
+          const err = result.reason as Error;
+          if (err instanceof CancelledError || signal.aborted) throw new CancelledError();
+          errors.push(`${step.name}: ${err.message}`);
+          // Mark completed-with-failure so the wave can move on; downstream
+          // dependents will be unreachable and end up skipped above.
+          completed.add(step.name);
+          outputs[step.name] = null;
+        }
+      }
+
+      // If any non-`onError: continue` step failed in this wave, the engine's
+      // runStep already rethrew — but Promise.allSettled swallowed it. We
+      // surface the first failure so the run is marked failed.
+      if (errors.length > 0) {
+        const firstFail = toRun.find((s, i) => results[i].status === "rejected" && (s.onError ?? "fail") !== "continue");
+        if (firstFail) {
+          throw new Error(errors.join("; "));
+        }
+        // Otherwise all failures were `continue` — keep going.
+      }
+      // Mute the unused-name lint when no validation fails.
+      void byName;
+    }
+
+    return outputs;
+  }
+
+  /**
    * Execute a single step with retry, onError, and deadline policies.
    * Persists state transitions to workflow_steps. Returns the step's
    * output and any sibling skip set.
@@ -328,6 +554,7 @@ export class WorkflowEngine {
         attempt,
       });
       try {
+        const sb = this.runSandboxes.get(runId);
         const result = await this.executeWithDeadline(step, {
           runId,
           stepId: stepRow.id,
@@ -335,6 +562,9 @@ export class WorkflowEngine {
           signal,
           engine: this,
           parentStepId,
+          dryRun: this.active.get(runId)?.dryRun === true,
+          sandbox: sb?.sandbox,
+          sandboxHandle: sb?.handle,
         });
         updateWorkflowStep(this.db, stepRow.id, {
           status: "completed",
@@ -454,12 +684,40 @@ export class WorkflowEngine {
       updateWorkflowRun(db, r.id, { status: "interrupted", finished_at: now });
       count++;
     }
+    // Forms attached to interrupted runs would otherwise linger as "pending"
+    // and confuse the UI. Sweep them.
+    cancelOrphanedForms(db);
     return count;
   }
 
   /** Test helper. */
   getRun(id: string): WorkflowRun | null {
     return getWorkflowRun(this.db, id);
+  }
+
+  /**
+   * Load secrets for a workflow into a name → value map. Errors are
+   * swallowed (with a console warning) so a broken encryption key doesn't
+   * crash unrelated workflows.
+   */
+  private loadSecretsForRun(workflowName: string): Record<string, string> {
+    try {
+      return loadSecretsMap(this.db, workflowName);
+    } catch (err) {
+      console.warn(`[workflow] failed to load secrets for "${workflowName}": ${(err as Error).message}`);
+      return {};
+    }
+  }
+
+  /**
+   * Test/debug helper: returns the per-step predecessor set the graph runner
+   * uses. Exposed so unit tests can pin the exact dependencies they expect.
+   */
+  static computeDependencies(
+    steps: WorkflowStepDef[],
+    graph: WorkflowGraph,
+  ): Map<string, Set<string>> {
+    return buildDependencyMap(steps, graph);
   }
 
   private sleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -475,4 +733,32 @@ export class WorkflowEngine {
       signal.addEventListener("abort", onAbort, { once: true });
     });
   }
+}
+
+/**
+ * Build a per-step set of predecessor step names from the workflow graph.
+ * Edges from `__trigger__` mark a step as an entry point with no real
+ * dependency (treated as always-resolved). Self-loops are filtered. Edges
+ * pointing at unknown steps are ignored.
+ */
+function buildDependencyMap(
+  steps: WorkflowStepDef[],
+  graph: WorkflowGraph,
+): Map<string, Set<string>> {
+  const valid = new Set(steps.map((s) => s.name));
+  const deps = new Map<string, Set<string>>();
+  for (const s of steps) deps.set(s.name, new Set());
+  for (const edge of graph.edges ?? []) {
+    if (!valid.has(edge.to)) continue;
+    if (edge.from === edge.to) continue;
+    if (edge.from === "__trigger__") {
+      // Entry points have no real predecessors; the graph runner treats
+      // __trigger__ as always-resolved so we just leave the dep set empty
+      // when only __trigger__ feeds the step.
+      continue;
+    }
+    if (!valid.has(edge.from)) continue;
+    deps.get(edge.to)!.add(edge.from);
+  }
+  return deps;
 }

@@ -1,0 +1,72 @@
+name: stripe-webhook-relay
+description: |
+  Stripe (or any webhook source) POSTs to /api/workflows/stripe-webhook-relay/run
+  with a bearer token. Filter for charge.succeeded events, look up the customer
+  in the facts store, and post a Slack message via http_request using a stored
+  secret.
+
+  Demonstrates: webhook trigger with auth token, condition routing, facts.get,
+  http_request with secrets reference, dry-run friendly (POST is suppressed).
+
+  Setup:
+    1. In the Inspector → Trigger panel, click "Generate" to mint a token.
+       Copy the cURL example into your Stripe → Developers → Webhooks endpoint
+       configuration.
+    2. In the Inspector → Secrets panel, add a "SLACK_WEBHOOK_URL" secret.
+
+executionMode: graph
+
+triggers:
+  - kind: webhook
+
+inputs:
+  type:
+    type: string
+    label: Stripe event type
+    description: Auto-supplied by Stripe. Manual runs can set it to "charge.succeeded" for testing.
+  data:
+    type: json
+    label: Event payload
+
+steps:
+  - name: filter
+    type: condition
+    if: 'input.type == "charge.succeeded"'
+    then: ["lookup"]
+    else: ["ignored"]
+
+  - name: ignored
+    type: notify
+    channel: log
+    message: "Ignoring Stripe event type=${input.type}"
+
+  - name: lookup
+    type: tool_call
+    tool: facts
+    args:
+      action: get
+      category: customer
+      entity: ${input.data.customer}
+      key: name
+
+  - name: notify_slack
+    type: http_request
+    method: POST
+    url: ${secrets.SLACK_WEBHOOK_URL}
+    headers:
+      Content-Type: application/json
+    body:
+      text: "💰 Charge succeeded for ${steps.lookup} (customer id: ${input.data.customer}, amount: ${input.data.amount})"
+    timeoutMs: 10000
+
+graph:
+  nodes:
+    - { stepName: filter,       position: { x: 200, y: 140 } }
+    - { stepName: ignored,      position: { x: 460, y: 280 } }
+    - { stepName: lookup,       position: { x: 460, y: 60 } }
+    - { stepName: notify_slack, position: { x: 760, y: 60 } }
+  edges:
+    - { from: __trigger__, to: filter }
+    - { from: filter,      to: lookup,       sourceHandle: "true" }
+    - { from: filter,      to: ignored,      sourceHandle: "false" }
+    - { from: lookup,      to: notify_slack }

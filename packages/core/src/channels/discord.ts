@@ -816,9 +816,11 @@ export class DiscordChannel implements Channel {
     let messagesTokens = 0;
     for (const msg of messages) messagesTokens += estimateTokens(msg);
 
-    // Total and context window
+    // Total and context window. Prefer a per-model override from agent.models[];
+    // fall back to the global agent.maxContextTokens.
     const totalTokens = basePromptTokens + contextTokens + toolsTokens + messagesTokens;
-    const maxTokens = config.agent.maxContextTokens;
+    const activeModelEntry = config.agent.models?.find((m) => m.model === model);
+    const maxTokens = activeModelEntry?.maxContextTokens ?? config.agent.maxContextTokens;
     const pct = Math.round((totalTokens / maxTokens) * 100);
 
     const fmtK = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}K` : `${n}`);

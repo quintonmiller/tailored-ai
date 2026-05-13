@@ -1,0 +1,87 @@
+name: morning-briefing
+description: |
+  Cron fires every weekday at 7am. Three independent steps run in parallel:
+  weather fetch (http_request), upcoming-deadline lookup (facts store), and a
+  research scan (web_search via researcher agent). A fourth step synthesizes
+  the three into one digest and DMs it to your Discord owner.
+
+  Demonstrates: schedule DSL, executionMode: graph (real parallel fan-out),
+  http_request step, facts tool, notify multi-channel step.
+
+executionMode: graph
+
+triggers:
+  - kind: cron
+    schedule: weekdays at 7am
+
+steps:
+  - name: weather
+    type: http_request
+    url: https://api.open-meteo.com/v1/forecast?latitude=40.7128&longitude=-74.006&current=temperature_2m,weathercode&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode&timezone=auto&forecast_days=1
+    timeoutMs: 8000
+
+  - name: deadlines
+    type: tool_call
+    tool: facts
+    args:
+      action: search
+      query: deadline
+      limit: 20
+
+  - name: news
+    type: agent_run
+    agent: researcher
+    maxToolRounds: 3
+    prompt: |
+      One web_search call for "top tech news today", then summarize the 3 most
+      relevant headlines as bullets. Do not fetch full pages. Stop after the
+      summary.
+
+  - name: synthesize
+    type: agent_run
+    agent: default
+    maxToolRounds: 1
+    prompt: |
+      Compose a brief morning briefing from these three inputs.
+
+      WEATHER (Open-Meteo JSON):
+      ${steps.weather.body}
+
+      UPCOMING DEADLINES (from facts store):
+      ${steps.deadlines}
+
+      NEWS:
+      ${steps.news}
+
+      Format:
+        ## Weather
+        <one line — current temp + today's high/low + rain note>
+
+        ## On your plate today
+        <bullet per deadline, leading with the most urgent; "(none on file)" if empty>
+
+        ## News
+        <3 bullets>
+
+      No tool calls. No preamble.
+
+  - name: send
+    type: notify
+    channel: discord
+    message: "🌅 ${steps.synthesize}"
+
+graph:
+  nodes:
+    - { stepName: weather,    position: { x: 240, y: 0 } }
+    - { stepName: deadlines,  position: { x: 240, y: 140 } }
+    - { stepName: news,       position: { x: 240, y: 280 } }
+    - { stepName: synthesize, position: { x: 540, y: 140 } }
+    - { stepName: send,       position: { x: 820, y: 140 } }
+  edges:
+    - { from: __trigger__, to: weather }
+    - { from: __trigger__, to: deadlines }
+    - { from: __trigger__, to: news }
+    - { from: weather,     to: synthesize }
+    - { from: deadlines,   to: synthesize }
+    - { from: news,        to: synthesize }
+    - { from: synthesize,  to: send }
