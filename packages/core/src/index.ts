@@ -155,6 +155,12 @@ export {
 } from "./projects/resolve.js";
 export { AutopilotWorker, buildTaskPrompt } from "./autopilot/worker.js";
 export type { AutopilotWorkerOptions } from "./autopilot/worker.js";
+export { ExploratoryWorker } from "./exploratory/worker.js";
+export type {
+  ExploratoryWorkerOptions,
+  ExploratoryActivity,
+  SkipReason as ExploratorySkipReason,
+} from "./exploratory/worker.js";
 export { buildMorningDigest, recordDigestRun } from "./autopilot/digest.js";
 export type { DigestResult, DigestSection } from "./autopilot/digest.js";
 export type { AutopilotSettings, TokenUsageInput, BudgetStatus } from "./db/autopilot-queries.js";
