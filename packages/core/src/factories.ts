@@ -32,6 +32,8 @@ import { WebSearchTool } from "./tools/web-search.js";
 import { WriteTool } from "./tools/write.js";
 import { OpenAIProvider } from "./providers/openai.js";
 import { AnthropicProvider } from "./providers/anthropic.js";
+import type { EmbeddingProvider } from "./providers/embedding.js";
+import { OpenAICompatibleEmbeddingProvider } from "./providers/openai-embedding.js";
 import type { AgentRuntime } from "./runtime.js";
 
 export interface CreateToolsOptions {
@@ -40,6 +42,27 @@ export interface CreateToolsOptions {
   db?: import("better-sqlite3").Database;
   /** Override the task backend. Defaults to `createTaskBackend(config, db)` when `db` is provided. */
   taskBackend?: TaskBackend;
+  /** Optional embedding provider getter for semantic recall. */
+  getEmbedder?: () => EmbeddingProvider | undefined;
+}
+
+/**
+ * Build an embedding provider from config. Returns undefined when embeddings
+ * are disabled (the default) or required config is missing.
+ */
+export function createEmbedder(config: AgentConfig): EmbeddingProvider | undefined {
+  const cfg = config.memory?.embeddings;
+  if (!cfg?.enabled) return undefined;
+  if (!cfg.baseUrl || !cfg.model) {
+    console.warn("[factories] memory.embeddings.enabled is true but baseUrl/model missing — disabling embeddings");
+    return undefined;
+  }
+  return new OpenAICompatibleEmbeddingProvider({
+    baseUrl: cfg.baseUrl,
+    defaultModel: cfg.model,
+    apiKey: cfg.apiKey,
+    dim: cfg.dim,
+  });
 }
 
 export function createTools(
@@ -72,7 +95,13 @@ export function createTools(
     tools.push(new FactsTool(opts.db));
   }
   if (config.tools.recall?.enabled !== false && opts?.db) {
-    tools.push(new RecallTool(opts.db, { defaultTtlDays: config.tools.recall?.defaultTtlDays }));
+    tools.push(
+      new RecallTool(opts.db, {
+        defaultTtlDays: config.tools.recall?.defaultTtlDays,
+        getEmbedder: opts.getEmbedder,
+        embedModel: config.memory?.embeddings?.model,
+      }),
+    );
   }
   if (config.tools.tasks?.enabled !== false) {
     const backend = opts?.taskBackend ?? (opts?.db ? createTaskBackend(config, opts.db) : undefined);

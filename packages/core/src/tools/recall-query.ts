@@ -1,12 +1,14 @@
 import type Database from "better-sqlite3";
+import { semanticSearch } from "../db/chunk-queries.js";
 import { listFacts, type Fact } from "../db/fact-queries.js";
 import { listNotes, type Note } from "../db/note-queries.js";
+import type { EmbeddingProvider } from "../providers/embedding.js";
 
 export type Tier = "short" | "long";
 
 export interface RecallHit {
   tier: Tier;
-  source: string;       // note id, or facts label "category:entity/key"
+  source: string;       // note id, or facts label "category:entity/key", or chunk source
   score: number;        // 0..1
   snippet: string;      // short preview of the matching content
   createdAt: string;
@@ -17,6 +19,13 @@ export interface RecallQueryOptions {
   tier?: "any" | Tier;
   projectId?: string | null;
   limit?: number;
+  /** When provided, also runs a semantic search against memory_chunks and
+   * merges hits into the ranked union. Failures are swallowed; semantic
+   * results never block keyword results. */
+  embedder?: EmbeddingProvider;
+  embedModel?: string;
+  /** Minimum cosine similarity to consider a chunk match (default 0.3). */
+  semanticMinScore?: number;
 }
 
 /**
@@ -82,8 +91,13 @@ function factSnippet(f: Fact): string {
 
 /**
  * Unified keyword search across notes (short-term) and facts (long-term).
- * Returns hits ranked by score descending, ties broken by recency. M5 will
- * extend this to merge in semantic-similarity scores from memory_chunks.
+ * When `embedder` is supplied, also runs a semantic search across
+ * memory_chunks and merges the hits by score. Returns hits ranked by score
+ * descending, ties broken by recency.
+ *
+ * For backwards compat, callers can keep using `recallQuery` synchronously
+ * — when no embedder is passed, the function is fully synchronous-equivalent.
+ * To opt into semantic search, use `recallQueryAsync`.
  */
 export function recallQuery(db: Database.Database, opts: RecallQueryOptions): RecallHit[] {
   const terms = tokenize(opts.query);
@@ -138,6 +152,71 @@ export function recallQuery(db: Database.Database, opts: RecallQueryOptions): Re
     return b.createdAt.localeCompare(a.createdAt);
   });
   return hits.slice(0, limit);
+}
+
+/**
+ * Async variant that adds semantic-search hits from memory_chunks into the
+ * ranked union. Falls back gracefully when the embedder fails — keyword
+ * results are always returned, even if semantic blows up.
+ */
+export async function recallQueryAsync(
+  db: Database.Database,
+  opts: RecallQueryOptions,
+): Promise<RecallHit[]> {
+  const keyword = recallQuery(db, opts);
+
+  if (!opts.embedder || !opts.query.trim()) return keyword;
+  // Tier filter applies to semantic too — chunks live in the long-term tier.
+  if (opts.tier === "short") return keyword;
+
+  let chunkHits: RecallHit[] = [];
+  try {
+    const embed = await opts.embedder.embed([opts.query], { model: opts.embedModel });
+    const queryVec = embed.vectors[0];
+    if (queryVec) {
+      const semanticHits = semanticSearch(db, queryVec, {
+        projectId: opts.projectId ?? null,
+        limit: opts.limit ?? 5,
+        minScore: opts.semanticMinScore ?? 0.3,
+      });
+      chunkHits = semanticHits.map((h) => ({
+        tier: "long" as Tier,
+        source: h.chunk.source,
+        score: h.score,
+        snippet: chunkSnippet(h.chunk.content),
+        createdAt: h.chunk.created_at,
+      }));
+    }
+  } catch (err) {
+    console.error("[recall] semantic search failed:", (err as Error).message);
+  }
+
+  // Merge: dedupe by source — if a chunk's source matches a note id ("note:X"
+  // vs "X"), prefer the higher score. Distinct sources just join.
+  const bySource = new Map<string, RecallHit>();
+  for (const h of [...keyword, ...chunkHits]) {
+    const key = canonicalSourceKey(h);
+    const existing = bySource.get(key);
+    if (!existing || h.score > existing.score) bySource.set(key, h);
+  }
+  const merged = Array.from(bySource.values());
+  merged.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return b.createdAt.localeCompare(a.createdAt);
+  });
+  return merged.slice(0, opts.limit ?? 5);
+}
+
+function chunkSnippet(content: string): string {
+  const line = content.split("\n").find((l) => l.trim().length > 0) ?? content;
+  return line.length > 160 ? `${line.slice(0, 160)}…` : line;
+}
+
+function canonicalSourceKey(h: RecallHit): string {
+  // A note's keyword hit has source = "note_abc12345"; its chunk has
+  // source = "note:note_abc12345". Normalize so they collapse.
+  if (h.source.startsWith("note:")) return h.source.slice("note:".length);
+  return h.source;
 }
 
 export function formatHits(hits: RecallHit[]): string {

@@ -22,6 +22,7 @@ import {
   AutopilotWorker,
   createTools,
   createProvider,
+  createEmbedder,
   createMetaTools,
   createWorkflowEngine,
   listSessions,
@@ -607,7 +608,7 @@ async function main() {
     });
 
   const runtime = new AgentRuntime(
-    { configPath, db, contextDir, kbDir, createTools: toolFactory, createProvider },
+    { configPath, db, contextDir, kbDir, createTools: toolFactory, createProvider, createEmbedder },
     (path) => loadConfig(path),
     config,
   );

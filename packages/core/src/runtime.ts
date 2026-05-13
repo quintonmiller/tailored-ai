@@ -35,8 +35,10 @@ export interface RuntimeOptions {
   db: Database.Database;
   contextDir: string;
   kbDir: string;
-  createTools: (config: AgentConfig, contextDir: string, configPath?: string, opts?: { db?: Database.Database; getDiscord?: () => any; getOwnerId?: () => string | undefined; taskBackend?: TaskBackend }) => Tool[];
+  createTools: (config: AgentConfig, contextDir: string, configPath?: string, opts?: { db?: Database.Database; getDiscord?: () => any; getOwnerId?: () => string | undefined; taskBackend?: TaskBackend; getEmbedder?: () => import("./providers/embedding.js").EmbeddingProvider | undefined }) => Tool[];
   createProvider: (config: AgentConfig) => { provider: AIProvider; model: string };
+  /** Optional embedding-provider factory. Returns undefined when embeddings are disabled. */
+  createEmbedder?: (config: AgentConfig) => import("./providers/embedding.js").EmbeddingProvider | undefined;
 }
 
 export class AgentRuntime {
@@ -60,6 +62,8 @@ export class AgentRuntime {
   private _metaTools: Tool[] = [];
   private _createTools: RuntimeOptions["createTools"];
   private _createProvider: RuntimeOptions["createProvider"];
+  private _createEmbedder: RuntimeOptions["createEmbedder"];
+  private _embedder: import("./providers/embedding.js").EmbeddingProvider | undefined;
   private _loadConfig: (path: string) => AgentConfig;
   private _toolRegistry: ToolRegistry = new ToolRegistry();
   private _providerRegistry: ProviderRegistry = new ProviderRegistry();
@@ -90,15 +94,18 @@ export class AgentRuntime {
     this.kbDir = opts.kbDir;
     this._createTools = opts.createTools;
     this._createProvider = opts.createProvider;
+    this._createEmbedder = opts.createEmbedder;
     this._loadConfig = loadConfig;
     this._activeProject = initialProject ?? null;
 
     const merged = mergeProjectOverlay(initialConfig, this._activeProject?.overlay);
     this._config = merged;
     this._taskBackend = createTaskBackend(merged, opts.db);
+    this._embedder = opts.createEmbedder?.(merged);
     this._tools = opts.createTools(merged, opts.contextDir, opts.configPath, {
       db: opts.db,
       taskBackend: this._taskBackend,
+      getEmbedder: () => this._embedder,
     }) ?? [];
     for (const tool of this._tools) this._toolRegistry.registerBuiltin(tool);
     const { provider, model } = opts.createProvider(merged);
@@ -160,6 +167,10 @@ export class AgentRuntime {
   }
   getTaskBackend(): TaskBackend {
     return this._taskBackend;
+  }
+  /** Returns the configured embedding provider, or undefined when embeddings are disabled. */
+  getEmbedder(): import("./providers/embedding.js").EmbeddingProvider | undefined {
+    return this._embedder;
   }
   /** Expose the underlying tool resource registry for skills, agent-authored tools, and inspection. */
   getToolRegistry(): ToolRegistry {
@@ -246,9 +257,11 @@ export class AgentRuntime {
       }
 
       const taskBackend = createTaskBackend(config, this.db);
+      const embedder = this._createEmbedder?.(config);
       const tools = this._createTools(config, this.contextDir, this.configPath, {
         db: this.db,
         taskBackend,
+        getEmbedder: () => embedder,
       }) ?? [];
       const { provider, model } = this._createProvider(config);
       // Clean up old tools that have a destroy hook (e.g. browser processes).
@@ -271,6 +284,7 @@ export class AgentRuntime {
       this._tools = tools;
       this._providerRegistry = newProviderRegistry;
       this._taskBackend = taskBackend;
+      this._embedder = embedder;
       this._provider = provider;
       this._model = model;
       this._generation++;

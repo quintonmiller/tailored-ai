@@ -338,12 +338,43 @@ export {
 export { RecallTool } from "./tools/recall.js";
 export {
   recallQuery,
+  recallQueryAsync,
   formatHits,
   tokenize,
   type RecallHit,
   type RecallQueryOptions,
   type Tier as RecallTier,
 } from "./tools/recall-query.js";
+export {
+  type EmbeddingProvider,
+  type EmbedOptions,
+  type EmbedResult,
+  vectorToBlob,
+  blobToVector,
+  cosine,
+} from "./providers/embedding.js";
+export {
+  OpenAICompatibleEmbeddingProvider,
+  type OpenAICompatibleEmbeddingOptions,
+} from "./providers/openai-embedding.js";
+export {
+  createChunk,
+  getChunk,
+  listChunksBySource,
+  deleteChunksBySource,
+  countChunks,
+  semanticSearch,
+  type MemoryChunk,
+  type MemoryChunkInput,
+  type ChunkSearchHit,
+} from "./db/chunk-queries.js";
+export {
+  chunkText,
+  indexNote,
+  indexKbDir,
+  type IndexResult,
+  type ChunkOptions,
+} from "./agent/memory-index.js";
 export type { Note, NoteInput, NoteQuery } from "./db/note-queries.js";
 export {
   createNote,
@@ -376,7 +407,7 @@ export { WebFetchTool } from "./tools/web-fetch.js";
 export { WebSearchTool } from "./tools/web-search.js";
 export { WriteTool } from "./tools/write.js";
 export type { CreateToolsOptions } from "./factories.js";
-export { createTools, createProvider, createMetaTools } from "./factories.js";
+export { createTools, createProvider, createEmbedder, createMetaTools } from "./factories.js";
 export type {
   BodyResolver,
   FetchOptions,

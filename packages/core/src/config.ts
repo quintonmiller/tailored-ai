@@ -371,6 +371,26 @@ export interface AgentConfig {
     /** Retain log files for the last N runs per workflow. Default 100. */
     retainRuns?: number;
   };
+  /** Tiered memory settings (notes, chunks, embeddings). See docs/memory-tiers.md. */
+  memory?: {
+    embeddings?: {
+      /** When false / omitted, recall stays keyword-only. Default false. */
+      enabled?: boolean;
+      /** Base URL for an OpenAI-compatible /v1/embeddings endpoint. */
+      baseUrl?: string;
+      /** Optional bearer key. Omit for local servers without auth. */
+      apiKey?: string;
+      /** Default embedding model id. */
+      model?: string;
+      /** Output dimension hint (used for sanity checks). */
+      dim?: number;
+    };
+    /** Chunking parameters for the indexer. */
+    chunks?: {
+      maxChunkChars?: number;
+      overlap?: number;
+    };
+  };
 }
 
 const DEFAULT_CONFIG: AgentConfig = {

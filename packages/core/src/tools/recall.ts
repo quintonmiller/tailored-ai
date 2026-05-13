@@ -6,7 +6,8 @@ import {
   listNotes,
   type Note,
 } from "../db/note-queries.js";
-import { formatHits, recallQuery, type Tier } from "./recall-query.js";
+import type { EmbeddingProvider } from "../providers/embedding.js";
+import { formatHits, recallQuery, recallQueryAsync, type Tier } from "./recall-query.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
 
 /**
@@ -77,10 +78,21 @@ export class RecallTool implements Tool {
 
   private db: Database.Database;
   private defaultTtlDays: number;
+  private getEmbedder?: () => EmbeddingProvider | undefined;
+  private embedModel?: string;
 
-  constructor(db: Database.Database, opts: { defaultTtlDays?: number } = {}) {
+  constructor(
+    db: Database.Database,
+    opts: {
+      defaultTtlDays?: number;
+      getEmbedder?: () => EmbeddingProvider | undefined;
+      embedModel?: string;
+    } = {},
+  ) {
     this.db = db;
     this.defaultTtlDays = opts.defaultTtlDays ?? 14;
+    this.getEmbedder = opts.getEmbedder;
+    this.embedModel = opts.embedModel;
   }
 
   async execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
@@ -105,7 +117,10 @@ export class RecallTool implements Tool {
     }
   }
 
-  private query(args: Record<string, unknown>, projectId: string | null): ToolResult {
+  private async query(
+    args: Record<string, unknown>,
+    projectId: string | null,
+  ): Promise<ToolResult> {
     const query = typeof args.query === "string" ? args.query.trim() : "";
     if (!query) {
       return { success: false, output: "", error: "query is required for action=query" };
@@ -115,12 +130,22 @@ export class RecallTool implements Tool {
       return { success: false, output: "", error: `invalid tier "${tierArg}" — use any|short|long` };
     }
     const limit = typeof args.limit === "number" ? args.limit : 5;
-    const hits = recallQuery(this.db, {
-      query,
-      tier: tierArg as "any" | Tier,
-      projectId,
-      limit,
-    });
+    const embedder = this.getEmbedder?.();
+    const hits = embedder
+      ? await recallQueryAsync(this.db, {
+          query,
+          tier: tierArg as "any" | Tier,
+          projectId,
+          limit,
+          embedder,
+          embedModel: this.embedModel,
+        })
+      : recallQuery(this.db, {
+          query,
+          tier: tierArg as "any" | Tier,
+          projectId,
+          limit,
+        });
     return { success: true, output: formatHits(hits) };
   }
 

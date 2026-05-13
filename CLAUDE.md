@@ -180,7 +180,7 @@ Both `openai_compatible` and `openai` share `OpenAIProvider`; the only differenc
 
 Design lives in [`docs/memory-tiers.md`](./docs/memory-tiers.md). Three tiers (working, short-term, long-term) sit alongside the existing `facts` and `memory` tools. Implementation lands across M1–M7 slices; the `recall` tool is the new unified surface.
 
-**M1 + M2 + M3 + M4 status (shipped):** schema, write surface, unified keyword retrieval, loop injection, and end-of-session summarization.
+**M1 + M2 + M3 + M4 + M5 status (shipped):** schema, write surface, keyword retrieval, loop injection, end-of-session summarization, and embeddings + semantic search.
 
 - `packages/core/src/tools/recall.ts` — `RecallTool` with `query` / `note` / `forget` / `list` actions
 - `packages/core/src/tools/recall-query.ts` — `recallQuery()` ranks notes (short-term) and facts (long-term) by term coverage with small bonuses for tag/key/entity matches. Scores are a ranking signal, not capped at 1.0
@@ -198,8 +198,16 @@ Design lives in [`docs/memory-tiers.md`](./docs/memory-tiers.md). Three tiers (w
 - `sweepIdleSessions(db, provider, model, opts)` — batch helper finds sessions where `updated_at <= now - idleMinutes` and runs `summarizeSession` on each. Supports `keyPrefixes` to target specific session kinds (e.g. `["autopilot:", "cron:"]`).
 - `deleteSession(db, sessionId)` — removes the session row + all its messages.
 - HTTP: `DELETE /api/sessions/:id` summarizes (unless `?summarize=0`) then deletes. Pass `?force=1` to re-summarize.
+- `EmbeddingProvider` (`packages/core/src/providers/embedding.ts`) — small interface mirroring `AIProvider` but producing dense float vectors. `OpenAICompatibleEmbeddingProvider` hits `/v1/embeddings` for vLLM/Ollama/LM Studio/hosted OpenAI.
+- Config: `memory.embeddings.{enabled, baseUrl, apiKey, model, dim}` (default off — opt in per project/runtime). `memory.chunks.{maxChunkChars, overlap}` for indexer parameters.
+- `runtime.getEmbedder()` exposes the configured provider; `createEmbedder(config)` is the factory.
+- Vector storage: `memory_chunks.embedding` is a SQLite BLOB; encoded via `vectorToBlob` / decoded via `blobToVector`. Float32Array round-trips losslessly.
+- `chunk-queries.ts`: `createChunk`, `listChunksBySource`, `deleteChunksBySource`, `semanticSearch(db, queryVec, {projectId, limit, minScore})`. Brute-force cosine; acceptable up to ~10k chunks before needing sqlite-vss.
+- `agent/memory-index.ts`: `chunkText(text, {maxChunkChars, overlap})` sliding-window splitter; `indexNote(db, embedder, note)` is idempotent (replaces prior chunks); `indexKbDir(db, embedder, kbDir, {projectId})` backfills KB.
+- `recallQueryAsync(db, opts)` is the async sibling of `recallQuery` that merges semantic + keyword hits by source. Falls back to keyword-only when the embedder throws.
+- `RecallTool.query` action automatically uses semantic when the runtime has an embedder configured.
 
-Embeddings + chunks (M5), promotion + sweep cron (M6), UI (M7) are tracked as separate beans `ptask_mem_m5`–`ptask_mem_m7`.
+Promotion + sweep cron (M6), UI (M7) are tracked as separate beans `ptask_mem_m6`–`ptask_mem_m7`.
 
 ## Admin Tool
 
