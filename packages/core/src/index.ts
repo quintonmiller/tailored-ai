@@ -336,6 +336,14 @@ export {
   getFact,
 } from "./db/fact-queries.js";
 export { RecallTool } from "./tools/recall.js";
+export {
+  recallQuery,
+  formatHits,
+  tokenize,
+  type RecallHit,
+  type RecallQueryOptions,
+  type Tier as RecallTier,
+} from "./tools/recall-query.js";
 export type { Note, NoteInput, NoteQuery } from "./db/note-queries.js";
 export {
   createNote,

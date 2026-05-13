@@ -6,28 +6,38 @@ import {
   listNotes,
   type Note,
 } from "../db/note-queries.js";
+import { formatHits, recallQuery, type Tier } from "./recall-query.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
 
 /**
- * Tiered memory surface. In M1 this only exposes write actions for short-term
- * notes; retrieval lands in M2. See docs/memory-tiers.md.
+ * Tiered memory surface. See docs/memory-tiers.md.
  *
  * Actions:
- *   - note    Write a new short-term note (prose). Tags / TTL / importance optional.
+ *   - query   Search notes (short-term) and facts (long-term) by relevance.
+ *   - note    Write a new short-term note. Tags / TTL / importance optional.
  *   - forget  Delete a note by ID.
- *   - list    Plain unranked list of recent notes (no scoring — that's M2's `query`).
+ *   - list    Plain unranked list of recent notes.
  */
 export class RecallTool implements Tool {
   name = "recall";
   description =
-    "Write short-term memory notes and forget them. Notes carry across sessions in this project. Retrieval (search) lands in a follow-up; for now use list to see recent notes.";
+    "Search and write short-term memory. Use query to find relevant notes + facts; note to save an observation; forget/list to manage notes.";
   parameters = {
     type: "object",
     properties: {
       action: {
         type: "string",
-        enum: ["note", "forget", "list"],
-        description: "note: write prose. forget: delete by id. list: show recent notes.",
+        enum: ["query", "note", "forget", "list"],
+        description: "query: ranked search. note: write prose. forget: delete by id. list: show recent notes.",
+      },
+      query: {
+        type: "string",
+        description: "Search terms (required for action=query). Coverage is scored over notes content/tags and fact category/entity/key/value.",
+      },
+      tier: {
+        type: "string",
+        enum: ["any", "short", "long"],
+        description: "Limit query to one tier. Default: any (union of notes + facts).",
       },
       content: {
         type: "string",
@@ -79,6 +89,8 @@ export class RecallTool implements Tool {
 
     try {
       switch (action) {
+        case "query":
+          return this.query(args, projectId);
         case "note":
           return this.note(args, context, projectId);
         case "forget":
@@ -91,6 +103,25 @@ export class RecallTool implements Tool {
     } catch (err) {
       return { success: false, output: "", error: (err as Error).message };
     }
+  }
+
+  private query(args: Record<string, unknown>, projectId: string | null): ToolResult {
+    const query = typeof args.query === "string" ? args.query.trim() : "";
+    if (!query) {
+      return { success: false, output: "", error: "query is required for action=query" };
+    }
+    const tierArg = typeof args.tier === "string" ? args.tier : "any";
+    if (tierArg !== "any" && tierArg !== "short" && tierArg !== "long") {
+      return { success: false, output: "", error: `invalid tier "${tierArg}" — use any|short|long` };
+    }
+    const limit = typeof args.limit === "number" ? args.limit : 5;
+    const hits = recallQuery(this.db, {
+      query,
+      tier: tierArg as "any" | Tier,
+      projectId,
+      limit,
+    });
+    return { success: true, output: formatHits(hits) };
   }
 
   private note(
