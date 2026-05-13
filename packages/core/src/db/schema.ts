@@ -272,6 +272,42 @@ export function initDatabase(dbPath: string): Database.Database {
 
     CREATE INDEX IF NOT EXISTS idx_chunks_project ON memory_chunks(project_id);
     CREATE INDEX IF NOT EXISTS idx_chunks_source ON memory_chunks(source);
+
+    CREATE TABLE IF NOT EXISTS exploratory_state (
+      agent_name             TEXT PRIMARY KEY,
+      enabled                INTEGER NOT NULL DEFAULT 1,
+      paused_until           TEXT,
+      last_tick_at           TEXT,
+      last_tick_status       TEXT,
+      current_interval_ms    INTEGER,
+      tokens_today           INTEGER NOT NULL DEFAULT 0,
+      tokens_today_resets_at TEXT,
+      runs_today             INTEGER NOT NULL DEFAULT 0,
+      updated_at             TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS exploratory_runs (
+      id              TEXT PRIMARY KEY,
+      agent_name      TEXT NOT NULL,
+      project_id      TEXT,
+      started_at      TEXT NOT NULL DEFAULT (datetime('now')),
+      ended_at        TEXT,
+      status          TEXT NOT NULL
+        CHECK(status IN ('running','ok','noop','budget','error')),
+      tokens_used     INTEGER,
+      tool_calls      INTEGER,
+      note_ids        TEXT NOT NULL DEFAULT '[]',
+      fact_ids        TEXT NOT NULL DEFAULT '[]',
+      task_ids        TEXT NOT NULL DEFAULT '[]',
+      notified_owner  INTEGER NOT NULL DEFAULT 0,
+      summary         TEXT,
+      error           TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_xruns_agent_started
+      ON exploratory_runs(agent_name, started_at);
+    CREATE INDEX IF NOT EXISTS idx_xruns_project_started
+      ON exploratory_runs(project_id, started_at);
   `);
 
   // Safe migration for existing DBs that lack session_key

@@ -217,6 +217,99 @@ describe("validateConfig — prompts block", () => {
   });
 });
 
+describe("validateConfig — online (exploratory) agents", () => {
+  it("warns when online.enabled is set but recall is missing from tools", () => {
+    const c = baseConfig();
+    c.agents = {
+      watcher: {
+        tools: ["web_search", "web_fetch"],
+        online: { enabled: true },
+      },
+    };
+    const ws = validateConfig(c);
+    expect(
+      ws.some((w) => w.includes("watcher") && w.includes('does not include "recall"')),
+    ).toBe(true);
+  });
+
+  it("does not warn when online.enabled but the agent has recall", () => {
+    const c = baseConfig();
+    c.agents = {
+      watcher: {
+        tools: ["recall", "web_search"],
+        online: { enabled: true },
+      },
+    };
+    const ws = validateConfig(c);
+    expect(ws.some((w) => w.includes('does not include "recall"'))).toBe(false);
+  });
+
+  it("does not warn when online is disabled", () => {
+    const c = baseConfig();
+    c.agents = {
+      watcher: { tools: ["web_search"], online: { enabled: false } },
+    };
+    expect(validateConfig(c).some((w) => w.includes("online"))).toBe(false);
+  });
+
+  it("warns when online.tools contains entries outside the agent's tool list", () => {
+    const c = baseConfig();
+    c.agents = {
+      watcher: {
+        tools: ["recall", "web_search"],
+        online: { enabled: true, tools: ["recall", "exec"] },
+      },
+    };
+    const ws = validateConfig(c);
+    expect(
+      ws.some((w) => w.includes("watcher") && w.includes('"exec"') && w.includes("main tools list")),
+    ).toBe(true);
+  });
+
+  it("warns when cadence.interval_minutes is non-positive", () => {
+    const c = baseConfig();
+    c.agents = {
+      watcher: {
+        tools: ["recall"],
+        online: { enabled: true, cadence: { interval_minutes: 0 } },
+      },
+    };
+    expect(
+      validateConfig(c).some((w) => w.includes("interval_minutes must be > 0")),
+    ).toBe(true);
+  });
+
+  it("warns when max_interval_minutes is below interval_minutes", () => {
+    const c = baseConfig();
+    c.agents = {
+      watcher: {
+        tools: ["recall"],
+        online: {
+          enabled: true,
+          cadence: { interval_minutes: 60, max_interval_minutes: 30 },
+        },
+      },
+    };
+    expect(
+      validateConfig(c).some((w) => w.includes("max_interval_minutes")),
+    ).toBe(true);
+  });
+
+  it("warns when cadence.window uses bad HH:MM strings", () => {
+    const c = baseConfig();
+    c.agents = {
+      watcher: {
+        tools: ["recall"],
+        online: {
+          enabled: true,
+          cadence: { window: { start: "9am", end: "18:00" } },
+        },
+      },
+    };
+    expect(validateConfig(c).some((w) => w.includes("HH:MM"))).toBe(true);
+  });
+});
+
 describe("loadConfig — ollama back-compat shim", () => {
   let dir: string;
   const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});

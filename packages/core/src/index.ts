@@ -74,6 +74,7 @@ export type {
   CronHook,
   CronJobConfig,
   CustomToolConfig,
+  OnlineAgentConfig,
   TaskWatcherConfig,
 } from "./config.js";
 export { loadConfig, validateConfig } from "./config.js";
@@ -167,6 +168,26 @@ export {
   isInDisabledHours,
   isInQuietHours,
 } from "./db/autopilot-queries.js";
+export type {
+  ExploratoryState,
+  ExploratoryStateUpdate,
+  ExploratoryRun,
+  ExploratoryRunStatus,
+  CreateExploratoryRunInput,
+  CompleteExploratoryRunInput,
+  ListExploratoryRunsOptions,
+} from "./db/exploratory-queries.js";
+export {
+  getExploratoryState,
+  listExploratoryStates,
+  ensureExploratoryState,
+  updateExploratoryState,
+  maybeResetDailyCounters,
+  createExploratoryRun,
+  getExploratoryRun,
+  completeExploratoryRun,
+  listExploratoryRuns,
+} from "./db/exploratory-queries.js";
 export type { DocumentMeta } from "./db/document-queries.js";
 export { createDocument, getDocument, updateDocument, deleteDocument, listDocuments } from "./db/document-queries.js";
 export type {

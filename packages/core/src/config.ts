@@ -68,6 +68,61 @@ export interface AgentDefinition {
    *     and allowed-tools are loaded only when needed.
    */
   skillLoading?: "eager" | "progressive";
+  /**
+   * Exploratory ("always-on") configuration. When enabled, the ExploratoryWorker
+   * runs this agent on a cadence — independently of user/task triggers — so it
+   * can observe, research, and file notes/tasks proactively. See
+   * docs/always-on-agents.md.
+   */
+  online?: OnlineAgentConfig;
+}
+
+export interface OnlineAgentConfig {
+  /** Master switch. Off by default. */
+  enabled?: boolean;
+  cadence?: {
+    /** Base interval between ticks, in minutes. Default 30. */
+    interval_minutes?: number;
+    /** Multiplier applied to interval after a no-op tick. Default 2.0. */
+    idle_backoff_multiplier?: number;
+    /** Cap on backed-off interval, in minutes. Default 240. */
+    max_interval_minutes?: number;
+    /**
+     * Optional time-of-day window in which ticks fire. HH:MM strings, supports
+     * windows that cross midnight. Omit to allow any time.
+     */
+    window?: {
+      start: string;
+      end: string;
+    };
+  };
+  /**
+   * Relative path (under the agent's context directory) to a goals file the
+   * agent reads on each tick. Falls back to `goals.md` when omitted.
+   */
+  goals_file?: string;
+  budgets?: {
+    /** Max tokens consumable in a single tick. Default 8000. */
+    tokens_per_tick?: number;
+    /** Per-agent daily token cap. Shared with autopilot's 24h cap. */
+    tokens_per_day?: number;
+    /** Max tool calls in a single tick. Default 8. */
+    tool_calls_per_tick?: number;
+    /** Hard cap on runs per day, even if tokens are available. Default 12. */
+    stop_after_runs_per_day?: number;
+  };
+  output?: {
+    notes?: boolean;
+    facts?: boolean;
+    tasks?: boolean;
+    /** Default false. When true, high-importance findings can DM the owner. */
+    notify_owner?: boolean;
+  };
+  /**
+   * Optional narrower tool subset for online ticks. Must be a subset of the
+   * agent's `tools`. When omitted, falls back to the agent's normal tools.
+   */
+  tools?: string[];
 }
 
 /** @deprecated Use AgentDefinition instead. */
@@ -371,6 +426,13 @@ export interface AgentConfig {
     /** Retain log files for the last N runs per workflow. Default 100. */
     retainRuns?: number;
   };
+  /** Always-on exploratory worker. See docs/always-on-agents.md. */
+  exploratory?: {
+    /** Master switch for the worker. Off by default. */
+    enabled?: boolean;
+    /** How often the worker scans for due agents, in ms. Default 60000. */
+    baseIntervalMs?: number;
+  };
   /** Tiered memory settings (notes, chunks, embeddings). See docs/memory-tiers.md. */
   memory?: {
     embeddings?: {
@@ -558,6 +620,49 @@ export function validateConfig(config: AgentConfig): string[] {
       for (const hook of hooks) {
         if (hook.tool && !enabledToolNames.has(hook.tool)) {
           warnings.push(`Agent "${agentName}" hook references tool "${hook.tool}" which is not enabled`);
+        }
+      }
+    }
+
+    // Validate online (exploratory) config
+    if (agent.online?.enabled) {
+      const agentTools = new Set(agent.tools ?? []);
+      if (!agentTools.has("recall")) {
+        warnings.push(
+          `Agent "${agentName}" has online.enabled but does not include "recall" in tools — exploratory ticks need recall to read goals and write findings`,
+        );
+      }
+      const onlineTools = agent.online.tools;
+      if (onlineTools) {
+        for (const t of onlineTools) {
+          if (!agentTools.has(t)) {
+            warnings.push(
+              `Agent "${agentName}" online.tools entry "${t}" is not in the agent's main tools list`,
+            );
+          }
+        }
+      }
+      const cadence = agent.online.cadence;
+      if (cadence?.interval_minutes !== undefined && cadence.interval_minutes <= 0) {
+        warnings.push(
+          `Agent "${agentName}" online.cadence.interval_minutes must be > 0`,
+        );
+      }
+      if (
+        cadence?.max_interval_minutes !== undefined &&
+        cadence.interval_minutes !== undefined &&
+        cadence.max_interval_minutes < cadence.interval_minutes
+      ) {
+        warnings.push(
+          `Agent "${agentName}" online.cadence.max_interval_minutes (${cadence.max_interval_minutes}) is less than interval_minutes (${cadence.interval_minutes})`,
+        );
+      }
+      if (cadence?.window) {
+        const ok = (s: string) => /^\d{1,2}:\d{2}$/.test(s);
+        if (!ok(cadence.window.start) || !ok(cadence.window.end)) {
+          warnings.push(
+            `Agent "${agentName}" online.cadence.window must use HH:MM strings`,
+          );
         }
       }
     }
