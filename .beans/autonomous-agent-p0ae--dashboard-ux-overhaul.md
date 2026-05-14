@@ -1,11 +1,11 @@
 ---
 # autonomous-agent-p0ae
 title: Dashboard UX overhaul
-status: in-progress
+status: completed
 type: epic
 priority: high
 created_at: 2026-05-14T05:28:57Z
-updated_at: 2026-05-14T05:28:57Z
+updated_at: 2026-05-14T06:02:12Z
 ---
 
 # Dashboard UX overhaul
