@@ -262,6 +262,9 @@ export function createServer(opts: ServerOptions) {
       agent: agent || undefined,
       limit,
       excludeExpired: true,
+      // A project view sees its own notes + global ones. Globals encode
+      // user-wide preferences/facts that apply across every project.
+      includeGlobal: typeof projectFilter === "string",
     });
     return c.json(notes);
   });
@@ -405,6 +408,7 @@ export function createServer(opts: ServerOptions) {
       project_id: projectFilter,
       excludeExpired: true,
       limit: 10_000,
+      includeGlobal: typeof projectFilter === "string",
     });
     const summaries = liveNotes.filter((n) => n.tags.includes(SESSION_SUMMARY_TAG));
     const chunks = countChunks(runtime.db, projectFilter as string | null | undefined);
@@ -413,6 +417,7 @@ export function createServer(opts: ServerOptions) {
     const facts = listFacts(runtime.db, {
       project_id: projectFilter as string | null | undefined,
       limit: 10_000,
+      includeGlobal: typeof projectFilter === "string",
     });
 
     // Most-referenced (live) notes.
@@ -1037,7 +1042,12 @@ export function createServer(opts: ServerOptions) {
 
   app.get("/api/facts", (c) => {
     const projectIdRaw = c.req.query("project_id");
-    const projectId = projectIdRaw === "global" || projectIdRaw == null ? null : projectIdRaw;
+    // Tri-state filter:
+    //   "global"           → globals only (project_id IS NULL)
+    //   undefined / null   → globals only (back-compat)
+    //   "<project-id>"     → that project's facts PLUS globals
+    const projectId =
+      projectIdRaw === "global" || projectIdRaw == null ? null : projectIdRaw;
     const limit = c.req.query("limit");
     const facts = listFacts(runtime.db, {
       project_id: projectId,
@@ -1046,6 +1056,7 @@ export function createServer(opts: ServerOptions) {
       key: c.req.query("key"),
       search: c.req.query("search"),
       limit: limit ? Number.parseInt(limit, 10) : undefined,
+      includeGlobal: typeof projectId === "string",
     });
     return c.json({ facts });
   });

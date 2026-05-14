@@ -39,6 +39,12 @@ export interface FactQuery {
   key?: string;
   search?: string;
   limit?: number;
+  /**
+   * When true AND project_id is a specific project id, also return facts
+   * where project_id IS NULL (globals). Mirrors listPinnedNotes — a
+   * project view sees its own facts + global ones.
+   */
+  includeGlobal?: boolean;
 }
 
 export function upsertFact(db: Database.Database, input: FactInput): Fact {
@@ -115,6 +121,9 @@ export function listFacts(db: Database.Database, q: FactQuery = {}): Fact[] {
   if (q.project_id !== undefined) {
     if (q.project_id === null) {
       clauses.push("project_id IS NULL");
+    } else if (q.includeGlobal) {
+      clauses.push("(project_id = ? OR project_id IS NULL)");
+      params.push(q.project_id);
     } else {
       clauses.push("project_id = ?");
       params.push(q.project_id);

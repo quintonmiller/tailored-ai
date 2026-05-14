@@ -38,6 +38,13 @@ export interface NoteQuery {
   limit?: number;
   /** When true, exclude notes whose ttl_at has passed. */
   excludeExpired?: boolean;
+  /**
+   * When true AND project_id is a specific project id, also return notes
+   * where project_id IS NULL (globals). Mirrors the inheritance behavior
+   * already used by listPinnedNotes — a project view sees its own notes
+   * + global ones, since global preferences/facts apply everywhere.
+   */
+  includeGlobal?: boolean;
 }
 
 interface NoteRow {
@@ -95,6 +102,9 @@ export function listNotes(db: Database.Database, q: NoteQuery = {}): Note[] {
   if (q.project_id !== undefined) {
     if (q.project_id === null) {
       clauses.push("project_id IS NULL");
+    } else if (q.includeGlobal) {
+      clauses.push("(project_id = ? OR project_id IS NULL)");
+      params.push(q.project_id);
     } else {
       clauses.push("project_id = ?");
       params.push(q.project_id);
