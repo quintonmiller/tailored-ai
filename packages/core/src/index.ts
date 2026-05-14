@@ -422,9 +422,12 @@ export {
   createNote,
   getNote,
   listNotes,
+  listPinnedNotes,
+  updateNote,
   deleteNote,
   sweepExpiredNotes,
 } from "./db/note-queries.js";
+export type { NotePatch, PinnedNotesQuery } from "./db/note-queries.js";
 export {
   summarizeSession,
   sweepIdleSessions,

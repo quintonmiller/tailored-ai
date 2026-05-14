@@ -1,11 +1,11 @@
 ---
 # autonomous-agent-ixu6
 title: DUX8 — Dock modes + agent switcher
-status: in-progress
+status: completed
 type: task
 priority: high
 created_at: 2026-05-14T07:00:51Z
-updated_at: 2026-05-14T07:00:51Z
+updated_at: 2026-05-14T07:08:15Z
 parent: autonomous-agent-p0ae
 ---
 

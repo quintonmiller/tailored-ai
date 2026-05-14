@@ -25,6 +25,7 @@ import {
   listNotes,
   getNote,
   deleteNote,
+  updateNote,
   countChunks,
   promoteNote,
   runMemorySweep,
@@ -300,6 +301,52 @@ export function createServer(opts: ServerOptions) {
     const note = getNote(runtime.db, id);
     if (!note) return c.json({ error: "note not found" }, 404);
     return c.json(note);
+  });
+
+  app.patch("/api/memory/notes/:id", async (c) => {
+    const { id } = c.req.param();
+    const existing = getNote(runtime.db, id);
+    if (!existing) return c.json({ error: "note not found" }, 404);
+    const body = (await c.req.json().catch(() => ({}))) as {
+      tags?: unknown;
+      importance?: unknown;
+      pinned?: unknown;
+    };
+    const patch: { tags?: string[]; importance?: number | null } = {};
+    if (Object.prototype.hasOwnProperty.call(body, "tags")) {
+      if (!Array.isArray(body.tags) || body.tags.some((t) => typeof t !== "string")) {
+        return c.json({ error: "tags must be string[]" }, 400);
+      }
+      patch.tags = body.tags as string[];
+    }
+    if (Object.prototype.hasOwnProperty.call(body, "importance")) {
+      if (body.importance === null) {
+        patch.importance = null;
+      } else if (typeof body.importance !== "number" || body.importance < 0 || body.importance > 1) {
+        return c.json({ error: "importance must be number in [0,1] or null" }, 400);
+      } else {
+        patch.importance = body.importance;
+      }
+    }
+    // Convenience: `pinned: true|false` toggles both the tag and importance.
+    if (Object.prototype.hasOwnProperty.call(body, "pinned")) {
+      if (typeof body.pinned !== "boolean") {
+        return c.json({ error: "pinned must be boolean" }, 400);
+      }
+      const baseTags = patch.tags ?? existing.tags;
+      const withPin = body.pinned
+        ? Array.from(new Set([...baseTags, "pinned"]))
+        : baseTags.filter((t) => t !== "pinned");
+      patch.tags = withPin;
+      // Set importance to >= 0.95 so the note also survives any tag-less
+      // fallbacks and the TTL sweep.
+      if (body.pinned && (patch.importance ?? existing.importance ?? 0) < 0.95) {
+        patch.importance = 0.95;
+      }
+    }
+    const updated = updateNote(runtime.db, id, patch);
+    if (!updated) return c.json({ error: "note not found" }, 404);
+    return c.json(updated);
   });
 
   app.delete("/api/memory/notes/:id", (c) => {
@@ -585,6 +632,7 @@ export function createServer(opts: ServerOptions) {
               data: JSON.stringify(info),
             });
           },
+          // info shape: { count, sources, pinned } — pinned is the always-inject lane.
         });
 
         // --- afterRun hooks ---

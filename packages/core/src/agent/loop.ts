@@ -95,8 +95,12 @@ export interface AgentLoopOptions {
   injectMemory?: boolean;
   memoryInjectBudgetTokens?: number;
   memoryInjectLimit?: number;
-  /** Fires once per turn when memory injection ran, with the source ids that were included in the block. */
-  onMemoryRecalled?: (info: { count: number; sources: string[] }) => void;
+  /** Fires once per turn when memory injection ran. `pinned` is always-injected preferences; `sources` is the relevance-ranked tier. */
+  onMemoryRecalled?: (info: {
+    count: number;
+    sources: string[];
+    pinned: string[];
+  }) => void;
 }
 
 export function estimateTokens(msg: Message): number {
@@ -412,10 +416,12 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
       limit: opts.memoryInjectLimit,
     });
     memoryBlock = meta.block;
-    if (meta.included.length > 0) {
+    const total = meta.included.length + meta.pinned.length;
+    if (total > 0) {
       opts.onMemoryRecalled?.({
-        count: meta.included.length,
+        count: total,
         sources: meta.included.map((h) => h.source),
+        pinned: meta.pinned.map((p) => p.noteId),
       });
     }
   }

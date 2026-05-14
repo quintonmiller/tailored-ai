@@ -138,7 +138,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setMessages((prev) => [...prev, { role: "user", content: text }]);
 
       let finalTools: ToolLogEntry[] = [];
-      let recalled: { count: number; sources: string[] } | undefined;
+      let recalled: { count: number; sources: string[]; pinned?: string[] } | undefined;
 
       abortRef.current = sendChat(
         text,
@@ -152,6 +152,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               recalled = {
                 count: (event.data.count as number) ?? 0,
                 sources: ((event.data.sources as string[]) ?? []).slice(0, 5),
+                pinned: ((event.data.pinned as string[]) ?? []).slice(0, 5),
               };
               break;
             }

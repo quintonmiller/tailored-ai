@@ -6,6 +6,7 @@ import {
   fetchMemoryStats,
   promoteMemoryNote,
   runMemorySweepHttp,
+  updateMemoryNote,
   type MemoryNote,
   type MemoryRecallHit,
   type MemoryStats,
@@ -62,6 +63,16 @@ export function Memory() {
     reload();
   }
 
+  async function handleTogglePin(n: MemoryNote) {
+    const next = !isPinned(n);
+    try {
+      await updateMemoryNote(n.id, { pinned: next });
+      reload();
+    } catch (e) {
+      alert(`Pin failed: ${(e as Error).message}`);
+    }
+  }
+
   async function handlePromote(id: string) {
     setBusy(true);
     try {
@@ -95,6 +106,13 @@ export function Memory() {
     const s = new Set<string>();
     for (const n of notes) for (const t of n.tags) s.add(t);
     return Array.from(s).sort();
+  }, [notes]);
+
+  const { pinnedNotes, otherNotes } = useMemo(() => {
+    const p: MemoryNote[] = [];
+    const o: MemoryNote[] = [];
+    for (const n of notes) (isPinned(n) ? p : o).push(n);
+    return { pinnedNotes: p, otherNotes: o };
   }, [notes]);
 
   return (
@@ -200,44 +218,107 @@ export function Memory() {
           </select>
         </div>
         {notes.length === 0 && <div className="memory-empty">No notes match.</div>}
-        <ul className="memory-note-list">
-          {notes.map((n) => (
-            <li key={n.id} className="memory-note">
-              <div className="memory-note-meta">
-                <span className="memory-note-id">{n.id}</span>
-                {n.agent && <span className="memory-note-agent">by {n.agent}</span>}
-                <span className="memory-note-date">{n.created_at.slice(0, 16).replace("T", " ")}</span>
-                {n.importance != null && (
-                  <span className="memory-note-importance" title="importance">
-                    ★ {n.importance.toFixed(2)}
-                  </span>
-                )}
-                {n.ref_count > 0 && <span className="memory-ref-badge">{n.ref_count}×</span>}
-              </div>
-              <div className="memory-note-content">{n.content}</div>
-              {n.tags.length > 0 && (
-                <div className="memory-note-tags">
-                  {n.tags.map((t) => (
-                    <span key={t} className="memory-tag-pill">
-                      {t}
-                    </span>
-                  ))}
-                </div>
-              )}
-              <div className="memory-note-actions">
-                {stats?.embeddingsEnabled && (
-                  <button type="button" onClick={() => handlePromote(n.id)} disabled={busy}>
-                    Promote
-                  </button>
-                )}
-                <button type="button" onClick={() => handleDelete(n.id)} disabled={busy}>
-                  Delete
-                </button>
-              </div>
-            </li>
-          ))}
-        </ul>
+        {pinnedNotes.length > 0 && (
+          <>
+            <h3 className="memory-section-label">Pinned preferences</h3>
+            <ul className="memory-note-list">
+              {pinnedNotes.map((n) => (
+                <NoteRow
+                  key={n.id}
+                  note={n}
+                  pinned
+                  showPromote={!!stats?.embeddingsEnabled}
+                  busy={busy}
+                  onDelete={handleDelete}
+                  onPromote={handlePromote}
+                  onTogglePin={handleTogglePin}
+                />
+              ))}
+            </ul>
+          </>
+        )}
+        {otherNotes.length > 0 && (
+          <>
+            {pinnedNotes.length > 0 && <h3 className="memory-section-label">Notes</h3>}
+            <ul className="memory-note-list">
+              {otherNotes.map((n) => (
+                <NoteRow
+                  key={n.id}
+                  note={n}
+                  pinned={false}
+                  showPromote={!!stats?.embeddingsEnabled}
+                  busy={busy}
+                  onDelete={handleDelete}
+                  onPromote={handlePromote}
+                  onTogglePin={handleTogglePin}
+                />
+              ))}
+            </ul>
+          </>
+        )}
       </section>
     </div>
+  );
+}
+
+function isPinned(n: MemoryNote): boolean {
+  return n.tags.includes("pinned") || (n.importance ?? 0) >= 0.95;
+}
+
+function NoteRow({
+  note: n,
+  pinned,
+  showPromote,
+  busy,
+  onDelete,
+  onPromote,
+  onTogglePin,
+}: {
+  note: MemoryNote;
+  pinned: boolean;
+  showPromote: boolean;
+  busy: boolean;
+  onDelete: (id: string) => void;
+  onPromote: (id: string) => void;
+  onTogglePin: (n: MemoryNote) => void;
+}) {
+  return (
+    <li className={`memory-note${pinned ? " memory-note-pinned" : ""}`}>
+      <div className="memory-note-meta">
+        <span className="memory-note-id">{n.id}</span>
+        {n.agent && <span className="memory-note-agent">by {n.agent}</span>}
+        <span className="memory-note-date">{n.created_at.slice(0, 16).replace("T", " ")}</span>
+        {n.importance != null && (
+          <span className="memory-note-importance" title="importance">
+            ★ {n.importance.toFixed(2)}
+          </span>
+        )}
+        {n.ref_count > 0 && <span className="memory-ref-badge">{n.ref_count}×</span>}
+        {pinned && <span className="memory-pin-badge" title="Always injected into system prompt">📌 pinned</span>}
+      </div>
+      <div className="memory-note-content">{n.content}</div>
+      {n.tags.length > 0 && (
+        <div className="memory-note-tags">
+          {n.tags.map((t) => (
+            <span key={t} className="memory-tag-pill">
+              {t}
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="memory-note-actions">
+        <button type="button" onClick={() => onTogglePin(n)} disabled={busy}>
+          {pinned ? "Unpin" : "Pin"}
+        </button>
+        {showPromote && (
+          <button type="button" onClick={() => onPromote(n.id)} disabled={busy}>
+            Promote
+          </button>
+        )}
+        <button type="button" onClick={() => onDelete(n.id)} disabled={busy}>
+          Delete
+        </button>
+      </div>
+    </li>
   );
 }

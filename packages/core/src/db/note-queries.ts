@@ -137,6 +137,89 @@ export function listNotes(db: Database.Database, q: NoteQuery = {}): Note[] {
   return (db.prepare(sql).all(...params) as NoteRow[]).map(rowToNote);
 }
 
+/**
+ * Notes that should ALWAYS inject into the system prompt — either explicitly
+ * tagged `pinned` or with `importance >= pinnedImportance` (default 0.95).
+ * Ordered by importance / ref_count / recency. Used by memory-inject's
+ * pinned tier (see docs/memory.md).
+ *
+ * Project scoping mirrors listNotes:
+ *   - omitted        → no filter (across all projects + global)
+ *   - explicit null  → global only
+ *   - id string      → that project's notes only
+ */
+export interface PinnedNotesQuery {
+  project_id?: string | null;
+  limit?: number;
+  pinnedImportance?: number;
+  excludeExpired?: boolean;
+}
+
+export function listPinnedNotes(
+  db: Database.Database,
+  q: PinnedNotesQuery = {},
+): Note[] {
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+
+  if (q.project_id !== undefined) {
+    if (q.project_id === null) {
+      clauses.push("project_id IS NULL");
+    } else {
+      // Project-scoped notes plus global ones — global rules apply everywhere.
+      clauses.push("(project_id = ? OR project_id IS NULL)");
+      params.push(q.project_id);
+    }
+  }
+  const pinnedImportance = q.pinnedImportance ?? 0.95;
+  clauses.push(
+    "(EXISTS (SELECT 1 FROM json_each(notes.tags) WHERE json_each.value = 'pinned') OR importance >= ?)",
+  );
+  params.push(pinnedImportance);
+  if (q.excludeExpired !== false) {
+    // Default ON — expired pinned notes shouldn't keep injecting.
+    clauses.push("(ttl_at IS NULL OR datetime(ttl_at) > datetime('now'))");
+  }
+  const where = `WHERE ${clauses.join(" AND ")}`;
+  const limit = q.limit && q.limit > 0 ? `LIMIT ${Math.floor(q.limit)}` : "LIMIT 10";
+  const sql = `SELECT * FROM notes ${where}
+               ORDER BY importance DESC, ref_count DESC, created_at DESC
+               ${limit}`;
+  return (db.prepare(sql).all(...params) as NoteRow[]).map(rowToNote);
+}
+
+/**
+ * Patch a note's tags and/or importance. Used by the Memory UI's pin
+ * toggle and any future curation surfaces. Returns the updated note, or
+ * null when the id doesn't exist.
+ */
+export interface NotePatch {
+  tags?: string[];
+  importance?: number | null;
+}
+
+export function updateNote(
+  db: Database.Database,
+  id: string,
+  patch: NotePatch,
+): Note | null {
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  if (patch.tags !== undefined) {
+    sets.push("tags = ?");
+    params.push(JSON.stringify(patch.tags));
+  }
+  if (patch.importance !== undefined) {
+    sets.push("importance = ?");
+    params.push(patch.importance);
+  }
+  if (sets.length > 0) {
+    params.push(id);
+    db.prepare(`UPDATE notes SET ${sets.join(", ")} WHERE id = ?`).run(...params);
+  }
+  return getNote(db, id);
+}
+
 export function deleteNote(db: Database.Database, id: string): boolean {
   const res = db.prepare("DELETE FROM notes WHERE id = ?").run(id);
   return res.changes > 0;

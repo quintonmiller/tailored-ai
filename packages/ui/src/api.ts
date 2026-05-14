@@ -53,6 +53,8 @@ export type ToolLogEntry = ToolLogToolEntry | ToolLogTextEntry;
 export interface MemoryRecall {
   count: number;
   sources: string[];
+  /** Pinned-tier note ids (always-inject lane). Empty if none. */
+  pinned?: string[];
 }
 
 export interface Message {
@@ -1417,6 +1419,20 @@ export function fetchMemoryRecall(params: {
   if (params.tier) qs.set("tier", params.tier);
   if (params.limit) qs.set("limit", String(params.limit));
   return fetch(`/api/memory/recall?${qs}`).then((r) => r.json());
+}
+
+export function updateMemoryNote(
+  id: string,
+  patch: { tags?: string[]; importance?: number | null; pinned?: boolean },
+): Promise<MemoryNote> {
+  return fetch(`/api/memory/notes/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  }).then((r) => {
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    return r.json();
+  });
 }
 
 export function createMemoryNote(input: {

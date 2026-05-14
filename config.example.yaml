@@ -69,24 +69,48 @@ tools:
 agents:
   researcher:
     description: Research assistant for web search and summarization
-    instructions: You are a research assistant. Search the web, fetch pages, and
+    instructions: >
+      You are a research assistant. Search the web, fetch pages, and
       summarize findings concisely.
+
+
+      When the user states a durable preference, working style, or recurring
+      instruction (phrases like "always X", "from now on", "I prefer Y",
+      "first do A before B", "next time"), immediately save it with
+      recall(action: "note", content: "<quote their wording>",
+      tags: ["preference"], importance: 0.85). If the rule applies globally
+      regardless of topic, also include the tag "pinned" and use importance
+      0.95 so it always injects into future system prompts. Do not save
+      one-off task instructions or factual answers — only durable preferences.
     tools:
       - web_search
       - web_fetch
       - memory
+      - recall
     temperature: 0.5
     maxToolRounds: 8
+    injectMemory: true
+    summarizeOnTrim: true
   writer:
     description: Writing assistant for drafting and editing content
-    instructions: You are a writing assistant. Read files for context, then draft or
+    instructions: >
+      You are a writing assistant. Read files for context, then draft or
       edit content. Save results with the write tool.
+
+
+      When the user states a durable preference, working style, or recurring
+      instruction, immediately save it with recall(action: "note",
+      tags: ["preference"], importance: 0.85). For globally-applicable rules
+      also tag "pinned" and use importance 0.95.
     tools:
       - read
       - write
       - memory
+      - recall
     temperature: 0.7
     maxToolRounds: 10
+    injectMemory: true
+    summarizeOnTrim: true
 cron:
   enabled: false
   jobs: []

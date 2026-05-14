@@ -276,6 +276,13 @@ function AssistantBubble(props: { content: string }) {
 function RecalledChip({ recalled }: { recalled: MemoryRecall }) {
   const [expanded, setExpanded] = useState(false);
   if (!recalled.count) return null;
+  const pinned = recalled.pinned ?? [];
+  const pinnedCount = pinned.length;
+  const relevant = recalled.sources.filter((s) => !pinned.includes(s));
+  const summary =
+    pinnedCount > 0
+      ? `${pinnedCount} pinned · ${relevant.length} relevant`
+      : `Recalled ${recalled.count} ${recalled.count === 1 ? "note" : "notes"}`;
   return (
     <div className="recalled-chip">
       <button
@@ -286,15 +293,19 @@ function RecalledChip({ recalled }: { recalled: MemoryRecall }) {
         title="Memory hits injected into the system prompt for this turn"
       >
         <span className="recalled-chip-icon">✺</span>
-        <span>
-          Recalled {recalled.count} {recalled.count === 1 ? "note" : "notes"}
-        </span>
+        <span>{summary}</span>
         <span className="recalled-chip-caret">{expanded ? "▾" : "▸"}</span>
       </button>
       {expanded && (
         <ul className="recalled-chip-sources">
-          {recalled.sources.map((s, i) => (
-            <li key={i}>
+          {pinned.map((s) => (
+            <li key={`p-${s}`}>
+              <span className="recalled-chip-tag">pinned</span>
+              <code>{s}</code>
+            </li>
+          ))}
+          {relevant.map((s) => (
+            <li key={`r-${s}`}>
               <code>{s}</code>
             </li>
           ))}
