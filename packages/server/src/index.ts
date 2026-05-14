@@ -19,6 +19,7 @@ import {
   getSessionMessages,
   listSessions,
   deleteSession,
+  updateSessionMeta,
   summarizeSession,
   listNotes,
   getNote,
@@ -181,6 +182,28 @@ export function createServer(opts: ServerOptions) {
     return c.json(messages);
   });
 
+  app.patch("/api/sessions/:id", async (c) => {
+    const { id } = c.req.param();
+    const body = (await c.req.json().catch(() => ({}))) as {
+      title?: string | null;
+      pinned?: boolean;
+    };
+    const patch: { title?: string | null; pinned?: boolean } = {};
+    if (Object.prototype.hasOwnProperty.call(body, "title")) {
+      const t = body.title;
+      if (t === null) patch.title = null;
+      else if (typeof t === "string") patch.title = t.slice(0, 200);
+      else return c.json({ error: "title must be string or null" }, 400);
+    }
+    if (Object.prototype.hasOwnProperty.call(body, "pinned")) {
+      if (typeof body.pinned !== "boolean") return c.json({ error: "pinned must be boolean" }, 400);
+      patch.pinned = body.pinned;
+    }
+    const row = updateSessionMeta(runtime.db, id, patch);
+    if (!row) return c.json({ error: "session not found" }, 404);
+    return c.json(row);
+  });
+
   app.delete("/api/sessions/:id", async (c) => {
     const { id } = c.req.param();
     // ?summarize=0 opts out (default on). ?force=1 re-summarizes even if a
@@ -218,6 +241,7 @@ export function createServer(opts: ServerOptions) {
     const project = c.req.query("project");
     const tag = c.req.query("tag");
     const search = c.req.query("search");
+    const agent = c.req.query("agent");
     const limitParam = c.req.query("limit");
     const limit = limitParam ? Number.parseInt(limitParam, 10) : 50;
     // ?project=global → un-scoped (null). Omitted → no project filter.
@@ -231,6 +255,7 @@ export function createServer(opts: ServerOptions) {
       project_id: projectFilter,
       tag,
       search,
+      agent: agent || undefined,
       limit,
       excludeExpired: true,
     });
@@ -488,9 +513,14 @@ export function createServer(opts: ServerOptions) {
           }
         }
 
+        const baseOpts = runtime.buildLoopOptions({ session, agentName });
+        const combinedSignal = baseOpts.signal
+          ? AbortSignal.any([baseOpts.signal, c.req.raw.signal])
+          : c.req.raw.signal;
         const response = await runAgentLoop(message, {
-          ...runtime.buildLoopOptions({ session, agentName }),
+          ...baseOpts,
           approvalHandler,
+          signal: combinedSignal,
           onToolCall: (name, args) => {
             stream.writeSSE({
               event: "tool_call",

@@ -394,6 +394,23 @@ export function initDatabase(dbPath: string): Database.Database {
     // Column already exists
   }
 
+  // Safe migration: session title + pinned flag (DUX1 — chat persistence).
+  try {
+    db.exec("ALTER TABLE sessions ADD COLUMN title TEXT");
+  } catch {
+    // Column already exists
+  }
+  try {
+    db.exec("ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0");
+  } catch {
+    // Column already exists
+  }
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_sessions_pinned_updated
+      ON sessions(pinned, updated_at);
+  `);
+
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_project_tasks_assignee_status_rank
       ON project_tasks(project_id, assignee, status, rank);

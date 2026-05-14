@@ -128,7 +128,8 @@ export type { CompiledSchedule } from "./cron/schedule-dsl.js";
 export type { TaskEvent } from "./task-watcher.js";
 export { TaskWatcher } from "./task-watcher.js";
 export { initDatabase } from "./db/schema.js";
-export { getSessionMessages, listSessions } from "./db/queries.js";
+export { getSessionMessages, listSessions, updateSessionMeta } from "./db/queries.js";
+export type { SessionRow, SessionMetaPatch } from "./db/queries.js";
 export type { ProjectTask, ProjectTaskWithComments, TaskComment, TaskQueryFilter, TaskQueryResult } from "./db/task-queries.js";
 export {
   addTaskComment,

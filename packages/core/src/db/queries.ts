@@ -7,8 +7,15 @@ export interface SessionRow {
   model: string;
   provider: string;
   project_id: string | null;
+  title: string | null;
+  pinned: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface SessionMetaPatch {
+  title?: string | null;
+  pinned?: boolean;
 }
 
 export interface ListSessionsOptions {
@@ -66,6 +73,32 @@ export function updateSessionModelProvider(db: Database.Database, id: string, mo
   db.prepare("UPDATE sessions SET model = ?, provider = ? WHERE id = ?").run(model, provider, id);
 }
 
+/**
+ * Patch session metadata (title, pinned). Only fields present in `patch` are
+ * touched. Returns the updated row, or undefined if the session doesn't exist.
+ */
+export function updateSessionMeta(
+  db: Database.Database,
+  id: string,
+  patch: SessionMetaPatch,
+): SessionRow | undefined {
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  if (patch.title !== undefined) {
+    sets.push("title = ?");
+    params.push(patch.title);
+  }
+  if (patch.pinned !== undefined) {
+    sets.push("pinned = ?");
+    params.push(patch.pinned ? 1 : 0);
+  }
+  if (sets.length > 0) {
+    params.push(id);
+    db.prepare(`UPDATE sessions SET ${sets.join(", ")} WHERE id = ?`).run(...params);
+  }
+  return getSession(db, id);
+}
+
 export function clearSessionKey(db: Database.Database, key: string): void {
   db.prepare("UPDATE sessions SET key = NULL WHERE key = ?").run(key);
 }
@@ -82,7 +115,7 @@ export function listSessions(db: Database.Database, opts?: ListSessionsOptions):
   const limit = opts?.limit ?? 200;
   params.push(limit);
   return db
-    .prepare(`SELECT * FROM sessions ${where} ORDER BY updated_at DESC LIMIT ?`)
+    .prepare(`SELECT * FROM sessions ${where} ORDER BY pinned DESC, updated_at DESC LIMIT ?`)
     .all(...params) as SessionRow[];
 }
 

@@ -4,6 +4,8 @@ export interface SessionRow {
   model: string;
   provider: string;
   project_id: string | null;
+  title: string | null;
+  pinned: number;
   created_at: string;
   updated_at: string;
 }
@@ -85,6 +87,49 @@ export function fetchSessions(opts?: { project?: string | "global" | null }): Pr
 
 export function fetchMessages(sessionId: string): Promise<Message[]> {
   return jsonFetch(`/api/sessions/${sessionId}/messages`);
+}
+
+export function updateSession(
+  sessionId: string,
+  patch: { title?: string | null; pinned?: boolean },
+): Promise<SessionRow> {
+  return jsonFetch(`/api/sessions/${sessionId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export function deleteSession(
+  sessionId: string,
+  opts?: { summarize?: boolean; force?: boolean },
+): Promise<{ deleted: boolean; summaryNoteId: string | null }> {
+  const params = new URLSearchParams();
+  if (opts?.summarize === false) params.set("summarize", "0");
+  if (opts?.force) params.set("force", "1");
+  const qs = params.toString();
+  return jsonFetch(`/api/sessions/${sessionId}${qs ? `?${qs}` : ""}`, {
+    method: "DELETE",
+  });
+}
+
+const ACTIVE_CHAT_SESSION_KEY = "tai.chat.activeSessionId";
+
+export function getStoredChatSessionId(): string | null {
+  try {
+    return localStorage.getItem(ACTIVE_CHAT_SESSION_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setStoredChatSessionId(id: string | null): void {
+  try {
+    if (id === null) localStorage.removeItem(ACTIVE_CHAT_SESSION_KEY);
+    else localStorage.setItem(ACTIVE_CHAT_SESSION_KEY, id);
+  } catch {
+    // localStorage unavailable — ignore
+  }
 }
 
 export interface ConfigData {
@@ -1188,7 +1233,7 @@ export function killSandbox(id: string): Promise<{ ok?: boolean }> {
 }
 
 export interface ChatEvent {
-  type: "tool_call" | "tool_result" | "response" | "error" | "activity";
+  type: "tool_call" | "tool_result" | "response" | "error" | "activity" | "approval_request";
   data: Record<string, unknown>;
 }
 
@@ -1290,12 +1335,14 @@ export function fetchMemoryNotes(params: {
   project?: string | "global" | null;
   tag?: string;
   search?: string;
+  agent?: string;
   limit?: number;
 }): Promise<MemoryNote[]> {
   const qs = new URLSearchParams();
   if (params.project !== undefined && params.project !== null) qs.set("project", params.project);
   if (params.tag) qs.set("tag", params.tag);
   if (params.search) qs.set("search", params.search);
+  if (params.agent) qs.set("agent", params.agent);
   if (params.limit) qs.set("limit", String(params.limit));
   return fetch(`/api/memory/notes?${qs}`).then((r) => r.json());
 }
