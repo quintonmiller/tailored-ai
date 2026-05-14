@@ -1,6 +1,7 @@
 import { marked } from "marked";
 import { useMemo, useState } from "react";
 import type { Message, ToolLogEntry, ToolLogToolEntry } from "../api";
+import { ChipBody } from "./chips";
 
 marked.setOptions({
   breaks: true,
@@ -115,15 +116,22 @@ export function ToolLogPanel(props: {
       {expanded && (
         <div className="tool-log-body">
           {entries.map((e, i) => (
-            <div key={entryKey(e, i)} className="tool-log-entry">
+            <div
+              key={entryKey(e, i)}
+              className={`tool-log-entry${isTool(e) && e.name === "delegate" ? " tool-log-entry-delegate" : ""}`}
+            >
               {isTool(e) ? (
-                <>
-                  <div className="tool-call-bubble">
-                    <span className="tool-call-name">{e.name}</span>
-                    <pre className="tool-call-args">{formatArgs(e.args)}</pre>
-                  </div>
-                  {e.output !== undefined && <ToolResultBubble content={e.output} compact />}
-                </>
+                e.name === "delegate" ? (
+                  <DelegateSubBubble entry={e} />
+                ) : (
+                  <>
+                    <div className="tool-call-bubble">
+                      <span className="tool-call-name">{e.name}</span>
+                      <pre className="tool-call-args">{formatArgs(e.args)}</pre>
+                    </div>
+                    {e.output !== undefined && <ToolResultBubble content={e.output} compact />}
+                  </>
+                )
               ) : (
                 <div className="tool-log-text">
                   <AssistantBubble content={e.content} />
@@ -237,7 +245,49 @@ function truncateCompact(content: string): string {
 function AssistantBubble(props: { content: string }) {
   const html = useMemo(() => marked.parse(props.content) as string, [props.content]);
 
-  return <div className="message-bubble assistant markdown-body" dangerouslySetInnerHTML={{ __html: html }} />;
+  return (
+    <div className="message-bubble assistant markdown-body">
+      <ChipBody html={html} />
+    </div>
+  );
+}
+
+function DelegateSubBubble({ entry }: { entry: ToolLogToolEntry }) {
+  const agent = (entry.args?.agent as string | undefined) ?? "(unknown)";
+  const task = (entry.args?.task as string | undefined) ?? "";
+  const [expanded, setExpanded] = useState(true);
+  return (
+    <div className="delegate-sub">
+      <button
+        type="button"
+        className="delegate-sub-header"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+      >
+        <span className="delegate-sub-arrow">↳</span>
+        <span className="delegate-sub-label">
+          delegated to <strong>{agent}</strong>
+        </span>
+        <span className="delegate-sub-caret">{expanded ? "▾" : "▸"}</span>
+      </button>
+      {expanded && (
+        <div className="delegate-sub-body">
+          {task && (
+            <div className="delegate-sub-task">
+              <div className="delegate-sub-section-label">Task</div>
+              <div className="delegate-sub-task-text">{task}</div>
+            </div>
+          )}
+          {entry.output !== undefined && (
+            <div className="delegate-sub-response">
+              <div className="delegate-sub-section-label">Response</div>
+              <AssistantBubble content={entry.output} />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function formatArgs(args: Record<string, unknown>): string {

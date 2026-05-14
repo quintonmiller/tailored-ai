@@ -1404,6 +1404,13 @@ export function fetchMemoryRecall(params: {
   return fetch(`/api/memory/recall?${qs}`).then((r) => r.json());
 }
 
+export function fetchMemoryNote(id: string): Promise<MemoryNote> {
+  return fetch(`/api/memory/notes/${encodeURIComponent(id)}`).then((r) => {
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    return r.json();
+  });
+}
+
 export function deleteMemoryNote(id: string): Promise<{ deleted: boolean }> {
   return fetch(`/api/memory/notes/${id}`, { method: "DELETE" }).then((r) => r.json());
 }
