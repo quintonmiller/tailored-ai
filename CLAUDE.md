@@ -592,6 +592,45 @@ CLI overrides:
 
 The project_id threading done here is a prerequisite for ever upgrading to a workspace daemon model where multiple projects' loops run concurrently. S7 stays single-tenant on purpose — runs serialize, one Discord bot, one cron scheduler — but isolation along the project_id axis is preserved so a future Slice 8 (or external supervisor) can fan that out.
 
+## Chat Output Tags (DUX3 / DUX6 / DUX7)
+
+Default chat-facing agents may emit a small set of XML-style tags inside
+their normal markdown output. The web UI lifts each into an interactive
+chip or card. Unknown / malformed tags fall back to inert text — the
+renderer never breaks a bubble.
+
+**Entity chips** (self-closing, inline):
+- `<task id="ptask_..."/>` — fetches the task, renders title + status pill, links to `#/tasks/{id}`.
+- `<agent name="researcher"/>` — links to `#/agents/{name}`, hover shows description.
+- `<note id="note_..."/>` — fetches the note, shows first-line preview + ★ if importance ≥ 0.8.
+- `<file path="..." line="..."/>` — monospace pill with optional line ref.
+
+**Proposals** (block-level — for things outside the current request):
+```xml
+<proposal kind="task|fix|note" priority="low|normal|high|critical" tags="a,b">
+  <title>One-line summary</title>
+  <body>Why and what.</body>
+</proposal>
+```
+The user gets Accept / Tell-me-more / Dismiss. Accept routes to:
+- `kind=task` → POST `/api/project-tasks` (tags: `["proposal", ...yourTags]`)
+- `kind=fix`  → re-prompts the agent: "Please apply the fix you proposed: …"
+- `kind=note` → writes a memory note (importance 0.6)
+
+Dismiss writes a `dismissed-proposal` note so memory injection surfaces
+the dismissal next time the agent considers re-proposing.
+
+**Asks** (block-level — for clarifying questions mid-conversation):
+```xml
+<ask kind="choice" choices="yes,no,defer">Should I migrate the old key now?</ask>
+<ask kind="text">What domain should I use?</ask>
+```
+Choice renders as buttons; text renders as an inline composer. Clicking
+a choice or submitting text calls `store.send(reply)` which continues the
+chat as the next user turn. (Loop-pause + `messages.in_reply_to`
+threading is a follow-up — today the agent's turn ends naturally and the
+user's reply starts the next turn.)
+
 ## Conventions
 
 - No default parameter values that duplicate config defaults (config.ts `DEFAULT_CONFIG` is the single source of truth)

@@ -1,6 +1,7 @@
 import { marked } from "marked";
 import { useMemo, useState } from "react";
 import type { MemoryRecall, Message, ToolLogEntry, ToolLogToolEntry } from "../api";
+import { AskCard, extractAsks } from "./asks";
 import { ChipBody } from "./chips";
 import { extractProposals, ProposalCard } from "./proposals";
 
@@ -250,10 +251,11 @@ function truncateCompact(content: string): string {
 }
 
 function AssistantBubble(props: { content: string }) {
-  const { content: stripped, proposals } = useMemo(
-    () => extractProposals(props.content),
-    [props.content],
-  );
+  const { stripped, proposals, asks } = useMemo(() => {
+    const a = extractAsks(props.content);
+    const p = extractProposals(a.content);
+    return { stripped: p.content, proposals: p.proposals, asks: a.asks };
+  }, [props.content]);
   const html = useMemo(() => marked.parse(stripped) as string, [stripped]);
 
   return (
@@ -261,6 +263,9 @@ function AssistantBubble(props: { content: string }) {
       <div className="message-bubble assistant markdown-body">
         <ChipBody html={html} />
       </div>
+      {asks.map((a, i) => (
+        <AskCard key={`ask-${i}`} ask={a} />
+      ))}
       {proposals.map((p, i) => (
         <ProposalCard key={`prop-${i}`} proposal={p} />
       ))}
