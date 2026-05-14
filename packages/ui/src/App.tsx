@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 import { type AutopilotActivity, fetchAutopilotActivity, fetchHealth } from "./api";
 import { BRAND } from "./brand";
+import { ChatProvider } from "./components/ChatContext";
+import { ChatDock } from "./components/ChatDock";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
+import { ToastProvider } from "./components/Toast";
+import { Agents } from "./pages/Agents";
 import { Chat } from "./pages/Chat";
 import { Config } from "./pages/Config";
 import { Dashboard } from "./pages/Dashboard";
@@ -19,6 +23,7 @@ import "./styles.css";
 
 type Route =
   | { page: "dashboard" }
+  | { page: "agents"; agentName?: string }
   | { page: "projects"; projectId?: string; tab?: "tasks" | "documents"; taskId?: string; docId?: string }
   | { page: "tasks"; taskId?: string; status?: string }
   | { page: "chat"; sessionKey?: string; sessionId?: string }
@@ -77,6 +82,10 @@ function parseHash(): Route {
     const parts = hash.split("/");
     const section = parts[2] || undefined;
     return { page: "config", section };
+  }
+  if (hash.startsWith("/agents")) {
+    const parts = hash.split("?")[0].split("/");
+    return { page: "agents", agentName: parts[2] || undefined };
   }
   if (hash.startsWith("/tools")) {
     return { page: "tools" };
@@ -147,6 +156,25 @@ export function App() {
   }, []);
 
   return (
+    <ToastProvider>
+      <ChatProvider>
+        <AppShell route={route} connected={connected} activity={activity} />
+        <ChatDock />
+      </ChatProvider>
+    </ToastProvider>
+  );
+}
+
+function AppShell({
+  route,
+  connected,
+  activity,
+}: {
+  route: Route;
+  connected: boolean | null;
+  activity: AutopilotActivity["current"] | null;
+}) {
+  return (
     <div className="app">
       <header className="app-header">
         <a href="#/" className="app-title">
@@ -158,6 +186,9 @@ export function App() {
           </a>
           <a href="#/projects" className={route.page === "projects" || route.page === "tasks" ? "active" : ""}>
             Projects
+          </a>
+          <a href="#/agents" className={route.page === "agents" ? "active" : ""}>
+            Agents
           </a>
           <a href="#/tools" className={route.page === "tools" ? "active" : ""}>
             Tools
@@ -204,6 +235,7 @@ export function App() {
             docId={route.docId}
           />
         )}
+        {route.page === "agents" && <Agents agentName={route.agentName} />}
         {route.page === "tasks" && <Tasks taskId={route.taskId} initialStatus={route.status} />}
         {route.page === "chat" && <Chat sessionKey={route.sessionKey} sessionId={route.sessionId} />}
         {route.page === "tools" && <Tools />}
