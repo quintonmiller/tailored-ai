@@ -99,6 +99,8 @@ import {
   parseSkillMd,
   renderSkillMd,
   readSkillMd,
+  readRawConfig,
+  writeRawConfigPath,
   type Resource,
   type ResourceKind,
 } from "@agent/core";
@@ -588,6 +590,78 @@ export function createServer(opts: ServerOptions) {
 
   app.get("/api/agents", (c) => {
     return c.json(runtime.getConfig().agents);
+  });
+
+  // ----- Agent CRUD (DUX4) -----
+  // Routes mutate `agents.<name>` in the raw YAML and trigger a runtime
+  // reload. Reuses the same helpers as AdminTool so the agent and a
+  // browser-side admin behave identically.
+
+  const VALID_AGENT_NAME = /^[A-Za-z0-9_-]+$/;
+
+  app.post("/api/agents", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as {
+      name?: unknown;
+      definition?: unknown;
+    };
+    const name = body.name;
+    const def = body.definition;
+    if (typeof name !== "string" || !VALID_AGENT_NAME.test(name)) {
+      return c.json({ error: "name must match /^[A-Za-z0-9_-]+$/" }, 400);
+    }
+    if (!def || typeof def !== "object" || Array.isArray(def)) {
+      return c.json({ error: "definition must be an object" }, 400);
+    }
+    if (runtime.getConfig().agents[name]) {
+      return c.json({ error: `agent "${name}" already exists` }, 409);
+    }
+    try {
+      await writeRawConfigPath(runtime, `agents.${name}`, def);
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 400);
+    }
+    return c.json({ name, definition: runtime.getConfig().agents[name] }, 201);
+  });
+
+  app.patch("/api/agents/:name", async (c) => {
+    const { name } = c.req.param();
+    if (!VALID_AGENT_NAME.test(name)) {
+      return c.json({ error: "invalid agent name" }, 400);
+    }
+    const existing = runtime.getConfig().agents[name];
+    if (!existing) return c.json({ error: "not found" }, 404);
+    const body = (await c.req.json().catch(() => ({}))) as { definition?: unknown };
+    const def = body.definition;
+    if (!def || typeof def !== "object" || Array.isArray(def)) {
+      return c.json({ error: "definition must be an object" }, 400);
+    }
+    try {
+      // Shallow-merge with the existing raw YAML entry so partial patches
+      // don't clobber fields the caller didn't send.
+      const raw = readRawConfig(runtime.configPath);
+      const agentsRaw = (raw.agents ?? {}) as Record<string, Record<string, unknown>>;
+      const merged = { ...(agentsRaw[name] ?? {}), ...(def as Record<string, unknown>) };
+      await writeRawConfigPath(runtime, `agents.${name}`, merged);
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 400);
+    }
+    return c.json({ name, definition: runtime.getConfig().agents[name] });
+  });
+
+  app.delete("/api/agents/:name", async (c) => {
+    const { name } = c.req.param();
+    if (!VALID_AGENT_NAME.test(name)) {
+      return c.json({ error: "invalid agent name" }, 400);
+    }
+    if (!runtime.getConfig().agents[name]) {
+      return c.json({ error: "not found" }, 404);
+    }
+    try {
+      await writeRawConfigPath(runtime, `agents.${name}`, undefined);
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 400);
+    }
+    return c.json({ deleted: true });
   });
 
   app.get("/api/cron", (c) => {

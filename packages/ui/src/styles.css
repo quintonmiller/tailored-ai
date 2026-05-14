@@ -6107,3 +6107,133 @@ select.model-entry-model {
 }
 .chat-dock-composer button:disabled { opacity: 0.4; cursor: default; }
 .tool-activity-dock { font-size: 11px; padding: 4px 8px; }
+
+/* Agents CRUD (DUX4) */
+.agents-sidebar-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.agents-new-btn {
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: var(--radius);
+  font-family: var(--font);
+  font-size: 11px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.agents-new-btn:hover { filter: brightness(1.1); }
+.agents-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+.agents-modal {
+  width: 600px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 64px);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.agents-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+.agents-modal-header h2 { margin: 0; font-size: 15px; font-weight: 500; }
+.agents-modal-header button {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 18px;
+}
+.agents-modal-body {
+  padding: 16px 18px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.agents-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+}
+.agents-modal-footer .primary {
+  background: var(--accent);
+  color: white;
+  border: none;
+}
+.agents-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.agents-field > span {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.agents-field input,
+.agents-field textarea {
+  padding: 7px 9px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  resize: vertical;
+}
+.agents-field textarea { font-family: var(--font-mono, monospace); }
+.agents-field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.agents-field-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+}
+.agents-field-check input { margin-top: 2px; }
+.agents-field-error {
+  color: #c25656;
+  font-style: normal;
+  font-size: 11px;
+}
+.agents-tool-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px;
+  background: var(--bg);
+}
+.agents-tool-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}

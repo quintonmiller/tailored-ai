@@ -163,6 +163,44 @@ export interface AgentInfo {
   tools?: string[];
   temperature?: number;
   maxToolRounds?: number;
+  injectMemory?: boolean;
+  summarizeOnTrim?: boolean;
+  maxHistoryTokens?: number;
+  memoryInjectBudgetTokens?: number;
+}
+
+export interface AgentDefinitionPatch {
+  description?: string;
+  model?: string;
+  provider?: string;
+  instructions?: string;
+  tools?: string[];
+  temperature?: number;
+  maxToolRounds?: number;
+  injectMemory?: boolean;
+  summarizeOnTrim?: boolean;
+}
+
+export function createAgent(name: string, definition: AgentDefinitionPatch): Promise<{ name: string; definition: AgentInfo }> {
+  return jsonFetch("/api/agents", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, definition }),
+  });
+}
+
+export function updateAgent(name: string, definition: AgentDefinitionPatch): Promise<{ name: string; definition: AgentInfo }> {
+  return jsonFetch(`/api/agents/${encodeURIComponent(name)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ definition }),
+  });
+}
+
+export function deleteAgent(name: string): Promise<{ deleted: boolean }> {
+  return jsonFetch(`/api/agents/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
 }
 
 /** @deprecated Use AgentInfo */
