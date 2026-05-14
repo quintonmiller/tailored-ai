@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  deleteFact,
   deleteMemoryNote,
+  fetchFacts,
   fetchMemoryNotes,
   fetchMemoryRecall,
   fetchMemoryStats,
   promoteMemoryNote,
   runMemorySweepHttp,
   updateMemoryNote,
+  type FactRow,
   type MemoryNote,
   type MemoryRecallHit,
   type MemoryStats,
@@ -15,6 +18,7 @@ import { useActiveProject } from "../hooks/useActiveProject";
 
 export function Memory() {
   const [notes, setNotes] = useState<MemoryNote[]>([]);
+  const [facts, setFacts] = useState<FactRow[]>([]);
   const [stats, setStats] = useState<MemoryStats | null>(null);
   const [search, setSearch] = useState("");
   const [recallQuery, setRecallQuery] = useState("");
@@ -37,6 +41,19 @@ export function Memory() {
     fetchMemoryStats(projectParam)
       .then(setStats)
       .catch(() => {});
+    fetchFacts({
+      project_id: projectParam ?? undefined,
+      search: search || undefined,
+      limit: 200,
+    })
+      .then((r) => setFacts(r.facts))
+      .catch(() => {});
+  }
+
+  async function handleDeleteFact(id: string) {
+    if (!confirm(`Delete fact ${id}?`)) return;
+    await deleteFact(id);
+    reload();
   }
 
   useEffect(() => {
@@ -134,6 +151,10 @@ export function Memory() {
           <div className="memory-stat">
             <div className="memory-stat-value">{stats.counts.notes}</div>
             <div className="memory-stat-label">Notes</div>
+          </div>
+          <div className="memory-stat">
+            <div className="memory-stat-value">{stats.counts.facts ?? 0}</div>
+            <div className="memory-stat-label">Facts</div>
           </div>
           <div className="memory-stat">
             <div className="memory-stat-value">{stats.counts.sessionSummaries}</div>
@@ -257,6 +278,47 @@ export function Memory() {
           </>
         )}
       </section>
+
+      {facts.length > 0 && (
+        <section className="memory-facts">
+          <h2>Facts ({facts.length})</h2>
+          <p className="memory-section-hint">
+            Structured atoms the agent has saved via the <code>facts</code>
+            {" "}tool — surfaced automatically by <code>recall</code> when
+            relevant.
+          </p>
+          <ul className="memory-fact-list">
+            {facts.map((f) => (
+              <li key={f.id} className="memory-fact">
+                <div className="memory-fact-key">
+                  <span className="memory-fact-category">{f.category}</span>
+                  {f.entity && <span className="memory-fact-entity">/ {f.entity}</span>}
+                  <span className="memory-fact-attr">· {f.key}</span>
+                </div>
+                <div className="memory-fact-value">{f.value}</div>
+                <div className="memory-fact-meta">
+                  <span className="memory-fact-date">
+                    {f.updated_at.slice(0, 16).replace("T", " ")}
+                  </span>
+                  {f.confidence != null && (
+                    <span title="confidence">{(f.confidence * 100).toFixed(0)}%</span>
+                  )}
+                  {f.source && <span title="source">via {f.source}</span>}
+                  <button
+                    type="button"
+                    className="memory-fact-delete"
+                    onClick={() => handleDeleteFact(f.id)}
+                    disabled={busy}
+                    aria-label="Delete fact"
+                  >
+                    ×
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </div>
   );
 }

@@ -6698,3 +6698,63 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
   letter-spacing: 0.04em;
   font-weight: 600;
 }
+
+/* Memory facts section (DUX11) */
+.memory-facts {
+  margin-top: 32px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.memory-facts h2 { margin-bottom: 4px; }
+.memory-section-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+}
+.memory-fact-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.memory-fact {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 12px;
+}
+.memory-fact-key { color: var(--text-dim); font-size: 11px; }
+.memory-fact-category { color: var(--accent); font-weight: 500; }
+.memory-fact-entity { color: var(--text); }
+.memory-fact-attr { color: var(--text-dim); }
+.memory-fact-value {
+  font-family: var(--font-mono, monospace);
+  color: var(--text);
+  font-size: 12px;
+  word-break: break-word;
+}
+.memory-fact-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--text-dim);
+  justify-self: end;
+}
+.memory-fact-delete {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+.memory-fact-delete:hover { color: #c25656; background: var(--bg-hover); }

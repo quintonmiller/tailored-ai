@@ -408,6 +408,12 @@ export function createServer(opts: ServerOptions) {
     });
     const summaries = liveNotes.filter((n) => n.tags.includes(SESSION_SUMMARY_TAG));
     const chunks = countChunks(runtime.db, projectFilter as string | null | undefined);
+    // Facts live in a separate table — count them so the stats tile reflects
+    // reality when the agent has been writing facts instead of notes.
+    const facts = listFacts(runtime.db, {
+      project_id: projectFilter as string | null | undefined,
+      limit: 10_000,
+    });
 
     // Most-referenced (live) notes.
     const topReferenced = [...liveNotes]
@@ -426,6 +432,7 @@ export function createServer(opts: ServerOptions) {
     return c.json({
       counts: {
         notes: liveNotes.length,
+        facts: facts.length,
         sessionSummaries: summaries.length,
         chunks,
       },

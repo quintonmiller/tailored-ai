@@ -1374,7 +1374,7 @@ export interface MemoryRecallHit {
 }
 
 export interface MemoryStats {
-  counts: { notes: number; sessionSummaries: number; chunks: number };
+  counts: { notes: number; facts: number; sessionSummaries: number; chunks: number };
   topReferenced: Array<{
     id: string;
     content: string;
@@ -1384,6 +1384,41 @@ export interface MemoryStats {
   }>;
   embeddingsEnabled: boolean;
   embeddingModel: string | null;
+}
+
+export interface FactRow {
+  id: string;
+  category: string;
+  entity: string;
+  key: string;
+  value: string;
+  asof: string | null;
+  source: string | null;
+  confidence: number | null;
+  project_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export function fetchFacts(params: {
+  project_id?: string | null;
+  category?: string;
+  search?: string;
+  limit?: number;
+}): Promise<{ facts: FactRow[] }> {
+  const qs = new URLSearchParams();
+  if (params.project_id !== undefined && params.project_id !== null)
+    qs.set("project_id", params.project_id);
+  if (params.category) qs.set("category", params.category);
+  if (params.search) qs.set("search", params.search);
+  if (params.limit) qs.set("limit", String(params.limit));
+  return fetch(`/api/facts${qs.toString() ? `?${qs}` : ""}`).then((r) => r.json());
+}
+
+export function deleteFact(id: string): Promise<{ ok: boolean }> {
+  return fetch(`/api/facts/${encodeURIComponent(id)}`, { method: "DELETE" }).then((r) =>
+    r.json(),
+  );
 }
 
 export function fetchMemoryNotes(params: {

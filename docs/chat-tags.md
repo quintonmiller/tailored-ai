@@ -50,14 +50,19 @@ Default chat agents scan every user message for three classes of information wor
 
 User says: *"I'm taking my car to the lake on Saturday."*
 
-The agent silently records three notes:
+The agent silently records — note that atomic profile facts go to the `facts` tool, while prose / inferred / ephemeral observations go to `recall`:
 
 ```
-recall(action:"note", content:"user has a car", tags:["profile"], importance:0.7)
+facts(set, category:"user", entity:"user", key:"has_car", value:"true")
 recall(action:"note", content:"user enjoys nature / outdoor activities", tags:["profile"], importance:0.55)
 recall(action:"note", content:"user is visiting a lake on Saturday 2026-05-16",
        tags:["ephemeral"], importance:0.4, ttl_at:"2026-05-18T00:00:00Z")
 ```
+
+Both surfaces — `notes` and `facts` — are read by `recallQuery`, so memory injection sees both. Pick the tool by the shape of the data:
+
+- **`facts`** — structured key/value atoms. Easy to update later (`facts(set, ...)` is idempotent on `category/entity/key`). Good for things like "city = Berlin", "has_car = true", "subscription:netflix monthly_cost = 22.99".
+- **`recall(action:"note")`** — prose or soft inferences. Good for "user enjoys hiking" (inferred from "let's go hiking again"), preferences, ephemeral context with a TTL.
 
 A week later when the user asks *"should I drive to the office or take transit?"* — none of these are pinned, so they don't always inject, but **with embeddings on** (DUX5) the semantic recall surfaces "user has a car" because driving ↔ has-car is a tight cosine match. By then the ephemeral lake note has been swept by TTL.
 
