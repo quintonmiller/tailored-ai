@@ -34,15 +34,38 @@ Dismiss writes a `dismissed-proposal` note so memory injection surfaces the dism
 
 Choice renders as buttons; text renders as an inline composer. Clicking a choice or submitting text calls `store.send(reply)` which continues the chat as the next user turn. (Loop-pause + `messages.in_reply_to` threading is a follow-up — today the agent's turn ends naturally and the user's reply starts the next turn.)
 
-## Preference learning (DUX9)
+## Observation extraction (DUX9 + DUX10)
 
-Default chat agents are instructed to recognize and persist durable user preferences. When the user says something like "always X", "from now on", "I prefer Y", or "first do A before B", the agent calls:
+Default chat agents scan every user message for three classes of information worth absorbing silently. They write to memory via `recall(action: "note", ...)` with the right tag + importance + TTL for each class. Retrieval is automatic via `injectMemory`.
+
+| Class | Tag(s) | Importance | TTL | Example trigger | Stored as |
+|---|---|---:|---|---|---|
+| Pinned preference | `["preference","pinned"]` | 0.95 | none | "from now on never commit without asking" | always-inject lane |
+| Preference | `["preference"]` | 0.85 | none | "I prefer terse answers" | relevance-ranked |
+| Profile fact (stated) | `["profile"]` | 0.7 | none | "I'm taking my car to the lake" → "user has a car" | relevance-ranked |
+| Profile fact (inferred) | `["profile"]` | 0.5–0.6 | none | "let's go hiking again" → "user enjoys hiking" | relevance-ranked |
+| Ephemeral context | `["ephemeral"]` | 0.4 | event date + 2 days | "visiting the lake on Saturday" | relevance-ranked, auto-swept |
+
+### Worked example
+
+User says: *"I'm taking my car to the lake on Saturday."*
+
+The agent silently records three notes:
 
 ```
-recall(action: "note", content: "<their wording>", tags: ["preference"], importance: 0.85)
+recall(action:"note", content:"user has a car", tags:["profile"], importance:0.7)
+recall(action:"note", content:"user enjoys nature / outdoor activities", tags:["profile"], importance:0.55)
+recall(action:"note", content:"user is visiting a lake on Saturday 2026-05-16",
+       tags:["ephemeral"], importance:0.4, ttl_at:"2026-05-18T00:00:00Z")
 ```
 
-For rules that apply globally regardless of topic (e.g. "never run destructive git without asking"), the agent also includes the tag `"pinned"` and uses `importance: 0.95`.
+A week later when the user asks *"should I drive to the office or take transit?"* — none of these are pinned, so they don't always inject, but **with embeddings on** (DUX5) the semantic recall surfaces "user has a car" because driving ↔ has-car is a tight cosine match. By then the ephemeral lake note has been swept by TTL.
+
+### Discipline rules
+
+- **Don't save** questions, hypotheticals, jokes, one-off task instructions, or anything already in memory. The agent may `recall(action:"query")` first if unsure.
+- **When in doubt, lower importance.** Unused notes get reaped naturally — `sweepExpiredNotes` deletes any note with `importance < 0.8` past its `ttl_at`.
+- **Pinned is precious.** Reserve 0.95 + "pinned" for rules that should apply on every turn regardless of topic. The injection budget caps pinned at ~4 notes / 200 tokens; over-pinning crowds it.
 
 ### How recall stays bounded
 

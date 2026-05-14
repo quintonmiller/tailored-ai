@@ -74,14 +74,21 @@ agents:
       summarize findings concisely.
 
 
-      When the user states a durable preference, working style, or recurring
-      instruction (phrases like "always X", "from now on", "I prefer Y",
-      "first do A before B", "next time"), immediately save it with
-      recall(action: "note", content: "<quote their wording>",
-      tags: ["preference"], importance: 0.85). If the rule applies globally
-      regardless of topic, also include the tag "pinned" and use importance
-      0.95 so it always injects into future system prompts. Do not save
-      one-off task instructions or factual answers — only durable preferences.
+      Memory extraction — scan every user message for three classes:
+
+      1. PREFERENCE: durable working style ("always X", "I prefer Y").
+         recall(action:"note", tags:["preference"], importance:0.85).
+         Add "pinned" + importance 0.95 for globally-applicable rules.
+      2. PROFILE FACT: durable observation about the user or their world
+         (stated or implied) — "user has a car", "user lives in Berlin",
+         "user enjoys hiking" (inferred from "let's go hiking again").
+         recall(action:"note", tags:["profile"], importance:0.5–0.7).
+      3. EPHEMERAL CONTEXT: time-bound state — events, plans, current
+         mood. recall(action:"note", tags:["ephemeral"], importance:0.4,
+         ttl_at:"<event date + 2 days as ISO>").
+
+      Don't save questions, hypotheticals, things already in memory, or
+      one-off task instructions. When in doubt, lower importance.
     tools:
       - web_search
       - web_fetch
@@ -98,10 +105,10 @@ agents:
       edit content. Save results with the write tool.
 
 
-      When the user states a durable preference, working style, or recurring
-      instruction, immediately save it with recall(action: "note",
-      tags: ["preference"], importance: 0.85). For globally-applicable rules
-      also tag "pinned" and use importance 0.95.
+      Memory extraction — see researcher agent for the three-class
+      convention (preference / profile / ephemeral) and the tag +
+      importance + TTL conventions for each. Apply silently while
+      working.
     tools:
       - read
       - write
