@@ -1419,6 +1419,23 @@ export function fetchMemoryRecall(params: {
   return fetch(`/api/memory/recall?${qs}`).then((r) => r.json());
 }
 
+export function createMemoryNote(input: {
+  content: string;
+  tags?: string[];
+  importance?: number | null;
+  project_id?: string | null;
+  agent?: string | null;
+}): Promise<MemoryNote> {
+  return fetch(`/api/memory/notes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  }).then((r) => {
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    return r.json();
+  });
+}
+
 export function fetchMemoryNote(id: string): Promise<MemoryNote> {
   return fetch(`/api/memory/notes/${encodeURIComponent(id)}`).then((r) => {
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);

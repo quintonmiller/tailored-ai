@@ -6381,3 +6381,99 @@ select.model-entry-model {
 }
 .recalled-chip-sources li { padding: 1px 0; }
 .recalled-chip-sources code { font-size: 10px; }
+
+/* Proposal cards (DUX6) */
+.proposal {
+  margin: 8px 0;
+  padding: 10px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  font-size: 12px;
+}
+.proposal-task { border-left-color: var(--accent); }
+.proposal-fix { border-left-color: #ffb454; }
+.proposal-note { border-left-color: #c08bdb; }
+.proposal-high { box-shadow: 0 0 0 1px rgba(255, 180, 84, 0.2); }
+.proposal-critical { box-shadow: 0 0 0 1px rgba(194, 86, 86, 0.3); border-left-color: #c25656; }
+.proposal-status-accepted,
+.proposal-status-dismissed { opacity: 0.7; }
+.proposal-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.proposal-kind {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--bg-hover);
+  color: var(--text-dim);
+}
+.kind-task { color: var(--accent); }
+.kind-fix { color: #ffb454; }
+.kind-note { color: #c08bdb; }
+.proposal-priority {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+.pri-high { color: #ffb454; }
+.pri-critical { color: #c25656; }
+.proposal-title {
+  flex: 1;
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--text);
+}
+.proposal-body {
+  margin: 4px 0 8px;
+  white-space: pre-wrap;
+  line-height: 1.5;
+  color: var(--text);
+}
+.proposal-tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 0 0 8px;
+}
+.proposal-tag {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.proposal-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.proposal-actions button {
+  font-family: var(--font);
+  font-size: 11px;
+  padding: 5px 10px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+.proposal-accept {
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+  color: white !important;
+}
+.proposal-accept:hover { filter: brightness(1.1); }
+.proposal-dismiss:hover { border-color: #c25656; color: #c25656; }
+.proposal-tell-more:hover { border-color: var(--accent-dim); }
+.proposal-busy { font-size: 11px; color: var(--text-dim); }
+.proposal-done {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-style: italic;
+}

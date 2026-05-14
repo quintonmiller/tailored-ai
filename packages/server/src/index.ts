@@ -21,6 +21,7 @@ import {
   deleteSession,
   updateSessionMeta,
   summarizeSession,
+  createNote,
   listNotes,
   getNote,
   deleteNote,
@@ -262,6 +263,36 @@ export function createServer(opts: ServerOptions) {
       excludeExpired: true,
     });
     return c.json(notes);
+  });
+
+  app.post("/api/memory/notes", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as {
+      content?: unknown;
+      tags?: unknown;
+      importance?: unknown;
+      project_id?: unknown;
+      session_id?: unknown;
+      agent?: unknown;
+      ttl_at?: unknown;
+    };
+    if (typeof body.content !== "string" || !body.content.trim()) {
+      return c.json({ error: "content is required" }, 400);
+    }
+    const tags = Array.isArray(body.tags) ? body.tags.filter((t): t is string => typeof t === "string") : [];
+    const importance =
+      typeof body.importance === "number" && body.importance >= 0 && body.importance <= 1
+        ? body.importance
+        : null;
+    const note = createNote(runtime.db, {
+      content: body.content,
+      tags,
+      importance,
+      project_id: typeof body.project_id === "string" ? body.project_id : null,
+      session_id: typeof body.session_id === "string" ? body.session_id : null,
+      agent: typeof body.agent === "string" ? body.agent : null,
+      ttl_at: typeof body.ttl_at === "string" ? body.ttl_at : null,
+    });
+    return c.json(note, 201);
   });
 
   app.get("/api/memory/notes/:id", (c) => {
