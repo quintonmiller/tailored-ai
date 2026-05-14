@@ -548,6 +548,12 @@ export function createServer(opts: ServerOptions) {
               data: JSON.stringify({ status: desc ? "active" : "idle", description: desc }),
             });
           },
+          onMemoryRecalled: (info) => {
+            stream.writeSSE({
+              event: "memory_recalled",
+              data: JSON.stringify(info),
+            });
+          },
         });
 
         // --- afterRun hooks ---

@@ -15,6 +15,14 @@ export interface MemoryInjectOptions {
 const DEFAULT_LIMIT = 5;
 const DEFAULT_BUDGET = 800; // tokens
 
+export interface MemoryInjectResult {
+  block: string;
+  /** Hits actually included in the rendered block (post budget cap). */
+  included: RecallHit[];
+  /** Hits returned by recallQuery before the budget cap was applied. */
+  total: number;
+}
+
 /**
  * Build a `[Relevant memory]` block to prepend to the system prompt. Calls
  * `recallQuery` against the user's message and renders the top hits as a
@@ -27,6 +35,18 @@ export function buildMemoryBlock(
   db: Database.Database,
   opts: MemoryInjectOptions,
 ): string {
+  return buildMemoryBlockWithMeta(db, opts).block;
+}
+
+/**
+ * Same as buildMemoryBlock but also returns metadata (which hits were
+ * included, total candidates). Used by the loop to emit a memory_recalled
+ * event so the UI can show "Recalled N notes".
+ */
+export function buildMemoryBlockWithMeta(
+  db: Database.Database,
+  opts: MemoryInjectOptions,
+): MemoryInjectResult {
   const limit = opts.limit ?? DEFAULT_LIMIT;
   const budget = opts.budgetTokens ?? DEFAULT_BUDGET;
 
@@ -36,23 +56,26 @@ export function buildMemoryBlock(
     tier: "any",
     limit,
   });
-  if (hits.length === 0) return "";
+  if (hits.length === 0) return { block: "", included: [], total: 0 };
 
   const lines: string[] = ["", "[Relevant memory]"];
   const charBudget = budget * 4;
   let used = 0;
   let included = 0;
+  const includedHits: RecallHit[] = [];
   for (const h of hits) {
     const line = formatLine(h);
     if (used + line.length > charBudget) {
       if (included === 0) {
         // Always include at least the top hit, even if it overruns slightly.
         lines.push(line);
+        includedHits.push(h);
         included++;
       }
       break;
     }
     lines.push(line);
+    includedHits.push(h);
     used += line.length;
     included++;
   }
@@ -60,7 +83,7 @@ export function buildMemoryBlock(
     lines.push(`(${hits.length - included} more hidden)`);
   }
   lines.push("[/Relevant memory]");
-  return `${lines.join("\n")}\n`;
+  return { block: `${lines.join("\n")}\n`, included: includedHits, total: hits.length };
 }
 
 function formatLine(h: RecallHit): string {

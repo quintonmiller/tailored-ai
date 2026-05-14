@@ -138,6 +138,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setMessages((prev) => [...prev, { role: "user", content: text }]);
 
       let finalTools: ToolLogEntry[] = [];
+      let recalled: { count: number; sources: string[] } | undefined;
 
       abortRef.current = sendChat(
         text,
@@ -147,6 +148,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             case "activity":
               setActivityDesc((event.data.description as string | null | undefined) ?? null);
               break;
+            case "memory_recalled": {
+              recalled = {
+                count: (event.data.count as number) ?? 0,
+                sources: ((event.data.sources as string[]) ?? []).slice(0, 5),
+              };
+              break;
+            }
             case "approval_request": {
               const req: PendingApproval = {
                 requestId: event.data.requestId as string,
@@ -208,8 +216,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                   role: "assistant",
                   content: event.data.content as string,
                   toolLog: finalTools.length > 0 ? finalTools : undefined,
+                  recalled,
                 },
               ]);
+              recalled = undefined;
               break;
             }
             case "error": {

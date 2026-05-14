@@ -6345,3 +6345,39 @@ select.model-entry-model {
   padding: 4px 8px;
   font-size: 12px;
 }
+
+/* Recalled-notes chip (DUX5) */
+.recalled-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+.recalled-chip-button {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 3px;
+  background: rgba(192, 139, 219, 0.08);
+  border: 1px solid rgba(192, 139, 219, 0.3);
+  border-radius: 999px;
+  font-family: var(--font);
+  font-size: 10px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.recalled-chip-button:hover { filter: brightness(1.05); color: var(--text); }
+.recalled-chip-icon { color: #c08bdb; }
+.recalled-chip-caret { font-size: 9px; opacity: 0.7; }
+.recalled-chip-sources {
+  list-style: none;
+  padding: 4px 12px;
+  margin: 0;
+  font-size: 10px;
+  color: var(--text-dim);
+  background: rgba(192, 139, 219, 0.04);
+  border-radius: var(--radius);
+}
+.recalled-chip-sources li { padding: 1px 0; }
+.recalled-chip-sources code { font-size: 10px; }

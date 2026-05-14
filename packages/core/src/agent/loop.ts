@@ -15,7 +15,7 @@ import type { Tool, ToolContext } from "../tools/interface.js";
 import { BASE_SYSTEM_PROMPT } from "./prompt.js";
 import type { Session } from "./session.js";
 import { createActiveSkillState, type ActiveSkillState } from "./active-skill.js";
-import { buildMemoryBlock } from "./memory-inject.js";
+import { buildMemoryBlockWithMeta } from "./memory-inject.js";
 import type { SkillCatalogEntry } from "./agents.js";
 
 const MAX_RETRIES = 1;
@@ -95,6 +95,8 @@ export interface AgentLoopOptions {
   injectMemory?: boolean;
   memoryInjectBudgetTokens?: number;
   memoryInjectLimit?: number;
+  /** Fires once per turn when memory injection ran, with the source ids that were included in the block. */
+  onMemoryRecalled?: (info: { count: number; sources: string[] }) => void;
 }
 
 export function estimateTokens(msg: Message): number {
@@ -401,14 +403,22 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
     contextContent = await loadAllContext(contextDir, agentContextDir);
   }
   const catalogBlock = renderSkillCatalog(opts.skillCatalog);
-  const memoryBlock = opts.injectMemory
-    ? buildMemoryBlock(db, {
-        userMessage,
-        projectId: session.projectId ?? null,
-        budgetTokens: opts.memoryInjectBudgetTokens,
-        limit: opts.memoryInjectLimit,
-      })
-    : "";
+  let memoryBlock = "";
+  if (opts.injectMemory) {
+    const meta = buildMemoryBlockWithMeta(db, {
+      userMessage,
+      projectId: session.projectId ?? null,
+      budgetTokens: opts.memoryInjectBudgetTokens,
+      limit: opts.memoryInjectLimit,
+    });
+    memoryBlock = meta.block;
+    if (meta.included.length > 0) {
+      opts.onMemoryRecalled?.({
+        count: meta.included.length,
+        sources: meta.included.map((h) => h.source),
+      });
+    }
+  }
   const fullSystemPrompt =
     BASE_SYSTEM_PROMPT + extraInstructions + contextContent + catalogBlock + memoryBlock;
   const systemPromptTokens = estimateTokens({ role: "system", content: fullSystemPrompt });
@@ -502,8 +512,11 @@ async function _runAgentLoopBody(
       prevToolNames &&
       (prevToolNames.length !== currentToolNames.length || prevToolNames.some((n, i) => n !== currentToolNames[i]))
     ) {
+      // Use role "user" so providers like vLLM (strict OpenAI mode) that
+      // reject mid-history system messages still accept it. The [System: ...]
+      // prefix keeps the semantic cue for the model.
       history.push({
-        role: "system",
+        role: "user",
         content: `[System: available tools have been updated. Current tools: ${currentToolNames.join(", ")}]`,
       });
     }

@@ -50,6 +50,11 @@ export interface ToolLogTextEntry {
 
 export type ToolLogEntry = ToolLogToolEntry | ToolLogTextEntry;
 
+export interface MemoryRecall {
+  count: number;
+  sources: string[];
+}
+
 export interface Message {
   role: "system" | "user" | "assistant" | "tool";
   content: string | null;
@@ -59,6 +64,9 @@ export interface Message {
   // text message. Populated by groupTurns() when grouping historical messages,
   // and by the chat streaming loop when committing the final response.
   toolLog?: ToolLogEntry[];
+  // UI-only: emitted by the loop when injectMemory ran and produced hits.
+  // Rendered as a "Recalled N notes" chip above the bubble.
+  recalled?: MemoryRecall;
 }
 
 export interface HealthInfo {
@@ -1271,7 +1279,14 @@ export function killSandbox(id: string): Promise<{ ok?: boolean }> {
 }
 
 export interface ChatEvent {
-  type: "tool_call" | "tool_result" | "response" | "error" | "activity" | "approval_request";
+  type:
+    | "tool_call"
+    | "tool_result"
+    | "response"
+    | "error"
+    | "activity"
+    | "approval_request"
+    | "memory_recalled";
   data: Record<string, unknown>;
 }
 

@@ -1,11 +1,11 @@
 ---
 # autonomous-agent-llvv
 title: DUX3 — Rich entity rendering
-status: todo
+status: completed
 type: task
 priority: normal
 created_at: 2026-05-14T05:30:54Z
-updated_at: 2026-05-14T05:30:54Z
+updated_at: 2026-05-14T05:52:14Z
 parent: autonomous-agent-p0ae
 ---
 

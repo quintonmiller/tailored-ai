@@ -1,6 +1,6 @@
 import { marked } from "marked";
 import { useMemo, useState } from "react";
-import type { Message, ToolLogEntry, ToolLogToolEntry } from "../api";
+import type { MemoryRecall, Message, ToolLogEntry, ToolLogToolEntry } from "../api";
 import { ChipBody } from "./chips";
 
 marked.setOptions({
@@ -13,7 +13,7 @@ const COMPACT_TRUNCATE_LENGTH = 120;
 const COMPACT_TRUNCATE_LINES = 2;
 
 export function MessageBubble(props: { message: Message }) {
-  const { role, content, toolCalls, toolLog } = props.message;
+  const { role, content, toolCalls, toolLog, recalled } = props.message;
 
   // Assistant carrier with a collapsed tool log (preferred path post-grouping).
   // Work summary goes ABOVE the final response so the response stays the
@@ -21,6 +21,7 @@ export function MessageBubble(props: { message: Message }) {
   if (role === "assistant" && toolLog?.length) {
     return (
       <>
+        {recalled && <RecalledChip recalled={recalled} />}
         <ToolLogPanel entries={toolLog} />
         {content && <AssistantBubble content={content} />}
       </>
@@ -61,7 +62,12 @@ export function MessageBubble(props: { message: Message }) {
 
   // Regular assistant message — render as markdown
   if (role === "assistant" && content) {
-    return <AssistantBubble content={content} />;
+    return (
+      <>
+        {recalled && <RecalledChip recalled={recalled} />}
+        <AssistantBubble content={content} />
+      </>
+    );
   }
 
   // Tool result (legacy path)
@@ -248,6 +254,37 @@ function AssistantBubble(props: { content: string }) {
   return (
     <div className="message-bubble assistant markdown-body">
       <ChipBody html={html} />
+    </div>
+  );
+}
+
+function RecalledChip({ recalled }: { recalled: MemoryRecall }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!recalled.count) return null;
+  return (
+    <div className="recalled-chip">
+      <button
+        type="button"
+        className="recalled-chip-button"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+        title="Memory hits injected into the system prompt for this turn"
+      >
+        <span className="recalled-chip-icon">✺</span>
+        <span>
+          Recalled {recalled.count} {recalled.count === 1 ? "note" : "notes"}
+        </span>
+        <span className="recalled-chip-caret">{expanded ? "▾" : "▸"}</span>
+      </button>
+      {expanded && (
+        <ul className="recalled-chip-sources">
+          {recalled.sources.map((s, i) => (
+            <li key={i}>
+              <code>{s}</code>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
