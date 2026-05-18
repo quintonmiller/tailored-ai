@@ -195,6 +195,29 @@ export class RecallTool implements Tool {
     if (!content) {
       return { success: false, output: "", error: "content is required for action=note" };
     }
+    // Channel discipline (docs/agent-unification.md, RC2): refuse to write
+    // operational telemetry into the semantic-recall store. Idle ticks and
+    // status pings belong in tick_log, not in notes future recall will surface.
+    // Strict prefix match keeps the filter narrow — a note that *mentions*
+    // these phrases mid-sentence is fine, only ones that *open* with them
+    // get rejected.
+    const TELEMETRY_PREFIXES = [
+      /^tick:/i,
+      /^standing by\b/i,
+      /^no new material\b/i,
+      /^email check at\b/i,
+      /^no[_ ]new[_ ]mail\b/i,
+    ];
+    if (TELEMETRY_PREFIXES.some((re) => re.test(content))) {
+      return {
+        success: false,
+        output: "",
+        error:
+          "Refusing to write a telemetry-style note to recall. " +
+          "Idle/status logs belong in tick_log, not in semantic memory. " +
+          "If this is a real observation, rephrase it so it does not open with 'tick:', 'standing by', 'email check at', etc.",
+      };
+    }
     const tags = Array.isArray(args.tags)
       ? args.tags.filter((t): t is string => typeof t === "string")
       : [];

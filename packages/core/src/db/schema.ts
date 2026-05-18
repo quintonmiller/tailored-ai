@@ -308,6 +308,76 @@ export function initDatabase(dbPath: string): Database.Database {
       ON exploratory_runs(agent_name, started_at);
     CREATE INDEX IF NOT EXISTS idx_xruns_project_started
       ON exploratory_runs(project_id, started_at);
+
+    -- Agent-unification Phase 1 (see docs/agent-unification.md).
+    --
+    -- core_memory: the always-injected identity layer. One row per
+    -- (agent, project_id, section). Sections are typed; content is
+    -- agent-authored prose. Hard-capped in code at ~2K tokens total
+    -- per (agent, project) so it stays cheap to inject every turn.
+    CREATE TABLE IF NOT EXISTS core_memory (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent       TEXT NOT NULL,
+      project_id  TEXT,
+      section     TEXT NOT NULL,
+      content     TEXT NOT NULL DEFAULT '',
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_by  TEXT
+    );
+
+    -- SQLite treats NULL as distinct in UNIQUE constraints, so we use
+    -- a COALESCE-wrapped unique index to enforce one row per
+    -- (agent, project_id, section) — including project_id IS NULL.
+    -- This is also the index lookups will hit, so we don't need a
+    -- separate non-unique one.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_core_memory_uniq
+      ON core_memory(agent, COALESCE(project_id, ''), section);
+
+    -- tick_log: operational telemetry for every exploratory/heartbeat
+    -- tick. Conventional kind values: start, noop, material, delegate,
+    -- workflow, error. Open TEXT so we can add kinds without ALTER
+    -- TABLE pain.
+    --
+    -- Critically: this table is NEVER queried by recall. It's a
+    -- separate channel from semantic memory by design — that's the
+    -- whole point of having it.
+    CREATE TABLE IF NOT EXISTS tick_log (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      tick_id     TEXT NOT NULL,
+      agent       TEXT NOT NULL,
+      project_id  TEXT,
+      kind        TEXT NOT NULL,
+      summary     TEXT,
+      payload     TEXT,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_tick_log_tick
+      ON tick_log(tick_id);
+    CREATE INDEX IF NOT EXISTS idx_tick_log_agent_created
+      ON tick_log(agent, created_at);
+    CREATE INDEX IF NOT EXISTS idx_tick_log_kind_created
+      ON tick_log(kind, created_at);
+
+    -- email_seen: dedup ledger so the email-fetcher agent doesn't
+    -- have to remember which messages it already processed. The
+    -- whole point: set membership belongs in SQL, not in an LLM
+    -- prompt. message_id is Gmail's unique id; subject_hash is for
+    -- "same sender + same subject template" rules later.
+    CREATE TABLE IF NOT EXISTS email_seen (
+      message_id   TEXT PRIMARY KEY,
+      thread_id    TEXT,
+      from_addr    TEXT,
+      subject_hash TEXT,
+      seen_at      TEXT NOT NULL DEFAULT (datetime('now')),
+      disposition  TEXT NOT NULL DEFAULT 'noted',
+      notes        TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_email_seen_seen_at
+      ON email_seen(seen_at);
+    CREATE INDEX IF NOT EXISTS idx_email_seen_from
+      ON email_seen(from_addr);
   `);
 
   // Safe migration for existing DBs that lack session_key
@@ -393,6 +463,20 @@ export function initDatabase(dbPath: string): Database.Database {
   } catch {
     // Column already exists
   }
+
+  // Safe migration: archival flag on notes (Phase 1, docs/agent-unification.md).
+  // Notes flagged archival=1 are the durable subset of recall — survive
+  // aggressive sweeps, agent-promoted explicitly.
+  try {
+    db.exec("ALTER TABLE notes ADD COLUMN archival INTEGER NOT NULL DEFAULT 0");
+  } catch {
+    // Column already exists
+  }
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_notes_archival
+      ON notes(archival, created_at);
+  `);
 
   // Safe migration: session title + pinned flag (DUX1 — chat persistence).
   try {
