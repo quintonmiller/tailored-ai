@@ -18,7 +18,9 @@ import {
 } from "../db/exploratory-queries.js";
 import { listNotes } from "../db/note-queries.js";
 import { appendTickLog } from "../db/tick-log-queries.js";
+import { SleepTool } from "../tools/sleep.js";
 import type { AgentRuntime } from "../runtime.js";
+import { buildTickContext, renderTickSituation } from "./tick-context.js";
 
 export interface ExploratoryWorkerOptions {
   runtime: AgentRuntime;
@@ -185,14 +187,29 @@ export class ExploratoryWorker {
     const explicitToolCallCap = online.budgets?.tool_calls_per_tick;
 
     try {
-      const prompt = await this.buildTickPrompt(agentName, def);
+      const basePrompt = await this.buildTickPrompt(agentName, def);
+
+      // Build a structured "Situation" block from live state (backlog,
+      // outcomes-window, exploration candidates from core_memory). The
+      // agent picks from a typed candidate menu instead of free-styling
+      // "what should I do" (docs/agent-unification.md, Phase 3).
+      const tickCtx = buildTickContext(db, agentName, projectId);
+      const situation = renderTickSituation(tickCtx);
+      const prompt = `${basePrompt}\n\n${situation}`;
 
       const sessionKey = `exploratory:${agentName}:${run.id}`;
       const provider = this.runtime.getProvider().id;
       const model = this.runtime.getModel();
       const session = resetSession(db, sessionKey, model, provider, null);
 
-      const baseOpts = this.runtime.buildLoopOptions({ session, agentName });
+      // Sleep tool is only available inside ticks — passed via extraTools
+      // so reactive chat never sees it (silent agent mid-conversation = bad UX).
+      const sleepTool = new SleepTool(db);
+      const baseOpts = this.runtime.buildLoopOptions({
+        session,
+        agentName,
+        extraTools: [sleepTool],
+      });
 
       // Narrow the tool set if the agent declared online.tools (a subset of
       // its main tools). Subset semantics: each entry must be a name in
@@ -206,7 +223,13 @@ export class ExploratoryWorker {
       if (online.tools && online.tools.length > 0) {
         const want = new Set(online.tools);
         const metaNames = new Set(this.runtime.getMetaTools().map((t) => t.name));
-        const keep = (t: { name: string }) => want.has(t.name) || metaNames.has(t.name);
+        // Sleep is the noop terminator — must survive any allowlist or the
+        // agent has no way to end a tick cleanly (it would have to fall back
+        // to writing a "tick: idle" recall note, which is exactly the
+        // antipattern we're trying to kill).
+        const alwaysKeep = new Set(["Sleep"]);
+        const keep = (t: { name: string }) =>
+          want.has(t.name) || metaNames.has(t.name) || alwaysKeep.has(t.name);
         tools = baseOpts.tools.filter(keep);
         getTools = () => (baseOpts.getTools?.() ?? tools).filter(keep);
       }

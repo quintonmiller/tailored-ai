@@ -11,6 +11,7 @@ import {
 import { loadAllContext, loadContextFiles } from "../context.js";
 import { getCoreMemory, renderCoreMemory } from "../db/core-memory-queries.js";
 import { getSessionMessages, saveMessage } from "../db/queries.js";
+import { buildChatLiveState, renderChatLiveState } from "./chat-live-state.js";
 import type { AIProvider, Message, ToolCall, ToolSchema } from "../providers/interface.js";
 import type { Tool, ToolContext } from "../tools/interface.js";
 import { BASE_SYSTEM_PROMPT } from "./prompt.js";
@@ -416,7 +417,9 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
   // agentName comes through toolContextExtras (set by every entry point
   // that runs a named agent — chat, tick worker, delegate, workflow).
   let coreMemoryBlock = "";
+  let chatLiveBlock = "";
   const agentNameForCore = opts.toolContextExtras?.agentName as string | undefined;
+  const isExploratoryTick = !!opts.toolContextExtras?.exploratoryRunId;
   if (agentNameForCore) {
     const rows = getCoreMemory(db, {
       agent: agentNameForCore,
@@ -425,6 +428,15 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
     if (rows.length > 0) {
       const rendered = renderCoreMemory(rows, { maxBytes: 8192 });
       if (rendered) coreMemoryBlock = `\n\n# Core memory (your identity across sessions)\n\n${rendered}`;
+    }
+    // Chat live_state: recent ticks + in-flight + pending. Only for chat
+    // sessions (not ticks — ticks get the TickContext Situation block,
+    // built and prepended by the exploratory worker; not delegates —
+    // they see the parent task only). Heuristic: no exploratoryRunId.
+    if (!isExploratoryTick) {
+      const state = buildChatLiveState(db, agentNameForCore, session.projectId ?? null);
+      const rendered = renderChatLiveState(state);
+      if (rendered) chatLiveBlock = `\n\n${rendered}`;
     }
   }
 
@@ -446,11 +458,19 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
       });
     }
   }
-  // Order: base + extra instructions + agent context + skill catalog + core
-  // memory + recall memory. Core memory goes BEFORE recall because identity
-  // is foundational — the agent should read who-it-is before what-it-knows.
+  // Order: base + extra instructions + agent context + skill catalog +
+  // core memory + chat live_state + recall memory. Identity (core) first,
+  // then "what's current right now" (live_state), then "what I might
+  // recall about this" (memoryBlock). Live_state only appears in chat;
+  // ticks build their own Situation block in the worker.
   const fullSystemPrompt =
-    BASE_SYSTEM_PROMPT + extraInstructions + contextContent + catalogBlock + coreMemoryBlock + memoryBlock;
+    BASE_SYSTEM_PROMPT +
+    extraInstructions +
+    contextContent +
+    catalogBlock +
+    coreMemoryBlock +
+    chatLiveBlock +
+    memoryBlock;
   const systemPromptTokens = estimateTokens({ role: "system", content: fullSystemPrompt });
 
   const history = getSessionMessages(db, session.id);
