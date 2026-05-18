@@ -14,6 +14,7 @@ import { LoadSkillTool } from "./tools/load-skill.js";
 import { ResourceAdminTool } from "./tools/resource-admin.js";
 import { ExecTool } from "./tools/exec.js";
 import { FactsTool } from "./tools/facts.js";
+import { CoreMemoryTool } from "./tools/core-memory.js";
 import { RecallTool } from "./tools/recall.js";
 import { GmailTool } from "./tools/gmail.js";
 import { GoogleCalendarTool } from "./tools/google-calendar.js";
@@ -88,8 +89,14 @@ export function createTools(
   if (config.tools.web_fetch?.enabled !== false) {
     tools.push(new WebFetchTool());
   }
-  if (config.tools.web_search?.enabled && config.tools.web_search.apiKey) {
-    tools.push(new WebSearchTool(config.tools.web_search.apiKey, config.tools.web_search.maxResults));
+  if (config.tools.web_search?.enabled) {
+    if (config.tools.web_search.apiKey) {
+      tools.push(new WebSearchTool(config.tools.web_search.apiKey, config.tools.web_search.maxResults));
+    } else {
+      console.warn(
+        '[factories] tools.web_search.enabled is true but apiKey is empty (likely an unresolved ${ENV_VAR}); tool will not be registered.',
+      );
+    }
   }
   if (config.tools.facts?.enabled !== false && opts?.db) {
     tools.push(new FactsTool(opts.db));
@@ -103,6 +110,9 @@ export function createTools(
       }),
     );
   }
+  // NOTE: CoreMemoryTool is registered as a META tool in createMetaTools(),
+  // not as a regular tool here. Identity maintenance is foundational —
+  // every named agent gets it regardless of its `tools:` allowlist.
   if (config.tools.tasks?.enabled !== false) {
     const backend = opts?.taskBackend ?? (opts?.db ? createTaskBackend(config, opts.db) : undefined);
     if (backend) {
@@ -110,11 +120,23 @@ export function createTools(
     }
   }
   const gogPassword = process.env.GOG_KEYRING_PASSWORD ?? "";
-  if (config.tools.gmail?.enabled && config.tools.gmail.account) {
-    tools.push(new GmailTool(config.tools.gmail.account, gogPassword));
+  if (config.tools.gmail?.enabled) {
+    if (config.tools.gmail.account) {
+      tools.push(new GmailTool(config.tools.gmail.account, gogPassword, opts?.db));
+    } else {
+      console.warn(
+        '[factories] tools.gmail.enabled is true but account is empty (likely an unresolved ${GOG_ACCOUNT}); tool will not be registered.',
+      );
+    }
   }
-  if (config.tools.google_calendar?.enabled && config.tools.google_calendar.account) {
-    tools.push(new GoogleCalendarTool(config.tools.google_calendar.account, gogPassword));
+  if (config.tools.google_calendar?.enabled) {
+    if (config.tools.google_calendar.account) {
+      tools.push(new GoogleCalendarTool(config.tools.google_calendar.account, gogPassword));
+    } else {
+      console.warn(
+        '[factories] tools.google_calendar.enabled is true but account is empty (likely an unresolved ${GOG_ACCOUNT}); tool will not be registered.',
+      );
+    }
   }
   if (config.tools.claude_code?.enabled) {
     tools.push(new ClaudeCodeTool(config.tools.claude_code));
@@ -125,16 +147,22 @@ export function createTools(
   if (config.tools.md_to_pdf?.enabled) {
     tools.push(new MdToPdfTool());
   }
-  if (config.tools.google_drive?.enabled && config.tools.google_drive.account) {
-    tools.push(
-      new GoogleDriveTool(
-        config.tools.google_drive.account,
-        gogPassword,
-        config.tools.google_drive.folder_name,
-        config.tools.google_drive.folder_id,
-        configPath,
-      ),
-    );
+  if (config.tools.google_drive?.enabled) {
+    if (config.tools.google_drive.account) {
+      tools.push(
+        new GoogleDriveTool(
+          config.tools.google_drive.account,
+          gogPassword,
+          config.tools.google_drive.folder_name,
+          config.tools.google_drive.folder_id,
+          configPath,
+        ),
+      );
+    } else {
+      console.warn(
+        '[factories] tools.google_drive.enabled is true but account is empty (likely an unresolved ${GOG_ACCOUNT}); tool will not be registered.',
+      );
+    }
   }
   if (config.tools.projects?.enabled !== false && opts?.db) {
     tools.push(new ProjectsTool(opts.db));
@@ -205,5 +233,9 @@ export function createMetaTools(runtime: AgentRuntime, contextDir: string, kbDir
   });
   const resourceAdminTool = new ResourceAdminTool({ runtime });
   const loadSkillTool = new LoadSkillTool({ getSkillRegistry: () => runtime.getSkillRegistry() });
-  return [delegateTool, taskStatusTool, adminTool, runWorkflowTool, resourceAdminTool, loadSkillTool];
+  // CoreMemoryTool: always available, even when an agent's `tools:` allowlist
+  // omits it. The agent needs to be able to maintain its own identity
+  // regardless of which other tools it's been narrowed to.
+  const coreMemoryTool = new CoreMemoryTool(runtime.db);
+  return [delegateTool, taskStatusTool, adminTool, runWorkflowTool, resourceAdminTool, loadSkillTool, coreMemoryTool];
 }

@@ -258,4 +258,73 @@ describe("RecallTool", () => {
     expect(res.success).toBe(false);
     expect(res.error).toMatch(/unknown action/);
   });
+
+  describe("action=archive", () => {
+    it("flips archival=1 and records the reason", async () => {
+      const tool = new RecallTool(db);
+      const created = createNote(db, { content: "user wants iMessage support" });
+      const res = await tool.execute(
+        { action: "archive", id: created.id, reason: "durable preference" },
+        makeCtx(),
+      );
+      expect(res.success).toBe(true);
+      const after = getNote(db, created.id);
+      expect((after as unknown as { archival: number }).archival).toBe(1);
+      expect(after?.tags.some((t) => t.includes("durable preference"))).toBe(true);
+    });
+
+    it("requires a reason", async () => {
+      const tool = new RecallTool(db);
+      const created = createNote(db, { content: "x" });
+      const res = await tool.execute({ action: "archive", id: created.id }, makeCtx());
+      expect(res.success).toBe(false);
+      expect(res.error).toMatch(/reason is required/);
+    });
+
+    it("requires an id", async () => {
+      const tool = new RecallTool(db);
+      const res = await tool.execute({ action: "archive", reason: "x" }, makeCtx());
+      expect(res.success).toBe(false);
+      expect(res.error).toMatch(/id is required/);
+    });
+
+    it("errors on unknown id", async () => {
+      const tool = new RecallTool(db);
+      const res = await tool.execute(
+        { action: "archive", id: "note_doesnt_exist", reason: "x" },
+        makeCtx(),
+      );
+      expect(res.success).toBe(false);
+      expect(res.error).toMatch(/no note with id/);
+    });
+  });
+
+  describe("telemetry write filter", () => {
+    const REJECTED = [
+      "tick: idle at 22:30",
+      "standing by for next instruction",
+      "no new material today",
+      "email check at 14:00, nothing material",
+      "NO_NEW_MAIL",
+      "TICK: IDLE",  // case-insensitive
+    ];
+
+    for (const content of REJECTED) {
+      it(`rejects telemetry-prefix: ${content.slice(0, 30)}...`, async () => {
+        const tool = new RecallTool(db);
+        const res = await tool.execute({ action: "note", content }, makeCtx());
+        expect(res.success).toBe(false);
+        expect(res.error).toMatch(/telemetry|tick_log/);
+      });
+    }
+
+    it("allows legitimate notes that mention these phrases mid-sentence", async () => {
+      const tool = new RecallTool(db);
+      const res = await tool.execute(
+        { action: "note", content: "Investigated X; was standing by for a response but none arrived." },
+        makeCtx(),
+      );
+      expect(res.success).toBe(true);
+    });
+  });
 });

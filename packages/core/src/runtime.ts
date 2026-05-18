@@ -125,10 +125,15 @@ export class AgentRuntime {
     // populates the AgentRegistry from disk. config.yaml agents still resolve
     // through the legacy fallback in resolveAgent for back-compat.
     try {
-      const migrated = migrateConfigAgentsToResources(merged, this.contextDir);
+      const { migrated, resynced } = migrateConfigAgentsToResources(merged, this.contextDir);
       if (migrated.length > 0) {
         console.log(
           `[agents] migrated ${migrated.length} agent(s) from config.yaml to authored-resources: ${migrated.join(", ")}`,
+        );
+      }
+      if (resynced.length > 0) {
+        console.log(
+          `[agents] resynced ${resynced.length} agent manifest(s) from config.yaml (drift detected): ${resynced.join(", ")}`,
         );
       }
       populateAgentsFromDisk(this._agentRegistry, this.contextDir);
@@ -238,6 +243,12 @@ export class AgentRuntime {
   /** Register meta tools (delegate, task_status, admin) to be included in all loop options. */
   setMetaTools(tools: Tool[]): void {
     this._metaTools = tools;
+  }
+
+  /** Read the registered meta tools. Used by the exploratory worker so the
+   * `online.tools` allowlist doesn't accidentally strip orchestration tools. */
+  getMetaTools(): Tool[] {
+    return this._metaTools;
   }
 
   reload(): void {
@@ -473,6 +484,12 @@ export class AgentRuntime {
       permissions: config.permissions,
       sandbox,
       skillCatalog: resolved.skillCatalog,
+      // Default agentName into the tool context so every entry point (chat,
+      // tick, delegate, workflow) carries it. Callers like the exploratory
+      // worker can still override by passing their own toolContextExtras —
+      // those override fields are spread AFTER this in the loop body
+      // (see agent/loop.ts where ToolContext is constructed).
+      toolContextExtras: agentName ? { agentName } : undefined,
       getTools: () => {
         const r = resolveAgent(
           agentName,

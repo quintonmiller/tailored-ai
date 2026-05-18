@@ -9,6 +9,7 @@ import {
   formatApprovalDescription,
 } from "../approval.js";
 import { loadAllContext, loadContextFiles } from "../context.js";
+import { getCoreMemory, renderCoreMemory } from "../db/core-memory-queries.js";
 import { getSessionMessages, saveMessage } from "../db/queries.js";
 import type { AIProvider, Message, ToolCall, ToolSchema } from "../providers/interface.js";
 import type { Tool, ToolContext } from "../tools/interface.js";
@@ -407,6 +408,26 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
     contextContent = await loadAllContext(contextDir, agentContextDir);
   }
   const catalogBlock = renderSkillCatalog(opts.skillCatalog);
+
+  // Core memory: always-injected identity layer (docs/agent-unification.md).
+  // Read fresh from DB at the start of every turn so updates from other
+  // sessions (chat, tick, delegate) are visible immediately on the next turn.
+  // No bloat-on-stack concern: this is the system prompt, rebuilt each call.
+  // agentName comes through toolContextExtras (set by every entry point
+  // that runs a named agent — chat, tick worker, delegate, workflow).
+  let coreMemoryBlock = "";
+  const agentNameForCore = opts.toolContextExtras?.agentName as string | undefined;
+  if (agentNameForCore) {
+    const rows = getCoreMemory(db, {
+      agent: agentNameForCore,
+      project_id: session.projectId ?? null,
+    });
+    if (rows.length > 0) {
+      const rendered = renderCoreMemory(rows, { maxBytes: 8192 });
+      if (rendered) coreMemoryBlock = `\n\n# Core memory (your identity across sessions)\n\n${rendered}`;
+    }
+  }
+
   let memoryBlock = "";
   if (opts.injectMemory) {
     const meta = buildMemoryBlockWithMeta(db, {
@@ -425,8 +446,11 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
       });
     }
   }
+  // Order: base + extra instructions + agent context + skill catalog + core
+  // memory + recall memory. Core memory goes BEFORE recall because identity
+  // is foundational — the agent should read who-it-is before what-it-knows.
   const fullSystemPrompt =
-    BASE_SYSTEM_PROMPT + extraInstructions + contextContent + catalogBlock + memoryBlock;
+    BASE_SYSTEM_PROMPT + extraInstructions + contextContent + catalogBlock + coreMemoryBlock + memoryBlock;
   const systemPromptTokens = estimateTokens({ role: "system", content: fullSystemPrompt });
 
   const history = getSessionMessages(db, session.id);
@@ -498,6 +522,7 @@ async function _runAgentLoopBody(
   let prevToolNames: string[] | undefined;
   let nudgesRemaining = opts.nudgeOnText ?? 0;
   let lastCallSignature = "";
+  let lastResultSignature = "";
   let repeatCount = 0;
   let cachedSummary: string | undefined;
   const MAX_REPEATED_CALLS = 3;
@@ -596,14 +621,7 @@ async function _runAgentLoopBody(
       opts.onActivity(firstSentence || reasoningText.slice(0, 100));
     }
 
-    // Detect repeated identical tool calls (model stuck in a loop)
     const callSignature = response.toolCalls.map((c) => `${c.name}:${JSON.stringify(c.arguments)}`).join("|");
-    if (callSignature === lastCallSignature) {
-      repeatCount++;
-    } else {
-      lastCallSignature = callSignature;
-      repeatCount = 1;
-    }
 
     // Execute all tool calls in parallel (with approval gate per call)
     const results = await Promise.all(
@@ -625,6 +643,19 @@ async function _runAgentLoopBody(
       saveMessage(db, session.id, toolMsg);
       history.push(toolMsg);
     }
+
+    // Detect a stuck model: same call AND same result, repeated. We use the
+    // result too so legitimate polling (e.g. task_status running → running →
+    // completed) doesn't trip the detector — only genuine "no progress"
+    // loops do.
+    const resultSignature = results.map((r) => r.resultOutput).join("|");
+    if (callSignature === lastCallSignature && resultSignature === lastResultSignature) {
+      repeatCount++;
+    } else {
+      repeatCount = 1;
+    }
+    lastCallSignature = callSignature;
+    lastResultSignature = resultSignature;
 
     if (repeatCount >= MAX_REPEATED_CALLS) {
       return response.content || "[Agent stopped: repeated identical tool calls detected]";

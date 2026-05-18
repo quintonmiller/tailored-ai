@@ -29,8 +29,8 @@ export class RecallTool implements Tool {
     properties: {
       action: {
         type: "string",
-        enum: ["query", "note", "forget", "list", "promote"],
-        description: "query: ranked search. note: write prose. forget: delete by id. list: show recent notes. promote: clone a note into long-term semantic memory.",
+        enum: ["query", "note", "forget", "list", "promote", "archive"],
+        description: "query: ranked search. note: write prose. forget: delete by id. list: show recent notes. promote: clone a note into long-term semantic memory. archive: mark a note as durable (survives TTL sweeps) — requires reason.",
       },
       query: {
         type: "string",
@@ -64,6 +64,10 @@ export class RecallTool implements Tool {
       force: {
         type: "boolean",
         description: "For promote: re-index even when chunks already exist.",
+      },
+      reason: {
+        type: "string",
+        description: "Required for action=archive — a one-liner on why this note is worth keeping forever. Forces selectivity; over-archiving crowds out signal.",
       },
       project_id: {
         type: "string",
@@ -116,6 +120,8 @@ export class RecallTool implements Tool {
           return this.list(args, context, projectId);
         case "promote":
           return this.promote(args);
+        case "archive":
+          return this.archive(args);
         default:
           return { success: false, output: "", error: `unknown action "${action}"` };
       }
@@ -248,6 +254,34 @@ export class RecallTool implements Tool {
     }
     deleteNote(this.db, id);
     return { success: true, output: `forgot ${id}` };
+  }
+
+  private archive(args: Record<string, unknown>): ToolResult {
+    const id = typeof args.id === "string" ? args.id : "";
+    const reason = typeof args.reason === "string" ? args.reason.trim() : "";
+    if (!id) {
+      return { success: false, output: "", error: "id is required for action=archive" };
+    }
+    if (!reason) {
+      return {
+        success: false,
+        output: "",
+        error:
+          "reason is required for action=archive — one short line on why this note is worth keeping forever. Forces selectivity.",
+      };
+    }
+    const note = getNote(this.db, id);
+    if (!note) {
+      return { success: false, output: "", error: `no note with id ${id}` };
+    }
+    // Flip the archival flag; append the reason to tags so it's queryable
+    // from the Memory UI ("why was this archived?"). Idempotent.
+    this.db
+      .prepare(
+        "UPDATE notes SET archival = 1, tags = json_insert(tags, '$[#]', ?) WHERE id = ? AND archival = 0",
+      )
+      .run(`archive: ${reason}`, id);
+    return { success: true, output: `archived ${id} — "${reason}"` };
   }
 
   private list(

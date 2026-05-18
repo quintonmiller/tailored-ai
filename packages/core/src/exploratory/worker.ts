@@ -17,6 +17,7 @@ import {
   updateExploratoryState,
 } from "../db/exploratory-queries.js";
 import { listNotes } from "../db/note-queries.js";
+import { appendTickLog } from "../db/tick-log-queries.js";
 import type { AgentRuntime } from "../runtime.js";
 
 export interface ExploratoryWorkerOptions {
@@ -47,10 +48,10 @@ export interface ExploratoryActivity {
 const DEFAULT_INTERVAL_MS = 60_000;
 const DEFAULT_TICK_INTERVAL_MINUTES = 30;
 const DEFAULT_MAX_INTERVAL_MINUTES = 240;
-const DEFAULT_RUNS_PER_DAY_CAP = 12;
-const DEFAULT_TOOL_CALLS_PER_TICK = 8;
-const DEFAULT_TOKENS_PER_TICK = 8000;
 const DEFAULT_IDLE_BACKOFF_MULTIPLIER = 2.0;
+// Budgets are opt-in: when a `budgets:` field is omitted from an agent's
+// online block, no cap is enforced. Set explicit values to gate runaway
+// ticks; leave the block off entirely to run unrestricted.
 
 export type SkipReason =
   | "config-disabled"
@@ -178,8 +179,10 @@ export class ExploratoryWorker {
     const onRuntimeAbort = () => abortController.abort();
     runtimeSignal.addEventListener("abort", onRuntimeAbort);
 
-    const tokenCap = online.budgets?.tokens_per_tick ?? DEFAULT_TOKENS_PER_TICK;
-    const toolCallCap = online.budgets?.tool_calls_per_tick ?? DEFAULT_TOOL_CALLS_PER_TICK;
+    // Budgets are opt-in. Missing values fall back to the agent's normal
+    // reactive limits (token use untracked, maxToolRounds from baseOpts below).
+    const tokenCap = online.budgets?.tokens_per_tick ?? Number.POSITIVE_INFINITY;
+    const explicitToolCallCap = online.budgets?.tool_calls_per_tick;
 
     try {
       const prompt = await this.buildTickPrompt(agentName, def);
@@ -193,14 +196,24 @@ export class ExploratoryWorker {
 
       // Narrow the tool set if the agent declared online.tools (a subset of
       // its main tools). Subset semantics: each entry must be a name in
-      // baseOpts.tools.
+      // baseOpts.tools. Meta tools (delegate, run_workflow, task_status,
+      // admin, …) are always kept regardless of the allowlist — they're
+      // unconditionally available in reactive mode too, and stripping them
+      // during ticks breaks orchestration patterns that delegate to
+      // specialists or invoke workflows.
       let tools = baseOpts.tools;
       let getTools = baseOpts.getTools;
       if (online.tools && online.tools.length > 0) {
         const want = new Set(online.tools);
-        tools = baseOpts.tools.filter((t) => want.has(t.name));
-        getTools = () => (baseOpts.getTools?.() ?? tools).filter((t) => want.has(t.name));
+        const metaNames = new Set(this.runtime.getMetaTools().map((t) => t.name));
+        const keep = (t: { name: string }) => want.has(t.name) || metaNames.has(t.name);
+        tools = baseOpts.tools.filter(keep);
+        getTools = () => (baseOpts.getTools?.() ?? tools).filter(keep);
       }
+
+      // When no per-tick tool-call budget is set, fall back to the agent's
+      // normal reactive maxToolRounds rather than capping at a magic number.
+      const toolCallCap = explicitToolCallCap ?? baseOpts.maxToolRounds ?? Number.POSITIVE_INFINITY;
 
       const response = await this.runLoop(prompt, {
         ...baseOpts,
@@ -261,6 +274,29 @@ export class ExploratoryWorker {
       taskIds: outputs.taskIds,
       summary,
       error: errorMsg,
+    });
+
+    // Mirror the run's outcome into tick_log so it's queryable as
+    // operational telemetry without joining recall (docs/agent-unification.md).
+    // Status → kind mapping: ok→material, noop→noop, error/budget→error.
+    const tickKind =
+      status === "ok" ? "material"
+      : status === "noop" ? "noop"
+      : "error";
+    appendTickLog(db, {
+      tick_id: run.id,
+      agent: agentName,
+      project_id: projectId,
+      kind: tickKind,
+      summary,
+      payload: {
+        tokens: promptTokens + completionTokens,
+        tool_calls: toolCalls.length,
+        notes: outputs.noteIds.length,
+        facts: outputs.factIds.length,
+        tasks: outputs.taskIds.length,
+        error: errorMsg ?? undefined,
+      },
     });
 
     // Update state counters. Daily counters were reset at the top of evaluate().
@@ -428,7 +464,7 @@ export class ExploratoryWorker {
       }
     }
 
-    const runsCap = online.budgets?.stop_after_runs_per_day ?? DEFAULT_RUNS_PER_DAY_CAP;
+    const runsCap = online.budgets?.stop_after_runs_per_day ?? Number.POSITIVE_INFINITY;
     if (state.runs_today >= runsCap) {
       return { kind: "skip", reason: "runs-cap-reached" };
     }
