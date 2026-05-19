@@ -100,6 +100,19 @@ export function listTickLogs(
 }
 
 /**
+ * Return all tick-log rows for a single `tickId`, in ascending (event-time)
+ * order. Used by the tick-log viewer for replay purposes.
+ */
+export function listTickLogsByTickId(
+  db: Database.Database,
+  tickId: string,
+): TickLogRow[] {
+  return db
+    .prepare("SELECT * FROM tick_log WHERE tick_id = ? ORDER BY id ASC")
+    .all(tickId) as TickLogRow[];
+}
+
+/**
  * Outcomes rollup for the "Stagnation check" / "Outcomes last window"
  * section of TickContext. Counts ticks by kind over the last N ticks
  * (default 20) for a given agent.
