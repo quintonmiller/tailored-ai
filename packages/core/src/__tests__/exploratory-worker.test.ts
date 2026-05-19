@@ -45,6 +45,7 @@ function mockRuntime(
     getProvider: () => ({ id: "mock", chat: async () => ({}) }),
     getModel: () => "mock-model",
     getEmbedder: () => undefined,
+    getMetaTools: () => [],
     get shutdownSignal() {
       return shutdownController.signal;
     },
@@ -447,6 +448,58 @@ describe("ExploratoryWorker.runAgent", () => {
     });
     await worker.runAgent("watcher", config.agents.watcher);
     expect(observedTools.map((t) => t.name).sort()).toEqual(["recall", "web_search"]);
+  });
+
+  it("keeps meta tools even when online.tools allowlist excludes them", async () => {
+    const config = baseConfig({
+      agents: {
+        watcher: {
+          tools: ["recall", "web_search"],
+          online: { enabled: true, tools: ["recall"] },
+        },
+      },
+    });
+    let observedTools: { name: string }[] = [];
+    const stubLoop = vi.fn(async (_prompt: string, opts: { tools?: { name: string }[] }) => {
+      observedTools = opts.tools ?? [];
+      return "ok";
+    });
+    const buildLoopOptions = vi.fn().mockReturnValue({
+      provider: {},
+      session: { id: "s", model: "m", provider: "p" },
+      db,
+      tools: [
+        { name: "recall" },
+        { name: "web_search" },
+        { name: "delegate" },
+        { name: "run_workflow" },
+      ],
+      maxHistoryTokens: 2000,
+      contextDir: "/tmp",
+      kbDir: "/tmp",
+      signal: new AbortController().signal,
+      getTools: () => [
+        { name: "recall" },
+        { name: "web_search" },
+        { name: "delegate" },
+        { name: "run_workflow" },
+      ],
+    });
+    const worker = new ExploratoryWorker({
+      runtime: mockRuntime(config, {
+        buildLoopOptions: buildLoopOptions as never,
+        getMetaTools: () => [{ name: "delegate" }, { name: "run_workflow" }] as never,
+      }),
+      runLoop: stubLoop as never,
+    });
+    await worker.runAgent("watcher", config.agents.watcher);
+    // recall: in allowlist. delegate/run_workflow: meta tools, kept implicitly.
+    // web_search: not in allowlist and not meta — stripped.
+    expect(observedTools.map((t) => t.name).sort()).toEqual([
+      "delegate",
+      "recall",
+      "run_workflow",
+    ]);
   });
 
   it("respects per-tick tool_calls cap by overriding maxToolRounds", async () => {

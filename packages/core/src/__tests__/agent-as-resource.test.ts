@@ -12,6 +12,7 @@ import {
   migrateConfigAgentsToResources,
   populateAgentsFromDisk,
   authoredAgentManifestPath,
+  authoredAgentDir,
 } from "../resources/agent-migration.js";
 import { resolveAgent } from "../agent/agents.js";
 import type { AgentConfig, AgentDefinition } from "../config.js";
@@ -157,8 +158,9 @@ describe("migrateConfigAgentsToResources", () => {
       researcher: { instructions: "find things", tools: ["web_search"] },
       reviewer: { instructions: "review code", skills: ["code/review"] },
     });
-    const migrated = migrateConfigAgentsToResources(config, context);
-    expect(migrated.sort()).toEqual(["researcher", "reviewer"]);
+    const result = migrateConfigAgentsToResources(config, context);
+    expect(result.migrated.sort()).toEqual(["researcher", "reviewer"]);
+    expect(result.resynced).toEqual([]);
     expect(existsSync(authoredAgentManifestPath(context, "researcher"))).toBe(true);
     const yaml = readFileSync(authoredAgentManifestPath(context, "reviewer"), "utf8");
     const parsed = parseYaml(yaml);
@@ -167,17 +169,46 @@ describe("migrateConfigAgentsToResources", () => {
     expect(parsed.data.skills).toEqual(["code/review"]);
   });
 
-  it("is idempotent — does not overwrite existing manifests", () => {
+  it("is idempotent when the manifest already matches config.yaml", () => {
     const config = baseConfig({ keeper: { instructions: "original" } });
-    migrateConfigAgentsToResources(config, context);
-    writeFileSync(
-      authoredAgentManifestPath(context, "keeper"),
-      "kind: agent\nid: keeper\nversion: 0.0.0\ndata:\n  instructions: hand-edited\n",
-      "utf8",
-    );
+    const first = migrateConfigAgentsToResources(config, context);
+    expect(first.migrated).toEqual(["keeper"]);
     const second = migrateConfigAgentsToResources(config, context);
-    expect(second).toEqual([]);
-    expect(readFileSync(authoredAgentManifestPath(context, "keeper"), "utf8")).toContain("hand-edited");
+    expect(second.migrated).toEqual([]);
+    expect(second.resynced).toEqual([]);
+  });
+
+  it("re-syncs the manifest when config.yaml has drifted from disk", () => {
+    // First export: manifest matches config.
+    const initial = baseConfig({ drifter: { instructions: "v1", tools: ["read"] } });
+    migrateConfigAgentsToResources(initial, context);
+
+    // User then edits config.yaml to widen the agent's tool list. The
+    // existing manifest still has the v1 definition — without re-sync,
+    // resolveAgent would keep returning v1 forever.
+    const updated = baseConfig({
+      drifter: { instructions: "v1", tools: ["read", "write", "web_search"] },
+    });
+    const result = migrateConfigAgentsToResources(updated, context);
+    expect(result.migrated).toEqual([]);
+    expect(result.resynced).toEqual(["drifter"]);
+
+    const written = parseYaml(
+      readFileSync(authoredAgentManifestPath(context, "drifter"), "utf8"),
+    );
+    expect(written.data.tools).toEqual(["read", "write", "web_search"]);
+  });
+
+  it("overwrites an unreadable / corrupt manifest rather than leaving it broken", () => {
+    const config = baseConfig({ broken: { instructions: "good" } });
+    mkdirSync(authoredAgentDir(context, "broken"), { recursive: true });
+    writeFileSync(authoredAgentManifestPath(context, "broken"), ":::not valid yaml:::", "utf8");
+    const result = migrateConfigAgentsToResources(config, context);
+    expect(result.resynced).toContain("broken");
+    const written = parseYaml(
+      readFileSync(authoredAgentManifestPath(context, "broken"), "utf8"),
+    );
+    expect(written.data.instructions).toBe("good");
   });
 });
 
