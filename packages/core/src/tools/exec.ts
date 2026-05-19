@@ -27,7 +27,7 @@ async function maybeTruncate(raw: string, sessionId: string | undefined): Promis
     // — just clip head/tail by chars.
     const head = raw.slice(0, 1500);
     const tail = raw.slice(-2000);
-    return `[exec output: ${raw.length} bytes truncated. Full output: ${path}]\n${head}\n... [middle omitted] ...\n${tail}`;
+    return `[exec output: ${raw.length} bytes truncated. Full output: ${path}]\n\n${head}\n... [middle omitted] ...\n${tail}`;
   }
   const head = lines.slice(0, HEAD_LINES).join("\n");
   const tail = lines.slice(-TAIL_LINES).join("\n");
