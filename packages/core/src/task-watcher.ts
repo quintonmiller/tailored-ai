@@ -4,8 +4,10 @@ import { runAgentLoop } from "./agent/loop.js";
 import { resolveAgent } from "./agent/agents.js";
 import { findOrCreateSession, resetSession } from "./agent/session.js";
 import type { DiscordChannel } from "./channels/discord.js";
-import type { ProjectTask } from "./db/task-queries.js";
+import { getProject } from "./db/project-queries.js";
+import { addTaskComment, type ProjectTask } from "./db/task-queries.js";
 import type { AgentRuntime } from "./runtime.js";
+import { createWorktree, type Worktree } from "./worktree.js";
 
 export interface TaskEvent {
   action: "created" | "updated" | "commented";
@@ -68,7 +70,18 @@ export class TaskWatcher {
     const logPrefix = `[task-watcher] [${event.task.id}]`;
     console.log(`${logPrefix} Processing ${event.action} event`);
 
-    const agentName = config.agent ?? config.profile;
+    // Route by assignee when it names a defined agent. This is what
+    // makes assignee="coder" actually invoke the coder agent rather than
+    // the default triage one (docs/agent-unification.md, Phase 5).
+    // Fallback chain: task.assignee (if it resolves) → config.taskWatcher.agent → undefined.
+    const config_ = this.runtime.getConfig();
+    const assignee = event.task.assignee?.trim() || undefined;
+    const assigneeIsAgent =
+      assignee !== undefined && Boolean(config_.agents?.[assignee]);
+    const agentName = assigneeIsAgent ? assignee : (config.agent ?? config.profile);
+    if (assigneeIsAgent) {
+      console.log(`${logPrefix} routing to assignee agent "${agentName}"`);
+    }
     const resolved = resolveAgent(
       agentName,
       this.runtime.getConfig(),
@@ -116,9 +129,68 @@ export class TaskWatcher {
       }
     }
 
-    // Build prompt: structured task context + user-configured prompt
+    // Worktree pre-flight for the coder agent. We create a per-task branch
+    // off HEAD and cd the loop into it so the agent operates on an isolated
+    // checkout. After the loop finishes, we look at the worktree to decide
+    // status — clean = nothing happened, dirty + committed = ready for
+    // review (docs/agent-unification.md, Phase 5).
+    let worktree: Worktree | undefined;
+    let projectOverride: import("./projects/resolve.js").ProjectContext | undefined;
+    if (agentName === "coder" && event.task.project_id) {
+      const project = getProject(this.runtime.db, event.task.project_id);
+      const repoPath = project?.path;
+      if (!repoPath) {
+        console.error(
+          `${logPrefix} coder routed but project ${event.task.project_id} has no path — skipping worktree`,
+        );
+      } else {
+        const slug = slugify(event.task.title).slice(0, 30) || "task";
+        const branch = `agent/${event.task.id}-${slug}`;
+        try {
+          worktree = await createWorktree({
+            repoDir: repoPath,
+            strategy: { type: "branch", branch },
+          });
+          projectOverride = {
+            id: project.id,
+            name: project.title,
+            path: worktree.path,
+            overlayPath: project.config_overlay_path ?? "",
+            overlay: {},
+          };
+          console.log(`${logPrefix} created worktree at ${worktree.path} on ${branch}`);
+        } catch (err) {
+          console.error(`${logPrefix} worktree creation failed:`, (err as Error).message);
+          // Continue without isolation — agent runs in the project's main checkout.
+        }
+      }
+    }
+
+    // Build prompt: structured task context + user-configured prompt.
+    // For coder routes, prepend explicit branch/commit/push instructions.
     const configPrompt = await expandPrompt(config.prompt, templateVars, promptsConfig);
+    const coderPreamble = worktree
+      ? [
+          "You are the **coder** agent. A fresh git worktree has been set up for you:",
+          `- Worktree path: ${worktree.path}`,
+          `- Branch: ${worktree.branch}`,
+          "- Status: clean, off main HEAD",
+          "",
+          "Your job for this task:",
+          "1. Read the task description carefully.",
+          "2. Make the minimal change that satisfies it — prefer editing existing files.",
+          "3. Run tests if relevant (`pnpm test`, `pnpm typecheck`).",
+          "4. `git add` + `git commit` your changes with a clear message.",
+          "5. Push the branch with `git push -u origin <branch>` if a remote is configured.",
+          "6. Call `tasks(action=update, id=" + event.task.id + ", status=in_review)` and add a comment with the branch name + a one-line summary of what you did.",
+          "7. If you cannot do the work (missing context, blocked by infra), update the task to `blocked` with a clear reason and STOP — do not invent files or paths.",
+          "",
+          "Do NOT touch ~/.tailored-ai/, the agent.db, or config.yaml. Do NOT commit secrets.",
+          "",
+        ].join("\n")
+      : "";
     const prompt = [
+      coderPreamble,
       "Task event received. Details:",
       `- Task ID: ${event.task.id}`,
       `- Event type: ${event.action}`,
@@ -126,21 +198,49 @@ export class TaskWatcher {
       `- Task description: ${event.task.description ?? "(none)"}`,
       "",
       configPrompt,
-    ].join("\n");
+    ].filter(Boolean).join("\n");
 
     // Ensure tasks/task_query tools are always available (even if the profile filters them out)
     const taskToolNames = new Set(["tasks", "task_query"]);
     const extraTools = allTools.filter((t) => taskToolNames.has(t.name));
 
-    const response = await runAgentLoop(prompt, {
-      ...this.runtime.buildLoopOptions({ session, agentName, extraTools }),
-      onToolCall: (name, args) => {
-        console.log(`${logPrefix} tool: ${name}(${JSON.stringify(args)})`);
-      },
-      onToolResult: (name, result) => {
-        console.log(`${logPrefix} result: ${name} → ${result.slice(0, 200)}`);
-      },
-    });
+    let response: string;
+    try {
+      response = await runAgentLoop(prompt, {
+        ...this.runtime.buildLoopOptions({
+          session,
+          agentName,
+          extraTools,
+          project: projectOverride ?? null,
+        }),
+        onToolCall: (name, args) => {
+          console.log(`${logPrefix} tool: ${name}(${JSON.stringify(args)})`);
+        },
+        onToolResult: (name, result) => {
+          console.log(`${logPrefix} result: ${name} → ${result.slice(0, 200)}`);
+        },
+      });
+    } finally {
+      // Worktree cleanup: returns { preservedPath } when the agent left
+      // uncommitted changes (which we want to surface to the user). Worktree
+      // with successful commits stays around — the branch carries them.
+      if (worktree) {
+        try {
+          const cleanup = await worktree.cleanup();
+          if (cleanup.preservedPath) {
+            console.log(`${logPrefix} worktree preserved at ${cleanup.preservedPath} (uncommitted changes)`);
+            addTaskComment(this.runtime.db, event.task.id, {
+              author: "coder",
+              content: `Worktree preserved at ${cleanup.preservedPath} on branch ${worktree.branch} — uncommitted changes remain. Review manually.`,
+            });
+          } else {
+            console.log(`${logPrefix} worktree cleaned up; branch ${worktree.branch} retained`);
+          }
+        } catch (err) {
+          console.error(`${logPrefix} worktree cleanup failed:`, (err as Error).message);
+        }
+      }
+    }
 
     // --- afterRun hooks ---
     if (hooks.afterRun.length > 0) {
@@ -198,4 +298,15 @@ export class TaskWatcher {
     this.debounceTimers.clear();
     console.log("[task-watcher] Stopped");
   }
+}
+
+// Branch-safe slug — strips out characters git refs reject, collapses
+// whitespace, lowercases. Used to build `agent/<task_id>-<slug>` branch
+// names. Trimmed to 30 chars by the caller.
+function slugify(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
 }

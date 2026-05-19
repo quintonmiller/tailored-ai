@@ -402,7 +402,16 @@ export class ExploratoryWorker {
       const current = state.current_interval_ms && state.current_interval_ms > 0
         ? state.current_interval_ms
         : baseMs;
-      const next = Math.min(Math.round(current * multiplier), maxMs);
+      // In-window cap: during the agent's working window, the user expects
+      // periodic activity. A 2h backoff (the default max) means the agent
+      // effectively goes silent for hours after a single quiet stretch.
+      // Cap in-window backoff at 4x the base interval; out-of-window can
+      // still stretch all the way to max_interval_minutes.
+      const inWindow = cadence?.window
+        ? isInTimeWindow(cadence.window.start, cadence.window.end, this.now())
+        : true;
+      const effectiveMax = inWindow ? Math.min(maxMs, baseMs * 4) : maxMs;
+      const next = Math.min(Math.round(current * multiplier), effectiveMax);
       return next;
     }
     // error / budget — leave the current interval alone.

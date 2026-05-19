@@ -484,12 +484,18 @@ export class AgentRuntime {
       permissions: config.permissions,
       sandbox,
       skillCatalog: resolved.skillCatalog,
-      // Default agentName into the tool context so every entry point (chat,
-      // tick, delegate, workflow) carries it. Callers like the exploratory
-      // worker can still override by passing their own toolContextExtras —
-      // those override fields are spread AFTER this in the loop body
-      // (see agent/loop.ts where ToolContext is constructed).
-      toolContextExtras: agentName ? { agentName } : undefined,
+      // Tool-context agent name (docs/agent-unification.md). Every call to
+      // a tool that maintains identity (core_memory, Sleep) needs a stable
+      // agent string. When the caller doesn't specify one (anonymous chat
+      // via Discord DM, fresh CLI runs), fall back to "default" so tools
+      // can still attribute writes — assuming the config has a `default`
+      // agent (which is the documented convention). Callers like the
+      // exploratory worker can still override by passing their own
+      // toolContextExtras — those override fields are spread AFTER this
+      // in the loop body (see agent/loop.ts ToolContext construction).
+      toolContextExtras: {
+        agentName: agentName ?? (config.agents?.default ? "default" : undefined),
+      },
       getTools: () => {
         const r = resolveAgent(
           agentName,

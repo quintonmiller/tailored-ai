@@ -224,11 +224,45 @@ export function renderTickSituation(ctx: TickContext): string {
   lines.push("C. `tasks(action=create, ...)` — propose a new sub-task that breaks something open");
   lines.push("D. `ask_user(\"<specific question>\")` — when only the user can decide");
   lines.push("E. `run_workflow(name=...)` — kick off a known pipeline");
-  lines.push("F. `Sleep` — only when A-E genuinely don't apply. Cite which you considered.");
+
+  // Sleep eligibility: explicitly forbid Sleep when there's plenty to do.
+  // The agent's failure mode is "nothing urgent, Sleep" — but exploration
+  // of non-urgent backlog is exactly what we want.
+  const hasUntouchedBacklog = ctx.backlog.untouched.length > 0;
+  const hasStaleReview = ctx.backlog.staleInReview.length > 0;
+  const hasOpenQuestions = ctx.exploration.openQuestions.length > 0;
+  const sleepForbidden = ctx.outcomes.stagnation || (hasUntouchedBacklog && ctx.backlog.untouched[0].ageDays >= 1);
+
+  if (sleepForbidden) {
+    lines.push("");
+    lines.push("**F. `Sleep` is NOT AVAILABLE this tick.** Reason: " +
+      (ctx.outcomes.stagnation
+        ? "stagnation — material work has been 0 across the window."
+        : `${ctx.backlog.untouched.length} untouched backlog items, oldest ${ctx.backlog.untouched[0].ageDays}d. Pick one to advance.`));
+    lines.push("");
+    lines.push(
+      "Even if nothing is 'urgent', exploration is the job. Pick the most interesting backlog item and: research it (delegate to researcher), propose a sub-task that makes it tractable (C), or ask the user a clarifying question (D). Doing one of these is success.",
+    );
+  } else {
+    lines.push("F. `Sleep` — only when A-E genuinely don't apply. Cite which you considered.");
+    lines.push("");
+    lines.push(
+      "If you choose F (Sleep), do NOT write a recall note about being idle — that's already captured in tick_log. Just call Sleep and stop.",
+    );
+  }
+
+  // Tick exit contract (docs/agent-unification.md). The chat agent reads
+  // recent_summary on every user turn — if you did material work this
+  // tick, append a one-liner to it BEFORE you Sleep, so chat is aware.
   lines.push("");
   lines.push(
-    "If you choose F (Sleep), do NOT write a recall note about being idle — that's already captured in tick_log. Just call Sleep and stop.",
+    "**Before Sleep, if you did material work this tick:** call `core_memory(action=append, section=recent_summary, content=\"<one-line of what you did>\")`. This is what makes chat aware of your tick activity — without it, the user asking 'what have you been up to?' sees stale state.",
   );
+
+  if (hasOpenQuestions || hasStaleReview) {
+    lines.push("");
+    lines.push("(Reminder: open_questions and stale in_review items above are also fair targets for action this tick.)");
+  }
 
   return lines.join("\n");
 }

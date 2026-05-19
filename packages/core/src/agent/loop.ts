@@ -551,6 +551,17 @@ async function _runAgentLoopBody(
     if (opts.signal?.aborted) {
       return "[Agent stopped: shutdown requested]";
     }
+    // Sleep tool sets workingMemory["tick_done"] = "true" to terminate
+    // the loop cleanly from inside a tool call. Models often ignore
+    // "stop generating" instructions in tool results — this enforces it.
+    if (context.workingMemory?.get("tick_done") === "true") {
+      // Surface Sleep's reason as the loop's return value so chat
+      // live_state and tick_log show what actually happened, not a
+      // generic terminator. Falls back to a tag if the agent forgot
+      // to provide a reason (shouldn't happen — Sleep requires one).
+      const reason = context.workingMemory.get("tick_summary");
+      return reason ? `[Sleep] ${reason}` : "[Tick concluded via Sleep]";
+    }
     rounds++;
 
     const currentTools = opts.getTools ? opts.getTools() : tools;

@@ -87,7 +87,12 @@ export function listTickLogs(
       params.push(q.kind);
     }
   }
-  if (q.since)   { clauses.push("created_at >= ?"); params.push(q.since); }
+  if (q.since)   {
+    // Normalize both sides via datetime() — SQLite's default format and
+    // Date.toISOString() use different separators (space vs T) and Z handling.
+    clauses.push("datetime(created_at) >= datetime(?)");
+    params.push(q.since);
+  }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const limit = q.limit && q.limit > 0 ? `LIMIT ${Math.floor(q.limit)}` : "";
   const sql = `SELECT * FROM tick_log ${where} ORDER BY created_at DESC ${limit}`;
