@@ -122,7 +122,7 @@ export class TasksTool implements Tool {
         case "comment":
           return await this.comment(id, text, authorArg ?? agentAuthor);
         default:
-          return { success: false, output: "", error: `Unknown action: ${action}` };
+          return { success: false, output: "", error: `Unknown action "${action}". Valid actions: create, get, update, delete, comment.` };
       }
     } catch (err) {
       return { success: false, output: "", error: (err as Error).message };
