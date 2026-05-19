@@ -25,27 +25,64 @@ export function authoredAgentManifestPath(contextDir: string, id: string): strin
 
 /**
  * On runtime startup, export every agent defined in `config.yaml` to its own
- * `manifest.yaml` under `data/authored-resources/agent/<name>/`. Skips agents
- * that already have a file on disk — re-runs are idempotent.
+ * `manifest.yaml` under `data/authored-resources/agent/<name>/`.
  *
- * Returns the ids that were newly written (for logging / telemetry).
+ * - If the manifest doesn't exist yet, write it (the original migration step).
+ * - If the manifest exists but its `data:` field has drifted from what
+ *   `config.yaml` would produce, re-export and warn. This makes config.yaml
+ *   the source of truth for agents that are still defined there — without
+ *   this, config-yaml edits silently stop taking effect once the registry
+ *   has been seeded.
+ * - If the manifest is up-to-date, leave it alone.
+ *
+ * Returns the ids touched (split into `migrated` for first-time exports and
+ * `resynced` for drift-driven re-exports) so callers can log the difference.
  */
+export interface MigrationResult {
+  migrated: string[];
+  resynced: string[];
+}
+
 export function migrateConfigAgentsToResources(
   config: AgentConfig,
   contextDir: string,
-): string[] {
-  const migrated: string[] = [];
+): MigrationResult {
+  const result: MigrationResult = { migrated: [], resynced: [] };
   const agents = config.agents ?? {};
   for (const [id, definition] of Object.entries(agents)) {
     if (!id) continue;
     const manifestPath = authoredAgentManifestPath(contextDir, id);
-    if (existsSync(manifestPath)) continue;
-    const manifest = agentDefinitionToManifest({ id, definition: definition as AgentDefinition });
-    mkdirSync(authoredAgentDir(contextDir, id), { recursive: true });
-    writeFileSync(manifestPath, stringifyYaml(manifest), "utf8");
-    migrated.push(id);
+    const fresh = agentDefinitionToManifest({ id, definition: definition as AgentDefinition });
+
+    if (!existsSync(manifestPath)) {
+      mkdirSync(authoredAgentDir(contextDir, id), { recursive: true });
+      writeFileSync(manifestPath, stringifyYaml(fresh), "utf8");
+      result.migrated.push(id);
+      continue;
+    }
+
+    // Compare existing manifest's data field to the freshly-derived one.
+    // Stringify-and-compare is good enough — both go through the same
+    // serialiser. If anything is different, the config has won.
+    try {
+      const existingRaw = readFileSync(manifestPath, "utf8");
+      const existing = parseYaml(existingRaw) as { data?: unknown };
+      const existingData = stringifyYaml(existing?.data ?? null);
+      const freshData = stringifyYaml(fresh.data ?? null);
+      if (existingData !== freshData) {
+        writeFileSync(manifestPath, stringifyYaml(fresh), "utf8");
+        result.resynced.push(id);
+      }
+    } catch (err) {
+      // Bad / unreadable manifest — overwrite it so the system isn't stuck.
+      console.warn(
+        `[agents] couldn't read existing manifest for "${id}" (${(err as Error).message}); overwriting from config.yaml`,
+      );
+      writeFileSync(manifestPath, stringifyYaml(fresh), "utf8");
+      result.resynced.push(id);
+    }
   }
-  return migrated;
+  return result;
 }
 
 /**
