@@ -1,3 +1,4 @@
+<!-- coder smoke test: 2026-05-19 -->
 # Agent unification — design + rollout
 
 Status: in progress (Phase 1 underway, 2026-05-17).
