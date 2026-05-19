@@ -123,3 +123,5 @@ additive; the agent's behavior doesn't change visibly until Phase 2.
 - MemGPT/Letta three-tier model — [paper](https://arxiv.org/pdf/2310.08560), [Letta docs](https://docs.letta.com/concepts/letta/)
 - openclaw heartbeat/commitments — [github.com/openclaw/openclaw](https://github.com/openclaw/openclaw)
 - Reflexion outcome-feedback loop — [arXiv:2303.11366](https://arxiv.org/abs/2303.11366)
+
+<!-- review-loop test: 2026-05-19 -->
