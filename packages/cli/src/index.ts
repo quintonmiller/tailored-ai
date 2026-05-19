@@ -82,6 +82,14 @@ function resolveUiDistPath(): string | undefined {
   return undefined;
 }
 
+/**
+ * Module-scoped reference to the TaskWatcher. main() captures it in
+ * the toolFactory closure (so the tasks tool can re-trigger routing on
+ * mutations); runServer() assigns it after constructing the watcher
+ * (Phase 6 — multi-agent task handoffs).
+ */
+let _taskWatcherRef: { notifyById: (action: "created" | "updated" | "commented", id: string) => void } | undefined;
+
 async function connectDiscord(runtime: AgentRuntime): Promise<DiscordChannel | undefined> {
   try {
     const dc = new DiscordChannel({ runtime });
@@ -111,6 +119,9 @@ async function runServer(runtime: AgentRuntime) {
   }
 
   const taskWatcher = new TaskWatcher({ runtime, discord });
+  // Hook up the lazy reference so the tasks tool can re-trigger routing
+  // on mutations (Phase 6 — coder→reviewer→coder handoffs).
+  _taskWatcherRef = taskWatcher;
 
   const autopilot = new AutopilotWorker({
     runtime,
@@ -611,6 +622,9 @@ async function main() {
       ...runtimeOpts,
       getDiscord: () => _discordChannel,
       getOwnerId: () => cfg.channels.discord?.owner,
+      // Module-scoped _taskWatcherRef gets assigned by runServer().
+      // Reads lazily at tool-call time, so it's fine if undefined here.
+      notifyTaskEvent: (action, id) => _taskWatcherRef?.notifyById(action, id),
     });
 
   const runtime = new AgentRuntime(

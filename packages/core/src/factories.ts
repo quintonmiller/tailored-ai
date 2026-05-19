@@ -45,6 +45,10 @@ export interface CreateToolsOptions {
   taskBackend?: TaskBackend;
   /** Optional embedding provider getter for semantic recall. */
   getEmbedder?: () => EmbeddingProvider | undefined;
+  /** Notify hook fired after a successful task mutation. Wires the tasks
+   *  tool to the task watcher so coder→reviewer handoffs re-trigger routing
+   *  (docs/agent-unification.md, Phase 6). */
+  notifyTaskEvent?: import("./tools/tasks.js").TasksToolNotify;
 }
 
 /**
@@ -116,7 +120,7 @@ export function createTools(
   if (config.tools.tasks?.enabled !== false) {
     const backend = opts?.taskBackend ?? (opts?.db ? createTaskBackend(config, opts.db) : undefined);
     if (backend) {
-      tools.push(new TasksTool(backend, opts?.db), new TaskQueryTool(backend));
+      tools.push(new TasksTool(backend, opts?.db, opts?.notifyTaskEvent), new TaskQueryTool(backend));
     }
   }
   const gogPassword = process.env.GOG_KEYRING_PASSWORD ?? "";

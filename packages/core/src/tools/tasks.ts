@@ -10,6 +10,14 @@ function collectStatuses(backend: TaskBackend): string[] {
   return [...seen];
 }
 
+/** Notify hook fired after a successful task mutation. The watcher uses it to
+ *  re-trigger the routing pipeline so coder→reviewer and reviewer→coder
+ *  handoffs work (docs/agent-unification.md, Phase 6). */
+export type TasksToolNotify = (
+  action: "created" | "updated" | "commented",
+  taskId: string,
+) => void;
+
 export class TasksTool implements Tool {
   name = "tasks";
   description: string;
@@ -18,16 +26,18 @@ export class TasksTool implements Tool {
   private backend: TaskBackend;
   private db: Database.Database | undefined;
   private validStatuses: Set<string>;
+  private notify?: TasksToolNotify;
 
-  constructor(backend: TaskBackend, db?: Database.Database) {
+  constructor(backend: TaskBackend, db?: Database.Database, notify?: TasksToolNotify) {
     this.backend = backend;
     this.db = db;
+    this.notify = notify;
 
     const statusList = collectStatuses(backend);
     this.validStatuses = new Set(statusList);
     const statusEnum = statusList.join(", ");
 
-    this.description = `Manage project tasks (backend: ${backend.name}). Actions: create, get, update, delete, comment. Changing status via update REQUIRES a \`comment\` explaining why.`;
+    this.description = `Manage one task at a time (backend: ${backend.name}). Actions: create, get, update, delete, comment. Changing status via update REQUIRES a \`comment\` explaining why. NOTE: there is no \`list\` action here — to list / search / filter tasks, use the separate \`task_query\` tool.`;
 
     this.parameters = {
       type: "object",
@@ -158,6 +168,7 @@ export class TasksTool implements Tool {
     ];
     if (task.tags.length) lines.push(`Tags: ${task.tags.join(", ")}`);
 
+    this.notify?.("created", task.id);
     return { success: true, output: lines.join("\n") };
   }
 
@@ -248,6 +259,7 @@ export class TasksTool implements Tool {
     });
 
     if (!task) return { success: false, output: "", error: `Task ${id} not found.` };
+    this.notify?.("updated", task.id);
     return { success: true, output: `Updated task "${task.title}" (${task.id}) — status: ${task.status}` };
   }
 
@@ -265,13 +277,14 @@ export class TasksTool implements Tool {
 
     const comment = await this.backend.comment(id, text, author);
     if (!comment) return { success: false, output: "", error: `Task ${id} not found.` };
+    this.notify?.("commented", id);
     return { success: true, output: `Added comment to task ${id}.` };
   }
 }
 
 export class TaskQueryTool implements Tool {
   name = "task_query";
-  description = "Search and filter project tasks. Call with no args to list recent tasks.";
+  description = "List, search, and filter project tasks. Use this — not the `tasks` tool — for any read across multiple tasks. Call with no args to list recent tasks.";
   parameters = {
     type: "object",
     properties: {

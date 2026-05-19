@@ -26,6 +26,14 @@ export class TaskWatcher {
   private discord?: DiscordChannel;
   private debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private queue: Promise<void> = Promise.resolve();
+  /**
+   * Per-task assignee we last fired the watcher with. Used to gate
+   * `updated` events: we only re-fire when the assignee actually changes
+   * to a (different) known agent — prevents the coder→in_review→watcher
+   * → coder loop, but allows coder→reviewer and reviewer→coder handoffs
+   * (Phase 6, multi-agent review loop).
+   */
+  private lastFiredAssignee = new Map<string, string | null>();
 
   constructor(opts: TaskWatcherOptions) {
     this.runtime = opts.runtime;
@@ -36,12 +44,47 @@ export class TaskWatcher {
     this.discord = discord;
   }
 
+  /**
+   * Convenience: notify by id. Looks up the current task row and forwards
+   * to notify(). Used by the tasks tool (which has the id at mutation
+   * time but not the full row). Silently no-ops if the row is gone.
+   */
+  notifyById(action: TaskEvent["action"], taskId: string): void {
+    const row = this.runtime.db
+      .prepare("SELECT * FROM project_tasks WHERE id = ?")
+      .get(taskId) as ProjectTask | undefined;
+    if (!row) return;
+    // tags is stored as JSON; parse it for the event.
+    let tags: string[] = [];
+    try {
+      const raw = (row as unknown as { tags: string }).tags;
+      tags = raw ? JSON.parse(raw) : [];
+    } catch {
+      tags = [];
+    }
+    this.notify({ action, task: { ...row, tags } as ProjectTask });
+  }
+
   notify(event: TaskEvent): void {
     const config = this.runtime.getConfig().taskWatcher;
     if (!config.enabled) return;
     if (!config.triggers.includes(event.action)) return;
 
     const taskId = event.task.id;
+    const newAssignee = event.task.assignee?.trim() || null;
+
+    // `updated` events fire only when the assignee transitions to a
+    // different known agent. Without this gate, every comment / status
+    // bump re-triggers the same agent that just finished, looping.
+    // `created` events always fire (initial routing).
+    if (event.action === "updated") {
+      const lastFired = this.lastFiredAssignee.get(taskId);
+      const isKnownAgent =
+        newAssignee !== null && Boolean(this.runtime.getConfig().agents?.[newAssignee]);
+      if (!isKnownAgent || newAssignee === lastFired) {
+        return;
+      }
+    }
 
     // Clear existing debounce for this task
     const existing = this.debounceTimers.get(taskId);
@@ -49,6 +92,7 @@ export class TaskWatcher {
 
     const timer = setTimeout(() => {
       this.debounceTimers.delete(taskId);
+      this.lastFiredAssignee.set(taskId, newAssignee);
       this.enqueue(event);
     }, config.debounceMs);
 
@@ -129,19 +173,21 @@ export class TaskWatcher {
       }
     }
 
-    // Worktree pre-flight for the coder agent. We create a per-task branch
-    // off HEAD and cd the loop into it so the agent operates on an isolated
-    // checkout. After the loop finishes, we look at the worktree to decide
-    // status — clean = nothing happened, dirty + committed = ready for
-    // review (docs/agent-unification.md, Phase 5).
+    // Worktree pre-flight for coder/reviewer agents (Phase 5+6).
+    // Both work on a per-task branch — coder writes; reviewer inspects
+    // diffs and runs tests. After the loop finishes, the worktree is
+    // cleaned up but the branch is retained so future iterations
+    // (e.g. reviewer requests changes → coder re-runs) pick up the
+    // existing branch instead of starting fresh.
     let worktree: Worktree | undefined;
     let projectOverride: import("./projects/resolve.js").ProjectContext | undefined;
-    if (agentName === "coder" && event.task.project_id) {
-      const project = getProject(this.runtime.db, event.task.project_id);
+    const needsWorktree = (agentName === "coder" || agentName === "reviewer") && event.task.project_id;
+    if (needsWorktree) {
+      const project = getProject(this.runtime.db, event.task.project_id!);
       const repoPath = project?.path;
       if (!repoPath) {
         console.error(
-          `${logPrefix} coder routed but project ${event.task.project_id} has no path — skipping worktree`,
+          `${logPrefix} ${agentName} routed but project ${event.task.project_id} has no path — skipping worktree`,
         );
       } else {
         const slug = slugify(event.task.title).slice(0, 30) || "task";
@@ -152,10 +198,10 @@ export class TaskWatcher {
             strategy: { type: "branch", branch },
           });
           projectOverride = {
-            id: project.id,
-            name: project.title,
+            id: project!.id,
+            name: project!.title,
             path: worktree.path,
-            overlayPath: project.config_overlay_path ?? "",
+            overlayPath: project!.config_overlay_path ?? "",
             overlay: {},
           };
           console.log(`${logPrefix} created worktree at ${worktree.path} on ${branch}`);
@@ -167,30 +213,59 @@ export class TaskWatcher {
     }
 
     // Build prompt: structured task context + user-configured prompt.
-    // For coder routes, prepend explicit branch/commit/push instructions.
+    // Coder/reviewer routes get role-specific preambles that explain the
+    // worktree + branch + per-role lifecycle.
     const configPrompt = await expandPrompt(config.prompt, templateVars, promptsConfig);
-    const coderPreamble = worktree
-      ? [
-          "You are the **coder** agent. A fresh git worktree has been set up for you:",
-          `- Worktree path: ${worktree.path}`,
-          `- Branch: ${worktree.branch}`,
-          "- Status: clean, off main HEAD",
-          "",
-          "Your job for this task:",
-          "1. Read the task description carefully.",
-          "2. Make the minimal change that satisfies it — prefer editing existing files.",
-          "3. Run tests if relevant (`pnpm test`, `pnpm typecheck`).",
-          "4. `git add` + `git commit` your changes with a clear message.",
-          "5. Push the branch with `git push -u origin <branch>` if a remote is configured.",
-          "6. Call `tasks(action=update, id=" + event.task.id + ", status=in_review)` and add a comment with the branch name + a one-line summary of what you did.",
-          "7. If you cannot do the work (missing context, blocked by infra), update the task to `blocked` with a clear reason and STOP — do not invent files or paths.",
-          "",
-          "Do NOT touch ~/.tailored-ai/, the agent.db, or config.yaml. Do NOT commit secrets.",
-          "",
-        ].join("\n")
-      : "";
+    const ownerName = this.runtime.getConfig().channels.discord?.owner ?? "the user";
+    let rolePreamble = "";
+    if (agentName === "coder" && worktree) {
+      rolePreamble = [
+        "You are the **coder** agent. A git worktree has been set up for you:",
+        `- Worktree path: ${worktree.path}`,
+        `- Branch: ${worktree.branch}`,
+        "- Status: checked out (may have prior commits if this is an iteration)",
+        "",
+        "Per-task lifecycle:",
+        "1. Read the task description AND any prior comments (esp. reviewer feedback).",
+        "2. Make the minimal change that satisfies the task or addresses the feedback.",
+        "3. Run typecheck and tests if you touched code:",
+        "   `pnpm typecheck` and `pnpm test`. Fix failures before committing.",
+        "4. `git add` + `git commit` with a clear message.",
+        "5. `git push -u origin <branch>` if a remote is configured.",
+        `6. Hand off to the reviewer: \`tasks(action=update, id=${event.task.id}, status=in_review, assignee=reviewer)\` and add a comment with branch name + commit sha + one-line summary.`,
+        "7. If you cannot proceed (missing context, infra issue), update to `blocked` with a clear reason and STOP — do not fabricate paths or files.",
+        "",
+        "Do NOT touch ~/.tailored-ai/, agent.db, or config.yaml. Do NOT commit secrets.",
+        "",
+      ].join("\n");
+    } else if (agentName === "reviewer" && worktree) {
+      rolePreamble = [
+        "You are the **reviewer** agent. The coder has produced a branch you need to review.",
+        `- Worktree path: ${worktree.path}`,
+        `- Branch: ${worktree.branch}`,
+        "- Status: checked out at HEAD of the branch",
+        "",
+        "Your review process:",
+        "1. Read the task description and ALL prior comments to understand what was asked.",
+        "2. Inspect the branch diff against main:",
+        "   `git diff main..HEAD` and `git log main..HEAD --oneline` from the worktree.",
+        "3. Read any files the diff touches for surrounding context.",
+        "4. Run `pnpm typecheck` and `pnpm test`. If they fail, that's grounds for changes.",
+        "5. Decide:",
+        "   - **APPROVE** (looks correct, minimal, tests pass): " +
+          `\`tasks(action=update, id=${event.task.id}, status=in_review, assignee=${ownerName})\`. ` +
+          "Add a comment summarizing why you approved (what was done, what you verified).",
+        "   - **REQUEST CHANGES** (bug, scope creep, broken tests, missing context, security issue): " +
+          `\`tasks(action=update, id=${event.task.id}, status=in_progress, assignee=coder)\`. ` +
+          "Add a comment listing specific, actionable items the coder should fix. Be precise — file paths, line refs, what's wrong, what's expected.",
+        "",
+        "You do NOT commit, push, or amend the branch yourself. You only review.",
+        "Aim for one decisive decision per review pass — don't bounce trivial issues; do bounce real problems.",
+        "",
+      ].join("\n");
+    }
     const prompt = [
-      coderPreamble,
+      rolePreamble,
       "Task event received. Details:",
       `- Task ID: ${event.task.id}`,
       `- Event type: ${event.action}`,
