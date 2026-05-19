@@ -284,7 +284,8 @@ export class TasksTool implements Tool {
 
 export class TaskQueryTool implements Tool {
   name = "task_query";
-  description = "List, search, and filter project tasks. Use this — not the `tasks` tool — for any read across multiple tasks. Call with no args to list recent tasks.";
+  description =
+    "List, search, and filter project tasks across all statuses. Use this — not the `tasks` tool — for any read across multiple tasks. For example, `task_query(status=\"backlog\", limit=10)` lists the top 10 pending tasks.";
   parameters = {
     type: "object",
     properties: {
