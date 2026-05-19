@@ -131,7 +131,25 @@ export function trimHistory(messages: Message[], maxTokens: number): Message[] {
       start++;
     }
   }
-  return messages.slice(start);
+  return ensureUserMessagePresent(messages.slice(start), messages);
+}
+
+/**
+ * Safety net: if trimming dropped every user-role message, splice the
+ * first one back in. Providers (vLLM, OpenAI, Anthropic) all reject
+ * requests with no user message — we'd rather show a stale task prompt
+ * than crash with "No user query found in messages." See Phase 7
+ * (docs/agent-unification.md).
+ */
+function ensureUserMessagePresent(trimmed: Message[], original: Message[]): Message[] {
+  if (trimmed.some((m) => m.role === "user")) return trimmed;
+  const firstUser = original.find((m) => m.role === "user");
+  if (!firstUser) return trimmed;
+  // Insert after any leading system summary block so the chronology is
+  // [system summary?, original task, ...kept turns].
+  const insertAt = trimmed.findIndex((m) => m.role !== "system");
+  if (insertAt === -1) return [...trimmed, firstUser];
+  return [...trimmed.slice(0, insertAt), firstUser, ...trimmed.slice(insertAt)];
 }
 
 /** Validate tool arguments against the tool's parameter schema. Returns an error string or null if valid. */
@@ -250,7 +268,7 @@ export async function trimHistoryWithSummary(
         role: "system",
         content: `[Earlier conversation summary: ${summary}]`,
       };
-      return { messages: [summaryMsg, ...kept], summary };
+      return { messages: ensureUserMessagePresent([summaryMsg, ...kept], messages), summary };
     }
   } else if (existingSummary) {
     // Re-use cached summary from a previous round
@@ -258,10 +276,13 @@ export async function trimHistoryWithSummary(
       role: "system",
       content: `[Earlier conversation summary: ${existingSummary}]`,
     };
-    return { messages: [summaryMsg, ...kept], summary: existingSummary };
+    return {
+      messages: ensureUserMessagePresent([summaryMsg, ...kept], messages),
+      summary: existingSummary,
+    };
   }
 
-  return { messages: kept };
+  return { messages: ensureUserMessagePresent(kept, messages) };
 }
 
 /** Request approval with timeout handling. */

@@ -56,6 +56,38 @@ async function isClean(worktreePath: string): Promise<boolean> {
   }
 }
 
+/**
+ * Returns the on-disk path of an existing worktree currently checked out
+ * on `branch`, or null if no such worktree exists. Used by createWorktree
+ * to support reuse semantics — a branch can only be checked out in one
+ * place, so the coder→reviewer handoff has to share the same worktree.
+ */
+async function findWorktreeForBranch(
+  repoDir: string,
+  branch: string,
+): Promise<string | null> {
+  try {
+    const r = await git(repoDir, ["worktree", "list", "--porcelain"]);
+    // Format: blocks of lines like `worktree <path>\nHEAD <sha>\nbranch refs/heads/<name>\n\n`
+    const blocks = r.stdout.split(/\n\n/).map((b) => b.trim()).filter(Boolean);
+    for (const block of blocks) {
+      const lines = block.split("\n");
+      const worktreeLine = lines.find((l) => l.startsWith("worktree "));
+      const branchLine = lines.find((l) => l.startsWith("branch "));
+      if (!worktreeLine || !branchLine) continue;
+      const path = worktreeLine.slice("worktree ".length).trim();
+      const ref = branchLine.slice("branch ".length).trim();
+      if (ref === `refs/heads/${branch}` || ref === branch) {
+        return path;
+      }
+    }
+  } catch {
+    // git command failed — just say no worktree found and let createWorktree
+    // try `worktree add` (which has its own error path).
+  }
+  return null;
+}
+
 async function getCurrentBranch(repoDir: string): Promise<string> {
   const r = await git(repoDir, ["rev-parse", "--abbrev-ref", "HEAD"]);
   return r.stdout.trim();
@@ -104,35 +136,53 @@ export async function createWorktree(opts: CreateWorktreeOptions): Promise<Workt
     await exec("mkdir", ["-p", parent]);
   }
 
-  // -b creates the branch from HEAD if it doesn't exist; if it exists, we use plain `git worktree add`.
-  const branches = (await git(repoDir, ["branch", "--list", branch])).stdout.trim();
-  if (branches) {
-    await git(repoDir, ["worktree", "add", wtPath, branch]);
+  // Reuse-existing semantics (Phase 5+6 — coder/reviewer handoffs):
+  // if a worktree on this branch already exists (e.g. coder left it
+  // around after a partial commit), reuse it. Otherwise create fresh.
+  // This is what lets the reviewer run on the coder's branch without
+  // racing the "path already exists" error from `git worktree add`.
+  const existingWorktreePath = await findWorktreeForBranch(repoDir, branch);
+  if (existingWorktreePath) {
+    // Reuse the existing worktree. If the caller asked for a different
+    // path, log it but use what's already there — a branch can only have
+    // one checkout at a time.
+    if (existingWorktreePath !== wtPath) {
+      // Quiet: this is expected when the caller doesn't override worktreePath.
+    }
   } else {
-    await git(repoDir, ["worktree", "add", "-b", branch, wtPath]);
+    // -b creates the branch from HEAD if it doesn't exist; if the branch
+    // already exists but no worktree owns it, plain `worktree add` checks
+    // it out.
+    const branches = (await git(repoDir, ["branch", "--list", branch])).stdout.trim();
+    if (branches) {
+      await git(repoDir, ["worktree", "add", wtPath, branch]);
+    } else {
+      await git(repoDir, ["worktree", "add", "-b", branch, wtPath]);
+    }
   }
+  const finalPath = existingWorktreePath ?? wtPath;
 
   const cleanup = async (): Promise<{ preservedPath?: string }> => {
-    const clean = await isClean(wtPath);
-    if (!clean) return { preservedPath: wtPath };
+    const clean = await isClean(finalPath);
+    if (!clean) return { preservedPath: finalPath };
     try {
-      await git(repoDir, ["worktree", "remove", wtPath]);
+      await git(repoDir, ["worktree", "remove", finalPath]);
     } catch {
       // Force remove if git refuses (e.g. locked).
-      await git(repoDir, ["worktree", "remove", "--force", wtPath]).catch(() => {});
-      await rm(wtPath, { recursive: true, force: true }).catch(() => {});
+      await git(repoDir, ["worktree", "remove", "--force", finalPath]).catch(() => {});
+      await rm(finalPath, { recursive: true, force: true }).catch(() => {});
     }
     return {};
   };
 
   if (opts.strategy.type === "branch") {
-    return { path: wtPath, branch, strategy: opts.strategy, cleanup };
+    return { path: finalPath, branch, strategy: opts.strategy, cleanup };
   }
 
   // merge-to-head
   const strategy = opts.strategy;
   return {
-    path: wtPath,
+    path: finalPath,
     branch,
     strategy,
     cleanup,

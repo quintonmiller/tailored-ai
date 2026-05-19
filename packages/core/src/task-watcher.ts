@@ -205,6 +205,22 @@ export class TaskWatcher {
             overlay: {},
           };
           console.log(`${logPrefix} created worktree at ${worktree.path} on ${branch}`);
+          // pnpm symlinks the workspace deps from the central store
+          // into the worktree's node_modules — fast (~3s with cache).
+          // Without this the coder can't run pnpm test / typecheck.
+          try {
+            const { exec } = await import("node:child_process");
+            await new Promise<void>((res, rej) => {
+              exec("pnpm install --prefer-offline --silent", { cwd: worktree!.path }, (err) => {
+                if (err) rej(err);
+                else res();
+              });
+            });
+            console.log(`${logPrefix} pnpm install complete in worktree`);
+          } catch (err) {
+            console.warn(`${logPrefix} pnpm install in worktree failed:`, (err as Error).message);
+            // Non-fatal — agent may not need to run tests.
+          }
         } catch (err) {
           console.error(`${logPrefix} worktree creation failed:`, (err as Error).message);
           // Continue without isolation — agent runs in the project's main checkout.

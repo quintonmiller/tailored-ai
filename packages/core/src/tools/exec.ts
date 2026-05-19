@@ -1,5 +1,53 @@
 import { execFile } from "node:child_process";
+import { mkdir, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
+
+/**
+ * Head + tail truncation for noisy command output (test runners,
+ * compilers). Saves the full output to a file so the agent (or a
+ * human debugging) can read it later, returns a bounded summary in
+ * the tool result. Without this, a single `pnpm test` run can blow
+ * past the model's context budget — see docs/agent-unification.md
+ * Phase 7 (output truncation + trim pinning).
+ */
+const TRUNCATE_BYTES = 4000;
+const HEAD_LINES = 15;
+const TAIL_LINES = 35;
+
+async function maybeTruncate(raw: string, sessionId: string | undefined): Promise<string> {
+  if (raw.length <= TRUNCATE_BYTES) return raw;
+
+  const path = await saveFullOutput(raw, sessionId);
+  const lines = raw.split("\n");
+  const total = lines.length;
+  if (total <= HEAD_LINES + TAIL_LINES) {
+    // Char-bloated single-line case (stack trace with long paths, etc.)
+    // — just clip head/tail by chars.
+    const head = raw.slice(0, 1500);
+    const tail = raw.slice(-2000);
+    return `[exec output: ${raw.length} bytes truncated. Full output: ${path}]\n${head}\n... [middle omitted] ...\n${tail}`;
+  }
+  const head = lines.slice(0, HEAD_LINES).join("\n");
+  const tail = lines.slice(-TAIL_LINES).join("\n");
+  const omitted = total - HEAD_LINES - TAIL_LINES;
+  return [
+    `[exec output: ${raw.length} bytes, ${total} lines — truncated. Full output: ${path}]`,
+    head,
+    `... [${omitted} lines omitted] ...`,
+    tail,
+  ].join("\n");
+}
+
+async function saveFullOutput(raw: string, sessionId: string | undefined): Promise<string> {
+  const dir = join(homedir(), ".tai", "exec-outputs", sessionId || "unknown");
+  await mkdir(dir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const path = join(dir, `${stamp}.log`);
+  await writeFile(path, raw, "utf8");
+  return path;
+}
 
 export class ExecTool implements Tool {
   name = "exec";
@@ -54,13 +102,12 @@ export class ExecTool implements Tool {
         env: context.env,
         timeoutMs: this.timeoutMs,
       });
+      const raw = result.stdout + (result.stderr ? `\n[stderr]: ${result.stderr}` : "");
+      const output = await maybeTruncate(raw, context.sessionId);
       if (result.exitCode !== 0) {
-        return { success: false, output: result.stdout, error: result.stderr || `exit code ${result.exitCode}` };
+        return { success: false, output, error: result.stderr || `exit code ${result.exitCode}` };
       }
-      return {
-        success: true,
-        output: result.stdout + (result.stderr ? `\n[stderr]: ${result.stderr}` : ""),
-      };
+      return { success: true, output };
     }
 
     return new Promise((resolve) => {
@@ -73,18 +120,17 @@ export class ExecTool implements Tool {
           timeout: this.timeoutMs,
           maxBuffer: 1024 * 1024,
         },
-        (error, stdout, stderr) => {
+        async (error, stdout, stderr) => {
+          const raw = stdout + (stderr ? `\n[stderr]: ${stderr}` : "");
+          const output = await maybeTruncate(raw, context.sessionId);
           if (error) {
             resolve({
               success: false,
-              output: stdout,
+              output,
               error: stderr || error.message,
             });
           } else {
-            resolve({
-              success: true,
-              output: stdout + (stderr ? `\n[stderr]: ${stderr}` : ""),
-            });
+            resolve({ success: true, output });
           }
         },
       );
