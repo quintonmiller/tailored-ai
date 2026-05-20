@@ -1,3 +1,4 @@
+import type { CalendarProviderKind } from "../types.js";
 import { CalDAVProvider } from "./caldav.js";
 
 export interface iCloudConfig {
@@ -10,7 +11,7 @@ export interface iCloudConfig {
  * defaults (server URL, app-specific password auth).
  */
 export class iCloudCalendarProvider extends CalDAVProvider {
-  override kind: "icloud" = "icloud";
+  override kind: CalendarProviderKind = "icloud";
 
   constructor(config: iCloudConfig) {
     super({

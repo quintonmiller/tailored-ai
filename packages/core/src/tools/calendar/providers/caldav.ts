@@ -1,4 +1,4 @@
-import type { CalendarProvider, CalendarEvent, CalendarListResult } from "../types.js";
+import type { CalendarProviderKind, CalendarProvider, CalendarEvent, CalendarListResult } from "../types.js";
 
 const ICLOUD_CALDAV_URL = "https://caldav.icloud.com";
 
@@ -15,7 +15,7 @@ export interface CalDAVConfig {
  * No external library required.
  */
 export class CalDAVProvider implements CalendarProvider {
-  kind: "caldav" = "caldav";
+  kind: CalendarProviderKind = "caldav";
 
   private readonly serverUrl: string;
   private readonly authHeader: string;
