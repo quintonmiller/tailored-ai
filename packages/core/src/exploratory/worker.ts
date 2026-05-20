@@ -16,8 +16,9 @@ import {
   maybeResetDailyCounters,
   updateExploratoryState,
 } from "../db/exploratory-queries.js";
-import { listNotes } from "../db/note-queries.js";
+import { createNote, listNotes } from "../db/note-queries.js";
 import { appendTickLog } from "../db/tick-log-queries.js";
+import { detectStall } from "../task-watcher.js";
 import { SleepTool } from "../tools/sleep.js";
 import type { AgentRuntime } from "../runtime.js";
 import { buildTickContext, renderTickSituation } from "./tick-context.js";
@@ -279,11 +280,42 @@ export class ExploratoryWorker {
       runtimeSignal.removeEventListener("abort", onRuntimeAbort);
     }
 
+    // Stall detection. When the loop returns `[Agent stopped: …]` (max
+    // rounds, repeated identical calls, shutdown), the exploratory worker
+    // previously classified it as "noop" because no outputs were produced
+    // — burying the failure. Now we reclassify to `error`, leave a recall
+    // note tagged `stall` so the agent sees it next tick, and bump the
+    // backoff so we don't immediately retry the same stuck shape.
+    // task-watcher has its own stall recovery (retry-then-block); this is
+    // the analog for exploratory ticks.
+    const stallReason = detectStall(summary ?? "");
+    if (stallReason) {
+      status = "error";
+      errorMsg = `loop-stalled: ${stallReason}`;
+      try {
+        createNote(db, {
+          agent: agentName,
+          project_id: projectId,
+          content:
+            `Previous tick stalled with "${stallReason}". ` +
+            `Likely cause: too much exploration with no commit/exit. ` +
+            `Next tick: pick a smaller scope, or write a status note and Sleep early.`,
+          tags: ["stall", "self-feedback"],
+          importance: 0.8,
+        });
+      } catch (err) {
+        console.error(`[exploratory] failed to record stall note: ${(err as Error).message}`);
+      }
+      console.error(
+        `[exploratory] ${agentName} stalled (${stallReason}); recorded self-feedback note`,
+      );
+    }
+
     // Detect outputs created during this run (agent-scoped notes; project_id
     // and global facts/tasks by cutoff). Drives the noop/ok classification.
     const outputs = this.detectOutputs(agentName, cutoffIso);
 
-    // Only reclassify ok ↔ noop. error/budget statuses stand as-is.
+    // Only reclassify ok ↔ noop. error/budget/stall statuses stand as-is.
     if (status === "ok" && outputs.totalCount === 0) {
       status = "noop";
     }
