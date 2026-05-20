@@ -1,5 +1,7 @@
 export type { ApprovalHandler, ApprovalRequest, ApprovalResponse, PermissionsConfig, PermissionRule, ToolPermissionConfig } from "./approval.js";
 export { evaluatePermission, createApprovalRequestId, formatApprovalDescription } from "./approval.js";
+export type { ApprovalGatewayConfig, ApprovalOutcome, PendingApproval, ApprovalRecord, EscalationCallback } from "./approval-gateway.js";
+export { ApprovalGateway } from "./approval-gateway.js";
 export type { CompactResult } from "./agent/compact.js";
 export { compactSession, formatCompactResult } from "./agent/compact.js";
 export type { ResolvedHooks } from "./agent/hooks.js";
@@ -141,7 +143,6 @@ export {
   getProjectTask,
   listRecentCommentsByAuthor,
   nextBacklogTaskForAssignees,
-  queryProjectTasks,
   unblockBudgetTasks,
   updateProjectTask,
 } from "./db/task-queries.js";
