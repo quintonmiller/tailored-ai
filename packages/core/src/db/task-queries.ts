@@ -240,6 +240,31 @@ export function claimBacklogTask(db: Database.Database, id: string): ProjectTask
 }
 
 /**
+ * Returns tasks that look stuck: assignee is in the given set of agent
+ * names, status is non-terminal, and updated_at is older than the given
+ * threshold. Used by the autopilot stuck-task scanner to find coder /
+ * reviewer dispatches that died silently (process restart, crash, etc.)
+ * so they can be requeued via `taskWatcher.notify(…, {force: true})`.
+ */
+export function findStuckCodingTasks(
+  db: Database.Database,
+  opts: { assignees: string[]; thresholdMs: number },
+): ProjectTask[] {
+  if (opts.assignees.length === 0) return [];
+  const placeholders = opts.assignees.map(() => "?").join(", ");
+  const thresholdSeconds = Math.max(1, Math.round(opts.thresholdMs / 1000));
+  const rows = db
+    .prepare(
+      `SELECT * FROM project_tasks
+        WHERE assignee IN (${placeholders})
+          AND status NOT IN ('done', 'archived', 'blocked')
+          AND datetime(updated_at) <= datetime('now', '-' || ? || ' seconds')`,
+    )
+    .all(...opts.assignees, thresholdSeconds) as ProjectTaskRow[];
+  return rows.map(rowToTask);
+}
+
+/**
  * Returns the top-ranked backlog task whose assignee is in the given set, or
  * undefined if none exist. Ordered by rank ascending, then creation time.
  */

@@ -127,6 +127,7 @@ async function runServer(runtime: AgentRuntime) {
     runtime,
     getDiscord: () => discord,
     getOwnerId: () => runtime.getConfig().channels.discord?.owner,
+    getTaskWatcher: () => taskWatcher,
   });
   autopilot.start();
 

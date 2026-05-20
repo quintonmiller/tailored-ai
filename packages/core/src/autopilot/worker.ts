@@ -10,11 +10,19 @@ import {
   recordTokenUsage,
 } from "../db/autopilot-queries.js";
 import { getProject } from "../db/project-queries.js";
+import { findStuckCodingTasks } from "../db/task-queries.js";
 import type { ProjectContext } from "../projects/resolve.js";
 import type { AgentRuntime } from "../runtime.js";
 import type { Task, TaskBackend } from "../tasks/interface.js";
 import { buildMorningDigest, recordDigestRun } from "./digest.js";
 import { runMemorySweep } from "../agent/memory-promotion.js";
+
+export interface StuckTaskWatcher {
+  notify(
+    event: { action: "updated"; task: import("../db/task-queries.js").ProjectTask },
+    opts?: { force?: boolean },
+  ): void;
+}
 
 export interface AutopilotWorkerOptions {
   runtime: AgentRuntime;
@@ -28,9 +36,21 @@ export interface AutopilotWorkerOptions {
   getOwnerId?: () => string | undefined;
   /** Override the task backend. Defaults to `createTaskBackend(runtime.getConfig(), runtime.db)`. */
   taskBackend?: TaskBackend;
+  /**
+   * Lookup for the live TaskWatcher so the stuck-task scanner can re-fire
+   * stalled coding tasks. Returning undefined disables the scanner (e.g.
+   * for tests, or when the watcher hasn't been built yet).
+   */
+  getTaskWatcher?: () => StuckTaskWatcher | undefined;
+  /** Override the stuck-task scan interval (ms). Default 15 min. */
+  stuckScanIntervalMs?: number;
+  /** Override the staleness threshold (ms). Tasks older than this with an agent assignee are considered stuck. Default 30 min. */
+  stuckThresholdMs?: number;
 }
 
 const DEFAULT_INTERVAL_MS = 30_000;
+const DEFAULT_STUCK_SCAN_INTERVAL_MS = 15 * 60_000;
+const DEFAULT_STUCK_THRESHOLD_MS = 30 * 60_000;
 
 const WORKFLOW_TAG_PREFIX = "workflow:";
 
@@ -49,12 +69,16 @@ export class AutopilotWorker {
   private timer: ReturnType<typeof setInterval> | undefined;
   private digestCron: Cron | undefined;
   private memorySweepCron: Cron | undefined;
+  private stuckScanTimer: ReturnType<typeof setInterval> | undefined;
   private currentDigestTime: string | null = null;
   private running = false;
   private currentTask: { taskId: string; title: string } | undefined;
   private onActivity?: (activity: { taskId: string; title: string } | null) => void;
   private getDiscord?: () => DiscordChannel | undefined;
   private getOwnerId?: () => string | undefined;
+  private getTaskWatcher?: () => StuckTaskWatcher | undefined;
+  private stuckScanIntervalMs: number;
+  private stuckThresholdMs: number;
   private tasks: TaskBackend;
 
   constructor(opts: AutopilotWorkerOptions) {
@@ -63,6 +87,9 @@ export class AutopilotWorker {
     this.onActivity = opts.onActivity;
     this.getDiscord = opts.getDiscord;
     this.getOwnerId = opts.getOwnerId;
+    this.getTaskWatcher = opts.getTaskWatcher;
+    this.stuckScanIntervalMs = opts.stuckScanIntervalMs ?? DEFAULT_STUCK_SCAN_INTERVAL_MS;
+    this.stuckThresholdMs = opts.stuckThresholdMs ?? DEFAULT_STUCK_THRESHOLD_MS;
     this.tasks = opts.taskBackend ?? this.runtime.getTaskBackend();
   }
 
@@ -87,10 +114,62 @@ export class AutopilotWorker {
     }, this.intervalMs);
     this.syncDigestSchedule();
     this.startMemorySweepCron();
+    this.startStuckTaskScan();
     // Fire once immediately.
     this.tick().catch((err) => {
       console.error("[autopilot] Initial tick error:", (err as Error).message);
     });
+  }
+
+  /**
+   * Periodically scan for coding tasks (assignee=coder/reviewer or any
+   * known agent) whose updated_at is older than the staleness threshold
+   * and that haven't reached a terminal status. For each stuck task we
+   * re-fire the watcher event with `force: true` — the watcher's stall
+   * handling (handleStall) then decides retry vs block based on prior
+   * STALL comments. Without this scan, a task whose dispatched run died
+   * silently (e.g. the process was restarted mid-loop) would never be
+   * picked up again.
+   */
+  private startStuckTaskScan(): void {
+    if (this.stuckScanTimer) return;
+    if (!this.getTaskWatcher) {
+      console.log("[autopilot] Stuck-task scan disabled (no taskWatcher accessor)");
+      return;
+    }
+    this.stuckScanTimer = setInterval(() => {
+      this.scanStuckTasks().catch((err) => {
+        console.error("[autopilot] Stuck-task scan error:", (err as Error).message);
+      });
+    }, this.stuckScanIntervalMs);
+    console.log(
+      `[autopilot] Stuck-task scan scheduled every ${Math.round(this.stuckScanIntervalMs / 60_000)}m ` +
+        `(threshold ${Math.round(this.stuckThresholdMs / 60_000)}m)`,
+    );
+  }
+
+  /** One pass of the stuck-task scanner. Public for the autopilot-stuck-scan test. */
+  async scanStuckTasks(): Promise<{ requeued: number; skipped: number }> {
+    const watcher = this.getTaskWatcher?.();
+    if (!watcher) return { requeued: 0, skipped: 0 };
+    const config = this.runtime.getConfig();
+    const knownAgents = Object.keys(config.agents ?? {});
+    if (knownAgents.length === 0) return { requeued: 0, skipped: 0 };
+
+    const stuck = findStuckCodingTasks(this.runtime.db, {
+      assignees: knownAgents,
+      thresholdMs: this.stuckThresholdMs,
+    });
+    let requeued = 0;
+    for (const task of stuck) {
+      console.log(
+        `[autopilot] Re-firing stuck task ${task.id} (assignee=${task.assignee}, status=${task.status}, ` +
+          `updated_at=${task.updated_at})`,
+      );
+      watcher.notify({ action: "updated", task }, { force: true });
+      requeued++;
+    }
+    return { requeued, skipped: 0 };
   }
 
   /**
@@ -123,6 +202,10 @@ export class AutopilotWorker {
     if (this.memorySweepCron) {
       this.memorySweepCron.stop();
       this.memorySweepCron = undefined;
+    }
+    if (this.stuckScanTimer) {
+      clearInterval(this.stuckScanTimer);
+      this.stuckScanTimer = undefined;
     }
     console.log("[autopilot] Stopped");
   }

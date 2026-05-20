@@ -137,6 +137,7 @@ export {
   claimBacklogTask,
   createProjectTask,
   deleteProjectTask,
+  findStuckCodingTasks,
   getProjectTask,
   listRecentCommentsByAuthor,
   nextBacklogTaskForAssignees,
