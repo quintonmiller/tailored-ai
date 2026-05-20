@@ -386,6 +386,11 @@ export class TaskWatcher {
           extraTools,
           project: projectOverride ?? null,
         }),
+        // Hard sandbox boundary: when there's a worktree, file/exec tools
+        // reject paths that resolve outside it. Closes the absolute-path
+        // escape we saw on 2026-05-20 where the coder wrote into main's
+        // checkout via /home/quint/repos/autonomous-agent/packages/... .
+        toolContextExtras: worktree ? { workingDirectoryBoundary: worktree.path } : undefined,
         onToolCall: (name, args) => {
           console.log(`${logPrefix} tool: ${name}(${JSON.stringify(args)})`);
         },
