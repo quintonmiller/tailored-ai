@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import YAML from "yaml";
 import type { CustomToolConfig } from "../config.js";
 import type { AgentRuntime } from "../runtime.js";
+import { RateLimiter, DEFAULT_RATE_LIMIT_CONFIG, formatRateLimitError, type RateLimitConfig } from "../rate-limiter.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
 
 const VALID_TOOL_NAME = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
@@ -186,6 +187,19 @@ function isWriteAllowed(path: string): boolean {
   });
 }
 
+/**
+ * Derive a rate-limit action key from a config path.
+ * Examples:
+ *   "agents.coder.tools" -> "update_config"
+ *   "permissions.sandbox" -> "update_permissions"
+ *   "custom_tools.greet" -> "create_tool"
+ */
+function actionKeyForPath(path: string): string {
+  if (path.startsWith("permissions.")) return "update_permissions";
+  if (path.startsWith("custom_tools.")) return "create_tool";
+  return "update_config";
+}
+
 export class AdminTool implements Tool {
   name = "admin";
   description =
@@ -213,9 +227,31 @@ export class AdminTool implements Tool {
   };
 
   private runtime: AgentRuntime;
+  private readonly rateLimiter: RateLimiter;
 
-  constructor(runtime: AgentRuntime) {
+  constructor(runtime: AgentRuntime, rateLimitConfig?: RateLimitConfig) {
     this.runtime = runtime;
+    this.rateLimiter = new RateLimiter(rateLimitConfig ?? DEFAULT_RATE_LIMIT_CONFIG);
+  }
+
+  /**
+   * Check the rate limiter for a config/permission write.
+   * Returns a rejection ToolResult if the limit is exceeded, or undefined if allowed.
+   */
+  private checkRateLimit(agentName: string | undefined, action: string): ToolResult | undefined {
+    const result = this.rateLimiter.tryConsume({
+      agentName,
+      action,
+    });
+
+    if (!result.allowed) {
+      return {
+        success: false,
+        output: "",
+        error: formatRateLimitError(result),
+      };
+    }
+    return undefined;
   }
 
   async execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
@@ -225,10 +261,10 @@ export class AdminTool implements Tool {
       case "get_config":
         return this.getConfig(args.section as string | undefined);
       case "update_config":
-        return this.updateConfig(args.path as string, args.value);
+        return this.updateConfig(args.path as string, args.value, context);
       case "create_agent":
       case "create_profile": // backward compat alias
-        return this.createAgent(args.name as string, (args.agent ?? args.profile) as Record<string, unknown>);
+        return this.createAgent(args.name as string, (args.agent ?? args.profile) as Record<string, unknown>, context);
       case "create_tool":
         return this.createTool(args.name as string, args.tool as Record<string, unknown>, context);
       case "list_agents":
@@ -252,7 +288,7 @@ export class AdminTool implements Tool {
     return { success: true, output: YAML.stringify(data) };
   }
 
-  private async updateConfig(path: string, value: unknown): Promise<ToolResult> {
+  private async updateConfig(path: string, value: unknown, context: ToolContext): Promise<ToolResult> {
     if (!path) {
       return { success: false, output: "", error: '"path" is required for update_config.' };
     }
@@ -264,6 +300,10 @@ export class AdminTool implements Tool {
         error: `Cannot modify "${path}": path is not in the allowed set. Writable prefixes: ${ALLOWED_WRITE_PREFIXES.join(", ")}`,
       };
     }
+
+    // Rate limit check
+    const rejection = this.checkRateLimit(context.agentName, actionKeyForPath(path));
+    if (rejection) return rejection;
 
     return this.runtime.withConfigLock(() => {
       let raw: Record<string, unknown>;
@@ -292,7 +332,7 @@ export class AdminTool implements Tool {
     });
   }
 
-  private async createAgent(name: string, agent: Record<string, unknown>): Promise<ToolResult> {
+  private async createAgent(name: string, agent: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     if (!name) {
       return { success: false, output: "", error: '"name" is required for create_agent.' };
     }
@@ -300,7 +340,11 @@ export class AdminTool implements Tool {
       return { success: false, output: "", error: '"agent" object is required for create_agent.' };
     }
 
-    return this.updateConfig(`agents.${name}`, agent);
+    // Rate limit check
+    const rejection = this.checkRateLimit(context.agentName, "create_agent");
+    if (rejection) return rejection;
+
+    return this.updateConfig(`agents.${name}`, agent, context);
   }
 
   private async createTool(
@@ -321,6 +365,10 @@ export class AdminTool implements Tool {
         error: `A tool named "${name}" already exists. Pick a different name or use update_config to overwrite custom_tools.${name} deliberately.`,
       };
     }
+
+    // Rate limit check
+    const rejection = this.checkRateLimit(context.agentName, "create_tool");
+    if (rejection) return rejection;
 
     const agentName = context.agentName;
     const agentDef = agentName ? config.agents[agentName] : undefined;
