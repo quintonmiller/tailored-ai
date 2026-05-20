@@ -5979,6 +5979,13 @@ select.model-entry-model {
 .agent-note-content { font-size: 13px; line-height: 1.45; white-space: pre-wrap; }
 .agent-note-meta { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
 
+.agent-comment-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.agent-comment-list li { padding: 8px 10px; background: var(--surface-alt); border-radius: 6px; display: flex; flex-direction: column; gap: 4px; }
+.agent-comment-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.agent-comment-head a { color: var(--text); text-decoration: none; font-weight: 500; }
+.agent-comment-head a:hover { text-decoration: underline; }
+.agent-comment-body { font-size: 12px; line-height: 1.45; color: var(--text-muted); white-space: pre-wrap; }
+
 .agent-history-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
 .agent-run-row { background: var(--surface-alt); border-radius: 6px; overflow: hidden; }
 .agent-run-row.expanded { background: var(--surface-alt); }

@@ -37,6 +37,7 @@ import {
   updateProjectTask,
   deleteProjectTask,
   addTaskComment,
+  listRecentCommentsByAuthor,
   queryProjectTasks,
   createProject,
   getProject,
@@ -1017,6 +1018,16 @@ export function createServer(opts: ServerOptions) {
     const deleted = deleteProjectTask(runtime.db, id);
     if (!deleted) return c.json({ error: "Task not found" }, 404);
     return c.json({ ok: true });
+  });
+
+  // Recent comments authored by X — used by the Agents page to surface
+  // "what has this agent been working on" beyond the current assignee.
+  app.get("/api/task-comments", (c) => {
+    const author = c.req.query("author");
+    if (!author) return c.json({ error: "author query param is required" }, 400);
+    const limitRaw = c.req.query("limit");
+    const limit = limitRaw ? Math.max(1, Math.min(100, Number.parseInt(limitRaw, 10) || 20)) : 20;
+    return c.json({ comments: listRecentCommentsByAuthor(runtime.db, author, limit) });
   });
 
   app.post("/api/project-tasks/:id/comments", async (c) => {

@@ -270,6 +270,43 @@ export function unblockBudgetTasks(db: Database.Database): number {
   return result.changes;
 }
 
+export interface TaskCommentWithTask {
+  id: number;
+  task_id: string;
+  task_title: string;
+  task_status: string;
+  task_assignee: string | null;
+  author: string;
+  content: string;
+  created_at: string;
+}
+
+/**
+ * Returns the N most recent comments authored by `author`, joined with the
+ * parent task's title/status/assignee. Used to surface "what has this agent
+ * been working on" on the Agents page — useful for agents like coder/reviewer
+ * whose task ownership churns (the assignee field doesn't preserve history,
+ * but comments do).
+ */
+export function listRecentCommentsByAuthor(
+  db: Database.Database,
+  author: string,
+  limit = 20,
+): TaskCommentWithTask[] {
+  const rows = db
+    .prepare(
+      `SELECT c.id, c.task_id, c.author, c.content, c.created_at,
+              t.title AS task_title, t.status AS task_status, t.assignee AS task_assignee
+         FROM task_comments c
+         JOIN project_tasks t ON t.id = c.task_id
+        WHERE c.author = ?
+        ORDER BY c.id DESC
+        LIMIT ?`,
+    )
+    .all(author, limit) as TaskCommentWithTask[];
+  return rows;
+}
+
 export function queryProjectTasks(db: Database.Database, filter?: TaskQueryFilter): TaskQueryResult {
   const conditions: string[] = [];
   const params: unknown[] = [];

@@ -8,6 +8,7 @@ import {
   type MemoryNote,
   type ProjectTask,
   type SessionRow,
+  type TaskCommentWithTask,
   createAgent,
   deleteAgent,
   disableExploratoryAgent,
@@ -18,6 +19,7 @@ import {
   fetchMemoryNotes,
   fetchProjectTasks,
   fetchSessions,
+  fetchTaskCommentsByAuthor,
   fetchTools,
   pauseExploratoryAgent,
   resumeExploratoryAgent,
@@ -266,11 +268,15 @@ function AgentDetail({
             />
           </div>
           <AgentNowSection watcher={w} activity={activity} />
+          <AgentRecentWorkSection name={agent.name} />
           <AgentUpcomingSection name={agent.name} watcher={w} />
           <AgentHistorySection name={agent.name} activity={activity} />
         </>
       ) : (
-        <AgentStaticActivity name={agent.name} exploratoryEnabled={exploratoryEnabled} />
+        <>
+          <AgentRecentWorkSection name={agent.name} />
+          <AgentStaticActivity name={agent.name} exploratoryEnabled={exploratoryEnabled} />
+        </>
       )}
     </div>
   );
@@ -455,6 +461,116 @@ function AgentNowSection({
           </div>
         )}
       </div>
+    </section>
+  );
+}
+
+/**
+ * Surfaces "what has this agent been working on?" for any agent — online,
+ * task-watcher-dispatched (coder/reviewer), or chat-only. Two data sources:
+ *   1) tasks currently assigned to the agent (any non-archived status)
+ *   2) recent comments authored by the agent (catches work the agent did
+ *      before handing the task off; the assignee field forgets old owners)
+ * Both feeds dedupe by task_id; the assigned task wins so the live status
+ * is shown.
+ */
+function AgentRecentWorkSection({ name }: { name: string }) {
+  const [assigned, setAssigned] = useState<ProjectTask[] | null>(null);
+  const [comments, setComments] = useState<TaskCommentWithTask[] | null>(null);
+
+  const reload = () => {
+    Promise.all([
+      fetchProjectTasks({ assignee: name, limit: 20 }).catch(() => ({ tasks: [] as ProjectTask[], total: 0 })),
+      fetchTaskCommentsByAuthor(name, 20).catch(() => ({ comments: [] as TaskCommentWithTask[] })),
+    ]).then(([t, c]) => {
+      setAssigned(t.tasks);
+      setComments(c.comments);
+    });
+  };
+
+  useEffect(() => {
+    reload();
+    const id = setInterval(reload, 15_000);
+    return () => clearInterval(id);
+  }, [name]);
+
+  if (assigned === null || comments === null) {
+    return (
+      <section className="agent-section">
+        <h2>Recent work</h2>
+        <div className="agent-loading">Loading…</div>
+      </section>
+    );
+  }
+
+  const assignedIds = new Set(assigned.map((t) => t.id));
+  // Group comments by task; keep the latest comment per task as the row label.
+  const commentsByTask = new Map<string, TaskCommentWithTask>();
+  for (const c of comments) {
+    if (assignedIds.has(c.task_id)) continue;
+    if (!commentsByTask.has(c.task_id)) commentsByTask.set(c.task_id, c);
+  }
+
+  if (assigned.length === 0 && commentsByTask.size === 0) {
+    return (
+      <section className="agent-section">
+        <h2>Recent work</h2>
+        <div className="agent-empty">
+          No task activity yet. When this agent is assigned a task or comments
+          on one, it will appear here.
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="agent-section">
+      <h2>Recent work</h2>
+
+      {assigned.length > 0 && (
+        <>
+          <h3 className="agent-subhead">
+            Currently assigned ({assigned.length})
+          </h3>
+          <ul className="agent-task-list">
+            {assigned.map((t) => (
+              <li key={t.id}>
+                <span className={`agent-state state-${t.status}`}>{t.status}</span>{" "}
+                <a href={`#/tasks/${t.id}`}>{t.title}</a>
+                <span className="agent-task-meta">
+                  updated {timeAgo(t.updated_at)}
+                  {t.tags.length > 0 && <> · {t.tags.join(", ")}</>}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      {commentsByTask.size > 0 && (
+        <>
+          <h3 className="agent-subhead">
+            Recent comments on other tasks ({commentsByTask.size})
+          </h3>
+          <ul className="agent-comment-list">
+            {Array.from(commentsByTask.values()).map((c) => (
+              <li key={c.id}>
+                <div className="agent-comment-head">
+                  <span className={`agent-state state-${c.task_status}`}>{c.task_status}</span>{" "}
+                  <a href={`#/tasks/${c.task_id}`}>{c.task_title}</a>
+                  <span className="agent-task-meta">
+                    {timeAgo(c.created_at)}
+                    {c.task_assignee && c.task_assignee !== name && <> · now assigned to {c.task_assignee}</>}
+                  </span>
+                </div>
+                <div className="agent-comment-body">
+                  {c.content.length > 200 ? `${c.content.slice(0, 200)}…` : c.content}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </section>
   );
 }

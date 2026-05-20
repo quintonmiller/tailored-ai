@@ -131,13 +131,14 @@ export { initDatabase } from "./db/schema.js";
 export { getSessionMessages, listSessions, updateSessionMeta } from "./db/queries.js";
 export type { SessionRow, SessionMetaPatch } from "./db/queries.js";
 export { readRawConfig, writeRawConfigPath } from "./tools/admin.js";
-export type { ProjectTask, ProjectTaskWithComments, TaskComment, TaskQueryFilter, TaskQueryResult } from "./db/task-queries.js";
+export type { ProjectTask, ProjectTaskWithComments, TaskComment, TaskCommentWithTask, TaskQueryFilter, TaskQueryResult } from "./db/task-queries.js";
 export {
   addTaskComment,
   claimBacklogTask,
   createProjectTask,
   deleteProjectTask,
   getProjectTask,
+  listRecentCommentsByAuthor,
   nextBacklogTaskForAssignees,
   queryProjectTasks,
   unblockBudgetTasks,

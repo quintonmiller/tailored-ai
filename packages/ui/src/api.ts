@@ -395,6 +395,25 @@ export function addProjectTaskComment(
   });
 }
 
+export interface TaskCommentWithTask {
+  id: number;
+  task_id: string;
+  task_title: string;
+  task_status: string;
+  task_assignee: string | null;
+  author: string;
+  content: string;
+  created_at: string;
+}
+
+export function fetchTaskCommentsByAuthor(
+  author: string,
+  limit = 20,
+): Promise<{ comments: TaskCommentWithTask[] }> {
+  const qs = new URLSearchParams({ author, limit: String(limit) });
+  return jsonFetch(`/api/task-comments?${qs.toString()}`);
+}
+
 // --- Projects ---
 
 export interface Project {
