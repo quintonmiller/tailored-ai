@@ -4,7 +4,7 @@ A comprehensive map of personal-operations use cases TAI is aimed at,
 with status against the current implementation.
 
 **Legend**
-- ✅ **shipped** — workflow exists under `packages/cli/workflows/`
+- ✅ **shipped** — workflow exists under `workflows/`
 - 🟢 **just landed** — workflow shipped in this catalog pass
 - 🟡 **buildable** — all primitives exist; needs a YAML that hasn't been written yet
 - 🔴 **gap** — needs a new primitive (tool, trigger, or step type); tracked as a `ptask_*` bean

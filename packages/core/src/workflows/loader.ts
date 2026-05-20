@@ -41,6 +41,7 @@ const VALID_HTTP_METHODS = new Set([
 ]);
 
 const VALID_HTTP_PARSE_AS = new Set(["json", "text", "raw"]);
+const VALID_AGENT_PARSE_AS = new Set(["json", "text"]);
 
 const VALID_ON_ERROR: OnErrorPolicy[] = ["fail", "continue", "retry"];
 
@@ -317,6 +318,9 @@ function validateStep(
       }
       if (!s.prompt || typeof s.prompt !== "string") {
         errors.push(`${path}.prompt is required for agent_run`);
+      }
+      if (s.parseAs !== undefined && !VALID_AGENT_PARSE_AS.has(String(s.parseAs))) {
+        errors.push(`${path}.parseAs must be one of ${[...VALID_AGENT_PARSE_AS].join(", ")}`);
       }
       break;
     case "tool_call":

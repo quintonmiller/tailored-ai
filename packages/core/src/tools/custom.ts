@@ -54,5 +54,33 @@ export class CustomTool implements Tool {
 }
 
 export function createCustomTools(configs: Record<string, CustomToolConfig>): Tool[] {
-  return Object.entries(configs).map(([name, config]) => new CustomTool(name, config));
+  const tools: Tool[] = [];
+  for (const [name, config] of Object.entries(configs)) {
+    if (!config || typeof config !== "object" || Array.isArray(config)) {
+      console.warn(`[custom_tools] Skipping "${name}": entry is not an object (got ${typeof config}). Fix it via admin.update_config or edit config.yaml.`);
+      continue;
+    }
+    const c = config as Partial<CustomToolConfig>;
+    if (typeof c.command !== "string" || !c.command) {
+      console.warn(`[custom_tools] Skipping "${name}": missing string "command".`);
+      continue;
+    }
+    if (typeof c.description !== "string") {
+      console.warn(`[custom_tools] Skipping "${name}": missing string "description".`);
+      continue;
+    }
+    if (c.parameters === undefined || c.parameters === null) {
+      // Tolerate omitted parameters as "no-arg tool"
+      (c as CustomToolConfig).parameters = {};
+    } else if (typeof c.parameters !== "object" || Array.isArray(c.parameters)) {
+      console.warn(`[custom_tools] Skipping "${name}": "parameters" must be an object.`);
+      continue;
+    }
+    try {
+      tools.push(new CustomTool(name, c as CustomToolConfig));
+    } catch (err) {
+      console.warn(`[custom_tools] Skipping "${name}": ${(err as Error).message}`);
+    }
+  }
+  return tools;
 }

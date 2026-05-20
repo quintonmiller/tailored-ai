@@ -141,7 +141,7 @@ pnpm monorepo with 4 packages:
 | `@agent/cli` (`packages/cli/`) | CLI entry point and `tai project` subcommands |
 | `@agent/ui` (`packages/ui/`) | React frontend (Vite SPA) |
 
-For deeper architecture notes — agent loop, hot-reload, factories, hook semantics, conventions — see [CLAUDE.md](./CLAUDE.md).
+For deeper architecture notes — agent loop, hot-reload, factories, hook semantics, conventions — see [CLAUDE.md](./CLAUDE.md) (index) and the deep-dives under [`docs/`](./docs/).
 
 ### Agent Loop
 
@@ -189,7 +189,7 @@ If the tool set changes mid-loop (e.g. a custom tool was added), a transient sys
 
 ### Agents (named configurations)
 
-Agents live under `agents:` in `config.yaml`. Each can override model, instructions, tools (allowlist), temperature, `maxToolRounds`, `sandbox`, hooks, and a few smaller knobs. They're used by the `--agent` CLI flag, the `delegate` tool, cron jobs, autopilot, and Discord. See [CLAUDE.md § Agents & Delegation](./CLAUDE.md) for full schema.
+Agents live under `agents:` in `config.yaml`. Each can override model, instructions, tools (allowlist), temperature, `maxToolRounds`, `sandbox`, hooks, and a few smaller knobs. They're used by the `--agent` CLI flag, the `delegate` tool, cron jobs, autopilot, and Discord. Full schema and delegation semantics: [docs/agents-and-hooks.md](./docs/agents-and-hooks.md).
 
 ### Hooks
 
@@ -231,11 +231,11 @@ Programmatic + declarative orchestration of multi-step jobs (`agent_run`, `tool_
 Tool side-effects (`exec`, `read`, `write`) can route through a `Sandbox`:
 
 - **`host`** (default) — runs on the host directly
-- **`docker`** / **`podman`** — long-running container with cwd bind-mounted at `/work`. Per-agent override via `agents.<name>.sandbox`. See [CLAUDE.md § Sandboxes](./CLAUDE.md).
+- **`docker`** / **`podman`** — long-running container with cwd bind-mounted at `/work`. Per-agent override via `agents.<name>.sandbox`. See [docs/sandboxes-and-worktrees.md](./docs/sandboxes-and-worktrees.md).
 
 ### Task backends
 
-`tasks.backend` selects the project-task store: `native` (SQLite, default), `github` (Issues), `beans` (CLI), or `beads` (CLI). The autopilot reads/writes through this single interface, so swapping backends doesn't change the rest of the system. See [CLAUDE.md § Task Backends](./CLAUDE.md) for status mapping and limitations.
+`tasks.backend` selects the project-task store: `native` (SQLite, default), `github` (Issues), `beans` (CLI), or `beads` (CLI). The autopilot reads/writes through this single interface, so swapping backends doesn't change the rest of the system. See [docs/tasks-and-autopilot.md](./docs/tasks-and-autopilot.md) for status mapping and limitations.
 
 ### Per-project mode
 
@@ -248,11 +248,11 @@ tai project list                       # shows all registered (cwd's project mar
 tai --list-sessions --project proj_…  # filter sessions by project
 ```
 
-`.tai.yaml` can carry an optional `config:` overlay that merges over the global config (per-project agents, tools, task backend, etc.). Sessions, cron jobs, autopilot tasks, Discord channel mappings, and the UI's session list all scope by `project_id`. Full reference: [CLAUDE.md § Projects](./CLAUDE.md).
+`.tai.yaml` can carry an optional `config:` overlay that merges over the global config (per-project agents, tools, task backend, etc.). Sessions, cron jobs, autopilot tasks, Discord channel mappings, and the UI's session list all scope by `project_id`. Full reference: [docs/projects.md](./docs/projects.md).
 
 ### Worktrees
 
-`createWorktree({ strategy })` runs an agent in an isolated git branch and optionally merges back. Strategies: `head` (no worktree), `branch` (fresh branch), `merge-to-head` (branch + auto-merge). Built for the workflow runner but usable directly. See [CLAUDE.md § Worktrees](./CLAUDE.md).
+`createWorktree({ strategy })` runs an agent in an isolated git branch and optionally merges back. Strategies: `head` (no worktree), `branch` (fresh branch), `merge-to-head` (branch + auto-merge). Built for the workflow runner but usable directly. See [docs/sandboxes-and-worktrees.md](./docs/sandboxes-and-worktrees.md).
 
 ### Background tasks
 

@@ -25,11 +25,11 @@ export class GoogleCalendarTool implements Tool {
       },
       start: {
         type: "string",
-        description: 'Start time for create_event (e.g. "2026-02-10T09:00:00", "tomorrow 9am").',
+        description: 'Start time for create_event in RFC3339 format with timezone (e.g. "2026-02-10T09:00:00-08:00"). Natural language is not supported.',
       },
       end: {
         type: "string",
-        description: 'End time for create_event (e.g. "2026-02-10T10:00:00", "tomorrow 10am").',
+        description: 'End time for create_event in RFC3339 format with timezone (e.g. "2026-02-10T10:00:00-08:00"). Natural language is not supported.',
       },
       description: {
         type: "string",
@@ -147,9 +147,9 @@ export class GoogleCalendarTool implements Tool {
       calendarId ?? "primary",
       "--summary",
       title,
-      "--start",
+      "--from",
       start,
-      "--end",
+      "--to",
       end,
       "--account",
       this.account,

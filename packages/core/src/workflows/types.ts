@@ -52,6 +52,13 @@ export interface AgentRunStep extends BaseStep {
   prompt: string;
   maxToolRounds?: number;
   modelOverride?: string;
+  /**
+   * When "json", the agent's final response is parsed as JSON before being
+   * stored as the step's output — so downstream `loop.over` / `condition`
+   * steps see the structured value (array / object) instead of a string.
+   * Tolerates ```json fenced blocks and leading/trailing prose.
+   */
+  parseAs?: "json" | "text";
 }
 
 export interface ToolCallStep extends BaseStep {

@@ -161,7 +161,24 @@ export function renderChatLiveState(state: ChatLiveState): string {
   }
 
   if (sections.length === 0) return "";
-  return ["## Current state", "", ...sections].join("\n\n");
+
+  // Prepend a "Now:" line so the time anchors the rendered block. Without
+  // this, an agent reading "in-flight tasks" had no clock to reason from.
+  // We only emit it when there's other content to avoid spamming an empty
+  // block onto every chat turn — the autonomous tick-context block has its
+  // own unconditional Now line.
+  const now = new Date(state.generatedAt);
+  const local = now.toLocaleString("en-US", {
+    weekday: "short",
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZoneName: "short",
+  });
+  return ["## Current state", "", `**Now:** ${local}  (UTC ${now.toISOString()})`, ...sections].join("\n\n");
 }
 
 function formatRelativeTime(at: string, now: string): string {

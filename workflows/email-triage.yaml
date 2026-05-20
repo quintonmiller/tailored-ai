@@ -1,0 +1,89 @@
+name: email-triage
+description: |
+  Two-pass inbox triage.
+
+  Pass 1 (email-classifier, read-only): looks at recent unread emails, skips
+  noise + already-processed IDs, and emits a JSON array of triage decisions.
+
+  Pass 2 (email-actor, parallel loop): one agent invocation per decision,
+  each handling its email's writes to tasks / projects / docs / facts /
+  memory in isolation. Failures stay per-email.
+
+  Notify only fires when the classifier found anything worth acting on.
+
+triggers:
+  - kind: cron
+    schedule: "0 */4 * * *"  # Every 4 hours
+
+steps:
+  # Pull the candidate listing. Gmail occasionally flakes, so retry a few
+  # times before giving up. onError: fail-on-exhaustion is the default.
+  - name: fetch_recent
+    type: tool_call
+    tool: gmail
+    args:
+      action: search
+      query: "is:unread is:inbox -category:promotions -category:social -category:forums"
+    onError: retry
+    retry:
+      maxAttempts: 3
+      backoffMs: 2000
+
+  # Pass 1. Read-only classification. parseAs: json turns the agent's
+  # final response into a real array on the step output, so the loop
+  # below can iterate it.
+  - name: classify
+    type: agent_run
+    agent: email-classifier
+    parseAs: json
+    maxToolRounds: 25
+    deadlineMs: 600000
+    prompt: |
+      Recent inbox listing (subject, from, date, id, labels):
+
+      ${steps.fetch_recent}
+
+      Today is {{date}}. Classify each email per your instructions and
+      return a single JSON array of decisions. Return [] if nothing
+      survives noise filtering or the dedup log. No prose.
+
+  # Pass 2. One actor invocation per decision, capped at 2-wide so we
+  # don't hammer the local model. Each iteration is its own durable
+  # step, so a single bad email doesn't abort the batch.
+  - name: act
+    type: loop
+    over: ${steps.classify}
+    as: decision
+    parallel: true
+    maxConcurrency: 2
+    body:
+      - name: apply
+        type: agent_run
+        agent: email-actor
+        maxToolRounds: 20
+        deadlineMs: 300000
+        onError: continue
+        prompt: |
+          Triage decision (one email):
+
+          ${decision}
+
+          Read the full email body, then enact each surface listed in
+          `decision.surfaces`. Use `decision.hints` as a starting point
+          but apply your own judgment. End with the memory(append) log
+          entry. Output one short summary line.
+
+  # Only ping Discord when the classifier identified something. Avoids
+  # a "📧 0 emails" message every 4 hours.
+  - name: should_notify
+    type: condition
+    if: "${steps.classify.length} > 0"
+    then: [notify]
+
+  - name: notify
+    type: notify
+    channel: discord
+    message: |
+      📧 Email triage — ${steps.classify.length} acted on
+
+      ${steps.act}

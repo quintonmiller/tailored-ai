@@ -586,8 +586,56 @@ export function validateConfig(config: AgentConfig): string[] {
       enabledToolNames.add(name);
     }
   }
-  // Custom tools are always available when defined
-  for (const name of Object.keys(config.custom_tools ?? {})) {
+  // Tools that have a hard credential gate at construction time. Listed here
+  // so we can warn when a tool is "enabled" but won't actually register —
+  // otherwise agents reference it, the UI silently omits it, and the user is
+  // left guessing why.
+  if (toolsConfig.web_search?.enabled && !toolsConfig.web_search.apiKey) {
+    warnings.push(
+      "tools.web_search is enabled but apiKey is empty (unresolved ${BRAVE_API_KEY}?); tool will be skipped at load",
+    );
+    enabledToolNames.delete("web_search");
+  }
+  if (toolsConfig.gmail?.enabled && !toolsConfig.gmail.account) {
+    warnings.push(
+      "tools.gmail is enabled but account is empty (unresolved ${GOG_ACCOUNT}?); tool will be skipped at load",
+    );
+    enabledToolNames.delete("gmail");
+  }
+  if (toolsConfig.google_calendar?.enabled && !toolsConfig.google_calendar.account) {
+    warnings.push(
+      "tools.google_calendar is enabled but account is empty (unresolved ${GOG_ACCOUNT}?); tool will be skipped at load",
+    );
+    enabledToolNames.delete("google_calendar");
+  }
+  if (toolsConfig.google_drive?.enabled && !toolsConfig.google_drive.account) {
+    warnings.push(
+      "tools.google_drive is enabled but account is empty (unresolved ${GOG_ACCOUNT}?); tool will be skipped at load",
+    );
+    enabledToolNames.delete("google_drive");
+  }
+  // Custom tools are always available when defined. Flag malformed entries so
+  // the runtime can skip them cleanly instead of crashing at construction.
+  for (const [name, raw] of Object.entries(config.custom_tools ?? {})) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      warnings.push(`custom_tools.${name}: entry must be an object — got ${typeof raw}; will be skipped at load`);
+      continue;
+    }
+    const cfg = raw as Partial<CustomToolConfig>;
+    if (typeof cfg.command !== "string" || !cfg.command) {
+      warnings.push(`custom_tools.${name}: missing required "command" string; will be skipped at load`);
+      continue;
+    }
+    if (typeof cfg.description !== "string") {
+      warnings.push(`custom_tools.${name}: missing required "description" string; will be skipped at load`);
+      continue;
+    }
+    if (cfg.parameters !== undefined && cfg.parameters !== null) {
+      if (typeof cfg.parameters !== "object" || Array.isArray(cfg.parameters)) {
+        warnings.push(`custom_tools.${name}: "parameters" must be an object; will be skipped at load`);
+        continue;
+      }
+    }
     enabledToolNames.add(name);
   }
   // Meta tools are always available

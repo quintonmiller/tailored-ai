@@ -173,6 +173,25 @@ export function renderTickSituation(ctx: TickContext): string {
   lines.push("## Situation (rebuilt fresh this tick)");
   lines.push("");
 
+  // Current time — first thing the agent reads. Without this the agent
+  // hallucinates the clock from stale recall notes (e.g. assuming it's
+  // "midnight PST" mid-afternoon) and reasons about working hours from
+  // bad data. Render in the host's local timezone with day-of-week so
+  // the agent can answer "is the user likely awake?" without guessing.
+  const now = new Date(ctx.generatedAt);
+  const local = now.toLocaleString("en-US", {
+    weekday: "short",
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZoneName: "short",
+  });
+  lines.push(`**Now:** ${local}  (UTC ${now.toISOString()})`);
+  lines.push("");
+
   if (ctx.outcomes.ticks > 0) {
     const k = ctx.outcomes.byKind;
     const kindParts = Object.entries(k)

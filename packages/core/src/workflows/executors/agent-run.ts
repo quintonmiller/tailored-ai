@@ -44,8 +44,20 @@ export class AgentRunExecutor implements StepExecutor {
     try {
       const sessionKey = `workflow:${ctx.runId}:${s.name}`;
       const cfg = this.runtime.getConfig();
-      const agent = cfg.agents?.[agentName];
-      if (!agent) throw new Error(`agent_run: agent "${agentName}" is not defined`);
+      // Registry first (S11.4 agents-as-resources), then fall back to
+      // config.yaml — same precedence resolveAgent uses everywhere else.
+      const agent =
+        this.runtime.getAgentRegistry().get(agentName) ?? cfg.agents?.[agentName];
+      if (!agent) {
+        const known = [
+          ...this.runtime.getAgentRegistry().list().map((r) => r.id),
+          ...Object.keys(cfg.agents ?? {}),
+        ];
+        const unique = Array.from(new Set(known)).sort();
+        throw new Error(
+          `agent_run: agent "${agentName}" is not defined. Known agents: ${unique.join(", ") || "(none)"}`,
+        );
+      }
 
       const provider = modelOverride ?? agent.provider ?? cfg.agent.defaultProvider;
       const providerCfg = cfg.providers[provider as keyof typeof cfg.providers];
@@ -81,9 +93,43 @@ export class AgentRunExecutor implements StepExecutor {
         ...loopOpts,
         signal: ctx.signal,
       });
+      if (s.parseAs === "json") {
+        return { output: parseJsonResponse(response, s.name) };
+      }
       return { output: response };
     } finally {
       release();
     }
   }
+}
+
+/**
+ * Pulls a JSON value out of an agent's free-form text response. Tries, in
+ * order: the whole string trimmed, a ```json fenced block, the first
+ * `[...]` span, the first `{...}` span. Throws with a useful preview if
+ * nothing parses — that's a real workflow bug worth surfacing.
+ */
+function parseJsonResponse(text: string, stepName: string): unknown {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return null;
+
+  const candidates: string[] = [trimmed];
+  const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fence) candidates.push(fence[1].trim());
+  const arr = trimmed.match(/\[[\s\S]*\]/);
+  if (arr) candidates.push(arr[0]);
+  const obj = trimmed.match(/\{[\s\S]*\}/);
+  if (obj) candidates.push(obj[0]);
+
+  for (const c of candidates) {
+    try {
+      return JSON.parse(c);
+    } catch {
+      // try next
+    }
+  }
+  const preview = trimmed.slice(0, 200);
+  throw new Error(
+    `agent_run "${stepName}": parseAs=json failed — response was not JSON. Preview: ${preview}`,
+  );
 }

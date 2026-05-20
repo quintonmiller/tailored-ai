@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   type AgentInfo,
   type ProjectWithCounts,
@@ -19,6 +19,19 @@ const STATUS_LABELS: Record<string, string> = {
   completed: "Completed",
   archived: "Archived",
 };
+
+type StatusFilter = "active" | "completed" | "archived" | "all";
+
+const STATUS_FILTERS: { key: StatusFilter; label: string }[] = [
+  { key: "active", label: "Active" },
+  { key: "completed", label: "Completed" },
+  { key: "archived", label: "Archived" },
+  { key: "all", label: "All" },
+];
+
+function sortByTitle(a: ProjectWithCounts, b: ProjectWithCounts): number {
+  return a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
+}
 
 export function Projects({
   projectId,
@@ -47,6 +60,8 @@ export function Projects({
   const [agents, setAgents] = useState<Record<string, AgentInfo>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("active");
+  const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
     fetchAgents()
@@ -56,11 +71,13 @@ export function Projects({
 
   const loadProjects = useCallback(async () => {
     try {
-      const res = await fetchProjects({ limit: 100 });
+      const res = await fetchProjects({ limit: 500 });
       setProjects(res.projects);
-      // Auto-select first project if none selected
+      // Auto-select first project (prefer an active one) if none selected
       if (!selectedId && res.projects.length > 0) {
-        const id = projectId ?? res.projects[0].id;
+        const sorted = [...res.projects].sort(sortByTitle);
+        const firstActive = sorted.find((p) => p.status === "active") ?? sorted[0];
+        const id = projectId ?? firstActive.id;
         setSelectedId(id);
         if (!projectId) {
           window.location.hash = `#/projects/${id}/${activeTab}`;
@@ -72,6 +89,34 @@ export function Projects({
       setLoading(false);
     }
   }, [selectedId, projectId, activeTab]);
+
+  const statusCounts = useMemo(() => {
+    const counts: Record<StatusFilter, number> = { active: 0, completed: 0, archived: 0, all: projects.length };
+    for (const p of projects) {
+      if (p.status === "active") counts.active += 1;
+      else if (p.status === "completed") counts.completed += 1;
+      else if (p.status === "archived") counts.archived += 1;
+    }
+    return counts;
+  }, [projects]);
+
+  const visibleProjects = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    const matchesStatus = (p: ProjectWithCounts) =>
+      statusFilter === "all" ? true : p.status === statusFilter;
+    const matchesSearch = (p: ProjectWithCounts) =>
+      q === "" ? true : p.title.toLowerCase().includes(q) || p.description.toLowerCase().includes(q);
+
+    const list = projects.filter((p) => matchesStatus(p) && matchesSearch(p));
+    // Always include the currently-selected project so it stays visible/selectable
+    // even if it falls outside the current filter (e.g. you selected an archived
+    // project and then switched the filter back to Active).
+    if (selectedId && !list.some((p) => p.id === selectedId)) {
+      const pinned = projects.find((p) => p.id === selectedId);
+      if (pinned) list.push(pinned);
+    }
+    return list.sort(sortByTitle);
+  }, [projects, statusFilter, searchQuery, selectedId]);
 
   useEffect(() => {
     loadProjects();
@@ -217,19 +262,58 @@ export function Projects({
         </div>
       ) : (
         <>
-          <div className="project-tabs">
-            {projects.map((p) => (
-              <button
-                key={p.id}
-                className={`project-tab${p.id === selectedId ? " active" : ""}`}
-                onClick={() => selectProject(p.id)}
-              >
-                <span className={`project-status-dot ${p.status}`} />
-                {p.title}
-                <span className="project-tab-count">{p.task_count}</span>
-              </button>
-            ))}
+          <div className="project-filter-bar">
+            <div className="project-filter-chips">
+              {STATUS_FILTERS.map(({ key, label }) => (
+                <button
+                  key={key}
+                  className={`project-filter-chip${statusFilter === key ? " active" : ""}`}
+                  onClick={() => setStatusFilter(key)}
+                  title={`Show ${label.toLowerCase()} projects`}
+                >
+                  {label}
+                  <span className="project-filter-chip-count">{statusCounts[key]}</span>
+                </button>
+              ))}
+            </div>
+            <input
+              type="search"
+              className="project-filter-search"
+              placeholder={`Search ${visibleProjects.length} project${visibleProjects.length === 1 ? "" : "s"}…`}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
           </div>
+
+          {visibleProjects.length === 0 ? (
+            <div className="empty-state">
+              No projects match the current filter.{" "}
+              <button
+                className="tasks-edit-btn"
+                onClick={() => {
+                  setStatusFilter("all");
+                  setSearchQuery("");
+                }}
+              >
+                Clear filters
+              </button>
+            </div>
+          ) : (
+            <div className="project-tabs">
+              {visibleProjects.map((p) => (
+                <button
+                  key={p.id}
+                  className={`project-tab${p.id === selectedId ? " active" : ""}`}
+                  onClick={() => selectProject(p.id)}
+                  title={p.description || p.title}
+                >
+                  <span className={`project-status-dot ${p.status}`} />
+                  {p.title}
+                  <span className="project-tab-count">{p.task_count}</span>
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* Sub-tabs + project actions */}
           {selected && (
