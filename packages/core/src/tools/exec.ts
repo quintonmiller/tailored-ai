@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
+import { checkExecBoundary } from "./sandbox-boundary.js";
 
 /**
  * Head + tail truncation for noisy command output (test runners,
@@ -94,6 +95,11 @@ export class ExecTool implements Tool {
           error: `Command "${bin}" is not in the allowlist: ${this.allowedCommands.join(", ")}`,
         };
       }
+    }
+
+    const boundaryCheck = checkExecBoundary(command, context);
+    if (!boundaryCheck.ok) {
+      return { success: false, output: "", error: boundaryCheck.error };
     }
 
     if (context.sandbox && context.sandboxHandle) {

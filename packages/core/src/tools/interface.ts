@@ -1,6 +1,17 @@
 export interface ToolContext {
   sessionId: string;
   workingDirectory: string;
+  /**
+   * Hard sandbox root — when set, file/exec tools reject paths that resolve
+   * outside this directory. Distinct from `workingDirectory` (which is just
+   * the default cwd for relative paths): the boundary is enforcement, the
+   * cwd is convenience. task-watcher sets this to the agent's worktree path
+   * for coder/reviewer dispatches so absolute paths can't escape the
+   * worktree and pollute main (Phase 6 follow-up: main-pollution incident).
+   * Leave unset for agents that legitimately need to read across the
+   * filesystem (default, researcher, etc.).
+   */
+  workingDirectoryBoundary?: string;
   env: Record<string, string>;
   agentContextDir?: string;
   kbDir?: string;

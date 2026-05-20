@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
+import { checkSandboxBoundary } from "./sandbox-boundary.js";
 
 export class WriteTool implements Tool {
   name = "write";
@@ -38,6 +39,11 @@ export class WriteTool implements Tool {
     }
 
     const fullPath = isAbsolute(rawPath) ? rawPath : resolve(context.workingDirectory, rawPath);
+
+    const boundaryCheck = checkSandboxBoundary(fullPath, context);
+    if (!boundaryCheck.ok) {
+      return { success: false, output: "", error: boundaryCheck.error };
+    }
 
     if (this.allowedPaths.length > 0) {
       const allowed = this.allowedPaths.some((p) => fullPath.startsWith(p));
