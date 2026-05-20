@@ -546,3 +546,9 @@ export type {
   TarRunner,
   TriggerKindMeta,
 } from "./resources/index.js";
+export type { McpClientConfig, McpToolInfo } from "./mcp/client.js";
+export { McpClient, createMcpClient } from "./mcp/client.js";
+export type { McpServerConfig } from "./mcp/server.js";
+export { McpServerAdapter, createMcpServer } from "./mcp/server.js";
+export type { McpManagerConfig, McpConnection } from "./mcp/manager.js";
+export { McpManager, createMcpManager } from "./mcp/manager.js";

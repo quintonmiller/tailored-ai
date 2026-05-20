@@ -18,6 +18,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@octokit/rest": "^22.0.1",
     "better-sqlite3": "^11.7.0",
     "croner": "^10.0.1",
