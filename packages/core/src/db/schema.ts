@@ -378,6 +378,41 @@ export function initDatabase(dbPath: string): Database.Database {
       ON email_seen(seen_at);
     CREATE INDEX IF NOT EXISTS idx_email_seen_from
       ON email_seen(from_addr);
+
+    -- audit_log: append-only audit trail for config/permission changes.
+    -- Cryptographic chaining via hash/prev_hash prevents tampering.
+    -- No UPDATE or DELETE allowed — only INSERT.
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp   TEXT NOT NULL,
+      actor       TEXT NOT NULL,
+      action      TEXT NOT NULL,
+      before      TEXT,
+      after       TEXT,
+      context     TEXT,
+      hash        TEXT NOT NULL,
+      prev_hash   TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_audit_log_action
+      ON audit_log(action);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_actor
+      ON audit_log(actor);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp
+      ON audit_log(timestamp);
+
+    -- Append-only enforcement: block UPDATE and DELETE via triggers.
+    CREATE TRIGGER IF NOT EXISTS audit_log_block_update
+      BEFORE UPDATE ON audit_log
+      BEGIN
+        SELECT RAISE(ABORT, 'audit_log is append-only: UPDATE not allowed');
+      END;
+
+    CREATE TRIGGER IF NOT EXISTS audit_log_block_delete
+      BEFORE DELETE ON audit_log
+      BEGIN
+        SELECT RAISE(ABORT, 'audit_log is append-only: DELETE not allowed');
+      END;
   `);
 
   // Safe migration for existing DBs that lack session_key
