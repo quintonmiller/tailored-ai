@@ -4,6 +4,7 @@ import {
   fetchAllPendingForms,
   fetchAutopilotActivity,
   fetchCron,
+  fetchExploratoryRuns,
   fetchHealth,
   fetchPendingApprovals,
   fetchProjectTasks,
@@ -11,6 +12,7 @@ import {
   type AutopilotActivity,
   type CronData,
   type CronJobRow,
+  type ExploratoryRun,
   type HealthInfo,
   type PendingApprovalRequest,
   type ProjectTask,
@@ -34,6 +36,7 @@ export function Dashboard() {
   const [pendingForms, setPendingForms] = useState<WorkflowFormPendingRow[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<PendingApprovalRequest[]>([]);
   const [recentRuns, setRecentRuns] = useState<WorkflowRunRow[]>([]);
+  const [recentTicks, setRecentTicks] = useState<ExploratoryRun[]>([]);
   const [cron, setCron] = useState<CronData | null>(null);
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const activeProject = useActiveProject();
@@ -71,6 +74,13 @@ export function Dashboard() {
     fetchPendingApprovals().then(setPendingApprovals).catch(() => {});
     fetchWorkflowRuns({ limit: RECENT_LIMIT })
       .then(setRecentRuns)
+      .catch(() => {});
+    // Recent exploratory ticks — the prose summary of each agent tick.
+    // Surfaces the actual work the default/online agents are doing (routing
+    // tasks, writing docs, recall notes) that would otherwise be invisible
+    // because backlog/done counts don't change when tasks are re-routed.
+    fetchExploratoryRuns({ limit: RECENT_LIMIT })
+      .then((r) => setRecentTicks(r.runs))
       .catch(() => {});
   }
 
@@ -111,7 +121,7 @@ export function Dashboard() {
 
       {/* RECENT */}
       <DashboardSection title="Recent">
-        <RecentPanel runs={recentFinishedRuns} tasks={recentDone} />
+        <RecentPanel runs={recentFinishedRuns} tasks={recentDone} ticks={recentTicks} />
       </DashboardSection>
 
       {/* MEMORY (M7) */}
@@ -294,12 +304,16 @@ function UpcomingPanel(props: { backlog: ProjectTask[]; cron: CronJobRow[] }) {
   );
 }
 
-function RecentPanel(props: { runs: WorkflowRunRow[]; tasks: ProjectTask[] }) {
-  const { runs, tasks } = props;
+function RecentPanel(props: {
+  runs: WorkflowRunRow[];
+  tasks: ProjectTask[];
+  ticks: ExploratoryRun[];
+}) {
+  const { runs, tasks, ticks } = props;
   const merged: {
     key: string;
     when: string;
-    kind: "run" | "task";
+    kind: "run" | "task" | "tick";
     title: string;
     detail: string;
     href: string;
@@ -327,6 +341,27 @@ function RecentPanel(props: { runs: WorkflowRunRow[]; tasks: ProjectTask[] }) {
       status: "completed",
     });
   }
+  for (const x of ticks) {
+    // Strip the "[Sleep] " prefix and any leading newlines/whitespace so the
+    // first sentence of the actual work is what surfaces.
+    const raw = (x.summary ?? x.error ?? "").trim();
+    const firstLine = raw
+      .replace(/^\[Sleep\]\s*/i, "")
+      .split("\n")
+      .map((s) => s.trim())
+      .find((s) => s.length > 0) ?? "";
+    if (!firstLine) continue;
+    const isSleep = /^\[Sleep\]/i.test(raw);
+    merged.push({
+      key: `tick-${x.id}`,
+      when: x.ended_at ?? x.started_at,
+      kind: "tick",
+      title: firstLine.length > 100 ? `${firstLine.slice(0, 100)}…` : firstLine,
+      detail: `${x.agent_name}${isSleep ? " · idle" : ""}`,
+      href: `#/agents/${encodeURIComponent(x.agent_name)}`,
+      status: x.status === "error" ? "failed" : isSleep ? "idle" : x.status,
+    });
+  }
   merged.sort((a, b) => (a.when < b.when ? 1 : -1));
   const top = merged.slice(0, RECENT_LIMIT);
   if (top.length === 0) {
@@ -339,7 +374,7 @@ function RecentPanel(props: { runs: WorkflowRunRow[]; tasks: ProjectTask[] }) {
           <a href={it.href}>
             <span className="dash-recent-title">{it.title}</span>
             <span className="dash-recent-meta">
-              {it.kind === "run" ? "workflow" : "task"} · {it.detail} · {relTime(it.when)}
+              {it.kind} · {it.detail} · {relTime(it.when)}
             </span>
           </a>
         </li>

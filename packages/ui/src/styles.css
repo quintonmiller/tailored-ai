@@ -419,6 +419,9 @@ button {
 .dash-recent-completed a { border-left: 3px solid var(--green); }
 .dash-recent-cancelled a { border-left: 3px solid var(--text-dim); }
 .dash-recent-interrupted a { border-left: 3px solid var(--amber); }
+.dash-recent-ok a { border-left: 3px solid var(--accent); }
+.dash-recent-idle a { border-left: 3px solid var(--text-dim); }
+.dash-recent-noop a { border-left: 3px solid var(--text-dim); }
 
 .dash-recent-title {
   overflow: hidden;
