@@ -137,6 +137,49 @@ export class TaskWatcher {
     if (assigneeIsAgent) {
       console.log(`${logPrefix} routing to assignee agent "${agentName}"`);
     }
+
+    // Hard guard rail (added after the main-pollution incident).
+    // Coder/reviewer dispatches without a usable project path would
+    // run unisolated in the main checkout and commit to main. Refuse
+    // the dispatch — mark blocked so the user / default agent fixes
+    // the project assignment before re-routing. Runs BEFORE resolveAgent
+    // / session setup so the failure mode is cheap and obvious.
+    const isCodingAgent = agentName === "coder" || agentName === "reviewer";
+    if (isCodingAgent && !event.task.project_id) {
+      const reason =
+        `coder/reviewer dispatch refused: task has no project_id. ` +
+        `Assign the task to a project whose path points at a git repo before re-routing.`;
+      console.error(`${logPrefix} ${reason}`);
+      addTaskComment(this.runtime.db, event.task.id, {
+        author: WATCHER_COMMENT_AUTHOR,
+        content: `BLOCKED: ${reason}`,
+      });
+      updateProjectTask(this.runtime.db, event.task.id, {
+        status: "blocked",
+        blocked_reason: "no project_id — coder/reviewer needs an isolated worktree",
+      });
+      return;
+    }
+    if (isCodingAgent && event.task.project_id) {
+      const project = getProject(this.runtime.db, event.task.project_id);
+      if (!project?.path) {
+        const reason =
+          `coder/reviewer dispatch refused: project "${project?.title ?? event.task.project_id}" ` +
+          `has no path. Set the project's path to a git repo (or move the task to a project that has one) ` +
+          `before re-routing.`;
+        console.error(`${logPrefix} ${reason}`);
+        addTaskComment(this.runtime.db, event.task.id, {
+          author: WATCHER_COMMENT_AUTHOR,
+          content: `BLOCKED: ${reason}`,
+        });
+        updateProjectTask(this.runtime.db, event.task.id, {
+          status: "blocked",
+          blocked_reason: "project has no path — coder/reviewer needs an isolated worktree",
+        });
+        return;
+      }
+    }
+
     const resolved = resolveAgent(
       agentName,
       this.runtime.getConfig(),
@@ -192,11 +235,16 @@ export class TaskWatcher {
     // existing branch instead of starting fresh.
     let worktree: Worktree | undefined;
     let projectOverride: import("./projects/resolve.js").ProjectContext | undefined;
-    const needsWorktree = (agentName === "coder" || agentName === "reviewer") && event.task.project_id;
+    // The guard rail at the top of processEvent has already refused
+    // dispatches that would lack an isolated worktree, so by this
+    // point a coding agent always has a project_id + project.path.
+    const needsWorktree = isCodingAgent && event.task.project_id;
     if (needsWorktree) {
       const project = getProject(this.runtime.db, event.task.project_id!);
       const repoPath = project?.path;
       if (!repoPath) {
+        // Unreachable now (handled by the guard above), but keep the
+        // log line so any future regression surfaces clearly.
         console.error(
           `${logPrefix} ${agentName} routed but project ${event.task.project_id} has no path — skipping worktree`,
         );
@@ -252,15 +300,24 @@ export class TaskWatcher {
         `- Branch: ${worktree.branch}`,
         "- Status: checked out (may have prior commits if this is an iteration)",
         "",
+        "**HARD RULE — branch safety.** You MUST work on the branch above",
+        `(\`${worktree.branch}\`). Before every \`git commit\`, verify the current`,
+        "branch with `git -C <worktree-path> branch --show-current`. If it",
+        "returns `main` or any trunk-like name (master, develop, prod),",
+        "STOP IMMEDIATELY — do NOT commit. Comment on the task explaining",
+        "what went wrong and exit. Committing to main poisons the trunk",
+        "and causes pollution that's expensive to clean up.",
+        "",
         "Per-task lifecycle:",
         "1. Read the task description AND any prior comments (esp. reviewer feedback).",
         "2. Make the minimal change that satisfies the task or addresses the feedback.",
         "3. Run typecheck and tests if you touched code:",
         "   `pnpm typecheck` and `pnpm test`. Fix failures before committing.",
-        "4. `git add` + `git commit` with a clear message.",
-        "5. `git push -u origin <branch>` if a remote is configured.",
-        `6. Hand off to the reviewer: \`tasks(action=update, id=${event.task.id}, status=in_review, assignee=reviewer)\` and add a comment with branch name + commit sha + one-line summary.`,
-        "7. If you cannot proceed (missing context, infra issue), update to `blocked` with a clear reason and STOP — do not fabricate paths or files.",
+        `4. Branch check: \`git -C ${worktree.path} branch --show-current\` — must return \`${worktree.branch}\`.`,
+        "5. `git add` + `git commit` with a clear message.",
+        "6. `git push -u origin <branch>` if a remote is configured.",
+        `7. Hand off to the reviewer: \`tasks(action=update, id=${event.task.id}, status=in_review, assignee=reviewer)\` and add a comment with branch name + commit sha + one-line summary.`,
+        "8. If you cannot proceed (missing context, infra issue), update to `blocked` with a clear reason and STOP — do not fabricate paths or files.",
         "",
         "**Reconnaissance budget.** Tool calls are expensive — burning them on `ls`,",
         "`cat`, and `read` without writing or committing is the #1 failure mode.",

@@ -294,6 +294,95 @@ describe("task-watcher stall handling (handleStall)", () => {
   });
 });
 
+describe("task-watcher coding-agent dispatch guard rail", () => {
+  // The pre-flight guard (added after the main-pollution incident) refuses
+  // to dispatch coder/reviewer when the task has no project_id, or when
+  // the project exists but has no `path`. Either case would cause the
+  // coder to run unisolated in the main checkout and commit straight
+  // to main, so we mark the task blocked instead.
+  it("blocks the task when coder is dispatched without a project_id", async () => {
+    const dbForTest = db;
+    const runtime: any = {
+      db: dbForTest,
+      contextDir: "/tmp/ctx",
+      getConfig: () => ({
+        agents: { coder: { description: "" } },
+        channels: { discord: { owner: "1234" } },
+        taskWatcher: {
+          enabled: true,
+          delivery: { channel: "log" },
+          triggers: ["updated"],
+          debounceMs: 0,
+          prompt: "",
+        },
+        prompts: {},
+      }),
+      getTools: () => [],
+      resolveHooks: () => ({ beforeRun: [], afterRun: [] }),
+      buildLoopOptions: () => ({}),
+    };
+    // Bypass the full processEvent pipeline by calling the guard rail
+    // through the public notify→enqueue path is too involved; instead we
+    // verify the underlying invariant: a coder task lacking project_id
+    // routed through the watcher gets transitioned to blocked.
+    const task = createProjectTask(dbForTest, { title: "no-proj", assignee: "coder" });
+    updateProjectTask(dbForTest, task.id, { project_id: null });
+    const watcher = new TaskWatcher({ runtime });
+    // Hand-build the event the watcher would receive.
+    const event = {
+      action: "updated" as const,
+      task: { ...task, project_id: null, tags: [] as string[] },
+    };
+    await (watcher as any).processEvent(event);
+    const after = getProjectTask(dbForTest, task.id);
+    expect(after?.status).toBe("blocked");
+    expect(after?.blocked_reason).toContain("no project_id");
+    const comments = dbForTest
+      .prepare("SELECT author, content FROM task_comments WHERE task_id = ?")
+      .all(task.id) as { author: string; content: string }[];
+    expect(comments.some((c) => c.author === "task-watcher" && c.content.startsWith("BLOCKED:"))).toBe(true);
+  });
+
+  it("blocks the task when the project exists but has no path", async () => {
+    const dbForTest = db;
+    // Insert a project row with empty path.
+    dbForTest
+      .prepare(
+        "INSERT INTO projects (id, title, path, status, created_at, updated_at) VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))",
+      )
+      .run("proj_test_nopath", "NoPath", "", "active");
+    const task = createProjectTask(dbForTest, {
+      title: "needs path",
+      assignee: "coder",
+      project_id: "proj_test_nopath",
+    });
+    const runtime: any = {
+      db: dbForTest,
+      contextDir: "/tmp/ctx",
+      getConfig: () => ({
+        agents: { coder: { description: "" } },
+        channels: { discord: { owner: "1234" } },
+        taskWatcher: {
+          enabled: true,
+          delivery: { channel: "log" },
+          triggers: ["updated"],
+          debounceMs: 0,
+          prompt: "",
+        },
+        prompts: {},
+      }),
+      getTools: () => [],
+      resolveHooks: () => ({ beforeRun: [], afterRun: [] }),
+      buildLoopOptions: () => ({}),
+    };
+    const watcher = new TaskWatcher({ runtime });
+    await (watcher as any).processEvent({ action: "updated", task });
+    const after = getProjectTask(dbForTest, task.id);
+    expect(after?.status).toBe("blocked");
+    expect(after?.blocked_reason).toContain("no path");
+  });
+});
+
 describe("task-watcher notify() force flag", () => {
   it("bypasses the lastFiredAssignee gate when force=true", () => {
     const runtime: any = {
