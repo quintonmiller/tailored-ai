@@ -150,6 +150,7 @@ export function updateProjectTask(
     assignee?: string | null;
     rank?: number;
     blocked_reason?: string | null;
+    project_id?: string | null;
   },
 ): ProjectTask | undefined {
   const fields: string[] = [];
@@ -186,6 +187,10 @@ export function updateProjectTask(
   if (updates.blocked_reason !== undefined) {
     fields.push("blocked_reason = ?");
     values.push(updates.blocked_reason);
+  }
+  if (updates.project_id !== undefined) {
+    fields.push("project_id = ?");
+    values.push(updates.project_id);
   }
 
   if (fields.length === 0) return getProjectTask(db, id);

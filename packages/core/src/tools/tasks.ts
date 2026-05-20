@@ -62,7 +62,7 @@ export class TasksTool implements Tool {
           description:
             "Required when update changes status. Short note explaining what you did or why you're blocked.",
         },
-        project_id: { type: "string", description: "Project ID (for create)." },
+        project_id: { type: "string", description: "Project ID (for create, or to move a task to a different project via update)." },
         assignee: { type: "string", description: "Assignee name (agent or user)." },
         rank: { type: "number", description: "Rank in backlog — lower = higher priority." },
         blocked_reason: { type: "string", description: "Reason when status=blocked (e.g. question, budget)." },
@@ -116,6 +116,7 @@ export class TasksTool implements Tool {
             blockedReason,
             comment ?? text,
             agentAuthor,
+            projectId,
           );
         case "delete":
           return await this.delete(id);
@@ -212,6 +213,7 @@ export class TasksTool implements Tool {
     blockedReason?: string,
     commentText?: string,
     agentAuthor?: string,
+    projectId?: string,
   ): Promise<ToolResult> {
     if (!id) return { success: false, output: "", error: "id is required for update." };
 
@@ -240,6 +242,18 @@ export class TasksTool implements Tool {
       };
     }
 
+    // Validate target project exists when moving a task to a different project
+    if (projectId !== undefined && this.db) {
+      const project = this.db.prepare("SELECT id FROM projects WHERE id = ?").get(projectId);
+      if (!project) {
+        return {
+          success: false,
+          output: "",
+          error: `Project "${projectId}" does not exist. Task cannot be moved to a non-existent project.`,
+        };
+      }
+    }
+
     const parsedTags = tags ? tags.split(",").map((t) => t.trim()).filter(Boolean) : undefined;
 
     // Post the comment FIRST so it appears before the status change in the log.
@@ -256,6 +270,7 @@ export class TasksTool implements Tool {
       assignee: assignee !== undefined ? assignee || null : undefined,
       rank,
       blocked_reason: blockedReason !== undefined ? blockedReason || null : undefined,
+      project_id: projectId !== undefined ? projectId || null : undefined,
     });
 
     if (!task) return { success: false, output: "", error: `Task ${id} not found.` };

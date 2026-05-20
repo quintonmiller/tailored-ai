@@ -53,6 +53,8 @@ export interface TaskUpdateInput {
   assignee?: string | null;
   rank?: number;
   blocked_reason?: string | null;
+  /** Move the task to a different project. Pass null to unassign from a project. */
+  project_id?: string | null;
 }
 
 export interface TaskFilter {
