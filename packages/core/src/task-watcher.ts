@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { executeHooks } from "./agent/hooks.js";
 import { expandPrompt } from "./prompts/expand.js";
 import { runAgentLoop } from "./agent/loop.js";
@@ -5,9 +7,16 @@ import { resolveAgent } from "./agent/agents.js";
 import { findOrCreateSession, resetSession } from "./agent/session.js";
 import type { DiscordChannel } from "./channels/discord.js";
 import { getProject } from "./db/project-queries.js";
-import type { ProjectTask } from "./db/task-queries.js";
+import { addTaskComment, updateProjectTask, type ProjectTask } from "./db/task-queries.js";
 import type { AgentRuntime } from "./runtime.js";
 import { createWorktree, type Worktree } from "./worktree.js";
+
+const exec = promisify(execFile);
+
+/** Sentinel author for watcher-authored bookkeeping comments. */
+const WATCHER_COMMENT_AUTHOR = "task-watcher";
+/** Prefix on stall comments so subsequent runs can count prior attempts. */
+const STALL_COMMENT_PREFIX = "STALL #";
 
 export interface TaskEvent {
   action: "created" | "updated" | "commented";
@@ -65,7 +74,7 @@ export class TaskWatcher {
     this.notify({ action, task: { ...row, tags } as ProjectTask });
   }
 
-  notify(event: TaskEvent): void {
+  notify(event: TaskEvent, opts: { force?: boolean } = {}): void {
     const config = this.runtime.getConfig().taskWatcher;
     if (!config.enabled) return;
     if (!config.triggers.includes(event.action)) return;
@@ -77,7 +86,9 @@ export class TaskWatcher {
     // different known agent. Without this gate, every comment / status
     // bump re-triggers the same agent that just finished, looping.
     // `created` events always fire (initial routing).
-    if (event.action === "updated") {
+    // `force` bypasses the gate — used for stall retries + the stuck-task
+    // scanner, where we explicitly want to re-fire on the same assignee.
+    if (event.action === "updated" && !opts.force) {
       const lastFired = this.lastFiredAssignee.get(taskId);
       const isKnownAgent =
         newAssignee !== null && Boolean(this.runtime.getConfig().agents?.[newAssignee]);
@@ -251,6 +262,17 @@ export class TaskWatcher {
         `6. Hand off to the reviewer: \`tasks(action=update, id=${event.task.id}, status=in_review, assignee=reviewer)\` and add a comment with branch name + commit sha + one-line summary.`,
         "7. If you cannot proceed (missing context, infra issue), update to `blocked` with a clear reason and STOP — do not fabricate paths or files.",
         "",
+        "**Reconnaissance budget.** Tool calls are expensive — burning them on `ls`,",
+        "`cat`, and `read` without writing or committing is the #1 failure mode.",
+        "Hard limits, in order:",
+        "  - After ~15 tool calls without writing/editing any file, STOP exploring.",
+        "    Comment on the task with: (a) files you inspected, (b) what you",
+        "    concluded, (c) what's blocking implementation. Then exit.",
+        "  - Do not re-read or re-`ls` paths you've already touched this session.",
+        "    If the answer is in your scrollback, look there first.",
+        "  - When in doubt, commit the smallest viable progress. A trivial",
+        "    commit that gets reviewed beats an empty session every time.",
+        "",
         "Do NOT touch ~/.tailored-ai/, agent.db, or config.yaml. Do NOT commit secrets.",
         "",
       ].join("\n");
@@ -296,6 +318,9 @@ export class TaskWatcher {
     const extraTools = allTools.filter((t) => taskToolNames.has(t.name));
 
     let response: string;
+    // Captured outside the finally so stall handling (below) can inspect
+    // the preserved worktree without re-querying git.
+    let worktreePreservedPath: string | null = null;
     try {
       response = await runAgentLoop(prompt, {
         ...this.runtime.buildLoopOptions({
@@ -322,6 +347,7 @@ export class TaskWatcher {
         try {
           const cleanup = await worktree.cleanup();
           if (cleanup.preservedPath) {
+            worktreePreservedPath = cleanup.preservedPath;
             console.log(`${logPrefix} worktree preserved at ${cleanup.preservedPath} (uncommitted changes)`);
           } else {
             console.log(`${logPrefix} worktree cleaned up; branch ${worktree.branch} retained`);
@@ -341,13 +367,41 @@ export class TaskWatcher {
     // Re-read the task to see how the agent left it. The agent may have
     // updated status/assignee mid-run; the delivery decision depends on
     // the FINAL state, not what triggered us.
-    const finalTask = this.runtime.db
+    let finalTask = this.runtime.db
       .prepare("SELECT * FROM project_tasks WHERE id = ?")
       .get(event.task.id) as
       | (ProjectTask & { tags: string })
       | undefined;
-    const finalAssignee = (finalTask?.assignee ?? "").trim() || null;
-    const finalStatus = finalTask?.status ?? event.task.status;
+    let finalAssignee = (finalTask?.assignee ?? "").trim() || null;
+    let finalStatus = finalTask?.status ?? event.task.status;
+
+    // Stall handling. A loop ending with `[Agent stopped: …]` means the
+    // model burned its budget without transitioning the task. The
+    // `shouldSuppressDelivery` rule would silently hide this (assignee is
+    // still a known agent, status is still backlog/in_progress), so we
+    // intercept here, write a structured comment, and either retry or
+    // transition to blocked. See docs/agent-unification.md (Phase 6
+    // follow-up: stall detection).
+    const stallReason = detectStall(response);
+    if (stallReason && finalStatus !== "blocked" && finalStatus !== "done") {
+      const handled = await this.handleStall({
+        event,
+        stallReason,
+        worktreePath: worktreePreservedPath,
+        logPrefix,
+      });
+      // handleStall mutates the task; re-read the row so the delivery
+      // logic below sees the new state.
+      if (handled.retried) {
+        // Retry was enqueued; the next pass will deliver. Nothing to do here.
+        return;
+      }
+      finalTask = this.runtime.db
+        .prepare("SELECT * FROM project_tasks WHERE id = ?")
+        .get(event.task.id) as (ProjectTask & { tags: string }) | undefined;
+      finalAssignee = (finalTask?.assignee ?? "").trim() || null;
+      finalStatus = finalTask?.status ?? event.task.status;
+    }
 
     if (this.shouldSuppressDelivery(finalAssignee, finalStatus)) {
       console.log(`${logPrefix} suppressing delivery — task in-flight (assignee=${finalAssignee}, status=${finalStatus})`);
@@ -356,6 +410,74 @@ export class TaskWatcher {
 
     const envelope = await this.buildNotification(event, finalTask ?? event.task, finalAssignee, finalStatus, response);
     await this.deliver(envelope, logPrefix);
+  }
+
+  /**
+   * Called when the agent loop returned `[Agent stopped: …]`. Counts
+   * prior `STALL #N` comments on this task; if we're under the retry
+   * cap, requeues the event with `force: true`. Otherwise transitions
+   * the task to blocked so the user sees it on the dashboard. Always
+   * writes a structured stall comment so the trail is preserved.
+   */
+  private async handleStall(args: {
+    event: TaskEvent;
+    stallReason: string;
+    worktreePath: string | null;
+    logPrefix: string;
+  }): Promise<{ retried: boolean }> {
+    const { event, stallReason, worktreePath, logPrefix } = args;
+    const taskId = event.task.id;
+
+    // Count prior stalls. Each watcher-authored stall comment carries
+    // `STALL #N: …` as its first line so we can extract the highest N.
+    const prior = this.runtime.db
+      .prepare(
+        "SELECT content FROM task_comments WHERE task_id = ? AND author = ? AND content LIKE ?",
+      )
+      .all(taskId, WATCHER_COMMENT_AUTHOR, `${STALL_COMMENT_PREFIX}%`) as { content: string }[];
+    const priorAttempt = prior
+      .map((r) => {
+        const m = r.content.match(/^STALL #(\d+)/);
+        return m ? Number.parseInt(m[1], 10) : 0;
+      })
+      .reduce((a, b) => (a > b ? a : b), 0);
+    const attempt = priorAttempt + 1;
+
+    const worktreeStatus = worktreePath ? await summarizeWorktreeChanges(worktreePath) : null;
+    const comment = formatStallComment(attempt, stallReason, worktreePath, worktreeStatus);
+    addTaskComment(this.runtime.db, taskId, { author: WATCHER_COMMENT_AUTHOR, content: comment });
+
+    const maxRetries = this.runtime.getConfig().taskWatcher.maxStallRetries ?? 1;
+    if (attempt <= maxRetries) {
+      console.log(`${logPrefix} stall detected (#${attempt}) — scheduling retry`);
+      // Bypass the `lastFiredAssignee` gate so the same assignee re-fires.
+      // Small delay lets logs flush and the user-facing comment land first.
+      setTimeout(() => {
+        const refreshed = this.runtime.db
+          .prepare("SELECT * FROM project_tasks WHERE id = ?")
+          .get(taskId) as ProjectTask | undefined;
+        if (!refreshed) return;
+        let tags: string[] = [];
+        try {
+          tags = JSON.parse((refreshed as unknown as { tags: string }).tags) ?? [];
+        } catch {
+          tags = [];
+        }
+        this.notify(
+          { action: "updated", task: { ...refreshed, tags } as ProjectTask },
+          { force: true },
+        );
+      }, 500);
+      return { retried: true };
+    }
+
+    // Out of retries: transition to blocked so the user sees it.
+    console.log(`${logPrefix} stall detected (#${attempt}) — out of retries, transitioning to blocked`);
+    updateProjectTask(this.runtime.db, taskId, {
+      status: "blocked",
+      blocked_reason: `coder-stalled after ${attempt} attempts: ${stallReason}`,
+    });
+    return { retried: false };
   }
 
   /**
@@ -547,4 +669,71 @@ function slugify(s: string): string {
     .replace(/[^a-z0-9-]+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
+}
+
+/**
+ * Returns a short stall reason when `response` matches the agent loop's
+ * `[Agent stopped: …]` terminators, or null when the loop ended cleanly.
+ * `[Sleep] …` is NOT a stall — that's how the default agent ends ticks
+ * intentionally.
+ */
+export function detectStall(response: string): string | null {
+  if (!response) return null;
+  const trimmed = response.trim();
+  const m = trimmed.match(/^\[Agent stopped:\s*([^\]]+)\]/);
+  if (!m) return null;
+  return m[1].trim();
+}
+
+/**
+ * Renders the watcher's stall comment. Goes onto the task's comment
+ * timeline so the user (and the next coder run) can see what was
+ * attempted. Format is `STALL #N: …` so subsequent stalls can count
+ * priors with a simple LIKE query.
+ */
+export function formatStallComment(
+  attempt: number,
+  stallReason: string,
+  worktreePath: string | null,
+  worktreeStatus: { stat: string; status: string } | null,
+): string {
+  const lines: string[] = [];
+  lines.push(`${STALL_COMMENT_PREFIX}${attempt}: ${stallReason}`);
+  if (worktreePath) {
+    lines.push(`Worktree preserved at: ${worktreePath}`);
+  }
+  if (worktreeStatus?.status?.trim()) {
+    lines.push("");
+    lines.push("Uncommitted changes (git status --short):");
+    lines.push("```");
+    lines.push(worktreeStatus.status.trim());
+    lines.push("```");
+  }
+  if (worktreeStatus?.stat?.trim()) {
+    lines.push("");
+    lines.push("Diff stat vs HEAD:");
+    lines.push("```");
+    lines.push(worktreeStatus.stat.trim());
+    lines.push("```");
+  }
+  if (!worktreeStatus || (!worktreeStatus.status?.trim() && !worktreeStatus.stat?.trim())) {
+    lines.push("");
+    lines.push("No file changes were made before the loop ended.");
+  }
+  return lines.join("\n");
+}
+
+/** Runs `git status --short` and `git diff --stat HEAD` in the preserved worktree. */
+async function summarizeWorktreeChanges(
+  worktreePath: string,
+): Promise<{ stat: string; status: string } | null> {
+  try {
+    const [status, stat] = await Promise.all([
+      exec("git", ["-C", worktreePath, "status", "--short"]).then((r) => r.stdout).catch(() => ""),
+      exec("git", ["-C", worktreePath, "diff", "--stat", "HEAD"]).then((r) => r.stdout).catch(() => ""),
+    ]);
+    return { status, stat };
+  } catch {
+    return null;
+  }
 }

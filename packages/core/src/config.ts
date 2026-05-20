@@ -205,6 +205,13 @@ export interface TaskWatcherConfig {
     beforeRun?: AgentHook | AgentHook[];
     afterRun?: AgentHook | AgentHook[];
   };
+  /**
+   * When a coding-agent run ends with `[Agent stopped: …]` (max rounds,
+   * repeated calls, or shutdown), the watcher writes a structured stall
+   * comment and either retries (up to maxStallRetries) or transitions
+   * the task to `blocked`. Default: 1 retry, then block.
+   */
+  maxStallRetries?: number;
 }
 
 export interface WebhookRouteConfig {
@@ -506,6 +513,7 @@ const DEFAULT_CONFIG: AgentConfig = {
     prompt: "Task {{action}}: {{task_title}} ({{task_id}}), status: {{task_status}}. {{task_description}}",
     debounceMs: 5000,
     triggers: ["created", "updated"],
+    maxStallRetries: 1,
   },
   webhooks: {
     enabled: false,
