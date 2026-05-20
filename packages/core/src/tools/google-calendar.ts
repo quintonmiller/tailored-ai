@@ -3,13 +3,13 @@ import type { Tool, ToolContext, ToolResult } from "./interface.js";
 
 export class GoogleCalendarTool implements Tool {
   name = "google_calendar";
-  description = "Manage Google Calendar. Actions: list_events, search, create_event.";
+  description = "Manage Google Calendar. Actions: list_events, search, create_event, delete_event.";
   parameters = {
     type: "object",
     properties: {
       action: {
         type: "string",
-        description: "The action: list_events, search, create_event.",
+        description: "The action: list_events, search, create_event, delete_event.",
       },
       query: {
         type: "string",
@@ -34,6 +34,10 @@ export class GoogleCalendarTool implements Tool {
       description: {
         type: "string",
         description: "Event description for create_event.",
+      },
+      event_id: {
+        type: "string",
+        description: "Google Calendar event ID for delete_event.",
       },
     },
     required: ["action"],
@@ -88,11 +92,13 @@ export class GoogleCalendarTool implements Tool {
             args.end as string,
             args.description as string | undefined,
           );
+        case "delete_event":
+          return this.deleteEvent(args.event_id as string);
         default:
           return {
             success: false,
             output: "",
-            error: `Unknown action: ${action}. Use: list_events, search, create_event.`,
+            error: `Unknown action: ${action}. Use: list_events, search, create_event, delete_event.`,
           };
       }
     } catch (err) {
@@ -165,5 +171,23 @@ export class GoogleCalendarTool implements Tool {
     if (code !== 0) return { success: false, output: "", error: stderr || "gog calendar create failed" };
 
     return { success: true, output: stdout || `Event "${title}" created.` };
+  }
+
+  private async deleteEvent(eventId: string): Promise<ToolResult> {
+    if (!eventId) return { success: false, output: "", error: "event_id is required for delete_event." };
+
+    const { stdout, stderr, code } = await this.gog([
+      "calendar",
+      "delete",
+      eventId,
+      "--account",
+      this.account,
+      "--json",
+      "--no-input",
+    ]);
+
+    if (code !== 0) return { success: false, output: "", error: stderr || "gog calendar delete failed" };
+
+    return { success: true, output: stdout || `Event "${eventId}" deleted.` };
   }
 }
