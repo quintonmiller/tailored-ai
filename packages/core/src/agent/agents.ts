@@ -30,6 +30,7 @@ export interface ResolvedAgent {
   injectMemory: boolean;
   memoryInjectBudgetTokens: number | undefined;
   memoryInjectLimit: number | undefined;
+  budgetWarnings: boolean;
   hooks: ResolvedHooks;
   /**
    * Set to "progressive" when the agent uses agentskills.io-style on-demand
@@ -100,6 +101,7 @@ export function resolveAgent(
     injectMemory: false,
     memoryInjectBudgetTokens: undefined,
     memoryInjectLimit: undefined,
+    budgetWarnings: false,
     hooks: EMPTY_HOOKS,
     skillLoading: "eager",
     skillCatalog: [],
@@ -140,6 +142,7 @@ export function resolveAgent(
     injectMemory: agent?.injectMemory ?? false,
     memoryInjectBudgetTokens: agent?.memoryInjectBudgetTokens,
     memoryInjectLimit: agent?.memoryInjectLimit,
+    budgetWarnings: agent?.budgetWarnings ?? false,
     hooks: agent?.hooks ? mergeHooks(agent.hooks) : EMPTY_HOOKS,
     skillLoading: agent?.skillLoading ?? "eager",
     skillCatalog: [],

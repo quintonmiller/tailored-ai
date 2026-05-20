@@ -97,6 +97,13 @@ export interface AgentLoopOptions {
   injectMemory?: boolean;
   memoryInjectBudgetTokens?: number;
   memoryInjectLimit?: number;
+  /**
+   * When true, inject `[System: …budget…]` reminders at 50% and 80% of
+   * `maxToolRounds` so the model can decide to commit progress before
+   * running out of budget. Off by default — opt in per agent via
+   * `AgentDefinition.budgetWarnings`.
+   */
+  budgetWarnings?: boolean;
   /** Fires once per turn when memory injection ran. `pinned` is always-injected preferences; `sources` is the relevance-ranked tier. */
   onMemoryRecalled?: (info: {
     count: number;
@@ -567,6 +574,12 @@ async function _runAgentLoopBody(
   let repeatCount = 0;
   let cachedSummary: string | undefined;
   const MAX_REPEATED_CALLS = 3;
+  // Tracks which budget warnings have already fired so we inject each at
+  // most once per loop. Without this the warning would replay every round
+  // past the threshold.
+  const firedBudgetWarnings = new Set<"half" | "near-end">();
+  const halfBudget = Math.max(1, Math.floor(maxToolRounds * 0.5));
+  const nearEndBudget = Math.max(halfBudget + 1, Math.floor(maxToolRounds * 0.8));
 
   while (rounds < maxToolRounds) {
     if (opts.signal?.aborted) {
@@ -584,6 +597,34 @@ async function _runAgentLoopBody(
       return reason ? `[Sleep] ${reason}` : "[Tick concluded via Sleep]";
     }
     rounds++;
+
+    // Budget warnings: nudge the model toward committing progress before
+    // it runs out of rounds. Off by default; opt in per agent. Critical
+    // for coder/reviewer where the failure mode is "burn 60 rounds reading,
+    // never write or commit."
+    if (opts.budgetWarnings) {
+      if (rounds === halfBudget && !firedBudgetWarnings.has("half")) {
+        firedBudgetWarnings.add("half");
+        history.push({
+          role: "user",
+          content:
+            `[System: tool-budget check — ${rounds}/${maxToolRounds} rounds used. ` +
+            `If you've made progress, prefer committing it now over more exploration. ` +
+            `A small commit you can hand off is better than no commit.]`,
+        });
+      }
+      if (rounds === nearEndBudget && !firedBudgetWarnings.has("near-end")) {
+        firedBudgetWarnings.add("near-end");
+        const remaining = maxToolRounds - rounds;
+        history.push({
+          role: "user",
+          content:
+            `[System: only ${remaining} rounds left of ${maxToolRounds}. ` +
+            `Either commit what you have and hand off, or post a status comment on the task ` +
+            `(what you found, what's blocking) and stop. Do NOT keep exploring.]`,
+        });
+      }
+    }
 
     const currentTools = opts.getTools ? opts.getTools() : tools;
     const currentProvider = opts.getProvider ? opts.getProvider() : provider;

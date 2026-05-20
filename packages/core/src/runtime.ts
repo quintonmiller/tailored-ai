@@ -481,6 +481,7 @@ export class AgentRuntime {
       injectMemory: resolved.injectMemory,
       memoryInjectBudgetTokens: resolved.memoryInjectBudgetTokens,
       memoryInjectLimit: resolved.memoryInjectLimit,
+      budgetWarnings: resolved.budgetWarnings,
       permissions: config.permissions,
       sandbox,
       skillCatalog: resolved.skillCatalog,

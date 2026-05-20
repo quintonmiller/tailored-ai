@@ -35,6 +35,13 @@ export interface AgentDefinition {
   summarizeOnTrim?: boolean;
   /** When true, prepend a `[Relevant memory]` block built from recall hits to the system prompt. */
   injectMemory?: boolean;
+  /**
+   * When true, inject mid-loop budget warnings at 50% and 80% of
+   * `maxToolRounds` so the model can decide to commit progress before
+   * running out. Useful for coding agents whose default mode is
+   * depth-first exploration. Off by default.
+   */
+  budgetWarnings?: boolean;
   /** Token budget for the injected memory block. Default 800. */
   memoryInjectBudgetTokens?: number;
   /** Max number of recall hits to consider for injection. Default 5. */
