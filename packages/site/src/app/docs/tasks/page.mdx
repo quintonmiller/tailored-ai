@@ -1,0 +1,174 @@
+export const metadata = {
+  title: "Tasks & projects",
+  description: "Persistent tasks the agent can create and assign. Coder/reviewer dispatch. Per-project mode.",
+};
+
+# Tasks & projects
+
+If the value of TAI for you is "an agent that does coding work for me,"
+this is the page. Tasks are the queue. Projects are the workspaces. The
+task-watcher is what makes the coder/reviewer specialist agents actually
+*do things* without you babysitting.
+
+If you don't need code automation, you can still use tasks for tracking
+("what's in flight"), but the multi-agent dispatch is the differentiated
+feature.
+
+## Tasks at a glance
+
+The `tasks` and `task_query` tools are the surface:
+
+```
+tasks(action="create",
+      title="Add /healthz route",
+      description="Return 200 with build info.",
+      assignee="coder",
+      tags=["server", "ops"])
+
+task_query(status="in_review", assignee="reviewer")
+```
+
+Statuses follow a fixed lifecycle:
+
+```
+backlog → in_progress → in_review → done
+                    ↘ blocked    ↘ archived
+```
+
+Every transition records a `task_comments` row. The web UI's Tasks board
+shows columns by status. CLI surface for tasks is on the roadmap.
+
+## The coder/reviewer loop
+
+This is the part that's novel. The **task-watcher** is a background
+poller (every 30 seconds by default) that scans for tasks whose
+`assignee` is set to a specialist agent name (`coder`, `reviewer`). When
+it sees one:
+
+1. Opens an isolated git worktree on a fresh branch.
+2. Runs the assigned agent (e.g. `coder`) with the task description as
+   the prompt.
+3. The agent edits files, commits, and updates the task status (usually
+   to `in_review` with assignee `reviewer`).
+4. The watcher picks it up again on the next tick. Now it runs the
+   `reviewer` agent.
+5. The reviewer runs typecheck and tests inside a Docker sandbox, reads
+   the diff, and either approves (reassigns to user) or requests changes
+   (reassigns back to `coder`).
+
+The human's role: skim the in-flight tasks, merge the approved ones,
+intervene when something's stuck.
+
+To kick this off from an agent or a script:
+
+```
+tasks(action="update", id="ptask_…", assignee="coder")
+```
+
+You don't `delegate()` to coder or reviewer. The task-watcher dispatches
+them.
+
+## Task backends
+
+The same tools work against any of four backends:
+
+| Backend | Where tasks live | When to use |
+|---|---|---|
+| `native` | `project_tasks` table in `agent.db` | Default. Local, fast, no external deps. |
+| `github` | GitHub Issues | When your team lives in GitHub and the agent should file issues there. |
+| `beans` | `.beans/` markdown files | When you want git-tracked, human-readable task files. |
+| `beads` | `beads` CLI | The newer rewrite of beans. |
+
+Configure under `tasks:`:
+
+```yaml
+tasks:
+  backend: native           # or: github, beans, beads
+  # For github backend:
+  # github:
+  #   repo: quintonmiller/tailored-ai
+  #   token: ${GITHUB_TOKEN}
+```
+
+All backends implement the same `TaskBackend` interface
+([`packages/core/src/tasks/factory.ts`](https://github.com/quintonmiller/tailored-ai/blob/main/packages/core/src/tasks/factory.ts)).
+The tools and the agent's mental model don't change when you swap.
+
+A Linear / Jira / Trello backend isn't built-in, but the registry is.
+Implement `TaskBackend`, then register it:
+
+```ts
+import { registerTaskBackendFactory } from "@tailored-ai/core";
+
+registerTaskBackendFactory("linear", (config, db) => {
+  return new LinearTaskBackend({
+    apiKey: config.tasks?.linear?.apiKey as string,
+    teamId: config.tasks?.linear?.teamId as string,
+  });
+});
+```
+
+Then `tasks.backend: linear` in `config.yaml` picks it. Register before
+the runtime constructs its task backend (so import the registration
+module before instantiating `AgentRuntime`).
+
+## Projects
+
+A project is a registered directory. Register the one you want the agent
+to operate inside:
+
+```bash
+cd ~/repos/my-app
+tai project init --name "My app"
+```
+
+This writes a `.tai.yaml` to the directory and a `projects` row to
+SQLite. From then on:
+
+- `tai` invoked from inside the directory is scoped to that project.
+- Sessions, cron jobs, autopilot tasks, Discord channel mappings, and
+  the UI's session list all filter by `project_id`.
+- The project's `.tai.yaml` can carry a `config:` overlay that merges
+  over the global config, so each project can have its own agents,
+  tools, and models.
+
+```yaml
+# my-app/.tai.yaml
+name: "My app"
+config:
+  agents:
+    coder:
+      model: qwen3-coder:30b
+      tools: [exec, read, write, memory]
+      maxToolRounds: 30
+```
+
+List projects:
+
+```bash
+tai project list
+```
+
+The active project is marked with `*`. Switch by `cd`-ing into one or
+by passing `--project <id>` to any command.
+
+## Per-project channel routing
+
+In Discord, map a channel id to a project so messages in that channel
+scope automatically:
+
+```yaml
+channels:
+  discord:
+    perChannelMapping:
+      "1234567890": proj_my_app
+      "9876543210": proj_other_thing
+```
+
+Or use slash commands. `/project <name>` in a Discord channel sets the
+project for the rest of that session.
+
+## Deep dive
+
+- [`docs/tasks-and-autopilot.md`](https://github.com/quintonmiller/tailored-ai/blob/main/docs/tasks-and-autopilot.md): task backends, autopilot, task-watcher.
+- [`docs/projects.md`](https://github.com/quintonmiller/tailored-ai/blob/main/docs/projects.md): per-project mode, overlays, project_id threading.

@@ -1,0 +1,89 @@
+export const metadata = {
+  title: "Documentation",
+  description: "Agents that run on your schedule, with your tools.",
+};
+
+# Tailored AI
+
+Tailored AI is a runtime for LLM agents that do work on a schedule. It runs
+on a laptop, on a Raspberry Pi, or on a server. The agents have access to
+your shell, your files, your inbox, and your calendar. They reach you in
+the terminal, in a browser, on Discord, or through your own service.
+
+## What a minute with TAI looks like
+
+```yaml
+# config.yaml
+provider:
+  type: openai
+  model: gpt-4o-mini
+  apiKey: ${OPENAI_API_KEY}
+
+agents:
+  reporter:
+    instructions: |
+      You write standups. Three bullets: yesterday, today, blockers.
+      Be specific. Don't pad.
+    tools: [exec, write]
+
+tools:
+  exec:  { enabled: true, allowedCommands: [git, date] }
+  write: { enabled: true }
+```
+
+```bash
+tai -a reporter -m "Run git log for the past day and write today's standup to standup.md"
+```
+
+Twenty seconds later, `standup.md` exists and reads like a person wrote it.
+Switch `provider.type` to `ollama` and the same config runs offline. Add a
+`cron` block and it runs every morning at eight without you. Add a Discord
+section and it DMs you the result.
+
+## What this is good for
+
+- **Cron jobs that think.** Read your calendar at 7am and prep a briefing.
+  Watch your inbox for invoices. Generate a release-note draft when a
+  semver tag is pushed.
+- **Multi-agent workflows.** A `coder` agent writes the diff in a fresh
+  git worktree, hands the task to a `reviewer` agent, which runs typecheck
+  and tests in a Docker sandbox.
+- **Ambient assistants.** An always-on agent reads its own goals file
+  every fifteen minutes, decides whether something needs doing, and either
+  acts or backs off.
+- **Embedding.** Drop the runtime into your own Node service and expose
+  agents over your existing API.
+
+## What this isn't
+
+It isn't a hosted chat product. It isn't an MCP server. It isn't an
+opinionated framework for building a single LangChain-style pipeline. If
+the thing you want is a chat box, ChatGPT is better at chat than TAI is.
+TAI shines when the agent needs to do something while you're not watching.
+
+## Status
+
+This is v0.1. The runtime, tools, agents, channels, memory, workflows,
+cron, HTTP API, and the eight extension registries (tool, channel,
+provider, embedding, task backend, step executor, trigger, skill) ship
+and are tested. The declarative `plugins: [...]` loader and built-in
+HTTP auth are v0.2 work. Pages marked "v0.2" describe finalized
+interfaces with the loader still landing.
+
+## Where to go next
+
+If you have ten minutes: [Quick start](/docs/quick-start) walks the
+standup scenario above end-to-end.
+
+If you have an hour and want the full picture: read
+[Architecture](/docs/architecture), then [Agents](/docs/agents), then
+[Tools](/docs/tools). The rest of the Concepts section can be read in any
+order.
+
+If you're picking a package to install: [Packages overview](/docs/packages)
+maps the five `@tailored-ai/*` packages and when to install which.
+
+If you're extending: [Custom tools](/docs/custom-tools) is the YAML path;
+[Extending in code](/docs/extending) is the TypeScript path;
+[Plugins](/docs/plugins) is the npm-distribution path (live today via
+registries; declarative loader v0.2).

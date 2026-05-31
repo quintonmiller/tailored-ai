@@ -1,0 +1,117 @@
+export const metadata = {
+  title: "@tailored-ai/trusted-actions",
+  description: "HITL approval gateway for risky agent actions. Mobile PWA, web-push, sandboxed Docker executor.",
+};
+
+# @tailored-ai/trusted-actions
+
+A human-in-the-loop gateway for **risky** actions an LLM agent might
+take. Placing orders. Submitting forms. Sending money. Pairs with
+`@tailored-ai/core` but is independently usable.
+
+```bash
+npm install @tailored-ai/trusted-actions
+```
+
+## The deal
+
+The agent never holds credentials. The agent never drives the browser.
+The agent proposes an *intent* (`purchase.amazon`, `submit.form`,
+`send.email`). A human gets a push notification on their phone, taps
+"Approve," and a **separate** executor process replays the approved
+steps through Playwright inside a Docker container.
+
+```
+┌───────────┐     intent      ┌──────────────┐  push    ┌──────┐
+│ LLM agent ├────────────────▶│  approval    ├─────────▶│ user │
+│           │  request_action │  gateway     │          │      │
+└───────────┘                 └─────┬────────┘  approve │      │
+                                    │           ◀──────┤      │
+                                    ▼                  └──────┘
+                              ┌──────────────┐
+                              │  executor    │  Playwright
+                              │  (Docker)    │
+                              └──────────────┘
+```
+
+## Components
+
+| Piece | What it does |
+|---|---|
+| **Approval gateway** (Hono server) | REST + SSE for pending actions, approve/reject flow. |
+| **Push notifier** (web-push, VAPID) | Sends to the approver's phone PWA. |
+| **Executor runner** | Replays approved steps in a hermetic Docker container with a saved login session. |
+| **Playwright adapters** | One per site. Amazon ships as the reference adapter. |
+| **PWA** | A small SPA the approver installs on their phone (Add to Home Screen). |
+| `tai-executor` CLI | `serve`, `run`, `test-purchase`, `install-token`. |
+
+The credential boundary is enforced by *process separation*. The LLM
+runs in your TAI process; the executor runs in a Docker container with
+the saved Amazon session inside it. They communicate only through
+structured intents. No shell, no eval, no path traversal.
+
+## Setup walkthrough
+
+Setup uses scripts in the monorepo. See the
+[runbook](https://github.com/quintonmiller/tailored-ai/blob/main/docs/trusted-actions-runbook.md)
+for the full reference.
+
+```bash
+# 1. One-time Docker + .env scaffold
+bash scripts/setup-tai-executor.sh
+
+# 2. Headed Amazon login (saves an encrypted session to the container)
+bash scripts/tai-executor-setup-amazon.sh
+
+# 3. Cloudflare Tunnel so the PWA can reach the gateway over HTTPS
+#    (Web Push requires HTTPS)
+bash scripts/tai-executor-tunnel-setup.sh
+
+# 4. PWA install token — open the printed URL on your phone,
+#    Add to Home Screen
+bash scripts/tai-executor-install-token.sh
+```
+
+Then in your TAI `config.yaml`:
+
+```yaml
+tools:
+  request_action:
+    enabled: true
+    executor_url: https://your-executor.example.com
+    shared_secret: ${TRUSTED_ACTIONS_SECRET}
+```
+
+The agent gets a `request_action` tool. It calls
+`request_action({ type: "purchase.amazon", input: { url, max_price, qty } })`.
+You get a push. Tap approve. The executor places the order.
+
+## Read-only actions
+
+Some intents don't need approval (cart contents, recent order history,
+product summary). These are exposed as their own tools:
+
+```yaml
+tools:
+  check_action_status: { enabled: true }
+  read_amazon_cart:    { enabled: true }
+  read_order_history:  { enabled: true }
+  product_summary:     { enabled: true }
+```
+
+## Always-HITL classes
+
+Some actions can never go through without explicit approval, even with
+a saved session: placing an order, entering payment info, changing the
+shipping address. The classifier lives in
+[`packages/browser-mediator/src/always-hitl.ts`](https://github.com/quintonmiller/tailored-ai/blob/main/packages/browser-mediator/src/always-hitl.ts).
+Extend it with per-domain config.
+
+## Threat model
+
+[`docs/trusted-actions-threats.md`](https://github.com/quintonmiller/tailored-ai/blob/main/docs/trusted-actions-threats.md)
+walks 11 named threats and how the gateway addresses each.
+
+## Source
+
+[`packages/trusted-actions/`](https://github.com/quintonmiller/tailored-ai/tree/main/packages/trusted-actions).

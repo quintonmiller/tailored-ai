@@ -1,0 +1,108 @@
+export const metadata = {
+  title: "Custom tools",
+  description: "Add a tool with YAML. Wrap any shell command into a function the agent can call.",
+};
+
+# Custom tools
+
+A custom tool turns any shell command into something the agent can
+call. No TypeScript needed. Add a block under `custom_tools:` in
+`config.yaml`, save, and the new tool is available on the next message
+(hot reload).
+
+## Anatomy
+
+```yaml
+custom_tools:
+  hn_top:
+    description: Fetch top Hacker News stories.
+    command: |
+      curl -s 'https://hacker-news.firebaseio.com/v0/topstories.json' \
+        | jq -r '.[0:{{limit}}][]' \
+        | while read -r id; do
+            curl -s "https://hacker-news.firebaseio.com/v0/item/${id}.json"
+          done \
+        | jq -rs '.[] | "\(.title // empty)\n\(.url // empty)\n"'
+    parameters:
+      limit:
+        type: integer
+        description: Number of stories to fetch.
+        default: 5
+```
+
+That's it. The agent now has a tool named `hn_top` that takes `limit`,
+runs the shell command, and returns stdout.
+
+TAI wraps the YAML block as a `Tool` and registers it the same way as
+the built-ins. `{{limit}}` in the command is substituted with the
+argument value before the shell runs.
+
+## Adding the tool to an agent
+
+By default a custom tool is *available* but not in any agent's
+allowlist. Add it to the agents that should be allowed to call it:
+
+```yaml
+agents:
+  researcher:
+    tools: [web_search, web_fetch, hn_top, memory]
+```
+
+If an agent's `tools:` is omitted or empty, all enabled tools (custom
+included) are available.
+
+## Parameter types
+
+```yaml
+parameters:
+  query:
+    type: string
+    description: The search term.
+  limit:
+    type: integer
+    description: Max results.
+    default: 10
+  recent_only:
+    type: boolean
+    description: Filter to recent items.
+    default: false
+  tags:
+    type: array
+    items: { type: string }
+    description: Tags to filter by.
+```
+
+List required parameters under `required: [...]`. Anything not in
+`required` with a `default:` is substituted when the agent omits the
+argument.
+
+## Working examples
+
+The repo's
+[`config.example.yaml`](https://github.com/quintonmiller/tailored-ai/blob/main/config.example.yaml)
+ships a handful of small custom tools to crib from: `hn_top`, `weather`,
+`git_log`, `ip_info`, `uptime`, `current_datetime`.
+
+## Security
+
+Custom tools run with the privileges of the agent process. Don't
+include unsubstituted user input in commands. The `{{}}` substitution
+shell-escapes arguments. Direct string concatenation in the YAML body
+is unsafe.
+
+For stronger isolation, run TAI in a sandbox (see
+[Architecture → Sandboxes](/docs/architecture#sandboxes-and-worktrees))
+or restrict the agent's tool list.
+
+## When YAML isn't enough
+
+YAML custom tools are right for "wrap a shell command." If you need:
+
+- Stateful tools (talk to an SDK, hold a connection)
+- Tools that share types with TAI's runtime
+- Tools that call other tools or query the runtime
+
+…write a TypeScript tool. See [Extending in code](/docs/extending).
+
+For sharing tools across projects or with the community, see
+[Plugins](/docs/plugins).

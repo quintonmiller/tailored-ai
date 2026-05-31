@@ -1,0 +1,178 @@
+export const metadata = {
+  title: "Installation",
+  description: "Install TAI as a CLI, as a project dependency, or as a library you embed.",
+};
+
+# Installation
+
+## What to install
+
+Three shapes. Pick one based on how you'll use TAI.
+
+### As a CLI
+
+The most common shape. Installs the `tai` command globally.
+
+```bash
+npm install -g @tailored-ai/cli
+```
+
+You can then run `tai` from any folder that has a `config.yaml`. Works
+with any package manager:
+
+```bash
+pnpm add -g @tailored-ai/cli
+yarn global add @tailored-ai/cli
+bun add -g @tailored-ai/cli
+```
+
+### As a project dependency
+
+If you want the agent's version pinned to your project's lockfile:
+
+```bash
+npm install --save-dev @tailored-ai/cli
+```
+
+Run via your package manager's script runner: `npx tai`, `pnpm tai`,
+`yarn tai`, `bunx tai`. Your project's `config.yaml` sits next to your
+`package.json`.
+
+### As a library you embed
+
+When you want the runtime inside your own Node service rather than running
+the `tai` command, depend on the libraries directly:
+
+```bash
+npm install @tailored-ai/core @tailored-ai/server better-sqlite3
+```
+
+See [@tailored-ai/core](/docs/packages/core) for the embed API and
+[@tailored-ai/server](/docs/packages/server) for the HTTP surface.
+
+## System requirements
+
+- **Node.js 20 or newer.** Node 18 reached EOL in April 2025. TAI declares
+  `engines.node: ">=20"`.
+- **A C toolchain only if `better-sqlite3` doesn't have a prebuilt binary
+  for your platform.** Prebuilt binaries cover Linux, macOS, and Windows
+  on x64 and arm64. If install fails: install `python3` and a compiler
+  (Xcode CLT on macOS, `build-essential` on Debian/Ubuntu, Visual Studio
+  Build Tools on Windows).
+
+## Pick a provider
+
+TAI doesn't ship a model. Pick at least one of the three common shapes.
+
+### OpenAI (and OpenAI-compatible)
+
+Works with hosted OpenAI plus anything that speaks the OpenAI chat API:
+vLLM, LM Studio, Llama.cpp's server, Together, OpenRouter, Anyscale.
+
+```yaml
+provider:
+  type: openai
+  model: gpt-4o-mini
+  apiKey: ${OPENAI_API_KEY}
+  baseUrl: https://api.openai.com/v1   # override for compatible servers
+```
+
+`.env` alongside `config.yaml`:
+
+```
+OPENAI_API_KEY=sk-…
+```
+
+For a self-hosted endpoint (vLLM on `127.0.0.1:8000`, etc.):
+
+```yaml
+provider:
+  type: openai
+  model: <your model id>
+  baseUrl: http://127.0.0.1:8000/v1
+  apiKey: not-required-but-must-be-present
+```
+
+### Anthropic
+
+```yaml
+provider:
+  type: anthropic
+  model: claude-sonnet-4-6
+  apiKey: ${ANTHROPIC_API_KEY}
+```
+
+### Ollama (local)
+
+Lowest-friction local path on a developer laptop:
+
+```bash
+brew install ollama        # or .deb / .rpm / install script
+ollama serve &
+ollama pull llama3.2
+```
+
+```yaml
+provider:
+  type: ollama
+  model: llama3.2
+  # default endpoint: http://127.0.0.1:11434
+```
+
+### Multi-provider
+
+You can also declare several providers and let each agent pick its own.
+See [Configuration → Multi-provider](/docs/configuration#multi-provider-via-providers--agentdefaultprovider).
+
+## Optional dependencies
+
+A few tools have peer dependencies installed only if you turn them on.
+Each tool fails with a clear "run `npm install …`" message at first use
+if the peer is missing.
+
+| Tool you turn on | Peer to install |
+|---|---|
+| `browser` | `npm install playwright && npx playwright install chromium` |
+| `browser_mediator` | `npm install @tailored-ai/browser-mediator playwright && npx playwright install chromium` |
+| `md_to_pdf` | `npm install md-to-pdf` |
+| PDF parsing (used by document tools) | `npm install pdf-parse` |
+| OCR on scanned PDFs and images | `npm install tesseract.js` |
+| Trusted-actions Amazon purchases | `npm install @tailored-ai/trusted-actions`; runs in its own Docker container |
+
+## Where things live on disk
+
+By default TAI uses the directory you run `tai` from. Nothing global is
+created beyond the CLI itself.
+
+```
+your-folder/
+├── config.yaml          # required
+├── .env                 # optional, for ${VAR} interpolation
+├── agent.db             # SQLite; created on first run
+├── data/                # embeddings, knowledge base; created on first run
+└── workflows/           # optional; YAML workflow files
+```
+
+To centralize state somewhere else, set `TAI_HOME=/path/to/dir`. TAI will
+look for `config.yaml` there and put `agent.db` and `data/` there too.
+
+## Verifying the install
+
+```bash
+tai --help            # CLI help
+tai --list-agents     # agents your config defines
+tai -m "Say hi"       # one-shot message; tests the provider connection
+```
+
+If `--list-agents` works but `tai -m "…"` hangs or errors, the LLM
+provider isn't reachable. Check that Ollama or vLLM is running, or that
+your API key is set.
+
+## Uninstall
+
+```bash
+npm uninstall -g @tailored-ai/cli
+```
+
+The folder you ran in still has its `agent.db` and `data/`. Delete them
+if you don't want them.

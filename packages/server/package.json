@@ -1,0 +1,60 @@
+{
+  "name": "@tailored-ai/server",
+  "version": "0.1.0",
+  "description": "Agent HTTP API server (Hono routes, SSE, webhooks, static UI serving)",
+  "license": "MIT",
+  "author": "Quinton Miller",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/quintonmiller/tailored-ai.git",
+    "directory": "packages/server"
+  },
+  "homepage": "https://github.com/quintonmiller/tailored-ai/tree/main/packages/server#readme",
+  "bugs": "https://github.com/quintonmiller/tailored-ai/issues",
+  "keywords": [
+    "ai",
+    "agent",
+    "llm",
+    "hono",
+    "sse",
+    "api"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.9",
+    "hono": "^4.11.8",
+    "yaml": "^2.6.0",
+    "@tailored-ai/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.0.18"
+  }
+}

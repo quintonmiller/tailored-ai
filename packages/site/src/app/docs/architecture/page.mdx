@@ -1,0 +1,199 @@
+export const metadata = {
+  title: "Architecture",
+  description: "How the pieces fit. Runtime, factories, channels, persistence, the agent loop.",
+};
+
+# Architecture
+
+You're holding a pnpm monorepo with five published packages, two private
+ones, and a few defining ideas.
+
+## The defining ideas
+
+1. **One `AgentRuntime`.** The runtime owns the config, the tool registry,
+   the LLM provider, and the SQLite handle. Everything else borrows from
+   it. The CLI, the HTTP server, the Discord channel, cron, and the
+   workflow engine all read and write through the same instance.
+2. **Sessions are SQLite rows.** What you start in the terminal can
+   continue from Discord or the web UI because they all key off the same
+   `sessions` and `messages` tables.
+3. **The agent loop is one function.** `chat → tool calls → chat → stop`.
+   No state machine. No DAG. Compaction, retries, and hooks wrap around it.
+4. **Hot reload by default.** Config, tools, and provider are *references*
+   the runtime re-resolves every iteration. Edit `config.yaml`, save, and
+   the next message uses the new config.
+5. **Channels are subscribers.** Discord, HTTP, file-drop. They turn an
+   external message into `runAgentLoop(content, opts)` and send the
+   response back. They don't own state.
+
+## The packages
+
+| Package | Path | What's in it |
+|---|---|---|
+| `@tailored-ai/core` | `packages/core/` | Runtime, config, tools, providers, channels, db, cron, hooks, workflows, memory. |
+| `@tailored-ai/server` | `packages/server/` | HTTP API (Hono), SSE streaming, webhook intake, optional static-UI mount. |
+| `@tailored-ai/cli` | `packages/cli/` | The `tai` command. REPL, one-shot, project mode, bundled web UI. |
+| `@tailored-ai/browser-mediator` | `packages/browser-mediator/` | Bounded browser tool. Framework-agnostic; OpenAI / Anthropic / TAI adapters. |
+| `@tailored-ai/trusted-actions` | `packages/trusted-actions/` | HITL approval gateway. Runs in its own Docker container. |
+| `@tailored-ai/ui` (private) | `packages/ui/` | React + Vite SPA. Bundled inside `@tailored-ai/cli`. |
+| `@tailored-ai/site` (private) | `packages/site/` | This documentation site. |
+
+See [Packages overview](/docs/packages) for the dependency graph.
+
+## The runtime
+
+```
+┌──────────────────────────────────────────────────────┐
+│                    AgentRuntime                      │
+│                                                      │
+│   Config       Tools        DB         Provider      │
+│   (YAML)       (Tool[])    (SQLite)   (LLM API)      │
+│                                                      │
+└──────────────────────────────────────────────────────┘
+       ▲             ▲             ▲
+       │             │             │
+  ┌────┴───┐   ┌─────┴────┐   ┌────┴─────┐
+  │  CLI   │   │ Discord  │   │  HTTP    │
+  │  REPL  │   │ channel  │   │  + SSE   │
+  └────────┘   └──────────┘   └──────────┘
+```
+
+The runtime is constructed once. Every entry point calls
+`runtime.buildLoopOptions({ session, agentName, project })` and hands the
+result to `runAgentLoop(content, opts)`. The same five fields above
+(config, tools, db, provider, plus a mutable cache) are read each
+iteration.
+
+## The agent loop
+
+```
+loop:
+  send (system, history, tools)  →  provider
+  receive (text | tool_calls)
+  if tool_calls:
+      validate args
+      execute each tool with retry on transient errors
+      append tool_results to history
+      continue
+  else:
+      return text
+```
+
+The loop stops when the model returns plain text or hits
+`maxToolRounds`. Around the loop sit history compaction (drops older
+messages when the context window fills), prompt expansion
+(`{{next_task}}`, `{{last_run_iso}}`), beforeRun and afterRun hooks, and
+per-tool retry with backoff.
+
+Source: [`packages/core/src/agent/loop.ts`](https://github.com/quintonmiller/tailored-ai/blob/main/packages/core/src/agent/loop.ts).
+
+## Persistence
+
+One SQLite file. Default `./agent.db` in the cwd, or `$TAI_HOME/agent.db`.
+
+| Table | What's in it |
+|---|---|
+| `sessions` | One row per chat. User key, model, provider, project_id, timestamps. |
+| `messages` | Every turn in every session. Tool calls and results inlined. |
+| `project_tasks` | The native task backend (status, assignee, tags). |
+| `task_comments` | Comments per task. |
+| `projects` | Registered projects, for per-project mode. |
+| `notes` | The recall memory tier: short observations, tags, embeddings. |
+| `chunks` | Promoted longer-form content with embeddings. |
+| `email_seen` | Dedup ledger for the gmail tool. |
+| `cron_runs` | History of cron job executions. |
+| `workflow_runs`, `workflow_steps` | Workflow telemetry. |
+| `digest_runs` | Autopilot morning-digest archive. |
+| `exploratory_runs` | Online tick history (one row per tick). |
+| `autopilot_settings` | Digest time, memory-sweep TTL. |
+| `actions`, `subscriptions`, `audit_log` | Trusted-actions executor (if installed). |
+
+`better-sqlite3` is synchronous. The hot path uses prepared statements.
+
+## Factories
+
+`packages/core/src/factories.ts` is the composition layer. Three pure
+builders:
+
+- `createTools(config, opts)` returns the registered tool list based on
+  `config.tools.*` flags.
+- `createProvider(config)` returns the `Provider` for
+  `config.provider.type`.
+- `createMetaTools(opts)` returns tools that depend on a runtime
+  reference: `delegate`, `task_status`, `admin`, `claude_code`,
+  `discord_dm`.
+
+The CLI and any embedding host call these once at startup, build the
+`AgentRuntime`, then start subscribers (Discord, HTTP, cron, workflow
+watcher, file-drop poller).
+
+## Online mode
+
+An agent with `online: { enabled: true }` runs a background tick on a
+cadence. Each tick reads the agent's `goals.md`, runs the loop with a
+tightened tool allowlist, and either acts or backs off (idle multiplier
+stretches the next tick from 15 to 30 to 60 to 120 minutes).
+
+The runtime calls this **online mode** externally. The internal module
+is `packages/core/src/exploratory/`; the rows in `exploratory_runs` are
+the audit trail. They're the same thing.
+
+There's a separate **autopilot** worker (`packages/core/src/autopilot/`)
+for cron-like jobs that aren't tied to a user message: the morning
+digest (8am by default), the daily memory sweep (3:14am), the
+stuck-task scan (every 15 minutes). Autopilot doesn't run an agent
+loop; it executes SQL.
+
+## Sandboxes and worktrees
+
+Tool execution that touches the host (`exec`, `write`) can be
+sandboxed. Three backends:
+
+| Backend | When to use |
+|---|---|
+| `host` | No sandbox. Tools run in the same process. The default. |
+| `docker` | `createSandbox({ kind: "docker", image: "node:20" })`. Commands run inside a container. |
+| `podman` | Same shape as docker, rootless. |
+
+Used by the coder workflow: writes code in an isolated git worktree,
+runs typecheck and tests in a Docker sandbox, then offers the branch for
+review. Worktrees are managed via
+[`createWorktree({ strategy })`](https://github.com/quintonmiller/tailored-ai/blob/main/packages/core/src/worktree.ts).
+
+Deep dive: [`docs/sandboxes-and-worktrees.md`](https://github.com/quintonmiller/tailored-ai/blob/main/docs/sandboxes-and-worktrees.md).
+
+## Layout
+
+```
+packages/
+├── core/src/
+│   ├── index.ts                 # barrel exports
+│   ├── runtime.ts               # AgentRuntime
+│   ├── factories.ts             # createTools / createProvider / createMetaTools
+│   ├── config.ts                # YAML loader, validation, types
+│   ├── context.ts               # context / memory file loader
+│   ├── agent/                   # loop, agents, session, compact, hooks, prompt
+│   ├── providers/               # ollama, openai, anthropic, embedding
+│   ├── tools/                   # built-in tools + interface
+│   ├── channels/                # discord, interface
+│   ├── triggers/                # file-drop, email-poll, rss-poll, calendar-poll, etc.
+│   ├── memory/                  # recall tier, embeddings, sweep
+│   ├── workflows/               # loader, engine, executors
+│   ├── tasks/                   # backends: native, github, beans, beads
+│   ├── projects/                # per-project resolution
+│   ├── sandboxes/               # host, docker, podman
+│   ├── cron/                    # scheduler + cron_runs
+│   ├── autopilot/               # digest, memory sweep, stuck-task scan
+│   └── exploratory/             # online tick worker
+├── server/src/index.ts          # Hono routes
+├── cli/src/                     # arg parsing, REPL, service orchestration
+├── browser-mediator/src/        # mediator, egress, sanitizer, hitl, adapters
+└── trusted-actions/src/         # gateway, executor, adapters
+```
+
+## Where to read next
+
+- [Agents](/docs/agents) for the agent definition shape.
+- [Tools](/docs/tools) for the built-in tool catalog.
+- [Memory](/docs/memory) for the recall / chunks / core_memory tiers.
+- [Channels](/docs/channels) for Discord, HTTP, and how to write your own.

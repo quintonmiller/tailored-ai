@@ -1,0 +1,75 @@
+{
+  "name": "@tailored-ai/browser-mediator",
+  "version": "0.1.0",
+  "description": "Framework-agnostic browser-control surface for LLM agents. Bounded tool API over Playwright, with egress allow-list, vault $ref expansion, output sanitiser, and always-HITL gates. No dependency on any specific agent framework.",
+  "license": "MIT",
+  "author": "Quinton Miller",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/quintonmiller/tailored-ai.git",
+    "directory": "packages/browser-mediator"
+  },
+  "homepage": "https://github.com/quintonmiller/tailored-ai/tree/main/packages/browser-mediator#readme",
+  "bugs": "https://github.com/quintonmiller/tailored-ai/issues",
+  "keywords": [
+    "browser",
+    "playwright",
+    "agent",
+    "llm",
+    "ai",
+    "tools",
+    "openai",
+    "anthropic",
+    "claude",
+    "egress-allow-list",
+    "vault",
+    "hitl"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./adapters/openai": {
+      "types": "./dist/adapters/openai.d.ts",
+      "import": "./dist/adapters/openai.js"
+    },
+    "./adapters/anthropic": {
+      "types": "./dist/adapters/anthropic.d.ts",
+      "import": "./dist/adapters/anthropic.js"
+    },
+    "./adapters/tai": {
+      "types": "./dist/adapters/tai.d.ts",
+      "import": "./dist/adapters/tai.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "playwright": "^1.58.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.0.18"
+  }
+}

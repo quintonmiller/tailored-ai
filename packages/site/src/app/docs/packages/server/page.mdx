@@ -1,0 +1,109 @@
+export const metadata = {
+  title: "@tailored-ai/server",
+  description: "HTTP API for the agent. Hono routes, SSE streaming, webhook intake.",
+};
+
+# @tailored-ai/server
+
+The HTTP API for TAI. Built on [Hono](https://hono.dev). Streams
+responses over Server-Sent Events. Hosts webhook endpoints. Optionally
+mounts a built UI as the root path.
+
+```bash
+npm install @tailored-ai/server @tailored-ai/core
+```
+
+You usually get this for free via
+[`@tailored-ai/cli`](/docs/packages/cli). Depend on it directly when
+embedding the HTTP routes inside your own service.
+
+## Minimal embed
+
+```ts
+import Database from "better-sqlite3";
+import { AgentRuntime, createProvider, loadConfig } from "@tailored-ai/core";
+import { startServer } from "@tailored-ai/server";
+
+const config = await loadConfig("./config.yaml");
+const db = new Database("./agent.db");
+const provider = createProvider(config);
+const runtime = new AgentRuntime({ config, db, provider });
+
+await startServer({
+  runtime,
+  port: 3000,
+  uiDist: "./my-built-ui",   // optional; serves a static SPA at /
+});
+```
+
+## Routes
+
+| Group | Endpoints |
+|---|---|
+| Agents | `GET /api/agents`, `GET /api/agents/:name`, `PATCH /api/agents/:name`, `DELETE /api/agents/:name` |
+| Sessions | `GET /api/sessions`, `POST /api/sessions/:id/messages` (SSE), `DELETE /api/sessions/:id` |
+| Workflows | `GET /api/workflows`, `POST /api/workflows/:name/run`, `GET /api/workflow-runs/:id` |
+| Tasks | `GET /api/tasks`, `POST /api/tasks`, `PATCH /api/tasks/:id`, `DELETE /api/tasks/:id` |
+| Projects | `GET /api/projects`, `POST /api/projects` |
+| Memory | `GET /api/memory/recall`, `POST /api/memory/notes`, `POST /api/memory/search` |
+| Resources | `GET /api/resources`, `POST /api/resources/install`, `GET /api/skills` |
+| Approvals | `GET /api/approvals`, `POST /api/approvals/:id/respond` |
+| Webhooks | `POST /webhooks/:name` (payloads route to configured workflows) |
+| Static UI | `GET /` and subpaths (serves the SPA from `uiDist` if provided) |
+
+See
+[`packages/server/src/index.ts`](https://github.com/quintonmiller/tailored-ai/blob/main/packages/server/src/index.ts)
+for the canonical list.
+
+## SSE streaming
+
+`POST /api/sessions/:id/messages` accepts a JSON `{ content, agent? }`
+body and streams back an `text/event-stream` of incremental tokens,
+tool calls, and final response. The bundled web UI uses this; any
+frontend can.
+
+Event types:
+
+```
+event: token       data: {"content": "Hel"}
+event: token       data: {"content": "lo"}
+event: tool_call   data: {"name": "read", "args": {...}}
+event: tool_result data: {"toolCallId": "…", "result": {...}}
+event: done        data: {"response": "Hello! …"}
+event: error       data: {"message": "…"}
+```
+
+## Authentication
+
+The routes ship **without built-in auth in v0.1**. Three options:
+
+1. **Bind to `127.0.0.1`** for local-only use.
+2. **Reverse-proxy in front** (`nginx`, `caddy`, `oauth2-proxy`).
+3. **Use the `proxyAuth` middleware** if you've wired up an external
+   auth proxy. See
+   [`packages/server/src/auth/proxy-auth.ts`](https://github.com/quintonmiller/tailored-ai/blob/main/packages/server/src/auth/proxy-auth.ts).
+
+Built-in bearer-token auth is v0.2 work.
+
+## Webhooks
+
+A workflow can declare a webhook trigger:
+
+```yaml
+# workflows/stripe-event.yaml
+name: stripe-event
+triggers:
+  - kind: webhook
+    path: stripe
+steps:
+  …
+```
+
+`POST /webhooks/stripe` runs the workflow with the request body as
+input. Signing is the workflow's responsibility; the server passes raw
+bytes plus headers, and your workflow can verify with HMAC or pass to
+a downstream tool.
+
+## Source
+
+[`packages/server/`](https://github.com/quintonmiller/tailored-ai/tree/main/packages/server).

@@ -1,0 +1,145 @@
+export const metadata = {
+  title: "Skills",
+  description: "SKILL.md packages that augment an agent's prompt with reusable knowledge or workflows.",
+};
+
+# Skills
+
+A skill is a unit of prompt augmentation distributed as a self-contained
+folder. Install it per-project or globally, opt in per agent, and ship a
+short instruction block plus example outputs, related tool defaults, and
+reference files.
+
+Skills sit between a one-line instruction in `config.yaml` and a code
+plugin. Reach for one when:
+
+- You want to teach an agent a specific technique (write a changeset,
+  format a code review).
+- The technique has multiple files (instructions plus examples plus a
+  checklist).
+- You want to opt in or out per agent without rewriting the agent's
+  instructions.
+
+## Anatomy
+
+A skill is a directory with one required file (`SKILL.md`) plus
+supporting reference files.
+
+```
+my-skill/
+├── SKILL.md
+├── example-output.md
+└── reference/
+    └── style-guide.md
+```
+
+`SKILL.md` is markdown with YAML frontmatter:
+
+```markdown
+---
+name: code-review-style
+description: Write code reviews in a particular voice and structure.
+keywords: [code-review, reviewer, style]
+references:
+  - reference/style-guide.md
+---
+
+# Code review style
+
+When asked to review code, follow this structure:
+
+1. Lead with the verdict (APPROVE or REQUEST CHANGES).
+2. Verify the gates: build, tests, rebase preflight, scope.
+3. Walk file-by-file with one-paragraph summaries.
+4. Close with any blocking concerns.
+
+Voice: terse, technical, specific.
+Cite line numbers like file.ts:42 when calling things out.
+```
+
+The skill's body is prepended to the agent's system prompt when loaded.
+References listed in frontmatter are available via the `memory` tool
+(`scope: "knowledge"`).
+
+## Installing
+
+Skills can come from three places:
+
+```yaml
+resources:
+  - kind: skill
+    source: ./skills/code-review-style    # local directory
+  - kind: skill
+    source: github:user/skill-foo         # GitHub repo
+  - kind: skill
+    source: npm:@my-org/tai-skill-bar     # npm package
+```
+
+From the CLI:
+
+```bash
+tai resources install github:user/skill-foo
+tai resources install ./skills/code-review-style
+```
+
+Installed skills land in `data/resources/skill/<name>/`. The runtime
+watches this directory and reloads on change.
+
+## Loading a skill into an agent
+
+A skill is opt-in per agent.
+
+**Always-on**: list the skill in the agent's `skills:` array.
+
+```yaml
+agents:
+  reviewer:
+    instructions: "You review code."
+    tools: [exec, read, tasks]
+    skills: [code-review-style]
+```
+
+**Lazy-loaded**: the agent calls `load_skill(name="code-review-style")`
+when it needs it. The skill's body appends to the agent's prompt for
+the remainder of the current loop.
+
+Lazy loading is useful when you have many skills but only need one per
+task. Keeps the prompt budget small.
+
+```yaml
+agents:
+  default:
+    tools: [load_skill, …]   # no skills loaded by default
+```
+
+## Inspecting
+
+```bash
+tai resources ls            # all installed resources
+tai resources ls skill      # just skills
+```
+
+The web UI's Skills page lists installed skills with descriptions, lets
+you preview the body, and shows which agents have them enabled.
+
+## When to use a skill vs. alternatives
+
+| Use case | Reach for |
+|---|---|
+| One-liner like "always reply in Spanish" | The agent's `instructions:`. |
+| Reusable technique with multiple sections, examples, a checklist | **A skill.** |
+| Cross-cutting reference material the agent should grep | The [knowledge base](/docs/memory#knowledge-base) (`data/kb/`). |
+| Behaviour change that requires tools, state, or lifecycle | A code [plugin](/docs/plugins). |
+
+## Source
+
+The skill loader is in
+[`packages/core/src/resources/`](https://github.com/quintonmiller/tailored-ai/tree/main/packages/core/src/resources).
+The `load_skill` tool is in
+[`packages/core/src/tools/load-skill.ts`](https://github.com/quintonmiller/tailored-ai/blob/main/packages/core/src/tools/load-skill.ts).
+
+## Deep dive
+
+[`docs/skills.md`](https://github.com/quintonmiller/tailored-ai/blob/main/docs/skills.md)
+has the full SKILL.md schema, install protocol, and manifest hashing
+that lets `--frozen` enforce a known-good state.

@@ -1,0 +1,154 @@
+export const metadata = {
+  title: "Plugins",
+  description: "Third-party packages that register tools, channels, providers, task backends, and triggers via @tailored-ai/core's registries.",
+};
+
+# Plugins
+
+A plugin is an npm package that extends TAI without forking the
+monorepo. Eight registries cover the extension surface today:
+
+| Registry | Adds | Register with |
+|---|---|---|
+| Tool | A new tool the agent can call | `registerToolFactory(id, factory)` |
+| Channel | A new transport (Slack, Telegram, …) | `registerChannelFactory(id, factory)` |
+| Provider | A new LLM backend (Bedrock, Cohere, …) | `registerProviderFactory(id, factory)` |
+| Embedding | A new embedding backend (Qdrant, Voyage, …) | `registerEmbeddingFactory(id, factory)` |
+| Task backend | A new task store (Linear, Jira, …) | `registerTaskBackendFactory(id, factory)` |
+| Step executor | A new workflow step type | `runtime.getWorkflowEngine()?.registerExecutor(executor)` |
+| Trigger | A new workflow trigger kind | trigger-registry (see [Workflows](/docs/workflows)) |
+| Skill | A SKILL.md the agent can load on demand | skill-registry (see [Skills](/docs/skills)) |
+
+Each registry is exported from `@tailored-ai/core`. Built-ins register
+on module load.
+
+## Shape of a plugin
+
+```ts
+// my-tai-plugin/src/index.ts
+import {
+  registerChannelFactory,
+  registerTaskBackendFactory,
+  registerToolFactory,
+  type Channel,
+  type TaskBackend,
+  type Tool,
+  type ToolFactoryContext,
+} from "@tailored-ai/core";
+
+class SlackChannel implements Channel { /* ... */ }
+class LinearTaskBackend implements TaskBackend { /* ... */ }
+class WeatherTool implements Tool { /* ... */ }
+
+registerChannelFactory("slack", async (runtime, cfg) => {
+  const slack = new SlackChannel(runtime, cfg);
+  await slack.connect();
+  return { channel: slack, disconnect: () => slack.disconnect() };
+});
+
+registerTaskBackendFactory("linear", (config) => {
+  return new LinearTaskBackend({
+    apiKey: config.tasks?.linear?.apiKey as string,
+    teamId: config.tasks?.linear?.teamId as string,
+  });
+});
+
+registerToolFactory("weather", (config, _ctx: ToolFactoryContext) => {
+  const cfg = config.tools?.weather;
+  if (!cfg?.enabled) return [];
+  return [new WeatherTool({ apiKey: cfg.apiKey as string })];
+});
+```
+
+A plugin doesn't need a wrapper class or lifecycle hook. Registering on
+import is the contract. The user `import`s your package once at startup
+and the registrations land.
+
+## Installing
+
+```bash
+npm install @some-author/tai-plugin-slack
+```
+
+Then declare it in `config.yaml`:
+
+```yaml
+plugins:
+  - "@some-author/tai-plugin-slack"
+  - module: "@me/tai-plugin-linear"
+    config:
+      api_token: ${LINEAR_TOKEN}
+```
+
+The CLI dynamic-imports each module at startup. The module's import
+side-effects (`registerToolFactory`, `registerChannelFactory`, etc.)
+register everything before the runtime asks. Failures are logged and the
+next plugin is attempted — one broken plugin doesn't take down the
+others.
+
+The optional per-entry `config` field is reserved for future routing.
+Today, plugins read their configuration from the normal `tools.*`,
+`channels.*`, `providers.*` blocks in the same config file.
+
+For embedders (anyone constructing `AgentRuntime` directly rather than
+running `tai`), call `loadPlugins(config, importer)` before runtime
+construction. The `importer` callback is required so dynamic `import()`
+resolves against your package's `node_modules`, not core's:
+
+```ts
+import {
+  AgentRuntime,
+  createProvider,
+  loadConfig,
+  loadPlugins,
+  startRegisteredChannels,
+} from "@tailored-ai/core";
+
+const config = await loadConfig("./config.yaml");
+await loadPlugins(config, (name) => import(name));
+
+const db = new Database("./agent.db");
+const { provider, model } = createProvider(config);
+const runtime = new AgentRuntime({ config, db, provider, model });
+const channels = await startRegisteredChannels(runtime);
+```
+
+## First-party plugins
+
+These ship from the monorepo as separate npm packages:
+
+| Package | What it adds | How to use today |
+|---|---|---|
+| `@tailored-ai/browser-mediator` | The `browser_mediator` tool with egress allow-list, vault refs, always-HITL gates. | Already a dependency of `@tailored-ai/core`. Enable via `tools.browser_mediator: { enabled: true }`. |
+| `@tailored-ai/trusted-actions` | HITL approval gateway plus the `request_action` tool. | Install separately. Configure under `tools.request_action`. |
+
+Future first-party plugins under consideration: Slack channel, Telegram
+channel, Linear task backend, Notion knowledge base.
+
+## Patterns for plugin-friendly code
+
+- **Take all configuration via the factory's `config` argument.** No
+  reading from `process.env` directly. Let the user route env vars
+  through YAML.
+- **Fail fast in the factory.** If required config is missing, throw
+  with a useful message. The startup loop catches and logs.
+- **Dynamic-import heavy peer dependencies.** If your plugin uses
+  `playwright`, `await import("playwright")` inside the connect handler,
+  not at the top of the file. `npm install your-plugin` shouldn't drag
+  Chromium along unless the user opts in.
+- **Don't reach into TAI internals.** Use the public exports of
+  `@tailored-ai/core`. The runtime shape may change between minor
+  versions; public exports won't.
+
+## Why register instead of fork?
+
+Forking the monorepo to add a channel or task backend is heavy. Wrapping
+shell commands in YAML custom tools is limited. The registries fill the
+gap: write idiomatic TypeScript, ship to npm, your users import your
+package once and the registrations land. The TAI monorepo doesn't grow.
+You don't carry a fork.
+
+## Where to read next
+
+- [Configuration → Plugins](/docs/configuration#plugins) — config-block syntax reference.
+- [Extending in code](/docs/extending) — what each registry's interface looks like.

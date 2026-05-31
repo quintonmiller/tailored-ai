@@ -1,0 +1,178 @@
+export const metadata = {
+  title: "Hooks",
+  description: "Tool calls that run before and after the agent loop. Pre-load context, post-record responses, skip on conditions.",
+};
+
+# Hooks
+
+Hooks run tool calls before and after the agent loop. They work the same
+way in every entry point: CLI, Discord, HTTP, webhooks, cron, delegate.
+
+Reach for hooks when you want behaviour that always happens around a
+particular agent. Pre-loading context. Post-recording responses to a
+file. Skipping the loop entirely when there's nothing to do.
+
+## Where hooks live
+
+Two scopes:
+
+1. **Agent-level**: `agents.<name>.hooks`. Runs every time the agent is
+   invoked, anywhere.
+2. **Cron-job-level**: `cron.jobs[].hooks`. Runs only when that
+   particular cron job fires.
+
+When both are present, the agent's hooks run first, then the cron job's
+are appended.
+
+## Configuration
+
+```yaml
+agents:
+  researcher:
+    instructions: "You are a research assistant."
+    tools: [web_search, web_fetch, memory]
+    hooks:
+      beforeRun:
+        - tool: memory
+          args: { action: read, file: research-context.md }
+      afterRun:
+        - tool: memory
+          args:
+            action: append
+            file: research-log.md
+            content: "{{response}}"
+
+cron:
+  jobs:
+    - name: daily-research
+      schedule: "0 9 * * *"
+      prompt: "Research today's AI news"
+      agent: researcher
+      hooks:
+        beforeRun:
+          - tool: gmail
+            args:
+              action: search
+              query: "newer_than:1d label:research"
+            skipIf: "^No results"
+```
+
+Every researcher invocation pre-loads context and records its response.
+The daily cron *additionally* checks for new email, and skips the whole
+agent loop if there's nothing new.
+
+## Hook shape
+
+```yaml
+tool: <tool_name>             # required
+args:                         # optional
+  key: value                  # string values support {{template}} interpolation
+skipIf: <regex>               # optional — skip rest of pipeline if output matches
+```
+
+- `tool` is any registered tool. It must be enabled but doesn't need to
+  be in the agent's `tools:` allowlist.
+- `args` pass verbatim, with `{{var}}` substitution on string values.
+- `skipIf` tests against the tool output as a string. If it matches, the
+  rest of the pipeline skips:
+  - In a `beforeRun` hook: remaining `beforeRun` hooks AND the agent
+    loop are both skipped. Useful for "don't bother if there's no new
+    mail."
+  - In an `afterRun` hook: remaining `afterRun` hooks are skipped.
+
+## Execution flow
+
+1. `beforeRun` hooks run sequentially.
+   - Each non-empty output is collected into `_hook_context` and
+     prepended to the agent's prompt (in cron mode) or made available
+     as `{{hookContext}}`.
+   - A `skipIf` match short-circuits everything.
+2. The agent loop runs.
+3. `afterRun` hooks run sequentially.
+   - The agent's response is available as `{{response}}`.
+
+## Template variables
+
+Available `{{vars}}` depend on the entry point.
+
+| Entry point | `beforeRun` vars | `afterRun` vars |
+|---|---|---|
+| **Cron** | `last_run`, `last_run_epoch`, `last_run_iso`, `last_response`, `next_task` | all of the above plus `response` |
+| **CLI, Discord, HTTP, webhook, delegate** | empty | `response` |
+
+Cron's extras come from previous runs of the same job.
+`{{next_task}}` reads the first `Next: …` line from the agent's
+`goals.md`.
+
+## Common patterns
+
+**Pre-load yesterday's notes:**
+
+```yaml
+hooks:
+  beforeRun:
+    - tool: memory
+      args: { action: read, file: yesterday.md, scope: profile }
+```
+
+**Skip if nothing new:**
+
+```yaml
+hooks:
+  beforeRun:
+    - tool: gmail
+      args:
+        action: search
+        query: "is:unread newer_than:4h"
+        exclude_seen: true
+      skipIf: "^No results"
+```
+
+**Record every response to a journal:**
+
+```yaml
+hooks:
+  afterRun:
+    - tool: memory
+      args:
+        action: append
+        file: journal.md
+        content: "## {{now}}\n\n{{response}}\n"
+```
+
+**Pre-load and post-summarise structured data:**
+
+```yaml
+hooks:
+  beforeRun:
+    - tool: recall
+      args: { action: list, limit: 50, updated_after: "{{last_run_iso}}" }
+      skipIf: "^\\s*$"
+  afterRun:
+    - tool: facts
+      args: { action: set, category: digest, entity: today, key: summary, value: "{{response}}" }
+```
+
+## Implementation reference
+
+The hooks engine is in
+[`packages/core/src/agent/hooks.ts`](https://github.com/quintonmiller/tailored-ai/blob/main/packages/core/src/agent/hooks.ts).
+
+- `normalizeHooks(hooks)` accepts `undefined | AgentHook | AgentHook[]`,
+  returns `AgentHook[]`.
+- `mergeHooks(agentHooks?, overrideHooks?)` returns `ResolvedHooks`,
+  agent hooks first.
+- `executeHooks(hooks, tools, templateVars, sessionId, logPrefix?)`
+  runs hooks sequentially. Returns `{ context, skipped }`.
+
+`AgentRuntime.resolveHooks({ agentName, override? })` is the public
+entry point. Every channel, cron, and delegate path calls it before
+invoking `runAgentLoop`.
+
+## When not to use hooks
+
+| Want | Use |
+|---|---|
+| Multi-step processing with branching or parallel execution | A [Workflow](/docs/workflows). |
+| To augment the agent's prompt with reusable knowledge | A [Skill](/docs/skills). |
+| To run a tool on a schedule without the agent | A cron job with an empty `prompt:`, or a workflow with a cron trigger. |

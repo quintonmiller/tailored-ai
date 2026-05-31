@@ -1,0 +1,196 @@
+export const metadata = {
+  title: "Quick start",
+  description: "From npm install to a working standup-generator agent in five minutes.",
+};
+
+# Quick start
+
+Five minutes to a working agent. We'll build a daily-standup generator: it
+reads your git log, pulls your in-progress tasks, and writes a three-line
+summary to a file. Everything stays local. No Discord setup, no OAuth, no
+external integrations.
+
+If you already have an LLM provider you use, you can skip ahead to
+[Configure the agent](#configure-the-agent).
+
+## 1. Install
+
+```bash
+npm install -g @tailored-ai/cli
+```
+
+The `tai` command is what you'll use. If you'd rather install as a project
+dependency or embed the runtime in your own service, see
+[Installation](/docs/installation).
+
+## 2. Pick a provider
+
+TAI doesn't ship a model. Bring whichever you already use. The three most
+common choices:
+
+### OpenAI (or OpenAI-compatible)
+
+The lowest friction if you already have an API key. Works with hosted
+OpenAI, vLLM, LM Studio, Together, OpenRouter, anything that speaks the
+OpenAI chat API.
+
+```yaml
+provider:
+  type: openai
+  model: gpt-4o-mini
+  apiKey: ${OPENAI_API_KEY}
+```
+
+### Anthropic
+
+```yaml
+provider:
+  type: anthropic
+  model: claude-sonnet-4-6
+  apiKey: ${ANTHROPIC_API_KEY}
+```
+
+### Ollama (local)
+
+For local models on your own hardware. Install Ollama, run `ollama pull
+llama3.2`, then:
+
+```yaml
+provider:
+  type: ollama
+  model: llama3.2
+```
+
+Pick one, drop it in a fresh folder as `config.yaml`. If you went with
+OpenAI or Anthropic, put the API key in a `.env` next to it.
+
+## 3. Configure the agent
+
+Add this below the `provider` block:
+
+```yaml
+agents:
+  reporter:
+    instructions: |
+      You write daily standups. Three bullets: yesterday, today, blockers.
+      Be specific. Don't pad.
+    tools: [exec, write, tasks]
+
+tools:
+  exec: { enabled: true, allowedCommands: [git, date] }
+  write: { enabled: true }
+  tasks: { enabled: true }
+```
+
+The agent is now constrained to three tools: `exec` (with a tight command
+allowlist), `write` (to save the standup), and `tasks` (to read your
+in-progress work).
+
+## 4. First run
+
+From the directory that has your `config.yaml`, in a git repo:
+
+```bash
+tai -a reporter -m "Generate today's standup. Use git log to see what changed yesterday, pull in-progress tasks, then write the standup to standup.md."
+```
+
+The agent runs the tools, writes `standup.md`, and prints what it did.
+That file is real. You can `cat standup.md` and see a standup.
+
+This is the part that's different from talking to ChatGPT. The agent
+chose to call `git log`, parsed it, wrote a file. It didn't show you the
+commands. It just did the work.
+
+## 5. Make it run on a schedule
+
+Add a `cron` block to the same `config.yaml`:
+
+```yaml
+cron:
+  enabled: true
+  jobs:
+    - name: daily-standup
+      schedule: "0 8 * * 1-5"   # weekdays, 8am
+      agent: reporter
+      prompt: |
+        Generate today's standup. Run git log for the past day, pull
+        in-progress tasks, and write the result to ~/standup.md.
+      delivery:
+        channel: log
+```
+
+Run `tai` (with no arguments). It starts the HTTP API, the cron
+scheduler, and the Discord bot if you've configured it. The job fires at
+8am every weekday and the standup lands at `~/standup.md`.
+
+To test the schedule without waiting until tomorrow, change `0 8 * * 1-5`
+to `*/2 * * * *` (every two minutes), restart `tai`, and watch the file
+appear.
+
+## 6. Pick a place for it to land
+
+By default the result goes to a log file. You almost certainly want
+something more useful. Three options ship in v0.1:
+
+- `delivery.channel: log` — stdout/log file. Good for cron jobs whose
+  side effect is the point (the standup file already exists; the
+  delivery is just confirmation).
+- `delivery.channel: discord-dm` — DMs the configured Discord owner.
+  Requires the Discord channel set up.
+- `delivery.channel: email` — sends through the gmail tool. Requires
+  Gmail wired up.
+
+### Add Discord
+
+```yaml
+channels:
+  discord:
+    enabled: true
+    token: ${DISCORD_BOT_TOKEN}
+    owner: ${DISCORD_OWNER_ID}
+    respondToDMs: true
+    respondToMentions: true
+```
+
+Now the standup arrives as a DM every weekday morning, and you can chat
+with the same agent from the same Discord. The session persists across
+terminal, browser, and Discord because they share one SQLite database.
+
+Slack, Telegram, SMS, iMessage aren't built-in. They're plugin-shaped
+(see [Plugins](/docs/plugins)) and the registry that makes them
+declaratively installable lands in v0.2. For now you can wire them in by
+embedding the runtime in your own Node script. See
+[Extending in code](/docs/extending).
+
+## 7. Pick a place to view it
+
+`tai` ships a web UI at `http://localhost:3000`. It gives you a chat
+sidebar, an agent picker, a session list, and views for tasks, memory,
+and workflows. To turn it off, set `server.host` to a unix socket or
+bind only to a path your reverse proxy fronts.
+
+If you'd rather build your own UI, the runtime's full surface is
+available over HTTP (see [@tailored-ai/server](/docs/packages/server)).
+The bundled UI is one consumer of that API, not the only one.
+
+## What you have now
+
+A folder with one config file. An agent that runs every morning, looks
+at your work, and writes a useful artifact. A way to chat with it on any
+of the channels you've enabled.
+
+## Where to go from here
+
+- **More agents.** Define a `researcher` for web search, a `coder` for
+  worktree-based code work, a `planner` for calendar review. See
+  [Agents](/docs/agents).
+- **More tools.** Twenty or so ship built-in. Wrap a shell command as a
+  custom tool in YAML: [Custom tools](/docs/custom-tools). Write a
+  TypeScript tool: [Extending in code](/docs/extending).
+- **More workflows.** Multi-step pipelines with conditions and parallel
+  fan-out: [Workflows](/docs/workflows).
+- **Memory.** Persistent recall across sessions, with embeddings and
+  promotion: [Memory](/docs/memory).
+- **A real example to crib from.** The repo ships with example
+  workflows for a morning briefing, email triage, bill detection, and a
+  weekly summary. They live in `workflows/` if you cloned the repo.

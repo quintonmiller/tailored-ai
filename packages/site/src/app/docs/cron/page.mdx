@@ -1,0 +1,168 @@
+export const metadata = {
+  title: "Cron jobs",
+  description: "Scheduled non-interactive runs. Wake an agent on a cadence; deliver to log, Discord, or email.",
+};
+
+# Cron jobs
+
+A cron job runs an agent on a schedule without a user in front of it.
+The scheduler starts when you run `tai` (alongside the Discord bot and
+HTTP API). Each job has a schedule, a prompt, an agent to run as, and a
+delivery channel for the result.
+
+If you want a one-shot "wake the agent and have it do X," cron is the
+right tool. If you want multi-step processing with conditions or
+parallel fan-out, you want a [Workflow](/docs/workflows) with a `cron`
+trigger.
+
+## Minimal example
+
+```yaml
+cron:
+  enabled: true
+  jobs:
+    - name: morning-briefing
+      schedule: "0 8 * * 1-5"     # weekdays at 8 AM
+      agent: planner
+      prompt: |
+        Give me a morning briefing: today's calendar, in-progress tasks,
+        and one suggestion for what to prioritise.
+      delivery:
+        channel: discord-dm
+```
+
+Run `tai` and the scheduler picks it up.
+
+## Schedule syntax
+
+Standard 5-field cron (`min hour day-of-month month day-of-week`).
+Common patterns:
+
+| Expression | When |
+|---|---|
+| `*/15 * * * *` | every 15 minutes |
+| `0 * * * *` | top of every hour |
+| `0 8 * * *` | daily at 8 AM |
+| `0 8 * * 1-5` | weekdays at 8 AM |
+| `0 0 1 * *` | first of every month at midnight |
+
+The scheduler is [croner](https://www.npmjs.com/package/croner). See its
+docs for advanced expressions.
+
+## Job options
+
+```yaml
+- name: my-job
+  schedule: "0 * * * *"
+  agent: default              # which agent; falls back to `default`
+  prompt: "Do the thing."     # the user-message equivalent
+  wakeAgent: true             # default; false = inject prompt without running loop
+  newSession: false           # default; true = fresh session each run
+  hooks: {}                   # job-specific hooks (appended to agent's hooks)
+  delivery:
+    channel: log              # log | discord | discord-dm | email
+    target: "<channel-id>"    # required for channel: discord
+  enabled: true               # set false to keep the job in config but skip it
+```
+
+`wakeAgent: false` is the "inject context without thinking" mode. The
+prompt becomes a user message in the agent's session without running
+the loop. Useful for preloading the next conversation with a fact note,
+without burning LLM tokens.
+
+`newSession: true` forces a fresh session each run. Without it, the
+cron job's conversation history accumulates over time.
+
+## Delivery channels
+
+| Channel | Behaviour |
+|---|---|
+| `log` | Prints to stdout / the agent log. Right for jobs whose side effect is the point (the file already exists; delivery is just confirmation). |
+| `discord` | Posts to a Discord channel. Requires `delivery.target` (the channel id). |
+| `discord-dm` | DMs the configured `channels.discord.owner`. |
+| `email` | Sends via the `gmail` tool. Requires Gmail wired up and the agent's tool list to include `gmail`. |
+
+For unsolicited push from an agent: prefer `discord-dm` over `email`
+unless the user explicitly wants it in their inbox.
+
+## Prompt templates
+
+Cron prompts substitute these variables:
+
+| Variable | Source |
+|---|---|
+| `{{last_run}}` | Local time of the previous run, formatted. |
+| `{{last_run_epoch}}` | Unix timestamp of the previous run. |
+| `{{last_run_iso}}` | ISO 8601 of the previous run. |
+| `{{last_response}}` | The agent's full response from the previous run. |
+| `{{next_task}}` | The first `Next: …` line from the agent's `goals.md`. |
+| `{{now}}` | Current ISO timestamp. |
+
+`{{next_task}}` is useful for "do whatever I told you to do next"
+patterns:
+
+```yaml
+- name: autonomous-explore
+  schedule: "0 */4 * * *"
+  agent: autonomous
+  prompt: "Your task: {{next_task}}"
+  newSession: true
+  delivery: { channel: log }
+```
+
+The `goals.md` lives at `data/context/agents/<agent-name>/goals.md`. You
+write a list of `Next: …` lines; the agent picks the top one each run.
+
+## Job-specific hooks
+
+Cron jobs can append hooks to the agent's normal hooks:
+
+```yaml
+- name: bill-alert
+  schedule: "0 9 * * *"
+  agent: default
+  prompt: |
+    Check for new bills and flag anything due in the next 7 days.
+    Hook context: {{hookContext}}
+  hooks:
+    beforeRun:
+      - tool: gmail
+        args:
+          action: search
+          query: "subject:(invoice OR bill OR \"due\")"
+          exclude_seen: true
+        skipIf: "^No results"
+```
+
+`skipIf` is the kill switch: if the hook output matches, the whole job
+(agent loop plus delivery) is skipped. Saves LLM cycles when the
+trigger condition hasn't fired.
+
+See [Hooks](/docs/hooks) for the full hook surface.
+
+## State persistence
+
+Job state (`last_run_at`, `last_response`) persists to the `cron_runs`
+table in `agent.db`. The `{{last_*}}` template variables read from
+there. State survives restarts, so `last_run_epoch` is genuinely the
+last actual run, not the last run of the current process.
+
+## Cron vs workflows vs online mode
+
+| Want | Use |
+|---|---|
+| Fire one prompt on a schedule | **Cron job** |
+| Fire on an event (new file, new email, webhook) | [Workflow](/docs/workflows) with the matching trigger |
+| Multi-step pipeline, scheduled or triggered | [Workflow](/docs/workflows) |
+| Agent that thinks on its own cadence and picks what to do | [Online mode on an agent](/docs/agents#online-mode) |
+
+You can combine them: a cron job that triggers a workflow, a workflow
+whose output gets injected into a different cron job's hook context, an
+online agent that creates cron jobs.
+
+## Inspecting runs
+
+The web UI's Cron page shows configured jobs and recent runs with
+status, duration, and response preview. CLI surface for cron
+(`tai cron list`, `tai cron run <name>`) is on the roadmap; for now use
+the web UI or query `cron_runs` directly.

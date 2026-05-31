@@ -1,0 +1,394 @@
+import type Database from "better-sqlite3";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { initDatabase } from "../db/schema.js";
+import {
+  addTaskComment,
+  claimBacklogTask,
+  createProjectTask,
+  deleteProjectTask,
+  getProjectTask,
+  nextBacklogTaskForAssignees,
+  queryProjectTasks,
+  unblockBudgetTasks,
+  updateProjectTask,
+} from "../db/task-queries.js";
+
+let db: Database.Database;
+
+beforeEach(() => {
+  db = initDatabase(":memory:");
+});
+
+afterEach(() => {
+  db.close();
+});
+
+describe("createProjectTask", () => {
+  it("creates a task with defaults", () => {
+    const task = createProjectTask(db, { title: "Test task" });
+    expect(task.id).toMatch(/^ptask_/);
+    expect(task.title).toBe("Test task");
+    expect(task.description).toBe("");
+    expect(task.status).toBe("backlog");
+    expect(task.author).toBe("");
+    expect(task.tags).toEqual([]);
+    expect(task.created_at).toBeTruthy();
+    expect(task.updated_at).toBeTruthy();
+  });
+
+  it("creates a task with all fields", () => {
+    const task = createProjectTask(db, {
+      title: "Full task",
+      description: "A detailed description",
+      author: "alice",
+      tags: ["bug", "urgent"],
+      status: "in_progress",
+    });
+    expect(task.title).toBe("Full task");
+    expect(task.description).toBe("A detailed description");
+    expect(task.author).toBe("alice");
+    expect(task.tags).toEqual(["bug", "urgent"]);
+    expect(task.status).toBe("in_progress");
+  });
+
+  it("rejects invalid status", () => {
+    expect(() => createProjectTask(db, { title: "Bad", status: "invalid" })).toThrow();
+  });
+});
+
+describe("getProjectTask", () => {
+  it("returns task with comments", () => {
+    const task = createProjectTask(db, { title: "Get me" });
+    addTaskComment(db, task.id, { content: "First comment", author: "bob" });
+    addTaskComment(db, task.id, { content: "Second comment" });
+
+    const fetched = getProjectTask(db, task.id);
+    expect(fetched).toBeDefined();
+    expect(fetched!.title).toBe("Get me");
+    expect(fetched!.comments).toHaveLength(2);
+    expect(fetched!.comments[0].content).toBe("First comment");
+    expect(fetched!.comments[0].author).toBe("bob");
+    expect(fetched!.comments[1].content).toBe("Second comment");
+  });
+
+  it("returns undefined for missing task", () => {
+    expect(getProjectTask(db, "ptask_nonexist")).toBeUndefined();
+  });
+});
+
+describe("updateProjectTask", () => {
+  it("updates individual fields", () => {
+    const task = createProjectTask(db, { title: "Original" });
+
+    const updated = updateProjectTask(db, task.id, { title: "Updated" });
+    expect(updated!.title).toBe("Updated");
+
+    const updated2 = updateProjectTask(db, task.id, { status: "done", author: "charlie" });
+    expect(updated2!.status).toBe("done");
+    expect(updated2!.author).toBe("charlie");
+  });
+
+  it("updates tags", () => {
+    const task = createProjectTask(db, { title: "Tagged", tags: ["a"] });
+    const updated = updateProjectTask(db, task.id, { tags: ["b", "c"] });
+    expect(updated!.tags).toEqual(["b", "c"]);
+  });
+
+  it("returns undefined for missing task", () => {
+    expect(updateProjectTask(db, "ptask_missing", { title: "X" })).toBeUndefined();
+  });
+
+  it("rejects invalid status on update", () => {
+    const task = createProjectTask(db, { title: "Valid" });
+    expect(() => updateProjectTask(db, task.id, { status: "bad_status" })).toThrow();
+  });
+
+  it("touches updated_at", () => {
+    const task = createProjectTask(db, { title: "Timestamp test" });
+    const before = task.updated_at;
+    // SQLite datetime precision is 1 second, so we verify it doesn't go backwards
+    const updated = updateProjectTask(db, task.id, { title: "Changed" });
+    expect(updated!.updated_at).toBeTruthy();
+    expect(updated!.updated_at >= before).toBe(true);
+  });
+});
+
+describe("deleteProjectTask", () => {
+  it("deletes task and cascades comments", () => {
+    const task = createProjectTask(db, { title: "Delete me" });
+    addTaskComment(db, task.id, { content: "Will be gone" });
+
+    expect(deleteProjectTask(db, task.id)).toBe(true);
+    expect(getProjectTask(db, task.id)).toBeUndefined();
+
+    // Comments should be gone too
+    const comments = db.prepare("SELECT * FROM task_comments WHERE task_id = ?").all(task.id);
+    expect(comments).toHaveLength(0);
+  });
+
+  it("returns false for missing task", () => {
+    expect(deleteProjectTask(db, "ptask_nope")).toBe(false);
+  });
+});
+
+describe("addTaskComment", () => {
+  it("adds a comment and returns it", () => {
+    const task = createProjectTask(db, { title: "Commentable" });
+    const comment = addTaskComment(db, task.id, { content: "Hello", author: "dave" });
+
+    expect(comment).toBeDefined();
+    expect(comment!.content).toBe("Hello");
+    expect(comment!.author).toBe("dave");
+    expect(comment!.task_id).toBe(task.id);
+    expect(comment!.created_at).toBeTruthy();
+  });
+
+  it("returns undefined for missing task", () => {
+    expect(addTaskComment(db, "ptask_missing", { content: "No task" })).toBeUndefined();
+  });
+
+  it("touches parent updated_at", () => {
+    const task = createProjectTask(db, { title: "Comment touch" });
+    const before = task.updated_at;
+    addTaskComment(db, task.id, { content: "Touch" });
+    const after = getProjectTask(db, task.id);
+    expect(after!.updated_at >= before).toBe(true);
+  });
+});
+
+describe("queryProjectTasks", () => {
+  it("returns all tasks with no filter", () => {
+    createProjectTask(db, { title: "A" });
+    createProjectTask(db, { title: "B" });
+    createProjectTask(db, { title: "C" });
+
+    const result = queryProjectTasks(db);
+    expect(result.total).toBe(3);
+    expect(result.tasks).toHaveLength(3);
+  });
+
+  it("filters by status (single)", () => {
+    createProjectTask(db, { title: "Backlog", status: "backlog" });
+    createProjectTask(db, { title: "Done", status: "done" });
+
+    const result = queryProjectTasks(db, { status: "done" });
+    expect(result.total).toBe(1);
+    expect(result.tasks[0].title).toBe("Done");
+  });
+
+  it("filters by status (multiple)", () => {
+    createProjectTask(db, { title: "Backlog", status: "backlog" });
+    createProjectTask(db, { title: "In Progress", status: "in_progress" });
+    createProjectTask(db, { title: "Done", status: "done" });
+
+    const result = queryProjectTasks(db, { status: ["backlog", "in_progress"] });
+    expect(result.total).toBe(2);
+  });
+
+  it("filters by author", () => {
+    createProjectTask(db, { title: "Alice task", author: "alice" });
+    createProjectTask(db, { title: "Bob task", author: "bob" });
+
+    const result = queryProjectTasks(db, { author: "alice" });
+    expect(result.total).toBe(1);
+    expect(result.tasks[0].author).toBe("alice");
+  });
+
+  it("filters by tags (any match)", () => {
+    createProjectTask(db, { title: "Bug", tags: ["bug", "urgent"] });
+    createProjectTask(db, { title: "Feature", tags: ["feature"] });
+    createProjectTask(db, { title: "Both", tags: ["bug", "feature"] });
+
+    const result = queryProjectTasks(db, { tags: ["bug"] });
+    expect(result.total).toBe(2);
+  });
+
+  it("searches title and description", () => {
+    createProjectTask(db, { title: "Fix login", description: "Login page broken" });
+    createProjectTask(db, { title: "Add dashboard", description: "New dashboard page" });
+
+    const result = queryProjectTasks(db, { search: "login" });
+    expect(result.total).toBe(1);
+    expect(result.tasks[0].title).toBe("Fix login");
+  });
+
+  it("paginates with limit and offset", () => {
+    for (let i = 0; i < 10; i++) {
+      createProjectTask(db, { title: `Task ${i}` });
+    }
+
+    const page1 = queryProjectTasks(db, { limit: 3, offset: 0 });
+    expect(page1.tasks).toHaveLength(3);
+    expect(page1.total).toBe(10);
+
+    const page2 = queryProjectTasks(db, { limit: 3, offset: 3 });
+    expect(page2.tasks).toHaveLength(3);
+    expect(page2.total).toBe(10);
+
+    // No overlap
+    const ids1 = page1.tasks.map((t) => t.id);
+    const ids2 = page2.tasks.map((t) => t.id);
+    expect(ids1.some((id) => ids2.includes(id))).toBe(false);
+  });
+
+  it("combines multiple filters", () => {
+    createProjectTask(db, { title: "Match", status: "in_progress", author: "alice", tags: ["bug"] });
+    createProjectTask(db, { title: "Wrong status", status: "done", author: "alice", tags: ["bug"] });
+    createProjectTask(db, { title: "Wrong author", status: "in_progress", author: "bob", tags: ["bug"] });
+
+    const result = queryProjectTasks(db, { status: "in_progress", author: "alice", tags: ["bug"] });
+    expect(result.total).toBe(1);
+    expect(result.tasks[0].title).toBe("Match");
+  });
+});
+
+describe("assignee and rank", () => {
+  it("defaults rank to max+1 within the project", () => {
+    const projectId = db.prepare("SELECT id FROM projects LIMIT 1").get() as { id: string };
+
+    const t1 = createProjectTask(db, { title: "First", project_id: projectId.id });
+    const t2 = createProjectTask(db, { title: "Second", project_id: projectId.id });
+    const t3 = createProjectTask(db, { title: "Third", project_id: projectId.id });
+
+    expect(t1.rank).toBe(1);
+    expect(t2.rank).toBe(2);
+    expect(t3.rank).toBe(3);
+  });
+
+  it("accepts an explicit rank on create", () => {
+    const task = createProjectTask(db, { title: "Explicit", rank: 42 });
+    expect(task.rank).toBe(42);
+  });
+
+  it("inherits assignee from project default_assignee", () => {
+    db.prepare("INSERT INTO projects (id, title, default_assignee) VALUES (?, ?, ?)").run(
+      "proj_agent",
+      "Agent Board",
+      "autonomous",
+    );
+
+    const task = createProjectTask(db, { title: "Inherit", project_id: "proj_agent" });
+    expect(task.assignee).toBe("autonomous");
+  });
+
+  it("explicit assignee overrides project default", () => {
+    db.prepare("INSERT INTO projects (id, title, default_assignee) VALUES (?, ?, ?)").run("proj_x", "X", "autonomous");
+
+    const task = createProjectTask(db, { title: "Override", project_id: "proj_x", assignee: "quint" });
+    expect(task.assignee).toBe("quint");
+  });
+
+  it("filters by assignee", () => {
+    createProjectTask(db, { title: "Mine", assignee: "autonomous" });
+    createProjectTask(db, { title: "Yours", assignee: "quint" });
+    createProjectTask(db, { title: "Also mine", assignee: "autonomous" });
+
+    const result = queryProjectTasks(db, { assignee: "autonomous" });
+    expect(result.total).toBe(2);
+    expect(result.tasks.every((t) => t.assignee === "autonomous")).toBe(true);
+  });
+
+  it("orders by rank ascending when requested", () => {
+    const projectId = (db.prepare("SELECT id FROM projects LIMIT 1").get() as { id: string }).id;
+    createProjectTask(db, { title: "Third", project_id: projectId, rank: 3 });
+    createProjectTask(db, { title: "First", project_id: projectId, rank: 1 });
+    createProjectTask(db, { title: "Second", project_id: projectId, rank: 2 });
+
+    const result = queryProjectTasks(db, { project_id: projectId, orderBy: "rank" });
+    expect(result.tasks.map((t) => t.title)).toEqual(["First", "Second", "Third"]);
+  });
+
+  it("updates assignee, rank, and blocked_reason", () => {
+    const task = createProjectTask(db, { title: "Update me" });
+
+    const updated = updateProjectTask(db, task.id, {
+      assignee: "autonomous",
+      rank: 99,
+      blocked_reason: "question",
+    });
+
+    expect(updated?.assignee).toBe("autonomous");
+    expect(updated?.rank).toBe(99);
+    expect(updated?.blocked_reason).toBe("question");
+  });
+
+  it("clears assignee when set to null", () => {
+    const task = createProjectTask(db, { title: "Assigned", assignee: "autonomous" });
+    const updated = updateProjectTask(db, task.id, { assignee: null });
+    expect(updated?.assignee).toBe(null);
+  });
+});
+
+describe("claimBacklogTask", () => {
+  it("claims a backlog task and transitions to in_progress", () => {
+    const task = createProjectTask(db, { title: "Claim me" });
+    const claimed = claimBacklogTask(db, task.id);
+    expect(claimed?.status).toBe("in_progress");
+  });
+
+  it("returns undefined for a task not in backlog", () => {
+    const task = createProjectTask(db, { title: "Already going", status: "in_progress" });
+    expect(claimBacklogTask(db, task.id)).toBeUndefined();
+  });
+
+  it("returns undefined for an unknown task id", () => {
+    expect(claimBacklogTask(db, "ptask_nope")).toBeUndefined();
+  });
+
+  it("is a no-op on the second claim attempt", () => {
+    const task = createProjectTask(db, { title: "Contested" });
+    expect(claimBacklogTask(db, task.id)?.status).toBe("in_progress");
+    expect(claimBacklogTask(db, task.id)).toBeUndefined();
+  });
+});
+
+describe("nextBacklogTaskForAssignees", () => {
+  it("returns the lowest-rank backlog task for any matching assignee", () => {
+    const projectId = (db.prepare("SELECT id FROM projects LIMIT 1").get() as { id: string }).id;
+    createProjectTask(db, { title: "High", project_id: projectId, assignee: "autonomous", rank: 1 });
+    createProjectTask(db, { title: "Low", project_id: projectId, assignee: "autonomous", rank: 3 });
+    createProjectTask(db, { title: "Other agent", project_id: projectId, assignee: "researcher", rank: 2 });
+    createProjectTask(db, { title: "Unassigned", project_id: projectId, rank: 0 });
+
+    const next = nextBacklogTaskForAssignees(db, ["autonomous", "researcher"]);
+    expect(next?.title).toBe("High");
+  });
+
+  it("ignores non-backlog tasks", () => {
+    createProjectTask(db, { title: "Done one", assignee: "autonomous", rank: 1, status: "done" });
+    createProjectTask(db, { title: "Backlog one", assignee: "autonomous", rank: 5 });
+
+    const next = nextBacklogTaskForAssignees(db, ["autonomous"]);
+    expect(next?.title).toBe("Backlog one");
+  });
+
+  it("returns undefined when no match", () => {
+    createProjectTask(db, { title: "Someone else's", assignee: "other" });
+    expect(nextBacklogTaskForAssignees(db, ["autonomous"])).toBeUndefined();
+  });
+
+  it("returns undefined for empty assignee list", () => {
+    createProjectTask(db, { title: "x", assignee: "autonomous" });
+    expect(nextBacklogTaskForAssignees(db, [])).toBeUndefined();
+  });
+});
+
+describe("unblockBudgetTasks", () => {
+  it("moves blocked(budget) tasks back to backlog and clears the reason", () => {
+    const t1 = createProjectTask(db, { title: "Budget blocked" });
+    updateProjectTask(db, t1.id, { status: "blocked", blocked_reason: "budget" });
+    const t2 = createProjectTask(db, { title: "Question blocked" });
+    updateProjectTask(db, t2.id, { status: "blocked", blocked_reason: "question" });
+
+    const changed = unblockBudgetTasks(db);
+    expect(changed).toBe(1);
+
+    const fresh1 = getProjectTask(db, t1.id);
+    expect(fresh1?.status).toBe("backlog");
+    expect(fresh1?.blocked_reason).toBeNull();
+
+    const fresh2 = getProjectTask(db, t2.id);
+    expect(fresh2?.status).toBe("blocked");
+    expect(fresh2?.blocked_reason).toBe("question");
+  });
+});

@@ -1,0 +1,44 @@
+# Build & deps
+node_modules/
+dist/
+packages/*/dist/
+.next/
+packages/site/out/
+*.tsbuildinfo
+
+# Runtime data
+local/
+/data
+/data/
+/workflows
+*.db
+*.db-shm
+*.db-wal
+*.db.backup*
+
+# Config & secrets
+.env
+config.yaml
+config.local.yaml
+
+# IDE & tools
+.claude/
+.ralph/
+.ralphrc
+packages/cli/tai.lock
+
+# Agent runtime artifacts (per-machine, never commit)
+.worktrees/
+packages/cli/notes/
+packages/cli/~/
+packages/cli/inbox/
+
+# Personal task tracking (lives in tai-personal repo)
+.beans/
+
+# trusted-actions runtime state (generated, contains secrets)
+docker/trusted-actions/.env
+docker/trusted-actions/app/
+docker/trusted-actions/data/
+docker/trusted-actions/secrets/
+docker/trusted-actions/screenshots/

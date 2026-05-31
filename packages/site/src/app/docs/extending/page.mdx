@@ -1,0 +1,284 @@
+export const metadata = {
+  title: "Extending in code",
+  description: "Add tools, channels, providers, task backends in TypeScript — as an npm plugin or by forking the monorepo.",
+};
+
+# Extending in code
+
+When YAML [Custom tools](/docs/custom-tools) aren't enough, extend TAI
+in TypeScript. This page covers the in-code surfaces and the two ways
+to distribute extensions.
+
+## Two routes
+
+**Plugin (preferred).** Write the extension as a standalone npm package
+that calls TAI's registration APIs at module load. Users install from
+npm and add one line to `plugins:` in `config.yaml`. You carry no fork.
+See [Plugins](/docs/plugins) for the contract.
+
+**Fork.** Clone the monorepo, add files to `packages/core/`, ship from
+your fork. Use this when you're prototyping something that may merge
+upstream, or when you need to touch the runtime itself rather than
+register new pieces.
+
+The APIs below are the same in both cases.
+
+## Adding a tool
+
+A tool implements the `Tool` interface from `@tailored-ai/core`:
+
+```ts
+import type { Tool, ToolContext, ToolResult } from "@tailored-ai/core";
+
+export class MyTool implements Tool {
+  name = "my_tool";
+  description = "Does something useful in one sentence.";
+  parameters = {
+    type: "object",
+    properties: {
+      input: { type: "string", description: "The input." },
+    },
+    required: ["input"],
+  };
+
+  constructor(private opts: { /* config from config.yaml */ }) {}
+
+  async execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
+    const input = args.input as string;
+    if (!input) {
+      return { success: false, output: "", error: "input is required." };
+    }
+    return { success: true, output: `Result: ${input}` };
+  }
+
+  async destroy(): Promise<void> {
+    // Optional cleanup when the tool is replaced on hot reload.
+  }
+}
+```
+
+Conventions that keep tools local-model-friendly:
+
+- **Description ≤ 2 sentences.** Small models pick tools by skimming
+  descriptions. Long ones blur the choice.
+- **Required parameters explicit.** TAI validates against your schema
+  before calling `execute`. Don't `??`-default things that should be
+  required.
+- **Always return a `ToolResult`.** Throwing is fine for true bugs;
+  expected failures (missing arg, network down) belong in
+  `{ success: false, error }`. The agent loop reasons about errors.
+- **Use `context.workingDirectory`** if the tool touches the
+  filesystem.
+
+Plugging? Register a factory at module load:
+
+```ts
+import { registerToolFactory, type ToolFactoryContext } from "@tailored-ai/core";
+
+registerToolFactory("my_tool", (config, _ctx: ToolFactoryContext) => {
+  const cfg = config.tools?.my_tool;
+  if (!cfg?.enabled) return [];
+  return [new MyTool(cfg)];
+});
+```
+
+The factory runs every time `createTools` is called (startup + hot
+reload). Return `[]` when the user hasn't enabled your tool.
+
+Forking? Wire in `packages/core/src/factories.ts`:
+
+```ts
+if (config.tools.my_tool?.enabled) {
+  tools.push(new MyTool(config.tools.my_tool));
+}
+```
+
+Add a config type in `packages/core/src/config.ts` under the `tools:`
+block.
+
+## Adding a channel
+
+Implement the `Channel` interface, then register a factory:
+
+```ts
+import {
+  registerChannelFactory,
+  findOrCreateSession,
+  runAgentLoop,
+  type Channel,
+  type AgentRuntime,
+} from "@tailored-ai/core";
+
+class SlackChannel implements Channel {
+  id = "slack";
+  type = "slack";
+
+  constructor(private runtime: AgentRuntime, private cfg: { botToken: string }) {}
+
+  async connect() {
+    // Subscribe to events. For each incoming message:
+    const session = findOrCreateSession(
+      this.runtime.db,
+      `slack:${userId}`,
+      this.runtime.getModel(),
+      this.runtime.getConfig().agent.defaultProvider,
+      null,
+    );
+    const reply = await runAgentLoop(text, this.runtime.buildLoopOptions({ session }));
+    // Send reply back over your transport.
+  }
+  async disconnect() { /* close socket */ }
+  onMessage() { /* … */ }
+  async send() { /* … */ }
+}
+
+registerChannelFactory("slack", async (runtime, cfg) => {
+  const slack = new SlackChannel(runtime, { botToken: cfg.botToken as string });
+  await slack.connect();
+  return { channel: slack, disconnect: () => slack.disconnect() };
+});
+```
+
+Enable in `config.yaml`:
+
+```yaml
+channels:
+  slack:
+    enabled: true
+    botToken: ${SLACK_BOT_TOKEN}
+```
+
+The CLI starts every registered factory whose config has
+`enabled: true`. `packages/core/src/channels/discord.ts` is the
+reference implementation (~250 lines).
+
+## Adding a provider
+
+Implement `AIProvider`, then register a factory:
+
+```ts
+import {
+  registerProviderFactory,
+  type AIProvider,
+  type ChatParams,
+  type ChatResponse,
+} from "@tailored-ai/core";
+
+class BedrockProvider implements AIProvider {
+  id = "bedrock";
+  name = "AWS Bedrock";
+  supportsTools = true;
+
+  async chat(params: ChatParams): Promise<ChatResponse> {
+    // Call Bedrock's invoke API. Return { content, role, toolCalls?, usage? }.
+  }
+}
+
+registerProviderFactory("bedrock", (config) => {
+  const cfg = config.providers.bedrock as { region: string; model: string };
+  return { provider: new BedrockProvider(cfg), model: cfg.model };
+});
+```
+
+Then `agent.defaultProvider: bedrock` picks it. `openai.ts` and
+`anthropic.ts` in `packages/core/src/providers/` are the references.
+
+For OpenAI-compatible endpoints (vLLM, LM Studio, Together, OpenRouter),
+no new provider needed. Use `agent.defaultProvider: openai_compatible`
+and set `providers.openai_compatible.baseUrl`.
+
+For custom embedding providers (Qdrant FastEmbed, Voyage, Cohere), the
+same shape applies via `registerEmbeddingFactory(id, factory)` from
+`@tailored-ai/core`. Pick it with `memory.embeddings.type: <id>`.
+
+## Adding a task backend
+
+Implement `TaskBackend`, then register a factory:
+
+```ts
+import { registerTaskBackendFactory, type TaskBackend } from "@tailored-ai/core";
+
+class LinearTaskBackend implements TaskBackend {
+  async list(filter) { /* … */ }
+  async get(id) { /* … */ }
+  async create(input) { /* … */ }
+  async update(id, patch) { /* … */ }
+  async comment(id, body) { /* … */ }
+  async delete(id) { /* … */ }
+}
+
+registerTaskBackendFactory("linear", (config, _db) => {
+  const cfg = config.tasks?.linear as { apiKey: string; teamId: string };
+  return new LinearTaskBackend(cfg);
+});
+```
+
+Then `tasks.backend: linear` in config selects it. References:
+`packages/core/src/tasks/{native,github,beans,beads}.ts`.
+
+## Adding a trigger
+
+A trigger polls something and fires a workflow when its condition
+matches. Implementation lives in `packages/core/src/triggers/`:
+
+```ts
+export interface Trigger {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+}
+```
+
+The trigger calls `runWorkflow(name, input)` when it fires. Simplest
+reference: `packages/core/src/triggers/file-drop.ts`, ~50 lines.
+
+## Adding a workflow step type
+
+Implement `StepExecutor`, then register it on the engine:
+
+```ts
+import type { StepExecutor, StepContext, StepResult } from "@tailored-ai/core";
+
+const databaseQuery: StepExecutor = {
+  type: "database_query",
+  async execute(step, ctx: StepContext): Promise<StepResult> {
+    const { query, params } = step as { query: string; params?: unknown[] };
+    const rows = await myDb.query(query, params ?? []);
+    return { output: rows };
+  },
+};
+
+runtime.workflowEngine.registerExecutor(databaseQuery);
+```
+
+Any workflow YAML can then use `type: database_query`. Last
+registration of a given `type` wins, so you can override built-ins.
+
+## Conventions
+
+- **TypeScript strict mode.** The monorepo runs `strict: true`.
+- **ESM only.** Internal imports use relative `.js` extensions
+  (Node16 module resolution).
+- **Cross-package imports** use the `@tailored-ai/*` workspace
+  specifier.
+- **Node 20 or newer.** `engines.node: ">=20"` on every published
+  package.
+- **Defaults in one place.** New defaults go in `DEFAULT_CONFIG` in
+  `packages/core/src/config.ts`, not scattered in code.
+- **One way to do a thing.** Before adding a second tool, channel, or
+  backend that overlaps with an existing one, see if extending the
+  existing one fits.
+
+## Distributing your extension
+
+Publish as `@your-org/tai-plugin-X` on npm with the `tai-plugin`
+keyword. Users install with `npm install` plus one entry in their
+`plugins:` block:
+
+```yaml
+plugins:
+  - "@your-org/tai-plugin-X"
+```
+
+For setup-specific extensions, the simplest distribution is your own
+fork of the monorepo. The `RELEASING.md` at the repo root walks the
+changesets-based publish flow if you want to ship from a fork.

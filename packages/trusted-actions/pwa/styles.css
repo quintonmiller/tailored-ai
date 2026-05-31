@@ -1,0 +1,125 @@
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #0b0d12;
+  color: #e6e8ee;
+  font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter,
+    "Helvetica Neue", Arial, sans-serif;
+}
+header {
+  padding: env(safe-area-inset-top, 16px) 20px 12px;
+  border-bottom: 1px solid #1f2330;
+}
+header h1 { margin: 0; font-size: 20px; }
+header .sub { margin: 4px 0 0; color: #8a93a8; font-size: 13px; }
+main {
+  padding: 16px;
+  max-width: 720px;
+  margin: 0 auto;
+}
+.card {
+  background: #11141d;
+  border: 1px solid #1f2330;
+  border-radius: 14px;
+  padding: 16px;
+  margin-bottom: 12px;
+}
+.card h2 {
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #8a93a8;
+  margin: 0 0 10px;
+}
+.muted { color: #8a93a8; font-size: 14px; }
+.warn {
+  color: #ffb347;
+  background: #2a2010;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+button {
+  background: #2b6cff;
+  color: #fff;
+  border: 0;
+  padding: 12px 16px;
+  font-size: 16px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: 600;
+  -webkit-tap-highlight-color: transparent;
+}
+button:active { transform: translateY(1px); }
+button.ghost {
+  background: transparent;
+  color: #8a93a8;
+  border: 1px solid #2a2f3d;
+}
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+ul#pending-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+ul#pending-list li {
+  background: #0d111a;
+  border: 1px solid #1f2330;
+  border-radius: 10px;
+  padding: 12px;
+}
+ul#pending-list .row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+}
+ul#pending-list .row button { padding: 8px 12px; font-size: 14px; }
+ul#pending-list .reject { background: transparent; color: #ff6b6b; border: 1px solid #432; }
+.title { font-weight: 600; font-size: 17px; margin: 6px 0 4px; }
+.meta { color: #8a93a8; font-size: 14px; margin: 2px 0; }
+.decide-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+.decide-actions button {
+  flex: 1;
+  padding: 14px 16px;
+  font-size: 16px;
+}
+button.approve { background: #2ecc71; color: #07140b; }
+button.reject {
+  background: transparent;
+  color: #ff6b6b;
+  border: 1px solid #5a2a2a;
+}
+#decide-card { border-color: #5a432a; }
+#decide-card h2 { color: #ffb347; }
+
+/* ---------- history (past purchases) ---------- */
+#history-list { list-style: none; padding: 0; margin: 0; }
+#history-list .history-entry {
+  padding: 10px 0;
+  border-top: 1px solid #1f2330;
+}
+#history-list .history-entry:first-child { border-top: 0; }
+.history-badge {
+  display: inline-block;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  margin-bottom: 4px;
+}
+.history-completed { background: #143820; color: #6cdf8e; }
+.history-failed    { background: #3a1818; color: #ff8a8a; }
+.history-rejected  { background: #2a2d3a; color: #b6bccb; }
+.history-title { font-size: 15px; margin: 2px 0; }
+.history-title a { color: #e6e8ee; }
+.history-meta a { color: #8a93a8; }

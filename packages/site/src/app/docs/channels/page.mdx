@@ -1,0 +1,172 @@
+export const metadata = {
+  title: "Channels",
+  description: "Surfaces users reach the agent through: CLI, Discord, HTTP API, web UI.",
+};
+
+# Channels
+
+A channel is whatever lets a user send a message in and get a reply
+back. Sessions live in SQLite, so the same conversation can move between
+channels: start in the terminal, continue on Discord, finish in the web
+UI.
+
+Four channel families ship in v0.1: CLI, HTTP, the web UI, and Discord.
+The HTTP API is the foundation; everything else is a consumer of it.
+
+For *workflow triggers* (file-drop, email polling, RSS, calendar) see
+[Workflows → Triggers](/docs/workflows#triggers). Triggers are
+event-driven workflow inputs, not user-facing channels.
+
+## CLI
+
+Comes with `@tailored-ai/cli`. The `tai` command and `tai -m "…"` for
+one-shot. See [Quick start](/docs/quick-start) and the
+[CLI package page](/docs/packages/cli) for the full surface.
+
+## HTTP API
+
+`tai` (with no arguments) starts an HTTP server on port 3000. Routes
+cover sessions, agents, workflows, tasks, projects, memory, resources,
+approvals, and webhooks. SSE streams responses token-by-token.
+
+See [@tailored-ai/server](/docs/packages/server) for the route
+reference. Every other channel here is a consumer of this surface; if
+you're building a custom UI or integrating into your own stack, this is
+your interface.
+
+> **No built-in auth in v0.1.** Bind to `127.0.0.1` for local-only use,
+> or put the server behind a reverse proxy (`nginx`, `caddy`,
+> `oauth2-proxy`) with auth in front. Built-in bearer-token auth is
+> v0.2 work.
+
+## Web UI
+
+`tai` (with no arguments) mounts a built React SPA at `/`. Chat sidebar,
+agent picker, session list, tasks board, memory view, workflow runner.
+
+The bundled UI is one consumer of the HTTP API. If you'd rather build
+your own:
+
+- Build a separate Next.js / SvelteKit / Vite app against
+  `/api/sessions`, `/api/agents`, etc.
+- Point `tai` at it via the (planned) `--ui-dist` flag. For now you can
+  serve your own UI from a different host and hit the TAI API by
+  baseUrl.
+
+To disable the bundled UI: there's no toggle in v0.1; bind the HTTP
+server to a host you don't expose, or front it with a reverse proxy
+that intercepts `/`.
+
+## Discord
+
+```yaml
+channels:
+  discord:
+    enabled: true
+    token: ${DISCORD_BOT_TOKEN}
+    owner: ${DISCORD_OWNER_ID}
+    respondToDMs: true
+    respondToMentions: true
+    allowedGuilds: []          # empty = any; otherwise list guild ids
+    perChannelMapping: {}      # channel id → project id
+```
+
+Setup:
+
+1. Create a bot at [discord.com/developers](https://discord.com/developers/applications).
+2. Copy the token into `.env` as `DISCORD_BOT_TOKEN=…`.
+3. Right-click your own user in any Discord client, "Copy User ID", put
+   in `.env` as `DISCORD_OWNER_ID=…`.
+4. Add the bot to your server with the `bot` and `applications.commands`
+   scopes plus message-content intent.
+5. Run `tai`. The bot logs in and registers slash commands (`/new`,
+   `/agent`, `/project`, …).
+
+DMs and `@mentions` route to the agent. Per-user sessions persist, so
+the bot remembers context across messages from the same user.
+
+### Outbound DM tool
+
+If you want an agent to *initiate* a Discord DM, enable the `discord_dm`
+tool and list it in the relevant agent's `tools:` array. The agent calls
+`discord_dm({ message: "…" })` and the configured `owner` gets a DM.
+
+The right channel for online-mode escalations. Preferred over `gmail
+send` for FYI-style pings, since the chat thread is more conversational
+than email.
+
+## Slack, Telegram, iMessage, SMS
+
+None ship in v0.1. Three paths:
+
+1. **Register a channel factory.** Call `registerChannelFactory("slack",
+   factory)` from your package. The CLI's startup loop calls every
+   registered factory whose config block has `enabled: true`. See
+   [Custom channels](#custom-channels) below.
+2. **Embed the runtime** in your own Node script. Construct an
+   `AgentRuntime`, write a small channel class that wires your transport
+   to `runAgentLoop`, start it directly. See [Extending in code](/docs/extending#adding-a-channel).
+3. **Wrap the HTTP API.** If your platform has a webhook or polling
+   bridge already, point it at `POST /api/sessions/:id/messages` and the
+   agent works without code changes.
+
+The Discord channel
+([`packages/core/src/channels/discord.ts`](https://github.com/quintonmiller/tailored-ai/blob/main/packages/core/src/channels/discord.ts))
+is the reference implementation, about 250 lines. The same shape works
+for Slack, Telegram, iMessage.
+
+## Custom channels
+
+Implement the `Channel` interface, then register a factory:
+
+```ts
+import {
+  registerChannelFactory,
+  type Channel,
+  type AgentRuntime,
+} from "@tailored-ai/core";
+
+class SlackChannel implements Channel {
+  id = "slack";
+  type = "slack";
+  // ...connect(), disconnect(), onMessage(), send()
+}
+
+registerChannelFactory("slack", async (runtime: AgentRuntime, cfg) => {
+  const slack = new SlackChannel({ runtime, botToken: cfg.botToken as string });
+  await slack.connect();
+  return { channel: slack, disconnect: () => slack.disconnect() };
+});
+```
+
+Enable it in `config.yaml`:
+
+```yaml
+channels:
+  slack:
+    enabled: true
+    botToken: ${SLACK_BOT_TOKEN}
+```
+
+The CLI starts every registered factory whose config has `enabled:
+true`. Failures are logged and skipped so one bad channel can't keep the
+others from starting.
+
+> **Note on Discord.** Discord is still wired directly into the CLI
+> rather than through the registry. The cron scheduler, task watcher,
+> and autopilot worker take Discord-typed references for owner DM
+> routing. Migrating those callers to a generic `OutboundChannel`
+> interface is on the roadmap.
+
+## Writing your own channel
+
+A channel is an object that:
+
+1. Listens for incoming messages (HTTP, WebSocket, file change).
+2. Resolves the right session via `findOrCreateSession(db, userKey,
+   model, provider, projectId)`.
+3. Calls `runAgentLoop(content, runtime.buildLoopOptions({ session,
+   agentName }))`.
+4. Sends the response back over its transport.
+
+See [Extending in code → Adding a channel](/docs/extending#adding-a-channel).

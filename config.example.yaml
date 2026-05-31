@@ -1,0 +1,142 @@
+server:
+  port: 3000
+  host: 127.0.0.1
+database:
+  path: ./agent.db
+providers:
+  ollama:
+    baseUrl: http://localhost:11434
+    defaultModel: devstral-small-2:latest
+  # openai:
+  #   apiKey: ${OPENAI_API_KEY}
+  #   defaultModel: gpt-4o
+  #   baseUrl: https://api.openai.com/v1   # optional, for OpenAI-compatible APIs
+  # anthropic:
+  #   apiKey: ${ANTHROPIC_API_KEY}
+  #   defaultModel: claude-sonnet-4-5-20250929
+  #   baseUrl: https://api.anthropic.com   # optional
+agent:
+  defaultProvider: ollama
+  extraInstructions: ""
+  maxHistoryTokens: 20000
+  temperature: 0.7
+  maxToolRounds: 100
+channels:
+  discord:
+    enabled: false
+    token: ${DISCORD_BOT_TOKEN}
+    owner: ${DISCORD_OWNER_ID}
+    respondToDMs: true
+    respondToMentions: true
+tools:
+  exec:
+    enabled: true
+    allowedCommands:
+      - ls
+  read:
+    enabled: true
+  write:
+    enabled: true
+  web_fetch:
+    enabled: true
+  web_search:
+    enabled: false
+    provider: brave
+    apiKey: ${BRAVE_API_KEY}
+    maxResults: 5
+  tasks:
+    enabled: true
+  gmail:
+    enabled: false
+    account: ${GOG_ACCOUNT}
+  google_calendar:
+    enabled: false
+    account: ${GOG_ACCOUNT}
+  claude_code:
+    enabled: false
+  browser:
+    enabled: false
+    headless: true
+  md_to_pdf:
+    enabled: false
+  google_drive:
+    enabled: false
+    account: ${GOG_ACCOUNT}
+    folder_name: My uploads
+    folder_id: your-folder-id-here
+  ask_user:
+    enabled: true
+agents:
+  researcher:
+    description: Research assistant for web search and summarization
+    instructions: >
+      You are a research assistant. Search the web, fetch pages, and
+      summarize findings concisely.
+
+
+      Memory extraction — scan every user message for three classes:
+
+      1. PREFERENCE: durable working style ("always X", "I prefer Y").
+         recall(action:"note", tags:["preference"], importance:0.85).
+         Add "pinned" + importance 0.95 for globally-applicable rules.
+      2. PROFILE FACT: durable observation about the user or their world
+         (stated or implied) — "user has a car", "user lives in Berlin",
+         "user enjoys hiking" (inferred from "let's go hiking again").
+         recall(action:"note", tags:["profile"], importance:0.5–0.7).
+      3. EPHEMERAL CONTEXT: time-bound state — events, plans, current
+         mood. recall(action:"note", tags:["ephemeral"], importance:0.4,
+         ttl_at:"<event date + 2 days as ISO>").
+
+      Don't save questions, hypotheticals, things already in memory, or
+      one-off task instructions. When in doubt, lower importance.
+    tools:
+      - web_search
+      - web_fetch
+      - memory
+      - recall
+    temperature: 0.5
+    maxToolRounds: 8
+    injectMemory: true
+    summarizeOnTrim: true
+  writer:
+    description: Writing assistant for drafting and editing content
+    instructions: >
+      You are a writing assistant. Read files for context, then draft or
+      edit content. Save results with the write tool.
+
+
+      Memory extraction — see researcher agent for the three-class
+      convention (preference / profile / ephemeral) and the tag +
+      importance + TTL conventions for each. Apply silently while
+      working.
+    tools:
+      - read
+      - write
+      - memory
+      - recall
+    temperature: 0.7
+    maxToolRounds: 10
+    injectMemory: true
+    summarizeOnTrim: true
+cron:
+  enabled: false
+  jobs: []
+custom_tools:
+  weather:
+    command: curl -s wttr.in/{{city}}?format=3
+    description: Get weather
+    parameters:
+      city:
+        description: City name
+        type: string
+  git_log:
+    command: git log --oneline -n {{count}}
+    description: Show recent git commits
+    parameters:
+      count:
+        description: Number of commits
+        type: string
+  uptime:
+    command: uptime
+    description: Show system uptime
+    parameters: {}

@@ -1,0 +1,171 @@
+export const metadata = {
+  title: "Memory",
+  description: "Recall: short notes with embeddings. Chunks: promoted longer-form. Core memory: always-injected text.",
+};
+
+# Memory
+
+The point of memory in TAI: a small local model can remember user facts
+across sessions, surface relevant prior notes when you ask a related
+question, and keep its own long-running goals. The mechanism is three
+stores that grade into each other.
+
+## The three stores
+
+| Store | Where | What goes in |
+|---|---|---|
+| **Core memory** | `data/context/agents/<name>/core_memory.md` | A small always-injected text block. The agent's running summary of who you are, what you're working on, recent corrections. The `core_memory` tool appends and edits it. |
+| **Recall** | `notes` table, with embeddings | Short observations with tags. "User prefers PRs over direct merges. 2026-05-29." Surfaced on demand or auto-injected if `injectMemory: true`. |
+| **Chunks** | `chunks` table, with embeddings | Longer-form content promoted from notes that prove useful repeatedly. Searched on demand via `recall(action="search", …)`. |
+
+Plus a fourth thing that isn't memory proper but lives nearby: **facts**,
+a strictly-structured key-value store for `(category, entity, key, value)`
+data. Used for "the user's address is X" type information that's better
+stored as data than prose.
+
+## The tools
+
+Four tools touch these stores:
+
+- **`memory`**: file-shaped reads and writes against an agent's context
+  directory. Use for long-form goals, journals, files you want left intact.
+  Scopes: `profile` (the agent's `contextDir`), `global` (the global
+  context dir), `knowledge` (read-only KB).
+- **`core_memory`**: append, replace, read, or clear sections of the
+  always-injected core memory text. Smaller surface, narrower purpose.
+- **`recall`**: structured tier. Short notes with tags and timestamps,
+  surfaced by embedding similarity. Verbs: `note`, `query`, `search`,
+  `list`, `delete`.
+- **`facts`**: typed structured facts. `set`, `get`, `delete`, `query`.
+
+### Usage
+
+```
+recall(action="note",
+       content="User prefers PRs over direct merges to main; reason: review trail.",
+       tags=["user-pref", "git"],
+       importance=0.7)
+
+recall(action="query", q="how does user feel about direct merges", limit=5)
+
+facts(action="set",
+      category="user",
+      entity="contact",
+      key="email",
+      value="user@example.com",
+      source="conversation")
+
+core_memory(action="append",
+            section="recent_summary",
+            content="2026-05-30: started v0.1 publish prep")
+```
+
+## Injection
+
+When an agent's `injectMemory: true` is set, the recall tier is queried
+automatically before the agent loop runs. Top hits are formatted into a
+`[Relevant memory]` block prepended to the system prompt, within a
+token budget (default 800).
+
+The point: small local models effectively get "context about the user"
+without having to think to call `recall` themselves. The cost: 800
+tokens come out of every turn's working budget. Tune
+`memoryInjectBudgetTokens` down on context-constrained setups.
+
+Core memory is *always* in the prompt regardless of `injectMemory`.
+Treat it as the agent's working scratchpad.
+
+## Promotion and sweep
+
+The autopilot worker runs two background jobs against memory:
+
+- **Memory sweep**, daily at 03:14 local. Walks `notes`. Expires anything
+  past its TTL (default 30 days) unless it's been read recently. Promotes
+  frequently-referenced notes into `chunks`. Logs to the agent log:
+  `[autopilot] Memory sweep: extended N, deleted N, remaining notes=…,
+  chunks=…`.
+- **Promotion**, inline. Whenever a note is searched-and-returned, its
+  access timestamp gets bumped. The sweep uses that for keep/discard.
+
+Autopilot settings (digest time, sweep TTL) live in the
+`autopilot_settings` SQLite table, not in `config.yaml`. Adjust via the
+web UI's Settings page or by writing to the table directly.
+
+## Knowledge base
+
+The `memory` tool with `scope: "knowledge"` searches `data/kb/` — a
+separate set of files intended for static reference material
+(documentation, runbooks, factsheets). Treat it as a wiki the agent can
+grep.
+
+```
+memory(action="search",
+       scope="knowledge",
+       q="how do I set up trusted-actions")
+```
+
+The KB has its own embeddings index, separate from `notes` and
+`chunks`. Read-only by default; the agent can search but not write.
+Add files via `tai resources install` or by dropping markdown into
+`data/kb/`.
+
+## HTTP and UI
+
+Memory is exposed in the HTTP API:
+
+```
+GET  /api/memory/recall?q=…
+POST /api/memory/notes
+POST /api/memory/search
+GET  /api/memory/chunks/:id
+```
+
+The web UI's Memory page shows recent notes, lets you delete, and
+exposes search.
+
+## Embedding provider
+
+Memory embeddings come from a separate provider, selected via a
+registry. The built-in `openai_compatible` factory hits any
+OpenAI-compatible `/v1/embeddings` endpoint (Ollama, vLLM, LM Studio,
+OpenAI itself, Together).
+
+```yaml
+memory:
+  embeddings:
+    enabled: true
+    type: openai_compatible    # default; omit to get this
+    baseUrl: http://127.0.0.1:11434/v1
+    model: nomic-embed-text
+    # apiKey: ${OPENAI_API_KEY}    # required for hosted OpenAI
+```
+
+Plug in a different backend by registering a factory:
+
+```ts
+import { registerEmbeddingFactory } from "@tailored-ai/core";
+
+registerEmbeddingFactory("voyage", (config) => {
+  const cfg = config.memory?.embeddings as { apiKey: string; model: string };
+  return new VoyageEmbeddingProvider(cfg);
+});
+```
+
+Then point at it:
+
+```yaml
+memory:
+  embeddings:
+    enabled: true
+    type: voyage
+    apiKey: ${VOYAGE_API_KEY}
+    model: voyage-3
+```
+
+If embeddings are disabled, recall falls back to keyword lookup and
+`injectMemory` is suppressed.
+
+## Deep dives
+
+- [`docs/memory.md`](https://github.com/quintonmiller/tailored-ai/blob/main/docs/memory.md): operational reference.
+- [`docs/memory-tiers.md`](https://github.com/quintonmiller/tailored-ai/blob/main/docs/memory-tiers.md): design rationale.

@@ -1,0 +1,73 @@
+export const metadata = {
+  title: "Packages overview",
+  description: "What each @tailored-ai/* npm package contains and when to install which.",
+};
+
+# Packages overview
+
+Five packages publish to npm under `@tailored-ai/*`.
+
+| Package | One-line | Install when |
+|---|---|---|
+| [`@tailored-ai/cli`](/docs/packages/cli) | The `tai` command. REPL, one-shot, project mode, bundled web UI. | You want to run TAI as a user. |
+| [`@tailored-ai/core`](/docs/packages/core) | Agent runtime, tools, providers, channels, persistence. Framework-free TypeScript library. | You're embedding the agent in your own Node service. |
+| [`@tailored-ai/server`](/docs/packages/server) | HTTP API: Hono routes, SSE streaming, webhook intake, optional static-UI mount. | You want the HTTP surface without the CLI's REPL. |
+| [`@tailored-ai/browser-mediator`](/docs/packages/browser-mediator) | Framework-agnostic bounded browser tool. Egress allow-list, vault refs, opaque ids, HITL gates. | You want a safe browser tool for *any* agent (TAI, OpenAI function-calling, Anthropic tool-use). |
+| [`@tailored-ai/trusted-actions`](/docs/packages/trusted-actions) | HITL approval gateway for risky actions. Mobile PWA, web-push, sandboxed Docker executor. | You want an agent to *do* things (place orders, submit forms) with human sign-off. |
+
+Two more packages live in the monorepo but stay private:
+
+- `@tailored-ai/ui`: the React + Vite SPA. Built and bundled inside
+  `@tailored-ai/cli`. Not published standalone.
+- `@tailored-ai/site`: this documentation site. Built and deployed to
+  GitHub Pages from `main`.
+
+## Dependency graph
+
+```
+@tailored-ai/cli             depends on  @tailored-ai/core
+                             depends on  @tailored-ai/server
+                             bundles     @tailored-ai/ui (built into ui-dist/)
+
+@tailored-ai/server          depends on  @tailored-ai/core
+
+@tailored-ai/core            depends on  @tailored-ai/browser-mediator
+                             (for the browser_mediator tool)
+
+@tailored-ai/trusted-actions depends on  @tailored-ai/core
+                             (for the request-action tool wiring)
+```
+
+Read that as: **install `@tailored-ai/cli` and you transitively get
+everything except trusted-actions**. Trusted-actions is intentionally
+separate because it runs in its own Docker container; installing it
+alongside the agent is opt-in.
+
+## Pick the smallest thing that works
+
+The temptation is to install the catch-all. Don't.
+
+- **End user running an agent**: `@tailored-ai/cli` only.
+- **Embedding into your own backend**: `@tailored-ai/core`, plus
+  `@tailored-ai/server` if you want the HTTP routes.
+- **Just the browser tool, for a non-TAI agent (Claude, GPT, your own
+  framework)**: `@tailored-ai/browser-mediator` only. Zero dependency on
+  the rest of TAI.
+- **Just the trusted-actions executor, even without TAI**:
+  `@tailored-ai/trusted-actions` runs standalone.
+
+## Versioning
+
+All five public packages release together. They share one version line
+because they evolve together; a breaking change in `@tailored-ai/core`
+rolls all of them. See
+[`RELEASING.md`](https://github.com/quintonmiller/tailored-ai/blob/main/RELEASING.md)
+in the repo if you're publishing a fork or your own scope.
+
+## Optional peer dependencies
+
+A few tools in `@tailored-ai/core` are gated by optional peers. They're
+listed in [Installation → Optional dependencies](/docs/installation#optional-dependencies).
+The short version: `playwright`, `md-to-pdf`, `pdf-parse`, and
+`tesseract.js` aren't installed by default. Add them only when you
+enable the corresponding tool.

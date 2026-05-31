@@ -1,0 +1,51 @@
+{
+  "name": "autonomous-agent",
+  "private": true,
+  "description": "Lightweight, modular AI agent framework optimized for local LLMs",
+  "type": "module",
+  "scripts": {
+    "build": "pnpm --filter @tailored-ai/browser-mediator run build && pnpm --filter @tailored-ai/core run build && pnpm --filter @tailored-ai/server run build && pnpm --filter @tailored-ai/ui run build && pnpm --filter @tailored-ai/cli run build && pnpm --filter @tailored-ai/trusted-actions run build && pnpm --filter @tailored-ai/site run build",
+    "dev": "pnpm --filter @tailored-ai/core run build && pnpm --filter @tailored-ai/server run build && pnpm --filter @tailored-ai/cli run dev",
+    "dev:msg": "pnpm --filter @tailored-ai/core run build && pnpm --filter @tailored-ai/server run build && pnpm --filter @tailored-ai/cli run dev -- --message",
+    "dev:ui": "pnpm --filter @tailored-ai/ui run dev",
+    "dev:site": "pnpm --filter @tailored-ai/site run dev",
+    "start": "pnpm --filter @tailored-ai/cli run start",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm -r run test",
+    "test:watch": "pnpm --filter @tailored-ai/core run test -- --watch",
+    "lint": "biome check packages/",
+    "lint:fix": "biome check --write packages/",
+    "format": "biome format --write packages/",
+    "build:ui": "pnpm --filter @tailored-ai/ui run build",
+    "publish:cli": "pnpm --filter @tailored-ai/cli publish --access public"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/quintonmiller/tailored-ai.git"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "llm",
+    "ollama",
+    "openai",
+    "tools",
+    "local-llm",
+    "discord-bot"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "packageManager": "pnpm@10.27.0",
+  "devDependencies": {
+    "@biomejs/biome": "2.3.14",
+    "@changesets/cli": "^2.31.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild"
+    ]
+  }
+}

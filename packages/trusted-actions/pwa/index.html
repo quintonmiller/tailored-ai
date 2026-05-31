@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b0d12" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="TAI Approvals" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+    <link rel="icon" href="/icons/icon-192.png" type="image/png" />
+    <title>TAI Approvals</title>
+    <link rel="stylesheet" href="/styles.css?v=__BUILD_ID__" />
+  </head>
+  <body>
+    <header>
+      <h1>TAI Approvals</h1>
+      <p class="sub">Trusted-actions executor</p>
+    </header>
+
+    <main>
+      <!-- Decide screen — shown when arriving from a notification tap.
+           Tokens come in via location.hash (never sent to a server). -->
+      <section id="decide-card" class="card" hidden>
+        <h2>Action requires approval</h2>
+        <p class="title" id="decide-title">…</p>
+        <p class="meta" id="decide-body">…</p>
+        <p class="meta" id="decide-id"></p>
+        <div class="decide-actions">
+          <button id="approve-btn" class="approve">Approve</button>
+          <button id="reject-btn" class="reject">Reject</button>
+        </div>
+        <p id="decide-result" class="muted" hidden></p>
+        <button id="decide-done" class="ghost" hidden style="margin-top:10px; width:100%">Done</button>
+      </section>
+
+      <section id="status-card" class="card">
+        <h2>Notifications</h2>
+        <p id="perm-status" class="muted">Checking…</p>
+        <button id="enable-btn" hidden>Enable approvals on this device</button>
+        <button id="disable-btn" hidden class="ghost">Disable on this device</button>
+        <p id="ua-warning" class="warn" hidden>
+          Web Push needs an installed PWA on iOS. Tap the Share button →
+          "Add to Home Screen", then open from the home screen.
+        </p>
+      </section>
+
+      <section class="card">
+        <h2>Pending actions</h2>
+        <p id="pending-empty" class="muted">No pending approvals.</p>
+        <ul id="pending-list"></ul>
+      </section>
+
+      <section class="card" id="history-card">
+        <h2>Past purchases</h2>
+        <p id="history-status" class="muted">Loading…</p>
+        <ul id="history-list"></ul>
+        <button id="history-more" class="ghost" hidden style="margin-top:8px; width:100%">Load more</button>
+      </section>
+
+      <section class="card">
+        <h2>About</h2>
+        <p class="muted">
+          This app receives push notifications when an action needs your
+          approval. Approve from the notification itself or from the list
+          above. The executor uses a private virtual card and your saved
+          Amazon session to complete the purchase — your phone never sees
+          either.
+        </p>
+        <p class="muted" id="sw-status">Service worker: checking…</p>
+      </section>
+
+      <section class="card" id="diag-card">
+        <h2>Diagnostics</h2>
+        <p class="meta"><span class="muted">App build:</span> <code id="diag-app-build"></code></p>
+        <p class="meta"><span class="muted">SW build:</span> <code id="diag-sw-build">…</code></p>
+        <p class="meta"><span class="muted">SW state:</span> <code id="diag-sw-state">…</code></p>
+        <p class="meta"><span class="muted">Cache decide present:</span> <code id="diag-cache">…</code></p>
+        <p class="meta"><span class="muted">SW messages received:</span> <code id="diag-msgs">0</code></p>
+        <p class="meta"><span class="muted">Last SW msg time:</span> <code id="diag-last">(none)</code></p>
+        <button id="diag-refresh" class="ghost" style="margin-top:8px">Refresh diagnostics</button>
+      </section>
+    </main>
+
+    <!-- Build identifier is replaced at build time. -->
+    <script>window.__APP_BUILD__ = "__BUILD_ID__";</script>
+    <script type="module" src="/app.js?v=__BUILD_ID__"></script>
+  </body>
+</html>

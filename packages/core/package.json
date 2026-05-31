@@ -1,0 +1,81 @@
+{
+  "name": "@tailored-ai/core",
+  "version": "0.1.0",
+  "description": "Agent core library: runtime, config, tools, providers, channels, db, cron, hooks. Lightweight, modular AI agent framework optimized for local LLMs.",
+  "license": "MIT",
+  "author": "Quinton Miller",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/quintonmiller/tailored-ai.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/quintonmiller/tailored-ai/tree/main/packages/core#readme",
+  "bugs": "https://github.com/quintonmiller/tailored-ai/issues",
+  "keywords": [
+    "ai",
+    "agent",
+    "llm",
+    "ollama",
+    "openai",
+    "anthropic",
+    "tools",
+    "local-llm",
+    "vllm",
+    "agentic"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@octokit/rest": "^22.0.1",
+    "@tailored-ai/browser-mediator": "workspace:*",
+    "better-sqlite3": "^11.7.0",
+    "croner": "^10.0.1",
+    "discord.js": "^14.25.1",
+    "yaml": "^2.6.0"
+  },
+  "peerDependencies": {
+    "md-to-pdf": "^5.2.4",
+    "playwright": "^1.58.2"
+  },
+  "peerDependenciesMeta": {
+    "md-to-pdf": { "optional": true },
+    "playwright": { "optional": true }
+  },
+  "optionalDependencies": {
+    "pdf-parse": "^1.1.1",
+    "tesseract.js": "^5.1.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.0",
+    "md-to-pdf": "^5.2.4",
+    "playwright": "^1.58.2",
+    "typescript": "^5.7.0",
+    "vitest": "^4.0.18"
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "name": "@tailored-ai/google-tools",
+  "version": "0.1.0",
+  "description": "Gmail, Google Calendar, and Google Drive tools for Tailored AI agents. Imports register the tools via @tailored-ai/core's tool-factory registry.",
+  "license": "MIT",
+  "author": "Quinton Miller",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/quintonmiller/tailored-ai.git",
+    "directory": "packages/google-tools"
+  },
+  "homepage": "https://github.com/quintonmiller/tailored-ai/tree/main/packages/google-tools#readme",
+  "bugs": "https://github.com/quintonmiller/tailored-ai/issues",
+  "keywords": [
+    "ai",
+    "agent",
+    "tailored-ai",
+    "gmail",
+    "google-calendar",
+    "google-drive",
+    "tools"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@tailored-ai/core": "workspace:*",
+    "better-sqlite3": "^11.7.0"
+  },
+  "devDependencies": {
+    "@tailored-ai/core": "workspace:*",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.0",
+    "better-sqlite3": "^11.7.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.0.18"
+  }
+}

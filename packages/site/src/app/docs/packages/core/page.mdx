@@ -1,0 +1,90 @@
+export const metadata = {
+  title: "@tailored-ai/core",
+  description: "The agent library. Runtime, tools, providers, channels, persistence.",
+};
+
+# @tailored-ai/core
+
+The agent library. Everything except the CLI surface and the HTTP
+routes. Framework-free TypeScript, ESM, Node 20 or newer.
+
+```bash
+npm install @tailored-ai/core better-sqlite3
+```
+
+`better-sqlite3` is listed as a `peerDependency` so you control the
+version your app uses.
+
+## What it contains
+
+| Area | Modules |
+|---|---|
+| Runtime + hot reload | `AgentRuntime`, `loadConfig`, `validateConfig` |
+| Agent loop | `runAgentLoop`, `resolveAgent`, history compaction, retry, timing |
+| Tools | `read`, `write`, `exec`, `web_fetch`, `web_search`, `memory`, `recall`, `core_memory`, `facts`, `tasks`, `delegate`, `claude_code`, `browser`, `discord_dm`, `request_action`, custom-tool loader, more |
+| Providers | `ollama`, `openai` + OpenAI-compatible (vLLM, LM Studio, …), `anthropic` |
+| Channels | Discord (`DiscordChannel`), HTTP/SSE (via `@tailored-ai/server`) |
+| Persistence | SQLite via `better-sqlite3`: sessions, messages, tasks, projects, memory, cron state |
+| Memory | Recall tier with embeddings, chunk promotion, TTL sweep |
+| Workflows | YAML loader and engine. Linear and graph execution modes |
+| Cron | Scheduled jobs with prompt expansion (`{{next_task}}`, `{{last_run_iso}}`) |
+| Sandboxes | host, docker, podman: `createSandbox`, `globalSandboxRegistry` |
+| Worktrees | `createWorktree({ strategy: "head" \| "branch" \| "merge-to-head" })` |
+
+The package's main entry re-exports the public API. See
+[`packages/core/src/index.ts`](https://github.com/quintonmiller/tailored-ai/blob/main/packages/core/src/index.ts)
+for the full surface.
+
+## Minimal embed
+
+```ts
+import Database from "better-sqlite3";
+import {
+  AgentRuntime,
+  createProvider,
+  loadConfig,
+  runAgentLoop,
+} from "@tailored-ai/core";
+
+const config = await loadConfig("./config.yaml");
+const db = new Database("./agent.db");
+const provider = createProvider(config);
+
+const runtime = new AgentRuntime({ config, db, provider });
+const loopOptions = runtime.buildLoopOptions({ agent: "default" });
+
+const response = await runAgentLoop("Hello", loopOptions);
+console.log(response);
+```
+
+The same `runtime` can be shared with
+[`@tailored-ai/server`](/docs/packages/server) to expose the agent over
+HTTP.
+
+## Hot reload
+
+`AgentRuntime` holds mutable references to config, the tool registry,
+and the provider. Every loop iteration re-resolves them. Editing
+`config.yaml` takes effect on the next message; no restart.
+
+The CLI uses a file watcher to call `runtime.reloadConfig()` on save.
+When embedding, you can call the same method, or mutate the config
+object directly (the runtime reads it by reference).
+
+## Optional peer dependencies
+
+Two tools in core import optional peers lazily, so they cost nothing if
+you don't use them:
+
+| Tool | Peer | Install command |
+|---|---|---|
+| `browser` | `playwright` | `npm install playwright && npx playwright install chromium` |
+| `md_to_pdf` | `md-to-pdf` | `npm install md-to-pdf` |
+
+Each fails with a clear "run `npm install …`" message at first use if
+the peer isn't present.
+
+## Source
+
+[`packages/core/`](https://github.com/quintonmiller/tailored-ai/tree/main/packages/core).
+The main barrel export is `src/index.ts`.

@@ -1,0 +1,244 @@
+export const metadata = {
+  title: "Workflows",
+  description: "Multi-step YAML pipelines. Triggers, conditions, parallel fan-out, durable runs.",
+};
+
+# Workflows
+
+A workflow is a YAML file that names a sequence of steps. Useful when:
+
+- The pipeline has more than one step and the agent would otherwise have
+  to call the same tools in the same order every time.
+- Multiple steps run in parallel and you want the engine to schedule them.
+- The pipeline should fire on an event (a new file, an email, a webhook)
+  rather than a user prompt.
+- You want every run persisted for inspection, retry, or audit.
+
+Workflows live in `./workflows/` by default. Drop a `.yaml` in there,
+restart `tai`, and the runtime watches the directory and reloads on
+change.
+
+If the work is one tool call or one agent message, you don't need a
+workflow. Just call the tool, or talk to the agent.
+
+## Minimal example
+
+```yaml
+# workflows/morning-briefing.yaml
+name: morning-briefing
+description: Run every weekday at 7 AM. Surface today's calendar and tasks.
+
+triggers:
+  - kind: cron
+    schedule: "0 7 * * 1-5"
+
+steps:
+  - id: calendar
+    type: tool
+    tool: google_calendar
+    args:
+      action: list_events
+      start: today
+      end: today+1d
+
+  - id: tasks
+    type: tool
+    tool: tasks
+    args:
+      action: list
+      status: in_progress
+
+  - id: write
+    type: agent
+    agent: writer
+    prompt: |
+      Summarise the day in one paragraph.
+      Calendar: ${steps.calendar}
+      In-progress tasks: ${steps.tasks}
+
+  - id: notify
+    type: notify
+    channel: discord
+    message: "Good morning.\n\n${steps.write}"
+```
+
+## Step types
+
+| Type | What it does |
+|---|---|
+| `tool` | Call a single tool, no LLM involved. Fast, deterministic. |
+| `agent` | Run a full agent loop with the given prompt. The agent picks its own tools. |
+| `shell` | Run a shell command. Sandboxed if `sandbox:` is set. |
+| `condition` | Branch: `if: "${steps.X.length} > 0"` → run one of `then:` or `else:`. |
+| `parallel` | Run several steps concurrently. Only in `executionMode: graph`. |
+| `delay` | Wait N seconds before continuing. |
+| `notify` | Send a message via `channel: discord`, `email`, or `log`. |
+| `http_request` | POST or GET to a URL. Good for webhook fan-out. |
+| `worktree` | Run subsequent steps inside an isolated git worktree. |
+| `set` | Set a variable in the workflow's variable map. |
+| `run_workflow` | Run another workflow as a sub-step. |
+
+### Custom step types
+
+Step types are a registry. To add your own (say a `database_query` step
+that runs a parameterised SQL query), implement the `StepExecutor`
+interface and register it on the engine:
+
+```ts
+import type { StepExecutor, StepContext, StepResult } from "@tailored-ai/core";
+
+const databaseQuery: StepExecutor = {
+  type: "database_query",
+  async execute(step, ctx: StepContext): Promise<StepResult> {
+    const { query, params } = step as { query: string; params?: unknown[] };
+    const rows = await myDb.query(query, params ?? []);
+    return { output: rows };
+  },
+};
+
+runtime.workflowEngine.registerExecutor(databaseQuery);
+```
+
+The registry is per-engine. Built-in executors register on engine
+construction; third-party executors register before the engine starts
+its first run. Use the same approach to override a built-in (last
+registration of a given `type` wins).
+
+## Variables
+
+`${input.foo}` references the workflow input. `${steps.<id>}` references
+a previous step's output. `${steps.<id>.json.field}` parses the step
+output as JSON and reads a field.
+
+`${facts.<category>.<entity>.<key>}` reads from the facts store. Useful
+for "send this email if `user.preferences.email_digest` is true".
+
+## Triggers
+
+A workflow's `triggers:` block lists everything that can fire it. All
+trigger implementations live in `packages/core/src/triggers/`.
+
+| Kind | Fires on |
+|---|---|
+| `cron` | A standard cron expression. |
+| `webhook` | A POST to `/webhooks/<workflow>` runs the workflow with the request body as input. |
+| `file_drop` | A new file appears in a watched directory. |
+| `email_poll` | A Gmail search query returns new (unseen) results. |
+| `rss_poll` | A new item appears in an RSS/Atom feed. |
+| `calendar_poll` | A calendar event enters a configurable window (e.g. 15 minutes before start). |
+| `geofence_poll` | Device enters or exits a geofence. Requires Home Assistant or OwnTracks integration. |
+| `weather_poll` | Forecast crosses a threshold. |
+| `sensor_poll` | A Home Assistant entity state crosses a threshold. |
+| `home_assistant_poll` | Any Home Assistant entity state change. |
+| `finance_poll` | A Plaid webhook surfaces a new transaction. |
+| `email_message` | An email matches a filter (variant of `email_poll` with content extraction). |
+
+Some triggers require external integrations:
+- `email_poll` and `email_message` need the `gmail` tool configured.
+- `calendar_poll` needs `google_calendar`.
+- `geofence_poll`, `sensor_poll`, `home_assistant_poll` need a Home
+  Assistant instance.
+- `finance_poll` needs Plaid credentials.
+
+If you don't have those configured, the trigger registers but never
+fires.
+
+You can also fire a workflow manually from another workflow via
+`run_workflow`, or from an agent via the `run_workflow` tool.
+
+## Execution modes
+
+```yaml
+executionMode: linear   # default — steps run in order, top to bottom
+```
+
+```yaml
+executionMode: graph    # steps form a DAG; the engine schedules by deps
+```
+
+Graph mode for parallel fan-out:
+
+```yaml
+executionMode: graph
+steps:
+  - id: classify
+    type: agent
+    agent: email-classifier
+    prompt: "Classify each email in: ${input.emails}"
+
+  - id: urgent_note
+    type: notify
+    channel: discord
+    when: "${steps.classify}.json.urgent.length > 0"
+    message: "${steps.classify.json.urgent.length} urgent emails"
+    after: [classify]
+
+  - id: junk_note
+    type: notify
+    channel: log
+    when: "${steps.classify}.json.junk.length > 0"
+    message: "Filed ${steps.classify.json.junk.length} junk emails"
+    after: [classify]
+```
+
+Both `urgent_note` and `junk_note` depend on `classify` and run in
+parallel once it completes.
+
+## Persistence and inspection
+
+Every run writes rows to `workflow_runs` and `workflow_steps`. The web
+UI's Workflows page lists past runs, opens a run to see each step's
+input, output, and timing, and re-runs a failed step from a previous
+run with new input.
+
+The CLI surface (`tai workflow runs`, `tai workflow inspect`) is on the
+roadmap; for now use the web UI or query SQLite directly.
+
+## Worktrees and sandboxes
+
+Code-shaped workflows can run inside isolated git worktrees:
+
+```yaml
+steps:
+  - id: setup
+    type: worktree
+    strategy: branch       # or: head (no worktree), merge-to-head
+    branch: feature/new-thing
+
+  - id: implement
+    type: agent
+    agent: coder
+    prompt: "Add a /healthz route to packages/server."
+
+  - id: typecheck
+    type: shell
+    cmd: "pnpm run typecheck"
+    sandbox: docker
+```
+
+The `worktree` step puts subsequent steps in a fresh checkout.
+`sandbox: docker` runs the shell inside a container. Together, you can
+hand a coding workflow to an agent without it modifying your working
+tree or your host.
+
+See [`docs/sandboxes-and-worktrees.md`](https://github.com/quintonmiller/tailored-ai/blob/main/docs/sandboxes-and-worktrees.md)
+for the full sandbox surface.
+
+## Concurrency
+
+```yaml
+workflows:
+  directory: ./workflows       # default
+  maxConcurrent: 4             # global cap; default 4
+  maxConcurrentByAgent:        # per-agent cap on `agent` steps
+    coder: 1
+    reviewer: 1
+    _default: 2
+  retainRuns: 100              # how many runs to keep logs for per workflow
+```
+
+## Deep dive
+
+[`docs/workflows.md`](https://github.com/quintonmiller/tailored-ai/blob/main/docs/workflows.md)
+has the full step-type schema, expression grammar, and graph-mode
+scheduling rules.

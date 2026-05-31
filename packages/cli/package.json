@@ -1,0 +1,66 @@
+{
+  "name": "@tailored-ai/cli",
+  "version": "0.1.0",
+  "description": "Tailored AI CLI — lightweight, modular AI agent framework optimized for local LLMs. `tai` command.",
+  "license": "MIT",
+  "author": "Quinton Miller",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/quintonmiller/tailored-ai.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/quintonmiller/tailored-ai#readme",
+  "bugs": "https://github.com/quintonmiller/tailored-ai/issues",
+  "keywords": [
+    "ai",
+    "agent",
+    "llm",
+    "cli",
+    "ollama",
+    "openai",
+    "anthropic",
+    "tools",
+    "local-llm",
+    "vllm",
+    "agentic"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "tai": "dist/index.js"
+  },
+  "files": [
+    "dist/",
+    "ui-dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -b && node scripts/bundle-ui.mjs",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo ui-dist",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.10.0",
+    "@tailored-ai/core": "workspace:*",
+    "@tailored-ai/google-tools": "workspace:*",
+    "@tailored-ai/server": "workspace:*",
+    "dotenv": "^17.2.4",
+    "yaml": "^2.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

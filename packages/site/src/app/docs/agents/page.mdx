@@ -1,0 +1,260 @@
+export const metadata = {
+  title: "Agents",
+  description: "Named agent configurations with their own tools, model, instructions, and lifecycle hooks.",
+};
+
+# Agents
+
+A 30B local model handed twenty tools picks badly. A 30B local model
+handed three picks well. Named agents are the mechanism: define a
+`researcher` with only web tools, a `coder` with only filesystem tools,
+a `planner` with only calendar tools, and each one sees a clean menu.
+
+This is the operational reason TAI has agents instead of one big system
+prompt. The configuration reason is that you can swap models per agent,
+override the system prompt, set different `maxToolRounds` budgets, and
+attach lifecycle hooks without affecting the rest.
+
+> Earlier versions called these **profiles**. The config key was renamed
+> from `profiles:` to `agents:` in S9. The old key still loads with a
+> deprecation warning so existing configs work.
+
+## Defining agents
+
+```yaml
+agents:
+  default:
+    description: "Primary assistant."
+    instructions: |
+      You are my primary assistant. Be concise. Delegate focused work
+      to specialists when appropriate.
+    tools: [read, write, web_fetch, memory, recall, delegate, tasks]
+    temperature: 0.4
+    maxToolRounds: 12
+
+  researcher:
+    description: "Web search and summarise."
+    model: gpt-4o-mini
+    instructions: |
+      You are a research assistant. For every question, search the web,
+      read 1-3 sources, and summarise. Cite the URLs.
+    tools: [web_search, web_fetch, memory]
+    temperature: 0.5
+    maxToolRounds: 8
+
+  coder:
+    description: "Implements code in a fresh git worktree."
+    model: qwen3-coder:30b
+    instructions: |
+      You are a code assistant. Write code, run typecheck, commit on
+      a branch. Stop after the branch is committed; do not push.
+    tools: [exec, read, write, memory]
+    maxToolRounds: 25
+    hooks:
+      afterRun:
+        - tool: memory
+          args:
+            action: append
+            file: coding-log.md
+            content: "{{response}}"
+```
+
+Pick which agent to talk to at the entry point:
+
+```bash
+tai -a researcher -m "What's new in MCP this week?"
+tai -a coder -m "Add a /healthz route to packages/server."
+```
+
+In Discord and the web UI, the agent switcher does the same thing.
+
+## What an agent overrides
+
+| Key | Default | Meaning |
+|---|---|---|
+| `description` | empty | One-line summary in `tai --list-agents`. |
+| `model` | `provider.model` | LLM model for this agent. |
+| `provider` | `agent.defaultProvider` | Override the provider type (e.g. one agent on Ollama, another on Anthropic). |
+| `models` | empty | Ordered priority list of `{ provider, model }`. First reachable wins. Useful for resilient setups. |
+| `instructions` | empty | System prompt for this agent. |
+| `tools` | all enabled | Allowlist of tools this agent may call. |
+| `temperature` | `0.3` | LLM temperature. |
+| `maxToolRounds` | `10` | Max tool-call iterations per message. |
+| `contextDir` | `data/context/agents/<name>/` | Where this agent's context files live. |
+| `nudgeOnText` | `0` | Re-prompt up to N times if the model responds with text instead of a tool call. Useful for small local models. |
+| `nudgeMessage` | generic | Text used when re-prompting. |
+| `skipGlobalContext` | `false` | Only load this agent's `contextDir`. Reduces prompt size. |
+| `summarizeOnTrim` | `false` | When compaction drops messages, summarise them instead of silent discard. |
+| `injectMemory` | `false` | Prepend a `[Relevant memory]` block built from recall hits to the system prompt. |
+| `memoryInjectBudgetTokens` | `800` | Token budget for the injected memory block. |
+| `budgetWarnings` | `false` | Inject "X% of maxToolRounds used" reminders so the model can commit progress. Useful for coding agents. |
+| `hooks` | empty | `beforeRun` and `afterRun` tool calls. See [Hooks](/docs/hooks). |
+| `online` | empty | Run this agent on a cadence in the background. See below. |
+| `systemPrompt` | empty | Replace the base prompt, reorder layers, or inject custom layers. See below. |
+
+## Customizing the system prompt
+
+`instructions:` adds your text on top of a fixed base prompt. When that
+isn't enough — you want a different identity, a different layer order,
+or an extra block in the middle — use `systemPrompt:` to take control of
+the whole composition.
+
+The default system prompt is seven layers in this order:
+
+| Layer | Source |
+|---|---|
+| `base` | A fixed identity preamble shipped with TAI. |
+| `instructions` | The agent's `instructions:` field. |
+| `context` | Files under the agent's `contextDir`. |
+| `skill_catalog` | The progressive-mode skill catalog (when enabled). |
+| `core_memory` | Identity facts saved via the `core_memory` tool. |
+| `chat_live_state` | Recent ticks and pending tasks. Chat only, not background ticks. |
+| `recall_memory` | Relevance-ranked recall hits when `injectMemory: true`. |
+
+Replace the base entirely:
+
+```yaml
+agents:
+  pirate:
+    systemPrompt:
+      base: |
+        You are a pirate. Speak in pirate. Use tools when needed.
+```
+
+Or load the base from a file (re-read on every turn, so edits land
+without a restart):
+
+```yaml
+agents:
+  coder:
+    systemPrompt:
+      baseFile: ./prompts/coder-base.md
+```
+
+Strip layers by omitting them from `order`. This `minimal` agent skips
+context files and recall:
+
+```yaml
+agents:
+  minimal:
+    systemPrompt:
+      order: [base, instructions, core_memory]
+```
+
+Inject a custom layer. Reference it by name in `order`:
+
+```yaml
+agents:
+  sprint:
+    systemPrompt:
+      custom:
+        - name: sprint_goals
+          file: ./prompts/sprint-goals.md
+      order:
+        - base
+        - sprint_goals
+        - instructions
+        - context
+        - core_memory
+        - recall_memory
+```
+
+Custom layer names cannot collide with the seven built-ins. Unknown
+names in `order` emit a warning and are skipped.
+
+## Online mode
+
+Add `online: { enabled: true, … }` to an agent definition for a
+background tick on a cadence:
+
+```yaml
+agents:
+  default:
+    instructions: …
+    tools: [recall, memory, ask_user, discord_dm, web_fetch, …]
+    online:
+      enabled: true
+      goals_file: goals.md
+      cadence:
+        interval_minutes: 15
+        idle_backoff_multiplier: 2
+        max_interval_minutes: 120
+      tools: [recall, memory, web_fetch, discord_dm, …]
+      output:
+        notify_owner_on_finding: false
+```
+
+Each tick reads the agent's `goals.md`, runs the agent loop with the
+tightened tool allowlist, and either acts or backs off. Idle backoff
+stretches the next tick (15 → 30 → 60 → 120 minutes) so a quiet agent
+doesn't burn the LLM.
+
+Online mode is what generates "your stale branches" or "I noticed this in
+the inbox" pings. The two outbound-push tools are `gmail` (sends email)
+and `discord_dm` (sends a DM). An online agent with neither can still
+write notes via `recall` and `memory`, but can't reach you.
+
+(Internally the worker lives at `packages/core/src/exploratory/`; the
+audit trail is in the `exploratory_runs` table. Same thing as online
+mode, different label inside the codebase.)
+
+## Delegation
+
+Any agent with the `delegate` tool can call another agent:
+
+```
+delegate(agent="researcher", task="Find AI news from the past week")
+```
+
+By default `delegate` runs **synchronously**. The calling agent blocks
+until the sub-agent finishes, then receives its final response as a
+string. This is the right shape when you need the answer to decide what
+to do next.
+
+For fire-and-forget background work:
+
+```
+delegate(agent="researcher", task="…", async=true)
+```
+
+The calling agent returns immediately with a task id. Use `task_status`
+to poll.
+
+## Coder + reviewer dispatch
+
+Two specialist agents, `coder` and `reviewer`, are **not** delegate
+targets. They're dispatched by the **task-watcher** when a task's
+`assignee` is set to their name:
+
+```
+tasks(action="update", id="ptask_…", assignee="coder")
+```
+
+The task-watcher is a background poller (every 30 seconds by default)
+that scans for tasks assigned to specialist agents and runs them. The
+coder writes in a fresh git worktree, commits to a branch, hands the
+task back as `in_review`. A separate `reviewer` agent then runs
+typecheck and tests, reads the diff, and either approves (reassigns to
+the user) or requests changes (reassigns to coder).
+
+This is the right shape for code work because the agent never modifies
+your working tree, and the human sees a branch ready to merge rather
+than a stream of partial edits.
+
+Deep dive: [`docs/agents-and-hooks.md`](https://github.com/quintonmiller/tailored-ai/blob/main/docs/agents-and-hooks.md).
+
+## Inspecting agents
+
+```bash
+tai --list-agents
+```
+
+Prints every agent your config defines, the model each uses, and how many
+tools each has.
+
+## Where to read next
+
+- [Tools](/docs/tools) for what each built-in does.
+- [Memory](/docs/memory) for how `injectMemory` and recall work.
+- [Hooks](/docs/hooks) for `beforeRun` and `afterRun`.
+- [Cron jobs](/docs/cron) for scheduled non-interactive runs.

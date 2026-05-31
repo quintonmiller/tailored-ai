@@ -1,0 +1,330 @@
+export const metadata = {
+  title: "Configuration",
+  description: "config.yaml reference. Providers, agents, tools, channels, workflows, cron, plugins.",
+};
+
+# Configuration
+
+Every setting lives in one file: `config.yaml`. Environment variables
+interpolate as `${VAR_NAME}`. If no config file is found, TAI uses
+defaults (Ollama on localhost, basic tools enabled).
+
+A full annotated reference is
+[`config.example.yaml`](https://github.com/quintonmiller/tailored-ai/blob/main/config.example.yaml)
+in the repo.
+
+## Where TAI looks for config
+
+1. `--config <path>` if passed to the CLI.
+2. `$TAI_HOME/config.yaml` if `TAI_HOME` is set.
+3. `./config.yaml` in the cwd.
+
+`.env` in the same directory is loaded automatically. Its vars are
+available for `${VAR}` interpolation.
+
+## Hot reload
+
+TAI watches `config.yaml` and reloads on save. Adding or removing
+tools, changing models, editing agent instructions: all take effect on
+the next message. No restart.
+
+## Top-level keys
+
+```yaml
+provider: { ... }       # active LLM provider (single)
+providers: { ... }      # named providers (multi-provider setups)
+agent: { ... }          # global agent defaults
+agents: { ... }         # named agent definitions
+channels: { ... }       # discord, etc.
+tools: { ... }          # tool enable/disable + per-tool config
+custom_tools: { ... }   # YAML-defined shell-command tools
+commands: { ... }       # slash commands
+cron: { ... }           # scheduled jobs
+webhooks: { ... }       # incoming webhook config
+workflows: { ... }      # workflow directory + caps
+exploratory: { ... }    # global toggle for online-mode worker
+memory: { ... }         # embeddings + recall settings
+plugins: [ ... ]        # declarative third-party extension loader
+resources: [ ... ]      # skills, knowledge files
+server: { ... }         # HTTP API binding
+database: { ... }       # SQLite location
+```
+
+Validation warnings print at startup.
+
+## Provider
+
+Single-provider setup (most common):
+
+```yaml
+provider:
+  type: ollama            # ollama | openai | anthropic
+  model: llama3.2
+  baseUrl: http://127.0.0.1:11434    # optional override
+```
+
+OpenAI-compatible (vLLM, LM Studio, hosted OpenAI):
+
+```yaml
+provider:
+  type: openai
+  model: gpt-4o-mini
+  apiKey: ${OPENAI_API_KEY}
+  baseUrl: https://api.openai.com/v1   # default
+```
+
+Anthropic:
+
+```yaml
+provider:
+  type: anthropic
+  model: claude-sonnet-4-6
+  apiKey: ${ANTHROPIC_API_KEY}
+```
+
+### Custom providers
+
+`type:` resolves through a registry. Built-ins are `openai`,
+`openai_compatible`, and `anthropic`. Register a custom factory
+(Bedrock, Cohere, Gemini, an internal gateway) via
+`registerProviderFactory("bedrock", factory)` from `@tailored-ai/core`,
+then set `type: bedrock`. See [Extending →
+Adding a provider](/docs/extending#adding-a-provider).
+
+## Multi-provider
+
+Define multiple providers and let agents pick:
+
+```yaml
+providers:
+  ollama:
+    baseUrl: http://127.0.0.1:11434
+    defaultModel: devstral-small-2
+  openai:
+    apiKey: ${OPENAI_API_KEY}
+    defaultModel: gpt-4o-mini
+  anthropic:
+    apiKey: ${ANTHROPIC_API_KEY}
+    defaultModel: claude-sonnet-4-6
+
+agent:
+  defaultProvider: ollama
+```
+
+Per agent:
+
+```yaml
+agents:
+  researcher:
+    provider: openai
+    model: gpt-4o-mini
+  coder:
+    provider: ollama
+    model: qwen3-coder:30b
+```
+
+## Resilient model selection
+
+For setups where local models may be unreachable, give an agent an
+ordered priority list. TAI picks the first reachable one:
+
+```yaml
+agents:
+  default:
+    models:
+      - { provider: ollama, model: qwen3-coder:30b }
+      - { provider: openai, model: gpt-4o-mini }
+      - { provider: anthropic, model: claude-haiku-4-5-20251001 }
+```
+
+## Agent defaults
+
+```yaml
+agent:
+  defaultProvider: ollama
+  extraInstructions: ""             # appended to every agent's system prompt
+  maxHistoryTokens: 16000           # context window budget
+  temperature: 0.3                  # default LLM temperature
+  maxToolRounds: 10                 # safety limit on tool calls per message
+```
+
+Per-agent overrides go under `agents.<name>`. See [Agents](/docs/agents).
+
+## Channels
+
+See [Channels](/docs/channels). Discord example:
+
+```yaml
+channels:
+  discord:
+    enabled: true
+    token: ${DISCORD_BOT_TOKEN}
+    owner: ${DISCORD_OWNER_ID}
+    respondToDMs: true
+    respondToMentions: true
+    allowedGuilds: []          # empty = any
+    perChannelMapping: {}      # channel id → project id
+```
+
+## Tools
+
+The full catalog is in [Tools](/docs/tools). Per-tool config keys vary;
+the pattern is:
+
+```yaml
+tools:
+  exec:
+    enabled: true
+    allowedCommands: [git, pnpm, node]
+  write:
+    enabled: true
+    allowedPrefixes: [data/, output/]
+  web_search:
+    enabled: true
+    provider: brave
+    apiKey: ${BRAVE_API_KEY}
+  browser_mediator:
+    enabled: true
+    egressAllowList: [amazon.com]
+    vaultEnabled: true
+  discord_dm:
+    enabled: true
+```
+
+## Custom tools
+
+See [Custom tools](/docs/custom-tools).
+
+```yaml
+custom_tools:
+  weather:
+    description: Get weather for a city.
+    parameters:
+      city: { type: string, description: City name. }
+    command: "curl -s wttr.in/{{city}}?format=3"
+    timeout_ms: 5000
+```
+
+## Cron jobs
+
+See [Cron jobs](/docs/cron).
+
+```yaml
+cron:
+  enabled: true
+  jobs:
+    - name: morning-briefing
+      schedule: "0 7 * * 1-5"
+      agent: default
+      prompt: "Run my morning briefing."
+      delivery:
+        channel: discord-dm
+```
+
+## Workflows
+
+```yaml
+workflows:
+  directory: ./workflows       # default
+  maxConcurrent: 4
+  maxConcurrentByAgent:
+    coder: 1
+    _default: 2
+  retainRuns: 100
+```
+
+## Online mode (per-agent)
+
+Online mode is configured per agent, not globally. See
+[Agents → Online mode](/docs/agents#online-mode). The global toggle
+`exploratory.enabled` turns the worker on or off across all agents.
+
+## Webhooks
+
+```yaml
+webhooks:
+  enabled: true
+  bind_path: /webhooks               # default
+  hmac_secret: ${WEBHOOK_SECRET}     # optional; verified per request
+```
+
+## Plugins
+
+The eight extension registries (tool, channel, provider, embedding,
+task backend, step executor, trigger, skill) are live. Ship a plugin as
+an npm package that calls `register*Factory(id, factory)` on import, and
+declare it in `config.yaml`:
+
+```yaml
+plugins:
+  - "@some-author/tai-plugin-slack"
+  - module: "@me/tai-plugin-todoist"
+    config:
+      api_token: ${TODOIST_TOKEN}
+```
+
+The CLI dynamic-imports each entry before constructing the runtime, so
+the plugin's import side-effects populate the registries before anything
+asks. Per-entry `config` is reserved for future routing — today plugins
+read their config from the normal `tools.*` / `channels.*` blocks.
+
+See [Plugins](/docs/plugins) for the full recipe.
+
+## Resources
+
+Skills and knowledge files installed from local paths, GitHub, or npm:
+
+```yaml
+resources:
+  - kind: skill
+    source: github:user/skill-code-review
+  - kind: knowledge
+    source: ./data/kb/runbooks.md
+```
+
+See [Skills](/docs/skills).
+
+## Server (HTTP)
+
+```yaml
+server:
+  port: 3000
+  host: 127.0.0.1                # bind only locally by default
+  authToken: ${TAI_AUTH_TOKEN}   # required when host is non-loopback
+```
+
+`authToken` gates every `/api/*` route — GETs included — behind
+`Authorization: Bearer <token>`. Constant-time comparison.
+
+Set `authToken` whenever `host` is anything other than `127.0.0.1`,
+`localhost`, or `::1`. Without it, every chat history, tool output,
+and memory entry is readable by anyone who can route to the port. The
+validator emits a startup warning when this condition is detected.
+
+The legacy `apiKey` field still works but only gates mutating verbs
+(POST/PUT/PATCH/DELETE). Prefer `authToken` for new deployments.
+
+## Database
+
+```yaml
+database:
+  path: ./agent.db
+```
+
+## Environment variable interpolation
+
+Anywhere a string appears in `config.yaml`, write `${VAR_NAME}` and TAI
+substitutes from `.env` or the host environment. If the variable is
+unset, the substitution is left literal and a startup warning prints.
+
+```yaml
+provider:
+  type: openai
+  apiKey: ${OPENAI_API_KEY}    # reads from .env or $OPENAI_API_KEY
+```
+
+## Per-project overlays
+
+A registered project's `.tai.yaml` can carry a `config:` block that
+merges over the global config. See
+[Tasks & projects → Projects](/docs/tasks#projects).

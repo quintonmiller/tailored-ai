@@ -1,0 +1,191 @@
+export const metadata = {
+  title: "Tools",
+  description: "Every built-in tool, what it does, and how to turn it on or off.",
+};
+
+# Tools
+
+A tool is the unit the agent loop calls when the model decides it needs
+to act in the world. `{ name, description, parameters, execute }`. The
+model picks a tool based on its instructions, the user's message, and the
+tools available to that agent.
+
+> **TAI tools vs MCP.** If you've used Model Context Protocol, the
+> mental model is the same: structured JSON-Schema parameters, structured
+> results. TAI doesn't speak MCP over JSON-RPC; tools are in-process
+> TypeScript objects. The simplification is intentional: no separate
+> server process, no transport, no version negotiation. The cost is that
+> sharing tools across stacks is a copy-paste job until the
+> [plugin loader](/docs/plugins) ships in v0.2.
+
+## How to enable
+
+Each tool has a `tools.<name>` block in `config.yaml`. Set `enabled: true`
+to turn it on:
+
+```yaml
+tools:
+  exec:
+    enabled: true
+    allowedCommands: [git, pnpm, node, tsc]
+  write:
+    enabled: true
+    allowedPrefixes: [data/, output/]
+  web_search:
+    enabled: true
+    provider: brave
+    apiKey: ${BRAVE_API_KEY}
+  browser_mediator:
+    enabled: true
+    egressAllowList: [amazon.com, wikipedia.org]
+    vaultEnabled: true
+  discord_dm:
+    enabled: true
+```
+
+To restrict which agents can call a tool, list it in the agent's `tools:`
+array. An agent with no `tools:` list inherits every enabled tool.
+
+## Built-in catalog
+
+### Memory and knowledge
+
+Read [Memory](/docs/memory) for how these stores relate.
+
+| Tool | Verbs | Notes |
+|---|---|---|
+| `memory` | `read`, `write`, `append`, `list`, `search` | File-shaped notes in the agent's context dir. Scopes: `profile`, `global`, `knowledge`. |
+| `recall` | `note`, `query`, `search`, `list`, `delete` | The structured tier. Short notes with tags and embeddings. |
+| `core_memory` | `append`, `replace`, `read`, `clear` | Always-injected text the agent maintains as its working summary. |
+| `facts` | `set`, `get`, `delete`, `query` | Structured `(category, entity, key, value)` facts. |
+
+### File system and shell
+
+| Tool | What it does | Notes |
+|---|---|---|
+| `read` | Read a file's contents. | `allowedPrefixes:` config to scope. |
+| `write` | Create or overwrite a file. | `allowedPrefixes:` config. |
+| `exec` | Run a shell command. | `allowedCommands:` allowlist. Honors sandbox config. |
+
+### Web
+
+| Tool | What it does | Notes |
+|---|---|---|
+| `web_fetch` | Fetch a URL, extract plain text. | Aware of browser-mediator sessions: refuses when an active mediator session disallows the host. |
+| `web_search` | Brave Search API. | Requires `apiKey: ${BRAVE_API_KEY}`. |
+
+### Tasks and projects
+
+Read [Tasks & projects](/docs/tasks) for the backend story.
+
+| Tool | What it does |
+|---|---|
+| `tasks` | Create, update, delete, comment on project tasks. |
+| `task_query` | Filter tasks by status, assignee, tags, text. |
+| `projects` | List, register, switch projects. |
+| `documents` | Document store. PDF and image OCR via optional peers. |
+
+### Integrations (Google)
+
+| Tool | Verbs | Setup |
+|---|---|---|
+| `gmail` | `search`, `read`, `mark_seen`, `send` | Requires the `gog` CLI installed and `${GOG_KEYRING_PASSWORD}` set. Account in `tools.gmail.account`. Send is opt-in per agent (add `gmail` to the agent's `tools:` allowlist deliberately). |
+| `google_calendar` | `list_events`, `search`, `create_event`, `delete_event` | Same `gog` CLI. |
+| `google_drive` | `upload`, `list`, `search` | Same `gog` CLI. |
+
+### Browser
+
+| Tool | What it does | Notes |
+|---|---|---|
+| `browser` | Generic Playwright browser. Navigate, click, type, screenshot. | Requires `playwright` peer dep. |
+| `browser_mediator` | Bounded browser with egress allow-list, vault refs, output sanitiser, always-HITL gates. | Provided by [`@tailored-ai/browser-mediator`](/docs/packages/browser-mediator). Prefer this over `browser` for agent-driven web flows. |
+
+### Delegation and control
+
+| Tool | What it does |
+|---|---|
+| `delegate` | Call another agent synchronously (or `async=true` for background). |
+| `task_status` | List or inspect background tasks started by async `delegate`. |
+| `claude_code` | Delegate to the Claude Code CLI as a sub-agent. |
+| `ask_user` | Block the loop and prompt the user for input. Works in CLI and Discord. |
+| `load_skill` | Lazy-load a [Skill](/docs/skills) into the current loop. |
+| `run_workflow` | Trigger a [Workflow](/docs/workflows). |
+
+### Outbound push
+
+| Tool | What it does |
+|---|---|
+| `discord_dm` | Send a Discord DM to the configured owner. The right channel for unsolicited "FYI" pings from online agents. |
+| `request_action` | Enqueue a high-risk action (purchase, form submit) to the [trusted-actions](/docs/packages/trusted-actions) gateway for human approval. |
+| `check_action_status` | Poll a previously-enqueued action's status. |
+| `md_to_pdf` | Convert a markdown file to PDF. Requires `md-to-pdf` peer dep. |
+
+### Admin and introspection
+
+| Tool | What it does |
+|---|---|
+| `admin` | Read or update agent configuration at runtime. Restricted to write-permitted agents. |
+| `resource_admin` | Install, list, remove skills and workflows. |
+| `sleep` | Block the loop for N seconds. Useful in workflow steps. |
+| `current_datetime` | Returns the current local datetime. |
+| `uptime` | Returns the agent process uptime. |
+| `git_log` | Returns recent git log entries from the current project. |
+| `ip_info` | Returns the agent's public IP and geo. |
+
+## Restricting per agent
+
+By default an agent inherits every enabled tool. Narrow with the agent's
+`tools:` array:
+
+```yaml
+agents:
+  researcher:
+    tools: [web_search, web_fetch, recall, memory]
+    # exec, write, browser, etc. are unavailable to this agent
+```
+
+For a 30B local model: keep the list under five tools per agent. Past
+that, accuracy of tool selection drops noticeably.
+
+## Custom tools
+
+For tools that wrap a shell command, no TypeScript needed. The
+`custom_tools:` block in `config.yaml` takes a name, a command, a
+description, and a parameter schema. See [Custom tools](/docs/custom-tools).
+
+## Plugin tools
+
+Tools shipped as npm packages plug in via the `plugins:` config block
+(v0.2, see [Plugins](/docs/plugins)).
+
+## Writing tools in code
+
+See [Extending in code](/docs/extending) for the `Tool` interface and
+how to add a tool by forking the monorepo or by writing a plugin.
+
+## The Tool interface
+
+For reference:
+
+```ts
+import type { Tool, ToolContext, ToolResult } from "@tailored-ai/core";
+
+export const myTool: Tool = {
+  name: "my_tool",
+  description: "Does something useful in one sentence.",
+  parameters: {
+    type: "object",
+    properties: {
+      input: { type: "string", description: "The input." },
+    },
+    required: ["input"],
+  },
+  async execute(args, context: ToolContext): Promise<ToolResult> {
+    return { success: true, output: `Result: ${args.input}` };
+  },
+};
+```
+
+`ToolContext` gives access to the active session id, project id, db
+reference, and runtime accessor. The optional `destroy?()` hook fires on
+hot reload, when the tool is being replaced.

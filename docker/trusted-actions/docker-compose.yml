@@ -1,0 +1,136 @@
+# trusted-actions executor — docker compose unit.
+#
+# Build context is the repo root (../../). The Dockerfile pulls in
+# workspace metadata + sources directly, so there's no host-side
+# pnpm build step — the image is self-contained.
+#
+# Usage:
+#   bash scripts/setup-tai-executor.sh        # first-time setup
+#   docker compose up -d                       # day-to-day start
+#   docker compose logs -f                     # tail
+#   docker compose down                        # stop
+#   bash scripts/tai-executor-setup-amazon.sh  # one-time Amazon login
+#
+# Persistent state lives in three bind mounts under
+# docker/trusted-actions/:
+#   ./data/         SQLite DB
+#   ./secrets/      age-encrypted credential blobs (Amazon session, etc.)
+#   ./screenshots/  Playwright failure captures
+
+services:
+  executor:
+    build:
+      context: ../..
+      dockerfile: docker/trusted-actions/Dockerfile
+    image: tai-executor:latest
+    container_name: tai-executor
+    restart: unless-stopped
+    # Run as the host user so bind-mounted dirs don't need chown.
+    user: "${EXECUTOR_UID:-1000}:${EXECUTOR_GID:-1000}"
+    ports:
+      - "127.0.0.1:3100:3100"
+    # Map host.docker.internal → host gateway so callback POSTs from
+    # the executor back to TAI (which runs natively on the host) can
+    # reach it. Required for the wait/notify flow on purchase_item.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file:
+      - ./.env
+    volumes:
+      - ./data:/data
+      - ./secrets:/home/executor/.tai-executor/secrets
+      - ./screenshots:/home/executor/screenshots
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3100/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # One-shot service for the headed-Chromium Amazon login. Reuses the
+  # same image as `executor`. Uses host display (X11 socket bind) so
+  # the Chromium window opens on your desktop. Run as:
+  #   docker compose --profile setup run --rm executor-setup-amazon
+  # (or via scripts/tai-executor-setup-amazon.sh)
+  # Cloudflare Tunnel sidecar. Exposes the executor at a public HTTPS
+  # hostname so the PWA + Web Push can reach it (both REQUIRE https).
+  # Token-based remotely-managed tunnel — see scripts/tai-executor-tunnel-setup.sh.
+  #
+  # Bring up alongside the executor with `--profile tunnel`:
+  #   docker compose --profile tunnel up -d
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: tai-executor-tunnel
+    restart: unless-stopped
+    profiles: ["tunnel"]
+    depends_on:
+      executor:
+        condition: service_healthy
+    # `TUNNEL_TOKEN` comes from .env (see setup script). The cloudflared
+    # daemon dials Cloudflare's edge with this token; no inbound port
+    # forwarding required.
+    env_file:
+      - ./.env
+    command: tunnel --no-autoupdate run
+
+  executor-setup-amazon:
+    build:
+      context: ../..
+      dockerfile: docker/trusted-actions/Dockerfile
+    image: tai-executor:latest
+    profiles: ["setup"]
+    user: "${EXECUTOR_UID:-1000}:${EXECUTOR_GID:-1000}"
+    env_file:
+      - ./.env
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+    volumes:
+      - ./secrets:/home/executor/.tai-executor/secrets
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro
+      # WSLg
+      - /mnt/wslg:/mnt/wslg
+    command: ["node", "/app/dist/cli/bin.js", "setup", "amazon"]
+
+  # Dry-run end-to-end: empty-cart check, add-to-cart, checkout review,
+  # price-tolerance check. STOPS before clicking Place Order; browser
+  # stays open for manual inspection (Ctrl+C to close).
+  # Run as: scripts/tai-executor-test-purchase.sh <url>
+  executor-test-purchase:
+    build:
+      context: ../..
+      dockerfile: docker/trusted-actions/Dockerfile
+    image: tai-executor:latest
+    profiles: ["test"]
+    user: "${EXECUTOR_UID:-1000}:${EXECUTOR_GID:-1000}"
+    env_file:
+      - ./.env
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+    volumes:
+      - ./secrets:/home/executor/.tai-executor/secrets
+      - ./screenshots:/home/executor/screenshots
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro
+      - /mnt/wslg:/mnt/wslg
+    # PID 1 init so SIGINT propagates cleanly to Playwright children
+    init: true
+    stdin_open: true
+    tty: true
+    entrypoint: ["node", "/app/dist/cli/bin.js", "test-purchase"]
+
+  # Dry-run probe: scrapes a single product URL via the saved Amazon
+  # session. No cart modification, no purchase. Run as:
+  #   docker compose --profile probe run --rm executor-probe <url>
+  # (or via scripts/tai-executor-probe.sh — friendlier wrapper)
+  executor-probe:
+    build:
+      context: ../..
+      dockerfile: docker/trusted-actions/Dockerfile
+    image: tai-executor:latest
+    profiles: ["probe"]
+    user: "${EXECUTOR_UID:-1000}:${EXECUTOR_GID:-1000}"
+    env_file:
+      - ./.env
+    volumes:
+      - ./secrets:/home/executor/.tai-executor/secrets
+      - ./screenshots:/home/executor/screenshots
+    entrypoint: ["node", "/app/dist/cli/bin.js", "probe", "amazon"]

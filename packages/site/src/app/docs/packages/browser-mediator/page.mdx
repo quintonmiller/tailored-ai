@@ -1,0 +1,158 @@
+export const metadata = {
+  title: "@tailored-ai/browser-mediator",
+  description: "Framework-agnostic bounded browser tool. Egress allow-list, vault refs, opaque ids, HITL gates.",
+};
+
+# @tailored-ai/browser-mediator
+
+A thin layer over Playwright that gives any LLM agent a **bounded**
+browser tool. No JS eval. No cookie or storage access. No raw HTTP.
+Plus three defenses you usually have to bolt on yourself.
+
+```bash
+npm install @tailored-ai/browser-mediator playwright
+npx playwright install chromium
+```
+
+**Zero dependency on the rest of TAI.** Ships with adapters for OpenAI
+function-calling, Anthropic tool-use, the TAI `Tool` interface, plus a
+framework-free `dispatchToMediator()` for everything else.
+
+## What's defended
+
+| Defense | What it does |
+|---|---|
+| **Egress allow-list** | Per-session list of hostnames the page can reach. Everything else aborts at the Playwright `route()` layer. |
+| **Vault `$ref` expansion** | Inject secrets into a form via opaque tokens. The value never returns to the agent; the audit log stores only the masked form. |
+| **Output sanitiser** | PANs (Luhn-checked), SSNs, IBANs, phone numbers, email addresses, addresses redacted from page text before it returns to the LLM. |
+| **Always-HITL classifier** | "Place your order," "Submit payment," and friends throw `AlwaysHitlRefusedError` instead of clicking. The host wraps the click and routes the user into an approval flow. |
+| **Opaque element ids** | `read_links` returns `el:bm-<hex>:<n>` per element. Selectors resolve only inside the mediator; the calling agent never sees a CSS selector. |
+| **Cross-tool egress crosstalk** | While a mediator session is open on `amazon.com`, other egress tools in the same process (e.g. `web_fetch`) check against the same allow-list. Closes the "read sensitive page, exfil via sibling tool" channel. |
+
+## Quick start (no framework)
+
+```ts
+import { BrowserMediator } from "@tailored-ai/browser-mediator";
+
+const m = new BrowserMediator({
+  egressAllowList: ["example.com"],
+  resolveSecret: async (ns, key) => myVault.get(`${ns}.${key}`),
+});
+
+await m.start();
+await m.navigate("https://example.com");
+console.log(await m.readText());   // sanitised; PANs/SSNs redacted
+await m.close();
+```
+
+## OpenAI function-calling
+
+```ts
+import OpenAI from "openai";
+import { BrowserMediator } from "@tailored-ai/browser-mediator";
+import {
+  openaiToolSpec,
+  handleOpenAIToolCall,
+} from "@tailored-ai/browser-mediator/adapters/openai";
+
+const client = new OpenAI();
+const mediator = new BrowserMediator({ egressAllowList: ["amazon.com"] });
+
+const response = await client.chat.completions.create({
+  model: "gpt-4o",
+  messages,
+  tools: [openaiToolSpec()],
+});
+
+for (const call of response.choices[0].message.tool_calls ?? []) {
+  if (call.function.name === "browser_mediator") {
+    const r = await handleOpenAIToolCall(mediator, call.function.arguments);
+    // feed r back as { role: "tool", tool_call_id, content }
+  }
+}
+```
+
+## Anthropic tool-use
+
+```ts
+import Anthropic from "@anthropic-ai/sdk";
+import { BrowserMediator } from "@tailored-ai/browser-mediator";
+import {
+  anthropicToolSpec,
+  handleAnthropicToolCall,
+} from "@tailored-ai/browser-mediator/adapters/anthropic";
+
+const mediator = new BrowserMediator({ egressAllowList: ["wikipedia.org"] });
+const response = await new Anthropic().messages.create({
+  model: "claude-opus-4-7",
+  max_tokens: 1024,
+  messages,
+  tools: [anthropicToolSpec()],
+});
+
+for (const block of response.content) {
+  if (block.type === "tool_use" && block.name === "browser_mediator") {
+    const r = await handleAnthropicToolCall(mediator, block.input);
+    // feed back as { type: "tool_result", tool_use_id: block.id, content: r.content, is_error: r.is_error }
+  }
+}
+```
+
+## With TAI
+
+If you're already using `@tailored-ai/core`, enable the tool:
+
+```yaml
+# config.yaml
+tools:
+  browser_mediator:
+    enabled: true
+    egressAllowList: ["amazon.com"]
+    vaultEnabled: true
+```
+
+The mediator's encrypted vault (AES-256-GCM, backed by your `agent.db`)
+holds your secrets. The agent types `$amazon.password` into a form;
+the mediator expands it server-side; the actual password never enters
+the LLM context.
+
+## Tool API
+
+| Action | Args | Returns |
+|---|---|---|
+| `navigate` | `{ url }` | `"Navigated to … Status: … Title: …"` |
+| `url` | — | `"<current url>\nTitle: <title>"` |
+| `read_text` | `{ max_chars? }` | page text (sanitised; default 4 KB cap) |
+| `read_links` | — | lines of `<opaque-id>\t<visible-text>` |
+| `click` | `{ node_id }` | confirmation; **refuses on always-HITL classes** |
+| `type_text` | `{ node_id, value }` | confirmation; `$ns.key` expanded server-side |
+| `screenshot` | — | metadata (size in bytes); mediator owns the image |
+| `wait_for` | `{ text?, selector?, timeout_ms? }` | `"visible"` |
+| `close` | — | `"closed"` |
+
+## What this package will not do
+
+- **Containerise Playwright.** v1 runs in-process; subprocess + netns
+  + iptables hardening is out of scope. The boundary against
+  prompt injection is the tool API, not the process. Wrap the mediator
+  in your own container if you need that.
+- **Solve CAPTCHAs or anti-bot.** Vanilla headless Chromium. Plenty of
+  sites detect it.
+- **Implement workflow learning.** Recording and replaying a sequence
+  of approved actions is upstream work the calling agent is expected
+  to do.
+
+## Threat model
+
+Full walk-through in the
+[design doc](https://github.com/quintonmiller/tailored-ai/blob/main/docs/browser-mediator-design.md).
+Short version: vault refs and the bounded tool API protect against
+prompt-injection-driven exfiltration; the egress allow-list and
+cross-tool egress policy protect against side-channel exfil via
+sibling tools.
+
+## Source
+
+[`packages/browser-mediator/`](https://github.com/quintonmiller/tailored-ai/tree/main/packages/browser-mediator).
+README:
+[`packages/browser-mediator/README.md`](https://github.com/quintonmiller/tailored-ai/blob/main/packages/browser-mediator/README.md).
