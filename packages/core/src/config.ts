@@ -263,6 +263,14 @@ export interface AgentConfig {
       enabled: boolean;
       password: string;
     };
+    /**
+     * Whether to serve the bundled web UI. When false, the server skips
+     * static-file mounting and `/` returns 404 — useful for headless
+     * deployments. Defaults to true.
+     */
+    ui?: {
+      enabled: boolean;
+    };
   };
   database: {
     path: string;
