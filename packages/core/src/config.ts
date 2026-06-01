@@ -563,6 +563,17 @@ export interface AgentConfig {
       maxChunkChars?: number;
       overlap?: number;
     };
+    /**
+     * Memory storage backend selection. `provider` names a registered
+     * `MemoryBackendFactory` (default "builtin" = bundled SQLite). Plugins
+     * register custom factories via `registerMemoryBackendFactory(id, ...)`
+     * and read their config slice from `memory.backend.<id>`. See
+     * docs/memory-storage-registry.md for the design.
+     */
+    backend?: {
+      provider?: string;
+      [providerId: string]: unknown;
+    };
   };
 }
 

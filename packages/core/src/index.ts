@@ -100,6 +100,26 @@ export { autoStash, createWorktree } from "./worktree.js";
 // Keep the side-effect import last so the registry has the rest of core
 // loaded before Discord registers itself.
 import "./channels/discord-builtin.js";
+// Importing this module registers SqliteMemoryBackend as the "builtin"
+// memory backend factory. Same pattern as discord-builtin.
+import "./memory/builtin.js";
+
+export type {
+  ListQuery as MemoryListQuery,
+  MemoryBackend,
+  MemoryContent,
+  MemoryFragment,
+  MemoryHint,
+  PreludeContext as MemoryPreludeContext,
+  QueryContext as MemoryQueryContext,
+} from "./memory/interface.js";
+export {
+  memoryBackendFactoryRegistry,
+  type MemoryBackendFactory,
+  registerMemoryBackendFactory,
+  resolveMemoryBackend,
+} from "./memory/registry.js";
+export { SqliteMemoryBackend } from "./memory/sqlite-backend.js";
 
 export {
   type ChunkOptions,
