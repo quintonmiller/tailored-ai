@@ -15,13 +15,10 @@ import {
   compactSession,
   countChunks,
   createDocument,
-  createNote,
   createProject,
   createProjectTask,
   defaultLockfilePath,
   deleteDocument,
-  deleteFact,
-  deleteNote,
   deleteProject,
   deleteProjectTask,
   deleteSecret,
@@ -35,9 +32,7 @@ import {
   FileLogStore,
   FileResourceSource,
   type FormEvent,
-  findFact,
   findOrCreateSession,
-  forgetFact,
   formatCompactResult,
   formatHits,
   GitResourceSource,
@@ -69,6 +64,7 @@ import {
   listTasks,
   listWorkflowRuns,
   listWorkflowSteps,
+  type MemoryFragment,
   NpmResourceSource,
   type ProjectQueryFilter,
   parseSkillMd,
@@ -101,7 +97,6 @@ import {
   updateProject,
   updateProjectTask,
   updateSessionMeta,
-  upsertFact,
   validateWorkflow,
   type WorkflowEngine,
   type WorkflowTrigger,
@@ -156,6 +151,82 @@ function safeBearerEquals(presented: string, expected: string): boolean {
     return false;
   }
   return timingSafeEqual(a, b);
+}
+
+/**
+ * Build a backend scope string from request params. The SQLite backend
+ * parses `project:<id> agent:<name> session:<id>` (space-separated). Other
+ * backends may treat scope as opaque, but the format is uniform on the
+ * server side so backend swaps don't ripple into routes.
+ */
+function buildScope(parts: {
+  projectId?: string | null;
+  agent?: string | null;
+  sessionId?: string | null;
+}): string {
+  const out: string[] = [];
+  if (parts.projectId) out.push(`project:${parts.projectId}`);
+  if (parts.agent) out.push(`agent:${parts.agent}`);
+  if (parts.sessionId) out.push(`session:${parts.sessionId}`);
+  return out.length > 0 ? out.join(" ") : "global";
+}
+
+/**
+ * Strip a `kind:` prefix from a fragment id. SQLite backend returns
+ * `note:abc` / `fact:abc`; the legacy JSON shape exposed the bare id. We
+ * peel the prefix back off so the UI keeps working without a migration.
+ */
+function stripIdPrefix(id: string | undefined, kind: string): string {
+  if (!id) return "";
+  const prefix = `${kind}:`;
+  return id.startsWith(prefix) ? id.slice(prefix.length) : id;
+}
+
+/**
+ * Convert a `MemoryFragment` (note kind) back into the legacy Note JSON
+ * shape that `/api/memory/notes` has returned since v0. Every field on
+ * the legacy shape lives on `fragment.metadata` for SqliteMemoryBackend
+ * (see `noteFragment` in sqlite-backend.ts). Other backends may not
+ * populate every field — callers tolerate `null`.
+ */
+function fragmentToNote(fragment: MemoryFragment): Record<string, unknown> {
+  const md = (fragment.metadata ?? {}) as Record<string, unknown>;
+  return {
+    id: stripIdPrefix(fragment.id, "note"),
+    content: fragment.text,
+    tags: Array.isArray(md.tags) ? md.tags : [],
+    importance: typeof md.importance === "number" ? md.importance : null,
+    ref_count: typeof md.ref_count === "number" ? md.ref_count : 0,
+    created_at: typeof md.created_at === "string" ? md.created_at : null,
+    ttl_at: typeof md.ttl_at === "string" ? md.ttl_at : null,
+    project_id: typeof md.project_id === "string" ? md.project_id : null,
+    agent: typeof md.agent === "string" ? md.agent : null,
+    // session_id isn't in the SQLite noteFragment metadata today; callers
+    // that want it should `getNote` directly. Surface as null for shape parity.
+    session_id: typeof md.session_id === "string" ? md.session_id : null,
+  };
+}
+
+/**
+ * Convert a `MemoryFragment` (fact kind) back into the legacy Fact JSON
+ * shape that `/api/facts` has returned since v0. Mirrors `factFragment`
+ * in sqlite-backend.ts.
+ */
+function fragmentToFact(fragment: MemoryFragment): Record<string, unknown> {
+  const md = (fragment.metadata ?? {}) as Record<string, unknown>;
+  return {
+    id: stripIdPrefix(fragment.id, "fact"),
+    category: typeof md.category === "string" ? md.category : "",
+    entity: typeof md.entity === "string" ? md.entity : "",
+    key: typeof md.key === "string" ? md.key : "",
+    value: fragment.text,
+    asof: typeof md.asof === "string" ? md.asof : null,
+    source: typeof md.source === "string" ? md.source : null,
+    confidence: typeof md.confidence === "number" ? md.confidence : null,
+    project_id: typeof md.project_id === "string" ? md.project_id : null,
+    created_at: typeof md.created_at === "string" ? md.created_at : null,
+    updated_at: typeof md.updated_at === "string" ? md.updated_at : null,
+  };
 }
 
 export function createServer(opts: ServerOptions) {
@@ -278,7 +349,7 @@ export function createServer(opts: ServerOptions) {
   // Memory: notes + chunks + recall (M7).
   // ---------------------------------------------------------------------------
 
-  app.get("/api/memory/notes", (c) => {
+  app.get("/api/memory/notes", async (c) => {
     const project = c.req.query("project");
     const tag = c.req.query("tag");
     const search = c.req.query("search");
@@ -287,18 +358,31 @@ export function createServer(opts: ServerOptions) {
     const limit = limitParam ? Number.parseInt(limitParam, 10) : 50;
     // ?project=global → un-scoped (null). Omitted → no project filter.
     const projectFilter = project === undefined ? undefined : project === "global" ? null : project;
-    const notes = listNotes(runtime.db, {
-      project_id: projectFilter,
-      tag,
-      search,
+    const backend = await runtime.getMemoryBackend();
+    if (!backend.list) {
+      return c.json({ error: "list not supported by the active memory backend" }, 501);
+    }
+    // `search` and `agent` aren't first-class on the backend list contract.
+    // We over-fetch and filter client-side on the agent metadata; for
+    // `search` we substring-match the fragment text. Cheap for the typical
+    // notes-table sizes; revisit if a remote backend ships paginated list.
+    const scope = buildScope({
+      projectId: typeof projectFilter === "string" ? projectFilter : undefined,
       agent: agent || undefined,
-      limit,
-      excludeExpired: true,
-      // A project view sees its own notes + global ones. Globals encode
-      // user-wide preferences/facts that apply across every project.
-      includeGlobal: typeof projectFilter === "string",
     });
-    return c.json(notes);
+    const fragments = await backend.list({
+      scope,
+      kind: "note",
+      tags: tag ? [tag] : undefined,
+      limit: search || agent ? Math.max(limit, 500) : limit,
+    });
+    let notes = fragments.map(fragmentToNote);
+    if (agent) notes = notes.filter((n) => n.agent === agent);
+    if (search) {
+      const needle = search.toLowerCase();
+      notes = notes.filter((n) => String(n.content ?? "").toLowerCase().includes(needle));
+    }
+    return c.json(notes.slice(0, limit));
   });
 
   app.post("/api/memory/notes", async (c) => {
@@ -317,25 +401,48 @@ export function createServer(opts: ServerOptions) {
     const tags = Array.isArray(body.tags) ? body.tags.filter((t): t is string => typeof t === "string") : [];
     const importance =
       typeof body.importance === "number" && body.importance >= 0 && body.importance <= 1 ? body.importance : null;
-    const note = createNote(runtime.db, {
-      content: body.content,
-      tags,
-      importance,
-      project_id: typeof body.project_id === "string" ? body.project_id : null,
-      session_id: typeof body.session_id === "string" ? body.session_id : null,
-      agent: typeof body.agent === "string" ? body.agent : null,
-      ttl_at: typeof body.ttl_at === "string" ? body.ttl_at : null,
+    const backend = await runtime.getMemoryBackend();
+    const scope = buildScope({
+      projectId: typeof body.project_id === "string" ? body.project_id : undefined,
+      agent: typeof body.agent === "string" ? body.agent : undefined,
+      sessionId: typeof body.session_id === "string" ? body.session_id : undefined,
     });
-    return c.json(note, 201);
+    const { id } = await backend.write(
+      { text: body.content },
+      {
+        kind: "note",
+        scope,
+        tags,
+        suggestedImportance: importance ?? undefined,
+        suggestedTtl: typeof body.ttl_at === "string" ? body.ttl_at : null,
+      },
+    );
+    // Re-fetch via backend.get to return the legacy Note shape. When the
+    // backend doesn't support get, fall back to a minimal envelope.
+    if (backend.get) {
+      const fragment = await backend.get(id);
+      if (fragment) return c.json(fragmentToNote(fragment), 201);
+    }
+    return c.json({ id: stripIdPrefix(id, "note") }, 201);
   });
 
-  app.get("/api/memory/notes/:id", (c) => {
+  app.get("/api/memory/notes/:id", async (c) => {
     const { id } = c.req.param();
-    const note = getNote(runtime.db, id);
-    if (!note) return c.json({ error: "note not found" }, 404);
-    return c.json(note);
+    const backend = await runtime.getMemoryBackend();
+    if (!backend.get) {
+      return c.json({ error: "get not supported by the active memory backend" }, 501);
+    }
+    // Try the prefixed form first (`note:<id>` is the canonical backend
+    // identifier), then fall back to bare id for backends that don't use
+    // the kind-prefix convention.
+    const fragment = (await backend.get(`note:${id}`)) ?? (await backend.get(id));
+    if (!fragment) return c.json({ error: "note not found" }, 404);
+    return c.json(fragmentToNote(fragment));
   });
 
+  // PATCH stays SQLite-direct: tag/importance/pinned edits operate on
+  // SQLite-shape-specific columns and the MemoryBackend write contract
+  // doesn't model partial updates.
   app.patch("/api/memory/notes/:id", async (c) => {
     const { id } = c.req.param();
     const existing = getNote(runtime.db, id);
@@ -382,13 +489,21 @@ export function createServer(opts: ServerOptions) {
     return c.json(updated);
   });
 
-  app.delete("/api/memory/notes/:id", (c) => {
+  app.delete("/api/memory/notes/:id", async (c) => {
     const { id } = c.req.param();
-    const ok = deleteNote(runtime.db, id);
+    const backend = await runtime.getMemoryBackend();
+    if (!backend.delete) {
+      return c.json({ error: "delete not supported by the active memory backend" }, 501);
+    }
+    // Try the prefixed form (canonical for SQLite), fall back to bare id
+    // for backends that don't use the kind-prefix convention.
+    const ok = (await backend.delete(`note:${id}`)) || (await backend.delete(id));
     if (!ok) return c.json({ error: "note not found" }, 404);
     return c.json({ deleted: true });
   });
 
+  // Promote stays SQLite-direct: lifecycle operation that owns the chunk
+  // table + embedding model, both private to the SQLite backend today.
   app.post("/api/memory/notes/:id/promote", async (c) => {
     const { id } = c.req.param();
     const embedder = runtime.getEmbedder();
@@ -428,6 +543,9 @@ export function createServer(opts: ServerOptions) {
     return c.json({ hits, formatted: formatHits(hits) });
   });
 
+  // Stats stays SQLite-direct: analytics over SQLite-specific shape
+  // (ref_count, archival tag filter, chunk count) that isn't part of the
+  // MemoryBackend contract.
   app.get("/api/memory/stats", (c) => {
     const project = c.req.query("project");
     const projectFilter = project === undefined ? undefined : project === "global" ? null : project;
@@ -476,6 +594,8 @@ export function createServer(opts: ServerOptions) {
     });
   });
 
+  // Sweep stays SQLite-direct: lifecycle operation (TTL eviction, ref-count
+  // decay) owned by the SQLite backend's internal tables.
   app.post("/api/memory/sweep", (c) => {
     const report = runMemorySweep(runtime.db);
     return c.json(report);
@@ -1237,33 +1357,59 @@ export function createServer(opts: ServerOptions) {
 
   // --- Facts ---
 
-  app.get("/api/facts", (c) => {
+  app.get("/api/facts", async (c) => {
     const projectIdRaw = c.req.query("project_id");
     // Tri-state filter:
     //   "global"           → globals only (project_id IS NULL)
     //   undefined / null   → globals only (back-compat)
     //   "<project-id>"     → that project's facts PLUS globals
     const projectId = projectIdRaw === "global" || projectIdRaw == null ? null : projectIdRaw;
-    const limit = c.req.query("limit");
-    const facts = listFacts(runtime.db, {
-      project_id: projectId,
-      category: c.req.query("category"),
-      entity: c.req.query("entity"),
-      key: c.req.query("key"),
-      search: c.req.query("search"),
-      limit: limit ? Number.parseInt(limit, 10) : undefined,
-      includeGlobal: typeof projectId === "string",
+    const limitRaw = c.req.query("limit");
+    const limit = limitRaw ? Number.parseInt(limitRaw, 10) : undefined;
+    const category = c.req.query("category");
+    const entity = c.req.query("entity");
+    const key = c.req.query("key");
+    const search = c.req.query("search");
+
+    const backend = await runtime.getMemoryBackend();
+    if (!backend.list) {
+      return c.json({ error: "list not supported by the active memory backend" }, 501);
+    }
+    // category/entity/key/search aren't first-class on the list contract.
+    // Over-fetch then filter client-side from fragment metadata.
+    const scope = buildScope({ projectId: typeof projectId === "string" ? projectId : undefined });
+    const needsClientFilter = !!(category || entity || key || search);
+    const fragments = await backend.list({
+      scope,
+      kind: "fact",
+      limit: needsClientFilter ? Math.max(limit ?? 100, 1000) : limit,
     });
+    let facts = fragments.map(fragmentToFact);
+    if (category) facts = facts.filter((f) => f.category === category);
+    if (entity) facts = facts.filter((f) => f.entity === entity);
+    if (key) facts = facts.filter((f) => f.key === key);
+    if (search) {
+      const needle = search.toLowerCase();
+      facts = facts.filter((f) => String(f.value ?? "").toLowerCase().includes(needle));
+    }
+    if (typeof limit === "number") facts = facts.slice(0, limit);
     return c.json({ facts });
   });
 
-  app.get("/api/facts/:category/:entity/:key", (c) => {
+  app.get("/api/facts/:category/:entity/:key", async (c) => {
     const { category, entity, key } = c.req.param();
     const projectIdRaw = c.req.query("project_id");
     const projectId = projectIdRaw === "global" || projectIdRaw == null ? null : projectIdRaw;
-    const fact = findFact(runtime.db, category, entity, key, projectId);
-    if (!fact) return c.json({ error: "Fact not found" }, 404);
-    return c.json(fact);
+    const backend = await runtime.getMemoryBackend();
+    const scope = buildScope({ projectId: typeof projectId === "string" ? projectId : undefined });
+    const hits = await backend.query({
+      wantStructured: { category, entity, key },
+      scope,
+      limit: 1,
+    });
+    const fragment = hits[0];
+    if (!fragment) return c.json({ error: "Fact not found" }, 404);
+    return c.json(fragmentToFact(fragment));
   });
 
   app.post("/api/facts", async (c) => {
@@ -1281,25 +1427,67 @@ export function createServer(opts: ServerOptions) {
       return c.json({ error: "category, key, and value are required" }, 400);
     }
     try {
-      const fact = upsertFact(runtime.db, body);
-      return c.json(fact, 201);
+      const backend = await runtime.getMemoryBackend();
+      const scope = buildScope({
+        projectId: typeof body.project_id === "string" ? body.project_id : undefined,
+      });
+      const structured: Record<string, unknown> = {
+        category: body.category,
+        entity: body.entity ?? "",
+        key: body.key,
+      };
+      if (body.asof !== undefined && body.asof !== null) structured.asof = body.asof;
+      if (body.confidence !== undefined && body.confidence !== null) structured.confidence = body.confidence;
+      await backend.write(
+        { text: body.value, structured },
+        {
+          kind: "fact",
+          scope,
+          sourceUri: body.source ?? undefined,
+        },
+      );
+      // Re-fetch via query to return the canonical Fact shape.
+      const hits = await backend.query({
+        wantStructured: { category: body.category, entity: body.entity ?? "", key: body.key },
+        scope,
+        limit: 1,
+      });
+      const fragment = hits[0];
+      if (fragment) return c.json(fragmentToFact(fragment), 201);
+      return c.json({ id: "" }, 201);
     } catch (err) {
       return c.json({ error: (err as Error).message }, 400);
     }
   });
 
-  app.delete("/api/facts/:id", (c) => {
+  app.delete("/api/facts/:id", async (c) => {
     const { id } = c.req.param();
-    const ok = deleteFact(runtime.db, id);
+    const backend = await runtime.getMemoryBackend();
+    if (!backend.delete) {
+      return c.json({ error: "delete not supported by the active memory backend" }, 501);
+    }
+    const ok = (await backend.delete(`fact:${id}`)) || (await backend.delete(id));
     if (!ok) return c.json({ error: "Fact not found" }, 404);
     return c.json({ ok: true });
   });
 
-  app.delete("/api/facts/:category/:entity/:key", (c) => {
+  app.delete("/api/facts/:category/:entity/:key", async (c) => {
     const { category, entity, key } = c.req.param();
     const projectIdRaw = c.req.query("project_id");
     const projectId = projectIdRaw === "global" || projectIdRaw == null ? null : projectIdRaw;
-    const ok = forgetFact(runtime.db, category, entity, key, projectId);
+    const backend = await runtime.getMemoryBackend();
+    if (!backend.delete) {
+      return c.json({ error: "delete not supported by the active memory backend" }, 501);
+    }
+    const scope = buildScope({ projectId: typeof projectId === "string" ? projectId : undefined });
+    const hits = await backend.query({
+      wantStructured: { category, entity, key },
+      scope,
+      limit: 1,
+    });
+    const target = hits[0];
+    if (!target || !target.id) return c.json({ error: "Fact not found" }, 404);
+    const ok = await backend.delete(target.id);
     if (!ok) return c.json({ error: "Fact not found" }, 404);
     return c.json({ ok: true });
   });
