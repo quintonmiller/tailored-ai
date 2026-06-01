@@ -40,7 +40,8 @@ function renderDetail(selected: string, d: DraftConfig) {
     case "ui":
       return (
         <>
-          <Text>Bundled web UI served from the CLI.</Text>
+          <Text>Web UI mounted by the server.</Text>
+          <Text dimColor>builtin = bundled dashboard; disabled = headless; or pick a custom package.</Text>
           <Text dimColor>Current: {describeSlot(d.ui)}</Text>
         </>
       );
