@@ -6,6 +6,16 @@ Designed as a **reference implementation** of the channel registry (#81) — sma
 
 ## Install
 
+> **Note**: A first-class `tai plugin install` command is tracked in [#43](https://github.com/quintonmiller/tailored-ai/issues/43). Until that lands, install the package next to your global `tai` so Node's module resolver can find it from the CLI's location.
+
+**npm-globally-installed TAI:**
+
+```bash
+npm install -g @tailored-ai/channel-slack
+```
+
+**Workspace / monorepo (development):**
+
 ```bash
 pnpm add @tailored-ai/channel-slack
 ```
