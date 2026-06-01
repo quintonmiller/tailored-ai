@@ -25,8 +25,10 @@ import {
   migrateContextDir,
   newSession,
   type ProjectContext,
+  registerUiProviderFactory,
   resolveAgent,
   resolveProjectFromCwd,
+  resolveUiProvider,
   runAgentLoop,
   startRegisteredChannels,
   TaskWatcher,
@@ -88,6 +90,15 @@ function resolveUiDistPath(): string | undefined {
 
   return undefined;
 }
+
+// Register the bundled web UI as the "builtin" provider. Custom providers
+// register themselves via the plugin loader, which runs before runServer
+// resolves the active provider.
+registerUiProviderFactory("builtin", () => {
+  const staticDir = resolveUiDistPath();
+  if (!staticDir) return undefined;
+  return { id: "builtin", staticDir };
+});
 
 /**
  * Module-scoped reference to the TaskWatcher. main() captures it in
@@ -177,8 +188,10 @@ async function runServer(runtime: AgentRuntime) {
     }
   });
 
-  // `server.ui.enabled: false` skips mounting static UI for headless deployments.
-  const uiDistPath = runtime.getConfig().server.ui?.enabled === false ? undefined : resolveUiDistPath();
+  // The CLI registers "builtin" above (top-level side-effect); plugin
+  // providers register on plugin import. `server.ui.enabled: false` is the
+  // kill-switch — resolveUiProvider returns undefined in that case.
+  const uiProvider = await resolveUiProvider(runtime);
   const workflowEngine = createWorkflowEngine({
     runtime,
     db: runtime.db,
@@ -349,7 +362,7 @@ async function runServer(runtime: AgentRuntime) {
     autopilot,
     exploratory,
     workflowEngine,
-    uiDistPath,
+    uiProvider,
   });
   const httpServer = start();
   channels.push({
@@ -363,8 +376,9 @@ async function runServer(runtime: AgentRuntime) {
   console.log(`Provider: ${runtime.getProvider().name} | Model: ${model}`);
   console.log(`Tools: ${tools.map((t) => t.name).join(", ")}`);
   console.log(`Channels: ${channels.map((c) => c.name).join(", ")}`);
-  if (uiDistPath) {
-    console.log(`UI: http://${runtime.getConfig().server.host}:${runtime.getConfig().server.port}`);
+  if (uiProvider) {
+    const label = uiProvider.id === "builtin" ? "UI" : `UI (${uiProvider.id})`;
+    console.log(`${label}: http://${runtime.getConfig().server.host}:${runtime.getConfig().server.port}`);
   }
   console.log("Listening for messages...");
 

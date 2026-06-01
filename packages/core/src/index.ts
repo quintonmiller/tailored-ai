@@ -87,6 +87,13 @@ export type {
 } from "./tasks/interface.js";
 export { NativeTaskBackend } from "./tasks/native.js";
 export { LoadSkillTool, type LoadSkillToolOptions } from "./tools/load-skill.js";
+export type { UiProvider } from "./ui/interface.js";
+export {
+  registerUiProviderFactory,
+  resolveUiProvider,
+  type UiProviderFactory,
+  uiProviderFactoryRegistry,
+} from "./ui/registry.js";
 export type { BranchStrategy, CreateWorktreeOptions, Worktree } from "./worktree.js";
 export { autoStash, createWorktree } from "./worktree.js";
 // Importing this module registers Discord as the "discord" channel factory.

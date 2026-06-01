@@ -152,14 +152,14 @@ function EditorSwitch({ state, dispatch }: { state: AppState; dispatch: (a: Acti
     case "plugins":
       return <PluginsEditor plugins={state.draft.plugins} dispatch={dispatch} onExit={onExit} />;
     case "ui":
-      // No UI registry in core yet — "Custom package…" hidden until one lands.
       return (
         <SlotEditor
           label="UI"
           current={state.draft.ui}
           allowDisabled
-          allowCustom={false}
+          allowCustom
           toAction={(choice) => ({ type: "setUi", choice })}
+          toPluginAction={(plugin) => ({ type: "addPlugin", plugin })}
           dispatch={dispatch}
           onExit={onExit}
         />

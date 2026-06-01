@@ -60,7 +60,12 @@ export function SlotEditor({ label, current, allowDisabled, allowCustom, toActio
               setMode("resolving");
               setBusy(`Resolving ${uri}…`);
               void resolveOnePlugin(uri).then((resolved) => {
-                dispatch(toAction({ customUri: uri }));
+                // customUri carries the registered id that ends up in
+                // config (e.g. server.ui.provider). Prefer the resolved
+                // manifestId; fall back to the URI when the plugin doesn't
+                // ship a manifest.
+                const providerId = resolved.manifestId ?? uri;
+                dispatch(toAction({ customUri: providerId }));
                 if (toPluginAction) dispatch(toPluginAction(resolved));
                 setBusy(undefined);
                 onExit();
