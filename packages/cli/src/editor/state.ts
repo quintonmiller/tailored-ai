@@ -1,8 +1,8 @@
 import type { DraftConfig, ProviderDraft, ResolvedPlugin, SlotChoice, ToolsDraft } from "./types.js";
 
-export type RowId = "provider" | "ui" | "memory" | "tools" | "channels" | "task" | "plugins";
+export type RowId = "provider" | "ui" | "memory" | "tools" | "channels" | "task" | "agents" | "plugins";
 
-export const ROWS: RowId[] = ["provider", "ui", "memory", "tools", "channels", "task", "plugins"];
+export const ROWS: RowId[] = ["provider", "ui", "memory", "tools", "channels", "task", "agents", "plugins"];
 
 export type DetailMode = "details" | "yaml" | "diff";
 
@@ -41,6 +41,8 @@ export type Action =
   | { type: "toggleDiscord" }
   | { type: "addPlugin"; plugin: ResolvedPlugin }
   | { type: "removePlugin"; index: number }
+  | { type: "addExternalAgent"; agent: ResolvedPlugin }
+  | { type: "removeExternalAgent"; index: number }
   | { type: "setUi"; choice: SlotChoice }
   | { type: "setMemory"; choice: SlotChoice }
   | { type: "setTaskBackend"; choice: SlotChoice }
@@ -92,6 +94,19 @@ export function reducer(state: AppState, action: Action): AppState {
       return {
         ...snapshot(state),
         draft: { ...state.draft, plugins: state.draft.plugins.filter((_, i) => i !== action.index) },
+      };
+    case "addExternalAgent":
+      return {
+        ...snapshot(state),
+        draft: { ...state.draft, externalAgents: [...state.draft.externalAgents, action.agent] },
+      };
+    case "removeExternalAgent":
+      return {
+        ...snapshot(state),
+        draft: {
+          ...state.draft,
+          externalAgents: state.draft.externalAgents.filter((_, i) => i !== action.index),
+        },
       };
     case "setUi":
       return { ...snapshot(state), draft: { ...state.draft, ui: action.choice } };

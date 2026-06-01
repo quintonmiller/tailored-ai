@@ -62,6 +62,7 @@ export function hydrateFromYaml(text: string, homeDir: string): DraftConfig {
     plugins: ((doc.toJS()?.plugins ?? []) as Array<string | { module: string }>).map((entry) => ({
       uri: typeof entry === "string" ? entry : entry.module,
     })),
+    externalAgents: ((doc.toJS()?.externalAgents ?? []) as string[]).map((uri) => ({ uri })),
     // server.ui.enabled is the kill-switch; server.ui.provider selects a
     // registered factory ("builtin" by default). memory.backend.provider
     // works the same way. taskBackend stays at "builtin" — it has its own
@@ -208,10 +209,21 @@ function renderPluginsBlock(plugins: ResolvedPlugin[]): string {
   return lines.join("\n");
 }
 
+function renderExternalAgentsBlock(agents: ResolvedPlugin[]): string {
+  if (agents.length === 0) return "";
+  const lines = ["externalAgents:"];
+  for (const a of agents) {
+    const note = a.manifestId ? ` # ${a.manifestId}@${a.version ?? "?"}` : "";
+    lines.push(`  - "${a.uri}"${note}`);
+  }
+  return `\n${lines.join("\n")}\n`;
+}
+
 export function renderNewConfig(d: DraftConfig): string {
   const providerBlock = renderProviderBlock(d.provider);
   const toolsBlock = renderToolsBlock(d.tools);
   const pluginsBlock = renderPluginsBlock(d.plugins);
+  const externalAgentsBlock = renderExternalAgentsBlock(d.externalAgents);
   const discordEnabled = d.channels.discord ? "true" : "false";
   const uiBlock =
     d.ui === "disabled"
@@ -251,7 +263,7 @@ channels:
     respondToMentions: true
 ${memoryBlock}
 ${pluginsBlock}
-
+${externalAgentsBlock}
 profiles:
   researcher:
     instructions: >-
@@ -338,6 +350,17 @@ export function patchExistingYaml(
   if (origPlugins.join("|") !== newPlugins.join("|")) {
     doc.setIn(["plugins"], newPlugins);
     changes.push(`plugins: [${origPlugins.join(", ")}] → [${newPlugins.join(", ")}]`);
+  }
+
+  const origAgents = original.externalAgents.map((p) => p.uri);
+  const newAgents = edited.externalAgents.map((p) => p.uri);
+  if (origAgents.join("|") !== newAgents.join("|")) {
+    if (newAgents.length === 0) {
+      doc.deleteIn(["externalAgents"]);
+    } else {
+      doc.setIn(["externalAgents"], newAgents);
+    }
+    changes.push(`externalAgents: [${origAgents.join(", ")}] → [${newAgents.join(", ")}]`);
   }
 
   return { text: doc.toString(), changes };

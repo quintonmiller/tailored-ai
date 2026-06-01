@@ -89,6 +89,19 @@ function renderDetail(selected: string, d: DraftConfig) {
           <Text dimColor>Current: {describeSlot(d.taskBackend)}</Text>
         </>
       );
+    case "agents":
+      if (d.externalAgents.length === 0) return <Text dimColor>No external agents installed.</Text>;
+      return (
+        <Box flexDirection="column">
+          {d.externalAgents.map((pl) => (
+            <Text key={pl.uri} color={pl.resolveError ? "red" : undefined}>
+              · {pl.uri}
+              {pl.manifestId ? ` (${pl.manifestId}@${pl.version ?? "?"})` : ""}
+              {pl.resolveError ? ` — ${pl.resolveError}` : ""}
+            </Text>
+          ))}
+        </Box>
+      );
     case "plugins":
       if (d.plugins.length === 0) return <Text dimColor>No plugins configured.</Text>;
       return (
