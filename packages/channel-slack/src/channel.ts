@@ -4,14 +4,9 @@ import type {
   Channel,
   IncomingMessage,
   OutboundNotifier,
-  ProjectContext,
+  ProjectRef,
 } from "@tailored-ai/core";
-import {
-  executeHooks,
-  findOrCreateSession,
-  getProject,
-  runAgentLoop,
-} from "@tailored-ai/core";
+import { executeHooks, runAgentLoop } from "@tailored-ai/core";
 import type { SlackChannelConfig } from "./types.js";
 
 /**
@@ -191,7 +186,7 @@ export class SlackChannel implements Channel, OutboundNotifier {
     await this.send(channel, content);
   }
 
-  private resolveProject(channelId: string, isDM: boolean): ProjectContext | null {
+  private resolveProject(channelId: string, isDM: boolean): ProjectRef | null {
     const mappings = this.config.projectMappings;
     if (!mappings?.length) return null;
     let mapped: string | null = null;
@@ -206,34 +201,20 @@ export class SlackChannel implements Channel, OutboundNotifier {
       }
     }
     if (!mapped) return null;
-    const row = getProject(this.runtime.db, mapped);
-    if (!row?.path) {
+    const ref = this.runtime.getProjectByName(mapped);
+    if (!ref) {
       console.warn(`[slack] projectMappings names "${mapped}" but it is unknown or has no path — using global`);
       return null;
     }
-    return {
-      id: row.id,
-      name: row.title,
-      path: row.path,
-      overlayPath: "",
-      overlay: {},
-    };
+    return ref;
   }
 
   private async runAgent(
     userKey: string,
     content: string,
-    project: ProjectContext | null,
+    project: ProjectRef | null,
   ): Promise<string | undefined> {
-    const config = this.runtime.getConfig();
-    const model = this.runtime.getModel();
-    const session = findOrCreateSession(
-      this.runtime.db,
-      userKey,
-      model,
-      config.agent.defaultProvider,
-      project?.id ?? null,
-    );
+    const session = this.runtime.findOrCreateSession({ key: userKey, project });
     const hooks = this.runtime.resolveHooks({});
     const logPrefix = `[slack] [${userKey}]`;
 
