@@ -143,7 +143,11 @@ export function listNotes(db: Database.Database, q: NoteQuery = {}): Note[] {
 
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const limit = q.limit && q.limit > 0 ? `LIMIT ${Math.floor(q.limit)}` : "";
-  const sql = `SELECT * FROM notes ${where} ORDER BY created_at DESC ${limit}`;
+  // Tiebreak on id DESC — SQLite's `datetime('now')` is second-precision so
+  // bursts of notes written in the same second otherwise return in non-
+  // deterministic order. The id is monotonically random; ordering by it
+  // doesn't strictly match insertion order but it's stable within a query.
+  const sql = `SELECT * FROM notes ${where} ORDER BY created_at DESC, id DESC ${limit}`;
   return (db.prepare(sql).all(...params) as NoteRow[]).map(rowToNote);
 }
 

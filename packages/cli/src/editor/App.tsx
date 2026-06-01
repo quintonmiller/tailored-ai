@@ -165,15 +165,14 @@ function EditorSwitch({ state, dispatch }: { state: AppState; dispatch: (a: Acti
         />
       );
     case "memory":
-      // No memory-storage registry in core yet (embedding provider has one,
-      // but storage is hardcoded SQLite). Single-option editor for now.
       return (
         <SlotEditor
           label="Memory backend"
           current={state.draft.memory}
           allowDisabled={false}
-          allowCustom={false}
+          allowCustom
           toAction={(choice) => ({ type: "setMemory", choice })}
+          toPluginAction={(plugin) => ({ type: "addPlugin", plugin })}
           dispatch={dispatch}
           onExit={onExit}
         />

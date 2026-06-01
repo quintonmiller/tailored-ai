@@ -135,6 +135,9 @@ export class RecallTool implements Tool {
         case "promote":
           return this.promote(args);
         case "archive":
+          // Lifecycle action — stays SQLite-direct. Plugin backends that
+          // don't expose an archival flag would no-op here; in practice
+          // `archive` is only meaningful for the built-in SQLite store.
           return this.archive(args);
         default:
           return { success: false, output: "", error: `unknown action "${action}"` };
@@ -203,7 +206,7 @@ export class RecallTool implements Tool {
     return { success: true, output: `promoted ${id} → ${result.chunkCount} chunks` };
   }
 
-  private note(args: Record<string, unknown>, context: ToolContext, projectId: string | null): ToolResult {
+  private async note(args: Record<string, unknown>, context: ToolContext, projectId: string | null): Promise<ToolResult> {
     const content = typeof args.content === "string" ? args.content.trim() : "";
     if (!content) {
       return { success: false, output: "", error: "content is required for action=note" };
@@ -211,9 +214,6 @@ export class RecallTool implements Tool {
     // Channel discipline (docs/agent-unification.md, RC2): refuse to write
     // operational telemetry into the semantic-recall store. Idle ticks and
     // status pings belong in tick_log, not in notes future recall will surface.
-    // Strict prefix match keeps the filter narrow — a note that *mentions*
-    // these phrases mid-sentence is fine, only ones that *open* with them
-    // get rejected.
     const TELEMETRY_PREFIXES = [
       /^tick:/i,
       /^standing by\b/i,
@@ -236,29 +236,45 @@ export class RecallTool implements Tool {
     const ttlDays = typeof args.ttl_days === "number" ? args.ttl_days : this.defaultTtlDays;
     const ttlAt = ttlDays > 0 ? new Date(Date.now() + ttlDays * 86_400_000).toISOString() : null;
 
-    const note = createNote(this.db, {
-      content,
-      session_id: context.sessionId ?? null,
-      project_id: projectId,
-      agent: context.agentName ?? null,
-      tags,
-      importance,
-      ttl_at: ttlAt,
-    });
-    return { success: true, output: `saved ${note.id}` };
+    const backend = await this.getMemoryBackend!();
+    const scope = scopeStr(projectId, context.agentName, context.sessionId);
+    const { id } = await backend.write(
+      { text: content },
+      {
+        kind: "note",
+        scope,
+        tags,
+        suggestedImportance: importance ?? undefined,
+        suggestedTtl: ttlAt,
+      },
+    );
+    // Strip the `note:` prefix so the legacy `saved <id>` output shape is
+    // preserved for SQLite. Plugin backends with different id shapes still
+    // round-trip — the returned id is whatever the backend assigned.
+    const display = id.startsWith("note:") ? id.slice("note:".length) : id;
+    return { success: true, output: `saved ${display}` };
   }
 
-  private forget(args: Record<string, unknown>): ToolResult {
+  private async forget(args: Record<string, unknown>): Promise<ToolResult> {
     const id = typeof args.id === "string" ? args.id : "";
     if (!id) {
       return { success: false, output: "", error: "id is required for action=forget" };
     }
-    const existing = getNote(this.db, id);
-    if (!existing) {
-      return { success: true, output: `(no note with id ${id})` };
+    const backend = await this.getMemoryBackend!();
+    if (!backend.delete) {
+      return { success: false, output: "", error: "delete is not supported by the active memory backend" };
     }
-    deleteNote(this.db, id);
-    return { success: true, output: `forgot ${id}` };
+    // Accept both the prefixed id we return today (`note:<id>`) and the bare
+    // SQLite note id older sessions may still reference.
+    const candidates = id.startsWith("note:") ? [id] : [`note:${id}`, id];
+    let removed = false;
+    for (const candidate of candidates) {
+      if (await backend.delete(candidate)) {
+        removed = true;
+        break;
+      }
+    }
+    return { success: true, output: removed ? `forgot ${id}` : `(no note with id ${id})` };
   }
 
   private archive(args: Record<string, unknown>): ToolResult {
@@ -287,20 +303,44 @@ export class RecallTool implements Tool {
     return { success: true, output: `archived ${id} — "${reason}"` };
   }
 
-  private list(args: Record<string, unknown>, _context: ToolContext, projectId: string | null): ToolResult {
+  private async list(args: Record<string, unknown>, _context: ToolContext, projectId: string | null): Promise<ToolResult> {
     const limit = typeof args.limit === "number" ? args.limit : 10;
     const tag = typeof args.tag === "string" && args.tag.length > 0 ? args.tag : undefined;
-    const notes = listNotes(this.db, {
-      project_id: projectId,
-      tag,
+    const backend = await this.getMemoryBackend!();
+    if (!backend.list) {
+      return { success: false, output: "", error: "list is not supported by the active memory backend" };
+    }
+    const fragments = await backend.list({
+      scope: scopeStr(projectId),
+      kind: "note",
+      tags: tag ? [tag] : undefined,
       limit,
-      excludeExpired: true,
     });
-    if (notes.length === 0) {
+    if (fragments.length === 0) {
       return { success: true, output: "(no notes)" };
     }
-    return { success: true, output: notes.map(formatNote).join("\n") };
+    return { success: true, output: fragments.map(formatNoteFragment).join("\n") };
   }
+}
+
+function scopeStr(projectId: string | null, agentName?: string | null, sessionId?: string | null): string {
+  const parts: string[] = [];
+  if (projectId) parts.push(`project:${projectId}`);
+  if (agentName) parts.push(`agent:${agentName}`);
+  if (sessionId) parts.push(`session:${sessionId}`);
+  return parts.length > 0 ? parts.join(" ") : "global";
+}
+
+function formatNoteFragment(f: import("../memory/interface.js").MemoryFragment): string {
+  const md = f.metadata ?? {};
+  const meta: string[] = [];
+  if (typeof md.created_at === "string") meta.push(md.created_at.slice(0, 16).replace("T", " "));
+  if (Array.isArray(md.tags) && md.tags.length) meta.push(`tags=${(md.tags as string[]).join(",")}`);
+  if (typeof md.importance === "number") meta.push(`importance=${md.importance}`);
+  const idStr = typeof f.id === "string" ? (f.id.startsWith("note:") ? f.id.slice("note:".length) : f.id) : "?";
+  const head = `${idStr}  (${meta.join(", ")})`;
+  const body = f.text.length > 200 ? `${f.text.slice(0, 200)}…` : f.text;
+  return `${head}\n  ${body}`;
 }
 
 function resolveProjectId(raw: unknown): string | null {

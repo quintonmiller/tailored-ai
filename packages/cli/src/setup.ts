@@ -63,10 +63,11 @@ export function hydrateFromYaml(text: string, homeDir: string): DraftConfig {
       uri: typeof entry === "string" ? entry : entry.module,
     })),
     // server.ui.enabled is the kill-switch; server.ui.provider selects a
-    // registered factory ("builtin" by default). memory + taskBackend stay
-    // at "builtin" — neither has a runtime registry yet.
+    // registered factory ("builtin" by default). memory.backend.provider
+    // works the same way. taskBackend stays at "builtin" — it has its own
+    // registry but the editor doesn't write `tasks.backend` yet.
     ui: hydrateUi(doc),
-    memory: "builtin",
+    memory: hydrateMemory(doc),
     taskBackend: "builtin",
     envLines: [],
   };
@@ -114,6 +115,47 @@ function applyUiSlot(doc: ReturnType<typeof parseDocument>, slot: SlotChoice): v
     (ui as { items?: unknown[] }).items?.length === 0
   ) {
     doc.deleteIn(["server", "ui"]);
+  }
+}
+
+function hydrateMemory(doc: ReturnType<typeof parseDocument>): SlotChoice {
+  const provider = doc.getIn(["memory", "backend", "provider"]);
+  if (typeof provider === "string" && provider !== "builtin") {
+    return { customUri: provider };
+  }
+  return "builtin";
+}
+
+function describeMemory(s: SlotChoice): string {
+  if (s === "builtin") return "builtin";
+  if (s === "disabled") return "disabled";
+  return `provider: ${s.customUri}`;
+}
+
+function applyMemorySlot(doc: ReturnType<typeof parseDocument>, slot: SlotChoice): void {
+  doc.deleteIn(["memory", "backend", "provider"]);
+  if (typeof slot === "object") {
+    doc.setIn(["memory", "backend", "provider"], slot.customUri);
+    return;
+  }
+  // builtin — drop empty memory.backend / memory blocks left behind.
+  const backend = doc.getIn(["memory", "backend"]);
+  if (
+    backend &&
+    typeof backend === "object" &&
+    !Array.isArray(backend) &&
+    (backend as { items?: unknown[] }).items?.length === 0
+  ) {
+    doc.deleteIn(["memory", "backend"]);
+  }
+  const memory = doc.getIn(["memory"]);
+  if (
+    memory &&
+    typeof memory === "object" &&
+    !Array.isArray(memory) &&
+    (memory as { items?: unknown[] }).items?.length === 0
+  ) {
+    doc.deleteIn(["memory"]);
   }
 }
 
@@ -177,6 +219,8 @@ export function renderNewConfig(d: DraftConfig): string {
       : typeof d.ui === "object"
         ? `\n  ui:\n    provider: ${d.ui.customUri}`
         : "";
+  const memoryBlock =
+    typeof d.memory === "object" ? `\nmemory:\n  backend:\n    provider: ${d.memory.customUri}\n` : "";
   return `# Tailored AI configuration
 # Docs: https://github.com/quintonmiller/tailored-ai
 
@@ -205,7 +249,7 @@ channels:
     owner: \${DISCORD_OWNER_ID}
     respondToDMs: true
     respondToMentions: true
-
+${memoryBlock}
 ${pluginsBlock}
 
 profiles:
@@ -282,6 +326,11 @@ export function patchExistingYaml(
   if (!slotEquals(edited.ui, original.ui)) {
     applyUiSlot(doc, edited.ui);
     changes.push(`server.ui: ${describeUi(original.ui)} → ${describeUi(edited.ui)}`);
+  }
+
+  if (!slotEquals(edited.memory, original.memory)) {
+    applyMemorySlot(doc, edited.memory);
+    changes.push(`memory.backend: ${describeMemory(original.memory)} → ${describeMemory(edited.memory)}`);
   }
 
   const origPlugins = original.plugins.map((p) => p.uri);
