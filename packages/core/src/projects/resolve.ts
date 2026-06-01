@@ -22,13 +22,27 @@ export interface ProjectFile {
 }
 
 /**
- * Runtime context for an active project. Sessions, tasks, cron, autopilot,
- * and channels carry this through their call paths so behavior scopes per-project.
+ * Routing-time project handle. Channels, cron, autopilot, and any other
+ * routing-decision call site only need this much — id/name/path is enough
+ * to scope a session, attach a project to a task, or set the loop's cwd.
+ *
+ * Carrying the full {@link ProjectContext} forces every routing site to
+ * construct placeholder `overlay` / `overlayPath` fields they never read
+ * (see [#36](https://github.com/quintonmiller/tailored-ai/issues/36)).
  */
-export interface ProjectContext {
+export interface ProjectRef {
   id: string;
   name: string;
   path: string;
+}
+
+/**
+ * Fully-loaded project context — extends {@link ProjectRef} with the
+ * `.tai.yaml` overlay that gets merged onto the global config at runtime
+ * activation time. Only the runtime-level "active project" needs this
+ * shape; per-message routing sites should pass `ProjectRef` instead.
+ */
+export interface ProjectContext extends ProjectRef {
   overlayPath: string;
   overlay: Record<string, unknown>;
 }

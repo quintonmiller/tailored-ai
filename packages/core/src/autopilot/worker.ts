@@ -10,9 +10,8 @@ import {
   isInQuietHours,
   recordTokenUsage,
 } from "../db/autopilot-queries.js";
-import { getProject } from "../db/project-queries.js";
 import { findStuckCodingTasks } from "../db/task-queries.js";
-import type { ProjectContext } from "../projects/resolve.js";
+import type { ProjectRef } from "../projects/resolve.js";
 import type { AgentRuntime } from "../runtime.js";
 import type { Task, TaskBackend } from "../tasks/interface.js";
 import { buildMorningDigest, recordDigestRun } from "./digest.js";
@@ -350,20 +349,12 @@ export class AutopilotWorker {
   }
 
   /**
-   * Resolve a task's `project_id` to a `ProjectContext` if the project is registered
+   * Resolve a task's `project_id` to a `ProjectRef` if the project is registered
    * with a path. Returns null for global/legacy tasks so they run in the host cwd.
    */
-  private resolveTaskProject(task: Task): ProjectContext | null {
+  private resolveTaskProject(task: Task): ProjectRef | null {
     if (!task.project_id) return null;
-    const row = getProject(this.runtime.db, task.project_id);
-    if (!row || !row.path) return null;
-    return {
-      id: row.id,
-      name: row.title,
-      path: row.path,
-      overlayPath: "",
-      overlay: {},
-    };
+    return this.runtime.getProjectByName(task.project_id) ?? null;
   }
 
   private async runTask(task: Task): Promise<void> {

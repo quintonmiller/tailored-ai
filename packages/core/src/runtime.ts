@@ -4,9 +4,10 @@ import type Database from "better-sqlite3";
 import { resolveAgent } from "./agent/agents.js";
 import { EMPTY_HOOKS, mergeHooks, type ResolvedHooks } from "./agent/hooks.js";
 import type { AgentLoopOptions } from "./agent/loop.js";
-import type { Session } from "./agent/session.js";
+import { findOrCreateSession, type Session } from "./agent/session.js";
+import { getProject } from "./db/project-queries.js";
 import { type AgentConfig, type AgentHook, mergeProjectOverlay, validateConfig } from "./config.js";
-import type { ProjectContext } from "./projects/resolve.js";
+import type { ProjectContext, ProjectRef } from "./projects/resolve.js";
 import type { AIProvider } from "./providers/interface.js";
 import { AgentRegistry } from "./resources/agent.js";
 import { migrateConfigAgentsToResources, populateAgentsFromDisk } from "./resources/agent-migration.js";
@@ -275,6 +276,38 @@ export class AgentRuntime {
     this.reload();
   }
 
+  /**
+   * Look up a registered project by id. Returns the routing-time
+   * {@link ProjectRef} (id/name/path) — channels and other routing call
+   * sites use this so they don't have to import db query helpers or reach
+   * into `runtime.db` directly.
+   *
+   * See [#38](https://github.com/quintonmiller/tailored-ai/issues/38).
+   */
+  getProjectByName(id: string): ProjectRef | undefined {
+    const row = getProject(this.db, id);
+    if (!row?.path) return undefined;
+    return { id: row.id, name: row.title, path: row.path };
+  }
+
+  /**
+   * Find or create a session keyed by `key`, using the runtime's current
+   * model + default provider. Convenience accessor so channels and other
+   * consumers don't import {@link findOrCreateSession} and pass
+   * `runtime.db` by hand.
+   *
+   * See [#38](https://github.com/quintonmiller/tailored-ai/issues/38).
+   */
+  findOrCreateSession(opts: { key: string; project?: ProjectRef | null }): Session {
+    return findOrCreateSession(
+      this.db,
+      opts.key,
+      this._model,
+      this._config.agent.defaultProvider,
+      opts.project?.id ?? null,
+    );
+  }
+
   /** Register meta tools (delegate, task_status, admin) to be included in all loop options. */
   setMetaTools(tools: Tool[]): void {
     this._metaTools = tools;
@@ -460,8 +493,13 @@ export class AgentRuntime {
     profileName?: string;
     modelOverride?: string;
     extraTools?: Tool[];
-    /** Per-call project override. When set, the loop's `cwd` comes from this project rather than the runtime's active project. */
-    project?: ProjectContext | null;
+    /**
+     * Per-call project override. When set, the loop's `cwd` comes from this
+     * project rather than the runtime's active project. Accepts either a
+     * {@link ProjectRef} (routing only, the common channel case) or a
+     * fully-loaded {@link ProjectContext}.
+     */
+    project?: ProjectRef | ProjectContext | null;
   }): AgentLoopOptions {
     const agentName = opts.agentName ?? opts.profileName;
     const config = this._config;
