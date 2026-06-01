@@ -20,6 +20,12 @@ import type {
   ToolResult,
   UiProvider,
   UiProviderFactory,
+  MemoryBackend,
+  MemoryBackendFactory,
+  MemoryContent,
+  MemoryHint,
+  MemoryQueryContext,
+  MemoryFragment,
 } from "../index.js";
 import * as core from "../index.js";
 
@@ -114,6 +120,26 @@ describe("plugin contract — public register* helpers", () => {
     const factory: UiProviderFactory = () => {
       const ui: UiProvider = { id: "test", staticDir: "/tmp" };
       return ui;
+    };
+    expect(typeof factory).toBe("function");
+  });
+
+  it("registerMemoryBackendFactory is exported", () => {
+    expect(typeof core.registerMemoryBackendFactory).toBe("function");
+  });
+
+  it("resolveMemoryBackend is exported", () => {
+    expect(typeof core.resolveMemoryBackend).toBe("function");
+  });
+
+  it("MemoryBackend / MemoryBackendFactory + supporting types are reachable from the barrel", () => {
+    const factory: MemoryBackendFactory = () => {
+      const backend: MemoryBackend = {
+        id: "test",
+        write: async (_c: MemoryContent, _h?: MemoryHint) => ({ id: "x" }),
+        query: async (_ctx: MemoryQueryContext): Promise<MemoryFragment[]> => [],
+      };
+      return backend;
     };
     expect(typeof factory).toBe("function");
   });
