@@ -264,12 +264,17 @@ export interface AgentConfig {
       password: string;
     };
     /**
-     * Whether to serve the bundled web UI. When false, the server skips
-     * static-file mounting and `/` returns 404 — useful for headless
-     * deployments. Defaults to true.
+     * Web UI configuration. `enabled: false` is the kill-switch for
+     * headless deployments (server skips static mounting entirely).
+     * `provider` selects which UI implementation to mount; defaults to
+     * "builtin" (bundled web UI). Third-party providers register via
+     * `registerUiProviderFactory(id, ...)`. Per-provider config goes
+     * under `server.ui.<id>` and is passed to the factory.
      */
     ui?: {
-      enabled: boolean;
+      enabled?: boolean;
+      provider?: string;
+      [providerId: string]: unknown;
     };
   };
   database: {

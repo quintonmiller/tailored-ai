@@ -58,6 +58,14 @@ custom_tools:
 3. Add provider creation in `packages/core/src/factories.ts` in the `createProvider()` function
 4. Export from `packages/core/src/index.ts`
 
+## Adding a UI Provider
+
+The server mounts a UI via the registry in `packages/core/src/ui/registry.ts`. The CLI ships the bundled web dashboard as the `"builtin"` provider; plugins register additional providers at import time.
+
+1. Implement a `UiProviderFactory` that returns a `UiProvider` — `{ id, staticDir?, mount? }`. Use `staticDir` to point at a pre-built bundle (server mounts it at `/*` with SPA fallback); use `mount(app)` to register custom Hono routes (runs before the static fallback so plugin routes win over the SPA index).
+2. Register at module import: `registerUiProviderFactory("my-ui", (runtime, slice) => ...)`. `slice` is the matching `server.ui.my-ui` block from config.
+3. Tell users to set `server.ui.provider: my-ui` in their `config.yaml`. The kill-switch `server.ui.enabled: false` skips UI entirely.
+
 ## Admin Tool
 
 `packages/core/src/tools/admin.ts` lets the agent read/modify its own configuration at runtime:

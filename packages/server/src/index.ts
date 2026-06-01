@@ -27,6 +27,7 @@ import {
   deleteSecret,
   deleteSession,
   type EngineEvent,
+  type UiProvider,
   type ExploratoryWorker,
   ensureExploratoryState,
   executeCommand,
@@ -124,7 +125,12 @@ export interface ServerOptions {
   autopilot?: AutopilotWorker;
   exploratory?: ExploratoryWorker;
   workflowEngine?: WorkflowEngine;
-  uiDistPath?: string;
+  /**
+   * Active UI provider. Resolved by the CLI via `resolveUiProvider(runtime)`.
+   * When set, `mount()` runs before `/*` static serving so custom routes
+   * win over the SPA index. When undefined, no UI is served.
+   */
+  uiProvider?: UiProvider;
 }
 
 interface SessionActivity {
@@ -3151,10 +3157,18 @@ export function createServer(opts: ServerOptions) {
     return c.json({ ok: true });
   });
 
-  // --- Static file serving (production build) ---
+  // --- UI provider (static bundle and/or custom routes) ---
 
-  const uiDist = opts.uiDistPath;
+  const uiProvider = opts.uiProvider;
 
+  if (uiProvider?.mount) {
+    // Run plugin-supplied mount before the static fallback so custom routes win.
+    Promise.resolve(uiProvider.mount(app)).catch((err) => {
+      console.warn(`[ui:${uiProvider.id}] mount() failed: ${(err as Error).message}`);
+    });
+  }
+
+  const uiDist = uiProvider?.staticDir;
   if (uiDist && existsSync(uiDist)) {
     app.use("/*", serveStatic({ root: uiDist }));
 
