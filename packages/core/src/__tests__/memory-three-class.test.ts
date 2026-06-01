@@ -3,11 +3,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildMemoryBlockWithMeta } from "../agent/memory-inject.js";
 import { createNote, sweepExpiredNotes } from "../db/note-queries.js";
 import { initDatabase } from "../db/schema.js";
+import { SqliteMemoryBackend } from "../memory/sqlite-backend.js";
 
 let db: Database.Database;
+let backend: SqliteMemoryBackend;
 
 beforeEach(() => {
   db = initDatabase(":memory:");
+  backend = new SqliteMemoryBackend(db);
 });
 
 afterEach(() => {
@@ -20,7 +23,7 @@ afterEach(() => {
  * notes auto-expire.
  */
 describe("three-class observation retention (DUX10)", () => {
-  it("pinned-preference always injects, profile injects on topical match only", () => {
+  it("pinned-preference always injects, profile injects on topical match only", async () => {
     createNote(db, {
       content: "never run destructive git without asking",
       project_id: "p",
@@ -35,7 +38,7 @@ describe("three-class observation retention (DUX10)", () => {
     });
 
     // Unrelated message: pinned-preference appears, profile does NOT.
-    const unrelated = buildMemoryBlockWithMeta(db, {
+    const unrelated = await buildMemoryBlockWithMeta(backend, {
       userMessage: "explain how cron jobs work",
       projectId: "p",
     });
@@ -43,7 +46,7 @@ describe("three-class observation retention (DUX10)", () => {
     expect(unrelated.block).not.toContain("user has a car");
 
     // Topical message: profile fact surfaces in the relevance lane.
-    const topical = buildMemoryBlockWithMeta(db, {
+    const topical = await buildMemoryBlockWithMeta(backend, {
       userMessage: "i need to drive my car to the lake — any tips?",
       projectId: "p",
     });

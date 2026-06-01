@@ -105,6 +105,17 @@ export interface AgentLoopOptions {
   memoryInjectBudgetTokens?: number;
   memoryInjectLimit?: number;
   /**
+   * Lazy accessor for the active memory backend. Wired by
+   * `runtime.buildLoopOptions()` from the active `memory.backend.provider`.
+   * Resolved once per turn when `injectMemory` is true. Modelled as a
+   * thunk so `buildLoopOptions` stays sync (the backend factory may be
+   * async).
+   */
+  getMemoryBackend?: () => Promise<import("../memory/interface.js").MemoryBackend>;
+  /** Embedder forwarded to the memory injection's relevance tier so the
+   *  backend can run hybrid keyword + semantic recall. Optional. */
+  memoryInjectEmbedder?: import("../providers/embedding.js").EmbeddingProvider;
+  /**
    * When true, inject `[System: …budget…]` reminders at 50% and 80% of
    * `maxToolRounds` so the model can decide to commit progress before
    * running out of budget. Off by default — opt in per agent via
@@ -459,12 +470,14 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
   }
 
   let memoryBlock = "";
-  if (opts.injectMemory) {
-    const meta = buildMemoryBlockWithMeta(db, {
+  if (opts.injectMemory && opts.getMemoryBackend) {
+    const backend = await opts.getMemoryBackend();
+    const meta = await buildMemoryBlockWithMeta(backend, {
       userMessage,
       projectId: session.projectId ?? null,
       budgetTokens: opts.memoryInjectBudgetTokens,
       limit: opts.memoryInjectLimit,
+      embedder: opts.memoryInjectEmbedder,
     });
     memoryBlock = meta.block;
     const total = meta.included.length + meta.pinned.length;

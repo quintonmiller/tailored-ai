@@ -3,11 +3,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildMemoryBlockWithMeta } from "../agent/memory-inject.js";
 import { createNote, listPinnedNotes, updateNote } from "../db/note-queries.js";
 import { initDatabase } from "../db/schema.js";
+import { SqliteMemoryBackend } from "../memory/sqlite-backend.js";
 
 let db: Database.Database;
+let backend: SqliteMemoryBackend;
 
 beforeEach(() => {
   db = initDatabase(":memory:");
+  backend = new SqliteMemoryBackend(db);
 });
 
 afterEach(() => {
@@ -63,13 +66,13 @@ describe("pinned memory tier (DUX9)", () => {
     expect(ids).not.toContain(otherProjectPin.id);
   });
 
-  it("always-injects pinned even when the user message doesn't match the content", () => {
+  it("always-injects pinned even when the user message doesn't match the content", async () => {
     createNote(db, {
       content: "use british english",
       project_id: "p",
       tags: ["preference", "pinned"],
     });
-    const meta = buildMemoryBlockWithMeta(db, {
+    const meta = await buildMemoryBlockWithMeta(backend, {
       userMessage: "explain how the cron scheduler works",
       projectId: "p",
     });
@@ -78,14 +81,14 @@ describe("pinned memory tier (DUX9)", () => {
     expect(meta.pinned).toHaveLength(1);
   });
 
-  it("dedupes a note that appears in both pinned and relevance tiers", () => {
+  it("dedupes a note that appears in both pinned and relevance tiers", async () => {
     // Build a note that matches the user query AND is pinned.
     const both = createNote(db, {
       content: "always use docker for the python projects",
       project_id: "p",
       tags: ["preference", "pinned"],
     });
-    const meta = buildMemoryBlockWithMeta(db, {
+    const meta = await buildMemoryBlockWithMeta(backend, {
       userMessage: "docker python",
       projectId: "p",
     });
@@ -94,7 +97,7 @@ describe("pinned memory tier (DUX9)", () => {
     expect(meta.included.find((h) => h.source === both.id)).toBeUndefined();
   });
 
-  it("respects pinnedLimit", () => {
+  it("respects pinnedLimit", async () => {
     for (let i = 0; i < 8; i++) {
       createNote(db, {
         content: `pinned rule ${i}`,
@@ -102,7 +105,7 @@ describe("pinned memory tier (DUX9)", () => {
         tags: ["pinned"],
       });
     }
-    const meta = buildMemoryBlockWithMeta(db, {
+    const meta = await buildMemoryBlockWithMeta(backend, {
       userMessage: "anything",
       projectId: "p",
       pinnedLimit: 3,
@@ -110,8 +113,8 @@ describe("pinned memory tier (DUX9)", () => {
     expect(meta.pinned).toHaveLength(3);
   });
 
-  it("returns empty when no pinned and no relevance hits", () => {
-    const meta = buildMemoryBlockWithMeta(db, {
+  it("returns empty when no pinned and no relevance hits", async () => {
+    const meta = await buildMemoryBlockWithMeta(backend, {
       userMessage: "nothing to find",
       projectId: "p",
     });
