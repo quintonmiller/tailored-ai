@@ -32,6 +32,8 @@ packages/cli/tai.lock
 packages/cli/notes/
 packages/cli/~/
 packages/cli/inbox/
+packages/cli/data/
+packages/cli/ui-dist/
 
 # CLI bundles the UI build output at packaging time (scripts/bundle-ui.mjs).
 # Regenerated on every `pnpm build` — checking in causes constant churn.
