@@ -3,6 +3,11 @@ name: Release
 on:
   push:
     branches: [main]
+  # Manually triggerable from the Actions tab. Lets you smoke-test the build
+  # + changesets steps on any branch without a merge to main. Triggering on
+  # a non-main branch exercises everything except the npm publish (changesets
+  # only publishes when changeset files merge to main).
+  workflow_dispatch:
 
 # Provenance requires id-token: write. contents: write lets the changesets
 # action open the Version Packages PR.

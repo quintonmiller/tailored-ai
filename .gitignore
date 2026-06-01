@@ -33,6 +33,10 @@ packages/cli/notes/
 packages/cli/~/
 packages/cli/inbox/
 
+# CLI bundles the UI build output at packaging time (scripts/bundle-ui.mjs).
+# Regenerated on every `pnpm build` — checking in causes constant churn.
+packages/cli/ui-dist/
+
 # Personal task tracking (lives in tai-personal repo)
 .beans/
 
