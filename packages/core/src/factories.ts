@@ -106,7 +106,7 @@ export function createTools(
     }
   }
   if (config.tools.facts?.enabled !== false && opts?.db) {
-    tools.push(new FactsTool(opts.db));
+    tools.push(new FactsTool(opts.db, { getMemoryBackend: opts.getMemoryBackend }));
   }
   if (config.tools.recall?.enabled !== false && opts?.db) {
     tools.push(
@@ -207,7 +207,9 @@ export function createMetaTools(runtime: AgentRuntime, contextDir: string, kbDir
   // CoreMemoryTool: always available, even when an agent's `tools:` allowlist
   // omits it. The agent needs to be able to maintain its own identity
   // regardless of which other tools it's been narrowed to.
-  const coreMemoryTool = new CoreMemoryTool(runtime.db);
+  const coreMemoryTool = new CoreMemoryTool(runtime.db, {
+    getMemoryBackend: () => runtime.getMemoryBackend(),
+  });
 
   // Trusted-actions tools used to be constructed inline here. They now
   // register through the tool-factory registry (tools/builtin-optional.ts)

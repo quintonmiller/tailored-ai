@@ -191,7 +191,9 @@ describe("RecallTool", () => {
   it("action=list returns recent notes scoped to project, ordered newest first", async () => {
     const tool = new RecallTool(db);
     await tool.execute({ action: "note", content: "first", project_id: "proj_a" }, makeCtx());
-    await new Promise((r) => setTimeout(r, 10));
+    // SQLite's datetime('now') is second-precision; sleep over the boundary
+    // so the second note's created_at is strictly later.
+    await new Promise((r) => setTimeout(r, 1100));
     await tool.execute({ action: "note", content: "second", project_id: "proj_a" }, makeCtx());
     await tool.execute({ action: "note", content: "other-proj", project_id: "proj_b" }, makeCtx());
 
