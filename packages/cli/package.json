@@ -51,15 +51,20 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@clack/prompts": "^0.10.0",
+    "@inkjs/ui": "^2.0.0",
     "@tailored-ai/core": "workspace:*",
     "@tailored-ai/google-tools": "workspace:*",
     "@tailored-ai/server": "workspace:*",
+    "diff": "^9.0.0",
     "dotenv": "^17.2.4",
+    "ink": "^7.0.5",
+    "react": "^19.2.4",
     "yaml": "^2.6.0"
   },
   "devDependencies": {
+    "@types/diff": "^8.0.0",
     "@types/node": "^22.10.0",
+    "@types/react": "^19.2.14",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   }

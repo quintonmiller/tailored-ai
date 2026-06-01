@@ -1,6 +1,8 @@
-import { writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import * as p from "@clack/prompts";
+import { parseDocument } from "yaml";
+import { defaultDraft } from "./editor/types.js";
+import type { DraftConfig, ProviderDraft, ProviderKind, ResolvedPlugin, ToolsDraft } from "./editor/types.js";
 import { ensureHomeStructure, resolveHomePaths } from "./home.js";
 
 interface SetupResult {
@@ -8,463 +10,153 @@ interface SetupResult {
   configPath: string;
 }
 
-interface ProviderAnswers {
-  provider: string;
-  providerBlock: string;
+interface EditorPlan {
+  source: "new" | "existing";
+  homeDir: string;
+  configPath: string;
+  envPath: string;
+  /** New mode: full config file. Edit mode: serialized yaml.Document. */
+  configContent: string;
+  /** Edit mode only: original content for diff display. */
+  originalContent?: string;
+  /** Human-readable change list for edit mode. */
+  changes: string[];
   envLines: string[];
+  plugins: ResolvedPlugin[];
 }
 
-/** Fetch available models from an OpenAI-compatible server's /models endpoint. */
-async function fetchCompatibleModels(
-  baseUrl: string,
-  apiKey?: string,
-): Promise<{ value: string; label: string }[] | null> {
-  try {
-    const headers: Record<string, string> = {};
-    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
-    const res = await fetch(`${baseUrl.replace(/\/$/, "")}/models`, {
-      headers,
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!res.ok) return null;
-    const data = (await res.json()) as { data?: { id: string }[] };
-    if (!data.data?.length) return null;
-    return data.data.map((m) => ({ value: m.id, label: m.id }));
-  } catch {
-    return null;
-  }
+export type SetupMode = "init" | "edit";
+
+// ─── Pure helpers: hydrate / render / patch ───────────────────────────────────
+
+/** Read a config.yaml into a DraftConfig. Comments + formatting are not preserved
+ * — patchExistingYaml is what writes back to disk while keeping them. */
+export function hydrateFromYaml(text: string, homeDir: string): DraftConfig {
+  const doc = parseDocument(text);
+  const get = <T = unknown>(path: (string | number)[], fallback: T): T => {
+    const v = doc.getIn(path);
+    if (v === undefined || v === null) return fallback;
+    return v as T;
+  };
+
+  const providerKind = get<string>(["agent", "defaultProvider"], "openai_compatible") as ProviderKind;
+  const providerDefaultModel = get<string>(["providers", providerKind, "defaultModel"], "");
+  const providerBaseUrl = get<string | undefined>(["providers", providerKind, "baseUrl"], undefined);
+
+  return {
+    homeDir,
+    provider: {
+      kind: providerKind,
+      defaultModel: providerDefaultModel,
+      baseUrl: providerBaseUrl,
+    },
+    tools: {
+      memory: Boolean(get(["tools", "memory", "enabled"], true)),
+      exec: Boolean(get(["tools", "exec", "enabled"], true)),
+      read: Boolean(get(["tools", "read", "enabled"], true)),
+      write: Boolean(get(["tools", "write", "enabled"], true)),
+      web_fetch: Boolean(get(["tools", "web_fetch", "enabled"], true)),
+      web_search: Boolean(get(["tools", "web_search", "enabled"], false)),
+    },
+    channels: { discord: Boolean(get(["channels", "discord", "enabled"], false)) },
+    plugins: ((doc.toJS()?.plugins ?? []) as Array<string | { module: string }>).map((entry) => ({
+      uri: typeof entry === "string" ? entry : entry.module,
+    })),
+    // server.ui.enabled is the only slot field wired in the runtime today;
+    // memory + taskBackend stay at "builtin" since there's nothing to read.
+    ui: get<boolean>(["server", "ui", "enabled"], true) ? "builtin" : "disabled",
+    memory: "builtin",
+    taskBackend: "builtin",
+    envLines: [],
+  };
 }
 
-/** Test connectivity to a provider. Returns null on success, error message on failure. */
-async function testProviderConnection(
-  provider: string,
-  opts: { baseUrl?: string; apiKey?: string },
-): Promise<string | null> {
-  const s = p.spinner();
-  s.start("Testing connection...");
-
-  try {
-    if (provider === "openai_compatible") {
-      const url = (opts.baseUrl ?? "http://localhost:11434/v1").replace(/\/$/, "");
-      const headers: Record<string, string> = {};
-      if (opts.apiKey) headers.Authorization = `Bearer ${opts.apiKey}`;
-      const res = await fetch(`${url}/models`, { headers, signal: AbortSignal.timeout(5000) });
-      if (!res.ok) {
-        s.stop("Connection failed");
-        return `Server returned HTTP ${res.status}. Is it running at ${url}?`;
-      }
-      s.stop("Connected");
-      return null;
-    }
-
-    if (provider === "openai") {
-      const url = (opts.baseUrl ?? "https://api.openai.com/v1").replace(/\/$/, "");
-      const res = await fetch(`${url}/models`, {
-        headers: { Authorization: `Bearer ${opts.apiKey}` },
-        signal: AbortSignal.timeout(10000),
-      });
-      if (!res.ok) {
-        s.stop("Connection failed");
-        return `OpenAI API returned HTTP ${res.status}. Check your API key and base URL.`;
-      }
-      s.stop("Connected to OpenAI");
-      return null;
-    }
-
-    if (provider === "anthropic") {
-      // Use a minimal messages request that will fail with a clear auth error if key is bad
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "x-api-key": opts.apiKey ?? "",
-          "anthropic-version": "2023-06-01",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 1,
-          messages: [{ role: "user", content: "hi" }],
-        }),
-        signal: AbortSignal.timeout(10000),
-      });
-      if (res.status === 401) {
-        s.stop("Connection failed");
-        return "Invalid API key. Check your Anthropic API key.";
-      }
-      // Any non-401 response means auth is valid (even 400/429 means key works)
-      s.stop("Connected to Anthropic");
-      return null;
-    }
-
-    s.stop("Skipped");
-    return null;
-  } catch (err) {
-    s.stop("Connection failed");
-    const msg = (err as Error).message;
-    if (msg.includes("fetch failed") || msg.includes("ECONNREFUSED")) {
-      return `Could not reach ${provider}. Is it running?`;
-    }
-    if (msg.includes("timed out") || msg.includes("TimeoutError")) {
-      return `Connection timed out. Check the URL and try again.`;
-    }
-    return `Connection error: ${msg}`;
-  }
-}
-
-async function askProvider(): Promise<ProviderAnswers> {
-  const provider = await p.select({
-    message: "Which AI provider will you use?",
-    options: [
-      {
-        value: "openai_compatible",
-        label: "OpenAI-compatible (local)",
-        hint: "Ollama, vLLM, LM Studio, llama.cpp, text-gen-webui",
-      },
-      { value: "openai", label: "OpenAI", hint: "GPT-4o, etc." },
-      { value: "anthropic", label: "Anthropic", hint: "Claude" },
-    ],
-  });
-
-  if (p.isCancel(provider)) {
-    p.cancel("Setup cancelled.");
-    process.exit(0);
-  }
-
-  const envLines: string[] = [];
-
-  if (provider === "openai_compatible") {
-    const preset = await p.select({
-      message: "Which server?",
-      options: [
-        { value: "vllm", label: "vLLM", hint: "http://127.0.0.1:8000/v1" },
-        { value: "ollama", label: "Ollama", hint: "http://localhost:11434/v1" },
-        { value: "lmstudio", label: "LM Studio", hint: "http://localhost:1234/v1" },
-        { value: "custom", label: "Custom URL" },
-      ],
-    });
-    if (p.isCancel(preset)) {
-      p.cancel("Setup cancelled.");
-      process.exit(0);
-    }
-
-    const presetUrls: Record<string, string> = {
-      vllm: "http://127.0.0.1:8000/v1",
-      ollama: "http://localhost:11434/v1",
-      lmstudio: "http://localhost:1234/v1",
-      custom: "http://localhost:8000/v1",
-    };
-    const presetNames: Record<string, string> = {
-      vllm: "vLLM",
-      ollama: "Ollama",
-      lmstudio: "LM Studio",
-      custom: "OpenAI-compatible",
-    };
-
-    const baseUrl = await p.text({
-      message: "Base URL (must include /v1):",
-      initialValue: presetUrls[preset as string],
-    });
-    if (p.isCancel(baseUrl)) {
-      p.cancel("Setup cancelled.");
-      process.exit(0);
-    }
-
-    const needsKey = await p.confirm({
-      message: "Does this server require an API key?",
-      initialValue: false,
-    });
-    if (p.isCancel(needsKey)) {
-      p.cancel("Setup cancelled.");
-      process.exit(0);
-    }
-
-    let apiKey: string | undefined;
-    if (needsKey) {
-      const entered = await p.text({
-        message: "API key:",
-        validate: (v) => (v.trim() ? undefined : "API key is required"),
-      });
-      if (p.isCancel(entered)) {
-        p.cancel("Setup cancelled.");
-        process.exit(0);
-      }
-      apiKey = entered;
-      envLines.push(`OPENAI_COMPATIBLE_API_KEY=${apiKey}`);
-    }
-
-    // Test connectivity
-    const connError = await testProviderConnection("openai_compatible", { baseUrl, apiKey });
-    if (connError) {
-      p.log.warn(connError);
-      const proceed = await p.confirm({ message: "Continue anyway?" });
-      if (p.isCancel(proceed) || !proceed) {
-        p.cancel("Setup cancelled.");
-        process.exit(0);
-      }
-    }
-
-    // Try to fetch available models for selection
-    let model: string;
-    const models = connError ? null : await fetchCompatibleModels(baseUrl, apiKey);
-    if (models && models.length > 0) {
-      const selected = await p.select({
-        message: "Select a model:",
-        options: [...models, { value: "__custom__", label: "Enter a custom model name..." }],
-      });
-      if (p.isCancel(selected)) {
-        p.cancel("Setup cancelled.");
-        process.exit(0);
-      }
-      if (selected === "__custom__") {
-        const custom = await p.text({
-          message: "Model name:",
-          initialValue: "devstral-small-2:latest",
-        });
-        if (p.isCancel(custom)) {
-          p.cancel("Setup cancelled.");
-          process.exit(0);
-        }
-        model = custom;
-      } else {
-        model = selected as string;
-      }
-    } else {
-      const entered = await p.text({
-        message: "Default model:",
-        initialValue: "devstral-small-2:latest",
-      });
-      if (p.isCancel(entered)) {
-        p.cancel("Setup cancelled.");
-        process.exit(0);
-      }
-      model = entered;
-    }
-
+function renderProviderBlock(d: ProviderDraft): string {
+  if (d.kind === "openai_compatible") {
     const lines = [
       "providers:",
       "  openai_compatible:",
-      `    baseUrl: ${baseUrl}`,
-      `    defaultModel: ${model}`,
-      `    name: ${presetNames[preset as string]}`,
+      `    baseUrl: ${d.baseUrl ?? "http://localhost:11434/v1"}`,
+      `    defaultModel: ${d.defaultModel}`,
     ];
-    if (apiKey) {
-      lines.push("    apiKey: ${OPENAI_COMPATIBLE_API_KEY}");
-    }
-    lines.push(
-      "  # openai:",
-      "  #   apiKey: ${OPENAI_API_KEY}",
-      "  #   defaultModel: gpt-4o",
-      "  # anthropic:",
-      "  #   apiKey: ${ANTHROPIC_API_KEY}",
-      "  #   defaultModel: claude-sonnet-4-5-20250929",
-    );
-    const block = lines.join("\n");
-
-    return { provider, providerBlock: block, envLines };
+    if (d.presetName) lines.push(`    name: ${d.presetName}`);
+    if (d.apiKey) lines.push("    apiKey: ${OPENAI_COMPATIBLE_API_KEY}");
+    return lines.join("\n");
   }
-
-  if (provider === "openai") {
-    const apiKey = await p.text({
-      message: "OpenAI API key:",
-      validate: (v) => (v.trim() ? undefined : "API key is required"),
-    });
-    if (p.isCancel(apiKey)) {
-      p.cancel("Setup cancelled.");
-      process.exit(0);
-    }
-
-    const baseUrl = await p.text({
-      message: "Base URL (leave default for OpenAI):",
-      initialValue: "https://api.openai.com/v1",
-    });
-    if (p.isCancel(baseUrl)) {
-      p.cancel("Setup cancelled.");
-      process.exit(0);
-    }
-
-    // Test connectivity
-    const connError = await testProviderConnection("openai", { apiKey, baseUrl });
-    if (connError) {
-      p.log.warn(connError);
-      const proceed = await p.confirm({ message: "Continue anyway?" });
-      if (p.isCancel(proceed) || !proceed) {
-        p.cancel("Setup cancelled.");
-        process.exit(0);
-      }
-    }
-
-    const model = await p.select({
-      message: "Select a model:",
-      options: [
-        { value: "gpt-4o", label: "gpt-4o", hint: "recommended" },
-        { value: "gpt-4o-mini", label: "gpt-4o-mini", hint: "faster, cheaper" },
-        { value: "gpt-4-turbo", label: "gpt-4-turbo" },
-        { value: "__custom__", label: "Enter a custom model name..." },
-      ],
-    });
-    if (p.isCancel(model)) {
-      p.cancel("Setup cancelled.");
-      process.exit(0);
-    }
-
-    let modelName: string;
-    if (model === "__custom__") {
-      const custom = await p.text({ message: "Model name:", initialValue: "gpt-4o" });
-      if (p.isCancel(custom)) {
-        p.cancel("Setup cancelled.");
-        process.exit(0);
-      }
-      modelName = custom;
-    } else {
-      modelName = model as string;
-    }
-
-    envLines.push(`OPENAI_API_KEY=${apiKey}`);
-    const block = [
+  if (d.kind === "openai") {
+    return [
       "providers:",
       "  openai:",
       "    apiKey: ${OPENAI_API_KEY}",
-      `    defaultModel: ${modelName}`,
-      `    baseUrl: ${baseUrl}`,
-      "  # openai_compatible:           # vLLM, Ollama /v1, LM Studio, etc.",
-      "  #   baseUrl: http://localhost:11434/v1",
-      "  #   defaultModel: devstral-small-2:latest",
-      "  # anthropic:",
-      "  #   apiKey: ${ANTHROPIC_API_KEY}",
-      "  #   defaultModel: claude-sonnet-4-5-20250929",
+      `    defaultModel: ${d.defaultModel}`,
+      `    baseUrl: ${d.baseUrl ?? "https://api.openai.com/v1"}`,
     ].join("\n");
-
-    return { provider, providerBlock: block, envLines };
   }
-
-  // anthropic
-  const apiKey = await p.text({
-    message: "Anthropic API key:",
-    validate: (v) => (v.trim() ? undefined : "API key is required"),
-  });
-  if (p.isCancel(apiKey)) {
-    p.cancel("Setup cancelled.");
-    process.exit(0);
-  }
-
-  // Test connectivity
-  const connError = await testProviderConnection("anthropic", { apiKey });
-  if (connError) {
-    p.log.warn(connError);
-    const proceed = await p.confirm({ message: "Continue anyway?" });
-    if (p.isCancel(proceed) || !proceed) {
-      p.cancel("Setup cancelled.");
-      process.exit(0);
-    }
-  }
-
-  const model = await p.select({
-    message: "Select a model:",
-    options: [
-      { value: "claude-sonnet-4-5-20250929", label: "claude-sonnet-4-5-20250929", hint: "recommended" },
-      { value: "claude-haiku-4-5-20251001", label: "claude-haiku-4-5-20251001", hint: "faster, cheaper" },
-      { value: "claude-opus-4-5-20250514", label: "claude-opus-4-5-20250514", hint: "most capable" },
-      { value: "__custom__", label: "Enter a custom model name..." },
-    ],
-  });
-  if (p.isCancel(model)) {
-    p.cancel("Setup cancelled.");
-    process.exit(0);
-  }
-
-  let modelName: string;
-  if (model === "__custom__") {
-    const custom = await p.text({ message: "Model name:", initialValue: "claude-sonnet-4-5-20250929" });
-    if (p.isCancel(custom)) {
-      p.cancel("Setup cancelled.");
-      process.exit(0);
-    }
-    modelName = custom;
-  } else {
-    modelName = model as string;
-  }
-
-  envLines.push(`ANTHROPIC_API_KEY=${apiKey}`);
-  const block = [
-    "providers:",
-    "  anthropic:",
-    "    apiKey: ${ANTHROPIC_API_KEY}",
-    `    defaultModel: ${modelName}`,
-    "  # openai_compatible:           # vLLM, Ollama /v1, LM Studio, etc.",
-    "  #   baseUrl: http://localhost:11434/v1",
-    "  #   defaultModel: devstral-small-2:latest",
-    "  # openai:",
-    "  #   apiKey: ${OPENAI_API_KEY}",
-    "  #   defaultModel: gpt-4o",
-    "  #   baseUrl: https://api.openai.com/v1",
-  ].join("\n");
-
-  return { provider, providerBlock: block, envLines };
+  return ["providers:", "  anthropic:", "    apiKey: ${ANTHROPIC_API_KEY}", `    defaultModel: ${d.defaultModel}`].join("\n");
 }
 
-function generateConfig(provider: string, providerBlock: string): string {
+function renderToolsBlock(t: ToolsDraft): string {
+  const lines = ["tools:"];
+  const indent = "  ";
+  lines.push(`${indent}memory:`, `${indent}  enabled: ${t.memory}`);
+  lines.push(`${indent}exec:`, `${indent}  enabled: ${t.exec}`);
+  if (t.exec) {
+    lines.push(`${indent}  allowedCommands:`, `${indent}    - ls`, `${indent}    - cat`, `${indent}    - git`);
+  }
+  lines.push(`${indent}read:`, `${indent}  enabled: ${t.read}`);
+  lines.push(`${indent}write:`, `${indent}  enabled: ${t.write}`);
+  lines.push(`${indent}web_fetch:`, `${indent}  enabled: ${t.web_fetch}`);
+  lines.push(`${indent}web_search:`, `${indent}  enabled: ${t.web_search}`);
+  return lines.join("\n");
+}
+
+function renderPluginsBlock(plugins: ResolvedPlugin[]): string {
+  if (plugins.length === 0) return "plugins: []";
+  const lines = ["plugins:"];
+  for (const pl of plugins) {
+    const note = pl.manifestId ? ` # ${pl.manifestId}@${pl.version ?? "?"}` : "";
+    lines.push(`  - "${pl.uri}"${note}`);
+  }
+  return lines.join("\n");
+}
+
+export function renderNewConfig(d: DraftConfig): string {
+  const providerBlock = renderProviderBlock(d.provider);
+  const toolsBlock = renderToolsBlock(d.tools);
+  const pluginsBlock = renderPluginsBlock(d.plugins);
+  const discordEnabled = d.channels.discord ? "true" : "false";
+  const uiBlock = d.ui === "disabled" ? "\n  ui:\n    enabled: false" : "";
   return `# Tailored AI configuration
 # Docs: https://github.com/quintonmiller/tailored-ai
 
-# --- Server ---
 server:
   port: 3000
-  host: 0.0.0.0
-  # apiKey: "secret"          # protect mutating API endpoints (optional)
+  host: 0.0.0.0${uiBlock}
 
-# --- Database ---
 database:
   path: ./agent.db
 
-# --- Providers ---
-# Uncomment additional providers to enable them. API keys are read from .env.
 ${providerBlock}
 
-# --- Agent defaults ---
 agent:
-  defaultProvider: ${provider}
-  extraInstructions: ""        # appended to every system prompt
+  defaultProvider: ${d.provider.kind}
+  extraInstructions: ""
   temperature: 0.7
   maxToolRounds: 100
   maxHistoryTokens: 20000
 
-# --- Tools ---
-# Enable or disable individual tools. Disabled tools are hidden from the model.
-tools:
-  exec:
-    enabled: true
-    allowedCommands:
-      - ls
-      - cat
-      - git
-  read:
-    enabled: true
-  write:
-    enabled: true
-  web_fetch:
-    enabled: true
-  web_search:
-    enabled: false
-    # provider: brave
-    # apiKey: \${BRAVE_API_KEY}
-    # maxResults: 5
-  # browser:
-  #   enabled: false
-  #   headless: true
-  # claude_code:
-  #   enabled: false
+${toolsBlock}
 
-# --- Channels ---
 channels:
   discord:
-    enabled: false
+    enabled: ${discordEnabled}
     token: \${DISCORD_BOT_TOKEN}
     owner: \${DISCORD_OWNER_ID}
     respondToDMs: true
     respondToMentions: true
 
-# --- Profiles ---
-# Named agent configurations. Use with: tai -m "query" -p researcher
+${pluginsBlock}
+
 profiles:
   researcher:
     instructions: >-
@@ -487,95 +179,185 @@ profiles:
     temperature: 0.7
     maxToolRounds: 10
 
-# --- Cron jobs ---
-# Scheduled tasks. Requires running tai in server mode (the default).
 cron:
   enabled: false
   jobs: []
-  # jobs:
-  #   - name: daily-research
-  #     schedule: "0 9 * * *"
-  #     prompt: "Research today's AI news"
-  #     profile: researcher
 
-# --- Custom tools ---
-# Shell command templates exposed as tools. {{param}} is interpolated.
 custom_tools: {}
-  # weather:
-  #   command: curl -s wttr.in/{{city}}?format=3
-  #   description: Get weather for a city
-  #   parameters:
-  #     city:
-  #       type: string
-  #       description: City name
 
-# --- Webhooks ---
 webhooks:
   enabled: false
-  # secret: "webhook-secret"
-  # routes:
-  #   - path: /deploy
-  #     action: agent
-  #     messageTemplate: "Deploy triggered: {{repo}} by {{user}}"
 
-# --- Custom commands ---
-# Slash commands for the web UI and CLI. Supports shell + agent prompts.
 commands: {}
-  # summarize:
-  #   description: Summarize the current conversation
-  #   prompt: "Summarize our conversation so far in 3 bullet points."
 `;
 }
 
-export async function runSetupWizard(defaultHomeDir: string): Promise<SetupResult> {
-  p.intro("Welcome to Tailored AI");
+/** Apply draft changes to the existing YAML document while preserving comments
+ * and formatting. Returns both the new text and a human-readable list of
+ * changes for dry-run display. */
+export function patchExistingYaml(
+  currentText: string,
+  original: DraftConfig,
+  edited: DraftConfig,
+): { text: string; changes: string[] } {
+  const doc = parseDocument(currentText);
+  const changes: string[] = [];
 
-  const location = await p.select({
-    message: "Where should tai store its data?",
-    options: [
-      { value: "home", label: defaultHomeDir, hint: "recommended" },
-      { value: "cwd", label: process.cwd(), hint: "current directory" },
-      { value: "custom", label: "Custom path" },
-    ],
+  if (edited.provider.kind !== original.provider.kind) {
+    doc.setIn(["agent", "defaultProvider"], edited.provider.kind);
+    changes.push(`agent.defaultProvider: ${original.provider.kind} → ${edited.provider.kind}`);
+  }
+  if (edited.provider.defaultModel !== original.provider.defaultModel) {
+    doc.setIn(["providers", edited.provider.kind, "defaultModel"], edited.provider.defaultModel);
+    changes.push(`providers.${edited.provider.kind}.defaultModel: ${original.provider.defaultModel} → ${edited.provider.defaultModel}`);
+  }
+  if (edited.provider.baseUrl && edited.provider.baseUrl !== original.provider.baseUrl) {
+    doc.setIn(["providers", edited.provider.kind, "baseUrl"], edited.provider.baseUrl);
+    changes.push(`providers.${edited.provider.kind}.baseUrl: ${original.provider.baseUrl ?? "(unset)"} → ${edited.provider.baseUrl}`);
+  }
+
+  for (const key of Object.keys(edited.tools) as (keyof ToolsDraft)[]) {
+    if (edited.tools[key] !== original.tools[key]) {
+      doc.setIn(["tools", key, "enabled"], edited.tools[key]);
+      changes.push(`tools.${key}.enabled: ${original.tools[key]} → ${edited.tools[key]}`);
+    }
+  }
+
+  if (edited.channels.discord !== original.channels.discord) {
+    doc.setIn(["channels", "discord", "enabled"], edited.channels.discord);
+    changes.push(`channels.discord.enabled: ${original.channels.discord} → ${edited.channels.discord}`);
+  }
+
+  if (edited.ui !== original.ui) {
+    if (edited.ui === "disabled") {
+      doc.setIn(["server", "ui", "enabled"], false);
+    } else if (original.ui === "disabled") {
+      doc.deleteIn(["server", "ui", "enabled"]);
+    }
+    changes.push(`server.ui.enabled: ${original.ui === "disabled" ? "false" : "(unset)"} → ${edited.ui === "disabled" ? "false" : "(unset)"}`);
+  }
+
+  const origPlugins = original.plugins.map((p) => p.uri);
+  const newPlugins = edited.plugins.map((p) => p.uri);
+  if (origPlugins.join("|") !== newPlugins.join("|")) {
+    doc.setIn(["plugins"], newPlugins);
+    changes.push(`plugins: [${origPlugins.join(", ")}] → [${newPlugins.join(", ")}]`);
+  }
+
+  return { text: doc.toString(), changes };
+}
+
+// ─── Dry-run output ───────────────────────────────────────────────────────────
+
+function printDryRunPlan(plan: EditorPlan): void {
+  console.log(`\n── Dry run — no files written ──`);
+  if (plan.source === "new") {
+    console.log(`Home directory: ${plan.homeDir}`);
+    console.log(`\nconfig.yaml (${plan.configPath}):\n`);
+    console.log(plan.configContent);
+  } else {
+    console.log(`Editing ${plan.configPath}`);
+    if (plan.changes.length === 0) {
+      console.log("\nNo changes.");
+    } else {
+      console.log("\nChanges:");
+      for (const c of plan.changes) console.log(`  ${c}`);
+    }
+  }
+  if (plan.envLines.length > 0) {
+    console.log(`\n.env additions (${plan.envPath}):`);
+    console.log(plan.envLines.join("\n"));
+  }
+  if (plan.plugins.length > 0) {
+    console.log(`\nplugins:`);
+    for (const pl of plan.plugins) {
+      console.log(
+        pl.resolveError
+          ? `  ! ${pl.uri} — ${pl.resolveError}`
+          : `  + ${pl.uri} (${pl.manifestId ?? "?"}@${pl.version ?? "?"})`,
+      );
+    }
+  }
+  console.log(`\nRe-run without --dry-run to apply.`);
+}
+
+// ─── Apply ────────────────────────────────────────────────────────────────────
+
+function appendEnv(envPath: string, lines: string[]): void {
+  const existing = existsSync(envPath) ? readFileSync(envPath, "utf-8") : "";
+  const sep = existing && !existing.endsWith("\n") ? "\n" : "";
+  writeFileSync(envPath, `${existing}${sep}${lines.join("\n")}\n`, "utf-8");
+}
+
+// ─── Public entry: orchestrates Ink + apply ───────────────────────────────────
+
+export async function runSetupWizard(
+  defaultHomeDir: string,
+  opts: { mode?: SetupMode; dryRun?: boolean; existingConfigPath?: string } = {},
+): Promise<SetupResult> {
+  const mode: SetupMode = opts.mode ?? "init";
+  if (mode === "edit" && !opts.existingConfigPath) {
+    throw new Error("runSetupWizard: mode=edit requires existingConfigPath");
+  }
+
+  // Dynamic import so Ink/React are only loaded when the editor actually runs
+  // (e.g. `tai serve` shouldn't pay for them).
+  const { runEditorApp } = await import("./editor/runEditorApp.js");
+  const result = await runEditorApp({
+    mode,
+    defaultHomeDir,
+    existingConfigPath: opts.existingConfigPath,
   });
-
-  if (p.isCancel(location)) {
-    p.cancel("Setup cancelled.");
+  if (!result) {
+    console.log("Cancelled.");
     process.exit(0);
   }
 
-  let homeDir = defaultHomeDir;
-  if (location === "cwd") {
-    homeDir = process.cwd();
-  } else if (location === "custom") {
-    const custom = await p.text({
-      message: "Enter the path:",
-      validate: (v) => (v.trim() ? undefined : "Path is required"),
-    });
-    if (p.isCancel(custom)) {
-      p.cancel("Setup cancelled.");
-      process.exit(0);
-    }
-    homeDir = resolve(custom);
-  }
-
-  const { provider, providerBlock, envLines } = await askProvider();
-
-  const s = p.spinner();
-  s.start("Creating directory structure");
-
-  await ensureHomeStructure(homeDir);
+  const homeDir = result.draft.homeDir;
   const paths = resolveHomePaths(homeDir);
+  const configPath = result.configPath ?? paths.configPath;
+  const isExisting = Boolean(result.originalText);
 
-  writeFileSync(paths.configPath, generateConfig(provider, providerBlock), "utf-8");
-
-  if (envLines.length > 0) {
-    writeFileSync(paths.envPath, `${envLines.join("\n")}\n`, "utf-8");
+  let configContent: string;
+  let changes: string[] = [];
+  if (isExisting && result.originalText) {
+    const original = hydrateFromYaml(result.originalText, homeDir);
+    const patch = patchExistingYaml(result.originalText, original, result.draft);
+    configContent = patch.text;
+    changes = patch.changes;
+  } else {
+    configContent = renderNewConfig(result.draft);
   }
 
-  s.stop("Configuration saved");
+  const plan: EditorPlan = {
+    source: isExisting ? "existing" : "new",
+    homeDir,
+    configPath,
+    envPath: paths.envPath,
+    configContent,
+    originalContent: result.originalText,
+    changes,
+    envLines: result.draft.envLines,
+    plugins: result.draft.plugins,
+  };
 
-  p.outro(`Setup complete! Data directory: ${homeDir}`);
+  if (opts.dryRun) {
+    printDryRunPlan(plan);
+    return { homeDir, configPath };
+  }
 
-  return { homeDir, configPath: paths.configPath };
+  if (!isExisting) {
+    await ensureHomeStructure(homeDir);
+  }
+  writeFileSync(configPath, configContent, "utf-8");
+  if (plan.envLines.length > 0) {
+    appendEnv(paths.envPath, plan.envLines);
+  }
+  console.log(isExisting ? "Edits applied." : `Setup complete! Data directory: ${homeDir}`);
+
+  return { homeDir, configPath };
 }
+
+// Re-export for callers that need to resolve the home dir without invoking the
+// editor (the CLI uses this for the `--init` flag handling).
+export { resolve as resolvePath };

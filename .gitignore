@@ -32,6 +32,8 @@ packages/cli/tai.lock
 packages/cli/notes/
 packages/cli/~/
 packages/cli/inbox/
+packages/cli/data/
+packages/cli/ui-dist/
 
 # Personal task tracking (lives in tai-personal repo)
 .beans/

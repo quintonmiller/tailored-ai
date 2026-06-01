@@ -39,7 +39,7 @@ import { runProjectCommand } from "./commands/project.js";
 import { runResourcesCommand } from "./commands/resources.js";
 import { runVaultCommand } from "./commands/vault.js";
 import { isSetupDone, resolveHomeDir, resolveHomePaths } from "./home.js";
-import { runSetupWizard } from "./setup.js";
+import { runSetupWizard, type SetupMode } from "./setup.js";
 
 let _discordChannel: import("@tailored-ai/core").DiscordChannel | undefined;
 let _discordNotifier: import("@tailored-ai/core").OutboundNotifier | undefined;
@@ -50,6 +50,8 @@ Usage: tai [options]
 Modes:
   (default)               Start server (HTTP + UI + Discord + cron)
   -m, --message <text>    Send a single message and exit
+  init                    Create a new config (run \`tai init --help\`)
+  edit                    Edit an existing config (run \`tai edit --help\`)
   project <cmd>           Manage registered projects (run \`tai project help\`)
 
 Options:
@@ -61,7 +63,8 @@ Options:
       --project <id>      Run scoped to a specific project (overrides cwd resolution)
       --global            Force global mode even inside a registered project
       --port <number>     Override server port
-      --init              Re-run the setup wizard
+      --init              Alias for \`tai init\` (deprecated — prefer the subcommand)
+      --dry-run           With --init: run prompts and print the plan without writing
       --list-agents       List available agents
       --list-sessions     List recent sessions (use --project <id> or --global to filter)
   -h, --help              Show this help message
@@ -174,7 +177,8 @@ async function runServer(runtime: AgentRuntime) {
     }
   });
 
-  const uiDistPath = resolveUiDistPath();
+  // `server.ui.enabled: false` skips mounting static UI for headless deployments.
+  const uiDistPath = runtime.getConfig().server.ui?.enabled === false ? undefined : resolveUiDistPath();
   const workflowEngine = createWorkflowEngine({
     runtime,
     db: runtime.db,
@@ -456,10 +460,59 @@ async function runSingleMessage(
   }
 }
 
+async function runSetupCommand(mode: SetupMode, args: string[]): Promise<void> {
+  const { values } = parseArgs({
+    args,
+    options: {
+      config: { type: "string", short: "c" },
+      "dry-run": { type: "boolean", default: false },
+      help: { type: "boolean", short: "h", default: false },
+    },
+    strict: true,
+  });
+
+  if (values.help) {
+    const usage =
+      mode === "init"
+        ? "Usage: tai init [-c <config>] [--dry-run]\n\nCreate a new config.yaml. Prompts before overwriting an existing one."
+        : "Usage: tai edit [-c <config>] [--dry-run]\n\nOpen the settings editor against an existing config.yaml.";
+    console.log(usage);
+    return;
+  }
+
+  const homeDir = resolveHomeDir(values.config);
+  const configPath = values.config ? resolve(values.config) : resolve(homeDir, "config.yaml");
+  const configExists = isSetupDone(homeDir);
+
+  if (mode === "edit" && !configExists) {
+    console.error(`No config found at ${configPath}. Run \`tai init\` first.`);
+    process.exit(1);
+  }
+
+  try {
+    await runSetupWizard(homeDir, {
+      mode,
+      dryRun: values["dry-run"],
+      existingConfigPath: configExists ? configPath : undefined,
+    });
+  } catch (err) {
+    // TTYError + other expected runEditorApp failures should print cleanly.
+    if ((err as { name?: string }).name === "TTYError") {
+      console.error((err as Error).message);
+      process.exit(1);
+    }
+    throw err;
+  }
+}
+
 async function main() {
   // Subcommand routing — peel off any leading positional verbs (e.g. `tai project ...`)
   // before parseArgs, which is strict and rejects positionals.
-  const argv = process.argv.slice(2);
+  // Drop a leading `--` that pnpm/npm/yarn often inject when forwarding args
+  // through nested run scripts (e.g. `pnpm run dev -- --init --dry-run` lands
+  // here as argv `["--", "--init", "--dry-run"]`).
+  let argv = process.argv.slice(2);
+  if (argv[0] === "--") argv = argv.slice(1);
   if (argv[0] === "project") {
     await runProjectCommand(argv.slice(1));
     return;
@@ -472,8 +525,13 @@ async function main() {
     await runVaultCommand(argv.slice(1));
     return;
   }
+  if (argv[0] === "init" || argv[0] === "edit") {
+    await runSetupCommand(argv[0], argv.slice(1));
+    return;
+  }
 
   const { values } = parseArgs({
+    args: argv,
     options: {
       config: { type: "string", short: "c" },
       message: { type: "string", short: "m" },
@@ -485,6 +543,7 @@ async function main() {
       global: { type: "boolean", default: false },
       port: { type: "string" },
       init: { type: "boolean", default: false },
+      "dry-run": { type: "boolean", default: false },
       "list-agents": { type: "boolean", default: false },
       "list-profiles": { type: "boolean", default: false }, // deprecated alias
       "list-sessions": { type: "boolean", default: false },
@@ -591,7 +650,17 @@ async function main() {
       console.log();
     }
 
-    const result = await runSetupWizard(homeDir);
+    // With --init on an existing install, mode=init makes the wizard ask
+    // whether to edit or replace before clobbering the file.
+    const existingConfigPath = isSetupDone(homeDir) ? configPath : undefined;
+    const result = await runSetupWizard(homeDir, {
+      mode: "init",
+      dryRun: values["dry-run"],
+      existingConfigPath,
+    });
+    if (values["dry-run"]) {
+      process.exit(0);
+    }
     homeDir = result.homeDir;
     configPath = result.configPath;
   }
