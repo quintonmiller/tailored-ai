@@ -18,6 +18,8 @@ import type {
   ToolFactory,
   ToolFactoryContext,
   ToolResult,
+  UiProvider,
+  UiProviderFactory,
 } from "../index.js";
 import * as core from "../index.js";
 
@@ -98,6 +100,22 @@ describe("plugin contract — public register* helpers", () => {
 
   it("registerTaskBackendFactory is exported", () => {
     expect(typeof core.registerTaskBackendFactory).toBe("function");
+  });
+
+  it("registerUiProviderFactory is exported", () => {
+    expect(typeof core.registerUiProviderFactory).toBe("function");
+  });
+
+  it("resolveUiProvider is exported", () => {
+    expect(typeof core.resolveUiProvider).toBe("function");
+  });
+
+  it("UiProvider / UiProviderFactory types are reachable from the barrel", () => {
+    const factory: UiProviderFactory = () => {
+      const ui: UiProvider = { id: "test", staticDir: "/tmp" };
+      return ui;
+    };
+    expect(typeof factory).toBe("function");
   });
 
   it("loadPlugins is exported", () => {

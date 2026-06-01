@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseDocument } from "yaml";
 import { defaultDraft } from "./editor/types.js";
-import type { DraftConfig, ProviderDraft, ProviderKind, ResolvedPlugin, ToolsDraft } from "./editor/types.js";
+import type { DraftConfig, ProviderDraft, ProviderKind, ResolvedPlugin, SlotChoice, ToolsDraft } from "./editor/types.js";
 import { ensureHomeStructure, resolveHomePaths } from "./home.js";
 
 interface SetupResult {
@@ -62,13 +62,59 @@ export function hydrateFromYaml(text: string, homeDir: string): DraftConfig {
     plugins: ((doc.toJS()?.plugins ?? []) as Array<string | { module: string }>).map((entry) => ({
       uri: typeof entry === "string" ? entry : entry.module,
     })),
-    // server.ui.enabled is the only slot field wired in the runtime today;
-    // memory + taskBackend stay at "builtin" since there's nothing to read.
-    ui: get<boolean>(["server", "ui", "enabled"], true) ? "builtin" : "disabled",
+    // server.ui.enabled is the kill-switch; server.ui.provider selects a
+    // registered factory ("builtin" by default). memory + taskBackend stay
+    // at "builtin" — neither has a runtime registry yet.
+    ui: hydrateUi(doc),
     memory: "builtin",
     taskBackend: "builtin",
     envLines: [],
   };
+}
+
+function hydrateUi(doc: ReturnType<typeof parseDocument>): SlotChoice {
+  if (doc.getIn(["server", "ui", "enabled"]) === false) return "disabled";
+  const provider = doc.getIn(["server", "ui", "provider"]);
+  if (typeof provider === "string" && provider !== "builtin") {
+    return { customUri: provider };
+  }
+  return "builtin";
+}
+
+function slotEquals(a: SlotChoice, b: SlotChoice): boolean {
+  if (a === b) return true;
+  if (typeof a === "object" && typeof b === "object") return a.customUri === b.customUri;
+  return false;
+}
+
+function describeUi(s: SlotChoice): string {
+  if (s === "disabled") return "disabled";
+  if (s === "builtin") return "builtin";
+  return `provider: ${s.customUri}`;
+}
+
+function applyUiSlot(doc: ReturnType<typeof parseDocument>, slot: SlotChoice): void {
+  // Clear both fields first so transitions don't leave stale keys behind.
+  doc.deleteIn(["server", "ui", "enabled"]);
+  doc.deleteIn(["server", "ui", "provider"]);
+  if (slot === "disabled") {
+    doc.setIn(["server", "ui", "enabled"], false);
+    return;
+  }
+  if (typeof slot === "object") {
+    doc.setIn(["server", "ui", "provider"], slot.customUri);
+    return;
+  }
+  // builtin — leave server.ui empty; clean up an empty map if present.
+  const ui = doc.getIn(["server", "ui"]);
+  if (
+    ui &&
+    typeof ui === "object" &&
+    !Array.isArray(ui) &&
+    (ui as { items?: unknown[] }).items?.length === 0
+  ) {
+    doc.deleteIn(["server", "ui"]);
+  }
 }
 
 function renderProviderBlock(d: ProviderDraft): string {
@@ -125,7 +171,12 @@ export function renderNewConfig(d: DraftConfig): string {
   const toolsBlock = renderToolsBlock(d.tools);
   const pluginsBlock = renderPluginsBlock(d.plugins);
   const discordEnabled = d.channels.discord ? "true" : "false";
-  const uiBlock = d.ui === "disabled" ? "\n  ui:\n    enabled: false" : "";
+  const uiBlock =
+    d.ui === "disabled"
+      ? "\n  ui:\n    enabled: false"
+      : typeof d.ui === "object"
+        ? `\n  ui:\n    provider: ${d.ui.customUri}`
+        : "";
   return `# Tailored AI configuration
 # Docs: https://github.com/quintonmiller/tailored-ai
 
@@ -228,13 +279,9 @@ export function patchExistingYaml(
     changes.push(`channels.discord.enabled: ${original.channels.discord} → ${edited.channels.discord}`);
   }
 
-  if (edited.ui !== original.ui) {
-    if (edited.ui === "disabled") {
-      doc.setIn(["server", "ui", "enabled"], false);
-    } else if (original.ui === "disabled") {
-      doc.deleteIn(["server", "ui", "enabled"]);
-    }
-    changes.push(`server.ui.enabled: ${original.ui === "disabled" ? "false" : "(unset)"} → ${edited.ui === "disabled" ? "false" : "(unset)"}`);
+  if (!slotEquals(edited.ui, original.ui)) {
+    applyUiSlot(doc, edited.ui);
+    changes.push(`server.ui: ${describeUi(original.ui)} → ${describeUi(edited.ui)}`);
   }
 
   const origPlugins = original.plugins.map((p) => p.uri);
