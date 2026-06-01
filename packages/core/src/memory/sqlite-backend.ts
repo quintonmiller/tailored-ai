@@ -142,9 +142,10 @@ export class SqliteMemoryBackend implements MemoryBackend {
     }
 
     // Default: note
+    const { sessionId } = parseScope(hint.scope);
     const note = createNote(this.db, {
       content: content.text,
-      session_id: null,
+      session_id: sessionId ?? null,
       project_id: projectId,
       agent: agent ?? null,
       tags: hint.tags,
@@ -429,17 +430,23 @@ function str(v: unknown): string | undefined {
   return typeof v === "string" ? v : undefined;
 }
 
-function parseScope(scope: string | string[] | undefined): { projectId: string | null; agent: string | undefined } {
-  if (!scope) return { projectId: null, agent: undefined };
+function parseScope(scope: string | string[] | undefined): {
+  projectId: string | null;
+  agent: string | undefined;
+  sessionId: string | undefined;
+} {
+  if (!scope) return { projectId: null, agent: undefined, sessionId: undefined };
   const parts = Array.isArray(scope) ? scope : scope.split(/\s+/);
   let projectId: string | null = null;
   let agent: string | undefined;
+  let sessionId: string | undefined;
   for (const part of parts) {
     if (part === "global") continue;
     if (part.startsWith("project:")) projectId = part.slice("project:".length) || null;
     else if (part.startsWith("agent:")) agent = part.slice("agent:".length) || undefined;
+    else if (part.startsWith("session:")) sessionId = part.slice("session:".length) || undefined;
   }
-  return { projectId, agent };
+  return { projectId, agent, sessionId };
 }
 
 function parseId(id: string): { kind: string; rest: string } | null {
