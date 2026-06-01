@@ -47,6 +47,11 @@ const ROW_DESCRIPTORS: RowDescriptor[] = [
   },
   { id: "task", label: "Task backend", value: (d) => shortSlot(d.taskBackend, "built-in (SQLite)") },
   {
+    id: "agents",
+    label: "Agents",
+    value: (d) => (d.externalAgents.length === 0 ? "(none external)" : `${d.externalAgents.length} external`),
+  },
+  {
     id: "plugins",
     label: "Plugins",
     value: (d) => (d.plugins.length === 0 ? "(none)" : `${d.plugins.length} configured`),

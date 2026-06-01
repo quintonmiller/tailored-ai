@@ -370,6 +370,7 @@ export type {
 export { ExploratoryWorker } from "./exploratory/worker.js";
 export type { CreateToolsOptions } from "./factories.js";
 export { createEmbedder, createMetaTools, createProvider, createTools } from "./factories.js";
+export { type LoadedExternalAgent, loadExternalAgents } from "./external-agents.js";
 export { type LoadedPlugin, loadPlugins } from "./plugins.js";
 export type { ProjectContext, ProjectFile, ResolveOptions as ProjectResolveOptions } from "./projects/resolve.js";
 export {
