@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 interface Subscription {
   endpoint: string;
@@ -64,7 +64,7 @@ export function Approvals() {
   const [showRejected, setShowRejected] = useState(false);
   const [pendingOp, setPendingOp] = useState<string | null>(null);
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     setErr(null);
     try {
       const r = await fetch("/api/trusted-actions/subscriptions");
@@ -82,7 +82,7 @@ export function Approvals() {
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     }
-  }
+  }, []);
 
   useEffect(() => {
     void refresh();
@@ -127,7 +127,7 @@ export function Approvals() {
       </div>
 
       <div style={{ display: "flex", gap: 16, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
-        <button onClick={() => void refresh()} disabled={pendingOp !== null}>
+        <button type="button" onClick={() => void refresh()} disabled={pendingOp !== null}>
           Refresh
         </button>
         <span className="muted">
@@ -183,10 +183,15 @@ export function Approvals() {
                 <td>
                   {s.status === "pending" && (
                     <>
-                      <button onClick={() => void decide(s.endpoint, "approve")} disabled={pendingOp !== null}>
+                      <button
+                        type="button"
+                        onClick={() => void decide(s.endpoint, "approve")}
+                        disabled={pendingOp !== null}
+                      >
                         Approve
                       </button>{" "}
                       <button
+                        type="button"
                         className="ghost"
                         onClick={() => void decide(s.endpoint, "reject")}
                         disabled={pendingOp !== null}
@@ -197,6 +202,7 @@ export function Approvals() {
                   )}
                   {s.status === "active" && (
                     <button
+                      type="button"
                       className="ghost"
                       onClick={() => void decide(s.endpoint, "reject")}
                       disabled={pendingOp !== null}
@@ -206,6 +212,7 @@ export function Approvals() {
                   )}
                   {s.status === "rejected" && (
                     <button
+                      type="button"
                       className="ghost"
                       onClick={() => {
                         if (confirm("Permanently delete this rejected subscription?")) {

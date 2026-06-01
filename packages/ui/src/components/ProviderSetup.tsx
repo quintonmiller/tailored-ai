@@ -64,7 +64,7 @@ export function ProviderSetup({ onSaved }: Props) {
   // key format: `${listId}:${index}` where listId is "default" or profile name
   const [customMode, setCustomMode] = useState<Set<string>>(new Set());
 
-  function ingestModelInfo(provider: string, info: Record<string, ModelInfo> | undefined) {
+  const ingestModelInfo = useCallback((provider: string, info: Record<string, ModelInfo> | undefined) => {
     if (!info) return;
     setModelInfo((prev) => {
       const next = { ...prev };
@@ -73,7 +73,7 @@ export function ProviderSetup({ onSaved }: Props) {
       }
       return next;
     });
-  }
+  }, []);
 
   const loadModels = useCallback(
     (providerName: string) => {
@@ -124,7 +124,7 @@ export function ProviderSetup({ onSaved }: Props) {
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [ingestModelInfo]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ingestModelInfo]);
 
   // When server-side modelInfo arrives, backfill maxContextTokens on entries
   // that don't already have one set. Only fills in known providers/models.

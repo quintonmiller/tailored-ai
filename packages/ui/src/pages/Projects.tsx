@@ -231,7 +231,7 @@ export function Projects({
       <div className="tasks-header">
         <h2>Projects{projects.length > 0 ? ` (${projects.length})` : ""}</h2>
         <div className="tasks-header-actions">
-          <button className="tasks-new-btn" onClick={openCreate}>
+          <button type="button" className="tasks-new-btn" onClick={openCreate}>
             + New Project
           </button>
         </div>
@@ -240,7 +240,7 @@ export function Projects({
       {error && (
         <div className="tasks-error">
           {error}
-          <button className="tasks-error-dismiss" onClick={() => setError(null)}>
+          <button type="button" className="tasks-error-dismiss" onClick={() => setError(null)}>
             x
           </button>
         </div>
@@ -255,7 +255,7 @@ export function Projects({
       ) : projects.length === 0 ? (
         <div className="empty-state">
           No projects yet.{" "}
-          <button className="tasks-new-btn" onClick={openCreate}>
+          <button type="button" className="tasks-new-btn" onClick={openCreate}>
             + Create one
           </button>
         </div>
@@ -265,6 +265,7 @@ export function Projects({
             <div className="project-filter-chips">
               {STATUS_FILTERS.map(({ key, label }) => (
                 <button
+                  type="button"
                   key={key}
                   className={`project-filter-chip${statusFilter === key ? " active" : ""}`}
                   onClick={() => setStatusFilter(key)}
@@ -288,6 +289,7 @@ export function Projects({
             <div className="empty-state">
               No projects match the current filter.{" "}
               <button
+                type="button"
                 className="tasks-edit-btn"
                 onClick={() => {
                   setStatusFilter("all");
@@ -301,6 +303,7 @@ export function Projects({
             <div className="project-tabs">
               {visibleProjects.map((p) => (
                 <button
+                  type="button"
                   key={p.id}
                   className={`project-tab${p.id === selectedId ? " active" : ""}`}
                   onClick={() => selectProject(p.id)}
@@ -319,12 +322,14 @@ export function Projects({
             <div className="project-subtabs">
               <div className="project-subtab-links">
                 <button
+                  type="button"
                   className={`project-subtab${activeTab === "tasks" ? " active" : ""}`}
                   onClick={() => switchTab("tasks")}
                 >
                   Tasks
                 </button>
                 <button
+                  type="button"
                   className={`project-subtab${activeTab === "documents" ? " active" : ""}`}
                   onClick={() => switchTab("documents")}
                 >
@@ -347,10 +352,10 @@ export function Projects({
                     </button>
                   </span>
                 )}
-                <button className="tasks-edit-btn" onClick={() => openEdit(selected)}>
+                <button type="button" className="tasks-edit-btn" onClick={() => openEdit(selected)}>
                   Edit
                 </button>
-                <button className="tasks-delete-btn" onClick={() => handleDelete(selected.id)}>
+                <button type="button" className="tasks-delete-btn" onClick={() => handleDelete(selected.id)}>
                   Delete
                 </button>
               </div>
@@ -366,7 +371,7 @@ export function Projects({
                 agents (or to yourself) from each task's form.
               </p>
               <div className="autopilot-hint-actions">
-                <button className="tasks-new-btn" onClick={() => openEdit(selected)}>
+                <button type="button" className="tasks-new-btn" onClick={() => openEdit(selected)}>
                   Set default agent
                 </button>
                 <a href="#/config/autopilot" className="autopilot-hint-link">
@@ -448,10 +453,10 @@ export function Projects({
               </select>
             </div>
             <div className="tasks-form-actions">
-              <button className="tasks-cancel-btn" onClick={() => setShowForm(false)}>
+              <button type="button" className="tasks-cancel-btn" onClick={() => setShowForm(false)}>
                 Cancel
               </button>
-              <button className="tasks-submit-btn" onClick={handleSubmit} disabled={!formTitle.trim()}>
+              <button type="button" className="tasks-submit-btn" onClick={handleSubmit} disabled={!formTitle.trim()}>
                 {editingProject ? "Save" : "Create"}
               </button>
             </div>
