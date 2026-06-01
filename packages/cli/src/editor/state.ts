@@ -1,8 +1,27 @@
 import type { DraftConfig, ProviderDraft, ResolvedPlugin, SlotChoice, ToolsDraft } from "./types.js";
 
-export type RowId = "provider" | "ui" | "memory" | "tools" | "channels" | "task" | "agents" | "plugins";
+export type RowId =
+  | "provider"
+  | "ui"
+  | "memory"
+  | "tools"
+  | "channels"
+  | "task"
+  | "agents"
+  | "systemPrompt"
+  | "plugins";
 
-export const ROWS: RowId[] = ["provider", "ui", "memory", "tools", "channels", "task", "agents", "plugins"];
+export const ROWS: RowId[] = [
+  "provider",
+  "ui",
+  "memory",
+  "tools",
+  "channels",
+  "task",
+  "agents",
+  "systemPrompt",
+  "plugins",
+];
 
 export type DetailMode = "details" | "yaml" | "diff";
 
@@ -46,6 +65,7 @@ export type Action =
   | { type: "setUi"; choice: SlotChoice }
   | { type: "setMemory"; choice: SlotChoice }
   | { type: "setTaskBackend"; choice: SlotChoice }
+  | { type: "setSystemPromptBaseFile"; baseFile: string | undefined }
   | { type: "setStatus"; status: string | undefined }
   | { type: "undo" }
   | { type: "setSearch"; search: string }
@@ -114,6 +134,11 @@ export function reducer(state: AppState, action: Action): AppState {
       return { ...snapshot(state), draft: { ...state.draft, memory: action.choice } };
     case "setTaskBackend":
       return { ...snapshot(state), draft: { ...state.draft, taskBackend: action.choice } };
+    case "setSystemPromptBaseFile":
+      return {
+        ...snapshot(state),
+        draft: { ...state.draft, systemPromptBaseFile: action.baseFile || undefined },
+      };
     case "setStatus":
       return { ...state, status: action.status };
     case "undo":

@@ -154,6 +154,7 @@ export {
   composeSystemPrompt,
   DEFAULT_LAYER_ORDER,
   type DefaultLayerName,
+  mergeSystemPromptOverrides,
   resolveBase,
   resolveCustomLayers,
   type SystemPromptOverride,

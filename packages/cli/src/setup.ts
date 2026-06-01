@@ -70,8 +70,35 @@ export function hydrateFromYaml(text: string, homeDir: string): DraftConfig {
     ui: hydrateUi(doc),
     memory: hydrateMemory(doc),
     taskBackend: "builtin",
+    systemPromptBaseFile: hydrateSystemPromptBaseFile(doc),
     envLines: [],
   };
+}
+
+function hydrateSystemPromptBaseFile(doc: ReturnType<typeof parseDocument>): string | undefined {
+  const v = doc.getIn(["agent", "systemPrompt", "baseFile"]);
+  return typeof v === "string" && v.trim() ? v : undefined;
+}
+
+function describeSystemPromptBaseFile(v: string | undefined): string {
+  return v ? `baseFile ${v}` : "built-in default";
+}
+
+function applySystemPromptBaseFile(doc: ReturnType<typeof parseDocument>, baseFile: string | undefined): void {
+  doc.deleteIn(["agent", "systemPrompt", "baseFile"]);
+  if (baseFile) {
+    doc.setIn(["agent", "systemPrompt", "baseFile"], baseFile);
+    return;
+  }
+  const sp = doc.getIn(["agent", "systemPrompt"]);
+  if (
+    sp &&
+    typeof sp === "object" &&
+    !Array.isArray(sp) &&
+    (sp as { items?: unknown[] }).items?.length === 0
+  ) {
+    doc.deleteIn(["agent", "systemPrompt"]);
+  }
 }
 
 function hydrateUi(doc: ReturnType<typeof parseDocument>): SlotChoice {
@@ -233,6 +260,9 @@ export function renderNewConfig(d: DraftConfig): string {
         : "";
   const memoryBlock =
     typeof d.memory === "object" ? `\nmemory:\n  backend:\n    provider: ${d.memory.customUri}\n` : "";
+  const systemPromptLine = d.systemPromptBaseFile
+    ? `\n  systemPrompt:\n    baseFile: ${d.systemPromptBaseFile}`
+    : "";
   return `# Tailored AI configuration
 # Docs: https://github.com/quintonmiller/tailored-ai
 
@@ -250,7 +280,7 @@ agent:
   extraInstructions: ""
   temperature: 0.7
   maxToolRounds: 100
-  maxHistoryTokens: 20000
+  maxHistoryTokens: 20000${systemPromptLine}
 
 ${toolsBlock}
 
@@ -343,6 +373,13 @@ export function patchExistingYaml(
   if (!slotEquals(edited.memory, original.memory)) {
     applyMemorySlot(doc, edited.memory);
     changes.push(`memory.backend: ${describeMemory(original.memory)} → ${describeMemory(edited.memory)}`);
+  }
+
+  if (edited.systemPromptBaseFile !== original.systemPromptBaseFile) {
+    applySystemPromptBaseFile(doc, edited.systemPromptBaseFile);
+    changes.push(
+      `agent.systemPrompt: ${describeSystemPromptBaseFile(original.systemPromptBaseFile)} → ${describeSystemPromptBaseFile(edited.systemPromptBaseFile)}`,
+    );
   }
 
   const origPlugins = original.plugins.map((p) => p.uri);

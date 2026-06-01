@@ -56,6 +56,13 @@ export interface DraftConfig {
    * `agents:`.
    */
   externalAgents: ResolvedPlugin[];
+  /**
+   * Global system-prompt base override — path to a file holding the base
+   * prompt. Empty/undefined means use the built-in BASE_SYSTEM_PROMPT.
+   * Per-agent overrides in `agents.<name>.systemPrompt` continue to win
+   * field-by-field at runtime.
+   */
+  systemPromptBaseFile?: string;
   /** Lines appended to .env (API keys, etc.). */
   envLines: string[];
 }

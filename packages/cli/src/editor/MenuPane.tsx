@@ -52,6 +52,11 @@ const ROW_DESCRIPTORS: RowDescriptor[] = [
     value: (d) => (d.externalAgents.length === 0 ? "(none external)" : `${d.externalAgents.length} external`),
   },
   {
+    id: "systemPrompt",
+    label: "System prompt",
+    value: (d) => (d.systemPromptBaseFile ? `baseFile: ${d.systemPromptBaseFile}` : "built-in default"),
+  },
+  {
     id: "plugins",
     label: "Plugins",
     value: (d) => (d.plugins.length === 0 ? "(none)" : `${d.plugins.length} configured`),
