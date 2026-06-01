@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   type AutopilotActivity,
   type CronData,
@@ -41,28 +41,16 @@ export function Dashboard() {
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const activeProject = useActiveProject();
 
-  useEffect(() => {
-    refreshActivity();
-    refreshSlow();
-    const a = setInterval(refreshActivity, ACTIVITY_POLL_MS);
-    const s = setInterval(refreshSlow, SLOW_POLL_MS);
-    return () => {
-      clearInterval(a);
-      clearInterval(s);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshActivity, refreshSlow]);
-
-  function refreshActivity() {
+  const refreshActivity = useCallback(() => {
     fetchActivity()
       .then(setActivity)
       .catch(() => {});
     fetchAutopilotActivity()
       .then(setAutopilot)
       .catch(() => {});
-  }
+  }, []);
 
-  function refreshSlow() {
+  const refreshSlow = useCallback(() => {
     fetchHealth()
       .then(setHealth)
       .catch(() => {});
@@ -94,7 +82,18 @@ export function Dashboard() {
     fetchExploratoryRuns({ limit: RECENT_LIMIT })
       .then((r) => setRecentTicks(r.runs))
       .catch(() => {});
-  }
+  }, []);
+
+  useEffect(() => {
+    refreshActivity();
+    refreshSlow();
+    const a = setInterval(refreshActivity, ACTIVITY_POLL_MS);
+    const s = setInterval(refreshSlow, SLOW_POLL_MS);
+    return () => {
+      clearInterval(a);
+      clearInterval(s);
+    };
+  }, [refreshActivity, refreshSlow]);
 
   const liveAgents = activity.filter((a) => a.status !== "idle");
   const failedRuns = recentRuns.filter((r) => r.status === "failed");
@@ -107,6 +106,7 @@ export function Dashboard() {
   return (
     <div className="dashboard dashboard-home">
       <button
+        type="button"
         className="dash-logout"
         onClick={() => {
           fetch("/api/auth/logout", { method: "POST" }).then(() => {
@@ -579,14 +579,14 @@ function WatchersPanel() {
   } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
-  const reload = () => {
+  const reload = useCallback(() => {
     import("../api").then((m) =>
       m
         .fetchExploratoryAgents()
         .then(setData)
         .catch(() => {}),
     );
-  };
+  }, []);
   useEffect(() => {
     reload();
     const id = setInterval(reload, 15_000);

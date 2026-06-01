@@ -68,7 +68,7 @@ export function DocumentList({ projectId }: { projectId: string }) {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
-        <button className="tasks-new-btn" onClick={() => setShowForm(true)}>
+        <button type="button" className="tasks-new-btn" onClick={() => setShowForm(true)}>
           + New Document
         </button>
       </div>
@@ -76,7 +76,7 @@ export function DocumentList({ projectId }: { projectId: string }) {
       {error && (
         <div className="tasks-error">
           {error}
-          <button className="tasks-error-dismiss" onClick={() => setError(null)}>
+          <button type="button" className="tasks-error-dismiss" onClick={() => setError(null)}>
             x
           </button>
         </div>
@@ -109,10 +109,10 @@ export function DocumentList({ projectId }: { projectId: string }) {
               />
             </div>
             <div className="tasks-form-actions">
-              <button className="tasks-cancel-btn" onClick={() => setShowForm(false)}>
+              <button type="button" className="tasks-cancel-btn" onClick={() => setShowForm(false)}>
                 Cancel
               </button>
-              <button className="tasks-submit-btn" onClick={handleCreate} disabled={!formTitle.trim()}>
+              <button type="button" className="tasks-submit-btn" onClick={handleCreate} disabled={!formTitle.trim()}>
                 Create
               </button>
             </div>
@@ -129,7 +129,7 @@ export function DocumentList({ projectId }: { projectId: string }) {
       ) : docs.length === 0 ? (
         <div className="empty-state">
           No documents yet.{" "}
-          <button className="tasks-new-btn" onClick={() => setShowForm(true)}>
+          <button type="button" className="tasks-new-btn" onClick={() => setShowForm(true)}>
             + Create one
           </button>
         </div>

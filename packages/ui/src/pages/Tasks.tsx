@@ -361,7 +361,7 @@ export function Tasks({
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
-          <button className="tasks-new-btn" onClick={() => openCreate()}>
+          <button type="button" className="tasks-new-btn" onClick={() => openCreate()}>
             + New Task
           </button>
         </div>
@@ -370,7 +370,7 @@ export function Tasks({
       {error && (
         <div className="tasks-error">
           {error}
-          <button className="tasks-error-dismiss" onClick={() => setError(null)}>
+          <button type="button" className="tasks-error-dismiss" onClick={() => setError(null)}>
             x
           </button>
         </div>
@@ -462,10 +462,10 @@ export function Tasks({
               />
             </div>
             <div className="tasks-form-actions">
-              <button className="tasks-cancel-btn" onClick={() => setShowForm(false)}>
+              <button type="button" className="tasks-cancel-btn" onClick={() => setShowForm(false)}>
                 Cancel
               </button>
-              <button className="tasks-submit-btn" onClick={handleSubmit} disabled={!form.title.trim()}>
+              <button type="button" className="tasks-submit-btn" onClick={handleSubmit} disabled={!form.title.trim()}>
                 {editingId ? "Save" : "Create"}
               </button>
             </div>
@@ -480,13 +480,13 @@ export function Tasks({
             <div className="tasks-detail-header">
               <h3>{detail.title}</h3>
               <div className="tasks-detail-actions">
-                <button className="tasks-edit-btn" onClick={() => openEdit(detail)}>
+                <button type="button" className="tasks-edit-btn" onClick={() => openEdit(detail)}>
                   Edit
                 </button>
-                <button className="tasks-delete-btn" onClick={() => handleDelete(detail.id)}>
+                <button type="button" className="tasks-delete-btn" onClick={() => handleDelete(detail.id)}>
                   Delete
                 </button>
-                <button className="tasks-close-btn" onClick={closeDetail}>
+                <button type="button" className="tasks-close-btn" onClick={closeDetail}>
                   x
                 </button>
               </div>
@@ -524,6 +524,7 @@ export function Tasks({
                   />
                 </div>
                 <button
+                  type="button"
                   className="tasks-submit-btn"
                   onClick={handleResumeFromQuestion}
                   disabled={!answerText.trim()}
@@ -564,7 +565,12 @@ export function Tasks({
                     if (e.key === "Enter") handleComment();
                   }}
                 />
-                <button className="tasks-submit-btn" onClick={handleComment} disabled={!commentText.trim()}>
+                <button
+                  type="button"
+                  className="tasks-submit-btn"
+                  onClick={handleComment}
+                  disabled={!commentText.trim()}
+                >
                   Send
                 </button>
               </div>
@@ -589,7 +595,7 @@ export function Tasks({
       ) : tasks.length === 0 && !search ? (
         <div className="empty-state">
           No tasks yet.{" "}
-          <button className="tasks-new-btn" onClick={() => openCreate()}>
+          <button type="button" className="tasks-new-btn" onClick={() => openCreate()}>
             + Create one
           </button>
         </div>
@@ -610,6 +616,7 @@ export function Tasks({
                     <span className="board-lane-title">{STATUS_LABELS[status]}</span>
                     <span className="board-lane-count">{laneTasks.length}</span>
                     <button
+                      type="button"
                       className="board-lane-add"
                       onClick={() => openCreate(status)}
                       title={`Add to ${STATUS_LABELS[status]}`}
@@ -663,12 +670,12 @@ export function Tasks({
             </div>
           </div>
           {archivedCount > 0 && !showArchived && (
-            <button className="board-show-archived" onClick={() => setShowArchived(true)}>
+            <button type="button" className="board-show-archived" onClick={() => setShowArchived(true)}>
               Show {archivedCount} archived task{archivedCount !== 1 ? "s" : ""}
             </button>
           )}
           {showArchived && archivedCount > 0 && (
-            <button className="board-show-archived" onClick={() => setShowArchived(false)}>
+            <button type="button" className="board-show-archived" onClick={() => setShowArchived(false)}>
               Hide archived tasks
             </button>
           )}
