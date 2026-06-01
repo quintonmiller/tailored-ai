@@ -44,6 +44,7 @@ export interface RuntimeOptions {
       getOwnerId?: () => string | undefined;
       taskBackend?: TaskBackend;
       getEmbedder?: () => import("./providers/embedding.js").EmbeddingProvider | undefined;
+      getMemoryBackend?: () => Promise<MemoryBackend>;
     },
   ) => Tool[];
   createProvider: (config: AgentConfig) => { provider: AIProvider; model: string };
@@ -124,6 +125,7 @@ export class AgentRuntime {
         db: opts.db,
         taskBackend: this._taskBackend,
         getEmbedder: () => this._embedder,
+        getMemoryBackend: () => this.getMemoryBackend(),
       }) ?? [];
     for (const tool of builtinTools) this._toolRegistry.registerBuiltin(tool);
     const { provider, model } = opts.createProvider(merged);
@@ -307,6 +309,7 @@ export class AgentRuntime {
           db: this.db,
           taskBackend,
           getEmbedder: () => embedder,
+          getMemoryBackend: () => this.getMemoryBackend(),
         }) ?? [];
       const { provider, model } = this._createProvider(config);
       // Clean up old tools that have a destroy hook (e.g. browser processes).
@@ -521,6 +524,8 @@ export class AgentRuntime {
       injectMemory: resolved.injectMemory,
       memoryInjectBudgetTokens: resolved.memoryInjectBudgetTokens,
       memoryInjectLimit: resolved.memoryInjectLimit,
+      getMemoryBackend: () => this.getMemoryBackend(),
+      memoryInjectEmbedder: this._embedder,
       budgetWarnings: resolved.budgetWarnings,
       permissions: config.permissions,
       sandbox,

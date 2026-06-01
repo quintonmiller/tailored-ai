@@ -412,14 +412,19 @@ export function createServer(opts: ServerOptions) {
     const limit = Number.parseInt(c.req.query("limit") ?? "5", 10);
     const tier = c.req.query("tier") as "any" | "short" | "long" | undefined;
     const embedder = runtime.getEmbedder();
-    const hits = await recallQueryAsync(runtime.db, {
-      query: q,
-      projectId: projectFilter,
-      tier: tier ?? "any",
-      limit,
-      embedder,
-      embedModel: runtime.getConfig().memory?.embeddings?.model,
-    });
+    const backend = await runtime.getMemoryBackend();
+    const hits = await recallQueryAsync(
+      backend,
+      {
+        query: q,
+        projectId: projectFilter,
+        tier: tier ?? "any",
+        limit,
+        embedder,
+        embedModel: runtime.getConfig().memory?.embeddings?.model,
+      },
+      runtime.db,
+    );
     return c.json({ hits, formatted: formatHits(hits) });
   });
 

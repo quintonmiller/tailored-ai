@@ -45,6 +45,10 @@ export interface CreateToolsOptions {
   taskBackend?: TaskBackend;
   /** Optional embedding provider getter for semantic recall. */
   getEmbedder?: () => EmbeddingProvider | undefined;
+  /** Memory backend accessor — when wired, the RecallTool's `query`
+   *  action routes through `backend.query` instead of calling SQLite
+   *  directly. Phase 2 wiring; Phase 3 will route the other actions too. */
+  getMemoryBackend?: () => Promise<import("./memory/interface.js").MemoryBackend>;
   /** Notify hook fired after a successful task mutation. Wires the tasks
    *  tool to the task watcher so coder→reviewer handoffs re-trigger routing
    *  (docs/agent-unification.md, Phase 6). */
@@ -110,6 +114,7 @@ export function createTools(
         defaultTtlDays: config.tools.recall?.defaultTtlDays,
         getEmbedder: opts.getEmbedder,
         embedModel: config.memory?.embeddings?.model,
+        getMemoryBackend: opts.getMemoryBackend,
       }),
     );
   }

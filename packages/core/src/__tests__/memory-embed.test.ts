@@ -13,14 +13,17 @@ import {
 } from "../db/chunk-queries.js";
 import { createNote } from "../db/note-queries.js";
 import { initDatabase } from "../db/schema.js";
+import { SqliteMemoryBackend } from "../memory/sqlite-backend.js";
 import { blobToVector, cosine, type EmbeddingProvider, vectorToBlob } from "../providers/embedding.js";
 import { RecallTool } from "../tools/recall.js";
 import { recallQueryAsync } from "../tools/recall-query.js";
 
 let db: Database.Database;
+let backend: SqliteMemoryBackend;
 
 beforeEach(() => {
   db = initDatabase(":memory:");
+  backend = new SqliteMemoryBackend(db);
 });
 
 afterEach(() => {
@@ -245,7 +248,7 @@ describe("indexKbDir", () => {
 describe("recallQueryAsync merges keyword + semantic", () => {
   it("returns keyword-only when embedder is absent", async () => {
     createNote(db, { content: "the cat sat", project_id: "p" });
-    const hits = await recallQueryAsync(db, { query: "cat", projectId: "p" });
+    const hits = await recallQueryAsync(backend, { query: "cat", projectId: "p" });
     expect(hits.length).toBe(1);
     expect(hits[0].source).toMatch(/^note_/);
   });
@@ -263,7 +266,7 @@ describe("recallQueryAsync merges keyword + semantic", () => {
       embed_model: "toy-3d",
     });
 
-    const hits = await recallQueryAsync(db, {
+    const hits = await recallQueryAsync(backend, {
       query: "cat",
       projectId: "p",
       embedder,
@@ -280,7 +283,7 @@ describe("recallQueryAsync merges keyword + semantic", () => {
       project_id: "p",
       embedding: new Float32Array([1, 0, 0]),
     });
-    const hits = await recallQueryAsync(db, {
+    const hits = await recallQueryAsync(backend, {
       query: "cat",
       projectId: "p",
       tier: "short",
@@ -301,7 +304,7 @@ describe("recallQueryAsync merges keyword + semantic", () => {
         throw new Error("network down");
       },
     };
-    const hits = await recallQueryAsync(db, {
+    const hits = await recallQueryAsync(backend, {
       query: "cat",
       projectId: "p",
       embedder: erroring,
@@ -320,7 +323,7 @@ describe("recallQueryAsync merges keyword + semantic", () => {
       embedding: new Float32Array([1, 0, 0]),
       embed_model: "toy-3d",
     });
-    const hits = await recallQueryAsync(db, {
+    const hits = await recallQueryAsync(backend, {
       query: "cat",
       projectId: "p",
       embedder,
