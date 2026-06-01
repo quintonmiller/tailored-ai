@@ -110,6 +110,10 @@ importers:
         version: 5.1.1
 
   packages/google-tools:
+    dependencies:
+      yaml:
+        specifier: ^2.6.0
+        version: 2.8.2
     devDependencies:
       '@tailored-ai/core':
         specifier: workspace:*

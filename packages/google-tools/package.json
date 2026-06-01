@@ -47,6 +47,9 @@
     "clean": "rm -rf dist tsconfig.tsbuildinfo",
     "test": "vitest run"
   },
+  "dependencies": {
+    "yaml": "^2.6.0"
+  },
   "peerDependencies": {
     "@tailored-ai/core": "workspace:*",
     "better-sqlite3": "^11.7.0"
