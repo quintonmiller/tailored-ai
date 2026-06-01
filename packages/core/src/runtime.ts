@@ -20,6 +20,8 @@ import { ToolRegistry } from "./resources/tool-registry.js";
 import { populateBuiltinTriggers, TriggerKindRegistry } from "./resources/trigger-registry.js";
 import { createSandbox } from "./sandboxes/factory.js";
 import { globalSandboxRegistry } from "./sandboxes/registry.js";
+import type { MemoryBackend } from "./memory/interface.js";
+import { resolveMemoryBackend } from "./memory/registry.js";
 import { createTaskBackend } from "./tasks/factory.js";
 import type { TaskBackend } from "./tasks/interface.js";
 import type { Tool } from "./tools/interface.js";
@@ -60,6 +62,13 @@ export class AgentRuntime {
   private _provider: AIProvider;
   private _model: string;
   private _taskBackend: TaskBackend;
+  /**
+   * Lazy memory backend. Constructed on first `getMemoryBackend()` and
+   * rebuilt on `reload()` so a config flip swaps the active backend the
+   * same way it swaps tools/provider. The promise is reused across
+   * concurrent callers so we don't double-construct.
+   */
+  private _memoryBackend: Promise<MemoryBackend> | undefined;
   private _generation = 0;
   private _watcher: FSWatcher | undefined;
   private _debounceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -185,6 +194,18 @@ export class AgentRuntime {
   getTaskBackend(): TaskBackend {
     return this._taskBackend;
   }
+  /**
+   * Resolve the configured memory backend (default "builtin" SQLite).
+   * Lazy — first caller pays the construction cost; subsequent callers
+   * get the cached promise. The backend is rebuilt on `reload()`.
+   * Throws when the configured provider id has no registered factory.
+   */
+  getMemoryBackend(): Promise<MemoryBackend> {
+    if (!this._memoryBackend) {
+      this._memoryBackend = resolveMemoryBackend(this);
+    }
+    return this._memoryBackend;
+  }
   /** Returns the configured embedding provider, or undefined when embeddings are disabled. */
   getEmbedder(): import("./providers/embedding.js").EmbeddingProvider | undefined {
     return this._embedder;
@@ -308,6 +329,14 @@ export class AgentRuntime {
       this._providerRegistry = newProviderRegistry;
       this._taskBackend = taskBackend;
       this._embedder = embedder;
+      // Drop the cached memory backend so the next getMemoryBackend() call
+      // re-resolves against the new config. A pending close() on the old
+      // backend runs in the background.
+      const previous = this._memoryBackend;
+      this._memoryBackend = undefined;
+      previous
+        ?.then((b) => b.close?.())
+        ?.catch((e) => console.error("[runtime] memory backend close failed:", (e as Error).message));
       this._provider = provider;
       this._model = model;
       this._generation++;
