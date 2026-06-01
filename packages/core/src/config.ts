@@ -353,6 +353,18 @@ export interface AgentConfig {
    * in this config file. The field is reserved for future routing.
    */
   plugins?: Array<string | { module: string; config?: Record<string, unknown> }>;
+  /**
+   * External agent URIs loaded into the AgentRegistry at startup. Each entry
+   * is a resource URI (npm:/git:/file:/https:/tai-registry:) pointing at a
+   * `kind: "agent"` manifest. Loaded via `loadExternalAgents()`, parallel
+   * to the `plugins` block — the goal is to install agents authored
+   * elsewhere without copying their definition into this config.
+   *
+   * Inline definitions under `agents:` continue to work; the two paths are
+   * complementary. The registry resolves matching ids before falling back
+   * to `agents:` (see `resolveAgent`).
+   */
+  externalAgents?: string[];
   cron: {
     enabled: boolean;
     jobs: CronJobConfig[];

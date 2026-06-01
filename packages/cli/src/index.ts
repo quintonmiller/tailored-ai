@@ -20,6 +20,7 @@ import {
   initDatabase,
   listSessions,
   loadConfig,
+  loadExternalAgents,
   loadPlugins,
   loadSession,
   migrateContextDir,
@@ -727,6 +728,14 @@ async function main() {
     (path) => loadConfig(path),
     config,
   );
+
+  // Pull in any externalAgents declared in config.yaml. Same source list the
+  // editor's SlotEditor uses for plugins, so file/https/git/npm/tai-registry
+  // URIs all work.
+  if (config.externalAgents?.length) {
+    const { buildExternalAgentLoader } = await import("./external-agent-loader.js");
+    await loadExternalAgents(config, runtime, buildExternalAgentLoader());
+  }
 
   const metaTools = createMetaTools(runtime, contextDir, kbDir);
   runtime.setMetaTools(metaTools);

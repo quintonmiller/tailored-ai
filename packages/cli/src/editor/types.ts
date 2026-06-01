@@ -49,6 +49,13 @@ export interface DraftConfig {
   memory: SlotChoice;
   /** Task backend. "disabled" not allowed. */
   taskBackend: SlotChoice;
+  /**
+   * Externally-loaded agent URIs (npm/git/file/https/tai-registry). At
+   * runtime these are resolved through `loadExternalAgents` and registered
+   * into the AgentRegistry, sitting alongside agents defined inline under
+   * `agents:`.
+   */
+  externalAgents: ResolvedPlugin[];
   /** Lines appended to .env (API keys, etc.). */
   envLines: string[];
 }
@@ -72,6 +79,7 @@ export function defaultDraft(homeDir: string): DraftConfig {
     ui: "builtin",
     memory: "builtin",
     taskBackend: "builtin",
+    externalAgents: [],
     envLines: [],
   };
 }

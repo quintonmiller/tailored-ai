@@ -5,6 +5,7 @@ import { DetailPane } from "./DetailPane.js";
 import { DiffPane } from "./DiffPane.js";
 import { HelpOverlay } from "./HelpOverlay.js";
 import { MenuPane } from "./MenuPane.js";
+import { AgentsEditor } from "./editors/AgentsEditor.js";
 import { ChannelsEditor } from "./editors/ChannelsEditor.js";
 import { PluginsEditor } from "./editors/PluginsEditor.js";
 import { ProviderEditor } from "./editors/ProviderEditor.js";
@@ -190,5 +191,7 @@ function EditorSwitch({ state, dispatch }: { state: AppState; dispatch: (a: Acti
           onExit={onExit}
         />
       );
+    case "agents":
+      return <AgentsEditor agents={state.draft.externalAgents} dispatch={dispatch} onExit={onExit} />;
   }
 }
