@@ -19,6 +19,15 @@ import {
   upsertFact,
 } from "../db/fact-queries.js";
 import {
+  chunkSnippet as renderChunkSnippet,
+  factLabel,
+  factSnippet,
+  noteSnippet,
+  scoreFact,
+  scoreNote,
+  tokenize,
+} from "./scoring.js";
+import {
   type MemoryChunk,
   countChunks,
   createChunk,
@@ -147,8 +156,7 @@ export class SqliteMemoryBackend implements MemoryBackend {
 
   async query(context: QueryContext): Promise<MemoryFragment[]> {
     const { projectId } = parseScope(context.scope);
-    const limit = context.limit ?? 10;
-    const fragments: MemoryFragment[] = [];
+    const limit = context.limit ?? 5;
 
     // Exact structured lookup first — the FactsTool's "find this triplet" path.
     if (context.wantStructured) {
@@ -157,45 +165,102 @@ export class SqliteMemoryBackend implements MemoryBackend {
       const key = str(s.key);
       if (category && key) {
         const fact = findFact(this.db, category, str(s.entity) ?? "", key, projectId);
-        if (fact) fragments.push(factFragment(fact));
-        if (fragments.length >= limit) return fragments;
+        return fact ? [factFragment(fact)] : [];
       }
     }
 
-    // Pinned items (when caller wants prelude-ish context).
+    const fragments: MemoryFragment[] = [];
+
+    // Pinned tier — always-inject high-importance notes. Surfaces with
+    // metadata.pinned=true so the agent layer can render them in their
+    // own block. SQLite-specific concept; other backends may omit.
     if (context.includePrelude) {
       const pinned = listPinnedNotes(this.db, { project_id: projectId, limit });
-      for (const note of pinned) {
-        fragments.push(noteFragment(note));
-        if (fragments.length >= limit) return fragments;
-      }
+      for (const note of pinned) fragments.push(noteFragment(note, { pinned: true }));
     }
+    const pinnedIds = new Set(
+      fragments.filter((f) => f.metadata?.pinned).map((f) => f.id ?? ""),
+    );
 
-    // Semantic search when the caller supplied a vector.
-    if (context.vector) {
-      const hits = semanticSearch(this.db, context.vector, { projectId, limit });
-      for (const hit of hits) {
-        fragments.push(chunkFragment(hit.chunk, hit.score));
-        if (fragments.length >= limit) return fragments;
-      }
-    }
-
-    // Keyword recall across notes.
+    // Keyword + structured recall over notes and facts. Mirrors the old
+    // recallQuery scoring; ranking now lives behind the backend so plugin
+    // backends can replace it entirely.
+    let keywordHits: Array<MemoryFragment & { _score: number; _createdAt: string }> = [];
     if (context.freeText) {
-      const noteQuery: NoteQuery = {
-        project_id: projectId,
-        search: context.freeText,
-        excludeExpired: true,
-        includeGlobal: projectId !== null,
-        limit,
-      };
-      const matched = listNotes(this.db, noteQuery);
-      for (const note of matched) {
-        fragments.push(noteFragment(note));
-        if (fragments.length >= limit) return fragments;
+      const terms = tokenize(context.freeText);
+      if (terms.length > 0) {
+        const minImportance = context.minImportance;
+        const notes = listNotes(this.db, {
+          project_id: projectId,
+          excludeExpired: true,
+          includeGlobal: projectId !== null,
+          limit: 500,
+        });
+        for (const n of notes) {
+          if (typeof minImportance === "number" && (n.importance ?? 0) < minImportance) continue;
+          const score = scoreNote(terms, n);
+          if (score <= 0) continue;
+          const frag = noteFragment(n, { tier: "short", score, snippet: noteSnippet(n) });
+          keywordHits.push({ ...frag, _score: score, _createdAt: n.created_at });
+        }
+
+        const facts = listFacts(this.db, {
+          project_id: projectId,
+          includeGlobal: projectId !== null,
+          limit: 1000,
+        });
+        for (const f of facts) {
+          const score = scoreFact(terms, f);
+          if (score <= 0) continue;
+          const frag = factFragment(f, {
+            tier: "long",
+            score,
+            label: factLabel(f),
+            snippet: factSnippet(f),
+          });
+          keywordHits.push({ ...frag, _score: score, _createdAt: f.updated_at });
+        }
       }
     }
 
+    // Semantic tier — only when the caller has already embedded.
+    let semanticHits: Array<MemoryFragment & { _score: number; _createdAt: string }> = [];
+    if (context.vector) {
+      const minScore = context.minImportance ?? 0;
+      const hits = semanticSearch(this.db, context.vector, { projectId, limit, minScore });
+      for (const hit of hits) {
+        const frag = chunkFragment(hit.chunk, {
+          tier: "long",
+          score: hit.score,
+          snippet: renderChunkSnippet(hit.chunk.content),
+        });
+        semanticHits.push({ ...frag, _score: hit.score, _createdAt: hit.chunk.created_at });
+      }
+    }
+
+    // Merge keyword + semantic. Dedupe: a chunk whose source is a note id
+    // collapses onto that note's keyword hit (keep the higher score). Then
+    // sort by score desc, recency desc.
+    const merged = new Map<string, MemoryFragment & { _score: number; _createdAt: string }>();
+    for (const h of [...keywordHits, ...semanticHits]) {
+      const key = canonicalSourceKey(h);
+      const existing = merged.get(key);
+      if (!existing || h._score > existing._score) merged.set(key, h);
+    }
+    const ranked = Array.from(merged.values())
+      .filter((f) => !pinnedIds.has(f.id ?? ""))
+      .sort((a, b) => {
+        if (b._score !== a._score) return b._score - a._score;
+        return b._createdAt.localeCompare(a._createdAt);
+      })
+      .slice(0, Math.max(0, limit - fragments.length));
+
+    for (const r of ranked) {
+      const { _score, _createdAt, ...frag } = r;
+      void _score;
+      void _createdAt;
+      fragments.push(frag);
+    }
     return fragments;
   }
 
@@ -242,7 +307,7 @@ export class SqliteMemoryBackend implements MemoryBackend {
         limit: query.limit,
         includeGlobal: projectId !== null,
       };
-      return listFacts(this.db, factQuery).map(factFragment);
+      return listFacts(this.db, factQuery).map((f) => factFragment(f));
     }
 
     if (kind === "chunk") {
@@ -281,7 +346,7 @@ export class SqliteMemoryBackend implements MemoryBackend {
       includeGlobal: projectId !== null,
       limit: query.limit,
     });
-    return notes.map(noteFragment);
+    return notes.map((n) => noteFragment(n));
   }
 
   async get(id: string): Promise<MemoryFragment | null> {
@@ -383,7 +448,7 @@ function parseId(id: string): { kind: string; rest: string } | null {
   return { kind: id.slice(0, idx), rest: id.slice(idx + 1) };
 }
 
-function noteFragment(note: Note): MemoryFragment {
+function noteFragment(note: Note, extra: Record<string, unknown> = {}): MemoryFragment {
   return {
     text: note.content,
     id: `note:${note.id}`,
@@ -396,11 +461,12 @@ function noteFragment(note: Note): MemoryFragment {
       ttl_at: note.ttl_at,
       project_id: note.project_id,
       agent: note.agent,
+      ...extra,
     },
   };
 }
 
-function factFragment(fact: Fact): MemoryFragment {
+function factFragment(fact: Fact, extra: Record<string, unknown> = {}): MemoryFragment {
   return {
     text: fact.value,
     id: `fact:${fact.id}`,
@@ -415,22 +481,34 @@ function factFragment(fact: Fact): MemoryFragment {
       project_id: fact.project_id,
       created_at: fact.created_at,
       updated_at: fact.updated_at,
+      ...extra,
     },
   };
 }
 
-function chunkFragment(chunk: MemoryChunk, score?: number): MemoryFragment {
+function chunkFragment(chunk: MemoryChunk, extra: Record<string, unknown> = {}): MemoryFragment {
   return {
     text: chunk.content,
     id: `chunk:${chunk.id}`,
     metadata: {
       kind: "chunk",
       source: chunk.source,
-      score,
       embed_model: chunk.embed_model,
       created_at: chunk.created_at,
       project_id: chunk.project_id,
       ...chunk.metadata,
+      ...extra,
     },
   };
+}
+
+/**
+ * Canonical key for dedup between keyword and semantic hits — a chunk
+ * whose source is `note:<id>` collapses onto the note's keyword hit so
+ * the same note isn't surfaced twice. Falls back to the fragment id.
+ */
+function canonicalSourceKey(f: MemoryFragment): string {
+  const src = f.metadata?.source;
+  if (typeof src === "string" && src.startsWith("note:")) return src.slice("note:".length);
+  return f.id ?? "";
 }

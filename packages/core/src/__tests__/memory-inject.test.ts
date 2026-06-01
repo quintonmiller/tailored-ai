@@ -6,13 +6,16 @@ import { newSession } from "../agent/session.js";
 import { upsertFact } from "../db/fact-queries.js";
 import { createNote } from "../db/note-queries.js";
 import { initDatabase } from "../db/schema.js";
+import { SqliteMemoryBackend } from "../memory/sqlite-backend.js";
 import type { AIProvider, Message } from "../providers/interface.js";
 import type { Tool, ToolContext } from "../tools/interface.js";
 
 let db: Database.Database;
+let backend: SqliteMemoryBackend;
 
 beforeEach(() => {
   db = initDatabase(":memory:");
+  backend = new SqliteMemoryBackend(db);
 });
 
 afterEach(() => {
@@ -20,11 +23,11 @@ afterEach(() => {
 });
 
 describe("buildMemoryBlock", () => {
-  it("returns empty string when no hits", () => {
-    expect(buildMemoryBlock(db, { userMessage: "nothing matches", projectId: "p" })).toBe("");
+  it("returns empty string when no hits", async () => {
+    expect(await buildMemoryBlock(backend, { userMessage: "nothing matches", projectId: "p" })).toBe("");
   });
 
-  it("renders a fenced block with tier badge + source + snippet", () => {
+  it("renders a fenced block with tier badge + source + snippet", async () => {
     createNote(db, { content: "watcher saw local llm news", project_id: "p" });
     upsertFact(db, {
       category: "person",
@@ -33,7 +36,7 @@ describe("buildMemoryBlock", () => {
       value: "1988-03-12",
       project_id: "p",
     });
-    const block = buildMemoryBlock(db, {
+    const block = await buildMemoryBlock(backend, {
       userMessage: "tell me about local llm",
       projectId: "p",
     });
@@ -43,22 +46,22 @@ describe("buildMemoryBlock", () => {
     expect(block).toContain("watcher saw local llm news");
   });
 
-  it("scopes by projectId", () => {
+  it("scopes by projectId", async () => {
     createNote(db, { content: "alpha bravo", project_id: "p" });
     createNote(db, { content: "alpha bravo", project_id: "q" });
-    const block = buildMemoryBlock(db, { userMessage: "alpha", projectId: "q" });
+    const block = await buildMemoryBlock(backend, { userMessage: "alpha", projectId: "q" });
     // Only one hit, not two — we don't leak cross-project notes.
     expect((block.match(/\(short\)/g) ?? []).length).toBe(1);
   });
 
-  it("caps output by budgetTokens and reports hidden count", () => {
+  it("caps output by budgetTokens and reports hidden count", async () => {
     for (let i = 0; i < 8; i++) {
       createNote(db, {
         content: `widget number ${i} blah blah blah filler filler filler filler filler`,
         project_id: "p",
       });
     }
-    const block = buildMemoryBlock(db, {
+    const block = await buildMemoryBlock(backend, {
       userMessage: "widget",
       projectId: "p",
       limit: 8,
@@ -67,13 +70,13 @@ describe("buildMemoryBlock", () => {
     expect(block).toContain("more hidden");
   });
 
-  it("always includes the top hit even when budget is tiny", () => {
+  it("always includes the top hit even when budget is tiny", async () => {
     createNote(db, {
       content: "a".repeat(500),
       project_id: "p",
       tags: ["target"],
     });
-    const block = buildMemoryBlock(db, {
+    const block = await buildMemoryBlock(backend, {
       userMessage: "target",
       projectId: "p",
       budgetTokens: 1,
@@ -122,6 +125,7 @@ function baseOpts(_provider: AIProvider): Omit<AgentLoopOptions, "provider" | "s
     maxToolRounds: 1,
     maxHistoryTokens: 2000,
     temperature: 0.3,
+    getMemoryBackend: async () => backend,
   };
 }
 

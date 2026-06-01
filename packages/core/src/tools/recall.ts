@@ -1,9 +1,11 @@
 import type Database from "better-sqlite3";
 import { promoteNote } from "../agent/memory-promotion.js";
 import { createNote, deleteNote, getNote, listNotes, type Note } from "../db/note-queries.js";
+import type { MemoryBackend } from "../memory/interface.js";
+import { SqliteMemoryBackend } from "../memory/sqlite-backend.js";
 import type { EmbeddingProvider } from "../providers/embedding.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
-import { formatHits, recallQuery, recallQueryAsync, type Tier } from "./recall-query.js";
+import { formatHits, recallQueryAsync, type Tier } from "./recall-query.js";
 
 /**
  * Tiered memory surface. See docs/memory-tiers.md.
@@ -86,6 +88,7 @@ export class RecallTool implements Tool {
   private defaultTtlDays: number;
   private getEmbedder?: () => EmbeddingProvider | undefined;
   private embedModel?: string;
+  private getMemoryBackend?: () => Promise<MemoryBackend>;
 
   constructor(
     db: Database.Database,
@@ -93,12 +96,26 @@ export class RecallTool implements Tool {
       defaultTtlDays?: number;
       getEmbedder?: () => EmbeddingProvider | undefined;
       embedModel?: string;
+      getMemoryBackend?: () => Promise<MemoryBackend>;
     } = {},
   ) {
     this.db = db;
     this.defaultTtlDays = opts.defaultTtlDays ?? 14;
     this.getEmbedder = opts.getEmbedder;
     this.embedModel = opts.embedModel;
+    // Fall back to a SqliteMemoryBackend over the same db when the caller
+    // doesn't wire one in. Lazily instantiated so the constructor stays
+    // side-effect-free; once resolved, the same backend is reused for the
+    // lifetime of the tool.
+    if (opts.getMemoryBackend) {
+      this.getMemoryBackend = opts.getMemoryBackend;
+    } else {
+      let cached: MemoryBackend | undefined;
+      this.getMemoryBackend = async () => {
+        if (!cached) cached = new SqliteMemoryBackend(db);
+        return cached;
+      };
+    }
   }
 
   async execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
@@ -138,24 +155,21 @@ export class RecallTool implements Tool {
     }
     const limit = typeof args.limit === "number" ? args.limit : 5;
     const embedder = this.getEmbedder?.();
-    const hits = embedder
-      ? await recallQueryAsync(this.db, {
-          query,
-          tier: tierArg as "any" | Tier,
-          projectId,
-          limit,
-          embedder,
-          embedModel: this.embedModel,
-          trackRefs: true,
-          autoPromote: true,
-        })
-      : recallQuery(this.db, {
-          query,
-          tier: tierArg as "any" | Tier,
-          projectId,
-          limit,
-          trackRefs: true,
-        });
+    const backend = await this.getMemoryBackend!();
+    const hits = await recallQueryAsync(
+      backend,
+      {
+        query,
+        tier: tierArg as "any" | Tier,
+        projectId,
+        limit,
+        embedder,
+        embedModel: this.embedModel,
+        trackRefs: true,
+        autoPromote: !!embedder,
+      },
+      this.db,
+    );
     return { success: true, output: formatHits(hits) };
   }
 

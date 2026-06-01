@@ -4,14 +4,17 @@ import { promoteNote, recordNoteHit, runMemorySweep } from "../agent/memory-prom
 import { countChunks, createChunk, listChunksBySource } from "../db/chunk-queries.js";
 import { createNote, extendNoteTtl, getNote, incrementNoteRef, listNotes } from "../db/note-queries.js";
 import { initDatabase } from "../db/schema.js";
+import { SqliteMemoryBackend } from "../memory/sqlite-backend.js";
 import type { EmbeddingProvider } from "../providers/embedding.js";
 import { RecallTool } from "../tools/recall.js";
 import { recallQuery } from "../tools/recall-query.js";
 
 let db: Database.Database;
+let backend: SqliteMemoryBackend;
 
 beforeEach(() => {
   db = initDatabase(":memory:");
+  backend = new SqliteMemoryBackend(db);
 });
 
 afterEach(() => {
@@ -175,23 +178,25 @@ describe("recordNoteHit", () => {
 });
 
 describe("recallQuery trackRefs", () => {
-  it("does not increment ref_count when trackRefs is omitted", () => {
+  it("does not increment ref_count when trackRefs is omitted", async () => {
     const n = createNote(db, { content: "cat", project_id: "p" });
-    recallQuery(db, { query: "cat", projectId: "p" });
+    await recallQuery(backend, { query: "cat", projectId: "p" }, db);
     expect(getNote(db, n.id)!.ref_count).toBe(0);
   });
 
-  it("increments ref_count for note hits when trackRefs is true", () => {
+  it("increments ref_count for note hits when trackRefs is true", async () => {
     const n = createNote(db, { content: "cat", project_id: "p" });
-    recallQuery(db, { query: "cat", projectId: "p", trackRefs: true });
+    await recallQuery(backend, { query: "cat", projectId: "p", trackRefs: true }, db);
     expect(getNote(db, n.id)!.ref_count).toBe(1);
   });
 
-  it("ignores fact hits — only notes carry a ref_count", () => {
+  it("ignores fact hits — only notes carry a ref_count", async () => {
     createNote(db, { content: "alice info", project_id: "p" });
     // Re-running shouldn't error; we're just checking nothing crashes when
     // trackHits encounters a fact source label.
-    expect(() => recallQuery(db, { query: "alice", projectId: "p", trackRefs: true })).not.toThrow();
+    await expect(
+      recallQuery(backend, { query: "alice", projectId: "p", trackRefs: true }, db),
+    ).resolves.not.toThrow();
   });
 });
 
