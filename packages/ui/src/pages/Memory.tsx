@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   deleteFact,
   deleteMemoryNote,
@@ -29,7 +29,7 @@ export function Memory() {
 
   const projectParam = activeProject ?? undefined;
 
-  function reload() {
+  const reload = useCallback(() => {
     fetchMemoryNotes({
       project: projectParam,
       tag: filterTag || undefined,
@@ -48,7 +48,7 @@ export function Memory() {
     })
       .then((r) => setFacts(r.facts))
       .catch(() => {});
-  }
+  }, [projectParam, filterTag, search]);
 
   async function handleDeleteFact(id: string) {
     if (!confirm(`Delete fact ${id}?`)) return;
@@ -58,7 +58,6 @@ export function Memory() {
 
   useEffect(() => {
     reload();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reload]);
 
   async function handleRecall() {

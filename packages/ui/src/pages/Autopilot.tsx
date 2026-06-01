@@ -159,10 +159,10 @@ export function Autopilot() {
       <div className="tasks-header">
         <h2>Autopilot</h2>
         <div className="tasks-header-actions">
-          <button className={paused ? "tasks-new-btn" : "tasks-delete-btn"} onClick={togglePause}>
+          <button type="button" className={paused ? "tasks-new-btn" : "tasks-delete-btn"} onClick={togglePause}>
             {paused ? "Resume" : "Pause"}
           </button>
-          <button className="tasks-edit-btn" onClick={triggerDigest}>
+          <button type="button" className="tasks-edit-btn" onClick={triggerDigest}>
             Run digest now
           </button>
         </div>
@@ -171,7 +171,7 @@ export function Autopilot() {
       {error && (
         <div className="tasks-error">
           {error}
-          <button className="tasks-error-dismiss" onClick={() => setError(null)}>
+          <button type="button" className="tasks-error-dismiss" onClick={() => setError(null)}>
             x
           </button>
         </div>
@@ -306,7 +306,7 @@ export function Autopilot() {
             Saved {new Date(savedAt).toLocaleTimeString()}
           </span>
         )}
-        <button className="tasks-submit-btn" onClick={save}>
+        <button type="button" className="tasks-submit-btn" onClick={save}>
           Save
         </button>
       </div>

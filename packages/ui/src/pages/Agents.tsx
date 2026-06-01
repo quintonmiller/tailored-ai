@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   type AgentDefinitionPatch,
   type AgentInfo,
@@ -50,7 +50,7 @@ export function Agents({ agentName }: AgentsPageProps) {
   );
   const toast = useToast();
 
-  const reload = () => {
+  const reload = useCallback(() => {
     Promise.all([fetchAgents(), fetchExploratoryAgents()])
       .then(([all, exp]) => {
         const watcherByName = new Map(exp.agents.map((w) => [w.name, w]));
@@ -72,7 +72,7 @@ export function Agents({ agentName }: AgentsPageProps) {
         setErr(null);
       })
       .catch((e) => setErr((e as Error).message));
-  };
+  }, []);
 
   useEffect(() => {
     reload();
@@ -518,7 +518,7 @@ function AgentRecentWorkSection({ name }: { name: string }) {
   const [assigned, setAssigned] = useState<ProjectTask[] | null>(null);
   const [comments, setComments] = useState<TaskCommentWithTask[] | null>(null);
 
-  const reload = () => {
+  const reload = useCallback(() => {
     Promise.all([
       fetchProjectTasks({ assignee: name, limit: 20 }).catch(() => ({ tasks: [] as ProjectTask[], total: 0 })),
       fetchTaskCommentsByAuthor(name, 20).catch(() => ({ comments: [] as TaskCommentWithTask[] })),
@@ -526,7 +526,7 @@ function AgentRecentWorkSection({ name }: { name: string }) {
       setAssigned(t.tasks);
       setComments(c.comments);
     });
-  };
+  }, [name]);
 
   useEffect(() => {
     reload();
@@ -706,11 +706,11 @@ function AgentHistorySection({ name, activity }: { name: string; activity: Explo
   const [runs, setRuns] = useState<ExploratoryRun[] | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
 
-  const reload = () => {
+  const reload = useCallback(() => {
     fetchExploratoryRuns({ agent: name, limit: 30 })
       .then((r) => setRuns(r.runs))
       .catch(() => setRuns([]));
-  };
+  }, [name]);
 
   useEffect(() => {
     reload();

@@ -90,7 +90,7 @@ export function DocumentViewer({ projectId, docId }: { projectId: string; docId:
       <div className="doc-page">
         <div className="empty-state">
           Document not found.{" "}
-          <button className="tasks-edit-btn" onClick={goBack}>
+          <button type="button" className="tasks-edit-btn" onClick={goBack}>
             Back to documents
           </button>
         </div>
@@ -103,7 +103,7 @@ export function DocumentViewer({ projectId, docId }: { projectId: string; docId:
       {error && (
         <div className="tasks-error">
           {error}
-          <button className="tasks-error-dismiss" onClick={() => setError(null)}>
+          <button type="button" className="tasks-error-dismiss" onClick={() => setError(null)}>
             x
           </button>
         </div>
@@ -111,16 +111,17 @@ export function DocumentViewer({ projectId, docId }: { projectId: string; docId:
 
       {/* Top bar */}
       <div className="doc-page-header">
-        <button className="doc-back-btn" onClick={goBack}>
+        <button type="button" className="doc-back-btn" onClick={goBack}>
           Back
         </button>
         <div className="doc-page-actions">
           {editing ? (
             <>
-              <button className="tasks-submit-btn" onClick={handleSave}>
+              <button type="button" className="tasks-submit-btn" onClick={handleSave}>
                 Save
               </button>
               <button
+                type="button"
                 className="tasks-cancel-btn"
                 onClick={() => {
                   setTitle(doc.title);
@@ -133,10 +134,10 @@ export function DocumentViewer({ projectId, docId }: { projectId: string; docId:
             </>
           ) : (
             <>
-              <button className="tasks-edit-btn" onClick={() => setEditing(true)}>
+              <button type="button" className="tasks-edit-btn" onClick={() => setEditing(true)}>
                 Edit
               </button>
-              <button className="tasks-delete-btn" onClick={handleDelete}>
+              <button type="button" className="tasks-delete-btn" onClick={handleDelete}>
                 Delete
               </button>
             </>
