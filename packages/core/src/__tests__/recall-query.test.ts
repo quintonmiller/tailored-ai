@@ -3,13 +3,16 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { upsertFact } from "../db/fact-queries.js";
 import { createNote } from "../db/note-queries.js";
 import { initDatabase } from "../db/schema.js";
+import { SqliteMemoryBackend } from "../memory/sqlite-backend.js";
 import { RecallTool } from "../tools/recall.js";
 import { coverage, formatHits, recallQuery, tokenize } from "../tools/recall-query.js";
 
 let db: Database.Database;
+let backend: SqliteMemoryBackend;
 
 beforeEach(() => {
   db = initDatabase(":memory:");
+  backend = new SqliteMemoryBackend(db);
 });
 
 afterEach(() => {
@@ -52,7 +55,7 @@ describe("recallQuery", () => {
     createNote(db, { content: "the fox", project_id: "p" }); // 0
     upsertFact(db, { category: "pet", entity: "rex", key: "species", value: "dog", project_id: "p" });
 
-    const hits = recallQuery(db, { query: "cat dog", projectId: "p", limit: 10 });
+    const hits = await recallQuery(backend, { query: "cat dog", projectId: "p", limit: 10 });
     expect(hits.length).toBeGreaterThanOrEqual(3);
     // first hit is the full-coverage note (score = 1.0)
     expect(hits[0].tier).toBe("short");
@@ -62,38 +65,38 @@ describe("recallQuery", () => {
     expect(hits.find((h) => h.snippet.includes("fox"))).toBeUndefined();
   });
 
-  it("scopes results to the requested project", () => {
+  it("scopes results to the requested project", async () => {
     createNote(db, { content: "alpha bravo", project_id: "p" });
     createNote(db, { content: "alpha bravo", project_id: "q" });
 
-    const fromP = recallQuery(db, { query: "alpha bravo", projectId: "p" });
+    const fromP = await recallQuery(backend, { query: "alpha bravo", projectId: "p" });
     expect(fromP.length).toBe(1);
 
-    const global = recallQuery(db, { query: "alpha bravo", projectId: null });
+    const global = await recallQuery(backend, { query: "alpha bravo", projectId: null });
     expect(global.length).toBe(0); // no global notes seeded
   });
 
-  it("respects the tier filter", () => {
+  it("respects the tier filter", async () => {
     createNote(db, { content: "alice birthday", project_id: "p" });
     upsertFact(db, { category: "person", entity: "alice", key: "birthday", value: "1988-03-12", project_id: "p" });
 
-    const both = recallQuery(db, { query: "alice", projectId: "p" });
+    const both = await recallQuery(backend, { query: "alice", projectId: "p" });
     expect(both.map((h) => h.tier).sort()).toEqual(["long", "short"]);
 
-    const onlyShort = recallQuery(db, { query: "alice", projectId: "p", tier: "short" });
+    const onlyShort = await recallQuery(backend, { query: "alice", projectId: "p", tier: "short" });
     expect(onlyShort.every((h) => h.tier === "short")).toBe(true);
 
-    const onlyLong = recallQuery(db, { query: "alice", projectId: "p", tier: "long" });
+    const onlyLong = await recallQuery(backend, { query: "alice", projectId: "p", tier: "long" });
     expect(onlyLong.every((h) => h.tier === "long")).toBe(true);
   });
 
-  it("returns empty for empty query terms", () => {
+  it("returns empty for empty query terms", async () => {
     createNote(db, { content: "stuff", project_id: "p" });
-    expect(recallQuery(db, { query: "", projectId: "p" })).toEqual([]);
-    expect(recallQuery(db, { query: "  ", projectId: "p" })).toEqual([]);
+    expect(await recallQuery(backend, { query: "", projectId: "p" })).toEqual([]);
+    expect(await recallQuery(backend, { query: "  ", projectId: "p" })).toEqual([]);
   });
 
-  it("skips expired notes", () => {
+  it("skips expired notes", async () => {
     createNote(db, {
       content: "old observation",
       project_id: "p",
@@ -101,21 +104,21 @@ describe("recallQuery", () => {
     });
     createNote(db, { content: "fresh observation", project_id: "p" });
 
-    const hits = recallQuery(db, { query: "observation", projectId: "p" });
+    const hits = await recallQuery(backend, { query: "observation", projectId: "p" });
     expect(hits.length).toBe(1);
     expect(hits[0].snippet).toContain("fresh");
   });
 
-  it("tag matches add a small bonus", () => {
+  it("tag matches add a small bonus", async () => {
     createNote(db, { content: "incidental mention of cats", tags: [], project_id: "p" });
     createNote(db, { content: "incidental mention of cats", tags: ["cats"], project_id: "p" });
 
-    const hits = recallQuery(db, { query: "cats", projectId: "p", limit: 5 });
+    const hits = await recallQuery(backend, { query: "cats", projectId: "p", limit: 5 });
     expect(hits.length).toBe(2);
     expect(hits[0].score).toBeGreaterThan(hits[1].score);
   });
 
-  it("key matches on facts add a small bonus over value-only matches", () => {
+  it("key matches on facts add a small bonus over value-only matches", async () => {
     upsertFact(db, { category: "person", entity: "alice", key: "city", value: "Portland", project_id: "p" });
     upsertFact(db, {
       category: "weather",
@@ -125,17 +128,17 @@ describe("recallQuery", () => {
       project_id: "p",
     });
 
-    const hits = recallQuery(db, { query: "city", projectId: "p", tier: "long" });
+    const hits = await recallQuery(backend, { query: "city", projectId: "p", tier: "long" });
     expect(hits.length).toBe(2);
     // The one where "city" is the key should score higher.
     expect(hits[0].source).toContain("city");
   });
 
-  it("limit caps the number of results", () => {
+  it("limit caps the number of results", async () => {
     for (let i = 0; i < 8; i++) {
       createNote(db, { content: `widget ${i}`, project_id: "p" });
     }
-    const hits = recallQuery(db, { query: "widget", projectId: "p", limit: 3 });
+    const hits = await recallQuery(backend, { query: "widget", projectId: "p", limit: 3 });
     expect(hits.length).toBe(3);
   });
 });
