@@ -114,6 +114,59 @@ describe("validateWorkflow", () => {
     );
   });
 
+  describe("triggers", () => {
+    const wf = (kind: string, extra: Record<string, unknown> = {}) => ({
+      name: "wf",
+      steps: [{ name: "s", type: "shell", command: "echo" }],
+      triggers: [{ kind, ...extra }],
+    });
+
+    it("accepts every built-in trigger kind", () => {
+      // The kinds the loader used to hard-reject before the registry-driven
+      // validation fix (#54). Each needs its required-fields satisfied where
+      // the kind has a sub-validator.
+      const cases: Array<[string, Record<string, unknown>]> = [
+        ["manual", {}],
+        ["cron", { schedule: "0 * * * *" }],
+        ["webhook", {}],
+        ["tool_called", { tool: "read" }],
+        ["document_event", { events: ["created"] }],
+        ["config_event", {}],
+        ["file_drop", { path: "/tmp/incoming" }],
+        ["email_message", { query: "newer_than:1d" }],
+        ["calendar_event", {}],
+        ["rss", { url: "https://example.com/feed" }],
+        ["geofence", {}],
+        ["weather", {}],
+        ["sensor", {}],
+        ["finance", {}],
+        ["home_assistant", {}],
+      ];
+      for (const [kind, extra] of cases) {
+        expect(validateWorkflow(wf(kind, extra)), `kind=${kind}`).toEqual([]);
+      }
+    });
+
+    it("rejects unknown trigger kinds with a helpful enumeration", () => {
+      const errs = validateWorkflow(wf("telepathy"));
+      expect(errs.some((e) => e.includes("telepathy") || e.includes("triggers[0].kind"))).toBe(true);
+      const err = errs.find((e) => e.startsWith("triggers[0].kind"))!;
+      // Both the historical kinds AND the previously-rejected ones should be
+      // listed in the must-be-one-of message.
+      expect(err).toContain("cron");
+      expect(err).toContain("geofence");
+      expect(err).toContain("weather");
+      expect(err).toContain("home_assistant");
+    });
+
+    it("accepts plugin-supplied trigger kinds via allowedTriggerKinds", () => {
+      const errs = validateWorkflow(wf("custom_plugin_kind"), {
+        allowedTriggerKinds: ["custom_plugin_kind"],
+      });
+      expect(errs).toEqual([]);
+    });
+  });
+
   it("rejects invalid onError policy", () => {
     const errs = validateWorkflow({
       name: "wf",

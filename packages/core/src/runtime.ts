@@ -138,6 +138,7 @@ export class AgentRuntime {
       defaultModel: model,
     });
     this._workflows.setDirectory(resolveWorkflowsDir(merged.workflows?.directory));
+    this._workflows.setExtraTriggerKinds(() => this._triggerRegistry.list().map((m) => m.kind));
     this._workflows.reloadFromDisk();
     populateBuiltinKbs(this._kbRegistry, this.kbDir);
 
