@@ -1,0 +1,12 @@
+{
+  "name": "@tailored-ai/integration-tests",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Docker-based end-to-end tests for the tai CLI: clean install, sample commands, assertions.",
+  "type": "module",
+  "scripts": {
+    "test:e2e": "bash scripts/run.sh",
+    "test:e2e:build": "bash scripts/run.sh --build-only",
+    "test:e2e:shell": "bash scripts/run.sh --shell"
+  }
+}
