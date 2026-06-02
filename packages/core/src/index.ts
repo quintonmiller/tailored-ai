@@ -371,7 +371,19 @@ export { ExploratoryWorker } from "./exploratory/worker.js";
 export type { CreateToolsOptions } from "./factories.js";
 export { createEmbedder, createMetaTools, createProvider, createTools } from "./factories.js";
 export { type LoadedExternalAgent, loadExternalAgents } from "./external-agents.js";
-export { type LoadedPlugin, loadPlugins } from "./plugins.js";
+export { type LoadedPlugin, type LoadPluginsOptions, loadPlugins } from "./plugins.js";
+export {
+  type ChannelRegistryView,
+  createPluginContext,
+  type EmbeddingRegistryView,
+  type MemoryBackendRegistryView,
+  type Plugin,
+  type PluginContext,
+  type ProviderRegistryView,
+  type TaskBackendRegistryView,
+  type ToolRegistryView,
+  type UiProviderRegistryView,
+} from "./plugin-context.js";
 export type { ProjectContext, ProjectFile, ResolveOptions as ProjectResolveOptions } from "./projects/resolve.js";
 export {
   assertAbsolutePath,

@@ -1,0 +1,8 @@
+{
+  "name": "tai-plugin-echo-tool",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Fixture plugin for the e2e plugin-load scenario. Exercises the default(ctx) contract from #47 — registers a single tool factory without importing @tailored-ai/core at runtime.",
+  "type": "module",
+  "main": "index.js"
+}
