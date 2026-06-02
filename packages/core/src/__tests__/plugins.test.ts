@@ -38,7 +38,7 @@ describe("loadPlugins", () => {
 
   it("logs success when a plugin resolves", async () => {
     const out = await loadPlugins(baseConfig({ plugins: ["node:path"] } as never), realImporter);
-    expect(out).toEqual([{ module: "node:path", ok: true }]);
+    expect(out).toEqual([{ module: "node:path", ok: true, shape: "side-effect" }]);
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("loaded node:path"));
   });
 
@@ -60,12 +60,41 @@ describe("loadPlugins", () => {
       } as never),
       realImporter,
     );
-    expect(out).toEqual([{ module: "node:path", ok: true }]);
+    expect(out).toEqual([{ module: "node:path", ok: true, shape: "side-effect" }]);
   });
 
   it("skips entries with no module string", async () => {
     const out = await loadPlugins(baseConfig({ plugins: [{ config: { foo: 1 } } as never] } as never), failingImporter);
     expect(out).toHaveLength(1);
     expect(out[0].ok).toBe(false);
+  });
+
+  it("invokes default(ctx) when the plugin exports a function", async () => {
+    let received: unknown;
+    const ctx = { marker: Symbol("ctx") } as never;
+    const importer = () =>
+      Promise.resolve({
+        default: (passedCtx: unknown) => {
+          received = passedCtx;
+        },
+      });
+    const out = await loadPlugins(baseConfig({ plugins: ["fake-plugin"] } as never), importer, { context: ctx });
+    expect(out).toEqual([{ module: "fake-plugin", ok: true, shape: "register" }]);
+    expect(received).toBe(ctx);
+  });
+
+  it("awaits async register(ctx)", async () => {
+    let resolved = false;
+    const importer = () =>
+      Promise.resolve({
+        default: async () => {
+          await new Promise((r) => setTimeout(r, 1));
+          resolved = true;
+        },
+      });
+    const out = await loadPlugins(baseConfig({ plugins: ["async-plugin"] } as never), importer);
+    expect(out[0].ok).toBe(true);
+    expect(out[0].shape).toBe("register");
+    expect(resolved).toBe(true);
   });
 });
