@@ -7,6 +7,7 @@ import type { ToolsDraft } from "../types.js";
 
 interface Props {
   tools: ToolsDraft;
+  homeDir: string;
   dispatch: (action: Action) => void;
   onExit: () => void;
 }
@@ -24,7 +25,7 @@ const HINTS: Record<keyof ToolsDraft, string> = {
 
 type Mode = "list" | "add" | "resolving";
 
-export function ToolsEditor({ tools, dispatch, onExit }: Props) {
+export function ToolsEditor({ tools, homeDir, dispatch, onExit }: Props) {
   const [cursor, setCursor] = useState(0);
   const [mode, setMode] = useState<Mode>("list");
   const [busy, setBusy] = useState<string | undefined>();
@@ -67,7 +68,7 @@ export function ToolsEditor({ tools, dispatch, onExit }: Props) {
     }
     setMode("resolving");
     setBusy(`Resolving ${trimmed}…`);
-    void resolveOnePlugin(trimmed).then((resolved) => {
+    void resolveOnePlugin(trimmed, homeDir).then((resolved) => {
       dispatch({ type: "addPlugin", plugin: resolved });
       setBusy(undefined);
       setMode("list");

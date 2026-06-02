@@ -8,13 +8,14 @@ import type { ResolvedPlugin } from "../types.js";
 interface Props {
   discord: boolean;
   plugins: ResolvedPlugin[];
+  homeDir: string;
   dispatch: (action: Action) => void;
   onExit: () => void;
 }
 
 type Mode = "list" | "add" | "resolving";
 
-export function ChannelsEditor({ discord, plugins, dispatch, onExit }: Props) {
+export function ChannelsEditor({ discord, plugins, homeDir, dispatch, onExit }: Props) {
   const [mode, setMode] = useState<Mode>("list");
   const [cursor, setCursor] = useState(0);
   const [resolveMsg, setResolveMsg] = useState<string | undefined>();
@@ -63,7 +64,7 @@ export function ChannelsEditor({ discord, plugins, dispatch, onExit }: Props) {
     }
     setMode("resolving");
     setResolveMsg(`Resolving ${trimmed}…`);
-    void resolveOnePlugin(trimmed).then((resolved) => {
+    void resolveOnePlugin(trimmed, homeDir).then((resolved) => {
       dispatch({ type: "addPlugin", plugin: resolved });
       setResolveMsg(undefined);
       setMode("list");
