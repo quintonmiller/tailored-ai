@@ -7,6 +7,7 @@ import {
   type BuiltInLayers,
   composeSystemPrompt,
   DEFAULT_LAYER_ORDER,
+  mergeSystemPromptOverrides,
   resolveBase,
   resolveCustomLayers,
 } from "../agent/system-prompt.js";
@@ -118,6 +119,58 @@ describe("system-prompt composer", () => {
     const custom = resolveCustomLayers([{ name: "x", file: "/no/such" }]);
     expect(custom).toEqual({ x: "" });
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(`file "/no/such" not found`));
+  });
+
+  describe("mergeSystemPromptOverrides", () => {
+    it("returns undefined when both inputs are undefined", () => {
+      expect(mergeSystemPromptOverrides(undefined, undefined)).toBeUndefined();
+    });
+
+    it("returns the only side when one is undefined", () => {
+      const g = { base: "g" };
+      const a = { base: "a" };
+      expect(mergeSystemPromptOverrides(g, undefined)).toEqual(g);
+      expect(mergeSystemPromptOverrides(undefined, a)).toEqual(a);
+    });
+
+    it("per-agent base wins over global base", () => {
+      const out = mergeSystemPromptOverrides({ base: "g" }, { base: "a" });
+      expect(out).toEqual({ base: "a" });
+    });
+
+    it("per-agent baseFile wins over global base (and replaces it)", () => {
+      const out = mergeSystemPromptOverrides({ base: "g" }, { baseFile: "/x" });
+      expect(out).toEqual({ baseFile: "/x" });
+    });
+
+    it("global base/baseFile shines through when per-agent specifies neither", () => {
+      const out = mergeSystemPromptOverrides({ baseFile: "/g" }, { order: ["base"] });
+      expect(out).toEqual({ baseFile: "/g", order: ["base"] });
+    });
+
+    it("per-agent order replaces global order (no merge)", () => {
+      const out = mergeSystemPromptOverrides(
+        { order: ["base", "instructions"] },
+        { order: ["recall_memory", "base"] },
+      );
+      expect(out?.order).toEqual(["recall_memory", "base"]);
+    });
+
+    it("per-agent custom replaces global custom (no merge)", () => {
+      const out = mergeSystemPromptOverrides(
+        { custom: [{ name: "g_layer", content: "g" }] },
+        { custom: [{ name: "a_layer", content: "a" }] },
+      );
+      expect(out?.custom).toEqual([{ name: "a_layer", content: "a" }]);
+    });
+
+    it("global custom shines through when per-agent has no custom", () => {
+      const out = mergeSystemPromptOverrides(
+        { custom: [{ name: "g_layer", content: "g" }] },
+        { base: "a" },
+      );
+      expect(out?.custom).toEqual([{ name: "g_layer", content: "g" }]);
+    });
   });
 
   it("DEFAULT_LAYER_ORDER matches the seven historical layers", () => {

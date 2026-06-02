@@ -10,6 +10,7 @@ import { ChannelsEditor } from "./editors/ChannelsEditor.js";
 import { PluginsEditor } from "./editors/PluginsEditor.js";
 import { ProviderEditor } from "./editors/ProviderEditor.js";
 import { SlotEditor } from "./editors/SlotEditor.js";
+import { SystemPromptEditor } from "./editors/SystemPromptEditor.js";
 import { ToolsEditor } from "./editors/ToolsEditor.js";
 import { computeDiff, previewExisting, previewNew } from "./preview.js";
 import { type Action, type AppState, type DetailMode, initialState, reducer } from "./state.js";
@@ -229,6 +230,10 @@ function EditorSwitch({ state, dispatch }: { state: AppState; dispatch: (a: Acti
           dispatch={dispatch}
           onExit={onExit}
         />
+      );
+    case "systemPrompt":
+      return (
+        <SystemPromptEditor current={state.draft.systemPromptBaseFile} dispatch={dispatch} onExit={onExit} />
       );
   }
 }
