@@ -72,15 +72,37 @@ If you need a new canned model response, add it to the `RESPONSES` array in
 `fixtures/mock-provider.mjs` — keyed by a regex against the last user
 message.
 
+## Current coverage
+
+| # | scenario | what it asserts |
+|---|---|---|
+| 01 | `tai --help` | bin entry resolves, no import-time crash |
+| 02 | `tai --list-agents` | config loader + agent merge surface the fixture agent |
+| 03 | `tai -m "ping"` | full agent loop round-trips through the mock provider |
+| 04 | `tai plugin install/list/remove` | plugin home bootstrap, install from local path, list, remove |
+| 05 | `tai` (server mode) | server boots, `/api/health` + `/api/agents` respond, SIGTERM shuts down cleanly |
+| 06 | `tai project init/list` | SQLite project store + project subcommand router |
+
+CI runs the suite on every PR via `.github/workflows/e2e.yml`.
+
+## Known limitations
+
+- **Plugin runtime registration isn't covered.** A plugin installed via
+  `tai plugin install` lives at `<TAI_HOME>/plugins/node_modules/<plugin>/`.
+  From there, standard Node ESM resolution can't find the
+  globally-installed `@tailored-ai/core`, so a plugin that imports core
+  to call `registerToolFactory()` will fail to load. Scenario 04 covers
+  install/list/remove mechanics only; runtime registration needs either
+  a `NODE_PATH` shim or a change to `PluginManager.buildImporter` to
+  forward the CLI's resolution context. Tracked separately — file an
+  issue if this hits you in real use.
+
 ## What's not covered yet
 
-This first cut hits config load + agent loop only. The follow-ups tracked
-in [#45] are:
-
-- plugin install lifecycle (`tai plugin install/list/remove`)
-- channel boot (HTTP server route smoke)
-- project init + per-project routing
-- CI wiring (GitHub Actions workflow)
-- a fixture plugin package for the install scenarios to target
+- a real plugin that registers a tool factory at runtime (see above)
+- multi-project routing (`--project` resolution, per-project sessions)
+- channel handshakes beyond HTTP (Discord, Slack — both need credentials
+  the harness shouldn't carry)
+- the Ink editor / TUI (would need expect-style scripting)
 
 [#45]: https://github.com/quintonmiller/tailored-ai/issues/45

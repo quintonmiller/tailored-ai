@@ -1,0 +1,8 @@
+{
+  "name": "tai-plugin-noop",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Minimal fixture plugin used by the e2e plugin-install scenario. Intentionally does not import @tailored-ai/core — we're testing the install/list/remove mechanics, not runtime registration.",
+  "type": "module",
+  "main": "index.js"
+}
