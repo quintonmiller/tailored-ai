@@ -76,9 +76,19 @@ Some tools require extra packages installed at the host:
 |---|---|---|
 | `playwright` | `browser` tool, `browser-mediator` | You enable headless-browser tools |
 | `md-to-pdf` | `md_to_pdf` tool | You generate PDFs from Markdown |
+| `vitest` | `@tailored-ai/core/testing` | You consume the contract-test helpers from a vitest suite |
 
 The tools `import()` these lazily and fail with a clear "run `npm install …`"
 message if missing.
+
+## Test helpers
+
+The `@tailored-ai/core/testing` subpath exposes `runChannelContractSuite` —
+plug a small harness in and the suite drives your `Channel` through the
+contract assertions (id/type, connect/disconnect, send round-trip,
+onMessage observer, plugin registration). `@tailored-ai/channel-slack` is
+the first adopter; mirror its `src/__tests__/channel.test.ts` when writing
+a new channel.
 
 ## Design philosophy
 
