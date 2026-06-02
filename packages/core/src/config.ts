@@ -315,6 +315,13 @@ export interface AgentConfig {
     maxToolRounds: number;
     /** Default sandbox kind for agents that don't set their own. Defaults to host. */
     sandbox?: "host" | "docker" | "podman";
+    /**
+     * Default system-prompt composition for every agent that doesn't set its
+     * own `systemPrompt`. Per-agent overrides win field-by-field (see
+     * `mergeSystemPromptOverrides`); list-shaped fields (`order`, `custom`)
+     * replace rather than concatenate.
+     */
+    systemPrompt?: import("./agent/system-prompt.js").SystemPromptOverride;
   };
   channels: {
     discord?: {

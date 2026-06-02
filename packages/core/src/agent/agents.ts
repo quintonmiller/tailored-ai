@@ -3,7 +3,7 @@ import type { AgentConfig, AgentDefinition, AgentHook } from "../config.js";
 import type { SkillDefinition } from "../resources/skill.js";
 import type { Tool } from "../tools/interface.js";
 import { EMPTY_HOOKS, mergeHooks, normalizeHooks, type ResolvedHooks } from "./hooks.js";
-import type { SystemPromptOverride } from "./system-prompt.js";
+import { mergeSystemPromptOverrides, type SystemPromptOverride } from "./system-prompt.js";
 
 /**
  * Entry surfaced in the progressive-mode skill catalog. The agent sees these
@@ -150,7 +150,7 @@ export function resolveAgent(
     hooks: agent?.hooks ? mergeHooks(agent.hooks) : EMPTY_HOOKS,
     skillLoading: agent?.skillLoading ?? "eager",
     skillCatalog: [],
-    systemPrompt: agent?.systemPrompt,
+    systemPrompt: mergeSystemPromptOverrides(config.agent.systemPrompt, agent?.systemPrompt),
   };
 
   // Derive contextDir when an agent is active

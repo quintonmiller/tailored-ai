@@ -102,6 +102,16 @@ function renderDetail(selected: string, d: DraftConfig) {
           ))}
         </Box>
       );
+    case "systemPrompt":
+      return (
+        <>
+          <Text>Global base prompt override for every agent.</Text>
+          <Text dimColor>
+            Current: {d.systemPromptBaseFile ? `baseFile ${d.systemPromptBaseFile}` : "built-in default"}
+          </Text>
+          <Text dimColor>Per-agent `systemPrompt` overrides win field-by-field at runtime.</Text>
+        </>
+      );
     case "plugins":
       if (d.plugins.length === 0) return <Text dimColor>No plugins configured.</Text>;
       return (

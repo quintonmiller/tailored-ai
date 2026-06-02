@@ -42,6 +42,35 @@ export interface BuiltInLayers {
   recall_memory: string;
 }
 
+/**
+ * Merge a global override with a per-agent override. Per-agent fields win
+ * field-by-field; list-shaped fields (`order`, `custom`) replace wholesale
+ * rather than concatenating, since merging layer orders has no obvious
+ * semantics. Returns undefined when both inputs are undefined so callers can
+ * cheaply check "no override at all."
+ */
+export function mergeSystemPromptOverrides(
+  global: SystemPromptOverride | undefined,
+  perAgent: SystemPromptOverride | undefined,
+): SystemPromptOverride | undefined {
+  if (!global && !perAgent) return undefined;
+  if (!global) return perAgent;
+  if (!perAgent) return global;
+  const merged: SystemPromptOverride = {};
+  if (perAgent.base !== undefined) {
+    merged.base = perAgent.base;
+  } else if (perAgent.baseFile !== undefined) {
+    merged.baseFile = perAgent.baseFile;
+  } else if (global.base !== undefined) {
+    merged.base = global.base;
+  } else if (global.baseFile !== undefined) {
+    merged.baseFile = global.baseFile;
+  }
+  merged.order = perAgent.order ?? global.order;
+  merged.custom = perAgent.custom ?? global.custom;
+  return merged;
+}
+
 export function resolveBase(override: SystemPromptOverride | undefined): string {
   if (override?.base !== undefined) return override.base;
   if (override?.baseFile) {
