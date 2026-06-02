@@ -1,4 +1,4 @@
-import { type EgressPolicy, EgressDeniedError } from "../../security/egress-policy.js";
+import { EgressDeniedError, type EgressPolicy } from "../../security/egress-policy.js";
 import type { StepContext, StepExecutor, StepResult } from "../engine.js";
 import { resolveString, resolveValue } from "../scope.js";
 import type { HttpRequestStep, WorkflowStepDef } from "../types.js";

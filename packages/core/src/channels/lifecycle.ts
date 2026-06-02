@@ -32,10 +32,7 @@ export class ChannelLifecycleManager {
    * Safe to call repeatedly on the same config — idempotent.
    */
   async reconcile(runtime: AgentRuntime): Promise<void> {
-    const blocks = (runtime.getConfig().channels ?? {}) as Record<
-      string,
-      Record<string, unknown> | undefined
-    >;
+    const blocks = (runtime.getConfig().channels ?? {}) as Record<string, Record<string, unknown> | undefined>;
 
     // Build the desired set: channels whose config block exists, has
     // enabled: true, AND has a registered factory.

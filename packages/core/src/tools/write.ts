@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
-import { isPathContainedRealpath } from "./path-containment.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
+import { isPathContainedRealpath } from "./path-containment.js";
 import { checkSandboxBoundary } from "./sandbox-boundary.js";
 
 export class WriteTool implements Tool {
@@ -47,9 +47,7 @@ export class WriteTool implements Tool {
     }
 
     if (this.allowedPaths.length > 0) {
-      const allowed = this.allowedPaths.some((p) =>
-        isPathContainedRealpath(fullPath, p, context.workingDirectory),
-      );
+      const allowed = this.allowedPaths.some((p) => isPathContainedRealpath(fullPath, p, context.workingDirectory));
       if (!allowed) {
         return {
           success: false,

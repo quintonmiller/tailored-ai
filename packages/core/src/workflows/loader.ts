@@ -128,12 +128,7 @@ export function validateWorkflow(wf: unknown, opts: ValidateWorkflowOptions = {}
 
 const VALID_DOCUMENT_EVENTS = new Set(["created", "updated", "deleted"]);
 
-function validateTrigger(
-  trigger: unknown,
-  path: string,
-  allowedKinds: Set<string>,
-  errors: string[],
-): void {
+function validateTrigger(trigger: unknown, path: string, allowedKinds: Set<string>, errors: string[]): void {
   if (!trigger || typeof trigger !== "object" || Array.isArray(trigger)) {
     errors.push(`${path} must be an object`);
     return;

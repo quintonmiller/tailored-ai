@@ -59,9 +59,7 @@ const plugin: Plugin = (ctx) => {
     const cfg = config.tools.google_drive;
     if (!cfg?.enabled) return [];
     if (!cfg.account) {
-      console.warn(
-        "[google-tools:google_drive] tools.google_drive.enabled is true but account is empty; skipping",
-      );
+      console.warn("[google-tools:google_drive] tools.google_drive.enabled is true but account is empty; skipping");
       return [];
     }
     return [

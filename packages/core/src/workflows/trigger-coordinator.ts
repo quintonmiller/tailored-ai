@@ -19,15 +19,15 @@
  * (e.g. EmailPoller needs `getTools()`) and lets tests inject fakes.
  */
 
-import type { FileDropWatcher } from "../triggers/file-drop.js";
-import type { EmailPoller } from "../triggers/email-poll.js";
 import type { CalendarPoller } from "../triggers/calendar-poll.js";
-import type { RssPoller } from "../triggers/rss-poll.js";
-import type { GeofencePoller } from "../triggers/geofence-poll.js";
-import type { WeatherPoller } from "../triggers/weather-poll.js";
-import type { SensorPoller } from "../triggers/sensor-poll.js";
+import type { EmailPoller } from "../triggers/email-poll.js";
+import type { FileDropWatcher } from "../triggers/file-drop.js";
 import type { FinancePoller } from "../triggers/finance-poll.js";
+import type { GeofencePoller } from "../triggers/geofence-poll.js";
 import type { HomeAssistantPoller } from "../triggers/home-assistant-poll.js";
+import type { RssPoller } from "../triggers/rss-poll.js";
+import type { SensorPoller } from "../triggers/sensor-poll.js";
+import type { WeatherPoller } from "../triggers/weather-poll.js";
 import type { WorkflowRegistry } from "./registry.js";
 import type { WorkflowTriggerDef } from "./types.js";
 
@@ -73,9 +73,7 @@ export class WorkflowTriggerCoordinator {
   reconcile(registry: WorkflowRegistry): void {
     const current = new Map<string, WorkflowTriggerDef[]>();
     for (const wf of registry.list()) {
-      const pollable = (wf.definition.triggers ?? []).filter((t) =>
-        POLLER_KINDS.has(t.kind as string),
-      );
+      const pollable = (wf.definition.triggers ?? []).filter((t) => POLLER_KINDS.has(t.kind as string));
       if (pollable.length > 0) current.set(wf.definition.name, pollable);
     }
 
@@ -96,9 +94,7 @@ export class WorkflowTriggerCoordinator {
         try {
           this.dispatch(name, trig);
         } catch (err) {
-          console.warn(
-            `[trigger-coordinator] ${trig.kind} register failed for "${name}": ${(err as Error).message}`,
-          );
+          console.warn(`[trigger-coordinator] ${trig.kind} register failed for "${name}": ${(err as Error).message}`);
         }
       }
       this.signatures.set(name, JSON.stringify(triggers));
