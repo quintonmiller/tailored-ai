@@ -1,0 +1,36 @@
+name: E2E
+
+# End-to-end harness from packages/integration-tests/. Builds a Docker
+# image that installs the workspace tarballs globally, then runs the
+# scenarios against the installed `tai`. See the package README for
+# what's covered and how to add new scenarios.
+#
+# Runs alongside ci.yml — the unit suite catches regressions in package
+# internals, this catches install + wiring breakage that only shows up
+# after `pnpm pack` + `npm install -g`.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build e2e image
+        run: bash packages/integration-tests/scripts/run.sh --build-only
+
+      - name: Run scenarios
+        run: bash packages/integration-tests/scripts/run.sh
