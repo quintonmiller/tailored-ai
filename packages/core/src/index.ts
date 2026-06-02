@@ -25,6 +25,7 @@ export { createApprovalRequestId, evaluatePermission, formatApprovalDescription 
 export { DiscordChannel } from "./channels/discord.js";
 export type { Channel, IncomingMessage } from "./channels/interface.js";
 export type { OutboundNotifier } from "./channels/outbound.js";
+export { ChannelLifecycleManager } from "./channels/lifecycle.js";
 export {
   type ChannelConnection,
   type ChannelFactory,
