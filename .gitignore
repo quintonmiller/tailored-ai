@@ -20,6 +20,8 @@ local/
 .env
 config.yaml
 config.local.yaml
+# fixture configs for the e2e harness aren't secrets — re-include
+!packages/integration-tests/fixtures/config.yaml
 
 # IDE & tools
 .claude/
