@@ -1,0 +1,13 @@
+**/node_modules
+**/dist
+**/ui-dist
+**/.turbo
+**/.next
+**/.cache
+**/tsconfig.tsbuildinfo
+.git
+.github
+data/
+**/*.db
+**/*.log
+packages/integration-tests/.docker-artifacts

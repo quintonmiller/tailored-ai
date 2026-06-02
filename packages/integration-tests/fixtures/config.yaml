@@ -1,0 +1,59 @@
+# Minimal config used by the e2e harness. Points at the in-container mock
+# provider so tai never reaches the real network. Tools that need outbound
+# access (web_fetch, web_search) are off.
+
+server:
+  port: 3000
+  host: "127.0.0.1"
+
+database:
+  path: "./agent.db"
+
+providers:
+  openai_compatible:
+    baseUrl: "http://127.0.0.1:18080/v1"
+    defaultModel: "mock-model"
+    apiKey: "test-key"
+
+agent:
+  defaultProvider: "openai_compatible"
+  extraInstructions: ""
+  temperature: 0.0
+  maxToolRounds: 1
+
+agents:
+  smoke:
+    description: "Default agent used by the smoke scenario."
+    instructions: "You are a test fixture. Reply briefly."
+    model: "mock-model"
+
+context:
+  directory: "./data/context"
+  kbDirectory: "./data/kb"
+
+channels: {}
+
+tools:
+  memory: { enabled: false }
+  exec: { enabled: false }
+  read: { enabled: false }
+  write: { enabled: false }
+  web_fetch: { enabled: false }
+  web_search: { enabled: false }
+  tasks: { enabled: false }
+  facts: { enabled: false }
+  recall: { enabled: false }
+  projects: { enabled: false }
+  documents: { enabled: false }
+  extract_document: { enabled: false }
+
+custom_tools: {}
+commands: {}
+
+cron:
+  enabled: false
+  jobs: []
+
+webhooks:
+  enabled: false
+  routes: []
