@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import type { AgentConfig } from "./config.js";
 import type { EmbeddingProvider } from "./providers/embedding.js";
 import { embeddingFactoryRegistry, providerFactoryRegistry } from "./providers/factories.js";
+import { createEgressPolicy } from "./security/egress-policy.js";
 import type { AIProvider } from "./providers/interface.js";
 import { createTaskBackend } from "./tasks/factory.js";
 import type { TaskBackend } from "./tasks/interface.js";
@@ -94,7 +95,7 @@ export function createTools(
     tools.push(new WriteTool(config.tools.write?.allowedPaths));
   }
   if (config.tools.web_fetch?.enabled !== false) {
-    tools.push(new WebFetchTool());
+    tools.push(new WebFetchTool(undefined, createEgressPolicy(config.security?.egress)));
   }
   if (config.tools.web_search?.enabled) {
     if (config.tools.web_search.apiKey) {

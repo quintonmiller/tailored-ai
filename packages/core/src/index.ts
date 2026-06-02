@@ -425,6 +425,14 @@ export {
   OpenAICompatibleEmbeddingProvider,
 } from "./providers/openai-embedding.js";
 export { Registry } from "./registry.js";
+export {
+  createEgressPolicy,
+  EgressDeniedError,
+  EgressPolicy,
+  type EgressLookup,
+  type EgressPolicyConfig,
+  PERMISSIVE_EGRESS_POLICY,
+} from "./security/egress-policy.js";
 export type {
   AgentBody,
   ApprovalGateOptions,

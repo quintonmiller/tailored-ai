@@ -3,6 +3,7 @@ import type Database from "better-sqlite3";
 import type { AgentRuntime } from "../runtime.js";
 import { createSandbox } from "../sandboxes/factory.js";
 import type { SandboxKind } from "../sandboxes/interface.js";
+import { createEgressPolicy } from "../security/egress-policy.js";
 import { WorkflowEngine } from "./engine.js";
 import { AgentRunExecutor } from "./executors/agent-run.js";
 import { DiscordMessageExecutor, type DiscordSender } from "./executors/discord-message.js";
@@ -63,7 +64,7 @@ export function createWorkflowEngine(opts: {
         getOwnerId: opts.getOwnerId ?? (() => undefined),
       }),
       new TriggerWorkflowExecutor(),
-      new HttpRequestExecutor(),
+      new HttpRequestExecutor({ egressPolicy: createEgressPolicy(cfg.security?.egress) }),
       new NotifyExecutor({
         getDiscord: opts.getDiscord ?? (() => undefined),
         getOwnerId: opts.getOwnerId ?? (() => undefined),
