@@ -1,10 +1,23 @@
 /**
- * Built-in memory backend registration. Importing this module side-effect-
- * registers "builtin" as the default memory backend factory. The CLI gets
- * this for free via the core barrel import; tests can register their own
- * factory and unregister "builtin" if they need to.
+ * Built-in SQLite memory backend registration. Recommended path is to call
+ * {@link registerBuiltinMemoryBackend} against your runtime's PluginContext
+ * during boot. The module-level side-effect stays during the deprecation
+ * window — see #47.
  */
-import { registerMemoryBackendFactory } from "./registry.js";
+import type { PluginContext } from "../plugin-context.js";
+import { type MemoryBackendFactory, registerMemoryBackendFactory } from "./registry.js";
 import { SqliteMemoryBackend } from "./sqlite-backend.js";
 
-registerMemoryBackendFactory("builtin", (runtime) => new SqliteMemoryBackend(runtime.db));
+const builtinFactory: MemoryBackendFactory = (runtime) => new SqliteMemoryBackend(runtime.db);
+
+/** Register the built-in SQLite memory backend against the given context. */
+export function registerBuiltinMemoryBackend(ctx: PluginContext): void {
+  ctx.memoryBackends.register("builtin", builtinFactory);
+}
+
+/**
+ * @deprecated Importing this module for side effects is going away. Prefer
+ * {@link registerBuiltinMemoryBackend} called against your runtime's
+ * PluginContext. See #47.
+ */
+registerMemoryBackendFactory("builtin", builtinFactory);

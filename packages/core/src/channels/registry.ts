@@ -19,6 +19,11 @@ export type ChannelFactory = (
 
 export const channelFactoryRegistry = new Registry<ChannelFactory>("channel");
 
+/**
+ * @deprecated Prefer the {@link Plugin} contract: call
+ * `ctx.channels.register(id, factory)` from a plugin's `default(ctx)`. This
+ * free function will be removed once internal consumers migrate — see #47.
+ */
 export function registerChannelFactory(id: string, factory: ChannelFactory): void {
   channelFactoryRegistry.register(id, factory);
 }

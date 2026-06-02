@@ -11,6 +11,11 @@ export type TaskBackendFactory = (config: AgentConfig, db: Database.Database) =>
 
 export const taskBackendFactoryRegistry = new Registry<TaskBackendFactory>("task-backend");
 
+/**
+ * @deprecated Prefer the {@link Plugin} contract: call
+ * `ctx.taskBackends.register(id, factory)` from a plugin's `default(ctx)`.
+ * This free function will be removed once internal consumers migrate — see #47.
+ */
 export function registerTaskBackendFactory(id: string, factory: TaskBackendFactory): void {
   taskBackendFactoryRegistry.register(id, factory);
 }

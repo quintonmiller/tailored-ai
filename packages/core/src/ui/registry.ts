@@ -14,6 +14,11 @@ export type UiProviderFactory = (
 
 export const uiProviderFactoryRegistry = new Registry<UiProviderFactory>("ui-provider");
 
+/**
+ * @deprecated Prefer the {@link Plugin} contract: call
+ * `ctx.uiProviders.register(id, factory)` from a plugin's `default(ctx)`.
+ * This free function will be removed once internal consumers migrate — see #47.
+ */
 export function registerUiProviderFactory(id: string, factory: UiProviderFactory): void {
   uiProviderFactoryRegistry.register(id, factory);
 }

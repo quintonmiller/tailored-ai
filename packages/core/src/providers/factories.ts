@@ -23,10 +23,20 @@ export type EmbeddingFactory = (config: AgentConfig) => EmbeddingProvider | unde
 export const providerFactoryRegistry = new Registry<ProviderFactory>("provider");
 export const embeddingFactoryRegistry = new Registry<EmbeddingFactory>("embedding");
 
+/**
+ * @deprecated Prefer the {@link Plugin} contract: call
+ * `ctx.providers.register(id, factory)` from a plugin's `default(ctx)`.
+ * This free function will be removed once internal consumers migrate — see #47.
+ */
 export function registerProviderFactory(id: string, factory: ProviderFactory): void {
   providerFactoryRegistry.register(id, factory);
 }
 
+/**
+ * @deprecated Prefer the {@link Plugin} contract: call
+ * `ctx.embeddings.register(id, factory)` from a plugin's `default(ctx)`.
+ * This free function will be removed once internal consumers migrate — see #47.
+ */
 export function registerEmbeddingFactory(id: string, factory: EmbeddingFactory): void {
   embeddingFactoryRegistry.register(id, factory);
 }
