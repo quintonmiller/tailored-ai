@@ -380,10 +380,14 @@ export {
   type Plugin,
   type PluginContext,
   type ProviderRegistryView,
+  registerCoreBuiltins,
   type TaskBackendRegistryView,
   type ToolRegistryView,
   type UiProviderRegistryView,
 } from "./plugin-context.js";
+export { registerBuiltinOptionalTools } from "./tools/builtin-optional.js";
+export { registerDiscordChannel } from "./channels/discord-builtin.js";
+export { registerBuiltinMemoryBackend } from "./memory/builtin.js";
 export type { ProjectContext, ProjectFile, ResolveOptions as ProjectResolveOptions } from "./projects/resolve.js";
 export {
   assertAbsolutePath,

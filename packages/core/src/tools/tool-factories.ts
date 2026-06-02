@@ -20,6 +20,12 @@ export type ToolFactory = (config: AgentConfig, ctx: ToolFactoryContext) => Tool
 
 export const toolFactoryRegistry = new Registry<ToolFactory>("tool-factory");
 
+/**
+ * @deprecated Prefer the {@link Plugin} contract: have the host construct a
+ * {@link PluginContext} and call `ctx.tools.register(id, factory)` instead.
+ * This module-scope free function will be removed once internal consumers
+ * are migrated — see #47 for the plan.
+ */
 export function registerToolFactory(id: string, factory: ToolFactory): void {
   toolFactoryRegistry.register(id, factory);
 }

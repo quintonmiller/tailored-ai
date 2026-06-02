@@ -110,3 +110,31 @@ export function createPluginContext(): PluginContext {
     uiProviders: { register: registerUiProviderFactory },
   };
 }
+
+/**
+ * Register the built-ins that ship with core against the given context:
+ * Discord channel, SQLite memory backend, browser-mediator + trusted-actions
+ * tool factories. Each remains gated on its own config block; this call
+ * just makes the factories available.
+ *
+ * Embedders constructing multiple runtimes should call this against each
+ * runtime's own PluginContext. The CLI currently relies on module-load
+ * side effects from those built-in files for back-compat — see #47 for
+ * the follow-up that flips the CLI to call this explicitly and drops the
+ * side effects.
+ */
+export async function registerCoreBuiltins(ctx: PluginContext): Promise<void> {
+  // Lazy-import the built-in modules so this function works even before the
+  // side-effect imports in core's barrel have run (e.g. from a sub-path
+  // import that bypassed the barrel). Each module's own top-level still
+  // self-registers into the legacy module-scope globals for back-compat.
+  const [{ registerBuiltinOptionalTools }, { registerDiscordChannel }, { registerBuiltinMemoryBackend }] =
+    await Promise.all([
+      import("./tools/builtin-optional.js"),
+      import("./channels/discord-builtin.js"),
+      import("./memory/builtin.js"),
+    ]);
+  registerBuiltinOptionalTools(ctx);
+  registerDiscordChannel(ctx);
+  registerBuiltinMemoryBackend(ctx);
+}

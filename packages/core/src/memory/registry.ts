@@ -14,6 +14,11 @@ export type MemoryBackendFactory = (
 
 export const memoryBackendFactoryRegistry = new Registry<MemoryBackendFactory>("memory-backend");
 
+/**
+ * @deprecated Prefer the {@link Plugin} contract: call
+ * `ctx.memoryBackends.register(id, factory)` from a plugin's `default(ctx)`.
+ * This free function will be removed once internal consumers migrate — see #47.
+ */
 export function registerMemoryBackendFactory(id: string, factory: MemoryBackendFactory): void {
   memoryBackendFactoryRegistry.register(id, factory);
 }
