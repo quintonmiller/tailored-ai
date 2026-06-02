@@ -66,6 +66,20 @@ export class EmailPoller {
     this.regs = [];
   }
 
+  unregister(workflowName: string): boolean {
+    const before = this.regs.length;
+    const keep: Registration[] = [];
+    for (const r of this.regs) {
+      if (r.workflowName === workflowName) {
+        clearInterval(r.timer);
+        continue;
+      }
+      keep.push(r);
+    }
+    this.regs = keep;
+    return this.regs.length < before;
+  }
+
   size(): number {
     return this.regs.length;
   }

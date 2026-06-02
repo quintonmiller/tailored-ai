@@ -186,7 +186,10 @@ async function runServer(runtime: AgentRuntime) {
   runtime.startWatchingWorkflows();
   scheduler.setWorkflowEngine(workflowEngine);
 
-  // Register async triggers (file_drop, email, calendar, rss, geofence, weather, sensor, finance, home_assistant) from all loaded workflows.
+  // Async triggers (file_drop, email, calendar, rss, geofence, weather,
+  // sensor, finance, home_assistant) go through WorkflowTriggerCoordinator
+  // — it reconciles registrations against the workflow registry on every
+  // change so hot-edits to workflow YAML actually pick up (closes #65).
   const {
     FileDropWatcher,
     EmailPoller,
@@ -197,6 +200,7 @@ async function runServer(runtime: AgentRuntime) {
     SensorPoller,
     FinancePoller,
     HomeAssistantPoller,
+    WorkflowTriggerCoordinator,
   } = await import("@tailored-ai/core");
   const fileDropWatcher = new FileDropWatcher({ workflowEngine });
   const emailPoller = new EmailPoller({
@@ -213,96 +217,22 @@ async function runServer(runtime: AgentRuntime) {
   const sensorPoller = new SensorPoller({ workflowEngine });
   const financePoller = new FinancePoller({ workflowEngine });
   const homeAssistantPoller = new HomeAssistantPoller({ workflowEngine });
-  for (const wf of runtime.getWorkflows().list()) {
-    for (const trig of wf.definition.triggers ?? []) {
-      if (trig.kind === "file_drop") {
-        try {
-          fileDropWatcher.register(wf.definition.name, trig);
-          console.log(`[file_drop] watching ${trig.path} for workflow "${wf.definition.name}"`);
-        } catch (err) {
-          console.warn(`[file_drop] failed to register ${wf.definition.name}: ${(err as Error).message}`);
-        }
-      }
-      if (trig.kind === "email_message") {
-        try {
-          emailPoller.register(wf.definition.name, trig.query, trig.intervalSeconds);
-          console.log(
-            `[email-poll] polling "${trig.query}" every ${trig.intervalSeconds ?? 300}s for workflow "${wf.definition.name}"`,
-          );
-        } catch (err) {
-          console.warn(`[email-poll] failed to register ${wf.definition.name}: ${(err as Error).message}`);
-        }
-      }
-      if (trig.kind === "calendar_event") {
-        try {
-          calendarPoller.register(wf.definition.name, trig);
-          console.log(
-            `[calendar-poll] polling calendar for workflow "${wf.definition.name}" (window: ${trig.beforeMinutes ?? 15}m)`,
-          );
-        } catch (err) {
-          console.warn(`[calendar-poll] failed to register ${wf.definition.name}: ${(err as Error).message}`);
-        }
-      }
-      if (trig.kind === "rss") {
-        try {
-          rssPoller.register(wf.definition.name, trig);
-          console.log(
-            `[rss-poll] polling ${trig.url} every ${trig.intervalSeconds ?? 600}s for workflow "${wf.definition.name}"`,
-          );
-        } catch (err) {
-          console.warn(`[rss-poll] failed to register ${wf.definition.name}: ${(err as Error).message}`);
-        }
-      }
-      if (trig.kind === "geofence") {
-        try {
-          geofencePoller.register(wf.definition.name, trig);
-          console.log(
-            `[geofence] watching ${trig.center.lat},${trig.center.lng} r=${trig.radiusMeters}m for workflow "${wf.definition.name}"`,
-          );
-        } catch (err) {
-          console.warn(`[geofence] failed to register ${wf.definition.name}: ${(err as Error).message}`);
-        }
-      }
-      if (trig.kind === "weather") {
-        try {
-          weatherPoller.register(wf.definition.name, trig);
-          console.log(
-            `[weather] polling ${trig.lat},${trig.lng} field=${trig.field} ${trig.op} ${trig.threshold} for workflow "${wf.definition.name}"`,
-          );
-        } catch (err) {
-          console.warn(`[weather] failed to register ${wf.definition.name}: ${(err as Error).message}`);
-        }
-      }
-      if (trig.kind === "sensor") {
-        try {
-          sensorPoller.register(wf.definition.name, trig);
-          console.log(
-            `[sensor] polling ${trig.url} ${trig.valuePath} ${trig.op} ${trig.threshold} for workflow "${wf.definition.name}"`,
-          );
-        } catch (err) {
-          console.warn(`[sensor] failed to register ${wf.definition.name}: ${(err as Error).message}`);
-        }
-      }
-      if (trig.kind === "finance") {
-        try {
-          financePoller.register(wf.definition.name, trig);
-          console.log(
-            `[finance] watching ${trig.symbol} cross ${trig.cross} ${trig.threshold} for workflow "${wf.definition.name}"`,
-          );
-        } catch (err) {
-          console.warn(`[finance] failed to register ${wf.definition.name}: ${(err as Error).message}`);
-        }
-      }
-      if (trig.kind === "home_assistant") {
-        try {
-          homeAssistantPoller.register(wf.definition.name, trig);
-          console.log(`[home_assistant] watching ${trig.entityId} for workflow "${wf.definition.name}"`);
-        } catch (err) {
-          console.warn(`[home_assistant] failed to register ${wf.definition.name}: ${(err as Error).message}`);
-        }
-      }
-    }
-  }
+  const triggerCoordinator = new WorkflowTriggerCoordinator({
+    fileDrop: fileDropWatcher,
+    email: emailPoller,
+    calendar: calendarPoller,
+    rss: rssPoller,
+    geofence: geofencePoller,
+    weather: weatherPoller,
+    sensor: sensorPoller,
+    finance: financePoller,
+    homeAssistant: homeAssistantPoller,
+  });
+  triggerCoordinator.start(runtime.getWorkflows());
+  channels.push({
+    name: "trigger_coordinator",
+    disconnect: async () => triggerCoordinator.stopAll(),
+  });
   channels.push({
     name: "file_drop",
     disconnect: async () => fileDropWatcher.stop(),
