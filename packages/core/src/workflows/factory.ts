@@ -48,14 +48,17 @@ export function createWorkflowEngine(opts: {
     maxConcurrent: wfCfg.maxConcurrent ?? 4,
     agentConcurrency,
     createSandbox: (kind: SandboxKind) => createSandbox(runtime.getConfig(), { sandbox: kind }),
+    // Run-scoped resolver: snapshotted at start of each run so executors and
+    // sandbox prepare hit the project root instead of the server's cwd.
+    getProjectPath: () => runtime.getActiveProject()?.path,
     executors: [
       new AgentRunExecutor({ runtime, db }),
       new ToolCallExecutor({
         getTools: () => runtime.getTools(),
-        workingDirectory: process.cwd(),
+        // cwd defaults are last-resort; per-run StepContext.projectPath wins.
         env: process.env as Record<string, string>,
       }),
-      new ShellExecutor({ cwd: process.cwd() }),
+      new ShellExecutor(),
       new WorktreeExecutor(),
       new LoopExecutor(),
       new ParallelExecutor(),
