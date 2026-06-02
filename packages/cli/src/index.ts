@@ -19,6 +19,7 @@ import {
   executeHooks,
   initDatabase,
   listSessions,
+  createPluginContext,
   loadConfig,
   loadExternalAgents,
   loadPlugins,
@@ -705,7 +706,7 @@ async function main() {
   // fallback is intentionally absent so the install path stays single
   // and unambiguous. See #43.
   const pluginManager = new PluginManager(homeDir);
-  await loadPlugins(config, pluginManager.buildImporter());
+  await loadPlugins(config, pluginManager.buildImporter(), { context: createPluginContext() });
 
   // Override port from CLI flag
   if (values.port) {
