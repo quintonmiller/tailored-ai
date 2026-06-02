@@ -1,34 +1,31 @@
 /**
  * Plugin contract — the runtime hands the plugin a {@link PluginContext} and
- * the plugin uses it to extend behavior. Compare with the legacy side-effect
- * shape (modules that import core and call `registerToolFactory(...)` at
- * load time): that shape requires the plugin to resolve `@tailored-ai/core`
- * from its install location, which breaks when a plugin is installed via
- * `tai plugin install` outside the host's resolution tree (#47).
+ * the plugin uses it to extend behavior. Compare with the old side-effect
+ * shape (modules that import core and call top-level `registerToolFactory(...)`):
+ * that shape required the plugin to resolve `@tailored-ai/core` from its
+ * install location, which broke for plugins installed via `tai plugin install`
+ * outside the host's resolution tree (#47).
  *
- * The ctx shape is intentionally type-only friendly. A plugin only needs:
+ * Authors only need type imports:
  *
  *     import type { Plugin } from "@tailored-ai/core";
  *     export default ((ctx) => {
  *       ctx.tools.register("echo", () => [echoTool]);
  *     }) satisfies Plugin;
  *
- * The `import type` is erased at compile time, so the plugin has *zero*
- * runtime dependency on core. Installation, resolution, and instance
- * identity stop being a problem.
+ * The `import type` erases at compile time, so a plugin has *zero* runtime
+ * dependency on core. Installation, resolution, and instance identity stop
+ * being a problem.
  *
- * Today this is a thin wrapper around the existing module-scope register*
- * functions — see {@link createPluginContext}. The follow-up work in #47
- * moves the registries themselves onto the runtime so multiple runtimes in
- * one process stop sharing state.
+ * Every AgentRuntime owns a {@link Registries} bundle; its
+ * {@link AgentRuntime.pluginContext} is the view passed to plugins.
  */
 
-import { registerChannelFactory } from "./channels/registry.js";
-import { registerMemoryBackendFactory } from "./memory/registry.js";
-import { registerEmbeddingFactory, registerProviderFactory } from "./providers/factories.js";
-import { registerTaskBackendFactory } from "./tasks/factory.js";
-import { registerToolFactory } from "./tools/tool-factories.js";
-import { registerUiProviderFactory } from "./ui/registry.js";
+import { registerDiscordChannel } from "./channels/discord-builtin.js";
+import { registerBuiltinMemoryBackend } from "./memory/builtin.js";
+import { registerBuiltinProviders } from "./providers/factories.js";
+import { registerBuiltinTaskBackends } from "./tasks/factory.js";
+import { registerBuiltinOptionalTools } from "./tools/builtin-optional.js";
 import type { ChannelFactory } from "./channels/registry.js";
 import type { MemoryBackendFactory } from "./memory/registry.js";
 import type { EmbeddingFactory, ProviderFactory } from "./providers/factories.js";
@@ -82,59 +79,23 @@ export interface PluginContext {
  * A plugin is a function the runtime calls with a context. The function may
  * register factories, mount channels, etc. Async is supported so plugins
  * can do setup work (e.g. wait on a remote handshake) before returning.
- *
- * Author with:
- *
- *     import type { Plugin } from "@tailored-ai/core";
- *     export default ((ctx) => { ... }) satisfies Plugin;
  */
 export type Plugin = (ctx: PluginContext) => void | Promise<void>;
 
 /**
- * Build a {@link PluginContext} that delegates to the existing module-scope
- * register* functions. This is the bridge that makes the new contract work
- * today without forcing every internal registry to migrate to a per-runtime
- * instance first — that migration happens in a follow-up under #47.
+ * Seed the built-ins that ship with core (provider + embedding factories,
+ * tool factories for browser_mediator and trusted_actions, the Discord
+ * channel, SQLite memory backend, the four task backends) into the given
+ * context. Called by AgentRuntime construction; embedders constructing
+ * their own ctx for multi-runtime setups should call it themselves.
  *
- * Pass this to {@link loadPlugins} so plugin imports that export a
- * `default(ctx)` function get invoked with the right shape.
+ * Each factory remains gated on its own config block — this just makes
+ * them resolvable by id.
  */
-export function createPluginContext(): PluginContext {
-  return {
-    tools: { register: registerToolFactory },
-    channels: { register: registerChannelFactory },
-    providers: { register: registerProviderFactory },
-    embeddings: { register: registerEmbeddingFactory },
-    memoryBackends: { register: registerMemoryBackendFactory },
-    taskBackends: { register: registerTaskBackendFactory },
-    uiProviders: { register: registerUiProviderFactory },
-  };
-}
-
-/**
- * Register the built-ins that ship with core against the given context:
- * Discord channel, SQLite memory backend, browser-mediator + trusted-actions
- * tool factories. Each remains gated on its own config block; this call
- * just makes the factories available.
- *
- * Embedders constructing multiple runtimes should call this against each
- * runtime's own PluginContext. The CLI currently relies on module-load
- * side effects from those built-in files for back-compat — see #47 for
- * the follow-up that flips the CLI to call this explicitly and drops the
- * side effects.
- */
-export async function registerCoreBuiltins(ctx: PluginContext): Promise<void> {
-  // Lazy-import the built-in modules so this function works even before the
-  // side-effect imports in core's barrel have run (e.g. from a sub-path
-  // import that bypassed the barrel). Each module's own top-level still
-  // self-registers into the legacy module-scope globals for back-compat.
-  const [{ registerBuiltinOptionalTools }, { registerDiscordChannel }, { registerBuiltinMemoryBackend }] =
-    await Promise.all([
-      import("./tools/builtin-optional.js"),
-      import("./channels/discord-builtin.js"),
-      import("./memory/builtin.js"),
-    ]);
+export function registerCoreBuiltins(ctx: PluginContext): void {
+  registerBuiltinProviders(ctx);
   registerBuiltinOptionalTools(ctx);
   registerDiscordChannel(ctx);
   registerBuiltinMemoryBackend(ctx);
+  registerBuiltinTaskBackends(ctx);
 }

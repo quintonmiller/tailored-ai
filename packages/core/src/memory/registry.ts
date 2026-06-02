@@ -1,4 +1,3 @@
-import { Registry } from "../registry.js";
 import type { AgentRuntime } from "../runtime.js";
 import type { MemoryBackend } from "./interface.js";
 
@@ -12,22 +11,11 @@ export type MemoryBackendFactory = (
   config: Record<string, unknown>,
 ) => Promise<MemoryBackend> | MemoryBackend;
 
-export const memoryBackendFactoryRegistry = new Registry<MemoryBackendFactory>("memory-backend");
-
-/**
- * @deprecated Prefer the {@link Plugin} contract: call
- * `ctx.memoryBackends.register(id, factory)` from a plugin's `default(ctx)`.
- * This free function will be removed once internal consumers migrate — see #47.
- */
-export function registerMemoryBackendFactory(id: string, factory: MemoryBackendFactory): void {
-  memoryBackendFactoryRegistry.register(id, factory);
-}
-
 /**
  * Resolve the memory backend declared by `memory.backend.provider`
- * (defaults to "builtin"). The "builtin" id is registered by core on
- * module import — it adapts the existing SQLite `db/*-queries.ts`
- * modules behind the verb interface.
+ * (defaults to "builtin"). The "builtin" id is seeded into every
+ * runtime's memory registry by registerCoreBuiltins — it adapts the
+ * existing SQLite `db/*-queries.ts` modules behind the verb interface.
  *
  * Unknown ids throw with the list of known factories, mirroring
  * `createTaskBackend`. The CLI surfaces the error at startup; tests
@@ -38,12 +26,12 @@ export async function resolveMemoryBackend(runtime: AgentRuntime): Promise<Memor
   const backendCfg = memCfg?.backend ?? {};
   const id = (typeof backendCfg.provider === "string" ? backendCfg.provider : undefined) ?? "builtin";
 
-  const factory = memoryBackendFactoryRegistry.get(id);
+  const factory = runtime.registries.memoryBackends.get(id);
   if (!factory) {
-    const known = memoryBackendFactoryRegistry.list().join(", ") || "(none)";
+    const known = runtime.registries.memoryBackends.list().join(", ") || "(none)";
     throw new Error(
       `No memory backend factory registered for "${id}". Known: ${known}. ` +
-        `Register one with registerMemoryBackendFactory().`,
+        `Register one via ctx.memoryBackends.register(id, factory) in your plugin.`,
     );
   }
 

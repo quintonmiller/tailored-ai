@@ -1,4 +1,3 @@
-import { Registry } from "../registry.js";
 import type { AgentRuntime } from "../runtime.js";
 import type { Channel } from "./interface.js";
 
@@ -17,17 +16,6 @@ export type ChannelFactory = (
   config: Record<string, unknown>,
 ) => Promise<ChannelConnection | undefined>;
 
-export const channelFactoryRegistry = new Registry<ChannelFactory>("channel");
-
-/**
- * @deprecated Prefer the {@link Plugin} contract: call
- * `ctx.channels.register(id, factory)` from a plugin's `default(ctx)`. This
- * free function will be removed once internal consumers migrate — see #47.
- */
-export function registerChannelFactory(id: string, factory: ChannelFactory): void {
-  channelFactoryRegistry.register(id, factory);
-}
-
 export interface StartedChannel {
   name: string;
   channel: Channel;
@@ -40,15 +28,16 @@ export interface StartedChannel {
  * constructing the runtime. Errors from individual channels are logged and
  * skipped so one bad channel can't block the others.
  *
- * Built-in channels (e.g. Discord) register themselves into this registry on
- * module import, so they come up via the same path as plugin-supplied
- * channels — no special-case construction at the CLI level.
+ * Reads from the runtime's channel registry — see Registries (#47). Built-in
+ * channels (e.g. Discord) seed that registry during AgentRuntime
+ * construction via registerCoreBuiltins, so they come up via the same path
+ * as plugin-supplied channels.
  */
 export async function startRegisteredChannels(runtime: AgentRuntime): Promise<StartedChannel[]> {
   const started: StartedChannel[] = [];
   const allChannelsConfig = (runtime.getConfig().channels ?? {}) as Record<string, Record<string, unknown> | undefined>;
 
-  for (const [id, factory] of channelFactoryRegistry.entriesList()) {
+  for (const [id, factory] of runtime.registries.channels.entriesList()) {
     const cfg = allChannelsConfig[id];
     if (!cfg || cfg.enabled !== true) continue;
     try {

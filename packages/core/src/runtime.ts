@@ -22,6 +22,9 @@ import { createSandbox } from "./sandboxes/factory.js";
 import { globalSandboxRegistry } from "./sandboxes/registry.js";
 import type { MemoryBackend } from "./memory/interface.js";
 import { resolveMemoryBackend } from "./memory/registry.js";
+import type { PluginContext } from "./plugin-context.js";
+import { registerCoreBuiltins } from "./plugin-context.js";
+import { Registries } from "./registries.js";
 import { createTaskBackend } from "./tasks/factory.js";
 import type { TaskBackend } from "./tasks/interface.js";
 import type { Tool } from "./tools/interface.js";
@@ -34,7 +37,20 @@ export interface RuntimeOptions {
   db: Database.Database;
   contextDir: string;
   kbDir: string;
+  /**
+   * Factory registries shared by every consumer of this runtime. The caller
+   * is responsible for seeding built-ins via {@link registerCoreBuiltins}
+   * and (optionally) loading plugins against it before construction —
+   * otherwise the runtime has nothing to resolve providers / tools /
+   * channels against.
+   *
+   * If omitted the runtime builds an empty bundle, seeds built-ins, and
+   * uses it. Embedders wanting to wire plugins should construct the bundle
+   * themselves.
+   */
+  registries?: Registries;
   createTools: (
+    registries: Registries,
     config: AgentConfig,
     contextDir: string,
     configPath?: string,
@@ -47,9 +63,9 @@ export interface RuntimeOptions {
       getMemoryBackend?: () => Promise<MemoryBackend>;
     },
   ) => Tool[];
-  createProvider: (config: AgentConfig) => { provider: AIProvider; model: string };
+  createProvider: (registries: Registries, config: AgentConfig) => { provider: AIProvider; model: string };
   /** Optional embedding-provider factory. Returns undefined when embeddings are disabled. */
-  createEmbedder?: (config: AgentConfig) => import("./providers/embedding.js").EmbeddingProvider | undefined;
+  createEmbedder?: (registries: Registries, config: AgentConfig) => import("./providers/embedding.js").EmbeddingProvider | undefined;
 }
 
 export class AgentRuntime {
@@ -100,6 +116,17 @@ export class AgentRuntime {
   private _workflowEngine: import("./workflows/engine.js").WorkflowEngine | undefined;
   private _activeProject: ProjectContext | null = null;
 
+  /**
+   * Bundle of factory registries (tools/channels/providers/embeddings/memory/
+   * tasks/ui). Each runtime owns its own — this is what kills the
+   * instance-identity problem (#47): even two runtimes in the same process
+   * keep their plugin registrations separate.
+   *
+   * Either pre-seeded by the caller (so the CLI / embedder can load plugins
+   * into it before construction) or auto-seeded with built-ins when omitted.
+   */
+  readonly registries: Registries;
+
   constructor(
     opts: RuntimeOptions,
     loadConfig: (path: string) => AgentConfig,
@@ -116,19 +143,29 @@ export class AgentRuntime {
     this._loadConfig = loadConfig;
     this._activeProject = initialProject ?? null;
 
+    // If the caller supplied registries, trust they've already seeded the
+    // built-ins. Otherwise build an empty bundle and seed it here so a
+    // simple `new AgentRuntime(...)` without registries still works.
+    if (opts.registries) {
+      this.registries = opts.registries;
+    } else {
+      this.registries = new Registries();
+      registerCoreBuiltins(this.registries.asPluginContext());
+    }
+
     const merged = mergeProjectOverlay(initialConfig, this._activeProject?.overlay);
     this._config = merged;
-    this._taskBackend = createTaskBackend(merged, opts.db);
-    this._embedder = opts.createEmbedder?.(merged);
+    this._taskBackend = createTaskBackend(this.registries, merged, opts.db);
+    this._embedder = opts.createEmbedder?.(this.registries, merged);
     const builtinTools =
-      opts.createTools(merged, opts.contextDir, opts.configPath, {
+      opts.createTools(this.registries, merged, opts.contextDir, opts.configPath, {
         db: opts.db,
         taskBackend: this._taskBackend,
         getEmbedder: () => this._embedder,
         getMemoryBackend: () => this.getMemoryBackend(),
       }) ?? [];
     for (const tool of builtinTools) this._toolRegistry.registerBuiltin(tool);
-    const { provider, model } = opts.createProvider(merged);
+    const { provider, model } = opts.createProvider(this.registries, merged);
     this._provider = provider;
     this._model = model;
     this._providerRegistry.registerBuiltin({
@@ -180,6 +217,15 @@ export class AgentRuntime {
 
   getConfig(): AgentConfig {
     return this._config;
+  }
+
+  /**
+   * View of {@link registries} for plugin authors. Pass this to
+   * {@link loadPlugins} to invoke `default(ctx)` plugins; the loaded plugins
+   * extend this runtime's registries through it.
+   */
+  get pluginContext(): PluginContext {
+    return this.registries.asPluginContext();
   }
   getTools(): Tool[] {
     // Source of truth is the tool registry. Built-ins register through
@@ -302,16 +348,16 @@ export class AgentRuntime {
         }
       }
 
-      const taskBackend = createTaskBackend(config, this.db);
-      const embedder = this._createEmbedder?.(config);
+      const taskBackend = createTaskBackend(this.registries, config, this.db);
+      const embedder = this._createEmbedder?.(this.registries, config);
       const tools =
-        this._createTools(config, this.contextDir, this.configPath, {
+        this._createTools(this.registries, config, this.contextDir, this.configPath, {
           db: this.db,
           taskBackend,
           getEmbedder: () => embedder,
           getMemoryBackend: () => this.getMemoryBackend(),
         }) ?? [];
-      const { provider, model } = this._createProvider(config);
+      const { provider, model } = this._createProvider(this.registries, config);
       // Clean up old tools that have a destroy hook (e.g. browser processes).
       // destroyAll() runs in parallel and swallows individual errors so one
       // bad tool can't block reload.

@@ -47,7 +47,7 @@ function buildRuntime(initialYaml: string): { runtime: AgentRuntime; configPath:
       db,
       contextDir: join(tmp, "context"),
       kbDir: join(tmp, "kb"),
-      createTools: (c) => createTools(c, join(tmp, "context"), configPath),
+      createTools: (registries, c) => createTools(registries, c, join(tmp, "context"), configPath),
       createProvider: () => ({ provider: fakeProvider(), model: "m" }),
     },
     () => {

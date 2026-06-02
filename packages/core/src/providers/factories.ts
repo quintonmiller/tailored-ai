@@ -1,5 +1,5 @@
 import type { AgentConfig } from "../config.js";
-import { Registry } from "../registry.js";
+import type { PluginContext } from "../plugin-context.js";
 import { AnthropicProvider } from "./anthropic.js";
 import type { EmbeddingProvider } from "./embedding.js";
 import type { AIProvider } from "./interface.js";
@@ -20,40 +20,16 @@ export type ProviderFactory = (config: AgentConfig) => ProviderFactoryResult;
  */
 export type EmbeddingFactory = (config: AgentConfig) => EmbeddingProvider | undefined;
 
-export const providerFactoryRegistry = new Registry<ProviderFactory>("provider");
-export const embeddingFactoryRegistry = new Registry<EmbeddingFactory>("embedding");
-
-/**
- * @deprecated Prefer the {@link Plugin} contract: call
- * `ctx.providers.register(id, factory)` from a plugin's `default(ctx)`.
- * This free function will be removed once internal consumers migrate — see #47.
- */
-export function registerProviderFactory(id: string, factory: ProviderFactory): void {
-  providerFactoryRegistry.register(id, factory);
-}
-
-/**
- * @deprecated Prefer the {@link Plugin} contract: call
- * `ctx.embeddings.register(id, factory)` from a plugin's `default(ctx)`.
- * This free function will be removed once internal consumers migrate — see #47.
- */
-export function registerEmbeddingFactory(id: string, factory: EmbeddingFactory): void {
-  embeddingFactoryRegistry.register(id, factory);
-}
-
-// Built-in providers register on module load so any package that imports
-// @tailored-ai/core gets them automatically.
-
-providerFactoryRegistry.register("openai", (config) => {
+const openaiFactory: ProviderFactory = (config) => {
   const cfg = config.providers.openai;
   if (!cfg) throw new Error("providers.openai not configured");
   return {
     provider: new OpenAIProvider(cfg.apiKey, cfg.baseUrl),
     model: cfg.defaultModel,
   };
-});
+};
 
-providerFactoryRegistry.register("openai_compatible", (config) => {
+const openaiCompatibleFactory: ProviderFactory = (config) => {
   const cfg = config.providers.openai_compatible;
   if (!cfg) throw new Error("providers.openai_compatible not configured");
   return {
@@ -63,22 +39,18 @@ providerFactoryRegistry.register("openai_compatible", (config) => {
     }),
     model: cfg.defaultModel,
   };
-});
+};
 
-providerFactoryRegistry.register("anthropic", (config) => {
+const anthropicFactory: ProviderFactory = (config) => {
   const cfg = config.providers.anthropic;
   if (!cfg) throw new Error("providers.anthropic not configured");
   return {
     provider: new AnthropicProvider(cfg.apiKey, cfg.baseUrl),
     model: cfg.defaultModel,
   };
-});
+};
 
-// Embedding built-in: an OpenAI-compatible /v1/embeddings endpoint (also
-// covers vLLM, LM Studio, Ollama). Plugin authors can register additional
-// embedding factories (e.g. "qdrant-fastembed", "voyage", "cohere") via
-// registerEmbeddingFactory.
-embeddingFactoryRegistry.register("openai_compatible", (config) => {
+const openaiCompatibleEmbeddingFactory: EmbeddingFactory = (config) => {
   const cfg = config.memory?.embeddings;
   if (!cfg?.enabled) return undefined;
   if (!cfg.baseUrl || !cfg.model) {
@@ -91,4 +63,18 @@ embeddingFactoryRegistry.register("openai_compatible", (config) => {
     apiKey: cfg.apiKey,
     dim: cfg.dim,
   });
-});
+};
+
+/**
+ * Seed the built-in provider + embedding factories into the given context.
+ * Called by {@link registerCoreBuiltins} during AgentRuntime construction.
+ */
+export function registerBuiltinProviders(ctx: PluginContext): void {
+  ctx.providers.register("openai", openaiFactory);
+  ctx.providers.register("openai_compatible", openaiCompatibleFactory);
+  ctx.providers.register("anthropic", anthropicFactory);
+  // OpenAI-compatible /v1/embeddings (vLLM, LM Studio, Ollama). Plugins
+  // can register additional embedding factories (qdrant-fastembed, voyage,
+  // cohere, …) via ctx.embeddings.register.
+  ctx.embeddings.register("openai_compatible", openaiCompatibleEmbeddingFactory);
+}

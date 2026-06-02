@@ -1,38 +1,46 @@
-import { toolFactoryRegistry } from "@tailored-ai/core";
+import { Registries } from "@tailored-ai/core";
 import { describe, expect, it } from "vitest";
 
-// Importing the package's index runs the side-effect registrations.
-import "../index.js";
+import plugin from "../index.js";
 
-describe("@tailored-ai/google-tools side-effect registrations", () => {
+function loadPlugin() {
+  const registries = new Registries();
+  plugin(registries.asPluginContext());
+  return registries;
+}
+
+describe("@tailored-ai/google-tools register(ctx)", () => {
   it("registers a tool factory for gmail", () => {
-    expect(toolFactoryRegistry.has("gmail")).toBe(true);
+    expect(loadPlugin().tools.has("gmail")).toBe(true);
   });
 
   it("registers a tool factory for google_calendar", () => {
-    expect(toolFactoryRegistry.has("google_calendar")).toBe(true);
+    expect(loadPlugin().tools.has("google_calendar")).toBe(true);
   });
 
   it("registers a tool factory for google_drive", () => {
-    expect(toolFactoryRegistry.has("google_drive")).toBe(true);
+    expect(loadPlugin().tools.has("google_drive")).toBe(true);
   });
 
   it("factory returns empty array when config is disabled", () => {
-    const factory = toolFactoryRegistry.get("gmail");
+    const registries = loadPlugin();
+    const factory = registries.tools.get("gmail");
     if (!factory) throw new Error("gmail factory missing");
     const tools = factory({ tools: {} } as never, {});
     expect(tools).toEqual([]);
   });
 
   it("factory warns and returns empty when enabled but account is missing", () => {
-    const factory = toolFactoryRegistry.get("google_calendar");
+    const registries = loadPlugin();
+    const factory = registries.tools.get("google_calendar");
     if (!factory) throw new Error("google_calendar factory missing");
     const tools = factory({ tools: { google_calendar: { enabled: true } } } as never, {});
     expect(tools).toEqual([]);
   });
 
   it("factory constructs the tool when config is fully populated", () => {
-    const factory = toolFactoryRegistry.get("gmail");
+    const registries = loadPlugin();
+    const factory = registries.tools.get("gmail");
     if (!factory) throw new Error("gmail factory missing");
     const tools = factory({ tools: { gmail: { enabled: true, account: "user@example.com" } } } as never, {});
     expect(tools).toHaveLength(1);

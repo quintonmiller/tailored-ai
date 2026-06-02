@@ -28,8 +28,6 @@ export type { OutboundNotifier } from "./channels/outbound.js";
 export {
   type ChannelConnection,
   type ChannelFactory,
-  channelFactoryRegistry,
-  registerChannelFactory,
   type StartedChannel,
   startRegisteredChannels,
 } from "./channels/registry.js";
@@ -70,12 +68,7 @@ export { PodmanSandbox, type PodmanSandboxOptions } from "./sandboxes/podman.js"
 export { type ActiveSandbox, globalSandboxRegistry, SandboxRegistry } from "./sandboxes/registry.js";
 export { type BeadsBackendOptions, type BeadsRunner, BeadsTaskBackend } from "./tasks/beads.js";
 export { type BeansBackendOptions, type BeansRunner, BeansTaskBackend } from "./tasks/beans.js";
-export {
-  createTaskBackend,
-  registerTaskBackendFactory,
-  type TaskBackendFactory,
-  taskBackendFactoryRegistry,
-} from "./tasks/factory.js";
+export { createTaskBackend, type TaskBackendFactory } from "./tasks/factory.js";
 export { type GitHubBackendOptions, GitHubTaskBackend } from "./tasks/github.js";
 export type {
   Task,
@@ -88,21 +81,9 @@ export type {
 export { NativeTaskBackend } from "./tasks/native.js";
 export { LoadSkillTool, type LoadSkillToolOptions } from "./tools/load-skill.js";
 export type { UiProvider } from "./ui/interface.js";
-export {
-  registerUiProviderFactory,
-  resolveUiProvider,
-  type UiProviderFactory,
-  uiProviderFactoryRegistry,
-} from "./ui/registry.js";
+export { resolveUiProvider, type UiProviderFactory } from "./ui/registry.js";
 export type { BranchStrategy, CreateWorktreeOptions, Worktree } from "./worktree.js";
 export { autoStash, createWorktree } from "./worktree.js";
-// Importing this module registers Discord as the "discord" channel factory.
-// Keep the side-effect import last so the registry has the rest of core
-// loaded before Discord registers itself.
-import "./channels/discord-builtin.js";
-// Importing this module registers SqliteMemoryBackend as the "builtin"
-// memory backend factory. Same pattern as discord-builtin.
-import "./memory/builtin.js";
 
 export type {
   ListQuery as MemoryListQuery,
@@ -113,12 +94,7 @@ export type {
   PreludeContext as MemoryPreludeContext,
   QueryContext as MemoryQueryContext,
 } from "./memory/interface.js";
-export {
-  memoryBackendFactoryRegistry,
-  type MemoryBackendFactory,
-  registerMemoryBackendFactory,
-  resolveMemoryBackend,
-} from "./memory/registry.js";
+export { type MemoryBackendFactory, resolveMemoryBackend } from "./memory/registry.js";
 export { SqliteMemoryBackend } from "./memory/sqlite-backend.js";
 
 export {
@@ -374,7 +350,6 @@ export { type LoadedExternalAgent, loadExternalAgents } from "./external-agents.
 export { type LoadedPlugin, type LoadPluginsOptions, loadPlugins } from "./plugins.js";
 export {
   type ChannelRegistryView,
-  createPluginContext,
   type EmbeddingRegistryView,
   type MemoryBackendRegistryView,
   type Plugin,
@@ -385,7 +360,10 @@ export {
   type ToolRegistryView,
   type UiProviderRegistryView,
 } from "./plugin-context.js";
+export { Registries } from "./registries.js";
 export { registerBuiltinOptionalTools } from "./tools/builtin-optional.js";
+export { registerBuiltinProviders } from "./providers/factories.js";
+export { registerBuiltinTaskBackends } from "./tasks/factory.js";
 export { registerDiscordChannel } from "./channels/discord-builtin.js";
 export { registerBuiltinMemoryBackend } from "./memory/builtin.js";
 export type { ProjectContext, ProjectFile, ResolveOptions as ProjectResolveOptions } from "./projects/resolve.js";
@@ -406,15 +384,7 @@ export {
   type EmbedResult,
   vectorToBlob,
 } from "./providers/embedding.js";
-export {
-  type EmbeddingFactory,
-  embeddingFactoryRegistry,
-  type ProviderFactory,
-  type ProviderFactoryResult,
-  providerFactoryRegistry,
-  registerEmbeddingFactory,
-  registerProviderFactory,
-} from "./providers/factories.js";
+export { type EmbeddingFactory, type ProviderFactory, type ProviderFactoryResult } from "./providers/factories.js";
 export type { AIProvider, ChatParams, ChatResponse, Message, ToolCall, ToolSchema } from "./providers/interface.js";
 export type { OpenAIProviderOptions } from "./providers/openai.js";
 export { OpenAIProvider } from "./providers/openai.js";
@@ -559,13 +529,7 @@ export { isTransientError, withRetry } from "./tools/retry.js";
 export { RunWorkflowTool } from "./tools/run-workflow.js";
 export { TaskStatusTool } from "./tools/task-status.js";
 export { TaskQueryTool, TasksTool } from "./tools/tasks.js";
-export {
-  registerToolFactory,
-  runToolFactories,
-  type ToolFactory,
-  type ToolFactoryContext,
-  toolFactoryRegistry,
-} from "./tools/tool-factories.js";
+export { runToolFactories, type ToolFactory, type ToolFactoryContext } from "./tools/tool-factories.js";
 export { WebFetchTool } from "./tools/web-fetch.js";
 export { WebSearchTool } from "./tools/web-search.js";
 export { WriteTool } from "./tools/write.js";

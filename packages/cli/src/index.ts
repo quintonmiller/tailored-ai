@@ -19,15 +19,16 @@ import {
   executeHooks,
   initDatabase,
   listSessions,
-  createPluginContext,
   loadConfig,
   loadExternalAgents,
   loadPlugins,
   loadSession,
+  type PluginContext,
+  Registries,
+  registerCoreBuiltins,
   migrateContextDir,
   newSession,
   type ProjectContext,
-  registerUiProviderFactory,
   resolveAgent,
   resolveProjectFromCwd,
   resolveUiProvider,
@@ -95,14 +96,18 @@ function resolveUiDistPath(): string | undefined {
   return undefined;
 }
 
-// Register the bundled web UI as the "builtin" provider. Custom providers
-// register themselves via the plugin loader, which runs before runServer
-// resolves the active provider.
-registerUiProviderFactory("builtin", () => {
-  const staticDir = resolveUiDistPath();
-  if (!staticDir) return undefined;
-  return { id: "builtin", staticDir };
-});
+/**
+ * Register the bundled web UI as the "builtin" provider. Called from main()
+ * after the runtime's registries are built so the ctx points at the runtime
+ * that will actually consult it.
+ */
+function registerCliBuiltinUiProvider(ctx: PluginContext): void {
+  ctx.uiProviders.register("builtin", () => {
+    const staticDir = resolveUiDistPath();
+    if (!staticDir) return undefined;
+    return { id: "builtin", staticDir };
+  });
+}
 
 /**
  * Module-scoped reference to the TaskWatcher. main() captures it in
@@ -700,13 +705,21 @@ async function main() {
     console.warn(`[config] Warning: ${warning}`);
   }
 
-  // Load declarative plugins before runtime construction. Plugins are
-  // resolved from the TAI-owned plugin home at <homeDir>/plugins/ — the
-  // user installs them via `tai plugin install`. Workspace / global-npm
-  // fallback is intentionally absent so the install path stays single
-  // and unambiguous. See #43.
+  // Build the per-runtime registries bundle now so the same instance is shared
+  // by built-ins, plugin registrations, and the AgentRuntime we construct
+  // below. Eliminates the module-scope-singleton instance-identity problem
+  // (#47).
+  const registries = new Registries();
+  const pluginContext = registries.asPluginContext();
+  registerCoreBuiltins(pluginContext);
+  registerCliBuiltinUiProvider(pluginContext);
+
+  // Load declarative plugins. Plugins are resolved from the TAI-owned plugin
+  // home at <homeDir>/plugins/ — the user installs them via `tai plugin
+  // install`. Workspace / global-npm fallback is intentionally absent so the
+  // install path stays single and unambiguous. See #43.
   const pluginManager = new PluginManager(homeDir);
-  await loadPlugins(config, pluginManager.buildImporter(), { context: createPluginContext() });
+  await loadPlugins(config, pluginManager.buildImporter(), { context: pluginContext });
 
   // Override port from CLI flag
   if (values.port) {
@@ -723,8 +736,14 @@ async function main() {
   const kbDir = await ensureContextDir(resolve(homeDir, config.context.kbDirectory));
   await ensureContextDir(resolve(kbDir, "global"));
 
-  const toolFactory = (cfg: typeof config, ctxDir: string, cfgPath?: string, runtimeOpts?: Record<string, unknown>) =>
-    createTools(cfg, ctxDir, cfgPath, {
+  const toolFactory = (
+    regs: Registries,
+    cfg: typeof config,
+    ctxDir: string,
+    cfgPath?: string,
+    runtimeOpts?: Record<string, unknown>,
+  ) =>
+    createTools(regs, cfg, ctxDir, cfgPath, {
       ...runtimeOpts,
       getDiscord: () => _discordChannel,
       getOwnerId: () => cfg.channels.discord?.owner,
@@ -734,7 +753,16 @@ async function main() {
     });
 
   const runtime = new AgentRuntime(
-    { configPath, db, contextDir, kbDir, createTools: toolFactory, createProvider, createEmbedder },
+    {
+      configPath,
+      db,
+      contextDir,
+      kbDir,
+      registries,
+      createTools: toolFactory,
+      createProvider,
+      createEmbedder,
+    },
     (path) => loadConfig(path),
     config,
   );

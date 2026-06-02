@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 import type { AgentConfig } from "../config.js";
-import { Registry } from "../registry.js";
+import type { Registries } from "../registries.js";
 import type { Tool } from "./interface.js";
 
 export interface ToolFactoryContext {
@@ -18,26 +18,14 @@ export interface ToolFactoryContext {
  */
 export type ToolFactory = (config: AgentConfig, ctx: ToolFactoryContext) => Tool[];
 
-export const toolFactoryRegistry = new Registry<ToolFactory>("tool-factory");
-
 /**
- * @deprecated Prefer the {@link Plugin} contract: have the host construct a
- * {@link PluginContext} and call `ctx.tools.register(id, factory)` instead.
- * This module-scope free function will be removed once internal consumers
- * are migrated — see #47 for the plan.
+ * Run every registered factory in the runtime's tool registry and aggregate
+ * the tools they produce. Called by createTools after the always-on built-ins
+ * (memory, read, write, exec, …) are constructed.
  */
-export function registerToolFactory(id: string, factory: ToolFactory): void {
-  toolFactoryRegistry.register(id, factory);
-}
-
-/**
- * Run every registered factory and aggregate the tools they produce. Called
- * by createTools after the always-on built-ins (memory, read, write, exec, …)
- * are constructed.
- */
-export function runToolFactories(config: AgentConfig, ctx: ToolFactoryContext): Tool[] {
+export function runToolFactories(registries: Registries, config: AgentConfig, ctx: ToolFactoryContext): Tool[] {
   const out: Tool[] = [];
-  for (const [id, factory] of toolFactoryRegistry.entriesList()) {
+  for (const [id, factory] of registries.tools.entriesList()) {
     try {
       const produced = factory(config, ctx);
       out.push(...produced);

@@ -87,29 +87,33 @@ describe("plugin contract — public type exports", () => {
   });
 });
 
-describe("plugin contract — public register* helpers", () => {
-  it("registerToolFactory is exported", () => {
-    expect(typeof core.registerToolFactory).toBe("function");
+describe("plugin contract — PluginContext + Registries surface", () => {
+  it("Registries class is exported", () => {
+    expect(typeof core.Registries).toBe("function");
   });
 
-  it("registerChannelFactory is exported", () => {
-    expect(typeof core.registerChannelFactory).toBe("function");
+  it("registerCoreBuiltins is exported", () => {
+    expect(typeof core.registerCoreBuiltins).toBe("function");
   });
 
-  it("registerProviderFactory is exported", () => {
-    expect(typeof core.registerProviderFactory).toBe("function");
+  it("registerBuiltinOptionalTools is exported", () => {
+    expect(typeof core.registerBuiltinOptionalTools).toBe("function");
   });
 
-  it("registerEmbeddingFactory is exported", () => {
-    expect(typeof core.registerEmbeddingFactory).toBe("function");
+  it("registerDiscordChannel is exported", () => {
+    expect(typeof core.registerDiscordChannel).toBe("function");
   });
 
-  it("registerTaskBackendFactory is exported", () => {
-    expect(typeof core.registerTaskBackendFactory).toBe("function");
+  it("registerBuiltinMemoryBackend is exported", () => {
+    expect(typeof core.registerBuiltinMemoryBackend).toBe("function");
   });
 
-  it("registerUiProviderFactory is exported", () => {
-    expect(typeof core.registerUiProviderFactory).toBe("function");
+  it("registerBuiltinProviders is exported", () => {
+    expect(typeof core.registerBuiltinProviders).toBe("function");
+  });
+
+  it("registerBuiltinTaskBackends is exported", () => {
+    expect(typeof core.registerBuiltinTaskBackends).toBe("function");
   });
 
   it("resolveUiProvider is exported", () => {
@@ -122,10 +126,6 @@ describe("plugin contract — public register* helpers", () => {
       return ui;
     };
     expect(typeof factory).toBe("function");
-  });
-
-  it("registerMemoryBackendFactory is exported", () => {
-    expect(typeof core.registerMemoryBackendFactory).toBe("function");
   });
 
   it("resolveMemoryBackend is exported", () => {
