@@ -24,7 +24,6 @@ import {
   deleteSecret,
   deleteSession,
   type EngineEvent,
-  type UiProvider,
   type ExploratoryWorker,
   ensureExploratoryState,
   executeCommand,
@@ -90,6 +89,7 @@ import {
   type TaskQueryFilter,
   type TaskWatcher,
   TrustStore,
+  type UiProvider,
   updateAutopilotSettings,
   updateDocument,
   updateExploratoryState,
@@ -159,11 +159,7 @@ function safeBearerEquals(presented: string, expected: string): boolean {
  * backends may treat scope as opaque, but the format is uniform on the
  * server side so backend swaps don't ripple into routes.
  */
-function buildScope(parts: {
-  projectId?: string | null;
-  agent?: string | null;
-  sessionId?: string | null;
-}): string {
+function buildScope(parts: { projectId?: string | null; agent?: string | null; sessionId?: string | null }): string {
   const out: string[] = [];
   if (parts.projectId) out.push(`project:${parts.projectId}`);
   if (parts.agent) out.push(`agent:${parts.agent}`);
@@ -380,7 +376,11 @@ export function createServer(opts: ServerOptions) {
     if (agent) notes = notes.filter((n) => n.agent === agent);
     if (search) {
       const needle = search.toLowerCase();
-      notes = notes.filter((n) => String(n.content ?? "").toLowerCase().includes(needle));
+      notes = notes.filter((n) =>
+        String(n.content ?? "")
+          .toLowerCase()
+          .includes(needle),
+      );
     }
     return c.json(notes.slice(0, limit));
   });
@@ -1390,7 +1390,11 @@ export function createServer(opts: ServerOptions) {
     if (key) facts = facts.filter((f) => f.key === key);
     if (search) {
       const needle = search.toLowerCase();
-      facts = facts.filter((f) => String(f.value ?? "").toLowerCase().includes(needle));
+      facts = facts.filter((f) =>
+        String(f.value ?? "")
+          .toLowerCase()
+          .includes(needle),
+      );
     }
     if (typeof limit === "number") facts = facts.slice(0, limit);
     return c.json({ facts });

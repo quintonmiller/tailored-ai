@@ -8,7 +8,7 @@
 import type { AgentRuntime, IncomingMessage } from "@tailored-ai/core";
 import { runChannelContractSuite } from "@tailored-ai/core/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { _splitMessageForTests as splitMessage, SlackChannel } from "../channel.js";
+import { SlackChannel, _splitMessageForTests as splitMessage } from "../channel.js";
 import plugin from "../index.js";
 
 describe("splitMessage", () => {
@@ -75,17 +75,16 @@ vi.mock("@slack/bolt", () => {
     __dmOpens: string[] = [];
 
     constructor() {
-      const self = this;
       this.client = {
         chat: {
           postMessage: async ({ channel, text }) => {
-            self.__sent.push({ target: channel, content: text });
+            this.__sent.push({ target: channel, content: text });
             return { ok: true };
           },
         },
         conversations: {
           open: async ({ users }) => {
-            self.__dmOpens.push(users);
+            this.__dmOpens.push(users);
             return { channel: { id: `D-${users}` } };
           },
         },
@@ -139,14 +138,13 @@ function buildSlackChannel(): SlackChannel {
   });
 }
 
-function appFor(channel: SlackChannel): FakeBoltApp {
+function appFor(_channel: SlackChannel): FakeBoltApp {
   // The SlackChannel pushes the most recently constructed App onto fakeApps.
   // The channel test harness builds one channel per test, so the last entry
   // belongs to the channel under test.
   const app = fakeApps.at(-1);
   if (!app) throw new Error("expected a fake Bolt App to be tracked");
   return app;
-  void channel;
 }
 
 runChannelContractSuite<SlackChannel>({

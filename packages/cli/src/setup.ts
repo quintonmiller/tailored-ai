@@ -1,8 +1,15 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseDocument } from "yaml";
+import type {
+  DraftConfig,
+  ProviderDraft,
+  ProviderKind,
+  ResolvedPlugin,
+  SlotChoice,
+  ToolsDraft,
+} from "./editor/types.js";
 import { defaultDraft } from "./editor/types.js";
-import type { DraftConfig, ProviderDraft, ProviderKind, ResolvedPlugin, SlotChoice, ToolsDraft } from "./editor/types.js";
 import { ensureHomeStructure, resolveHomePaths } from "./home.js";
 
 interface SetupResult {
@@ -91,12 +98,7 @@ function applySystemPromptBaseFile(doc: ReturnType<typeof parseDocument>, baseFi
     return;
   }
   const sp = doc.getIn(["agent", "systemPrompt"]);
-  if (
-    sp &&
-    typeof sp === "object" &&
-    !Array.isArray(sp) &&
-    (sp as { items?: unknown[] }).items?.length === 0
-  ) {
+  if (sp && typeof sp === "object" && !Array.isArray(sp) && (sp as { items?: unknown[] }).items?.length === 0) {
     doc.deleteIn(["agent", "systemPrompt"]);
   }
 }
@@ -136,12 +138,7 @@ function applyUiSlot(doc: ReturnType<typeof parseDocument>, slot: SlotChoice): v
   }
   // builtin — leave server.ui empty; clean up an empty map if present.
   const ui = doc.getIn(["server", "ui"]);
-  if (
-    ui &&
-    typeof ui === "object" &&
-    !Array.isArray(ui) &&
-    (ui as { items?: unknown[] }).items?.length === 0
-  ) {
+  if (ui && typeof ui === "object" && !Array.isArray(ui) && (ui as { items?: unknown[] }).items?.length === 0) {
     doc.deleteIn(["server", "ui"]);
   }
 }
@@ -208,7 +205,9 @@ function renderProviderBlock(d: ProviderDraft): string {
       `    baseUrl: ${d.baseUrl ?? "https://api.openai.com/v1"}`,
     ].join("\n");
   }
-  return ["providers:", "  anthropic:", "    apiKey: ${ANTHROPIC_API_KEY}", `    defaultModel: ${d.defaultModel}`].join("\n");
+  return ["providers:", "  anthropic:", "    apiKey: ${ANTHROPIC_API_KEY}", `    defaultModel: ${d.defaultModel}`].join(
+    "\n",
+  );
 }
 
 function renderToolsBlock(t: ToolsDraft): string {
@@ -260,9 +259,7 @@ export function renderNewConfig(d: DraftConfig): string {
         : "";
   const memoryBlock =
     typeof d.memory === "object" ? `\nmemory:\n  backend:\n    provider: ${d.memory.customUri}\n` : "";
-  const systemPromptLine = d.systemPromptBaseFile
-    ? `\n  systemPrompt:\n    baseFile: ${d.systemPromptBaseFile}`
-    : "";
+  const systemPromptLine = d.systemPromptBaseFile ? `\n  systemPrompt:\n    baseFile: ${d.systemPromptBaseFile}` : "";
   return `# Tailored AI configuration
 # Docs: https://github.com/quintonmiller/tailored-ai
 
@@ -346,11 +343,15 @@ export function patchExistingYaml(
   }
   if (edited.provider.defaultModel !== original.provider.defaultModel) {
     doc.setIn(["providers", edited.provider.kind, "defaultModel"], edited.provider.defaultModel);
-    changes.push(`providers.${edited.provider.kind}.defaultModel: ${original.provider.defaultModel} → ${edited.provider.defaultModel}`);
+    changes.push(
+      `providers.${edited.provider.kind}.defaultModel: ${original.provider.defaultModel} → ${edited.provider.defaultModel}`,
+    );
   }
   if (edited.provider.baseUrl && edited.provider.baseUrl !== original.provider.baseUrl) {
     doc.setIn(["providers", edited.provider.kind, "baseUrl"], edited.provider.baseUrl);
-    changes.push(`providers.${edited.provider.kind}.baseUrl: ${original.provider.baseUrl ?? "(unset)"} → ${edited.provider.baseUrl}`);
+    changes.push(
+      `providers.${edited.provider.kind}.baseUrl: ${original.provider.baseUrl ?? "(unset)"} → ${edited.provider.baseUrl}`,
+    );
   }
 
   for (const key of Object.keys(edited.tools) as (keyof ToolsDraft)[]) {

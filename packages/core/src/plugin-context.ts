@@ -23,18 +23,18 @@
  * one process stop sharing state.
  */
 
-import { registerChannelFactory } from "./channels/registry.js";
-import { registerMemoryBackendFactory } from "./memory/registry.js";
-import { registerEmbeddingFactory, registerProviderFactory } from "./providers/factories.js";
-import { registerTaskBackendFactory } from "./tasks/factory.js";
-import { registerToolFactory } from "./tools/tool-factories.js";
-import { registerUiProviderFactory } from "./ui/registry.js";
 import type { ChannelFactory } from "./channels/registry.js";
+import { registerChannelFactory } from "./channels/registry.js";
 import type { MemoryBackendFactory } from "./memory/registry.js";
+import { registerMemoryBackendFactory } from "./memory/registry.js";
 import type { EmbeddingFactory, ProviderFactory } from "./providers/factories.js";
+import { registerEmbeddingFactory, registerProviderFactory } from "./providers/factories.js";
 import type { TaskBackendFactory } from "./tasks/factory.js";
+import { registerTaskBackendFactory } from "./tasks/factory.js";
 import type { ToolFactory } from "./tools/tool-factories.js";
+import { registerToolFactory } from "./tools/tool-factories.js";
 import type { UiProviderFactory } from "./ui/registry.js";
+import { registerUiProviderFactory } from "./ui/registry.js";
 
 export interface ToolRegistryView {
   register(id: string, factory: ToolFactory): void;

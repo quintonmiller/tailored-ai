@@ -172,7 +172,9 @@ export class CronScheduler {
     if (!job.project) return null;
     const ref = this.runtime.getProjectByName(job.project);
     if (!ref) {
-      console.warn(`[cron] "${job.name}" references unknown project "${job.project}" (unregistered or no path) — running global`);
+      console.warn(
+        `[cron] "${job.name}" references unknown project "${job.project}" (unregistered or no path) — running global`,
+      );
       return null;
     }
     return ref;

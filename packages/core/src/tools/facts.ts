@@ -58,10 +58,7 @@ export class FactsTool implements Tool {
 
   private getBackend: () => Promise<MemoryBackend>;
 
-  constructor(
-    db: Database.Database,
-    opts: { getMemoryBackend?: () => Promise<MemoryBackend> } = {},
-  ) {
+  constructor(db: Database.Database, opts: { getMemoryBackend?: () => Promise<MemoryBackend> } = {}) {
     if (opts.getMemoryBackend) {
       this.getBackend = opts.getMemoryBackend;
     } else {
@@ -147,7 +144,11 @@ export class FactsTool implements Tool {
         kind: "fact",
         scope: scopeOf(projectId),
         sourceUri:
-          args.source !== undefined ? String(args.source) : context.agentName ? `agent:${context.agentName}` : undefined,
+          args.source !== undefined
+            ? String(args.source)
+            : context.agentName
+              ? `agent:${context.agentName}`
+              : undefined,
       },
     );
 
@@ -160,7 +161,12 @@ export class FactsTool implements Tool {
       limit: 1,
     });
     const fragment = written.find(isFactFragment);
-    return { success: true, output: fragment ? `saved: ${formatFactFragment(fragment)}` : `saved: ${describe(category, entity, key)} = ${value}` };
+    return {
+      success: true,
+      output: fragment
+        ? `saved: ${formatFactFragment(fragment)}`
+        : `saved: ${describe(category, entity, key)} = ${value}`,
+    };
   }
 
   private async list(
@@ -177,9 +183,7 @@ export class FactsTool implements Tool {
       kind: "fact",
       limit,
     });
-    const facts = fragments
-      .filter(isFactFragment)
-      .filter((f) => matchesFilter(f, args));
+    const facts = fragments.filter(isFactFragment).filter((f) => matchesFilter(f, args));
     if (facts.length === 0) return { success: true, output: "(no facts match)" };
     return { success: true, output: facts.map(formatFactFragment).join("\n") };
   }
