@@ -1,3 +1,4 @@
+import { type EgressPolicy, EgressDeniedError } from "../../security/egress-policy.js";
 import type { StepContext, StepExecutor, StepResult } from "../engine.js";
 import { resolveString, resolveValue } from "../scope.js";
 import type { HttpRequestStep, WorkflowStepDef } from "../types.js";
@@ -7,6 +8,12 @@ export interface HttpRequestExecutorOptions {
   fetcher?: typeof fetch;
   /** Default timeout when step.timeoutMs is unset. Default 30s. */
   defaultTimeoutMs?: number;
+  /**
+   * SSRF policy applied before the fetch runs. Same instance plumbed
+   * through to web_fetch. Default permissive — but the runtime wires
+   * the config-supplied strict policy when constructing the executor.
+   */
+  egressPolicy?: EgressPolicy;
 }
 
 const RAW_BUFFER_PREVIEW = 64;
@@ -20,10 +27,12 @@ export class HttpRequestExecutor implements StepExecutor {
   type = "http_request" as const;
   private fetcher: typeof fetch;
   private defaultTimeoutMs: number;
+  private egressPolicy: EgressPolicy | undefined;
 
   constructor(opts: HttpRequestExecutorOptions = {}) {
     this.fetcher = opts.fetcher ?? globalThis.fetch.bind(globalThis);
     this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 30_000;
+    this.egressPolicy = opts.egressPolicy;
   }
 
   async execute(step: WorkflowStepDef, ctx: StepContext): Promise<StepResult> {
@@ -46,6 +55,20 @@ export class HttpRequestExecutor implements StepExecutor {
         },
       };
     }
+    // Centralized SSRF check (#57). Wraps the EgressDeniedError into a
+    // step-level Error so the engine's onError/retry handles it the same
+    // as any other rejected request.
+    if (this.egressPolicy) {
+      try {
+        await this.egressPolicy.check(url);
+      } catch (err) {
+        if (err instanceof EgressDeniedError) {
+          throw new Error(`http_request ${method} ${url} blocked: ${err.reason}`);
+        }
+        throw err;
+      }
+    }
+
     const headers: Record<string, string> = {};
     for (const [k, v] of Object.entries(s.headers ?? {})) {
       headers[k] = String(resolveString(v, ctx.scope));

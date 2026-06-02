@@ -1,3 +1,4 @@
+import { type EgressPolicy, EgressDeniedError } from "../security/egress-policy.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
 import { isTransientError, withRetry } from "./retry.js";
 
@@ -43,9 +44,11 @@ export class WebFetchTool implements Tool {
   };
 
   private timeoutMs: number;
+  private egressPolicy: EgressPolicy | undefined;
 
-  constructor(timeoutMs: number = 15_000) {
+  constructor(timeoutMs: number = 15_000, egressPolicy?: EgressPolicy) {
     this.timeoutMs = timeoutMs;
+    this.egressPolicy = egressPolicy;
   }
 
   async execute(args: Record<string, unknown>, _context: ToolContext): Promise<ToolResult> {
@@ -76,6 +79,20 @@ export class WebFetchTool implements Tool {
           `is active and this host is not in its egress allow-list. Close the ` +
           `mediator session first or add this host to the allow-list.`,
       };
+    }
+
+    // Centralized SSRF check (#57). Blocks loopback, RFC1918, link-local,
+    // metadata IPs by default. The runtime wires this through from
+    // config.security.egress when constructing the tool.
+    if (this.egressPolicy) {
+      try {
+        await this.egressPolicy.check(url);
+      } catch (err) {
+        if (err instanceof EgressDeniedError) {
+          return { success: false, output: "", error: err.message };
+        }
+        throw err;
+      }
     }
 
     try {
