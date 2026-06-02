@@ -16,9 +16,19 @@ export class WorkflowRegistry {
   private generation = 0;
   private listeners: Array<() => void> = [];
   private lastErrors: Array<{ path: string; error: string }> = [];
+  private getExtraTriggerKinds?: () => Iterable<string>;
 
   setDirectory(dir: string | undefined): void {
     this.dir = dir;
+  }
+
+  /**
+   * Plug a supplier of additional trigger kinds beyond the built-ins.
+   * Typically wired to `runtime.triggerKinds.list().map(m => m.kind)` so
+   * workflow files can reference trigger kinds registered by plugins.
+   */
+  setExtraTriggerKinds(supplier: () => Iterable<string>): void {
+    this.getExtraTriggerKinds = supplier;
   }
 
   getDirectory(): string | undefined {
@@ -34,7 +44,9 @@ export class WorkflowRegistry {
       this.notify();
       return;
     }
-    const result = loadWorkflowsFromDir(this.dir);
+    const result = loadWorkflowsFromDir(this.dir, {
+      allowedTriggerKinds: this.getExtraTriggerKinds?.(),
+    });
     this.lastErrors = result.errors;
     const next = new Map<string, RegisteredWorkflow>();
     this.generation++;

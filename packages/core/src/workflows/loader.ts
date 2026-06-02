@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { extname, join, resolve } from "node:path";
 import YAML from "yaml";
+import { BUILTIN_TRIGGER_KINDS } from "../resources/trigger-registry.js";
 import { validateInputsSchema } from "./inputs.js";
 import type { OnErrorPolicy, StepType, WorkflowDefinition, WorkflowStepDef } from "./types.js";
 
@@ -47,12 +48,24 @@ export function parseWorkflow(text: string): WorkflowDefinition {
   return parsed as WorkflowDefinition;
 }
 
+export interface ValidateWorkflowOptions {
+  /**
+   * Trigger kinds that are valid for this workflow's `triggers[].kind` field,
+   * beyond the kinds the loader knows about by default. Useful when a plugin
+   * has registered a custom trigger kind via the trigger registry — pass
+   * `runtime.triggerKinds.list().map(m => m.kind)` to allow them.
+   *
+   * Built-in kinds (see `BUILTIN_TRIGGER_KINDS`) are always allowed.
+   */
+  allowedTriggerKinds?: Iterable<string>;
+}
+
 /**
  * Validate a workflow definition. Returns a list of error messages — empty
  * when valid. Errors are collected (not thrown) so the loader can report
  * many problems in one pass.
  */
-export function validateWorkflow(wf: unknown): string[] {
+export function validateWorkflow(wf: unknown, opts: ValidateWorkflowOptions = {}): string[] {
   const errors: string[] = [];
   if (!wf || typeof wf !== "object" || Array.isArray(wf)) {
     return ["workflow must be an object"];
@@ -98,8 +111,12 @@ export function validateWorkflow(wf: unknown): string[] {
     if (!Array.isArray(def.triggers)) {
       errors.push("workflow.triggers must be an array");
     } else {
+      const allowedKinds = new Set<string>([
+        ...BUILTIN_TRIGGER_KINDS.map((m) => m.kind),
+        ...(opts.allowedTriggerKinds ?? []),
+      ]);
       for (let i = 0; i < def.triggers.length; i++) {
-        validateTrigger(def.triggers[i], `triggers[${i}]`, errors);
+        validateTrigger(def.triggers[i], `triggers[${i}]`, allowedKinds, errors);
       }
     }
   }
@@ -109,29 +126,21 @@ export function validateWorkflow(wf: unknown): string[] {
   return errors;
 }
 
-const VALID_TRIGGER_KINDS = new Set([
-  "manual",
-  "cron",
-  "tool_called",
-  "document_event",
-  "config_event",
-  "file_drop",
-  "webhook",
-  "email_message",
-  "calendar_event",
-  "rss",
-]);
-
 const VALID_DOCUMENT_EVENTS = new Set(["created", "updated", "deleted"]);
 
-function validateTrigger(trigger: unknown, path: string, errors: string[]): void {
+function validateTrigger(
+  trigger: unknown,
+  path: string,
+  allowedKinds: Set<string>,
+  errors: string[],
+): void {
   if (!trigger || typeof trigger !== "object" || Array.isArray(trigger)) {
     errors.push(`${path} must be an object`);
     return;
   }
   const t = trigger as Record<string, unknown>;
-  if (typeof t.kind !== "string" || !VALID_TRIGGER_KINDS.has(t.kind)) {
-    errors.push(`${path}.kind must be one of: ${[...VALID_TRIGGER_KINDS].join(", ")}`);
+  if (typeof t.kind !== "string" || !allowedKinds.has(t.kind)) {
+    errors.push(`${path}.kind must be one of: ${[...allowedKinds].sort().join(", ")}`);
     return;
   }
   switch (t.kind) {
@@ -474,7 +483,7 @@ function validateStep(step: unknown, path: string, errors: string[], seenNames: 
  * Files are discovered by extension (.yaml, .yml). Subdirectories are not
  * recursed.
  */
-export function loadWorkflowsFromDir(dir: string): LoadResult {
+export function loadWorkflowsFromDir(dir: string, opts: ValidateWorkflowOptions = {}): LoadResult {
   const result: LoadResult = { workflows: [], errors: [] };
   if (!existsSync(dir)) return result;
 
@@ -501,7 +510,7 @@ export function loadWorkflowsFromDir(dir: string): LoadResult {
     try {
       const text = readFileSync(full, "utf-8");
       const parsed = parseWorkflow(text);
-      const validationErrors = validateWorkflow(parsed);
+      const validationErrors = validateWorkflow(parsed, opts);
       if (validationErrors.length > 0) {
         result.errors.push({
           path: full,
