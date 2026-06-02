@@ -206,7 +206,12 @@ export class TaskWatcher {
     const ownerId = this.runtime.getConfig().channels.discord?.owner;
     const session = agentName
       ? resetSession(this.runtime.db, `task-watcher:${agentName}`, resolved.model, resolved.provider)
-      : findOrCreateSession(this.runtime.db, `discord:${ownerId}`, resolved.model, resolved.provider);
+      : findOrCreateSession(
+          this.runtime.db,
+          this.runtime.makeSessionKey({ channelId: "discord", userId: ownerId ?? "owner" }),
+          resolved.model,
+          resolved.provider,
+        );
 
     // Resolve hooks
     const hooks = this.runtime.resolveHooks({ agentName, overrideHooks: config.hooks });

@@ -109,6 +109,15 @@ function buildRuntimeStub(): AgentRuntime {
     resolveHooks: () => ({ beforeRun: [], afterRun: [] }),
     getTools: () => [],
     getProjectByName: () => null,
+    makeSessionKey: ({
+      channelId,
+      userId,
+      project,
+    }: {
+      channelId: string;
+      userId: string;
+      project?: { id: string };
+    }) => (project ? `${channelId}:${project.id}:${userId}` : `${channelId}:${userId}`),
     buildLoopOptions: () => ({
       provider: {
         chat: async () => ({ message: { role: "assistant", content: "" }, toolCalls: [] }),

@@ -106,7 +106,7 @@ export class SlackChannel implements Channel, OutboundNotifier {
       if (!content) return;
 
       const projectCtx = this.resolveProject(channelId, isDM);
-      const userKey = projectCtx ? `slack:${projectCtx.id}:${user}` : `slack:${user}`;
+      const userKey = this.runtime.makeSessionKey({ channelId: "slack", userId: user, project: projectCtx });
       if (this.processing.has(userKey)) {
         await client.chat.postMessage({
           channel: channelId,
