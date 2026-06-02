@@ -37,6 +37,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js"
     }
   },
   "files": [
@@ -60,11 +64,13 @@
   },
   "peerDependencies": {
     "md-to-pdf": "^5.2.4",
-    "playwright": "^1.58.2"
+    "playwright": "^1.58.2",
+    "vitest": "^4.0.0"
   },
   "peerDependenciesMeta": {
     "md-to-pdf": { "optional": true },
-    "playwright": { "optional": true }
+    "playwright": { "optional": true },
+    "vitest": { "optional": true }
   },
   "optionalDependencies": {
     "pdf-parse": "^1.1.1",
