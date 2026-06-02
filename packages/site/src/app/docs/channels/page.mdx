@@ -129,7 +129,7 @@ import {
 class SlackChannel implements Channel {
   id = "slack";
   type = "slack";
-  // ...connect(), disconnect(), onMessage(), send()
+  // ...connect(), disconnect(), send()
 }
 
 registerChannelFactory("slack", async (runtime: AgentRuntime, cfg) => {

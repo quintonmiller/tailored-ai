@@ -5,7 +5,7 @@
  * splitting) and run the shared channel contract suite from
  * `@tailored-ai/core/testing` against a Bolt-mocked channel.
  */
-import type { AgentRuntime, IncomingMessage } from "@tailored-ai/core";
+import type { AgentRuntime } from "@tailored-ai/core";
 import { runChannelContractSuite } from "@tailored-ai/core/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SlackChannel, _splitMessageForTests as splitMessage } from "../channel.js";
@@ -34,8 +34,8 @@ describe("splitMessage", () => {
 
 /**
  * Bolt is mocked at the module level — every `new App({...})` returns a fake
- * with an in-memory `client.chat.postMessage` and a `message(handler)` hook
- * the contract suite drives via `emitIncoming`.
+ * with an in-memory `client.chat.postMessage` so the contract suite can
+ * assert that `send()` reached the wire.
  */
 type SlackMessageHandler = (arg: { message: unknown; client: FakeBoltClient }) => void | Promise<void>;
 
@@ -58,11 +58,6 @@ interface FakeBoltApp {
 const fakeApps: FakeBoltApp[] = [];
 
 beforeEach(() => {
-  // The stub runtime returns a partial loopOpts that crashes inside
-  // runAgentLoop after the observer fires. That's by design — the contract
-  // suite only asserts on observer invocation — but it logs to console.error
-  // via the channel's own try/catch. Silence it here to keep test output
-  // readable.
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(console, "log").mockImplementation(() => {});
 });
@@ -105,8 +100,8 @@ vi.mock("@slack/bolt", () => {
 
 /**
  * Minimal AgentRuntime stub. The Slack handler calls into the runtime once
- * it finishes routing — we stub just enough that runAgentLoop is a no-op so
- * the messageHandler observer still fires under the contract suite.
+ * it finishes routing — we stub just enough that `send()` round-trips
+ * through the fake Bolt client without hitting real loop code.
  */
 function buildRuntimeStub(): AgentRuntime {
   return {
@@ -152,31 +147,6 @@ runChannelContractSuite<SlackChannel>({
   plugin,
   harness: {
     build: () => buildSlackChannel(),
-    emitIncoming: async (channel, msg: IncomingMessage) => {
-      const app = appFor(channel);
-      if (!app.__handler) throw new Error("SlackChannel did not register a Bolt message handler in connect()");
-      // Route as a DM regardless of the contract message — SlackChannel
-      // re-derives `isMention` from raw text (looking for `<@U-BOT>`), so a
-      // contract-shaped IncomingMessage with isMention=true but no bot tag
-      // in the body would be filtered out on the mention path.
-      // Fire-and-forget: the handler proceeds into runAgent after invoking
-      // messageHandler, and the stub runtime's no-op runAgentLoop returns
-      // promptly. Any downstream error is swallowed since the test asserts
-      // only on the observer invocation.
-      void app.__handler({
-        message: {
-          user: msg.authorId,
-          text: msg.content,
-          channel: msg.channelId,
-          channel_type: "im",
-          ts: msg.id,
-        },
-        client: app.client,
-      });
-      // Yield long enough for the handler's leading awaits (auth.test) to
-      // resolve and call messageHandler before the assertion runs.
-      await new Promise((r) => setImmediate(r));
-    },
     drainSent: (channel) => appFor(channel).__sent.splice(0),
   },
 });

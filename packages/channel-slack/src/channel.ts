@@ -1,5 +1,5 @@
 import { App, LogLevel } from "@slack/bolt";
-import type { AgentRuntime, Channel, IncomingMessage, OutboundNotifier, ProjectRef } from "@tailored-ai/core";
+import type { AgentRuntime, Channel, OutboundNotifier, ProjectRef } from "@tailored-ai/core";
 import { executeHooks, runAgentLoop } from "@tailored-ai/core";
 import type { SlackChannelConfig } from "./types.js";
 
@@ -51,7 +51,6 @@ export class SlackChannel implements Channel, OutboundNotifier {
   private runtime: AgentRuntime;
   private config: SlackChannelConfig;
   private botUserId: string | undefined;
-  private messageHandler?: (msg: IncomingMessage) => void;
   private processing = new Set<string>();
 
   constructor(opts: SlackChannelOptions) {
@@ -106,16 +105,6 @@ export class SlackChannel implements Channel, OutboundNotifier {
       const content = text.replace(new RegExp(`<@${this.botUserId}>`, "g"), "").trim();
       if (!content) return;
 
-      this.messageHandler?.({
-        id: message.ts,
-        channelId,
-        authorId: user,
-        authorName: user,
-        content,
-        isDM,
-        isMention,
-      });
-
       const projectCtx = this.resolveProject(channelId, isDM);
       const userKey = projectCtx ? `slack:${projectCtx.id}:${user}` : `slack:${user}`;
       if (this.processing.has(userKey)) {
@@ -163,10 +152,6 @@ export class SlackChannel implements Channel, OutboundNotifier {
   async disconnect(): Promise<void> {
     await this.app.stop();
     console.log("[slack] Disconnected");
-  }
-
-  onMessage(handler: (msg: IncomingMessage) => void): void {
-    this.messageHandler = handler;
   }
 
   async send(target: string, content: string): Promise<void> {
@@ -218,9 +203,7 @@ export class SlackChannel implements Channel, OutboundNotifier {
     const loopOpts = this.runtime.buildLoopOptions({ session, project });
     const response = await runAgentLoop(content, {
       ...loopOpts,
-      onToolCall: (name, args) => {
-        console.log(`${logPrefix} tool: ${name}(${JSON.stringify(args).slice(0, 200)})`);
-      },
+      ...this.runtime.defaultLoopObservers({ prefix: logPrefix }),
     });
 
     if (hooks.afterRun.length > 0) {
