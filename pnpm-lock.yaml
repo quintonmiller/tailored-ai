@@ -171,6 +171,8 @@ importers:
         specifier: ^4.0.18
         version: 4.0.18(@types/node@22.19.11)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.21.0)(yaml@2.8.2)
 
+  packages/integration-tests: {}
+
   packages/server:
     dependencies:
       '@hono/node-server':

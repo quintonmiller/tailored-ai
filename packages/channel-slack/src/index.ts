@@ -1,10 +1,12 @@
 /**
- * Side-effect entry point. Importing this module registers Slack as the
- * "slack" channel factory in `@tailored-ai/core`'s channel registry, so the
- * runtime's `startRegisteredChannels` picks it up the same way it picks up
- * Discord (and any other channel plugin).
+ * @tailored-ai/channel-slack
  *
- * To use, add this to `config.yaml`:
+ * Slack channel for Tailored AI agents, packaged as a register(ctx) plugin
+ * (#47). The host invokes the default export with a {@link PluginContext}
+ * during runtime construction; the plugin registers a channel factory the
+ * runtime starts when `channels.slack.enabled: true`.
+ *
+ * To use, add the package to `config.yaml`:
  *
  *     plugins:
  *       - "@tailored-ai/channel-slack"
@@ -16,18 +18,22 @@
  *         respondToDMs: true
  *         respondToMentions: true
  */
-import { registerChannelFactory } from "@tailored-ai/core";
+import type { Plugin } from "@tailored-ai/core";
 import { SlackChannel } from "./channel.js";
 import type { SlackChannelConfig } from "./types.js";
 
-registerChannelFactory("slack", async (runtime, cfg) => {
-  const channel = new SlackChannel({ runtime, config: cfg as SlackChannelConfig });
-  await channel.connect();
-  return {
-    channel,
-    disconnect: () => channel.disconnect(),
-  };
-});
+const plugin: Plugin = (ctx) => {
+  ctx.channels.register("slack", async (runtime, cfg) => {
+    const channel = new SlackChannel({ runtime, config: cfg as SlackChannelConfig });
+    await channel.connect();
+    return {
+      channel,
+      disconnect: () => channel.disconnect(),
+    };
+  });
+};
+
+export default plugin;
 
 export { SlackChannel } from "./channel.js";
 export type { SlackChannelConfig } from "./types.js";

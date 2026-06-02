@@ -1,23 +1,13 @@
 # @tailored-ai/channel-slack
 
-Slack channel for [Tailored AI](https://github.com/quintonmiller/tailored-ai). Importing this package registers Slack as a channel factory; the runtime starts it automatically when `channels.slack.enabled: true` is set in `config.yaml`.
+Slack channel for [Tailored AI](https://github.com/quintonmiller/tailored-ai). Ships as a `register(ctx)` plugin (#47) — the host invokes the package's default export with a `PluginContext` during runtime construction; the plugin registers a channel factory the runtime starts automatically when `channels.slack.enabled: true` is set in `config.yaml`.
 
 Designed as a **reference implementation** of the channel registry (#81) — small enough to read in one sitting (~250 lines) but functional enough to be useful day-to-day. The deeper Discord channel in `@tailored-ai/core` is the feature-complete version; treat this as the canonical example for anyone authoring a third-party channel.
 
 ## Install
 
-> **Note**: A first-class `tai plugin install` command is tracked in [#43](https://github.com/quintonmiller/tailored-ai/issues/43). Until that lands, install the package next to your global `tai` so Node's module resolver can find it from the CLI's location.
-
-**npm-globally-installed TAI:**
-
 ```bash
-npm install -g @tailored-ai/channel-slack
-```
-
-**Workspace / monorepo (development):**
-
-```bash
-pnpm add @tailored-ai/channel-slack
+tai plugin install @tailored-ai/channel-slack
 ```
 
 Then in `config.yaml`:
