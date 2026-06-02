@@ -5,9 +5,11 @@
   "fixed": [
     [
       "@tailored-ai/browser-mediator",
+      "@tailored-ai/channel-slack",
       "@tailored-ai/core",
       "@tailored-ai/server",
       "@tailored-ai/cli",
+      "@tailored-ai/google-tools",
       "@tailored-ai/trusted-actions"
     ]
   ],
@@ -17,6 +19,7 @@
   "updateInternalDependencies": "patch",
   "ignore": [
     "@tailored-ai/ui",
-    "@tailored-ai/site"
+    "@tailored-ai/site",
+    "@tailored-ai/integration-tests"
   ]
 }
