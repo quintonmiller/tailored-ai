@@ -40,9 +40,7 @@ describe("EgressPolicy — IP-literal denials", () => {
   });
 
   it("blocks AWS/GCP IMDSv1 at 169.254.169.254", async () => {
-    await expect(policy.check("http://169.254.169.254/latest/meta-data/")).rejects.toThrow(
-      /metadata/,
-    );
+    await expect(policy.check("http://169.254.169.254/latest/meta-data/")).rejects.toThrow(/metadata/);
   });
 
   it("blocks IPv6 ULA (fc00::/7)", async () => {

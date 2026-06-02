@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
-import { isPathContainedRealpath } from "./path-containment.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
+import { isPathContainedRealpath } from "./path-containment.js";
 import { checkSandboxBoundary } from "./sandbox-boundary.js";
 
 export class ReadTool implements Tool {
@@ -38,9 +38,7 @@ export class ReadTool implements Tool {
     }
 
     if (this.allowedPaths.length > 0) {
-      const allowed = this.allowedPaths.some((p) =>
-        isPathContainedRealpath(fullPath, p, context.workingDirectory),
-      );
+      const allowed = this.allowedPaths.some((p) => isPathContainedRealpath(fullPath, p, context.workingDirectory));
       if (!allowed) {
         return {
           success: false,

@@ -5,8 +5,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ChannelLifecycleManager } from "../channels/lifecycle.js";
 import type { Channel, IncomingMessage } from "../channels/interface.js";
+import { ChannelLifecycleManager } from "../channels/lifecycle.js";
 import { channelFactoryRegistry } from "../channels/registry.js";
 import type { AgentRuntime } from "../runtime.js";
 
@@ -130,9 +130,7 @@ describe("ChannelLifecycleManager", () => {
     const consoleErr = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const mgr = new ChannelLifecycleManager();
-      await mgr.reconcile(
-        fakeRuntime({ alpha: { enabled: true }, crash: { enabled: true } }),
-      );
+      await mgr.reconcile(fakeRuntime({ alpha: { enabled: true }, crash: { enabled: true } }));
       expect(mgr.get("alpha")).toBeDefined();
       expect(mgr.get("crash")).toBeUndefined();
       expect(consoleErr).toHaveBeenCalled();

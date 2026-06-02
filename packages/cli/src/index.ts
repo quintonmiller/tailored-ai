@@ -289,9 +289,7 @@ async function runServer(runtime: AgentRuntime) {
   console.log("tailored-ai v0.1.0");
   console.log(`Provider: ${runtime.getProvider().name} | Model: ${model}`);
   console.log(`Tools: ${tools.map((t) => t.name).join(", ")}`);
-  console.log(
-    `Channels: ${[...channelManager.list().map((c) => c.name), ...channels.map((c) => c.name)].join(", ")}`,
-  );
+  console.log(`Channels: ${[...channelManager.list().map((c) => c.name), ...channels.map((c) => c.name)].join(", ")}`);
   if (uiProvider) {
     const label = uiProvider.id === "builtin" ? "UI" : `UI (${uiProvider.id})`;
     console.log(`${label}: http://${runtime.getConfig().server.host}:${runtime.getConfig().server.port}`);

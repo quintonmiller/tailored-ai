@@ -24,8 +24,8 @@ export type {
 export { createApprovalRequestId, evaluatePermission, formatApprovalDescription } from "./approval.js";
 export { DiscordChannel } from "./channels/discord.js";
 export type { Channel, IncomingMessage } from "./channels/interface.js";
-export type { OutboundNotifier } from "./channels/outbound.js";
 export { ChannelLifecycleManager } from "./channels/lifecycle.js";
+export type { OutboundNotifier } from "./channels/outbound.js";
 export {
   type ChannelConnection,
   type ChannelFactory,
@@ -425,14 +425,6 @@ export {
   OpenAICompatibleEmbeddingProvider,
 } from "./providers/openai-embedding.js";
 export { Registry } from "./registry.js";
-export {
-  createEgressPolicy,
-  EgressDeniedError,
-  EgressPolicy,
-  type EgressLookup,
-  type EgressPolicyConfig,
-  PERMISSIVE_EGRESS_POLICY,
-} from "./security/egress-policy.js";
 export type {
   AgentBody,
   ApprovalGateOptions,
@@ -524,6 +516,14 @@ export {
 } from "./resources/index.js";
 export type { RuntimeOptions } from "./runtime.js";
 export { AgentRuntime } from "./runtime.js";
+export {
+  createEgressPolicy,
+  EgressDeniedError,
+  type EgressLookup,
+  EgressPolicy,
+  type EgressPolicyConfig,
+  PERMISSIVE_EGRESS_POLICY,
+} from "./security/egress-policy.js";
 export type { ShellResult } from "./shell.js";
 export { runShellCommand, shellEscape } from "./shell.js";
 export type { TaskEvent } from "./task-watcher.js";
@@ -697,10 +697,6 @@ export {
 } from "./workflows/loader.js";
 export { FileLogStore } from "./workflows/logs.js";
 export { WorkflowRegistry } from "./workflows/registry.js";
-export {
-  WorkflowTriggerCoordinator,
-  type WorkflowTriggerCoordinatorPollers,
-} from "./workflows/trigger-coordinator.js";
 export { lookup, resolveString, resolveValue, type Scope } from "./workflows/scope.js";
 export {
   deleteSecret,
@@ -712,6 +708,10 @@ export {
   setSecret,
 } from "./workflows/secrets.js";
 export { KeyedSemaphore, Semaphore } from "./workflows/semaphore.js";
+export {
+  WorkflowTriggerCoordinator,
+  type WorkflowTriggerCoordinatorPollers,
+} from "./workflows/trigger-coordinator.js";
 export type {
   AgentRunStep,
   ConditionStep,

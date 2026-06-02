@@ -26,27 +26,18 @@ describe("WebFetchTool + EgressPolicy wiring", () => {
   it("blocks the metadata IP regardless of the host string used", async () => {
     const policy = new EgressPolicy();
     const tool = new WebFetchTool(5_000, policy);
-    const res = await tool.execute(
-      { url: "http://169.254.169.254/latest/meta-data/" },
-      ctx(),
-    );
+    const res = await tool.execute({ url: "http://169.254.169.254/latest/meta-data/" }, ctx());
     expect(res.success).toBe(false);
     expect(res.error).toMatch(/metadata/);
   });
 
   it("respects allowHosts for an explicit internal opt-in", async () => {
-    const policy = new EgressPolicy(
-      { allowHosts: ["internal.example.com"] },
-      async () => ["10.0.0.1"],
-    );
+    const policy = new EgressPolicy({ allowHosts: ["internal.example.com"] }, async () => ["10.0.0.1"]);
     const tool = new WebFetchTool(5_000, policy);
     // The fetch itself will fail (no network), but the relevant
     // assertion is that the failure isn't an Egress denial — the
     // policy's allowHosts let it through.
-    const res = await tool.execute(
-      { url: "http://internal.example.com/" },
-      ctx(),
-    );
+    const res = await tool.execute({ url: "http://internal.example.com/" }, ctx());
     if (!res.success) {
       expect(res.error).not.toMatch(/Egress denied/);
     }

@@ -1,5 +1,5 @@
-import { createPluginContext } from "@tailored-ai/core";
 import type { ToolFactory } from "@tailored-ai/core";
+import { createPluginContext } from "@tailored-ai/core";
 import { describe, expect, it, vi } from "vitest";
 import plugin from "../index.js";
 
@@ -47,10 +47,7 @@ describe("@tailored-ai/google-tools register(ctx) contract", () => {
 
   it("gmail factory constructs the tool when config is fully populated", () => {
     const factory = captureFactories().get("gmail")!;
-    const tools = factory(
-      { tools: { gmail: { enabled: true, account: "user@example.com" } } } as never,
-      {} as never,
-    );
+    const tools = factory({ tools: { gmail: { enabled: true, account: "user@example.com" } } } as never, {} as never);
     expect(tools).toHaveLength(1);
     expect(tools[0].name).toBe("gmail");
   });
