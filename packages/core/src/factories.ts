@@ -1,8 +1,8 @@
 import { resolve } from "node:path";
 import type { AgentConfig } from "./config.js";
 import type { EmbeddingProvider } from "./providers/embedding.js";
-import { embeddingFactoryRegistry, providerFactoryRegistry } from "./providers/factories.js";
 import type { AIProvider } from "./providers/interface.js";
+import type { Registries } from "./registries.js";
 import { createTaskBackend } from "./tasks/factory.js";
 import type { TaskBackend } from "./tasks/interface.js";
 import { AdminTool } from "./tools/admin.js";
@@ -32,16 +32,13 @@ import { runToolFactories } from "./tools/tool-factories.js";
 import { WebFetchTool } from "./tools/web-fetch.js";
 import { WebSearchTool } from "./tools/web-search.js";
 import { WriteTool } from "./tools/write.js";
-// Side-effect import: registers built-in optional tool factories
-// (browser_mediator, trusted_actions) on module load.
-import "./tools/builtin-optional.js";
 import type { AgentRuntime } from "./runtime.js";
 
 export interface CreateToolsOptions {
   getDiscord?: () => any;
   getOwnerId?: () => string | undefined;
   db?: import("better-sqlite3").Database;
-  /** Override the task backend. Defaults to `createTaskBackend(config, db)` when `db` is provided. */
+  /** Override the task backend. Defaults to `createTaskBackend(registries, config, db)` when `db` is provided. */
   taskBackend?: TaskBackend;
   /** Optional embedding provider getter for semantic recall. */
   getEmbedder?: () => EmbeddingProvider | undefined;
@@ -60,13 +57,13 @@ export interface CreateToolsOptions {
  * are disabled (the default), required config is missing, or the requested
  * factory id is not registered.
  */
-export function createEmbedder(config: AgentConfig): EmbeddingProvider | undefined {
+export function createEmbedder(registries: Registries, config: AgentConfig): EmbeddingProvider | undefined {
   const cfg = config.memory?.embeddings;
   if (!cfg?.enabled) return undefined;
   const id = cfg.type ?? "openai_compatible";
-  const factory = embeddingFactoryRegistry.get(id);
+  const factory = registries.embeddings.get(id);
   if (!factory) {
-    const known = embeddingFactoryRegistry.list().join(", ") || "(none)";
+    const known = registries.embeddings.list().join(", ") || "(none)";
     console.warn(`[factories] No embedding factory registered for "${id}". Known: ${known}. Disabling embeddings.`);
     return undefined;
   }
@@ -74,6 +71,7 @@ export function createEmbedder(config: AgentConfig): EmbeddingProvider | undefin
 }
 
 export function createTools(
+  registries: Registries,
   config: AgentConfig,
   contextDir: string,
   configPath?: string,
@@ -122,7 +120,7 @@ export function createTools(
   // not as a regular tool here. Identity maintenance is foundational —
   // every named agent gets it regardless of its `tools:` allowlist.
   if (config.tools.tasks?.enabled !== false) {
-    const backend = opts?.taskBackend ?? (opts?.db ? createTaskBackend(config, opts.db) : undefined);
+    const backend = opts?.taskBackend ?? (opts?.db ? createTaskBackend(registries, config, opts.db) : undefined);
     if (backend) {
       tools.push(new TasksTool(backend, opts?.db, opts?.notifyTaskEvent), new TaskQueryTool(backend));
     }
@@ -169,19 +167,18 @@ export function createTools(
     tools.push(...createCustomTools(config.custom_tools));
   }
   // Tool-factory registry: built-in optional tools (browser_mediator,
-  // trusted_actions, gmail, google_calendar, google_drive) register here on
-  // import; external plugins do the same.
-  tools.push(...runToolFactories(config, { db: opts?.db, configPath }));
+  // trusted_actions) plus anything seeded by loaded plugins.
+  tools.push(...runToolFactories(registries, config, { db: opts?.db, configPath }));
   return tools;
 }
 
-export function createProvider(config: AgentConfig): { provider: AIProvider; model: string } {
+export function createProvider(registries: Registries, config: AgentConfig): { provider: AIProvider; model: string } {
   const id = config.agent.defaultProvider;
-  const factory = providerFactoryRegistry.get(id);
+  const factory = registries.providers.get(id);
   if (!factory) {
-    const known = providerFactoryRegistry.list().join(", ") || "(none)";
+    const known = registries.providers.list().join(", ") || "(none)";
     throw new Error(
-      `No provider factory registered for "${id}". Known: ${known}. Register a custom factory with registerProviderFactory().`,
+      `No provider factory registered for "${id}". Known: ${known}. Register a custom factory via ctx.providers.register in your plugin.`,
     );
   }
   return factory(config);

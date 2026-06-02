@@ -1,8 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  createPluginContext,
+  Registries,
   registerBuiltinMemoryBackend,
   registerBuiltinOptionalTools,
+  registerBuiltinProviders,
+  registerBuiltinTaskBackends,
   registerCoreBuiltins,
   registerDiscordChannel,
 } from "../index.js";
@@ -49,36 +51,54 @@ describe("register* built-in helpers", () => {
     expect(ctx.calls.memoryBackends).toEqual(["builtin"]);
   });
 
-  it("registerCoreBuiltins aggregates all three", async () => {
+  it("registerBuiltinProviders registers openai/openai_compatible/anthropic + embeddings", () => {
     const ctx = makeRecordingContext();
-    await registerCoreBuiltins(ctx);
+    registerBuiltinProviders(ctx);
+    expect(ctx.calls.providers.sort()).toEqual(["anthropic", "openai", "openai_compatible"]);
+    expect(ctx.calls.embeddings).toEqual(["openai_compatible"]);
+  });
+
+  it("registerBuiltinTaskBackends registers native/github/beans/beads", () => {
+    const ctx = makeRecordingContext();
+    registerBuiltinTaskBackends(ctx);
+    expect(ctx.calls.taskBackends.sort()).toEqual(["beads", "beans", "github", "native"]);
+  });
+
+  it("registerCoreBuiltins aggregates everything", () => {
+    const ctx = makeRecordingContext();
+    registerCoreBuiltins(ctx);
     expect(ctx.calls.tools.sort()).toEqual(["browser_mediator", "trusted_actions"]);
     expect(ctx.calls.channels).toEqual(["discord"]);
     expect(ctx.calls.memoryBackends).toEqual(["builtin"]);
+    expect(ctx.calls.providers.sort()).toEqual(["anthropic", "openai", "openai_compatible"]);
+    expect(ctx.calls.embeddings).toEqual(["openai_compatible"]);
+    expect(ctx.calls.taskBackends.sort()).toEqual(["beads", "beans", "github", "native"]);
   });
 });
 
-describe("createPluginContext bridge", () => {
-  it("exposes register on every namespace", () => {
-    const ctx = createPluginContext();
-    expect(typeof ctx.tools.register).toBe("function");
-    expect(typeof ctx.channels.register).toBe("function");
-    expect(typeof ctx.providers.register).toBe("function");
-    expect(typeof ctx.embeddings.register).toBe("function");
-    expect(typeof ctx.memoryBackends.register).toBe("function");
-    expect(typeof ctx.taskBackends.register).toBe("function");
-    expect(typeof ctx.uiProviders.register).toBe("function");
+describe("Registries bundle", () => {
+  it("starts empty and accumulates registrations through asPluginContext", () => {
+    const registries = new Registries();
+    expect(registries.tools.list()).toEqual([]);
+    registries.asPluginContext().tools.register("foo", () => []);
+    expect(registries.tools.has("foo")).toBe(true);
   });
 
-  it("forwards tool registration into the legacy module-scope registry", async () => {
-    const ctx = createPluginContext();
-    const { toolFactoryRegistry } = await import("../tools/tool-factories.js");
-    const before = toolFactoryRegistry.has("ctx-bridge-tool");
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    ctx.tools.register("ctx-bridge-tool", () => []);
-    warn.mockRestore();
-    expect(before).toBe(false);
-    expect(toolFactoryRegistry.has("ctx-bridge-tool")).toBe(true);
-    toolFactoryRegistry.unregister("ctx-bridge-tool");
+  it("registerCoreBuiltins seeds providers + memory + tools + channels + tasks", () => {
+    const registries = new Registries();
+    registerCoreBuiltins(registries.asPluginContext());
+    expect(registries.providers.list().sort()).toEqual(["anthropic", "openai", "openai_compatible"]);
+    expect(registries.memoryBackends.has("builtin")).toBe(true);
+    expect(registries.taskBackends.list().sort()).toEqual(["beads", "beans", "github", "native"]);
+    expect(registries.channels.has("discord")).toBe(true);
+    expect(registries.tools.list().sort()).toEqual(["browser_mediator", "trusted_actions"]);
+  });
+
+  it("two Registries are isolated — no cross-contamination", () => {
+    const a = new Registries();
+    const b = new Registries();
+    a.asPluginContext().tools.register("only-a", () => []);
+    expect(a.tools.has("only-a")).toBe(true);
+    expect(b.tools.has("only-a")).toBe(false);
   });
 });

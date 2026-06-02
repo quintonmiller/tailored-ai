@@ -1,4 +1,3 @@
-import { Registry } from "../registry.js";
 import type { AgentRuntime } from "../runtime.js";
 import type { UiProvider } from "./interface.js";
 
@@ -11,17 +10,6 @@ export type UiProviderFactory = (
   runtime: AgentRuntime,
   config: Record<string, unknown>,
 ) => Promise<UiProvider | undefined> | UiProvider | undefined;
-
-export const uiProviderFactoryRegistry = new Registry<UiProviderFactory>("ui-provider");
-
-/**
- * @deprecated Prefer the {@link Plugin} contract: call
- * `ctx.uiProviders.register(id, factory)` from a plugin's `default(ctx)`.
- * This free function will be removed once internal consumers migrate — see #47.
- */
-export function registerUiProviderFactory(id: string, factory: UiProviderFactory): void {
-  uiProviderFactoryRegistry.register(id, factory);
-}
 
 /**
  * Resolve the UI provider declared by `server.ui.provider` (defaults to
@@ -38,12 +26,12 @@ export async function resolveUiProvider(runtime: AgentRuntime): Promise<UiProvid
   if (ui?.enabled === false) return undefined;
 
   const id = ui?.provider ?? "builtin";
-  const factory = uiProviderFactoryRegistry.get(id);
+  const factory = runtime.registries.uiProviders.get(id);
   if (!factory) {
-    const known = uiProviderFactoryRegistry.list().join(", ") || "(none)";
+    const known = runtime.registries.uiProviders.list().join(", ") || "(none)";
     console.warn(
       `[ui] No factory registered for server.ui.provider="${id}". Known: ${known}. ` +
-        `Register one with registerUiProviderFactory(). Skipping UI mount.`,
+        `Register one via ctx.uiProviders.register from a plugin. Skipping UI mount.`,
     );
     return undefined;
   }
