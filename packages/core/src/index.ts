@@ -689,6 +689,10 @@ export {
 } from "./workflows/loader.js";
 export { FileLogStore } from "./workflows/logs.js";
 export { WorkflowRegistry } from "./workflows/registry.js";
+export {
+  WorkflowTriggerCoordinator,
+  type WorkflowTriggerCoordinatorPollers,
+} from "./workflows/trigger-coordinator.js";
 export { lookup, resolveString, resolveValue, type Scope } from "./workflows/scope.js";
 export {
   deleteSecret,

@@ -84,6 +84,37 @@ export class FileDropWatcher {
     this.pending.clear();
   }
 
+  /**
+   * Remove every registration for `workflowName`. Used by the workflow
+   * trigger coordinator when a workflow is deleted or its triggers change
+   * across a hot-reload. Returns true if at least one registration was
+   * removed.
+   */
+  unregister(workflowName: string): boolean {
+    const before = this.regs.length;
+    const keep: Registration[] = [];
+    for (const reg of this.regs) {
+      if (reg.workflowName === workflowName) {
+        try {
+          reg.watcher.close();
+        } catch {
+          /* ignore */
+        }
+        continue;
+      }
+      keep.push(reg);
+    }
+    this.regs = keep;
+    // Drop pending debounce timers for the removed workflow too.
+    for (const [path, p] of this.pending.entries()) {
+      if (p.workflowName === workflowName) {
+        clearTimeout(p.timer);
+        this.pending.delete(path);
+      }
+    }
+    return this.regs.length < before;
+  }
+
   /** Number of currently registered triggers (test helper). */
   size(): number {
     return this.regs.length;
