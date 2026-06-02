@@ -524,6 +524,30 @@ export interface AgentConfig {
     beans?: { path?: string };
     beads?: { path?: string };
   };
+  /**
+   * Centralized SSRF / outbound-HTTP egress policy. Applied to web_fetch,
+   * the workflow http_request executor, and the trigger pollers. See
+   * #57 / packages/core/src/security/egress-policy.ts.
+   *
+   * Default (block: undefined): policy is active with safe defaults —
+   * loopback, RFC1918, link-local, IPv6 ULA, and cloud metadata IPs are
+   * denied. Self-hosted integrations that need an internal target should
+   * flip the appropriate field on or add the host to `allowHosts`.
+   */
+  security?: {
+    egress?: {
+      /** Skip every check. Use only in trusted networks. */
+      disabled?: boolean;
+      /** Allow loopback, RFC1918, ULA, link-local. */
+      allowPrivateNetworks?: boolean;
+      /** Allow AWS/GCP/Azure IMDS at 169.254.169.254 etc. */
+      allowMetadataEndpoints?: boolean;
+      /** Hostnames (or *.suffix) that always pass. */
+      allowHosts?: string[];
+      /** Hostnames (or *.suffix) that always fail. */
+      denyHosts?: string[];
+    };
+  };
   sandboxes?: {
     docker?: {
       imageName?: string;
@@ -999,6 +1023,18 @@ export function validateConfig(config: AgentConfig): string[] {
       `server.host="${host}" exposes the API beyond loopback but neither server.authToken ` +
         `nor server.proxyAuth.enabled is set — all reads are unauthenticated. ` +
         `Set server.authToken to a strong secret, or bind to 127.0.0.1.`,
+    );
+  }
+
+  // Egress policy: flag a `disabled: true` setting since it turns off the
+  // SSRF guard wholesale. allow* flags get noted as informational so a
+  // YAML typo doesn't silently re-enable internal targets.
+  const egress = config.security?.egress;
+  if (egress?.disabled) {
+    warnings.push(
+      `security.egress.disabled is true — the SSRF guard is OFF for web_fetch, ` +
+        `the http_request workflow step, and trigger pollers. Set this only on ` +
+        `trusted networks; prefer allowHosts for narrow internal-target opt-ins.`,
     );
   }
 
