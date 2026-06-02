@@ -54,7 +54,6 @@
   "dependencies": {
     "@inkjs/ui": "^2.0.0",
     "@tailored-ai/core": "workspace:*",
-    "@tailored-ai/google-tools": "workspace:*",
     "@tailored-ai/server": "workspace:*",
     "diff": "^9.0.0",
     "dotenv": "^17.2.4",
