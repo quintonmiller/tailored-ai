@@ -7,6 +7,7 @@ import { parseArgs } from "node:util";
 import {
   AgentRuntime,
   AutopilotWorker,
+  ChannelLifecycleManager,
   CronScheduler,
   createEmbedder,
   createMetaTools,
@@ -32,7 +33,6 @@ import {
   resolveProjectFromCwd,
   resolveUiProvider,
   runAgentLoop,
-  startRegisteredChannels,
   TaskWatcher,
   validateConfig,
 } from "@tailored-ai/core";
@@ -113,16 +113,18 @@ registerUiProviderFactory("builtin", () => {
 let _taskWatcherRef: { notifyById: (action: "created" | "updated" | "commented", id: string) => void } | undefined;
 
 async function runServer(runtime: AgentRuntime) {
-  // Discord and any plugin channels (Slack, Telegram, …) both come up via the
-  // channel registry. Discord registers itself as a built-in from core's
-  // discord-builtin.ts on import. No special-case Discord construction here.
-  let startedChannels = await startRegisteredChannels(runtime);
-  const channels: { name: string; disconnect: () => Promise<void> }[] = [
-    ...startedChannels.map((c) => ({ name: c.name, disconnect: c.disconnect })),
-  ];
+  // Every registered channel — Discord (built-in) plus plugin channels
+  // (Slack, Telegram, …) — comes up through the lifecycle manager. The
+  // manager reconciles desired vs running on each reload so we never
+  // restart already-running channels or leak duplicate listeners (#58).
+  const channelManager = new ChannelLifecycleManager();
+  await channelManager.reconcile(runtime);
 
-  const discordEntry = startedChannels.find((c) => c.name === "discord");
-  _discordChannel = discordEntry?.channel as DiscordChannel | undefined;
+  // Local shutdownables: pollers and the HTTP server. Channel-registry
+  // channels are owned by channelManager — `shutdown` stops it explicitly.
+  const channels: { name: string; disconnect: () => Promise<void> }[] = [];
+
+  _discordChannel = channelManager.get("discord")?.channel as DiscordChannel | undefined;
   _discordNotifier = _discordChannel;
   const notifier = _discordNotifier;
 
@@ -147,48 +149,26 @@ async function runServer(runtime: AgentRuntime) {
   const exploratory = new ExploratoryWorker({ runtime });
   exploratory.start();
 
-  // Hot-reload: when channels.discord.enabled flips, drive the change through
-  // the channel registry instead of special-casing Discord.
+  // Hot-reload: the lifecycle manager reconciles the channel set against
+  // the new config. The Discord-specific notifier wiring then re-syncs
+  // off whatever the manager produced.
   runtime.onReload(async () => {
     scheduler.restart();
 
-    const wantsDiscord = runtime.getConfig().channels.discord?.enabled === true;
-    const hasDiscord = _discordChannel !== undefined;
+    try {
+      await channelManager.reconcile(runtime);
+    } catch (err) {
+      console.error("[channels] Reconcile error after reload:", (err as Error).message);
+    }
 
-    if (wantsDiscord && !hasDiscord) {
-      try {
-        const newStarted = await startRegisteredChannels(runtime);
-        const newDiscord = newStarted.find((c) => c.name === "discord");
-        if (newDiscord) {
-          _discordChannel = newDiscord.channel as DiscordChannel;
-          _discordNotifier = _discordChannel;
-          scheduler.setNotifier(_discordNotifier);
-          taskWatcher.setNotifier(_discordNotifier);
-          channels.push({ name: "discord", disconnect: newDiscord.disconnect });
-          startedChannels = newStarted;
-          console.log("[discord] Connected after config reload");
-        }
-      } catch (err) {
-        console.error("[discord] Error connecting after reload:", (err as Error).message);
-      }
-    } else if (!wantsDiscord && hasDiscord) {
-      const old = _discordChannel!;
-      _discordChannel = undefined;
-      _discordNotifier = undefined;
-      scheduler.setNotifier(undefined);
-      taskWatcher.setNotifier(undefined);
-      const idx = channels.findIndex((c) => c.name === "discord");
-      if (idx !== -1) {
-        const entry = channels[idx];
-        channels.splice(idx, 1);
-        entry.disconnect().catch((err) => {
-          console.error("[discord] Error disconnecting after reload:", (err as Error).message);
-        });
-      } else {
-        old.disconnect().catch((err) => {
-          console.error("[discord] Error disconnecting after reload:", (err as Error).message);
-        });
-      }
+    const next = channelManager.get("discord")?.channel as DiscordChannel | undefined;
+    if (next !== _discordChannel) {
+      _discordChannel = next;
+      _discordNotifier = next;
+      scheduler.setNotifier(next);
+      taskWatcher.setNotifier(next);
+      if (next) console.log("[discord] Connected after config reload");
+      else console.log("[discord] Disconnected after config reload");
     }
   });
 
@@ -379,7 +359,9 @@ async function runServer(runtime: AgentRuntime) {
   console.log("tailored-ai v0.1.0");
   console.log(`Provider: ${runtime.getProvider().name} | Model: ${model}`);
   console.log(`Tools: ${tools.map((t) => t.name).join(", ")}`);
-  console.log(`Channels: ${channels.map((c) => c.name).join(", ")}`);
+  console.log(
+    `Channels: ${[...channelManager.list().map((c) => c.name), ...channels.map((c) => c.name)].join(", ")}`,
+  );
   if (uiProvider) {
     const label = uiProvider.id === "builtin" ? "UI" : `UI (${uiProvider.id})`;
     console.log(`${label}: http://${runtime.getConfig().server.host}:${runtime.getConfig().server.port}`);
@@ -394,6 +376,7 @@ async function runServer(runtime: AgentRuntime) {
     taskWatcher.stop();
     autopilot.stop();
     exploratory.stop();
+    await channelManager.stopAll();
     for (const ch of channels) {
       await ch.disconnect();
     }
