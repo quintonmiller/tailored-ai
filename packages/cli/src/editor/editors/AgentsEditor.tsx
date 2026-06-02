@@ -7,13 +7,14 @@ import type { ResolvedPlugin } from "../types.js";
 
 interface Props {
   agents: ResolvedPlugin[];
+  homeDir: string;
   dispatch: (action: Action) => void;
   onExit: () => void;
 }
 
 type Mode = "list" | "add" | "resolving";
 
-export function AgentsEditor({ agents, dispatch, onExit }: Props) {
+export function AgentsEditor({ agents, homeDir, dispatch, onExit }: Props) {
   const [mode, setMode] = useState<Mode>("list");
   const [cursor, setCursor] = useState(0);
   const [resolveMsg, setResolveMsg] = useState<string | undefined>();
@@ -59,7 +60,7 @@ export function AgentsEditor({ agents, dispatch, onExit }: Props) {
     // resolveOnePlugin works for any resource URI — it builds the same
     // ResourceLoader the runtime uses, so a successful resolve here means
     // the runtime will find the same manifest at startup.
-    void resolveOnePlugin(trimmed).then((resolved) => {
+    void resolveOnePlugin(trimmed, homeDir).then((resolved) => {
       dispatch({ type: "addExternalAgent", agent: resolved });
       setResolveMsg(undefined);
       setMode("list");

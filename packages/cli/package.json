@@ -48,7 +48,8 @@
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist tsconfig.tsbuildinfo ui-dist",
     "dev": "tsx src/index.ts",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "test": "vitest run"
   },
   "dependencies": {
     "@inkjs/ui": "^2.0.0",
@@ -66,6 +67,7 @@
     "@types/node": "^22.10.0",
     "@types/react": "^19.2.14",
     "tsx": "^4.19.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^4.0.18"
   }
 }

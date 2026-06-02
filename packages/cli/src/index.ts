@@ -38,9 +38,11 @@ import {
 import { createServer } from "@tailored-ai/server";
 import dotenv from "dotenv";
 import { CliApprovalHandler } from "./approval.js";
+import { runPluginCommand } from "./commands/plugin.js";
 import { runProjectCommand } from "./commands/project.js";
 import { runResourcesCommand } from "./commands/resources.js";
 import { runVaultCommand } from "./commands/vault.js";
+import { PluginManager } from "./plugins/manager.js";
 import { isSetupDone, resolveHomeDir, resolveHomePaths } from "./home.js";
 import { runSetupWizard, type SetupMode } from "./setup.js";
 
@@ -540,6 +542,10 @@ async function main() {
     await runVaultCommand(argv.slice(1));
     return;
   }
+  if (argv[0] === "plugin" || argv[0] === "plugins") {
+    await runPluginCommand(argv.slice(1));
+    return;
+  }
   if (argv[0] === "init" || argv[0] === "edit") {
     await runSetupCommand(argv[0], argv.slice(1));
     return;
@@ -693,10 +699,13 @@ async function main() {
     console.warn(`[config] Warning: ${warning}`);
   }
 
-  // Load declarative plugins before runtime construction. The dynamic
-  // import runs from the CLI's resolution context so workspace / installed
-  // plugins resolve correctly.
-  await loadPlugins(config, (name) => import(name));
+  // Load declarative plugins before runtime construction. Plugins are
+  // resolved from the TAI-owned plugin home at <homeDir>/plugins/ — the
+  // user installs them via `tai plugin install`. Workspace / global-npm
+  // fallback is intentionally absent so the install path stays single
+  // and unambiguous. See #43.
+  const pluginManager = new PluginManager(homeDir);
+  await loadPlugins(config, pluginManager.buildImporter());
 
   // Override port from CLI flag
   if (values.port) {
