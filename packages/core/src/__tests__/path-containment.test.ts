@@ -78,9 +78,7 @@ describe("isPathContainedRealpath — symlink escape", () => {
   it("rejects symlink escape from within the allowed dir", () => {
     // /tmp/.../allowed/escape -> /tmp/.../outside
     // /tmp/.../allowed/escape/secret.txt resolves to /tmp/.../outside/secret.txt.
-    expect(
-      isPathContainedRealpath(join(allowed, "escape", "secret.txt"), allowed),
-    ).toBe(false);
+    expect(isPathContainedRealpath(join(allowed, "escape", "secret.txt"), allowed)).toBe(false);
   });
 
   it("allows writes to a not-yet-existing descendant by resolving the nearest parent", () => {
@@ -88,8 +86,6 @@ describe("isPathContainedRealpath — symlink escape", () => {
   });
 
   it("rejects writes targeting a symlinked-out path even when the leaf doesn't exist yet", () => {
-    expect(
-      isPathContainedRealpath(join(allowed, "escape", "new-file.txt"), allowed),
-    ).toBe(false);
+    expect(isPathContainedRealpath(join(allowed, "escape", "new-file.txt"), allowed)).toBe(false);
   });
 });

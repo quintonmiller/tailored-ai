@@ -2,8 +2,8 @@ import { resolve } from "node:path";
 import type { AgentConfig } from "./config.js";
 import type { EmbeddingProvider } from "./providers/embedding.js";
 import { embeddingFactoryRegistry, providerFactoryRegistry } from "./providers/factories.js";
-import { createEgressPolicy } from "./security/egress-policy.js";
 import type { AIProvider } from "./providers/interface.js";
+import { createEgressPolicy } from "./security/egress-policy.js";
 import { createTaskBackend } from "./tasks/factory.js";
 import type { TaskBackend } from "./tasks/interface.js";
 import { AdminTool } from "./tools/admin.js";
@@ -89,9 +89,7 @@ export function createTools(
     // Scratch lives under the configured TAI home so a per-user override or
     // a sandbox-injected $TAI_HOME picks it up. Falls back to ~/.tai inside
     // ExecTool when neither is set. (#60)
-    const scratchDir = process.env.TAI_HOME
-      ? resolve(process.env.TAI_HOME, "exec-outputs")
-      : undefined;
+    const scratchDir = process.env.TAI_HOME ? resolve(process.env.TAI_HOME, "exec-outputs") : undefined;
     tools.push(new ExecTool(config.tools.exec?.allowedCommands, undefined, scratchDir));
   }
   if (config.tools.read?.enabled !== false) {

@@ -1,4 +1,4 @@
-import { type EgressPolicy, EgressDeniedError } from "../security/egress-policy.js";
+import { EgressDeniedError, type EgressPolicy } from "../security/egress-policy.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
 import { isTransientError, withRetry } from "./retry.js";
 

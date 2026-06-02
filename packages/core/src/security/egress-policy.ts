@@ -90,10 +90,12 @@ export class EgressPolicy {
     private readonly config: EgressPolicyConfig = {},
     lookup?: EgressLookup,
   ) {
-    this.lookup = lookup ?? (async (hostname: string) => {
-      const results = await defaultLookup(hostname, { all: true });
-      return results.map((r) => r.address);
-    });
+    this.lookup =
+      lookup ??
+      (async (hostname: string) => {
+        const results = await defaultLookup(hostname, { all: true });
+        return results.map((r) => r.address);
+      });
   }
 
   /**
