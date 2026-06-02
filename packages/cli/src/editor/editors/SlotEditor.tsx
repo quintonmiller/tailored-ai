@@ -19,13 +19,26 @@ interface Props {
    *  to draft.plugins so it shows up in the Plugins row. Required only when
    *  allowCustom is true. */
   toPluginAction?: (plugin: ResolvedPlugin) => Action;
+  /** Plugin home root (state.draft.homeDir). Used to install the package via
+   *  the PluginManager when the user picks a custom URI. */
+  homeDir: string;
   dispatch: (a: Action) => void;
   onExit: () => void;
 }
 
 type Mode = "select" | "uri" | "resolving";
 
-export function SlotEditor({ label, current, allowDisabled, allowCustom, toAction, toPluginAction, dispatch, onExit }: Props) {
+export function SlotEditor({
+  label,
+  current,
+  allowDisabled,
+  allowCustom,
+  toAction,
+  toPluginAction,
+  homeDir,
+  dispatch,
+  onExit,
+}: Props) {
   const [mode, setMode] = useState<Mode>("select");
   const [busy, setBusy] = useState<string | undefined>();
 
@@ -58,8 +71,8 @@ export function SlotEditor({ label, current, allowDisabled, allowCustom, toActio
                 return;
               }
               setMode("resolving");
-              setBusy(`Resolving ${uri}…`);
-              void resolveOnePlugin(uri).then((resolved) => {
+              setBusy(`Installing ${uri}…`);
+              void resolveOnePlugin(uri, homeDir).then((resolved) => {
                 // customUri carries the registered id that ends up in
                 // config (e.g. server.ui.provider). Prefer the resolved
                 // manifestId; fall back to the URI when the plugin doesn't

@@ -143,15 +143,42 @@ function EditorSwitch({ state, dispatch }: { state: AppState; dispatch: (a: Acti
   const onExit = () => dispatch({ type: "exitEditor" });
   switch (state.selected) {
     case "provider":
-      return <ProviderEditor provider={state.draft.provider} dispatch={dispatch} onExit={onExit} />;
+      return (
+        <ProviderEditor
+          provider={state.draft.provider}
+          homeDir={state.draft.homeDir}
+          dispatch={dispatch}
+          onExit={onExit}
+        />
+      );
     case "tools":
-      return <ToolsEditor tools={state.draft.tools} dispatch={dispatch} onExit={onExit} />;
+      return (
+        <ToolsEditor
+          tools={state.draft.tools}
+          homeDir={state.draft.homeDir}
+          dispatch={dispatch}
+          onExit={onExit}
+        />
+      );
     case "channels":
       return (
-        <ChannelsEditor discord={state.draft.channels.discord} plugins={state.draft.plugins} dispatch={dispatch} onExit={onExit} />
+        <ChannelsEditor
+          discord={state.draft.channels.discord}
+          plugins={state.draft.plugins}
+          homeDir={state.draft.homeDir}
+          dispatch={dispatch}
+          onExit={onExit}
+        />
       );
     case "plugins":
-      return <PluginsEditor plugins={state.draft.plugins} dispatch={dispatch} onExit={onExit} />;
+      return (
+        <PluginsEditor
+          plugins={state.draft.plugins}
+          homeDir={state.draft.homeDir}
+          dispatch={dispatch}
+          onExit={onExit}
+        />
+      );
     case "ui":
       return (
         <SlotEditor
@@ -161,6 +188,7 @@ function EditorSwitch({ state, dispatch }: { state: AppState; dispatch: (a: Acti
           allowCustom
           toAction={(choice) => ({ type: "setUi", choice })}
           toPluginAction={(plugin) => ({ type: "addPlugin", plugin })}
+          homeDir={state.draft.homeDir}
           dispatch={dispatch}
           onExit={onExit}
         />
@@ -174,6 +202,7 @@ function EditorSwitch({ state, dispatch }: { state: AppState; dispatch: (a: Acti
           allowCustom
           toAction={(choice) => ({ type: "setMemory", choice })}
           toPluginAction={(plugin) => ({ type: "addPlugin", plugin })}
+          homeDir={state.draft.homeDir}
           dispatch={dispatch}
           onExit={onExit}
         />
@@ -187,11 +216,19 @@ function EditorSwitch({ state, dispatch }: { state: AppState; dispatch: (a: Acti
           allowCustom
           toAction={(choice) => ({ type: "setTaskBackend", choice })}
           toPluginAction={(plugin) => ({ type: "addPlugin", plugin })}
+          homeDir={state.draft.homeDir}
           dispatch={dispatch}
           onExit={onExit}
         />
       );
     case "agents":
-      return <AgentsEditor agents={state.draft.externalAgents} dispatch={dispatch} onExit={onExit} />;
+      return (
+        <AgentsEditor
+          agents={state.draft.externalAgents}
+          homeDir={state.draft.homeDir}
+          dispatch={dispatch}
+          onExit={onExit}
+        />
+      );
   }
 }

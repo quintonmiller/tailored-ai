@@ -7,6 +7,7 @@ import type { ProviderDraft, ProviderKind } from "../types.js";
 
 interface Props {
   provider: ProviderDraft;
+  homeDir: string;
   dispatch: (action: Action) => void;
   onExit: () => void;
 }
@@ -28,7 +29,7 @@ const PRESET_URLS: Record<string, string> = {
   lmstudio: "http://localhost:1234/v1",
 };
 
-export function ProviderEditor({ provider, dispatch, onExit }: Props) {
+export function ProviderEditor({ provider, homeDir, dispatch, onExit }: Props) {
   const [draft, setDraft] = useState<ProviderDraft>(provider);
   const [focus, setFocus] = useState<FocusState>({ field: "kind", editing: false });
   const [mode, setMode] = useState<Mode>("form");
@@ -92,7 +93,7 @@ export function ProviderEditor({ provider, dispatch, onExit }: Props) {
               }
               setMode("resolving");
               setBusy(`Resolving ${uri}…`);
-              void resolveOnePlugin(uri).then((resolved) => {
+              void resolveOnePlugin(uri, homeDir).then((resolved) => {
                 dispatch({ type: "addPlugin", plugin: resolved });
                 setAddedUri(uri);
                 setBusy(undefined);
