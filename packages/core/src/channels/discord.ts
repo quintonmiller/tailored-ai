@@ -18,10 +18,9 @@ import { BASE_SYSTEM_PROMPT } from "../agent/prompt.js";
 import { findOrCreateSession, resetSession } from "../agent/session.js";
 import { executeCommand, isCommand } from "../commands.js";
 import { loadAllContext, loadContextFiles } from "../context.js";
-import { getProject } from "../db/project-queries.js";
 import { getSessionMessages } from "../db/queries.js";
 import { createProjectTask, queryProjectTasks } from "../db/task-queries.js";
-import type { ProjectContext } from "../projects/resolve.js";
+import type { ProjectRef } from "../projects/resolve.js";
 import type { AgentRuntime } from "../runtime.js";
 import { DiscordApprovalHandler } from "./discord-approval.js";
 import type { Channel, IncomingMessage } from "./interface.js";
@@ -198,7 +197,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
    * `channels.discord.projectMappings`. Returns null when no mapping matches —
    * such messages stay in global mode.
    */
-  private resolveMessageProject(msg: DiscordMessage): ProjectContext | null {
+  private resolveMessageProject(msg: DiscordMessage): ProjectRef | null {
     const mappings = this.runtime.getConfig().channels.discord?.projectMappings;
     if (!mappings || mappings.length === 0) return null;
 
@@ -216,18 +215,12 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     }
     if (!mapped) return null;
 
-    const row = getProject(this.runtime.db, mapped);
-    if (!row || !row.path) {
+    const ref = this.runtime.getProjectByName(mapped);
+    if (!ref) {
       console.warn(`[discord] projectMappings names "${mapped}" but it is unknown or has no path — using global`);
       return null;
     }
-    return {
-      id: row.id,
-      name: row.title,
-      path: row.path,
-      overlayPath: "",
-      overlay: {},
-    };
+    return ref;
   }
 
   private async handleMessage(msg: DiscordMessage): Promise<void> {
@@ -375,7 +368,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     userKey: string,
     content: string,
     agentName?: string,
-    project?: ProjectContext | null,
+    project?: ProjectRef | null,
   ): Promise<void> {
     const canType = "sendTyping" in msg.channel;
     if (canType) {

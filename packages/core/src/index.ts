@@ -385,7 +385,12 @@ export {
   type ToolRegistryView,
   type UiProviderRegistryView,
 } from "./plugin-context.js";
-export type { ProjectContext, ProjectFile, ResolveOptions as ProjectResolveOptions } from "./projects/resolve.js";
+export type {
+  ProjectContext,
+  ProjectFile,
+  ProjectRef,
+  ResolveOptions as ProjectResolveOptions,
+} from "./projects/resolve.js";
 export {
   assertAbsolutePath,
   buildProjectFile,
