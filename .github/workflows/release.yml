@@ -41,6 +41,12 @@ jobs:
       - name: Build all publishable packages
         run: pnpm run build
 
+      - name: Pack-check every publishable tarball
+        # Guards against the bug fixed in #56: if the root build script ever
+        # forgets a package, `pnpm publish -r` would ship a tarball with a
+        # missing or stale dist directory. This catches it before npm does.
+        run: pnpm run pack:check
+
       # Either opens / updates the "Version Packages" PR, or — if a version PR
       # was just merged — runs `pnpm publish -r` to push the new versions to npm.
       - name: Create release PR or publish

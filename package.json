@@ -4,7 +4,8 @@
   "description": "Lightweight, modular AI agent framework optimized for local LLMs",
   "type": "module",
   "scripts": {
-    "build": "pnpm --filter @tailored-ai/browser-mediator run build && pnpm --filter @tailored-ai/core run build && pnpm --filter @tailored-ai/server run build && pnpm --filter @tailored-ai/ui run build && pnpm --filter @tailored-ai/cli run build && pnpm --filter @tailored-ai/trusted-actions run build && pnpm --filter @tailored-ai/site run build",
+    "build": "pnpm -r run build",
+    "pack:check": "bash scripts/pack-check.sh",
     "dev": "pnpm --filter @tailored-ai/core run build && pnpm --filter @tailored-ai/server run build && pnpm --filter @tailored-ai/cli run dev",
     "dev:msg": "pnpm --filter @tailored-ai/core run build && pnpm --filter @tailored-ai/server run build && pnpm --filter @tailored-ai/cli run dev -- --message",
     "dev:ui": "pnpm --filter @tailored-ai/ui run dev",
