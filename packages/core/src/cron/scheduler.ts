@@ -8,9 +8,8 @@ import { runAgentLoop } from "../agent/loop.js";
 import { findOrCreateSession, resetSession } from "../agent/session.js";
 import type { OutboundNotifier } from "../channels/outbound.js";
 import type { CronJobConfig } from "../config.js";
-import { getProject } from "../db/project-queries.js";
 import { saveMessage } from "../db/queries.js";
-import type { ProjectContext } from "../projects/resolve.js";
+import type { ProjectRef } from "../projects/resolve.js";
 import { expandPrompt } from "../prompts/expand.js";
 import type { AgentRuntime } from "../runtime.js";
 import type { WorkflowEngine } from "../workflows/engine.js";
@@ -169,24 +168,14 @@ export class CronScheduler {
    * Returns null when the job is global. Returns null (with a warning) if `job.project`
    * names a project that doesn't exist or has no path.
    */
-  private resolveJobProject(job: CronJobConfig): ProjectContext | null {
+  private resolveJobProject(job: CronJobConfig): ProjectRef | null {
     if (!job.project) return null;
-    const row = getProject(this.runtime.db, job.project);
-    if (!row) {
-      console.warn(`[cron] "${job.name}" references unknown project "${job.project}" — running global`);
+    const ref = this.runtime.getProjectByName(job.project);
+    if (!ref) {
+      console.warn(`[cron] "${job.name}" references unknown project "${job.project}" (unregistered or no path) — running global`);
       return null;
     }
-    if (!row.path) {
-      console.warn(`[cron] "${job.name}" references project "${job.project}" with no registered path — running global`);
-      return null;
-    }
-    return {
-      id: row.id,
-      name: row.title,
-      path: row.path,
-      overlayPath: "",
-      overlay: {},
-    };
+    return ref;
   }
 
   private async resolvePrompt(job: CronJobConfig, vars?: Record<string, string>): Promise<string> {
