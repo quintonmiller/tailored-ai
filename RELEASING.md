@@ -3,10 +3,18 @@
 This monorepo uses [Changesets](https://github.com/changesets/changesets) to
 version and publish the public `@tailored-ai/*` packages together.
 
-Five packages publish: `browser-mediator`, `core`, `server`, `cli`,
-`trusted-actions`. They are configured as a **fixed** group — they always
-bump together. `@tailored-ai/ui` and `@tailored-ai/site` are private and
+Seven packages publish: `browser-mediator`, `channel-slack`, `cli`, `core`,
+`google-tools`, `server`, `trusted-actions`. They are configured as a
+**fixed** group in `.changeset/config.json` — they always bump together so
+the plugin packages stay in lockstep with `core`'s public surface (the
+`register(ctx)` contract, `PluginContext`, etc.). `@tailored-ai/ui`,
+`@tailored-ai/site`, and `@tailored-ai/integration-tests` are private and
 never publish.
+
+If a plugin package needs to ship independently later (e.g. patch a Slack
+adapter without bumping core), move it out of the `fixed` group and into
+`linked` in `.changeset/config.json` — but only after consumers can rely
+on a versioned plugin contract from `core`.
 
 ## One-time setup
 
@@ -68,9 +76,21 @@ The flow is **PR-driven** — you don't run publish locally.
 
 4. **Tag** (the changesets action does this automatically).
 
-## Verifying a tarball before publish
+## Verifying tarballs before publish
 
-For paranoia or first publishes, pack a candidate locally:
+The release workflow runs `pnpm run pack:check` automatically after the
+build step. It packs every publishable package and asserts each tarball
+contains `dist/index.js`. If `pnpm run build` ever forgets a package,
+this catches it before `pnpm publish -r` ships an empty tarball.
+
+You can run it locally the same way:
+
+```bash
+pnpm run build
+pnpm run pack:check
+```
+
+For a deeper inspection, pack a single candidate by hand:
 
 ```bash
 cd packages/core
