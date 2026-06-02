@@ -58,9 +58,6 @@ importers:
       '@tailored-ai/core':
         specifier: workspace:*
         version: link:../core
-      '@tailored-ai/google-tools':
-        specifier: workspace:*
-        version: link:../google-tools
       '@tailored-ai/server':
         specifier: workspace:*
         version: link:../server
