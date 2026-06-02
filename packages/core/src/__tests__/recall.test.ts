@@ -190,10 +190,10 @@ describe("RecallTool", () => {
 
   it("action=list returns recent notes scoped to project, ordered newest first", async () => {
     const tool = new RecallTool(db);
+    // Three notes written back-to-back within the same SQLite-second tick.
+    // The list query must still return them newest-insert first (#63: tiebreak
+    // on rowid, not the random-hex id).
     await tool.execute({ action: "note", content: "first", project_id: "proj_a" }, makeCtx());
-    // SQLite's datetime('now') is second-precision; sleep over the boundary
-    // so the second note's created_at is strictly later.
-    await new Promise((r) => setTimeout(r, 1100));
     await tool.execute({ action: "note", content: "second", project_id: "proj_a" }, makeCtx());
     await tool.execute({ action: "note", content: "other-proj", project_id: "proj_b" }, makeCtx());
 
@@ -207,6 +207,29 @@ describe("RecallTool", () => {
     expect(firstSecond).toBeLessThan(firstFirst);
     // doesn't leak the other project's note
     expect(list.output).not.toContain("other-proj");
+  });
+
+  it("action=list orders deterministically when many notes share a created_at second (#63)", async () => {
+    const tool = new RecallTool(db);
+    // Write 20 notes inside a single tick — without the rowid tiebreak the
+    // listing came back in random order (id is `note_${randomHex}`).
+    const expected: string[] = [];
+    for (let i = 0; i < 20; i++) {
+      const content = `note-${String(i).padStart(2, "0")}`;
+      expected.push(content);
+      await tool.execute({ action: "note", content, project_id: "proj_a" }, makeCtx());
+    }
+    expected.reverse(); // newest-first
+
+    const list = await tool.execute({ action: "list", project_id: "proj_a", limit: 50 }, makeCtx());
+    expect(list.success).toBe(true);
+    const positions = expected.map((c) => list.output.indexOf(c));
+    // Every content appears, and positions are strictly increasing (i.e.
+    // listing matches the reversed insertion order).
+    for (let i = 0; i < positions.length; i++) {
+      expect(positions[i]).toBeGreaterThan(-1);
+      if (i > 0) expect(positions[i]).toBeGreaterThan(positions[i - 1]);
+    }
   });
 
   it("action=list with no notes returns the empty marker", async () => {
