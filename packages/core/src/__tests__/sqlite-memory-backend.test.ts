@@ -1,7 +1,7 @@
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { getNote } from "../db/note-queries.js";
 import { findFact } from "../db/fact-queries.js";
+import { getNote } from "../db/note-queries.js";
 import { initDatabase } from "../db/schema.js";
 import { SqliteMemoryBackend } from "../memory/sqlite-backend.js";
 
@@ -38,10 +38,7 @@ describe("SqliteMemoryBackend — write routing", () => {
 
   it("routes kind=chunk to memory_chunks with an embedding when provided", async () => {
     const vector = Float32Array.from([0.1, 0.2, 0.3]);
-    const { id } = await backend.write(
-      { text: "chunk body" },
-      { kind: "chunk", sourceUri: "doc:1", vector },
-    );
+    const { id } = await backend.write({ text: "chunk body" }, { kind: "chunk", sourceUri: "doc:1", vector });
     expect(id).toMatch(/^chunk:/);
     const fragment = await backend.get(id);
     expect(fragment?.text).toBe("chunk body");
@@ -55,9 +52,9 @@ describe("SqliteMemoryBackend — write routing", () => {
     );
     expect(id).toBe("prelude:helper/persona");
 
-    await expect(
-      backend.write({ text: "x", structured: { section: "persona" } }, { kind: "prelude" }),
-    ).rejects.toThrow(/hint.scope.*agent/);
+    await expect(backend.write({ text: "x", structured: { section: "persona" } }, { kind: "prelude" })).rejects.toThrow(
+      /hint.scope.*agent/,
+    );
   });
 
   it("rejects unknown core_memory sections", async () => {
@@ -71,10 +68,7 @@ describe("SqliteMemoryBackend — write routing", () => {
 
   it("supersedes drops the prior record before writing the replacement", async () => {
     const first = await backend.write({ text: "old preference" }, { tags: ["pref"] });
-    const second = await backend.write(
-      { text: "new preference" },
-      { supersedes: first.id, tags: ["pref"] },
-    );
+    const second = await backend.write({ text: "new preference" }, { supersedes: first.id, tags: ["pref"] });
     expect(await backend.get(first.id)).toBeNull();
     expect((await backend.get(second.id))?.text).toBe("new preference");
   });
@@ -101,10 +95,7 @@ describe("SqliteMemoryBackend — query routing", () => {
 
   it("keyword recall returns matching notes scoped to project + globals", async () => {
     await backend.write({ text: "global note about coffee" }, {});
-    await backend.write(
-      { text: "project note about coffee shop" },
-      { scope: "project:p1" },
-    );
+    await backend.write({ text: "project note about coffee shop" }, { scope: "project:p1" });
     await backend.write({ text: "unrelated tea note" }, { scope: "project:p1" });
     const hits = await backend.query({ freeText: "coffee", scope: "project:p1", limit: 5 });
     const texts = hits.map((h) => h.text);
@@ -181,10 +172,7 @@ describe("SqliteMemoryBackend — list and count", () => {
   it("count returns table totals per kind", async () => {
     await backend.write({ text: "n1" }, {});
     await backend.write({ text: "n2" }, {});
-    await backend.write(
-      { text: "v", structured: { category: "c", key: "k" } },
-      { kind: "fact" },
-    );
+    await backend.write({ text: "v", structured: { category: "c", key: "k" } }, { kind: "fact" });
     expect(await backend.count({ kind: "note" })).toBe(2);
     expect(await backend.count({ kind: "fact" })).toBe(1);
     expect(await backend.count({ kind: "chunk" })).toBe(0);

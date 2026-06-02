@@ -1,6 +1,6 @@
 import type { MemoryBackend, MemoryFragment } from "../memory/interface.js";
-import { type RecallHit, recallQueryAsync } from "../tools/recall-query.js";
 import type { EmbeddingProvider } from "../providers/embedding.js";
+import { type RecallHit, recallQueryAsync } from "../tools/recall-query.js";
 
 export interface MemoryInjectOptions {
   /** User message used as the search query. */
@@ -47,10 +47,7 @@ export interface PinnedHit {
  * Returns an empty string when there are no hits — callers can concat
  * unconditionally. See docs/memory.md (M3) and DUX9 (pinned tier).
  */
-export async function buildMemoryBlock(
-  backend: MemoryBackend,
-  opts: MemoryInjectOptions,
-): Promise<string> {
+export async function buildMemoryBlock(backend: MemoryBackend, opts: MemoryInjectOptions): Promise<string> {
   return (await buildMemoryBlockWithMeta(backend, opts)).block;
 }
 

@@ -4,8 +4,8 @@
  * `list` / `delete` get a clear error from the tool instead of crashing.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type Database from "better-sqlite3";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { initDatabase } from "../db/schema.js";
 import type { MemoryBackend } from "../memory/interface.js";
 import { CoreMemoryTool } from "../tools/core-memory.js";
@@ -56,10 +56,7 @@ describe("Phase 3: tool capability gating", () => {
   it("FactsTool.forget returns a 'not supported' error when backend.delete is missing", async () => {
     const backend = makeMinimalBackend();
     const tool = new FactsTool(db, { getMemoryBackend: async () => backend });
-    const res = await tool.execute(
-      { action: "forget", category: "person", entity: "alice", key: "city" },
-      ctx(),
-    );
+    const res = await tool.execute({ action: "forget", category: "person", entity: "alice", key: "city" }, ctx());
     expect(res.success).toBe(false);
     expect(res.error).toMatch(/delete is not supported/);
   });

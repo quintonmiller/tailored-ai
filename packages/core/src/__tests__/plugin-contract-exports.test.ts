@@ -10,6 +10,12 @@ import { describe, expect, it } from "vitest";
 import type {
   ChannelFactory,
   EmbeddingFactory,
+  MemoryBackend,
+  MemoryBackendFactory,
+  MemoryContent,
+  MemoryFragment,
+  MemoryHint,
+  MemoryQueryContext,
   ProviderFactory,
   ProviderFactoryResult,
   TaskBackendFactory,
@@ -20,12 +26,6 @@ import type {
   ToolResult,
   UiProvider,
   UiProviderFactory,
-  MemoryBackend,
-  MemoryBackendFactory,
-  MemoryContent,
-  MemoryHint,
-  MemoryQueryContext,
-  MemoryFragment,
 } from "../index.js";
 import * as core from "../index.js";
 

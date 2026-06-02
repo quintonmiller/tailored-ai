@@ -1,11 +1,5 @@
 import { App, LogLevel } from "@slack/bolt";
-import type {
-  AgentRuntime,
-  Channel,
-  IncomingMessage,
-  OutboundNotifier,
-  ProjectRef,
-} from "@tailored-ai/core";
+import type { AgentRuntime, Channel, IncomingMessage, OutboundNotifier, ProjectRef } from "@tailored-ai/core";
 import { executeHooks, runAgentLoop } from "@tailored-ai/core";
 import type { SlackChannelConfig } from "./types.js";
 
@@ -150,11 +144,13 @@ export class SlackChannel implements Channel, OutboundNotifier {
         console.log(`[slack] Replied to ${user}: "${response.slice(0, 80)}"`);
       } catch (err) {
         console.error(`[slack] Error handling message from ${user}:`, (err as Error).message);
-        await client.chat.postMessage({
-          channel: channelId,
-          thread_ts: isDM ? undefined : message.ts,
-          text: "Sorry, I hit an error processing your message.",
-        }).catch(() => {});
+        await client.chat
+          .postMessage({
+            channel: channelId,
+            thread_ts: isDM ? undefined : message.ts,
+            text: "Sorry, I hit an error processing your message.",
+          })
+          .catch(() => {});
       } finally {
         this.processing.delete(userKey);
       }
@@ -209,23 +205,13 @@ export class SlackChannel implements Channel, OutboundNotifier {
     return ref;
   }
 
-  private async runAgent(
-    userKey: string,
-    content: string,
-    project: ProjectRef | null,
-  ): Promise<string | undefined> {
+  private async runAgent(userKey: string, content: string, project: ProjectRef | null): Promise<string | undefined> {
     const session = this.runtime.findOrCreateSession({ key: userKey, project });
     const hooks = this.runtime.resolveHooks({});
     const logPrefix = `[slack] [${userKey}]`;
 
     if (hooks.beforeRun.length > 0) {
-      const { skipped } = await executeHooks(
-        hooks.beforeRun,
-        this.runtime.getTools(),
-        {},
-        session.id,
-        logPrefix,
-      );
+      const { skipped } = await executeHooks(hooks.beforeRun, this.runtime.getTools(), {}, session.id, logPrefix);
       if (skipped) return undefined;
     }
 
@@ -238,13 +224,7 @@ export class SlackChannel implements Channel, OutboundNotifier {
     });
 
     if (hooks.afterRun.length > 0) {
-      await executeHooks(
-        hooks.afterRun,
-        this.runtime.getTools(),
-        { response: response ?? "" },
-        session.id,
-        logPrefix,
-      );
+      await executeHooks(hooks.afterRun, this.runtime.getTools(), { response: response ?? "" }, session.id, logPrefix);
     }
     return response;
   }

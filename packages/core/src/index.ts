@@ -105,23 +105,6 @@ import "./channels/discord-builtin.js";
 // memory backend factory. Same pattern as discord-builtin.
 import "./memory/builtin.js";
 
-export type {
-  ListQuery as MemoryListQuery,
-  MemoryBackend,
-  MemoryContent,
-  MemoryFragment,
-  MemoryHint,
-  PreludeContext as MemoryPreludeContext,
-  QueryContext as MemoryQueryContext,
-} from "./memory/interface.js";
-export {
-  memoryBackendFactoryRegistry,
-  type MemoryBackendFactory,
-  registerMemoryBackendFactory,
-  resolveMemoryBackend,
-} from "./memory/registry.js";
-export { SqliteMemoryBackend } from "./memory/sqlite-backend.js";
-
 export {
   type ChunkOptions,
   chunkText,
@@ -370,10 +353,25 @@ export type {
   SkipReason as ExploratorySkipReason,
 } from "./exploratory/worker.js";
 export { ExploratoryWorker } from "./exploratory/worker.js";
+export { type LoadedExternalAgent, loadExternalAgents } from "./external-agents.js";
 export type { CreateToolsOptions } from "./factories.js";
 export { createEmbedder, createMetaTools, createProvider, createTools } from "./factories.js";
-export { type LoadedExternalAgent, loadExternalAgents } from "./external-agents.js";
-export { type LoadedPlugin, type LoadPluginsOptions, loadPlugins } from "./plugins.js";
+export type {
+  ListQuery as MemoryListQuery,
+  MemoryBackend,
+  MemoryContent,
+  MemoryFragment,
+  MemoryHint,
+  PreludeContext as MemoryPreludeContext,
+  QueryContext as MemoryQueryContext,
+} from "./memory/interface.js";
+export {
+  type MemoryBackendFactory,
+  memoryBackendFactoryRegistry,
+  registerMemoryBackendFactory,
+  resolveMemoryBackend,
+} from "./memory/registry.js";
+export { SqliteMemoryBackend } from "./memory/sqlite-backend.js";
 export {
   type ChannelRegistryView,
   createPluginContext,
@@ -386,6 +384,7 @@ export {
   type ToolRegistryView,
   type UiProviderRegistryView,
 } from "./plugin-context.js";
+export { type LoadedPlugin, type LoadPluginsOptions, loadPlugins } from "./plugins.js";
 export type {
   ProjectContext,
   ProjectFile,

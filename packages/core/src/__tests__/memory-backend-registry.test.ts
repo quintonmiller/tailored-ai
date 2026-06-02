@@ -12,10 +12,7 @@ import "../memory/builtin.js";
 import { SqliteMemoryBackend } from "../memory/sqlite-backend.js";
 import type { AgentRuntime } from "../runtime.js";
 
-function fakeRuntime(
-  memory: { backend?: Record<string, unknown> } = {},
-  db?: Database.Database,
-): AgentRuntime {
+function fakeRuntime(memory: { backend?: Record<string, unknown> } = {}, db?: Database.Database): AgentRuntime {
   const cfg = { memory } as unknown as AgentConfig;
   return { getConfig: () => cfg, db } as unknown as AgentRuntime;
 }

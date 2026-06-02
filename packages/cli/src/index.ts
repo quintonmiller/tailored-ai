@@ -11,6 +11,7 @@ import {
   CronScheduler,
   createEmbedder,
   createMetaTools,
+  createPluginContext,
   createProvider,
   createTools,
   createWorkflowEngine,
@@ -20,7 +21,6 @@ import {
   executeHooks,
   initDatabase,
   listSessions,
-  createPluginContext,
   loadConfig,
   loadExternalAgents,
   loadPlugins,
@@ -43,8 +43,8 @@ import { runPluginCommand } from "./commands/plugin.js";
 import { runProjectCommand } from "./commands/project.js";
 import { runResourcesCommand } from "./commands/resources.js";
 import { runVaultCommand } from "./commands/vault.js";
-import { PluginManager } from "./plugins/manager.js";
 import { isSetupDone, resolveHomeDir, resolveHomePaths } from "./home.js";
+import { PluginManager } from "./plugins/manager.js";
 import { runSetupWizard, type SetupMode } from "./setup.js";
 
 let _discordChannel: import("@tailored-ai/core").DiscordChannel | undefined;

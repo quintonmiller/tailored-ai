@@ -1,48 +1,31 @@
 import type Database from "better-sqlite3";
 import {
+  countChunks,
+  createChunk,
+  deleteChunksBySource,
+  getChunk,
+  type MemoryChunk,
+  semanticSearch,
+} from "../db/chunk-queries.js";
+import {
   CORE_MEMORY_SECTIONS,
-  type CoreMemorySection,
   type CoreMemoryScope,
+  type CoreMemorySection,
   clearCoreMemorySection,
   getCoreMemory,
   getCoreMemorySection,
   renderCoreMemory,
   setCoreMemory,
 } from "../db/core-memory-queries.js";
+import { deleteFact, type Fact, type FactQuery, findFact, getFact, listFacts, upsertFact } from "../db/fact-queries.js";
 import {
-  type Fact,
-  type FactQuery,
-  deleteFact,
-  findFact,
-  getFact,
-  listFacts,
-  upsertFact,
-} from "../db/fact-queries.js";
-import {
-  chunkSnippet as renderChunkSnippet,
-  factLabel,
-  factSnippet,
-  noteSnippet,
-  scoreFact,
-  scoreNote,
-  tokenize,
-} from "./scoring.js";
-import {
-  type MemoryChunk,
-  countChunks,
-  createChunk,
-  deleteChunksBySource,
-  getChunk,
-  semanticSearch,
-} from "../db/chunk-queries.js";
-import {
-  type Note,
-  type NoteQuery,
   createNote,
   deleteNote,
   getNote,
   listNotes,
   listPinnedNotes,
+  type Note,
+  type NoteQuery,
 } from "../db/note-queries.js";
 import type {
   ListQuery,
@@ -53,6 +36,15 @@ import type {
   PreludeContext,
   QueryContext,
 } from "./interface.js";
+import {
+  factLabel,
+  factSnippet,
+  noteSnippet,
+  chunkSnippet as renderChunkSnippet,
+  scoreFact,
+  scoreNote,
+  tokenize,
+} from "./scoring.js";
 
 /**
  * Verb-shaped adapter over the existing SQLite `db/*-queries.ts` modules.
@@ -108,9 +100,11 @@ export class SqliteMemoryBackend implements MemoryBackend {
     }
 
     if (kind === "chunk") {
-      const md = (content.structured && typeof content.structured === "object"
-        ? (content.structured as Record<string, unknown>)
-        : {}) as Record<string, unknown>;
+      const md = (
+        content.structured && typeof content.structured === "object"
+          ? (content.structured as Record<string, unknown>)
+          : {}
+      ) as Record<string, unknown>;
       const chunk = createChunk(this.db, {
         source: hint.sourceUri ?? str(md.source) ?? "memory",
         content: content.text,
@@ -179,14 +173,12 @@ export class SqliteMemoryBackend implements MemoryBackend {
       const pinned = listPinnedNotes(this.db, { project_id: projectId, limit });
       for (const note of pinned) fragments.push(noteFragment(note, { pinned: true }));
     }
-    const pinnedIds = new Set(
-      fragments.filter((f) => f.metadata?.pinned).map((f) => f.id ?? ""),
-    );
+    const pinnedIds = new Set(fragments.filter((f) => f.metadata?.pinned).map((f) => f.id ?? ""));
 
     // Keyword + structured recall over notes and facts. Mirrors the old
     // recallQuery scoring; ranking now lives behind the backend so plugin
     // backends can replace it entirely.
-    let keywordHits: Array<MemoryFragment & { _score: number; _createdAt: string }> = [];
+    const keywordHits: Array<MemoryFragment & { _score: number; _createdAt: string }> = [];
     if (context.freeText) {
       const terms = tokenize(context.freeText);
       if (terms.length > 0) {
@@ -225,7 +217,7 @@ export class SqliteMemoryBackend implements MemoryBackend {
     }
 
     // Semantic tier — only when the caller has already embedded.
-    let semanticHits: Array<MemoryFragment & { _score: number; _createdAt: string }> = [];
+    const semanticHits: Array<MemoryFragment & { _score: number; _createdAt: string }> = [];
     if (context.vector) {
       const minScore = context.minImportance ?? 0;
       const hits = semanticSearch(this.db, context.vector, { projectId, limit, minScore });
@@ -280,11 +272,7 @@ export class SqliteMemoryBackend implements MemoryBackend {
       case "prelude": {
         const [agent, section, project_id] = parsed.rest.split("/");
         if (!agent || !section) return false;
-        return clearCoreMemorySection(
-          this.db,
-          { agent, project_id: project_id ?? null },
-          section as CoreMemorySection,
-        );
+        return clearCoreMemorySection(this.db, { agent, project_id: project_id ?? null }, section as CoreMemorySection);
       }
       default:
         return false;
@@ -320,7 +308,11 @@ export class SqliteMemoryBackend implements MemoryBackend {
             ? "SELECT * FROM memory_chunks WHERE project_id IS NULL ORDER BY created_at DESC LIMIT ? OFFSET ?"
             : "SELECT * FROM memory_chunks WHERE project_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
         )
-        .all(...(projectId === null ? [limit, offset] : [projectId, limit, offset])) as Array<{ id: string; content: string; source: string }>;
+        .all(...(projectId === null ? [limit, offset] : [projectId, limit, offset])) as Array<{
+        id: string;
+        content: string;
+        source: string;
+      }>;
       return rows.map((r) => ({
         text: r.content,
         id: `chunk:${r.id}`,
