@@ -1,11 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentConfig } from "../config.js";
 import type { AgentRuntime } from "../runtime.js";
-import {
-  registerUiProviderFactory,
-  resolveUiProvider,
-  uiProviderFactoryRegistry,
-} from "../ui/registry.js";
+import { registerUiProviderFactory, resolveUiProvider, uiProviderFactoryRegistry } from "../ui/registry.js";
 
 function fakeRuntime(config: Partial<AgentConfig["server"]> & Record<string, unknown> = {}): AgentRuntime {
   const cfg = {

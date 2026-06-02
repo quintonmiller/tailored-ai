@@ -8,10 +8,10 @@
  * RecallHit[].
  */
 
+import type Database from "better-sqlite3";
+import { recordNoteHit } from "../agent/memory-promotion.js";
 import type { MemoryBackend, MemoryFragment } from "../memory/interface.js";
 import type { EmbeddingProvider } from "../providers/embedding.js";
-import { recordNoteHit } from "../agent/memory-promotion.js";
-import type Database from "better-sqlite3";
 
 export type Tier = "short" | "long";
 
@@ -39,7 +39,7 @@ export interface RecallQueryOptions {
   promoteThreshold?: number;
 }
 
-export { tokenize, coverage } from "../memory/scoring.js";
+export { coverage, tokenize } from "../memory/scoring.js";
 
 /**
  * Async recall. Calls `backend.query` with the given context and

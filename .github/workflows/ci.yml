@@ -30,6 +30,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Lint
+        run: pnpm run lint
+
       - name: Build
         run: pnpm run build
 
@@ -38,3 +41,9 @@ jobs:
 
       - name: Test
         run: pnpm run test
+
+      - name: Pack-check publishable packages
+        # Mirrors the release.yml pack-check (#56). Catches a missing dist
+        # output (e.g. when the root build script forgets a package)
+        # before publish-time.
+        run: pnpm run pack:check

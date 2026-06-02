@@ -206,7 +206,11 @@ export class RecallTool implements Tool {
     return { success: true, output: `promoted ${id} → ${result.chunkCount} chunks` };
   }
 
-  private async note(args: Record<string, unknown>, context: ToolContext, projectId: string | null): Promise<ToolResult> {
+  private async note(
+    args: Record<string, unknown>,
+    context: ToolContext,
+    projectId: string | null,
+  ): Promise<ToolResult> {
     const content = typeof args.content === "string" ? args.content.trim() : "";
     if (!content) {
       return { success: false, output: "", error: "content is required for action=note" };
@@ -303,7 +307,11 @@ export class RecallTool implements Tool {
     return { success: true, output: `archived ${id} — "${reason}"` };
   }
 
-  private async list(args: Record<string, unknown>, _context: ToolContext, projectId: string | null): Promise<ToolResult> {
+  private async list(
+    args: Record<string, unknown>,
+    _context: ToolContext,
+    projectId: string | null,
+  ): Promise<ToolResult> {
     const limit = typeof args.limit === "number" ? args.limit : 10;
     const tag = typeof args.tag === "string" && args.tag.length > 0 ? args.tag : undefined;
     const backend = await this.getMemoryBackend!();

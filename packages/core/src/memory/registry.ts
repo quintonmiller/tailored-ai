@@ -43,6 +43,6 @@ export async function resolveMemoryBackend(runtime: AgentRuntime): Promise<Memor
   }
 
   const slice = backendCfg[id];
-  const cfg = (slice && typeof slice === "object" && !Array.isArray(slice) ? (slice as Record<string, unknown>) : {});
+  const cfg = slice && typeof slice === "object" && !Array.isArray(slice) ? (slice as Record<string, unknown>) : {};
   return factory(runtime, cfg);
 }

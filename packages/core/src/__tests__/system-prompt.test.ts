@@ -149,10 +149,7 @@ describe("system-prompt composer", () => {
     });
 
     it("per-agent order replaces global order (no merge)", () => {
-      const out = mergeSystemPromptOverrides(
-        { order: ["base", "instructions"] },
-        { order: ["recall_memory", "base"] },
-      );
+      const out = mergeSystemPromptOverrides({ order: ["base", "instructions"] }, { order: ["recall_memory", "base"] });
       expect(out?.order).toEqual(["recall_memory", "base"]);
     });
 
@@ -165,10 +162,7 @@ describe("system-prompt composer", () => {
     });
 
     it("global custom shines through when per-agent has no custom", () => {
-      const out = mergeSystemPromptOverrides(
-        { custom: [{ name: "g_layer", content: "g" }] },
-        { base: "a" },
-      );
+      const out = mergeSystemPromptOverrides({ custom: [{ name: "g_layer", content: "g" }] }, { base: "a" });
       expect(out?.custom).toEqual([{ name: "g_layer", content: "g" }]);
     });
   });

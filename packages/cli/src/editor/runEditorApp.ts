@@ -1,10 +1,10 @@
-import { render } from "ink";
 import { existsSync, readFileSync } from "node:fs";
+import { render } from "ink";
 import { createElement } from "react";
 import { App } from "./App.js";
 import { ConflictPrompt } from "./ConflictPrompt.js";
 import { HomeDirPrompt } from "./HomeDirPrompt.js";
-import { defaultDraft, type DraftConfig } from "./types.js";
+import { type DraftConfig, defaultDraft } from "./types.js";
 
 export type EditorMode = "init" | "edit";
 

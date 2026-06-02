@@ -102,9 +102,7 @@ export function runChannelContractSuite<C extends Channel>(opts: ChannelContract
         await channel.send("contract-target", "hello from contract");
         const sent = harness.drainSent!(channel);
         expect(sent.length).toBeGreaterThan(0);
-        const match = sent.find(
-          (m) => m.target === "contract-target" && m.content.includes("hello from contract"),
-        );
+        const match = sent.find((m) => m.target === "contract-target" && m.content.includes("hello from contract"));
         expect(match, `expected drainSent() to contain a write to "contract-target"`).toBeDefined();
         await channel.disconnect();
       });

@@ -194,9 +194,7 @@ describe("recallQuery trackRefs", () => {
     createNote(db, { content: "alice info", project_id: "p" });
     // Re-running shouldn't error; we're just checking nothing crashes when
     // trackHits encounters a fact source label.
-    await expect(
-      recallQuery(backend, { query: "alice", projectId: "p", trackRefs: true }, db),
-    ).resolves.not.toThrow();
+    await expect(recallQuery(backend, { query: "alice", projectId: "p", trackRefs: true }, db)).resolves.not.toThrow();
   });
 });
 

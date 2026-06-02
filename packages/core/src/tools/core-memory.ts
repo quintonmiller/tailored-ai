@@ -59,10 +59,7 @@ export class CoreMemoryTool implements Tool {
 
   private getBackend: () => Promise<MemoryBackend>;
 
-  constructor(
-    db: Database.Database,
-    opts: { getMemoryBackend?: () => Promise<MemoryBackend> } = {},
-  ) {
+  constructor(db: Database.Database, opts: { getMemoryBackend?: () => Promise<MemoryBackend> } = {}) {
     if (opts.getMemoryBackend) {
       this.getBackend = opts.getMemoryBackend;
     } else {
@@ -105,11 +102,7 @@ export class CoreMemoryTool implements Tool {
     }
   }
 
-  private async read(
-    backend: MemoryBackend,
-    scope: string,
-    section?: CoreMemorySection,
-  ): Promise<ToolResult> {
+  private async read(backend: MemoryBackend, scope: string, section?: CoreMemorySection): Promise<ToolResult> {
     if (section) {
       if (!(CORE_MEMORY_SECTIONS as string[]).includes(section)) {
         return { success: false, output: "", error: `Unknown section: ${section}` };
