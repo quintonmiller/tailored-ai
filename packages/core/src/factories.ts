@@ -85,7 +85,13 @@ export function createTools(
     tools.push(new MemoryTool(globalDir));
   }
   if (config.tools.exec?.enabled !== false) {
-    tools.push(new ExecTool(config.tools.exec?.allowedCommands));
+    // Scratch lives under the configured TAI home so a per-user override or
+    // a sandbox-injected $TAI_HOME picks it up. Falls back to ~/.tai inside
+    // ExecTool when neither is set. (#60)
+    const scratchDir = process.env.TAI_HOME
+      ? resolve(process.env.TAI_HOME, "exec-outputs")
+      : undefined;
+    tools.push(new ExecTool(config.tools.exec?.allowedCommands, undefined, scratchDir));
   }
   if (config.tools.read?.enabled !== false) {
     tools.push(new ReadTool(config.tools.read?.allowedPaths));
