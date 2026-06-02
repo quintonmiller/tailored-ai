@@ -55,6 +55,40 @@ describe("ExecTool output truncation", () => {
     expect(full).toContain("line 200 ");
   }, 15_000);
 
+  it("honors a custom scratchDir (regression for #60)", async () => {
+    const scratchRoot = join(homedir(), ".tai-test-scratch");
+    if (existsSync(scratchRoot)) rmSync(scratchRoot, { recursive: true, force: true });
+    try {
+      const tool = new ExecTool(undefined, undefined, scratchRoot);
+      const result = await tool.execute(
+        { command: `seq 1 200 | sed 's/^/line /; s/$/ padding padding padding padding padding/'` },
+        makeCtx(),
+      );
+      expect(result.success).toBe(true);
+      const m = result.output.match(/Full output: ([^\]\s]+)/);
+      expect(m).not.toBeNull();
+      expect(m![1].startsWith(scratchRoot)).toBe(true);
+      expect(existsSync(m![1])).toBe(true);
+    } finally {
+      if (existsSync(scratchRoot)) rmSync(scratchRoot, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("still settles the tool promise when scratch persistence fails (regression for #60)", async () => {
+    // Point at a path we can't create — /dev/null/anything → ENOTDIR.
+    const tool = new ExecTool(undefined, undefined, "/dev/null/forbidden");
+    const result = await tool.execute(
+      { command: `seq 1 200 | sed 's/^/line /; s/$/ padding padding padding padding padding/'` },
+      makeCtx(),
+    );
+    // Without the fix, the inner write throws and the outer Promise hangs
+    // until vitest's test timeout. With the fix, we get a clean truncated
+    // result with a "could not be persisted" warning.
+    expect(result.success).toBe(true);
+    expect(result.output).toMatch(/truncated/);
+    expect(result.output).toMatch(/Full output could not be persisted/);
+  }, 15_000);
+
   it("keeps head and tail in the visible output", async () => {
     const tool = new ExecTool();
     // 300 lines of padded text — comfortably past the 4000-byte threshold
