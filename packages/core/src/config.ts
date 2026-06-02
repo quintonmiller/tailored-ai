@@ -599,7 +599,7 @@ export interface AgentConfig {
 const DEFAULT_CONFIG: AgentConfig = {
   server: {
     port: 3000,
-    host: "0.0.0.0",
+    host: "127.0.0.1",
   },
   database: {
     path: "./agent.db",
@@ -987,10 +987,11 @@ export function validateConfig(config: AgentConfig): string[] {
     }
   }
 
-  // Network exposure check. The default host is "0.0.0.0" so the dashboard
-  // is reachable from anywhere on the LAN. If no auth is configured, every
-  // session, chat history, and tool output is readable by anyone who can
-  // route to the port. Flag loud at startup.
+  // Network exposure check. The default host is "127.0.0.1" — loopback only.
+  // When a user opts in to a non-loopback bind (e.g. 0.0.0.0 to reach the
+  // dashboard from another machine), every session, chat history, and tool
+  // output becomes readable by anyone on the network unless auth is set.
+  // Flag loud at startup.
   const host = config.server.host;
   const looksLoopback = host === "127.0.0.1" || host === "localhost" || host === "::1";
   const hasAuth = !!(config.server.authToken || config.server.proxyAuth?.enabled);

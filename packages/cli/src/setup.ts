@@ -268,7 +268,10 @@ export function renderNewConfig(d: DraftConfig): string {
 
 server:
   port: 3000
-  host: 0.0.0.0${uiBlock}
+  # Loopback by default — the dashboard and HTTP API are unauthenticated unless
+  # server.authToken or server.proxyAuth is set. To expose beyond localhost,
+  # set host: 0.0.0.0 AND configure auth.
+  host: 127.0.0.1${uiBlock}
 
 database:
   path: ./agent.db
