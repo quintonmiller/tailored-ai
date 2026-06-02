@@ -302,6 +302,28 @@ describe("validateConfig — online (exploratory) agents", () => {
   });
 });
 
+describe("loadConfig — default host", () => {
+  let dir: string;
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "tai-config-host-"));
+  });
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("defaults server.host to 127.0.0.1 when no config file exists", () => {
+    const cfg = loadConfig(join(dir, "missing.yaml"));
+    expect(cfg.server.host).toBe("127.0.0.1");
+  });
+
+  it("respects an explicit host: 0.0.0.0 in the config file", () => {
+    const path = join(dir, "exposed.yaml");
+    writeFileSync(path, "server:\n  port: 3000\n  host: 0.0.0.0\n");
+    const cfg = loadConfig(path);
+    expect(cfg.server.host).toBe("0.0.0.0");
+  });
+});
+
 describe("validateConfig — server exposure warning", () => {
   it("warns when host is 0.0.0.0 without auth", () => {
     const c = baseConfig();
