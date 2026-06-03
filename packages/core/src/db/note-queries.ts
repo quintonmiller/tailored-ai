@@ -143,11 +143,13 @@ export function listNotes(db: Database.Database, q: NoteQuery = {}): Note[] {
 
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
   const limit = q.limit && q.limit > 0 ? `LIMIT ${Math.floor(q.limit)}` : "";
-  // Tiebreak on id DESC — SQLite's `datetime('now')` is second-precision so
-  // bursts of notes written in the same second otherwise return in non-
-  // deterministic order. The id is monotonically random; ordering by it
-  // doesn't strictly match insertion order but it's stable within a query.
-  const sql = `SELECT * FROM notes ${where} ORDER BY created_at DESC, id DESC ${limit}`;
+  // SQLite's `datetime('now')` is second-precision, so bursts of notes written
+  // in the same second tie on `created_at`. The previous tiebreak — `id DESC`,
+  // where the id is `note_${randomHex}` — is *not* monotonic in insertion
+  // order, so two notes written within the same second came back in arbitrary
+  // order (#63). `rowid` is SQLite's implicit monotonic insertion counter and
+  // gives us deterministic newest-first ordering at sub-second precision.
+  const sql = `SELECT * FROM notes ${where} ORDER BY created_at DESC, rowid DESC ${limit}`;
   return (db.prepare(sql).all(...params) as NoteRow[]).map(rowToNote);
 }
 
