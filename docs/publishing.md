@@ -201,7 +201,7 @@ Releases page if you also want to remove the tag.
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Release workflow runs but version PR never appears | `GITHUB_TOKEN` lacks `pull-requests: write` | `permissions:` block in `release.yml` already grants it — check repo Settings → Actions → Workflow permissions allows the actions to create PRs |
-| Version PR exists but CI doesn't run on it | GitHub blocks workflow triggers from PRs opened by `GITHUB_TOKEN` | Settings → Actions → "Allow GitHub Actions to create and approve pull requests" + push an empty commit to retrigger |
+| Version PR exists but CI doesn't run on it (build-and-test stuck on "Expected — Waiting for status to be reported") | `actions/checkout` not using `RELEASE_PAT`, so the changesets action's `git push` to `changeset-release/main` is committed by `github-actions[bot]` and GitHub suppresses workflow triggers on bot-sourced events | Verify `actions/checkout` in `release.yml` has `token: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}`. As a one-shot unblock, push an empty commit to `changeset-release/main` from a real user account: `git checkout changeset-release/main && git commit --allow-empty -m 'nudge ci' && git push` |
 | Publish step fails: `OTP required` | npm token has full-write 2FA enforced | Regenerate as automation token with "Authorization only" 2FA, or as a granular token (which never prompts for OTP) |
 | Publish step fails: `403 Forbidden` | npm token doesn't own `@tailored-ai` scope | Use a token from the scope owner's account |
 | Auto-merge workflow fails: `auto-merge is not allowed` | Repo auto-merge not enabled | Settings → General → "Allow auto-merge" |
