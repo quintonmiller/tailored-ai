@@ -44,6 +44,12 @@ export interface CreateToolsOptions {
   db?: import("better-sqlite3").Database;
   /** Override the task backend. Defaults to `createTaskBackend(config, db)` when `db` is provided. */
   taskBackend?: TaskBackend;
+  /** Resolve the task backend per project at call time. When set, takes
+   *  precedence over `taskBackend` and enables per-project routing
+   *  (different repos / DBs for different projects). The runtime wires
+   *  this so a single agent invocation can file tasks across multiple
+   *  project-scoped trackers. */
+  taskBackendResolver?: import("./tools/tasks.js").TaskBackendResolver;
   /** Optional embedding provider getter for semantic recall. */
   getEmbedder?: () => EmbeddingProvider | undefined;
   /** Memory backend accessor — when wired, the RecallTool's `query`
@@ -127,8 +133,13 @@ export function createTools(
   // not as a regular tool here. Identity maintenance is foundational —
   // every named agent gets it regardless of its `tools:` allowlist.
   if (config.tools.tasks?.enabled !== false) {
+    // Prefer the runtime-supplied resolver when present (multi-project
+    // routing). Fall back to a single backend for plain callers + tests.
+    const resolver = opts?.taskBackendResolver;
     const backend = opts?.taskBackend ?? (opts?.db ? createTaskBackend(config, opts.db) : undefined);
-    if (backend) {
+    if (resolver) {
+      tools.push(new TasksTool(resolver, opts?.db, opts?.notifyTaskEvent), new TaskQueryTool(resolver));
+    } else if (backend) {
       tools.push(new TasksTool(backend, opts?.db, opts?.notifyTaskEvent), new TaskQueryTool(backend));
     }
   }
