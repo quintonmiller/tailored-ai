@@ -766,7 +766,12 @@ export function mergeProjectOverlay(
   overlay: Record<string, unknown> | undefined | null,
 ): AgentConfig {
   if (!overlay || Object.keys(overlay).length === 0) return base;
-  return deepMerge(base as unknown as Record<string, unknown>, overlay) as unknown as AgentConfig;
+  // Interpolate ${ENV} references in the overlay before merging. The base
+  // config was interpolated by loadConfig; without this, secret tokens in
+  // `.tai.yaml` (e.g. `tasks.github.token: ${GITHUB_PERSONAL_TOKEN}`) reach
+  // downstream consumers as literal `${VAR}` strings.
+  const interpolated = deepInterpolate(overlay) as Record<string, unknown>;
+  return deepMerge(base as unknown as Record<string, unknown>, interpolated) as unknown as AgentConfig;
 }
 
 /** Validate config and return warnings. Does not throw — issues are advisory. */
