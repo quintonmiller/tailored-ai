@@ -33,9 +33,13 @@ permissions:
 
 jobs:
   enable-auto-merge:
+    # Filter on the canonical changesets branch alone — `changeset-release/main`
+    # is only ever written to by the changesets action. Author check would
+    # break the workflow when the action is configured with RELEASE_PAT (PR
+    # author becomes the PAT owner) instead of GITHUB_TOKEN (author is
+    # github-actions[bot]).
     if: >-
       github.event.pull_request.head.ref == 'changeset-release/main' &&
-      github.event.pull_request.user.login == 'github-actions[bot]' &&
       github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 5
