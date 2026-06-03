@@ -37,6 +37,29 @@ const els = {
   historyStatus: $("#history-status"),
   historyList: $("#history-list"),
   historyMore: $("#history-more"),
+  decisionsCard: $("#decisions-card"),
+  decisionsStatus: $("#decisions-status"),
+  decisionsCounts: $("#decisions-counts"),
+  decisionsCapGroup: $("#decisions-cap-group"),
+  decisionsCapList: $("#decisions-cap-list"),
+  decisionsReviewGroup: $("#decisions-review-group"),
+  decisionsReviewList: $("#decisions-review-list"),
+  decisionsEmpty: $("#decisions-empty"),
+  captureCard: $("#capture-card"),
+  captureForm: $("#capture-form"),
+  captureTitle: $("#capture-title"),
+  captureTags: $("#capture-tags"),
+  captureSubmit: $("#capture-submit"),
+  captureStatus: $("#capture-status"),
+  activityCard: $("#activity-card"),
+  activityStatus: $("#activity-status"),
+  activityList: $("#activity-list"),
+  chatCard: $("#chat-card"),
+  chatLog: $("#chat-log"),
+  chatForm: $("#chat-form"),
+  chatInput: $("#chat-input"),
+  chatSend: $("#chat-send"),
+  chatStatus: $("#chat-status"),
 };
 
 // ---------- helpers ----------
@@ -616,5 +639,402 @@ document.addEventListener("visibilitychange", () => {
 
 // Kick the first load after the rest of init() has run.
 setTimeout(() => { void loadHistory(false); }, 500);
+
+// ---------- decisions (PWA-as-dashboard, Phase 1, issue #121) ----------
+
+let decisionsLoaded = false;
+
+async function fetchDecisions() {
+  const reg = await getRegistration();
+  const sub = reg ? await reg.pushManager.getSubscription() : null;
+  if (!sub) {
+    return { unsubscribed: true };
+  }
+  const r = await fetch("/pwa/decisions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ endpoint: sub.endpoint }),
+  });
+  if (r.status === 503) return { unconfigured: true };
+  if (r.status === 401) return { unsubscribed: true };
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+function renderDecisionRow(t) {
+  const li = document.createElement("li");
+  li.className = "decision-row";
+  li.dataset.taskId = t.id;
+  const days = typeof t.days_idle === "number" && t.days_idle >= 0 ? `${t.days_idle}d idle` : "";
+  li.innerHTML = `
+    <div class="decision-main">
+      <div class="decision-title">${escapeHtml(t.title)}</div>
+      <div class="decision-meta">${escapeHtml(t.id)}${days ? ` · ${escapeHtml(days)}` : ""}</div>
+    </div>
+    <div class="decision-actions">
+      <button class="dec-approve approve">Approve</button>
+      <button class="dec-reject reject">Reject</button>
+    </div>
+    <div class="decision-status muted" hidden></div>
+  `;
+  li.querySelector(".dec-approve").addEventListener("click", () => decideTask(li, t.id, "approve"));
+  li.querySelector(".dec-reject").addEventListener("click", () => decideTask(li, t.id, "reject"));
+  return li;
+}
+
+async function decideTask(li, taskId, decision) {
+  const reg = await getRegistration();
+  const sub = reg ? await reg.pushManager.getSubscription() : null;
+  if (!sub) {
+    setRowStatus(li, "Enable notifications first.");
+    return;
+  }
+  const approveBtn = li.querySelector(".dec-approve");
+  const rejectBtn = li.querySelector(".dec-reject");
+  approveBtn.disabled = rejectBtn.disabled = true;
+  setRowStatus(li, decision === "approve" ? "Approving…" : "Rejecting…");
+  try {
+    const r = await fetch(`/pwa/tasks/${encodeURIComponent(taskId)}/decide`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ endpoint: sub.endpoint, decision }),
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.error || `HTTP ${r.status}`);
+    }
+    // Fade row out, then reload counts so the badge stays honest.
+    li.style.transition = "opacity 0.3s";
+    li.style.opacity = "0";
+    setTimeout(() => {
+      li.remove();
+      void loadDecisions();
+    }, 320);
+  } catch (err) {
+    setRowStatus(li, `Failed: ${err && err.message ? err.message : "error"}`);
+    approveBtn.disabled = rejectBtn.disabled = false;
+  }
+}
+
+function setRowStatus(li, text) {
+  const s = li.querySelector(".decision-status");
+  s.textContent = text;
+  s.hidden = false;
+}
+
+async function loadDecisions() {
+  els.decisionsStatus.textContent = "Loading…";
+  els.decisionsStatus.hidden = false;
+  els.decisionsEmpty.hidden = true;
+  els.decisionsCapGroup.hidden = true;
+  els.decisionsReviewGroup.hidden = true;
+  els.decisionsCapList.innerHTML = "";
+  els.decisionsReviewList.innerHTML = "";
+  try {
+    const j = await fetchDecisions();
+    if (j.unconfigured) {
+      // Hide card entirely when TAI proxy isn't wired.
+      els.decisionsCard.hidden = true;
+      return;
+    }
+    els.decisionsCard.hidden = false;
+    if (j.unsubscribed) {
+      els.decisionsStatus.textContent = "Enable notifications to see decisions.";
+      return;
+    }
+    const cap = j.capability_proposals || [];
+    const review = j.needs_review || [];
+    decisionsLoaded = true;
+    els.decisionsCounts.textContent = `(${cap.length + review.length})`;
+    if (cap.length === 0 && review.length === 0) {
+      els.decisionsStatus.hidden = true;
+      els.decisionsEmpty.hidden = false;
+      return;
+    }
+    els.decisionsStatus.hidden = true;
+    if (cap.length > 0) {
+      els.decisionsCapGroup.hidden = false;
+      for (const t of cap) els.decisionsCapList.appendChild(renderDecisionRow(t));
+    }
+    if (review.length > 0) {
+      els.decisionsReviewGroup.hidden = false;
+      for (const t of review) els.decisionsReviewList.appendChild(renderDecisionRow(t));
+    }
+  } catch (err) {
+    els.decisionsCard.hidden = false;
+    els.decisionsStatus.textContent = `Couldn't load decisions: ${err && err.message ? err.message : "error"}`;
+    els.decisionsStatus.hidden = false;
+  }
+}
+
+// Refresh when foregrounded; initial kick alongside history.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && decisionsLoaded) {
+    void loadDecisions();
+  }
+});
+setTimeout(() => { void loadDecisions(); }, 600);
+
+// ---------- quick capture (PWA-as-dashboard, Phase 5, issue #121) ----------
+
+async function getActiveEndpoint() {
+  const reg = await getRegistration();
+  const sub = reg ? await reg.pushManager.getSubscription() : null;
+  return sub ? sub.endpoint : null;
+}
+
+function setCaptureStatus(text, ok) {
+  els.captureStatus.textContent = text;
+  els.captureStatus.hidden = !text;
+  els.captureStatus.className = ok ? "ok" : "muted";
+}
+
+els.captureForm.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const title = els.captureTitle.value.trim();
+  if (!title) return;
+  const tags = els.captureTags.value
+    .split(",")
+    .map((t) => t.trim())
+    .filter(Boolean);
+
+  const endpoint = await getActiveEndpoint();
+  if (!endpoint) {
+    setCaptureStatus("Enable notifications first.", false);
+    return;
+  }
+
+  els.captureSubmit.disabled = true;
+  setCaptureStatus("Filing…", false);
+  try {
+    const r = await fetch("/pwa/tasks/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ endpoint, title, tags }),
+    });
+    if (r.status === 503) {
+      els.captureCard.hidden = true;
+      return;
+    }
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.error || `HTTP ${r.status}`);
+    }
+    const j = await r.json();
+    setCaptureStatus(`✓ Filed ${j.id || ""}`.trim(), true);
+    els.captureTitle.value = "";
+    els.captureTags.value = "";
+    // Activity feed will pick this up on its next refresh.
+    setTimeout(() => void loadActivity(), 400);
+  } catch (err) {
+    setCaptureStatus(`Failed: ${err && err.message ? err.message : "error"}`, false);
+  } finally {
+    els.captureSubmit.disabled = false;
+  }
+});
+
+// Surface the capture card whenever the proxy is configured. We use the
+// /pwa/decisions probe to decide that — same 503 path. Card shows by
+// default; if the probe says unconfigured, both cards stay hidden.
+function showCaptureIfProxyOk() {
+  // decisions-card hidden === proxy unconfigured. Mirror that here.
+  els.captureCard.hidden = els.decisionsCard.hidden;
+}
+
+// ---------- activity feed (PWA-as-dashboard, Phase 3, issue #121) ----------
+
+let activityLoaded = false;
+
+function fmtTs(iso) {
+  try {
+    const d = new Date(iso);
+    const now = Date.now();
+    const diff = (now - d.getTime()) / 1000;
+    if (diff < 60) return "just now";
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    if (diff < 86400 * 7) return `${Math.floor(diff / 86400)}d ago`;
+    return d.toISOString().slice(0, 10);
+  } catch {
+    return iso || "";
+  }
+}
+
+function renderActivityItem(it) {
+  const li = document.createElement("li");
+  li.className = `activity-item activity-${it.kind}`;
+  if (it.kind === "task_done") {
+    li.innerHTML = `
+      <div class="activity-meta">${escapeHtml(fmtTs(it.timestamp))} · ✓ task done</div>
+      <div class="activity-content">${escapeHtml(it.title)}</div>
+    `;
+  } else {
+    const agent = it.agent ? `· ${escapeHtml(it.agent)}` : "";
+    const tags = (it.tags || []).length ? ` <span class="activity-tags">${escapeHtml((it.tags || []).join(", "))}</span>` : "";
+    li.innerHTML = `
+      <div class="activity-meta">${escapeHtml(fmtTs(it.timestamp))} ${agent}${tags}</div>
+      <div class="activity-content">${escapeHtml(it.content)}</div>
+    `;
+  }
+  return li;
+}
+
+async function loadActivity() {
+  const endpoint = await getActiveEndpoint();
+  if (!endpoint) {
+    els.activityCard.hidden = false;
+    els.activityStatus.textContent = "Enable notifications to see recent activity.";
+    els.activityStatus.hidden = false;
+    return;
+  }
+  els.activityStatus.textContent = "Loading…";
+  els.activityStatus.hidden = false;
+  els.activityList.innerHTML = "";
+  try {
+    const r = await fetch("/pwa/activity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ endpoint }),
+    });
+    if (r.status === 503) {
+      els.activityCard.hidden = true;
+      return;
+    }
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = await r.json();
+    activityLoaded = true;
+    els.activityCard.hidden = false;
+    const items = j.items || [];
+    if (items.length === 0) {
+      els.activityStatus.textContent = "Quiet — no recent agent activity.";
+      return;
+    }
+    els.activityStatus.hidden = true;
+    for (const it of items) els.activityList.appendChild(renderActivityItem(it));
+  } catch (err) {
+    els.activityStatus.textContent = `Couldn't load activity: ${err && err.message ? err.message : "error"}`;
+    els.activityStatus.hidden = false;
+  }
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && activityLoaded) {
+    void loadActivity();
+  }
+});
+setTimeout(() => {
+  showCaptureIfProxyOk();
+  void loadActivity();
+  void initChat();
+}, 800);
+
+// ---------- chat (PWA-as-dashboard, Phase 4, issue #121) ----------
+
+const CHAT_STORAGE_KEY = "tai-pwa-chat-v1";
+const CHAT_MAX_HISTORY = 50;
+
+function loadChatHistory() {
+  try {
+    const raw = localStorage.getItem(CHAT_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveChatHistory(items) {
+  try {
+    localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(items.slice(-CHAT_MAX_HISTORY)));
+  } catch {
+    try {
+      localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(items.slice(-CHAT_MAX_HISTORY / 2)));
+    } catch {
+      // give up; in-memory state stays correct
+    }
+  }
+}
+
+let chatItems = [];
+
+function renderChatLine(item) {
+  const div = document.createElement("div");
+  div.className = `chat-line chat-${item.role}`;
+  div.textContent = item.content;
+  return div;
+}
+
+function rerenderChatLog() {
+  els.chatLog.innerHTML = "";
+  for (const it of chatItems.slice(-20)) {
+    els.chatLog.appendChild(renderChatLine(it));
+  }
+  els.chatLog.scrollTop = els.chatLog.scrollHeight;
+}
+
+function setChatStatus(text) {
+  els.chatStatus.textContent = text;
+  els.chatStatus.hidden = !text;
+}
+
+async function initChat() {
+  // Mirror the decisions card's visibility — same proxy gate.
+  els.chatCard.hidden = els.decisionsCard.hidden;
+  chatItems = loadChatHistory();
+  rerenderChatLog();
+}
+
+els.chatForm.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const message = els.chatInput.value.trim();
+  if (!message) return;
+  const endpoint = await getActiveEndpoint();
+  if (!endpoint) {
+    setChatStatus("Enable notifications first.");
+    return;
+  }
+
+  chatItems.push({ role: "user", content: message, ts: Date.now() });
+  rerenderChatLog();
+  saveChatHistory(chatItems);
+  els.chatInput.value = "";
+  els.chatSend.disabled = true;
+  setChatStatus("Thinking…");
+
+  try {
+    const r = await fetch("/pwa/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ endpoint, message }),
+    });
+    if (r.status === 503) {
+      els.chatCard.hidden = true;
+      return;
+    }
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.error || `HTTP ${r.status}`);
+    }
+    const j = await r.json();
+    chatItems.push({
+      role: "agent",
+      content: j.content || "(no response)",
+      ts: Date.now(),
+    });
+    rerenderChatLog();
+    saveChatHistory(chatItems);
+    setChatStatus("");
+  } catch (err) {
+    chatItems.push({
+      role: "error",
+      content: `Failed: ${err && err.message ? err.message : "error"}`,
+      ts: Date.now(),
+    });
+    rerenderChatLog();
+    saveChatHistory(chatItems);
+    setChatStatus("");
+  } finally {
+    els.chatSend.disabled = false;
+  }
+});
 
 init();
