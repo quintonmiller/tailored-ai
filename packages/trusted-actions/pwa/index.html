@@ -52,6 +52,73 @@
         <ul id="pending-list"></ul>
       </section>
 
+      <!-- Phase 1 of the PWA-as-dashboard merge (issue #121). Hidden if
+           the executor reports the TAI proxy is unconfigured. -->
+      <section class="card" id="decisions-card" hidden>
+        <h2>Decisions <span id="decisions-counts" class="muted"></span></h2>
+        <p id="decisions-status" class="muted">Loading…</p>
+        <div id="decisions-cap-group" hidden>
+          <h3 class="card-sub">Capability proposals</h3>
+          <ul id="decisions-cap-list"></ul>
+        </div>
+        <div id="decisions-review-group" hidden>
+          <h3 class="card-sub">Needs review</h3>
+          <ul id="decisions-review-list"></ul>
+        </div>
+        <p id="decisions-empty" class="muted" hidden>Nothing waiting on you.</p>
+      </section>
+
+      <!-- Phase 4: lightweight chat with the default agent. -->
+      <section class="card" id="chat-card" hidden>
+        <h2>Chat</h2>
+        <div id="chat-log"></div>
+        <form id="chat-form">
+          <input
+            type="text"
+            id="chat-input"
+            placeholder="Ask anything…"
+            autocomplete="off"
+            maxlength="1000"
+            required
+          />
+          <button type="submit" id="chat-send">Send</button>
+        </form>
+        <p id="chat-status" class="muted" hidden></p>
+      </section>
+
+      <!-- Phase 5: Quick capture. Hidden when the TAI proxy is
+           unconfigured. -->
+      <section class="card" id="capture-card" hidden>
+        <h2>Quick capture</h2>
+        <form id="capture-form">
+          <input
+            type="text"
+            id="capture-title"
+            placeholder="What's the task?"
+            autocomplete="off"
+            maxlength="200"
+            required
+          />
+          <input
+            type="text"
+            id="capture-tags"
+            placeholder="tags (comma-separated, optional)"
+            autocomplete="off"
+            maxlength="200"
+          />
+          <button type="submit" id="capture-submit">File task</button>
+          <p id="capture-status" class="muted" hidden></p>
+        </form>
+      </section>
+
+      <!-- Phase 3: Activity feed. Read-only stream of recent agent
+           notes + recently-completed tasks. -->
+      <section class="card" id="activity-card" hidden>
+        <h2>Recent activity</h2>
+        <p id="activity-status" class="muted">Loading…</p>
+        <ul id="activity-list"></ul>
+      </section>
+
       <section class="card" id="history-card">
         <h2>Past purchases</h2>
         <p id="history-status" class="muted">Loading…</p>

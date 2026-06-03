@@ -28,17 +28,23 @@ RUN corepack disable && npm install -g pnpm@10.27.0
 
 WORKDIR /repo
 
-# 1. Workspace metadata + package manifests (for cached dep install)
+# 1. Workspace metadata + package manifests (for cached dep install).
+# core depends on @tailored-ai/browser-mediator as a workspace package,
+# so its manifest + source must be present for pnpm to resolve the dep
+# tree and for `pnpm deploy --legacy` (below) to copy it into /deploy.
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.json tsconfig.base.json ./
+COPY packages/browser-mediator/package.json packages/browser-mediator/
 COPY packages/core/package.json packages/core/
 COPY packages/trusted-actions/package.json packages/trusted-actions/
 
 # 2. Install only what trusted-actions transitively needs.
 RUN pnpm install --filter @tailored-ai/trusted-actions... --frozen-lockfile
 
-# 3. Copy source + build
+# 3. Copy source + build (browser-mediator first since core imports from it)
+COPY packages/browser-mediator packages/browser-mediator
 COPY packages/core packages/core
 COPY packages/trusted-actions packages/trusted-actions
+RUN pnpm --filter @tailored-ai/browser-mediator build
 RUN pnpm --filter @tailored-ai/core build
 RUN pnpm --filter @tailored-ai/trusted-actions build
 

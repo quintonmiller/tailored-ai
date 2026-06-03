@@ -1,3 +1,6 @@
+import { readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { type ActionHandler, get as getAction, listTypes } from "./actions/registry.js";
@@ -603,6 +606,80 @@ app.post("/history", async (c) => {
   return c.json(loadHistory({ before: body.before, limit: body.limit }));
 });
 
+/**
+ * PWA decisions card: capability proposals + non-capability in_review items
+ * needing the user. Auth model matches /pending and /history (push
+ * subscription endpoint is the credential). Proxies to the TAI HTTP API
+ * configured via TAI_API_URL + TAI_API_TOKEN. Returns 503 if unset so the
+ * PWA can hide the card cleanly.
+ *
+ * See issue #121 for the broader PWA-as-dashboard plan; this is Phase 1.
+ */
+app.post("/pwa/decisions", async (c) => {
+  let body: { endpoint?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400);
+  }
+  if (!body.endpoint || typeof body.endpoint !== "string") {
+    return c.json({ error: "Missing endpoint" }, 400);
+  }
+  if (getSubscriptionStatus(body.endpoint) !== "active") {
+    return c.json({ error: "Unknown subscription" }, 401);
+  }
+
+  const taiUrl = process.env.TAI_API_URL || "";
+  const taiToken = process.env.TAI_API_TOKEN || "";
+  if (!taiUrl || !taiToken) {
+    return c.json({ error: "TAI proxy not configured" }, 503);
+  }
+
+  const headers = { Authorization: `Bearer ${taiToken}` };
+  let reviewRes: Response;
+  let capRes: Response;
+  try {
+    [reviewRes, capRes] = await Promise.all([
+      fetch(`${taiUrl}/api/project-tasks?status=in_review&limit=20`, { headers }),
+      fetch(`${taiUrl}/api/project-tasks?status=in_review&tags=capability&limit=20`, { headers }),
+    ]);
+  } catch (err) {
+    return c.json({ error: `TAI unreachable: ${(err as Error).message}` }, 502);
+  }
+  if (!reviewRes.ok || !capRes.ok) {
+    return c.json({ error: `TAI returned ${reviewRes.status}/${capRes.status}` }, 502);
+  }
+
+  type TaskRow = {
+    id: string;
+    title: string;
+    status: string;
+    tags?: string[];
+    assignee?: string;
+    updated_at: string;
+  };
+  const review = (await reviewRes.json()) as { tasks?: TaskRow[] };
+  const cap = (await capRes.json()) as { tasks?: TaskRow[] };
+
+  const slim = (t: TaskRow) => {
+    const ms = Date.now() - Date.parse(t.updated_at);
+    const days = Number.isFinite(ms) ? Math.floor(ms / 86_400_000) : null;
+    return {
+      id: t.id,
+      title: t.title,
+      days_idle: days,
+      assignee: t.assignee ?? null,
+      tags: t.tags ?? [],
+    };
+  };
+
+  const capIds = new Set((cap.tasks ?? []).map((t) => t.id));
+  const needsReview = (review.tasks ?? []).filter((t) => !capIds.has(t.id)).map(slim);
+  const capabilityProposals = (cap.tasks ?? []).map(slim);
+
+  return c.json({ capability_proposals: capabilityProposals, needs_review: needsReview });
+});
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
@@ -734,6 +811,461 @@ function genId(): string {
   // Short readable id: ta_<8 hex>
   return `ta_${Math.random().toString(16).slice(2, 10).padStart(8, "0")}`;
 }
+
+/**
+ * PWA decide action: approve / reject a task from the phone. Issue #121
+ * Phase 2. Mirrors the auth model of /pending and /pwa/decisions (push
+ * subscription endpoint is the credential).
+ *
+ * Behavior matrix (by tag + decision):
+ *
+ *   capability + approve → status=in_progress, assignee=quinton,
+ *                          comment "Approved via PWA …".
+ *     Punts back to Quinton to wire up the proposed artifact. Once #118
+ *     ships, approve will auto-apply instead.
+ *
+ *   capability + reject  → status=archived,
+ *                          comment "Rejected via PWA …".
+ *
+ *   default    + approve → status=done,
+ *                          comment "Approved via PWA …".
+ *     The reviewer agent places items in in_review awaiting the user to
+ *     mark done; this matches that flow.
+ *
+ *   default    + reject  → status=in_progress (assignee unchanged),
+ *                          comment "Needs revision via PWA …".
+ */
+app.post("/pwa/tasks/:id/decide", async (c) => {
+  let body: { endpoint?: string; decision?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400);
+  }
+  if (!body.endpoint || typeof body.endpoint !== "string") {
+    return c.json({ error: "Missing endpoint" }, 400);
+  }
+  if (body.decision !== "approve" && body.decision !== "reject") {
+    return c.json({ error: "decision must be approve or reject" }, 400);
+  }
+  if (getSubscriptionStatus(body.endpoint) !== "active") {
+    return c.json({ error: "Unknown subscription" }, 401);
+  }
+
+  const taiUrl = process.env.TAI_API_URL || "";
+  const taiToken = process.env.TAI_API_TOKEN || "";
+  if (!taiUrl || !taiToken) {
+    return c.json({ error: "TAI proxy not configured" }, 503);
+  }
+
+  const taskId = c.req.param("id");
+  const headers = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${taiToken}`,
+  };
+
+  type TaskRow = { id: string; tags?: string[]; status: string };
+  let task: TaskRow;
+  try {
+    const r = await fetch(`${taiUrl}/api/project-tasks/${encodeURIComponent(taskId)}`, { headers });
+    if (r.status === 404) return c.json({ error: "Task not found" }, 404);
+    if (!r.ok) return c.json({ error: `TAI returned ${r.status}` }, 502);
+    task = (await r.json()) as TaskRow;
+  } catch (err) {
+    return c.json({ error: `TAI unreachable: ${(err as Error).message}` }, 502);
+  }
+
+  const isCapability = (task.tags ?? []).includes("capability");
+  const today = new Date().toISOString().slice(0, 10);
+
+  let newStatus: string;
+  let label: string;
+  const patch: Record<string, unknown> = {};
+  if (body.decision === "approve") {
+    if (isCapability) {
+      newStatus = "in_progress";
+      label = "Approved capability via PWA";
+      patch.assignee = "quinton";
+    } else {
+      newStatus = "done";
+      label = "Approved via PWA";
+    }
+  } else {
+    if (isCapability) {
+      newStatus = "archived";
+      label = "Rejected capability via PWA";
+    } else {
+      newStatus = "in_progress";
+      label = "Needs revision via PWA";
+    }
+  }
+  patch.status = newStatus;
+
+  try {
+    const commentRes = await fetch(`${taiUrl}/api/project-tasks/${encodeURIComponent(taskId)}/comments`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ content: `${label} on ${today}.`, author: "quinton-pwa" }),
+    });
+    if (!commentRes.ok) {
+      return c.json({ error: `Comment failed: ${commentRes.status}` }, 502);
+    }
+    const patchRes = await fetch(`${taiUrl}/api/project-tasks/${encodeURIComponent(taskId)}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify(patch),
+    });
+    if (!patchRes.ok) {
+      return c.json({ error: `Status update failed: ${patchRes.status}` }, 502);
+    }
+    return c.json({ ok: true, new_status: newStatus, decision: body.decision });
+  } catch (err) {
+    return c.json({ error: `TAI unreachable: ${(err as Error).message}` }, 502);
+  }
+});
+
+/**
+ * PWA quick-capture: file a task from the phone with one-tap. Issue #121
+ * Phase 5. Title required; tags + description optional. Always lands in
+ * backlog assigned to nobody — the user can re-route later.
+ */
+app.post("/pwa/tasks/create", async (c) => {
+  let body: {
+    endpoint?: string;
+    title?: string;
+    tags?: unknown;
+    description?: string;
+  };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400);
+  }
+  if (!body.endpoint || typeof body.endpoint !== "string") {
+    return c.json({ error: "Missing endpoint" }, 400);
+  }
+  if (!body.title || typeof body.title !== "string" || !body.title.trim()) {
+    return c.json({ error: "title is required" }, 400);
+  }
+  if (getSubscriptionStatus(body.endpoint) !== "active") {
+    return c.json({ error: "Unknown subscription" }, 401);
+  }
+
+  const taiUrl = process.env.TAI_API_URL || "";
+  const taiToken = process.env.TAI_API_TOKEN || "";
+  if (!taiUrl || !taiToken) {
+    return c.json({ error: "TAI proxy not configured" }, 503);
+  }
+
+  const tags = Array.isArray(body.tags)
+    ? (body.tags as unknown[])
+        .filter((t): t is string => typeof t === "string" && t.trim().length > 0)
+        .map((t) => t.trim().slice(0, 40))
+        .slice(0, 8)
+    : [];
+  const description = typeof body.description === "string" ? body.description.slice(0, 4000) : "";
+
+  const headers = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${taiToken}`,
+  };
+  try {
+    const r = await fetch(`${taiUrl}/api/project-tasks`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: body.title.trim().slice(0, 200),
+        description,
+        tags,
+        author: "quinton-pwa",
+        status: "backlog",
+      }),
+    });
+    if (!r.ok) {
+      return c.json({ error: `TAI returned ${r.status}` }, 502);
+    }
+    const task = (await r.json()) as { id?: string; title?: string };
+    return c.json({ ok: true, id: task.id ?? null, title: task.title ?? null });
+  } catch (err) {
+    return c.json({ error: `TAI unreachable: ${(err as Error).message}` }, 502);
+  }
+});
+
+/**
+ * PWA activity feed: recent recall notes and recently-completed tasks,
+ * sorted newest first. Issue #121 Phase 3. Read-only — gives you a sense
+ * of what the agent has been up to since you last looked.
+ */
+app.post("/pwa/activity", async (c) => {
+  let body: { endpoint?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400);
+  }
+  if (!body.endpoint || typeof body.endpoint !== "string") {
+    return c.json({ error: "Missing endpoint" }, 400);
+  }
+  if (getSubscriptionStatus(body.endpoint) !== "active") {
+    return c.json({ error: "Unknown subscription" }, 401);
+  }
+
+  const taiUrl = process.env.TAI_API_URL || "";
+  const taiToken = process.env.TAI_API_TOKEN || "";
+  if (!taiUrl || !taiToken) {
+    return c.json({ error: "TAI proxy not configured" }, 503);
+  }
+
+  const headers = { Authorization: `Bearer ${taiToken}` };
+  type NoteRow = {
+    id?: string;
+    content?: string;
+    tags?: string[];
+    agent?: string;
+    created_at?: string;
+    createdAt?: string;
+  };
+  type TaskRow = { id: string; title: string; updated_at?: string };
+
+  let notes: NoteRow[] = [];
+  let tasks: TaskRow[] = [];
+  try {
+    const [notesRes, tasksRes] = await Promise.all([
+      fetch(`${taiUrl}/api/memory/notes?limit=15`, { headers }),
+      fetch(`${taiUrl}/api/project-tasks?status=done&limit=10`, { headers }),
+    ]);
+    if (notesRes.ok) {
+      const j = (await notesRes.json()) as NoteRow[] | { notes?: NoteRow[] };
+      notes = Array.isArray(j) ? j : (j.notes ?? []);
+    }
+    if (tasksRes.ok) {
+      const j = (await tasksRes.json()) as { tasks?: TaskRow[] };
+      tasks = j.tasks ?? [];
+    }
+  } catch (err) {
+    return c.json({ error: `TAI unreachable: ${(err as Error).message}` }, 502);
+  }
+
+  const noteItems = notes.slice(0, 15).map((n) => ({
+    kind: "note" as const,
+    id: n.id ?? "",
+    content: typeof n.content === "string" ? n.content.slice(0, 220) : "",
+    tags: n.tags ?? [],
+    agent: n.agent ?? null,
+    timestamp: n.created_at ?? n.createdAt ?? null,
+  }));
+  const taskItems = tasks.slice(0, 10).map((t) => ({
+    kind: "task_done" as const,
+    id: t.id,
+    title: t.title,
+    timestamp: t.updated_at ?? null,
+  }));
+
+  const items = [...noteItems, ...taskItems]
+    .filter((i): i is typeof i & { timestamp: string } => typeof i.timestamp === "string")
+    .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+    .slice(0, 20);
+
+  return c.json({ items });
+});
+
+/**
+ * PWA chat: send one message to the default agent and wait for its
+ * response. Issue #121 Phase 4. Non-streaming: proxies to TAI's SSE
+ * /api/chat, consumes the stream, returns the final `response` event
+ * payload synchronously. Keeps the phone-side UX simple at the cost of
+ * no incremental tokens — acceptable for short Q&A during travel.
+ *
+ * Session key is derived from the push subscription endpoint so each
+ * device gets its own continuous conversation history in TAI.
+ */
+app.post("/pwa/chat", async (c) => {
+  let body: { endpoint?: string; message?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400);
+  }
+  if (!body.endpoint || typeof body.endpoint !== "string") {
+    return c.json({ error: "Missing endpoint" }, 400);
+  }
+  if (!body.message || typeof body.message !== "string" || !body.message.trim()) {
+    return c.json({ error: "message is required" }, 400);
+  }
+  if (getSubscriptionStatus(body.endpoint) !== "active") {
+    return c.json({ error: "Unknown subscription" }, 401);
+  }
+
+  const taiUrl = process.env.TAI_API_URL || "";
+  const taiToken = process.env.TAI_API_TOKEN || "";
+  if (!taiUrl || !taiToken) {
+    return c.json({ error: "TAI proxy not configured" }, 503);
+  }
+
+  // Per-device sessionKey. Hash the endpoint so we don't leak it into
+  // TAI's session table verbatim.
+  const sessionKey = `pwa:${(await sha256Hex(body.endpoint)).slice(0, 24)}`;
+
+  // 90s ceiling — enough for a tool-using turn, not long enough to hang
+  // forever if vLLM stalls.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 90_000);
+
+  let upstream: Response;
+  try {
+    upstream = await fetch(`${taiUrl}/api/chat`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+        Authorization: `Bearer ${taiToken}`,
+      },
+      body: JSON.stringify({
+        message: body.message,
+        sessionKey,
+        agent: "default",
+      }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    clearTimeout(timer);
+    return c.json({ error: `TAI unreachable: ${(err as Error).message}` }, 502);
+  }
+  if (!upstream.ok || !upstream.body) {
+    clearTimeout(timer);
+    return c.json({ error: `TAI returned ${upstream.status}` }, 502);
+  }
+
+  // Consume the SSE stream. We only care about the final `response`
+  // event. Tool calls and intermediate activity are ignored at this
+  // tier — Phase 4 surfaces just the final text.
+  const reader = upstream.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let lastEvent = "";
+  let responsePayload: Record<string, unknown> | null = null;
+  let errorPayload: Record<string, unknown> | null = null;
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      // SSE frames are separated by blank lines.
+      let idx: number;
+      // biome-ignore lint/suspicious/noAssignInExpressions: idiomatic loop
+      while ((idx = buf.indexOf("\n\n")) !== -1) {
+        const frame = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        const lines = frame.split("\n");
+        let event = "message";
+        const dataLines: string[] = [];
+        for (const line of lines) {
+          if (line.startsWith("event:")) event = line.slice(6).trim();
+          else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+        }
+        if (dataLines.length === 0) continue;
+        const dataStr = dataLines.join("\n");
+        try {
+          const parsed = JSON.parse(dataStr) as Record<string, unknown>;
+          if (event === "response") responsePayload = parsed;
+          else if (event === "error") errorPayload = parsed;
+          lastEvent = event;
+        } catch {
+          // ignore malformed frame
+        }
+        if (responsePayload || errorPayload) break;
+      }
+      if (responsePayload || errorPayload) break;
+    }
+  } catch (err) {
+    clearTimeout(timer);
+    return c.json({ error: `Stream error: ${(err as Error).message}` }, 502);
+  } finally {
+    clearTimeout(timer);
+    try {
+      await reader.cancel();
+    } catch {
+      // already done
+    }
+  }
+
+  if (errorPayload) {
+    return c.json({ error: (errorPayload.error as string) || "Agent error" }, 502);
+  }
+  if (!responsePayload) {
+    return c.json({ error: `No response event (last: ${lastEvent || "none"})` }, 502);
+  }
+
+  return c.json({
+    ok: true,
+    content: (responsePayload.content as string | null) ?? null,
+    session_id: (responsePayload.sessionId as string) ?? null,
+    session_key: (responsePayload.sessionKey as string) ?? sessionKey,
+  });
+});
+
+async function sha256Hex(input: string): Promise<string> {
+  const enc = new TextEncoder();
+  const digest = await crypto.subtle.digest("SHA-256", enc.encode(input));
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+// ── Static PWA ──────────────────────────────────────────────────────────────
+//
+// The PWA is built into ../pwa relative to the compiled server.js by the
+// trusted-actions package build (scripts/build-pwa.cjs copies pwa/ →
+// dist/pwa/). Serve those files from the same origin so iOS/Android can
+// install the PWA and so the SW can fetch updates after install — the
+// network-first SW only works if the origin actually serves the assets.
+//
+// Routes are explicit (no glob) so they sort cleanly with the API routes
+// above and we can be precise about content-types and path traversal.
+
+const PWA_ROOT = join(dirname(fileURLToPath(import.meta.url)), "pwa");
+
+async function servePwaFile(c: import("hono").Context, relPath: string, contentType: string) {
+  try {
+    const body = await readFile(join(PWA_ROOT, relPath));
+    return new Response(body, {
+      status: 200,
+      headers: {
+        "Content-Type": contentType,
+        // PWA assets are stamped with a build id per build; the SW is
+        // network-first. No-store keeps the HTTP cache from masking a
+        // redeploy.
+        "Cache-Control": "no-store",
+      },
+    });
+  } catch {
+    return c.json({ error: "Not found" }, 404);
+  }
+}
+
+function iconMime(name: string): string {
+  if (name.endsWith(".png")) return "image/png";
+  if (name.endsWith(".svg")) return "image/svg+xml";
+  if (name.endsWith(".ico")) return "image/x-icon";
+  return "application/octet-stream";
+}
+
+app.get("/", (c) => servePwaFile(c, "index.html", "text/html; charset=utf-8"));
+app.get("/index.html", (c) => servePwaFile(c, "index.html", "text/html; charset=utf-8"));
+app.get("/app.js", (c) => servePwaFile(c, "app.js", "application/javascript; charset=utf-8"));
+app.get("/sw.js", (c) => servePwaFile(c, "sw.js", "application/javascript; charset=utf-8"));
+app.get("/styles.css", (c) => servePwaFile(c, "styles.css", "text/css; charset=utf-8"));
+app.get("/manifest.webmanifest", (c) =>
+  servePwaFile(c, "manifest.webmanifest", "application/manifest+json; charset=utf-8"),
+);
+app.get("/icons/:name", (c) => {
+  const name = c.req.param("name") || "";
+  // Defense in depth: param won't include slashes via Hono routing, but
+  // explicitly reject anything that smells like traversal.
+  if (name.includes("..") || name.includes("/")) return c.json({ error: "Bad path" }, 400);
+  return servePwaFile(c, `icons/${name}`, iconMime(name));
+});
 
 // ── Bootstrap ───────────────────────────────────────────────────────────────
 

@@ -123,3 +123,200 @@ button.reject {
 .history-title { font-size: 15px; margin: 2px 0; }
 .history-title a { color: #e6e8ee; }
 .history-meta a { color: #8a93a8; }
+
+/* ---------- decisions card (issue #121) ---------- */
+.card-sub {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #8a93a8;
+  margin: 14px 0 6px;
+}
+#decisions-cap-list, #decisions-review-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.decision-row {
+  padding: 10px 0;
+  border-top: 1px solid #1f2330;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px 12px;
+  align-items: center;
+}
+.decision-row:first-child { border-top: 0; }
+.decision-main { min-width: 0; }
+.decision-title {
+  font-size: 15px;
+  margin: 0;
+  color: #e6e8ee;
+  word-break: break-word;
+}
+.decision-meta {
+  font-size: 12px;
+  color: #8a93a8;
+  margin-top: 2px;
+}
+.decision-actions {
+  display: flex;
+  gap: 6px;
+}
+.decision-actions button {
+  font-size: 13px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 0;
+  font-weight: 600;
+  cursor: pointer;
+  /* Bigger tap targets on phones, but still compact in the row. */
+  min-height: 36px;
+}
+.decision-actions button:disabled { opacity: 0.5; cursor: progress; }
+.decision-actions .dec-approve { background: #1c5b34; color: #c9f4d6; }
+.decision-actions .dec-reject  { background: #5a1f1f; color: #ffd0d0; }
+.decision-status {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  color: #8a93a8;
+}
+@media (max-width: 380px) {
+  .decision-row { grid-template-columns: 1fr; }
+  .decision-actions { justify-content: flex-end; }
+}
+
+/* ---------- quick capture (issue #121 Phase 5) ---------- */
+#capture-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#capture-form input[type="text"] {
+  width: 100%;
+  font-size: 16px; /* prevents iOS zoom-on-focus */
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #2a2f3c;
+  background: #0e1118;
+  color: #e6e8ee;
+  box-sizing: border-box;
+}
+#capture-form input[type="text"]::placeholder { color: #6a738a; }
+#capture-form input[type="text"]:focus {
+  outline: none;
+  border-color: #5a8cff;
+}
+#capture-submit {
+  margin-top: 4px;
+  background: #2a3450;
+  color: #cfd6ff;
+  border: 0;
+  font-weight: 600;
+  font-size: 15px;
+  padding: 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+#capture-submit:disabled { opacity: 0.6; cursor: progress; }
+#capture-status { margin: 4px 0 0; font-size: 13px; }
+#capture-status.ok { color: #6cdf8e; }
+
+/* ---------- activity feed (issue #121 Phase 3) ---------- */
+#activity-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.activity-item {
+  padding: 8px 0;
+  border-top: 1px solid #1f2330;
+}
+.activity-item:first-child { border-top: 0; }
+.activity-meta {
+  font-size: 12px;
+  color: #8a93a8;
+  margin-bottom: 2px;
+}
+.activity-tags {
+  display: inline-block;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #1a2030;
+  color: #8a93a8;
+  margin-left: 4px;
+}
+.activity-content {
+  font-size: 14px;
+  color: #d9dde6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.activity-task_done .activity-content { color: #c9f4d6; }
+
+/* ---------- chat (issue #121 Phase 4) ---------- */
+#chat-log {
+  max-height: 320px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+  background: #0e1118;
+  border: 1px solid #1f2330;
+  border-radius: 8px;
+  padding: 8px;
+}
+.chat-line {
+  font-size: 14px;
+  margin: 4px 0;
+  padding: 6px 10px;
+  border-radius: 10px;
+  word-break: break-word;
+  white-space: pre-wrap;
+  max-width: 90%;
+}
+.chat-user {
+  background: #2a3450;
+  color: #cfd6ff;
+  margin-left: auto;
+  border-bottom-right-radius: 2px;
+}
+.chat-agent {
+  background: #1a1f2c;
+  color: #d9dde6;
+  margin-right: auto;
+  border-bottom-left-radius: 2px;
+}
+.chat-error {
+  background: #3a1818;
+  color: #ffd0d0;
+  margin-right: auto;
+  font-size: 12px;
+}
+#chat-form {
+  display: flex;
+  gap: 6px;
+}
+#chat-form input[type="text"] {
+  flex: 1;
+  font-size: 16px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #2a2f3c;
+  background: #0e1118;
+  color: #e6e8ee;
+  box-sizing: border-box;
+}
+#chat-form input[type="text"]:focus {
+  outline: none;
+  border-color: #5a8cff;
+}
+#chat-send {
+  background: #2a3450;
+  color: #cfd6ff;
+  border: 0;
+  font-weight: 600;
+  padding: 0 16px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+#chat-send:disabled { opacity: 0.6; cursor: progress; }
+#chat-status { margin: 6px 0 0; font-size: 13px; }
