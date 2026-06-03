@@ -15,18 +15,43 @@ function collectStatuses(backend: TaskBackend): string[] {
  *  handoffs work (docs/agent-unification.md, Phase 6). */
 export type TasksToolNotify = (action: "created" | "updated" | "commented", taskId: string) => void;
 
+/** Resolves the task backend to use for a given project. When no projectId
+ *  is given (or it's null), returns the default (top-level) backend. Lets a
+ *  single agent file/update tasks across multiple project-scoped trackers
+ *  in one invocation. */
+export type TaskBackendResolver = (projectId?: string | null) => TaskBackend;
+
+/** Internal helper: turn a single backend into a resolver that ignores
+ *  projectId. Used so existing single-backend callers can keep working. */
+function singleBackendResolver(backend: TaskBackend): TaskBackendResolver {
+  return () => backend;
+}
+
+/** Internal helper: accept either a TaskBackend (legacy) or a resolver. */
+function asResolver(arg: TaskBackend | TaskBackendResolver): TaskBackendResolver {
+  // A TaskBackend has a `name` string + `create` function. A resolver is a
+  // plain function. Distinguish by the `name` property's type.
+  if (typeof arg === "function") return arg as TaskBackendResolver;
+  return singleBackendResolver(arg);
+}
+
 export class TasksTool implements Tool {
   name = "tasks";
   description: string;
   parameters: Record<string, unknown>;
 
-  private backend: TaskBackend;
+  private resolveBackend: TaskBackendResolver;
+  /** The backend used to build the tool description + status enum. Usually
+   *  the default (no-project) backend. */
+  private defaultBackend: TaskBackend;
   private db: Database.Database | undefined;
   private validStatuses: Set<string>;
   private notify?: TasksToolNotify;
 
-  constructor(backend: TaskBackend, db?: Database.Database, notify?: TasksToolNotify) {
-    this.backend = backend;
+  constructor(backendOrResolver: TaskBackend | TaskBackendResolver, db?: Database.Database, notify?: TasksToolNotify) {
+    this.resolveBackend = asResolver(backendOrResolver);
+    this.defaultBackend = this.resolveBackend(undefined);
+    const backend = this.defaultBackend;
     this.db = db;
     this.notify = notify;
 
@@ -101,7 +126,7 @@ export class TasksTool implements Tool {
             rank,
           );
         case "get":
-          return await this.get(id);
+          return await this.get(id, projectId);
         case "update":
           return await this.update(
             id,
@@ -118,9 +143,9 @@ export class TasksTool implements Tool {
             projectId,
           );
         case "delete":
-          return await this.delete(id);
+          return await this.delete(id, projectId);
         case "comment":
-          return await this.comment(id, text, authorArg ?? agentAuthor);
+          return await this.comment(id, text, authorArg ?? agentAuthor, projectId);
         default:
           return {
             success: false,
@@ -145,11 +170,12 @@ export class TasksTool implements Tool {
   ): Promise<ToolResult> {
     if (!title) return { success: false, output: "", error: "title is required for create." };
 
+    const backend = this.resolveBackend(projectId);
     if (status !== undefined && !this.validStatuses.has(status)) {
       return {
         success: false,
         output: "",
-        error: `Invalid status "${status}" for ${this.backend.name} backend. Valid: ${[...this.validStatuses].join(", ")}.`,
+        error: `Invalid status "${status}" for ${backend.name} backend. Valid: ${[...this.validStatuses].join(", ")}.`,
       };
     }
 
@@ -160,7 +186,7 @@ export class TasksTool implements Tool {
           .map((t) => t.trim())
           .filter(Boolean)
       : undefined;
-    const task = await this.backend.create({
+    const task = await backend.create({
       title,
       description,
       author,
@@ -181,10 +207,11 @@ export class TasksTool implements Tool {
     return { success: true, output: lines.join("\n") };
   }
 
-  private async get(id?: string): Promise<ToolResult> {
+  private async get(id?: string, projectId?: string): Promise<ToolResult> {
     if (!id) return { success: false, output: "", error: "id is required for get." };
 
-    const task = await this.backend.get(id);
+    const backend = this.resolveBackend(projectId);
+    const task = await backend.get(id);
     if (!task) return { success: false, output: "", error: `Task ${id} not found.` };
 
     const lines = [`${task.title} (${task.id})`, `Status: ${task.status}`];
@@ -222,17 +249,18 @@ export class TasksTool implements Tool {
   ): Promise<ToolResult> {
     if (!id) return { success: false, output: "", error: "id is required for update." };
 
+    const backend = this.resolveBackend(projectId);
     if (status !== undefined && !this.validStatuses.has(status)) {
       return {
         success: false,
         output: "",
-        error: `Invalid status "${status}" for ${this.backend.name} backend. Valid: ${[...this.validStatuses].join(", ")}.`,
+        error: `Invalid status "${status}" for ${backend.name} backend. Valid: ${[...this.validStatuses].join(", ")}.`,
       };
     }
 
     // If the caller is changing status, require a comment explaining why.
     // This is how the teammate audit trail is built.
-    const existing = await this.backend.get(id);
+    const existing = await backend.get(id);
     if (!existing) return { success: false, output: "", error: `Task ${id} not found.` };
 
     const statusChanging = status !== undefined && status !== existing.status;
@@ -268,10 +296,10 @@ export class TasksTool implements Tool {
 
     // Post the comment FIRST so it appears before the status change in the log.
     if (trimmedComment) {
-      await this.backend.comment(id, trimmedComment, author ?? agentAuthor ?? "agent");
+      await backend.comment(id, trimmedComment, author ?? agentAuthor ?? "agent");
     }
 
-    const task = await this.backend.update(id, {
+    const task = await backend.update(id, {
       title: title ?? undefined,
       description: description ?? undefined,
       status: status ?? undefined,
@@ -288,19 +316,21 @@ export class TasksTool implements Tool {
     return { success: true, output: `Updated task "${task.title}" (${task.id}) — status: ${task.status}` };
   }
 
-  private async delete(id?: string): Promise<ToolResult> {
+  private async delete(id?: string, projectId?: string): Promise<ToolResult> {
     if (!id) return { success: false, output: "", error: "id is required for delete." };
 
-    const deleted = await this.backend.delete(id);
+    const backend = this.resolveBackend(projectId);
+    const deleted = await backend.delete(id);
     if (!deleted) return { success: false, output: "", error: `Task ${id} not found.` };
     return { success: true, output: `Deleted task ${id}.` };
   }
 
-  private async comment(id?: string, text?: string, author?: string): Promise<ToolResult> {
+  private async comment(id?: string, text?: string, author?: string, projectId?: string): Promise<ToolResult> {
     if (!id) return { success: false, output: "", error: "id is required for comment." };
     if (!text) return { success: false, output: "", error: "text is required for comment." };
 
-    const comment = await this.backend.comment(id, text, author);
+    const backend = this.resolveBackend(projectId);
+    const comment = await backend.comment(id, text, author);
     if (!comment) return { success: false, output: "", error: `Task ${id} not found.` };
     this.notify?.("commented", id);
     return { success: true, output: `Added comment to task ${id}.` };
@@ -330,10 +360,10 @@ export class TaskQueryTool implements Tool {
     required: [],
   };
 
-  private backend: TaskBackend;
+  private resolveBackend: TaskBackendResolver;
 
-  constructor(backend: TaskBackend) {
-    this.backend = backend;
+  constructor(backendOrResolver: TaskBackend | TaskBackendResolver) {
+    this.resolveBackend = asResolver(backendOrResolver);
   }
 
   async execute(args: Record<string, unknown>, _context: ToolContext): Promise<ToolResult> {
@@ -362,7 +392,10 @@ export class TaskQueryTool implements Tool {
       if (args.order_by === "rank") filter.orderBy = "rank";
       filter.limit = typeof args.limit === "number" ? args.limit : 20;
 
-      const { tasks, total } = await this.backend.query(filter);
+      // project_id on the filter is also the routing key — different
+      // projects can live on different task backends.
+      const backend = this.resolveBackend(filter.project_id ?? null);
+      const { tasks, total } = await backend.query(filter);
 
       if (tasks.length === 0) {
         return { success: true, output: "No tasks found." };

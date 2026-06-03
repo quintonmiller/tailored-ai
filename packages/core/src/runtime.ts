@@ -10,7 +10,7 @@ import { type AgentConfig, type AgentHook, mergeProjectOverlay, validateConfig }
 import { getProject } from "./db/project-queries.js";
 import type { MemoryBackend } from "./memory/interface.js";
 import { resolveMemoryBackend } from "./memory/registry.js";
-import type { ProjectContext, ProjectRef } from "./projects/resolve.js";
+import { type ProjectContext, type ProjectRef, readProjectFile } from "./projects/resolve.js";
 import type { AIProvider } from "./providers/interface.js";
 import { AgentRegistry } from "./resources/agent.js";
 import { migrateConfigAgentsToResources, populateAgentsFromDisk } from "./resources/agent-migration.js";
@@ -45,6 +45,7 @@ export interface RuntimeOptions {
       getDiscord?: () => any;
       getOwnerId?: () => string | undefined;
       taskBackend?: TaskBackend;
+      taskBackendResolver?: import("./tools/tasks.js").TaskBackendResolver;
       getEmbedder?: () => import("./providers/embedding.js").EmbeddingProvider | undefined;
       getMemoryBackend?: () => Promise<MemoryBackend>;
     },
@@ -126,6 +127,7 @@ export class AgentRuntime {
       opts.createTools(merged, opts.contextDir, opts.configPath, {
         db: opts.db,
         taskBackend: this._taskBackend,
+        taskBackendResolver: (projectId?: string | null) => this.getTaskBackendForProject(projectId),
         getEmbedder: () => this._embedder,
         getMemoryBackend: () => this.getMemoryBackend(),
       }) ?? [];
@@ -198,6 +200,67 @@ export class AgentRuntime {
   }
   getTaskBackend(): TaskBackend {
     return this._taskBackend;
+  }
+  /**
+   * Per-project task backend cache. Constructed lazily on first access for
+   * each registered project. Lets a single agent invocation file tasks
+   * across multiple project-scoped trackers (e.g. a personal SQLite default
+   * plus distinct GitHub repos for `tai` and `tai-personal`).
+   *
+   * Cache is cleared on `reload()` so changing a project's `.tai.yaml`
+   * overlay takes effect on the next call.
+   */
+  private _taskBackendByProject: Map<string, TaskBackend> = new Map();
+
+  /**
+   * Resolve the task backend for a given project id. Returns the default
+   * (top-level) backend when projectId is null/undefined, the project is
+   * unknown, or the project's overlay doesn't define a `tasks` block.
+   *
+   * Project overlays are read from `.tai.yaml` at the project's registered
+   * path (see `projects.config_overlay_path`). Only the `tasks` overlay
+   * affects routing — other overlay fields are layered onto the base
+   * config but discarded here since the per-call backend doesn't need
+   * the full merged config.
+   */
+  getTaskBackendForProject(projectId?: string | null): TaskBackend {
+    if (!projectId) return this._taskBackend;
+    const cached = this._taskBackendByProject.get(projectId);
+    if (cached) return cached;
+
+    const project = getProject(this.db, projectId);
+    if (!project) {
+      console.warn(`[tasks] Unknown project "${projectId}" — using default backend.`);
+      this._taskBackendByProject.set(projectId, this._taskBackend);
+      return this._taskBackend;
+    }
+
+    let overlay: Record<string, unknown> = {};
+    const overlayPath = project.config_overlay_path;
+    if (overlayPath) {
+      try {
+        const file = readProjectFile(overlayPath);
+        overlay = file.config ?? {};
+      } catch (err) {
+        console.warn(
+          `[tasks] Failed to read overlay ${overlayPath} for project "${projectId}": ${(err as Error).message}. Using default backend.`,
+        );
+        this._taskBackendByProject.set(projectId, this._taskBackend);
+        return this._taskBackend;
+      }
+    }
+
+    // No tasks block in overlay → default backend is correct.
+    const overlayTasks = (overlay as { tasks?: unknown }).tasks;
+    if (!overlayTasks || typeof overlayTasks !== "object") {
+      this._taskBackendByProject.set(projectId, this._taskBackend);
+      return this._taskBackend;
+    }
+
+    const merged = mergeProjectOverlay(this._config, overlay);
+    const backend = createTaskBackend(merged, this.db);
+    this._taskBackendByProject.set(projectId, backend);
+    return backend;
   }
   /**
    * Resolve the configured memory backend (default "builtin" SQLite).
@@ -343,6 +406,7 @@ export class AgentRuntime {
         this._createTools(config, this.contextDir, this.configPath, {
           db: this.db,
           taskBackend,
+          taskBackendResolver: (projectId?: string | null) => this.getTaskBackendForProject(projectId),
           getEmbedder: () => embedder,
           getMemoryBackend: () => this.getMemoryBackend(),
         }) ?? [];
@@ -366,6 +430,9 @@ export class AgentRuntime {
       this._toolRegistry = newToolRegistry;
       this._providerRegistry = newProviderRegistry;
       this._taskBackend = taskBackend;
+      // Per-project backends are derived from project overlays — those may
+      // have changed too. Drop the cache; next call rebuilds lazily.
+      this._taskBackendByProject = new Map();
       this._embedder = embedder;
       // Drop the cached memory backend so the next getMemoryBackend() call
       // re-resolves against the new config. A pending close() on the old
