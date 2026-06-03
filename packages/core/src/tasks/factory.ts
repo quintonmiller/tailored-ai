@@ -24,7 +24,7 @@ taskBackendFactoryRegistry.register("github", (config) => {
   if (!cfg?.repo || !cfg?.token) {
     throw new Error('tasks.backend = "github" requires tasks.github.repo and tasks.github.token');
   }
-  return new GitHubTaskBackend({ repo: cfg.repo, token: cfg.token });
+  return new GitHubTaskBackend({ repo: cfg.repo, token: cfg.token, agentRoles: cfg.agentRoles });
 });
 
 taskBackendFactoryRegistry.register("beans", (config) => new BeansTaskBackend({ path: config.tasks?.beans?.path }));

@@ -216,6 +216,68 @@ describe("GitHubTaskBackend.create + get", () => {
   });
 });
 
+describe("GitHubTaskBackend agent-role assignees", () => {
+  it("routes a coder assignment to an agent:coder label, not GH assignees", async () => {
+    // Regression: TAI assigns code-shaped tasks to `assignee: "coder"`.
+    // GitHub's assignees API 422s on unknown logins. The backend now
+    // sends agent-role names through an `agent:<name>` label instead.
+    const { backend, oct } = build();
+    const t = await backend.create({
+      title: "Implement login",
+      assignee: "coder",
+      status: "backlog",
+    });
+    const issue = oct.issues.get(1)!;
+    expect(issue.assignees).toEqual([]);
+    expect(issue.labels).toContain("agent:coder");
+    // Round-trip: get() returns assignee="coder" via the label.
+    expect(t.assignee).toBe("coder");
+    const fetched = await backend.get(t.id);
+    expect(fetched?.assignee).toBe("coder");
+    // The label is hidden from the public tags list.
+    expect(fetched?.tags).not.toContain("agent:coder");
+  });
+
+  it("still sends real GitHub usernames through the assignees API", async () => {
+    const { backend, oct } = build();
+    await backend.create({ title: "T", assignee: "alice" });
+    expect(oct.issues.get(1)?.assignees?.map((a) => a.login)).toEqual(["alice"]);
+    expect(oct.issues.get(1)?.labels).not.toContain("agent:alice");
+  });
+
+  it("reassigning from coder to a human swaps the label for a GH assignee", async () => {
+    const { backend, oct } = build();
+    const t = await backend.create({ title: "T", assignee: "coder", status: "backlog" });
+    expect(oct.issues.get(1)?.labels).toContain("agent:coder");
+    await backend.update(t.id, { assignee: "alice" });
+    const issue = oct.issues.get(1)!;
+    expect(issue.assignees?.map((a) => a.login)).toEqual(["alice"]);
+    expect(issue.labels).not.toContain("agent:coder");
+  });
+
+  it("filters query results by agent-role label when filter.assignee is a role", async () => {
+    const { backend } = build();
+    await backend.create({ title: "A", assignee: "coder", status: "backlog" });
+    await backend.create({ title: "B", assignee: "reviewer", status: "backlog" });
+    const r = await backend.query({ assignee: "coder", status: "backlog" });
+    expect(r.tasks.map((t) => t.title)).toEqual(["A"]);
+  });
+
+  it("custom agentRoles option extends the default set", async () => {
+    const oct = new FakeOctokit();
+    const backend = new GitHubTaskBackend({
+      repo: "owner/repo",
+      token: "t",
+      // biome-ignore lint/suspicious/noExplicitAny: stub.
+      octokit: oct as any,
+      agentRoles: ["coder", "reviewer", "my-custom-agent"],
+    });
+    await backend.create({ title: "T", assignee: "my-custom-agent" });
+    expect(oct.issues.get(1)?.labels).toContain("agent:my-custom-agent");
+    expect(oct.issues.get(1)?.assignees).toEqual([]);
+  });
+});
+
 describe("GitHubTaskBackend.update", () => {
   it("updating status to done closes the issue", async () => {
     const { backend, oct } = build();

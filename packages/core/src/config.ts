@@ -535,7 +535,18 @@ export interface AgentConfig {
     /** Which task backend to use for project tasks and autopilot. Default "native". */
     backend?: "native" | "github" | "beans" | "beads";
     /** Backend-specific options keyed by backend name. */
-    github?: { repo?: string; token?: string };
+    github?: {
+      repo?: string;
+      token?: string;
+      /**
+       * Names treated as TAI agent roles rather than GitHub users. When a
+       * task is assigned to one of these, the backend stores the
+       * assignment as an `agent:<name>` label instead of calling GitHub's
+       * assignees API (which 422s on unknown logins). Defaults to the
+       * built-in TAI agent set.
+       */
+      agentRoles?: string[];
+    };
     beans?: { path?: string };
     beads?: { path?: string };
   };
