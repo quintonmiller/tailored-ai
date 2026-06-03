@@ -15,7 +15,7 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
-import type { Channel, IncomingMessage } from "../channels/interface.js";
+import type { Channel } from "../channels/interface.js";
 import { createPluginContext, type Plugin } from "../plugin-context.js";
 
 export interface OutboundCapture {
@@ -26,14 +26,6 @@ export interface OutboundCapture {
 export interface ChannelContractHarness<C extends Channel = Channel> {
   /** Build a fresh channel. Called once per test so state never leaks. */
   build(): C | Promise<C>;
-  /**
-   * Push a fake incoming event into the channel's transport after
-   * `connect()` has resolved. Implementations typically call into the
-   * stubbed Bolt/discord.js client they wired up in `build()`.
-   *
-   * When omitted, the `onMessage` test is skipped.
-   */
-  emitIncoming?(channel: C, msg: IncomingMessage): void | Promise<void>;
   /**
    * Return the messages the channel has sent via `send()` (or, if the
    * channel implements `OutboundNotifier`, via `sendDM`). The helper
@@ -104,38 +96,6 @@ export function runChannelContractSuite<C extends Channel>(opts: ChannelContract
         expect(sent.length).toBeGreaterThan(0);
         const match = sent.find((m) => m.target === "contract-target" && m.content.includes("hello from contract"));
         expect(match, `expected drainSent() to contain a write to "contract-target"`).toBeDefined();
-        await channel.disconnect();
-      });
-    }
-
-    if (harness.emitIncoming) {
-      it("onMessage handler fires when an incoming event arrives", async () => {
-        const channel = await harness.build();
-        const handler = vi.fn();
-        channel.onMessage(handler);
-        await channel.connect();
-        const fake: IncomingMessage = {
-          id: "contract-msg-1",
-          channelId: "contract-room",
-          authorId: "contract-user",
-          authorName: "Contract Tester",
-          content: "ping",
-          isDM: false,
-          isMention: true,
-        };
-        await harness.emitIncoming!(channel, fake);
-        expect(handler).toHaveBeenCalled();
-        const arg = handler.mock.calls[0]?.[0] as IncomingMessage | undefined;
-        expect(arg?.content).toContain("ping");
-        await channel.disconnect();
-      });
-
-      it("onMessage handler is not fired before connect()", async () => {
-        const channel = await harness.build();
-        const handler = vi.fn();
-        channel.onMessage(handler);
-        // Don't connect — the channel should not be receiving events yet.
-        expect(handler).not.toHaveBeenCalled();
         await channel.disconnect();
       });
     }

@@ -23,7 +23,7 @@ import { createProjectTask, queryProjectTasks } from "../db/task-queries.js";
 import type { ProjectRef } from "../projects/resolve.js";
 import type { AgentRuntime } from "../runtime.js";
 import { DiscordApprovalHandler } from "./discord-approval.js";
-import type { Channel, IncomingMessage } from "./interface.js";
+import type { Channel } from "./interface.js";
 import type { OutboundNotifier } from "./outbound.js";
 
 const MAX_MESSAGE_LENGTH = 2000;
@@ -68,7 +68,6 @@ export class DiscordChannel implements Channel, OutboundNotifier {
 
   private client: Client;
   private runtime: AgentRuntime;
-  private messageHandler?: (msg: IncomingMessage) => void;
   private processing = new Set<string>();
   private userAgents = new Map<string, string>();
   private registeredCommandsHash = "";
@@ -145,8 +144,35 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     console.log("[discord] Disconnected");
   }
 
-  onMessage(handler: (msg: IncomingMessage) => void): void {
-    this.messageHandler = handler;
+  /**
+   * Send the Discord "is typing…" indicator at `channelId` and keep it alive
+   * by re-sending every 8 seconds (the API expires it on a ~10s window).
+   * Returns a stop function that idempotently clears the keep-alive timer.
+   * Channels without a `sendTyping` method (some thread/forum subtypes)
+   * silently no-op.
+   */
+  indicateWorking(channelId: string): () => void {
+    let timer: ReturnType<typeof setInterval> | undefined;
+    let stopped = false;
+    const send = async () => {
+      try {
+        const ch = await this.client.channels.fetch(channelId);
+        if (!ch || !("sendTyping" in ch)) return;
+        await (ch as unknown as { sendTyping: () => Promise<void> }).sendTyping();
+      } catch {
+        // Permissions/network — typing is best-effort.
+      }
+    };
+    void send();
+    timer = setInterval(() => {
+      if (stopped) return;
+      void send();
+    }, 8_000);
+    return () => {
+      if (stopped) return;
+      stopped = true;
+      if (timer) clearInterval(timer);
+    };
   }
 
   async send(channelId: string, content: string): Promise<void> {
@@ -230,19 +256,6 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     const content = msg.content.replace(new RegExp(`<@!?${this.client.user!.id}>`, "g"), "").trim();
 
     if (!content) return;
-
-    // Emit to handler if registered
-    if (this.messageHandler) {
-      this.messageHandler({
-        id: msg.id,
-        channelId: msg.channelId,
-        authorId: msg.author.id,
-        authorName: msg.author.displayName ?? msg.author.username,
-        content,
-        isDM: !msg.guild,
-        isMention: msg.mentions.has(this.client.user!),
-      });
-    }
 
     // Deduplicate: don't process if we're already handling a message from this user.
     // Project-scoped sessions are namespaced under their project id so the same user
@@ -370,15 +383,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     agentName?: string,
     project?: ProjectRef | null,
   ): Promise<void> {
-    const canType = "sendTyping" in msg.channel;
-    if (canType) {
-      await (msg.channel as { sendTyping: () => Promise<void> }).sendTyping();
-    }
-    const typingInterval = canType
-      ? setInterval(() => {
-          (msg.channel as { sendTyping: () => Promise<void> }).sendTyping().catch(() => {});
-        }, 8_000)
-      : undefined;
+    const stopTyping = this.indicateWorking(msg.channelId);
 
     try {
       const config = this.runtime.getConfig();
@@ -408,17 +413,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
       const response = await runAgentLoop(content, {
         ...loopOpts,
         approvalHandler,
-        onToolCall: (name, args) => {
-          console.log(`${logPrefix} tool: ${name}(${JSON.stringify(args)})`);
-        },
-        onApprovalRequest: (req) => {
-          console.log(`${logPrefix} approval requested: ${req.description}`);
-        },
-        onApprovalResponse: (req, res) => {
-          console.log(
-            `${logPrefix} approval ${res.approved ? "granted" : "denied"}: ${req.toolName} (${res.responseTimeMs}ms)`,
-          );
-        },
+        ...this.runtime.defaultLoopObservers({ prefix: logPrefix }),
       });
 
       // --- afterRun hooks ---
@@ -444,7 +439,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
       }
       console.log(`[discord] Replied to ${msg.author.username}: "${response.slice(0, 80)}"`);
     } finally {
-      if (typingInterval) clearInterval(typingInterval);
+      stopTyping();
     }
   }
 
@@ -748,17 +743,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     const response = await runAgentLoop(content, {
       ...loopOpts,
       approvalHandler,
-      onToolCall: (name, args) => {
-        console.log(`${logPrefix} tool: ${name}(${JSON.stringify(args)})`);
-      },
-      onApprovalRequest: (req) => {
-        console.log(`${logPrefix} approval requested: ${req.description}`);
-      },
-      onApprovalResponse: (req, res) => {
-        console.log(
-          `${logPrefix} approval ${res.approved ? "granted" : "denied"}: ${req.toolName} (${res.responseTimeMs}ms)`,
-        );
-      },
+      ...this.runtime.defaultLoopObservers({ prefix: logPrefix }),
     });
 
     // --- afterRun hooks ---
