@@ -46,5 +46,13 @@ jobs:
     steps:
       - name: Enable auto-merge (squash)
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Prefer RELEASE_PAT so GitHub credits the eventual auto-merge to a
+          # real user. Without this, auto-merge is enabled "by" the bot, and
+          # the resulting merge commit's push to main is treated as
+          # GITHUB_TOKEN-sourced — GitHub suppresses workflow triggers on
+          # those, so `release.yml` never fires and the publish silently
+          # never happens. Falls back to GITHUB_TOKEN so the workflow still
+          # runs (just without the auto-publish behaviour) on a checkout
+          # without RELEASE_PAT configured.
+          GH_TOKEN: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
         run: gh pr merge --auto --squash --repo "$GITHUB_REPOSITORY" "${{ github.event.pull_request.number }}"
