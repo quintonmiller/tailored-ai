@@ -239,6 +239,21 @@ export interface WebhookRouteConfig {
   workflow?: string;
   sessionKey?: string;
   newSession?: boolean;
+  /**
+   * Per-route authentication mode. Overrides the global `webhooks.secret`
+   * Bearer check on this route only.
+   *
+   * - `"bearer"` (default when `secret` is set, or implied by the global
+   *   `webhooks.secret`): expects `Authorization: Bearer <secret>`.
+   * - `"github_hmac"`: expects `X-Hub-Signature-256: sha256=<hex>`
+   *   computed as HMAC-SHA256(raw body, `secret`). Use this to accept
+   *   webhooks from GitHub. The raw body is read once and parsed
+   *   downstream — message templates and workflow inputs still see the
+   *   decoded JSON.
+   */
+  auth?: "bearer" | "github_hmac";
+  /** Secret used by `auth`. Required when `auth` is set; ignored otherwise. */
+  secret?: string;
 }
 
 export interface AgentConfig {
