@@ -1,6 +1,6 @@
 {
   "name": "@tailored-ai/core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Agent core library: runtime, config, tools, providers, channels, db, cron, hooks. Lightweight, modular AI agent framework optimized for local LLMs.",
   "license": "MIT",
   "author": "Quinton Miller",
@@ -68,9 +68,15 @@
     "vitest": "^4.0.0"
   },
   "peerDependenciesMeta": {
-    "md-to-pdf": { "optional": true },
-    "playwright": { "optional": true },
-    "vitest": { "optional": true }
+    "md-to-pdf": {
+      "optional": true
+    },
+    "playwright": {
+      "optional": true
+    },
+    "vitest": {
+      "optional": true
+    }
   },
   "optionalDependencies": {
     "pdf-parse": "^1.1.1",
