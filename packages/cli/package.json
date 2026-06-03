@@ -1,6 +1,6 @@
 {
   "name": "@tailored-ai/cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Tailored AI CLI — lightweight, modular AI agent framework optimized for local LLMs. `tai` command.",
   "license": "MIT",
   "author": "Quinton Miller",
