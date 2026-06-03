@@ -49,6 +49,14 @@ export interface StepContext {
    */
   sandbox?: Sandbox;
   sandboxHandle?: SandboxHandle;
+  /**
+   * Resolved project root for this run. Set when the runtime has an active
+   * project; absent in global mode. Executors that anchor to a filesystem
+   * location (shell, tool_call, worktree) prefer this over `process.cwd()`
+   * so a workflow launched from any directory still executes against the
+   * intended project. See [#64].
+   */
+  projectPath?: string;
 }
 
 export interface RunOptions {
@@ -81,6 +89,15 @@ export interface EngineOptions {
    * the existing host-only behavior. Tests usually leave it unset.
    */
   createSandbox?: (kind: SandboxKind) => Sandbox;
+  /**
+   * Resolve the active project root at the moment a run starts. The result
+   * is captured on the run handle and threaded onto every step's
+   * `StepContext.projectPath` so filesystem-anchored executors (shell,
+   * tool_call, worktree, sandbox) use the project root instead of
+   * `process.cwd()`. Returning `undefined` means "no active project"
+   * (global mode) — executors fall back to their own defaults.
+   */
+  getProjectPath?: () => string | undefined;
   /** Override clock for tests. */
   now?: () => Date;
 }
@@ -103,6 +120,8 @@ interface RunHandle {
   abort: AbortController;
   workflowName: string;
   dryRun: boolean;
+  /** Resolved at run-start so a mid-run project switch doesn't change the cwd of in-flight steps. */
+  projectPath?: string;
 }
 
 export type EngineEvent =
@@ -146,6 +165,7 @@ export class WorkflowEngine {
   private now: () => Date;
   private listeners = new Set<EventListener>();
   private createSandbox: ((kind: SandboxKind) => Sandbox) | undefined;
+  private getProjectPath: (() => string | undefined) | undefined;
   /** Sandbox + handle prepared for an active run; cleaned up in `runWorkflow`'s finally. */
   private runSandboxes = new Map<string, { sandbox: Sandbox; handle: SandboxHandle }>();
   readonly forms: FormRegistry;
@@ -158,6 +178,7 @@ export class WorkflowEngine {
     this.agentSemaphores = new KeyedSemaphore(cap);
     this.now = opts.now ?? (() => new Date());
     this.createSandbox = opts.createSandbox;
+    this.getProjectPath = opts.getProjectPath;
     this.forms = new FormRegistry(this.db);
     for (const exec of opts.executors ?? []) this.registerExecutor(exec);
   }
@@ -229,7 +250,13 @@ export class WorkflowEngine {
     });
 
     const abort = new AbortController();
-    this.active.set(run.id, { abort, workflowName: name, dryRun: options.dryRun === true });
+    const projectPath = this.resolveProjectPath();
+    this.active.set(run.id, {
+      abort,
+      workflowName: name,
+      dryRun: options.dryRun === true,
+      projectPath,
+    });
 
     let runRelease: (() => void) | null = null;
     let workflowDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
@@ -243,7 +270,7 @@ export class WorkflowEngine {
         workflowDeadlineTimer = setTimeout(() => abort.abort(), def.deadlineMs);
       }
 
-      await this.prepareRunSandbox(run.id, def);
+      await this.prepareRunSandbox(run.id, def, projectPath);
 
       const scope: Scope = {
         input,
@@ -289,7 +316,11 @@ export class WorkflowEngine {
    * setup happens once per run; the handle is shared with every step via
    * `StepContext`. Missing factory or "host" kind is a no-op.
    */
-  private async prepareRunSandbox(runId: string, def: WorkflowDefinition): Promise<void> {
+  private async prepareRunSandbox(
+    runId: string,
+    def: WorkflowDefinition,
+    projectPath: string | undefined,
+  ): Promise<void> {
     if (!def.sandbox || def.sandbox === "host") return;
     if (!this.createSandbox) {
       throw new WorkflowError(
@@ -297,8 +328,24 @@ export class WorkflowEngine {
       );
     }
     const sandbox = this.createSandbox(def.sandbox);
-    const handle = await sandbox.prepare({ cwd: process.cwd() });
+    const handle = await sandbox.prepare({ cwd: projectPath ?? process.cwd() });
     this.runSandboxes.set(runId, { sandbox, handle });
+  }
+
+  /**
+   * Snapshot the current project root from the injected resolver. Called once
+   * per run at start so an `setActiveProject` switch mid-run doesn't shift the
+   * cwd of in-flight steps.
+   */
+  private resolveProjectPath(): string | undefined {
+    if (!this.getProjectPath) return undefined;
+    try {
+      const path = this.getProjectPath();
+      return path && path.length > 0 ? path : undefined;
+    } catch (err) {
+      console.warn(`[workflow] getProjectPath threw: ${(err as Error).message}`);
+      return undefined;
+    }
   }
 
   private async cleanupRunSandbox(runId: string): Promise<void> {
@@ -557,6 +604,7 @@ export class WorkflowEngine {
       });
       try {
         const sb = this.runSandboxes.get(runId);
+        const handle = this.active.get(runId);
         const result = await this.executeWithDeadline(step, {
           runId,
           stepId: stepRow.id,
@@ -564,9 +612,10 @@ export class WorkflowEngine {
           signal,
           engine: this,
           parentStepId,
-          dryRun: this.active.get(runId)?.dryRun === true,
+          dryRun: handle?.dryRun === true,
           sandbox: sb?.sandbox,
           sandboxHandle: sb?.handle,
+          projectPath: handle?.projectPath,
         });
         updateWorkflowStep(this.db, stepRow.id, {
           status: "completed",

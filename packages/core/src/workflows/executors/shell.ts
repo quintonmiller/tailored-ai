@@ -49,7 +49,7 @@ export class ShellExecutor implements StepExecutor {
       console.log(`[dry-run] shell "${s.name}" skipped: ${command}`);
       return { output: `[dry-run] would run: ${command}` };
     }
-    const cwd = s.cwd ? String(resolveString(s.cwd, ctx.scope)) : this.cwd;
+    const cwd = s.cwd ? String(resolveString(s.cwd, ctx.scope)) : (ctx.projectPath ?? this.cwd);
     const stepEnv = (resolveValue(s.env ?? {}, ctx.scope) as Record<string, string>) ?? {};
     const env = { ...this.baseEnv, ...stepEnv };
     const timeoutMs = s.timeoutMs ?? this.defaultTimeoutMs;

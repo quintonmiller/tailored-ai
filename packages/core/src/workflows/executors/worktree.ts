@@ -16,7 +16,7 @@ export class WorktreeExecutor implements StepExecutor {
 
   async execute(step: WorkflowStepDef, ctx: StepContext): Promise<StepResult> {
     const s = step as WorktreeStep;
-    const repoDir = s.repoDir ? String(resolveString(s.repoDir, ctx.scope)) : process.cwd();
+    const repoDir = s.repoDir ? String(resolveString(s.repoDir, ctx.scope)) : (ctx.projectPath ?? process.cwd());
     const branchOverride = s.branch ? String(resolveString(s.branch, ctx.scope)) : undefined;
     const worktreePath = s.worktreePath ? String(resolveString(s.worktreePath, ctx.scope)) : undefined;
 
