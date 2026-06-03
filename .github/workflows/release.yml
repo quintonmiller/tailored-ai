@@ -26,6 +26,16 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Authenticate the git remote with RELEASE_PAT so the changesets
+          # action's `git push` to changeset-release/main is sourced from a
+          # real user account. Pushes from github-actions[bot] (the default
+          # when actions/checkout uses GITHUB_TOKEN) do not trigger
+          # pull_request workflows, leaving the version PR's required
+          # build-and-test check stuck on "Expected — Waiting for status".
+          # Falls back to GITHUB_TOKEN so the workflow still runs (without
+          # the auto-CI behaviour) on a fresh clone with no PAT configured.
+          token: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
 
       - uses: pnpm/action-setup@v4
 
