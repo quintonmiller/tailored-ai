@@ -51,6 +51,21 @@ tools:
 The agent calls `request_action` with a JSON intent; you get a push
 notification; you tap "Approve"; the executor runs.
 
+## PWA dashboard (optional)
+
+The PWA can show TAI's pending decisions (capability proposals and
+in_review tasks) alongside the trusted-actions queue. Configure the
+executor with:
+
+```bash
+TAI_API_URL=http://127.0.0.1:3000     # TAI HTTP API base
+TAI_API_TOKEN=<server.authToken>      # matches `server.authToken` in tai config
+```
+
+If either is unset, the PWA's Decisions card hides itself cleanly. See
+[issue #121](https://github.com/quintonmiller/tailored-ai/issues/121)
+for the phased PWA-as-dashboard plan.
+
 ## Docs
 
 - [`docs/trusted-actions.md`](https://github.com/quintonmiller/tailored-ai/blob/main/docs/trusted-actions.md) — overview
