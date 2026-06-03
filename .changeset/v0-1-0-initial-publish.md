@@ -1,10 +1,10 @@
 ---
-"@tailored-ai/browser-mediator": minor
-"@tailored-ai/core": minor
-"@tailored-ai/server": minor
-"@tailored-ai/cli": minor
-"@tailored-ai/google-tools": minor
-"@tailored-ai/trusted-actions": minor
+"@tailored-ai/browser-mediator": patch
+"@tailored-ai/core": patch
+"@tailored-ai/server": patch
+"@tailored-ai/cli": patch
+"@tailored-ai/google-tools": patch
+"@tailored-ai/trusted-actions": patch
 ---
 
 Initial public release.

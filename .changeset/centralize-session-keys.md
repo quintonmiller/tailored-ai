@@ -1,5 +1,5 @@
 ---
-"@tailored-ai/core": minor
+"@tailored-ai/core": patch
 "@tailored-ai/channel-slack": patch
 ---
 
