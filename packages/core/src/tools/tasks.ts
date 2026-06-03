@@ -48,11 +48,7 @@ export class TasksTool implements Tool {
   private validStatuses: Set<string>;
   private notify?: TasksToolNotify;
 
-  constructor(
-    backendOrResolver: TaskBackend | TaskBackendResolver,
-    db?: Database.Database,
-    notify?: TasksToolNotify,
-  ) {
+  constructor(backendOrResolver: TaskBackend | TaskBackendResolver, db?: Database.Database, notify?: TasksToolNotify) {
     this.resolveBackend = asResolver(backendOrResolver);
     this.defaultBackend = this.resolveBackend(undefined);
     const backend = this.defaultBackend;

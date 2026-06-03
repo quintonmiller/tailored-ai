@@ -84,8 +84,7 @@ class StubBackend implements TaskBackend {
       ...existing,
       ...patch,
       assignee: patch.assignee === undefined ? existing.assignee : (patch.assignee ?? null),
-      blocked_reason:
-        patch.blocked_reason === undefined ? existing.blocked_reason : (patch.blocked_reason ?? null),
+      blocked_reason: patch.blocked_reason === undefined ? existing.blocked_reason : (patch.blocked_reason ?? null),
       updated_at: new Date().toISOString(),
     } as Task;
     this.tasks.set(id, updated);
@@ -132,8 +131,7 @@ const ctx: ToolContext = {
 function build() {
   const defaultBackend = new StubBackend("default");
   const altBackend = new StubBackend("alt");
-  const resolver: TaskBackendResolver = (projectId) =>
-    projectId === "alt" ? altBackend : defaultBackend;
+  const resolver: TaskBackendResolver = (projectId) => (projectId === "alt" ? altBackend : defaultBackend);
   return { defaultBackend, altBackend, resolver };
 }
 
@@ -152,10 +150,7 @@ describe("TasksTool — per-project routing", () => {
     const { defaultBackend, altBackend, resolver } = build();
     const tool = new TasksTool(resolver);
 
-    const r = await tool.execute(
-      { action: "create", title: "alt-task", project_id: "alt" },
-      ctx,
-    );
+    const r = await tool.execute({ action: "create", title: "alt-task", project_id: "alt" }, ctx);
     expect(r.success).toBe(true);
     expect(altBackend.calls.some((c) => c.op === "create")).toBe(true);
     expect(defaultBackend.calls.length).toBe(0);
@@ -185,16 +180,10 @@ describe("TasksTool — per-project routing", () => {
     );
     expect(updated.success).toBe(true);
 
-    const commented = await tool.execute(
-      { action: "comment", id, text: "another note", project_id: "alt" },
-      ctx,
-    );
+    const commented = await tool.execute({ action: "comment", id, text: "another note", project_id: "alt" }, ctx);
     expect(commented.success).toBe(true);
 
-    const deleted = await tool.execute(
-      { action: "delete", id, project_id: "alt" },
-      ctx,
-    );
+    const deleted = await tool.execute({ action: "delete", id, project_id: "alt" }, ctx);
     expect(deleted.success).toBe(true);
 
     // All mutations landed on alt, none on default.
