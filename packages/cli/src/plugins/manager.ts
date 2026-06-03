@@ -1,7 +1,48 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+
+/**
+ * Manual resolver for pure-ESM packages whose `exports` map only declares
+ * the `import` condition. Reads the package's manifest from the plugin
+ * home's node_modules and picks the best entry point. Returns the absolute
+ * path of a JS file, or null when the package isn't there at all.
+ */
+function resolveEsmEntry(pluginDir: string, name: string): string | null {
+  const pkgPath = resolve(pluginDir, "node_modules", name, "package.json");
+  if (!existsSync(pkgPath)) return null;
+  let pkg: {
+    main?: string;
+    module?: string;
+    exports?:
+      | string
+      | {
+          [k: string]: string | { import?: string; default?: string; require?: string };
+        };
+  };
+  try {
+    pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as typeof pkg;
+  } catch {
+    return null;
+  }
+  const pkgDir = dirname(pkgPath);
+  let entry: string | undefined;
+  if (typeof pkg.exports === "string") {
+    entry = pkg.exports;
+  } else if (pkg.exports && typeof pkg.exports === "object") {
+    const root = pkg.exports["."];
+    if (typeof root === "string") {
+      entry = root;
+    } else if (root && typeof root === "object") {
+      entry = root.import ?? root.default ?? root.require;
+    }
+  }
+  if (!entry) entry = pkg.module ?? pkg.main;
+  if (!entry) return null;
+  return resolve(pkgDir, entry);
+}
 
 /**
  * One installed plugin entry, as it appears in `~/.tailored-ai/plugins/package.json`.
@@ -116,25 +157,49 @@ export class PluginManager {
    * names relative to the plugin home's package.json — so a plugin only loads
    * when it was installed via `tai plugin install`.
    *
-   * Throws with a recovery hint when the plugin isn't installed; the loader
-   * catches and reports per-plugin so other plugins still come up.
+   * Tries CJS `createRequire().resolve` first because it's the cheapest
+   * path and works for packages that publish a `main` field or expose
+   * `default` / `require` in their exports map. Falls back to a manual
+   * `exports.<key>.import` lookup for pure-ESM plugins where the exports
+   * map only declares `import` — CJS resolve treats those as unresolvable
+   * even though dynamic `import()` of the file path works fine.
+   *
+   * `import.meta.resolve(name, parentUrl)` would be the ideal API but
+   * Node 24 ignores the `parentUrl` argument without
+   * `--experimental-import-meta-resolve`, so a resolver scoped to the
+   * plugin home isn't possible without flagging.
+   *
+   * Throws with a recovery hint when the plugin isn't installed (truly
+   * absent — no package.json under `node_modules/<name>/`); the caller
+   * catches per-plugin so one bad install doesn't stop the rest.
    */
   buildImporter(): (name: string) => Promise<unknown> {
     this.bootstrap();
     const req = createRequire(this.packageJsonPath);
-    return (name: string) => {
-      let resolved: string;
+    return async (name: string) => {
+      // 1) Fast path: createRequire().resolve. Works whenever the
+      //    package has a `main` field or its exports map includes a
+      //    CJS-visible condition (`default`, `require`).
+      let resolved: string | null = null;
       try {
         resolved = req.resolve(name);
       } catch {
-        return Promise.reject(
-          new Error(
-            `plugin "${name}" is not installed in ${this.pluginDir}. ` +
-              `Run \`tai plugin install ${name}\` and retry.`,
-          ),
-        );
+        // Fall through to manual resolution for pure-ESM packages.
       }
-      return import(resolved);
+      if (resolved) return import(resolved);
+
+      // 2) Manual exports-map walk for pure-ESM packages. Read the
+      //    plugin's package.json from the plugin home's node_modules,
+      //    pick an entry from exports.import / exports.default /
+      //    exports.require, then dynamic-import the resolved file.
+      const manualEntry = resolveEsmEntry(this.pluginDir, name);
+      if (manualEntry) {
+        return import(pathToFileURL(manualEntry).href);
+      }
+
+      throw new Error(
+        `plugin "${name}" is not installed in ${this.pluginDir}. ` + `Run \`tai plugin install ${name}\` and retry.`,
+      );
     };
   }
 }
