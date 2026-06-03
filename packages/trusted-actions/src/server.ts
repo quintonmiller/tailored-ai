@@ -867,10 +867,7 @@ app.post("/pwa/tasks/:id/decide", async (c) => {
   type TaskRow = { id: string; tags?: string[]; status: string };
   let task: TaskRow;
   try {
-    const r = await fetch(
-      `${taiUrl}/api/project-tasks/${encodeURIComponent(taskId)}`,
-      { headers },
-    );
+    const r = await fetch(`${taiUrl}/api/project-tasks/${encodeURIComponent(taskId)}`, { headers });
     if (r.status === 404) return c.json({ error: "Task not found" }, 404);
     if (!r.ok) return c.json({ error: `TAI returned ${r.status}` }, 502);
     task = (await r.json()) as TaskRow;
@@ -905,21 +902,19 @@ app.post("/pwa/tasks/:id/decide", async (c) => {
   patch.status = newStatus;
 
   try {
-    const commentRes = await fetch(
-      `${taiUrl}/api/project-tasks/${encodeURIComponent(taskId)}/comments`,
-      {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ content: `${label} on ${today}.`, author: "quinton-pwa" }),
-      },
-    );
+    const commentRes = await fetch(`${taiUrl}/api/project-tasks/${encodeURIComponent(taskId)}/comments`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ content: `${label} on ${today}.`, author: "quinton-pwa" }),
+    });
     if (!commentRes.ok) {
       return c.json({ error: `Comment failed: ${commentRes.status}` }, 502);
     }
-    const patchRes = await fetch(
-      `${taiUrl}/api/project-tasks/${encodeURIComponent(taskId)}`,
-      { method: "PATCH", headers, body: JSON.stringify(patch) },
-    );
+    const patchRes = await fetch(`${taiUrl}/api/project-tasks/${encodeURIComponent(taskId)}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify(patch),
+    });
     if (!patchRes.ok) {
       return c.json({ error: `Status update failed: ${patchRes.status}` }, 502);
     }
@@ -968,8 +963,7 @@ app.post("/pwa/tasks/create", async (c) => {
         .map((t) => t.trim().slice(0, 40))
         .slice(0, 8)
     : [];
-  const description =
-    typeof body.description === "string" ? body.description.slice(0, 4000) : "";
+  const description = typeof body.description === "string" ? body.description.slice(0, 4000) : "";
 
   const headers = {
     "Content-Type": "application/json",
@@ -1232,11 +1226,7 @@ async function sha256Hex(input: string): Promise<string> {
 
 const PWA_ROOT = join(dirname(fileURLToPath(import.meta.url)), "pwa");
 
-async function servePwaFile(
-  c: import("hono").Context,
-  relPath: string,
-  contentType: string,
-) {
+async function servePwaFile(c: import("hono").Context, relPath: string, contentType: string) {
   try {
     const body = await readFile(join(PWA_ROOT, relPath));
     return new Response(body, {
