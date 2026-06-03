@@ -5,6 +5,7 @@ import { resolveAgent } from "./agent/agents.js";
 import { EMPTY_HOOKS, mergeHooks, type ResolvedHooks } from "./agent/hooks.js";
 import type { AgentLoopOptions } from "./agent/loop.js";
 import { findOrCreateSession, type Session } from "./agent/session.js";
+import type { ApprovalRequest, ApprovalResponse } from "./approval.js";
 import { type AgentConfig, type AgentHook, mergeProjectOverlay, validateConfig } from "./config.js";
 import { getProject } from "./db/project-queries.js";
 import type { MemoryBackend } from "./memory/interface.js";
@@ -481,6 +482,44 @@ export class AgentRuntime {
     const agentHooks = name ? this._config.agents[name]?.hooks : undefined;
     if (!agentHooks && !opts.overrideHooks) return EMPTY_HOOKS;
     return mergeHooks(agentHooks, opts.overrideHooks);
+  }
+
+  /**
+   * Default observer callbacks for {@link runAgentLoop} that log tool calls
+   * and approval transitions through `console.log`. Every first-party channel
+   * (Discord, Slack) used to hand-roll these identical handlers; spread the
+   * return value onto your `runAgentLoop` opts instead so a future format
+   * change happens in one place.
+   *
+   *     const response = await runAgentLoop(content, {
+   *       ...loopOpts,
+   *       ...runtime.defaultLoopObservers({ prefix: `[slack] [${user}]` }),
+   *     });
+   *
+   * Pass `prefix` to scope log lines to your channel/user. Defaults to `[tai]`.
+   */
+  defaultLoopObservers(opts: { prefix?: string } = {}): {
+    onToolCall: (name: string, args: Record<string, unknown>) => void;
+    onApprovalRequest: (req: ApprovalRequest) => void;
+    onApprovalResponse: (req: ApprovalRequest, res: ApprovalResponse) => void;
+  } {
+    const prefix = opts.prefix ?? "[tai]";
+    return {
+      onToolCall: (name, args) => {
+        // Truncate args so a noisy `write_file` doesn't dump kilobytes of code.
+        const argsStr = JSON.stringify(args);
+        const trimmed = argsStr.length > 200 ? `${argsStr.slice(0, 200)}…` : argsStr;
+        console.log(`${prefix} tool: ${name}(${trimmed})`);
+      },
+      onApprovalRequest: (req) => {
+        console.log(`${prefix} approval requested: ${req.description}`);
+      },
+      onApprovalResponse: (req, res) => {
+        console.log(
+          `${prefix} approval ${res.approved ? "granted" : "denied"}: ${req.toolName} (${res.responseTimeMs}ms)`,
+        );
+      },
+    };
   }
 
   /**
