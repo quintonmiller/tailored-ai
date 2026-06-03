@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -154,5 +155,132 @@ describe("webhook trigger -> workflow", () => {
     ]);
     const res = await app.fetch(new Request("http://t/api/webhooks/x", { method: "POST" }));
     expect(res.status).toBe(404);
+  });
+});
+
+// GitHub HMAC auth lets us accept webhooks from GitHub directly. The
+// signature is computed against the raw body, so the handler must read
+// the body once as bytes / text before parsing JSON.
+describe("webhook auth — github_hmac", () => {
+  const secret = "hub-secret-XYZ";
+
+  function sign(body: string): string {
+    return `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
+  }
+
+  it("accepts a request with a valid X-Hub-Signature-256", async () => {
+    setup([
+      {
+        path: "/github",
+        action: "workflow",
+        workflow: "review",
+        messageTemplate: "{{action}} on {{repository.full_name}}",
+        auth: "github_hmac",
+        secret,
+      },
+    ]);
+    const body = JSON.stringify({ action: "opened", repository: { full_name: "owner/repo" } });
+    const res = await app.fetch(
+      new Request("http://t/api/webhooks/github", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-hub-signature-256": sign(body),
+        },
+        body,
+      }),
+    );
+    expect([200, 202]).toContain(res.status);
+    await new Promise((r) => setTimeout(r, 25));
+    expect(exec.inputs).toHaveLength(1);
+    const input = exec.inputs[0] as { message: string; payload: Record<string, unknown> };
+    expect(input.message).toBe("opened on owner/repo");
+  });
+
+  it("rejects when the signature is missing", async () => {
+    setup([
+      {
+        path: "/github",
+        action: "log",
+        messageTemplate: "x",
+        auth: "github_hmac",
+        secret,
+      },
+    ]);
+    const res = await app.fetch(
+      new Request("http://t/api/webhooks/github", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it("rejects when the signature is invalid", async () => {
+    setup([
+      {
+        path: "/github",
+        action: "log",
+        messageTemplate: "x",
+        auth: "github_hmac",
+        secret,
+      },
+    ]);
+    const res = await app.fetch(
+      new Request("http://t/api/webhooks/github", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-hub-signature-256": "sha256=deadbeef",
+        },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it("rejects when a different secret signs the body", async () => {
+    setup([
+      {
+        path: "/github",
+        action: "log",
+        messageTemplate: "x",
+        auth: "github_hmac",
+        secret,
+      },
+    ]);
+    const body = "{}";
+    const wrong = `sha256=${createHmac("sha256", "WRONG").update(body).digest("hex")}`;
+    const res = await app.fetch(
+      new Request("http://t/api/webhooks/github", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-hub-signature-256": wrong,
+        },
+        body,
+      }),
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 500 when auth=github_hmac is configured without a secret", async () => {
+    setup([
+      {
+        path: "/github",
+        action: "log",
+        messageTemplate: "x",
+        auth: "github_hmac",
+      },
+    ]);
+    const res = await app.fetch(
+      new Request("http://t/api/webhooks/github", {
+        method: "POST",
+        headers: { "x-hub-signature-256": "sha256=00" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(500);
   });
 });
