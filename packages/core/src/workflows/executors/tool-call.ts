@@ -39,7 +39,7 @@ export class ToolCallExecutor implements StepExecutor {
 
     const toolCtx: ToolContext = {
       sessionId: `workflow:${ctx.runId}:${s.name}`,
-      workingDirectory: this.workingDirectory,
+      workingDirectory: ctx.projectPath ?? this.workingDirectory,
       env: this.env,
       agentName: "workflow",
     };
