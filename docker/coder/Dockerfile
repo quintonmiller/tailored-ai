@@ -11,7 +11,10 @@ FROM node:20-alpine
 # - openssh-client / ca-certificates so https git ops resolve TLS roots
 #   (skip-push is the default but the model may still web_fetch over https)
 # - Tini for proper signal handling on `docker stop`
-RUN apk add --no-cache git bash openssh-client ca-certificates tini
+# - github-cli so the reviewer agent can `gh pr create` on approve.
+#   github-cli is in alpine's community repo. Reads GH_TOKEN from env at
+#   call time — host wires that through the sandbox env block.
+RUN apk add --no-cache git bash openssh-client ca-certificates tini github-cli
 
 # pnpm: install globally via npm (system-wide, world-readable) and
 # DISABLE corepack. Corepack-managed pnpm was unreadable when the
