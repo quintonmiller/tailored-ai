@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -2260,22 +2260,53 @@ export function createServer(opts: ServerOptions) {
       return c.json({ error: "Webhooks are disabled" }, 503);
     }
 
-    // Authenticate via webhook secret (separate from API key)
-    if (config.webhooks.secret) {
+    const route = config.webhooks.routes.find((r) => r.path === `/${routePath}` || r.path === routePath);
+    if (!route) {
+      return c.json({ error: `No webhook route configured for "/${routePath}"` }, 404);
+    }
+
+    // Read the raw body once. Needed up-front because github_hmac auth
+    // signs the raw bytes — re-parsing later via c.req.json() would
+    // canonicalize whitespace and break the signature check.
+    const rawBody = await c.req.text();
+
+    // Per-route auth takes precedence over the global bearer check.
+    // - "github_hmac": validate X-Hub-Signature-256 against route.secret
+    //   using HMAC-SHA256 of the raw body.
+    // - "bearer" (or default + global secret): Authorization: Bearer ...
+    if (route.auth === "github_hmac") {
+      if (!route.secret) {
+        console.error(`[webhook] route "${route.path}" has auth=github_hmac but no secret configured`);
+        return c.json({ error: "Route auth misconfigured" }, 500);
+      }
+      const sigHeader = c.req.header("x-hub-signature-256");
+      if (!sigHeader) {
+        return c.json({ error: "Missing X-Hub-Signature-256" }, 401);
+      }
+      const expected = `sha256=${createHmac("sha256", route.secret).update(rawBody).digest("hex")}`;
+      // timingSafeEqual requires equal-length buffers — bail early if the
+      // header is malformed.
+      const a = Buffer.from(sigHeader);
+      const b = Buffer.from(expected);
+      if (a.length !== b.length || !timingSafeEqual(a, b)) {
+        return c.json({ error: "Bad signature" }, 401);
+      }
+    } else if (route.auth === "bearer" && route.secret) {
+      const auth = c.req.header("Authorization");
+      if (auth !== `Bearer ${route.secret}`) {
+        return c.json({ error: "Unauthorized" }, 401);
+      }
+    } else if (config.webhooks.secret) {
+      // Backwards-compat: global Bearer when no per-route auth is set.
       const auth = c.req.header("Authorization");
       if (auth !== `Bearer ${config.webhooks.secret}`) {
         return c.json({ error: "Unauthorized" }, 401);
       }
     }
 
-    const route = config.webhooks.routes.find((r) => r.path === `/${routePath}` || r.path === routePath);
-    if (!route) {
-      return c.json({ error: `No webhook route configured for "/${routePath}"` }, 404);
-    }
-
     let payload: Record<string, unknown> = {};
     try {
-      payload = await c.req.json();
+      payload = rawBody ? (JSON.parse(rawBody) as Record<string, unknown>) : {};
     } catch {
       // Body may be empty or non-JSON — that's OK
     }
