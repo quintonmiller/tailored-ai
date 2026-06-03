@@ -523,6 +523,57 @@ export class AgentRuntime {
   }
 
   /**
+   * Build a session key in the format every first-party channel + downstream
+   * consumer uses. Encoded as either
+   *
+   *     <channelId>:<userId>
+   *     <channelId>:<projectId>:<userId>
+   *
+   * so that the same user in two different projects gets isolated history,
+   * and `<channelId>:<userId>` continues to mean "global / no project".
+   *
+   * Channels used to hand-roll this string; now they call this helper so the
+   * format lives in one place and stays consistent across transports. Pair
+   * with {@link parseSessionKey} when downstream code needs to extract the
+   * pieces (currently autopilot / task-watcher prefix-match on raw strings).
+   *
+   * Throws on inputs containing `:` since the delimiter would corrupt parse.
+   * See [#39](https://github.com/quintonmiller/tailored-ai/issues/39).
+   */
+  makeSessionKey(opts: { channelId: string; userId: string; project?: ProjectRef | null }): string {
+    const { channelId, userId, project } = opts;
+    if (!channelId) throw new Error("makeSessionKey: channelId is required");
+    if (!userId) throw new Error("makeSessionKey: userId is required");
+    if (channelId.includes(":")) throw new Error(`makeSessionKey: channelId cannot contain ':' (got "${channelId}")`);
+    if (userId.includes(":")) throw new Error(`makeSessionKey: userId cannot contain ':' (got "${userId}")`);
+    if (project) {
+      if (project.id.includes(":")) {
+        throw new Error(`makeSessionKey: project.id cannot contain ':' (got "${project.id}")`);
+      }
+      return `${channelId}:${project.id}:${userId}`;
+    }
+    return `${channelId}:${userId}`;
+  }
+
+  /**
+   * Inverse of {@link makeSessionKey}. Returns `undefined` for keys that
+   * don't match the documented shape — callers should treat that as "this
+   * isn't one of ours" rather than throwing, since downstream surfaces
+   * (CLI sessions, web sessions, custom integrations) may use freeform
+   * session ids.
+   */
+  parseSessionKey(key: string): { channelId: string; userId: string; projectId?: string } | undefined {
+    const parts = key.split(":");
+    if (parts.length === 2 && parts[0] && parts[1]) {
+      return { channelId: parts[0], userId: parts[1] };
+    }
+    if (parts.length === 3 && parts[0] && parts[1] && parts[2]) {
+      return { channelId: parts[0], projectId: parts[1], userId: parts[2] };
+    }
+    return undefined;
+  }
+
+  /**
    * Build a standard AgentLoopOptions from the current runtime state.
    * Callers can spread additional fields (onToolCall, onToolResult, etc.) on top.
    */

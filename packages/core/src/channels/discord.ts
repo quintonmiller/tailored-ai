@@ -261,7 +261,11 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     // Project-scoped sessions are namespaced under their project id so the same user
     // in two different mapped channels gets isolated history (and parallel processing).
     const projectCtx = this.resolveMessageProject(msg);
-    const userKey = projectCtx ? `discord:${projectCtx.id}:${msg.author.id}` : `discord:${msg.author.id}`;
+    const userKey = this.runtime.makeSessionKey({
+      channelId: "discord",
+      userId: msg.author.id,
+      project: projectCtx,
+    });
     if (this.processing.has(userKey)) {
       await msg.reply("I'm still working on your previous message, hold on...");
       return;
@@ -562,7 +566,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
 
   private async handleInteraction(interaction: ChatInputCommandInteraction): Promise<void> {
     const userId = interaction.user.id;
-    const userKey = `discord:${userId}`;
+    const userKey = this.runtime.makeSessionKey({ channelId: "discord", userId });
 
     // Deduplicate
     if (this.processing.has(userKey)) {
@@ -756,7 +760,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
 
   private async buildContextReply(userId: string, agentName?: string): Promise<string> {
     const config = this.runtime.getConfig();
-    const userKey = `discord:${userId}`;
+    const userKey = this.runtime.makeSessionKey({ channelId: "discord", userId });
     const resolved = resolveAgent(
       agentName,
       config,
