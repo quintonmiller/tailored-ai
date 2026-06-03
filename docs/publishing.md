@@ -109,6 +109,27 @@ End state per release: new package versions on the npm registry, tagged
 GitHub releases per package with the changelog body, no human in the loop
 after the feature PR merges.
 
+## Pre-1.0 versioning rule
+
+Until we ship `1.0.0`, mark every changeset as `patch` regardless of whether
+the change is technically a minor feature. Two reasons:
+
+1. **Semver pre-1.0 minor _is_ breaking.** `^0.1.0` does not satisfy `0.2.0`
+   — the caret is special-cased pre-1.0. Calling something `minor` leaks
+   breaking changes onto consumers pinned with caret ranges.
+2. **Changesets escalates peer dependents.** `@tailored-ai/channel-slack`
+   and `@tailored-ai/google-tools` declare `@tailored-ai/core` as a peer
+   dependency (correct plugin pattern). When `core` bumps `minor` while
+   below 1.0, changesets bumps every peer dependent in the `fixed` group to
+   `major` (the new version no longer satisfies the peer range), which
+   ripples to all 7 packages and pushes the whole group to `1.0.0` before
+   we're ready.
+
+The `1.0.0` release will be coordinated when the public surface is stable
+and we deliberately want to cut it. Until then, every release is
+`0.1.x → 0.1.(x+1)`. `pnpm changeset add` lets you pick a bump type per
+package; pick `patch` for all of them.
+
 ## Inspecting what would publish before merging
 
 Run locally on the branch with the queued changesets:

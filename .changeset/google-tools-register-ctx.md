@@ -1,5 +1,5 @@
 ---
-"@tailored-ai/google-tools": minor
+"@tailored-ai/google-tools": patch
 "@tailored-ai/cli": patch
 ---
 
