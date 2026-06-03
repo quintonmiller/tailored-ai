@@ -1,0 +1,46 @@
+name: Auto-merge version PR
+
+# Enables GitHub auto-merge on the changesets-generated "Version Packages" PR
+# (branch: changeset-release/main). GitHub waits for required status checks
+# (build-and-test) to go green, then squash-merges automatically. Merge to
+# main re-triggers release.yml, which runs the npm publish.
+#
+# This means the human-in-the-loop sequence collapses to: write changesets,
+# merge feature PRs, walk away. No need to manually merge the version PR.
+#
+# Safety:
+# - Only fires on the bot-authored changeset-release/main branch.
+# - Only enables auto-merge (not direct merge) — required CI checks still
+#   gate the merge.
+# - If you want to inspect a release before it goes out, dismiss auto-merge
+#   on the PR; the action's idempotent and won't re-enable it on the same
+#   sha.
+#
+# Pre-requisites (one-time, by a repo admin):
+# - Repository Settings → General → "Allow auto-merge".
+# - Branch protection on `main` requires the `build-and-test` check.
+#   Without required checks, auto-merge merges immediately, which defeats
+#   the safety net.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  enable-auto-merge:
+    if: >-
+      github.event.pull_request.head.ref == 'changeset-release/main' &&
+      github.event.pull_request.user.login == 'github-actions[bot]' &&
+      github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Enable auto-merge (squash)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr merge --auto --squash --repo "$GITHUB_REPOSITORY" "${{ github.event.pull_request.number }}"
