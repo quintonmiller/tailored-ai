@@ -59,11 +59,44 @@ export class TaskWatcher {
   }
 
   /**
-   * Convenience: notify by id. Looks up the current task row and forwards
-   * to notify(). Used by the tasks tool (which has the id at mutation
-   * time but not the full row). Silently no-ops if the row is gone.
+   * Convenience: notify by id. Looks up the current task and forwards to
+   * notify(). Used by the tasks tool (which has the id at mutation time
+   * but not the full row). Silently no-ops if the task is gone.
+   *
+   * `projectId` carries the routing key when the task lives on a per-project
+   * backend (PR #123). Without it the lookup falls back to the default
+   * backend, which silently misses GitHub-issue tasks (gh-* ids never
+   * appear in project_tasks). With it, the runtime's per-project resolver
+   * fetches from the right backend.
    */
-  notifyById(action: TaskEvent["action"], taskId: string): void {
+  notifyById(action: TaskEvent["action"], taskId: string, projectId?: string): void {
+    if (projectId) {
+      // Per-project lookup: backend.get is async. Fire the notify when it
+      // resolves; swallow errors so a flaky GH API call doesn't break the
+      // watcher.
+      void this.runtime
+        .getTaskBackendForProject(projectId)
+        .get(taskId)
+        .then((task) => {
+          if (!task) return;
+          // The Task interface from the backend is structurally compatible
+          // with ProjectTask for the fields the watcher reads (id, title,
+          // assignee, tags, status, etc.). project_id on the backend Task
+          // is null for GH (issues don't carry our project_id); inject the
+          // routing key so downstream resolution (worktree path, etc.)
+          // finds it.
+          const projectTask = { ...task, project_id: projectId } as ProjectTask;
+          this.notify({ action, task: projectTask });
+        })
+        .catch((err) => {
+          console.warn(`[task-watcher] notifyById ${taskId} via project ${projectId} failed:`, (err as Error).message);
+        });
+      return;
+    }
+
+    // Default backend: keep the original synchronous SQL path. Faster than
+    // going through the backend resolver for the common case and avoids
+    // touching the existing test surface.
     const row = this.runtime.db.prepare("SELECT * FROM project_tasks WHERE id = ?").get(taskId) as
       | ProjectTask
       | undefined;
