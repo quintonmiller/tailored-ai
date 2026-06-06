@@ -1,5 +1,58 @@
 # @tailored-ai/core
 
+## 0.1.2
+
+### Patch Changes
+
+- d2733dc: GitHub task backend routes TAI agent-role assignees (coder, reviewer,
+  planner, etc.) through `agent:<role>` labels instead of GitHub's
+  `assignees` API. GitHub rejects `assignees: ["coder"]` with 422 because
+  "coder" isn't a real collaborator, which previously prevented the
+  backend from creating any task assigned to an agent role.
+
+  - New `tasks.github.agentRoles` config option to extend the built-in
+    set of agent names (defaults cover the standard TAI agents).
+  - Real GitHub usernames still go through the assignees API.
+  - Reads round-trip cleanly: `toTask` prefers the `agent:*` label, falls
+    back to the first GH assignee.
+  - `query` and `nextBacklogTask` filter by label when the requested
+    assignee is an agent role.
+
+- a6d5d9b: Project overlays (`.tai.yaml`) now have `${ENV}` references interpolated
+  before merging onto the global config. Previously a per-project overlay
+  that referenced `${GITHUB_PERSONAL_TOKEN}` in `tasks.github.token`
+  reached the GitHub task backend as the literal string
+  `${GITHUB_PERSONAL_TOKEN}`, producing `Bad credentials` on every Octokit
+  call. The base config has always been interpolated by `loadConfig`; the
+  overlay path skipped this step entirely.
+
+  Fix applies in `mergeProjectOverlay` itself so every overlay consumer
+  (per-project task backends, the active-project runtime overlay, etc.)
+  benefits without each caller having to remember to interpolate.
+
+- 74bc27d: Task-watcher routes notifyById through the per-project backend resolver
+  (PR #123). Previously the watcher's notifyById always looked up tasks
+  via direct SQL against `project_tasks` — fine for native-backend tasks
+  but invisible to GitHub-issue tasks (`gh-*` ids), which silently
+  dropped out of the routing pipeline. The coder agent never ran on any
+  task filed via the per-project GH backend.
+
+  - `TasksToolNotify` callback signature gains an optional `projectId`
+    argument. The tasks tool passes the calling args' `project_id` on
+    every create/update/comment.
+  - The CLI's `_taskWatcherRef.notifyById` accepts the new arg and
+    forwards to the watcher.
+  - `TaskWatcher.notifyById` uses `runtime.getTaskBackendForProject(projectId).get(id)`
+    when `projectId` is supplied; the native SQL path is preserved as
+    fallback for the no-projectId case.
+  - Project id is injected back onto the resolved task so downstream
+    worktree-path resolution finds the right repo.
+
+  Three new tests cover the project-routed path, the native-fallback
+  path, and the gracefully-empty case.
+
+  - @tailored-ai/browser-mediator@0.1.2
+
 ## 0.1.1
 
 ### Patch Changes
