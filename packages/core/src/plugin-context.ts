@@ -25,6 +25,7 @@
 
 import type { ChannelFactory } from "./channels/registry.js";
 import { registerChannelFactory } from "./channels/registry.js";
+import { type EventBus, TypedEventBus } from "./events.js";
 import type { MemoryBackendFactory } from "./memory/registry.js";
 import { registerMemoryBackendFactory } from "./memory/registry.js";
 import type { EmbeddingFactory, ProviderFactory } from "./providers/factories.js";
@@ -76,6 +77,17 @@ export interface PluginContext {
   memoryBackends: MemoryBackendRegistryView;
   taskBackends: TaskBackendRegistryView;
   uiProviders: UiProviderRegistryView;
+  /**
+   * Typed pub/sub bus for runtime lifecycle events. Plugins subscribe via
+   * `ctx.events.on(name, handler)` and get back a disposer.
+   *
+   * Slice 1 of the platform vision (`docs/platform-vision.md`): the bus
+   * ships, but emissions land incrementally as later slices wire the
+   * underlying subsystems through it. Subscribing is safe today — your
+   * handler simply won't fire until the corresponding event starts
+   * being emitted.
+   */
+  events: EventBus;
 }
 
 /**
@@ -90,6 +102,16 @@ export interface PluginContext {
  */
 export type Plugin = (ctx: PluginContext) => void | Promise<void>;
 
+export interface CreatePluginContextOptions {
+  /**
+   * Event bus to expose as `ctx.events`. The runtime passes its own
+   * `runtime.events` so plugin subscriptions land on the same bus the
+   * runtime emits to. Tests + standalone callers can omit this and get
+   * a fresh in-memory bus.
+   */
+  events?: EventBus;
+}
+
 /**
  * Build a {@link PluginContext} that delegates to the existing module-scope
  * register* functions. This is the bridge that makes the new contract work
@@ -99,7 +121,7 @@ export type Plugin = (ctx: PluginContext) => void | Promise<void>;
  * Pass this to {@link loadPlugins} so plugin imports that export a
  * `default(ctx)` function get invoked with the right shape.
  */
-export function createPluginContext(): PluginContext {
+export function createPluginContext(opts: CreatePluginContextOptions = {}): PluginContext {
   return {
     tools: { register: registerToolFactory },
     channels: { register: registerChannelFactory },
@@ -108,5 +130,6 @@ export function createPluginContext(): PluginContext {
     memoryBackends: { register: registerMemoryBackendFactory },
     taskBackends: { register: registerTaskBackendFactory },
     uiProviders: { register: registerUiProviderFactory },
+    events: opts.events ?? new TypedEventBus(),
   };
 }

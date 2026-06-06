@@ -8,6 +8,7 @@ import { findOrCreateSession, type Session } from "./agent/session.js";
 import type { ApprovalRequest, ApprovalResponse } from "./approval.js";
 import { type AgentConfig, type AgentHook, mergeProjectOverlay, validateConfig } from "./config.js";
 import { getProject } from "./db/project-queries.js";
+import { type EventBus, TypedEventBus } from "./events.js";
 import type { MemoryBackend } from "./memory/interface.js";
 import { resolveMemoryBackend } from "./memory/registry.js";
 import { type ProjectContext, type ProjectRef, readProjectFile } from "./projects/resolve.js";
@@ -36,6 +37,13 @@ export interface RuntimeOptions {
   db: Database.Database;
   contextDir: string;
   kbDir: string;
+  /**
+   * Event bus to use. Pass the same instance you handed to
+   * `createPluginContext()` so plugin subscriptions land on the bus the
+   * runtime emits to. Optional — when omitted, the runtime constructs
+   * its own bus (fine for standalone callers + tests).
+   */
+  events?: EventBus;
   createTools: (
     config: AgentConfig,
     contextDir: string,
@@ -73,6 +81,17 @@ export class AgentRuntime {
    * concurrent callers so we don't double-construct.
    */
   private _memoryBackend: Promise<MemoryBackend> | undefined;
+  /**
+   * Typed pub/sub bus for runtime lifecycle events — the foundation of
+   * the platform vision (`docs/platform-vision.md`). Internal subsystems
+   * and plugins both subscribe; emissions land here. Cleared and re-armed
+   * on `reload()` so stale handlers from a previous generation don't
+   * keep firing.
+   *
+   * Assigned in the constructor either from `opts.events` (so plugin
+   * context and runtime share an instance) or a fresh `TypedEventBus`.
+   */
+  readonly events: EventBus;
   private _generation = 0;
   private _watcher: FSWatcher | undefined;
   private _debounceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -109,6 +128,7 @@ export class AgentRuntime {
     initialConfig: AgentConfig,
     initialProject?: ProjectContext | null,
   ) {
+    this.events = opts.events ?? new TypedEventBus();
     this.configPath = opts.configPath;
     this.db = opts.db;
     this.contextDir = opts.contextDir;
@@ -449,6 +469,12 @@ export class AgentRuntime {
       this._workflows.reloadFromDisk();
       const projectTag = this._activeProject ? ` [project:${this._activeProject.id}]` : "";
       console.log(`[runtime] Reloaded config (generation ${this._generation})${projectTag}`);
+      // Emit reload BEFORE clearing so current subscribers (who may want
+      // to do bookkeeping on every reload) hear it. Then clear, so the
+      // next generation starts on a clean bus and stale handlers from
+      // dropped plugin imports can't keep firing.
+      this.events.emit("runtime.reloaded", { generation: this._generation });
+      this.events.clear();
       for (const cb of this._reloadListeners) {
         try {
           cb();
