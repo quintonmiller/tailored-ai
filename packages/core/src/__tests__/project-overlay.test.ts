@@ -72,6 +72,30 @@ describe("mergeProjectOverlay", () => {
     expect(merged.agents.coder.tools).toEqual(["read"]);
   });
 
+  it("interpolates ${ENV} references in the overlay before merging", () => {
+    // Regression: a per-project `.tai.yaml` whose `tasks.github.token`
+    // referenced ${GITHUB_PERSONAL_TOKEN} reached the github task backend
+    // as the literal string `${GITHUB_PERSONAL_TOKEN}`, producing
+    // "Bad credentials" on every Octokit call.
+    process.env._OVERLAY_TEST_TOKEN = "ghp_secret_value";
+    try {
+      const base = baseConfig();
+      const merged = mergeProjectOverlay(base, {
+        tasks: {
+          backend: "github",
+          github: {
+            repo: "acme/widgets",
+            token: "${_OVERLAY_TEST_TOKEN}",
+          },
+        },
+      });
+      expect(merged.tasks?.github?.token).toBe("ghp_secret_value");
+      expect(merged.tasks?.github?.repo).toBe("acme/widgets");
+    } finally {
+      delete process.env._OVERLAY_TEST_TOKEN;
+    }
+  });
+
   it("does not mutate the base config", () => {
     const base = baseConfig();
     const before = JSON.stringify(base);
