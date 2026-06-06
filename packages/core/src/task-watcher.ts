@@ -59,11 +59,44 @@ export class TaskWatcher {
   }
 
   /**
-   * Convenience: notify by id. Looks up the current task row and forwards
-   * to notify(). Used by the tasks tool (which has the id at mutation
-   * time but not the full row). Silently no-ops if the row is gone.
+   * Convenience: notify by id. Looks up the current task and forwards to
+   * notify(). Used by the tasks tool (which has the id at mutation time
+   * but not the full row). Silently no-ops if the task is gone.
+   *
+   * `projectId` carries the routing key when the task lives on a per-project
+   * backend (PR #123). Without it the lookup falls back to the default
+   * backend, which silently misses GitHub-issue tasks (gh-* ids never
+   * appear in project_tasks). With it, the runtime's per-project resolver
+   * fetches from the right backend.
    */
-  notifyById(action: TaskEvent["action"], taskId: string): void {
+  notifyById(action: TaskEvent["action"], taskId: string, projectId?: string): void {
+    if (projectId) {
+      // Per-project lookup: backend.get is async. Fire the notify when it
+      // resolves; swallow errors so a flaky GH API call doesn't break the
+      // watcher.
+      void this.runtime
+        .getTaskBackendForProject(projectId)
+        .get(taskId)
+        .then((task) => {
+          if (!task) return;
+          // The Task interface from the backend is structurally compatible
+          // with ProjectTask for the fields the watcher reads (id, title,
+          // assignee, tags, status, etc.). project_id on the backend Task
+          // is null for GH (issues don't carry our project_id); inject the
+          // routing key so downstream resolution (worktree path, etc.)
+          // finds it.
+          const projectTask = { ...task, project_id: projectId } as ProjectTask;
+          this.notify({ action, task: projectTask });
+        })
+        .catch((err) => {
+          console.warn(`[task-watcher] notifyById ${taskId} via project ${projectId} failed:`, (err as Error).message);
+        });
+      return;
+    }
+
+    // Default backend: keep the original synchronous SQL path. Faster than
+    // going through the backend resolver for the common case and avoids
+    // touching the existing test surface.
     const row = this.runtime.db.prepare("SELECT * FROM project_tasks WHERE id = ?").get(taskId) as
       | ProjectTask
       | undefined;
@@ -323,7 +356,7 @@ export class TaskWatcher {
         "   `pnpm typecheck` and `pnpm test`. Fix failures before committing.",
         '4. `git add` + `git commit -m "<task_id>: <short summary>"`',
         "   (The worktree is already on the right branch — no need to checkout.)",
-        `5. Hand off immediately: \`tasks(action=update, id=${event.task.id}, status=in_review, assignee=reviewer)\` and add a comment with the branch name + commit sha + one-line summary.`,
+        `5. Hand off immediately: \`tasks(action=update, id=${event.task.id}, project_id=${event.task.project_id ?? "<project>"}, status=in_review, assignee=reviewer)\` and add a comment with the branch name + commit sha + one-line summary. **The \`project_id\` is mandatory** when the task lives on a per-project tracker (e.g. GitHub issues) — without it the tool falls back to the default backend and the update silently 404s.`,
         "6. **Stop here.** The host pushes branches and merges them; your commit",
         "   reaches the host via the .git bind mount as soon as `git commit`",
         "   succeeds. `git push` is unnecessary and will fail (no SSH key in",
@@ -395,17 +428,25 @@ export class TaskWatcher {
         "  `git diff main..HEAD` is identical.",
         "",
         "Decision (only after all three gates pass):",
+        `  **\`project_id\` is mandatory on every tasks() call.** Pass \`project_id=${event.task.project_id ?? "<project>"}\` ` +
+          "or the update silently 404s on the default backend instead of " +
+          "the project's tracker (GitHub issues, etc.).",
         "  - **APPROVE**: " +
-          `\`tasks(action=update, id=${event.task.id}, status=in_review, assignee=${ownerName})\`. ` +
+          `\`tasks(action=update, id=${event.task.id}, project_id=${event.task.project_id ?? "<project>"}, status=in_review, assignee=${ownerName})\`. ` +
           "Comment must state: (a) what was done, (b) which gates passed",
         "    (build/test output summary, merge-base SHA, scope verified).",
         "  - **REQUEST CHANGES**: " +
-          `\`tasks(action=update, id=${event.task.id}, status=in_progress, assignee=coder)\`. ` +
+          `\`tasks(action=update, id=${event.task.id}, project_id=${event.task.project_id ?? "<project>"}, status=in_progress, assignee=coder)\`. ` +
           "Comment lists specific actionable items — file path, line ref,",
         "    what's wrong, what's expected. Include the first error from the",
         "    failing gate so the coder doesn't have to re-run it.",
         "",
-        "You do NOT commit, push, or amend the branch yourself. You only review.",
+        "You do NOT commit or amend the branch. Pushing IS allowed when",
+        "your custom configuration calls for it (e.g. to open a PR on",
+        "approve) — the worktree's per-task branch is isolated so a push",
+        "can't pollute main. Before the first push in a fresh container,",
+        "run `gh auth setup-git` to wire git's credential helper through",
+        "the GH_TOKEN your sandbox env carries.",
         "Aim for one decisive decision per review pass — don't bounce trivial issues; do bounce real problems.",
         "",
       ].join("\n");

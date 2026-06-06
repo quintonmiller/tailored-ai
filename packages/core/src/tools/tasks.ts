@@ -12,8 +12,13 @@ function collectStatuses(backend: TaskBackend): string[] {
 
 /** Notify hook fired after a successful task mutation. The watcher uses it to
  *  re-trigger the routing pipeline so coder→reviewer and reviewer→coder
- *  handoffs work (docs/agent-unification.md, Phase 6). */
-export type TasksToolNotify = (action: "created" | "updated" | "commented", taskId: string) => void;
+ *  handoffs work (docs/agent-unification.md, Phase 6).
+ *
+ *  `projectId` carries the routing key when the task lives on a per-project
+ *  backend (PR #123). The watcher uses it to look up the task via the right
+ *  backend — without it, the lookup falls back to the default backend, which
+ *  is the bug that left gh-* tasks orphaned. */
+export type TasksToolNotify = (action: "created" | "updated" | "commented", taskId: string, projectId?: string) => void;
 
 /** Resolves the task backend to use for a given project. When no projectId
  *  is given (or it's null), returns the default (top-level) backend. Lets a
@@ -203,7 +208,7 @@ export class TasksTool implements Tool {
     ];
     if (task.tags.length) lines.push(`Tags: ${task.tags.join(", ")}`);
 
-    this.notify?.("created", task.id);
+    this.notify?.("created", task.id, projectId);
     return { success: true, output: lines.join("\n") };
   }
 
@@ -312,7 +317,7 @@ export class TasksTool implements Tool {
     });
 
     if (!task) return { success: false, output: "", error: `Task ${id} not found.` };
-    this.notify?.("updated", task.id);
+    this.notify?.("updated", task.id, projectId);
     return { success: true, output: `Updated task "${task.title}" (${task.id}) — status: ${task.status}` };
   }
 
@@ -332,7 +337,7 @@ export class TasksTool implements Tool {
     const backend = this.resolveBackend(projectId);
     const comment = await backend.comment(id, text, author);
     if (!comment) return { success: false, output: "", error: `Task ${id} not found.` };
-    this.notify?.("commented", id);
+    this.notify?.("commented", id, projectId);
     return { success: true, output: `Added comment to task ${id}.` };
   }
 }
