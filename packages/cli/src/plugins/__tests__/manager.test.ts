@@ -175,6 +175,45 @@ describe("PluginManager.buildImporter", () => {
     const importer = mgr.buildImporter();
     await expect(importer("not-installed")).rejects.toThrow(/not installed.*tai plugin install not-installed/);
   });
+
+  // Regression for pure-ESM plugins that publish an `exports` map with only
+  // the `import` condition (no `main`, no `default`, no `require`). CJS
+  // `require.resolve` can't see the `import` condition, so the loader has
+  // to fall through to `import.meta.resolve`. @tailored-ai/google-tools
+  // 0.1.1 shipped this exact layout and the agent failed to find gmail
+  // until the loader learned this path.
+  it("imports a pure-ESM plugin whose exports map exposes only the `import` condition", async () => {
+    const mgr = new PluginManager(homeDir, fakeExecutor());
+    mgr.bootstrap();
+    const { mkdirSync } = await import("node:fs");
+    const root = resolve(mgr.pluginDir, "node_modules", "esm-only");
+    mkdirSync(root, { recursive: true });
+    writeFileSync(
+      resolve(root, "package.json"),
+      JSON.stringify({
+        name: "esm-only",
+        type: "module",
+        exports: {
+          ".": {
+            types: "./dist/index.d.ts",
+            import: "./dist/index.js",
+          },
+        },
+      }),
+      "utf8",
+    );
+    mkdirSync(resolve(root, "dist"), { recursive: true });
+    writeFileSync(resolve(root, "dist", "index.js"), "export const esmOnly = true;\n", "utf8");
+    writeFileSync(
+      mgr.packageJsonPath,
+      JSON.stringify({ name: "tai-plugins", dependencies: { "esm-only": "0.0.0" } }, null, 2),
+      "utf8",
+    );
+
+    const importer = mgr.buildImporter();
+    const mod = (await importer("esm-only")) as { esmOnly?: boolean };
+    expect(mod.esmOnly).toBe(true);
+  });
 });
 
 describe("PluginManager.spy", () => {
