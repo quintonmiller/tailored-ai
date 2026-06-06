@@ -1,5 +1,14 @@
 # @tailored-ai/channel-slack
 
+## 0.1.2
+
+### Patch Changes
+
+- Updated dependencies [d2733dc]
+- Updated dependencies [a6d5d9b]
+- Updated dependencies [74bc27d]
+  - @tailored-ai/core@0.1.2
+
 ## 0.1.1
 
 ### Patch Changes

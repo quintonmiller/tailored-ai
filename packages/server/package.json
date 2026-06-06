@@ -1,6 +1,6 @@
 {
   "name": "@tailored-ai/server",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Agent HTTP API server (Hono routes, SSE, webhooks, static UI serving)",
   "license": "MIT",
   "author": "Quinton Miller",
