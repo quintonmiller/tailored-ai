@@ -421,3 +421,102 @@ describe("task-watcher notify() force flag", () => {
     });
   });
 });
+
+describe("task-watcher notifyById per-project routing", () => {
+  // Regression: when a task lives on a per-project backend (e.g. the
+  // GitHub task backend per PR #123), notifyById's old SQL lookup against
+  // `project_tasks` couldn't find it. Tasks like `gh-3` silently
+  // disappeared from the routing pipeline — coder never ran. With a
+  // projectId argument, the watcher routes through
+  // runtime.getTaskBackendForProject(...).get(id).
+  it("routes notifyById to the project's backend when projectId is supplied", async () => {
+    // In-memory stub backend that knows about a single task.
+    const stubBackend = {
+      name: "stub",
+      get: async (id: string) => {
+        if (id !== "gh-3") return undefined;
+        return {
+          id: "gh-3",
+          title: "Add hello_tai.py",
+          description: "",
+          status: "backlog",
+          author: "agent",
+          tags: [],
+          assignee: "coder",
+          rank: 3,
+          blocked_reason: null,
+          project_id: null,
+          created_at: "2026-06-03T00:00:00Z",
+          updated_at: "2026-06-03T00:00:00Z",
+        };
+      },
+    };
+    const runtime: any = {
+      db,
+      getConfig: () => ({
+        agents: { coder: { description: "" } },
+        channels: {},
+        taskWatcher: { enabled: true, delivery: { channel: "log" }, triggers: ["created"], debounceMs: 0 },
+      }),
+      getTaskBackendForProject: (projectId: string | undefined) => {
+        expect(projectId).toBe("tai-personal");
+        return stubBackend;
+      },
+    };
+    const watcher = new TaskWatcher({ runtime }) as any;
+    const received: Array<{ action: string; taskId: string; projectId: string | null }> = [];
+    watcher.notify = (event: { action: string; task: { id: string; project_id: string | null } }) => {
+      received.push({ action: event.action, taskId: event.task.id, projectId: event.task.project_id });
+    };
+
+    watcher.notifyById("created", "gh-3", "tai-personal");
+
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        expect(received).toEqual([{ action: "created", taskId: "gh-3", projectId: "tai-personal" }]);
+        resolve();
+      }, 30);
+    });
+  });
+
+  it("falls back to the native SQL path when no projectId is supplied", () => {
+    const runtime = makeFakeRuntime();
+    const watcher = new TaskWatcher({ runtime }) as any;
+    const task = createProjectTask(db, { title: "Local task", assignee: "coder" });
+    const received: Array<{ action: string; taskId: string }> = [];
+    watcher.notify = (event: { action: string; task: { id: string } }) => {
+      received.push({ action: event.action, taskId: event.task.id });
+    };
+
+    watcher.notifyById("created", task.id);
+
+    expect(received).toEqual([{ action: "created", taskId: task.id }]);
+  });
+
+  it("no-ops silently when the per-project backend returns undefined", async () => {
+    const stubBackend = { name: "stub", get: async () => undefined };
+    const runtime: any = {
+      db,
+      getConfig: () => ({
+        agents: {},
+        channels: {},
+        taskWatcher: { enabled: true, delivery: { channel: "log" }, triggers: ["created"], debounceMs: 0 },
+      }),
+      getTaskBackendForProject: () => stubBackend,
+    };
+    const watcher = new TaskWatcher({ runtime }) as any;
+    let notifyCalls = 0;
+    watcher.notify = () => {
+      notifyCalls++;
+    };
+
+    watcher.notifyById("created", "gh-9999", "tai-personal");
+
+    return new Promise<void>((resolve) => {
+      setTimeout(() => {
+        expect(notifyCalls).toBe(0);
+        resolve();
+      }, 30);
+    });
+  });
+});

@@ -110,7 +110,9 @@ registerUiProviderFactory("builtin", () => {
  * mutations); runServer() assigns it after constructing the watcher
  * (Phase 6 — multi-agent task handoffs).
  */
-let _taskWatcherRef: { notifyById: (action: "created" | "updated" | "commented", id: string) => void } | undefined;
+let _taskWatcherRef:
+  | { notifyById: (action: "created" | "updated" | "commented", id: string, projectId?: string) => void }
+  | undefined;
 
 async function runServer(runtime: AgentRuntime) {
   // Every registered channel — Discord (built-in) plus plugin channels
@@ -641,7 +643,7 @@ async function main() {
       getOwnerId: () => cfg.channels.discord?.owner,
       // Module-scoped _taskWatcherRef gets assigned by runServer().
       // Reads lazily at tool-call time, so it's fine if undefined here.
-      notifyTaskEvent: (action, id) => _taskWatcherRef?.notifyById(action, id),
+      notifyTaskEvent: (action, id, projectId) => _taskWatcherRef?.notifyById(action, id, projectId),
     });
 
   const runtime = new AgentRuntime(
