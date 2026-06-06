@@ -17,8 +17,14 @@ import type {
  *   id          ↔ "gh-<issue.number>"
  *   status      ↔ derived from labels: "status:backlog" | "status:in_progress"
  *                  | "status:blocked" | "status:in_review"; closed → "done"
- *   tags        ↔ labels (excluding "status:*" and "reason:*")
- *   assignee    ↔ first assignee's login
+ *   tags        ↔ labels (excluding "status:*", "reason:*", and "agent:*")
+ *   assignee    ↔ "agent:<name>" label when the assignee is a configured
+ *                  TAI agent role (coder, reviewer, …); otherwise the
+ *                  GitHub issue's first assignee login. GitHub rejects
+ *                  `assignees: ["coder"]` with 422 because "coder" isn't
+ *                  a real collaborator, so agent-role assignments live
+ *                  in a label and only real users go through GH's
+ *                  assignees API.
  *   author      ↔ issue.user.login
  *   rank        ↔ issue.number (lower = older issue = higher priority)
  *   blocked_reason ↔ first "reason:*" label after the prefix
@@ -27,6 +33,27 @@ import type {
 
 const STATUS_LABEL_PREFIX = "status:";
 const REASON_LABEL_PREFIX = "reason:";
+const AGENT_LABEL_PREFIX = "agent:";
+
+/**
+ * Built-in TAI agent role names. Assignments to these never hit GitHub's
+ * `assignees` API — they ride on an `agent:<role>` label instead. Callers
+ * extend this set via `GitHubBackendOptions.agentRoles` to register
+ * custom agents.
+ */
+const DEFAULT_AGENT_ROLES = [
+  "coder",
+  "reviewer",
+  "planner",
+  "researcher",
+  "writer",
+  "default",
+  "cleanup",
+  "capability-researcher",
+  "email-fetcher",
+  "email-classifier",
+  "email-actor",
+];
 
 const STATUSES: TaskStatusMap = {
   backlog: "backlog",
@@ -47,6 +74,14 @@ export interface GitHubBackendOptions {
   repo: string;
   /** GitHub personal access token with repo scope. */
   token: string;
+  /**
+   * Names that should be treated as TAI agent roles rather than GitHub
+   * users when used as a task assignee. Stored as `agent:<name>` labels
+   * so the assignment survives a round-trip through GH without the API
+   * rejecting unknown logins. Defaults to the built-in TAI agent set
+   * (coder, reviewer, planner, etc.). Extend with custom agent names.
+   */
+  agentRoles?: string[];
   /** Inject a pre-built Octokit instance (mainly for tests). */
   octokit?: Octokit;
 }
@@ -71,6 +106,7 @@ export class GitHubTaskBackend implements TaskBackend {
   private octokit: Octokit;
   private owner: string;
   private repo: string;
+  private agentRoles: Set<string>;
 
   constructor(opts: GitHubBackendOptions) {
     const [owner, repo] = opts.repo.split("/");
@@ -80,6 +116,19 @@ export class GitHubTaskBackend implements TaskBackend {
     this.owner = owner;
     this.repo = repo;
     this.octokit = opts.octokit ?? new Octokit({ auth: opts.token });
+    this.agentRoles = new Set(opts.agentRoles ?? DEFAULT_AGENT_ROLES);
+  }
+
+  /**
+   * Split an assignee into the GitHub-side assignees array + the agent-role
+   * label. `null` clears both; a known agent name routes to label only; any
+   * other string is sent to GH's assignees API as a real user.
+   */
+  private splitAssignee(assignee: string | null | undefined): { ghAssignees?: string[]; agentLabel?: string } {
+    if (assignee === undefined) return {};
+    if (assignee === null || assignee === "") return { ghAssignees: [], agentLabel: "" };
+    if (this.agentRoles.has(assignee)) return { ghAssignees: [], agentLabel: assignee };
+    return { ghAssignees: [assignee], agentLabel: "" };
   }
 
   isDone(status: string): boolean {
@@ -136,14 +185,19 @@ export class GitHubTaskBackend implements TaskBackend {
   }
 
   async create(input: TaskCreateInput): Promise<Task> {
+    const { ghAssignees, agentLabel } = this.splitAssignee(input.assignee);
     const labels = this.buildLabels(input.tags, input.status, undefined);
+    if (agentLabel) (labels ?? (labels === undefined ? [] : labels))!.push(`${AGENT_LABEL_PREFIX}${agentLabel}`);
+    // buildLabels returns undefined when there's nothing to add. Promote
+    // to an array if we appended an agent label.
+    const finalLabels = labels ?? (agentLabel ? [`${AGENT_LABEL_PREFIX}${agentLabel}`] : undefined);
     const r = await this.octokit.rest.issues.create({
       owner: this.owner,
       repo: this.repo,
       title: input.title,
       body: input.description ?? "",
-      labels,
-      assignees: input.assignee ? [input.assignee] : undefined,
+      labels: finalLabels,
+      assignees: ghAssignees,
     });
     return this.toTask(r.data as IssueLike);
   }
@@ -213,8 +267,22 @@ export class GitHubTaskBackend implements TaskBackend {
     if (patch.description !== undefined) params.body = patch.description;
     if (patch.status === "done") params.state = "closed";
     else if (patch.status !== undefined) params.state = "open";
-    if (labels) params.labels = labels;
-    if (patch.assignee !== undefined) params.assignees = patch.assignee ? [patch.assignee] : [];
+
+    let mergedLabels = labels;
+    if (patch.assignee !== undefined) {
+      const { ghAssignees, agentLabel } = this.splitAssignee(patch.assignee);
+      params.assignees = ghAssignees;
+      // Update labels to reflect the new agent assignment: strip any
+      // existing agent:* labels, then add the new one if present.
+      const base =
+        mergedLabels ??
+        ((current.data.labels ?? []) as Array<string | { name?: string }>).map((l) =>
+          typeof l === "string" ? l : (l.name ?? ""),
+        );
+      const stripped = base.filter((l) => l && !l.startsWith(AGENT_LABEL_PREFIX));
+      mergedLabels = agentLabel ? [...stripped, `${AGENT_LABEL_PREFIX}${agentLabel}`] : stripped;
+    }
+    if (mergedLabels) params.labels = mergedLabels;
 
     const r = await this.octokit.rest.issues.update(params);
     return this.toTask(r.data as IssueLike);
@@ -272,6 +340,16 @@ export class GitHubTaskBackend implements TaskBackend {
       }
     }
     if (filter?.tags) labels.push(...filter.tags);
+    // Agent-role assignees live on labels, not on GH's assignees API.
+    // Route the filter accordingly.
+    let assigneeQuery: string | undefined;
+    if (filter?.assignee) {
+      if (this.agentRoles.has(filter.assignee)) {
+        labels.push(`${AGENT_LABEL_PREFIX}${filter.assignee}`);
+      } else {
+        assigneeQuery = filter.assignee;
+      }
+    }
 
     // GitHub's state is open|closed|all; pick based on whether any requested status is "done".
     const wantsDone =
@@ -287,7 +365,7 @@ export class GitHubTaskBackend implements TaskBackend {
       repo: this.repo,
       state,
       labels: labels.length > 0 ? labels.join(",") : undefined,
-      assignee: filter?.assignee,
+      assignee: assigneeQuery,
       since: filter?.updatedAfter,
       per_page: filter?.limit ?? 50,
       page: filter?.offset ? Math.floor(filter.offset / (filter.limit ?? 50)) + 1 : 1,
@@ -312,13 +390,16 @@ export class GitHubTaskBackend implements TaskBackend {
   async nextBacklogTask(assignees: string[]): Promise<Task | undefined> {
     if (assignees.length === 0) return undefined;
     // Try each assignee in turn; first hit wins (lowest issue number under that assignee).
+    // Agent-role assignees ride on `agent:<name>` labels; real users go
+    // through GitHub's assignee filter.
     for (const assignee of assignees) {
+      const isAgentRole = this.agentRoles.has(assignee);
       const r = await this.octokit.rest.issues.listForRepo({
         owner: this.owner,
         repo: this.repo,
         state: "open",
-        labels: STATUS_LABEL.backlog,
-        assignee,
+        labels: isAgentRole ? `${STATUS_LABEL.backlog},${AGENT_LABEL_PREFIX}${assignee}` : STATUS_LABEL.backlog,
+        assignee: isAgentRole ? undefined : assignee,
         per_page: 1,
         sort: "created",
         direction: "asc",
@@ -392,8 +473,16 @@ export class GitHubTaskBackend implements TaskBackend {
     const status = deriveStatus(issue);
     const blockedReason = deriveBlockedReason(allLabels);
     const tags = allLabels.filter(
-      (l) => !l.startsWith(STATUS_LABEL_PREFIX) && !l.startsWith(REASON_LABEL_PREFIX) && l !== "",
+      (l) =>
+        !l.startsWith(STATUS_LABEL_PREFIX) &&
+        !l.startsWith(REASON_LABEL_PREFIX) &&
+        !l.startsWith(AGENT_LABEL_PREFIX) &&
+        l !== "",
     );
+    // Agent-role label wins over GH assignee. The label is how the
+    // task-watcher picks tasks up — a human assignee is informational.
+    const agentLabel = allLabels.find((l) => l.startsWith(AGENT_LABEL_PREFIX));
+    const assignee = agentLabel ? agentLabel.slice(AGENT_LABEL_PREFIX.length) : (issue.assignees?.[0]?.login ?? null);
     return {
       id: `gh-${issue.number}`,
       title: issue.title,
@@ -401,7 +490,7 @@ export class GitHubTaskBackend implements TaskBackend {
       status,
       author: issue.user?.login ?? "",
       tags,
-      assignee: issue.assignees?.[0]?.login ?? null,
+      assignee,
       rank: issue.number,
       blocked_reason: blockedReason,
       project_id: null,
