@@ -197,6 +197,24 @@ export interface RuntimeEventMap {
     /** Human-readable reason the dispatch was requested. Goes to logs only today. */
     reason: string;
   };
+
+  /**
+   * The watcher is about to run an agent loop for a task. Emitted via
+   * `bus.emitAsync(...)` so subscribers can VETO the dispatch by
+   * returning `false` — e.g. the default CoderProjectGuard plugin
+   * refuses coder/reviewer dispatches that lack a usable project path.
+   *
+   * Subscribers that just want to observe (no veto) can subscribe with
+   * a void-returning handler; the bus only treats an explicit `false`
+   * return as veto.
+   */
+  "agent.dispatched": {
+    taskId: string;
+    projectId: string | null;
+    /** Resolved agent name (`coder`, `reviewer`, `default`, etc.) or undefined when the watcher routes to the default. */
+    agentName: string | undefined;
+    task: AgentCompletedTask;
+  };
 }
 
 /**
@@ -242,7 +260,16 @@ export type RuntimeEvent = keyof RuntimeEventMap;
 
 export type RuntimeEventPayload<K extends RuntimeEvent> = RuntimeEventMap[K];
 
-export type RuntimeEventHandler<K extends RuntimeEvent> = (payload: RuntimeEventPayload<K>) => void | Promise<void>;
+/**
+ * Handler signature. The return type intentionally allows a `boolean`
+ * (or `Promise<boolean>`) so handlers attached to vetoable events can
+ * say "veto this dispatch" by returning `false`. `emit` ignores the
+ * return value; only `emitAsync` consults it (see {@link EventBus.emitAsync}).
+ * Handlers that don't care return `void` as before.
+ */
+export type RuntimeEventHandler<K extends RuntimeEvent> = (
+  payload: RuntimeEventPayload<K>,
+) => void | boolean | Promise<void | boolean>;
 
 /**
  * Returned by `on()` so callers can stop receiving an event without
@@ -261,6 +288,21 @@ export interface EventBus {
   on<K extends RuntimeEvent>(event: K, handler: RuntimeEventHandler<K>): Subscription;
   off<K extends RuntimeEvent>(event: K, handler: RuntimeEventHandler<K>): void;
   emit<K extends RuntimeEvent>(event: K, payload: RuntimeEventPayload<K>): void;
+  /**
+   * Synchronous-causality variant of `emit`. Awaits every subscriber
+   * (sequentially, in registration order) and returns `true` when none
+   * vetoed, `false` when any handler returned `false`. Use for events
+   * where a plugin may need to block downstream work — e.g. the default
+   * CoderProjectGuard subscribes to `agent.dispatched` and returns
+   * `false` when the task lacks a usable project, which tells the
+   * watcher to skip the dispatch.
+   *
+   * A throwing handler is treated as **non-veto** and is logged; only
+   * an explicit `false` return blocks the operation. That keeps a
+   * misbehaving observability plugin from accidentally vetoing real
+   * work.
+   */
+  emitAsync<K extends RuntimeEvent>(event: K, payload: RuntimeEventPayload<K>): Promise<boolean>;
   /**
    * Remove every subscriber. Used during runtime reload so internal
    * subscribers re-arm cleanly and stale plugin handlers from a previous
@@ -318,7 +360,7 @@ export class TypedEventBus implements EventBus {
     // handler unsubscribing itself — doesn't break iteration.
     const snapshot = [...set];
     for (const handler of snapshot) {
-      let result: void | Promise<void>;
+      let result: void | boolean | Promise<void | boolean>;
       try {
         result = handler(payload);
       } catch (err) {
@@ -331,6 +373,27 @@ export class TypedEventBus implements EventBus {
         });
       }
     }
+  }
+
+  async emitAsync<K extends RuntimeEvent>(event: K, payload: RuntimeEventPayload<K>): Promise<boolean> {
+    const set = this.handlers.get(event);
+    if (!set || set.size === 0) return true;
+    // Snapshot up front so off/on during dispatch behave the same as
+    // `emit`. Sequential await ensures predictable ordering — a guard
+    // that mutates DB state needs to land before the next handler runs.
+    const snapshot = [...set];
+    let vetoed = false;
+    for (const handler of snapshot) {
+      try {
+        const result = await handler(payload);
+        if (result === false) vetoed = true;
+      } catch (err) {
+        // Throwing handlers are treated as non-veto. Logged like the
+        // emit() path so observability isn't affected by silent veto.
+        console.error(`[events] handler for "${event}" threw during emitAsync:`, err);
+      }
+    }
+    return !vetoed;
   }
 
   clear(): void {
