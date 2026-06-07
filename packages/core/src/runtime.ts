@@ -56,6 +56,11 @@ export interface RuntimeOptions {
       taskBackendResolver?: import("./tools/tasks.js").TaskBackendResolver;
       getEmbedder?: () => import("./providers/embedding.js").EmbeddingProvider | undefined;
       getMemoryBackend?: () => Promise<MemoryBackend>;
+      /** Runtime event bus, threaded through so the tasks tool (and any
+       *  future event-emitting tool) reaches the runtime's bus without the
+       *  CLI/server having to wire it explicitly. Slice 2 of the platform
+       *  vision (`docs/platform-vision.md`). */
+      events?: EventBus;
     },
   ) => Tool[];
   createProvider: (config: AgentConfig) => { provider: AIProvider; model: string };
@@ -150,6 +155,7 @@ export class AgentRuntime {
         taskBackendResolver: (projectId?: string | null) => this.getTaskBackendForProject(projectId),
         getEmbedder: () => this._embedder,
         getMemoryBackend: () => this.getMemoryBackend(),
+        events: this.events,
       }) ?? [];
     for (const tool of builtinTools) this._toolRegistry.registerBuiltin(tool);
     const { provider, model } = opts.createProvider(merged);
@@ -429,6 +435,7 @@ export class AgentRuntime {
           taskBackendResolver: (projectId?: string | null) => this.getTaskBackendForProject(projectId),
           getEmbedder: () => embedder,
           getMemoryBackend: () => this.getMemoryBackend(),
+          events: this.events,
         }) ?? [];
       const { provider, model } = this._createProvider(config);
       // Clean up old tools that have a destroy hook (e.g. browser processes).

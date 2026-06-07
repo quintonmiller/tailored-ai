@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import type { AgentConfig } from "./config.js";
+import type { EventBus } from "./events.js";
 import type { EmbeddingProvider } from "./providers/embedding.js";
 import { embeddingFactoryRegistry, providerFactoryRegistry } from "./providers/factories.js";
 import type { AIProvider } from "./providers/interface.js";
@@ -60,6 +61,13 @@ export interface CreateToolsOptions {
    *  tool to the task watcher so coder→reviewer handoffs re-trigger routing
    *  (docs/agent-unification.md, Phase 6). */
   notifyTaskEvent?: import("./tools/tasks.js").TasksToolNotify;
+  /** Runtime event bus. When supplied, the tasks tool emits typed
+   *  `task.created` / `task.updated` / `task.transitioned` / `task.commented`
+   *  events for plugin subscribers (`docs/platform-vision.md`, Slice 2).
+   *  Distinct from `notifyTaskEvent`: the notify hook is the legacy watcher
+   *  callback that re-runs routing; the bus is the new public surface that
+   *  plugins consume. */
+  events?: EventBus;
 }
 
 /**
@@ -137,10 +145,11 @@ export function createTools(
     // routing). Fall back to a single backend for plain callers + tests.
     const resolver = opts?.taskBackendResolver;
     const backend = opts?.taskBackend ?? (opts?.db ? createTaskBackend(config, opts.db) : undefined);
+    const tasksOpts = opts?.events ? { events: opts.events } : undefined;
     if (resolver) {
-      tools.push(new TasksTool(resolver, opts?.db, opts?.notifyTaskEvent), new TaskQueryTool(resolver));
+      tools.push(new TasksTool(resolver, opts?.db, opts?.notifyTaskEvent, tasksOpts), new TaskQueryTool(resolver));
     } else if (backend) {
-      tools.push(new TasksTool(backend, opts?.db, opts?.notifyTaskEvent), new TaskQueryTool(backend));
+      tools.push(new TasksTool(backend, opts?.db, opts?.notifyTaskEvent, tasksOpts), new TaskQueryTool(backend));
     }
   }
   if (config.tools.discord_dm?.enabled) {
