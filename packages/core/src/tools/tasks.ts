@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 import { getDefaultProjectId } from "../db/project-queries.js";
-import type { TaskBackend, TaskFilter } from "../tasks/interface.js";
+import type { EventBus } from "../events.js";
+import type { Task, TaskBackend, TaskFilter, TaskUpdateInput } from "../tasks/interface.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
 
 /** Full status list for a backend: the four normalized values plus any extras the backend declares. */
@@ -40,6 +41,19 @@ function asResolver(arg: TaskBackend | TaskBackendResolver): TaskBackendResolver
   return singleBackendResolver(arg);
 }
 
+/** Options bag for {@link TasksTool}. Kept distinct from the positional
+ *  notify/db args so future additions don't keep widening the constructor.
+ *  Slice 2 of the platform vision (`docs/platform-vision.md`) adds the
+ *  events bus here: the tool emits `task.*` lifecycle events alongside the
+ *  legacy notify callback, so plugins can subscribe without reaching into
+ *  the watcher. */
+export interface TasksToolOptions {
+  /** Event bus used to emit `task.created` / `task.updated` /
+   *  `task.transitioned` / `task.commented`. Optional so existing callers
+   *  (and tests) keep working — when absent, no events fire. */
+  events?: EventBus;
+}
+
 export class TasksTool implements Tool {
   name = "tasks";
   description: string;
@@ -52,13 +66,20 @@ export class TasksTool implements Tool {
   private db: Database.Database | undefined;
   private validStatuses: Set<string>;
   private notify?: TasksToolNotify;
+  private events?: EventBus;
 
-  constructor(backendOrResolver: TaskBackend | TaskBackendResolver, db?: Database.Database, notify?: TasksToolNotify) {
+  constructor(
+    backendOrResolver: TaskBackend | TaskBackendResolver,
+    db?: Database.Database,
+    notify?: TasksToolNotify,
+    opts?: TasksToolOptions,
+  ) {
     this.resolveBackend = asResolver(backendOrResolver);
     this.defaultBackend = this.resolveBackend(undefined);
     const backend = this.defaultBackend;
     this.db = db;
     this.notify = notify;
+    this.events = opts?.events;
 
     const statusList = collectStatuses(backend);
     this.validStatuses = new Set(statusList);
@@ -209,6 +230,7 @@ export class TasksTool implements Tool {
     if (task.tags.length) lines.push(`Tags: ${task.tags.join(", ")}`);
 
     this.notify?.("created", task.id, projectId);
+    this.events?.emit("task.created", { taskId: task.id, projectId });
     return { success: true, output: lines.join("\n") };
   }
 
@@ -318,6 +340,33 @@ export class TasksTool implements Tool {
 
     if (!task) return { success: false, output: "", error: `Task ${id} not found.` };
     this.notify?.("updated", task.id, projectId);
+
+    // Diff existing → task to figure out what actually changed. `task.updated`
+    // carries a generic change list; status transitions also fan out a
+    // separate `task.transitioned` so subscribers interested only in state
+    // moves don't have to filter the full update stream.
+    if (this.events) {
+      const changes = diffTaskFields(existing, task);
+      if (changes.length > 0) {
+        this.events.emit("task.updated", { taskId: task.id, projectId, changes });
+      }
+      if (statusChanging && task.status !== existing.status) {
+        this.events.emit("task.transitioned", {
+          taskId: task.id,
+          projectId,
+          from: existing.status,
+          to: task.status,
+          assignee: task.assignee,
+        });
+      }
+      if (trimmedComment) {
+        this.events.emit("task.commented", {
+          taskId: task.id,
+          projectId,
+          author: author ?? agentAuthor ?? "agent",
+        });
+      }
+    }
     return { success: true, output: `Updated task "${task.title}" (${task.id}) — status: ${task.status}` };
   }
 
@@ -338,8 +387,31 @@ export class TasksTool implements Tool {
     const comment = await backend.comment(id, text, author);
     if (!comment) return { success: false, output: "", error: `Task ${id} not found.` };
     this.notify?.("commented", id, projectId);
+    this.events?.emit("task.commented", { taskId: id, projectId, author: comment.author || author });
     return { success: true, output: `Added comment to task ${id}.` };
   }
+}
+
+/** Field-level diff of two task snapshots. Returns the list of `TaskUpdateInput`
+ *  field names that changed. Used by `task.updated` to tell subscribers which
+ *  fields mutated without forcing them to compare snapshots themselves. */
+function diffTaskFields(before: Task, after: Task): string[] {
+  const changes: string[] = [];
+  const compare = <K extends keyof TaskUpdateInput & keyof Task>(field: K) => {
+    if (before[field] !== after[field]) changes.push(field);
+  };
+  compare("title");
+  compare("description");
+  compare("status");
+  compare("author");
+  compare("assignee");
+  compare("rank");
+  compare("blocked_reason");
+  compare("project_id");
+  // Tags are an array — JSON.stringify is good enough for an order-stable diff
+  // given backends normalize order on read.
+  if (JSON.stringify(before.tags) !== JSON.stringify(after.tags)) changes.push("tags");
+  return changes;
 }
 
 export class TaskQueryTool implements Tool {
