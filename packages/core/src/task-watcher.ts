@@ -14,8 +14,10 @@ const exec = promisify(execFile);
 
 /** Sentinel author for watcher-authored bookkeeping comments. */
 const WATCHER_COMMENT_AUTHOR = "task-watcher";
-/** Prefix on stall comments so subsequent runs can count prior attempts. */
-const STALL_COMMENT_PREFIX = "STALL #";
+
+/** Stall-comment prefix kept here so the StallGuard plugin and any
+ *  external implementation share one constant. */
+export const STALL_COMMENT_PREFIX = "STALL #";
 
 export interface TaskEvent {
   action: "created" | "updated" | "commented";
@@ -38,9 +40,39 @@ export class TaskWatcher {
    * (Phase 6, multi-agent review loop).
    */
   private lastFiredAssignee = new Map<string, string | null>();
+  /**
+   * Subscription to `task.dispatch_requested`. Default StallGuard plugin
+   * emits this when it wants a retry; any other plugin can do the same
+   * to ask the watcher to re-fire routing.
+   */
+  private dispatchRequestSub: import("./events.js").Subscription;
 
   constructor(opts: TaskWatcherOptions) {
     this.runtime = opts.runtime;
+    this.dispatchRequestSub = this.runtime.events.on("task.dispatch_requested", (e) => this.handleDispatchRequest(e));
+  }
+
+  /**
+   * Wire-back from a `task.dispatch_requested` event. Re-routes the task
+   * through `notify({...}, { force: true })` so the assignee-transition
+   * gate is bypassed (the requesting plugin already knows it wants the
+   * same agent to run again — typically StallGuard retrying a stall).
+   */
+  private handleDispatchRequest(e: import("./events.js").RuntimeEventPayload<"task.dispatch_requested">): void {
+    // Best-effort: drop the request if we can't find the task. The plugin
+    // logged a reason already, no need to double-warn.
+    const row = this.runtime.db.prepare("SELECT * FROM project_tasks WHERE id = ?").get(e.taskId) as
+      | ProjectTask
+      | undefined;
+    if (!row) return;
+    let tags: string[] = [];
+    try {
+      tags = JSON.parse((row as unknown as { tags: string }).tags) ?? [];
+    } catch {
+      tags = [];
+    }
+    console.log(`[task-watcher] [${e.taskId}] dispatch requested: ${e.reason}`);
+    this.notify({ action: "updated", task: { ...row, tags } as ProjectTask }, { force: true });
   }
 
   /**
@@ -531,49 +563,27 @@ export class TaskWatcher {
     }
 
     // Re-read the task to see how the agent left it. The agent may have
-    // updated status/assignee mid-run; the delivery decision depends on
-    // the FINAL state, not what triggered us.
-    let finalTask = this.runtime.db.prepare("SELECT * FROM project_tasks WHERE id = ?").get(event.task.id) as
+    // updated status/assignee mid-run; downstream subscribers (notifier,
+    // scope-creep, stall guard) decide what to do based on the FINAL
+    // state, not what triggered us.
+    const finalTask = this.runtime.db.prepare("SELECT * FROM project_tasks WHERE id = ?").get(event.task.id) as
       | (ProjectTask & { tags: string })
       | undefined;
-    let finalAssignee = (finalTask?.assignee ?? "").trim() || null;
-    let finalStatus = finalTask?.status ?? event.task.status;
+    const finalAssignee = (finalTask?.assignee ?? "").trim() || null;
+    const finalStatus = finalTask?.status ?? event.task.status;
 
-    // Stall handling. A loop ending with `[Agent stopped: …]` means the
-    // model burned its budget without transitioning the task. The
-    // `shouldSuppressDelivery` rule would silently hide this (assignee is
-    // still a known agent, status is still backlog/in_progress), so we
-    // intercept here, write a structured comment, and either retry or
-    // transition to blocked. See docs/agent-unification.md (Phase 6
-    // follow-up: stall detection).
+    // Stall vs clean completion. A loop ending with `[Agent stopped: …]`
+    // means the model burned its budget without transitioning the task.
+    // Slice 3 step 3 of the platform vision: stall handling moved to the
+    // StallGuard plugin. The watcher emits `agent.stalled` (instead of
+    // `agent.completed`) when it detects a stall so the guard can decide
+    // retry-or-block. For terminal statuses (blocked/done) we never
+    // treat the response as a stall — those are intentional terminations.
     const stallReason = detectStall(response);
-    if (stallReason && finalStatus !== "blocked" && finalStatus !== "done") {
-      const handled = await this.handleStall({
-        event,
-        stallReason,
-        worktreePath: worktreePreservedPath,
-        logPrefix,
-      });
-      // handleStall mutates the task; re-read the row so the delivery
-      // logic below sees the new state.
-      if (handled.retried) {
-        // Retry was enqueued; the next pass will deliver. Nothing to do here.
-        return;
-      }
-      finalTask = this.runtime.db.prepare("SELECT * FROM project_tasks WHERE id = ?").get(event.task.id) as
-        | (ProjectTask & { tags: string })
-        | undefined;
-      finalAssignee = (finalTask?.assignee ?? "").trim() || null;
-      finalStatus = finalTask?.status ?? event.task.status;
-    }
-
-    // Slice 3 of the platform vision: Discord delivery and scope-creep
-    // flagging moved into default plugins. The watcher emits
-    // `agent.completed` carrying the final task state, the agent's
-    // response, and (when applicable) the worktree's parent repo +
-    // branch so plugins like ScopeCreepFlagger can inspect commits
-    // without depending on the worktree dir surviving cleanup.
-    this.runtime.events.emit("agent.completed", {
+    const isStall = stallReason !== null && finalStatus !== "blocked" && finalStatus !== "done";
+    const eventName = isStall ? "agent.stalled" : "agent.completed";
+    // Both payloads are structurally identical apart from `stallReason`.
+    const basePayload = {
       taskId: event.task.id,
       projectId: event.task.project_id ?? undefined,
       agentName,
@@ -602,89 +612,12 @@ export class TaskWatcher {
               preservedPath: worktreePreservedPath,
             }
           : undefined,
-    });
-  }
-
-  /**
-   * Called when the agent loop returned `[Agent stopped: …]`. Counts
-   * prior `STALL #N` comments on this task; if we're under the retry
-   * cap, requeues the event with `force: true`. Otherwise transitions
-   * the task to blocked so the user sees it on the dashboard. Always
-   * writes a structured stall comment so the trail is preserved.
-   */
-  private async handleStall(args: {
-    event: TaskEvent;
-    stallReason: string;
-    worktreePath: string | null;
-    logPrefix: string;
-  }): Promise<{ retried: boolean }> {
-    const { event, stallReason, worktreePath, logPrefix } = args;
-    const taskId = event.task.id;
-
-    // Count prior stalls. Each watcher-authored stall comment carries
-    // `STALL #N: …` as its first line so we can extract the highest N.
-    const prior = this.runtime.db
-      .prepare("SELECT content FROM task_comments WHERE task_id = ? AND author = ? AND content LIKE ?")
-      .all(taskId, WATCHER_COMMENT_AUTHOR, `${STALL_COMMENT_PREFIX}%`) as { content: string }[];
-    const priorAttempt = prior
-      .map((r) => {
-        const m = r.content.match(/^STALL #(\d+)/);
-        return m ? Number.parseInt(m[1], 10) : 0;
-      })
-      .reduce((a, b) => (a > b ? a : b), 0);
-    const attempt = priorAttempt + 1;
-
-    const worktreeStatus = worktreePath ? await summarizeWorktreeChanges(worktreePath) : null;
-    const comment = formatStallComment(attempt, stallReason, worktreePath, worktreeStatus);
-    addTaskComment(this.runtime.db, taskId, { author: WATCHER_COMMENT_AUTHOR, content: comment });
-
-    const maxRetries = this.runtime.getConfig().taskWatcher.maxStallRetries ?? 1;
-    if (attempt <= maxRetries) {
-      console.log(`${logPrefix} stall detected (#${attempt}) — scheduling retry`);
-      // Bypass the `lastFiredAssignee` gate so the same assignee re-fires.
-      // Small delay lets logs flush and the user-facing comment land first.
-      setTimeout(() => {
-        const refreshed = this.runtime.db.prepare("SELECT * FROM project_tasks WHERE id = ?").get(taskId) as
-          | ProjectTask
-          | undefined;
-        if (!refreshed) return;
-        let tags: string[] = [];
-        try {
-          tags = JSON.parse((refreshed as unknown as { tags: string }).tags) ?? [];
-        } catch {
-          tags = [];
-        }
-        this.notify({ action: "updated", task: { ...refreshed, tags } as ProjectTask }, { force: true });
-      }, 500);
-      return { retried: true };
+    };
+    if (eventName === "agent.stalled") {
+      this.runtime.events.emit("agent.stalled", { ...basePayload, stallReason: stallReason! });
+    } else {
+      this.runtime.events.emit("agent.completed", basePayload);
     }
-
-    // Out of retries: transition to blocked AND leave a structured note
-    // suggesting decomposition. A task that stalls twice is almost always
-    // too big for one coder pass — splitting it is the right next step.
-    console.log(`${logPrefix} stall detected (#${attempt}) — out of retries, transitioning to blocked`);
-    const decomposeHint = [
-      "**Two stalls in a row — this task is likely too large for one coder pass.**",
-      "",
-      "Suggested next move for the supervisor (or user):",
-      "1. Read the worktree (if preserved) to see what got done.",
-      "2. Split this task into 2–3 smaller subtasks with concrete file lists",
-      '   (e.g. "add the schema migration", "wire the API endpoint",',
-      '   "add the UI"). Each subtask should be doable in ~15 tool calls.',
-      "3. Mark each subtask `assignee=coder`; the supervisor's job is then",
-      "   to merge them back together.",
-      "",
-      "Do NOT just re-dispatch this task as-is — it will stall again.",
-    ].join("\n");
-    addTaskComment(this.runtime.db, taskId, {
-      author: WATCHER_COMMENT_AUTHOR,
-      content: decomposeHint,
-    });
-    updateProjectTask(this.runtime.db, taskId, {
-      status: "blocked",
-      blocked_reason: `coder-stalled after ${attempt} attempts (suggest decomposition): ${stallReason}`,
-    });
-    return { retried: false };
   }
 
   stop(): void {
@@ -692,6 +625,7 @@ export class TaskWatcher {
       clearTimeout(timer);
     }
     this.debounceTimers.clear();
+    this.dispatchRequestSub.dispose();
     console.log("[task-watcher] Stopped");
   }
 }
@@ -711,7 +645,9 @@ function slugify(s: string): string {
  * Returns a short stall reason when `response` matches the agent loop's
  * `[Agent stopped: …]` terminators, or null when the loop ended cleanly.
  * `[Sleep] …` is NOT a stall — that's how the default agent ends ticks
- * intentionally.
+ * intentionally. Used by the watcher to route to `agent.stalled`
+ * instead of `agent.completed`; also exported for plugins that want to
+ * detect stalls in their own response inspection paths.
  */
 export function detectStall(response: string): string | null {
   if (!response) return null;
@@ -719,61 +655,6 @@ export function detectStall(response: string): string | null {
   const m = trimmed.match(/^\[Agent stopped:\s*([^\]]+)\]/);
   if (!m) return null;
   return m[1].trim();
-}
-
-/**
- * Renders the watcher's stall comment. Goes onto the task's comment
- * timeline so the user (and the next coder run) can see what was
- * attempted. Format is `STALL #N: …` so subsequent stalls can count
- * priors with a simple LIKE query.
- */
-export function formatStallComment(
-  attempt: number,
-  stallReason: string,
-  worktreePath: string | null,
-  worktreeStatus: { stat: string; status: string } | null,
-): string {
-  const lines: string[] = [];
-  lines.push(`${STALL_COMMENT_PREFIX}${attempt}: ${stallReason}`);
-  if (worktreePath) {
-    lines.push(`Worktree preserved at: ${worktreePath}`);
-  }
-  if (worktreeStatus?.status?.trim()) {
-    lines.push("");
-    lines.push("Uncommitted changes (git status --short):");
-    lines.push("```");
-    lines.push(worktreeStatus.status.trim());
-    lines.push("```");
-  }
-  if (worktreeStatus?.stat?.trim()) {
-    lines.push("");
-    lines.push("Diff stat vs HEAD:");
-    lines.push("```");
-    lines.push(worktreeStatus.stat.trim());
-    lines.push("```");
-  }
-  if (!worktreeStatus || (!worktreeStatus.status?.trim() && !worktreeStatus.stat?.trim())) {
-    lines.push("");
-    lines.push("No file changes were made before the loop ended.");
-  }
-  return lines.join("\n");
-}
-
-/** Runs `git status --short` and `git diff --stat HEAD` in the preserved worktree. */
-async function summarizeWorktreeChanges(worktreePath: string): Promise<{ stat: string; status: string } | null> {
-  try {
-    const [status, stat] = await Promise.all([
-      exec("git", ["-C", worktreePath, "status", "--short"])
-        .then((r) => r.stdout)
-        .catch(() => ""),
-      exec("git", ["-C", worktreePath, "diff", "--stat", "HEAD"])
-        .then((r) => r.stdout)
-        .catch(() => ""),
-    ]);
-    return { status, stat };
-  } catch {
-    return null;
-  }
 }
 
 /**

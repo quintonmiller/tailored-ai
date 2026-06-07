@@ -154,6 +154,49 @@ export interface RuntimeEventMap {
      */
     worktree?: AgentCompletedWorktree;
   };
+
+  /**
+   * An agent loop returned a `[Agent stopped: …]` terminator instead
+   * of a clean response — see `detectStall`. The watcher emits this
+   * INSTEAD of `agent.completed` when it spots a stall, so the
+   * default StallGuard plugin (`packages/core/src/plugins/stall-guard.ts`)
+   * can decide whether to retry or transition to blocked.
+   *
+   * Payload shape mirrors `agent.completed`, plus `stallReason`. If you
+   * also want to react to stalls in your own plugin (e.g. for
+   * observability), subscribe here. The DiscordNotifier doesn't —
+   * StallGuard will re-emit `agent.completed` for the terminal blocked
+   * state once retries are exhausted.
+   */
+  "agent.stalled": {
+    taskId: string;
+    projectId?: string;
+    agentName: string | undefined;
+    action: "created" | "updated" | "commented";
+    task: AgentCompletedTask;
+    finalTask: AgentCompletedTask;
+    response: string;
+    /** Short string extracted from the loop's `[Agent stopped: <reason>]` terminator. */
+    stallReason: string;
+    worktree?: AgentCompletedWorktree;
+  };
+
+  /**
+   * A subscriber is asking the watcher to re-fire routing for a task —
+   * bypassing the assignee-transition gate so the same agent runs again.
+   * The default StallGuard plugin emits this when it wants a retry; the
+   * watcher subscribes and calls `notify({...}, { force: true })`.
+   *
+   * Open to external use: any plugin (e.g. a scheduler that wants to
+   * poke a task after a remote signal landed) can emit this and the
+   * watcher will route accordingly.
+   */
+  "task.dispatch_requested": {
+    taskId: string;
+    projectId?: string;
+    /** Human-readable reason the dispatch was requested. Goes to logs only today. */
+    reason: string;
+  };
 }
 
 /**
