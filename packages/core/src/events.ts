@@ -108,6 +108,51 @@ export interface RuntimeEventMap {
   "runtime.reloaded": {
     generation: number;
   };
+
+  /**
+   * An agent loop finished running for a task. Carries the initial task
+   * (as the watcher saw it when routing), the final task state (which
+   * may differ — the agent may have transitioned status / re-assigned
+   * mid-loop), the agent's freeform response, and the routing context.
+   *
+   * Slice 3 of the platform vision (`docs/platform-vision.md`): default
+   * plugins (Discord notifier, stall guard, scope-creep flagger)
+   * subscribe to this event instead of being baked into the watcher.
+   */
+  "agent.completed": {
+    taskId: string;
+    projectId?: string;
+    /**
+     * Name of the agent that ran the loop. May be undefined when the
+     * watcher routed to the default agent without a profile.
+     */
+    agentName: string | undefined;
+    /** The watcher event that triggered this run (created/updated/commented). */
+    action: "created" | "updated" | "commented";
+    /** Task snapshot when routing started. */
+    task: AgentCompletedTask;
+    /**
+     * Task snapshot after the agent loop returned and any post-loop
+     * mutations (stall comment, scope-warning comment) landed. Same
+     * shape as `task`; will be identical when the agent didn't mutate.
+     */
+    finalTask: AgentCompletedTask;
+    /** The agent's freeform response. May be empty. */
+    response: string;
+  };
+}
+
+/**
+ * Task snapshot carried on agent.completed. Subset of the project_tasks
+ * row — only the fields downstream plugins typically read. Plugins that
+ * need more should fetch via their own DB / backend handle.
+ */
+export interface AgentCompletedTask {
+  id: string;
+  title: string;
+  description?: string;
+  status: string;
+  assignee: string | null;
 }
 
 export type RuntimeEvent = keyof RuntimeEventMap;
