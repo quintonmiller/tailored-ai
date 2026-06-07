@@ -347,6 +347,15 @@ export {
   updateWorkflowRun,
   updateWorkflowStep,
 } from "./db/workflow-queries.js";
+export {
+  type EventBus,
+  type RuntimeEvent,
+  type RuntimeEventHandler,
+  type RuntimeEventMap,
+  type RuntimeEventPayload,
+  type Subscription,
+  TypedEventBus,
+} from "./events.js";
 export type {
   ExploratoryActivity,
   ExploratoryWorkerOptions,
@@ -374,6 +383,7 @@ export {
 export { SqliteMemoryBackend } from "./memory/sqlite-backend.js";
 export {
   type ChannelRegistryView,
+  type CreatePluginContextOptions,
   createPluginContext,
   type EmbeddingRegistryView,
   type MemoryBackendRegistryView,

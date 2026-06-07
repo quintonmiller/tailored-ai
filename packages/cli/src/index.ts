@@ -34,6 +34,7 @@ import {
   resolveUiProvider,
   runAgentLoop,
   TaskWatcher,
+  TypedEventBus,
   validateConfig,
 } from "@tailored-ai/core";
 import { createServer } from "@tailored-ai/server";
@@ -619,7 +620,13 @@ async function main() {
   // fallback is intentionally absent so the install path stays single
   // and unambiguous. See #43.
   const pluginManager = new PluginManager(homeDir);
-  await loadPlugins(config, pluginManager.buildImporter(), { context: createPluginContext() });
+  // The event bus is constructed up-front so plugins (which load before
+  // the runtime is built) and the runtime itself share one instance.
+  // Plugin subscriptions land on the same bus the runtime emits to.
+  const events = new TypedEventBus();
+  await loadPlugins(config, pluginManager.buildImporter(), {
+    context: createPluginContext({ events }),
+  });
 
   // Override port from CLI flag
   if (values.port) {
@@ -647,7 +654,7 @@ async function main() {
     });
 
   const runtime = new AgentRuntime(
-    { configPath, db, contextDir, kbDir, createTools: toolFactory, createProvider, createEmbedder },
+    { configPath, db, contextDir, kbDir, createTools: toolFactory, createProvider, createEmbedder, events },
     (path) => loadConfig(path),
     config,
   );
