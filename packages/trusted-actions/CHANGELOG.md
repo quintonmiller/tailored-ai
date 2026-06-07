@@ -1,5 +1,12 @@
 # @tailored-ai/trusted-actions
 
+## 0.1.3
+
+### Patch Changes
+
+- Updated dependencies [41bea5c]
+  - @tailored-ai/core@0.1.3
+
 ## 0.1.2
 
 ### Patch Changes
