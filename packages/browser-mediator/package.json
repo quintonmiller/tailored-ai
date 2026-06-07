@@ -1,6 +1,6 @@
 {
   "name": "@tailored-ai/browser-mediator",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Framework-agnostic browser-control surface for LLM agents. Bounded tool API over Playwright, with egress allow-list, vault $ref expansion, output sanitiser, and always-HITL gates. No dependency on any specific agent framework.",
   "license": "MIT",
   "author": "Quinton Miller",
