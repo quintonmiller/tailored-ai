@@ -35,6 +35,7 @@ import {
   resolveUiProvider,
   runAgentLoop,
   ScopeCreepFlagger,
+  StallGuard,
   TaskWatcher,
   TypedEventBus,
   validateConfig,
@@ -154,6 +155,10 @@ async function runServer(runtime: AgentRuntime) {
   // inline check, which silently no-opped on clean handoffs because
   // it ran against the (already cleaned up) worktree dir.
   const scopeCreepFlagger = new ScopeCreepFlagger({ runtime });
+  // Stall guard: subscribes to agent.stalled and either retries (via
+  // task.dispatch_requested) or transitions to blocked after the
+  // configured number of attempts. Replaces TaskWatcher.handleStall.
+  const stallGuard = new StallGuard({ runtime });
 
   const autopilot = new AutopilotWorker({
     runtime,
@@ -321,6 +326,7 @@ async function runServer(runtime: AgentRuntime) {
     taskWatcher.stop();
     discordNotifier.stop();
     scopeCreepFlagger.stop();
+    stallGuard.stop();
     autopilot.stop();
     exploratory.stop();
     await channelManager.stopAll();

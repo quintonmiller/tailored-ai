@@ -9,13 +9,15 @@ import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { initDatabase } from "../db/schema.js";
 import { addTaskComment, createProjectTask, getProjectTask, updateProjectTask } from "../db/task-queries.js";
-import { detectStall, formatStallComment, TaskWatcher } from "../task-watcher.js";
+import { TypedEventBus } from "../events.js";
+import { detectStall, TaskWatcher } from "../task-watcher.js";
 
 let db: Database.Database;
 
 function makeFakeRuntime(): any {
   return {
     db,
+    events: new TypedEventBus(),
     getConfig: () => ({
       agents: { coder: { description: "" }, reviewer: { description: "" } },
       channels: { discord: { owner: "1234" } },
@@ -64,111 +66,9 @@ describe("detectStall", () => {
   });
 });
 
-describe("formatStallComment", () => {
-  it("starts with the STALL #N prefix so subsequent stalls can count priors", () => {
-    expect(formatStallComment(1, "max tool rounds reached", null, null)).toMatch(/^STALL #1: /);
-    expect(formatStallComment(3, "x", null, null)).toMatch(/^STALL #3: /);
-  });
-
-  it("includes the worktree path and diff stat when provided", () => {
-    const c = formatStallComment(1, "max tool rounds reached", "/tmp/wt/agent/abc", {
-      status: " M src/foo.ts",
-      stat: " src/foo.ts | 5 ++++-",
-    });
-    expect(c).toContain("/tmp/wt/agent/abc");
-    expect(c).toContain("M src/foo.ts");
-    expect(c).toContain("src/foo.ts | 5 ++++-");
-  });
-
-  it("notes when no file changes were made", () => {
-    const c = formatStallComment(1, "max rounds", "/tmp/wt", { status: "", stat: "" });
-    expect(c).toContain("No file changes were made");
-  });
-});
-
-describe("task-watcher stall handling (handleStall)", () => {
-  function makeWatcher() {
-    const runtime: any = {
-      db,
-      getConfig: () => ({
-        agents: { coder: { description: "" } },
-        channels: { discord: { owner: "1234" } },
-        taskWatcher: { enabled: true, delivery: { channel: "log" }, maxStallRetries: 1 },
-      }),
-    };
-    return new TaskWatcher({ runtime });
-  }
-
-  it("writes a STALL #1 comment and retries on first stall", async () => {
-    const watcher = makeWatcher() as any;
-    const task = createProjectTask(db, { title: "T", assignee: "coder" });
-    const result = await watcher.handleStall({
-      event: { action: "updated", task },
-      stallReason: "max tool rounds reached",
-      worktreePath: null,
-      logPrefix: "[test]",
-    });
-    expect(result.retried).toBe(true);
-    const after = getProjectTask(db, task.id);
-    expect(after?.status).toBe("backlog");
-    const comments = db
-      .prepare("SELECT author, content FROM task_comments WHERE task_id = ? ORDER BY id")
-      .all(task.id) as { author: string; content: string }[];
-    expect(comments).toHaveLength(1);
-    expect(comments[0].author).toBe("task-watcher");
-    expect(comments[0].content).toMatch(/^STALL #1: max tool rounds reached/);
-  });
-
-  it("transitions to blocked on the second stall (default maxStallRetries=1)", async () => {
-    const watcher = makeWatcher() as any;
-    const task = createProjectTask(db, { title: "T", assignee: "coder" });
-    addTaskComment(db, task.id, {
-      author: "task-watcher",
-      content: "STALL #1: max tool rounds reached\nWorktree preserved at: /tmp/wt",
-    });
-    const result = await watcher.handleStall({
-      event: { action: "updated", task },
-      stallReason: "repeated identical tool calls detected",
-      worktreePath: null,
-      logPrefix: "[test]",
-    });
-    expect(result.retried).toBe(false);
-    const after = getProjectTask(db, task.id);
-    expect(after?.status).toBe("blocked");
-    expect(after?.blocked_reason).toMatch(/coder-stalled after 2 attempts/);
-    const comments = db.prepare("SELECT content FROM task_comments WHERE task_id = ? ORDER BY id").all(task.id) as {
-      content: string;
-    }[];
-    // Three comments: pre-existing STALL #1, the new STALL #2, and the
-    // decomposition hint emitted when out of retries.
-    expect(comments).toHaveLength(3);
-    expect(comments[1].content).toMatch(/^STALL #2: repeated identical/);
-    expect(comments[2].content).toMatch(/Two stalls in a row/);
-  });
-
-  it("respects maxStallRetries > 1 from config", async () => {
-    const runtime: any = {
-      db,
-      getConfig: () => ({
-        agents: { coder: { description: "" } },
-        channels: { discord: { owner: "1234" } },
-        taskWatcher: { enabled: true, delivery: { channel: "log" }, maxStallRetries: 2 },
-      }),
-    };
-    const watcher = new TaskWatcher({ runtime }) as any;
-    const task = createProjectTask(db, { title: "T", assignee: "coder" });
-    addTaskComment(db, task.id, { author: "task-watcher", content: "STALL #1: x" });
-    const result = await watcher.handleStall({
-      event: { action: "updated", task },
-      stallReason: "x",
-      worktreePath: null,
-      logPrefix: "[test]",
-    });
-    expect(result.retried).toBe(true);
-    const after = getProjectTask(db, task.id);
-    expect(after?.status).toBe("backlog");
-  });
-});
+// formatStallComment + handleStall tests moved to stall-guard.test.ts in
+// Slice 3 step 3 of the platform vision. Stall handling now lives in the
+// StallGuard plugin that subscribes to `agent.stalled`.
 
 describe("task-watcher coding-agent dispatch guard rail", () => {
   // The pre-flight guard (added after the main-pollution incident) refuses
@@ -180,6 +80,7 @@ describe("task-watcher coding-agent dispatch guard rail", () => {
     const dbForTest = db;
     const runtime: any = {
       db: dbForTest,
+      events: new TypedEventBus(),
       contextDir: "/tmp/ctx",
       getConfig: () => ({
         agents: { coder: { description: "" } },
@@ -235,6 +136,7 @@ describe("task-watcher coding-agent dispatch guard rail", () => {
     });
     const runtime: any = {
       db: dbForTest,
+      events: new TypedEventBus(),
       contextDir: "/tmp/ctx",
       getConfig: () => ({
         agents: { coder: { description: "" } },
@@ -264,6 +166,7 @@ describe("task-watcher notify() force flag", () => {
   it("bypasses the lastFiredAssignee gate when force=true", () => {
     const runtime: any = {
       db,
+      events: new TypedEventBus(),
       getConfig: () => ({
         agents: { coder: { description: "" } },
         channels: { discord: { owner: "1234" } },
@@ -330,6 +233,7 @@ describe("task-watcher notifyById per-project routing", () => {
     };
     const runtime: any = {
       db,
+      events: new TypedEventBus(),
       getConfig: () => ({
         agents: { coder: { description: "" } },
         channels: {},
@@ -374,6 +278,7 @@ describe("task-watcher notifyById per-project routing", () => {
     const stubBackend = { name: "stub", get: async () => undefined };
     const runtime: any = {
       db,
+      events: new TypedEventBus(),
       getConfig: () => ({
         agents: {},
         channels: {},
