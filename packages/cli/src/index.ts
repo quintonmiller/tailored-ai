@@ -8,6 +8,7 @@ import {
   AgentRuntime,
   AutopilotWorker,
   ChannelLifecycleManager,
+  CoderProjectGuard,
   CronScheduler,
   createEmbedder,
   createMetaTools,
@@ -159,6 +160,11 @@ async function runServer(runtime: AgentRuntime) {
   // task.dispatch_requested) or transitions to blocked after the
   // configured number of attempts. Replaces TaskWatcher.handleStall.
   const stallGuard = new StallGuard({ runtime });
+  // Coder/reviewer project_id guardrail: subscribes to agent.dispatched
+  // (vetoable via bus.emitAsync) and refuses dispatches that would run
+  // a coder without an isolated worktree. Same hard guarantee the
+  // watcher used to enforce inline.
+  const coderProjectGuard = new CoderProjectGuard({ runtime });
 
   const autopilot = new AutopilotWorker({
     runtime,
@@ -327,6 +333,7 @@ async function runServer(runtime: AgentRuntime) {
     discordNotifier.stop();
     scopeCreepFlagger.stop();
     stallGuard.stop();
+    coderProjectGuard.stop();
     autopilot.stop();
     exploratory.stop();
     await channelManager.stopAll();

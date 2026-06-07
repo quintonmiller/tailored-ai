@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { initDatabase } from "../db/schema.js";
 import { addTaskComment, createProjectTask, getProjectTask, updateProjectTask } from "../db/task-queries.js";
 import { TypedEventBus } from "../events.js";
+import { CoderProjectGuard } from "../plugins/coder-project-guard.js";
 import { detectStall, TaskWatcher } from "../task-watcher.js";
 
 let db: Database.Database;
@@ -105,7 +106,9 @@ describe("task-watcher coding-agent dispatch guard rail", () => {
     const task = createProjectTask(dbForTest, { title: "no-proj", assignee: "coder" });
     updateProjectTask(dbForTest, task.id, { project_id: null });
     const watcher = new TaskWatcher({ runtime });
-    // Hand-build the event the watcher would receive.
+    // The guard moved to a default plugin in Slice 3 step 4. Constructing
+    // it here keeps this regression test exercising the same invariant.
+    new CoderProjectGuard({ runtime });
     const event = {
       action: "updated" as const,
       task: { ...task, project_id: null, tags: [] as string[] },
@@ -155,6 +158,7 @@ describe("task-watcher coding-agent dispatch guard rail", () => {
       buildLoopOptions: () => ({}),
     };
     const watcher = new TaskWatcher({ runtime });
+    new CoderProjectGuard({ runtime });
     await (watcher as any).processEvent({ action: "updated", task });
     const after = getProjectTask(dbForTest, task.id);
     expect(after?.status).toBe("blocked");

@@ -396,6 +396,7 @@ export {
   type ToolRegistryView,
   type UiProviderRegistryView,
 } from "./plugin-context.js";
+export { CoderProjectGuard, type CoderProjectGuardOptions } from "./plugins/coder-project-guard.js";
 export {
   buildNotification as buildDiscordNotification,
   DiscordNotifier,
