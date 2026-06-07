@@ -260,6 +260,14 @@ export class TaskWatcher {
     // (e.g. reviewer requests changes → coder re-runs) pick up the
     // existing branch instead of starting fresh.
     let worktree: Worktree | undefined;
+    /**
+     * Parent repo for the worktree we'll create below — captured at top
+     * scope so it survives the worktree.cleanup() in the finally block
+     * and can be attached to agent.completed. Plugin-side git inspection
+     * (scope-creep flagger, etc.) keys off the parent repo + branch
+     * because the worktree dir may be gone by event time.
+     */
+    let worktreeRepoPath: string | undefined;
     let projectOverride: import("./projects/resolve.js").ProjectContext | undefined;
     // The guard rail at the top of processEvent has already refused
     // dispatches that would lack an isolated worktree, so by this
@@ -282,6 +290,7 @@ export class TaskWatcher {
             repoDir: repoPath,
             strategy: { type: "branch", branch },
           });
+          worktreeRepoPath = repoPath;
           projectOverride = {
             id: project!.id,
             name: project!.title,
@@ -558,39 +567,12 @@ export class TaskWatcher {
       finalStatus = finalTask?.status ?? event.task.status;
     }
 
-    // Scope-creep flag: when the coder hands off to the reviewer, peek at
-    // the branch commits and flag if any other ptask_ ids show up. This
-    // is a watcher-authored comment the reviewer will see in GATE 3 of its
-    // preamble, so it gets caught even if the reviewer is a small model.
-    if (agentName === "coder" && finalAssignee === "reviewer" && worktree && finalStatus === "in_review") {
-      try {
-        const scope = await detectScopeCreep(worktree.path, event.task.id);
-        if (scope && scope.foreignTaskIds.length > 0) {
-          addTaskComment(this.runtime.db, event.task.id, {
-            author: WATCHER_COMMENT_AUTHOR,
-            content: [
-              `SCOPE WARNING: branch contains commits for ${scope.foreignTaskIds.length} other task(s): ${scope.foreignTaskIds.join(", ")}.`,
-              "",
-              "Reviewer: apply GATE 3 (scope check) — these commits should",
-              "be on separate branches. Request changes with 'split into",
-              "separate task' unless the foreign work is genuinely required",
-              "for this task to compile/run.",
-            ].join("\n"),
-          });
-          console.log(
-            `${logPrefix} scope warning: branch has commits for foreign task(s) ${scope.foreignTaskIds.join(",")}`,
-          );
-        }
-      } catch (err) {
-        console.warn(`${logPrefix} scope-creep check failed:`, (err as Error).message);
-      }
-    }
-
-    // Slice 3 of the platform vision: delivery moved to the
-    // DiscordNotifier default plugin. The watcher emits
-    // `agent.completed` and any number of plugins decide whether and
-    // how to notify. Suppress-delivery rules + envelope formatting
-    // now live in `packages/core/src/plugins/discord-notifier.ts`.
+    // Slice 3 of the platform vision: Discord delivery and scope-creep
+    // flagging moved into default plugins. The watcher emits
+    // `agent.completed` carrying the final task state, the agent's
+    // response, and (when applicable) the worktree's parent repo +
+    // branch so plugins like ScopeCreepFlagger can inspect commits
+    // without depending on the worktree dir surviving cleanup.
     this.runtime.events.emit("agent.completed", {
       taskId: event.task.id,
       projectId: event.task.project_id ?? undefined,
@@ -611,6 +593,15 @@ export class TaskWatcher {
         assignee: finalAssignee,
       },
       response,
+      worktree:
+        worktree && worktreeRepoPath
+          ? {
+              repoPath: worktreeRepoPath,
+              worktreePath: worktree.path,
+              branch: worktree.branch,
+              preservedPath: worktreePreservedPath,
+            }
+          : undefined,
     });
   }
 
@@ -786,21 +777,29 @@ async function summarizeWorktreeChanges(worktreePath: string): Promise<{ stat: s
 }
 
 /**
- * Scope-creep detection. Looks at commits on the branch since fork from
- * main and extracts any `ptask_<8 hex>` ids in commit messages. If more
- * than one distinct id appears, the branch is mixing work for multiple
- * tasks — return the foreign ids so the watcher can flag it.
+ * Scope-creep detection. Looks at commits on the per-task branch since
+ * fork from main and extracts any `ptask_<8 hex>` ids in commit
+ * messages. If more than one distinct id appears, the branch is mixing
+ * work for multiple tasks — return the foreign ids so the caller can
+ * flag it.
+ *
+ * Runs against the parent repo (`repoPath`) and references the branch
+ * by name, so it survives worktree cleanup (the prior worktree-rooted
+ * implementation silently no-opped after a clean coder→reviewer
+ * handoff, because the worktree dir was already gone).
  *
  * Returns null on any git error (treat as "no signal").
  */
-export async function detectScopeCreep(
-  worktreePath: string,
-  expectedTaskId: string,
-): Promise<{ foreignTaskIds: string[]; commitCount: number } | null> {
+export async function detectScopeCreep(args: {
+  repoPath: string;
+  branch: string;
+  expectedTaskId: string;
+}): Promise<{ foreignTaskIds: string[]; commitCount: number } | null> {
+  const { repoPath, branch, expectedTaskId } = args;
   try {
-    const mergeBase = (await exec("git", ["-C", worktreePath, "merge-base", "main", "HEAD"])).stdout.trim();
+    const mergeBase = (await exec("git", ["-C", repoPath, "merge-base", "main", branch])).stdout.trim();
     if (!mergeBase) return null;
-    const log = (await exec("git", ["-C", worktreePath, "log", `${mergeBase}..HEAD`, "--pretty=%s"])).stdout;
+    const log = (await exec("git", ["-C", repoPath, "log", `${mergeBase}..${branch}`, "--pretty=%s"])).stdout;
     const lines = log.split("\n").filter((l) => l.trim().length > 0);
     const found = new Set<string>();
     for (const line of lines) {

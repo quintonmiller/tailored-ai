@@ -348,6 +348,8 @@ export {
   updateWorkflowStep,
 } from "./db/workflow-queries.js";
 export {
+  type AgentCompletedTask,
+  type AgentCompletedWorktree,
   type EventBus,
   type RuntimeEvent,
   type RuntimeEventHandler,
@@ -400,6 +402,11 @@ export {
   type DiscordNotifierOptions,
   emojiForStatus,
 } from "./plugins/discord-notifier.js";
+export {
+  ScopeCreepFlagger,
+  type ScopeCreepFlaggerOptions,
+  writeScopeWarning,
+} from "./plugins/scope-creep.js";
 export { type LoadedPlugin, type LoadPluginsOptions, loadPlugins } from "./plugins.js";
 export type {
   ProjectContext,
