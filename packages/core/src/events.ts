@@ -139,6 +139,20 @@ export interface RuntimeEventMap {
     finalTask: AgentCompletedTask;
     /** The agent's freeform response. May be empty. */
     response: string;
+    /**
+     * Worktree context, present when the loop ran inside an isolated
+     * per-task worktree (coder / reviewer dispatches). Used by the
+     * scope-creep flagger to inspect branch commits and by future
+     * worktree-cleanup plugins.
+     *
+     * `repoPath` is the parent repo (always reachable on disk).
+     * `worktreePath` is the per-task worktree directory — it may
+     * have been torn down by the time the event reaches you; rely on
+     * `repoPath` + `branch` for git operations that need to survive
+     * cleanup. `preservedPath` is set when the worktree was kept
+     * (uncommitted changes); null when it was cleaned up.
+     */
+    worktree?: AgentCompletedWorktree;
   };
 }
 
@@ -153,6 +167,32 @@ export interface AgentCompletedTask {
   description?: string;
   status: string;
   assignee: string | null;
+}
+
+/**
+ * Worktree context attached to agent.completed when the loop ran in an
+ * isolated per-task worktree. Subscribers that want to inspect branch
+ * commits should use `repoPath` + `branch` rather than `worktreePath`,
+ * since the worktree dir may have been torn down by the watcher's
+ * cleanup before the event reaches them.
+ */
+export interface AgentCompletedWorktree {
+  /** Absolute path of the parent repo (the project root). Always present on disk. */
+  repoPath: string;
+  /**
+   * Absolute path of the per-task worktree dir. May not exist by event
+   * time — if the worktree was cleaned, the directory is gone but the
+   * branch persists in the parent repo.
+   */
+  worktreePath: string;
+  /** Branch name the worktree was on (e.g. `agent/<task-id>-<slug>`). */
+  branch: string;
+  /**
+   * When the worktree was preserved (uncommitted changes), this is the
+   * preserved on-disk path. Null when the worktree was cleaned up
+   * normally.
+   */
+  preservedPath: string | null;
 }
 
 export type RuntimeEvent = keyof RuntimeEventMap;

@@ -34,6 +34,7 @@ import {
   resolveProjectFromCwd,
   resolveUiProvider,
   runAgentLoop,
+  ScopeCreepFlagger,
   TaskWatcher,
   TypedEventBus,
   validateConfig,
@@ -147,6 +148,12 @@ async function runServer(runtime: AgentRuntime) {
   // subscribes and decides whether to deliver. Users on Slack /
   // Telegram / email replace this with their own plugin.
   const discordNotifier = new DiscordNotifier({ runtime, notifier });
+  // Scope-creep flagger: subscribes to agent.completed and writes a
+  // SCOPE WARNING comment when the coder hands off a branch that
+  // contains commits for other ptask_ ids. Replaces the watcher's
+  // inline check, which silently no-opped on clean handoffs because
+  // it ran against the (already cleaned up) worktree dir.
+  const scopeCreepFlagger = new ScopeCreepFlagger({ runtime });
 
   const autopilot = new AutopilotWorker({
     runtime,
@@ -312,6 +319,8 @@ async function runServer(runtime: AgentRuntime) {
     runtime.stopWatching();
     scheduler.stop();
     taskWatcher.stop();
+    discordNotifier.stop();
+    scopeCreepFlagger.stop();
     autopilot.stop();
     exploratory.stop();
     await channelManager.stopAll();
