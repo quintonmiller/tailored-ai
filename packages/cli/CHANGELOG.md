@@ -1,5 +1,13 @@
 # @tailored-ai/cli
 
+## 0.1.4
+
+### Patch Changes
+
+- Updated dependencies [b163368]
+  - @tailored-ai/core@0.1.4
+  - @tailored-ai/server@0.1.4
+
 ## 0.1.3
 
 ### Patch Changes
