@@ -1,5 +1,145 @@
 # @tailored-ai/cli
 
+## 0.1.6
+
+### Patch Changes
+
+- 4201cc9: Extract coder/reviewer project_id guardrail out of TaskWatcher into a
+  `CoderProjectGuard` default plugin — Slice 3 step 4 of the platform
+  vision (`docs/platform-vision.md`). The watcher emits `agent.dispatched`
+  via `bus.emitAsync(...)`; the guard subscribes and returns `false` to
+  veto when a coder or reviewer is about to dispatch without an isolated
+  worktree. Watcher honours the veto and skips the dispatch.
+
+  **New EventBus capability: `emitAsync` with veto semantics.**
+
+  `EventBus.emitAsync<K>(event, payload): Promise<boolean>` is the
+  synchronous-causality variant of `emit`. It awaits every subscriber
+  (sequentially, in registration order) and returns:
+
+  - `true` when no handler vetoed
+  - `false` when any handler returned `false`
+
+  A throwing handler is logged and treated as non-veto, so a buggy
+  observability plugin can't accidentally block real work. The handler
+  type widens to `void | boolean | Promise<void | boolean>` —
+  `undefined`/`true` returns are equivalent and the common case stays
+  side-effect-only.
+
+  **New event: `agent.dispatched`.**
+
+  Payload `{ taskId, projectId, agentName, task }`. Fired by the watcher
+  _before_ it starts the agent loop; the guard's veto causes the watcher
+  to skip resolveAgent / session setup / worktree creation / loop
+  entirely. Same hard guarantee the watcher used to enforce inline.
+
+  - New `packages/core/src/plugins/coder-project-guard.ts` with
+    `CoderProjectGuard`. On veto, writes a BLOCKED comment + transitions
+    the task to `blocked` (same shape the watcher used to write).
+  - Watcher drops the two inline guard checks (~36 LOC), removes the
+    now-unused `addTaskComment`/`updateProjectTask` imports and the
+    `WATCHER_COMMENT_AUTHOR` constant.
+  - CLI constructs `new CoderProjectGuard({ runtime })` alongside the
+    other defaults; stops on shutdown.
+
+  11 new tests in `coder-project-guard.test.ts` cover the veto path
+  (missing project_id, missing project path), the allow path (non-coder
+  agents, valid project, default routing), `stop()` lifecycle, and the
+  new `TypedEventBus.emitAsync` (empty subscribers, void/true returns,
+  explicit false veto, sequential ordering, throw-as-non-veto).
+  Pre-existing watcher tests construct the guard so the same invariants
+  remain pinned. 1419 tests pass overall.
+
+  This closes Slice 3 of the platform vision. Slices 1, 2, 3, 5 are
+  shipped; Slice 4 (RepoBackend / Notifier / ApprovalSurface contracts)
+  follows.
+
+- 4201cc9: Extract scope-creep flagging out of TaskWatcher into a
+  `ScopeCreepFlagger` default plugin — Slice 3 step 2 of the platform
+  vision (`docs/platform-vision.md`). The plugin subscribes to
+  `agent.completed` and, when the coder hands off a worktree branch to
+  the reviewer, scans the branch's commits for foreign `ptask_*` ids
+  and writes a SCOPE WARNING comment when it finds any.
+
+  **Bug fix**: the watcher's inline implementation ran git inside
+  `worktree.path`, which is gone by the time the check runs on a clean
+  coder→reviewer handoff (worktree.cleanup() removes the dir before the
+  scope-creep block executes). The plugin now runs git in the parent
+  repo and references the branch by name, so it works in both the
+  preserved and cleaned-up cases. `detectScopeCreep`'s signature changes
+  from `(worktreePath, expectedTaskId)` to
+  `({ repoPath, branch, expectedTaskId })` to reflect this.
+
+  - New `agent.completed` payload field: `worktree?: { repoPath,
+worktreePath, branch, preservedPath }`. The watcher captures
+    `worktreeRepoPath` at creation time so it can attach the parent-repo
+    path to the event even after cleanup.
+  - New `packages/core/src/plugins/scope-creep.ts` with
+    `ScopeCreepFlagger` and a thin `writeScopeWarning` helper.
+  - Watcher drops the inline scope-creep block (~26 LOC) and the
+    unconditional `addTaskComment` import path that fed it.
+  - CLI constructs `new ScopeCreepFlagger({ runtime })` alongside
+    `new DiscordNotifier(...)` and stops both on shutdown.
+
+  9 new tests cover the gate (3 cases that should be ignored), the
+  write path (2 cases including the parent-repo-not-worktree assertion),
+  git error handling, stop()/dispose, and the formatter shape.
+
+  Slice 3 step 3 (stall guard as a plugin, using a new
+  `task.dispatch_requested` event for re-fire) follows as a separate PR.
+
+- 4201cc9: Extract stall detection + retry out of TaskWatcher into a `StallGuard`
+  default plugin — Slice 3 step 3 of the platform vision
+  (`docs/platform-vision.md`). The watcher emits `agent.stalled`
+  instead of `agent.completed` when the loop response carries an
+  `[Agent stopped: …]` terminator; the guard subscribes and either
+  requests a retry or transitions the task to blocked.
+
+  **Two new events:**
+
+  - `agent.stalled` — emitted by the watcher when `detectStall(response)`
+    returns a reason. Same payload as `agent.completed` plus
+    `stallReason: string`. Lets observability plugins react to stalls
+    separately from clean completions.
+  - `task.dispatch_requested` — emitted by the StallGuard when it wants
+    the watcher to re-fire routing on a retry. Payload is
+    `{ taskId; projectId?; reason: string }`. The watcher subscribes
+    in its constructor and forwards to `notify({...}, { force: true })`.
+    Any plugin (a future scheduler, a remote-signal handler) can emit
+    this and the watcher will route accordingly.
+
+  **Behavior preserved.** Comment shape (`STALL #N: …`), retry count
+  (`taskWatcher.maxStallRetries`, default 1), decompose-hint on block,
+  500ms delay before re-fire — all identical to the old watcher path.
+  On the out-of-retries branch the guard re-emits `agent.completed` with
+  the new `finalTask.status = "blocked"` so the DiscordNotifier (which
+  only subscribes to `agent.completed`) still sees the terminal
+  transition. StallGuard subscribes to `agent.stalled` only, so the
+  re-emit doesn't loop.
+
+  - New `packages/core/src/plugins/stall-guard.ts` with `StallGuard`,
+    `countPriorStalls`, and `formatStallComment`. Constructor accepts
+    an optional `maxStallRetries` override for tests.
+  - Watcher drops `handleStall`, `formatStallComment`,
+    `summarizeWorktreeChanges`, and the unused `STALL_COMMENT_PREFIX`
+    helper from inside the class. `detectStall` stays exported.
+  - `TaskWatcher` subscribes to `task.dispatch_requested` in its
+    constructor and disposes on `stop()`.
+  - CLI constructs `new StallGuard({ runtime })` alongside the other
+    default plugins and stops it on shutdown.
+
+  10 new tests in `stall-guard.test.ts` cover retry, block, re-emit,
+  override, lifecycle. Pre-existing handleStall + formatStallComment
+  tests removed from `task-watcher-notification.test.ts` (they exercised
+  the now-deleted watcher private API). 1408 tests pass overall (was
+  1405).
+
+- Updated dependencies [4201cc9]
+- Updated dependencies [4201cc9]
+- Updated dependencies [4201cc9]
+  - @tailored-ai/core@0.1.6
+  - @tailored-ai/server@0.1.6
+
 ## 0.1.5
 
 ### Patch Changes
