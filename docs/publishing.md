@@ -86,28 +86,30 @@ immediately on every push to the version PR, which defeats the safety net.
 
 ## Per-release flow
 
-1. **Open a feature PR** with a changeset file under `.changeset/`. Generate
-   with `pnpm changeset`.
-2. **Merge the feature PR to `main`.** This triggers
-   `.github/workflows/release.yml`, which runs the changesets action.
-   - The action finds the new `.changeset/*.md` files and either:
-     - **Opens or updates the "Version Packages" PR** (branch
-       `changeset-release/main`) bumping versions and consolidating changelogs,
-       or
-     - **Publishes to npm** if a "Version Packages" PR was just merged.
-3. **`auto-merge-version-pr.yml` flips the version PR into auto-merge mode.**
-   GitHub waits for `build-and-test` to go green, then squash-merges.
-4. **Merge of the version PR to `main` re-triggers `release.yml`.** This time
-   the changesets action sees no pending `.changeset/*.md` files, runs
-   `pnpm publish -r`, and tags a GitHub Release per package (via
-   `createGithubReleases: true`).
-5. **Post-publish verification.** A workflow step does `npm view PKG@VERSION`
-   on each published package — fails the run loudly if any tarball didn't
-   reach the registry.
+Publishing is a **deliberate, approved act** — it never happens automatically
+on a push to `main`. The flow:
 
-End state per release: new package versions on the npm registry, tagged
-GitHub releases per package with the changelog body, no human in the loop
-after the feature PR merges.
+1. **Open a feature PR** with a changeset file under `.changeset/`. Generate
+   with `pnpm changeset`. **Mark every bump `patch`** while pre-1.0 (see the
+   versioning rule below).
+2. **Merge the feature PR to `main`.** This triggers the `version` job in
+   `.github/workflows/release.yml`, which **opens or updates the "Version
+   Packages" PR** (branch `changeset-release/main`). It does **not** publish.
+3. **Review and merge the Version Packages PR yourself.** It is **not**
+   auto-merged by default — look at the proposed `package.json` bumps first
+   (confirm they're `0.1.x → 0.1.(x+1)`, **not** an unintended `1.0.0`). To
+   restore the old auto-merge-on-green behaviour for a routine 0.x bump, add
+   the `release:auto-merge` label to the PR.
+4. **Publish manually, with approval.** Go to **Actions ▸ Release ▸ Run
+   workflow** (from `main`). The `publish` job is gated on the `npm-publish`
+   environment, so it pauses for a maintainer's **approval** before
+   `pnpm publish -r` runs. It tags a GitHub Release per package and verifies
+   each tarball reached the registry.
+
+The two gates (manual version-PR merge + approved manual publish) exist so a
+stray `major`/`minor` changeset — including one authored by an unattended
+agent — cannot ship a release on its own. See the 2026-06-09 incident note
+under "Pre-1.0 versioning rule."
 
 ## Pre-1.0 versioning rule
 
@@ -130,6 +132,17 @@ and we deliberately want to cut it. Until then, every release is
 `0.1.x → 0.1.(x+1)`. `pnpm changeset add` lets you pick a bump type per
 package; pick `patch` for all of them.
 
+> **Incident — 2026-06-09.** Several changesets were marked `minor` (not
+> `patch`). Pre-1.0, a `minor` on `core` escalates the whole `fixed` group to
+> `major` (the peer-dependent mechanism above), so the Version Packages PR
+> bumped everything to `1.0.0`, and the old auto-publish-on-push path shipped
+> `1.0.0` to npm before anyone reviewed it. Fixes: every changeset is `patch`
+> again, the Version Packages PR is no longer auto-merged by default, and npm
+> publishing is now a manual, approval-gated job (above). If a Version
+> Packages PR ever proposes `1.0.0`, a non-`patch` changeset slipped in —
+> find it (`grep -rL '"@tailored-ai/.*": patch' .changeset/*.md`) and fix it
+> before merging.
+
 ## Inspecting what would publish before merging
 
 Run locally on the branch with the queued changesets:
@@ -148,14 +161,15 @@ release ships.
 
 ## Pausing or vetoing a release
 
-The version PR is the only checkpoint between a merged changeset and a real
-npm publish. To pause:
+There are two independent checkpoints, both manual by default:
 
-- **Disable auto-merge on the version PR** (PR page → "Disable auto-merge").
-  The PR stays open until a human merges it.
-- **Close the version PR** if you want to drop everything queued. The next
-  push to `main` regenerates it from the still-present `.changeset/*.md`
-  files. To truly drop, delete the changeset files too.
+- **The Version Packages PR** is not auto-merged — just don't merge it. To
+  drop everything queued, close it (the next push regenerates it from the
+  `.changeset/*.md` files; delete those to drop for good).
+- **The npm publish** only runs when you manually trigger the `publish` job
+  (Actions ▸ Release ▸ Run workflow) AND approve the `npm-publish`
+  environment. Not triggering it, or rejecting the approval, vetoes the
+  release. Nothing ships from a push to `main`.
 
 ## Manual / emergency publish
 
@@ -180,18 +194,54 @@ npm whoami
 pnpm publish -r --access public --no-git-checks
 ```
 
-## Rollback / unpublish
+## Rollback a bad publish — deprecate, don't unpublish
 
-npm allows unpublish within 72 hours of publish for non-replacement reasons.
-After that, the path is deprecation, not removal:
+**`npm unpublish` does not work for this monorepo.** npm only allows unpublish
+when nothing in the registry depends on the version, and our packages depend on
+each other (`server`/`cli` depend on `core`; `channel-slack`/`google-tools`
+peer-depend on `core`). So `npm unpublish @tailored-ai/core@1.0.0` returns:
+
+```
+npm error 405 ... You can no longer unpublish this package.
+npm error Failed criteria: has dependent packages in the registry
+```
+
+This is permanent and independent of the 72-hour window or the unpublish
+order — the inter-package dependency means the "no dependents" criterion can
+never be met. **The only path is `npm deprecate` + re-pointing the `latest`
+dist-tag** at the last good 0.x. This does not free the version number, so a
+deprecated `1.0.0`/`1.0.1` is still spent — the eventual real V1 must be a
+higher number.
+
+### Authentication for the rollback (security-key 2FA)
+
+The maintainer's npm account uses a WebAuthn **security key** for 2FA, which
+the CLI cannot satisfy with `--otp` (there's no TOTP). Use an **npm automation
+token** or **granular access token** instead — both bypass 2FA for CLI writes:
+
+1. npmjs.com ▸ Access Tokens ▸ **Generate New Token**.
+2. **Granular Access Token** (recommended): Read and write, scope
+   `@tailored-ai`, short expiry. (Or **Classic ▸ Automation**.)
+3. Run the script below with the token in `NPM_TOKEN` — it never touches
+   `~/.npmrc`:
 
 ```bash
-# Within 72 hours of a bad publish
-npm unpublish @tailored-ai/core@1.0.0
-
-# Older than 72 hours — mark broken, ship a fix forward
-npm deprecate '@tailored-ai/core@1.0.0' 'broken release, use 1.0.1+'
+NPM_TOKEN=npm_xxx bash scripts/npm-deprecate-1x.sh
 ```
+
+`scripts/npm-deprecate-1x.sh` deprecates every `1.0.x` across the fixed group
+and re-points `latest` to the last good 0.x, then prints the resulting
+dist-tags. Editable list of bad versions / target at the top of the script.
+
+### Prevention
+
+Going forward, a bad group-wide bump can't ship unattended:
+
+- `pnpm run guard:pre-v1` runs in CI (`ci.yml`) and in the release `version`
+  job — it fails if any publishable version is `>= 1.0.0` or any changeset
+  isn't `patch`.
+- Publishing is `workflow_dispatch`-only and gated on the `npm-publish`
+  environment (see above).
 
 Tags created by `createGithubReleases: true` can be deleted from the GitHub
 Releases page if you also want to remove the tag.
