@@ -17,6 +17,7 @@ async function initRepo(cwd: string): Promise<void> {
   await git(cwd, ["init", "-q", "-b", "main"]);
   await git(cwd, ["config", "user.email", "test@example.com"]);
   await git(cwd, ["config", "user.name", "Tester"]);
+  await git(cwd, ["config", "commit.gpgsign", "false"]);
   writeFileSync(join(cwd, "README.md"), "hello\n");
   await git(cwd, ["add", "."]);
   await git(cwd, ["commit", "-q", "-m", "initial"]);
