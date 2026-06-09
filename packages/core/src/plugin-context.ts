@@ -30,6 +30,8 @@ import type { MemoryBackendFactory } from "./memory/registry.js";
 import { registerMemoryBackendFactory } from "./memory/registry.js";
 import type { EmbeddingFactory, ProviderFactory } from "./providers/factories.js";
 import { registerEmbeddingFactory, registerProviderFactory } from "./providers/factories.js";
+import type { RepoBackendFactory } from "./repo/factory.js";
+import { registerRepoBackendFactory } from "./repo/factory.js";
 import type { TaskBackendFactory } from "./tasks/factory.js";
 import { registerTaskBackendFactory } from "./tasks/factory.js";
 import type { ToolFactory } from "./tools/tool-factories.js";
@@ -61,6 +63,10 @@ export interface TaskBackendRegistryView {
   register(id: string, factory: TaskBackendFactory): void;
 }
 
+export interface RepoBackendRegistryView {
+  register(id: string, factory: RepoBackendFactory): void;
+}
+
 export interface UiProviderRegistryView {
   register(id: string, factory: UiProviderFactory): void;
 }
@@ -76,6 +82,7 @@ export interface PluginContext {
   embeddings: EmbeddingRegistryView;
   memoryBackends: MemoryBackendRegistryView;
   taskBackends: TaskBackendRegistryView;
+  repoBackends: RepoBackendRegistryView;
   uiProviders: UiProviderRegistryView;
   /**
    * Typed pub/sub bus for runtime lifecycle events. Plugins subscribe via
@@ -129,6 +136,7 @@ export function createPluginContext(opts: CreatePluginContextOptions = {}): Plug
     embeddings: { register: registerEmbeddingFactory },
     memoryBackends: { register: registerMemoryBackendFactory },
     taskBackends: { register: registerTaskBackendFactory },
+    repoBackends: { register: registerRepoBackendFactory },
     uiProviders: { register: registerUiProviderFactory },
     events: opts.events ?? new TypedEventBus(),
   };

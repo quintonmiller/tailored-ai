@@ -37,6 +37,24 @@ export {
 export type { ExpandOptions } from "./prompts/expand.js";
 export { applyVars, expandPrompt } from "./prompts/expand.js";
 export {
+  createRepoBackend,
+  type RepoBackendDeps,
+  type RepoBackendFactory,
+  registerRepoBackendFactory,
+  repoBackendFactoryRegistry,
+} from "./repo/factory.js";
+export { type CmdRunner, GhRepoBackend, type GhRepoBackendOptions, mapPrJson } from "./repo/github.js";
+export type {
+  MergeProposalInput,
+  OpenProposalInput,
+  Proposal,
+  ProposalRef,
+  ProposalState,
+  PushBranchInput,
+  PushResult,
+  RepoBackend,
+} from "./repo/interface.js";
+export {
   authoredAgentDir,
   authoredAgentManifestPath,
   authoredAgentRoot,
@@ -392,6 +410,7 @@ export {
   type Plugin,
   type PluginContext,
   type ProviderRegistryView,
+  type RepoBackendRegistryView,
   type TaskBackendRegistryView,
   type ToolRegistryView,
   type UiProviderRegistryView,
