@@ -6,6 +6,7 @@ import { EMPTY_HOOKS, mergeHooks, type ResolvedHooks } from "./agent/hooks.js";
 import type { AgentLoopOptions } from "./agent/loop.js";
 import { findOrCreateSession, type Session } from "./agent/session.js";
 import type { ApprovalRequest, ApprovalResponse } from "./approval.js";
+import type { OutboundNotifier } from "./channels/outbound.js";
 import { type AgentConfig, type AgentHook, mergeProjectOverlay, validateConfig } from "./config.js";
 import { getProject } from "./db/project-queries.js";
 import { type EventBus, TypedEventBus } from "./events.js";
@@ -126,6 +127,15 @@ export class AgentRuntime {
   private _workflows: WorkflowRegistry = new WorkflowRegistry();
   private _workflowEngine: import("./workflows/engine.js").WorkflowEngine | undefined;
   private _activeProject: ProjectContext | null = null;
+  /**
+   * Live outbound notifiers keyed by channel id (`notifier.id`). Populated by
+   * the host as channels connect (`registerOutbound`) and cleared as they
+   * disconnect (`unregisterOutbound`) — keyed by the live connection
+   * lifecycle, NOT by config, so it deliberately survives `reload()`. Lets
+   * cron / autopilot / task-watcher / workflows resolve a sink by channel id
+   * instead of being hand-wired to the single Discord instance. See #66.
+   */
+  private _outbound = new Map<string, OutboundNotifier>();
 
   constructor(
     opts: RuntimeOptions,
@@ -709,6 +719,43 @@ export class AgentRuntime {
       userId: owner ?? "owner",
       displayName: fieldOf(channelId, "ownerName") ?? owner ?? "the user",
     };
+  }
+
+  /**
+   * Register a live outbound notifier (a connected channel) under its
+   * `notifier.id`. Re-registering the same id replaces the entry — that's the
+   * reconnect / hot-reload path. Pairs with {@link unregisterOutbound}.
+   */
+  registerOutbound(notifier: OutboundNotifier): void {
+    this._outbound.set(notifier.id, notifier);
+  }
+
+  /** Drop the outbound notifier for `channelId` (channel disconnected). */
+  unregisterOutbound(channelId: string): void {
+    this._outbound.delete(channelId);
+  }
+
+  /** The live outbound notifier for an exact channel id, or undefined. */
+  getOutbound(channelId: string): OutboundNotifier | undefined {
+    return this._outbound.get(channelId);
+  }
+
+  /** All currently-registered outbound notifiers. */
+  listOutbound(): OutboundNotifier[] {
+    return [...this._outbound.values()];
+  }
+
+  /**
+   * Resolve an outbound notifier the channel-neutral way: an explicit
+   * `channelId` when given, else the deployment's primary channel
+   * ({@link getPrimaryOwner}, which honors `config.defaultChannel`). Returns
+   * undefined when the resolved channel has no live notifier registered (e.g.
+   * it isn't connected). Callers that hardcode a transport (a `delivery.channel`
+   * union still pinned to `"discord"`) should use {@link getOutbound} directly
+   * until that union is opened.
+   */
+  resolveOutbound(channelId?: string): OutboundNotifier | undefined {
+    return this.getOutbound(channelId ?? this.getPrimaryOwner().channelId);
   }
 
   /**

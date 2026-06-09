@@ -7,7 +7,6 @@ import { executeHooks } from "../agent/hooks.js";
 import { runAgentLoop } from "../agent/loop.js";
 import { findOrCreateSession, resetSession } from "../agent/session.js";
 import { getDiscordConfig } from "../channels/discord-config.js";
-import type { OutboundNotifier } from "../channels/outbound.js";
 import type { CronJobConfig } from "../config.js";
 import { saveMessage } from "../db/queries.js";
 import type { ProjectRef } from "../projects/resolve.js";
@@ -18,38 +17,21 @@ import { compileSchedule } from "./schedule-dsl.js";
 
 export interface CronSchedulerOptions {
   runtime: AgentRuntime;
-  /** Outbound channel for `delivery.channel = "discord" | "discord-dm"` jobs.
-   * Any OutboundNotifier works; the routing keys stay "discord"/"discord-dm"
-   * for back-compat. Future: lookup by channel id from the channel registry. */
-  notifier?: OutboundNotifier;
-  /** @deprecated Use notifier instead. Kept for back-compat with old callers. */
-  discord?: OutboundNotifier;
   workflowEngine?: WorkflowEngine;
 }
 
 export class CronScheduler {
   private timers: Cron[] = [];
   private runtime: AgentRuntime;
-  private notifier?: OutboundNotifier;
   private workflowEngine: WorkflowEngine | undefined;
 
   constructor(opts: CronSchedulerOptions) {
     this.runtime = opts.runtime;
-    this.notifier = opts.notifier ?? opts.discord;
     this.workflowEngine = opts.workflowEngine;
   }
 
   setWorkflowEngine(engine: WorkflowEngine | undefined): void {
     this.workflowEngine = engine;
-  }
-
-  setNotifier(notifier: OutboundNotifier | undefined): void {
-    this.notifier = notifier;
-  }
-
-  /** @deprecated Use setNotifier instead. */
-  setDiscord(notifier: OutboundNotifier | undefined): void {
-    this.notifier = notifier;
   }
 
   start(): void {
@@ -326,11 +308,15 @@ export class CronScheduler {
         console.error(`[cron] Job "${job.name}" has discord delivery but no target channel ID`);
         return;
       }
-      if (!this.notifier) {
+      // The "discord"/"discord-dm" routing keys stay for back-compat; the live
+      // sink is now resolved by channel id from the runtime's outbound registry
+      // (#66) instead of a notifier hand-injected at construction.
+      const out = this.runtime.getOutbound("discord");
+      if (!out) {
         console.error(`[cron] Job "${job.name}" wants discord delivery but Discord is not connected`);
         return;
       }
-      await this.notifier.send(target, response);
+      await out.send(target, response);
       console.log(`[cron] Delivered "${job.name}" response to Discord channel ${target}`);
       return;
     }
@@ -343,11 +329,12 @@ export class CronScheduler {
         );
         return;
       }
-      if (!this.notifier) {
+      const out = this.runtime.getOutbound("discord");
+      if (!out) {
         console.error(`[cron] Job "${job.name}" wants discord-dm delivery but Discord is not connected`);
         return;
       }
-      await this.notifier.sendDM(target, response);
+      await out.sendDM(target, response);
       console.log(`[cron] Delivered "${job.name}" response as DM to user ${target}`);
       return;
     }
