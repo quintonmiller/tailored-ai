@@ -164,8 +164,18 @@ export interface CronJobConfig {
   /** When set, the cron job triggers a workflow run instead of an agent loop. The expanded prompt becomes the workflow input prompt. */
   workflow?: string;
   enabled?: boolean;
+  /**
+   * Where to deliver this job's response. `channel` is an open channel id
+   * (resolved against the runtime's outbound registry) or the reserved
+   * sentinel `"log"` (console only, the default when omitted). `mode` picks
+   * channel-post (`send`) vs direct-message (`sendDM`). `target` is the room
+   * id (channel mode) or user id (dm mode); for dm it defaults to the
+   * channel's configured owner. The legacy `"discord"` / `"discord-dm"`
+   * string channel values are migrated to this shape by `migrateDeliveryConfig`.
+   */
   delivery?: {
-    channel: "log" | "discord" | "discord-dm";
+    channel?: string;
+    mode?: "channel" | "dm";
     target?: string;
   };
   wakeAgent?: boolean;
@@ -211,8 +221,18 @@ export interface TaskWatcherConfig {
   prompt: string;
   debounceMs: number;
   triggers: ("created" | "updated" | "commented")[];
+  /**
+   * Where to deliver the watcher's notification. `channel` is an open channel
+   * id (resolved against the runtime's outbound registry) or the reserved
+   * sentinel `"log"` (console only, the default when omitted). `mode` picks
+   * channel-post (`send`) vs direct-message (`sendDM`). `target` is the room
+   * id (channel mode) or user id (dm mode); for dm it defaults to the
+   * channel's configured owner. The legacy `"discord"` / `"discord-dm"`
+   * string channel values are migrated to this shape by `migrateDeliveryConfig`.
+   */
   delivery?: {
-    channel: "log" | "discord" | "discord-dm";
+    channel?: string;
+    mode?: "channel" | "dm";
     target?: string;
   };
   hooks?: {
@@ -785,9 +805,11 @@ export function mergeProjectOverlay(
   // `.tai.yaml` (e.g. `tasks.options.token: ${GITHUB_PERSONAL_TOKEN}`) reach
   // downstream consumers as literal `${VAR}` strings.
   const interpolated = deepInterpolate(overlay) as Record<string, unknown>;
-  // Apply the same legacy-block migration as loadConfig so per-project
-  // overlays written against the old `tasks.github` shape still resolve.
+  // Apply the same legacy-block migrations as loadConfig so per-project
+  // overlays written against the old `tasks.github` / legacy `delivery.channel`
+  // shapes still resolve.
   migrateTaskBackendConfig(interpolated);
+  migrateDeliveryConfig(interpolated);
   return deepMerge(base as unknown as Record<string, unknown>, interpolated) as unknown as AgentConfig;
 }
 
@@ -1099,6 +1121,8 @@ export function loadConfig(configPath?: string): AgentConfig {
   migrateOllamaProvider(interpolated);
   migrateTaskBackendConfig(interpolated);
   coerceCronJobs(interpolated);
+  // After coerceCronJobs so a JSON-string cron.jobs is already an array.
+  migrateDeliveryConfig(interpolated);
 
   return deepMerge(DEFAULT_CONFIG as unknown as Record<string, unknown>, interpolated) as unknown as AgentConfig;
 }
@@ -1128,6 +1152,48 @@ export function migrateTaskBackendConfig(interpolated: Record<string, unknown>):
     delete tasks[k];
   }
   tasks.options = merged;
+}
+
+/**
+ * Back-compat: the old delivery union pinned `channel` to a closed
+ * `"log" | "discord" | "discord-dm"` set that conflated *which* channel with
+ * *channel-post vs DM*. The new shape is `{ channel?: string; mode?: "channel"
+ * | "dm"; target? }` where `channel` is an open id (or the `"log"` sentinel).
+ * Map the three legacy string values onto it for `config.taskWatcher.delivery`
+ * and each `config.cron.jobs[].delivery`, preserving `target`:
+ *   - `"discord"`     → `{ channel: "discord", mode: "channel" }`
+ *   - `"discord-dm"`  → `{ channel: "discord", mode: "dm" }`
+ *   - `"log"`         → `{ channel: "log" }`
+ * Idempotent: only rewrites when `channel` is one of those legacy strings and
+ * `mode` is not already set; already-migrated or other configs are untouched.
+ * Mutates `interpolated` in place. Run on both the main config and overlays.
+ */
+export function migrateDeliveryConfig(interpolated: Record<string, unknown>): void {
+  const migrate = (delivery: unknown): void => {
+    if (!delivery || typeof delivery !== "object") return;
+    const d = delivery as Record<string, unknown>;
+    // Already on the new shape (or a custom channel + explicit mode): leave it.
+    if (d.mode !== undefined) return;
+    if (d.channel === "discord") {
+      d.mode = "channel";
+    } else if (d.channel === "discord-dm") {
+      d.channel = "discord";
+      d.mode = "dm";
+    }
+    // "log" needs no rewrite (channel stays "log", no mode); other/custom
+    // channel ids are left as-is.
+  };
+
+  const taskWatcher = interpolated.taskWatcher as Record<string, unknown> | undefined;
+  if (taskWatcher) migrate(taskWatcher.delivery);
+
+  const cron = interpolated.cron as Record<string, unknown> | undefined;
+  const jobs = cron?.jobs;
+  if (Array.isArray(jobs)) {
+    for (const job of jobs) {
+      if (job && typeof job === "object") migrate((job as Record<string, unknown>).delivery);
+    }
+  }
 }
 
 /**

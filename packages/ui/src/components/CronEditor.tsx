@@ -10,7 +10,8 @@ interface CronJob {
   profile?: string;
   enabled?: boolean;
   delivery?: {
-    channel: "log" | "discord" | "discord-dm";
+    channel?: string;
+    mode?: "channel" | "dm";
     target?: string;
   };
   wakeAgent?: boolean;
@@ -20,6 +21,22 @@ interface CronJob {
 interface CronConfig {
   enabled: boolean;
   jobs: CronJob[];
+}
+
+// UI presets over the open `{ channel, mode, target }` delivery shape. "log"
+// is the console-only sentinel; the discord presets map onto channel id
+// "discord" + the matching mode.
+const DELIVERY_PRESETS = ["log", "discord", "discord-dm"] as const;
+type DeliveryPreset = (typeof DELIVERY_PRESETS)[number];
+
+function deliveryToPreset(delivery: CronJob["delivery"]): DeliveryPreset {
+  if (!delivery || !delivery.channel || delivery.channel === "log") return "log";
+  return delivery.mode === "dm" ? "discord-dm" : "discord";
+}
+
+function presetToDelivery(preset: DeliveryPreset, target?: string): CronJob["delivery"] {
+  if (preset === "log") return undefined;
+  return { channel: "discord", mode: preset === "discord-dm" ? "dm" : "channel", target };
 }
 
 const DEFAULTS: CronConfig = {
@@ -174,10 +191,10 @@ export function CronEditor() {
               <label className="field-label">Delivery Channel</label>
               <select
                 className="field-select"
-                value={job.delivery?.channel ?? "log"}
+                value={deliveryToPreset(job.delivery)}
                 onChange={(e) => {
-                  const channel = e.target.value as "log" | "discord" | "discord-dm";
-                  updateJob(i, "delivery", channel === "log" ? undefined : { channel, target: job.delivery?.target });
+                  const preset = e.target.value as DeliveryPreset;
+                  updateJob(i, "delivery", presetToDelivery(preset, job.delivery?.target));
                 }}
               >
                 <option value="log">log (stdout)</option>
@@ -187,13 +204,19 @@ export function CronEditor() {
             </div>
           </div>
 
-          {job.delivery && job.delivery.channel !== "log" && (
+          {deliveryToPreset(job.delivery) !== "log" && (
             <div className="field-group">
               <label className="field-label">Delivery Target</label>
               <input
                 className="field-input"
-                value={job.delivery.target ?? ""}
-                onChange={(e) => updateJob(i, "delivery", { ...job.delivery!, target: e.target.value || undefined })}
+                value={job.delivery?.target ?? ""}
+                onChange={(e) =>
+                  updateJob(
+                    i,
+                    "delivery",
+                    presetToDelivery(deliveryToPreset(job.delivery), e.target.value || undefined),
+                  )
+                }
                 placeholder="Channel ID"
               />
             </div>
