@@ -1,19 +1,20 @@
-# @tailored-ai/cli — `tai`
+# @tailored-ai/cli - `tai`
 
-Lightweight, modular AI agent framework optimized for local LLMs.
-The `tai` command runs a REPL or one-shot prompts against a configured
-agent, manages sessions, projects, and the web UI.
+Tailored AI is a modular framework for running personal agents. The `tai`
+command starts the local HTTP API and bundled web UI, runs one-shot prompts,
+manages sessions/projects/plugins, and opens the TUI setup/editor.
 
 ```bash
 npm install -g @tailored-ai/cli
-# or use it as a dev dependency in a project
 ```
 
 ## Quick start
 
 ```bash
-# 1. drop a config.yaml in your cwd (see below)
-# 2. start the REPL
+# 1. create ~/.tailored-ai/config.yaml
+tai init
+
+# 2. start HTTP API + bundled UI + enabled channels/cron/autopilot
 tai
 
 # one-shot
@@ -26,32 +27,53 @@ tai -a coder -m "Add a /healthz route to the server"
 tai --list-agents
 tai --list-sessions
 tai project list
+
+# install external plugins into the TAI plugin home
+tai plugin install @tailored-ai/google-tools
+tai plugin list
 ```
 
 ## Minimal `config.yaml`
 
 ```yaml
-provider:
-  type: ollama          # or: openai, anthropic, vllm
-  model: llama3.2
+providers:
+  openai_compatible:
+    baseUrl: http://localhost:11434/v1
+    defaultModel: devstral-small-2:latest
+  # openai:
+  #   apiKey: ${OPENAI_API_KEY}
+  #   defaultModel: gpt-4o
+  # anthropic:
+  #   apiKey: ${ANTHROPIC_API_KEY}
+  #   defaultModel: claude-sonnet-4-5-20250929
+
+agent:
+  defaultProvider: openai_compatible
+
+plugins: []
+
 agents:
   default:
     instructions: "You are a helpful assistant."
-    tools: [read, write, web_fetch]
+    tools: [read, write, web_fetch, memory]
+
 tools:
-  read:    { enabled: true }
-  write:   { enabled: true }
+  read: { enabled: true }
+  write: { enabled: true }
   web_fetch: { enabled: true }
+  memory: { enabled: true }
 ```
 
 A fully annotated reference is at [`config.example.yaml`](https://github.com/quintonmiller/tailored-ai/blob/main/config.example.yaml).
 
 ## What ships
 
-- `tai` REPL with session sidebar, agent switcher, expandable tool results
+- `tai` server mode with HTTP API, bundled web UI, enabled channels, cron, and autopilot
+- `tai -m`, `tai -a`, `tai -s`, `--json` for one-shot and scripted runs
+- `tai init` / `tai edit` setup and configuration TUI
 - `tai project init/list` — register and switch between repos
+- `tai plugin install/list/remove/upgrade` — install npm, git, tarball, and local plugins into `<TAI_HOME>/plugins/`
 - `tai --list-agents`, `--list-sessions` for quick inspection
-- Built-in web UI served on `tai serve` (chat, agents, sessions, workflows, memory)
 - Setup wizard that probes your provider and discovers available models
 
 ## Architecture
