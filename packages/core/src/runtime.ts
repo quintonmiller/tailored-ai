@@ -722,6 +722,19 @@ export class AgentRuntime {
   }
 
   /**
+   * The *real* configured owner id for a channel — `channels[id].owner` — or
+   * undefined when none is set. Unlike {@link getPrimaryOwner}.userId (which
+   * substitutes a synthetic `"owner"` so session keys are always well-formed),
+   * this returns undefined so delivery consumers can skip DMing a non-existent
+   * recipient. Defaults to the primary channel ({@link getPrimaryOwner}).
+   */
+  getOwnerId(channelId?: string): string | undefined {
+    const id = channelId ?? this.getPrimaryOwner().channelId;
+    const raw = (this.getConfig().channels?.[id] as Record<string, unknown> | undefined)?.owner;
+    return typeof raw === "string" && raw ? raw : undefined;
+  }
+
+  /**
    * Register a live outbound notifier (a connected channel) under its
    * `notifier.id`. Re-registering the same id replaces the entry — that's the
    * reconnect / hot-reload path. Pairs with {@link unregisterOutbound}.

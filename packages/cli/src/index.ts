@@ -173,8 +173,8 @@ async function runServer(runtime: AgentRuntime) {
 
   const autopilot = new AutopilotWorker({
     runtime,
-    getNotifier: () => _discordNotifier,
-    getOwnerId: () => getDiscordConfig(runtime.getConfig())?.owner,
+    // Notifier + operator resolve from the runtime's outbound registry and
+    // getOwnerId (#66) — no Discord-specific injection here anymore.
     getTaskWatcher: () => taskWatcher,
   });
   autopilot.start();
