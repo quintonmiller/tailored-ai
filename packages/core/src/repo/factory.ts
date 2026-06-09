@@ -36,11 +36,12 @@ export function registerRepoBackendFactory(id: string, factory: RepoBackendFacto
 
 repoBackendFactoryRegistry.register("github", (config, deps) => {
   const opts = config.repo?.options ?? {};
+  const taskOpts = config.tasks?.options ?? {};
   return new GhRepoBackend({
-    // Fall back to the task backend's GitHub coordinates so a user who
-    // already configured tasks.github doesn't repeat themselves.
-    repo: asString(opts.repo) ?? config.tasks?.github?.repo,
-    token: asString(opts.token) ?? config.tasks?.github?.token,
+    // Fall back to the github task backend's coordinates so a user who
+    // already configured it doesn't repeat themselves.
+    repo: asString(opts.repo) ?? asString(taskOpts.repo),
+    token: asString(opts.token) ?? asString(taskOpts.token),
     defaultBase: config.repo?.defaultBase,
     remote: config.repo?.remote,
     events: deps.events,

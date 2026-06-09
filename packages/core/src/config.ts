@@ -532,23 +532,22 @@ export interface AgentConfig {
     includeBaseDir?: string;
   };
   tasks?: {
-    /** Which task backend to use for project tasks and autopilot. Default "native". */
-    backend?: "native" | "github" | "beans" | "beads";
-    /** Backend-specific options keyed by backend name. */
-    github?: {
-      repo?: string;
-      token?: string;
-      /**
-       * Names treated as TAI agent roles rather than GitHub users. When a
-       * task is assigned to one of these, the backend stores the
-       * assignment as an `agent:<name>` label instead of calling GitHub's
-       * assignees API (which 422s on unknown logins). Defaults to the
-       * built-in TAI agent set.
-       */
-      agentRoles?: string[];
-    };
-    beans?: { path?: string };
-    beads?: { path?: string };
+    /**
+     * Task backend id, resolved through the task-backend registry.
+     * Built-ins and third-party plugins are treated identically — any
+     * registered name works. Default "native".
+     */
+    backend?: string;
+    /**
+     * Backend-specific options, opaque to core and read by the selected
+     * backend — the same bag a third-party backend reads, so built-ins
+     * aren't privileged. The `github` backend reads `repo`, `token`,
+     * `agentRoles`; `beans`/`beads` read `path`.
+     *
+     * Legacy `tasks.github` / `tasks.beans` / `tasks.beads` blocks are
+     * folded into this bag at load time (see `migrateTaskBackendConfig`).
+     */
+    options?: Record<string, unknown>;
   };
   /**
    * Forge integration for pushing branches and opening proposals
@@ -796,9 +795,12 @@ export function mergeProjectOverlay(
   if (!overlay || Object.keys(overlay).length === 0) return base;
   // Interpolate ${ENV} references in the overlay before merging. The base
   // config was interpolated by loadConfig; without this, secret tokens in
-  // `.tai.yaml` (e.g. `tasks.github.token: ${GITHUB_PERSONAL_TOKEN}`) reach
+  // `.tai.yaml` (e.g. `tasks.options.token: ${GITHUB_PERSONAL_TOKEN}`) reach
   // downstream consumers as literal `${VAR}` strings.
   const interpolated = deepInterpolate(overlay) as Record<string, unknown>;
+  // Apply the same legacy-block migration as loadConfig so per-project
+  // overlays written against the old `tasks.github` shape still resolve.
+  migrateTaskBackendConfig(interpolated);
   return deepMerge(base as unknown as Record<string, unknown>, interpolated) as unknown as AgentConfig;
 }
 
@@ -963,25 +965,12 @@ export function validateConfig(config: AgentConfig): string[] {
     warnings.push(`Default provider "${defaultProvider}" is not configured in providers`);
   }
 
-  // Validate tasks block
-  if (config.tasks) {
-    const validBackends = ["native", "github", "beans", "beads"];
-    const backend = config.tasks.backend;
-    if (backend && !validBackends.includes(backend)) {
-      warnings.push(`tasks.backend "${backend}" is not valid (use ${validBackends.map((b) => `"${b}"`).join(", ")})`);
-    }
-    if (backend === "github") {
-      const gh = config.tasks.github;
-      if (!gh?.repo) {
-        warnings.push(`tasks.backend is "github" but tasks.github.repo is not set`);
-      } else if (!/^[^/\s]+\/[^/\s]+$/.test(gh.repo)) {
-        warnings.push(`tasks.github.repo "${gh.repo}" is not in "owner/repo" format`);
-      }
-      if (!gh?.token) {
-        warnings.push(`tasks.backend is "github" but tasks.github.token is not set`);
-      }
-    }
-  }
+  // Task-backend validity is not checked here: the backend id is resolved
+  // dynamically through the registry (createTaskBackend throws a helpful
+  // "Known: …" error on an unknown name), and backend-specific options are
+  // the backend's own concern — core privileges no built-in. A backend that
+  // needs missing options (e.g. github without repo/token) throws on
+  // construction with a clear message.
 
   // Validate sandbox kinds
   const validSandboxes = ["host", "docker", "podman"];
@@ -1121,9 +1110,37 @@ export function loadConfig(configPath?: string): AgentConfig {
   }
 
   migrateOllamaProvider(interpolated);
+  migrateTaskBackendConfig(interpolated);
   coerceCronJobs(interpolated);
 
   return deepMerge(DEFAULT_CONFIG as unknown as Record<string, unknown>, interpolated) as unknown as AgentConfig;
+}
+
+/**
+ * Back-compat: the old per-backend `tasks.github` / `tasks.beans` /
+ * `tasks.beads` config blocks are folded into the generic, backend-opaque
+ * `tasks.options` bag so core privileges no built-in. The selected backend
+ * reads its settings from `options` exactly how a third-party backend
+ * would. Mutates `interpolated` in place. Run on both the main config and
+ * project overlays.
+ */
+export function migrateTaskBackendConfig(interpolated: Record<string, unknown>): void {
+  const tasks = interpolated.tasks as Record<string, unknown> | undefined;
+  if (!tasks) return;
+  const legacyKeys = ["github", "beans", "beads"] as const;
+  const present = legacyKeys.filter((k) => tasks[k] && typeof tasks[k] === "object");
+  if (present.length === 0) return;
+
+  console.warn(
+    `[config] Warning: tasks.${present.join(", tasks.")} ${present.length > 1 ? "blocks are" : "block is"} deprecated; move the settings under tasks.options`,
+  );
+  // Explicit tasks.options wins over any legacy block.
+  let merged = { ...((tasks.options as Record<string, unknown> | undefined) ?? {}) };
+  for (const k of present) {
+    merged = { ...(tasks[k] as Record<string, unknown>), ...merged };
+    delete tasks[k];
+  }
+  tasks.options = merged;
 }
 
 /**

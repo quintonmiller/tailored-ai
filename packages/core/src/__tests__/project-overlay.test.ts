@@ -72,11 +72,12 @@ describe("mergeProjectOverlay", () => {
     expect(merged.agents.coder.tools).toEqual(["read"]);
   });
 
-  it("interpolates ${ENV} references in the overlay before merging", () => {
+  it("interpolates ${ENV} refs and migrates a legacy tasks.github overlay into tasks.options", () => {
     // Regression: a per-project `.tai.yaml` whose `tasks.github.token`
     // referenced ${GITHUB_PERSONAL_TOKEN} reached the github task backend
     // as the literal string `${GITHUB_PERSONAL_TOKEN}`, producing
-    // "Bad credentials" on every Octokit call.
+    // "Bad credentials" on every Octokit call. Also exercises the legacy
+    // `tasks.github` → `tasks.options` migration on overlays.
     process.env._OVERLAY_TEST_TOKEN = "ghp_secret_value";
     try {
       const base = baseConfig();
@@ -89,8 +90,10 @@ describe("mergeProjectOverlay", () => {
           },
         },
       });
-      expect(merged.tasks?.github?.token).toBe("ghp_secret_value");
-      expect(merged.tasks?.github?.repo).toBe("acme/widgets");
+      expect(merged.tasks?.options?.token).toBe("ghp_secret_value");
+      expect(merged.tasks?.options?.repo).toBe("acme/widgets");
+      // Legacy block was folded away.
+      expect((merged.tasks as Record<string, unknown>)?.github).toBeUndefined();
     } finally {
       delete process.env._OVERLAY_TEST_TOKEN;
     }
