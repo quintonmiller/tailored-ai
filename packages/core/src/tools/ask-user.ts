@@ -1,6 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import type { DiscordChannel } from "../channels/discord.js";
+import type { OutboundNotifier } from "../channels/outbound.js";
 import { ensureContextDir } from "../context.js";
 import { getAutopilotSettings, isInQuietHours } from "../db/autopilot-queries.js";
 import { addTaskComment, updateProjectTask } from "../db/task-queries.js";
@@ -8,7 +8,7 @@ import type { Tool, ToolContext, ToolResult } from "./interface.js";
 
 export interface AskUserToolOptions {
   contextDir: string;
-  getDiscord: () => DiscordChannel | undefined;
+  getDiscord: () => OutboundNotifier | undefined;
   getOwnerId: () => string | undefined;
 }
 
@@ -27,7 +27,7 @@ export class AskUserTool implements Tool {
   };
 
   private contextDir: string;
-  private getDiscord: () => DiscordChannel | undefined;
+  private getDiscord: () => OutboundNotifier | undefined;
   private getOwnerId: () => string | undefined;
 
   constructor(opts: AskUserToolOptions) {
