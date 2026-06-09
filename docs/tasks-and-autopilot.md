@@ -45,15 +45,19 @@ Config:
 
 ```yaml
 tasks:
-  backend: github           # native | github | beans | beads
-  github:                   # required when backend: github
-    repo: owner/repo
+  backend: github           # any registered backend id; built-ins: native | github | beans | beads
+  options:                  # backend-specific, opaque to core — the selected backend reads it
+    repo: owner/repo        #   github: repo + token (+ optional agentRoles)
     token: ${GITHUB_TOKEN}
-  beans:
-    path: ./.beans
-  beads:
-    path: ./.beads
+    # beans/beads read: path
 ```
+
+`backend` is resolved through the task-backend registry, so a third-party
+backend id works the same as a built-in. Backend-specific settings live in
+the opaque `options` bag the selected backend reads itself — core privileges
+no built-in. The legacy `tasks.github` / `tasks.beans` / `tasks.beads` blocks
+are still accepted and folded into `tasks.options` at load with a deprecation
+warning.
 
 When using the `github` backend, `AutopilotWorker.start()` calls `backend.bootstrap()` once on launch — this creates the four `status:*` labels (`backlog`, `in_progress`, `blocked`, `in_review`) and `reason:budget` with sensible colors if they're missing. Idempotent and non-fatal: missing-permissions or 422-already-exists errors are swallowed. Backends declare bootstrap as optional on `TaskBackend`; only `github` implements it today.
 

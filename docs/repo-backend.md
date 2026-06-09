@@ -65,8 +65,8 @@ repo:
   defaultBase: main      # target branch for new proposals (git-generic)
   remote: origin         # remote for pushes (git-generic)
   options:               # backend-specific, opaque to core — the github backend reads:
-    repo: owner/name     #   falls back to tasks.github.repo, then gh's inferred remote
-    token: ${GH_TOKEN}   #   falls back to tasks.github.token, then ambient `gh auth`
+    repo: owner/name     #   falls back to tasks.options.repo, then gh's inferred remote
+    token: ${GH_TOKEN}   #   falls back to tasks.options.token, then ambient `gh auth`
 ```
 
 ## Events
