@@ -340,6 +340,16 @@ export interface AgentConfig {
     [channelId: string]: { enabled?: boolean; [key: string]: unknown } | undefined;
   };
   /**
+   * Id of the channel that acts as the deployment's primary / default
+   * communication channel — must name a key in `channels`. Drives the
+   * operator identity (`runtime.getPrimaryOwner()`) and is the fallback sink
+   * for plugins that don't pin their own channel. When unset, resolution
+   * falls back to the first configured channel that declares an `owner`, then
+   * to the first registered channel. Built-ins are not privileged here: the
+   * value is a plain channel id resolved against `channels`.
+   */
+  defaultChannel?: string;
+  /**
    * Third-party plugin modules to load at startup. Each entry is either a
    * package specifier (`"@some-author/tai-plugin-x"`) or an object with
    * `module` and optional `config`. Loading happens before runtime

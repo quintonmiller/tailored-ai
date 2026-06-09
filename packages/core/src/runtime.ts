@@ -674,6 +674,44 @@ export class AgentRuntime {
   }
 
   /**
+   * Resolve the deployment's "operator" — the human this agent serves — as a
+   * channel-neutral identity: which channel they communicate on, their user id
+   * there, and a display name. Used by the task-watcher to thread a no-agent
+   * autopilot run into the operator's existing conversation and to name them
+   * in prompts. No channel is privileged — the operator is whoever owns the
+   * primary channel, resolved from the opaque `channels` config:
+   *
+   *   channelId = config.defaultChannel
+   *             ?? first configured channel that declares an `owner`
+   *             ?? first registered channel
+   *             ?? "primary"            (synthetic, when nothing is configured)
+   *   userId    = channels[channelId].owner ?? "owner"
+   *   display   = channels[channelId].ownerName ?? owner ?? "the user"
+   *
+   * Back-compat: a Discord deployment with `channels.discord.owner` set and no
+   * `defaultChannel` resolves to `{ channelId: "discord", userId: <owner> }`,
+   * preserving the historical `discord:<owner>` primary-session key. `userId`
+   * / `displayName` may be the synthetic fallbacks when no channel declares an
+   * owner; callers that need a *real* owner can check `channels[channelId].owner`.
+   */
+  getPrimaryOwner(): { channelId: string; userId: string; displayName: string } {
+    const channels = this.getConfig().channels ?? {};
+    const configured = Object.keys(channels).filter((id) => channels[id]);
+    const fieldOf = (id: string, key: string): string | undefined => {
+      const raw = (channels[id] as Record<string, unknown> | undefined)?.[key];
+      return typeof raw === "string" && raw ? raw : undefined;
+    };
+    const channelId =
+      this.getConfig().defaultChannel ?? configured.find((id) => fieldOf(id, "owner")) ?? configured[0] ?? "primary";
+    const owner = fieldOf(channelId, "owner");
+    return {
+      channelId,
+      userId: owner ?? "owner",
+      displayName: fieldOf(channelId, "ownerName") ?? owner ?? "the user",
+    };
+  }
+
+  /**
    * Build a standard AgentLoopOptions from the current runtime state.
    * Callers can spread additional fields (onToolCall, onToolResult, etc.) on top.
    */
