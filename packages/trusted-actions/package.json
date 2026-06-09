@@ -1,6 +1,6 @@
 {
   "name": "@tailored-ai/trusted-actions",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Trusted-actions executor: approval gateway, push notifications, execution runner, Playwright adapters. HITL gateway for agent-driven purchases and other risky actions.",
   "license": "MIT",
   "author": "Quinton Miller",
