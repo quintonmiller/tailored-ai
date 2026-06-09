@@ -6,6 +6,7 @@
   "scripts": {
     "build": "pnpm -r run build",
     "pack:check": "bash scripts/pack-check.sh",
+    "guard:pre-v1": "node scripts/guard-pre-v1.mjs",
     "dev": "pnpm --filter @tailored-ai/core run build && pnpm --filter @tailored-ai/server run build && pnpm --filter @tailored-ai/cli run dev",
     "dev:msg": "pnpm --filter @tailored-ai/core run build && pnpm --filter @tailored-ai/server run build && pnpm --filter @tailored-ai/cli run dev -- --message",
     "dev:ui": "pnpm --filter @tailored-ai/ui run dev",

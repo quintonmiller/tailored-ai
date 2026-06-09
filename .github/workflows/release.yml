@@ -1,16 +1,26 @@
 name: Release
 
+# Versioning and publishing are split so npm publishes are never automatic:
+#
+#   * push to main  → the `version` job opens / updates the "Version Packages"
+#                     PR. It NEVER publishes.
+#   * workflow_dispatch (from main) → the `publish` job publishes to npm, but
+#                     only after a reviewer approves the `npm-publish`
+#                     environment. This is the maintainer-approval gate.
+#
+# Why: the whole package set is version-locked (`fixed` in
+# .changeset/config.json), so a single `major` changeset bumps everything to
+# the next major. On 2026-06-09 an unattended/agent-authored major changeset
+# rode the old auto-publish-on-push path and shipped 1.0.0 to npm before a
+# human could intervene. The project stays on 0.x until the maintainer is
+# satisfied with a real V1 — so publishing must be a deliberate, approved act.
+# See docs/publishing.md.
+
 on:
   push:
     branches: [main]
-  # Manually triggerable from the Actions tab. Lets you smoke-test the build
-  # + changesets steps on any branch without a merge to main. Triggering on
-  # a non-main branch exercises everything except the npm publish (changesets
-  # only publishes when changeset files merge to main).
   workflow_dispatch:
 
-# Provenance requires id-token: write. contents: write lets the changesets
-# action open the Version Packages PR.
 permissions:
   contents: write
   pull-requests: write
@@ -21,24 +31,61 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
+  # Open / update the "Version Packages" PR on every push to main. No npm
+  # publish happens here — there is no `publish:` input and no NPM_TOKEN.
+  version:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
-          # Authenticate the git remote with RELEASE_PAT so the changesets
-          # action's `git push` to changeset-release/main is sourced from a
-          # real user account. Pushes from github-actions[bot] (the default
-          # when actions/checkout uses GITHUB_TOKEN) do not trigger
-          # pull_request workflows, leaving the version PR's required
-          # build-and-test check stuck on "Expected — Waiting for status".
-          # Falls back to GITHUB_TOKEN so the workflow still runs (without
-          # the auto-CI behaviour) on a fresh clone with no PAT configured.
+          # RELEASE_PAT so the version PR is opened "as" a real user and CI
+          # runs on it normally (GITHUB_TOKEN-opened PRs don't trigger
+          # pull_request workflows). Falls back to GITHUB_TOKEN.
           token: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
 
       - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
 
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Pre-V1 guard (block any 1.x changeset before it becomes a PR)
+        # Belt-and-suspenders with the CI check: refuse to even open a Version
+        # Packages PR if a non-`patch` changeset slipped in. Stops the
+        # 2026-06-09 escalation (minor changeset → whole fixed group to 1.0.0)
+        # at the source. See docs/publishing.md.
+        run: pnpm run guard:pre-v1
+
+      - name: Create / update the Version Packages PR
+        uses: changesets/action@v1
+        with:
+          version: pnpm changeset version
+          commit: "chore: version packages"
+          title: "chore: version packages"
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
+
+  # Publish to npm. MANUAL ONLY (workflow_dispatch from main) and gated on the
+  # `npm-publish` environment, which must be configured in repo Settings ▸
+  # Environments with the maintainer as a required reviewer. Run this after
+  # merging the Version Packages PR and confirming the proposed versions are
+  # what you want (e.g. NOT an unintended 1.0.0).
+  publish:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: npm-publish
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
+
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -52,34 +99,25 @@ jobs:
         run: pnpm run build
 
       - name: Pack-check every publishable tarball
-        # Guards against the bug fixed in #56: if the root build script ever
-        # forgets a package, `pnpm publish -r` would ship a tarball with a
-        # missing or stale dist directory. This catches it before npm does.
+        # Guards against #56: a forgotten package would ship a stale/missing
+        # dist. Catches it before npm does.
         run: pnpm run pack:check
 
-      # Either opens / updates the "Version Packages" PR, or — if a version PR
-      # was just merged — runs `pnpm publish -r` to push the new versions to npm.
-      - name: Create release PR or publish
+      # Publishes any package whose package.json version isn't on npm yet; a
+      # clean no-op when everything is already published.
+      - name: Publish to npm
         id: changesets
         uses: changesets/action@v1
         with:
-          version: pnpm changeset version
           publish: pnpm publish -r --access public --no-git-checks
-          commit: "chore: version packages"
-          title: "chore: version packages"
-          # Tag + GitHub Release per published package using changelog body.
           createGithubReleases: true
         env:
-          # Prefer RELEASE_PAT so the version PR is opened "as" a real user
-          # and CI runs on it normally. GITHUB_TOKEN-opened PRs do not
-          # trigger pull_request workflows — see docs/publishing.md.
           GITHUB_TOKEN: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      # Catches the silent-failure case where `pnpm publish` exits 0 for some
-      # packages but the registry never received them (network blip, auth race
-      # on one tarball, etc.). Runs only on the publish branch of the action.
+      # Catches the silent-failure case where `pnpm publish` exits 0 but the
+      # registry never received a tarball (network blip, auth race, etc.).
       - name: Verify publish reached the registry
         if: steps.changesets.outputs.published == 'true'
         run: |
