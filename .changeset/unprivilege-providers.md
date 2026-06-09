@@ -1,5 +1,5 @@
 ---
-"@tailored-ai/core": minor
+"@tailored-ai/core": patch
 "@tailored-ai/cli": patch
 "@tailored-ai/server": patch
 ---
