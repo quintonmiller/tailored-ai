@@ -17,6 +17,11 @@ Backend selection is **opt-in**: with no `repo.backend` configured,
 proposals — today's behavior is unchanged. Setting `repo.backend: github`
 lights up the default.
 
+Built-ins are not privileged: `repo.backend` is a plain `string` resolved
+through the registry, and backend-specific settings live in an opaque
+`repo.options` bag the selected backend reads itself (the github backend
+reads `options.repo` / `options.token`). Core carries no per-forge schema.
+
 New `repo.*` events on the runtime bus: `repo.proposal.opened` /
 `.merged` / `.closed` are emitted by the default backend; `.reviewed` and
 `repo.check.completed` are declared placeholders for a future forge

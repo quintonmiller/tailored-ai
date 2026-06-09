@@ -53,14 +53,20 @@ can serve many checkouts — the forge is resolved from that directory's remote.
 Opt-in. With no `repo.backend` set, `createRepoBackend` returns `undefined` and
 core neither pushes nor opens proposals — today's behavior is unchanged.
 
+`backend` is any id registered in the repo-backend registry — built-ins and
+third-party plugins are resolved the same way, and backend-specific settings go
+in the opaque `options` bag rather than a per-backend block in core. Core knows
+nothing about any particular forge's schema; the selected backend reads `options`
+itself.
+
 ```yaml
 repo:
-  backend: github        # "github" (wraps gh) or "none"
-  defaultBase: main      # target branch for new proposals
-  remote: origin         # remote for pushes
-  github:
-    repo: owner/name     # falls back to tasks.github.repo, then gh's inferred remote
-    token: ${GH_TOKEN}   # falls back to tasks.github.token, then ambient `gh auth`
+  backend: github        # any registered backend id (built-in default: "github"); "none"/unset disables
+  defaultBase: main      # target branch for new proposals (git-generic)
+  remote: origin         # remote for pushes (git-generic)
+  options:               # backend-specific, opaque to core — the github backend reads:
+    repo: owner/name     #   falls back to tasks.github.repo, then gh's inferred remote
+    token: ${GH_TOKEN}   #   falls back to tasks.github.token, then ambient `gh auth`
 ```
 
 ## Events

@@ -28,9 +28,7 @@ describe("createRepoBackend", () => {
   });
 
   it("throws a helpful error for an unknown backend", () => {
-    expect(() => createRepoBackend(cfg({ backend: "gitlab" as "github" }))).toThrow(
-      /Unsupported repo.backend "gitlab"/,
-    );
+    expect(() => createRepoBackend(cfg({ backend: "gitlab" }))).toThrow(/Unsupported repo.backend "gitlab"/);
   });
 
   it("resolves a custom backend registered via registerRepoBackendFactory", () => {
@@ -43,8 +41,25 @@ describe("createRepoBackend", () => {
       closeProposal: async () => {},
     };
     registerRepoBackendFactory("custom", () => fake);
-    const be = createRepoBackend(cfg({ backend: "custom" as "github" }));
+    const be = createRepoBackend(cfg({ backend: "custom" }));
     expect(be).toBe(fake);
+  });
+
+  it("passes config + deps through to the resolved factory (built-ins aren't special)", () => {
+    let seen: { backend?: string; options?: Record<string, unknown> } | undefined;
+    registerRepoBackendFactory("custom", (config) => {
+      seen = { backend: config.repo?.backend, options: config.repo?.options };
+      return {
+        name: "custom",
+        pushBranch: async () => ({ remote: "origin", branch: "b", pushed: true, upToDate: false }),
+        openProposal: async () => ({ id: "1", branch: "b", base: "main", title: "", state: "open", approvedBy: [] }),
+        getProposalState: async () => undefined,
+        mergeProposal: async () => ({ id: "1", branch: "b", base: "main", title: "", state: "merged", approvedBy: [] }),
+        closeProposal: async () => {},
+      };
+    });
+    createRepoBackend(cfg({ backend: "custom", options: { token: "t" } }));
+    expect(seen).toEqual({ backend: "custom", options: { token: "t" } });
   });
 
   it("registers github as a built-in", () => {

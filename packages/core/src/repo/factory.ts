@@ -30,20 +30,26 @@ export function registerRepoBackendFactory(id: string, factory: RepoBackendFacto
   repoBackendFactoryRegistry.register(id, factory);
 }
 
-// Built-in repo backends register on module load.
+// Built-in repo backends register on module load. The github backend reads
+// its options from the generic `repo.options` bag — exactly how a
+// third-party backend would — so core privileges no built-in.
 
 repoBackendFactoryRegistry.register("github", (config, deps) => {
-  const repoCfg = config.repo;
+  const opts = config.repo?.options ?? {};
   return new GhRepoBackend({
     // Fall back to the task backend's GitHub coordinates so a user who
     // already configured tasks.github doesn't repeat themselves.
-    repo: repoCfg?.github?.repo ?? config.tasks?.github?.repo,
-    token: repoCfg?.github?.token ?? config.tasks?.github?.token,
-    defaultBase: repoCfg?.defaultBase,
-    remote: repoCfg?.remote,
+    repo: asString(opts.repo) ?? config.tasks?.github?.repo,
+    token: asString(opts.token) ?? config.tasks?.github?.token,
+    defaultBase: config.repo?.defaultBase,
+    remote: config.repo?.remote,
     events: deps.events,
   });
 });
+
+function asString(v: unknown): string | undefined {
+  return typeof v === "string" ? v : undefined;
+}
 
 /**
  * Construct the configured repo backend, or undefined when none is set

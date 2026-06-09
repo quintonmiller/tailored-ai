@@ -558,18 +558,25 @@ export interface AgentConfig {
    * host/user integrates by hand).
    */
   repo?: {
-    /** Forge backend. "github" wraps the `gh` CLI; "none" disables. */
-    backend?: "github" | "none";
+    /**
+     * Forge backend id, resolved through the repo-backend registry.
+     * Built-ins and third-party plugins are treated identically — any
+     * registered name works. Unset (or the reserved "none") → no
+     * programmatic forge, today's behavior. The default built-in is
+     * "github" (wraps the `gh` CLI).
+     */
+    backend?: string;
     /** Default target branch for new proposals. Default "main". */
     defaultBase?: string;
     /** Default git remote for pushes. Default "origin". */
     remote?: string;
-    github?: {
-      /** owner/repo; falls back to tasks.github.repo, then `gh`'s inferred remote. */
-      repo?: string;
-      /** Exported as GH_TOKEN; falls back to tasks.github.token, then ambient `gh auth`. */
-      token?: string;
-    };
+    /**
+     * Backend-specific options, opaque to core and read by the selected
+     * backend — the same bag a third-party backend reads, so built-ins
+     * aren't privileged. The `github` backend reads `repo` and `token`
+     * (falling back to `tasks.github` then ambient `gh auth`).
+     */
+    options?: Record<string, unknown>;
   };
   /**
    * Centralized SSRF / outbound-HTTP egress policy. Applied to web_fetch,
