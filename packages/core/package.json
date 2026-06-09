@@ -1,6 +1,6 @@
 {
   "name": "@tailored-ai/core",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Agent core library: runtime, config, tools, providers, channels, db, cron, hooks. Lightweight, modular AI agent framework optimized for local LLMs.",
   "license": "MIT",
   "author": "Quinton Miller",

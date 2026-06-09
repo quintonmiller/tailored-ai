@@ -1,5 +1,14 @@
 # @tailored-ai/google-tools
 
+## 0.1.6
+
+### Patch Changes
+
+- Updated dependencies [4201cc9]
+- Updated dependencies [4201cc9]
+- Updated dependencies [4201cc9]
+  - @tailored-ai/core@0.1.6
+
 ## 0.1.5
 
 ### Patch Changes
