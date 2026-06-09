@@ -6,6 +6,7 @@ import { resolveAgent } from "../agent/agents.js";
 import { executeHooks } from "../agent/hooks.js";
 import { runAgentLoop } from "../agent/loop.js";
 import { findOrCreateSession, resetSession } from "../agent/session.js";
+import { getDiscordConfig } from "../channels/discord-config.js";
 import type { OutboundNotifier } from "../channels/outbound.js";
 import type { CronJobConfig } from "../config.js";
 import { saveMessage } from "../db/queries.js";
@@ -335,7 +336,7 @@ export class CronScheduler {
     }
 
     if (channel === "discord-dm") {
-      const target = job.delivery?.target ?? this.runtime.getConfig().channels.discord?.owner;
+      const target = job.delivery?.target ?? getDiscordConfig(this.runtime.getConfig())?.owner;
       if (!target) {
         console.error(
           `[cron] Job "${job.name}" has discord-dm delivery but no target user ID or discord owner configured`,
