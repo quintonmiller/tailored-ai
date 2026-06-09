@@ -135,8 +135,12 @@ async function runServer(runtime: AgentRuntime) {
   _discordChannel = channelManager.get("discord")?.channel as DiscordChannel | undefined;
   _discordNotifier = _discordChannel;
   const notifier = _discordNotifier;
+  // Publish the live Discord sink into the runtime's outbound registry so
+  // channel-id consumers (cron today; autopilot/notifier/workflows next)
+  // resolve it by id instead of constructor injection (#66).
+  if (_discordChannel) runtime.registerOutbound(_discordChannel);
 
-  const scheduler = new CronScheduler({ runtime, notifier });
+  const scheduler = new CronScheduler({ runtime });
   if (runtime.getConfig().cron.enabled) {
     scheduler.start();
   }
@@ -194,7 +198,11 @@ async function runServer(runtime: AgentRuntime) {
     if (next !== _discordChannel) {
       _discordChannel = next;
       _discordNotifier = next;
-      scheduler.setNotifier(next);
+      // Keep the outbound registry in sync with the live connection. Cron now
+      // resolves through it; the still-injected DiscordNotifier hot-swaps until
+      // it migrates to the registry too (#142).
+      if (next) runtime.registerOutbound(next);
+      else runtime.unregisterOutbound("discord");
       discordNotifier.setNotifier(next);
       if (next) console.log("[discord] Connected after config reload");
       else console.log("[discord] Disconnected after config reload");
