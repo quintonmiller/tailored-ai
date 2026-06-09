@@ -1,5 +1,5 @@
 ---
-"@tailored-ai/core": minor
+"@tailored-ai/core": patch
 ---
 
 Add the `RepoBackend` contract + default `gh` implementation — Slice 4 of

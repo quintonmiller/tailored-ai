@@ -55,6 +55,7 @@ pnpm monorepo with 4 packages:
 - All configurable values go in `config.yaml` / `AgentConfig`
 - Tool descriptions: 1-2 sentences max (for local model compatibility)
 - Prefer `node:` prefixed imports for Node.js built-ins
+- **Releases stay on 0.x** until a deliberate V1. Mark **every changeset `patch`** — pre-1.0 a `minor`/`major` on `core` escalates the whole `fixed` group to `1.0.0`. npm publish is **manual + approval-gated** (never on push); see [docs/publishing.md](./docs/publishing.md).
 
 ## Subsystem index
 
