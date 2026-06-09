@@ -6,7 +6,7 @@ Tight index for development. Subsystem deep-dives live in [`docs/`](./docs/).
 
 ```bash
 pnpm install              # install dependencies
-pnpm run build            # compile all packages (core → server → cli → ui)
+pnpm run build            # compile all workspace packages
 pnpm run typecheck        # type-check all packages
 pnpm run test             # run unit tests (vitest)
 pnpm run test:watch       # run core tests in watch mode
@@ -17,28 +17,49 @@ pnpm run dev -- --list-agents     # list configured agents
 pnpm run dev -- --list-sessions   # list recent sessions
 pnpm run dev -- project init      # register cwd as a project
 pnpm run dev -- project list      # show registered projects
-pnpm run serve            # run Discord bot service (needs DISCORD_BOT_TOKEN env)
+pnpm run dev -- init      # run setup wizard
+pnpm run dev -- edit      # open TUI config editor
+pnpm run dev -- plugin list        # list installed plugins
 pnpm run dev:ui           # Vite dev server with proxy
+pnpm run dev:site         # Next.js docs site
 pnpm run start            # run compiled CLI
+pnpm run test:e2e         # integration smoke scenarios
 ```
 
 ## Project Structure
 
-pnpm monorepo with 4 packages:
+pnpm monorepo with first-party runtime packages, plugins, and docs:
 
 | Package | Path | Purpose | Depends on |
 |---------|------|---------|------------|
-| `@tailored-ai/core` | `packages/core/` | Agent library: runtime, config, tools, providers, channels, db, cron, hooks, factories | — |
+| `@tailored-ai/cli` | `packages/cli/` | Published `tai` command, setup/editor TUI, service orchestration, project/plugin commands | `@tailored-ai/core`, `@tailored-ai/server` |
+| `@tailored-ai/core` | `packages/core/` | Agent library: runtime, config, tools, providers, channels, resources, event bus, db, tasks, memory, cron, hooks, factories | — |
 | `@tailored-ai/server` | `packages/server/` | HTTP API server (Hono routes, SSE, webhooks, static UI serving) | `@tailored-ai/core` |
-| `@tailored-ai/cli` | `packages/cli/` | CLI entry point (arg parsing, REPL, service orchestration) | `@tailored-ai/core`, `@tailored-ai/server` |
 | `@tailored-ai/ui` | `packages/ui/` | React frontend (Vite SPA) | — (HTTP API only) |
 | `@tailored-ai/browser-mediator` | `packages/browser-mediator/` | Framework-agnostic browser-control surface for LLM agents (OpenAI / Anthropic / TAI adapters) | — (zero TAI deps) |
+| `@tailored-ai/channel-slack` | `packages/channel-slack/` | Slack channel plugin | `@tailored-ai/core` peer |
+| `@tailored-ai/google-tools` | `packages/google-tools/` | Gmail, Google Calendar, Google Drive tool plugin | `@tailored-ai/core` peer |
+| `@tailored-ai/trusted-actions` | `packages/trusted-actions/` | HITL executor for approval-gated actions | `@tailored-ai/core` |
+| `@tailored-ai/site` | `packages/site/` | Next.js docs site | private |
+| `@tailored-ai/integration-tests` | `packages/integration-tests/` | End-to-end CLI/plugin/server smoke scenarios | private |
 
 - ESM project (`"type": "module"` in all packages)
 - Internal imports within a package use relative `.js` extensions (Node16 module resolution)
 - Cross-package imports use the `@tailored-ai/*` workspace specifier
 - SQLite via `better-sqlite3` (synchronous API)
 - Config via `config.yaml` with `${ENV_VAR}` interpolation
+- Published CLI package is `@tailored-ai/cli`; current public install path is `npm install -g @tailored-ai/cli`
+
+## Current Direction
+
+TAI is a modular framework for running personal agents. Keep docs and APIs oriented around replaceable components with intelligent defaults:
+
+- Models/providers: OpenAI-compatible, OpenAI, Anthropic, OpenRouter/local gateways, and plugin providers.
+- Messaging protocols/channels: Discord built in; Slack and future GitHub/Telegram/email/etc. as plugins.
+- UI: bundled web UI by default, replaceable through the UI provider registry.
+- Agents/skills/tools/resources/workflows/task backends/repo backends/sandboxes: interfaces + registries + config selection where practical.
+- Plugins: install through `tai plugin` into `<TAI_HOME>/plugins/`; support npm specs, git URLs, tarballs, and local `file:` packages.
+- Status: working end-to-end, still in active development. Prefer accurate "what works today" wording over polished but aspirational claims.
 
 ## Key Design Decisions
 
@@ -48,6 +69,7 @@ pnpm monorepo with 4 packages:
 - **No conditional response tokens**: Never use patterns like "reply NO_REPLY if..." — local models misinterpret these.
 - **Simple agent loop**: No complex state machines. Loop: chat → tool calls → chat → stop.
 - **Hot-reloadable runtime**: Config, tools, and provider are mutable at runtime. The agent loop re-resolves tools each iteration so changes take effect immediately without restart.
+- **Replaceable opinions**: Default behavior should be useful, but workflow opinions should move toward plugins/event subscribers instead of hardcoded core paths.
 
 ## Conventions
 

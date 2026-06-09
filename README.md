@@ -1,44 +1,56 @@
 # Tailored AI (`tai`)
 
-Lightweight, modular AI agent framework optimized for local LLMs while supporting cloud providers. Designed from scratch to work well with smaller models (30B parameter quantized models on consumer GPUs) by keeping system prompts short, tool counts low, and context tight. Configuration, tools, and providers hot-reload at runtime — the agent can modify its own capabilities without restarting.
+Tailored AI is a modular framework for running personal agents. It gives you a working local-first agent system in minutes, then lets you replace the pieces as your workflow gets more specific: models, tools, agents, channels, UI surfaces, task backends, workflows, repo integrations, sandboxes, and plugins.
+
+TAI is still moving quickly, but it works end-to-end today: install the `tai` CLI, run the setup wizard, start the server, chat through the bundled UI or CLI, add agents/tools/plugins, and connect channels such as Discord or Slack.
+
+Design priorities:
+
+- **Modular by default** - most runtime surfaces have interfaces, registries, and config selection.
+- **Personal-agent first** - projects, memory, tasks, cron, workflows, and autopilot are built around agents that can keep working with context.
+- **Small-model friendly** - short prompts, low tool counts, tight context, and deterministic defaults keep local LLMs viable.
+- **Useful immediately** - sensible defaults, an interactive config editor, and first-party packages make the first run boring in the good way.
+- **Plugin-friendly** - external packages can register tools, channels, providers, UI/resource surfaces, and other extension points.
 
 ## Quick Start
+
+### Install from npm
+
+Prerequisites:
+
+- Node.js 20+
+- npm
+- One model provider: Ollama locally, or an OpenAI / Anthropic / OpenAI-compatible API key
+
+```bash
+npm install -g @tailored-ai/cli
+tai init                 # create ~/.tailored-ai/config.yaml
+tai                      # start HTTP API + bundled UI + channels + cron/autopilot
+```
+
+By default the server binds to `127.0.0.1:3000`. The setup wizard probes available providers, writes a starter `.env`, and creates `config.yaml` under `~/.tailored-ai/`.
+
+After setup:
+
+```bash
+tai -m "What is the current date?"          # one-shot message
+tai -a researcher -m "Find AI news"         # use a named agent
+tai --list-agents                           # inspect configured agents
+tai --list-sessions                         # inspect recent sessions
+tai project init --name "My app"            # register the current repo
+tai project list
+tai edit                                    # open the TUI settings editor
+```
+
+### Develop from source
 
 ```bash
 pnpm install
 pnpm run build
-pnpm run start            # first run launches the setup wizard, then starts the server (HTTP API + UI + Discord + cron)
-```
-
-The setup wizard probes your provider (Ollama / OpenAI / Anthropic), seeds `~/.tailored-ai/config.yaml`, and writes a starter `.env`. After that:
-
-```bash
-# Single message (non-interactive)
-pnpm run dev -- -m "What is the current date?"
-
-# Use a named agent
-pnpm run dev -- -a researcher -m "Find AI news"
-
-# JSON output for scripting
-pnpm run dev -- -m "List files in /tmp" --json
-
-# Resume a previous session
-pnpm run dev -- -s <session-id>
-
-# Inspect what's configured
-pnpm run dev -- --list-agents
-pnpm run dev -- --list-sessions
-
-# Manage registered projects (see "Per-project mode" below)
-pnpm run dev -- project init --name "My app"
-pnpm run dev -- project list
-```
-
-For development:
-
-```bash
+pnpm run start            # run compiled CLI from the workspace
 pnpm run dev              # builds core+server then runs CLI via tsx
 pnpm run dev:ui           # Vite dev server (proxies API to local tai instance)
+pnpm run dev:site         # docs/marketing site
 ```
 
 ## CLI options
@@ -53,14 +65,17 @@ pnpm run dev:ui           # Vite dev server (proxies API to local tai instance)
 | `--project <id>` |  | Scope to a specific registered project |
 | `--global` |  | Force global mode even inside a registered project |
 | `--port <n>` |  | Override server port |
-| `--init` |  | Re-run the setup wizard |
+| `--init` |  | Re-run the setup wizard (deprecated alias for `tai init`) |
 | `--list-agents` |  | Show all configured agents and exit |
 | `--list-sessions` |  | Show recent sessions (accepts `--project` / `--global`) |
 | `--help` | `-h` | Show help |
 
 Subcommands:
 
+- `tai init` / `tai edit` — create or edit `config.yaml` in the TUI
 - `tai project {init,list,show,add,remove,help}` — manage the project registry (see Per-project mode)
+- `tai plugin {install,remove,list,upgrade,help}` — install external plugins into the TAI plugin home
+- `tai resources ...` — inspect resource bundles exposed by core or plugins
 
 The default mode (no flags) starts the server: HTTP API on `127.0.0.1:3000`, Web UI, Discord bot (if enabled), cron scheduler, and autopilot worker.
 
@@ -70,17 +85,17 @@ All settings live in `config.yaml` under `TAI_HOME` (default `~/.tailored-ai/`).
 
 ```yaml
 providers:
-  ollama:
-    baseUrl: "http://localhost:11434"
+  openai_compatible:
+    baseUrl: "http://localhost:11434/v1"
     defaultModel: "devstral-small-2:latest"
-  # openai:    { apiKey: "${OPENAI_API_KEY}",    defaultModel: "gpt-4o-mini" }
+  # openai:    { apiKey: "${OPENAI_API_KEY}",    defaultModel: "gpt-4o" }
   # anthropic: { apiKey: "${ANTHROPIC_API_KEY}", defaultModel: "claude-sonnet-4-5-20250929" }
 
 agent:
-  defaultProvider: "ollama"
+  defaultProvider: "openai_compatible"
   maxHistoryTokens: 20000
-  temperature: 0.7
-  maxToolRounds: 100
+  temperature: 0.3
+  maxToolRounds: 10
   sandbox: host             # "host" (default) | "docker" | "podman"
 
 channels:
@@ -93,6 +108,8 @@ channels:
     # projectMappings:                 # optional — bind channels/DMs to a project
     #   - { channel: "1234567890", project: proj_abc12345 }
     #   - { dm: true,              project: proj_xyz78901 }
+
+plugins: []                 # e.g. ["@tailored-ai/google-tools", "@tailored-ai/channel-slack"]
 
 tools:
   exec: { enabled: true, allowedCommands: ["git", "npm", "ls"] }
@@ -128,18 +145,52 @@ custom_tools:
     command: "curl -s wttr.in/{{city}}?format=3"
 ```
 
-If no config file is found, built-in defaults are used (Ollama on localhost:11434, basic tools enabled).
+If no config file is found, built-in defaults are used (OpenAI-compatible provider pointed at Ollama's `http://localhost:11434/v1`, basic tools enabled).
+
+## Plugins
+
+Plugins are normal npm packages (or any npm-compatible spec) that register new runtime pieces on import: tools, channels, providers, task backends, workflow step executors, UI providers, resources, skills, and event subscribers.
+
+```bash
+tai plugin install @tailored-ai/google-tools
+tai plugin install @tailored-ai/channel-slack
+tai plugin install git+https://github.com/you/tai-plugin-example.git
+tai plugin install file:../my-local-plugin
+tai plugin list
+```
+
+Plugins install into `<TAI_HOME>/plugins/` so they do not depend on the current project's `node_modules` or the global CLI install. After installing, enable them in `config.yaml`:
+
+```yaml
+plugins:
+  - "@tailored-ai/google-tools"
+  - "@tailored-ai/channel-slack"
+
+channels:
+  slack:
+    enabled: true
+    botToken: ${SLACK_BOT_TOKEN}
+    signingSecret: ${SLACK_SIGNING_SECRET}
+```
+
+The TUI settings editor (`tai edit`) can also add and remove plugin entries.
 
 ## Architecture
 
-pnpm monorepo with 4 packages:
+pnpm monorepo with first-party runtime packages, plugins, and docs:
 
 | Package | Purpose |
 |---|---|
-| `@tailored-ai/core` (`packages/core/`) | Runtime, config, tools, providers, channels, db, cron, hooks, factories, sandboxes, workflows, autopilot, projects |
+| `@tailored-ai/cli` (`packages/cli/`) | Published `tai` command, setup/editor TUI, service orchestration, project/plugin commands |
+| `@tailored-ai/core` (`packages/core/`) | Agent runtime, config, tools, providers, channels, resources, event bus, db, tasks, memory, cron, workflows, sandboxes, projects |
 | `@tailored-ai/server` (`packages/server/`) | HTTP API server (Hono routes, SSE, webhooks, static UI serving) |
-| `@tailored-ai/cli` (`packages/cli/`) | CLI entry point and `tai project` subcommands |
 | `@tailored-ai/ui` (`packages/ui/`) | React frontend (Vite SPA) |
+| `@tailored-ai/browser-mediator` (`packages/browser-mediator/`) | Framework-agnostic browser-control surface with OpenAI, Anthropic, and TAI adapters |
+| `@tailored-ai/channel-slack` (`packages/channel-slack/`) | Slack channel plugin |
+| `@tailored-ai/google-tools` (`packages/google-tools/`) | Gmail, Google Calendar, and Google Drive tool plugin |
+| `@tailored-ai/trusted-actions` (`packages/trusted-actions/`) | Human-in-the-loop executor for approval-gated actions |
+| `@tailored-ai/site` (`packages/site/`) | Next.js docs site |
+| `@tailored-ai/integration-tests` (`packages/integration-tests/`) | End-to-end CLI/plugin/server smoke scenarios |
 
 For deeper architecture notes — agent loop, hot-reload, factories, hook semantics, conventions — see [CLAUDE.md](./CLAUDE.md) (index) and the deep-dives under [`docs/`](./docs/).
 
@@ -157,7 +208,7 @@ If the tool set changes mid-loop (e.g. a custom tool was added), a transient sys
 
 ### Providers
 
-- **Ollama** — Native `/api/chat` with tool calling
+- **OpenAI-compatible** — Generic `/v1` chat completions for Ollama, vLLM, LM Studio, OpenRouter, Groq, Together, and similar gateways
 - **OpenAI** — Chat Completions API; works with any OpenAI-compatible API (Groq, Together, etc.) via custom `baseUrl`
 - **Anthropic** — Messages API with tool calling
 
@@ -173,7 +224,7 @@ If the tool set changes mid-loop (e.g. a custom tool was added), a transient sys
 | `browser` | Playwright-based browser automation |
 | `tasks` / `task_query` | Project task CRUD + filtering (SQLite-backed kanban) |
 | `documents` | Per-project markdown documents |
-| `gmail` / `google_calendar` / `google_drive` | Google services via the gog CLI |
+| `gmail` / `google_calendar` / `google_drive` | Google services via the `@tailored-ai/google-tools` plugin |
 | `md_to_pdf` | Markdown → PDF |
 | `ask_user` | Prompt the user (CLI or Discord) |
 | `claude_code` | Delegate to the Claude Code CLI |
@@ -185,7 +236,9 @@ If the tool set changes mid-loop (e.g. a custom tool was added), a transient sys
 
 ### Channels
 
-- **Discord** — DMs + @mentions, per-user sessions, slash commands, optional channel→project mapping
+- **Discord** — Built-in DMs + @mentions, per-user sessions, slash commands, optional channel→project mapping
+- **Slack** — First-party plugin via `@tailored-ai/channel-slack`
+- **Custom channels** — Plugins can register Slack-like adapters for GitHub, Telegram, email, iMessage, or internal systems
 
 ### Agents (named configurations)
 
@@ -271,7 +324,7 @@ commands:
 
 ## Prerequisites
 
-- Node.js 18+
+- Node.js 20+
 - pnpm
 - Ollama running locally **or** an OpenAI / Anthropic API key (or any OpenAI-compatible API)
 - Discord bot token (optional, for Discord channel)
@@ -286,13 +339,14 @@ Tested with:
 
 ```bash
 pnpm install              # install dependencies
-pnpm run build            # compile all packages (core → server → cli → ui)
+pnpm run build            # compile all workspace packages
 pnpm run typecheck        # type-check all packages
 pnpm run test             # run unit tests (vitest)
 pnpm run test:watch       # core tests in watch mode
 pnpm run lint             # check with biome
 pnpm run lint:fix         # auto-fix lint issues
 pnpm run dev              # CLI via tsx (builds core+server first)
+pnpm run dev:site         # docs site
 pnpm run dev:ui           # web UI dev server
 ```
 
