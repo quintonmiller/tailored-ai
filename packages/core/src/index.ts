@@ -394,6 +394,12 @@ export {
   type ToolRegistryView,
   type UiProviderRegistryView,
 } from "./plugin-context.js";
+export {
+  buildNotification as buildDiscordNotification,
+  DiscordNotifier,
+  type DiscordNotifierOptions,
+  emojiForStatus,
+} from "./plugins/discord-notifier.js";
 export { type LoadedPlugin, type LoadPluginsOptions, loadPlugins } from "./plugins.js";
 export type {
   ProjectContext,

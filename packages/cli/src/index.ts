@@ -16,6 +16,7 @@ import {
   createTools,
   createWorkflowEngine,
   type DiscordChannel,
+  DiscordNotifier,
   ExploratoryWorker,
   ensureContextDir,
   executeHooks,
@@ -136,10 +137,16 @@ async function runServer(runtime: AgentRuntime) {
     scheduler.start();
   }
 
-  const taskWatcher = new TaskWatcher({ runtime, notifier });
+  const taskWatcher = new TaskWatcher({ runtime });
   // Hook up the lazy reference so the tasks tool can re-trigger routing
   // on mutations (Phase 6 — coder→reviewer→coder handoffs).
   _taskWatcherRef = taskWatcher;
+
+  // Discord delivery moved out of the watcher in Slice 3 of the platform
+  // vision. The watcher emits `agent.completed`; this notifier
+  // subscribes and decides whether to deliver. Users on Slack /
+  // Telegram / email replace this with their own plugin.
+  const discordNotifier = new DiscordNotifier({ runtime, notifier });
 
   const autopilot = new AutopilotWorker({
     runtime,
@@ -169,7 +176,7 @@ async function runServer(runtime: AgentRuntime) {
       _discordChannel = next;
       _discordNotifier = next;
       scheduler.setNotifier(next);
-      taskWatcher.setNotifier(next);
+      discordNotifier.setNotifier(next);
       if (next) console.log("[discord] Connected after config reload");
       else console.log("[discord] Disconnected after config reload");
     }
