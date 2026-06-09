@@ -24,6 +24,7 @@
  */
 
 import type Database from "better-sqlite3";
+import { getDiscordConfig } from "../channels/discord-config.js";
 import type { OutboundNotifier } from "../channels/outbound.js";
 import type { RuntimeEventPayload, Subscription } from "../events.js";
 import type { AgentRuntime } from "../runtime.js";
@@ -113,7 +114,7 @@ export class DiscordNotifier {
     }
 
     if (channel === "discord-dm") {
-      const target = config.delivery?.target ?? this.runtime.getConfig().channels.discord?.owner;
+      const target = config.delivery?.target ?? getDiscordConfig(this.runtime.getConfig())?.owner;
       if (!target) {
         console.error(`${logPrefix} discord-dm delivery configured but no target user ID or discord owner`);
         return;

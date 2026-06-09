@@ -338,28 +338,16 @@ export interface AgentConfig {
      */
     systemPrompt?: import("./agent/system-prompt.js").SystemPromptOverride;
   };
+  /**
+   * Channels keyed by id. Every channel — the built-in Discord and any
+   * plugin-registered channel (slack, telegram, imessage, …) — is configured
+   * the same way: an `enabled` flag plus a backend-opaque options bag the
+   * channel reads itself. Core privileges no built-in and carries no
+   * per-channel schema; e.g. the Discord channel parses `channels.discord`
+   * via `getDiscordConfig` (`channels/discord-config.ts`). Channels with
+   * `enabled: true` are started by `startRegisteredChannels` on CLI startup.
+   */
   channels: {
-    discord?: {
-      enabled: boolean;
-      token: string;
-      owner?: string;
-      allowedGuilds?: string[];
-      respondToDMs: boolean;
-      respondToMentions: boolean;
-      /**
-       * Route messages to a specific project based on channel id or DM origin.
-       * Each entry may set `channel: <id>` to bind a guild channel, or `dm: true`
-       * to bind direct messages. The first matching entry wins. Unmapped messages
-       * fall back to global mode.
-       */
-      projectMappings?: Array<({ channel: string } | { dm: true }) & { project: string }>;
-    };
-    /**
-     * Additional channels supplied by plugins (e.g. slack, telegram, imessage).
-     * Each plugin registers a factory via `registerChannelFactory(id, ...)` and
-     * reads its own config slice. Channels with `enabled: true` are started by
-     * `startRegisteredChannels` on CLI startup.
-     */
     [channelId: string]: { enabled?: boolean; [key: string]: unknown } | undefined;
   };
   /**
