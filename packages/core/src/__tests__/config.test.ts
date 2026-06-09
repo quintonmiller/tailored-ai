@@ -2,7 +2,14 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { type AgentConfig, deepInterpolate, deepMerge, loadConfig, validateConfig } from "../config.js";
+import {
+  type AgentConfig,
+  deepInterpolate,
+  deepMerge,
+  loadConfig,
+  migrateTaskBackendConfig,
+  validateConfig,
+} from "../config.js";
 
 function baseConfig(): AgentConfig {
   return {
@@ -105,41 +112,62 @@ describe("deepInterpolate", () => {
 });
 
 describe("validateConfig — tasks block", () => {
-  it("rejects unknown tasks.backend values", () => {
+  // Task backends are no longer special-cased here: the id is an open
+  // registry key (createTaskBackend throws a dynamic "Known: …" error on an
+  // unknown name) and backend-specific options are the backend's concern.
+  // So validateConfig privileges no built-in and emits no tasks.* warnings.
+  it("does not warn on an unknown task backend (resolved at construction, not here)", () => {
     const c = baseConfig();
-    c.tasks = { backend: "trello" as unknown as "native" };
-    const ws = validateConfig(c);
-    expect(ws.some((w) => w.includes(`tasks.backend "trello" is not valid`))).toBe(true);
+    c.tasks = { backend: "trello" };
+    expect(validateConfig(c).some((w) => w.toLowerCase().includes("tasks.backend"))).toBe(false);
   });
 
-  it("warns when github backend is missing repo and token", () => {
+  it("does not emit github-specific warnings (no privileged built-in)", () => {
     const c = baseConfig();
     c.tasks = { backend: "github" };
-    const ws = validateConfig(c);
-    expect(ws.some((w) => w.includes("tasks.github.repo is not set"))).toBe(true);
-    expect(ws.some((w) => w.includes("tasks.github.token is not set"))).toBe(true);
+    expect(validateConfig(c).some((w) => w.toLowerCase().includes("tasks.github"))).toBe(false);
   });
 
-  it("warns when github repo is malformed", () => {
-    const c = baseConfig();
-    c.tasks = { backend: "github", github: { repo: "not-a-repo", token: "x" } };
-    const ws = validateConfig(c);
-    expect(ws.some((w) => w.includes(`"not-a-repo" is not in "owner/repo" format`))).toBe(true);
-  });
-
-  it("accepts a valid github backend config", () => {
-    const c = baseConfig();
-    c.tasks = { backend: "github", github: { repo: "owner/repo", token: "t" } };
-    const ws = validateConfig(c);
-    expect(ws.some((w) => w.toLowerCase().includes("tasks."))).toBe(false);
-  });
-
-  it("does not warn 'not implemented' for beans or beads backends", () => {
+  it("does not warn for beans or beads backends", () => {
     const c = baseConfig();
     c.tasks = { backend: "beans" };
-    expect(validateConfig(c).some((w) => w.includes("not yet implemented"))).toBe(false);
+    expect(validateConfig(c).some((w) => w.toLowerCase().includes("tasks."))).toBe(false);
     c.tasks = { backend: "beads" };
-    expect(validateConfig(c).some((w) => w.includes("not yet implemented"))).toBe(false);
+    expect(validateConfig(c).some((w) => w.toLowerCase().includes("tasks."))).toBe(false);
+  });
+});
+
+describe("migrateTaskBackendConfig — legacy per-backend blocks → tasks.options", () => {
+  it("folds tasks.github into tasks.options and deletes the legacy block", () => {
+    const cfg = { tasks: { backend: "github", github: { repo: "a/r", token: "t", agentRoles: ["coder"] } } };
+    migrateTaskBackendConfig(cfg);
+    expect(cfg.tasks).toEqual({ backend: "github", options: { repo: "a/r", token: "t", agentRoles: ["coder"] } });
+  });
+
+  it("folds beans/beads path the same way", () => {
+    const beans: Record<string, unknown> = { tasks: { backend: "beans", beans: { path: "/x/beans.json" } } };
+    migrateTaskBackendConfig(beans);
+    expect(beans.tasks).toEqual({ backend: "beans", options: { path: "/x/beans.json" } });
+  });
+
+  it("lets an explicit tasks.options win over the legacy block", () => {
+    const cfg = {
+      tasks: { backend: "github", options: { repo: "new/repo" }, github: { repo: "old/repo", token: "t" } },
+    };
+    migrateTaskBackendConfig(cfg);
+    expect((cfg.tasks as { options: Record<string, unknown> }).options).toEqual({ repo: "new/repo", token: "t" });
+  });
+
+  it("is a no-op when there is no legacy block", () => {
+    const cfg = { tasks: { backend: "native" } };
+    migrateTaskBackendConfig(cfg);
+    expect(cfg.tasks).toEqual({ backend: "native" });
+  });
+
+  it("is a no-op when there is no tasks block", () => {
+    const cfg: Record<string, unknown> = { agent: {} };
+    migrateTaskBackendConfig(cfg);
+    expect(cfg).toEqual({ agent: {} });
   });
 });
 

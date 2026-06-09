@@ -17,19 +17,40 @@ export function registerTaskBackendFactory(id: string, factory: TaskBackendFacto
 
 // Built-in task backends register on module load.
 
+// Built-in backends read their settings from the generic `tasks.options`
+// bag — exactly how a third-party backend would — so core privileges no
+// built-in. (Legacy `tasks.github`/`beans`/`beads` blocks are folded into
+// `options` at load by migrateTaskBackendConfig.)
+
 taskBackendFactoryRegistry.register("native", (_config, db) => new NativeTaskBackend(db));
 
 taskBackendFactoryRegistry.register("github", (config) => {
-  const cfg = config.tasks?.github;
-  if (!cfg?.repo || !cfg?.token) {
-    throw new Error('tasks.backend = "github" requires tasks.github.repo and tasks.github.token');
+  const opts = config.tasks?.options ?? {};
+  const repo = asString(opts.repo);
+  const token = asString(opts.token);
+  if (!repo || !token) {
+    throw new Error('tasks.backend = "github" requires tasks.options.repo and tasks.options.token');
   }
-  return new GitHubTaskBackend({ repo: cfg.repo, token: cfg.token, agentRoles: cfg.agentRoles });
+  return new GitHubTaskBackend({ repo, token, agentRoles: asStringArray(opts.agentRoles) });
 });
 
-taskBackendFactoryRegistry.register("beans", (config) => new BeansTaskBackend({ path: config.tasks?.beans?.path }));
+taskBackendFactoryRegistry.register(
+  "beans",
+  (config) => new BeansTaskBackend({ path: asString(config.tasks?.options?.path) }),
+);
 
-taskBackendFactoryRegistry.register("beads", (config) => new BeadsTaskBackend({ db: config.tasks?.beads?.path }));
+taskBackendFactoryRegistry.register(
+  "beads",
+  (config) => new BeadsTaskBackend({ db: asString(config.tasks?.options?.path) }),
+);
+
+function asString(v: unknown): string | undefined {
+  return typeof v === "string" ? v : undefined;
+}
+
+function asStringArray(v: unknown): string[] | undefined {
+  return Array.isArray(v) && v.every((x) => typeof x === "string") ? (v as string[]) : undefined;
+}
 
 /**
  * Construct the configured task backend. Defaults to `native` (SQLite) when no

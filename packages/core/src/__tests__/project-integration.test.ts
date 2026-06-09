@@ -248,14 +248,14 @@ describe("Slice 7 — end-to-end project flow", () => {
     // call to `createTaskBackend(merged, db)` would pick the right one.
     const base = loadConfig();
     const overlayA: Partial<AgentConfig> = {
-      tasks: { backend: "github", github: { repo: "a/r", token: "x" } },
+      tasks: { backend: "github", options: { repo: "a/r", token: "x" } },
     } as never;
     const overlayB: Partial<AgentConfig> = { tasks: { backend: "native" } } as never;
 
     const mergedA = mergeProjectOverlay(base, overlayA as Record<string, unknown>);
     const mergedB = mergeProjectOverlay(base, overlayB as Record<string, unknown>);
     expect(mergedA.tasks.backend).toBe("github");
-    expect(mergedA.tasks.github?.repo).toBe("a/r");
+    expect(mergedA.tasks.options?.repo).toBe("a/r");
     expect(mergedB.tasks.backend).toBe("native");
     // base is untouched
     expect(base.tasks.backend).toBe("native");
