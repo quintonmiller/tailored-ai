@@ -551,6 +551,27 @@ export interface AgentConfig {
     beads?: { path?: string };
   };
   /**
+   * Forge integration for pushing branches and opening proposals
+   * (pull/merge requests). Slice 4 of the platform vision — see
+   * `docs/repo-backend.md`. Opt-in: with `backend` unset, core does not
+   * push or open proposals (today's behavior — the coder commits and the
+   * host/user integrates by hand).
+   */
+  repo?: {
+    /** Forge backend. "github" wraps the `gh` CLI; "none" disables. */
+    backend?: "github" | "none";
+    /** Default target branch for new proposals. Default "main". */
+    defaultBase?: string;
+    /** Default git remote for pushes. Default "origin". */
+    remote?: string;
+    github?: {
+      /** owner/repo; falls back to tasks.github.repo, then `gh`'s inferred remote. */
+      repo?: string;
+      /** Exported as GH_TOKEN; falls back to tasks.github.token, then ambient `gh auth`. */
+      token?: string;
+    };
+  };
+  /**
    * Centralized SSRF / outbound-HTTP egress policy. Applied to web_fetch,
    * the workflow http_request executor, and the trigger pollers. See
    * #57 / packages/core/src/security/egress-policy.ts.

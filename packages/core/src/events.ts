@@ -140,6 +140,65 @@ export interface RuntimeEventMap {
     /** The agent's freeform response. May be empty. */
     response: string;
   };
+
+  /**
+   * A proposal (pull/merge request) was opened by a `RepoBackend`.
+   *
+   * Slice 4 of the platform vision (`docs/platform-vision.md`): emitted by
+   * the default `gh` backend (and any other forge backend) so automation
+   * plugins — auto-merge on green CI, status mirroring, changelog
+   * accounting — can react without the forge call site knowing about them.
+   */
+  "repo.proposal.opened": {
+    /** Backend-native proposal id (PR number as a string for GitHub). */
+    proposalId: string;
+    number?: number;
+    url?: string;
+    branch: string;
+    base: string;
+    /** Task id when the proposal was opened for a task. */
+    taskId?: string;
+  };
+
+  /** A proposal was merged by a `RepoBackend`. */
+  "repo.proposal.merged": {
+    proposalId: string;
+    number?: number;
+    branch: string;
+    taskId?: string;
+  };
+
+  /** A proposal was closed without merging by a `RepoBackend`. */
+  "repo.proposal.closed": {
+    proposalId: string;
+    number?: number;
+    branch: string;
+  };
+
+  /**
+   * A proposal was reviewed (approved / changes requested). Documented
+   * placeholder — an inbound webhook/polling emitter lands with the
+   * forge-integration work; no core emitter today.
+   */
+  "repo.proposal.reviewed": {
+    proposalId: string;
+    number?: number;
+    /** Normalized review verdict. */
+    decision: "approved" | "changes_requested" | "commented";
+    reviewer?: string;
+  };
+
+  /**
+   * A CI check completed for a proposal/commit. Documented placeholder —
+   * emitted by a future forge webhook bridge; no core emitter today. The
+   * vision's "auto-merge on green CI" example subscribes to this.
+   */
+  "repo.check.completed": {
+    proposalId?: string;
+    sha?: string;
+    name?: string;
+    conclusion: "success" | "failure" | "neutral" | "cancelled" | "skipped" | "timed_out";
+  };
 }
 
 /**
