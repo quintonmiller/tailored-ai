@@ -22,6 +22,7 @@
 import type { CalendarPoller } from "../triggers/calendar-poll.js";
 import type { EmailPoller } from "../triggers/email-poll.js";
 import type { FileDropWatcher } from "../triggers/file-drop.js";
+import type { FsWatcher } from "../triggers/fs-watch.js";
 import type { FinancePoller } from "../triggers/finance-poll.js";
 import type { GeofencePoller } from "../triggers/geofence-poll.js";
 import type { HomeAssistantPoller } from "../triggers/home-assistant-poll.js";
@@ -33,6 +34,7 @@ import type { WorkflowTriggerDef } from "./types.js";
 
 export interface WorkflowTriggerCoordinatorPollers {
   fileDrop: Pick<FileDropWatcher, "register" | "unregister">;
+  fsWatch: Pick<FsWatcher, "register" | "unregister">;
   email: Pick<EmailPoller, "register" | "unregister">;
   calendar: Pick<CalendarPoller, "register" | "unregister">;
   rss: Pick<RssPoller, "register" | "unregister">;
@@ -48,6 +50,7 @@ export interface WorkflowTriggerCoordinatorPollers {
  *  elsewhere. */
 const POLLER_KINDS = new Set([
   "file_drop",
+  "fs_watch",
   "email_message",
   "calendar_event",
   "rss",
@@ -131,6 +134,7 @@ export class WorkflowTriggerCoordinator {
 
   private unregisterAll(workflowName: string): void {
     this.pollers.fileDrop.unregister(workflowName);
+    this.pollers.fsWatch.unregister(workflowName);
     this.pollers.email.unregister(workflowName);
     this.pollers.calendar.unregister(workflowName);
     this.pollers.rss.unregister(workflowName);
@@ -145,6 +149,9 @@ export class WorkflowTriggerCoordinator {
     switch (trig.kind) {
       case "file_drop":
         this.pollers.fileDrop.register(name, trig);
+        break;
+      case "fs_watch":
+        this.pollers.fsWatch.register(name, trig);
         break;
       case "email_message":
         this.pollers.email.register(name, trig.query, trig.intervalSeconds);

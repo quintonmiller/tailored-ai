@@ -297,6 +297,29 @@ export type WorkflowTriggerDef =
       stableForMs?: number;
     }
   | {
+      kind: "fs_watch";
+      /**
+       * Glob-aware file watcher. Supports:
+       *   - `config.paths`: one or more paths/globs to watch
+       *   - `config.events`: which events to fire on (default: create, modify)
+       *   - `config.debounceMs`: debounce window in ms (default: 500)
+       *   - `config.ignored`: glob patterns to exclude
+       *   - `config.deep`: when false, watch only top-level entries
+       */
+      config: {
+        /** One or more paths or glob patterns to watch. */
+        paths: string | string[];
+        /** Which events to react to. Default: ["create", "modify"]. */
+        events?: ("create" | "modify" | "delete")[];
+        /** Debounce window in ms. Default: 500. */
+        debounceMs?: number;
+        /** Ignore patterns (glob). */
+        ignored?: string | string[];
+        /** When false, watch only top-level entries. Default: true (recursive). */
+        deep?: boolean;
+      };
+    }
+  | {
       kind: "webhook";
       /**
        * Optional bearer-style secret. When set, inbound webhook calls must

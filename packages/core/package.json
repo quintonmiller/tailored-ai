@@ -58,6 +58,7 @@
     "@octokit/rest": "^22.0.1",
     "@tailored-ai/browser-mediator": "workspace:*",
     "better-sqlite3": "^11.7.0",
+    "chokidar": "^4.0.3",
     "croner": "^10.0.1",
     "discord.js": "^14.25.1",
     "yaml": "^2.6.0"

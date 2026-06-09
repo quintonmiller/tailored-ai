@@ -1,0 +1,21 @@
+name: "watch-code-changes"
+description: "Fires when TypeScript source files change"
+triggers:
+  - kind: fs_watch
+    config:
+      paths:
+        - "./packages/**/*.ts"
+      events:
+        - "modify"
+      debounceMs: 500
+      ignored:
+        - "*.test.ts"
+        - "node_modules/**"
+      deep: true
+steps:
+  - type: notify
+    channel: log
+    message: |
+      File changed: ${input.file_path}
+      Event: ${input.event}
+      Size: ${input.stat?.size} bytes

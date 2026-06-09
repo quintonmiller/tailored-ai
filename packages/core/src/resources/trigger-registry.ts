@@ -83,6 +83,7 @@ export const BUILTIN_TRIGGER_KINDS: TriggerKindMeta[] = [
   { kind: "document_event", description: "Fires on document create / update / delete." },
   { kind: "config_event", description: "Fires when the agent config is reloaded." },
   { kind: "file_drop", description: "Watches a directory and fires per added file.", async: true },
+  { kind: "fs_watch", description: "Watches paths/globs and fires on create/modify/delete.", async: true },
   { kind: "email_message", description: "Polls a Gmail account for matching messages.", async: true },
   { kind: "calendar_event", description: "Fires N minutes before a calendar event.", async: true },
   { kind: "rss", description: "Polls an RSS/Atom feed for new entries.", async: true },

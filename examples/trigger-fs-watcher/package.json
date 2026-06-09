@@ -1,0 +1,29 @@
+{
+  "name": "@tailored-ai/trigger-fs-watcher",
+  "version": "0.1.0",
+  "description": "Reference implementation: glob-aware filesystem watcher trigger for TAI workflows.",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "chokidar": "^4.0.3"
+  },
+  "devDependencies": {
+    "@tailored-ai/core": "workspace:*",
+    "typescript": "^5.7.0"
+  },
+  "peerDependencies": {
+    "@tailored-ai/core": "workspace:*"
+  }
+}
