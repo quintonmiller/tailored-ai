@@ -60,8 +60,8 @@ export class AgentRunExecutor implements StepExecutor {
       }
 
       const provider = modelOverride ?? agent.provider ?? cfg.agent.defaultProvider;
-      const providerCfg = cfg.providers[provider as keyof typeof cfg.providers];
-      const defaultModel = providerCfg?.defaultModel ?? "";
+      const providerCfg = cfg.providers[provider];
+      const defaultModel = typeof providerCfg?.defaultModel === "string" ? providerCfg.defaultModel : "";
       const model = modelOverride ?? agent.model ?? defaultModel;
 
       const session = newSession(this.db, model, provider, sessionKey);

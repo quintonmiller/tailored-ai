@@ -34,12 +34,16 @@ export function registerEmbeddingFactory(id: string, factory: EmbeddingFactory):
 // Built-in providers register on module load so any package that imports
 // @tailored-ai/core gets them automatically.
 
+// Built-ins read their settings from the backend-opaque `providers.<id>`
+// bag — exactly how a plugin provider would — so core privileges no
+// built-in. `requireModel` enforces the one field every provider needs.
+
 providerFactoryRegistry.register("openai", (config) => {
   const cfg = config.providers.openai;
   if (!cfg) throw new Error("providers.openai not configured");
   return {
-    provider: new OpenAIProvider(cfg.apiKey, cfg.baseUrl),
-    model: cfg.defaultModel,
+    provider: new OpenAIProvider(asString(cfg.apiKey), asString(cfg.baseUrl)),
+    model: requireModel(cfg, "openai"),
   };
 });
 
@@ -47,11 +51,11 @@ providerFactoryRegistry.register("openai_compatible", (config) => {
   const cfg = config.providers.openai_compatible;
   if (!cfg) throw new Error("providers.openai_compatible not configured");
   return {
-    provider: new OpenAIProvider(cfg.apiKey, cfg.baseUrl, {
+    provider: new OpenAIProvider(asString(cfg.apiKey), asString(cfg.baseUrl), {
       id: "openai_compatible",
-      name: cfg.name ?? "OpenAI-compatible",
+      name: asString(cfg.name) ?? "OpenAI-compatible",
     }),
-    model: cfg.defaultModel,
+    model: requireModel(cfg, "openai_compatible"),
   };
 });
 
@@ -59,10 +63,20 @@ providerFactoryRegistry.register("anthropic", (config) => {
   const cfg = config.providers.anthropic;
   if (!cfg) throw new Error("providers.anthropic not configured");
   return {
-    provider: new AnthropicProvider(cfg.apiKey, cfg.baseUrl),
-    model: cfg.defaultModel,
+    provider: new AnthropicProvider(asString(cfg.apiKey) ?? "", asString(cfg.baseUrl)),
+    model: requireModel(cfg, "anthropic"),
   };
 });
+
+function asString(v: unknown): string | undefined {
+  return typeof v === "string" ? v : undefined;
+}
+
+function requireModel(cfg: Record<string, unknown>, id: string): string {
+  const model = asString(cfg.defaultModel);
+  if (!model) throw new Error(`providers.${id} requires a defaultModel`);
+  return model;
+}
 
 // Embedding built-in: an OpenAI-compatible /v1/embeddings endpoint (also
 // covers vLLM, LM Studio, Ollama). Plugin authors can register additional

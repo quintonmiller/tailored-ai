@@ -2076,8 +2076,8 @@ export function createServer(opts: ServerOptions) {
       defaultModels = config.agent.models;
     } else {
       const dp = config.agent.defaultProvider;
-      const provCfg = config.providers[dp as keyof typeof config.providers];
-      if (provCfg && "defaultModel" in provCfg && provCfg.defaultModel) {
+      const provCfg = config.providers[dp];
+      if (typeof provCfg?.defaultModel === "string" && provCfg.defaultModel) {
         defaultModels = [{ provider: dp, model: provCfg.defaultModel }];
       }
     }

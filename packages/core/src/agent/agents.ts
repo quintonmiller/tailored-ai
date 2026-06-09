@@ -85,8 +85,8 @@ export function resolveAgent(
   baseKbDir?: string,
   opts?: ResolveAgentOptions,
 ): ResolvedAgent {
-  const providerCfg = config.providers[config.agent.defaultProvider as keyof typeof config.providers];
-  const defaultModel = providerCfg && "defaultModel" in providerCfg ? providerCfg.defaultModel : "";
+  const providerCfg = config.providers[config.agent.defaultProvider];
+  const defaultModel = typeof providerCfg?.defaultModel === "string" ? providerCfg.defaultModel : "";
 
   const defaults: ResolvedAgent = {
     model: defaultModel,

@@ -1,5 +1,6 @@
 import type { AgentConfig } from "../config.js";
 import { type CreateToolsOptions, createProvider, createTools } from "../factories.js";
+import { providerFactoryRegistry } from "../providers/factories.js";
 import type { ProviderRegistry } from "./provider-registry.js";
 import type { ToolRegistry } from "./tool-registry.js";
 
@@ -36,21 +37,13 @@ export function populateBuiltinTools(registry: ToolRegistry, opts: PopulateRegis
  * switch providers at runtime by id without rebuilding.
  */
 export function populateBuiltinProviders(registry: ProviderRegistry, config: AgentConfig): void {
-  const providers = config.providers;
-  if (providers.openai_compatible) {
-    const tmp = applyDefault(config, "openai_compatible");
-    const { provider, model } = createProvider(tmp);
-    registry.registerBuiltin({ id: "openai_compatible", provider, defaultModel: model });
-  }
-  if (providers.openai) {
-    const tmp = applyDefault(config, "openai");
-    const { provider, model } = createProvider(tmp);
-    registry.registerBuiltin({ id: "openai", provider, defaultModel: model });
-  }
-  if (providers.anthropic) {
-    const tmp = applyDefault(config, "anthropic");
-    const { provider, model } = createProvider(tmp);
-    registry.registerBuiltin({ id: "anthropic", provider, defaultModel: model });
+  // Register every configured provider whose factory is available — built-ins
+  // and plugin providers alike, by id. No hardcoded built-in list.
+  for (const id of Object.keys(config.providers)) {
+    if (!config.providers[id]) continue;
+    if (!providerFactoryRegistry.has(id)) continue;
+    const { provider, model } = createProvider(applyDefault(config, id));
+    registry.registerBuiltin({ id, provider, defaultModel: model });
   }
 }
 
