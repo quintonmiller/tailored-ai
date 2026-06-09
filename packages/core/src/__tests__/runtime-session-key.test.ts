@@ -94,3 +94,75 @@ describe("parse(make(x)) round-trip", () => {
     });
   });
 });
+
+describe("getPrimaryOwner", () => {
+  // getPrimaryOwner only reads this.getConfig(); stub it on a prototype-shaped
+  // runtime like the session-key suite above.
+  const withConfig = (config: unknown): AgentRuntime => {
+    const r = Object.create(AgentRuntime.prototype) as AgentRuntime;
+    (r as unknown as { getConfig: () => unknown }).getConfig = () => config;
+    return r;
+  };
+
+  it("resolves the Discord owner with no defaultChannel (back-compat)", () => {
+    // Preserves the historical discord:<owner> primary-session key.
+    const r = withConfig({ channels: { discord: { owner: "U-owner" } } });
+    expect(r.getPrimaryOwner()).toEqual({
+      channelId: "discord",
+      userId: "U-owner",
+      displayName: "U-owner",
+    });
+  });
+
+  it("honors an explicit defaultChannel", () => {
+    const r = withConfig({
+      defaultChannel: "slack",
+      channels: { discord: { owner: "D-1" }, slack: { owner: "S-1" } },
+    });
+    expect(r.getPrimaryOwner()).toEqual({ channelId: "slack", userId: "S-1", displayName: "S-1" });
+  });
+
+  it("picks the first channel that declares an owner when no defaultChannel", () => {
+    const r = withConfig({
+      channels: { log: { enabled: true }, slack: { owner: "S-2" } },
+    });
+    expect(r.getPrimaryOwner()).toEqual({ channelId: "slack", userId: "S-2", displayName: "S-2" });
+  });
+
+  it("uses ownerName for displayName when present", () => {
+    const r = withConfig({ channels: { discord: { owner: "U-9", ownerName: "Quinton" } } });
+    expect(r.getPrimaryOwner()).toEqual({ channelId: "discord", userId: "U-9", displayName: "Quinton" });
+  });
+
+  it("falls back to synthetic owner when a channel exists but declares no owner", () => {
+    const r = withConfig({ channels: { discord: { enabled: true } } });
+    expect(r.getPrimaryOwner()).toEqual({
+      channelId: "discord",
+      userId: "owner",
+      displayName: "the user",
+    });
+  });
+
+  it("keeps the named defaultChannel even when it declares no owner", () => {
+    const r = withConfig({ defaultChannel: "slack", channels: { slack: { enabled: true } } });
+    expect(r.getPrimaryOwner()).toEqual({ channelId: "slack", userId: "owner", displayName: "the user" });
+  });
+
+  it("uses a synthetic 'primary' channel when nothing is configured", () => {
+    const r = withConfig({ channels: {} });
+    expect(r.getPrimaryOwner()).toEqual({
+      channelId: "primary",
+      userId: "owner",
+      displayName: "the user",
+    });
+  });
+
+  it("ignores a non-string owner field", () => {
+    const r = withConfig({ channels: { discord: { owner: 12345 } } });
+    expect(r.getPrimaryOwner()).toEqual({
+      channelId: "discord",
+      userId: "owner",
+      displayName: "the user",
+    });
+  });
+});

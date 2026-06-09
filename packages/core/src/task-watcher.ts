@@ -4,7 +4,6 @@ import { resolveAgent } from "./agent/agents.js";
 import { executeHooks } from "./agent/hooks.js";
 import { runAgentLoop } from "./agent/loop.js";
 import { findOrCreateSession, resetSession } from "./agent/session.js";
-import { getDiscordConfig } from "./channels/discord-config.js";
 import { getProject } from "./db/project-queries.js";
 import type { ProjectTask } from "./db/task-queries.js";
 import { expandPrompt } from "./prompts/expand.js";
@@ -229,13 +228,14 @@ export class TaskWatcher {
     };
 
     // Session follows the agent: agent set → dedicated session (reset each event),
-    // no agent → primary session (shared with the Discord owner's conversation).
-    const ownerId = getDiscordConfig(this.runtime.getConfig())?.owner;
+    // no agent → primary session (shared with the operator's conversation on
+    // the deployment's default channel — see runtime.getPrimaryOwner()).
+    const operator = this.runtime.getPrimaryOwner();
     const session = agentName
       ? resetSession(this.runtime.db, `task-watcher:${agentName}`, resolved.model, resolved.provider)
       : findOrCreateSession(
           this.runtime.db,
-          this.runtime.makeSessionKey({ channelId: "discord", userId: ownerId ?? "owner" }),
+          this.runtime.makeSessionKey({ channelId: operator.channelId, userId: operator.userId }),
           resolved.model,
           resolved.provider,
         );
@@ -335,7 +335,7 @@ export class TaskWatcher {
     // Coder/reviewer routes get role-specific preambles that explain the
     // worktree + branch + per-role lifecycle.
     const configPrompt = await expandPrompt(config.prompt, templateVars, promptsConfig);
-    const ownerName = getDiscordConfig(this.runtime.getConfig())?.owner ?? "the user";
+    const ownerName = operator.displayName;
     let rolePreamble = "";
     if (agentName === "coder" && worktree) {
       rolePreamble = [
