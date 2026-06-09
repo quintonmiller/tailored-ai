@@ -2,7 +2,13 @@
 // patchExistingYaml, hydrateFromYaml, resolveOnePlugin) operate on these same
 // shapes — the Ink app is just a different driver.
 
-export type ProviderKind = "openai_compatible" | "openai" | "anthropic";
+/**
+ * Provider factory id. The built-ins ("openai_compatible", "openai",
+ * "anthropic") are offered as presets in the editor, but any registered
+ * provider id is valid — core resolves it through the provider registry, so
+ * built-ins aren't privileged.
+ */
+export type ProviderKind = string;
 
 export interface ProviderDraft {
   kind: ProviderKind;
