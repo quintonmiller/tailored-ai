@@ -2,7 +2,6 @@ import { Cron } from "croner";
 import { runAgentLoop } from "../agent/loop.js";
 import { runMemorySweep } from "../agent/memory-promotion.js";
 import { resetSession } from "../agent/session.js";
-import type { OutboundNotifier } from "../channels/outbound.js";
 import {
   checkBudget,
   getAutopilotSettings,
@@ -29,12 +28,6 @@ export interface AutopilotWorkerOptions {
   intervalMs?: number;
   /** Emits when the worker picks up or finishes a task. UI uses this for the "working on" strip. */
   onActivity?: (activity: { taskId: string; title: string } | null) => void;
-  /** Outbound notifier accessor for notifications and digest delivery. */
-  getNotifier?: () => OutboundNotifier | undefined;
-  /** @deprecated Alias for getNotifier kept for back-compat. */
-  getDiscord?: () => OutboundNotifier | undefined;
-  /** Owner user id (Discord DM target) for notifications and digest. */
-  getOwnerId?: () => string | undefined;
   /** Override the task backend. Defaults to `createTaskBackend(runtime.getConfig(), runtime.db)`. */
   taskBackend?: TaskBackend;
   /**
@@ -75,8 +68,6 @@ export class AutopilotWorker {
   private running = false;
   private currentTask: { taskId: string; title: string } | undefined;
   private onActivity?: (activity: { taskId: string; title: string } | null) => void;
-  private getNotifier?: () => OutboundNotifier | undefined;
-  private getOwnerId?: () => string | undefined;
   private getTaskWatcher?: () => StuckTaskWatcher | undefined;
   private stuckScanIntervalMs: number;
   private stuckThresholdMs: number;
@@ -86,8 +77,6 @@ export class AutopilotWorker {
     this.runtime = opts.runtime;
     this.intervalMs = opts.intervalMs ?? DEFAULT_INTERVAL_MS;
     this.onActivity = opts.onActivity;
-    this.getNotifier = opts.getNotifier ?? opts.getDiscord;
-    this.getOwnerId = opts.getOwnerId;
     this.getTaskWatcher = opts.getTaskWatcher;
     this.stuckScanIntervalMs = opts.stuckScanIntervalMs ?? DEFAULT_STUCK_SCAN_INTERVAL_MS;
     this.stuckThresholdMs = opts.stuckThresholdMs ?? DEFAULT_STUCK_THRESHOLD_MS;
@@ -255,8 +244,8 @@ export class AutopilotWorker {
     }
     recordDigestRun(this.runtime.db, digest.content);
 
-    const notifier = this.getNotifier?.();
-    const ownerId = this.getOwnerId?.();
+    const notifier = this.runtime.resolveOutbound();
+    const ownerId = this.runtime.getOwnerId();
     if (notifier && ownerId) {
       try {
         await notifier.sendDM(ownerId, digest.content);
@@ -338,8 +327,8 @@ export class AutopilotWorker {
       console.log(`[autopilot] Suppressing notification during quiet hours: ${message.slice(0, 80)}`);
       return;
     }
-    const notifier = this.getNotifier?.();
-    const ownerId = this.getOwnerId?.();
+    const notifier = this.runtime.resolveOutbound();
+    const ownerId = this.runtime.getOwnerId();
     if (!notifier || !ownerId) return;
     try {
       await notifier.sendDM(ownerId, message);

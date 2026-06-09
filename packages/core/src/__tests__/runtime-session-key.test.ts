@@ -166,3 +166,39 @@ describe("getPrimaryOwner", () => {
     });
   });
 });
+
+describe("getOwnerId", () => {
+  const withConfig = (config: unknown): AgentRuntime => {
+    const r = Object.create(AgentRuntime.prototype) as AgentRuntime;
+    (r as unknown as { getConfig: () => unknown }).getConfig = () => config;
+    return r;
+  };
+
+  it("returns the real owner of the primary channel", () => {
+    const r = withConfig({ channels: { discord: { owner: "U-1" } } });
+    expect(r.getOwnerId()).toBe("U-1");
+  });
+
+  it("returns the owner of an explicit channel id", () => {
+    const r = withConfig({ channels: { discord: { owner: "D-1" }, slack: { owner: "S-1" } } });
+    expect(r.getOwnerId("slack")).toBe("S-1");
+  });
+
+  it("returns undefined (not a synthetic 'owner') when none is configured", () => {
+    // The key difference from getPrimaryOwner: delivery consumers must be able
+    // to skip rather than DM a fake recipient.
+    const r = withConfig({ channels: { discord: { enabled: true } } });
+    expect(r.getOwnerId()).toBeUndefined();
+    expect(r.getPrimaryOwner().userId).toBe("owner");
+  });
+
+  it("follows defaultChannel", () => {
+    const r = withConfig({ defaultChannel: "slack", channels: { discord: { owner: "D" }, slack: { owner: "S" } } });
+    expect(r.getOwnerId()).toBe("S");
+  });
+
+  it("returns undefined for a non-string owner", () => {
+    const r = withConfig({ channels: { discord: { owner: 999 } } });
+    expect(r.getOwnerId()).toBeUndefined();
+  });
+});
