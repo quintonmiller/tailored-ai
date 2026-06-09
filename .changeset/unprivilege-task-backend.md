@@ -1,5 +1,5 @@
 ---
-"@tailored-ai/core": minor
+"@tailored-ai/core": patch
 ---
 
 Stop privileging built-in task backends in config (matches the `repo`
