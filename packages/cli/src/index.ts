@@ -21,6 +21,7 @@ import {
   ExploratoryWorker,
   ensureContextDir,
   executeHooks,
+  getDiscordConfig,
   initDatabase,
   listSessions,
   loadConfig,
@@ -169,7 +170,7 @@ async function runServer(runtime: AgentRuntime) {
   const autopilot = new AutopilotWorker({
     runtime,
     getNotifier: () => _discordNotifier,
-    getOwnerId: () => runtime.getConfig().channels.discord?.owner,
+    getOwnerId: () => getDiscordConfig(runtime.getConfig())?.owner,
     getTaskWatcher: () => taskWatcher,
   });
   autopilot.start();
@@ -208,7 +209,7 @@ async function runServer(runtime: AgentRuntime) {
     runtime,
     db: runtime.db,
     getDiscord: () => _discordChannel,
-    getOwnerId: () => runtime.getConfig().channels.discord?.owner,
+    getOwnerId: () => getDiscordConfig(runtime.getConfig())?.owner,
   });
   runtime.setWorkflowEngine(workflowEngine);
   runtime.startWatchingWorkflows();
@@ -676,7 +677,7 @@ async function main() {
     createTools(cfg, ctxDir, cfgPath, {
       ...runtimeOpts,
       getDiscord: () => _discordChannel,
-      getOwnerId: () => cfg.channels.discord?.owner,
+      getOwnerId: () => getDiscordConfig(cfg)?.owner,
       // Module-scoped _taskWatcherRef gets assigned by runServer().
       // Reads lazily at tool-call time, so it's fine if undefined here.
       notifyTaskEvent: (action, id, projectId) => _taskWatcherRef?.notifyById(action, id, projectId),

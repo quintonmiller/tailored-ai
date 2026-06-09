@@ -23,6 +23,7 @@ import { createProjectTask, queryProjectTasks } from "../db/task-queries.js";
 import type { ProjectRef } from "../projects/resolve.js";
 import type { AgentRuntime } from "../runtime.js";
 import { DiscordApprovalHandler } from "./discord-approval.js";
+import { getDiscordConfig } from "./discord-config.js";
 import type { Channel } from "./interface.js";
 import type { OutboundNotifier } from "./outbound.js";
 
@@ -87,7 +88,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
   }
 
   async connect(): Promise<void> {
-    const token = this.runtime.getConfig().channels.discord?.token;
+    const token = getDiscordConfig(this.runtime.getConfig())?.token;
     if (!token) {
       throw new Error("Discord token not configured");
     }
@@ -197,7 +198,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     // Never respond to other bots
     if (msg.author.bot) return false;
 
-    const discordConfig = this.runtime.getConfig().channels.discord;
+    const discordConfig = getDiscordConfig(this.runtime.getConfig());
     if (!discordConfig) return false;
 
     // DMs
@@ -224,7 +225,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
    * such messages stay in global mode.
    */
   private resolveMessageProject(msg: DiscordMessage): ProjectRef | null {
-    const mappings = this.runtime.getConfig().channels.discord?.projectMappings;
+    const mappings = getDiscordConfig(this.runtime.getConfig())?.projectMappings;
     if (!mappings || mappings.length === 0) return null;
 
     const isDM = !msg.guild;
@@ -544,7 +545,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
   }
 
   private async syncCommands(): Promise<void> {
-    const token = this.runtime.getConfig().channels.discord?.token;
+    const token = getDiscordConfig(this.runtime.getConfig())?.token;
     const clientId = this.client.user?.id;
     if (!token || !clientId) return;
 
