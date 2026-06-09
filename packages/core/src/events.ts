@@ -139,6 +139,81 @@ export interface RuntimeEventMap {
     finalTask: AgentCompletedTask;
     /** The agent's freeform response. May be empty. */
     response: string;
+    /**
+     * Worktree context, present when the loop ran inside an isolated
+     * per-task worktree (coder / reviewer dispatches). Used by the
+     * scope-creep flagger to inspect branch commits and by future
+     * worktree-cleanup plugins.
+     *
+     * `repoPath` is the parent repo (always reachable on disk).
+     * `worktreePath` is the per-task worktree directory — it may
+     * have been torn down by the time the event reaches you; rely on
+     * `repoPath` + `branch` for git operations that need to survive
+     * cleanup. `preservedPath` is set when the worktree was kept
+     * (uncommitted changes); null when it was cleaned up.
+     */
+    worktree?: AgentCompletedWorktree;
+  };
+
+  /**
+   * An agent loop returned a `[Agent stopped: …]` terminator instead
+   * of a clean response — see `detectStall`. The watcher emits this
+   * INSTEAD of `agent.completed` when it spots a stall, so the
+   * default StallGuard plugin (`packages/core/src/plugins/stall-guard.ts`)
+   * can decide whether to retry or transition to blocked.
+   *
+   * Payload shape mirrors `agent.completed`, plus `stallReason`. If you
+   * also want to react to stalls in your own plugin (e.g. for
+   * observability), subscribe here. The DiscordNotifier doesn't —
+   * StallGuard will re-emit `agent.completed` for the terminal blocked
+   * state once retries are exhausted.
+   */
+  "agent.stalled": {
+    taskId: string;
+    projectId?: string;
+    agentName: string | undefined;
+    action: "created" | "updated" | "commented";
+    task: AgentCompletedTask;
+    finalTask: AgentCompletedTask;
+    response: string;
+    /** Short string extracted from the loop's `[Agent stopped: <reason>]` terminator. */
+    stallReason: string;
+    worktree?: AgentCompletedWorktree;
+  };
+
+  /**
+   * A subscriber is asking the watcher to re-fire routing for a task —
+   * bypassing the assignee-transition gate so the same agent runs again.
+   * The default StallGuard plugin emits this when it wants a retry; the
+   * watcher subscribes and calls `notify({...}, { force: true })`.
+   *
+   * Open to external use: any plugin (e.g. a scheduler that wants to
+   * poke a task after a remote signal landed) can emit this and the
+   * watcher will route accordingly.
+   */
+  "task.dispatch_requested": {
+    taskId: string;
+    projectId?: string;
+    /** Human-readable reason the dispatch was requested. Goes to logs only today. */
+    reason: string;
+  };
+
+  /**
+   * The watcher is about to run an agent loop for a task. Emitted via
+   * `bus.emitAsync(...)` so subscribers can VETO the dispatch by
+   * returning `false` — e.g. the default CoderProjectGuard plugin
+   * refuses coder/reviewer dispatches that lack a usable project path.
+   *
+   * Subscribers that just want to observe (no veto) can subscribe with
+   * a void-returning handler; the bus only treats an explicit `false`
+   * return as veto.
+   */
+  "agent.dispatched": {
+    taskId: string;
+    projectId: string | null;
+    /** Resolved agent name (`coder`, `reviewer`, `default`, etc.) or undefined when the watcher routes to the default. */
+    agentName: string | undefined;
+    task: AgentCompletedTask;
   };
 }
 
@@ -155,11 +230,46 @@ export interface AgentCompletedTask {
   assignee: string | null;
 }
 
+/**
+ * Worktree context attached to agent.completed when the loop ran in an
+ * isolated per-task worktree. Subscribers that want to inspect branch
+ * commits should use `repoPath` + `branch` rather than `worktreePath`,
+ * since the worktree dir may have been torn down by the watcher's
+ * cleanup before the event reaches them.
+ */
+export interface AgentCompletedWorktree {
+  /** Absolute path of the parent repo (the project root). Always present on disk. */
+  repoPath: string;
+  /**
+   * Absolute path of the per-task worktree dir. May not exist by event
+   * time — if the worktree was cleaned, the directory is gone but the
+   * branch persists in the parent repo.
+   */
+  worktreePath: string;
+  /** Branch name the worktree was on (e.g. `agent/<task-id>-<slug>`). */
+  branch: string;
+  /**
+   * When the worktree was preserved (uncommitted changes), this is the
+   * preserved on-disk path. Null when the worktree was cleaned up
+   * normally.
+   */
+  preservedPath: string | null;
+}
+
 export type RuntimeEvent = keyof RuntimeEventMap;
 
 export type RuntimeEventPayload<K extends RuntimeEvent> = RuntimeEventMap[K];
 
-export type RuntimeEventHandler<K extends RuntimeEvent> = (payload: RuntimeEventPayload<K>) => void | Promise<void>;
+/**
+ * Handler signature. The return type intentionally allows a `boolean`
+ * (or `Promise<boolean>`) so handlers attached to vetoable events can
+ * say "veto this dispatch" by returning `false`. `emit` ignores the
+ * return value; only `emitAsync` consults it (see {@link EventBus.emitAsync}).
+ * Handlers that don't care return `void` as before.
+ */
+export type RuntimeEventHandler<K extends RuntimeEvent> = (
+  payload: RuntimeEventPayload<K>,
+) => void | boolean | Promise<void | boolean>;
 
 /**
  * Returned by `on()` so callers can stop receiving an event without
@@ -178,6 +288,21 @@ export interface EventBus {
   on<K extends RuntimeEvent>(event: K, handler: RuntimeEventHandler<K>): Subscription;
   off<K extends RuntimeEvent>(event: K, handler: RuntimeEventHandler<K>): void;
   emit<K extends RuntimeEvent>(event: K, payload: RuntimeEventPayload<K>): void;
+  /**
+   * Synchronous-causality variant of `emit`. Awaits every subscriber
+   * (sequentially, in registration order) and returns `true` when none
+   * vetoed, `false` when any handler returned `false`. Use for events
+   * where a plugin may need to block downstream work — e.g. the default
+   * CoderProjectGuard subscribes to `agent.dispatched` and returns
+   * `false` when the task lacks a usable project, which tells the
+   * watcher to skip the dispatch.
+   *
+   * A throwing handler is treated as **non-veto** and is logged; only
+   * an explicit `false` return blocks the operation. That keeps a
+   * misbehaving observability plugin from accidentally vetoing real
+   * work.
+   */
+  emitAsync<K extends RuntimeEvent>(event: K, payload: RuntimeEventPayload<K>): Promise<boolean>;
   /**
    * Remove every subscriber. Used during runtime reload so internal
    * subscribers re-arm cleanly and stale plugin handlers from a previous
@@ -235,7 +360,7 @@ export class TypedEventBus implements EventBus {
     // handler unsubscribing itself — doesn't break iteration.
     const snapshot = [...set];
     for (const handler of snapshot) {
-      let result: void | Promise<void>;
+      let result: void | boolean | Promise<void | boolean>;
       try {
         result = handler(payload);
       } catch (err) {
@@ -248,6 +373,27 @@ export class TypedEventBus implements EventBus {
         });
       }
     }
+  }
+
+  async emitAsync<K extends RuntimeEvent>(event: K, payload: RuntimeEventPayload<K>): Promise<boolean> {
+    const set = this.handlers.get(event);
+    if (!set || set.size === 0) return true;
+    // Snapshot up front so off/on during dispatch behave the same as
+    // `emit`. Sequential await ensures predictable ordering — a guard
+    // that mutates DB state needs to land before the next handler runs.
+    const snapshot = [...set];
+    let vetoed = false;
+    for (const handler of snapshot) {
+      try {
+        const result = await handler(payload);
+        if (result === false) vetoed = true;
+      } catch (err) {
+        // Throwing handlers are treated as non-veto. Logged like the
+        // emit() path so observability isn't affected by silent veto.
+        console.error(`[events] handler for "${event}" threw during emitAsync:`, err);
+      }
+    }
+    return !vetoed;
   }
 
   clear(): void {
