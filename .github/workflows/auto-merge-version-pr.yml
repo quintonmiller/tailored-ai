@@ -1,20 +1,18 @@
 name: Auto-merge version PR
 
 # Enables GitHub auto-merge on the changesets-generated "Version Packages" PR
-# (branch: changeset-release/main). GitHub waits for required status checks
-# (build-and-test) to go green, then squash-merges automatically. Merge to
-# main re-triggers release.yml, which runs the npm publish.
-#
-# This means the human-in-the-loop sequence collapses to: write changesets,
-# merge feature PRs, walk away. No need to manually merge the version PR.
+# (branch: changeset-release/main), but ONLY when it carries the opt-in
+# `release:auto-merge` label. By default the version PR is left for the
+# maintainer to review and merge manually — so the proposed version bump is
+# always seen by a human before it lands on main (e.g. to catch an
+# unintended 1.0.0 while the project is deliberately staying on 0.x). Add the
+# label to a version PR to restore the old "walk away" behaviour for a
+# routine 0.x bump. Publishing to npm is separately gated — see release.yml.
 #
 # Safety:
 # - Only fires on the bot-authored changeset-release/main branch.
 # - Only enables auto-merge (not direct merge) — required CI checks still
 #   gate the merge.
-# - If you want to inspect a release before it goes out, dismiss auto-merge
-#   on the PR; the action's idempotent and won't re-enable it on the same
-#   sha.
 #
 # Pre-requisites (one-time, by a repo admin):
 # - Repository Settings → General → "Allow auto-merge".
@@ -24,7 +22,7 @@ name: Auto-merge version PR
 
 on:
   pull_request:
-    types: [opened, reopened, synchronize, ready_for_review]
+    types: [opened, reopened, synchronize, ready_for_review, labeled]
     branches: [main]
 
 permissions:
@@ -40,7 +38,8 @@ jobs:
     # github-actions[bot]).
     if: >-
       github.event.pull_request.head.ref == 'changeset-release/main' &&
-      github.event.pull_request.draft == false
+      github.event.pull_request.draft == false &&
+      contains(github.event.pull_request.labels.*.name, 'release:auto-merge')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

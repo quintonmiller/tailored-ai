@@ -30,6 +30,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Pre-V1 guard (stay on 0.x)
+        # Fails the build if any publishable version is >= 1.0.0 or any
+        # changeset bump isn't `patch`. This is what makes "stay on 0.x"
+        # enforceable rather than conventional — see the 2026-06-09 incident
+        # in docs/publishing.md. Runs before build so it fails fast.
+        run: pnpm run guard:pre-v1
+
       - name: Lint
         run: pnpm run lint
 
