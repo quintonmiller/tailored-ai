@@ -66,6 +66,7 @@ Deep notes on each subsystem live under [`docs/`](./docs/):
 | Agent loop: history compaction, validation, retry, timing, providers | [docs/agent-loop.md](./docs/agent-loop.md) |
 | Named agents, delegation, hooks, cron jobs, prompt expansion | [docs/agents-and-hooks.md](./docs/agents-and-hooks.md) |
 | Background tasks, project tasks, pluggable backends, autopilot | [docs/tasks-and-autopilot.md](./docs/tasks-and-autopilot.md) |
+| Repo backend (forge seam): push branch + manage proposals (PR/MR), default `gh` impl, events | [docs/repo-backend.md](./docs/repo-backend.md) |
 | Tiered memory (recall, embeddings, promotion, sweep, HTTP/UI) | [docs/memory.md](./docs/memory.md) + design [docs/memory-tiers.md](./docs/memory-tiers.md) + storage-registry [docs/memory-storage-registry.md](./docs/memory-storage-registry.md) |
 | Sandboxes (host/docker/podman) and `git worktree` helpers | [docs/sandboxes-and-worktrees.md](./docs/sandboxes-and-worktrees.md) |
 | Chat output tags (`<task/>`, `<proposal>`, `<ask>`, etc.) | [docs/chat-tags.md](./docs/chat-tags.md) |
