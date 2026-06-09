@@ -8,6 +8,7 @@ import {
   AgentRuntime,
   AutopilotWorker,
   ChannelLifecycleManager,
+  CoderProjectGuard,
   CronScheduler,
   createEmbedder,
   createMetaTools,
@@ -34,6 +35,8 @@ import {
   resolveProjectFromCwd,
   resolveUiProvider,
   runAgentLoop,
+  ScopeCreepFlagger,
+  StallGuard,
   TaskWatcher,
   TypedEventBus,
   validateConfig,
@@ -147,6 +150,21 @@ async function runServer(runtime: AgentRuntime) {
   // subscribes and decides whether to deliver. Users on Slack /
   // Telegram / email replace this with their own plugin.
   const discordNotifier = new DiscordNotifier({ runtime, notifier });
+  // Scope-creep flagger: subscribes to agent.completed and writes a
+  // SCOPE WARNING comment when the coder hands off a branch that
+  // contains commits for other ptask_ ids. Replaces the watcher's
+  // inline check, which silently no-opped on clean handoffs because
+  // it ran against the (already cleaned up) worktree dir.
+  const scopeCreepFlagger = new ScopeCreepFlagger({ runtime });
+  // Stall guard: subscribes to agent.stalled and either retries (via
+  // task.dispatch_requested) or transitions to blocked after the
+  // configured number of attempts. Replaces TaskWatcher.handleStall.
+  const stallGuard = new StallGuard({ runtime });
+  // Coder/reviewer project_id guardrail: subscribes to agent.dispatched
+  // (vetoable via bus.emitAsync) and refuses dispatches that would run
+  // a coder without an isolated worktree. Same hard guarantee the
+  // watcher used to enforce inline.
+  const coderProjectGuard = new CoderProjectGuard({ runtime });
 
   const autopilot = new AutopilotWorker({
     runtime,
@@ -312,6 +330,10 @@ async function runServer(runtime: AgentRuntime) {
     runtime.stopWatching();
     scheduler.stop();
     taskWatcher.stop();
+    discordNotifier.stop();
+    scopeCreepFlagger.stop();
+    stallGuard.stop();
+    coderProjectGuard.stop();
     autopilot.stop();
     exploratory.stop();
     await channelManager.stopAll();

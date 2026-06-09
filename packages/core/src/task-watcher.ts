@@ -5,17 +5,16 @@ import { executeHooks } from "./agent/hooks.js";
 import { runAgentLoop } from "./agent/loop.js";
 import { findOrCreateSession, resetSession } from "./agent/session.js";
 import { getProject } from "./db/project-queries.js";
-import { addTaskComment, type ProjectTask, updateProjectTask } from "./db/task-queries.js";
+import type { ProjectTask } from "./db/task-queries.js";
 import { expandPrompt } from "./prompts/expand.js";
 import type { AgentRuntime } from "./runtime.js";
 import { createWorktree, type Worktree } from "./worktree.js";
 
 const exec = promisify(execFile);
 
-/** Sentinel author for watcher-authored bookkeeping comments. */
-const WATCHER_COMMENT_AUTHOR = "task-watcher";
-/** Prefix on stall comments so subsequent runs can count prior attempts. */
-const STALL_COMMENT_PREFIX = "STALL #";
+/** Stall-comment prefix kept here so the StallGuard plugin and any
+ *  external implementation share one constant. */
+export const STALL_COMMENT_PREFIX = "STALL #";
 
 export interface TaskEvent {
   action: "created" | "updated" | "commented";
@@ -38,9 +37,39 @@ export class TaskWatcher {
    * (Phase 6, multi-agent review loop).
    */
   private lastFiredAssignee = new Map<string, string | null>();
+  /**
+   * Subscription to `task.dispatch_requested`. Default StallGuard plugin
+   * emits this when it wants a retry; any other plugin can do the same
+   * to ask the watcher to re-fire routing.
+   */
+  private dispatchRequestSub: import("./events.js").Subscription;
 
   constructor(opts: TaskWatcherOptions) {
     this.runtime = opts.runtime;
+    this.dispatchRequestSub = this.runtime.events.on("task.dispatch_requested", (e) => this.handleDispatchRequest(e));
+  }
+
+  /**
+   * Wire-back from a `task.dispatch_requested` event. Re-routes the task
+   * through `notify({...}, { force: true })` so the assignee-transition
+   * gate is bypassed (the requesting plugin already knows it wants the
+   * same agent to run again — typically StallGuard retrying a stall).
+   */
+  private handleDispatchRequest(e: import("./events.js").RuntimeEventPayload<"task.dispatch_requested">): void {
+    // Best-effort: drop the request if we can't find the task. The plugin
+    // logged a reason already, no need to double-warn.
+    const row = this.runtime.db.prepare("SELECT * FROM project_tasks WHERE id = ?").get(e.taskId) as
+      | ProjectTask
+      | undefined;
+    if (!row) return;
+    let tags: string[] = [];
+    try {
+      tags = JSON.parse((row as unknown as { tags: string }).tags) ?? [];
+    } catch {
+      tags = [];
+    }
+    console.log(`[task-watcher] [${e.taskId}] dispatch requested: ${e.reason}`);
+    this.notify({ action: "updated", task: { ...row, tags } as ProjectTask }, { force: true });
   }
 
   /**
@@ -159,46 +188,25 @@ export class TaskWatcher {
       console.log(`${logPrefix} routing to assignee agent "${agentName}"`);
     }
 
-    // Hard guard rail (added after the main-pollution incident).
-    // Coder/reviewer dispatches without a usable project path would
-    // run unisolated in the main checkout and commit to main. Refuse
-    // the dispatch — mark blocked so the user / default agent fixes
-    // the project assignment before re-routing. Runs BEFORE resolveAgent
-    // / session setup so the failure mode is cheap and obvious.
+    // Vetoable dispatch event. Default CoderProjectGuard plugin
+    // refuses coder/reviewer dispatches that lack a project + path;
+    // user-installed plugins can apply additional policy here.
     const isCodingAgent = agentName === "coder" || agentName === "reviewer";
-    if (isCodingAgent && !event.task.project_id) {
-      const reason =
-        `coder/reviewer dispatch refused: task has no project_id. ` +
-        `Assign the task to a project whose path points at a git repo before re-routing.`;
-      console.error(`${logPrefix} ${reason}`);
-      addTaskComment(this.runtime.db, event.task.id, {
-        author: WATCHER_COMMENT_AUTHOR,
-        content: `BLOCKED: ${reason}`,
-      });
-      updateProjectTask(this.runtime.db, event.task.id, {
-        status: "blocked",
-        blocked_reason: "no project_id — coder/reviewer needs an isolated worktree",
-      });
+    const allowed = await this.runtime.events.emitAsync("agent.dispatched", {
+      taskId: event.task.id,
+      projectId: event.task.project_id ?? null,
+      agentName,
+      task: {
+        id: event.task.id,
+        title: event.task.title,
+        description: event.task.description,
+        status: event.task.status,
+        assignee: event.task.assignee,
+      },
+    });
+    if (!allowed) {
+      console.log(`${logPrefix} dispatch vetoed by plugin`);
       return;
-    }
-    if (isCodingAgent && event.task.project_id) {
-      const project = getProject(this.runtime.db, event.task.project_id);
-      if (!project?.path) {
-        const reason =
-          `coder/reviewer dispatch refused: project "${project?.title ?? event.task.project_id}" ` +
-          `has no path. Set the project's path to a git repo (or move the task to a project that has one) ` +
-          `before re-routing.`;
-        console.error(`${logPrefix} ${reason}`);
-        addTaskComment(this.runtime.db, event.task.id, {
-          author: WATCHER_COMMENT_AUTHOR,
-          content: `BLOCKED: ${reason}`,
-        });
-        updateProjectTask(this.runtime.db, event.task.id, {
-          status: "blocked",
-          blocked_reason: "project has no path — coder/reviewer needs an isolated worktree",
-        });
-        return;
-      }
     }
 
     const resolved = resolveAgent(
@@ -260,6 +268,14 @@ export class TaskWatcher {
     // (e.g. reviewer requests changes → coder re-runs) pick up the
     // existing branch instead of starting fresh.
     let worktree: Worktree | undefined;
+    /**
+     * Parent repo for the worktree we'll create below — captured at top
+     * scope so it survives the worktree.cleanup() in the finally block
+     * and can be attached to agent.completed. Plugin-side git inspection
+     * (scope-creep flagger, etc.) keys off the parent repo + branch
+     * because the worktree dir may be gone by event time.
+     */
+    let worktreeRepoPath: string | undefined;
     let projectOverride: import("./projects/resolve.js").ProjectContext | undefined;
     // The guard rail at the top of processEvent has already refused
     // dispatches that would lack an isolated worktree, so by this
@@ -282,6 +298,7 @@ export class TaskWatcher {
             repoDir: repoPath,
             strategy: { type: "branch", branch },
           });
+          worktreeRepoPath = repoPath;
           projectOverride = {
             id: project!.id,
             name: project!.title,
@@ -522,76 +539,27 @@ export class TaskWatcher {
     }
 
     // Re-read the task to see how the agent left it. The agent may have
-    // updated status/assignee mid-run; the delivery decision depends on
-    // the FINAL state, not what triggered us.
-    let finalTask = this.runtime.db.prepare("SELECT * FROM project_tasks WHERE id = ?").get(event.task.id) as
+    // updated status/assignee mid-run; downstream subscribers (notifier,
+    // scope-creep, stall guard) decide what to do based on the FINAL
+    // state, not what triggered us.
+    const finalTask = this.runtime.db.prepare("SELECT * FROM project_tasks WHERE id = ?").get(event.task.id) as
       | (ProjectTask & { tags: string })
       | undefined;
-    let finalAssignee = (finalTask?.assignee ?? "").trim() || null;
-    let finalStatus = finalTask?.status ?? event.task.status;
+    const finalAssignee = (finalTask?.assignee ?? "").trim() || null;
+    const finalStatus = finalTask?.status ?? event.task.status;
 
-    // Stall handling. A loop ending with `[Agent stopped: …]` means the
-    // model burned its budget without transitioning the task. The
-    // `shouldSuppressDelivery` rule would silently hide this (assignee is
-    // still a known agent, status is still backlog/in_progress), so we
-    // intercept here, write a structured comment, and either retry or
-    // transition to blocked. See docs/agent-unification.md (Phase 6
-    // follow-up: stall detection).
+    // Stall vs clean completion. A loop ending with `[Agent stopped: …]`
+    // means the model burned its budget without transitioning the task.
+    // Slice 3 step 3 of the platform vision: stall handling moved to the
+    // StallGuard plugin. The watcher emits `agent.stalled` (instead of
+    // `agent.completed`) when it detects a stall so the guard can decide
+    // retry-or-block. For terminal statuses (blocked/done) we never
+    // treat the response as a stall — those are intentional terminations.
     const stallReason = detectStall(response);
-    if (stallReason && finalStatus !== "blocked" && finalStatus !== "done") {
-      const handled = await this.handleStall({
-        event,
-        stallReason,
-        worktreePath: worktreePreservedPath,
-        logPrefix,
-      });
-      // handleStall mutates the task; re-read the row so the delivery
-      // logic below sees the new state.
-      if (handled.retried) {
-        // Retry was enqueued; the next pass will deliver. Nothing to do here.
-        return;
-      }
-      finalTask = this.runtime.db.prepare("SELECT * FROM project_tasks WHERE id = ?").get(event.task.id) as
-        | (ProjectTask & { tags: string })
-        | undefined;
-      finalAssignee = (finalTask?.assignee ?? "").trim() || null;
-      finalStatus = finalTask?.status ?? event.task.status;
-    }
-
-    // Scope-creep flag: when the coder hands off to the reviewer, peek at
-    // the branch commits and flag if any other ptask_ ids show up. This
-    // is a watcher-authored comment the reviewer will see in GATE 3 of its
-    // preamble, so it gets caught even if the reviewer is a small model.
-    if (agentName === "coder" && finalAssignee === "reviewer" && worktree && finalStatus === "in_review") {
-      try {
-        const scope = await detectScopeCreep(worktree.path, event.task.id);
-        if (scope && scope.foreignTaskIds.length > 0) {
-          addTaskComment(this.runtime.db, event.task.id, {
-            author: WATCHER_COMMENT_AUTHOR,
-            content: [
-              `SCOPE WARNING: branch contains commits for ${scope.foreignTaskIds.length} other task(s): ${scope.foreignTaskIds.join(", ")}.`,
-              "",
-              "Reviewer: apply GATE 3 (scope check) — these commits should",
-              "be on separate branches. Request changes with 'split into",
-              "separate task' unless the foreign work is genuinely required",
-              "for this task to compile/run.",
-            ].join("\n"),
-          });
-          console.log(
-            `${logPrefix} scope warning: branch has commits for foreign task(s) ${scope.foreignTaskIds.join(",")}`,
-          );
-        }
-      } catch (err) {
-        console.warn(`${logPrefix} scope-creep check failed:`, (err as Error).message);
-      }
-    }
-
-    // Slice 3 of the platform vision: delivery moved to the
-    // DiscordNotifier default plugin. The watcher emits
-    // `agent.completed` and any number of plugins decide whether and
-    // how to notify. Suppress-delivery rules + envelope formatting
-    // now live in `packages/core/src/plugins/discord-notifier.ts`.
-    this.runtime.events.emit("agent.completed", {
+    const isStall = stallReason !== null && finalStatus !== "blocked" && finalStatus !== "done";
+    const eventName = isStall ? "agent.stalled" : "agent.completed";
+    // Both payloads are structurally identical apart from `stallReason`.
+    const basePayload = {
       taskId: event.task.id,
       projectId: event.task.project_id ?? undefined,
       agentName,
@@ -611,89 +579,21 @@ export class TaskWatcher {
         assignee: finalAssignee,
       },
       response,
-    });
-  }
-
-  /**
-   * Called when the agent loop returned `[Agent stopped: …]`. Counts
-   * prior `STALL #N` comments on this task; if we're under the retry
-   * cap, requeues the event with `force: true`. Otherwise transitions
-   * the task to blocked so the user sees it on the dashboard. Always
-   * writes a structured stall comment so the trail is preserved.
-   */
-  private async handleStall(args: {
-    event: TaskEvent;
-    stallReason: string;
-    worktreePath: string | null;
-    logPrefix: string;
-  }): Promise<{ retried: boolean }> {
-    const { event, stallReason, worktreePath, logPrefix } = args;
-    const taskId = event.task.id;
-
-    // Count prior stalls. Each watcher-authored stall comment carries
-    // `STALL #N: …` as its first line so we can extract the highest N.
-    const prior = this.runtime.db
-      .prepare("SELECT content FROM task_comments WHERE task_id = ? AND author = ? AND content LIKE ?")
-      .all(taskId, WATCHER_COMMENT_AUTHOR, `${STALL_COMMENT_PREFIX}%`) as { content: string }[];
-    const priorAttempt = prior
-      .map((r) => {
-        const m = r.content.match(/^STALL #(\d+)/);
-        return m ? Number.parseInt(m[1], 10) : 0;
-      })
-      .reduce((a, b) => (a > b ? a : b), 0);
-    const attempt = priorAttempt + 1;
-
-    const worktreeStatus = worktreePath ? await summarizeWorktreeChanges(worktreePath) : null;
-    const comment = formatStallComment(attempt, stallReason, worktreePath, worktreeStatus);
-    addTaskComment(this.runtime.db, taskId, { author: WATCHER_COMMENT_AUTHOR, content: comment });
-
-    const maxRetries = this.runtime.getConfig().taskWatcher.maxStallRetries ?? 1;
-    if (attempt <= maxRetries) {
-      console.log(`${logPrefix} stall detected (#${attempt}) — scheduling retry`);
-      // Bypass the `lastFiredAssignee` gate so the same assignee re-fires.
-      // Small delay lets logs flush and the user-facing comment land first.
-      setTimeout(() => {
-        const refreshed = this.runtime.db.prepare("SELECT * FROM project_tasks WHERE id = ?").get(taskId) as
-          | ProjectTask
-          | undefined;
-        if (!refreshed) return;
-        let tags: string[] = [];
-        try {
-          tags = JSON.parse((refreshed as unknown as { tags: string }).tags) ?? [];
-        } catch {
-          tags = [];
-        }
-        this.notify({ action: "updated", task: { ...refreshed, tags } as ProjectTask }, { force: true });
-      }, 500);
-      return { retried: true };
+      worktree:
+        worktree && worktreeRepoPath
+          ? {
+              repoPath: worktreeRepoPath,
+              worktreePath: worktree.path,
+              branch: worktree.branch,
+              preservedPath: worktreePreservedPath,
+            }
+          : undefined,
+    };
+    if (eventName === "agent.stalled") {
+      this.runtime.events.emit("agent.stalled", { ...basePayload, stallReason: stallReason! });
+    } else {
+      this.runtime.events.emit("agent.completed", basePayload);
     }
-
-    // Out of retries: transition to blocked AND leave a structured note
-    // suggesting decomposition. A task that stalls twice is almost always
-    // too big for one coder pass — splitting it is the right next step.
-    console.log(`${logPrefix} stall detected (#${attempt}) — out of retries, transitioning to blocked`);
-    const decomposeHint = [
-      "**Two stalls in a row — this task is likely too large for one coder pass.**",
-      "",
-      "Suggested next move for the supervisor (or user):",
-      "1. Read the worktree (if preserved) to see what got done.",
-      "2. Split this task into 2–3 smaller subtasks with concrete file lists",
-      '   (e.g. "add the schema migration", "wire the API endpoint",',
-      '   "add the UI"). Each subtask should be doable in ~15 tool calls.',
-      "3. Mark each subtask `assignee=coder`; the supervisor's job is then",
-      "   to merge them back together.",
-      "",
-      "Do NOT just re-dispatch this task as-is — it will stall again.",
-    ].join("\n");
-    addTaskComment(this.runtime.db, taskId, {
-      author: WATCHER_COMMENT_AUTHOR,
-      content: decomposeHint,
-    });
-    updateProjectTask(this.runtime.db, taskId, {
-      status: "blocked",
-      blocked_reason: `coder-stalled after ${attempt} attempts (suggest decomposition): ${stallReason}`,
-    });
-    return { retried: false };
   }
 
   stop(): void {
@@ -701,6 +601,7 @@ export class TaskWatcher {
       clearTimeout(timer);
     }
     this.debounceTimers.clear();
+    this.dispatchRequestSub.dispose();
     console.log("[task-watcher] Stopped");
   }
 }
@@ -720,7 +621,9 @@ function slugify(s: string): string {
  * Returns a short stall reason when `response` matches the agent loop's
  * `[Agent stopped: …]` terminators, or null when the loop ended cleanly.
  * `[Sleep] …` is NOT a stall — that's how the default agent ends ticks
- * intentionally.
+ * intentionally. Used by the watcher to route to `agent.stalled`
+ * instead of `agent.completed`; also exported for plugins that want to
+ * detect stalls in their own response inspection paths.
  */
 export function detectStall(response: string): string | null {
   if (!response) return null;
@@ -731,76 +634,29 @@ export function detectStall(response: string): string | null {
 }
 
 /**
- * Renders the watcher's stall comment. Goes onto the task's comment
- * timeline so the user (and the next coder run) can see what was
- * attempted. Format is `STALL #N: …` so subsequent stalls can count
- * priors with a simple LIKE query.
- */
-export function formatStallComment(
-  attempt: number,
-  stallReason: string,
-  worktreePath: string | null,
-  worktreeStatus: { stat: string; status: string } | null,
-): string {
-  const lines: string[] = [];
-  lines.push(`${STALL_COMMENT_PREFIX}${attempt}: ${stallReason}`);
-  if (worktreePath) {
-    lines.push(`Worktree preserved at: ${worktreePath}`);
-  }
-  if (worktreeStatus?.status?.trim()) {
-    lines.push("");
-    lines.push("Uncommitted changes (git status --short):");
-    lines.push("```");
-    lines.push(worktreeStatus.status.trim());
-    lines.push("```");
-  }
-  if (worktreeStatus?.stat?.trim()) {
-    lines.push("");
-    lines.push("Diff stat vs HEAD:");
-    lines.push("```");
-    lines.push(worktreeStatus.stat.trim());
-    lines.push("```");
-  }
-  if (!worktreeStatus || (!worktreeStatus.status?.trim() && !worktreeStatus.stat?.trim())) {
-    lines.push("");
-    lines.push("No file changes were made before the loop ended.");
-  }
-  return lines.join("\n");
-}
-
-/** Runs `git status --short` and `git diff --stat HEAD` in the preserved worktree. */
-async function summarizeWorktreeChanges(worktreePath: string): Promise<{ stat: string; status: string } | null> {
-  try {
-    const [status, stat] = await Promise.all([
-      exec("git", ["-C", worktreePath, "status", "--short"])
-        .then((r) => r.stdout)
-        .catch(() => ""),
-      exec("git", ["-C", worktreePath, "diff", "--stat", "HEAD"])
-        .then((r) => r.stdout)
-        .catch(() => ""),
-    ]);
-    return { status, stat };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Scope-creep detection. Looks at commits on the branch since fork from
- * main and extracts any `ptask_<8 hex>` ids in commit messages. If more
- * than one distinct id appears, the branch is mixing work for multiple
- * tasks — return the foreign ids so the watcher can flag it.
+ * Scope-creep detection. Looks at commits on the per-task branch since
+ * fork from main and extracts any `ptask_<8 hex>` ids in commit
+ * messages. If more than one distinct id appears, the branch is mixing
+ * work for multiple tasks — return the foreign ids so the caller can
+ * flag it.
+ *
+ * Runs against the parent repo (`repoPath`) and references the branch
+ * by name, so it survives worktree cleanup (the prior worktree-rooted
+ * implementation silently no-opped after a clean coder→reviewer
+ * handoff, because the worktree dir was already gone).
  *
  * Returns null on any git error (treat as "no signal").
  */
-export async function detectScopeCreep(
-  worktreePath: string,
-  expectedTaskId: string,
-): Promise<{ foreignTaskIds: string[]; commitCount: number } | null> {
+export async function detectScopeCreep(args: {
+  repoPath: string;
+  branch: string;
+  expectedTaskId: string;
+}): Promise<{ foreignTaskIds: string[]; commitCount: number } | null> {
+  const { repoPath, branch, expectedTaskId } = args;
   try {
-    const mergeBase = (await exec("git", ["-C", worktreePath, "merge-base", "main", "HEAD"])).stdout.trim();
+    const mergeBase = (await exec("git", ["-C", repoPath, "merge-base", "main", branch])).stdout.trim();
     if (!mergeBase) return null;
-    const log = (await exec("git", ["-C", worktreePath, "log", `${mergeBase}..HEAD`, "--pretty=%s"])).stdout;
+    const log = (await exec("git", ["-C", repoPath, "log", `${mergeBase}..${branch}`, "--pretty=%s"])).stdout;
     const lines = log.split("\n").filter((l) => l.trim().length > 0);
     const found = new Set<string>();
     for (const line of lines) {

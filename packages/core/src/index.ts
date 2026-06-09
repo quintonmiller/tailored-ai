@@ -348,6 +348,8 @@ export {
   updateWorkflowStep,
 } from "./db/workflow-queries.js";
 export {
+  type AgentCompletedTask,
+  type AgentCompletedWorktree,
   type EventBus,
   type RuntimeEvent,
   type RuntimeEventHandler,
@@ -394,12 +396,24 @@ export {
   type ToolRegistryView,
   type UiProviderRegistryView,
 } from "./plugin-context.js";
+export { CoderProjectGuard, type CoderProjectGuardOptions } from "./plugins/coder-project-guard.js";
 export {
   buildNotification as buildDiscordNotification,
   DiscordNotifier,
   type DiscordNotifierOptions,
   emojiForStatus,
 } from "./plugins/discord-notifier.js";
+export {
+  ScopeCreepFlagger,
+  type ScopeCreepFlaggerOptions,
+  writeScopeWarning,
+} from "./plugins/scope-creep.js";
+export {
+  countPriorStalls,
+  formatStallComment,
+  StallGuard,
+  type StallGuardOptions,
+} from "./plugins/stall-guard.js";
 export { type LoadedPlugin, type LoadPluginsOptions, loadPlugins } from "./plugins.js";
 export type {
   ProjectContext,
@@ -543,7 +557,7 @@ export {
 export type { ShellResult } from "./shell.js";
 export { runShellCommand, shellEscape } from "./shell.js";
 export type { TaskEvent } from "./task-watcher.js";
-export { TaskWatcher } from "./task-watcher.js";
+export { detectScopeCreep, detectStall, STALL_COMMENT_PREFIX, TaskWatcher } from "./task-watcher.js";
 export { AdminTool, readRawConfig, writeRawConfigPath } from "./tools/admin.js";
 export { AskUserTool } from "./tools/ask-user.js";
 export type { BrowserToolConfig } from "./tools/browser.js";
