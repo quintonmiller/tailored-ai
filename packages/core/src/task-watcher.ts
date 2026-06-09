@@ -5,15 +5,12 @@ import { executeHooks } from "./agent/hooks.js";
 import { runAgentLoop } from "./agent/loop.js";
 import { findOrCreateSession, resetSession } from "./agent/session.js";
 import { getProject } from "./db/project-queries.js";
-import { addTaskComment, type ProjectTask, updateProjectTask } from "./db/task-queries.js";
+import type { ProjectTask } from "./db/task-queries.js";
 import { expandPrompt } from "./prompts/expand.js";
 import type { AgentRuntime } from "./runtime.js";
 import { createWorktree, type Worktree } from "./worktree.js";
 
 const exec = promisify(execFile);
-
-/** Sentinel author for watcher-authored bookkeeping comments. */
-const WATCHER_COMMENT_AUTHOR = "task-watcher";
 
 /** Stall-comment prefix kept here so the StallGuard plugin and any
  *  external implementation share one constant. */
@@ -191,46 +188,25 @@ export class TaskWatcher {
       console.log(`${logPrefix} routing to assignee agent "${agentName}"`);
     }
 
-    // Hard guard rail (added after the main-pollution incident).
-    // Coder/reviewer dispatches without a usable project path would
-    // run unisolated in the main checkout and commit to main. Refuse
-    // the dispatch — mark blocked so the user / default agent fixes
-    // the project assignment before re-routing. Runs BEFORE resolveAgent
-    // / session setup so the failure mode is cheap and obvious.
+    // Vetoable dispatch event. Default CoderProjectGuard plugin
+    // refuses coder/reviewer dispatches that lack a project + path;
+    // user-installed plugins can apply additional policy here.
     const isCodingAgent = agentName === "coder" || agentName === "reviewer";
-    if (isCodingAgent && !event.task.project_id) {
-      const reason =
-        `coder/reviewer dispatch refused: task has no project_id. ` +
-        `Assign the task to a project whose path points at a git repo before re-routing.`;
-      console.error(`${logPrefix} ${reason}`);
-      addTaskComment(this.runtime.db, event.task.id, {
-        author: WATCHER_COMMENT_AUTHOR,
-        content: `BLOCKED: ${reason}`,
-      });
-      updateProjectTask(this.runtime.db, event.task.id, {
-        status: "blocked",
-        blocked_reason: "no project_id — coder/reviewer needs an isolated worktree",
-      });
+    const allowed = await this.runtime.events.emitAsync("agent.dispatched", {
+      taskId: event.task.id,
+      projectId: event.task.project_id ?? null,
+      agentName,
+      task: {
+        id: event.task.id,
+        title: event.task.title,
+        description: event.task.description,
+        status: event.task.status,
+        assignee: event.task.assignee,
+      },
+    });
+    if (!allowed) {
+      console.log(`${logPrefix} dispatch vetoed by plugin`);
       return;
-    }
-    if (isCodingAgent && event.task.project_id) {
-      const project = getProject(this.runtime.db, event.task.project_id);
-      if (!project?.path) {
-        const reason =
-          `coder/reviewer dispatch refused: project "${project?.title ?? event.task.project_id}" ` +
-          `has no path. Set the project's path to a git repo (or move the task to a project that has one) ` +
-          `before re-routing.`;
-        console.error(`${logPrefix} ${reason}`);
-        addTaskComment(this.runtime.db, event.task.id, {
-          author: WATCHER_COMMENT_AUTHOR,
-          content: `BLOCKED: ${reason}`,
-        });
-        updateProjectTask(this.runtime.db, event.task.id, {
-          status: "blocked",
-          blocked_reason: "project has no path — coder/reviewer needs an isolated worktree",
-        });
-        return;
-      }
     }
 
     const resolved = resolveAgent(
