@@ -136,10 +136,16 @@ export function Memory() {
       <header className="memory-header">
         <h1>Memory</h1>
         <div className="memory-actions">
-          <button type="button" onClick={reload} disabled={busy}>
+          <button type="button" className="btn-secondary" onClick={reload} disabled={busy}>
             Reload
           </button>
-          <button type="button" onClick={handleSweep} disabled={busy}>
+          <button
+            type="button"
+            className="btn-ghost memory-sweep-btn"
+            onClick={handleSweep}
+            disabled={busy}
+            title="Delete expired low-importance notes"
+          >
             Run sweep
           </button>
         </div>
@@ -319,6 +325,23 @@ function isPinned(n: MemoryNote): boolean {
   return n.tags.includes("pinned") || (n.importance ?? 0) >= 0.95;
 }
 
+function relTime(iso: string | null): string {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    const m = Math.floor((Date.now() - d.getTime()) / 60000);
+    if (m < 1) return "just now";
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    const day = Math.floor(h / 24);
+    if (day < 7) return `${day}d ago`;
+    return d.toLocaleDateString();
+  } catch {
+    return iso;
+  }
+}
+
 function NoteRow({
   note: n,
   pinned,
@@ -338,45 +361,58 @@ function NoteRow({
 }) {
   return (
     <li className={`memory-note${pinned ? " memory-note-pinned" : ""}`}>
+      <div className="memory-note-content">{n.content}</div>
       <div className="memory-note-meta">
-        <span className="memory-note-id">{n.id}</span>
-        {n.agent && <span className="memory-note-agent">by {n.agent}</span>}
-        <span className="memory-note-date">{n.created_at.slice(0, 16).replace("T", " ")}</span>
-        {n.importance != null && (
-          <span className="memory-note-importance" title="importance">
-            ★ {n.importance.toFixed(2)}
-          </span>
-        )}
-        {n.ref_count > 0 && <span className="memory-ref-badge">{n.ref_count}×</span>}
+        <span className="memory-note-date">{relTime(n.created_at)}</span>
         {pinned && (
           <span className="memory-pin-badge" title="Always injected into system prompt">
             📌 pinned
           </span>
         )}
+        {n.tags.map((t) => (
+          <span key={t} className="memory-tag-pill">
+            {t}
+          </span>
+        ))}
       </div>
-      <div className="memory-note-content">{n.content}</div>
-      {n.tags.length > 0 && (
-        <div className="memory-note-tags">
-          {n.tags.map((t) => (
-            <span key={t} className="memory-tag-pill">
-              {t}
-            </span>
-          ))}
-        </div>
-      )}
       <div className="memory-note-actions">
-        <button type="button" onClick={() => onTogglePin(n)} disabled={busy}>
+        <button type="button" className="btn-secondary" onClick={() => onTogglePin(n)} disabled={busy}>
           {pinned ? "Unpin" : "Pin"}
         </button>
-        {showPromote && (
-          <button type="button" onClick={() => onPromote(n.id)} disabled={busy}>
-            Promote
-          </button>
-        )}
-        <button type="button" onClick={() => onDelete(n.id)} disabled={busy}>
+        <button type="button" className="btn-ghost" onClick={() => onDelete(n.id)} disabled={busy}>
           Delete
         </button>
       </div>
+      <details className="memory-note-details">
+        <summary>Details</summary>
+        <dl className="memory-note-detail-grid">
+          <dt>ID</dt>
+          <dd>
+            <code>{n.id}</code>
+          </dd>
+          {n.agent && (
+            <>
+              <dt>Author</dt>
+              <dd>{n.agent}</dd>
+            </>
+          )}
+          <dt>Created</dt>
+          <dd>{n.created_at.slice(0, 16).replace("T", " ")}</dd>
+          {n.importance != null && (
+            <>
+              <dt>Importance</dt>
+              <dd>{n.importance.toFixed(2)}</dd>
+            </>
+          )}
+          <dt>References</dt>
+          <dd>{n.ref_count}×</dd>
+        </dl>
+        {showPromote && (
+          <button type="button" className="btn-secondary" onClick={() => onPromote(n.id)} disabled={busy}>
+            Promote to long-term
+          </button>
+        )}
+      </details>
     </li>
   );
 }
