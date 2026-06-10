@@ -750,6 +750,10 @@ export interface AgentConfig {
      *  reasoning tokens from this budget, so keep headroom above the
      *  expected output length. */
     maxTokens?: number;
+    /** Opaque provider-specific request fields for the generation call,
+     *  passed through as `ChatParams.extra` (e.g. vLLM's
+     *  `chat_template_kwargs: { enable_thinking: false }`). */
+    providerExtra?: Record<string, unknown>;
   };
 }
 
