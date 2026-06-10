@@ -134,6 +134,7 @@ export async function generateBriefing(
       { role: "user", content: context },
     ],
     temperature: 0.3,
+    maxTokens: briefingCfg.maxTokens ?? 1024,
   });
 
   return {

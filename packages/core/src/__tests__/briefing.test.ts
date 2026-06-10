@@ -141,8 +141,21 @@ describe("generateBriefing", () => {
     expect(params.messages[0].content).toBe(DEFAULT_BRIEFING_PROMPT);
     expect(params.messages[1].role).toBe("user");
     expect(params.messages[1].content).toContain("Needs review");
+    expect(params.maxTokens).toBe(1024);
     expect(result.content).toBe("Good morning! One thing needs you.");
     expect(result.generatedAt).toBeGreaterThan(0);
+  });
+
+  it("honors briefing.maxTokens override", async () => {
+    const chat = vi.fn(async (_params: ChatParams) => ({
+      content: "brief",
+      usage: { input: 0, output: 0 },
+      finishReason: "stop" as const,
+    }));
+    const config = buildConfig();
+    config.briefing = { ...config.briefing, maxTokens: 256 };
+    await generateBriefing(makeRuntime(config, chat));
+    expect(chat.mock.calls[0][0].maxTokens).toBe(256);
   });
 
   it("uses briefing.model when set, otherwise the runtime model", async () => {
