@@ -175,6 +175,38 @@ channels:
 
 The TUI settings editor (`tai edit`) can also add and remove plugin entries.
 
+### Default plugins
+
+The out-of-the-box workflow ships as four **default plugins** loaded through the same `plugins:` path as any third party — they are not privileged. They appear as `builtin:` entries (seeded automatically into a fresh config):
+
+```yaml
+plugins:
+  - "builtin:discord-notifier"      # delivers agent.completed to your channel
+  - "builtin:scope-creep-flagger"   # flags branches that touch other tasks
+  - "builtin:stall-guard"           # retries or blocks stalled coder runs
+  - "builtin:coder-project-guard"   # refuses unisolated coder/reviewer dispatch
+```
+
+- The `builtin:` prefix resolves to a module inside `@tailored-ai/core` (`@tailored-ai/core/plugins/<name>`) — no install needed. Any other entry resolves from the plugin home as usual.
+- **Disable a default** by setting `enabled: false` on its entry. **Deleting** the entry is not durable: a load-time migration re-appends any missing `builtin:` default. Keeping the entry with `enabled: false` is the durable off switch (the loader skips it):
+
+  ```yaml
+  plugins:
+    - module: "builtin:discord-notifier"
+      enabled: false
+  ```
+
+- **Per-plugin config** goes in the entry's `config` bag and reaches the plugin as `ctx.config`. For example, override the stall retry cap:
+
+  ```yaml
+  plugins:
+    - module: "builtin:stall-guard"
+      config:
+        maxStallRetries: 3
+  ```
+
+  (`discord-notifier` reads its delivery settings from `taskWatcher.delivery`, not a per-plugin knob.)
+
 ## Architecture
 
 pnpm monorepo with first-party runtime packages, plugins, and docs:

@@ -27,6 +27,7 @@
 
 import type Database from "better-sqlite3";
 import type { RuntimeEventPayload, Subscription } from "../events.js";
+import type { Plugin } from "../plugin-context.js";
 import type { AgentRuntime } from "../runtime.js";
 
 export interface DiscordNotifierOptions {
@@ -227,3 +228,21 @@ export function emojiForStatus(status: string, assignee: string | null): string 
   if (status === "backlog") return "📥";
   return "📝";
 }
+
+/**
+ * Default-plugin entry point — loaded via `config.plugins:
+ * builtin:discord-notifier`. Constructs a {@link DiscordNotifier} bound to
+ * the live runtime and returns a disposer so the loader can tear down the
+ * subscription on shutdown / reload.
+ *
+ * `ctx.config` is intentionally unused: delivery settings (channel, mode,
+ * target) live under `taskWatcher.delivery` and are resolved at delivery
+ * time from the runtime's outbound registry (#165), so there is no separate
+ * per-plugin knob to wire here.
+ */
+const plugin: Plugin = (ctx) => {
+  if (!ctx.runtime) return;
+  const notifier = new DiscordNotifier({ runtime: ctx.runtime });
+  return () => notifier.stop();
+};
+export default plugin;

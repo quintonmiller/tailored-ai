@@ -276,6 +276,21 @@ export interface WebhookRouteConfig {
   secret?: string;
 }
 
+/**
+ * One entry in `config.plugins`. A bare string is the module specifier; the
+ * object form adds `enabled` (default true — `false` skips the entry) and a
+ * per-plugin `config` bag threaded into the plugin's `ctx.config`.
+ */
+export type PluginEntry = string | { module: string; enabled?: boolean; config?: Record<string, unknown> };
+
+/** The four default plugins, seeded into `config.plugins` as `builtin:*` entries. */
+export const DEFAULT_PLUGIN_MODULES = [
+  "builtin:discord-notifier",
+  "builtin:scope-creep-flagger",
+  "builtin:stall-guard",
+  "builtin:coder-project-guard",
+] as const;
+
 export interface AgentConfig {
   server: {
     port: number;
@@ -370,18 +385,26 @@ export interface AgentConfig {
    */
   defaultChannel?: string;
   /**
-   * Third-party plugin modules to load at startup. Each entry is either a
-   * package specifier (`"@some-author/tai-plugin-x"`) or an object with
-   * `module` and optional `config`. Loading happens before runtime
-   * construction; the plugin's import side-effects register tools, channels,
-   * providers, task backends, step executors, etc. into the matching
-   * registries.
+   * Plugin modules to load at startup. Each entry is either a package
+   * specifier (`"@some-author/tai-plugin-x"`) or an object with `module`,
+   * optional `enabled`, and optional `config`. Loading happens before
+   * runtime construction for registry-shaped plugins (tools, channels,
+   * providers, task backends, step executors); event-driven plugins that
+   * need the runtime receive it on `ctx.runtime`.
    *
-   * Per-plugin `config` is currently ignored by the loader — plugins read
-   * their configuration from the normal `tools.*`, `channels.*`, etc. blocks
-   * in this config file. The field is reserved for future routing.
+   * The four default plugins ship here too as `builtin:*` entries
+   * (`builtin:discord-notifier`, `builtin:scope-creep-flagger`,
+   * `builtin:stall-guard`, `builtin:coder-project-guard`). Built-ins are not
+   * privileged — they are loaded through the same path as third parties; the
+   * `builtin:` prefix only tells the CLI importer to resolve them from
+   * `@tailored-ai/core/plugins/*`.
+   *
+   * `enabled: false` disables an entry durably (the loader skips it). Per-
+   * plugin `config` is threaded into the plugin's `ctx.config`; a plugin may
+   * still read shared settings from the normal `tools.*`, `channels.*`, etc.
+   * blocks. See {@link migrateDefaultPlugins} for the default seeding.
    */
-  plugins?: Array<string | { module: string; config?: Record<string, unknown> }>;
+  plugins?: PluginEntry[];
   /**
    * External agent URIs loaded into the AgentRegistry at startup. Each entry
    * is a resource URI (npm:/git:/file:/https:/tai-registry:) pointing at a
@@ -703,6 +726,12 @@ const DEFAULT_CONFIG: AgentConfig = {
     maxToolRounds: 10,
   },
   agents: {},
+  // The default plugin set ships installed + enabled. These reproduce the
+  // out-of-the-box workflow (Discord delivery, scope-creep flagging, stall
+  // retries, coder/reviewer project guard). Disable one with
+  // `{ module: "builtin:...", enabled: false }`; deleting an entry is not
+  // durable because `migrateDefaultPlugins` re-appends missing modules.
+  plugins: DEFAULT_PLUGIN_MODULES.map((module) => ({ module })),
   cron: {
     enabled: false,
     jobs: [],
@@ -1124,7 +1153,15 @@ export function loadConfig(configPath?: string): AgentConfig {
   // After coerceCronJobs so a JSON-string cron.jobs is already an array.
   migrateDeliveryConfig(interpolated);
 
-  return deepMerge(DEFAULT_CONFIG as unknown as Record<string, unknown>, interpolated) as unknown as AgentConfig;
+  const merged = deepMerge(
+    DEFAULT_CONFIG as unknown as Record<string, unknown>,
+    interpolated,
+  ) as unknown as AgentConfig;
+  // Run AFTER the merge: deepMerge replaces the `plugins` array wholesale, so
+  // a user who declares any `plugins:` block drops the seeded defaults. This
+  // re-appends any missing default modules to whatever the user has.
+  migrateDefaultPlugins(merged);
+  return merged;
 }
 
 /**
@@ -1194,6 +1231,34 @@ export function migrateDeliveryConfig(interpolated: Record<string, unknown>): vo
       if (job && typeof job === "object") migrate((job as Record<string, unknown>).delivery);
     }
   }
+}
+
+/**
+ * Ensure the four default `builtin:*` plugins are present in `config.plugins`.
+ * `deepMerge` replaces the `plugins` array wholesale, so a user who declares
+ * their own `plugins:` block silently drops the seeded defaults. This appends
+ * any default module whose name is absent — AFTER the user's entries, so user
+ * order is preserved and explicit user entries (including ones flipped to
+ * `enabled: false`) win.
+ *
+ * Disable semantics: because this re-appends missing modules on every load,
+ * **deleting** a default entry is not a durable off switch — it comes back.
+ * To turn a default off durably, keep the entry but set `enabled: false`; the
+ * module name stays present (so nothing is re-added) and the loader skips it.
+ *
+ * Idempotent. Mutates `config.plugins` in place; runs on the merged config.
+ */
+export function migrateDefaultPlugins(config: AgentConfig): void {
+  const existing = config.plugins ?? [];
+  const present = new Set(
+    existing.map((e) => (typeof e === "string" ? e : e?.module)).filter((m): m is string => typeof m === "string"),
+  );
+  const missing = DEFAULT_PLUGIN_MODULES.filter((m) => !present.has(m)).map((module) => ({ module }));
+  if (missing.length === 0) {
+    config.plugins = existing;
+    return;
+  }
+  config.plugins = [...existing, ...missing];
 }
 
 /**

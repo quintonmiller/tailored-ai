@@ -24,6 +24,7 @@ import { promisify } from "node:util";
 import type Database from "better-sqlite3";
 import { addTaskComment, updateProjectTask } from "../db/task-queries.js";
 import type { RuntimeEventPayload, Subscription } from "../events.js";
+import type { Plugin } from "../plugin-context.js";
 import type { AgentRuntime } from "../runtime.js";
 import { STALL_COMMENT_PREFIX } from "../task-watcher.js";
 
@@ -193,3 +194,22 @@ const DECOMPOSE_HINT = [
   "",
   "Do NOT just re-dispatch this task as-is — it will stall again.",
 ].join("\n");
+
+/**
+ * Default-plugin entry point — loaded via `config.plugins:
+ * builtin:stall-guard`. Binds a {@link StallGuard} to the live runtime and
+ * returns a disposer.
+ *
+ * Reads an optional numeric `maxStallRetries` from `ctx.config`
+ * (`{ module: "builtin:stall-guard", config: { maxStallRetries: 3 } }`),
+ * which overrides `taskWatcher.maxStallRetries`. When absent, the guard
+ * falls back to that config value as before.
+ */
+const plugin: Plugin = (ctx) => {
+  if (!ctx.runtime) return;
+  const raw = ctx.config.maxStallRetries;
+  const maxStallRetries = typeof raw === "number" && Number.isFinite(raw) ? raw : undefined;
+  const guard = new StallGuard({ runtime: ctx.runtime, maxStallRetries });
+  return () => guard.stop();
+};
+export default plugin;

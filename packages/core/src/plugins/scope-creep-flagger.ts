@@ -20,6 +20,7 @@
 import type Database from "better-sqlite3";
 import { addTaskComment } from "../db/task-queries.js";
 import type { RuntimeEventPayload, Subscription } from "../events.js";
+import type { Plugin } from "../plugin-context.js";
 import type { AgentRuntime } from "../runtime.js";
 import { detectScopeCreep } from "../task-watcher.js";
 
@@ -87,3 +88,16 @@ export function writeScopeWarning(db: Database.Database, taskId: string, foreign
     ].join("\n"),
   });
 }
+
+/**
+ * Default-plugin entry point — loaded via `config.plugins:
+ * builtin:scope-creep-flagger`. Binds a {@link ScopeCreepFlagger} to the
+ * live runtime and returns a disposer. `ctx.config` is unused — the flagger
+ * has no per-plugin settings today.
+ */
+const plugin: Plugin = (ctx) => {
+  if (!ctx.runtime) return;
+  const flagger = new ScopeCreepFlagger({ runtime: ctx.runtime });
+  return () => flagger.stop();
+};
+export default plugin;
