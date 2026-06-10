@@ -720,6 +720,10 @@ export interface AgentConfig {
     prompt?: string;
     ttlMinutes?: number;
     model?: string;
+    /** Completion token cap for the generation call. Thinking models spend
+     *  reasoning tokens from this budget, so keep headroom above the
+     *  expected output length. */
+    maxTokens?: number;
   };
   /**
    * Chat empty-state suggestion chips. Off by default — when disabled the
