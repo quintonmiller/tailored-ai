@@ -145,7 +145,7 @@ describe("DiscordNotifier subscription to agent.completed", () => {
   it("delivers via the configured channel notifier when status is terminal", async () => {
     const sendDM = vi.fn().mockResolvedValue(undefined);
     const runtime = makeRuntime(
-      { taskWatcher: { enabled: true, delivery: { channel: "discord-dm", target: "user-abc" } } },
+      { taskWatcher: { enabled: true, delivery: { channel: "discord", mode: "dm", target: "user-abc" } } },
       { send: vi.fn(), sendDM },
     );
     const n = new DiscordNotifier({ runtime });
@@ -171,7 +171,7 @@ describe("DiscordNotifier subscription to agent.completed", () => {
   it("does NOT deliver when an agent is still in-flight", async () => {
     const sendDM = vi.fn();
     const runtime = makeRuntime(
-      { taskWatcher: { enabled: true, delivery: { channel: "discord-dm", target: "user-abc" } } },
+      { taskWatcher: { enabled: true, delivery: { channel: "discord", mode: "dm", target: "user-abc" } } },
       { send: vi.fn(), sendDM },
     );
     const n = new DiscordNotifier({ runtime });
@@ -217,10 +217,85 @@ describe("DiscordNotifier subscription to agent.completed", () => {
     n.stop();
   });
 
+  it("delivers via channel mode (send) when mode is 'channel'", async () => {
+    const send = vi.fn().mockResolvedValue(undefined);
+    const runtime = makeRuntime(
+      { taskWatcher: { enabled: true, delivery: { channel: "discord", mode: "channel", target: "room-1" } } },
+      { send, sendDM: vi.fn() },
+    );
+    const n = new DiscordNotifier({ runtime });
+
+    const task = createProjectTask(db, { title: "Channel post" });
+    runtime.events.emit("agent.completed", {
+      taskId: task.id,
+      agentName: undefined,
+      action: "updated",
+      task: { id: task.id, title: "Channel post", status: "in_progress", assignee: null },
+      finalTask: { id: task.id, title: "Channel post", status: "done", assignee: null },
+      response: "posted",
+    });
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0]).toBe("room-1");
+    expect(send.mock.calls[0][1]).toContain(task.id);
+    n.stop();
+  });
+
+  it("dm mode falls back to the channel owner when no target is set", async () => {
+    const sendDM = vi.fn().mockResolvedValue(undefined);
+    const runtime = makeRuntime(
+      { taskWatcher: { enabled: true, delivery: { channel: "discord", mode: "dm" } } },
+      { send: vi.fn(), sendDM },
+    );
+    const n = new DiscordNotifier({ runtime });
+
+    const task = createProjectTask(db, { title: "Owner DM" });
+    runtime.events.emit("agent.completed", {
+      taskId: task.id,
+      agentName: undefined,
+      action: "updated",
+      task: { id: task.id, title: "Owner DM", status: "in_progress", assignee: null },
+      finalTask: { id: task.id, title: "Owner DM", status: "done", assignee: null },
+      response: "dm",
+    });
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sendDM).toHaveBeenCalledTimes(1);
+    // makeRuntime's getOwnerId returns "1234" for the discord channel.
+    expect(sendDM.mock.calls[0][0]).toBe("1234");
+    n.stop();
+  });
+
+  it("does not throw and logs an error when the target channel is not connected", async () => {
+    // No outbound notifier registered → getOutbound("discord") is undefined.
+    const runtime = makeRuntime({
+      taskWatcher: { enabled: true, delivery: { channel: "discord", mode: "dm", target: "user-abc" } },
+    });
+    const n = new DiscordNotifier({ runtime });
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const task = createProjectTask(db, { title: "Unconnected" });
+    runtime.events.emit("agent.completed", {
+      taskId: task.id,
+      agentName: undefined,
+      action: "updated",
+      task: { id: task.id, title: "Unconnected", status: "in_progress", assignee: null },
+      finalTask: { id: task.id, title: "Unconnected", status: "done", assignee: null },
+      response: "x",
+    });
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(errSpy).toHaveBeenCalled();
+    expect(errSpy.mock.calls.some((c) => String(c[0]).includes("not connected"))).toBe(true);
+    errSpy.mockRestore();
+    n.stop();
+  });
+
   it("stop() disposes the subscription so later events are ignored", async () => {
     const sendDM = vi.fn();
     const runtime = makeRuntime(
-      { taskWatcher: { enabled: true, delivery: { channel: "discord-dm", target: "user-abc" } } },
+      { taskWatcher: { enabled: true, delivery: { channel: "discord", mode: "dm", target: "user-abc" } } },
       { send: vi.fn(), sendDM },
     );
     const n = new DiscordNotifier({ runtime });

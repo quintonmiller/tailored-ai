@@ -7,6 +7,7 @@ import {
   deepInterpolate,
   deepMerge,
   loadConfig,
+  migrateDeliveryConfig,
   migrateTaskBackendConfig,
   validateConfig,
 } from "../config.js";
@@ -167,6 +168,67 @@ describe("migrateTaskBackendConfig — legacy per-backend blocks → tasks.optio
   it("is a no-op when there is no tasks block", () => {
     const cfg: Record<string, unknown> = { agent: {} };
     migrateTaskBackendConfig(cfg);
+    expect(cfg).toEqual({ agent: {} });
+  });
+});
+
+describe("migrateDeliveryConfig — legacy delivery.channel union → { channel, mode }", () => {
+  it("maps taskWatcher delivery 'discord' to channel + channel mode, preserving target", () => {
+    const cfg = { taskWatcher: { delivery: { channel: "discord", target: "room-1" } } };
+    migrateDeliveryConfig(cfg);
+    expect(cfg.taskWatcher.delivery).toEqual({ channel: "discord", mode: "channel", target: "room-1" });
+  });
+
+  it("maps taskWatcher delivery 'discord-dm' to channel 'discord' + dm mode, preserving target", () => {
+    const cfg = { taskWatcher: { delivery: { channel: "discord-dm", target: "user-1" } } };
+    migrateDeliveryConfig(cfg);
+    expect(cfg.taskWatcher.delivery).toEqual({ channel: "discord", mode: "dm", target: "user-1" });
+  });
+
+  it("leaves 'log' delivery as the console sentinel (no mode added)", () => {
+    const cfg = { taskWatcher: { delivery: { channel: "log" } } };
+    migrateDeliveryConfig(cfg);
+    expect(cfg.taskWatcher.delivery).toEqual({ channel: "log" });
+  });
+
+  it("maps each cron job's legacy delivery independently", () => {
+    const cfg = {
+      cron: {
+        jobs: [
+          { name: "a", delivery: { channel: "discord", target: "room-a" } },
+          { name: "b", delivery: { channel: "discord-dm" } },
+          { name: "c", delivery: { channel: "log" } },
+          { name: "d" },
+        ],
+      },
+    };
+    migrateDeliveryConfig(cfg);
+    expect(cfg.cron.jobs[0].delivery).toEqual({ channel: "discord", mode: "channel", target: "room-a" });
+    expect(cfg.cron.jobs[1].delivery).toEqual({ channel: "discord", mode: "dm" });
+    expect(cfg.cron.jobs[2].delivery).toEqual({ channel: "log" });
+    expect(cfg.cron.jobs[3].delivery).toBeUndefined();
+  });
+
+  it("is idempotent — already-migrated config is left untouched", () => {
+    const cfg = {
+      taskWatcher: { delivery: { channel: "discord", mode: "dm", target: "user-1" } },
+      cron: { jobs: [{ name: "a", delivery: { channel: "slack", mode: "channel", target: "C123" } }] },
+    };
+    const before = JSON.parse(JSON.stringify(cfg));
+    migrateDeliveryConfig(cfg);
+    expect(cfg).toEqual(before);
+  });
+
+  it("leaves an already-open custom channel id untouched", () => {
+    const cfg = { taskWatcher: { delivery: { channel: "slack", target: "C42" } } };
+    migrateDeliveryConfig(cfg);
+    // No legacy string match and no mode → left exactly as written.
+    expect(cfg.taskWatcher.delivery).toEqual({ channel: "slack", target: "C42" });
+  });
+
+  it("is a no-op when there is no taskWatcher or cron block", () => {
+    const cfg: Record<string, unknown> = { agent: {} };
+    migrateDeliveryConfig(cfg);
     expect(cfg).toEqual({ agent: {} });
   });
 });

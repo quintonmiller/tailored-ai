@@ -87,42 +87,40 @@ export class DiscordNotifier {
   }
 
   private async deliver(response: string, logPrefix: string): Promise<void> {
-    const config = this.runtime.getConfig().taskWatcher;
-    const channel = config.delivery?.channel ?? "log";
+    const delivery = this.runtime.getConfig().taskWatcher.delivery;
+    const channelId = delivery?.channel ?? "log";
 
-    if (channel === "discord") {
-      const target = config.delivery?.target;
-      if (!target) {
-        console.error(`${logPrefix} discord delivery configured but no target channel ID`);
-        return;
-      }
-      const out = this.runtime.getOutbound("discord");
-      if (!out) {
-        console.error(`${logPrefix} discord delivery configured but Discord is not connected`);
-        return;
-      }
-      await out.send(target, response);
-      console.log(`${logPrefix} Delivered to Discord channel ${target}`);
+    // "log" is the reserved console-only sentinel (also the default when
+    // delivery is unconfigured) — no real channel delivery.
+    if (channelId === "log") {
+      console.log(`${logPrefix} ${response}`);
       return;
     }
 
-    if (channel === "discord-dm") {
-      const target = config.delivery?.target ?? this.runtime.getOwnerId("discord");
-      if (!target) {
-        console.error(`${logPrefix} discord-dm delivery configured but no target user ID or discord owner`);
-        return;
-      }
-      const out = this.runtime.getOutbound("discord");
-      if (!out) {
-        console.error(`${logPrefix} discord-dm delivery configured but Discord is not connected`);
-        return;
-      }
-      await out.sendDM(target, response);
-      console.log(`${logPrefix} Delivered as DM to user ${target}`);
+    const mode = delivery?.mode ?? "channel";
+    const out = this.runtime.getOutbound(channelId);
+    if (!out) {
+      console.error(`${logPrefix} wants ${channelId} delivery but it is not connected`);
       return;
     }
 
-    console.log(`${logPrefix} ${response}`);
+    if (mode === "dm") {
+      const userId = delivery?.target ?? this.runtime.getOwnerId(channelId);
+      if (!userId) {
+        console.error(`${logPrefix} dm delivery has no target user id and no owner for ${channelId}`);
+        return;
+      }
+      await out.sendDM(userId, response);
+      console.log(`${logPrefix} Delivered as DM to user ${userId}`);
+      return;
+    }
+
+    if (!delivery?.target) {
+      console.error(`${logPrefix} channel delivery has no target channel id`);
+      return;
+    }
+    await out.send(delivery.target, response);
+    console.log(`${logPrefix} Delivered to ${channelId} channel ${delivery.target}`);
   }
 }
 
