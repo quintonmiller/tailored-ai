@@ -22,20 +22,19 @@ const DEFAULTS: TaskWatcherConfig = {
 };
 
 const ALL_TRIGGERS = ["created", "updated", "commented"] as const;
-// UI presets over the open `{ channel, mode, target }` delivery shape. "log"
-// is the console-only sentinel; the discord presets map onto channel id
-// "discord" + the matching mode.
-const DELIVERY_PRESETS = ["log", "discord", "discord-dm"] as const;
-type DeliveryPreset = (typeof DELIVERY_PRESETS)[number];
+// UI modes over the open `{ channel, mode, target }` delivery shape. "log" is
+// the console-only sentinel (stored as `{ channel: "log" }`); "channel" posts
+// to a channel/thread and "dm" DMs a user. The channel id is open free-text.
+type DeliveryMode = "log" | "channel" | "dm";
 
-function deliveryToPreset(delivery: TaskWatcherConfig["delivery"]): DeliveryPreset {
+function deliveryToMode(delivery: TaskWatcherConfig["delivery"]): DeliveryMode {
   if (!delivery || !delivery.channel || delivery.channel === "log") return "log";
-  return delivery.mode === "dm" ? "discord-dm" : "discord";
+  return delivery.mode === "dm" ? "dm" : "channel";
 }
 
-function presetToDelivery(preset: DeliveryPreset, target?: string): TaskWatcherConfig["delivery"] {
-  if (preset === "log") return undefined;
-  return { channel: "discord", mode: preset === "discord-dm" ? "dm" : "channel", target };
+function buildDelivery(mode: DeliveryMode, channel?: string, target?: string): TaskWatcherConfig["delivery"] {
+  if (mode === "log") return { channel: "log" };
+  return { channel: channel || undefined, mode, target };
 }
 
 export function TaskWatcherEditor() {
@@ -79,8 +78,8 @@ export function TaskWatcherEditor() {
     });
   }
 
-  const deliveryPreset = deliveryToPreset(data.delivery);
-  const needsTarget = deliveryPreset === "discord" || deliveryPreset === "discord-dm";
+  const deliveryMode = deliveryToMode(data.delivery);
+  const needsChannel = deliveryMode !== "log";
 
   if (loading) {
     return (
@@ -177,38 +176,58 @@ export function TaskWatcherEditor() {
         </div>
 
         <div className="field-group">
-          <label className="field-label">Delivery</label>
+          <label className="field-label">Delivery Mode</label>
           <select
             className="field-select"
-            value={deliveryPreset}
+            value={deliveryMode}
             onChange={(e) => {
-              const preset = e.target.value as DeliveryPreset;
-              setData((p) => ({ ...p, delivery: presetToDelivery(preset, p.delivery?.target) }));
+              const mode = e.target.value as DeliveryMode;
+              setData((p) => ({ ...p, delivery: buildDelivery(mode, p.delivery?.channel, p.delivery?.target) }));
             }}
           >
-            {DELIVERY_PRESETS.map((preset) => (
-              <option key={preset} value={preset}>
-                {preset}
-              </option>
-            ))}
+            <option value="log">log (stdout)</option>
+            <option value="channel">channel</option>
+            <option value="dm">dm</option>
           </select>
         </div>
 
-        {needsTarget && (
-          <div className="field-group">
-            <label className="field-label">{deliveryPreset === "discord" ? "Channel ID" : "User ID"}</label>
-            <input
-              className="field-input"
-              value={data.delivery?.target ?? ""}
-              onChange={(e) =>
-                setData((p) => ({
-                  ...p,
-                  delivery: presetToDelivery(deliveryPreset, e.target.value || undefined),
-                }))
-              }
-              placeholder={deliveryPreset === "discord" ? "Discord channel ID" : "Discord user ID (defaults to owner)"}
-            />
-          </div>
+        {needsChannel && (
+          <>
+            <div className="field-group">
+              <label className="field-label" htmlFor="taskwatcher-delivery-channel">
+                Delivery Channel
+              </label>
+              <input
+                id="taskwatcher-delivery-channel"
+                className="field-input"
+                value={data.delivery?.channel ?? ""}
+                onChange={(e) =>
+                  setData((p) => ({
+                    ...p,
+                    delivery: buildDelivery(deliveryMode, e.target.value || undefined, p.delivery?.target),
+                  }))
+                }
+                placeholder="default channel"
+              />
+            </div>
+            <div className="field-group">
+              <label className="field-label" htmlFor="taskwatcher-delivery-target">
+                Delivery Target (optional)
+              </label>
+              <input
+                id="taskwatcher-delivery-target"
+                className="field-input"
+                value={data.delivery?.target ?? ""}
+                onChange={(e) =>
+                  setData((p) => ({
+                    ...p,
+                    delivery: buildDelivery(deliveryMode, p.delivery?.channel, e.target.value || undefined),
+                  }))
+                }
+                placeholder={deliveryMode === "dm" ? "User ID (optional)" : "Channel/thread ID (optional)"}
+              />
+            </div>
+          </>
         )}
       </div>
     </div>

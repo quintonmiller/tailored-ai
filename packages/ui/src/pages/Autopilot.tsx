@@ -285,7 +285,7 @@ export function Autopilot() {
       <section style={{ marginBottom: 24 }}>
         <h3>Morning digest</h3>
         <p className="field-hint">
-          Daily summary of overnight activity, delivered via Discord DM when available. Blank = disabled.
+          Daily summary of overnight activity, delivered via your default channel when available. Blank = disabled.
         </p>
         <div className="tasks-form-row">
           <div className="field-group" style={{ flex: 1 }}>
