@@ -21,7 +21,6 @@ import {
   ExploratoryWorker,
   ensureContextDir,
   executeHooks,
-  getDiscordConfig,
   initDatabase,
   listSessions,
   loadConfig,
@@ -681,8 +680,9 @@ async function main() {
   const toolFactory = (cfg: typeof config, ctxDir: string, cfgPath?: string, runtimeOpts?: Record<string, unknown>) =>
     createTools(cfg, ctxDir, cfgPath, {
       ...runtimeOpts,
-      getDiscord: () => _discordChannel,
-      getOwnerId: () => getDiscordConfig(cfg)?.owner,
+      // getDiscord/getOwnerId now come from the runtime's outbound registry
+      // (#66) — the runtime wires getOutbound("discord")/getOwnerId("discord")
+      // into runtimeOpts, so we no longer inject them here.
       // Module-scoped _taskWatcherRef gets assigned by runServer().
       // Reads lazily at tool-call time, so it's fine if undefined here.
       notifyTaskEvent: (action, id, projectId) => _taskWatcherRef?.notifyById(action, id, projectId),
