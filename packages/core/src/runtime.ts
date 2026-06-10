@@ -165,6 +165,8 @@ export class AgentRuntime {
         taskBackendResolver: (projectId?: string | null) => this.getTaskBackendForProject(projectId),
         getEmbedder: () => this._embedder,
         getMemoryBackend: () => this.getMemoryBackend(),
+        getDiscord: () => this.getOutbound("discord"),
+        getOwnerId: () => this.getOwnerId("discord"),
         events: this.events,
       }) ?? [];
     for (const tool of builtinTools) this._toolRegistry.registerBuiltin(tool);

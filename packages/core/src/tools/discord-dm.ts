@@ -1,4 +1,4 @@
-import type { DiscordChannel } from "../channels/discord.js";
+import type { OutboundNotifier } from "../channels/outbound.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
 
 /**
@@ -30,7 +30,7 @@ export class DiscordDmTool implements Tool {
   };
 
   constructor(
-    private getDiscord: () => DiscordChannel | undefined,
+    private getDiscord: () => OutboundNotifier | undefined,
     private getOwnerId: () => string | undefined,
   ) {}
 
