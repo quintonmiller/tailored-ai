@@ -21,7 +21,7 @@ const STEP_TYPES: WorkflowStepType[] = [
   "condition",
   "loop",
   "parallel",
-  "discord_message",
+  "channel_message",
   "trigger_workflow",
 ];
 
@@ -511,7 +511,7 @@ function renderTypeFields(
           onChange={(next) => update("steps", next)}
         />
       );
-    case "discord_message":
+    case "channel_message":
       return (
         <>
           <div className="field-group">
@@ -525,6 +525,18 @@ function renderTypeFields(
             />
           </div>
           <div className="field-group">
+            <label className="field-label">Channel id (optional)</label>
+            <input
+              className="field-input"
+              value={step.channel ?? ""}
+              onChange={(e) => update("channel", e.target.value || undefined)}
+              placeholder="default channel"
+            />
+            <div className="wf-field-hint">
+              Outbound channel id (e.g. discord, slack). Leave blank to use the default channel.
+            </div>
+          </div>
+          <div className="field-group">
             <label className="field-label">Send to</label>
             <select
               className="field-select"
@@ -536,33 +548,30 @@ function renderTypeFields(
                 else onChange({ ...step, channelId: undefined, userId: step.userId ?? "" });
               }}
             >
-              <option value="owner">Configured Discord owner (default)</option>
+              <option value="owner">Configured owner (default)</option>
               <option value="channel">A specific channel</option>
               <option value="user">A specific user (DM)</option>
             </select>
           </div>
           {step.channelId !== undefined && (
             <div className="field-group">
-              <label className="field-label">Channel ID</label>
+              <label className="field-label">Target channel/thread ID</label>
               <input
                 className="field-input"
                 value={step.channelId ?? ""}
                 onChange={(e) => update("channelId", e.target.value)}
-                placeholder="Discord channel ID"
+                placeholder="Target channel/thread ID"
               />
-              <div className="wf-field-hint">
-                Right-click a channel in Discord with developer mode on to copy its ID.
-              </div>
             </div>
           )}
           {step.userId !== undefined && (
             <div className="field-group">
-              <label className="field-label">User ID</label>
+              <label className="field-label">User ID (DM)</label>
               <input
                 className="field-input"
                 value={step.userId ?? ""}
                 onChange={(e) => update("userId", e.target.value)}
-                placeholder="Discord user ID"
+                placeholder="User ID (DM)"
               />
             </div>
           )}
@@ -610,21 +619,45 @@ function renderTypeFields(
           </div>
         </>
       );
-    case "notify":
+    case "notify": {
+      // Notify's `channel` is an open string. "email" and "log" are special
+      // backends; any other value (e.g. "discord", "slack") is an outbound
+      // channel id. The select toggles between those two specials and an open
+      // "channel" mode that surfaces a free-text channel-id input.
+      const notifyMode = step.channel === "email" ? "email" : step.channel === "log" ? "log" : "channel";
       return (
         <>
           <div className="field-group">
             <label className="field-label">Channel</label>
             <select
               className="field-select"
-              value={step.channel ?? "discord"}
-              onChange={(e) => update("channel", e.target.value as typeof step.channel)}
+              value={notifyMode}
+              onChange={(e) => {
+                const mode = e.target.value;
+                if (mode === "email") onChange({ ...step, channel: "email", channelId: undefined, userId: undefined });
+                else if (mode === "log") onChange({ ...step, channel: "log", channelId: undefined, userId: undefined });
+                else onChange({ ...step, channel: "" });
+              }}
             >
-              <option value="discord">Discord</option>
+              <option value="channel">Channel</option>
               <option value="email">Email</option>
               <option value="log">Log (stdout only)</option>
             </select>
           </div>
+          {notifyMode === "channel" && (
+            <div className="field-group">
+              <label className="field-label">Channel id (optional)</label>
+              <input
+                className="field-input"
+                value={step.channel ?? ""}
+                onChange={(e) => update("channel", e.target.value)}
+                placeholder="default channel"
+              />
+              <div className="wf-field-hint">
+                Outbound channel id (e.g. discord, slack). Leave blank to use the default channel.
+              </div>
+            </div>
+          )}
           <div className="field-group">
             <label className="field-label">Message</label>
             <textarea
@@ -661,7 +694,7 @@ function renderTypeFields(
               </div>
             </>
           )}
-          {step.channel === "discord" && (
+          {notifyMode === "channel" && (
             <>
               <div className="field-group">
                 <label className="field-label">Send to</label>
@@ -676,28 +709,30 @@ function renderTypeFields(
                     else onChange({ ...step, channelId: undefined, userId: step.userId ?? "" });
                   }}
                 >
-                  <option value="owner">Configured Discord owner (default)</option>
+                  <option value="owner">Configured owner (default)</option>
                   <option value="channel">A specific channel</option>
                   <option value="user">A specific user (DM)</option>
                 </select>
               </div>
               {step.channelId !== undefined && (
                 <div className="field-group">
-                  <label className="field-label">Channel ID</label>
+                  <label className="field-label">Target channel/thread ID</label>
                   <input
                     className="field-input"
                     value={step.channelId ?? ""}
                     onChange={(e) => update("channelId", e.target.value)}
+                    placeholder="Target channel/thread ID"
                   />
                 </div>
               )}
               {step.userId !== undefined && (
                 <div className="field-group">
-                  <label className="field-label">User ID</label>
+                  <label className="field-label">User ID (DM)</label>
                   <input
                     className="field-input"
                     value={step.userId ?? ""}
                     onChange={(e) => update("userId", e.target.value)}
+                    placeholder="User ID (DM)"
                   />
                 </div>
               )}
@@ -705,6 +740,7 @@ function renderTypeFields(
           )}
         </>
       );
+    }
     case "http_request":
       return (
         <>
@@ -973,14 +1009,14 @@ export function blankStep(type: WorkflowStepType): WorkflowStepDef {
       return { ...base, over: "", as: "item", body: [] };
     case "parallel":
       return { ...base, steps: [] };
-    case "discord_message":
+    case "channel_message":
       return { ...base, message: "" };
     case "trigger_workflow":
       return { ...base, workflow: "" };
     case "http_request":
       return { ...base, method: "GET", url: "" };
     case "notify":
-      return { ...base, channel: "discord", message: "" };
+      return { ...base, channel: "", message: "" };
     case "form":
       return { ...base, prompt: "", fields: {} };
     case "worktree":

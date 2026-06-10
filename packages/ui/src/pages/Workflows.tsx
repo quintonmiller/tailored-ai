@@ -269,7 +269,7 @@ export function Workflows() {
                 className="btn-ghost"
                 onClick={() => handleRun(true)}
                 disabled={status.type === "saving"}
-                title="Skips side-effecting steps (no Discord/email/POSTs/shell). Useful for testing."
+                title="Skips side-effecting steps (no channel messages/email/POSTs/shell). Useful for testing."
               >
                 Dry run
               </button>

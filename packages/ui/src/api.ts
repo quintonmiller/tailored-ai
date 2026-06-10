@@ -704,7 +704,7 @@ export type WorkflowStepType =
   | "condition"
   | "loop"
   | "parallel"
-  | "discord_message"
+  | "channel_message"
   | "trigger_workflow"
   | "http_request"
   | "notify"
@@ -751,8 +751,10 @@ export interface WorkflowStepDef {
   maxConcurrency?: number;
   // parallel
   steps?: WorkflowStepDef[];
-  // discord_message
+  // channel_message
   message?: string;
+  /** Outbound channel id (e.g. "discord", "slack"). Absent = default channel. */
+  channel?: string;
   channelId?: string;
   userId?: string;
   // trigger_workflow
@@ -766,13 +768,15 @@ export interface WorkflowStepDef {
   parseAs?: "json" | "text" | "raw";
   expectStatus?: number[];
   // notify
-  channel?: "discord" | "email" | "log";
+  // `channel` is shared with channel_message above (open string). For notify,
+  // "email" routes through the email backend, "log" writes to stdout, and any
+  // other value is an outbound channel id (e.g. "discord", "slack").
   subject?: string;
   to?: string;
   // form
   fields?: Record<string, WorkflowInputSchema>;
   notify?: {
-    channel: "discord" | "log";
+    channel: string;
     channelId?: string;
     userId?: string;
     message?: string;

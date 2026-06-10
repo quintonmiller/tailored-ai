@@ -72,17 +72,17 @@ export const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
   {
     id: "scheduled-reminder",
     label: "Scheduled reminder",
-    description: "Send a Discord message on a cron schedule. One step, no AI.",
+    description: "Send a channel message on a cron schedule. One step, no AI.",
     build(name, _ctx) {
       return {
         name,
-        description: "Post a daily reminder to Discord at 9am.",
+        description: "Post a daily reminder to your default channel at 9am.",
         executionMode: "graph",
         triggers: [{ kind: "cron", schedule: "0 9 * * *" }],
         steps: [
           {
             name: "remind",
-            type: "discord_message",
+            type: "channel_message",
             message: "👋 Daily reminder: check the backlog.",
           },
         ],
@@ -96,11 +96,11 @@ export const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
   {
     id: "document-summarizer",
     label: "Document summarizer",
-    description: "When a document is created or updated, summarize it and post the summary to Discord.",
+    description: "When a document is created or updated, summarize it and post the summary to a channel.",
     build(name, ctx) {
       return {
         name,
-        description: "Fires on document events. Agent summarizes the change, then notifies Discord.",
+        description: "Fires on document events. Agent summarizes the change, then notifies a channel.",
         executionMode: "graph",
         triggers: [{ kind: "document_event", events: ["created", "updated"] }],
         steps: [
@@ -114,7 +114,7 @@ export const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
           },
           {
             name: "notify",
-            type: "discord_message",
+            type: "channel_message",
             message: "📄 Document update:\n${steps.summarize}",
           },
         ],
@@ -134,7 +134,7 @@ export const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
   {
     id: "approval-gate",
     label: "Approval gate",
-    description: "Agent classifies a request as approve or review; condition routes to the right Discord notification.",
+    description: "Agent classifies a request as approve or review; condition routes to the right channel notification.",
     build(name, ctx) {
       return {
         name,
@@ -159,12 +159,12 @@ export const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
           },
           {
             name: "approved",
-            type: "discord_message",
+            type: "channel_message",
             message: "✅ Auto-approved: ${input.request}",
           },
           {
             name: "needs_review",
-            type: "discord_message",
+            type: "channel_message",
             message: "⚠️ Needs human review: ${input.request}\nClassifier said: ${steps.classify}",
           },
         ],
@@ -188,11 +188,11 @@ export const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
   {
     id: "morning-digest",
     label: "Morning digest (parallel fan-out)",
-    description: "Cron fires two parallel research agents, a third synthesizes, then posts a digest to Discord.",
+    description: "Cron fires two parallel research agents, a third synthesizes, then posts a digest to a channel.",
     build(name, ctx) {
       return {
         name,
-        description: "Daily 8am: research news + markets in parallel, synthesize, publish to Discord.",
+        description: "Daily 8am: research news + markets in parallel, synthesize, publish to a channel.",
         executionMode: "graph",
         triggers: [{ kind: "cron", schedule: "0 8 * * *" }],
         steps: [
@@ -222,7 +222,7 @@ export const WORKFLOW_TEMPLATES: WorkflowTemplate[] = [
           },
           {
             name: "publish",
-            type: "discord_message",
+            type: "channel_message",
             message: "🌅 Morning digest:\n\n${steps.synthesize}",
           },
         ],
@@ -262,7 +262,7 @@ WORKFLOW_TEMPLATES.push(
       return {
         name,
         description:
-          "Cron fires monthly. Pulls all subscription:* facts from the personal-facts store, asks the agent to highlight anything unused, and sends the summary to Discord.",
+          "Cron fires monthly. Pulls all subscription:* facts from the personal-facts store, asks the agent to highlight anything unused, and sends the summary to a channel.",
         executionMode: "graph",
         triggers: [{ kind: "cron", schedule: "0 9 1 * *" }],
         steps: [
@@ -283,7 +283,6 @@ WORKFLOW_TEMPLATES.push(
           {
             name: "notify",
             type: "notify",
-            channel: "discord",
             message: "💸 Monthly subscription audit:\n\n${steps.review}",
           },
         ],
@@ -310,7 +309,7 @@ WORKFLOW_TEMPLATES.push(
       return {
         name,
         description:
-          "Cron fires Monday 7am. Pulls upcoming deadlines (facts) plus recent activity, asks an agent to draft a personal weekly digest, and posts to Discord.",
+          "Cron fires Monday 7am. Pulls upcoming deadlines (facts) plus recent activity, asks an agent to draft a personal weekly digest, and posts to a channel.",
         executionMode: "graph",
         triggers: [{ kind: "cron", schedule: "0 7 * * 1" }],
         steps: [
@@ -331,7 +330,6 @@ WORKFLOW_TEMPLATES.push(
           {
             name: "send",
             type: "notify",
-            channel: "discord",
             message: "🗓️ Week ahead:\n\n${steps.draft}",
           },
         ],
@@ -353,7 +351,7 @@ WORKFLOW_TEMPLATES.push(
   {
     id: "inbox-triage",
     label: "Inbox triage (daily)",
-    description: "Daily: scan Gmail for action items and post the actionable ones to Discord.",
+    description: "Daily: scan Gmail for action items and post the actionable ones to a channel.",
     build(name, ctx) {
       return {
         name,
@@ -379,7 +377,6 @@ WORKFLOW_TEMPLATES.push(
           {
             name: "send",
             type: "notify",
-            channel: "discord",
             message: "📧 Inbox triage:\n\n${steps.triage}",
           },
         ],
@@ -433,7 +430,6 @@ WORKFLOW_TEMPLATES.push(
           {
             name: "notify",
             type: "notify",
-            channel: "discord",
             message: "🧾 New receipt: ${input.file_name}\n\n${steps.extract}",
           },
         ],
@@ -490,7 +486,6 @@ WORKFLOW_TEMPLATES.push(
           {
             name: "warn",
             type: "notify",
-            channel: "discord",
             message: "🌧️ Heads up for tomorrow:\n${steps.interpret}",
           },
         ],
@@ -548,7 +543,6 @@ WORKFLOW_TEMPLATES.push(
           {
             name: "deliver",
             type: "notify",
-            channel: "discord",
             message: "📚 Research brief — ${input.topic}\n\n${steps.research}",
           },
         ],
