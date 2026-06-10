@@ -25,6 +25,10 @@ export interface SummarizeSessionOptions {
 }
 
 export interface SummarizeSessionResult {
+  /** The session that was summarized. Lets sweep callers map a result
+   *  back to its source session (e.g. to refresh that session's agent's
+   *  core-memory `recent_summary`). */
+  sessionId: string;
   noteId: string;
   importance: number;
   messageCount: number;
@@ -82,7 +86,7 @@ export async function summarizeSession(
     ttl_at: ttlAt,
   });
 
-  return { noteId: note.id, importance, messageCount: messages.length };
+  return { sessionId, noteId: note.id, importance, messageCount: messages.length };
 }
 
 /**
