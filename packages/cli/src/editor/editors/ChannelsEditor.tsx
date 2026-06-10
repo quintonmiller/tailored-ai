@@ -6,7 +6,7 @@ import type { Action } from "../state.js";
 import type { ResolvedPlugin } from "../types.js";
 
 interface Props {
-  discord: boolean;
+  channels: Record<string, boolean>;
   plugins: ResolvedPlugin[];
   homeDir: string;
   dispatch: (action: Action) => void;
@@ -15,14 +15,20 @@ interface Props {
 
 type Mode = "list" | "add" | "resolving";
 
-export function ChannelsEditor({ discord, plugins, homeDir, dispatch, onExit }: Props) {
+export function ChannelsEditor({ channels, plugins, homeDir, dispatch, onExit }: Props) {
   const [mode, setMode] = useState<Mode>("list");
   const [cursor, setCursor] = useState(0);
   const [resolveMsg, setResolveMsg] = useState<string | undefined>();
 
-  // Rows: discord toggle, each plugin, "Add" row.
-  const totalRows = 1 + plugins.length + 1;
+  // Stable, sorted channel ids — one toggle row each. `discord` is seeded into
+  // the draft (default false) so it always appears even when absent from config.
+  const channelIds = Object.keys(channels).sort();
+
+  // Rows: one per channel id, each plugin, "Add" row.
+  const totalRows = channelIds.length + plugins.length + 1;
   const addRow = totalRows - 1;
+  // Plugin rows sit after the channel-toggle rows.
+  const firstPluginRow = channelIds.length;
 
   useInput((input, key) => {
     if (mode !== "list") {
@@ -42,12 +48,12 @@ export function ChannelsEditor({ discord, plugins, homeDir, dispatch, onExit }: 
       setCursor((c) => Math.min(totalRows - 1, c + 1));
       return;
     }
-    if (input === " " && cursor === 0) {
-      dispatch({ type: "toggleDiscord" });
+    if (input === " " && cursor < channelIds.length) {
+      dispatch({ type: "toggleChannel", channelId: channelIds[cursor] });
       return;
     }
-    if (input === "d" && cursor > 0 && cursor <= plugins.length) {
-      dispatch({ type: "removePlugin", index: cursor - 1 });
+    if (input === "d" && cursor >= firstPluginRow && cursor < addRow) {
+      dispatch({ type: "removePlugin", index: cursor - firstPluginRow });
       setCursor((c) => Math.min(c, totalRows - 2));
       return;
     }
@@ -75,14 +81,17 @@ export function ChannelsEditor({ discord, plugins, homeDir, dispatch, onExit }: 
     <Box flexDirection="column">
       <Text bold>Edit Channels</Text>
       <Box marginTop={1} flexDirection="column">
-        <Text color={cursor === 0 ? "cyan" : undefined}>
-          {cursor === 0 ? "▶ " : "  "}[{discord ? "x" : " "}] discord <Text dimColor>(built-in)</Text>
-        </Text>
+        {channelIds.map((id, i) => (
+          <Text key={id} color={cursor === i ? "cyan" : undefined}>
+            {cursor === i ? "▶ " : "  "}[{channels[id] ? "x" : " "}] {id}
+            {id === "discord" ? <Text dimColor> (built-in)</Text> : null}
+          </Text>
+        ))}
         {plugins.length > 0 ? (
           <Box marginTop={1} flexDirection="column">
             <Text dimColor>Custom channel packages:</Text>
             {plugins.map((pl, i) => {
-              const idx = i + 1;
+              const idx = firstPluginRow + i;
               return (
                 <Text key={pl.uri} color={idx === cursor ? "cyan" : pl.resolveError ? "red" : undefined}>
                   {idx === cursor ? "▶ " : "  "}

@@ -15,7 +15,6 @@ import {
   createProvider,
   createTools,
   createWorkflowEngine,
-  type DiscordChannel,
   ExploratoryWorker,
   ensureContextDir,
   executeHooks,
@@ -45,16 +44,15 @@ import { runProjectCommand } from "./commands/project.js";
 import { runResourcesCommand } from "./commands/resources.js";
 import { runVaultCommand } from "./commands/vault.js";
 import { isSetupDone, resolveHomeDir, resolveHomePaths } from "./home.js";
+import { syncOutboundRegistry } from "./outbound-sync.js";
 import { PluginManager } from "./plugins/manager.js";
 import { runSetupWizard, type SetupMode } from "./setup.js";
-
-let _discordChannel: import("@tailored-ai/core").DiscordChannel | undefined;
 
 const USAGE = `
 Usage: tai [options]
 
 Modes:
-  (default)               Start server (HTTP + UI + Discord + cron)
+  (default)               Start server (HTTP + UI + channels + cron)
   -m, --message <text>    Send a single message and exit
   init                    Create a new config (run \`tai init --help\`)
   edit                    Edit an existing config (run \`tai edit --help\`)
@@ -118,7 +116,7 @@ async function runServer(
   runtime: AgentRuntime,
   loadRuntimePlugins: () => Promise<import("@tailored-ai/core").LoadedPlugin[]>,
 ) {
-  // Load the runtime-context plugins (the `builtin:*` default set: Discord
+  // Load the runtime-context plugins (the `builtin:*` default set: agent
   // notifier, scope-creep flagger, stall guard, coder/reviewer project
   // guard). They subscribe to the runtime's event bus on register and
   // return disposers we hold for shutdown + reload. Previously these were
@@ -147,11 +145,12 @@ async function runServer(
   // channels are owned by channelManager — `shutdown` stops it explicitly.
   const channels: { name: string; disconnect: () => Promise<void> }[] = [];
 
-  _discordChannel = channelManager.get("discord")?.channel as DiscordChannel | undefined;
-  // Publish the live Discord sink into the runtime's outbound registry so
-  // channel-id consumers (cron, autopilot, notifier, workflows) resolve it by
-  // id instead of constructor injection (#66).
-  if (_discordChannel) runtime.registerOutbound(_discordChannel);
+  // Publish every connected outbound-capable channel into the runtime's
+  // outbound registry so channel-id consumers (cron, autopilot, notifier,
+  // workflows) resolve them by id instead of constructor injection (#66). The
+  // set tracks which ids we've registered so reloads can reconcile them.
+  const registeredOutbound = new Set<string>();
+  syncOutboundRegistry(runtime, channelManager, registeredOutbound);
 
   const scheduler = new CronScheduler({ runtime });
   if (runtime.getConfig().cron.enabled) {
@@ -163,7 +162,7 @@ async function runServer(
   // on mutations (Phase 6 — coder→reviewer→coder handoffs).
   _taskWatcherRef = taskWatcher;
 
-  // The Discord notifier, scope-creep flagger, stall guard, and coder/
+  // The agent notifier, scope-creep flagger, stall guard, and coder/
   // reviewer project guard used to be constructed here as hardcoded
   // `new …()` instances. #142 moves them to `config.plugins` (the
   // `builtin:*` default set), loaded above via loadRuntimePlugins().
@@ -171,7 +170,7 @@ async function runServer(
   const autopilot = new AutopilotWorker({
     runtime,
     // Notifier + operator resolve from the runtime's outbound registry and
-    // getOwnerId (#66) — no Discord-specific injection here anymore.
+    // getOwnerId (#66) — no channel-specific injection here anymore.
     getTaskWatcher: () => taskWatcher,
   });
   autopilot.start();
@@ -180,8 +179,8 @@ async function runServer(
   exploratory.start();
 
   // Hot-reload: the lifecycle manager reconciles the channel set against
-  // the new config. The Discord-specific notifier wiring then re-syncs
-  // off whatever the manager produced.
+  // the new config. The outbound registry then re-syncs off whatever the
+  // manager produced — for every channel, not just Discord.
   runtime.onReload(async () => {
     scheduler.restart();
 
@@ -199,17 +198,9 @@ async function runServer(
       console.error("[channels] Reconcile error after reload:", (err as Error).message);
     }
 
-    const next = channelManager.get("discord")?.channel as DiscordChannel | undefined;
-    if (next !== _discordChannel) {
-      _discordChannel = next;
-      // Keep the outbound registry in sync with the live connection. All
-      // consumers (cron, autopilot, agent-notifier, workflows) resolve the
-      // Discord sink through the registry at use time (#66).
-      if (next) runtime.registerOutbound(next);
-      else runtime.unregisterOutbound("discord");
-      if (next) console.log("[discord] Connected after config reload");
-      else console.log("[discord] Disconnected after config reload");
-    }
+    // Re-sync the outbound registry against the live channel set: register
+    // newly-connected outbound channels, unregister ones that went away (#66).
+    syncOutboundRegistry(runtime, channelManager, registeredOutbound);
   });
 
   // The CLI registers "builtin" above (top-level side-effect); plugin

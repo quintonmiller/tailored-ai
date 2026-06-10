@@ -47,7 +47,13 @@ export interface DraftConfig {
   homeDir: string;
   provider: ProviderDraft;
   tools: ToolsDraft;
-  channels: { discord: boolean };
+  /**
+   * Outbound channels keyed by channel id, mapped to enabled/disabled. The
+   * built-in `discord` channel is always seeded here (default false) so it
+   * shows as an available row even when absent from config; plugin channels
+   * add their own ids. No id is privileged.
+   */
+  channels: Record<string, boolean>;
   plugins: ResolvedPlugin[];
   /** Web UI — "builtin" serves bundled UI, "disabled" skips serving entirely. */
   ui: SlotChoice;
