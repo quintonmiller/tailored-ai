@@ -56,6 +56,7 @@ export async function generateSuggestions(
       { role: "user", content: context },
     ],
     temperature: 0.3,
+    maxTokens: suggestionsCfg.maxTokens ?? 512,
   });
 
   return {

@@ -149,8 +149,17 @@ describe("generateSuggestions", () => {
     expect(params.messages[0].content).toBe(DEFAULT_SUGGESTIONS_PROMPT);
     expect(params.messages[1].role).toBe("user");
     expect(params.messages[1].content).toContain("Needs review");
+    expect(params.maxTokens).toBe(512);
     expect(result.suggestions).toEqual(["Resume the discussion", "Triage blocked tasks"]);
     expect(result.generatedAt).toBeGreaterThan(0);
+  });
+
+  it("honors suggestions.maxTokens override", async () => {
+    const chat = chatReturning("One thing\nAnother thing");
+    const config = buildConfig();
+    config.suggestions = { ...config.suggestions, maxTokens: 128 };
+    await generateSuggestions(makeRuntime(config, chat));
+    expect(chat.mock.calls[0][0].maxTokens).toBe(128);
   });
 
   it("honors suggestions.count in the prompt and the cap", async () => {

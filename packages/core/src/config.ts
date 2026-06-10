@@ -742,6 +742,10 @@ export interface AgentConfig {
     count?: number;
     ttlMinutes?: number;
     model?: string;
+    /** Completion token cap for the generation call. Thinking models spend
+     *  reasoning tokens from this budget, so keep headroom above the
+     *  expected output length. */
+    maxTokens?: number;
   };
 }
 
