@@ -1,8 +1,8 @@
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OutboundNotifier } from "../channels/outbound.js";
 import { initDatabase } from "../db/schema.js";
 import { WorkflowEngine } from "../workflows/engine.js";
-import type { DiscordSender } from "../workflows/executors/discord-message.js";
 import { type EmailSender, NotifyExecutor } from "../workflows/executors/notify.js";
 import { WorkflowRegistry } from "../workflows/registry.js";
 
@@ -18,11 +18,12 @@ afterEach(() => {
   db.close();
 });
 
-function fakeDiscord() {
+function fakeNotifier(id = "discord"): OutboundNotifier {
   return {
+    id,
     send: vi.fn(async () => {}),
     sendDM: vi.fn(async () => {}),
-  } satisfies DiscordSender;
+  };
 }
 
 function fakeEmail() {
@@ -39,7 +40,7 @@ describe("NotifyExecutor", () => {
       registry,
       executors: [
         new NotifyExecutor({
-          getDiscord: () => undefined,
+          resolveOutbound: () => undefined,
           getOwnerId: () => undefined,
           log: (m) => logs.push(m),
         }),
@@ -54,14 +55,14 @@ describe("NotifyExecutor", () => {
     expect(logs).toEqual(["hello world"]);
   });
 
-  it("discord channel falls back to owner DM when no target is set", async () => {
-    const discord = fakeDiscord();
+  it("channel falls back to owner DM when no target is set", async () => {
+    const notifier = fakeNotifier();
     const engine = new WorkflowEngine({
       db,
       registry,
       executors: [
         new NotifyExecutor({
-          getDiscord: () => discord,
+          resolveOutbound: () => notifier,
           getOwnerId: () => "owner123",
         }),
       ],
@@ -72,17 +73,40 @@ describe("NotifyExecutor", () => {
     });
     const run = await engine.runWorkflow("wf");
     expect(run.status).toBe("completed");
-    expect(discord.sendDM).toHaveBeenCalledWith("owner123", "ping");
+    expect(notifier.sendDM).toHaveBeenCalledWith("owner123", "ping");
   });
 
-  it("discord channel honours explicit channelId", async () => {
-    const discord = fakeDiscord();
+  it("dispatches to an arbitrary registered channel id", async () => {
+    const slack = fakeNotifier("slack");
+    const resolveOutbound = vi.fn((id?: string) => (id === "slack" ? slack : undefined));
     const engine = new WorkflowEngine({
       db,
       registry,
       executors: [
         new NotifyExecutor({
-          getDiscord: () => discord,
+          resolveOutbound,
+          getOwnerId: () => "owner123",
+        }),
+      ],
+    });
+    registry.register({
+      name: "wf",
+      steps: [{ name: "ping", type: "notify", channel: "slack", message: "ping" }],
+    });
+    const run = await engine.runWorkflow("wf");
+    expect(run.status).toBe("completed");
+    expect(resolveOutbound).toHaveBeenCalledWith("slack");
+    expect(slack.sendDM).toHaveBeenCalledWith("owner123", "ping");
+  });
+
+  it("channel honours explicit channelId", async () => {
+    const notifier = fakeNotifier();
+    const engine = new WorkflowEngine({
+      db,
+      registry,
+      executors: [
+        new NotifyExecutor({
+          resolveOutbound: () => notifier,
           getOwnerId: () => "owner123",
         }),
       ],
@@ -101,8 +125,8 @@ describe("NotifyExecutor", () => {
     });
     const run = await engine.runWorkflow("wf");
     expect(run.status).toBe("completed");
-    expect(discord.send).toHaveBeenCalledWith("ch-1", "ping");
-    expect(discord.sendDM).not.toHaveBeenCalled();
+    expect(notifier.send).toHaveBeenCalledWith("ch-1", "ping");
+    expect(notifier.sendDM).not.toHaveBeenCalled();
   });
 
   it("email channel dispatches through the configured sender", async () => {
@@ -112,7 +136,7 @@ describe("NotifyExecutor", () => {
       registry,
       executors: [
         new NotifyExecutor({
-          getDiscord: () => undefined,
+          resolveOutbound: () => undefined,
           getOwnerId: () => undefined,
           getEmail: () => email,
         }),
@@ -146,7 +170,7 @@ describe("NotifyExecutor", () => {
       registry,
       executors: [
         new NotifyExecutor({
-          getDiscord: () => undefined,
+          resolveOutbound: () => undefined,
           getOwnerId: () => undefined,
         }),
       ],

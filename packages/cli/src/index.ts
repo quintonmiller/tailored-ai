@@ -203,7 +203,7 @@ async function runServer(
     if (next !== _discordChannel) {
       _discordChannel = next;
       // Keep the outbound registry in sync with the live connection. All
-      // consumers (cron, autopilot, DiscordNotifier, workflows) resolve the
+      // consumers (cron, autopilot, agent-notifier, workflows) resolve the
       // Discord sink through the registry at use time (#66).
       if (next) runtime.registerOutbound(next);
       else runtime.unregisterOutbound("discord");
@@ -216,8 +216,8 @@ async function runServer(
   // providers register on plugin import. `server.ui.enabled: false` is the
   // kill-switch — resolveUiProvider returns undefined in that case.
   const uiProvider = await resolveUiProvider(runtime);
-  // getDiscord/getOwnerId default to the runtime's outbound registry (#66),
-  // so the host no longer injects the Discord channel here.
+  // The engine resolves the outbound sink + owner from the runtime's outbound
+  // registry (#66), so the host no longer injects any channel here.
   const workflowEngine = createWorkflowEngine({
     runtime,
     db: runtime.db,
@@ -702,8 +702,8 @@ async function main() {
   const toolFactory = (cfg: typeof config, ctxDir: string, cfgPath?: string, runtimeOpts?: Record<string, unknown>) =>
     createTools(cfg, ctxDir, cfgPath, {
       ...runtimeOpts,
-      // getDiscord/getOwnerId now come from the runtime's outbound registry
-      // (#66) — the runtime wires getOutbound("discord")/getOwnerId("discord")
+      // resolveOutbound/getOwnerId now come from the runtime's outbound
+      // registry (#66) — the runtime wires resolveOutbound(id)/getOwnerId(id)
       // into runtimeOpts, so we no longer inject them here.
       // Module-scoped _taskWatcherRef gets assigned by runServer().
       // Reads lazily at tool-call time, so it's fine if undefined here.

@@ -254,7 +254,7 @@ describe("migrateDefaultPlugins — seed missing builtin: entries", () => {
       "@me/my-plugin",
       "builtin:stall-guard",
       // the three not already present, in default order
-      "builtin:discord-notifier",
+      "builtin:agent-notifier",
       "builtin:scope-creep-flagger",
       "builtin:coder-project-guard",
     ]);
@@ -271,11 +271,13 @@ describe("migrateDefaultPlugins — seed missing builtin: entries", () => {
 
   it("respects a present-but-disabled builtin (does not re-add it)", () => {
     const cfg = baseConfig();
-    cfg.plugins = [{ module: "builtin:discord-notifier", enabled: false }];
+    cfg.plugins = [{ module: "builtin:scope-creep-flagger", enabled: false }];
     migrateDefaultPlugins(cfg);
     // Disabled entry stays exactly once; only the other three are appended.
-    const discord = (cfg.plugins ?? []).filter((e) => typeof e !== "string" && e.module === "builtin:discord-notifier");
-    expect(discord).toEqual([{ module: "builtin:discord-notifier", enabled: false }]);
+    const disabled = (cfg.plugins ?? []).filter(
+      (e) => typeof e !== "string" && e.module === "builtin:scope-creep-flagger",
+    );
+    expect(disabled).toEqual([{ module: "builtin:scope-creep-flagger", enabled: false }]);
     expect(modules(cfg.plugins)).toHaveLength(DEFAULT_PLUGIN_MODULES.length);
   });
 
@@ -284,6 +286,25 @@ describe("migrateDefaultPlugins — seed missing builtin: entries", () => {
     cfg.plugins = DEFAULT_PLUGIN_MODULES.map((module) => ({ module }));
     migrateDefaultPlugins(cfg);
     expect(modules(cfg.plugins)).toEqual([...DEFAULT_PLUGIN_MODULES]);
+  });
+
+  it("rewrites the renamed builtin:discord-notifier → builtin:agent-notifier (string form)", () => {
+    const cfg = baseConfig();
+    cfg.plugins = ["builtin:discord-notifier"];
+    migrateDefaultPlugins(cfg);
+    expect(modules(cfg.plugins)).toContain("builtin:agent-notifier");
+    expect(modules(cfg.plugins)).not.toContain("builtin:discord-notifier");
+    // No duplicate agent-notifier appended afterward.
+    expect(modules(cfg.plugins).filter((m) => m === "builtin:agent-notifier")).toHaveLength(1);
+  });
+
+  it("rewrites the renamed builtin preserving enabled/config (object form)", () => {
+    const cfg = baseConfig();
+    cfg.plugins = [{ module: "builtin:discord-notifier", enabled: false, config: { foo: 1 } }];
+    migrateDefaultPlugins(cfg);
+    const entry = (cfg.plugins ?? []).find((e) => typeof e !== "string" && e.module === "builtin:agent-notifier");
+    expect(entry).toEqual({ module: "builtin:agent-notifier", enabled: false, config: { foo: 1 } });
+    expect(modules(cfg.plugins)).not.toContain("builtin:discord-notifier");
   });
 });
 
@@ -482,12 +503,20 @@ describe("loadConfig — default host", () => {
     expect(mods).toEqual([
       "@me/custom",
       "builtin:stall-guard",
-      "builtin:discord-notifier",
+      "builtin:agent-notifier",
       "builtin:scope-creep-flagger",
       "builtin:coder-project-guard",
     ]);
     // The disabled stall-guard is preserved as-is (durable off switch).
     expect(cfg.plugins?.[1]).toEqual({ module: "builtin:stall-guard", enabled: false });
+  });
+
+  it("migrates the legacy tools.discord_dm key to tools.notify_owner", () => {
+    const path = join(dir, "discord-dm.yaml");
+    writeFileSync(path, "tools:\n  discord_dm:\n    enabled: true\n");
+    const cfg = loadConfig(path);
+    expect(cfg.tools.notify_owner).toEqual({ enabled: true });
+    expect((cfg.tools as Record<string, unknown>).discord_dm).toBeUndefined();
   });
 });
 

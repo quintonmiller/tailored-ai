@@ -1,25 +1,25 @@
+import type { OutboundNotifier } from "../../channels/outbound.js";
 import type { StepContext, StepExecutor, StepResult } from "../engine.js";
 import type { FormRegistry } from "../form-registry.js";
 import { FormCancelledError } from "../form-registry.js";
 import { resolveString } from "../scope.js";
 import type { FormStep, WorkflowStepDef } from "../types.js";
-import type { DiscordSender } from "./discord-message.js";
 
 const DEFAULT_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
 export interface FormExecutorOptions {
   registry: FormRegistry;
-  /** Optional Discord plumbing for the form's notify option. */
-  getDiscord?: () => DiscordSender | undefined;
-  /** Optional Discord owner id used as the default DM target. */
-  getOwnerId?: () => string | undefined;
+  /** Resolve the outbound notifier for the form's notify option (default channel when absent). */
+  resolveOutbound?: (channelId?: string) => OutboundNotifier | undefined;
+  /** Returns the configured owner id for a channel, the default DM target. */
+  getOwnerId?: (channelId?: string) => string | undefined;
   /** Defaults to console.log — overridable in tests. */
   log?: (message: string) => void;
 }
 
 /**
  * Pauses the workflow run, persists a pending-form row, optionally fires a
- * Discord/log notification, and awaits submission via the registry.
+ * channel/log notification, and awaits submission via the registry.
  *
  * In dry-run mode the executor short-circuits with synthesized default
  * values: required fields use empty defaults (string `""`, number 0, etc.)
@@ -29,13 +29,13 @@ export interface FormExecutorOptions {
 export class FormExecutor implements StepExecutor {
   type = "form" as const;
   private registry: FormRegistry;
-  private getDiscord?: () => DiscordSender | undefined;
-  private getOwnerId?: () => string | undefined;
+  private resolveOutbound?: (channelId?: string) => OutboundNotifier | undefined;
+  private getOwnerId?: (channelId?: string) => string | undefined;
   private log: (message: string) => void;
 
   constructor(opts: FormExecutorOptions) {
     this.registry = opts.registry;
-    this.getDiscord = opts.getDiscord;
+    this.resolveOutbound = opts.resolveOutbound;
     this.getOwnerId = opts.getOwnerId;
     this.log = opts.log ?? ((m: string) => console.log(`[form] ${m}`));
   }
@@ -95,22 +95,21 @@ export class FormExecutor implements StepExecutor {
       this.log(message);
       return;
     }
-    if (step.notify.channel === "discord") {
-      const sender = this.getDiscord?.();
-      if (!sender) {
-        this.log(`Discord not connected; would have sent: ${message}`);
-        return;
-      }
-      const ownerId = this.getOwnerId?.();
-      const channelId = step.notify.channelId;
-      const userId = step.notify.userId ?? ownerId;
-      if (channelId) {
-        await sender.send(channelId, message);
-      } else if (userId) {
-        await sender.sendDM(userId, message);
-      } else {
-        this.log(`No Discord channel or user id resolved; would have sent: ${message}`);
-      }
+    const channel = step.notify.channel;
+    const sender = this.resolveOutbound?.(channel);
+    if (!sender) {
+      this.log(`channel "${channel}" not connected; would have sent: ${message}`);
+      return;
+    }
+    const ownerId = this.getOwnerId?.(channel);
+    const channelId = step.notify.channelId;
+    const userId = step.notify.userId ?? ownerId;
+    if (channelId) {
+      await sender.send(channelId, message);
+    } else if (userId) {
+      await sender.sendDM(userId, message);
+    } else {
+      this.log(`No channel or user id resolved for "${channel}"; would have sent: ${message}`);
     }
   }
 }

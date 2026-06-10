@@ -122,7 +122,7 @@ describe("StallGuard block path (out of retries)", () => {
     expect(comments[1].content).toMatch(/^STALL #2: repeated/);
     expect(comments[2].content).toMatch(/Two stalls in a row/);
 
-    // Re-emit lets DiscordNotifier (which only subscribes to agent.completed)
+    // Re-emit lets AgentNotifier (which only subscribes to agent.completed)
     // see the terminal blocked state.
     expect(completedSpy).toHaveBeenCalledTimes(1);
     expect(completedSpy.mock.calls[0][0]).toMatchObject({

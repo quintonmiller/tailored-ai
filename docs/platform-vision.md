@@ -247,7 +247,7 @@ remove the old. Suggested order:
 3. Stall guard
 4. Assignee routing + agent dispatch (the big one)
 
-The four shipped default plugins (`discord-notifier`, `scope-creep-flagger`,
+The four shipped default plugins (`agent-notifier`, `scope-creep-flagger`,
 `stall-guard`, `coder-project-guard`) load through the ordinary
 config-driven `loadPlugins` path as `builtin:*` entries in `config.plugins`
 (#142) — not hardcoded `new …()` constructions. The `builtin:` prefix

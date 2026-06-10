@@ -11,7 +11,7 @@
  *   re-fires routing with the same assignee.
  * - **Block path** (out of retries): writes a decompose-this-task
  *   comment, transitions the task to blocked, then re-emits the
- *   payload as `agent.completed` so the Discord notifier (and any
+ *   payload as `agent.completed` so the agent notifier (and any
  *   other subscriber that watches completions) sees the terminal
  *   transition.
  *
@@ -97,7 +97,7 @@ export class StallGuard {
       blocked_reason: `coder-stalled after ${attempt} attempts (suggest decomposition): ${e.stallReason}`,
     });
 
-    // Re-emit as agent.completed with the new finalTask so the Discord
+    // Re-emit as agent.completed with the new finalTask so the agent
     // notifier and other completion subscribers see the terminal state.
     // Stall guard subscribes to agent.stalled, so this won't loop.
     this.runtime.events.emit("agent.completed", {

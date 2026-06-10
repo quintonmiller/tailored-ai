@@ -1,6 +1,6 @@
 /**
  * Default-plugin `register(ctx)` entry points — #142. Each of the four
- * builtin plugins (discord-notifier, scope-creep-flagger, stall-guard,
+ * builtin plugins (agent-notifier, scope-creep-flagger, stall-guard,
  * coder-project-guard) ships a `default` export that the config-driven
  * loader calls with a {@link PluginContext}. These tests cover the shared
  * contract: the plugin subscribes when a runtime is present, returns a
@@ -13,8 +13,8 @@ import { initDatabase } from "../db/schema.js";
 import { createProjectTask, getProjectTask } from "../db/task-queries.js";
 import { TypedEventBus } from "../events.js";
 import { createPluginContext, type Plugin } from "../plugin-context.js";
+import agentNotifierPlugin from "../plugins/agent-notifier.js";
 import coderProjectGuardPlugin from "../plugins/coder-project-guard.js";
-import discordNotifierPlugin from "../plugins/discord-notifier.js";
 import scopeCreepPlugin from "../plugins/scope-creep-flagger.js";
 import stallGuardPlugin from "../plugins/stall-guard.js";
 import type { AgentRuntime } from "../runtime.js";
@@ -44,7 +44,7 @@ afterEach(() => {
 });
 
 const cases: Array<{ name: string; plugin: Plugin; event: string }> = [
-  { name: "discord-notifier", plugin: discordNotifierPlugin, event: "agent.completed" },
+  { name: "agent-notifier", plugin: agentNotifierPlugin, event: "agent.completed" },
   { name: "scope-creep-flagger", plugin: scopeCreepPlugin, event: "agent.completed" },
   { name: "stall-guard", plugin: stallGuardPlugin, event: "agent.stalled" },
   { name: "coder-project-guard", plugin: coderProjectGuardPlugin, event: "agent.dispatched" },

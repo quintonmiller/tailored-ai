@@ -36,8 +36,8 @@ afterEach(() => {
 });
 
 // Delivery filter (shouldSuppressDelivery) and envelope (buildNotification)
-// tests moved to discord-notifier.test.ts in Slice 3 of the platform vision.
-// The watcher emits agent.completed; the DiscordNotifier owns delivery.
+// tests moved to agent-notifier.test.ts in Slice 3 of the platform vision.
+// The watcher emits agent.completed; the AgentNotifier owns delivery.
 
 describe("detectStall", () => {
   it("returns the reason for max-rounds termination", () => {

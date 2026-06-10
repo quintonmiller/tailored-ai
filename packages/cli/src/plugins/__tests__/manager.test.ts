@@ -183,7 +183,7 @@ describe("PluginManager.buildImporter", () => {
     // workspace dep of the cli package under test).
     const mgr = new PluginManager(homeDir, fakeExecutor());
     const importer = mgr.buildImporter();
-    const mod = (await importer("builtin:discord-notifier")) as { default?: unknown };
+    const mod = (await importer("builtin:agent-notifier")) as { default?: unknown };
     expect(typeof mod.default).toBe("function");
   });
 

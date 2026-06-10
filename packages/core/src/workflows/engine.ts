@@ -35,7 +35,7 @@ export interface StepContext {
   engine: WorkflowEngine;
   parentStepId: string | null;
   /**
-   * Dry-run mode: side-effecting executors (notify, discord_message,
+   * Dry-run mode: side-effecting executors (notify, channel_message,
    * http_request with mutating method, shell, tool_call) check this and
    * log-only instead of executing. Read-only ops still run normally so the
    * pipeline produces realistic intermediate values.

@@ -171,7 +171,7 @@ export class PluginManager {
    *
    * The `builtin:<name>` prefix is resolved separately, ahead of the plugin
    * home lookup: it maps to a subpath export inside `@tailored-ai/core`
-   * (`builtin:discord-notifier` → `@tailored-ai/core/plugins/discord-notifier`).
+   * (`builtin:agent-notifier` → `@tailored-ai/core/plugins/agent-notifier`).
    * This is how the four default plugins load — no install required, no
    * hardcoded allowlist. An unknown `builtin:<name>` simply fails the import
    * and is handled by the loader's per-plugin error handling.
