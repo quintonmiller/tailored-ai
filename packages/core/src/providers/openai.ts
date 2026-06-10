@@ -108,6 +108,10 @@ export class OpenAIProvider implements AIProvider {
       body.max_tokens = params.maxTokens;
     }
 
+    if (params.extra) {
+      Object.assign(body, params.extra);
+    }
+
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (this.apiKey) {
       headers.Authorization = `Bearer ${this.apiKey}`;
