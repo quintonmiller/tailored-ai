@@ -84,3 +84,27 @@ Notifications:
 - The web UI's "working on" strip subscribes via `getActivity()` for live status
 
 The autopilot uses `runtime.getTaskBackend()` by default; tests override via `AutopilotWorkerOptions.taskBackend`. As of S7.5 the worker still claims one task per tick from a single backend — multi-project iteration with per-project backends is a follow-up bean.
+
+## Briefing surface
+
+The morning digest is delivered out-of-band (default channel). The **briefing** is the on-demand, in-UI counterpart: an LLM-written greeting/summary the web UI shows at the top of Home. It is off by default, so there's no behavior or token cost unless a user enables it.
+
+`packages/core/src/briefing.ts` exposes `generateBriefing(runtime)`. It assembles a compact, **data-only** context from the same queries that feed the Dashboard — blocked tasks, pending workflow forms, tasks completed in the last ~24h, recent completed/failed workflow runs, enabled cron jobs, and recent `session-summary` notes — capping each list (5) and the whole context (~1500 chars) so it stays local-model friendly. It then runs **one** provider completion using the system prompt from `config.briefing.prompt`.
+
+Config (ships in `DEFAULT_CONFIG`, all optional, disabled):
+
+```yaml
+briefing:
+  enabled: false        # master switch — when false the endpoint returns { enabled: false } with no provider call
+  prompt: <generic default>   # system prompt; replaceable per install (config is the seam, not core)
+  ttlMinutes: 30        # cache freshness window
+  model: ""             # optional model override against the active provider; omit to use the runtime default
+```
+
+Default prompt: *"You are the user's personal assistant. Write a brief, friendly briefing from the data below: a 1-2 sentence greeting summarizing the situation, then up to 3 bullet points of what needs attention, then 1 line of what's coming up. Plain language, under 120 words, no headers."*
+
+Endpoints (`packages/server`):
+- `GET /api/briefing` — `{ enabled: false }` when disabled (no provider call). When enabled, returns `{ enabled: true, content, generatedAt, stale }`: serves a fresh cached result within `ttlMinutes`, otherwise generates one. Generation is cached in process memory and single-flighted, so concurrent requests await the same completion.
+- `POST /api/briefing/refresh` — force a regenerate; `429` if a generation is already running.
+
+Model override: `briefing.model` swaps the model used against the active provider. A per-agent override (resolving a *different* provider via `resolveAgent`) was scoped but deferred — wiring a distinct provider instance per agent is heavier than the model swap, so it's a follow-up; use `model` for now.
