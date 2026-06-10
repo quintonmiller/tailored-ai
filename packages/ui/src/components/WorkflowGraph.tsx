@@ -53,7 +53,7 @@ const STEP_TYPES: WorkflowStepType[] = [
   "condition",
   "loop",
   "parallel",
-  "discord_message",
+  "channel_message",
   "trigger_workflow",
   "http_request",
   "notify",

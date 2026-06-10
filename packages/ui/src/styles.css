@@ -4795,7 +4795,7 @@ select.model-entry-model {
 .wf-node-agent_run { border-color: rgba(180, 140, 230, 0.6); }
 .wf-node-tool_call { border-color: rgba(140, 200, 180, 0.6); }
 .wf-node-shell { border-color: rgba(200, 180, 120, 0.6); }
-.wf-node-discord_message { border-color: rgba(120, 180, 220, 0.6); }
+.wf-node-channel_message { border-color: rgba(120, 180, 220, 0.6); }
 .wf-node-trigger_workflow { border-color: rgba(220, 160, 200, 0.6); }
 .wf-node-condition { border-color: rgba(220, 180, 140, 0.6); }
 .wf-node-loop { border-color: rgba(140, 180, 220, 0.6); }

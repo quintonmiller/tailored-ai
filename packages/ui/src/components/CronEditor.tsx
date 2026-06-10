@@ -23,20 +23,19 @@ interface CronConfig {
   jobs: CronJob[];
 }
 
-// UI presets over the open `{ channel, mode, target }` delivery shape. "log"
-// is the console-only sentinel; the discord presets map onto channel id
-// "discord" + the matching mode.
-const DELIVERY_PRESETS = ["log", "discord", "discord-dm"] as const;
-type DeliveryPreset = (typeof DELIVERY_PRESETS)[number];
+// UI modes over the open `{ channel, mode, target }` delivery shape. "log" is
+// the console-only sentinel (stored as `{ channel: "log" }`); "channel" posts
+// to a channel/thread and "dm" DMs a user. The channel id is open free-text.
+type DeliveryMode = "log" | "channel" | "dm";
 
-function deliveryToPreset(delivery: CronJob["delivery"]): DeliveryPreset {
+function deliveryToMode(delivery: CronJob["delivery"]): DeliveryMode {
   if (!delivery || !delivery.channel || delivery.channel === "log") return "log";
-  return delivery.mode === "dm" ? "discord-dm" : "discord";
+  return delivery.mode === "dm" ? "dm" : "channel";
 }
 
-function presetToDelivery(preset: DeliveryPreset, target?: string): CronJob["delivery"] {
-  if (preset === "log") return undefined;
-  return { channel: "discord", mode: preset === "discord-dm" ? "dm" : "channel", target };
+function buildDelivery(mode: DeliveryMode, channel?: string, target?: string): CronJob["delivery"] {
+  if (mode === "log") return { channel: "log" };
+  return { channel: channel || undefined, mode, target };
 }
 
 const DEFAULTS: CronConfig = {
@@ -188,37 +187,62 @@ export function CronEditor() {
             </div>
 
             <div className="field-group" style={{ flex: 1 }}>
-              <label className="field-label">Delivery Channel</label>
+              <label className="field-label">Delivery Mode</label>
               <select
                 className="field-select"
-                value={deliveryToPreset(job.delivery)}
+                value={deliveryToMode(job.delivery)}
                 onChange={(e) => {
-                  const preset = e.target.value as DeliveryPreset;
-                  updateJob(i, "delivery", presetToDelivery(preset, job.delivery?.target));
+                  const mode = e.target.value as DeliveryMode;
+                  updateJob(i, "delivery", buildDelivery(mode, job.delivery?.channel, job.delivery?.target));
                 }}
               >
                 <option value="log">log (stdout)</option>
-                <option value="discord">discord</option>
-                <option value="discord-dm">discord-dm</option>
+                <option value="channel">channel</option>
+                <option value="dm">dm</option>
               </select>
             </div>
           </div>
 
-          {deliveryToPreset(job.delivery) !== "log" && (
-            <div className="field-group">
-              <label className="field-label">Delivery Target</label>
-              <input
-                className="field-input"
-                value={job.delivery?.target ?? ""}
-                onChange={(e) =>
-                  updateJob(
-                    i,
-                    "delivery",
-                    presetToDelivery(deliveryToPreset(job.delivery), e.target.value || undefined),
-                  )
-                }
-                placeholder="Channel ID"
-              />
+          {deliveryToMode(job.delivery) !== "log" && (
+            <div style={{ display: "flex", gap: 12 }}>
+              <div className="field-group" style={{ flex: 1 }}>
+                <label className="field-label" htmlFor={`cron-delivery-channel-${i}`}>
+                  Delivery Channel
+                </label>
+                <input
+                  id={`cron-delivery-channel-${i}`}
+                  className="field-input"
+                  value={job.delivery?.channel ?? ""}
+                  onChange={(e) =>
+                    updateJob(
+                      i,
+                      "delivery",
+                      buildDelivery(deliveryToMode(job.delivery), e.target.value || undefined, job.delivery?.target),
+                    )
+                  }
+                  placeholder="default channel"
+                />
+              </div>
+              <div className="field-group" style={{ flex: 1 }}>
+                <label className="field-label" htmlFor={`cron-delivery-target-${i}`}>
+                  Delivery Target (optional)
+                </label>
+                <input
+                  id={`cron-delivery-target-${i}`}
+                  className="field-input"
+                  value={job.delivery?.target ?? ""}
+                  onChange={(e) =>
+                    updateJob(
+                      i,
+                      "delivery",
+                      buildDelivery(deliveryToMode(job.delivery), job.delivery?.channel, e.target.value || undefined),
+                    )
+                  }
+                  placeholder={
+                    deliveryToMode(job.delivery) === "dm" ? "User ID (optional)" : "Channel/thread ID (optional)"
+                  }
+                />
+              </div>
             </div>
           )}
 
