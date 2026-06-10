@@ -40,7 +40,7 @@ import "./tools/builtin-optional.js";
 import type { AgentRuntime } from "./runtime.js";
 
 export interface CreateToolsOptions {
-  getDiscord?: () => any;
+  getDiscord?: () => import("./channels/outbound.js").OutboundNotifier | undefined;
   getOwnerId?: () => string | undefined;
   db?: import("better-sqlite3").Database;
   /** Override the task backend. Defaults to `createTaskBackend(config, db)` when `db` is provided. */
