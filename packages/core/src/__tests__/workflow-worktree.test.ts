@@ -19,6 +19,7 @@ function initRepo(): string {
   git(dir, "init", "--initial-branch=main");
   git(dir, "config", "user.email", "test@example.com");
   git(dir, "config", "user.name", "Test");
+  git(dir, "config", "commit.gpgsign", "false");
   writeFileSync(join(dir, "README.md"), "initial\n");
   git(dir, "add", "README.md");
   git(dir, "commit", "-m", "init");

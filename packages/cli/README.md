@@ -45,7 +45,7 @@ providers:
   #   defaultModel: gpt-4o
   # anthropic:
   #   apiKey: ${ANTHROPIC_API_KEY}
-  #   defaultModel: claude-sonnet-4-5-20250929
+  #   defaultModel: claude-sonnet-4-6
 
 agent:
   defaultProvider: openai_compatible

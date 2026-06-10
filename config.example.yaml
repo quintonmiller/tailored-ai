@@ -13,7 +13,7 @@ providers:
   #   baseUrl: https://api.openai.com/v1   # optional, for OpenAI-compatible APIs
   # anthropic:
   #   apiKey: ${ANTHROPIC_API_KEY}
-  #   defaultModel: claude-sonnet-4-5-20250929
+  #   defaultModel: claude-sonnet-4-6
   #   baseUrl: https://api.anthropic.com   # optional
 agent:
   defaultProvider: ollama
