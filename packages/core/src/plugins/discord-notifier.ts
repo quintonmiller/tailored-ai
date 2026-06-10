@@ -18,36 +18,28 @@
  *
  * The class is constructed by the host (CLI / server / tests) with a
  * runtime ref. It subscribes on construction and disposes its
- * subscription on `stop()`. The notifier (the actual Discord channel)
- * is mutable via `setNotifier()` so the host can swap it on connect /
- * disconnect / config-reload without rebuilding the subscriber.
+ * subscription on `stop()`. The live Discord sink is resolved at
+ * delivery time from the runtime's outbound registry
+ * (`runtime.getOutbound("discord")`), so connect / disconnect /
+ * config-reload swaps are picked up automatically without rebuilding
+ * the subscriber.
  */
 
 import type Database from "better-sqlite3";
-import { getDiscordConfig } from "../channels/discord-config.js";
-import type { OutboundNotifier } from "../channels/outbound.js";
 import type { RuntimeEventPayload, Subscription } from "../events.js";
 import type { AgentRuntime } from "../runtime.js";
 
 export interface DiscordNotifierOptions {
   runtime: AgentRuntime;
-  /** Initial notifier; may be undefined when Discord hasn't connected yet. */
-  notifier?: OutboundNotifier;
 }
 
 export class DiscordNotifier {
   private runtime: AgentRuntime;
-  private notifier?: OutboundNotifier;
   private subscription: Subscription;
 
   constructor(opts: DiscordNotifierOptions) {
     this.runtime = opts.runtime;
-    this.notifier = opts.notifier;
     this.subscription = this.runtime.events.on("agent.completed", (e) => this.handle(e));
-  }
-
-  setNotifier(notifier: OutboundNotifier | undefined): void {
-    this.notifier = notifier;
   }
 
   stop(): void {
@@ -104,26 +96,28 @@ export class DiscordNotifier {
         console.error(`${logPrefix} discord delivery configured but no target channel ID`);
         return;
       }
-      if (!this.notifier) {
+      const out = this.runtime.getOutbound("discord");
+      if (!out) {
         console.error(`${logPrefix} discord delivery configured but Discord is not connected`);
         return;
       }
-      await this.notifier.send(target, response);
+      await out.send(target, response);
       console.log(`${logPrefix} Delivered to Discord channel ${target}`);
       return;
     }
 
     if (channel === "discord-dm") {
-      const target = config.delivery?.target ?? getDiscordConfig(this.runtime.getConfig())?.owner;
+      const target = config.delivery?.target ?? this.runtime.getOwnerId("discord");
       if (!target) {
         console.error(`${logPrefix} discord-dm delivery configured but no target user ID or discord owner`);
         return;
       }
-      if (!this.notifier) {
+      const out = this.runtime.getOutbound("discord");
+      if (!out) {
         console.error(`${logPrefix} discord-dm delivery configured but Discord is not connected`);
         return;
       }
-      await this.notifier.sendDM(target, response);
+      await out.sendDM(target, response);
       console.log(`${logPrefix} Delivered as DM to user ${target}`);
       return;
     }

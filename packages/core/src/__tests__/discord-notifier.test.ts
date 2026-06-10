@@ -15,8 +15,12 @@ import type { AgentRuntime } from "../runtime.js";
 
 let db: Database.Database;
 
-function makeRuntime(over: Record<string, unknown> = {}): AgentRuntime {
+function makeRuntime(
+  over: Record<string, unknown> = {},
+  outbound?: { id?: string; send: (...a: unknown[]) => unknown; sendDM: (...a: unknown[]) => unknown },
+): AgentRuntime {
   const events = new TypedEventBus();
+  const sink = outbound ? { id: "discord", ...outbound } : undefined;
   return {
     db,
     events,
@@ -26,6 +30,10 @@ function makeRuntime(over: Record<string, unknown> = {}): AgentRuntime {
       taskWatcher: { enabled: true, delivery: { channel: "log" } },
       ...over,
     }),
+    // Mirror the real runtime's outbound registry: the DiscordNotifier
+    // resolves its sink by channel id at delivery time (#66).
+    getOutbound: (id: string) => (id === "discord" ? sink : undefined),
+    getOwnerId: (id?: string) => (id === "discord" || id === undefined ? "1234" : undefined),
   } as unknown as AgentRuntime;
 }
 
@@ -135,12 +143,12 @@ describe("DiscordNotifier envelope (buildNotification)", () => {
 
 describe("DiscordNotifier subscription to agent.completed", () => {
   it("delivers via the configured channel notifier when status is terminal", async () => {
-    const runtime = makeRuntime({
-      taskWatcher: { enabled: true, delivery: { channel: "discord-dm", target: "user-abc" } },
-    });
     const sendDM = vi.fn().mockResolvedValue(undefined);
-    const notifier = { send: vi.fn(), sendDM } as any;
-    const n = new DiscordNotifier({ runtime, notifier });
+    const runtime = makeRuntime(
+      { taskWatcher: { enabled: true, delivery: { channel: "discord-dm", target: "user-abc" } } },
+      { send: vi.fn(), sendDM },
+    );
+    const n = new DiscordNotifier({ runtime });
 
     const task = createProjectTask(db, { title: "Ship it" });
     runtime.events.emit("agent.completed", {
@@ -161,12 +169,12 @@ describe("DiscordNotifier subscription to agent.completed", () => {
   });
 
   it("does NOT deliver when an agent is still in-flight", async () => {
-    const runtime = makeRuntime({
-      taskWatcher: { enabled: true, delivery: { channel: "discord-dm", target: "user-abc" } },
-    });
     const sendDM = vi.fn();
-    const notifier = { send: vi.fn(), sendDM } as any;
-    const n = new DiscordNotifier({ runtime, notifier });
+    const runtime = makeRuntime(
+      { taskWatcher: { enabled: true, delivery: { channel: "discord-dm", target: "user-abc" } } },
+      { send: vi.fn(), sendDM },
+    );
+    const n = new DiscordNotifier({ runtime });
 
     const task = createProjectTask(db, { title: "Mid-handoff" });
     runtime.events.emit("agent.completed", {
@@ -184,12 +192,12 @@ describe("DiscordNotifier subscription to agent.completed", () => {
   });
 
   it("logs (no DM) when delivery channel is 'log'", async () => {
-    const runtime = makeRuntime({
-      taskWatcher: { enabled: true, delivery: { channel: "log" } },
-    });
     const sendDM = vi.fn();
-    const notifier = { send: vi.fn(), sendDM } as any;
-    const n = new DiscordNotifier({ runtime, notifier });
+    const runtime = makeRuntime(
+      { taskWatcher: { enabled: true, delivery: { channel: "log" } } },
+      { send: vi.fn(), sendDM },
+    );
+    const n = new DiscordNotifier({ runtime });
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
     const task = createProjectTask(db, { title: "logged" });
@@ -210,12 +218,12 @@ describe("DiscordNotifier subscription to agent.completed", () => {
   });
 
   it("stop() disposes the subscription so later events are ignored", async () => {
-    const runtime = makeRuntime({
-      taskWatcher: { enabled: true, delivery: { channel: "discord-dm", target: "user-abc" } },
-    });
     const sendDM = vi.fn();
-    const notifier = { send: vi.fn(), sendDM } as any;
-    const n = new DiscordNotifier({ runtime, notifier });
+    const runtime = makeRuntime(
+      { taskWatcher: { enabled: true, delivery: { channel: "discord-dm", target: "user-abc" } } },
+      { send: vi.fn(), sendDM },
+    );
+    const n = new DiscordNotifier({ runtime });
     n.stop();
 
     const task = createProjectTask(db, { title: "ignored" });

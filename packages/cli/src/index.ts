@@ -54,7 +54,6 @@ import { PluginManager } from "./plugins/manager.js";
 import { runSetupWizard, type SetupMode } from "./setup.js";
 
 let _discordChannel: import("@tailored-ai/core").DiscordChannel | undefined;
-let _discordNotifier: import("@tailored-ai/core").OutboundNotifier | undefined;
 
 const USAGE = `
 Usage: tai [options]
@@ -133,11 +132,9 @@ async function runServer(runtime: AgentRuntime) {
   const channels: { name: string; disconnect: () => Promise<void> }[] = [];
 
   _discordChannel = channelManager.get("discord")?.channel as DiscordChannel | undefined;
-  _discordNotifier = _discordChannel;
-  const notifier = _discordNotifier;
   // Publish the live Discord sink into the runtime's outbound registry so
-  // channel-id consumers (cron today; autopilot/notifier/workflows next)
-  // resolve it by id instead of constructor injection (#66).
+  // channel-id consumers (cron, autopilot, notifier, workflows) resolve it by
+  // id instead of constructor injection (#66).
   if (_discordChannel) runtime.registerOutbound(_discordChannel);
 
   const scheduler = new CronScheduler({ runtime });
@@ -152,9 +149,11 @@ async function runServer(runtime: AgentRuntime) {
 
   // Discord delivery moved out of the watcher in Slice 3 of the platform
   // vision. The watcher emits `agent.completed`; this notifier
-  // subscribes and decides whether to deliver. Users on Slack /
-  // Telegram / email replace this with their own plugin.
-  const discordNotifier = new DiscordNotifier({ runtime, notifier });
+  // subscribes and decides whether to deliver. It resolves the live
+  // Discord sink from the runtime's outbound registry at delivery time
+  // (#66). Users on Slack / Telegram / email replace this with their
+  // own plugin.
+  const discordNotifier = new DiscordNotifier({ runtime });
   // Scope-creep flagger: subscribes to agent.completed and writes a
   // SCOPE WARNING comment when the coder hands off a branch that
   // contains commits for other ptask_ ids. Replaces the watcher's
@@ -197,13 +196,11 @@ async function runServer(runtime: AgentRuntime) {
     const next = channelManager.get("discord")?.channel as DiscordChannel | undefined;
     if (next !== _discordChannel) {
       _discordChannel = next;
-      _discordNotifier = next;
-      // Keep the outbound registry in sync with the live connection. Cron now
-      // resolves through it; the still-injected DiscordNotifier hot-swaps until
-      // it migrates to the registry too (#142).
+      // Keep the outbound registry in sync with the live connection. All
+      // consumers (cron, autopilot, DiscordNotifier, workflows) resolve the
+      // Discord sink through the registry at use time (#66).
       if (next) runtime.registerOutbound(next);
       else runtime.unregisterOutbound("discord");
-      discordNotifier.setNotifier(next);
       if (next) console.log("[discord] Connected after config reload");
       else console.log("[discord] Disconnected after config reload");
     }
