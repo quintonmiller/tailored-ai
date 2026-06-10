@@ -247,7 +247,7 @@ export interface CronJobRow {
   agent: string | null;
   enabled: number;
   last_run: string | null;
-  delivery: { channel: string; target?: string } | null;
+  delivery: { channel?: string; mode?: "channel" | "dm"; target?: string } | null;
   in_db: boolean;
 }
 

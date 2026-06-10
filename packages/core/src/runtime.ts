@@ -165,6 +165,8 @@ export class AgentRuntime {
         taskBackendResolver: (projectId?: string | null) => this.getTaskBackendForProject(projectId),
         getEmbedder: () => this._embedder,
         getMemoryBackend: () => this.getMemoryBackend(),
+        getDiscord: () => this.getOutbound("discord"),
+        getOwnerId: () => this.getOwnerId("discord"),
         events: this.events,
       }) ?? [];
     for (const tool of builtinTools) this._toolRegistry.registerBuiltin(tool);
@@ -763,9 +765,8 @@ export class AgentRuntime {
    * `channelId` when given, else the deployment's primary channel
    * ({@link getPrimaryOwner}, which honors `config.defaultChannel`). Returns
    * undefined when the resolved channel has no live notifier registered (e.g.
-   * it isn't connected). Callers that hardcode a transport (a `delivery.channel`
-   * union still pinned to `"discord"`) should use {@link getOutbound} directly
-   * until that union is opened.
+   * it isn't connected). Callers that resolve a specific configured channel id
+   * (an open `delivery.channel`) should use {@link getOutbound} directly.
    */
   resolveOutbound(channelId?: string): OutboundNotifier | undefined {
     return this.getOutbound(channelId ?? this.getPrimaryOwner().channelId);
