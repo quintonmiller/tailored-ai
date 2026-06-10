@@ -4,7 +4,7 @@
  * so the Discord channel — like any plugin channel — owns its own schema and
  * parses its slice itself. This module is intentionally dependency-light (no
  * `discord.js`) so the notification paths that only need the owner id
- * (task-watcher, cron scheduler, discord-notifier, CLI) can import it without
+ * (task-watcher, cron scheduler, agent-notifier, CLI) can import it without
  * pulling in the gateway client.
  */
 

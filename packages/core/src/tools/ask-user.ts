@@ -8,13 +8,13 @@ import type { Tool, ToolContext, ToolResult } from "./interface.js";
 
 export interface AskUserToolOptions {
   contextDir: string;
-  getDiscord: () => OutboundNotifier | undefined;
+  resolveOutbound: () => OutboundNotifier | undefined;
   getOwnerId: () => string | undefined;
 }
 
 export class AskUserTool implements Tool {
   name = "ask_user";
-  description = "Ask the user a question. Records in inbox.md and sends a Discord DM.";
+  description = "Ask the user a question. Records in inbox.md and notifies the owner through the default channel.";
   parameters = {
     type: "object",
     properties: {
@@ -27,12 +27,12 @@ export class AskUserTool implements Tool {
   };
 
   private contextDir: string;
-  private getDiscord: () => OutboundNotifier | undefined;
+  private resolveOutbound: () => OutboundNotifier | undefined;
   private getOwnerId: () => string | undefined;
 
   constructor(opts: AskUserToolOptions) {
     this.contextDir = opts.contextDir;
-    this.getDiscord = opts.getDiscord;
+    this.resolveOutbound = opts.resolveOutbound;
     this.getOwnerId = opts.getOwnerId;
   }
 
@@ -57,13 +57,13 @@ export class AskUserTool implements Tool {
         return { success: false, output: "", error: `Failed to block task: ${(err as Error).message}` };
       }
 
-      const discord = this.getDiscord();
+      const out = this.resolveOutbound();
       const ownerId = this.getOwnerId();
       const settings = getAutopilotSettings(context.db);
       const quiet = isInQuietHours(settings);
-      if (discord && ownerId && !quiet) {
+      if (out && ownerId && !quiet) {
         try {
-          await discord.sendDM(ownerId, `Task ${context.autopilotTaskId} is blocked — agent needs input:\n${question}`);
+          await out.sendDM(ownerId, `Task ${context.autopilotTaskId} is blocked — agent needs input:\n${question}`);
         } catch {
           // Best-effort notification; don't fail the tool on DM failure.
         }
@@ -96,15 +96,15 @@ export class AskUserTool implements Tool {
       return { success: false, output: "", error: `Failed to write inbox: ${(err as Error).message}` };
     }
 
-    // Send Discord DM if available
-    const discord = this.getDiscord();
+    // Send a channel DM if available
+    const out = this.resolveOutbound();
     const ownerId = this.getOwnerId();
-    if (discord && ownerId) {
+    if (out && ownerId) {
       try {
-        await discord.sendDM(ownerId, `Question from autonomous agent:\n${question}`);
-        channels.push("discord DM");
+        await out.sendDM(ownerId, `Question from autonomous agent:\n${question}`);
+        channels.push(`${out.id} DM`);
       } catch (err) {
-        channels.push(`discord DM failed: ${(err as Error).message}`);
+        channels.push(`${out.id} DM failed: ${(err as Error).message}`);
       }
     }
 

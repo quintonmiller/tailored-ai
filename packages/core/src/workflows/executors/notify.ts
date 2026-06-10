@@ -1,7 +1,7 @@
+import type { OutboundNotifier } from "../../channels/outbound.js";
 import type { StepContext, StepExecutor, StepResult } from "../engine.js";
 import { resolveString } from "../scope.js";
 import type { NotifyStep, WorkflowStepDef } from "../types.js";
-import type { DiscordSender } from "./discord-message.js";
 
 /**
  * Backend that delivers email notifications. Plumbed through here so the
@@ -14,8 +14,10 @@ export interface EmailSender {
 }
 
 export interface NotifyExecutorOptions {
-  getDiscord: () => DiscordSender | undefined;
-  getOwnerId: () => string | undefined;
+  /** Resolve the outbound notifier for an optional channel id (default channel when absent). */
+  resolveOutbound: (channelId?: string) => OutboundNotifier | undefined;
+  /** Returns the configured owner user id for a channel, the default DM target. */
+  getOwnerId: (channelId?: string) => string | undefined;
   /** Default email recipients when `to` is omitted on the step. */
   getDefaultEmailRecipients?: () => string[];
   /** Email sender, optional — when absent, email channel surfaces a clear error. */
@@ -25,20 +27,21 @@ export interface NotifyExecutorOptions {
 }
 
 /**
- * Multi-channel notification dispatcher. Discord goes through the existing
- * Discord sender; email goes through the optional EmailSender; the `log`
- * channel just writes to stdout (cheap default + handy for dry-runs).
+ * Multi-channel notification dispatcher. `email` goes through the optional
+ * EmailSender; `log` just writes to stdout (cheap default + handy for
+ * dry-runs); every other channel string resolves an outbound notifier from the
+ * runtime's registry and posts/DMs through it.
  */
 export class NotifyExecutor implements StepExecutor {
   type = "notify" as const;
-  private getDiscord: () => DiscordSender | undefined;
-  private getOwnerId: () => string | undefined;
+  private resolveOutbound: (channelId?: string) => OutboundNotifier | undefined;
+  private getOwnerId: (channelId?: string) => string | undefined;
   private getEmail?: () => EmailSender | undefined;
   private getDefaultRecipients?: () => string[];
   private log: (message: string) => void;
 
   constructor(opts: NotifyExecutorOptions) {
-    this.getDiscord = opts.getDiscord;
+    this.resolveOutbound = opts.resolveOutbound;
     this.getOwnerId = opts.getOwnerId;
     this.getEmail = opts.getEmail;
     this.getDefaultRecipients = opts.getDefaultEmailRecipients;
@@ -53,35 +56,33 @@ export class NotifyExecutor implements StepExecutor {
       return { output: { delivered: "dry-run", channel: s.channel, message } };
     }
     switch (s.channel) {
-      case "discord":
-        return this.dispatchDiscord(s, ctx, message);
       case "email":
         return this.dispatchEmail(s, ctx, message);
       case "log":
         this.log(message);
         return { output: { delivered: "log", message } };
       default:
-        throw new Error(`notify "${s.name}": unknown channel "${(s as { channel: string }).channel}"`);
+        return this.dispatchChannel(s, ctx, message);
     }
   }
 
-  private async dispatchDiscord(s: NotifyStep, ctx: StepContext, message: string): Promise<StepResult> {
-    const discord = this.getDiscord();
-    if (!discord) {
-      throw new Error(`notify "${s.name}": Discord is not connected`);
+  private async dispatchChannel(s: NotifyStep, ctx: StepContext, message: string): Promise<StepResult> {
+    const out = this.resolveOutbound(s.channel);
+    if (!out) {
+      throw new Error(`notify "${s.name}": channel "${s.channel}" is not connected`);
     }
     if (s.channelId) {
       const channelId = String(resolveString(s.channelId, ctx.scope) ?? "");
-      await discord.send(channelId, message);
-      return { output: { delivered: "discord-channel", target: channelId, message } };
+      await out.send(channelId, message);
+      return { output: { delivered: "channel-post", target: channelId, message } };
     }
     const explicit = s.userId ? String(resolveString(s.userId, ctx.scope) ?? "") : undefined;
-    const userId = explicit || this.getOwnerId();
+    const userId = explicit || this.getOwnerId(s.channel);
     if (!userId) {
-      throw new Error(`notify "${s.name}": no channelId or userId provided and no Discord owner configured`);
+      throw new Error(`notify "${s.name}": no channelId or userId provided and no owner configured for "${s.channel}"`);
     }
-    await discord.sendDM(userId, message);
-    return { output: { delivered: "discord-dm", target: userId, message } };
+    await out.sendDM(userId, message);
+    return { output: { delivered: "channel-dm", target: userId, message } };
   }
 
   private async dispatchEmail(s: NotifyStep, ctx: StepContext, message: string): Promise<StepResult> {

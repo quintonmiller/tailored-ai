@@ -51,8 +51,8 @@ export interface RuntimeOptions {
     configPath?: string,
     opts?: {
       db?: Database.Database;
-      getDiscord?: () => any;
-      getOwnerId?: () => string | undefined;
+      resolveOutbound?: (channelId?: string) => OutboundNotifier | undefined;
+      getOwnerId?: (channelId?: string) => string | undefined;
       taskBackend?: TaskBackend;
       taskBackendResolver?: import("./tools/tasks.js").TaskBackendResolver;
       getEmbedder?: () => import("./providers/embedding.js").EmbeddingProvider | undefined;
@@ -165,8 +165,8 @@ export class AgentRuntime {
         taskBackendResolver: (projectId?: string | null) => this.getTaskBackendForProject(projectId),
         getEmbedder: () => this._embedder,
         getMemoryBackend: () => this.getMemoryBackend(),
-        getDiscord: () => this.getOutbound("discord"),
-        getOwnerId: () => this.getOwnerId("discord"),
+        resolveOutbound: (id?: string) => this.resolveOutbound(id),
+        getOwnerId: (id?: string) => this.getOwnerId(id),
         events: this.events,
       }) ?? [];
     for (const tool of builtinTools) this._toolRegistry.registerBuiltin(tool);
@@ -447,6 +447,8 @@ export class AgentRuntime {
           taskBackendResolver: (projectId?: string | null) => this.getTaskBackendForProject(projectId),
           getEmbedder: () => embedder,
           getMemoryBackend: () => this.getMemoryBackend(),
+          resolveOutbound: (id?: string) => this.resolveOutbound(id),
+          getOwnerId: (id?: string) => this.getOwnerId(id),
           events: this.events,
         }) ?? [];
       const { provider, model } = this._createProvider(config);

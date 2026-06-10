@@ -5,7 +5,7 @@ export type StepType =
   | "condition"
   | "loop"
   | "parallel"
-  | "discord_message"
+  | "channel_message"
   | "trigger_workflow"
   | "http_request"
   | "notify"
@@ -97,14 +97,18 @@ export interface ParallelStep extends BaseStep {
 }
 
 /**
- * Send a Discord message. Reuses the configured Discord channel; the target
- * defaults to the owner DM when neither `channelId` nor `userId` is provided.
+ * Send a message through a communication channel. Resolves the outbound
+ * channel from `channel` (an outbound channel id) or the default channel when
+ * absent; the target defaults to the owner DM when neither `channelId` nor
+ * `userId` is provided.
  */
-export interface DiscordMessageStep extends BaseStep {
-  type: "discord_message";
+export interface ChannelMessageStep extends BaseStep {
+  type: "channel_message";
   /** Message body. Supports `${steps.X.output}` / `${input.field}` expressions. */
   message: string;
-  /** Optional override: post to a specific channel ID. */
+  /** Optional outbound channel id (e.g. "discord", "slack"). Absent = default channel. */
+  channel?: string;
+  /** Optional override: post to a specific channel/thread id within the channel. */
   channelId?: string;
   /** Optional override: DM a specific user ID. */
   userId?: string;
@@ -156,15 +160,13 @@ export interface HttpRequestStep extends BaseStep {
 }
 
 /**
- * Multi-channel notification. Generalizes `discord_message` to also support
- * email and a log channel, with web-push to follow once the VAPID surface
- * lands. The shape is intentionally flat — the `channel` discriminator
- * selects which optional target field is consulted.
- *
- * `discord_message` remains as a legacy alias; the engine routes both to the
- * same underlying notify executor.
+ * Multi-channel notification. The `channel` discriminator is an open string:
+ * `"email"` routes through the email backend, `"log"` writes to stdout, and
+ * any other value is treated as an outbound channel id (e.g. "discord",
+ * "slack") resolved from the runtime's outbound registry. The shape is
+ * intentionally flat — `channel` selects which optional target field applies.
  */
-export type NotifyChannel = "discord" | "email" | "log";
+export type NotifyChannel = string;
 
 export interface NotifyStep extends BaseStep {
   type: "notify";
@@ -174,9 +176,9 @@ export interface NotifyStep extends BaseStep {
   message: string;
   /** Optional subject line. Used by `email`; ignored by other channels. */
   subject?: string;
-  /** Optional Discord channel ID (channel: "discord"). */
+  /** Optional target channel/thread id (channel-message channels). */
   channelId?: string;
-  /** Optional Discord user ID for DM (channel: "discord"). */
+  /** Optional user id for a DM (channel-message channels). */
   userId?: string;
   /** Optional comma-separated email recipients (channel: "email"). */
   to?: string;
@@ -204,9 +206,13 @@ export interface FormStep extends BaseStep {
   fields: WorkflowInputsSchema;
   /** Optional notification fired when the form goes pending. */
   notify?: {
-    /** Notification channel. Only `discord` and `log` supported today. */
-    channel: "discord" | "log";
-    /** Optional Discord channel/user override. */
+    /**
+     * Notification channel. `"log"` writes to stdout; any other value is an
+     * outbound channel id (e.g. "discord", "slack") resolved from the
+     * runtime's outbound registry.
+     */
+    channel: string;
+    /** Optional target channel/thread id or user id override. */
     channelId?: string;
     userId?: string;
     /** Overrides the default "Form '<name>' needs your input" message. */
@@ -262,7 +268,7 @@ export type WorkflowStepDef =
   | ConditionStep
   | LoopStep
   | ParallelStep
-  | DiscordMessageStep
+  | ChannelMessageStep
   | TriggerWorkflowStep
   | HttpRequestStep
   | NotifyStep
