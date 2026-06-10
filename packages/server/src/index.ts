@@ -1955,7 +1955,6 @@ export function createServer(opts: ServerOptions) {
   // --- Config section endpoints (generic read/write for YAML sections) ---
 
   const SECTION_MAP: Record<string, string[]> = {
-    discord: ["channels", "discord"],
     agents: ["agents"],
     profiles: ["agents"], // deprecated alias, maps to agents
     custom_tools: ["custom_tools"],
@@ -1969,9 +1968,24 @@ export function createServer(opts: ServerOptions) {
     workflows: ["workflows"],
   };
 
+  /**
+   * Resolve a config-section key to its dotted path in the YAML document.
+   * Static sections live in SECTION_MAP; per-channel config uses the open
+   * `channels.<id>` pattern (e.g. `channels.discord` → `["channels", "discord"]`),
+   * so channels register their own config page without a hardcoded list here.
+   */
+  function resolveSectionPath(key: string): string[] | undefined {
+    if (key.startsWith("channels.")) {
+      const id = key.slice("channels.".length);
+      if (!id || id.includes(".")) return undefined;
+      return ["channels", id];
+    }
+    return SECTION_MAP[key];
+  }
+
   app.get("/api/config/section/:key", (c) => {
     const key = c.req.param("key");
-    const path = SECTION_MAP[key];
+    const path = resolveSectionPath(key);
     if (!path) {
       return c.json({ error: `Unknown section "${key}"` }, 404);
     }
@@ -1986,7 +2000,7 @@ export function createServer(opts: ServerOptions) {
 
   app.put("/api/config/section/:key", async (c) => {
     const key = c.req.param("key");
-    const path = SECTION_MAP[key];
+    const path = resolveSectionPath(key);
     if (!path) {
       return c.json({ error: `Unknown section "${key}"` }, 404);
     }

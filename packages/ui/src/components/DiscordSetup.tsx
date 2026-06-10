@@ -25,7 +25,7 @@ export function DiscordSetup() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchConfigSection<DiscordConfig | null>("discord")
+    fetchConfigSection<DiscordConfig | null>("channels.discord")
       .then((res) => {
         if (res.data) setData({ ...DEFAULTS, ...res.data });
       })
@@ -36,7 +36,7 @@ export function DiscordSetup() {
   async function handleSave() {
     setStatus({ type: "saving" });
     try {
-      const result = await saveConfigSection("discord", data);
+      const result = await saveConfigSection("channels.discord", data);
       if (result.error) {
         setStatus({ type: "error", message: result.error });
       } else {

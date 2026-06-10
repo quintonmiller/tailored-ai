@@ -57,7 +57,7 @@ export const STEP_TYPE_LABELS: Record<WorkflowStepType, string> = {
   condition: "Branch on condition",
   loop: "Loop over items",
   parallel: "Run in parallel",
-  discord_message: "Send Discord message",
+  channel_message: "Send channel message",
   trigger_workflow: "Trigger another workflow",
   http_request: "HTTP request",
   notify: "Send notification",
@@ -128,9 +128,10 @@ export const STEP_HELP: Record<WorkflowStepType, StepHelp> = {
     input: "Triggered by the connected upstream step.",
     output: "Array of branch outputs in declaration order.",
   },
-  discord_message: {
-    summary: "Post a message to Discord. Defaults to DMing the configured owner.",
-    input: "Message text (supports ${input.x} / ${steps.name}). Optional channel or user ID.",
+  channel_message: {
+    summary: "Post a message to an outbound channel. Defaults to DMing the configured owner on the default channel.",
+    input:
+      "Message text (supports ${input.x} / ${steps.name}). Optional channel id, target channel/thread, or user ID.",
     output: "Confirmation that the message was sent.",
   },
   trigger_workflow: {
@@ -144,8 +145,8 @@ export const STEP_HELP: Record<WorkflowStepType, StepHelp> = {
     output: "{ status: number, headers: object, body: parsed JSON or text }.",
   },
   notify: {
-    summary: "Send a notification through Discord, email, or a log line.",
-    input: "Channel choice, message text, plus per-channel target (Discord channel/user, email recipients).",
+    summary: "Send a notification through a channel, email, or a log line.",
+    input: "Channel choice, message text, plus per-channel target (channel/thread or user id, email recipients).",
     output: "Delivery confirmation: { delivered, target, message }.",
   },
   form: {
@@ -478,7 +479,7 @@ export function describeStep(step: WorkflowStepDef): string {
       return step.tool ? `tool: ${step.tool}` : "tool: (none)";
     case "shell":
       return (step.command ?? "").slice(0, 32) || "(no command)";
-    case "discord_message":
+    case "channel_message":
       return (step.message ?? "").slice(0, 32) || "(no message)";
     case "trigger_workflow":
       return step.workflow ? `→ ${step.workflow}` : "(no workflow)";
