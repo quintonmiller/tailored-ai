@@ -247,6 +247,19 @@ remove the old. Suggested order:
 3. Stall guard
 4. Assignee routing + agent dispatch (the big one)
 
+The four shipped default plugins (`discord-notifier`, `scope-creep-flagger`,
+`stall-guard`, `coder-project-guard`) load through the ordinary
+config-driven `loadPlugins` path as `builtin:*` entries in `config.plugins`
+(#142) — not hardcoded `new …()` constructions. The `builtin:` prefix
+resolves to a subpath export of `@tailored-ai/core` (`./plugins/*`); a
+load-time migration (`migrateDefaultPlugins`) seeds any missing default so a
+fresh install behaves as before. Users disable a default durably with
+`{ module: "builtin:…", enabled: false }` (deletion alone is re-added by the
+migration) and pass per-plugin settings through the entry's `config` bag,
+which reaches the plugin as `ctx.config`. Event-driven plugins receive the
+live runtime on `ctx.runtime` and load after the runtime is constructed;
+registry-shaped plugins (tools/channels/providers) still load before it.
+
 **Slice 4 — Backend abstractions.** Land the `RepoBackend` interface,
 ship `@tai/github-repo` as the default. Migrate the
 push-and-PR-on-approve flow to a plugin that uses it.

@@ -176,6 +176,25 @@ describe("PluginManager.buildImporter", () => {
     await expect(importer("not-installed")).rejects.toThrow(/not installed.*tai plugin install not-installed/);
   });
 
+  it("resolves a `builtin:` name to a @tailored-ai/core plugin module", async () => {
+    // Built-ins do not live in the plugin home — they resolve from core's
+    // `./plugins/*` subpath export. The four default plugins each expose a
+    // `default` register function. Requires core to be built (it is, as a
+    // workspace dep of the cli package under test).
+    const mgr = new PluginManager(homeDir, fakeExecutor());
+    const importer = mgr.buildImporter();
+    const mod = (await importer("builtin:discord-notifier")) as { default?: unknown };
+    expect(typeof mod.default).toBe("function");
+  });
+
+  it("fails the import for an unknown `builtin:` name (no allowlist)", async () => {
+    const mgr = new PluginManager(homeDir, fakeExecutor());
+    const importer = mgr.buildImporter();
+    // No hardcoded list of valid builtins — an unknown one just fails to
+    // resolve, which the loader's per-plugin try/catch handles.
+    await expect(importer("builtin:does-not-exist")).rejects.toThrow();
+  });
+
   // Regression for pure-ESM plugins that publish an `exports` map with only
   // the `import` condition (no `main`, no `default`, no `require`). CJS
   // `require.resolve` can't see the `import` condition, so the loader has

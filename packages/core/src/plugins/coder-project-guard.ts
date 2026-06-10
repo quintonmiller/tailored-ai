@@ -20,6 +20,7 @@
 import { getProject } from "../db/project-queries.js";
 import { addTaskComment, updateProjectTask } from "../db/task-queries.js";
 import type { RuntimeEventPayload, Subscription } from "../events.js";
+import type { Plugin } from "../plugin-context.js";
 import type { AgentRuntime } from "../runtime.js";
 
 /** Author for guard-authored bookkeeping comments. Same sentinel the
@@ -82,3 +83,16 @@ export class CoderProjectGuard {
     });
   }
 }
+
+/**
+ * Default-plugin entry point — loaded via `config.plugins:
+ * builtin:coder-project-guard`. Binds a {@link CoderProjectGuard} to the
+ * live runtime and returns a disposer. `ctx.config` is unused — the guard
+ * has no per-plugin settings today.
+ */
+const plugin: Plugin = (ctx) => {
+  if (!ctx.runtime) return;
+  const guard = new CoderProjectGuard({ runtime: ctx.runtime });
+  return () => guard.stop();
+};
+export default plugin;

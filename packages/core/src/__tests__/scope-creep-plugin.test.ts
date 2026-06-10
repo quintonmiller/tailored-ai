@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } fr
 import { initDatabase } from "../db/schema.js";
 import { createProjectTask } from "../db/task-queries.js";
 import { TypedEventBus } from "../events.js";
-import { ScopeCreepFlagger, writeScopeWarning } from "../plugins/scope-creep.js";
+import { ScopeCreepFlagger, writeScopeWarning } from "../plugins/scope-creep-flagger.js";
 import type { AgentRuntime } from "../runtime.js";
 
 vi.mock("node:child_process", async () => {

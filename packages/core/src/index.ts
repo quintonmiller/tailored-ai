@@ -200,9 +200,16 @@ export type {
   CronJobConfig,
   CustomToolConfig,
   OnlineAgentConfig,
+  PluginEntry,
   TaskWatcherConfig,
 } from "./config.js";
-export { loadConfig, mergeProjectOverlay, validateConfig } from "./config.js";
+export {
+  DEFAULT_PLUGIN_MODULES,
+  loadConfig,
+  mergeProjectOverlay,
+  migrateDefaultPlugins,
+  validateConfig,
+} from "./config.js";
 export { ensureContextDir, loadAllContext, loadContextFiles, migrateContextDir } from "./context.js";
 export type { CompiledSchedule } from "./cron/schedule-dsl.js";
 export { compileSchedule, scheduleToCron } from "./cron/schedule-dsl.js";
@@ -410,6 +417,7 @@ export {
   type MemoryBackendRegistryView,
   type Plugin,
   type PluginContext,
+  type PluginDisposer,
   type ProviderRegistryView,
   type RepoBackendRegistryView,
   type TaskBackendRegistryView,
@@ -427,7 +435,7 @@ export {
   ScopeCreepFlagger,
   type ScopeCreepFlaggerOptions,
   writeScopeWarning,
-} from "./plugins/scope-creep.js";
+} from "./plugins/scope-creep-flagger.js";
 export {
   countPriorStalls,
   formatStallComment,
