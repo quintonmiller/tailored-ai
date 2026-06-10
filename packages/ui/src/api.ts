@@ -698,6 +698,19 @@ export function refreshBriefing(): Promise<BriefingResponse> {
   return jsonFetch("/api/briefing/refresh", { method: "POST" });
 }
 
+/**
+ * Chat empty-state suggestion chips. `enabled: false` means the feature is off
+ * — the UI shows its plain empty state. When enabled, `suggestions` is a short
+ * list of prompt strings (may be empty when the model returned nothing usable,
+ * in which case the UI also falls back to the plain empty state) and
+ * `generatedAt` is an epoch-ms timestamp.
+ */
+export type SuggestionsResponse = { enabled: false } | { enabled: true; suggestions: string[]; generatedAt: number };
+
+export function fetchSuggestions(): Promise<SuggestionsResponse> {
+  return jsonFetch("/api/suggestions");
+}
+
 export interface AutopilotUsage {
   usage: { "1h": number; "5h": number; "24h": number };
   budget: {

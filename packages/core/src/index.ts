@@ -586,6 +586,13 @@ export {
 } from "./security/egress-policy.js";
 export type { ShellResult } from "./shell.js";
 export { runShellCommand, shellEscape } from "./shell.js";
+export type { GenerateSuggestionsOptions, Suggestions, SuggestionsRuntime } from "./suggestions.js";
+export {
+  assembleSuggestionsContext,
+  DEFAULT_SUGGESTIONS_PROMPT,
+  generateSuggestions,
+  parseSuggestions,
+} from "./suggestions.js";
 export type { TaskEvent } from "./task-watcher.js";
 export { detectScopeCreep, detectStall, STALL_COMMENT_PREFIX, TaskWatcher } from "./task-watcher.js";
 export { AdminTool, readRawConfig, writeRawConfigPath } from "./tools/admin.js";
