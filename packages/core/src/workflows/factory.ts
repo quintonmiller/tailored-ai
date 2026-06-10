@@ -36,6 +36,12 @@ export function createWorkflowEngine(opts: {
   getDefaultEmailRecipients?: () => string[];
 }): WorkflowEngine {
   const { runtime, db } = opts;
+  // Default the Discord sink + owner to the runtime's outbound registry (#66)
+  // so the host no longer hand-injects the live Discord channel. getOutbound
+  // returns the same instance the CLI registered; getOwnerId("discord") reads
+  // channels.discord.owner. Callers may still override (e.g. tests).
+  const getDiscord = opts.getDiscord ?? (() => runtime.getOutbound("discord"));
+  const getOwnerId = opts.getOwnerId ?? (() => runtime.getOwnerId("discord"));
   const cfg = runtime.getConfig();
   const wfCfg = cfg.workflows ?? {};
   const byAgent = wfCfg.maxConcurrentByAgent ?? {};
@@ -63,14 +69,14 @@ export function createWorkflowEngine(opts: {
       new LoopExecutor(),
       new ParallelExecutor(),
       new DiscordMessageExecutor({
-        getDiscord: opts.getDiscord ?? (() => undefined),
-        getOwnerId: opts.getOwnerId ?? (() => undefined),
+        getDiscord,
+        getOwnerId,
       }),
       new TriggerWorkflowExecutor(),
       new HttpRequestExecutor({ egressPolicy: createEgressPolicy(cfg.security?.egress) }),
       new NotifyExecutor({
-        getDiscord: opts.getDiscord ?? (() => undefined),
-        getOwnerId: opts.getOwnerId ?? (() => undefined),
+        getDiscord,
+        getOwnerId,
         getEmail: opts.getEmail,
         getDefaultEmailRecipients: opts.getDefaultEmailRecipients,
       }),
@@ -83,8 +89,8 @@ export function createWorkflowEngine(opts: {
   engine.registerExecutor(
     new FormExecutor({
       registry: engine.forms,
-      getDiscord: opts.getDiscord ?? (() => undefined),
-      getOwnerId: opts.getOwnerId ?? (() => undefined),
+      getDiscord,
+      getOwnerId,
     }),
   );
 

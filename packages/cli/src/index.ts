@@ -213,11 +213,11 @@ async function runServer(runtime: AgentRuntime) {
   // providers register on plugin import. `server.ui.enabled: false` is the
   // kill-switch — resolveUiProvider returns undefined in that case.
   const uiProvider = await resolveUiProvider(runtime);
+  // getDiscord/getOwnerId default to the runtime's outbound registry (#66),
+  // so the host no longer injects the Discord channel here.
   const workflowEngine = createWorkflowEngine({
     runtime,
     db: runtime.db,
-    getDiscord: () => _discordChannel,
-    getOwnerId: () => getDiscordConfig(runtime.getConfig())?.owner,
   });
   runtime.setWorkflowEngine(workflowEngine);
   runtime.startWatchingWorkflows();
