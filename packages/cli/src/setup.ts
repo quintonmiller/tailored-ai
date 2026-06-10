@@ -65,7 +65,7 @@ export function hydrateFromYaml(text: string, homeDir: string): DraftConfig {
       web_fetch: Boolean(get(["tools", "web_fetch", "enabled"], true)),
       web_search: Boolean(get(["tools", "web_search", "enabled"], false)),
     },
-    channels: { discord: Boolean(get(["channels", "discord", "enabled"], false)) },
+    channels: hydrateChannels(doc),
     plugins: ((doc.toJS()?.plugins ?? []) as Array<string | { module: string }>).map((entry) => ({
       uri: typeof entry === "string" ? entry : entry.module,
     })),
@@ -80,6 +80,20 @@ export function hydrateFromYaml(text: string, homeDir: string): DraftConfig {
     systemPromptBaseFile: hydrateSystemPromptBaseFile(doc),
     envLines: [],
   };
+}
+
+/**
+ * Read the `channels:` map into `{ <id>: enabled }`. No channel is privileged
+ * — every config block contributes a row. `discord` (the built-in example) is
+ * always seeded so it shows in the editor even when absent from config.
+ */
+function hydrateChannels(doc: ReturnType<typeof parseDocument>): Record<string, boolean> {
+  const channels: Record<string, boolean> = { discord: false };
+  const block = doc.toJS()?.channels as Record<string, { enabled?: unknown } | undefined> | undefined;
+  for (const [id, cfg] of Object.entries(block ?? {})) {
+    channels[id] = Boolean(cfg?.enabled);
+  }
+  return channels;
 }
 
 function hydrateSystemPromptBaseFile(doc: ReturnType<typeof parseDocument>): string | undefined {
@@ -285,6 +299,8 @@ agent:
 ${toolsBlock}
 
 channels:
+  # Discord is the built-in channel. Plugin channels (Slack, Telegram, …) add
+  # their own blocks under channels: keyed by id.
   discord:
     enabled: ${discordEnabled}
     token: \${DISCORD_BOT_TOKEN}
@@ -364,9 +380,15 @@ export function patchExistingYaml(
     }
   }
 
-  if (edited.channels.discord !== original.channels.discord) {
-    doc.setIn(["channels", "discord", "enabled"], edited.channels.discord);
-    changes.push(`channels.discord.enabled: ${original.channels.discord} → ${edited.channels.discord}`);
+  // Channels write through the generic `channels.<id>.enabled` map — no id is
+  // special-cased. Union the keys so a newly-toggled channel still gets written.
+  for (const id of new Set([...Object.keys(original.channels), ...Object.keys(edited.channels)])) {
+    const was = Boolean(original.channels[id]);
+    const now = Boolean(edited.channels[id]);
+    if (now !== was) {
+      doc.setIn(["channels", id, "enabled"], now);
+      changes.push(`channels.${id}.enabled: ${was} → ${now}`);
+    }
   }
 
   if (!slotEquals(edited.ui, original.ui)) {

@@ -65,9 +65,14 @@ function renderDetail(selected: string, d: DraftConfig) {
     case "channels":
       return (
         <Box flexDirection="column">
-          <Text color={d.channels.discord ? "green" : "gray"}>
-            {d.channels.discord ? "✔" : "✗"} discord (built-in)
-          </Text>
+          {Object.entries(d.channels)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([id, on]) => (
+              <Text key={id} color={on ? "green" : "gray"}>
+                {on ? "✔" : "✗"} {id}
+                {id === "discord" ? " (built-in)" : ""}
+              </Text>
+            ))}
           {d.plugins.length > 0 ? (
             <Box marginTop={1} flexDirection="column">
               <Text bold>Custom channel packages:</Text>

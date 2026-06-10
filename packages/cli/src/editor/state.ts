@@ -57,7 +57,7 @@ export type Action =
   | { type: "setProvider"; provider: ProviderDraft }
   | { type: "toggleTool"; tool: keyof ToolsDraft }
   | { type: "setTools"; tools: ToolsDraft }
-  | { type: "toggleDiscord" }
+  | { type: "toggleChannel"; channelId: string }
   | { type: "addPlugin"; plugin: ResolvedPlugin }
   | { type: "removePlugin"; index: number }
   | { type: "addExternalAgent"; agent: ResolvedPlugin }
@@ -103,10 +103,13 @@ export function reducer(state: AppState, action: Action): AppState {
       };
     case "setTools":
       return { ...snapshot(state), draft: { ...state.draft, tools: action.tools } };
-    case "toggleDiscord":
+    case "toggleChannel":
       return {
         ...snapshot(state),
-        draft: { ...state.draft, channels: { discord: !state.draft.channels.discord } },
+        draft: {
+          ...state.draft,
+          channels: { ...state.draft.channels, [action.channelId]: !state.draft.channels[action.channelId] },
+        },
       };
     case "addPlugin":
       return { ...snapshot(state), draft: { ...state.draft, plugins: [...state.draft.plugins, action.plugin] } };

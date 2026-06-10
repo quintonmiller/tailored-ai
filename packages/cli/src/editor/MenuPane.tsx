@@ -40,9 +40,12 @@ const ROW_DESCRIPTORS: RowDescriptor[] = [
     id: "channels",
     label: "Channels",
     value: (d) => {
-      const builtin = d.channels.discord ? ["discord"] : [];
+      const enabled = Object.entries(d.channels)
+        .filter(([, on]) => on)
+        .map(([id]) => id)
+        .sort();
       const customs = d.plugins.length > 0 ? `, ${d.plugins.length} custom` : "";
-      return builtin.length === 0 && d.plugins.length === 0 ? "(none)" : `${builtin.join(", ") || "(none)"}${customs}`;
+      return enabled.length === 0 && d.plugins.length === 0 ? "(none)" : `${enabled.join(", ") || "(none)"}${customs}`;
     },
   },
   { id: "task", label: "Task backend", value: (d) => shortSlot(d.taskBackend, "built-in (SQLite)") },
