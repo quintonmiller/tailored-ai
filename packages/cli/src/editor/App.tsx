@@ -164,7 +164,7 @@ function EditorSwitch({ state, dispatch }: { state: AppState; dispatch: (a: Acti
     case "channels":
       return (
         <ChannelsEditor
-          discord={state.draft.channels.discord}
+          channels={state.draft.channels}
           plugins={state.draft.plugins}
           homeDir={state.draft.homeDir}
           dispatch={dispatch}

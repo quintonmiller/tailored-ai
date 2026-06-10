@@ -254,7 +254,7 @@ export class AutopilotWorker {
         console.error("[autopilot] Digest DM failed:", (err as Error).message);
       }
     } else {
-      console.log(`[autopilot] Morning digest (no Discord target):\n${digest.content}`);
+      console.log(`[autopilot] Morning digest (no delivery target):\n${digest.content}`);
     }
   }
 
