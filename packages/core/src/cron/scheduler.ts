@@ -6,7 +6,6 @@ import { resolveAgent } from "../agent/agents.js";
 import { executeHooks } from "../agent/hooks.js";
 import { runAgentLoop } from "../agent/loop.js";
 import { findOrCreateSession, resetSession } from "../agent/session.js";
-import { getDiscordConfig } from "../channels/discord-config.js";
 import type { CronJobConfig } from "../config.js";
 import { saveMessage } from "../db/queries.js";
 import type { ProjectRef } from "../projects/resolve.js";
@@ -300,47 +299,42 @@ export class CronScheduler {
   }
 
   private async deliver(job: CronJobConfig, response: string): Promise<void> {
-    const channel = job.delivery?.channel ?? "log";
+    const delivery = job.delivery;
+    const channelId = delivery?.channel ?? "log";
 
-    if (channel === "discord") {
-      const target = job.delivery?.target;
-      if (!target) {
-        console.error(`[cron] Job "${job.name}" has discord delivery but no target channel ID`);
-        return;
-      }
-      // The "discord"/"discord-dm" routing keys stay for back-compat; the live
-      // sink is now resolved by channel id from the runtime's outbound registry
-      // (#66) instead of a notifier hand-injected at construction.
-      const out = this.runtime.getOutbound("discord");
-      if (!out) {
-        console.error(`[cron] Job "${job.name}" wants discord delivery but Discord is not connected`);
-        return;
-      }
-      await out.send(target, response);
-      console.log(`[cron] Delivered "${job.name}" response to Discord channel ${target}`);
+    // "log" is the reserved console-only sentinel (also the default when
+    // delivery is unconfigured) — no real channel delivery.
+    if (channelId === "log") {
+      console.log(`[cron] [${job.name}] ${response}`);
       return;
     }
 
-    if (channel === "discord-dm") {
-      const target = job.delivery?.target ?? getDiscordConfig(this.runtime.getConfig())?.owner;
-      if (!target) {
-        console.error(
-          `[cron] Job "${job.name}" has discord-dm delivery but no target user ID or discord owner configured`,
-        );
-        return;
-      }
-      const out = this.runtime.getOutbound("discord");
-      if (!out) {
-        console.error(`[cron] Job "${job.name}" wants discord-dm delivery but Discord is not connected`);
-        return;
-      }
-      await out.sendDM(target, response);
-      console.log(`[cron] Delivered "${job.name}" response as DM to user ${target}`);
+    // The live sink is resolved by channel id from the runtime's outbound
+    // registry (#66) instead of a notifier hand-injected at construction.
+    const mode = delivery?.mode ?? "channel";
+    const out = this.runtime.getOutbound(channelId);
+    if (!out) {
+      console.error(`[cron] Job "${job.name}" wants ${channelId} delivery but it is not connected`);
       return;
     }
 
-    // Default: log
-    console.log(`[cron] [${job.name}] ${response}`);
+    if (mode === "dm") {
+      const userId = delivery?.target ?? this.runtime.getOwnerId(channelId);
+      if (!userId) {
+        console.error(`[cron] Job "${job.name}" dm delivery has no target user id and no owner for ${channelId}`);
+        return;
+      }
+      await out.sendDM(userId, response);
+      console.log(`[cron] Delivered "${job.name}" response as DM to user ${userId}`);
+      return;
+    }
+
+    if (!delivery?.target) {
+      console.error(`[cron] Job "${job.name}" channel delivery has no target channel id`);
+      return;
+    }
+    await out.send(delivery.target, response);
+    console.log(`[cron] Delivered "${job.name}" response to ${channelId} channel ${delivery.target}`);
   }
 
   private upsertJobRow(job: CronJobConfig): void {

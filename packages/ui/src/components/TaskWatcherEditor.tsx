@@ -8,7 +8,8 @@ interface TaskWatcherConfig {
   debounceMs: number;
   triggers: string[];
   delivery?: {
-    channel: "log" | "discord" | "discord-dm";
+    channel?: string;
+    mode?: "channel" | "dm";
     target?: string;
   };
 }
@@ -21,7 +22,21 @@ const DEFAULTS: TaskWatcherConfig = {
 };
 
 const ALL_TRIGGERS = ["created", "updated", "commented"] as const;
-const DELIVERY_CHANNELS = ["log", "discord", "discord-dm"] as const;
+// UI presets over the open `{ channel, mode, target }` delivery shape. "log"
+// is the console-only sentinel; the discord presets map onto channel id
+// "discord" + the matching mode.
+const DELIVERY_PRESETS = ["log", "discord", "discord-dm"] as const;
+type DeliveryPreset = (typeof DELIVERY_PRESETS)[number];
+
+function deliveryToPreset(delivery: TaskWatcherConfig["delivery"]): DeliveryPreset {
+  if (!delivery || !delivery.channel || delivery.channel === "log") return "log";
+  return delivery.mode === "dm" ? "discord-dm" : "discord";
+}
+
+function presetToDelivery(preset: DeliveryPreset, target?: string): TaskWatcherConfig["delivery"] {
+  if (preset === "log") return undefined;
+  return { channel: "discord", mode: preset === "discord-dm" ? "dm" : "channel", target };
+}
 
 export function TaskWatcherEditor() {
   const [data, setData] = useState<TaskWatcherConfig>(DEFAULTS);
@@ -64,8 +79,8 @@ export function TaskWatcherEditor() {
     });
   }
 
-  const deliveryChannel = data.delivery?.channel ?? "log";
-  const needsTarget = deliveryChannel === "discord" || deliveryChannel === "discord-dm";
+  const deliveryPreset = deliveryToPreset(data.delivery);
+  const needsTarget = deliveryPreset === "discord" || deliveryPreset === "discord-dm";
 
   if (loading) {
     return (
@@ -165,18 +180,15 @@ export function TaskWatcherEditor() {
           <label className="field-label">Delivery</label>
           <select
             className="field-select"
-            value={deliveryChannel}
+            value={deliveryPreset}
             onChange={(e) => {
-              const ch = e.target.value as "log" | "discord" | "discord-dm";
-              setData((p) => ({
-                ...p,
-                delivery: ch === "log" ? undefined : { channel: ch, target: p.delivery?.target },
-              }));
+              const preset = e.target.value as DeliveryPreset;
+              setData((p) => ({ ...p, delivery: presetToDelivery(preset, p.delivery?.target) }));
             }}
           >
-            {DELIVERY_CHANNELS.map((ch) => (
-              <option key={ch} value={ch}>
-                {ch}
+            {DELIVERY_PRESETS.map((preset) => (
+              <option key={preset} value={preset}>
+                {preset}
               </option>
             ))}
           </select>
@@ -184,17 +196,17 @@ export function TaskWatcherEditor() {
 
         {needsTarget && (
           <div className="field-group">
-            <label className="field-label">{deliveryChannel === "discord" ? "Channel ID" : "User ID"}</label>
+            <label className="field-label">{deliveryPreset === "discord" ? "Channel ID" : "User ID"}</label>
             <input
               className="field-input"
               value={data.delivery?.target ?? ""}
               onChange={(e) =>
                 setData((p) => ({
                   ...p,
-                  delivery: { channel: deliveryChannel, target: e.target.value || undefined },
+                  delivery: presetToDelivery(deliveryPreset, e.target.value || undefined),
                 }))
               }
-              placeholder={deliveryChannel === "discord" ? "Discord channel ID" : "Discord user ID (defaults to owner)"}
+              placeholder={deliveryPreset === "discord" ? "Discord channel ID" : "Discord user ID (defaults to owner)"}
             />
           </div>
         )}
