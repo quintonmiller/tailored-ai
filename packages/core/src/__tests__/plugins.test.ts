@@ -69,18 +69,22 @@ describe("loadPlugins", () => {
     expect(out[0].ok).toBe(false);
   });
 
-  it("invokes default(ctx) when the plugin exports a function", async () => {
-    let received: unknown;
-    const ctx = { marker: Symbol("ctx") } as never;
+  it("invokes default(ctx) with a per-entry context carrying the base views", async () => {
+    const marker = Symbol("ctx");
+    let received: { marker?: symbol; config?: unknown } | undefined;
+    const ctx = { marker } as never;
     const importer = () =>
       Promise.resolve({
-        default: (passedCtx: unknown) => {
+        default: (passedCtx: { marker?: symbol; config?: unknown }) => {
           received = passedCtx;
         },
       });
     const out = await loadPlugins(baseConfig({ plugins: ["fake-plugin"] } as never), importer, { context: ctx });
     expect(out).toEqual([{ module: "fake-plugin", ok: true, shape: "register" }]);
-    expect(received).toBe(ctx);
+    // The loader hands each entry a shallow copy of the base context with a
+    // per-entry `config`, so base properties are carried through by value.
+    expect(received?.marker).toBe(marker);
+    expect(received?.config).toEqual({});
   });
 
   it("awaits async register(ctx)", async () => {
@@ -96,5 +100,95 @@ describe("loadPlugins", () => {
     expect(out[0].ok).toBe(true);
     expect(out[0].shape).toBe("register");
     expect(resolved).toBe(true);
+  });
+
+  it("threads the per-entry config bag into ctx.config", async () => {
+    let received: Record<string, unknown> | undefined;
+    const importer = () =>
+      Promise.resolve({
+        default: (ctx: { config: Record<string, unknown> }) => {
+          received = ctx.config;
+        },
+      });
+    await loadPlugins(
+      baseConfig({ plugins: [{ module: "cfg-plugin", config: { maxStallRetries: 5 } }] } as never),
+      importer,
+    );
+    expect(received).toEqual({ maxStallRetries: 5 });
+  });
+
+  it("passes an empty config object for a bare-string entry", async () => {
+    let received: unknown;
+    const importer = () =>
+      Promise.resolve({
+        default: (ctx: { config: Record<string, unknown> }) => {
+          received = ctx.config;
+        },
+      });
+    await loadPlugins(baseConfig({ plugins: ["bare-plugin"] } as never), importer);
+    expect(received).toEqual({});
+  });
+
+  it("gives each entry its own config without bleeding across entries", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const importer = () =>
+      Promise.resolve({
+        default: (ctx: { config: Record<string, unknown> }) => {
+          seen.push(ctx.config);
+        },
+      });
+    await loadPlugins(
+      baseConfig({
+        plugins: [{ module: "a", config: { which: "a" } }, { module: "b", config: { which: "b" } }, "c"],
+      } as never),
+      importer,
+    );
+    expect(seen).toEqual([{ which: "a" }, { which: "b" }, {}]);
+  });
+
+  it("skips an entry with enabled: false without importing it", async () => {
+    const importer = vi.fn(() => Promise.resolve({ default: () => {} }));
+    const out = await loadPlugins(
+      baseConfig({ plugins: [{ module: "off-plugin", enabled: false }] } as never),
+      importer,
+    );
+    expect(importer).not.toHaveBeenCalled();
+    expect(out).toEqual([{ module: "off-plugin", ok: true, shape: "skipped" }]);
+  });
+
+  it("loads an entry with enabled: true normally", async () => {
+    const importer = vi.fn(() => Promise.resolve({ default: () => {} }));
+    const out = await loadPlugins(baseConfig({ plugins: [{ module: "on-plugin", enabled: true }] } as never), importer);
+    expect(importer).toHaveBeenCalledTimes(1);
+    expect(out[0]).toMatchObject({ module: "on-plugin", ok: true, shape: "register" });
+  });
+
+  it("captures the disposer a register plugin returns on stop", async () => {
+    const dispose = vi.fn();
+    const importer = () => Promise.resolve({ default: () => dispose });
+    const out = await loadPlugins(baseConfig({ plugins: ["disposer-plugin"] } as never), importer);
+    expect(typeof out[0].stop).toBe("function");
+    await out[0].stop?.();
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("awaits an async disposer", async () => {
+    let disposed = false;
+    const importer = () =>
+      Promise.resolve({
+        default: () => async () => {
+          await new Promise((r) => setTimeout(r, 1));
+          disposed = true;
+        },
+      });
+    const out = await loadPlugins(baseConfig({ plugins: ["async-disposer"] } as never), importer);
+    await out[0].stop?.();
+    expect(disposed).toBe(true);
+  });
+
+  it("leaves stop undefined when a register plugin returns nothing", async () => {
+    const importer = () => Promise.resolve({ default: () => {} });
+    const out = await loadPlugins(baseConfig({ plugins: ["no-disposer"] } as never), importer);
+    expect(out[0].stop).toBeUndefined();
   });
 });

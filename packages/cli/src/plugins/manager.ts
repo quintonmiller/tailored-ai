@@ -169,6 +169,13 @@ export class PluginManager {
    * `--experimental-import-meta-resolve`, so a resolver scoped to the
    * plugin home isn't possible without flagging.
    *
+   * The `builtin:<name>` prefix is resolved separately, ahead of the plugin
+   * home lookup: it maps to a subpath export inside `@tailored-ai/core`
+   * (`builtin:discord-notifier` → `@tailored-ai/core/plugins/discord-notifier`).
+   * This is how the four default plugins load — no install required, no
+   * hardcoded allowlist. An unknown `builtin:<name>` simply fails the import
+   * and is handled by the loader's per-plugin error handling.
+   *
    * Throws with a recovery hint when the plugin isn't installed (truly
    * absent — no package.json under `node_modules/<name>/`); the caller
    * catches per-plugin so one bad install doesn't stop the rest.
@@ -177,6 +184,14 @@ export class PluginManager {
     this.bootstrap();
     const req = createRequire(this.packageJsonPath);
     return async (name: string) => {
+      // 0) Built-in default plugins live inside @tailored-ai/core under the
+      //    `./plugins/*` subpath export. Resolve them from the CLI's own
+      //    resolution context (core is a direct dep), not the plugin home.
+      if (name.startsWith("builtin:")) {
+        const sub = name.slice("builtin:".length);
+        return import(`@tailored-ai/core/plugins/${sub}`);
+      }
+
       // 1) Fast path: createRequire().resolve. Works whenever the
       //    package has a `main` field or its exports map includes a
       //    CJS-visible condition (`default`, `require`).

@@ -4,9 +4,11 @@ import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type AgentConfig,
+  DEFAULT_PLUGIN_MODULES,
   deepInterpolate,
   deepMerge,
   loadConfig,
+  migrateDefaultPlugins,
   migrateDeliveryConfig,
   migrateTaskBackendConfig,
   validateConfig,
@@ -233,6 +235,58 @@ describe("migrateDeliveryConfig — legacy delivery.channel union → { channel,
   });
 });
 
+describe("migrateDefaultPlugins — seed missing builtin: entries", () => {
+  const modules = (entries: AgentConfig["plugins"]) =>
+    (entries ?? []).map((e) => (typeof e === "string" ? e : e.module));
+
+  it("appends all four builtins to an empty/undefined plugins array", () => {
+    const cfg = baseConfig();
+    cfg.plugins = [];
+    migrateDefaultPlugins(cfg);
+    expect(modules(cfg.plugins)).toEqual([...DEFAULT_PLUGIN_MODULES]);
+  });
+
+  it("preserves user entries and appends missing builtins AFTER them", () => {
+    const cfg = baseConfig();
+    cfg.plugins = ["@me/my-plugin", "builtin:stall-guard"];
+    migrateDefaultPlugins(cfg);
+    expect(modules(cfg.plugins)).toEqual([
+      "@me/my-plugin",
+      "builtin:stall-guard",
+      // the three not already present, in default order
+      "builtin:discord-notifier",
+      "builtin:scope-creep-flagger",
+      "builtin:coder-project-guard",
+    ]);
+  });
+
+  it("is idempotent — running twice does not duplicate", () => {
+    const cfg = baseConfig();
+    cfg.plugins = ["@me/my-plugin"];
+    migrateDefaultPlugins(cfg);
+    const once = modules(cfg.plugins);
+    migrateDefaultPlugins(cfg);
+    expect(modules(cfg.plugins)).toEqual(once);
+  });
+
+  it("respects a present-but-disabled builtin (does not re-add it)", () => {
+    const cfg = baseConfig();
+    cfg.plugins = [{ module: "builtin:discord-notifier", enabled: false }];
+    migrateDefaultPlugins(cfg);
+    // Disabled entry stays exactly once; only the other three are appended.
+    const discord = (cfg.plugins ?? []).filter((e) => typeof e !== "string" && e.module === "builtin:discord-notifier");
+    expect(discord).toEqual([{ module: "builtin:discord-notifier", enabled: false }]);
+    expect(modules(cfg.plugins)).toHaveLength(DEFAULT_PLUGIN_MODULES.length);
+  });
+
+  it("matches builtins declared in the object form", () => {
+    const cfg = baseConfig();
+    cfg.plugins = DEFAULT_PLUGIN_MODULES.map((module) => ({ module }));
+    migrateDefaultPlugins(cfg);
+    expect(modules(cfg.plugins)).toEqual([...DEFAULT_PLUGIN_MODULES]);
+  });
+});
+
 describe("validateConfig — sandbox block", () => {
   it("rejects unknown sandbox kinds at agent.sandbox", () => {
     const c = baseConfig();
@@ -411,6 +465,29 @@ describe("loadConfig — default host", () => {
     writeFileSync(path, "server:\n  port: 3000\n  host: 0.0.0.0\n");
     const cfg = loadConfig(path);
     expect(cfg.server.host).toBe("0.0.0.0");
+  });
+
+  it("seeds the four default builtin plugins when no config file exists", () => {
+    const cfg = loadConfig(join(dir, "no-such.yaml"));
+    const mods = (cfg.plugins ?? []).map((e) => (typeof e === "string" ? e : e.module));
+    expect(mods).toEqual([...DEFAULT_PLUGIN_MODULES]);
+  });
+
+  it("appends missing default plugins after a user's plugins: block", () => {
+    const path = join(dir, "user-plugins.yaml");
+    writeFileSync(path, "plugins:\n  - '@me/custom'\n  - module: 'builtin:stall-guard'\n    enabled: false\n");
+    const cfg = loadConfig(path);
+    const mods = (cfg.plugins ?? []).map((e) => (typeof e === "string" ? e : e.module));
+    // User entries first, then the three not already present.
+    expect(mods).toEqual([
+      "@me/custom",
+      "builtin:stall-guard",
+      "builtin:discord-notifier",
+      "builtin:scope-creep-flagger",
+      "builtin:coder-project-guard",
+    ]);
+    // The disabled stall-guard is preserved as-is (durable off switch).
+    expect(cfg.plugins?.[1]).toEqual({ module: "builtin:stall-guard", enabled: false });
   });
 });
 

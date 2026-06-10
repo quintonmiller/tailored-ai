@@ -32,6 +32,7 @@ import type { EmbeddingFactory, ProviderFactory } from "./providers/factories.js
 import { registerEmbeddingFactory, registerProviderFactory } from "./providers/factories.js";
 import type { RepoBackendFactory } from "./repo/factory.js";
 import { registerRepoBackendFactory } from "./repo/factory.js";
+import type { AgentRuntime } from "./runtime.js";
 import type { TaskBackendFactory } from "./tasks/factory.js";
 import { registerTaskBackendFactory } from "./tasks/factory.js";
 import type { ToolFactory } from "./tools/tool-factories.js";
@@ -95,6 +96,31 @@ export interface PluginContext {
    * being emitted.
    */
   events: EventBus;
+  /**
+   * The live {@link AgentRuntime}, when the host built the context with one
+   * (the CLI / server always do). Optional because a library consumer can
+   * build a bare context for registry-shaped plugins that only need the
+   * `register` views above.
+   *
+   * Plugins that subscribe to the event bus and act on runtime state — the
+   * default `builtin:*` plugins do — read `ctx.runtime.db`,
+   * `ctx.runtime.getConfig()`, `ctx.runtime.getOutbound()`, etc. A plugin
+   * that needs the runtime should early-return when it's absent rather than
+   * assume it's present:
+   *
+   *     export default ((ctx) => {
+   *       if (!ctx.runtime) return;
+   *       ...
+   *     }) satisfies Plugin;
+   */
+  runtime?: AgentRuntime;
+  /**
+   * The per-entry `config` bag from this plugin's `config.plugins:` entry
+   * (`{ module, config: { ... } }`). Empty object when the entry is a bare
+   * string or declares no `config`. Plugins read their own settings from
+   * here — e.g. `builtin:stall-guard` reads `ctx.config.maxStallRetries`.
+   */
+  config: Record<string, unknown>;
 }
 
 /**
@@ -102,12 +128,25 @@ export interface PluginContext {
  * register factories, mount channels, etc. Async is supported so plugins
  * can do setup work (e.g. wait on a remote handshake) before returning.
  *
+ * It may return a **disposer** — a function that tears down whatever the
+ * plugin started (event subscriptions, timers, connections). The loader
+ * captures it on {@link LoadedPlugin.stop} so the host can dispose all
+ * plugins on shutdown / reload. Sync or async; returning nothing means the
+ * plugin has no teardown.
+ *
  * Author with:
  *
  *     import type { Plugin } from "@tailored-ai/core";
- *     export default ((ctx) => { ... }) satisfies Plugin;
+ *     export default ((ctx) => {
+ *       const sub = ctx.events.on("agent.completed", handle);
+ *       return () => sub.dispose();
+ *     }) satisfies Plugin;
  */
-export type Plugin = (ctx: PluginContext) => void | Promise<void>;
+export type PluginDisposer = () => void | Promise<void>;
+// Each arm kept distinct (rather than `Promise<void | PluginDisposer>`) so
+// `void` never appears inside a union — covers sync no-return, sync disposer,
+// async no-return, and async disposer.
+export type Plugin = (ctx: PluginContext) => void | PluginDisposer | Promise<void> | Promise<PluginDisposer>;
 
 export interface CreatePluginContextOptions {
   /**
@@ -117,6 +156,19 @@ export interface CreatePluginContextOptions {
    * a fresh in-memory bus.
    */
   events?: EventBus;
+  /**
+   * The live runtime to expose as `ctx.runtime`. The CLI / server pass
+   * their {@link AgentRuntime} so event-driven plugins can read runtime
+   * state. When set and `events` is omitted, the runtime's own bus is used
+   * so subscriptions and emissions share one instance.
+   */
+  runtime?: AgentRuntime;
+  /**
+   * Default per-plugin `config` bag for `ctx.config`. {@link loadPlugins}
+   * overrides this per entry, so this is only the fallback for a context
+   * built outside the loader. Defaults to `{}`.
+   */
+  config?: Record<string, unknown>;
 }
 
 /**
@@ -138,6 +190,10 @@ export function createPluginContext(opts: CreatePluginContextOptions = {}): Plug
     taskBackends: { register: registerTaskBackendFactory },
     repoBackends: { register: registerRepoBackendFactory },
     uiProviders: { register: registerUiProviderFactory },
-    events: opts.events ?? new TypedEventBus(),
+    // Prefer an explicit bus; else the runtime's own bus so plugin
+    // subscriptions land where the runtime emits; else a fresh bus.
+    events: opts.events ?? opts.runtime?.events ?? new TypedEventBus(),
+    runtime: opts.runtime,
+    config: opts.config ?? {},
   };
 }

@@ -1,12 +1,22 @@
 import type { AgentConfig } from "./config.js";
-import { createPluginContext, type Plugin, type PluginContext } from "./plugin-context.js";
+import { createPluginContext, type Plugin, type PluginContext, type PluginDisposer } from "./plugin-context.js";
 
 export interface LoadedPlugin {
   module: string;
   ok: boolean;
-  /** "register" — invoked default(ctx). "side-effect" — relied on top-level imports. */
-  shape?: "register" | "side-effect";
+  /**
+   * "register" — invoked default(ctx). "side-effect" — relied on top-level
+   * imports. "skipped" — entry had `enabled: false`, so it was never imported.
+   */
+  shape?: "register" | "side-effect" | "skipped";
   error?: string;
+  /**
+   * Teardown returned by a `register(ctx)` plugin, if any. The host calls
+   * this on shutdown / reload to dispose subscriptions, timers, etc.
+   * Undefined for side-effect imports, skipped entries, and register plugins
+   * that returned nothing.
+   */
+  stop?: PluginDisposer;
 }
 
 export type PluginImporter = (moduleName: string) => Promise<unknown>;
@@ -48,9 +58,19 @@ export interface LoadPluginsOptions {
  * in try/catch, logged, and the next plugin is attempted. The return value
  * lists what loaded and what failed so the caller can surface a summary.
  *
- * Per-plugin `config` values in the declarative entry are reserved for future
- * routing. Today plugins read their configuration from the normal AgentConfig
- * blocks (tools, channels, etc.).
+ * **Per-entry `config`** in the object form (`{ module, config: { ... } }`)
+ * is threaded into `ctx.config` for that plugin's `register(ctx)` — the rest
+ * of the context (registries, event bus, runtime) is shared across entries.
+ * The default `builtin:*` plugins read their settings from here.
+ *
+ * **`enabled: false`** on the object form skips the entry entirely: it is not
+ * imported and contributes a `shape: "skipped"` result. This is the durable
+ * off switch for default plugins, whose module names `migrateDefaultPlugins`
+ * re-appends if deleted (see config.ts).
+ *
+ * **Disposers**: a `register(ctx)` plugin may return a teardown function; it
+ * is captured on {@link LoadedPlugin.stop} so the host can dispose it on
+ * shutdown / reload.
  */
 export async function loadPlugins(
   config: AgentConfig,
@@ -60,7 +80,7 @@ export async function loadPlugins(
   const entries = config.plugins ?? [];
   if (entries.length === 0) return [];
 
-  const ctx = opts.context ?? createPluginContext();
+  const baseCtx = opts.context ?? createPluginContext();
   const results: LoadedPlugin[] = [];
   for (const entry of entries) {
     const moduleName = typeof entry === "string" ? entry : entry.module;
@@ -69,13 +89,31 @@ export async function loadPlugins(
       results.push({ module: String(entry), ok: false, error: "invalid entry shape" });
       continue;
     }
+    // Disabled entries are skipped without importing — the durable off
+    // switch for default plugins (their module name stays present so the
+    // migration won't re-add them, but the loader never runs them).
+    if (typeof entry === "object" && entry.enabled === false) {
+      console.log(`[plugins] skipping ${moduleName} (enabled: false)`);
+      results.push({ module: moduleName, ok: true, shape: "skipped" });
+      continue;
+    }
+    // Per-entry config bag overrides the base context's `config` so each
+    // plugin sees only its own settings. Other views (registries, bus,
+    // runtime) are shared.
+    const entryConfig = typeof entry === "object" && entry.config ? entry.config : {};
+    const ctx: PluginContext = { ...baseCtx, config: entryConfig };
     try {
       const mod = (await importer(moduleName)) as { default?: unknown } | undefined;
       const register = mod?.default;
       if (typeof register === "function") {
-        await (register as Plugin)(ctx);
+        const disposer = await (register as Plugin)(ctx);
         console.log(`[plugins] loaded ${moduleName} (register)`);
-        results.push({ module: moduleName, ok: true, shape: "register" });
+        results.push({
+          module: moduleName,
+          ok: true,
+          shape: "register",
+          stop: typeof disposer === "function" ? disposer : undefined,
+        });
       } else {
         console.log(`[plugins] loaded ${moduleName} (side-effect)`);
         results.push({ module: moduleName, ok: true, shape: "side-effect" });

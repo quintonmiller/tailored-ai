@@ -8,7 +8,6 @@ import {
   AgentRuntime,
   AutopilotWorker,
   ChannelLifecycleManager,
-  CoderProjectGuard,
   CronScheduler,
   createEmbedder,
   createMetaTools,
@@ -17,7 +16,6 @@ import {
   createTools,
   createWorkflowEngine,
   type DiscordChannel,
-  DiscordNotifier,
   ExploratoryWorker,
   ensureContextDir,
   executeHooks,
@@ -35,8 +33,6 @@ import {
   resolveProjectFromCwd,
   resolveUiProvider,
   runAgentLoop,
-  ScopeCreepFlagger,
-  StallGuard,
   TaskWatcher,
   TypedEventBus,
   validateConfig,
@@ -118,7 +114,28 @@ let _taskWatcherRef:
   | { notifyById: (action: "created" | "updated" | "commented", id: string, projectId?: string) => void }
   | undefined;
 
-async function runServer(runtime: AgentRuntime) {
+async function runServer(
+  runtime: AgentRuntime,
+  loadRuntimePlugins: () => Promise<import("@tailored-ai/core").LoadedPlugin[]>,
+) {
+  // Load the runtime-context plugins (the `builtin:*` default set: Discord
+  // notifier, scope-creep flagger, stall guard, coder/reviewer project
+  // guard). They subscribe to the runtime's event bus on register and
+  // return disposers we hold for shutdown + reload. Previously these were
+  // hardcoded `new …()` constructions here; #142 routes them through
+  // config.plugins so they're user-toggleable (`enabled: false`).
+  let runtimePlugins = await loadRuntimePlugins();
+  const disposeRuntimePlugins = async () => {
+    for (const p of runtimePlugins) {
+      if (!p.stop) continue;
+      try {
+        await p.stop();
+      } catch (err) {
+        console.error(`[plugins] dispose error for ${p.module}:`, (err as Error).message);
+      }
+    }
+  };
+
   // Every registered channel — Discord (built-in) plus plugin channels
   // (Slack, Telegram, …) — comes up through the lifecycle manager. The
   // manager reconciles desired vs running on each reload so we never
@@ -146,28 +163,10 @@ async function runServer(runtime: AgentRuntime) {
   // on mutations (Phase 6 — coder→reviewer→coder handoffs).
   _taskWatcherRef = taskWatcher;
 
-  // Discord delivery moved out of the watcher in Slice 3 of the platform
-  // vision. The watcher emits `agent.completed`; this notifier
-  // subscribes and decides whether to deliver. It resolves the live
-  // Discord sink from the runtime's outbound registry at delivery time
-  // (#66). Users on Slack / Telegram / email replace this with their
-  // own plugin.
-  const discordNotifier = new DiscordNotifier({ runtime });
-  // Scope-creep flagger: subscribes to agent.completed and writes a
-  // SCOPE WARNING comment when the coder hands off a branch that
-  // contains commits for other ptask_ ids. Replaces the watcher's
-  // inline check, which silently no-opped on clean handoffs because
-  // it ran against the (already cleaned up) worktree dir.
-  const scopeCreepFlagger = new ScopeCreepFlagger({ runtime });
-  // Stall guard: subscribes to agent.stalled and either retries (via
-  // task.dispatch_requested) or transitions to blocked after the
-  // configured number of attempts. Replaces TaskWatcher.handleStall.
-  const stallGuard = new StallGuard({ runtime });
-  // Coder/reviewer project_id guardrail: subscribes to agent.dispatched
-  // (vetoable via bus.emitAsync) and refuses dispatches that would run
-  // a coder without an isolated worktree. Same hard guarantee the
-  // watcher used to enforce inline.
-  const coderProjectGuard = new CoderProjectGuard({ runtime });
+  // The Discord notifier, scope-creep flagger, stall guard, and coder/
+  // reviewer project guard used to be constructed here as hardcoded
+  // `new …()` instances. #142 moves them to `config.plugins` (the
+  // `builtin:*` default set), loaded above via loadRuntimePlugins().
 
   const autopilot = new AutopilotWorker({
     runtime,
@@ -185,6 +184,14 @@ async function runServer(runtime: AgentRuntime) {
   // off whatever the manager produced.
   runtime.onReload(async () => {
     scheduler.restart();
+
+    // runtime.reload() calls events.clear(), which drops the builtin
+    // plugins' subscriptions (a latent pre-#142 bug — the hardcoded
+    // notifier/guards went silent until process restart). onReload runs
+    // AFTER the clear, so dispose the stale instances and re-load against
+    // the fresh config to re-arm subscriptions (and pick up plugin toggles).
+    await disposeRuntimePlugins();
+    runtimePlugins = await loadRuntimePlugins();
 
     try {
       await channelManager.reconcile(runtime);
@@ -335,10 +342,7 @@ async function runServer(runtime: AgentRuntime) {
     runtime.stopWatching();
     scheduler.stop();
     taskWatcher.stop();
-    discordNotifier.stop();
-    scopeCreepFlagger.stop();
-    stallGuard.stop();
-    coderProjectGuard.stop();
+    await disposeRuntimePlugins();
     autopilot.stop();
     exploratory.stop();
     await channelManager.stopAll();
@@ -648,17 +652,35 @@ async function main() {
     console.warn(`[config] Warning: ${warning}`);
   }
 
-  // Load declarative plugins before runtime construction. Plugins are
-  // resolved from the TAI-owned plugin home at <homeDir>/plugins/ — the
-  // user installs them via `tai plugin install`. Workspace / global-npm
-  // fallback is intentionally absent so the install path stays single
+  // Load declarative plugins. Plugins are resolved from the TAI-owned plugin
+  // home at <homeDir>/plugins/ (third parties, installed via `tai plugin
+  // install`) or from @tailored-ai/core's `./plugins/*` subpath export
+  // (the `builtin:` prefix — the four default plugins). Workspace / global-
+  // npm fallback is intentionally absent so the install path stays single
   // and unambiguous. See #43.
   const pluginManager = new PluginManager(homeDir);
-  // The event bus is constructed up-front so plugins (which load before
-  // the runtime is built) and the runtime itself share one instance.
-  // Plugin subscriptions land on the same bus the runtime emits to.
+  const importer = pluginManager.buildImporter();
+  // The event bus is constructed up-front so plugins and the runtime share
+  // one instance — plugin subscriptions land on the same bus the runtime
+  // emits to.
   const events = new TypedEventBus();
-  await loadPlugins(config, pluginManager.buildImporter(), {
+
+  // Loading is split into two passes by entry shape (see PR #142 body):
+  //   1. Registry-shaped plugins (third-party: tools, channels, providers)
+  //      must register BEFORE runtime construction, because the runtime's
+  //      constructor runs createTools/createProvider against the registries.
+  //      These load now, with no `ctx.runtime` (identical to prior behavior).
+  //   2. Runtime-context plugins (the `builtin:*` default set) need the live
+  //      runtime to subscribe to its event bus, so they load AFTER the
+  //      runtime exists (see loadRuntimePlugins below).
+  // The `builtin:` prefix is a load-ordering signal, not a privilege: a
+  // builtin loads through the same loadPlugins path as any third party.
+  const isRuntimePlugin = (entry: import("@tailored-ai/core").PluginEntry): boolean => {
+    const module = typeof entry === "string" ? entry : entry.module;
+    return typeof module === "string" && module.startsWith("builtin:");
+  };
+  const registryEntries = (config.plugins ?? []).filter((e) => !isRuntimePlugin(e));
+  await loadPlugins({ ...config, plugins: registryEntries }, importer, {
     context: createPluginContext({ events }),
   });
 
@@ -693,6 +715,19 @@ async function main() {
     (path) => loadConfig(path),
     config,
   );
+
+  // Pass-2 loader for runtime-context (`builtin:*`) plugins. Re-reads the
+  // entries from the runtime's CURRENT config each call so a reload picks up
+  // toggles (enabled: false) and config-bag edits. Returns the LoadedPlugins
+  // so the caller can capture their `stop` disposers. runServer() invokes
+  // this once at startup and again on every reload (see the onReload hook),
+  // which also re-arms subscriptions after runtime.reload() clears the bus.
+  const loadRuntimePlugins = () => {
+    const entries = (runtime.getConfig().plugins ?? []).filter(isRuntimePlugin);
+    return loadPlugins({ ...runtime.getConfig(), plugins: entries }, importer, {
+      context: createPluginContext({ runtime, events }),
+    });
+  };
 
   // Pull in any externalAgents declared in config.yaml. Same source list the
   // editor's SlotEditor uses for plugins, so file/https/git/npm/tai-registry
@@ -758,7 +793,7 @@ async function main() {
 
   // --- Server mode (default) ---
   runtime.startWatching();
-  await runServer(runtime);
+  await runServer(runtime, loadRuntimePlugins);
 }
 
 main().catch((err) => {
