@@ -22,7 +22,7 @@ export interface PopulateRegistriesOptions extends CreateToolsOptions {
 export function populateBuiltinTools(registry: ToolRegistry, opts: PopulateRegistriesOptions): void {
   const tools = createTools(opts.config, opts.contextDir, opts.configPath, {
     db: opts.db,
-    getDiscord: opts.getDiscord,
+    resolveOutbound: opts.resolveOutbound,
     getOwnerId: opts.getOwnerId,
     taskBackend: opts.taskBackend,
   });

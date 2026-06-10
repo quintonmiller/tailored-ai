@@ -12,7 +12,7 @@ const VALID_STEP_TYPES: StepType[] = [
   "condition",
   "loop",
   "parallel",
-  "discord_message",
+  "channel_message",
   "trigger_workflow",
   "http_request",
   "notify",
@@ -21,10 +21,6 @@ const VALID_STEP_TYPES: StepType[] = [
 ];
 
 const VALID_WORKTREE_STRATEGIES = new Set(["head", "branch", "merge-to-head"]);
-
-const VALID_FORM_NOTIFY_CHANNELS = new Set(["discord", "log"]);
-
-const VALID_NOTIFY_CHANNELS = new Set(["discord", "email", "log"]);
 
 const VALID_HTTP_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]);
 
@@ -353,9 +349,12 @@ function validateStep(step: unknown, path: string, errors: string[], seenNames: 
       }
       break;
     }
-    case "discord_message":
+    case "channel_message":
       if (!s.message || typeof s.message !== "string") {
-        errors.push(`${path}.message is required for discord_message`);
+        errors.push(`${path}.message is required for channel_message`);
+      }
+      if (s.channel !== undefined && typeof s.channel !== "string") {
+        errors.push(`${path}.channel must be a string`);
       }
       if (s.channelId !== undefined && typeof s.channelId !== "string") {
         errors.push(`${path}.channelId must be a string`);
@@ -376,8 +375,8 @@ function validateStep(step: unknown, path: string, errors: string[], seenNames: 
       }
       break;
     case "notify":
-      if (typeof s.channel !== "string" || !VALID_NOTIFY_CHANNELS.has(String(s.channel))) {
-        errors.push(`${path}.channel must be one of ${[...VALID_NOTIFY_CHANNELS].join(", ")}`);
+      if (typeof s.channel !== "string" || !s.channel) {
+        errors.push(`${path}.channel must be a non-empty string`);
       }
       if (!s.message || typeof s.message !== "string") {
         errors.push(`${path}.message is required for notify`);
@@ -453,8 +452,8 @@ function validateStep(step: unknown, path: string, errors: string[], seenNames: 
           errors.push(`${path}.notify must be an object`);
         } else {
           const n = s.notify as Record<string, unknown>;
-          if (typeof n.channel !== "string" || !VALID_FORM_NOTIFY_CHANNELS.has(n.channel)) {
-            errors.push(`${path}.notify.channel must be one of: ${[...VALID_FORM_NOTIFY_CHANNELS].join(", ")}`);
+          if (typeof n.channel !== "string" || !n.channel) {
+            errors.push(`${path}.notify.channel must be a non-empty string`);
           }
           if (n.channelId !== undefined && typeof n.channelId !== "string") {
             errors.push(`${path}.notify.channelId must be a string`);

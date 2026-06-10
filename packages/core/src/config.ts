@@ -285,7 +285,7 @@ export type PluginEntry = string | { module: string; enabled?: boolean; config?:
 
 /** The four default plugins, seeded into `config.plugins` as `builtin:*` entries. */
 export const DEFAULT_PLUGIN_MODULES = [
-  "builtin:discord-notifier",
+  "builtin:agent-notifier",
   "builtin:scope-creep-flagger",
   "builtin:stall-guard",
   "builtin:coder-project-guard",
@@ -393,7 +393,7 @@ export interface AgentConfig {
    * need the runtime receive it on `ctx.runtime`.
    *
    * The four default plugins ship here too as `builtin:*` entries
-   * (`builtin:discord-notifier`, `builtin:scope-creep-flagger`,
+   * (`builtin:agent-notifier`, `builtin:scope-creep-flagger`,
    * `builtin:stall-guard`, `builtin:coder-project-guard`). Built-ins are not
    * privileged — they are loaded through the same path as third parties; the
    * `builtin:` prefix only tells the CLI importer to resolve them from
@@ -477,8 +477,10 @@ export interface AgentConfig {
       model?: string;
       timeoutMs?: number;
     };
-    discord_dm?: {
+    notify_owner?: {
       enabled: boolean;
+      /** Optional outbound channel id override. Defaults to the default channel. */
+      channel?: string;
     };
     browser?: {
       enabled: boolean;
@@ -1149,6 +1151,7 @@ export function loadConfig(configPath?: string): AgentConfig {
 
   migrateOllamaProvider(interpolated);
   migrateTaskBackendConfig(interpolated);
+  migrateNotifyOwnerTool(interpolated);
   coerceCronJobs(interpolated);
   // After coerceCronJobs so a JSON-string cron.jobs is already an array.
   migrateDeliveryConfig(interpolated);
@@ -1189,6 +1192,23 @@ export function migrateTaskBackendConfig(interpolated: Record<string, unknown>):
     delete tasks[k];
   }
   tasks.options = merged;
+}
+
+/**
+ * Back-compat: the old `tools.discord_dm` tool key was renamed to
+ * `tools.notify_owner` when the Discord-specific DM tool became the
+ * channel-neutral owner-notify tool. Move the block to the new key (deleting
+ * the old one) so an existing config keeps the tool enabled. Explicit
+ * `tools.notify_owner` wins. Mutates `interpolated` in place.
+ */
+export function migrateNotifyOwnerTool(interpolated: Record<string, unknown>): void {
+  const tools = interpolated.tools as Record<string, unknown> | undefined;
+  if (!tools || !tools.discord_dm) return;
+  console.warn("[config] Warning: tools.discord_dm is deprecated; rename it to tools.notify_owner");
+  if (tools.notify_owner === undefined) {
+    tools.notify_owner = tools.discord_dm;
+  }
+  delete tools.discord_dm;
 }
 
 /**
@@ -1246,19 +1266,31 @@ export function migrateDeliveryConfig(interpolated: Record<string, unknown>): vo
  * To turn a default off durably, keep the entry but set `enabled: false`; the
  * module name stays present (so nothing is re-added) and the loader skips it.
  *
+ * Also rewrites the renamed default `builtin:discord-notifier` →
+ * `builtin:agent-notifier` (string or object form, preserving `config` /
+ * `enabled`) so an existing config keeps its delivery plugin after the
+ * channel-neutral rename.
+ *
  * Idempotent. Mutates `config.plugins` in place; runs on the merged config.
  */
 export function migrateDefaultPlugins(config: AgentConfig): void {
-  const existing = config.plugins ?? [];
+  const RENAMES: Record<string, string> = {
+    "builtin:discord-notifier": "builtin:agent-notifier",
+  };
+  const existing = (config.plugins ?? []).map((e) => {
+    if (typeof e === "string") {
+      return RENAMES[e] ?? e;
+    }
+    if (e && typeof e.module === "string" && RENAMES[e.module]) {
+      return { ...e, module: RENAMES[e.module] };
+    }
+    return e;
+  });
   const present = new Set(
     existing.map((e) => (typeof e === "string" ? e : e?.module)).filter((m): m is string => typeof m === "string"),
   );
   const missing = DEFAULT_PLUGIN_MODULES.filter((m) => !present.has(m)).map((module) => ({ module }));
-  if (missing.length === 0) {
-    config.plugins = existing;
-    return;
-  }
-  config.plugins = [...existing, ...missing];
+  config.plugins = missing.length === 0 ? existing : [...existing, ...missing];
 }
 
 /**

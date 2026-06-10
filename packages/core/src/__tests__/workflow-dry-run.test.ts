@@ -2,7 +2,7 @@ import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initDatabase } from "../db/schema.js";
 import { WorkflowEngine } from "../workflows/engine.js";
-import { DiscordMessageExecutor } from "../workflows/executors/discord-message.js";
+import { ChannelMessageExecutor } from "../workflows/executors/channel-message.js";
 import { HttpRequestExecutor } from "../workflows/executors/http-request.js";
 import { NotifyExecutor } from "../workflows/executors/notify.js";
 import { ShellExecutor } from "../workflows/executors/shell.js";
@@ -21,8 +21,8 @@ afterEach(() => {
 });
 
 describe("dry-run mode", () => {
-  it("notify in dry-run logs instead of calling discord/email", async () => {
-    const discordSend = vi.fn(async () => {});
+  it("notify in dry-run logs instead of calling the channel/email", async () => {
+    const channelSend = vi.fn(async () => {});
     const emailSend = vi.fn(async () => {});
     const logs: string[] = [];
 
@@ -31,7 +31,7 @@ describe("dry-run mode", () => {
       registry,
       executors: [
         new NotifyExecutor({
-          getDiscord: () => ({ send: discordSend, sendDM: discordSend }),
+          resolveOutbound: () => ({ id: "discord", send: channelSend, sendDM: channelSend }),
           getOwnerId: () => "owner",
           getEmail: () => ({ send: emailSend }),
           log: (m) => logs.push(m),
@@ -47,7 +47,7 @@ describe("dry-run mode", () => {
     });
     const run = await engine.runWorkflow("wf", {}, "programmatic", { dryRun: true });
     expect(run.status).toBe("completed");
-    expect(discordSend).not.toHaveBeenCalled();
+    expect(channelSend).not.toHaveBeenCalled();
     expect(emailSend).not.toHaveBeenCalled();
     expect(logs.some((l) => l.includes("dry-run") && l.includes("discord"))).toBe(true);
     expect(logs.some((l) => l.includes("dry-run") && l.includes("email"))).toBe(true);
@@ -92,21 +92,21 @@ describe("dry-run mode", () => {
     expect(String(run.output)).toContain("[dry-run]");
   });
 
-  it("discord_message legacy step honours dry-run", async () => {
+  it("channel_message step honours dry-run", async () => {
     const send = vi.fn(async () => {});
     const engine = new WorkflowEngine({
       db,
       registry,
       executors: [
-        new DiscordMessageExecutor({
-          getDiscord: () => ({ send, sendDM: send }),
+        new ChannelMessageExecutor({
+          resolveOutbound: () => ({ id: "discord", send, sendDM: send }),
           getOwnerId: () => "owner",
         }),
       ],
     });
     registry.register({
       name: "wf",
-      steps: [{ name: "m", type: "discord_message", message: "hi" }],
+      steps: [{ name: "m", type: "channel_message", message: "hi" }],
     });
     const run = await engine.runWorkflow("wf", {}, "programmatic", { dryRun: true });
     expect(run.status).toBe("completed");

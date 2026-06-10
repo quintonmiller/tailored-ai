@@ -6,7 +6,7 @@ import type { SandboxKind } from "../sandboxes/interface.js";
 import { createEgressPolicy } from "../security/egress-policy.js";
 import { WorkflowEngine } from "./engine.js";
 import { AgentRunExecutor } from "./executors/agent-run.js";
-import { DiscordMessageExecutor, type DiscordSender } from "./executors/discord-message.js";
+import { ChannelMessageExecutor } from "./executors/channel-message.js";
 import { FormExecutor } from "./executors/form.js";
 import { HttpRequestExecutor } from "./executors/http-request.js";
 import { LoopExecutor } from "./executors/loop.js";
@@ -26,22 +26,17 @@ import { FileLogStore } from "./logs.js";
 export function createWorkflowEngine(opts: {
   runtime: AgentRuntime;
   db: Database.Database;
-  /** Returns the active Discord channel (or undefined when not connected). */
-  getDiscord?: () => DiscordSender | undefined;
-  /** Returns the configured Discord owner user id (default DM target). */
-  getOwnerId?: () => string | undefined;
   /** Returns the active email sender, when one is wired. */
   getEmail?: () => EmailSender | undefined;
   /** Default email recipient list when a notify step doesn't supply `to`. */
   getDefaultEmailRecipients?: () => string[];
 }): WorkflowEngine {
   const { runtime, db } = opts;
-  // Default the Discord sink + owner to the runtime's outbound registry (#66)
-  // so the host no longer hand-injects the live Discord channel. getOutbound
-  // returns the same instance the CLI registered; getOwnerId("discord") reads
-  // channels.discord.owner. Callers may still override (e.g. tests).
-  const getDiscord = opts.getDiscord ?? (() => runtime.getOutbound("discord"));
-  const getOwnerId = opts.getOwnerId ?? (() => runtime.getOwnerId("discord"));
+  // Resolve the outbound sink + owner per-step through the runtime's outbound
+  // registry (#66): channel-message / notify / form steps pass their optional
+  // channel id and fall back to the default channel when none is given.
+  const resolveOutbound = (id?: string) => runtime.resolveOutbound(id);
+  const getOwnerId = (id?: string) => runtime.getOwnerId(id);
   const cfg = runtime.getConfig();
   const wfCfg = cfg.workflows ?? {};
   const byAgent = wfCfg.maxConcurrentByAgent ?? {};
@@ -68,14 +63,14 @@ export function createWorkflowEngine(opts: {
       new WorktreeExecutor(),
       new LoopExecutor(),
       new ParallelExecutor(),
-      new DiscordMessageExecutor({
-        getDiscord,
+      new ChannelMessageExecutor({
+        resolveOutbound,
         getOwnerId,
       }),
       new TriggerWorkflowExecutor(),
       new HttpRequestExecutor({ egressPolicy: createEgressPolicy(cfg.security?.egress) }),
       new NotifyExecutor({
-        getDiscord,
+        resolveOutbound,
         getOwnerId,
         getEmail: opts.getEmail,
         getDefaultEmailRecipients: opts.getDefaultEmailRecipients,
@@ -89,7 +84,7 @@ export function createWorkflowEngine(opts: {
   engine.registerExecutor(
     new FormExecutor({
       registry: engine.forms,
-      getDiscord,
+      resolveOutbound,
       getOwnerId,
     }),
   );

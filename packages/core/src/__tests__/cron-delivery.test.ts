@@ -4,7 +4,7 @@
  * console sentinel, channel-post (`send`), direct-message (`sendDM`) with an
  * explicit target and with the channel-owner fallback, and an unregistered
  * channel (logs an error, does not throw). Uses a stub runtime with a fake
- * outbound registry, mirroring discord-notifier.test.ts.
+ * outbound registry, mirroring agent-notifier.test.ts.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJobConfig } from "../config.js";

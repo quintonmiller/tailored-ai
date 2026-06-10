@@ -116,7 +116,7 @@ export interface RuntimeEventMap {
    * mid-loop), the agent's freeform response, and the routing context.
    *
    * Slice 3 of the platform vision (`docs/platform-vision.md`): default
-   * plugins (Discord notifier, stall guard, scope-creep flagger)
+   * plugins (agent notifier, stall guard, scope-creep flagger)
    * subscribe to this event instead of being baked into the watcher.
    */
   "agent.completed": {
@@ -164,7 +164,7 @@ export interface RuntimeEventMap {
    *
    * Payload shape mirrors `agent.completed`, plus `stallReason`. If you
    * also want to react to stalls in your own plugin (e.g. for
-   * observability), subscribe here. The DiscordNotifier doesn't —
+   * observability), subscribe here. The AgentNotifier doesn't —
    * StallGuard will re-emit `agent.completed` for the terminal blocked
    * state once retries are exhausted.
    */

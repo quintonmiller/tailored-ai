@@ -1,9 +1,9 @@
 /**
- * Default Discord notifier — Slice 3 of the platform vision
+ * Default agent notifier — Slice 3 of the platform vision
  * (`docs/platform-vision.md`). Subscribes to `agent.completed` on the
- * runtime event bus and delivers a structured Discord DM / channel
- * message when the loop terminates in a state that needs user
- * attention (blocked, done, in_review without an agent assignee, etc.).
+ * runtime event bus and delivers a structured DM / channel message when
+ * the loop terminates in a state that needs user attention (blocked,
+ * done, in_review without an agent assignee, etc.).
  *
  * Previously this lived inside `TaskWatcher`. Extracting it has two
  * payoffs:
@@ -18,11 +18,12 @@
  *
  * The class is constructed by the host (CLI / server / tests) with a
  * runtime ref. It subscribes on construction and disposes its
- * subscription on `stop()`. The live Discord sink is resolved at
- * delivery time from the runtime's outbound registry
- * (`runtime.getOutbound("discord")`), so connect / disconnect /
- * config-reload swaps are picked up automatically without rebuilding
- * the subscriber.
+ * subscription on `stop()`. The delivery target is channel-neutral:
+ * `taskWatcher.delivery.{channel,mode,target}` selects the outbound
+ * channel id, and the live sink is resolved at delivery time from the
+ * runtime's outbound registry (`runtime.getOutbound(channelId)`), so
+ * connect / disconnect / config-reload swaps are picked up automatically
+ * without rebuilding the subscriber.
  */
 
 import type Database from "better-sqlite3";
@@ -30,15 +31,15 @@ import type { RuntimeEventPayload, Subscription } from "../events.js";
 import type { Plugin } from "../plugin-context.js";
 import type { AgentRuntime } from "../runtime.js";
 
-export interface DiscordNotifierOptions {
+export interface AgentNotifierOptions {
   runtime: AgentRuntime;
 }
 
-export class DiscordNotifier {
+export class AgentNotifier {
   private runtime: AgentRuntime;
   private subscription: Subscription;
 
-  constructor(opts: DiscordNotifierOptions) {
+  constructor(opts: AgentNotifierOptions) {
     this.runtime = opts.runtime;
     this.subscription = this.runtime.events.on("agent.completed", (e) => this.handle(e));
   }
@@ -48,7 +49,7 @@ export class DiscordNotifier {
   }
 
   private async handle(e: RuntimeEventPayload<"agent.completed">): Promise<void> {
-    const logPrefix = `[discord-notifier] [${e.taskId}]`;
+    const logPrefix = `[agent-notifier] [${e.taskId}]`;
     const finalAssignee = e.finalTask.assignee?.trim() || null;
     const finalStatus = e.finalTask.status;
 
@@ -71,7 +72,7 @@ export class DiscordNotifier {
   }
 
   /**
-   * Skip the Discord DM when the task is still being worked on by another
+   * Skip the DM when the task is still being worked on by another
    * agent. The user only wants to hear when (a) the loop hits the user,
    * (b) something is blocked, or (c) something is done. Mid-flight
    * handoffs between agents are noise.
@@ -126,8 +127,8 @@ export class DiscordNotifier {
 }
 
 /**
- * Build the structured Discord message: header (status + task id + title),
- * latest comment as blockquote, what-to-do-next hint, then a trimmed
+ * Build the structured notification message: header (status + task id +
+ * title), latest comment as blockquote, what-to-do-next hint, then a trimmed
  * slice of the agent's response when it adds info beyond the comment.
  *
  * Exported (alongside `emojiForStatus`) so tests can exercise the
@@ -231,8 +232,8 @@ export function emojiForStatus(status: string, assignee: string | null): string 
 
 /**
  * Default-plugin entry point — loaded via `config.plugins:
- * builtin:discord-notifier`. Constructs a {@link DiscordNotifier} bound to
- * the live runtime and returns a disposer so the loader can tear down the
+ * builtin:agent-notifier`. Constructs an {@link AgentNotifier} bound to the
+ * live runtime and returns a disposer so the loader can tear down the
  * subscription on shutdown / reload.
  *
  * `ctx.config` is intentionally unused: delivery settings (channel, mode,
@@ -242,7 +243,7 @@ export function emojiForStatus(status: string, assignee: string | null): string 
  */
 const plugin: Plugin = (ctx) => {
   if (!ctx.runtime) return;
-  const notifier = new DiscordNotifier({ runtime: ctx.runtime });
+  const notifier = new AgentNotifier({ runtime: ctx.runtime });
   return () => notifier.stop();
 };
 export default plugin;

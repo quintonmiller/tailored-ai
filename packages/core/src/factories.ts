@@ -14,7 +14,6 @@ import { ClaudeCodeTool } from "./tools/claude-code.js";
 import { CoreMemoryTool } from "./tools/core-memory.js";
 import { createCustomTools } from "./tools/custom.js";
 import { DelegateTool } from "./tools/delegate.js";
-import { DiscordDmTool } from "./tools/discord-dm.js";
 import { DocumentsTool } from "./tools/documents.js";
 import { ExecTool } from "./tools/exec.js";
 import { ExtractDocumentTool } from "./tools/extract-document.js";
@@ -23,6 +22,7 @@ import type { Tool } from "./tools/interface.js";
 import { LoadSkillTool } from "./tools/load-skill.js";
 import { MdToPdfTool } from "./tools/md-to-pdf.js";
 import { MemoryTool } from "./tools/memory.js";
+import { NotifyOwnerTool } from "./tools/notify-owner.js";
 import { ProjectsTool } from "./tools/projects.js";
 import { ReadTool } from "./tools/read.js";
 import { RecallTool } from "./tools/recall.js";
@@ -40,8 +40,8 @@ import "./tools/builtin-optional.js";
 import type { AgentRuntime } from "./runtime.js";
 
 export interface CreateToolsOptions {
-  getDiscord?: () => import("./channels/outbound.js").OutboundNotifier | undefined;
-  getOwnerId?: () => string | undefined;
+  resolveOutbound?: (channelId?: string) => import("./channels/outbound.js").OutboundNotifier | undefined;
+  getOwnerId?: (channelId?: string) => string | undefined;
   db?: import("better-sqlite3").Database;
   /** Override the task backend. Defaults to `createTaskBackend(config, db)` when `db` is provided. */
   taskBackend?: TaskBackend;
@@ -152,12 +152,20 @@ export function createTools(
       tools.push(new TasksTool(backend, opts?.db, opts?.notifyTaskEvent, tasksOpts), new TaskQueryTool(backend));
     }
   }
-  if (config.tools.discord_dm?.enabled) {
-    if (opts?.getDiscord) {
-      tools.push(new DiscordDmTool(opts.getDiscord, opts.getOwnerId ?? (() => undefined)));
+  if (config.tools.notify_owner?.enabled) {
+    if (opts?.resolveOutbound) {
+      const channel = config.tools.notify_owner.channel;
+      const resolveOutbound = opts.resolveOutbound;
+      const getOwnerId = opts.getOwnerId ?? (() => undefined);
+      tools.push(
+        new NotifyOwnerTool(
+          (id) => resolveOutbound(id ?? channel),
+          (id) => getOwnerId(id ?? channel),
+        ),
+      );
     } else {
       console.warn(
-        "[factories] tools.discord_dm.enabled is true but no Discord accessor was wired by the host; tool will not be registered.",
+        "[factories] tools.notify_owner.enabled is true but no outbound accessor was wired by the host; tool will not be registered.",
       );
     }
   }
@@ -185,8 +193,8 @@ export function createTools(
     tools.push(
       new AskUserTool({
         contextDir,
-        getDiscord: opts?.getDiscord ?? (() => undefined),
-        getOwnerId: opts?.getOwnerId ?? (() => undefined),
+        resolveOutbound: () => opts?.resolveOutbound?.(),
+        getOwnerId: () => opts?.getOwnerId?.(),
       }),
     );
   }

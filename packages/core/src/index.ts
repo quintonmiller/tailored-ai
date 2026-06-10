@@ -424,13 +424,13 @@ export {
   type ToolRegistryView,
   type UiProviderRegistryView,
 } from "./plugin-context.js";
-export { CoderProjectGuard, type CoderProjectGuardOptions } from "./plugins/coder-project-guard.js";
 export {
-  buildNotification as buildDiscordNotification,
-  DiscordNotifier,
-  type DiscordNotifierOptions,
+  AgentNotifier,
+  type AgentNotifierOptions,
+  buildNotification,
   emojiForStatus,
-} from "./plugins/discord-notifier.js";
+} from "./plugins/agent-notifier.js";
+export { CoderProjectGuard, type CoderProjectGuardOptions } from "./plugins/coder-project-guard.js";
 export {
   ScopeCreepFlagger,
   type ScopeCreepFlaggerOptions,
@@ -717,8 +717,8 @@ export {
   WorkflowError,
 } from "./workflows/engine.js";
 export { AgentRunExecutor } from "./workflows/executors/agent-run.js";
-export type { DiscordMessageExecutorOptions, DiscordSender } from "./workflows/executors/discord-message.js";
-export { DiscordMessageExecutor } from "./workflows/executors/discord-message.js";
+export type { ChannelMessageExecutorOptions } from "./workflows/executors/channel-message.js";
+export { ChannelMessageExecutor } from "./workflows/executors/channel-message.js";
 export { FormExecutor, type FormExecutorOptions } from "./workflows/executors/form.js";
 export { HttpRequestExecutor } from "./workflows/executors/http-request.js";
 export { LoopExecutor } from "./workflows/executors/loop.js";
