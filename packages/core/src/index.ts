@@ -423,6 +423,7 @@ export {
   type PluginDisposer,
   type ProviderRegistryView,
   type RepoBackendRegistryView,
+  type StepExecutorRegistryView,
   type TaskBackendRegistryView,
   type ToolRegistryView,
   type UiProviderRegistryView,
@@ -574,6 +575,8 @@ export {
   readSkillMd,
   renderSkillMd,
   SkillRegistry,
+  type StepExecutorContext,
+  type StepExecutorFactory,
   StepExecutorRegistry,
   TaiRegistrySource,
   ToolRegistry,
@@ -721,6 +724,7 @@ export {
   type TokensByWorkflow,
   tokenUsageByWorkflow,
 } from "./workflows/analytics.js";
+export { populateBuiltinExecutors } from "./workflows/builtin-executors.js";
 export {
   CancelledError,
   DeadlineError,
