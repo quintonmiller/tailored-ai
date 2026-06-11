@@ -4,6 +4,7 @@ import YAML from "yaml";
 import type { PermissionsConfig } from "./approval.js";
 import { DEFAULT_BRIEFING_PROMPT } from "./briefing.js";
 import { DEFAULT_SUGGESTIONS_PROMPT } from "./suggestions.js";
+import { META_TOOL_NAMES } from "./tools/tool-factories.js";
 
 export interface ModelEntry {
   provider: string;
@@ -989,8 +990,8 @@ export function validateConfig(config: AgentConfig): string[] {
     }
     enabledToolNames.add(name);
   }
-  // Meta tools are always available
-  for (const name of ["delegate", "task_status", "admin", "memory", "ask_user"]) {
+  // Meta tools are always available (list is authoritative in META_TOOL_NAMES)
+  for (const name of META_TOOL_NAMES) {
     enabledToolNames.add(name);
   }
 
