@@ -108,3 +108,20 @@ Endpoints (`packages/server`):
 - `POST /api/briefing/refresh` — force a regenerate; `429` if a generation is already running.
 
 Model override: `briefing.model` swaps the model used against the active provider. A per-agent override (resolving a *different* provider via `resolveAgent`) was scoped but deferred — wiring a distinct provider instance per agent is heavier than the model swap, so it's a follow-up; use `model` for now.
+
+## Chat suggestion chips
+
+The same pattern, applied to the Chat empty state. `packages/core/src/suggestions.ts` exposes `generateSuggestions(runtime)`, which reuses the briefing's `assembleBriefingContext` and runs **one** provider completion asking for `count` short imperative/question prompts, one per line. The response is parsed robustly — leading bullets (`-`/`*`/`•`), numbering (`1.`/`2)`), and wrapping quotes are stripped, blanks and lines over 100 chars are dropped, the list is de-duplicated and capped at `count`; if fewer than **2** usable lines survive it returns `[]` so the UI falls back to its plain empty state rather than rendering garbage. Off by default — no behavior or token cost unless enabled.
+
+```yaml
+suggestions:
+  enabled: false        # master switch — when false /api/suggestions returns { enabled: false } with no provider call
+  prompt: <generic default>   # system prompt; replaceable per install
+  count: 4              # how many chips to ask for (hard-capped at 6)
+  ttlMinutes: 15        # cache freshness window (shorter than briefing — chips track current state)
+  model: ""             # optional model override against the active provider; omit to use the runtime default
+```
+
+Default prompt: *"You are the user's personal assistant. From the state below, write short prompts the user could send you right now to make progress. Output one prompt per line, each an imperative or a question under 60 characters. No numbering, no bullets, no quotes, no extra text. If nothing stands out, write generally useful prompts."*
+
+`GET /api/suggestions` — `{ enabled: false }` when disabled (no provider call). When enabled, returns `{ enabled: true, suggestions, generatedAt }`: serves a fresh cached result within `ttlMinutes`, otherwise generates one (cached in process memory, single-flighted). TTL-only — there's no refresh endpoint. The web UI renders the suggestions as ghost-button chips above the Chat (and Chat dock) empty-state text, only when ≥2 are returned; clicking a chip sends it as a normal user message.

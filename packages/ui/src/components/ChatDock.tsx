@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { groupTurns } from "../chat-grouping";
 import { useChatStore } from "./ChatContext";
 import { MessageBubble } from "./MessageBubble";
+import { SuggestionChips } from "./SuggestionChips";
 
 type DockMode = "floating" | "docked-left" | "docked-right";
 
@@ -372,7 +373,10 @@ export function ChatDock() {
       )}
       <div className="chat-dock-messages">
         {displayMessages.length === 0 && !store.sending && (
-          <div className="chat-dock-empty">Ask the agent something. Cmd-K to toggle this dock.</div>
+          <div className="chat-dock-empty">
+            <SuggestionChips onPick={(text) => store.send(text)} />
+            <div className="chat-empty-text">Ask the agent something. Cmd-K to toggle this dock.</div>
+          </div>
         )}
         {displayMessages.map((m, i) => (
           <MessageBubble key={i} message={m} />

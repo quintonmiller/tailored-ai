@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import YAML from "yaml";
 import type { PermissionsConfig } from "./approval.js";
 import { DEFAULT_BRIEFING_PROMPT } from "./briefing.js";
+import { DEFAULT_SUGGESTIONS_PROMPT } from "./suggestions.js";
 
 export interface ModelEntry {
   provider: string;
@@ -740,6 +741,32 @@ export interface AgentConfig {
      *  `chat_template_kwargs: { enable_thinking: false }`). */
     providerExtra?: Record<string, unknown>;
   };
+  /**
+   * Chat empty-state suggestion chips. Off by default — when disabled the
+   * server's `/api/suggestions` returns `{ enabled: false }` with no provider
+   * call, so there's no behavior or token cost for non-users. When enabled, the
+   * server runs ONE provider completion against the same compact, data-only
+   * context the briefing uses and caches the result for `ttlMinutes`. The model
+   * is asked for `count` short prompts; `prompt` is the system prompt (a generic
+   * default ships in DEFAULT_CONFIG, replaceable per install). `model`
+   * optionally overrides the model used (against the active provider); omit it
+   * to use the runtime default. See docs/tasks-and-autopilot.md.
+   */
+  suggestions?: {
+    enabled?: boolean;
+    prompt?: string;
+    count?: number;
+    ttlMinutes?: number;
+    model?: string;
+    /** Completion token cap for the generation call. Thinking models spend
+     *  reasoning tokens from this budget, so keep headroom above the
+     *  expected output length. */
+    maxTokens?: number;
+    /** Opaque provider-specific request fields for the generation call,
+     *  passed through as `ChatParams.extra` (e.g. vLLM's
+     *  `chat_template_kwargs: { enable_thinking: false }`). */
+    providerExtra?: Record<string, unknown>;
+  };
 }
 
 const DEFAULT_CONFIG: AgentConfig = {
@@ -825,6 +852,12 @@ const DEFAULT_CONFIG: AgentConfig = {
     enabled: false,
     prompt: DEFAULT_BRIEFING_PROMPT,
     ttlMinutes: 30,
+  },
+  suggestions: {
+    enabled: false,
+    prompt: DEFAULT_SUGGESTIONS_PROMPT,
+    count: 4,
+    ttlMinutes: 15,
   },
 };
 

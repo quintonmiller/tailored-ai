@@ -1061,6 +1061,50 @@ button {
   text-align: center;
   padding: 64px 24px;
   font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.chat-empty-text {
+  color: var(--text-dim);
+}
+
+/* Empty-state suggestion chips (ghost-button row, wraps). Fades in when the
+ * /api/suggestions fetch resolves so a slow model doesn't jolt the layout. */
+.chat-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  max-width: 520px;
+  animation: chat-suggestions-in 0.2s ease-out;
+}
+
+.chat-suggestion-chip {
+  display: inline-flex;
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 12px;
+  font-family: var(--font);
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.chat-suggestion-chip:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+  background: var(--bg-hover);
+}
+
+@keyframes chat-suggestions-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 /* Session sidebar */
@@ -6568,6 +6612,10 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
   font-size: 12px;
   text-align: center;
   padding: 24px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
 }
 .chat-dock-composer {
   display: flex;

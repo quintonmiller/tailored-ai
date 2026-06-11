@@ -3,6 +3,7 @@ import { fetchMessages, type SessionRow, setStoredChatSessionId } from "../api";
 import { groupTurns } from "../chat-grouping";
 import { useChatStore } from "../components/ChatContext";
 import { MessageBubble, ToolLogPanel } from "../components/MessageBubble";
+import { SuggestionChips } from "../components/SuggestionChips";
 import { VoiceInputButton } from "../components/VoiceInputButton";
 import { useActiveProject } from "../hooks/useActiveProject";
 
@@ -220,8 +221,11 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
         <div className="chat-messages">
           {store.messages.length === 0 && !store.sending && (
             <div className="chat-empty-state">
-              Send a message to start a conversation
-              {store.selectedAgent ? ` with the "${store.selectedAgent}" agent` : ""}.
+              <SuggestionChips onPick={(text) => store.send(text)} />
+              <div className="chat-empty-text">
+                Send a message to start a conversation
+                {store.selectedAgent ? ` with the "${store.selectedAgent}" agent` : ""}.
+              </div>
             </div>
           )}
           {displayMessages.map((m, i) => (
