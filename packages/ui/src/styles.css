@@ -281,328 +281,707 @@ button {
   margin: 0 auto;
 }
 
-/* New home dashboard layout */
-.dashboard-home {
-  max-width: 1100px;
+/* Home (assistant-first) ---------------------------------------------------
+
+   The agent speaks (serif briefing hero), shows what needs you (hairline
+   stack), and listens (docked ask bar). Single centered mono column with one
+   warm serif voice for the briefing prose. All other chrome uses --font.    */
+
+.home {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  /* a touch of warmth behind the hero — accent at low alpha, large radius */
+  background: radial-gradient(60% 42% at 50% 8%, rgba(108, 138, 255, 0.05), transparent 70%);
+}
+
+/* Two-zone layout: primary column + ambient "Today" rail. Below the breakpoint
+   the grid collapses to one column and the rail stacks beneath (see media query
+   at the end of the home block). The grid itself is centered by .home. */
+.home-grid {
+  width: 100%;
+  max-width: 960px;
+  min-height: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 640px) 264px;
+  justify-content: center;
+  column-gap: 52px;
+  padding: 48px 24px 0;
+}
+
+.home-col {
+  width: 100%;
+  max-width: 640px;
+  min-height: 100%;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 36px;
 }
 
-.dash-section {
+/* The ask bar + footer sink to the bottom of the column, and stick to the
+   bottom of the app scroller when the column overflows the viewport — the
+   thread + ask bar are the live surface, so they must stay reachable without
+   scrolling. Solid background: content scrolls under, never through. */
+.home-dock {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 12px;
+  position: sticky;
+  bottom: 0;
+  background: var(--bg);
+  padding-bottom: 20px;
+}
+
+/* Soften the edge where scrolling content slides under the sticky dock. */
+.home-dock::before {
+  content: "";
+  position: absolute;
+  top: -18px;
+  left: 0;
+  right: 0;
+  height: 18px;
+  background: linear-gradient(to bottom, transparent, var(--bg));
+  pointer-events: none;
+}
+
+/* Eyebrow status line */
+.home-eyebrow {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  text-transform: lowercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Briefing hero — the serif voice */
+.home-hero {
+  min-height: 96px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* The warm serif voice stays, but the body now sets UPRIGHT for readability —
+   briefings are short, so the hero tightens slightly (20px / 1.55). Italic is
+   reserved for the single greeting accent below. */
+.home-hero-prose,
+.home-hero-prose p,
+.home-hero-prose li {
+  font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+  font-style: normal;
+  font-size: 20px;
+  line-height: 1.55;
+  color: #e9e3d8;
+}
+
+.home-hero-prose p {
+  margin: 0 0 8px;
+}
+
+.home-hero-prose p:last-child {
+  margin-bottom: 0;
+}
+
+.home-hero-prose ul,
+.home-hero-prose ol {
+  margin: 8px 0;
+  padding-left: 24px;
+}
+
+.home-hero-prose li {
+  margin: 2px 0;
+}
+
+.home-hero-prose strong {
+  font-weight: 600;
+}
+
+/* The disabled-state greeting keeps the italic accent — the one place the
+   serif leans, so it reads as a warm spoken line, not body copy. */
+.home-hero-greeting {
+  font-style: italic;
+}
+
+.home-hero-prose a {
+  color: inherit;
+  text-decoration-color: var(--accent);
+}
+
+.home-hero-prose code {
+  font-family: var(--font);
+  font-style: normal;
+  font-size: 0.82em;
   background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 14px 18px;
+  padding: 1px 5px;
+  border-radius: 4px;
 }
 
-.dash-section-alert {
-  border-color: var(--amber);
+.home-hero-loading {
+  font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+  font-style: normal;
+  font-size: 20px;
+  line-height: 1.55;
+  color: var(--text-dim);
 }
 
-.dash-section-header {
+.home-caret {
+  display: inline-block;
+  margin-left: 2px;
+  font-style: normal;
+  color: var(--accent);
+  animation: home-caret-pulse 1.1s steps(1, end) infinite;
+}
+
+@keyframes home-caret-pulse {
+  0%, 50% { opacity: 1; }
+  50.01%, 100% { opacity: 0; }
+}
+
+.home-hero-caption {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-
-.dash-section-header h3 {
-  font-size: 13px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-dim);
-  font-weight: 600;
-  margin: 0;
-}
-
-.dash-section-badge {
-  background: var(--amber);
-  color: #1a1d27;
-  font-size: 11px;
-  font-weight: 700;
-  padding: 1px 7px;
-  border-radius: 10px;
-}
-
-.dash-empty {
-  font-size: 13px;
-  color: var(--text-dim);
-  padding: 6px 0;
-}
-
-/* BRIEFING card — LLM-written Home summary at the top of the dashboard. */
-.briefing-card {
-  border-left: 2px solid var(--accent);
-}
-
-.briefing-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 8px;
-}
-
-.briefing-header h3 {
-  font-size: 13px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-dim);
-  font-weight: 600;
-  margin: 0;
-}
-
-.briefing-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-}
-
-.briefing-time {
+  gap: 7px;
   font-size: 11px;
   color: var(--text-dim);
 }
 
-.briefing-stale {
-  font-size: 10px;
+.home-hero-stale {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--amber);
   border: 1px solid var(--amber);
   border-radius: 4px;
-  padding: 0 5px;
+  padding: 0 4px;
 }
 
-.briefing-refresh {
+.home-hero-refresh {
   background: none;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  border: none;
   color: var(--text-dim);
   cursor: pointer;
   font-size: 13px;
   line-height: 1;
-  padding: 3px 7px;
+  padding: 0;
 }
 
-.briefing-refresh:hover:not(:disabled) {
+.home-hero-refresh:hover:not(:disabled) {
   color: var(--accent);
-  border-color: var(--accent);
 }
 
-.briefing-refresh:disabled {
+.home-hero-refresh:disabled {
   cursor: default;
-  opacity: 0.7;
+  opacity: 0.6;
 }
 
-.briefing-spinner {
+.home-hero-spin {
   display: inline-block;
   animation: spin 0.8s linear infinite;
 }
 
-.briefing-body {
-  font-size: 14px;
-  line-height: 1.55;
-  color: var(--text);
+/* Section heading shared by NEEDS YOU */
+.home-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 8px;
 }
 
-.briefing-skeleton {
-  height: 64px;
-  border-radius: var(--radius);
-  background: var(--bg-hover);
+.home-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-dim);
+  margin: 0;
 }
 
-/* NOW */
-.dash-now-list {
+.home-section-count {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* NEEDS YOU stack — hairline rows, not cards */
+.home-needs-empty {
+  font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+  font-style: normal;
+  font-size: 16px;
+  color: var(--text-dim);
+}
+
+.home-needs-list {
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 6px;
 }
 
-.dash-now-item {
+.home-needs-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
+  padding: 11px 0;
+  border-top: 1px solid var(--border);
   font-size: 13px;
 }
 
-.dash-now-pulse {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--green);
-  box-shadow: 0 0 0 0 var(--green);
-  animation: dashPulse 1.6s infinite;
+.home-needs-row:last-child {
+  border-bottom: 1px solid var(--border);
+}
+
+.home-needs-title {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-needs-age {
+  font-size: 12px;
+  color: var(--text-dim);
   flex-shrink: 0;
 }
 
-@keyframes dashPulse {
-  0% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.5); }
-  70% { box-shadow: 0 0 0 6px rgba(74, 222, 128, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0); }
-}
-
-.dash-now-label {
-  font-weight: 600;
-  color: var(--text);
-}
-
-.dash-now-desc {
-  color: var(--text-dim);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* NEEDS HUMAN */
-.dash-needs-list {
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.dash-needs-item {
-  display: grid;
-  grid-template-columns: 90px 1fr auto;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 10px;
+.home-needs-action {
+  flex-shrink: 0;
+  padding: 4px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--bg);
-  font-size: 13px;
-}
-
-.dash-needs-kind {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-weight: 600;
+  font-size: 12px;
   color: var(--text-dim);
-}
-
-.dash-needs-form .dash-needs-kind { color: var(--accent); }
-.dash-needs-approval .dash-needs-kind { color: var(--amber); }
-.dash-needs-blocked .dash-needs-kind { color: var(--amber); }
-.dash-needs-failed .dash-needs-kind { color: var(--red); }
-
-.dash-needs-title {
-  color: var(--text);
   text-decoration: none;
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s;
 }
 
-.dash-needs-title:hover {
+.home-needs-action:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+.home-needs-more a {
+  font-size: 12px;
+  color: var(--text-dim);
+  text-decoration: none;
+}
+
+.home-needs-more a:hover {
   color: var(--accent);
 }
 
-.dash-needs-meta {
+/* Quick actions — ghost suggestion chips */
+.home-actions:empty {
+  display: none;
+}
+
+/* Docked ask bar */
+.home-ask {
+  position: sticky;
+  bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 8px 14px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28);
+}
+
+.home-ask:focus-within {
+  border-color: var(--accent);
+}
+
+.home-ask-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.home-ask-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font: 14px var(--font);
+}
+
+.home-ask-input::placeholder {
+  color: var(--text-dim);
+}
+
+.home-ask-send {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  color: #0f1117;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.home-ask-send:disabled {
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  cursor: default;
+}
+
+/* Footer status line */
+.home-foot {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   font-size: 12px;
   color: var(--text-dim);
 }
 
-/* UPCOMING */
-.dash-upcoming {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 14px;
+.home-foot-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green);
 }
 
-.dash-upcoming-group h4 {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+.home-foot-dot.error {
+  background: var(--red);
+}
+
+.home-foot a {
   color: var(--text-dim);
-  margin-bottom: 8px;
+  text-decoration: none;
+}
+
+.home-foot a:hover {
+  color: var(--accent);
+}
+
+/* --- Today rail (secondary, ambient) --------------------------------------
+   Deliberately quieter than the main column: smaller type, dimmer color, a
+   hairline left border. Reads as peripheral vision, not a second column. */
+.home-rail {
+  border-left: 1px solid var(--border);
+  padding: 64px 0 24px 28px;
+  margin-top: -64px; /* pull the rail's top flush with the column's top padding */
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-self: stretch;
+}
+
+.home-rail-label {
+  font-size: 10px;
   font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--text-dim);
+  margin: 0;
 }
 
-.dash-upcoming-list {
+.home-rail-empty {
+  font-size: 12px;
+  color: var(--text-dim);
+  opacity: 0.7;
+}
+
+.home-rail-list {
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 9px;
 }
 
-.dash-upcoming-list li a {
+.home-rail-row {
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.home-rail-link,
+.home-rail-static {
   display: flex;
-  justify-content: space-between;
+  gap: 9px;
+  align-items: baseline;
+  color: var(--text-dim);
+  text-decoration: none;
+}
+
+.home-rail-link {
+  transition: color 0.15s;
+}
+
+.home-rail-link:hover {
+  color: var(--text);
+}
+
+.home-rail-link:hover .home-rail-time {
+  color: var(--accent-dim);
+}
+
+.home-rail-time {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--accent-dim);
+  letter-spacing: 0.02em;
+}
+
+.home-rail-text {
+  min-width: 0;
+  overflow: hidden;
+  /* Two-line clamp: rail entries are terse but shouldn't be amputated mid-word
+     after a dozen characters the way a single-line ellipsis leaves them. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* Newly-arrived rows fade in subtly without re-animating the whole list. */
+.home-rail-fresh {
+  animation: home-rail-fade 0.5s ease-out;
+}
+
+@keyframes home-rail-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* --- Inline live thread ----------------------------------------------------
+   The lightweight surface above the ask bar: the tail of the current session,
+   a sending status row, and inline approvals. Quiet — no cards, no tool logs. */
+.home-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.home-thread-scroll {
+  max-height: 340px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-right: 4px;
+  /* Mask the top edge so scrolled-up content fades rather than clips hard. */
+  mask-image: linear-gradient(to bottom, transparent 0, #000 14px);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 14px);
+}
+
+.home-thread-line {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.home-thread-label {
+  font-size: 10px;
+  text-transform: lowercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+
+.home-thread-user .home-thread-label {
+  color: var(--accent-dim);
+}
+
+.home-thread-body {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.home-thread-user .home-thread-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Trim markdown-body margins so assistant lines stay compact in the tail. */
+.home-thread-body.markdown-body > :first-child {
+  margin-top: 0;
+}
+
+.home-thread-body.markdown-body > :last-child {
+  margin-bottom: 0;
+}
+
+.home-thread-status {
+  display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 10px;
-  background: var(--bg);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.home-thread-status-text {
+  display: inline-flex;
+  align-items: baseline;
+}
+
+.home-thread-stop {
+  background: none;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  text-decoration: none;
-  color: var(--text);
-  font-size: 13px;
+  color: var(--text-dim);
+  font: 11px var(--font);
+  padding: 2px 9px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
 }
 
-.dash-upcoming-list li a:hover {
-  border-color: var(--accent);
+.home-thread-stop:hover {
+  color: var(--red);
+  border-color: var(--red);
 }
 
-.dash-upcoming-title {
+.home-thread-approval {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.home-thread-approval-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.home-thread-approval-tool {
+  font-size: 12px;
+  color: var(--amber);
+}
+
+.home-thread-approval-desc {
+  font-size: 12px;
+  color: var(--text-dim);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.dash-upcoming-assignee {
-  font-size: 11px;
-  color: var(--text-dim);
+.home-thread-approval-actions {
   flex-shrink: 0;
+  display: flex;
+  gap: 6px;
 }
 
-/* RECENT */
-.dash-recent-list {
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.dash-recent-item a {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 10px;
-  background: var(--bg);
+.home-thread-approve,
+.home-thread-reject {
+  background: none;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  text-decoration: none;
-  color: var(--text);
-  font-size: 13px;
+  font: 11px var(--font);
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
 }
 
-.dash-recent-item a:hover {
-  border-color: var(--accent);
+.home-thread-approve {
+  color: var(--green);
 }
 
-.dash-recent-failed a { border-left: 3px solid var(--red); }
-.dash-recent-completed a { border-left: 3px solid var(--green); }
-.dash-recent-cancelled a { border-left: 3px solid var(--text-dim); }
-.dash-recent-interrupted a { border-left: 3px solid var(--amber); }
-.dash-recent-ok a { border-left: 3px solid var(--accent); }
-.dash-recent-idle a { border-left: 3px solid var(--text-dim); }
-.dash-recent-noop a { border-left: 3px solid var(--text-dim); }
-
-.dash-recent-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.home-thread-approve:hover {
+  border-color: var(--green);
 }
 
-.dash-recent-meta {
+.home-thread-reject {
+  color: var(--text-dim);
+}
+
+.home-thread-reject:hover {
+  color: var(--red);
+  border-color: var(--red);
+}
+
+.home-thread-open {
+  align-self: flex-start;
   font-size: 11px;
   color: var(--text-dim);
-  flex-shrink: 0;
+  text-decoration: none;
+}
+
+.home-thread-open:hover {
+  color: var(--accent);
+}
+
+/* Motion — one orchestrated fade-up per load */
+.home-reveal {
+  opacity: 0;
+  transform: translateY(6px);
+  animation: home-reveal-in 0.34s ease-out forwards;
+  animation-delay: var(--home-reveal-delay, 0ms);
+}
+
+@keyframes home-reveal-in {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-reveal {
+    opacity: 1;
+    transform: none;
+    animation: none;
+  }
+  .home-caret,
+  .home-hero-spin,
+  .home-rail-fresh {
+    animation: none;
+  }
+}
+
+/* Below ~1024px the rail loses its dedicated column: the grid collapses to one
+   column and the rail stacks beneath the main column as a full-width strip. */
+@media (max-width: 1023px) {
+  .home-grid {
+    grid-template-columns: minmax(0, 640px);
+    max-width: 640px;
+  }
+  .home-rail {
+    border-left: none;
+    border-top: 1px solid var(--border);
+    padding: 24px 0 0;
+    margin-top: 0;
+  }
+}
+
+/* Mobile — full width with 20px gutters, ask bar stays usable */
+@media (max-width: 720px) {
+  .home-grid {
+    max-width: none;
+    padding: 40px 20px 20px;
+  }
+  .home-col {
+    max-width: none;
+    gap: 28px;
+  }
+  .home-hero-prose,
+  .home-hero-prose p,
+  .home-hero-prose li,
+  .home-hero-loading {
+    font-size: 18px;
+  }
 }
 
 /* Resource picker modal */
@@ -836,44 +1215,6 @@ button {
   margin-top: 16px;
 }
 
-/* Compact health footer */
-.dash-health-footer {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 12px;
-  color: var(--text-dim);
-  padding: 8px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg);
-  flex-wrap: wrap;
-}
-
-.dash-health-footer a {
-  color: var(--text-dim);
-  text-decoration: none;
-}
-
-.dash-health-footer a:hover {
-  color: var(--accent);
-}
-
-.dash-health-pip {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--red);
-}
-
-.dash-health-pip.ok {
-  background: var(--green);
-}
-
-.dash-health-sep {
-  opacity: 0.5;
-}
-
 .dashboard h2 {
   font-size: 16px;
   margin-bottom: 16px;
@@ -1100,6 +1441,14 @@ button {
   color: var(--text);
   border-color: var(--text-dim);
   background: var(--bg-hover);
+}
+
+/* Home variant: left-aligned wrapped row of ghost chips (no animation — the
+   Home page owns the reveal motion on the wrapping container). */
+.chat-suggestions-row {
+  justify-content: flex-start;
+  max-width: none;
+  animation: none;
 }
 
 @keyframes chat-suggestions-in {
@@ -6133,78 +6482,6 @@ select.model-entry-model {
 .memory-empty {
   font-style: italic;
   color: var(--text-muted);
-}
-
-/* Dashboard mobile (extracted from the former inline Dashboard <style>). */
-@media (max-width: 640px) {
-  .dashboard-home {
-    padding: 12px;
-    gap: 12px;
-  }
-  .dashboard-home .dash-section {
-    padding: 12px 14px;
-  }
-  .dashboard-home .dash-upcoming {
-    grid-template-columns: 1fr;
-    gap: 10px;
-  }
-  .dashboard-home .dash-needs-item {
-    grid-template-columns: 1fr;
-    gap: 6px;
-    padding: 10px 12px;
-    min-height: 44px;
-  }
-  .dashboard-home .dash-needs-item > a {
-    min-height: 44px;
-    display: flex;
-    align-items: center;
-  }
-  .dashboard-home .dash-now-item {
-    min-height: 44px;
-    align-items: flex-start;
-    padding: 6px 0;
-  }
-  .dashboard-home .dash-recent-item a {
-    min-height: 44px;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 4px;
-    padding: 10px 12px;
-  }
-  .dashboard-home .dash-recent-meta {
-    align-self: flex-start;
-  }
-  .dashboard-home .dash-upcoming-list li a {
-    min-height: 44px;
-    padding: 10px 12px;
-  }
-  .dashboard-home .dash-health-footer {
-    flex-wrap: wrap;
-    gap: 6px;
-    padding: 10px 12px;
-    min-height: 44px;
-  }
-  .dashboard-home .dash-health-footer a {
-    min-height: 44px;
-    display: flex;
-    align-items: center;
-  }
-  .dashboard-home .dash-section-header {
-    padding: 4px 0;
-  }
-  .dashboard-home .dash-section-header h3 {
-    font-size: 12px;
-  }
-  .dashboard-home .dash-empty {
-    min-height: 44px;
-    display: flex;
-    align-items: center;
-  }
-  .dashboard-home .dash-empty a {
-    min-height: 44px;
-    display: inline-flex;
-    align-items: center;
-  }
 }
 
 /* ---- Agents page ---- */

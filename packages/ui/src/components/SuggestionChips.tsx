@@ -12,7 +12,14 @@ import { fetchSuggestions, type SuggestionsResponse } from "../api";
  * first and the chips fade in when ready, so there's no layout jolt on a slow
  * model.
  */
-export function SuggestionChips({ onPick }: { onPick: (text: string) => void }) {
+export function SuggestionChips({
+  onPick,
+  variant = "centered",
+}: {
+  onPick: (text: string) => void;
+  /** "centered" is the chat empty-state layout; "row" is the left-aligned Home layout. */
+  variant?: "centered" | "row";
+}) {
   const [state, setState] = useState<SuggestionsResponse | null>(null);
 
   useEffect(() => {
@@ -35,7 +42,11 @@ export function SuggestionChips({ onPick }: { onPick: (text: string) => void }) 
   if (!state?.enabled || state.suggestions.length < 2) return null;
 
   return (
-    <div className="chat-suggestions" role="group" aria-label="Suggested prompts">
+    <div
+      className={`chat-suggestions${variant === "row" ? " chat-suggestions-row" : ""}`}
+      role="group"
+      aria-label="Suggested prompts"
+    >
       {state.suggestions.map((text) => (
         <button key={text} type="button" className="chat-suggestion-chip" onClick={() => onPick(text)}>
           {text}

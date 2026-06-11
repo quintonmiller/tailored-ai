@@ -88,7 +88,9 @@ export function ChatDock() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  const onChatPage = hash.startsWith("#/chat");
+  // Hidden on routes that already host the shared conversation: the full
+  // Chat page and Home (which embeds the live thread + ask bar).
+  const onChatPage = hash.startsWith("#/chat") || hash === "" || hash === "#/" || hash === "#";
 
   // Persist mode + sizes whenever they change.
   useEffect(() => {
