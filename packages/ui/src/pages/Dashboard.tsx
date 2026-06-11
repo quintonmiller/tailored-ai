@@ -260,14 +260,17 @@ function QuickActions({ onPick }: { onPick: (text: string) => void }) {
 function Thread({ store }: { store: ChatStore }) {
   const { messages, sending, activeTool, activityDesc, approvals } = store;
   const tail = messages.slice(-THREAD_TAIL);
-  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
 
   // One signature that flips whenever the visible thread changes (new message,
   // a tool starts/stops, the status line updates). The effect reads it so the
   // dependency is honest while still re-scrolling on every relevant change.
+  // Scroll only the thread's own box — scrollIntoView would also scroll the
+  // app scroller, yanking the whole page down on mount.
   const scrollSig = `${messages.length}|${sending}|${activeTool ?? ""}|${activityDesc ?? ""}`;
   useEffect(() => {
-    if (scrollSig) bottomRef.current?.scrollIntoView({ block: "end" });
+    const el = scrollRef.current;
+    if (scrollSig && el) el.scrollTop = el.scrollHeight;
   }, [scrollSig]);
 
   const hasContent = tail.length > 0 || sending || approvals.length > 0;
@@ -277,7 +280,7 @@ function Thread({ store }: { store: ChatStore }) {
 
   return (
     <div className="home-thread">
-      <div className="home-thread-scroll">
+      <div className="home-thread-scroll" ref={scrollRef}>
         {tail.map((m, i) => (
           <ThreadLine key={`${i}-${m.role}`} role={m.role} content={m.content} agentName={resolveAgentName(store)} />
         ))}
@@ -313,7 +316,6 @@ function Thread({ store }: { store: ChatStore }) {
           </div>
         ))}
 
-        <div ref={bottomRef} />
       </div>
       {tail.length > 0 && (
         <a className="home-thread-open" href="#/chat">
