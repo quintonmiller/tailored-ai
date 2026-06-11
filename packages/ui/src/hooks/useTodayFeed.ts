@@ -229,9 +229,15 @@ function firstLine(content: string): string {
   return trimmed.length > 120 ? `${trimmed.slice(0, 117)}…` : trimmed;
 }
 
-function parseTime(value: string | null | undefined): Date | null {
+/** ISO-like timestamp with no zone designator (SQLite's `YYYY-MM-DD HH:MM:SS`). */
+const NO_ZONE = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2})?(\.\d+)?$/;
+
+export function parseTime(value: string | null | undefined): Date | null {
   if (!value) return null;
-  const d = new Date(value);
+  // The server stores UTC, but SQLite timestamps carry no zone marker and JS
+  // parses bare strings as LOCAL time — skewing rows by the UTC offset and
+  // breaking sort + day grouping. No explicit zone → treat as UTC.
+  const d = NO_ZONE.test(value) ? new Date(`${value.replace(" ", "T")}Z`) : new Date(value);
   return Number.isNaN(d.getTime()) ? null : d;
 }
 

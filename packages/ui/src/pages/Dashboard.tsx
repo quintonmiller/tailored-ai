@@ -13,7 +13,7 @@ import {
 import { useChatStore } from "../components/ChatContext";
 import { SuggestionChips } from "../components/SuggestionChips";
 import { type NeedsYouItem, useNeedsYou } from "../hooks/useNeedsYou";
-import { type FeedItem, useTodayFeed } from "../hooks/useTodayFeed";
+import { type FeedItem, parseTime, useTodayFeed } from "../hooks/useTodayFeed";
 
 marked.setOptions({ breaks: true, gfm: true });
 
@@ -442,7 +442,10 @@ function relTime(epochMs: number): string {
 }
 
 function shortAge(iso: string): string {
-  const d = new Date(iso);
+  // parseTime handles SQLite's zone-less UTC strings; a bare new Date() would
+  // skew these by the UTC offset (and can land in the future).
+  const d = parseTime(iso);
+  if (!d) return "";
   const diffMs = Date.now() - d.getTime();
   const m = Math.floor(diffMs / 60000);
   if (m < 1) return "now";
