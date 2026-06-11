@@ -37,6 +37,7 @@ import {
   formatHits,
   GitResourceSource,
   generateBriefing,
+  generateSuggestions,
   getAutopilotSettings,
   getDefaultProjectId,
   getDocument,
@@ -84,6 +85,7 @@ import {
   runAgentLoop,
   runMemorySweep,
   SESSION_SUMMARY_TAG,
+  type Suggestions,
   saveMessage,
   setSecret,
   summarizeSession,
@@ -261,6 +263,36 @@ export function createServer(opts: ServerOptions) {
         briefingInflight = null;
       });
     briefingInflight = p;
+    return p;
+  }
+
+  // --- Suggestions cache (server-process lifetime, single entry) ---
+  //
+  // Same TTL + single-flight contract as the briefing cache above, but for the
+  // chat empty-state suggestion chips. Defaults to a shorter `ttlMinutes` since
+  // suggestions track current state more tightly than a daily briefing.
+  let suggestionsCache: Suggestions | null = null;
+  let suggestionsInflight: Promise<Suggestions> | null = null;
+
+  function suggestionsTtlMs(): number {
+    const minutes = runtime.getConfig().suggestions?.ttlMinutes ?? 15;
+    return Math.max(0, minutes) * 60_000;
+  }
+  function suggestionsIsStale(s: Suggestions | null): boolean {
+    if (!s) return true;
+    return Date.now() - s.generatedAt >= suggestionsTtlMs();
+  }
+  function runSuggestions(): Promise<Suggestions> {
+    if (suggestionsInflight) return suggestionsInflight;
+    const p = generateSuggestions(runtime)
+      .then((s) => {
+        suggestionsCache = s;
+        return s;
+      })
+      .finally(() => {
+        suggestionsInflight = null;
+      });
+    suggestionsInflight = p;
     return p;
   }
 
@@ -1815,6 +1847,42 @@ export function createServer(opts: ServerOptions) {
       const b = await runBriefing();
       return c.json({ enabled: true, content: b.content, generatedAt: b.generatedAt, stale: false });
     } catch (err) {
+      return c.json({ error: (err as Error).message }, 500);
+    }
+  });
+
+  // --- Suggestions endpoint ---
+  //
+  // GET returns cached chat suggestion chips (generating on first call / when
+  // stale). No refresh endpoint — chips are TTL-only. A no-op returning
+  // `{ enabled: false }` when `suggestions.enabled` is off: no provider call,
+  // no token cost.
+
+  app.get("/api/suggestions", async (c) => {
+    if (runtime.getConfig().suggestions?.enabled !== true) {
+      return c.json({ enabled: false });
+    }
+    // Fresh cache: serve it without a provider call.
+    if (suggestionsCache && !suggestionsIsStale(suggestionsCache)) {
+      return c.json({
+        enabled: true,
+        suggestions: suggestionsCache.suggestions,
+        generatedAt: suggestionsCache.generatedAt,
+      });
+    }
+    try {
+      const s = await runSuggestions();
+      return c.json({ enabled: true, suggestions: s.suggestions, generatedAt: s.generatedAt });
+    } catch (err) {
+      // On failure, fall back to a stale cache if we have one so the chips
+      // still render rather than erroring the chat empty state.
+      if (suggestionsCache) {
+        return c.json({
+          enabled: true,
+          suggestions: suggestionsCache.suggestions,
+          generatedAt: suggestionsCache.generatedAt,
+        });
+      }
       return c.json({ error: (err as Error).message }, 500);
     }
   });
