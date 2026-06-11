@@ -1,11 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { type AutopilotActivity, fetchAutopilotActivity, fetchHealth } from "./api";
 import { BRAND } from "./brand";
 import { ChatProvider } from "./components/ChatContext";
 import { ChatDock } from "./components/ChatDock";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
 import { ToastProvider } from "./components/Toast";
-import { Actions } from "./pages/Actions";
 import { Agents } from "./pages/Agents";
 import { Approvals } from "./pages/Approvals";
 import { Chat } from "./pages/Chat";
@@ -43,6 +42,19 @@ type Route =
   | { page: "help" }
   | { page: "login" };
 
+// Pages reachable through each nav group — drives the "active" highlight on the
+// group trigger so a deep link into e.g. Workflows still lights up "Build".
+const BUILD_PAGES = new Set<Route["page"]>([
+  "agents",
+  "workflows",
+  "workflow-runs",
+  "workflow-analytics",
+  "memory",
+  "tools",
+  "projects",
+]);
+const SYSTEM_PAGES = new Set<Route["page"]>(["config", "resources", "sandboxes", "approvals", "actions", "help"]);
+
 function parseHash(): Route {
   const hash = window.location.hash.slice(1);
   if (hash.startsWith("/projects")) {
@@ -67,12 +79,19 @@ function parseHash(): Route {
     };
   }
   if (hash.startsWith("/tasks")) {
-    // Redirect #/tasks to #/projects for backward compat
     const params = new URLSearchParams(hash.split("?")[1] ?? "");
     const parts = hash.split("?")[0].split("/");
+    const taskId = parts[2] || undefined;
+    // `#/tasks/:id` is a live deep-link target (task detail) used across the
+    // app, so it keeps rendering the task view. The bare `#/tasks` board is a
+    // duplicate of Projects → Tasks, so redirect it to the canonical page.
+    if (!taskId) {
+      window.location.hash = "/projects";
+      return { page: "projects" };
+    }
     return {
       page: "tasks",
-      taskId: parts[2] || undefined,
+      taskId,
       status: params.get("status") ?? undefined,
     };
   }
@@ -217,55 +236,77 @@ function AppShell({
         <a href="#/" className="app-title">
           {BRAND.name}
         </a>
-        <nav>
-          <a href="#/" className={route.page === "dashboard" ? "active" : ""}>
-            Dashboard
+        <nav className="app-nav" aria-label="Primary">
+          <a href="#/" className={`nav-link${route.page === "dashboard" ? " active" : ""}`}>
+            Home
           </a>
-          <a href="#/projects" className={route.page === "projects" || route.page === "tasks" ? "active" : ""}>
-            Projects
-          </a>
-          <a href="#/agents" className={route.page === "agents" ? "active" : ""}>
-            Agents
-          </a>
-          <a href="#/tools" className={route.page === "tools" ? "active" : ""}>
-            Tools
-          </a>
-          <a
-            href="#/workflows"
-            className={route.page === "workflows" || route.page === "workflow-runs" ? "active" : ""}
-          >
-            Workflows
-          </a>
-          <a href="#/sandboxes" className={route.page === "sandboxes" ? "active" : ""}>
-            Sandboxes
-          </a>
-          <a href="#/resources" className={route.page === "resources" ? "active" : ""}>
-            Resources
-          </a>
-          <a href="#/memory" className={route.page === "memory" ? "active" : ""}>
-            Memory
-          </a>
-          <a href="#/chat" className={route.page === "chat" ? "active" : ""}>
+          <a href="#/chat" className={`nav-link${route.page === "chat" ? " active" : ""}`}>
             Chat
           </a>
-          <a href="#/actions" className={route.page === "actions" ? "active" : ""}>
-            Actions
+          <a
+            href="#/projects"
+            className={`nav-link${route.page === "projects" || route.page === "tasks" ? " active" : ""}`}
+          >
+            Tasks
           </a>
-          <a href="#/approvals" className={route.page === "approvals" ? "active" : ""}>
-            Approvals
-          </a>
-          <a href="#/config" className={route.page === "config" ? "active" : ""}>
-            Config
-          </a>
-          <a href="#/help" className={route.page === "help" ? "active" : ""}>
-            Help
-          </a>
+          <NavGroup label="Build" active={BUILD_PAGES.has(route.page)}>
+            <a href="#/agents" className={`nav-menu-item${route.page === "agents" ? " active" : ""}`}>
+              Agents
+            </a>
+            <a
+              href="#/workflows"
+              className={`nav-menu-item${route.page === "workflows" || route.page === "workflow-runs" || route.page === "workflow-analytics" ? " active" : ""}`}
+            >
+              Workflows
+            </a>
+            <a href="#/memory" className={`nav-menu-item${route.page === "memory" ? " active" : ""}`}>
+              Memory
+            </a>
+            <a href="#/tools" className={`nav-menu-item${route.page === "tools" ? " active" : ""}`}>
+              Tools
+            </a>
+            <a href="#/projects" className={`nav-menu-item${route.page === "projects" ? " active" : ""}`}>
+              Projects
+            </a>
+          </NavGroup>
+          <NavGroup label="System" active={SYSTEM_PAGES.has(route.page)}>
+            <a href="#/config" className={`nav-menu-item${route.page === "config" ? " active" : ""}`}>
+              Config
+            </a>
+            <a href="#/resources" className={`nav-menu-item${route.page === "resources" ? " active" : ""}`}>
+              Resources
+            </a>
+            <a href="#/sandboxes" className={`nav-menu-item${route.page === "sandboxes" ? " active" : ""}`}>
+              Sandboxes
+            </a>
+            <a
+              href="#/approvals"
+              className={`nav-menu-item${route.page === "approvals" || route.page === "actions" ? " active" : ""}`}
+            >
+              Approvals
+            </a>
+            <a href="#/help" className={`nav-menu-item${route.page === "help" ? " active" : ""}`}>
+              Help
+            </a>
+          </NavGroup>
           <ProjectSwitcher />
           {connected !== null && (
             <span className="header-status" title={connected ? "Connected" : "Disconnected"}>
               <span className={`status-dot${connected ? "" : " error"}`} />
             </span>
           )}
+          <button
+            type="button"
+            className="nav-logout"
+            title="Log out"
+            onClick={() => {
+              fetch("/api/auth/logout", { method: "POST" }).then(() => {
+                window.location.hash = "/login";
+              });
+            }}
+          >
+            Logout
+          </button>
         </nav>
       </header>
       <main className="app-main">
@@ -283,8 +324,8 @@ function AppShell({
         {route.page === "sandboxes" && <Sandboxes />}
         {route.page === "resources" && <Resources />}
         {route.page === "memory" && <Memory />}
-        {route.page === "actions" && <Actions />}
-        {route.page === "approvals" && <Approvals />}
+        {route.page === "actions" && <Approvals initialTab="actions" />}
+        {route.page === "approvals" && <Approvals initialTab="subscriptions" />}
         {route.page === "config" && <Config section={route.section} />}
         {route.page === "help" && <Help />}
       </main>
@@ -310,6 +351,78 @@ function AppShell({
           Website
         </a>
       </footer>
+    </div>
+  );
+}
+
+/**
+ * Accessible nav disclosure. The trigger toggles a menu of links on click and
+ * exposes `aria-expanded`; the menu also opens on hover for pointer users. The
+ * menu closes on outside click, on Escape, and when focus leaves the group, so
+ * it stays keyboard-reachable without trapping focus.
+ */
+function NavGroup({ label, active, children }: { label: string; active: boolean; children: React.ReactNode }) {
+  // `open` drives the click/keyboard-controlled state (and aria-expanded).
+  // Pointer users also get hover-to-open purely from CSS (`.nav-group:hover`),
+  // so the wrapper carries no JS event handlers — that keeps it free of the
+  // static-element-interaction a11y warning while staying keyboard-reachable.
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const menuId = useId();
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocPointer = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onFocusOut = () => {
+      // Defer so document.activeElement reflects the new focus target.
+      requestAnimationFrame(() => {
+        if (ref.current && !ref.current.contains(document.activeElement)) setOpen(false);
+      });
+    };
+    document.addEventListener("mousedown", onDocPointer);
+    ref.current?.addEventListener("focusout", onFocusOut);
+    const node = ref.current;
+    return () => {
+      document.removeEventListener("mousedown", onDocPointer);
+      node?.removeEventListener("focusout", onFocusOut);
+    };
+  }, [open]);
+
+  return (
+    <div className={`nav-group${open ? " is-open" : ""}`} ref={ref}>
+      <button
+        type="button"
+        className={`nav-link nav-group-trigger${active ? " active" : ""}`}
+        aria-expanded={open}
+        aria-haspopup="true"
+        aria-controls={menuId}
+        onClick={() => setOpen((v) => !v)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") setOpen(false);
+          else if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setOpen(true);
+          }
+        }}
+      >
+        {label}
+        <span className="nav-group-caret" aria-hidden="true">
+          ▾
+        </span>
+      </button>
+      <div
+        id={menuId}
+        className="nav-menu"
+        role="menu"
+        onClick={() => setOpen(false)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") setOpen(false);
+        }}
+      >
+        {children}
+      </div>
     </div>
   );
 }

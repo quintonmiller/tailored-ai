@@ -20,7 +20,6 @@ import {
   type WorkflowFormPendingRow,
   type WorkflowRunRow,
 } from "../api";
-import { useActiveProject } from "../hooks/useActiveProject";
 
 const ACTIVITY_POLL_MS = 3000;
 const SLOW_POLL_MS = 30000;
@@ -39,7 +38,6 @@ export function Dashboard() {
   const [recentTicks, setRecentTicks] = useState<ExploratoryRun[]>([]);
   const [cron, setCron] = useState<CronData | null>(null);
   const [health, setHealth] = useState<HealthInfo | null>(null);
-  const activeProject = useActiveProject();
 
   const refreshActivity = useCallback(() => {
     fetchActivity()
@@ -105,111 +103,6 @@ export function Dashboard() {
 
   return (
     <div className="dashboard dashboard-home">
-      <button
-        type="button"
-        className="dash-logout"
-        onClick={() => {
-          fetch("/api/auth/logout", { method: "POST" }).then(() => {
-            window.location.hash = "/login";
-          });
-        }}
-      >
-        Logout
-      </button>
-      {/* Mobile styles — scoped to dashboard */}
-      <style>{`
-        @media (max-width: 640px) {
-          .dashboard-home {
-            padding: 12px;
-            gap: 12px;
-          }
-          .dash-section {
-            padding: 12px 14px;
-          }
-          .dash-upcoming {
-            grid-template-columns: 1fr;
-            gap: 10px;
-          }
-          .dash-needs-item {
-            grid-template-columns: 1fr;
-            gap: 6px;
-            padding: 10px 12px;
-            min-height: 44px;
-          }
-          .dash-needs-item > a {
-            min-height: 44px;
-            display: flex;
-            align-items: center;
-          }
-          .dash-now-item {
-            min-height: 44px;
-            align-items: flex-start;
-            padding: 6px 0;
-          }
-          .dash-recent-item a {
-            min-height: 44px;
-            flex-direction: column;
-            align-items: flex-start;
-            gap: 4px;
-            padding: 10px 12px;
-          }
-          .dash-recent-meta {
-            align-self: flex-start;
-          }
-          .dash-watcher-row {
-            flex-direction: column;
-            gap: 8px;
-            padding: 10px 0;
-          }
-          .dash-watcher-actions {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-          }
-          .dash-watcher-actions button {
-            min-height: 44px;
-            min-width: 44px;
-            padding: 8px 14px;
-            font-size: 13px;
-          }
-          .dash-upcoming-list li a {
-            min-height: 44px;
-            padding: 10px 12px;
-          }
-          .dash-memory-stats {
-            flex-wrap: wrap;
-            gap: 4px;
-          }
-          .dash-health-footer {
-            flex-wrap: wrap;
-            gap: 6px;
-            padding: 10px 12px;
-            min-height: 44px;
-          }
-          .dash-health-footer a {
-            min-height: 44px;
-            display: flex;
-            align-items: center;
-          }
-          .dash-section-header {
-            padding: 4px 0;
-          }
-          .dash-section-header h3 {
-            font-size: 12px;
-          }
-          .dash-empty {
-            min-height: 44px;
-            display: flex;
-            align-items: center;
-          }
-          .dash-empty a {
-            min-height: 44px;
-            display: inline-flex;
-            align-items: center;
-          }
-        }
-      `}</style>
-
       {/* NOW: live activity */}
       <DashboardSection title="Now">
         <NowPanel liveAgents={liveAgents} autopilot={autopilot} />
@@ -233,16 +126,6 @@ export function Dashboard() {
       {/* RECENT */}
       <DashboardSection title="Recent">
         <RecentPanel runs={recentFinishedRuns} tasks={recentDone} ticks={recentTicks} />
-      </DashboardSection>
-
-      {/* MEMORY (M7) */}
-      <DashboardSection title="Memory">
-        <MemoryPanel projectId={activeProject} />
-      </DashboardSection>
-
-      {/* WATCHERS — always-on / exploratory agents (A5) */}
-      <DashboardSection title="Watchers">
-        <WatchersPanel />
       </DashboardSection>
 
       {/* Compact health footer */}
@@ -515,167 +398,4 @@ function formatUptime(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
   return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
-}
-
-function MemoryPanel(props: { projectId: string | null }) {
-  const [stats, setStats] = useState<import("../api").MemoryStats | null>(null);
-  useEffect(() => {
-    import("../api").then((m) =>
-      m
-        .fetchMemoryStats(props.projectId ?? undefined)
-        .then(setStats)
-        .catch(() => {}),
-    );
-  }, [props.projectId]);
-
-  if (!stats) return <div className="dash-empty">Loading…</div>;
-  const { counts, topReferenced, embeddingsEnabled, embeddingModel } = stats;
-  if (counts.notes === 0 && counts.chunks === 0) {
-    return (
-      <div className="dash-empty">
-        No memory yet. <a href="#/memory">Open Memory →</a>
-      </div>
-    );
-  }
-
-  return (
-    <div className="dash-memory">
-      <div className="dash-memory-stats">
-        <span>{counts.notes} notes</span>
-        <span>·</span>
-        <span>{counts.sessionSummaries} summaries</span>
-        <span>·</span>
-        <span>{counts.chunks} chunks</span>
-        <span>·</span>
-        <span className={embeddingsEnabled ? "dash-memory-on" : "dash-memory-off"}>
-          embeddings {embeddingsEnabled ? `on${embeddingModel ? ` (${embeddingModel})` : ""}` : "off"}
-        </span>
-      </div>
-      {topReferenced.length > 0 && (
-        <div className="dash-memory-top">
-          <div className="dash-memory-top-label">Most referenced</div>
-          <ul>
-            {topReferenced.slice(0, 3).map((n) => (
-              <li key={n.id}>
-                <span className="memory-ref-badge">{n.ref_count}×</span>{" "}
-                <span className="dash-memory-snippet">{truncate(n.content, 100)}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-      <a className="dash-memory-link" href="#/memory">
-        Open Memory →
-      </a>
-    </div>
-  );
-}
-
-function WatchersPanel() {
-  const [data, setData] = useState<{
-    enabled: boolean;
-    activity: import("../api").ExploratoryActivity | null;
-    agents: import("../api").ExploratoryAgent[];
-  } | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
-
-  const reload = useCallback(() => {
-    import("../api").then((m) =>
-      m
-        .fetchExploratoryAgents()
-        .then(setData)
-        .catch(() => {}),
-    );
-  }, []);
-  useEffect(() => {
-    reload();
-    const id = setInterval(reload, 15_000);
-    return () => clearInterval(id);
-  }, [reload]);
-
-  if (!data) return <div className="dash-empty">Loading…</div>;
-
-  if (!data.enabled) {
-    return (
-      <div className="dash-empty">
-        Exploratory worker disabled. Set <code>exploratory.enabled: true</code> in config to enable.
-      </div>
-    );
-  }
-
-  if (data.agents.length === 0) {
-    return (
-      <div className="dash-empty">
-        No agents have <code>online.enabled: true</code>. Add it to an agent (with <code>recall</code> in its tools) to
-        start a watcher.
-      </div>
-    );
-  }
-
-  const handle = async (name: string, action: "pause" | "resume" | "run") => {
-    setBusy(name);
-    try {
-      const api = await import("../api");
-      if (action === "pause") await api.pauseExploratoryAgent(name, 4);
-      else if (action === "resume") await api.resumeExploratoryAgent(name);
-      else if (action === "run") await api.runExploratoryAgent(name);
-      reload();
-    } catch (e) {
-      alert(`Failed: ${(e as Error).message}`);
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  return (
-    <div className="dash-watchers">
-      {data.activity && (
-        <div className="dash-watchers-activity">
-          <span className="dash-watchers-dot" /> {data.activity.agentName} running ({data.activity.runId})
-        </div>
-      )}
-      <ul className="dash-watchers-list">
-        {data.agents.map((a) => {
-          const paused = a.paused_until && new Date(a.paused_until) > new Date();
-          return (
-            <li key={a.name} className="dash-watcher-row">
-              <div className="dash-watcher-name">
-                <span
-                  className={`dash-watcher-state state-${a.last_tick_status ?? "idle"}${paused ? " paused" : ""}${a.enabled_in_state ? "" : " disabled"}`}
-                >
-                  {!a.enabled_in_state
-                    ? "off"
-                    : paused
-                      ? "paused"
-                      : data.activity?.agentName === a.name
-                        ? "running"
-                        : (a.last_tick_status ?? "idle")}
-                </span>
-                {a.name}
-              </div>
-              <div className="dash-watcher-meta">
-                {a.runs_today} runs · {a.tokens_today.toLocaleString()} tok today
-                {a.current_interval_ms && <> · interval {Math.round(a.current_interval_ms / 60_000)}m</>}
-                {a.last_tick_at && <> · last {a.last_tick_at.slice(11, 16)}</>}
-              </div>
-              <div className="dash-watcher-actions">
-                <button type="button" disabled={busy === a.name} onClick={() => handle(a.name, "run")}>
-                  Run now
-                </button>
-                {paused ? (
-                  <button type="button" disabled={busy === a.name} onClick={() => handle(a.name, "resume")}>
-                    Resume
-                  </button>
-                ) : (
-                  <button type="button" disabled={busy === a.name} onClick={() => handle(a.name, "pause")}>
-                    Pause 4h
-                  </button>
-                )}
-              </div>
-            </li>
-          );
-        })}
-      </ul>
-    </div>
-  );
 }
