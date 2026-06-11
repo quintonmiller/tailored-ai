@@ -206,6 +206,7 @@ export type {
   TaskWatcherConfig,
 } from "./config.js";
 export {
+  DEFAULT_DISABLED_PLUGIN_MODULES,
   DEFAULT_PLUGIN_MODULES,
   loadConfig,
   mergeProjectOverlay,
@@ -438,6 +439,12 @@ export {
   type ScopeCreepFlaggerOptions,
   writeScopeWarning,
 } from "./plugins/scope-creep-flagger.js";
+export {
+  composeRecentSummary,
+  SessionSummarizer,
+  type SessionSummarizerConfig,
+  type SessionSummarizerOptions,
+} from "./plugins/session-summarizer.js";
 export {
   countPriorStalls,
   formatStallComment,
