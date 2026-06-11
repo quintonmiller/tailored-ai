@@ -178,7 +178,7 @@ describe("PluginManager.buildImporter", () => {
 
   it("resolves a `builtin:` name to a @tailored-ai/core plugin module", async () => {
     // Built-ins do not live in the plugin home — they resolve from core's
-    // `./plugins/*` subpath export. The four default plugins each expose a
+    // `./plugins/*` subpath export. The default plugins each expose a
     // `default` register function. Requires core to be built (it is, as a
     // workspace dep of the cli package under test).
     const mgr = new PluginManager(homeDir, fakeExecutor());
