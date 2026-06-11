@@ -17,6 +17,12 @@ export interface ChatParams {
   tools?: ToolSchema[];
   temperature?: number;
   maxTokens?: number;
+  /**
+   * Opaque provider-specific request fields merged into the outgoing request
+   * body (e.g. vLLM's `chat_template_kwargs`). Providers that build their own
+   * request shape may ignore keys they don't understand.
+   */
+  extra?: Record<string, unknown>;
 }
 
 export interface ToolSchema {

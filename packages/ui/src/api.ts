@@ -680,6 +680,24 @@ export function runAutopilotDigest(): Promise<{ ok: boolean }> {
   return jsonFetch("/api/autopilot/digest/run", { method: "POST" });
 }
 
+/**
+ * Home-page briefing. `enabled: false` means the feature is off — the UI
+ * renders nothing. When enabled, `content` is markdown, `generatedAt` is an
+ * epoch-ms timestamp, and `stale` flags a fallback to an old cache after a
+ * generation error.
+ */
+export type BriefingResponse =
+  | { enabled: false }
+  | { enabled: true; content: string; generatedAt: number; stale: boolean };
+
+export function fetchBriefing(): Promise<BriefingResponse> {
+  return jsonFetch("/api/briefing");
+}
+
+export function refreshBriefing(): Promise<BriefingResponse> {
+  return jsonFetch("/api/briefing/refresh", { method: "POST" });
+}
+
 export interface AutopilotUsage {
   usage: { "1h": number; "5h": number; "24h": number };
   budget: {

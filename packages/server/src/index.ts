@@ -10,6 +10,7 @@ import {
   type AutopilotSettings,
   type AutopilotWorker,
   addTaskComment,
+  type Briefing,
   type CronScheduler,
   checkBudget,
   compactSession,
@@ -35,6 +36,7 @@ import {
   formatCompactResult,
   formatHits,
   GitResourceSource,
+  generateBriefing,
   getAutopilotSettings,
   getDefaultProjectId,
   getDocument,
@@ -230,6 +232,37 @@ export function createServer(opts: ServerOptions) {
   const { runtime } = opts;
 
   const app = new Hono();
+
+  // --- Briefing cache (server-process lifetime, single entry) ---
+  //
+  // One cached briefing, refreshed lazily when it goes stale past
+  // `briefing.ttlMinutes`. `inflight` is the single-flight guard: concurrent
+  // callers await the same generation instead of triggering N provider calls.
+  let briefingCache: Briefing | null = null;
+  let briefingInflight: Promise<Briefing> | null = null;
+
+  function briefingTtlMs(): number {
+    const minutes = runtime.getConfig().briefing?.ttlMinutes ?? 30;
+    return Math.max(0, minutes) * 60_000;
+  }
+  function briefingIsStale(b: Briefing | null): boolean {
+    if (!b) return true;
+    return Date.now() - b.generatedAt >= briefingTtlMs();
+  }
+  /** Run one generation, deduped across concurrent callers (single-flight). */
+  function runBriefing(): Promise<Briefing> {
+    if (briefingInflight) return briefingInflight;
+    const p = generateBriefing(runtime)
+      .then((b) => {
+        briefingCache = b;
+        return b;
+      })
+      .finally(() => {
+        briefingInflight = null;
+      });
+    briefingInflight = p;
+    return p;
+  }
 
   // --- Auth middleware ---
   //
@@ -1731,6 +1764,59 @@ export function createServer(opts: ServerOptions) {
     };
     const budget = checkBudget(runtime.db, settings);
     return c.json({ usage, budget });
+  });
+
+  // --- Briefing endpoints ---
+  //
+  // GET returns the cached briefing (generating on first call / when stale).
+  // POST forces a regeneration. Both are no-ops with `{ enabled: false }` when
+  // `briefing.enabled` is off — no provider call, no token cost.
+
+  app.get("/api/briefing", async (c) => {
+    if (runtime.getConfig().briefing?.enabled !== true) {
+      return c.json({ enabled: false });
+    }
+    // Fresh cache: serve it without a provider call.
+    if (briefingCache && !briefingIsStale(briefingCache)) {
+      return c.json({
+        enabled: true,
+        content: briefingCache.content,
+        generatedAt: briefingCache.generatedAt,
+        stale: false,
+      });
+    }
+    try {
+      const b = await runBriefing();
+      return c.json({ enabled: true, content: b.content, generatedAt: b.generatedAt, stale: false });
+    } catch (err) {
+      // On failure, fall back to a stale cache if we have one so the card
+      // still renders something rather than erroring the whole Home page.
+      if (briefingCache) {
+        return c.json({
+          enabled: true,
+          content: briefingCache.content,
+          generatedAt: briefingCache.generatedAt,
+          stale: true,
+        });
+      }
+      return c.json({ error: (err as Error).message }, 500);
+    }
+  });
+
+  app.post("/api/briefing/refresh", async (c) => {
+    if (runtime.getConfig().briefing?.enabled !== true) {
+      return c.json({ enabled: false });
+    }
+    // Rate-limit: refuse if a generation is already running.
+    if (briefingInflight) {
+      return c.json({ error: "A briefing is already being generated" }, 429);
+    }
+    try {
+      const b = await runBriefing();
+      return c.json({ enabled: true, content: b.content, generatedAt: b.generatedAt, stale: false });
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 500);
+    }
   });
 
   // --- Command endpoints ---

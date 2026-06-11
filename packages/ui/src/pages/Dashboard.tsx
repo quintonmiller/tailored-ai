@@ -20,6 +20,7 @@ import {
   type WorkflowFormPendingRow,
   type WorkflowRunRow,
 } from "../api";
+import { BriefingCard } from "../components/BriefingCard";
 
 const ACTIVITY_POLL_MS = 3000;
 const SLOW_POLL_MS = 30000;
@@ -103,6 +104,10 @@ export function Dashboard() {
 
   return (
     <div className="dashboard dashboard-home">
+      {/* BRIEFING: LLM-written summary at the top. Renders nothing when the
+          briefing feature is disabled (the default), so Home is unchanged. */}
+      <BriefingCard />
+
       {/* NOW: live activity */}
       <DashboardSection title="Now">
         <NowPanel liveAgents={liveAgents} autopilot={autopilot} />
