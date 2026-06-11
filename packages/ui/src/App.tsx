@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { type AutopilotActivity, fetchAutopilotActivity, fetchHealth } from "./api";
 import { ChatProvider } from "./components/ChatContext";
 import { ChatDock } from "./components/ChatDock";
@@ -42,6 +42,19 @@ type Route =
   | { page: "approvals" }
   | { page: "help" }
   | { page: "login" };
+
+// Pages reachable through each nav group — drives the "active" highlight on the
+// group trigger so a deep link into e.g. Workflows still lights up "Build".
+const BUILD_PAGES = new Set<Route["page"]>([
+  "agents",
+  "workflows",
+  "workflow-runs",
+  "workflow-analytics",
+  "memory",
+  "tools",
+  "projects",
+]);
+const SYSTEM_PAGES = new Set<Route["page"]>(["config", "resources", "sandboxes", "approvals", "actions", "help"]);
 
 function parseHash(): Route {
   const hash = window.location.hash.slice(1);
@@ -311,6 +324,78 @@ function AppShell({
             </a>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Accessible nav disclosure. The trigger toggles a menu of links on click and
+ * exposes `aria-expanded`; the menu also opens on hover for pointer users. The
+ * menu closes on outside click, on Escape, and when focus leaves the group, so
+ * it stays keyboard-reachable without trapping focus.
+ */
+function NavGroup({ label, active, children }: { label: string; active: boolean; children: React.ReactNode }) {
+  // `open` drives the click/keyboard-controlled state (and aria-expanded).
+  // Pointer users also get hover-to-open purely from CSS (`.nav-group:hover`),
+  // so the wrapper carries no JS event handlers — that keeps it free of the
+  // static-element-interaction a11y warning while staying keyboard-reachable.
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const menuId = useId();
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocPointer = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onFocusOut = () => {
+      // Defer so document.activeElement reflects the new focus target.
+      requestAnimationFrame(() => {
+        if (ref.current && !ref.current.contains(document.activeElement)) setOpen(false);
+      });
+    };
+    document.addEventListener("mousedown", onDocPointer);
+    ref.current?.addEventListener("focusout", onFocusOut);
+    const node = ref.current;
+    return () => {
+      document.removeEventListener("mousedown", onDocPointer);
+      node?.removeEventListener("focusout", onFocusOut);
+    };
+  }, [open]);
+
+  return (
+    <div className={`nav-group${open ? " is-open" : ""}`} ref={ref}>
+      <button
+        type="button"
+        className={`nav-link nav-group-trigger${active ? " active" : ""}`}
+        aria-expanded={open}
+        aria-haspopup="true"
+        aria-controls={menuId}
+        onClick={() => setOpen((v) => !v)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") setOpen(false);
+          else if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setOpen(true);
+          }
+        }}
+      >
+        {label}
+        <span className="nav-group-caret" aria-hidden="true">
+          ▾
+        </span>
+      </button>
+      <div
+        id={menuId}
+        className="nav-menu"
+        role="menu"
+        onClick={() => setOpen(false)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") setOpen(false);
+        }}
+      >
+        {children}
       </div>
     </div>
   );
