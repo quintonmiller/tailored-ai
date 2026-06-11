@@ -75,7 +75,12 @@ export {
   DockerSandbox,
   type DockerSandboxOptions,
 } from "./sandboxes/docker.js";
-export { createSandbox } from "./sandboxes/factory.js";
+export {
+  createSandbox,
+  registerSandboxFactory,
+  type SandboxFactory,
+  sandboxFactoryRegistry,
+} from "./sandboxes/factory.js";
 export { HostSandbox } from "./sandboxes/host.js";
 export type {
   Mount,
@@ -423,6 +428,7 @@ export {
   type PluginDisposer,
   type ProviderRegistryView,
   type RepoBackendRegistryView,
+  type SandboxBackendRegistryView,
   type TaskBackendRegistryView,
   type ToolRegistryView,
   type UiProviderRegistryView,

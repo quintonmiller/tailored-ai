@@ -12,7 +12,11 @@
  * specific and lives in the per-backend factory options.
  */
 
-export type SandboxKind = "host" | "docker" | "podman";
+/**
+ * Open string alias for sandbox kind identifiers. Built-ins are "host",
+ * "docker", and "podman"; plugins may register any other string.
+ */
+export type SandboxKind = string;
 
 export interface Mount {
   /** Path on the host. Relative paths resolve against the prepare() cwd. */
