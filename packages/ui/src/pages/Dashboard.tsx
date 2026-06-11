@@ -1,5 +1,5 @@
 import { marked } from "marked";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   type AutopilotActivity,
   type BriefingResponse,
@@ -10,28 +10,47 @@ import {
   fetchHealth,
   refreshBriefing,
 } from "../api";
-import { useChatStore } from "../components/ChatContext";
+import { type ChatStore, useChatStore } from "../components/ChatContext";
 import { SuggestionChips } from "../components/SuggestionChips";
 import { type NeedsYouItem, useNeedsYou } from "../hooks/useNeedsYou";
+import { type FeedItem, useTodayFeed } from "../hooks/useTodayFeed";
 
 marked.setOptions({ breaks: true, gfm: true });
 
 const ACTIVITY_POLL_MS = 5000;
 const SLOW_POLL_MS = 30000;
 const NEEDS_YOU_MAX = 4;
+const THREAD_TAIL = 6;
 
 /**
- * Home — the assistant's surface. A single centered column: the agent speaks
- * (the serif briefing hero), shows what needs you (a flat hairline stack), and
- * listens (a docked ask bar that hands off to Chat). Every data source is one
- * of the existing config-gated endpoints; with the briefing/suggestions
- * features off the page still reads as intentional, never broken.
+ * Home — the assistant's surface, now a two-zone layout.
+ *
+ * On wide viewports it's a grid: a primary 640px column + a secondary "Today"
+ * rail (ambient peripheral vision, not a second content column). Below the
+ * breakpoint the rail stacks under the column for a single-column mobile read.
+ *
+ * The primary column descends in importance: the agent speaks (the serif
+ * briefing hero, body upright with at most one italic accent), shows what needs
+ * you (a flat hairline stack), then — the new heart of the page — HOSTS the
+ * actual current chat session inline. The docked ask bar and suggestion chips
+ * call store.send() and stay here; the tail of the live transcript renders just
+ * above the bar (markdown for the agent, live status + interrupt while sending,
+ * inline approval rows), with a quiet "open full chat" escape hatch. No more
+ * handoff to /chat.
+ *
+ * The right rail is the live "Today" feed (useTodayFeed) — timestamped events
+ * merged client-side from existing endpoints, polled on a single interval.
+ *
+ * Every data source is one of the existing config-gated endpoints; with the
+ * briefing/suggestions features off, or an empty session, the page still reads
+ * as intentional, never broken.
  */
 export function Dashboard() {
   const [activeTask, setActiveTask] = useState<AutopilotActivity["current"] | null>(null);
   const [connected, setConnected] = useState<boolean | null>(null);
   const [cron, setCron] = useState<CronData | null>(null);
   const { items: needsYou } = useNeedsYou();
+  const { items: feed } = useTodayFeed();
   const store = useChatStore();
 
   useEffect(() => {
@@ -59,30 +78,32 @@ export function Dashboard() {
     return () => clearInterval(id);
   }, []);
 
-  // Send to chat through the shared store, then route to the Chat page. The
-  // store is app-wide (ChatProvider in App.tsx wraps every page including the
-  // ChatDock), so the message is already streaming when Chat mounts.
-  const handoffToChat = useCallback(
+  // Send through the shared app-wide store and STAY on Home — the inline thread
+  // below the ask bar renders the live turn. No route handoff.
+  const onSend = useCallback(
     (text: string) => {
       const trimmed = text.trim();
       if (!trimmed) return;
       store.send(trimmed);
-      window.location.hash = "/chat";
     },
     [store],
   );
 
   return (
     <div className="home">
-      <div className="home-col">
-        <Eyebrow activeTask={activeTask} />
-        <BriefingHero />
-        <NeedsYou items={needsYou} />
-        <QuickActions onPick={handoffToChat} />
-        <div className="home-dock home-reveal" style={revealDelay(4)}>
-          <AskBar agentName={resolveAgentName(store)} onSubmit={handoffToChat} />
-          <FooterStatus connected={connected} cron={cron} />
+      <div className="home-grid">
+        <div className="home-col">
+          <Eyebrow activeTask={activeTask} />
+          <BriefingHero />
+          <NeedsYou items={needsYou} />
+          <QuickActions onPick={onSend} />
+          <div className="home-dock home-reveal" style={revealDelay(4)}>
+            <Thread store={store} />
+            <AskBar agentName={resolveAgentName(store)} onSubmit={onSend} />
+            <FooterStatus connected={connected} cron={cron} />
+          </div>
         </div>
+        <TodayRail items={feed} />
       </div>
     </div>
   );
@@ -102,7 +123,7 @@ function Eyebrow({ activeTask }: { activeTask: AutopilotActivity["current"] | nu
   );
 }
 
-// --- Briefing hero (the serif voice) ---------------------------------------
+// --- Briefing hero (the serif voice, upright body) --------------------------
 
 function BriefingHero() {
   const [state, setState] = useState<BriefingResponse | null>(null);
@@ -154,7 +175,7 @@ function BriefingHero() {
         ) : state?.enabled ? (
           <div dangerouslySetInnerHTML={{ __html: html }} />
         ) : (
-          <p>{greeting()}</p>
+          <p className="home-hero-greeting">{greeting()}</p>
         )}
       </div>
       {state?.enabled && (
@@ -228,6 +249,113 @@ function QuickActions({ onPick }: { onPick: (text: string) => void }) {
   );
 }
 
+// --- Inline live thread -----------------------------------------------------
+
+/**
+ * The lightweight live surface: the tail of the current session, a sending
+ * status row with interrupt, and inline approval rows. No tool logs or copy
+ * buttons — that detail lives on /chat. Renders nothing when there's no
+ * conversation and nothing in flight, so the page stays clean for new users.
+ */
+function Thread({ store }: { store: ChatStore }) {
+  const { messages, sending, activeTool, activityDesc, approvals } = store;
+  const tail = messages.slice(-THREAD_TAIL);
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+
+  // One signature that flips whenever the visible thread changes (new message,
+  // a tool starts/stops, the status line updates). The effect reads it so the
+  // dependency is honest while still re-scrolling on every relevant change.
+  const scrollSig = `${messages.length}|${sending}|${activeTool ?? ""}|${activityDesc ?? ""}`;
+  useEffect(() => {
+    if (scrollSig) bottomRef.current?.scrollIntoView({ block: "end" });
+  }, [scrollSig]);
+
+  const hasContent = tail.length > 0 || sending || approvals.length > 0;
+  if (!hasContent) return null;
+
+  const statusText = activityDesc ?? (activeTool ? `running ${activeTool}` : "thinking…");
+
+  return (
+    <div className="home-thread">
+      <div className="home-thread-scroll">
+        {tail.map((m, i) => (
+          <ThreadLine key={`${i}-${m.role}`} role={m.role} content={m.content} agentName={resolveAgentName(store)} />
+        ))}
+
+        {sending && (
+          <div className="home-thread-status" aria-live="polite">
+            <span className="home-thread-status-text">
+              {statusText}
+              <span className="home-caret" aria-hidden="true">
+                ▍
+              </span>
+            </span>
+            <button type="button" className="home-thread-stop" onClick={store.interrupt}>
+              stop
+            </button>
+          </div>
+        )}
+
+        {approvals.map((a) => (
+          <div key={a.requestId} className="home-thread-approval">
+            <span className="home-thread-approval-text" title={a.description ?? a.toolName}>
+              <span className="home-thread-approval-tool">{a.toolName}</span>
+              {a.description && <span className="home-thread-approval-desc">{a.description}</span>}
+            </span>
+            <span className="home-thread-approval-actions">
+              <button type="button" className="home-thread-approve" onClick={() => store.approve(a.requestId)}>
+                Approve
+              </button>
+              <button type="button" className="home-thread-reject" onClick={() => store.reject(a.requestId)}>
+                Reject
+              </button>
+            </span>
+          </div>
+        ))}
+
+        <div ref={bottomRef} />
+      </div>
+      {tail.length > 0 && (
+        <a className="home-thread-open" href="#/chat">
+          open full chat →
+        </a>
+      )}
+    </div>
+  );
+}
+
+function ThreadLine({
+  role,
+  content,
+  agentName,
+}: {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string | null;
+  agentName: string | null;
+}) {
+  const text = content ?? "";
+  // Hooks run unconditionally (rules of hooks); the render guards below decide
+  // whether the line shows at all.
+  const html = useMemo(() => (role === "assistant" ? (marked.parse(text) as string) : ""), [role, text]);
+
+  // Quiet surface — skip system/tool carriers and empty lines.
+  if (role !== "user" && role !== "assistant") return null;
+  if (!text.trim()) return null;
+
+  const label = role === "user" ? "you" : (agentName ?? "agent");
+
+  return (
+    <div className={`home-thread-line home-thread-${role}`}>
+      <span className="home-thread-label">{label}</span>
+      {role === "assistant" ? (
+        <div className="home-thread-body markdown-body" dangerouslySetInnerHTML={{ __html: html }} />
+      ) : (
+        <div className="home-thread-body">{text}</div>
+      )}
+    </div>
+  );
+}
+
 // --- Docked ask bar ---------------------------------------------------------
 
 function AskBar({ agentName, onSubmit }: { agentName: string | null; onSubmit: (text: string) => void }) {
@@ -286,9 +414,58 @@ function FooterStatus({ connected, cron }: { connected: boolean | null; cron: Cr
   );
 }
 
+// --- Today rail (live feed, secondary) --------------------------------------
+
+function TodayRail({ items }: { items: FeedItem[] }) {
+  // Track which keys have already been seen so freshly-arrived rows can fade in
+  // without re-animating the whole list on every poll.
+  const seenRef = useRef<Set<string>>(new Set());
+  const seen = seenRef.current;
+  const fresh = new Set<string>();
+  for (const it of items) {
+    if (!seen.has(it.key)) fresh.add(it.key);
+  }
+  useEffect(() => {
+    for (const it of items) seen.add(it.key);
+  });
+
+  return (
+    <aside className="home-rail home-reveal" style={revealDelay(2)} aria-label="Today">
+      <h2 className="home-rail-label">Today</h2>
+      {items.length === 0 ? (
+        <p className="home-rail-empty">quiet so far.</p>
+      ) : (
+        <ul className="home-rail-list">
+          {items.map((it) => {
+            const row = (
+              <>
+                <span className="home-rail-time">{clock(it.at)}</span>
+                <span className="home-rail-text">{it.text}</span>
+              </>
+            );
+            return (
+              <li key={it.key} className={`home-rail-row${fresh.has(it.key) ? " home-rail-fresh" : ""}`}>
+                {it.href ? (
+                  <a className="home-rail-link" href={it.href} title={it.text}>
+                    {row}
+                  </a>
+                ) : (
+                  <span className="home-rail-static" title={it.text}>
+                    {row}
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </aside>
+  );
+}
+
 // --- Helpers ----------------------------------------------------------------
 
-function resolveAgentName(store: ReturnType<typeof useChatStore>): string | null {
+function resolveAgentName(store: ChatStore): string | null {
   const selected = store.selectedAgent;
   if (selected && store.agents[selected]) return selected;
   return null;
@@ -307,6 +484,11 @@ function greeting(): string {
   if (h < 12) return "Good morning.";
   if (h < 18) return "Good afternoon.";
   return "Good evening.";
+}
+
+/** 24h HH:MM stamp for a feed row. */
+function clock(d: Date): string {
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
 /** Pick the soonest enabled cron job's name + HH:MM, if cheaply derivable. */

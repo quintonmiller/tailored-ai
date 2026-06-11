@@ -295,11 +295,24 @@ button {
   background: radial-gradient(60% 42% at 50% 8%, rgba(108, 138, 255, 0.05), transparent 70%);
 }
 
+/* Two-zone layout: primary column + ambient "Today" rail. Below the breakpoint
+   the grid collapses to one column and the rail stacks beneath (see media query
+   at the end of the home block). The grid itself is centered by .home. */
+.home-grid {
+  width: 100%;
+  max-width: 960px;
+  min-height: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 640px) 264px;
+  justify-content: center;
+  column-gap: 52px;
+  padding: 64px 24px 24px;
+}
+
 .home-col {
   width: 100%;
   max-width: 640px;
   min-height: 100%;
-  padding: 64px 24px 24px;
   display: flex;
   flex-direction: column;
   gap: 36px;
@@ -335,18 +348,21 @@ button {
   gap: 10px;
 }
 
+/* The warm serif voice stays, but the body now sets UPRIGHT for readability —
+   briefings are short, so the hero tightens slightly (20px / 1.55). Italic is
+   reserved for the single greeting accent below. */
 .home-hero-prose,
 .home-hero-prose p,
 .home-hero-prose li {
   font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
-  font-style: italic;
-  font-size: 21px;
-  line-height: 1.65;
+  font-style: normal;
+  font-size: 20px;
+  line-height: 1.55;
   color: #e9e3d8;
 }
 
 .home-hero-prose p {
-  margin: 0 0 10px;
+  margin: 0 0 8px;
 }
 
 .home-hero-prose p:last-child {
@@ -365,6 +381,11 @@ button {
 
 .home-hero-prose strong {
   font-weight: 600;
+}
+
+/* The disabled-state greeting keeps the italic accent — the one place the
+   serif leans, so it reads as a warm spoken line, not body copy. */
+.home-hero-greeting {
   font-style: italic;
 }
 
@@ -384,9 +405,9 @@ button {
 
 .home-hero-loading {
   font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
-  font-style: italic;
-  font-size: 21px;
-  line-height: 1.65;
+  font-style: normal;
+  font-size: 20px;
+  line-height: 1.55;
   color: var(--text-dim);
 }
 
@@ -469,8 +490,8 @@ button {
 /* NEEDS YOU stack — hairline rows, not cards */
 .home-needs-empty {
   font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
-  font-style: italic;
-  font-size: 17px;
+  font-style: normal;
+  font-size: 16px;
   color: var(--text-dim);
 }
 
@@ -633,6 +654,255 @@ button {
   color: var(--accent);
 }
 
+/* --- Today rail (secondary, ambient) --------------------------------------
+   Deliberately quieter than the main column: smaller type, dimmer color, a
+   hairline left border. Reads as peripheral vision, not a second column. */
+.home-rail {
+  border-left: 1px solid var(--border);
+  padding: 64px 0 24px 28px;
+  margin-top: -64px; /* pull the rail's top flush with the column's top padding */
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-self: stretch;
+}
+
+.home-rail-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--text-dim);
+  margin: 0;
+}
+
+.home-rail-empty {
+  font-size: 12px;
+  color: var(--text-dim);
+  opacity: 0.7;
+}
+
+.home-rail-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.home-rail-row {
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.home-rail-link,
+.home-rail-static {
+  display: flex;
+  gap: 9px;
+  align-items: baseline;
+  color: var(--text-dim);
+  text-decoration: none;
+}
+
+.home-rail-link {
+  transition: color 0.15s;
+}
+
+.home-rail-link:hover {
+  color: var(--text);
+}
+
+.home-rail-link:hover .home-rail-time {
+  color: var(--accent-dim);
+}
+
+.home-rail-time {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--accent-dim);
+  letter-spacing: 0.02em;
+}
+
+.home-rail-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Newly-arrived rows fade in subtly without re-animating the whole list. */
+.home-rail-fresh {
+  animation: home-rail-fade 0.5s ease-out;
+}
+
+@keyframes home-rail-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* --- Inline live thread ----------------------------------------------------
+   The lightweight surface above the ask bar: the tail of the current session,
+   a sending status row, and inline approvals. Quiet — no cards, no tool logs. */
+.home-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.home-thread-scroll {
+  max-height: 340px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-right: 4px;
+  /* Mask the top edge so scrolled-up content fades rather than clips hard. */
+  mask-image: linear-gradient(to bottom, transparent 0, #000 14px);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 14px);
+}
+
+.home-thread-line {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.home-thread-label {
+  font-size: 10px;
+  text-transform: lowercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+
+.home-thread-user .home-thread-label {
+  color: var(--accent-dim);
+}
+
+.home-thread-body {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.home-thread-user .home-thread-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Trim markdown-body margins so assistant lines stay compact in the tail. */
+.home-thread-body.markdown-body > :first-child {
+  margin-top: 0;
+}
+
+.home-thread-body.markdown-body > :last-child {
+  margin-bottom: 0;
+}
+
+.home-thread-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.home-thread-status-text {
+  display: inline-flex;
+  align-items: baseline;
+}
+
+.home-thread-stop {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  font: 11px var(--font);
+  padding: 2px 9px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.home-thread-stop:hover {
+  color: var(--red);
+  border-color: var(--red);
+}
+
+.home-thread-approval {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.home-thread-approval-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.home-thread-approval-tool {
+  font-size: 12px;
+  color: var(--amber);
+}
+
+.home-thread-approval-desc {
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-thread-approval-actions {
+  flex-shrink: 0;
+  display: flex;
+  gap: 6px;
+}
+
+.home-thread-approve,
+.home-thread-reject {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font: 11px var(--font);
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.home-thread-approve {
+  color: var(--green);
+}
+
+.home-thread-approve:hover {
+  border-color: var(--green);
+}
+
+.home-thread-reject {
+  color: var(--text-dim);
+}
+
+.home-thread-reject:hover {
+  color: var(--red);
+  border-color: var(--red);
+}
+
+.home-thread-open {
+  align-self: flex-start;
+  font-size: 11px;
+  color: var(--text-dim);
+  text-decoration: none;
+}
+
+.home-thread-open:hover {
+  color: var(--accent);
+}
+
 /* Motion — one orchestrated fade-up per load */
 .home-reveal {
   opacity: 0;
@@ -655,23 +925,42 @@ button {
     animation: none;
   }
   .home-caret,
-  .home-hero-spin {
+  .home-hero-spin,
+  .home-rail-fresh {
     animation: none;
+  }
+}
+
+/* Below ~1024px the rail loses its dedicated column: the grid collapses to one
+   column and the rail stacks beneath the main column as a full-width strip. */
+@media (max-width: 1023px) {
+  .home-grid {
+    grid-template-columns: minmax(0, 640px);
+    max-width: 640px;
+  }
+  .home-rail {
+    border-left: none;
+    border-top: 1px solid var(--border);
+    padding: 24px 0 0;
+    margin-top: 0;
   }
 }
 
 /* Mobile — full width with 20px gutters, ask bar stays usable */
 @media (max-width: 720px) {
-  .home-col {
+  .home-grid {
     max-width: none;
     padding: 40px 20px 20px;
+  }
+  .home-col {
+    max-width: none;
     gap: 28px;
   }
   .home-hero-prose,
   .home-hero-prose p,
   .home-hero-prose li,
   .home-hero-loading {
-    font-size: 19px;
+    font-size: 18px;
   }
 }
 
