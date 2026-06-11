@@ -113,8 +113,8 @@ export class AutopilotWorker {
   }
 
   /**
-   * Periodically scan for coding tasks (assignee=coder/reviewer or any
-   * known agent) whose updated_at is older than the staleness threshold
+   * Periodically scan for agent-assigned tasks (assignee is any known
+   * agent) whose updated_at is older than the staleness threshold
    * and that haven't reached a terminal status. For each stuck task we
    * re-fire the watcher event with `force: true` — the watcher's stall
    * handling (handleStall) then decides retry vs block based on prior

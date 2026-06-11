@@ -30,7 +30,15 @@ export function parseAgentData(manifest: ResourceManifest): AgentDefinition {
   }
   const out: AgentDefinition = {};
 
-  for (const key of ["description", "model", "provider", "instructions", "nudgeMessage", "contextDir"] as const) {
+  for (const key of [
+    "description",
+    "model",
+    "provider",
+    "instructions",
+    "nudgeMessage",
+    "contextDir",
+    "taskPreamble",
+  ] as const) {
     const v = (data as Record<string, unknown>)[key];
     if (v == null) continue;
     if (typeof v !== "string") {
@@ -48,7 +56,7 @@ export function parseAgentData(manifest: ResourceManifest): AgentDefinition {
     (out as Record<string, unknown>)[key] = v;
   }
 
-  for (const key of ["skipGlobalContext", "summarizeOnTrim"] as const) {
+  for (const key of ["skipGlobalContext", "summarizeOnTrim", "worktree"] as const) {
     const v = (data as Record<string, unknown>)[key];
     if (v == null) continue;
     if (typeof v !== "boolean") {

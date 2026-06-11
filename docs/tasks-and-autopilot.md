@@ -31,7 +31,7 @@ In-process task registry, persistent project tasks, pluggable backends, and the 
 Project tasks (and the autopilot worker) read/write through a pluggable `TaskBackend` interface defined in `packages/core/src/tasks/interface.ts`. Today:
 
 - **`native`** (default) — `packages/core/src/tasks/native.ts`, wraps the existing SQLite `project_tasks` table.
-- **`github`** — `packages/core/src/tasks/github.ts`, drives an arbitrary GitHub repo's Issues. Status maps to labels: `status:backlog`, `status:in_progress`, `status:blocked`, `status:in_review`. A closed issue means done. Tags are non-status, non-reason labels. Rank is the issue number (lower = older = higher priority for the autopilot). Assignee is the first `assignees[]` entry. Blocked reason maps to `reason:<value>` labels. Comments preserve the agent's `agentName` by prepending `[agent: NAME] ` to the body when the name matches `[A-Za-z0-9._-]+`; on read, the prefix is stripped and the embedded name overrides the GH user attribution. Plain comments without the prefix still attribute to the GH commenter.
+- **`github`** — `packages/core/src/tasks/github.ts`, drives an arbitrary GitHub repo's Issues. Status maps to labels: `status:backlog`, `status:in_progress`, `status:blocked`, `status:in_review`. A closed issue means done. Tags are non-status, non-reason labels. Rank is the issue number (lower = older = higher priority for the autopilot). Assignee is the first `assignees[]` entry — **unless** it's a known TAI agent role, in which case it rides on an `agent:<name>` label instead (GitHub 422s on `assignees: ["coder"]` because "coder" isn't a real collaborator). The agent-role set is **derived from your config** (#204), not a hardcoded list: every name under `agents:`, plus `taskWatcher.agent`, plus any `tasks.options.agentRoles`. Blocked reason maps to `reason:<value>` labels. Comments preserve the agent's `agentName` by prepending `[agent: NAME] ` to the body when the name matches `[A-Za-z0-9._-]+`; on read, the prefix is stripped and the embedded name overrides the GH user attribution. Plain comments without the prefix still attribute to the GH commenter.
 - **`beans`** — `packages/core/src/tasks/beans.ts`, shells out to the [beans](https://github.com/hmans/beans) CLI. Status maps: `backlog↔todo`, `in_progress↔in-progress`, `done↔completed`; `blocked` is encoded as `status=todo` plus a `status:blocked` tag (with optional `reason:*` tag for `blocked_reason`). Assignee is stored as a managed `assignee:NAME` tag (filtered out on read). beans-native `draft` and `scrapped` statuses are exposed verbatim via `extraStatuses`. Comments are appended to the body inside `<!-- beans-comment ... -->` markers and stripped from `description` on read. `claimBacklog` uses `--if-match <etag>` for optimistic concurrency. Accepts an injected `BeansRunner` for testability; production uses `execFile('beans', ...)`.
 - **`beads`** — `packages/core/src/tasks/beads.ts`, shells out to the [beads](https://github.com/steveyegge/beads) `bd` CLI. Status maps natively (`backlog↔open`, `in_progress↔in_progress`, `blocked↔blocked`, `done↔closed`); the beads-native `deferred` is exposed via `extraStatuses`. Status transitions go through `bd close` / `bd reopen` / `bd set-state --reason` (a generic reason is supplied when the caller doesn't provide one). `claimBacklog` uses `bd update --claim`. Labels map 1:1 (no `assignee:` / `status:blocked` tag prefix gymnastics needed). Limitations: per-issue delete falls back to `bd close --reason deleted`, and `bd init` must have been run on the repo before the backend will work. Accepts an injected `BeadsRunner` for testability.
 
@@ -47,7 +47,7 @@ Config:
 tasks:
   backend: github           # any registered backend id; built-ins: native | github | beans | beads
   options:                  # backend-specific, opaque to core — the selected backend reads it
-    repo: owner/repo        #   github: repo + token (+ optional agentRoles)
+    repo: owner/repo        #   github: repo + token (+ optional agentRoles to extend the derived role set)
     token: ${GITHUB_TOKEN}
     # beans/beads read: path
 ```
@@ -58,6 +58,8 @@ the opaque `options` bag the selected backend reads itself — core privileges
 no built-in. The legacy `tasks.github` / `tasks.beans` / `tasks.beads` blocks
 are still accepted and folded into `tasks.options` at load with a deprecation
 warning.
+
+**Agent-role derivation.** The factory (`createTaskBackend` in `tasks/factory.ts`) builds the github backend's agent-role set from the install's own config: the union of `config.agents` keys, `config.taskWatcher.agent`, and `tasks.options.agentRoles`. There is no built-in default list — if you don't define any agents and don't set `agentRoles`, every assignee is treated as a real GitHub user. Names in the set route to `agent:<name>` labels (and `nextBacklogTask` / `query` filter on those labels) instead of GH's assignees API.
 
 When using the `github` backend, `AutopilotWorker.start()` calls `backend.bootstrap()` once on launch — this creates the four `status:*` labels (`backlog`, `in_progress`, `blocked`, `in_review`) and `reason:budget` with sensible colors if they're missing. Idempotent and non-fatal: missing-permissions or 422-already-exists errors are swallowed. Backends declare bootstrap as optional on `TaskBackend`; only `github` implements it today.
 

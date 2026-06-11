@@ -31,8 +31,26 @@ taskBackendFactoryRegistry.register("github", (config) => {
   if (!repo || !token) {
     throw new Error('tasks.backend = "github" requires tasks.options.repo and tasks.options.token');
   }
-  return new GitHubTaskBackend({ repo, token, agentRoles: asStringArray(opts.agentRoles) });
+  return new GitHubTaskBackend({ repo, token, agentRoles: deriveAgentRoles(config, asStringArray(opts.agentRoles)) });
 });
+
+/**
+ * The set of names the GitHub backend treats as TAI agent roles (routed via
+ * `agent:<name>` labels instead of GH's assignees API). Derived from the
+ * install's own config rather than a hardcoded personal list (#204):
+ *   - every configured agent (`config.agents` keys),
+ *   - the task-watcher's default agent (`config.taskWatcher.agent`/`.profile`),
+ *   - any extra names from `tasks.options.agentRoles`.
+ * Returns undefined when the union is empty so the backend's own default
+ * (empty set) applies. Exported for tests.
+ */
+export function deriveAgentRoles(config: AgentConfig, extra: string[] | undefined): string[] | undefined {
+  const roles = new Set<string>(extra ?? []);
+  for (const name of Object.keys(config.agents ?? {})) roles.add(name);
+  const watcherAgent = config.taskWatcher?.agent ?? config.taskWatcher?.profile;
+  if (watcherAgent) roles.add(watcherAgent);
+  return roles.size > 0 ? Array.from(roles) : undefined;
+}
 
 taskBackendFactoryRegistry.register(
   "beans",

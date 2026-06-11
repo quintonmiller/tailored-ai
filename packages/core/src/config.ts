@@ -35,6 +35,28 @@ export interface AgentDefinition {
   skipGlobalContext?: boolean;
   /** When true, summarize dropped history instead of silently discarding it. */
   summarizeOnTrim?: boolean;
+  /**
+   * When true, task-watcher dispatches to this agent run in an isolated git
+   * worktree on a per-task branch (`agent/<task_id>-<slug>`). The watcher
+   * creates the worktree before the loop, mounts it as the working-directory
+   * boundary, and cleans it up afterward (retaining the branch). Off by
+   * default — only agents that need an isolated checkout (coding / review
+   * roles) should opt in. Replaces the historical hardcoded
+   * `agentName === "coder" || "reviewer"` check.
+   */
+  worktree?: boolean;
+  /**
+   * Prompt template prepended to task-watcher dispatch prompts for this
+   * agent. Expanded through the same `{{var}}` path as other prompts, with
+   * vars: `task_id`, `task_title`, `task_status`, `task_description`,
+   * `task_author`, `task_tags`, `action`, `project_id`, `owner_name`,
+   * `worktree_path`, `worktree_branch` (the last two are empty strings when
+   * the agent has no worktree). Unset means no preamble — the dispatch
+   * prompt is just the task context + the watcher's configured prompt.
+   * This is where install-specific role guidance (coder/reviewer lifecycle,
+   * review gates, handoff conventions) now lives, instead of hardcoded core.
+   */
+  taskPreamble?: string;
   /** When true, prepend a `[Relevant memory]` block built from recall hits to the system prompt. */
   injectMemory?: boolean;
   /**
