@@ -1,5 +1,5 @@
 import { marked } from "marked";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   type AutopilotActivity,
   type BriefingResponse,
@@ -10,7 +10,7 @@ import {
   fetchHealth,
   refreshBriefing,
 } from "../api";
-import { type ChatStore, useChatStore } from "../components/ChatContext";
+import { useChatStore } from "../components/ChatContext";
 import { SuggestionChips } from "../components/SuggestionChips";
 import { type NeedsYouItem, useNeedsYou } from "../hooks/useNeedsYou";
 import { type FeedItem, useTodayFeed } from "../hooks/useTodayFeed";
@@ -20,30 +20,19 @@ marked.setOptions({ breaks: true, gfm: true });
 const ACTIVITY_POLL_MS = 5000;
 const SLOW_POLL_MS = 30000;
 const NEEDS_YOU_MAX = 4;
-const THREAD_TAIL = 6;
 
 /**
- * Home — the assistant's surface, now a two-zone layout.
+ * Home v3 — a real dashboard.
  *
- * On wide viewports it's a grid: a primary 640px column + a secondary "Today"
- * rail (ambient peripheral vision, not a second content column). Below the
- * breakpoint the rail stacks under the column for a single-column mobile read.
+ * A single centered column (right of the persistent app sidebar) descending in
+ * priority: a slim status eyebrow with ambient health folded in; the serif
+ * briefing hero (the agent's voice); a quick-actions row; NEEDS YOU (the
+ * hairline approval/blocked stack); then the FEED as the main body of the page
+ * — a day-grouped, in-flight-pinned activity log merged client-side from the
+ * existing endpoints, with memory notes collapsed into digest rows. Suggestion
+ * chips close it out, prefilling the floating ChatDock rather than auto-sending.
  *
- * The primary column descends in importance: the agent speaks (the serif
- * briefing hero, body upright with at most one italic accent), shows what needs
- * you (a flat hairline stack), then — the new heart of the page — HOSTS the
- * actual current chat session inline. The docked ask bar and suggestion chips
- * call store.send() and stay here; the tail of the live transcript renders just
- * above the bar (markdown for the agent, live status + interrupt while sending,
- * inline approval rows), with a quiet "open full chat" escape hatch. No more
- * handoff to /chat.
- *
- * The right rail is the live "Today" feed (useTodayFeed) — timestamped events
- * merged client-side from existing endpoints, polled on a single interval.
- *
- * Every data source is one of the existing config-gated endpoints; with the
- * briefing/suggestions features off, or an empty session, the page still reads
- * as intentional, never broken.
+ * Chat lives in the floating ChatDock now — Home no longer embeds a thread.
  */
 export function Dashboard() {
   const [activeTask, setActiveTask] = useState<AutopilotActivity["current"] | null>(null);
@@ -78,46 +67,51 @@ export function Dashboard() {
     return () => clearInterval(id);
   }, []);
 
-  // Send through the shared app-wide store and STAY on Home — the inline thread
-  // below the ask bar renders the live turn. No route handoff.
-  const onSend = useCallback(
-    (text: string) => {
-      const trimmed = text.trim();
-      if (!trimmed) return;
-      store.send(trimmed);
-    },
-    [store],
-  );
+  // Suggestion chips + the "new chat" quick action prefill the dock instead of
+  // auto-sending — the user reviews, edits, and presses send themselves.
+  const onPick = useCallback((text: string) => store.requestDock(text), [store]);
 
   return (
     <div className="home">
-      <div className="home-grid">
-        <div className="home-col">
-          <Eyebrow activeTask={activeTask} />
-          <BriefingHero />
-          <NeedsYou items={needsYou} />
-          <QuickActions onPick={onSend} />
-          <div className="home-dock home-reveal" style={revealDelay(4)}>
-            <Thread store={store} />
-            <AskBar agentName={resolveAgentName(store)} onSubmit={onSend} />
-            <FooterStatus connected={connected} cron={cron} />
-          </div>
+      <div className="home-col home-col-v3">
+        <Eyebrow activeTask={activeTask} connected={connected} cron={cron} />
+        <BriefingHero />
+        <QuickActions onNewChat={() => store.requestDock()} />
+        <NeedsYou items={needsYou} />
+        <Feed items={feed} />
+        <div className="home-actions home-reveal" style={revealDelay(5)}>
+          <SuggestionChips variant="row" onPick={onPick} />
         </div>
-        <TodayRail items={feed} />
       </div>
     </div>
   );
 }
 
-// --- Eyebrow status line ----------------------------------------------------
+// --- Eyebrow status line (with ambient health folded in) --------------------
 
-function Eyebrow({ activeTask }: { activeTask: AutopilotActivity["current"] | null }) {
+function Eyebrow({
+  activeTask,
+  connected,
+  cron,
+}: {
+  activeTask: AutopilotActivity["current"] | null;
+  connected: boolean | null;
+  cron: CronData | null;
+}) {
   const tod = timeOfDay();
   const situation = activeTask ? `working: ${activeTask.title}` : "all quiet";
+  const next = cron?.enabled ? nextCronLabel(cron) : null;
+  const dotClass = connected === false ? "home-foot-dot error" : "home-foot-dot";
+  const state = connected === false ? "offline" : activeTask ? "busy" : "idle";
   return (
     <div className="home-eyebrow home-reveal" style={revealDelay(0)}>
       <span className="home-eyebrow-left">
         {tod} · {situation}
+      </span>
+      <span className="home-eyebrow-right">
+        <span className={dotClass} aria-hidden="true" />
+        <span>{state}</span>
+        {next && <span>· next: {next}</span>}
       </span>
     </div>
   );
@@ -199,13 +193,39 @@ function BriefingHero() {
   );
 }
 
+// --- Quick actions ----------------------------------------------------------
+
+/**
+ * Small text buttons linking to the closest real destination. "new chat" opens
+ * the floating dock via requestDock; the rest are plain hash routes that exist
+ * today (Tasks board, Agents page → create modal, Config → providers/plugins).
+ */
+function QuickActions({ onNewChat }: { onNewChat: () => void }) {
+  return (
+    <div className="home-quick home-reveal" style={revealDelay(2)}>
+      <button type="button" className="home-quick-btn" onClick={onNewChat}>
+        new chat
+      </button>
+      <a className="home-quick-btn" href="#/projects">
+        new task
+      </a>
+      <a className="home-quick-btn" href="#/agents">
+        create agent
+      </a>
+      <a className="home-quick-btn" href="#/config/providers">
+        install plugin
+      </a>
+    </div>
+  );
+}
+
 // --- NEEDS YOU stack --------------------------------------------------------
 
 function NeedsYou({ items }: { items: NeedsYouItem[] }) {
   const shown = items.slice(0, NEEDS_YOU_MAX);
   const overflow = items.length - shown.length;
   return (
-    <section className="home-needs home-reveal" style={revealDelay(2)}>
+    <section className="home-needs home-reveal" style={revealDelay(3)}>
       <div className="home-section-head">
         <h2 className="home-section-label">Needs you</h2>
         {items.length > 0 && <span className="home-section-count">{items.length}</span>}
@@ -214,13 +234,8 @@ function NeedsYou({ items }: { items: NeedsYouItem[] }) {
         <p className="home-needs-empty">Nothing needs you.</p>
       ) : (
         <ul className="home-needs-list">
-          {shown.map((it, i) => (
-            <li
-              key={it.key}
-              className="home-needs-row home-reveal"
-              style={revealDelay(2.5 + i * 0.5)}
-              title={it.reason}
-            >
+          {shown.map((it) => (
+            <li key={it.key} className="home-needs-row" title={it.reason}>
               <span className="home-needs-title">{it.title}</span>
               {it.when && <span className="home-needs-age">{shortAge(it.when)}</span>}
               <a className="home-needs-action" href={it.href}>
@@ -239,239 +254,115 @@ function NeedsYou({ items }: { items: NeedsYouItem[] }) {
   );
 }
 
-// --- Quick actions ----------------------------------------------------------
-
-function QuickActions({ onPick }: { onPick: (text: string) => void }) {
-  return (
-    <div className="home-actions home-reveal" style={revealDelay(3)}>
-      <SuggestionChips variant="row" onPick={onPick} />
-    </div>
-  );
-}
-
-// --- Inline live thread -----------------------------------------------------
+// --- Feed (the main body) ---------------------------------------------------
 
 /**
- * The lightweight live surface: the tail of the current session, a sending
- * status row with interrupt, and inline approval rows. No tool logs or copy
- * buttons — that detail lives on /chat. Renders nothing when there's no
- * conversation and nothing in flight, so the page stays clean for new users.
+ * Day-grouped activity log. In-flight rows pin to the top with a pulsing dot;
+ * memory bursts render as a collapsed digest row expandable inline. Each row is
+ * a HH:MM stamp, a kind glyph, the text, and a deep link where one exists.
  */
-function Thread({ store }: { store: ChatStore }) {
-  const { messages, sending, activeTool, activityDesc, approvals } = store;
-  const tail = messages.slice(-THREAD_TAIL);
-  const scrollRef = useRef<HTMLDivElement | null>(null);
+function Feed({ items }: { items: FeedItem[] }) {
+  if (items.length === 0) {
+    return (
+      <section className="home-feed home-reveal" style={revealDelay(4)}>
+        <div className="home-section-head">
+          <h2 className="home-section-label">Activity</h2>
+        </div>
+        <p className="home-feed-empty">quiet so far.</p>
+      </section>
+    );
+  }
 
-  // One signature that flips whenever the visible thread changes (new message,
-  // a tool starts/stops, the status line updates). The effect reads it so the
-  // dependency is honest while still re-scrolling on every relevant change.
-  // Scroll only the thread's own box — scrollIntoView would also scroll the
-  // app scroller, yanking the whole page down on mount.
-  const scrollSig = `${messages.length}|${sending}|${activeTool ?? ""}|${activityDesc ?? ""}`;
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (scrollSig && el) el.scrollTop = el.scrollHeight;
-  }, [scrollSig]);
-
-  const hasContent = tail.length > 0 || sending || approvals.length > 0;
-  if (!hasContent) return null;
-
-  const statusText = activityDesc ?? (activeTool ? `running ${activeTool}` : "thinking…");
+  const groups = groupByDay(items);
 
   return (
-    <div className="home-thread">
-      <div className="home-thread-scroll" ref={scrollRef}>
-        {tail.map((m, i) => (
-          <ThreadLine key={`${i}-${m.role}`} role={m.role} content={m.content} agentName={resolveAgentName(store)} />
-        ))}
-
-        {sending && (
-          <div className="home-thread-status" aria-live="polite">
-            <span className="home-thread-status-text">
-              {statusText}
-              <span className="home-caret" aria-hidden="true">
-                ▍
-              </span>
-            </span>
-            <button type="button" className="home-thread-stop" onClick={store.interrupt}>
-              stop
-            </button>
-          </div>
-        )}
-
-        {approvals.map((a) => (
-          <div key={a.requestId} className="home-thread-approval">
-            <span className="home-thread-approval-text" title={a.description ?? a.toolName}>
-              <span className="home-thread-approval-tool">{a.toolName}</span>
-              {a.description && <span className="home-thread-approval-desc">{a.description}</span>}
-            </span>
-            <span className="home-thread-approval-actions">
-              <button type="button" className="home-thread-approve" onClick={() => store.approve(a.requestId)}>
-                Approve
-              </button>
-              <button type="button" className="home-thread-reject" onClick={() => store.reject(a.requestId)}>
-                Reject
-              </button>
-            </span>
-          </div>
-        ))}
-
+    <section className="home-feed home-reveal" style={revealDelay(4)}>
+      <div className="home-section-head">
+        <h2 className="home-section-label">Activity</h2>
       </div>
-      {tail.length > 0 && (
-        <a className="home-thread-open" href="#/chat">
-          open full chat →
-        </a>
-      )}
-    </div>
+      <ul className="home-feed-list">
+        {groups.map((g) => (
+          <li key={g.label} className="home-feed-day">
+            <div className="home-feed-day-label">{g.label}</div>
+            <ul className="home-feed-rows">
+              {g.items.map((it) => (
+                <FeedRow key={it.key} item={it} />
+              ))}
+            </ul>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
-function ThreadLine({
-  role,
-  content,
-  agentName,
-}: {
-  role: "system" | "user" | "assistant" | "tool";
-  content: string | null;
-  agentName: string | null;
-}) {
-  const text = content ?? "";
-  // Hooks run unconditionally (rules of hooks); the render guards below decide
-  // whether the line shows at all.
-  const html = useMemo(() => (role === "assistant" ? (marked.parse(text) as string) : ""), [role, text]);
+function FeedRow({ item }: { item: FeedItem }) {
+  const [expanded, setExpanded] = useState(false);
+  const glyph = KIND_GLYPH[item.kind] ?? "·";
 
-  // Quiet surface — skip system/tool carriers and empty lines.
-  if (role !== "user" && role !== "assistant") return null;
-  if (!text.trim()) return null;
-
-  const label = role === "user" ? "you" : (agentName ?? "agent");
-
-  return (
-    <div className={`home-thread-line home-thread-${role}`}>
-      <span className="home-thread-label">{label}</span>
-      {role === "assistant" ? (
-        <div className="home-thread-body markdown-body" dangerouslySetInnerHTML={{ __html: html }} />
-      ) : (
-        <div className="home-thread-body">{text}</div>
-      )}
-    </div>
+  const body = (
+    <>
+      <span className="home-feed-time">{clock(item.at)}</span>
+      <span className={`home-feed-glyph${item.inFlight ? " home-feed-pulse" : ""}`} aria-hidden="true">
+        {item.inFlight ? "●" : glyph}
+      </span>
+      <span className="home-feed-text">{item.text}</span>
+    </>
   );
-}
 
-// --- Docked ask bar ---------------------------------------------------------
-
-function AskBar({ agentName, onSubmit }: { agentName: string | null; onSubmit: (text: string) => void }) {
-  const [text, setText] = useState("");
-  const placeholder = agentName ? `Ask or tell ${agentName} anything…` : "Ask or tell your assistant anything…";
-
-  function submit(e: React.FormEvent) {
-    e.preventDefault();
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    setText("");
-    onSubmit(trimmed);
-  }
-
-  return (
-    <form className="home-ask" onSubmit={submit}>
-      <label className="home-ask-label" htmlFor="home-ask-input">
-        Message your assistant
-      </label>
-      <input
-        id="home-ask-input"
-        className="home-ask-input"
-        type="text"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        placeholder={placeholder}
-        aria-label="Message your assistant"
-        autoComplete="off"
-      />
-      <button type="submit" className="home-ask-send" disabled={!text.trim()} aria-label="Send">
-        →
-      </button>
-    </form>
-  );
-}
-
-// --- Footer status line -----------------------------------------------------
-
-function FooterStatus({ connected, cron }: { connected: boolean | null; cron: CronData | null }) {
-  const next = cron?.enabled ? nextCronLabel(cron) : null;
-  const dotClass = connected === false ? "home-foot-dot error" : "home-foot-dot";
-  const dotState = connected === false ? "offline" : "idle";
-  return (
-    <div className="home-foot">
-      <span className={dotClass} aria-hidden="true" />
-      <span>{dotState}</span>
-      {next && (
-        <>
-          <span aria-hidden="true">·</span>
-          <span>next: {next}</span>
-        </>
-      )}
-      <span aria-hidden="true">·</span>
-      <a href="#/agents">activity →</a>
-    </div>
-  );
-}
-
-// --- Today rail (live feed, secondary) --------------------------------------
-
-function TodayRail({ items }: { items: FeedItem[] }) {
-  // Track which keys have already been seen so freshly-arrived rows can fade in
-  // without re-animating the whole list on every poll.
-  const seenRef = useRef<Set<string>>(new Set());
-  const seen = seenRef.current;
-  const fresh = new Set<string>();
-  for (const it of items) {
-    if (!seen.has(it.key)) fresh.add(it.key);
-  }
-  useEffect(() => {
-    for (const it of items) seen.add(it.key);
-  });
-
-  return (
-    <aside className="home-rail home-reveal" style={revealDelay(2)} aria-label="Today">
-      <h2 className="home-rail-label">Today</h2>
-      {items.length === 0 ? (
-        <p className="home-rail-empty">quiet so far.</p>
-      ) : (
-        <ul className="home-rail-list">
-          {items.map((it) => {
-            const row = (
-              <>
-                <span className="home-rail-time">{clock(it.at)}</span>
-                <span className="home-rail-text">{it.text}</span>
-              </>
-            );
-            return (
-              <li key={it.key} className={`home-rail-row${fresh.has(it.key) ? " home-rail-fresh" : ""}`}>
-                {it.href ? (
-                  <a className="home-rail-link" href={it.href} title={it.text}>
-                    {row}
-                  </a>
-                ) : (
-                  <span className="home-rail-static" title={it.text}>
-                    {row}
-                  </span>
-                )}
+  // Memory digest — a button that expands the note first-lines inline.
+  if (item.details && item.details.length > 0) {
+    return (
+      <li className={`home-feed-row${item.inFlight ? " is-inflight" : ""}`}>
+        <button
+          type="button"
+          className="home-feed-link home-feed-digest"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((v) => !v)}
+        >
+          {body}
+          <span className="home-feed-caret" aria-hidden="true">
+            {expanded ? "▾" : "▸"}
+          </span>
+        </button>
+        {expanded && (
+          <ul className="home-feed-details">
+            {item.details.map((d, i) => (
+              <li key={`${item.key}-d${i}`} className="home-feed-detail">
+                {d}
               </li>
-            );
-          })}
-        </ul>
+            ))}
+          </ul>
+        )}
+      </li>
+    );
+  }
+
+  return (
+    <li className={`home-feed-row${item.inFlight ? " is-inflight" : ""}`}>
+      {item.href ? (
+        <a className="home-feed-link" href={item.href} title={item.text}>
+          {body}
+        </a>
+      ) : (
+        <span className="home-feed-link home-feed-static" title={item.text}>
+          {body}
+        </span>
       )}
-    </aside>
+    </li>
   );
 }
+
+const KIND_GLYPH: Record<FeedItem["kind"], string> = {
+  workflow: "⚙",
+  task: "▸",
+  explore: "✦",
+  cron: "↻",
+  session: "›",
+  memory: "✎",
+};
 
 // --- Helpers ----------------------------------------------------------------
-
-function resolveAgentName(store: ChatStore): string | null {
-  const selected = store.selectedAgent;
-  if (selected && store.agents[selected]) return selected;
-  return null;
-}
 
 function timeOfDay(): string {
   const d = new Date();
@@ -493,12 +384,36 @@ function clock(d: Date): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
+/** Group feed items under "today" / "yesterday" / a date label, in order. */
+function groupByDay(items: FeedItem[]): Array<{ label: string; items: FeedItem[] }> {
+  const groups: Array<{ label: string; items: FeedItem[] }> = [];
+  const byLabel = new Map<string, FeedItem[]>();
+  for (const it of items) {
+    const label = dayLabel(it.at);
+    let arr = byLabel.get(label);
+    if (!arr) {
+      arr = [];
+      byLabel.set(label, arr);
+      groups.push({ label, items: arr });
+    }
+    arr.push(it);
+  }
+  return groups;
+}
+
+function dayLabel(d: Date): string {
+  const today = new Date();
+  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diffDays = Math.round((startOfDay(today) - startOfDay(d)) / 86_400_000);
+  if (diffDays <= 0) return "today";
+  if (diffDays === 1) return "yesterday";
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }).toLowerCase();
+}
+
 /** Pick the soonest enabled cron job's name + HH:MM, if cheaply derivable. */
 function nextCronLabel(cron: CronData): string | null {
   const enabled = cron.jobs.filter((j) => j.enabled);
   if (enabled.length === 0) return null;
-  // schedules are cron expressions; surface a time-of-day when the minute/hour
-  // fields are plain numbers, otherwise just the job name.
   for (const j of enabled) {
     const t = cronTime(j.schedule);
     if (t) return `${j.name} ${t}`;
