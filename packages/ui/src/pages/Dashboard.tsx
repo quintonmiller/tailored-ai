@@ -315,7 +315,6 @@ function Thread({ store }: { store: ChatStore }) {
             </span>
           </div>
         ))}
-
       </div>
       {tail.length > 0 && (
         <a className="home-thread-open" href="#/chat">
