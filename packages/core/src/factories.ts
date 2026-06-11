@@ -193,8 +193,8 @@ export function createTools(
     tools.push(
       new AskUserTool({
         contextDir,
-        resolveOutbound: () => opts?.resolveOutbound?.(),
-        getOwnerId: () => opts?.getOwnerId?.(),
+        events: opts?.events,
+        inboxFile: config.tools.ask_user?.inboxFile ?? "inbox.md",
       }),
     );
   }

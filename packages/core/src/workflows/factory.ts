@@ -66,6 +66,7 @@ export function createWorkflowEngine(opts: {
       new ChannelMessageExecutor({
         resolveOutbound,
         getOwnerId,
+        events: runtime.events,
       }),
       new TriggerWorkflowExecutor(),
       new HttpRequestExecutor({ egressPolicy: createEgressPolicy(cfg.security?.egress) }),

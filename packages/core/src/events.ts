@@ -217,6 +217,73 @@ export interface RuntimeEventMap {
   };
 
   /**
+   * Autopilot (or any subsystem) needs a human's attention on a task — it
+   * errored or got blocked and there's nothing the agent can do without
+   * input. Replaces the inline owner-DM the autopilot worker used to send.
+   * The default `builtin:owner-notifier` plugin subscribes and delivers
+   * (DM to the owner via the primary channel), applying quiet-hours
+   * suppression. A user who wants different delivery disables that plugin
+   * and subscribes their own handler.
+   */
+  "task.needs_human": {
+    taskId: string;
+    /** Agent that was working the task, when known. */
+    agentName?: string;
+    /** Short machine reason: "error", "question", etc. */
+    reason: string;
+    /** Human-readable message to deliver. */
+    message: string;
+  };
+
+  /**
+   * A periodic digest is ready to deliver (e.g. the autopilot morning
+   * digest). Replaces the inline owner-DM the worker used to send. The
+   * default `builtin:owner-notifier` plugin delivers it; digests are NOT
+   * quiet-hours-suppressed (they fire on a schedule the user chose).
+   */
+  "digest.ready": {
+    /** Rendered digest body. */
+    content: string;
+    /** Short label for the digest period, e.g. "last 24h". */
+    periodLabel: string;
+  };
+
+  /**
+   * An agent asked the user a question via the `ask_user` tool. Replaces
+   * the inline owner-DM that tool used to send. `taskId` is set when the
+   * question came from an autopilot task run (the task is already blocked
+   * on `question` by the time this fires) — the default
+   * `builtin:owner-notifier` plugin applies autopilot quiet-hours
+   * suppression for those. Out-of-autopilot questions leave `taskId`
+   * unset and are always delivered.
+   */
+  "question.asked": {
+    /** The question text. */
+    question: string;
+    /** Session the question was asked from, when available. */
+    sessionId?: string;
+    /** Autopilot task id when the question came from a task run. */
+    taskId?: string;
+  };
+
+  /**
+   * A workflow step wants to deliver a message to the deployment owner
+   * without the workflow author naming an explicit channel/user — the
+   * implicit "tell the owner" fallback. Replaces the inline owner-DM the
+   * `channel_message` executor used to send on that fallback path.
+   * Explicit `channelId` / `userId` deliveries stay direct (author chose
+   * the target). The default `builtin:owner-notifier` plugin delivers.
+   */
+  "form.completed": {
+    /** Workflow run id, when known. */
+    runId?: string;
+    /** Step name that produced the message. */
+    stepName?: string;
+    /** Message body to deliver to the owner. */
+    message: string;
+  };
+
+  /**
    * A proposal (pull/merge request) was opened by a `RepoBackend`.
    *
    * Slice 4 of the platform vision (`docs/platform-vision.md`): emitted by

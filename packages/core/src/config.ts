@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import YAML from "yaml";
 import type { PermissionsConfig } from "./approval.js";
+import { DEFAULT_AUTOPILOT_TASK_PROMPT } from "./autopilot/task-prompt.js";
 import { DEFAULT_BRIEFING_PROMPT } from "./briefing.js";
 import { DEFAULT_SUGGESTIONS_PROMPT } from "./suggestions.js";
 
@@ -288,6 +289,7 @@ export type PluginEntry = string | { module: string; enabled?: boolean; config?:
 /** The default plugins seeded into `config.plugins` as enabled `builtin:*` entries. */
 export const DEFAULT_PLUGIN_MODULES = [
   "builtin:agent-notifier",
+  "builtin:owner-notifier",
   "builtin:scope-creep-flagger",
   "builtin:stall-guard",
   "builtin:coder-project-guard",
@@ -406,11 +408,12 @@ export interface AgentConfig {
    * providers, task backends, step executors); event-driven plugins that
    * need the runtime receive it on `ctx.runtime`.
    *
-   * The four default plugins ship here too as `builtin:*` entries
-   * (`builtin:agent-notifier`, `builtin:scope-creep-flagger`,
-   * `builtin:stall-guard`, `builtin:coder-project-guard`). Built-ins are not
-   * privileged — they are loaded through the same path as third parties; the
-   * `builtin:` prefix only tells the CLI importer to resolve them from
+   * The default plugins ship here too as `builtin:*` entries
+   * (`builtin:agent-notifier`, `builtin:owner-notifier`,
+   * `builtin:scope-creep-flagger`, `builtin:stall-guard`,
+   * `builtin:coder-project-guard`). Built-ins are not privileged — they are
+   * loaded through the same path as third parties; the `builtin:` prefix
+   * only tells the CLI importer to resolve them from
    * `@tailored-ai/core/plugins/*`.
    *
    * `enabled: false` disables an entry durably (the loader skips it). Per-
@@ -522,6 +525,11 @@ export interface AgentConfig {
     };
     ask_user?: {
       enabled: boolean;
+      /**
+       * File (relative to the global context dir) the out-of-autopilot
+       * `ask_user` fallback appends questions to. Default "inbox.md".
+       */
+      inboxFile?: string;
     };
     projects?: {
       enabled: boolean;
@@ -767,6 +775,19 @@ export interface AgentConfig {
      *  `chat_template_kwargs: { enable_thinking: false }`). */
     providerExtra?: Record<string, unknown>;
   };
+  /**
+   * Autopilot worker tuning. Today this holds the overridable task prompt —
+   * the orchestration rules the worker hands an agent when it picks up a
+   * task. DEFAULT_CONFIG ships {@link DEFAULT_AUTOPILOT_TASK_PROMPT}, so
+   * out-of-the-box behavior is unchanged. Override `taskPrompt` to reshape
+   * how autopilot drives agents. Template vars: `{{task_id}}`,
+   * `{{task_title}}`, `{{task_description}}`, `{{prior_activity}}` (the
+   * rendered prior-comment block, or empty when there are none). See
+   * docs/tasks-and-autopilot.md.
+   */
+  autopilot?: {
+    taskPrompt?: string;
+  };
 }
 
 const DEFAULT_CONFIG: AgentConfig = {
@@ -793,8 +814,9 @@ const DEFAULT_CONFIG: AgentConfig = {
   },
   agents: {},
   // The default plugin set ships installed + enabled. These reproduce the
-  // out-of-the-box workflow (Discord delivery, scope-creep flagging, stall
-  // retries, coder/reviewer project guard). Disable one with
+  // out-of-the-box workflow (agent-completed delivery, owner notifications,
+  // scope-creep flagging, stall retries, coder/reviewer project guard).
+  // Disable one with
   // `{ module: "builtin:...", enabled: false }`; deleting an entry is not
   // durable because `migrateDefaultPlugins` re-appends missing modules.
   //
@@ -826,6 +848,7 @@ const DEFAULT_CONFIG: AgentConfig = {
     projects: { enabled: true, directory: "./data/projects" },
     documents: { enabled: true },
     extract_document: { enabled: false },
+    ask_user: { enabled: true, inboxFile: "inbox.md" },
   },
   taskWatcher: {
     enabled: false,
@@ -858,6 +881,9 @@ const DEFAULT_CONFIG: AgentConfig = {
     prompt: DEFAULT_SUGGESTIONS_PROMPT,
     count: 4,
     ttlMinutes: 15,
+  },
+  autopilot: {
+    taskPrompt: DEFAULT_AUTOPILOT_TASK_PROMPT,
   },
 };
 

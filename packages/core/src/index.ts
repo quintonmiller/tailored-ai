@@ -165,7 +165,7 @@ export {
 export type { DigestResult, DigestSection } from "./autopilot/digest.js";
 export { buildMorningDigest, recordDigestRun } from "./autopilot/digest.js";
 export type { AutopilotWorkerOptions } from "./autopilot/worker.js";
-export { AutopilotWorker, buildTaskPrompt } from "./autopilot/worker.js";
+export { AutopilotWorker, buildTaskPrompt, DEFAULT_AUTOPILOT_TASK_PROMPT } from "./autopilot/worker.js";
 export type { Briefing, BriefingRuntime, GenerateBriefingOptions } from "./briefing.js";
 export { assembleBriefingContext, DEFAULT_BRIEFING_PROMPT, generateBriefing } from "./briefing.js";
 export {
@@ -434,6 +434,7 @@ export {
   emojiForStatus,
 } from "./plugins/agent-notifier.js";
 export { CoderProjectGuard, type CoderProjectGuardOptions } from "./plugins/coder-project-guard.js";
+export { OwnerNotifier, type OwnerNotifierOptions } from "./plugins/owner-notifier.js";
 export {
   ScopeCreepFlagger,
   type ScopeCreepFlaggerOptions,

@@ -1,15 +1,21 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import type { OutboundNotifier } from "../channels/outbound.js";
 import { ensureContextDir } from "../context.js";
-import { getAutopilotSettings, isInQuietHours } from "../db/autopilot-queries.js";
 import { addTaskComment, updateProjectTask } from "../db/task-queries.js";
+import type { EventBus } from "../events.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
 
 export interface AskUserToolOptions {
   contextDir: string;
-  resolveOutbound: () => OutboundNotifier | undefined;
-  getOwnerId: () => string | undefined;
+  /**
+   * Runtime event bus. When wired, the tool emits `question.asked` instead of
+   * DMing the owner inline — delivery is owned by the `builtin:owner-notifier`
+   * plugin (or any subscriber the user wires up). Optional so a bare-library
+   * caller without a runtime still records the question to the inbox file.
+   */
+  events?: EventBus;
+  /** Inbox file (relative to the global context dir) for out-of-autopilot questions. */
+  inboxFile: string;
 }
 
 export class AskUserTool implements Tool {
@@ -27,13 +33,13 @@ export class AskUserTool implements Tool {
   };
 
   private contextDir: string;
-  private resolveOutbound: () => OutboundNotifier | undefined;
-  private getOwnerId: () => string | undefined;
+  private events?: EventBus;
+  private inboxFile: string;
 
   constructor(opts: AskUserToolOptions) {
     this.contextDir = opts.contextDir;
-    this.resolveOutbound = opts.resolveOutbound;
-    this.getOwnerId = opts.getOwnerId;
+    this.events = opts.events;
+    this.inboxFile = opts.inboxFile;
   }
 
   async execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
@@ -57,17 +63,13 @@ export class AskUserTool implements Tool {
         return { success: false, output: "", error: `Failed to block task: ${(err as Error).message}` };
       }
 
-      const out = this.resolveOutbound();
-      const ownerId = this.getOwnerId();
-      const settings = getAutopilotSettings(context.db);
-      const quiet = isInQuietHours(settings);
-      if (out && ownerId && !quiet) {
-        try {
-          await out.sendDM(ownerId, `Task ${context.autopilotTaskId} is blocked — agent needs input:\n${question}`);
-        } catch {
-          // Best-effort notification; don't fail the tool on DM failure.
-        }
-      }
+      // Delivery + quiet-hours suppression is owned by the owner-notifier
+      // plugin: emit the event rather than DMing inline.
+      this.events?.emit("question.asked", {
+        question,
+        sessionId: context.sessionId,
+        taskId: context.autopilotTaskId,
+      });
 
       return {
         success: true,
@@ -79,8 +81,8 @@ export class AskUserTool implements Tool {
     const globalDir = resolve(this.contextDir, "global");
     await ensureContextDir(globalDir);
 
-    // Append to inbox.md
-    const inboxPath = resolve(globalDir, "inbox.md");
+    // Append to the configured inbox file.
+    const inboxPath = resolve(globalDir, this.inboxFile);
     const timestamp = new Date().toISOString();
     const entry = `\n[QUESTION] ${timestamp}\n${question}\n`;
     try {
@@ -91,21 +93,15 @@ export class AskUserTool implements Tool {
         /* new file */
       }
       await writeFile(inboxPath, existing + entry, "utf-8");
-      channels.push("inbox.md");
+      channels.push(this.inboxFile);
     } catch (err) {
       return { success: false, output: "", error: `Failed to write inbox: ${(err as Error).message}` };
     }
 
-    // Send a channel DM if available
-    const out = this.resolveOutbound();
-    const ownerId = this.getOwnerId();
-    if (out && ownerId) {
-      try {
-        await out.sendDM(ownerId, `Question from autonomous agent:\n${question}`);
-        channels.push(`${out.id} DM`);
-      } catch (err) {
-        channels.push(`${out.id} DM failed: ${(err as Error).message}`);
-      }
+    // Notify the owner via the event bus — the owner-notifier plugin delivers.
+    if (this.events) {
+      this.events.emit("question.asked", { question, sessionId: context.sessionId });
+      channels.push("owner notification");
     }
 
     return { success: true, output: `Question recorded via: ${channels.join(", ")}` };
