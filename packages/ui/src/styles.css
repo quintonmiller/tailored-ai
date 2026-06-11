@@ -306,7 +306,7 @@ button {
   grid-template-columns: minmax(0, 640px) 264px;
   justify-content: center;
   column-gap: 52px;
-  padding: 64px 24px 24px;
+  padding: 48px 24px 0;
 }
 
 .home-col {
@@ -318,15 +318,32 @@ button {
   gap: 36px;
 }
 
-/* The ask bar + footer sink to the bottom of the column. On a short page this
-   pushes them down with generous negative space above; on a long page they sit
-   at the natural end (scroll to reach), so the bar never overlaps content. */
+/* The ask bar + footer sink to the bottom of the column, and stick to the
+   bottom of the app scroller when the column overflows the viewport — the
+   thread + ask bar are the live surface, so they must stay reachable without
+   scrolling. Solid background: content scrolls under, never through. */
 .home-dock {
   margin-top: auto;
   display: flex;
   flex-direction: column;
   gap: 14px;
   padding-top: 12px;
+  position: sticky;
+  bottom: 0;
+  background: var(--bg);
+  padding-bottom: 20px;
+}
+
+/* Soften the edge where scrolling content slides under the sticky dock. */
+.home-dock::before {
+  content: "";
+  position: absolute;
+  top: -18px;
+  left: 0;
+  right: 0;
+  height: 18px;
+  background: linear-gradient(to bottom, transparent, var(--bg));
+  pointer-events: none;
 }
 
 /* Eyebrow status line */
@@ -726,8 +743,11 @@ button {
 .home-rail-text {
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* Two-line clamp: rail entries are terse but shouldn't be amputated mid-word
+     after a dozen characters the way a single-line ellipsis leaves them. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 /* Newly-arrived rows fade in subtly without re-animating the whole list. */
