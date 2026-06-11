@@ -1,9 +1,10 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { type AutopilotActivity, fetchAutopilotActivity, fetchHealth } from "./api";
-import { BRAND } from "./brand";
 import { ChatProvider } from "./components/ChatContext";
 import { ChatDock } from "./components/ChatDock";
+import { CommandPalette } from "./components/CommandPalette";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
+import { Sidebar } from "./components/Sidebar";
 import { ToastProvider } from "./components/Toast";
 import { Agents } from "./pages/Agents";
 import { Approvals } from "./pages/Approvals";
@@ -211,6 +212,7 @@ export function App() {
       <ChatProvider>
         <AppShell route={route} connected={connected} activity={activity} />
         <ChatDock />
+        <CommandPalette />
       </ChatProvider>
     </ToastProvider>
   );
@@ -225,71 +227,56 @@ function AppShell({
   connected: boolean | null;
   activity: AutopilotActivity["current"] | null;
 }) {
+  // Off-canvas sidebar state (only relevant below the responsive breakpoint).
+  const [navOpen, setNavOpen] = useState(false);
+
+  // Close the off-canvas drawer whenever the route changes.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: route is the trigger.
+  useEffect(() => {
+    setNavOpen(false);
+  }, [route]);
+
   // Login page renders without the app shell chrome
   if (route.page === "login") {
     return <Login />;
   }
 
   return (
-    <div className="app">
-      <header className="app-header">
-        <a href="#/" className="app-title">
-          {BRAND.name}
-        </a>
-        <nav className="app-nav" aria-label="Primary">
-          <a href="#/" className={`nav-link${route.page === "dashboard" ? " active" : ""}`}>
-            Home
-          </a>
-          <a href="#/chat" className={`nav-link${route.page === "chat" ? " active" : ""}`}>
-            Chat
-          </a>
-          <a
-            href="#/projects"
-            className={`nav-link${route.page === "projects" || route.page === "tasks" ? " active" : ""}`}
+    <div className={`app${navOpen ? " nav-open" : ""}`}>
+      {navOpen && (
+        <button
+          type="button"
+          className="sidebar-scrim"
+          aria-label="Close navigation"
+          onClick={() => setNavOpen(false)}
+        />
+      )}
+      <aside className="app-sidebar">
+        <Sidebar page={route.page} onNavigate={() => setNavOpen(false)} />
+      </aside>
+      <div className="app-body">
+        <header className="app-topbar">
+          <button
+            type="button"
+            className="topbar-hamburger"
+            aria-label="Toggle navigation"
+            aria-expanded={navOpen}
+            onClick={() => setNavOpen((v) => !v)}
           >
-            Tasks
-          </a>
-          <NavGroup label="Build" active={BUILD_PAGES.has(route.page)}>
-            <a href="#/agents" className={`nav-menu-item${route.page === "agents" ? " active" : ""}`}>
-              Agents
-            </a>
-            <a
-              href="#/workflows"
-              className={`nav-menu-item${route.page === "workflows" || route.page === "workflow-runs" || route.page === "workflow-analytics" ? " active" : ""}`}
-            >
-              Workflows
-            </a>
-            <a href="#/memory" className={`nav-menu-item${route.page === "memory" ? " active" : ""}`}>
-              Memory
-            </a>
-            <a href="#/tools" className={`nav-menu-item${route.page === "tools" ? " active" : ""}`}>
-              Tools
-            </a>
-            <a href="#/projects" className={`nav-menu-item${route.page === "projects" ? " active" : ""}`}>
-              Projects
-            </a>
-          </NavGroup>
-          <NavGroup label="System" active={SYSTEM_PAGES.has(route.page)}>
-            <a href="#/config" className={`nav-menu-item${route.page === "config" ? " active" : ""}`}>
-              Config
-            </a>
-            <a href="#/resources" className={`nav-menu-item${route.page === "resources" ? " active" : ""}`}>
-              Resources
-            </a>
-            <a href="#/sandboxes" className={`nav-menu-item${route.page === "sandboxes" ? " active" : ""}`}>
-              Sandboxes
-            </a>
-            <a
-              href="#/approvals"
-              className={`nav-menu-item${route.page === "approvals" || route.page === "actions" ? " active" : ""}`}
-            >
-              Approvals
-            </a>
-            <a href="#/help" className={`nav-menu-item${route.page === "help" ? " active" : ""}`}>
-              Help
-            </a>
-          </NavGroup>
+            ☰
+          </button>
+          <div className="topbar-spacer" />
           <ProjectSwitcher />
+          <button
+            type="button"
+            className="topbar-search"
+            title="Search (⌘K)"
+            aria-label="Open command palette"
+            onClick={() => window.dispatchEvent(new CustomEvent("tai:open-command-palette"))}
+          >
+            <span className="topbar-search-text">Search</span>
+            <span className="topbar-search-kbd">⌘K</span>
+          </button>
           {connected !== null && (
             <span className="header-status" title={connected ? "Connected" : "Disconnected"}>
               <span className={`status-dot${connected ? "" : " error"}`} />
@@ -307,50 +294,37 @@ function AppShell({
           >
             Logout
           </button>
-        </nav>
-      </header>
-      <main className="app-main">
-        {route.page === "dashboard" && <Dashboard />}
-        {route.page === "projects" && (
-          <Projects projectId={route.projectId} tab={route.tab} taskId={route.taskId} docId={route.docId} />
+        </header>
+        <main className="app-main">
+          {route.page === "dashboard" && <Dashboard />}
+          {route.page === "projects" && (
+            <Projects projectId={route.projectId} tab={route.tab} taskId={route.taskId} docId={route.docId} />
+          )}
+          {route.page === "agents" && <Agents agentName={route.agentName} />}
+          {route.page === "tasks" && <Tasks taskId={route.taskId} initialStatus={route.status} />}
+          {route.page === "chat" && <Chat sessionKey={route.sessionKey} sessionId={route.sessionId} />}
+          {route.page === "tools" && <Tools />}
+          {route.page === "workflows" && <Workflows />}
+          {route.page === "workflow-runs" && <WorkflowRuns runId={route.runId} />}
+          {route.page === "workflow-analytics" && <WorkflowAnalytics />}
+          {route.page === "sandboxes" && <Sandboxes />}
+          {route.page === "resources" && <Resources />}
+          {route.page === "memory" && <Memory />}
+          {route.page === "actions" && <Approvals initialTab="actions" />}
+          {route.page === "approvals" && <Approvals initialTab="subscriptions" />}
+          {route.page === "config" && <Config section={route.section} />}
+          {route.page === "help" && <Help />}
+        </main>
+        {activity && (
+          <div className="autopilot-activity-strip" role="status">
+            <span className="autopilot-activity-dot" />
+            <span className="autopilot-activity-label">Agent working on:</span>
+            <a href={`#/tasks/${activity.taskId}`} className="autopilot-activity-link">
+              {activity.title}
+            </a>
+          </div>
         )}
-        {route.page === "agents" && <Agents agentName={route.agentName} />}
-        {route.page === "tasks" && <Tasks taskId={route.taskId} initialStatus={route.status} />}
-        {route.page === "chat" && <Chat sessionKey={route.sessionKey} sessionId={route.sessionId} />}
-        {route.page === "tools" && <Tools />}
-        {route.page === "workflows" && <Workflows />}
-        {route.page === "workflow-runs" && <WorkflowRuns runId={route.runId} />}
-        {route.page === "workflow-analytics" && <WorkflowAnalytics />}
-        {route.page === "sandboxes" && <Sandboxes />}
-        {route.page === "resources" && <Resources />}
-        {route.page === "memory" && <Memory />}
-        {route.page === "actions" && <Approvals initialTab="actions" />}
-        {route.page === "approvals" && <Approvals initialTab="subscriptions" />}
-        {route.page === "config" && <Config section={route.section} />}
-        {route.page === "help" && <Help />}
-      </main>
-      {activity && (
-        <div className="autopilot-activity-strip" role="status">
-          <span className="autopilot-activity-dot" />
-          <span className="autopilot-activity-label">Agent working on:</span>
-          <a href={`#/tasks/${activity.taskId}`} className="autopilot-activity-link">
-            {activity.title}
-          </a>
-        </div>
-      )}
-      <footer className="app-footer">
-        <span className="app-footer-brand">{BRAND.name}</span>
-        <span className="app-footer-sep" />
-        <a href={BRAND.docs} target="_blank" rel="noopener noreferrer">
-          Docs
-        </a>
-        <a href={BRAND.github} target="_blank" rel="noopener noreferrer">
-          GitHub
-        </a>
-        <a href={BRAND.website} target="_blank" rel="noopener noreferrer">
-          Website
-        </a>
-      </footer>
+      </div>
     </div>
   );
 }
