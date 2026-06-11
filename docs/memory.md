@@ -27,6 +27,34 @@ Design: [memory-tiers.md](./memory-tiers.md). This doc captures the implementati
 - `deleteSession(db, sessionId)` — removes the session row + all its messages.
 - HTTP: `DELETE /api/sessions/:id` summarizes (unless `?summarize=0`) then deletes. Pass `?force=1` to re-summarize.
 
+### `builtin:session-summarizer` plugin (cross-channel continuity, opt-in)
+
+Sessions are hermetic per-channel silos (`discord:<user>`, `web:<key>`). Out of the box nothing summarizes an idle session, so a new session on a different channel starts cold — the agent has no idea what it just discussed elsewhere. This plugin closes that gap.
+
+It ships **installed but disabled** (`DEFAULT_DISABLED_PLUGIN_MODULES` in `config.ts`). It autonomously calls the LLM and writes memory, so it's opt-in: enable it deliberately. No behavior change for anyone who leaves it off.
+
+On a timer it sweeps idle sessions (`sweepIdleSessions`), then refreshes the `recent_summary` **core-memory** section — the always-injected identity layer keyed by `(agent, project_id)`, read on every turn (`agent/loop.ts`). `recent_summary` is what carries continuity: the next session on any channel sees a compact "here's what recently happened" block. The section is composed from the most recent summaries (newest first) and hard-capped (~600 bytes) so the always-injected layer stays small for local models. Sessions don't store an agent, so the section is keyed by the `default` agent (the same fallback the loop uses for anonymous chat) plus the session's `project_id`.
+
+Idempotence comes for free: `summarizeSession` skips sessions that already have a `session-summary` note (the plugin never passes `force`), so a steady-state sweep makes no LLM calls and the log line is silent.
+
+Enable it by flipping the seeded entry in `config.yaml`:
+
+```yaml
+plugins:
+  - module: builtin:session-summarizer
+    enabled: true
+    config:
+      intervalMinutes: 30          # sweep cadence (default 30)
+      idleMinutes: 120             # only sessions idle this long (default 120)
+      maxPerSweep: 5               # cap sessions summarized per sweep — bounds LLM cost (default 5)
+      keyPrefixes: ["discord:", "web:"]  # optional; omit = all sessions
+      updateRecentSummary: true    # refresh recent_summary after a sweep (default true)
+      recentSummaryCount: 3        # how many recent summaries to compose (default 3)
+      recentSummaryMaxBytes: 600   # byte cap on the composed section (default 600)
+```
+
+For a personal install with Discord + web sessions, `keyPrefixes: ["discord:", "web:"]` scopes the sweep to real user conversations and leaves autopilot/cron sessions alone.
+
 ## Embeddings & semantic search
 
 - `EmbeddingProvider` (`packages/core/src/providers/embedding.ts`) — small interface mirroring `AIProvider` but producing dense float vectors. `OpenAICompatibleEmbeddingProvider` hits `/v1/embeddings` for vLLM/Ollama/LM Studio/hosted OpenAI.

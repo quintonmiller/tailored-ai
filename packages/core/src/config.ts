@@ -285,13 +285,25 @@ export interface WebhookRouteConfig {
  */
 export type PluginEntry = string | { module: string; enabled?: boolean; config?: Record<string, unknown> };
 
-/** The four default plugins, seeded into `config.plugins` as `builtin:*` entries. */
+/** The default plugins seeded into `config.plugins` as enabled `builtin:*` entries. */
 export const DEFAULT_PLUGIN_MODULES = [
   "builtin:agent-notifier",
   "builtin:scope-creep-flagger",
   "builtin:stall-guard",
   "builtin:coder-project-guard",
 ] as const;
+
+/**
+ * Built-in plugins seeded `enabled: false` — installed and discoverable but
+ * opt-in. These do something a conservative default shouldn't do unasked
+ * (autonomous LLM calls, background memory writes), so users turn them on
+ * deliberately by flipping the seeded entry's `enabled` to `true`.
+ *
+ * Seeded and re-appended (disabled) by {@link migrateDefaultPlugins} exactly
+ * like the enabled set, but the loader skips them until enabled. Once a user
+ * sets `enabled: true`, the migration leaves their entry untouched.
+ */
+export const DEFAULT_DISABLED_PLUGIN_MODULES = ["builtin:session-summarizer"] as const;
 
 export interface AgentConfig {
   server: {
@@ -785,7 +797,13 @@ const DEFAULT_CONFIG: AgentConfig = {
   // retries, coder/reviewer project guard). Disable one with
   // `{ module: "builtin:...", enabled: false }`; deleting an entry is not
   // durable because `migrateDefaultPlugins` re-appends missing modules.
-  plugins: DEFAULT_PLUGIN_MODULES.map((module) => ({ module })),
+  //
+  // Opt-in built-ins (DEFAULT_DISABLED_PLUGIN_MODULES) are seeded too, but
+  // `enabled: false` — the loader skips them until the user flips them on.
+  plugins: [
+    ...DEFAULT_PLUGIN_MODULES.map((module) => ({ module })),
+    ...DEFAULT_DISABLED_PLUGIN_MODULES.map((module) => ({ module, enabled: false })),
+  ],
   cron: {
     enabled: false,
     jobs: [],
@@ -1317,17 +1335,26 @@ export function migrateDeliveryConfig(interpolated: Record<string, unknown>): vo
 }
 
 /**
- * Ensure the four default `builtin:*` plugins are present in `config.plugins`.
+ * Ensure the default `builtin:*` plugins are present in `config.plugins`.
  * `deepMerge` replaces the `plugins` array wholesale, so a user who declares
  * their own `plugins:` block silently drops the seeded defaults. This appends
  * any default module whose name is absent — AFTER the user's entries, so user
  * order is preserved and explicit user entries (including ones flipped to
  * `enabled: false`) win.
  *
+ * Two tiers of default:
+ *   - {@link DEFAULT_PLUGIN_MODULES} — appended enabled (bare `{ module }`).
+ *   - {@link DEFAULT_DISABLED_PLUGIN_MODULES} — appended `enabled: false`.
+ *     A user opts in by flipping their seeded entry to `enabled: true`; because
+ *     this only appends *absent* modules, an existing entry (enabled OR
+ *     disabled) is never rewritten — so an opt-in choice is preserved across
+ *     reloads.
+ *
  * Disable semantics: because this re-appends missing modules on every load,
  * **deleting** a default entry is not a durable off switch — it comes back.
- * To turn a default off durably, keep the entry but set `enabled: false`; the
- * module name stays present (so nothing is re-added) and the loader skips it.
+ * To turn an enabled default off durably, keep the entry but set
+ * `enabled: false`; the module name stays present (so nothing is re-added) and
+ * the loader skips it.
  *
  * Also rewrites the renamed default `builtin:discord-notifier` →
  * `builtin:agent-notifier` (string or object form, preserving `config` /
@@ -1352,7 +1379,13 @@ export function migrateDefaultPlugins(config: AgentConfig): void {
   const present = new Set(
     existing.map((e) => (typeof e === "string" ? e : e?.module)).filter((m): m is string => typeof m === "string"),
   );
-  const missing = DEFAULT_PLUGIN_MODULES.filter((m) => !present.has(m)).map((module) => ({ module }));
+  const missingEnabled: PluginEntry[] = DEFAULT_PLUGIN_MODULES.filter((m) => !present.has(m)).map((module) => ({
+    module,
+  }));
+  const missingDisabled: PluginEntry[] = DEFAULT_DISABLED_PLUGIN_MODULES.filter((m) => !present.has(m)).map(
+    (module) => ({ module, enabled: false }),
+  );
+  const missing = [...missingEnabled, ...missingDisabled];
   config.plugins = missing.length === 0 ? existing : [...existing, ...missing];
 }
 
