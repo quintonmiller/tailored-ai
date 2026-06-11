@@ -26,6 +26,7 @@
 import type { ChannelFactory } from "./channels/registry.js";
 import { registerChannelFactory } from "./channels/registry.js";
 import { type EventBus, TypedEventBus } from "./events.js";
+import { createHttpRegistryView, type HttpRegistryView, HttpRouteRegistry } from "./http/registry.js";
 import type { MemoryBackendFactory } from "./memory/registry.js";
 import { registerMemoryBackendFactory } from "./memory/registry.js";
 import type { EmbeddingFactory, ProviderFactory } from "./providers/factories.js";
@@ -96,6 +97,18 @@ export interface PluginContext {
    * being emitted.
    */
   events: EventBus;
+  /**
+   * HTTP route surface — register routes the server mounts on its router.
+   * Routes namespace under `/api/ext/<plugin-id>/…` so a plugin can't shadow
+   * a core route. See `http/registry.ts` for the descriptor shape, the
+   * framework-agnostic request/response types, the `auth: "none"` exemption,
+   * and the `absolute` escape hatch for legacy paths.
+   *
+   * Backed by the runtime's {@link HttpRouteRegistry} when `ctx.runtime` is
+   * present; a context built without a runtime gets a throwaway registry so
+   * `register` is always safe to call (the routes just go nowhere).
+   */
+  http: HttpRegistryView;
   /**
    * The live {@link AgentRuntime}, when the host built the context with one
    * (the CLI / server always do). Optional because a library consumer can
@@ -169,6 +182,13 @@ export interface CreatePluginContextOptions {
    * built outside the loader. Defaults to `{}`.
    */
   config?: Record<string, unknown>;
+  /**
+   * Namespace prefix for `ctx.http` route registration — typically the
+   * plugin's module id. {@link loadPlugins} sets this per entry so each
+   * plugin's routes land under `/api/ext/<id>/`. Omit for a context built
+   * outside the loader; routes then land directly under `/api/ext/`.
+   */
+  httpPrefix?: string;
 }
 
 /**
@@ -181,6 +201,12 @@ export interface CreatePluginContextOptions {
  * `default(ctx)` function get invoked with the right shape.
  */
 export function createPluginContext(opts: CreatePluginContextOptions = {}): PluginContext {
+  // Routes register against the runtime's registry so the server can read
+  // them after the runtime is built. A context with no runtime — or a partial
+  // runtime stub that predates the seam — gets a throwaway registry, so
+  // `register` stays safe and the routes simply go nowhere.
+  const httpRegistry =
+    typeof opts.runtime?.getHttpRoutes === "function" ? opts.runtime.getHttpRoutes() : new HttpRouteRegistry();
   return {
     tools: { register: registerToolFactory },
     channels: { register: registerChannelFactory },
@@ -190,6 +216,7 @@ export function createPluginContext(opts: CreatePluginContextOptions = {}): Plug
     taskBackends: { register: registerTaskBackendFactory },
     repoBackends: { register: registerRepoBackendFactory },
     uiProviders: { register: registerUiProviderFactory },
+    http: createHttpRegistryView(httpRegistry, opts.httpPrefix),
     // Prefer an explicit bus; else the runtime's own bus so plugin
     // subscriptions land where the runtime emits; else a fresh bus.
     events: opts.events ?? opts.runtime?.events ?? new TypedEventBus(),

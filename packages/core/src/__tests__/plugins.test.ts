@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentConfig } from "../config.js";
+import { HttpRouteRegistry } from "../http/registry.js";
+import { createPluginContext } from "../plugin-context.js";
 import { loadPlugins } from "../plugins.js";
 
 const baseConfig = (overrides: Partial<AgentConfig> = {}): AgentConfig =>
@@ -190,5 +192,23 @@ describe("loadPlugins", () => {
     const importer = () => Promise.resolve({ default: () => {} });
     const out = await loadPlugins(baseConfig({ plugins: ["no-disposer"] } as never), importer);
     expect(out[0].stop).toBeUndefined();
+  });
+
+  it("namespaces a plugin's ctx.http routes under its module name", async () => {
+    const registry = new HttpRouteRegistry();
+    // Minimal runtime stub: the loader derives the per-entry http view from
+    // ctx.runtime.getHttpRoutes(), so only that method needs to exist.
+    const ctx = createPluginContext({
+      runtime: { getHttpRoutes: () => registry } as never,
+    });
+    const importer = () =>
+      Promise.resolve({
+        default: (passed: { http: { register: (d: unknown) => void } }) => {
+          passed.http.register({ method: "GET", path: "status", handler: async () => ({ status: 200 }) });
+        },
+      });
+    await loadPlugins(baseConfig({ plugins: ["acme-widget"] } as never), importer, { context: ctx });
+    expect(registry.list()).toHaveLength(1);
+    expect(registry.list()[0].mountPath).toBe("/api/ext/acme-widget/status");
   });
 });

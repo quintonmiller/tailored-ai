@@ -396,6 +396,18 @@ export { ExploratoryWorker } from "./exploratory/worker.js";
 export { type LoadedExternalAgent, loadExternalAgents } from "./external-agents.js";
 export type { CreateToolsOptions } from "./factories.js";
 export { createEmbedder, createMetaTools, createProvider, createTools } from "./factories.js";
+export {
+  createHttpRegistryView,
+  HTTP_ROUTE_NAMESPACE,
+  type HttpMethod,
+  type HttpRegistryView,
+  type HttpRouteDescriptor,
+  type HttpRouteHandler,
+  HttpRouteRegistry,
+  type ResolvedHttpRoute,
+  type TaiHttpRequest,
+  type TaiHttpResponse,
+} from "./http/registry.js";
 export type {
   ListQuery as MemoryListQuery,
   MemoryBackend,

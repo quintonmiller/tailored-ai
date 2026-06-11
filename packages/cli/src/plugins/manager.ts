@@ -192,6 +192,19 @@ export class PluginManager {
         return import(`@tailored-ai/core/plugins/${sub}`);
       }
 
+      // 0b) The trusted-actions route plugin ships as a CLI optional
+      //     dependency (it registers /api/trusted-actions/* through core's
+      //     HTTP seam — #206). Resolve it from the CLI's own context so it
+      //     loads without a `tai plugin install`, gated on trustedActions
+      //     being enabled (the CLI only adds the entry then).
+      if (name === "@tailored-ai/trusted-actions/plugin") {
+        // Import via a non-literal specifier so tsc doesn't statically
+        // resolve the optional dependency's types — the CLI must compile
+        // in environments where the package isn't installed or built.
+        const spec: string = name;
+        return import(spec);
+      }
+
       // 1) Fast path: createRequire().resolve. Works whenever the
       //    package has a `main` field or its exports map includes a
       //    CJS-visible condition (`default`, `require`).
