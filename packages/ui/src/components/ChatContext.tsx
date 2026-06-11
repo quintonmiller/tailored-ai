@@ -24,6 +24,16 @@ export interface PendingApproval {
   description?: string;
 }
 
+/**
+ * One-shot request to surface the floating ChatDock. The `nonce` makes each
+ * request distinct so the dock can react even when the same `text` is sent
+ * twice; `text` (when present) prefills the composer without auto-sending.
+ */
+export interface DockSignal {
+  text?: string;
+  nonce: number;
+}
+
 export interface ChatStore {
   // Session + transcript
   messages: Message[];
@@ -56,6 +66,9 @@ export interface ChatStore {
   reject: (requestId: string) => void;
   approveAll: () => void;
   rejectAll: () => void;
+  // Request the floating dock open (optionally prefilled). ChatDock subscribes.
+  dockSignal: DockSignal | null;
+  requestDock: (text?: string) => void;
 }
 
 const ChatContext = createContext<ChatStore | null>(null);
@@ -76,8 +89,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [agents, setAgents] = useState<Record<string, AgentInfo>>({});
   const [selectedAgent, setSelectedAgent] = useState("");
   const [sessions, setSessions] = useState<SessionRow[]>([]);
+  const [dockSignal, setDockSignal] = useState<DockSignal | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
+  const dockNonce = useRef(0);
+
+  const requestDock = useCallback((text?: string) => {
+    dockNonce.current += 1;
+    setDockSignal({ text, nonce: dockNonce.current });
+  }, []);
 
   // Load agents once.
   useEffect(() => {
@@ -378,6 +398,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       reject,
       approveAll,
       rejectAll,
+      dockSignal,
+      requestDock,
     }),
     [
       messages,
@@ -405,6 +427,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       reject,
       approveAll,
       rejectAll,
+      dockSignal,
+      requestDock,
     ],
   );
 

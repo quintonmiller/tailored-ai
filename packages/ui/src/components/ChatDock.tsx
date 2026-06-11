@@ -88,9 +88,9 @@ export function ChatDock() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
-  // Hidden on routes that already host the shared conversation: the full
-  // Chat page and Home (which embeds the live thread + ask bar).
-  const onChatPage = hash.startsWith("#/chat") || hash === "" || hash === "#/" || hash === "#";
+  // Hidden only on the full Chat page, which already hosts the shared
+  // conversation. Everywhere else (including Home) the dock is available.
+  const onChatPage = hash.startsWith("#/chat");
 
   // Persist mode + sizes whenever they change.
   useEffect(() => {
@@ -125,20 +125,32 @@ export function ChatDock() {
     };
   }, [open, onChatPage, mode, docked.widthPct]);
 
-  // Cmd/Ctrl-K toggles the dock from anywhere. Esc collapses (unless
-  // sending — interrupt is the meaningful action there).
+  // Esc collapses the dock (unless sending — interrupt is the meaningful action
+  // there). Cmd-K is owned by the global command palette now, not the dock.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        setOpen((v) => !v);
-      } else if (e.key === "Escape" && open && !store.sending) {
+      if (e.key === "Escape" && open && !store.sending) {
         setOpen(false);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, store.sending]);
+
+  // Respond to requestDock(): open the floating dock and prefill (not send) the
+  // composer. Switches out of any docked mode so the prompt is always visible.
+  const lastDockNonce = useRef(0);
+  useEffect(() => {
+    const sig = store.dockSignal;
+    if (!sig || sig.nonce === lastDockNonce.current) return;
+    lastDockNonce.current = sig.nonce;
+    if (onChatPage) return; // the full Chat page owns the conversation
+    setMode((m) => (m === "floating" ? m : "floating"));
+    setOpen(true);
+    if (sig.text) setInput(sig.text);
+    // Focus after the panel mounts.
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }, [store.dockSignal, onChatPage]);
 
   useEffect(() => {
     if (open) inputRef.current?.focus();
@@ -249,7 +261,7 @@ export function ChatDock() {
         type="button"
         className="chat-dock-fab"
         onClick={() => setOpen(true)}
-        title="Open chat (Cmd-K)"
+        title="Open chat"
         aria-label="Open chat"
       >
         <span>Chat</span>
@@ -377,7 +389,7 @@ export function ChatDock() {
         {displayMessages.length === 0 && !store.sending && (
           <div className="chat-dock-empty">
             <SuggestionChips onPick={(text) => store.send(text)} />
-            <div className="chat-empty-text">Ask the agent something. Cmd-K to toggle this dock.</div>
+            <div className="chat-empty-text">Ask the agent something.</div>
           </div>
         )}
         {displayMessages.map((m, i) => (
