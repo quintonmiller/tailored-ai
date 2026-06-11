@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type AgentConfig,
+  DEFAULT_DISABLED_PLUGIN_MODULES,
   DEFAULT_PLUGIN_MODULES,
   deepInterpolate,
   deepMerge,
@@ -239,11 +240,21 @@ describe("migrateDefaultPlugins — seed missing builtin: entries", () => {
   const modules = (entries: AgentConfig["plugins"]) =>
     (entries ?? []).map((e) => (typeof e === "string" ? e : e.module));
 
-  it("appends all four builtins to an empty/undefined plugins array", () => {
+  it("appends all builtins (enabled set, then disabled set) to an empty/undefined plugins array", () => {
     const cfg = baseConfig();
     cfg.plugins = [];
     migrateDefaultPlugins(cfg);
-    expect(modules(cfg.plugins)).toEqual([...DEFAULT_PLUGIN_MODULES]);
+    expect(modules(cfg.plugins)).toEqual([...DEFAULT_PLUGIN_MODULES, ...DEFAULT_DISABLED_PLUGIN_MODULES]);
+  });
+
+  it("seeds the disabled built-in set with enabled: false", () => {
+    const cfg = baseConfig();
+    cfg.plugins = [];
+    migrateDefaultPlugins(cfg);
+    for (const module of DEFAULT_DISABLED_PLUGIN_MODULES) {
+      const entry = (cfg.plugins ?? []).find((e) => typeof e !== "string" && e.module === module);
+      expect(entry).toEqual({ module, enabled: false });
+    }
   });
 
   it("preserves user entries and appends missing builtins AFTER them", () => {
@@ -253,11 +264,25 @@ describe("migrateDefaultPlugins — seed missing builtin: entries", () => {
     expect(modules(cfg.plugins)).toEqual([
       "@me/my-plugin",
       "builtin:stall-guard",
-      // the three not already present, in default order
+      // the three enabled not already present, in default order
       "builtin:agent-notifier",
       "builtin:scope-creep-flagger",
       "builtin:coder-project-guard",
+      // then the disabled set
+      ...DEFAULT_DISABLED_PLUGIN_MODULES,
     ]);
+  });
+
+  it("does NOT flip a user-enabled opt-in built-in back to disabled", () => {
+    const cfg = baseConfig();
+    // User has opted the session-summarizer in.
+    cfg.plugins = [{ module: "builtin:session-summarizer", enabled: true, config: { intervalMinutes: 10 } }];
+    migrateDefaultPlugins(cfg);
+    const entry = (cfg.plugins ?? []).find((e) => typeof e !== "string" && e.module === "builtin:session-summarizer");
+    // The existing entry is left untouched — opt-in survives the migration.
+    expect(entry).toEqual({ module: "builtin:session-summarizer", enabled: true, config: { intervalMinutes: 10 } });
+    // And it appears exactly once (not re-appended).
+    expect(modules(cfg.plugins).filter((m) => m === "builtin:session-summarizer")).toHaveLength(1);
   });
 
   it("is idempotent — running twice does not duplicate", () => {
@@ -278,14 +303,17 @@ describe("migrateDefaultPlugins — seed missing builtin: entries", () => {
       (e) => typeof e !== "string" && e.module === "builtin:scope-creep-flagger",
     );
     expect(disabled).toEqual([{ module: "builtin:scope-creep-flagger", enabled: false }]);
-    expect(modules(cfg.plugins)).toHaveLength(DEFAULT_PLUGIN_MODULES.length);
+    expect(modules(cfg.plugins)).toHaveLength(DEFAULT_PLUGIN_MODULES.length + DEFAULT_DISABLED_PLUGIN_MODULES.length);
   });
 
   it("matches builtins declared in the object form", () => {
     const cfg = baseConfig();
-    cfg.plugins = DEFAULT_PLUGIN_MODULES.map((module) => ({ module }));
+    cfg.plugins = [
+      ...DEFAULT_PLUGIN_MODULES.map((module) => ({ module })),
+      ...DEFAULT_DISABLED_PLUGIN_MODULES.map((module) => ({ module, enabled: false })),
+    ];
     migrateDefaultPlugins(cfg);
-    expect(modules(cfg.plugins)).toEqual([...DEFAULT_PLUGIN_MODULES]);
+    expect(modules(cfg.plugins)).toEqual([...DEFAULT_PLUGIN_MODULES, ...DEFAULT_DISABLED_PLUGIN_MODULES]);
   });
 
   it("rewrites the renamed builtin:discord-notifier → builtin:agent-notifier (string form)", () => {
@@ -488,10 +516,17 @@ describe("loadConfig — default host", () => {
     expect(cfg.server.host).toBe("0.0.0.0");
   });
 
-  it("seeds the four default builtin plugins when no config file exists", () => {
+  it("seeds the default builtin plugins (enabled set + disabled opt-ins) when no config file exists", () => {
     const cfg = loadConfig(join(dir, "no-such.yaml"));
     const mods = (cfg.plugins ?? []).map((e) => (typeof e === "string" ? e : e.module));
-    expect(mods).toEqual([...DEFAULT_PLUGIN_MODULES]);
+    expect(mods).toEqual([...DEFAULT_PLUGIN_MODULES, ...DEFAULT_DISABLED_PLUGIN_MODULES]);
+    // The opt-in built-ins ship disabled.
+    for (const module of DEFAULT_DISABLED_PLUGIN_MODULES) {
+      expect(cfg.plugins?.find((e) => typeof e !== "string" && e.module === module)).toEqual({
+        module,
+        enabled: false,
+      });
+    }
   });
 
   it("appends missing default plugins after a user's plugins: block", () => {
@@ -499,13 +534,14 @@ describe("loadConfig — default host", () => {
     writeFileSync(path, "plugins:\n  - '@me/custom'\n  - module: 'builtin:stall-guard'\n    enabled: false\n");
     const cfg = loadConfig(path);
     const mods = (cfg.plugins ?? []).map((e) => (typeof e === "string" ? e : e.module));
-    // User entries first, then the three not already present.
+    // User entries first, then the enabled set not already present, then the disabled opt-ins.
     expect(mods).toEqual([
       "@me/custom",
       "builtin:stall-guard",
       "builtin:agent-notifier",
       "builtin:scope-creep-flagger",
       "builtin:coder-project-guard",
+      ...DEFAULT_DISABLED_PLUGIN_MODULES,
     ]);
     // The disabled stall-guard is preserved as-is (durable off switch).
     expect(cfg.plugins?.[1]).toEqual({ module: "builtin:stall-guard", enabled: false });
