@@ -192,9 +192,13 @@ function buildFeed(sources: {
     return true;
   });
 
-  // In-flight items pin to the top; otherwise reverse-chronological.
+  // In-flight items pin to the top; otherwise reverse-chronological. Coerce
+  // inFlight to boolean — comparing `false !== undefined` makes the comparator
+  // inconsistent and scrambles the whole sort.
   deduped.sort((a, b) => {
-    if (a.inFlight !== b.inFlight) return a.inFlight ? -1 : 1;
+    const aLive = Boolean(a.inFlight);
+    const bLive = Boolean(b.inFlight);
+    if (aLive !== bLive) return aLive ? -1 : 1;
     return b.at.getTime() - a.at.getTime();
   });
   return deduped.slice(0, CAP);
