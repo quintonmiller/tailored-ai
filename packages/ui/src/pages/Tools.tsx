@@ -24,7 +24,13 @@ export function Tools() {
   return (
     <div className="tools-page">
       <div className="tools-header">
-        <h2>Tools ({tools.length})</h2>
+        <div>
+          <h2>Tools ({tools.length})</h2>
+          <p className="tools-subtitle">
+            Browse the tools currently loaded. To enable or disable tools, use{" "}
+            <a href="#/config/tools">Config → Tools</a>.
+          </p>
+        </div>
         {tools.length > 0 && (
           <input
             className="tools-search"

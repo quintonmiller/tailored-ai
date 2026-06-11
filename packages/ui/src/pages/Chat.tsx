@@ -377,7 +377,7 @@ function ApprovalPanel(props: {
             <div className="chat-approval-info">
               <div className="chat-approval-tool">{a.toolName}</div>
               {a.description && <div className="chat-approval-desc">{a.description}</div>}
-              {a.toolArgs && <pre className="chat-approval-args">{formatArgs(a.toolArgs)}</pre>}
+              {a.toolArgs && <ApprovalArgs args={a.toolArgs} />}
             </div>
             <div className="chat-approval-actions">
               <button type="button" className="chat-approve-btn" onClick={() => onApprove(a.requestId)}>
@@ -394,13 +394,50 @@ function ApprovalPanel(props: {
   );
 }
 
-function formatArgs(args: Record<string, unknown>): string {
-  try {
-    const json = JSON.stringify(args, null, 2);
-    return json.length > 600 ? `${json.slice(0, 600)}…` : json;
-  } catch {
-    return String(args);
+/** One arg value rendered compactly — strings inline, objects stringified. */
+function formatArgValue(v: unknown): { display: string; truncated: boolean } {
+  let s: string;
+  if (typeof v === "string") s = v;
+  else {
+    try {
+      s = JSON.stringify(v);
+    } catch {
+      s = String(v);
+    }
   }
+  if (s.length > 140) return { display: `${s.slice(0, 140)}…`, truncated: true };
+  return { display: s, truncated: false };
+}
+
+/** Compact key: value list for a tool-call's args, with raw JSON on demand. */
+function ApprovalArgs({ args }: { args: Record<string, unknown> }) {
+  const entries = Object.entries(args);
+  if (entries.length === 0) return null;
+  let raw: string;
+  try {
+    raw = JSON.stringify(args, null, 2);
+  } catch {
+    raw = String(args);
+  }
+  const anyTruncated = entries.some(([, v]) => formatArgValue(v).truncated);
+  return (
+    <div className="chat-approval-args">
+      <dl className="chat-approval-arg-list">
+        {entries.map(([k, v]) => (
+          <div key={k} className="chat-approval-arg">
+            <dt>{k}</dt>
+            <dd>{formatArgValue(v).display}</dd>
+          </div>
+        ))}
+      </dl>
+      {(anyTruncated || entries.length > 1) && (
+        <details className="chat-approval-raw">
+          <summary>Raw JSON</summary>
+          <pre>{raw}</pre>
+        </details>
+      )}
+    </div>
+  );
 }
 
 function formatTime(iso: string): string {

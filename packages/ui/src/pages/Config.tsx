@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { fetchConfig, saveConfig } from "../api";
-import { AgentEditor } from "../components/AgentEditor";
 import { CommandEditor } from "../components/CommandEditor";
 import { ConfigSidebar } from "../components/ConfigSidebar";
 import { CronEditor } from "../components/CronEditor";
@@ -20,7 +19,19 @@ interface Props {
 export function Config({ section }: Props) {
   const active = section || "providers";
 
+  // Agents have a dedicated full-page editor — the Config "Agents" entry is a
+  // shortcut to it, not a second editor. `profiles` is the legacy alias.
+  useEffect(() => {
+    if (active === "agents" || active === "profiles") {
+      window.location.hash = "/agents";
+    }
+  }, [active]);
+
   function setSection(s: string) {
+    if (s === "agents") {
+      window.location.hash = "/agents";
+      return;
+    }
     window.location.hash = s === "providers" ? "/config" : `/config/${s}`;
   }
 
@@ -69,9 +80,9 @@ export function Config({ section }: Props) {
       case "discord":
         return <DiscordSetup />;
       case "agents":
-        return <AgentEditor />;
-      case "profiles": // deprecated route, redirect to agents
-        return <AgentEditor />;
+      case "profiles":
+        // Redirected to the standalone #/agents editor (see effect above).
+        return null;
       case "autopilot":
         return <Autopilot />;
       case "tools":
