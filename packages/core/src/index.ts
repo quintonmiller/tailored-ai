@@ -166,6 +166,8 @@ export type { DigestResult, DigestSection } from "./autopilot/digest.js";
 export { buildMorningDigest, recordDigestRun } from "./autopilot/digest.js";
 export type { AutopilotWorkerOptions } from "./autopilot/worker.js";
 export { AutopilotWorker, buildTaskPrompt } from "./autopilot/worker.js";
+export type { Briefing, BriefingRuntime, GenerateBriefingOptions } from "./briefing.js";
+export { assembleBriefingContext, DEFAULT_BRIEFING_PROMPT, generateBriefing } from "./briefing.js";
 export {
   type ActionClass,
   type AlwaysHitlConfig,

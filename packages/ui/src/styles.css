@@ -331,6 +331,87 @@ button {
   padding: 6px 0;
 }
 
+/* BRIEFING card — LLM-written Home summary at the top of the dashboard. */
+.briefing-card {
+  border-left: 2px solid var(--accent);
+}
+
+.briefing-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.briefing-header h3 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  font-weight: 600;
+  margin: 0;
+}
+
+.briefing-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.briefing-time {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.briefing-stale {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--amber);
+  border: 1px solid var(--amber);
+  border-radius: 4px;
+  padding: 0 5px;
+}
+
+.briefing-refresh {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 3px 7px;
+}
+
+.briefing-refresh:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.briefing-refresh:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.briefing-spinner {
+  display: inline-block;
+  animation: spin 0.8s linear infinite;
+}
+
+.briefing-body {
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.briefing-skeleton {
+  height: 64px;
+  border-radius: var(--radius);
+  background: var(--bg-hover);
+}
+
 /* NOW */
 .dash-now-list {
   list-style: none;
