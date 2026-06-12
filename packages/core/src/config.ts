@@ -53,8 +53,12 @@ export interface AgentDefinition {
     beforeRun?: AgentHook | AgentHook[];
     afterRun?: AgentHook | AgentHook[];
   };
-  /** Sandbox kind to run shell/file tools in. Defaults to host (no isolation). */
-  sandbox?: "host" | "docker" | "podman";
+  /**
+   * Sandbox kind to run shell/file tools in. Defaults to "host" (no isolation).
+   * Built-ins: "host", "docker", "podman". Plugins may register additional kinds
+   * via `registerSandboxFactory`.
+   */
+  sandbox?: string;
   /**
    * Skills to layer into this agent. Each entry is a skill resource id (e.g.
    * "my-org/code-reviewer"). Skill instructions append to the agent's; skill
@@ -366,8 +370,12 @@ export interface AgentConfig {
     maxContextTokens: number;
     temperature: number;
     maxToolRounds: number;
-    /** Default sandbox kind for agents that don't set their own. Defaults to host. */
-    sandbox?: "host" | "docker" | "podman";
+    /**
+     * Default sandbox kind for agents that don't set their own. Defaults to "host".
+     * Built-ins: "host", "docker", "podman". Plugins may register additional kinds
+     * via `registerSandboxFactory`.
+     */
+    sandbox?: string;
     /**
      * Default system-prompt composition for every agent that doesn't set its
      * own `systemPrompt`. Per-agent overrides win field-by-field (see
@@ -1093,33 +1101,23 @@ export function validateConfig(config: AgentConfig): string[] {
   // needs missing options (e.g. github without repo/token) throws on
   // construction with a clear message.
 
-  // Validate sandbox kinds
-  const validSandboxes = ["host", "docker", "podman"];
-  const defaultSandbox = config.agent.sandbox;
-  if (defaultSandbox && !validSandboxes.includes(defaultSandbox)) {
-    warnings.push(
-      `agent.sandbox "${defaultSandbox}" is not valid (use ${validSandboxes.map((s) => `"${s}"`).join(", ")})`,
-    );
-  }
-  if (defaultSandbox === "docker" && !config.sandboxes?.docker?.imageName) {
-    warnings.push(`agent.sandbox is "docker" but sandboxes.docker.imageName is not set`);
-  }
-  if (defaultSandbox === "podman" && !config.sandboxes?.podman?.imageName) {
-    warnings.push(`agent.sandbox is "podman" but sandboxes.podman.imageName is not set`);
-  }
-  for (const [agentName, agent] of Object.entries(config.agents)) {
-    const kind = agent.sandbox;
-    if (kind && !validSandboxes.includes(kind)) {
-      warnings.push(
-        `Agent "${agentName}" sandbox "${kind}" is not valid (use ${validSandboxes.map((s) => `"${s}"`).join(", ")})`,
-      );
-    }
+  // Sandbox-backend validity is not checked here either: the id is resolved
+  // dynamically through the sandbox factory registry (createSandbox throws a
+  // helpful "Known: …" error on an unknown kind), and core privileges no
+  // built-in. We do keep the "imageName not set" guard for the built-in docker
+  // and podman factories because that is a config-time detectable mistake the
+  // factory itself cannot surface until runtime.
+  const checkSandboxImageName = (kind: string | undefined, context: string) => {
     if (kind === "docker" && !config.sandboxes?.docker?.imageName) {
-      warnings.push(`Agent "${agentName}" uses sandbox "docker" but sandboxes.docker.imageName is not set`);
+      warnings.push(`${context} uses sandbox "docker" but sandboxes.docker.imageName is not set`);
     }
     if (kind === "podman" && !config.sandboxes?.podman?.imageName) {
-      warnings.push(`Agent "${agentName}" uses sandbox "podman" but sandboxes.podman.imageName is not set`);
+      warnings.push(`${context} uses sandbox "podman" but sandboxes.podman.imageName is not set`);
     }
+  };
+  checkSandboxImageName(config.agent.sandbox, "agent.sandbox");
+  for (const [agentName, agent] of Object.entries(config.agents)) {
+    checkSandboxImageName(agent.sandbox, `Agent "${agentName}"`);
   }
 
   // Validate workflows block
