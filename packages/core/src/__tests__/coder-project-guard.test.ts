@@ -15,9 +15,20 @@ import type { AgentRuntime } from "../runtime.js";
 
 let db: Database.Database;
 
-function makeRuntime(): AgentRuntime {
+/**
+ * Fake runtime for the guard. `worktreeAgents` becomes the set
+ * `getWorktreeAgentNames()` returns — the guard's default audience after
+ * #204 (no more hardcoded coder/reviewer names). Defaults to the two roles
+ * the historical tests assumed.
+ */
+function makeRuntime(worktreeAgents: string[] = ["coder", "reviewer"]): AgentRuntime {
   const events = new TypedEventBus();
-  return { db, events, getConfig: () => ({}) } as unknown as AgentRuntime;
+  return {
+    db,
+    events,
+    getConfig: () => ({}),
+    getWorktreeAgentNames: () => worktreeAgents,
+  } as unknown as AgentRuntime;
 }
 
 function fireDispatch(
@@ -74,7 +85,7 @@ describe("CoderProjectGuard veto path", () => {
 });
 
 describe("CoderProjectGuard allow path", () => {
-  it("allows when the agent isn't coder or reviewer", async () => {
+  it("allows when the agent isn't worktree-opted", async () => {
     const runtime = makeRuntime();
     new CoderProjectGuard({ runtime });
     const task = createProjectTask(db, { title: "T", assignee: "default" });
@@ -99,6 +110,44 @@ describe("CoderProjectGuard allow path", () => {
     const task = createProjectTask(db, { title: "T", assignee: null });
     const allowed = await fireDispatch(runtime, { taskId: task.id, projectId: null, agentName: undefined });
     expect(allowed).toBe(true);
+  });
+});
+
+describe("CoderProjectGuard worktree-opt-in audience (#204)", () => {
+  it("guards an arbitrarily-named worktree-opted agent, not just coder/reviewer", async () => {
+    // The guard derives its audience from worktree-opted agents. An agent
+    // named "fixer" (with worktree: true) is guarded; the name is irrelevant.
+    const runtime = makeRuntime(["fixer"]);
+    new CoderProjectGuard({ runtime });
+    const task = createProjectTask(db, { title: "T", assignee: "fixer" });
+    const allowed = await fireDispatch(runtime, { taskId: task.id, projectId: null, agentName: "fixer" });
+    expect(allowed).toBe(false);
+    expect(getProjectTask(db, task.id)?.status).toBe("blocked");
+  });
+
+  it("does NOT guard 'coder' when it isn't worktree-opted", async () => {
+    // No agent opts into worktrees, so the historical name "coder" gets no
+    // special treatment — the dispatch is allowed even without a project.
+    const runtime = makeRuntime([]);
+    new CoderProjectGuard({ runtime });
+    const task = createProjectTask(db, { title: "T", assignee: "coder" });
+    const allowed = await fireDispatch(runtime, { taskId: task.id, projectId: null, agentName: "coder" });
+    expect(allowed).toBe(true);
+    expect(getProjectTask(db, task.id)?.status).not.toBe("blocked");
+  });
+
+  it("honors an explicit agents override from plugin config", async () => {
+    // worktreeAgents would say "coder", but the explicit list narrows the
+    // guard to ["builder"] only.
+    const runtime = makeRuntime(["coder"]);
+    new CoderProjectGuard({ runtime, agents: ["builder"] });
+    // "coder" is no longer guarded under the explicit list.
+    const coderTask = createProjectTask(db, { title: "C", assignee: "coder" });
+    expect(await fireDispatch(runtime, { taskId: coderTask.id, projectId: null, agentName: "coder" })).toBe(true);
+    // "builder" is.
+    const builderTask = createProjectTask(db, { title: "B", assignee: "builder" });
+    expect(await fireDispatch(runtime, { taskId: builderTask.id, projectId: null, agentName: "builder" })).toBe(false);
+    expect(getProjectTask(db, builderTask.id)?.status).toBe("blocked");
   });
 });
 

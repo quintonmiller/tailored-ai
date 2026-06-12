@@ -143,10 +143,14 @@ class FakeOctokit {
 
 function build(): { backend: GitHubTaskBackend; oct: FakeOctokit } {
   const oct = new FakeOctokit();
+  // As of #204 the backend no longer ships a hardcoded role list — the
+  // factory derives roles from config.agents. Pass the roles these tests
+  // exercise explicitly, the same way the factory would.
   const backend = new GitHubTaskBackend({
     repo: "acme/widgets",
     token: "fake",
     octokit: oct as unknown as import("@octokit/rest").Octokit,
+    agentRoles: ["coder", "reviewer", "researcher"],
   });
   return { backend, oct };
 }
@@ -263,18 +267,32 @@ describe("GitHubTaskBackend agent-role assignees", () => {
     expect(r.tasks.map((t) => t.title)).toEqual(["A"]);
   });
 
-  it("custom agentRoles option extends the default set", async () => {
+  it("agentRoles option drives which assignees route to agent:<name> labels", async () => {
     const oct = new FakeOctokit();
     const backend = new GitHubTaskBackend({
       repo: "owner/repo",
       token: "t",
-      // biome-ignore lint/suspicious/noExplicitAny: stub.
-      octokit: oct as any,
+      octokit: oct as unknown as import("@octokit/rest").Octokit,
       agentRoles: ["coder", "reviewer", "my-custom-agent"],
     });
     await backend.create({ title: "T", assignee: "my-custom-agent" });
     expect(oct.issues.get(1)?.labels).toContain("agent:my-custom-agent");
     expect(oct.issues.get(1)?.assignees).toEqual([]);
+  });
+
+  it("treats an assignee as a real GH user when it isn't in agentRoles (no hardcoded defaults)", async () => {
+    // Regression for #204: the backend used to ship a built-in role list that
+    // included "planner". With no agentRoles passed, "planner" is just a GH
+    // user, so it goes through the assignees API rather than a label.
+    const oct = new FakeOctokit();
+    const backend = new GitHubTaskBackend({
+      repo: "owner/repo",
+      token: "t",
+      octokit: oct as unknown as import("@octokit/rest").Octokit,
+    });
+    await backend.create({ title: "T", assignee: "planner" });
+    expect(oct.issues.get(1)?.labels ?? []).not.toContain("agent:planner");
+    expect(oct.issues.get(1)?.assignees?.map((a) => a.login)).toEqual(["planner"]);
   });
 });
 

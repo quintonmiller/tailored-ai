@@ -94,7 +94,7 @@ export class StallGuard {
     });
     updateProjectTask(this.runtime.db, taskId, {
       status: "blocked",
-      blocked_reason: `coder-stalled after ${attempt} attempts (suggest decomposition): ${e.stallReason}`,
+      blocked_reason: `${e.agentName ?? "agent"}-stalled after ${attempt} attempts (suggest decomposition): ${e.stallReason}`,
     });
 
     // Re-emit as agent.completed with the new finalTask so the agent

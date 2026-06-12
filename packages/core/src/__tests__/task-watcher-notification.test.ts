@@ -8,7 +8,7 @@
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { initDatabase } from "../db/schema.js";
-import { addTaskComment, createProjectTask, getProjectTask, updateProjectTask } from "../db/task-queries.js";
+import { createProjectTask, getProjectTask, updateProjectTask } from "../db/task-queries.js";
 import { TypedEventBus } from "../events.js";
 import { CoderProjectGuard } from "../plugins/coder-project-guard.js";
 import { detectStall, TaskWatcher } from "../task-watcher.js";
@@ -84,7 +84,7 @@ describe("task-watcher coding-agent dispatch guard rail", () => {
       events: new TypedEventBus(),
       contextDir: "/tmp/ctx",
       getConfig: () => ({
-        agents: { coder: { description: "" } },
+        agents: { coder: { description: "", worktree: true } },
         channels: { discord: { owner: "1234" } },
         taskWatcher: {
           enabled: true,
@@ -96,6 +96,9 @@ describe("task-watcher coding-agent dispatch guard rail", () => {
         prompts: {},
       }),
       getTools: () => [],
+      getAgentDefinition: (name: string) => (name === "coder" ? { description: "", worktree: true } : undefined),
+      // #204: the guard keys off worktree-opted agents, not the name "coder".
+      getWorktreeAgentNames: () => ["coder"],
       resolveHooks: () => ({ beforeRun: [], afterRun: [] }),
       buildLoopOptions: () => ({}),
     };
@@ -142,7 +145,7 @@ describe("task-watcher coding-agent dispatch guard rail", () => {
       events: new TypedEventBus(),
       contextDir: "/tmp/ctx",
       getConfig: () => ({
-        agents: { coder: { description: "" } },
+        agents: { coder: { description: "", worktree: true } },
         channels: { discord: { owner: "1234" } },
         taskWatcher: {
           enabled: true,
@@ -154,6 +157,8 @@ describe("task-watcher coding-agent dispatch guard rail", () => {
         prompts: {},
       }),
       getTools: () => [],
+      getAgentDefinition: (name: string) => (name === "coder" ? { description: "", worktree: true } : undefined),
+      getWorktreeAgentNames: () => ["coder"],
       resolveHooks: () => ({ beforeRun: [], afterRun: [] }),
       buildLoopOptions: () => ({}),
     };

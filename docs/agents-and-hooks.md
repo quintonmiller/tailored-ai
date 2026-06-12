@@ -45,6 +45,29 @@ cron:
       agent: "researcher"
 ```
 
+### Task-watcher fields: `worktree` and `taskPreamble`
+
+Two agent fields shape how the task watcher dispatches to a named agent. Both are off/empty by default, so core ships no built-in coding workflow (#204) — you opt your own agents in.
+
+- `worktree: true` — task-watcher dispatches to this agent run in an isolated git worktree on a per-task branch (`agent/<task_id>-<slug>`). The watcher creates the worktree before the loop, sets it as the working-directory boundary, and cleans it up after (keeping the branch so later iterations reuse it). The default `builtin:coder-project-guard` plugin refuses a worktree-opted dispatch that lacks a project whose `path` is a git repo, and `builtin:scope-creep-flagger` watches worktree-opted agents for cross-task commits.
+- `taskPreamble:` — a prompt template prepended to the task-watcher dispatch prompt for this agent. It runs through the normal `{{var}}` expansion (see Prompt Expansion below) with these vars: `task_id`, `task_title`, `task_status`, `task_description`, `task_author`, `task_tags`, `action`, `project_id`, `owner_name`, plus `worktree_path` and `worktree_branch` (empty strings when the agent has no worktree). This is where install-specific role guidance lives — coder lifecycle, reviewer gates, handoff conventions — instead of being hardcoded in core.
+
+```yaml
+agents:
+  coder:
+    worktree: true
+    taskPreamble: |
+      You are the coder. A git worktree is checked out at {{worktree_path}}
+      on branch {{worktree_branch}}. Make the minimal change for task
+      {{task_id}}, run typecheck + tests, commit, then hand off to the
+      reviewer.
+  reviewer:
+    worktree: true
+    taskPreamble: |
+      You are the reviewer for branch {{worktree_branch}}. Run the build/test
+      gate before deciding; approve back to {{owner_name}} or request changes.
+```
+
 ## Hooks
 
 Hooks run tool calls before and/or after the agent loop. They are a first-class feature of agents and work across all entry points: CLI, Discord, HTTP API, webhooks, cron, and delegate.

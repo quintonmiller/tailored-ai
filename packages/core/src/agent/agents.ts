@@ -28,6 +28,10 @@ export interface ResolvedAgent {
   nudgeMessage: string;
   skipGlobalContext: boolean;
   summarizeOnTrim: boolean;
+  /** True when this agent's task-watcher dispatches run in an isolated worktree. */
+  worktree: boolean;
+  /** Per-agent task-watcher dispatch preamble template (unexpanded). Empty when unset. */
+  taskPreamble: string;
   injectMemory: boolean;
   memoryInjectBudgetTokens: number | undefined;
   memoryInjectLimit: number | undefined;
@@ -101,6 +105,8 @@ export function resolveAgent(
     nudgeMessage: "",
     skipGlobalContext: false,
     summarizeOnTrim: false,
+    worktree: false,
+    taskPreamble: "",
     injectMemory: false,
     memoryInjectBudgetTokens: undefined,
     memoryInjectLimit: undefined,
@@ -143,6 +149,8 @@ export function resolveAgent(
     nudgeMessage: agent?.nudgeMessage ?? "",
     skipGlobalContext: agent?.skipGlobalContext ?? false,
     summarizeOnTrim: agent?.summarizeOnTrim ?? false,
+    worktree: agent?.worktree ?? false,
+    taskPreamble: agent?.taskPreamble ?? "",
     injectMemory: agent?.injectMemory ?? false,
     memoryInjectBudgetTokens: agent?.memoryInjectBudgetTokens,
     memoryInjectLimit: agent?.memoryInjectLimit,
