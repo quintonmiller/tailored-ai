@@ -67,10 +67,12 @@ and the registrations land.
 ## Installing
 
 ```bash
-npm install @some-author/tai-plugin-slack
+tai plugin install @some-author/tai-plugin-slack
 ```
 
-Then declare it in `config.yaml`:
+The plugin lands in `<TAI_HOME>/plugins/` and the CLI appends it to
+`config.yaml`'s `plugins:` list for you (comments preserved; pass
+`--no-save` to opt out). The list accepts bare names or objects:
 
 ```yaml
 plugins:
