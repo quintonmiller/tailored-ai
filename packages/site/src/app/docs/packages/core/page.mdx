@@ -22,7 +22,7 @@ version your app uses.
 | Runtime + hot reload | `AgentRuntime`, `loadConfig`, `validateConfig` |
 | Agent loop | `runAgentLoop`, `resolveAgent`, history compaction, retry, timing |
 | Tools | `read`, `write`, `exec`, `web_fetch`, `web_search`, `memory`, `recall`, `core_memory`, `facts`, `tasks`, `delegate`, `claude_code`, `browser`, `discord_dm`, `request_action`, custom-tool loader, more |
-| Providers | `ollama`, `openai` + OpenAI-compatible (vLLM, LM Studio, …), `anthropic` |
+| Providers | `openai_compatible` (Ollama, vLLM, LM Studio, any OpenAI-wire server); hosted vendors via `@tailored-ai/provider-*` plugins |
 | Channels | Discord (`DiscordChannel`), HTTP/SSE (via `@tailored-ai/server`) |
 | Persistence | SQLite via `better-sqlite3`: sessions, messages, tasks, projects, memory, cron state |
 | Memory | Recall tier with embeddings, chunk promotion, TTL sweep |

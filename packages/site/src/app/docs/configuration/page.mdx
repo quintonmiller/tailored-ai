@@ -54,41 +54,50 @@ Validation warnings print at startup.
 
 ## Provider
 
-Single-provider setup (most common):
+Providers are keyed by registered factory id under `providers:`, and
+`agent.defaultProvider` selects the active one. The one built-in is
+`openai_compatible`, which covers Ollama, vLLM, LM Studio, llama.cpp's
+server, and any other OpenAI-wire endpoint:
 
 ```yaml
-provider:
-  type: ollama            # ollama | openai | anthropic
-  model: llama3.2
-  baseUrl: http://127.0.0.1:11434    # optional override
+providers:
+  openai_compatible:
+    baseUrl: http://localhost:11434/v1   # Ollama
+    defaultModel: llama3.2
+    # apiKey: ${SOME_KEY}                # optional, only sent when set
+    # name: Ollama                       # label shown in logs and UIs
+
+agent:
+  defaultProvider: openai_compatible
 ```
 
-OpenAI-compatible (vLLM, LM Studio, hosted OpenAI):
+### Hosted vendors are plugins
+
+`openai`, `anthropic`, `openrouter`, and `bedrock` register their ids from
+plugin packages:
 
 ```yaml
-provider:
-  type: openai
-  model: gpt-4o-mini
-  apiKey: ${OPENAI_API_KEY}
-  baseUrl: https://api.openai.com/v1   # default
+plugins:
+  - "@tailored-ai/provider-anthropic"
+
+providers:
+  anthropic:
+    apiKey: ${ANTHROPIC_API_KEY}
+    defaultModel: claude-haiku-4-5
+
+agent:
+  defaultProvider: anthropic
 ```
 
-Anthropic:
-
-```yaml
-provider:
-  type: anthropic
-  model: claude-sonnet-4-6
-  apiKey: ${ANTHROPIC_API_KEY}
-```
+Each value under `providers:` is an opaque options bag the provider reads
+itself; core carries no per-provider schema. See each plugin's page under
+[Packages](/docs/packages) for its options.
 
 ### Custom providers
 
-`type:` resolves through a registry. Built-ins are `openai`,
-`openai_compatible`, and `anthropic`. Register a custom factory
-(Bedrock, Cohere, Gemini, an internal gateway) via
-`registerProviderFactory("bedrock", factory)` from `@tailored-ai/core`,
-then set `type: bedrock`. See [Extending →
+Provider ids resolve through a registry, so a plugin (or your own code via
+`registerProviderFactory` from `@tailored-ai/core`) can register any id and
+config selects it the same way. See [Extending →
 Adding a provider](/docs/extending#adding-a-provider).
 
 ## Multi-provider
@@ -97,18 +106,18 @@ Define multiple providers and let agents pick:
 
 ```yaml
 providers:
-  ollama:
-    baseUrl: http://127.0.0.1:11434
+  openai_compatible:
+    baseUrl: http://localhost:11434/v1
     defaultModel: devstral-small-2
-  openai:
+  openai:                                # via @tailored-ai/provider-openai
     apiKey: ${OPENAI_API_KEY}
-    defaultModel: gpt-4o-mini
-  anthropic:
+    defaultModel: gpt-5-mini
+  anthropic:                             # via @tailored-ai/provider-anthropic
     apiKey: ${ANTHROPIC_API_KEY}
-    defaultModel: claude-sonnet-4-6
+    defaultModel: claude-haiku-4-5
 
 agent:
-  defaultProvider: ollama
+  defaultProvider: openai_compatible
 ```
 
 Per agent:
@@ -117,9 +126,9 @@ Per agent:
 agents:
   researcher:
     provider: openai
-    model: gpt-4o-mini
+    model: gpt-5-mini
   coder:
-    provider: ollama
+    provider: openai_compatible
     model: qwen3-coder:30b
 ```
 
@@ -132,9 +141,9 @@ ordered priority list. TAI picks the first reachable one:
 agents:
   default:
     models:
-      - { provider: ollama, model: qwen3-coder:30b }
-      - { provider: openai, model: gpt-4o-mini }
-      - { provider: anthropic, model: claude-haiku-4-5-20251001 }
+      - { provider: openai_compatible, model: qwen3-coder:30b }
+      - { provider: openai, model: gpt-5-mini }
+      - { provider: anthropic, model: claude-haiku-4-5 }
 ```
 
 ## Agent defaults

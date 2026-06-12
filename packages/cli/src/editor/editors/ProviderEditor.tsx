@@ -25,11 +25,11 @@ type Mode = "form" | "addCustom" | "resolving" | "customAdded";
 /** Friendlier labels for the well-known built-ins; anything else self-labels. */
 const KIND_LABELS: Record<string, string> = {
   openai_compatible: "openai_compatible (Ollama, vLLM, LM Studio)",
-  openai: "openai",
-  anthropic: "anthropic",
 };
 
-const FALLBACK_KINDS = ["openai_compatible", "openai", "anthropic"];
+// Hosted vendors (openai, anthropic, openrouter, bedrock, …) are plugins
+// (#236) — they appear here via discovery once installed.
+const FALLBACK_KINDS = ["openai_compatible"];
 
 const PRESET_URLS: Record<string, string> = {
   vllm: "http://127.0.0.1:8000/v1",

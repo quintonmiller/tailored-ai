@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runAgentLoop } from "../agent/loop.js";
 import { newSession } from "../agent/session.js";
 import { initDatabase } from "../db/schema.js";
-import { AnthropicProvider } from "../providers/anthropic.js";
 import type { AIProvider, ChatResponse, ChatStreamEvent } from "../providers/interface.js";
 import { OpenAIProvider } from "../providers/openai.js";
 import { parseSseStream } from "../providers/sse.js";
@@ -100,51 +99,6 @@ describe("OpenAIProvider.chatStream", () => {
     const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
     expect(body.stream).toBe(true);
     expect(body.stream_options).toEqual({ include_usage: true });
-  });
-});
-
-describe("AnthropicProvider.chatStream", () => {
-  afterEach(() => vi.unstubAllGlobals());
-
-  function stubFetch(chunks: string[]): void {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(sseBody(chunks), { status: 200 })),
-    );
-  }
-
-  it("yields text deltas and assembles usage from start/delta events", async () => {
-    stubFetch([
-      'event: message_start\ndata: {"message":{"usage":{"input_tokens":9}}}\n\n',
-      'event: content_block_start\ndata: {"index":0,"content_block":{"type":"text"}}\n\n',
-      'event: content_block_delta\ndata: {"index":0,"delta":{"type":"text_delta","text":"Hi"}}\n\n',
-      'event: content_block_delta\ndata: {"index":0,"delta":{"type":"text_delta","text":" there"}}\n\n',
-      'event: message_delta\ndata: {"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}\n\n',
-      "event: message_stop\ndata: {}\n\n",
-    ]);
-    const provider = new AnthropicProvider("key");
-    const { deltas, done } = await collect(provider.chatStream({ model: "m", messages: [] }));
-    expect(deltas).toEqual(["Hi", " there"]);
-    expect(done).toEqual({
-      content: "Hi there",
-      toolCalls: undefined,
-      usage: { input: 9, output: 3 },
-      finishReason: "stop",
-    });
-  });
-
-  it("accumulates tool_use input json fragments", async () => {
-    stubFetch([
-      'event: message_start\ndata: {"message":{"usage":{"input_tokens":1}}}\n\n',
-      'event: content_block_start\ndata: {"index":0,"content_block":{"type":"tool_use","id":"tu1","name":"get_weather"}}\n\n',
-      'event: content_block_delta\ndata: {"index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"city\\":"}}\n\n',
-      'event: content_block_delta\ndata: {"index":0,"delta":{"type":"input_json_delta","partial_json":"\\"Oslo\\"}"}}\n\n',
-      'event: message_delta\ndata: {"delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":5}}\n\n',
-    ]);
-    const provider = new AnthropicProvider("key");
-    const { done } = await collect(provider.chatStream({ model: "m", messages: [] }));
-    expect(done.toolCalls).toEqual([{ id: "tu1", name: "get_weather", arguments: { city: "Oslo" } }]);
-    expect(done.finishReason).toBe("tool_calls");
   });
 });
 

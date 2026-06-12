@@ -20,7 +20,7 @@ Prerequisites:
 
 - Node.js 20+
 - npm
-- One model provider: Ollama locally, or an OpenAI / Anthropic / OpenAI-compatible API key
+- One model provider: Ollama (or any OpenAI-compatible server) locally, or a hosted vendor (OpenAI / Anthropic / OpenRouter / Bedrock) via its provider plugin
 
 ```bash
 npm install -g @tailored-ai/cli
@@ -88,8 +88,9 @@ providers:
   openai_compatible:
     baseUrl: "http://localhost:11434/v1"
     defaultModel: "devstral-small-2:latest"
-  # openai:    { apiKey: "${OPENAI_API_KEY}",    defaultModel: "gpt-4o" }
-  # anthropic: { apiKey: "${ANTHROPIC_API_KEY}", defaultModel: "claude-sonnet-4-6" }
+  # Hosted vendors register their ids from plugins — add e.g.
+  # "@tailored-ai/provider-anthropic" to plugins: and then:
+  # anthropic: { apiKey: "${ANTHROPIC_API_KEY}", defaultModel: "claude-haiku-4-5" }
 
 agent:
   defaultProvider: "openai_compatible"
@@ -240,9 +241,8 @@ If the tool set changes mid-loop (e.g. a custom tool was added), a transient sys
 
 ### Providers
 
-- **OpenAI-compatible** — Generic `/v1` chat completions for Ollama, vLLM, LM Studio, OpenRouter, Groq, Together, and similar gateways
-- **OpenAI** — Chat Completions API; works with any OpenAI-compatible API (Groq, Together, etc.) via custom `baseUrl`
-- **Anthropic** — Messages API with tool calling
+- **OpenAI-compatible** (built-in) — Generic `/v1` chat completions for Ollama, vLLM, LM Studio, Groq, Together, and similar gateways
+- **OpenAI, Anthropic, OpenRouter, AWS Bedrock** (plugins) — `@tailored-ai/provider-openai`, `provider-anthropic`, `provider-openrouter`, `provider-bedrock`; install with `tai plugin install`, configure under `providers.<id>`
 
 ### Tools
 
@@ -358,7 +358,7 @@ commands:
 
 - Node.js 20+
 - pnpm
-- Ollama running locally **or** an OpenAI / Anthropic API key (or any OpenAI-compatible API)
+- Ollama running locally (or any OpenAI-compatible API) **or** a hosted-vendor API key plus its provider plugin
 - Discord bot token (optional, for Discord channel)
 
 ### Hardware (for local LLMs)

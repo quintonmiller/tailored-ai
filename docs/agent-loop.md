@@ -42,13 +42,11 @@ Tools taking >= 100ms have `[completed in Xms]` appended to their output, giving
 
 ## Providers
 
-Three providers are supported — set `agent.defaultProvider` in config:
+One provider is built in — set `agent.defaultProvider` in config:
 
 - **OpenAI-compatible** (`packages/core/src/providers/openai.ts`, `id: "openai_compatible"`) — generic `POST /v1/chat/completions` client for any OpenAI-wire-format server: **vLLM**, **Ollama** (`/v1` endpoint), **LM Studio**, **llama.cpp server**, **text-generation-webui**. `apiKey` is optional — when omitted no `Authorization` header is sent. Configure under `providers.openai_compatible` with required `baseUrl` (must include `/v1`) and `defaultModel`. Optional `name` controls the label shown in logs/UI.
-- **OpenAI** (`packages/core/src/providers/openai.ts`, `id: "openai"`) — hosted OpenAI; requires `apiKey`. Same wire format as openai_compatible but always sends auth.
-- **Anthropic** (`packages/core/src/providers/anthropic.ts`) — Anthropic Messages API.
 
-Both `openai_compatible` and `openai` share `OpenAIProvider`; the only differences are auth-header behavior and the `id`/`name` reported on the instance.
+Hosted vendors register their ids from plugin packages (#236): `@tailored-ai/provider-openai` (`openai`), `provider-anthropic` (`anthropic`), `provider-openrouter` (`openrouter`), `provider-bedrock` (`bedrock`). The `OpenAIProvider` class stays exported from core — `openai_compatible` uses it and gateway plugins (openrouter) wrap it. An unknown `defaultProvider` id fails with a hint to install the plugin that registers it.
 
 **Back-compat**: configs that still use `providers.ollama` (the removed native `/api/chat` provider) are auto-migrated to `providers.openai_compatible` at load time by appending `/v1` to the base URL. A deprecation warning is printed.
 

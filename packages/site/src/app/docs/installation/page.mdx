@@ -62,49 +62,12 @@ See [@tailored-ai/core](/docs/packages/core) for the embed API and
 
 ## Pick a provider
 
-TAI doesn't ship a model. Pick at least one of the three common shapes.
+TAI doesn't ship a model. Pick the shape that matches where your model runs.
 
-### OpenAI (and OpenAI-compatible)
+### Local or self-hosted (Ollama, vLLM, LM Studio)
 
-Works with hosted OpenAI plus anything that speaks the OpenAI chat API:
-vLLM, LM Studio, Llama.cpp's server, Together, OpenRouter, Anyscale.
-
-```yaml
-provider:
-  type: openai
-  model: gpt-4o-mini
-  apiKey: ${OPENAI_API_KEY}
-  baseUrl: https://api.openai.com/v1   # override for compatible servers
-```
-
-`.env` alongside `config.yaml`:
-
-```
-OPENAI_API_KEY=sk-…
-```
-
-For a self-hosted endpoint (vLLM on `127.0.0.1:8000`, etc.):
-
-```yaml
-provider:
-  type: openai
-  model: <your model id>
-  baseUrl: http://127.0.0.1:8000/v1
-  apiKey: not-required-but-must-be-present
-```
-
-### Anthropic
-
-```yaml
-provider:
-  type: anthropic
-  model: claude-sonnet-4-6
-  apiKey: ${ANTHROPIC_API_KEY}
-```
-
-### Ollama (local)
-
-Lowest-friction local path on a developer laptop:
+The built-in `openai_compatible` provider talks to any server that speaks
+the OpenAI chat API. For Ollama on a developer laptop:
 
 ```bash
 brew install ollama        # or .deb / .rpm / install script
@@ -113,11 +76,46 @@ ollama pull llama3.2
 ```
 
 ```yaml
-provider:
-  type: ollama
-  model: llama3.2
-  # default endpoint: http://127.0.0.1:11434
+providers:
+  openai_compatible:
+    baseUrl: http://localhost:11434/v1
+    defaultModel: llama3.2
+
+agent:
+  defaultProvider: openai_compatible
 ```
+
+For vLLM swap the `baseUrl` for `http://127.0.0.1:8000/v1`. An `apiKey` is
+optional and only sent when set.
+
+### Hosted vendors (Anthropic, OpenAI, OpenRouter, Bedrock)
+
+Hosted providers ship as plugins. Install the one you want, configure its
+`providers` block, and select it:
+
+```bash
+tai plugin install @tailored-ai/provider-anthropic
+```
+
+```yaml
+providers:
+  anthropic:
+    apiKey: ${ANTHROPIC_API_KEY}
+    defaultModel: claude-haiku-4-5
+
+agent:
+  defaultProvider: anthropic
+```
+
+`.env` alongside `config.yaml`:
+
+```
+ANTHROPIC_API_KEY=sk-ant-…
+```
+
+The same shape works for `@tailored-ai/provider-openai`,
+`@tailored-ai/provider-openrouter`, and `@tailored-ai/provider-bedrock`.
+Each plugin's page under [Packages](/docs/packages) lists its options.
 
 ### Multi-provider
 

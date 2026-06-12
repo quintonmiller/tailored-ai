@@ -108,7 +108,10 @@ export function createProvider(config: AgentConfig): { provider: AIProvider; mod
   if (!factory) {
     const known = providerFactoryRegistry.list().join(", ") || "(none)";
     throw new Error(
-      `No provider factory registered for "${id}". Known: ${known}. Register a custom factory with registerProviderFactory().`,
+      `No provider factory registered for "${id}". Known: ${known}. ` +
+        `Hosted providers ship as plugins — install the package that registers "${id}" ` +
+        `(e.g. @tailored-ai/provider-${id}) and add it to the plugins: list, ` +
+        "or register a custom factory with registerProviderFactory().",
     );
   }
   return factory(config);

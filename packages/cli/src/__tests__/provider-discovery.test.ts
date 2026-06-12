@@ -19,8 +19,8 @@ describe("discoverProviders", () => {
     const found = await discoverProviders("/tmp/does-not-matter");
     const ids = found.map((p) => p.id);
     expect(ids).toContain("openai_compatible");
-    expect(ids).toContain("openai");
-    expect(ids).toContain("anthropic");
+    expect(ids).not.toContain("openai"); // hosted vendors are plugins (#236)
+    expect(ids).not.toContain("anthropic");
     expect(found.every((p) => typeof p.factory === "function")).toBe(true);
   });
 
