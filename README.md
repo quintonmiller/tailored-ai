@@ -159,7 +159,7 @@ tai plugin install file:../my-local-plugin
 tai plugin list
 ```
 
-Plugins install into `<TAI_HOME>/plugins/` so they do not depend on the current project's `node_modules` or the global CLI install. After installing, enable them in `config.yaml`:
+Plugins install into `<TAI_HOME>/plugins/` so they do not depend on the current project's `node_modules` or the global CLI install. Install and remove keep the `plugins:` list in `config.yaml` in sync automatically (pass `--no-save` to manage it yourself), so after an install the plugin is enabled on next startup:
 
 ```yaml
 plugins:
