@@ -75,7 +75,12 @@ export {
   DockerSandbox,
   type DockerSandboxOptions,
 } from "./sandboxes/docker.js";
-export { createSandbox } from "./sandboxes/factory.js";
+export {
+  createSandbox,
+  registerSandboxFactory,
+  type SandboxFactory,
+  sandboxFactoryRegistry,
+} from "./sandboxes/factory.js";
 export { HostSandbox } from "./sandboxes/host.js";
 export type {
   Mount,
@@ -165,7 +170,7 @@ export {
 export type { DigestResult, DigestSection } from "./autopilot/digest.js";
 export { buildMorningDigest, recordDigestRun } from "./autopilot/digest.js";
 export type { AutopilotWorkerOptions } from "./autopilot/worker.js";
-export { AutopilotWorker, buildTaskPrompt } from "./autopilot/worker.js";
+export { AutopilotWorker, buildTaskPrompt, DEFAULT_AUTOPILOT_TASK_PROMPT } from "./autopilot/worker.js";
 export type { Briefing, BriefingRuntime, GenerateBriefingOptions } from "./briefing.js";
 export { assembleBriefingContext, DEFAULT_BRIEFING_PROMPT, generateBriefing } from "./briefing.js";
 export {
@@ -423,6 +428,8 @@ export {
   type PluginDisposer,
   type ProviderRegistryView,
   type RepoBackendRegistryView,
+  type SandboxBackendRegistryView,
+  type StepExecutorRegistryView,
   type TaskBackendRegistryView,
   type ToolRegistryView,
   type UiProviderRegistryView,
@@ -434,6 +441,7 @@ export {
   emojiForStatus,
 } from "./plugins/agent-notifier.js";
 export { CoderProjectGuard, type CoderProjectGuardOptions } from "./plugins/coder-project-guard.js";
+export { OwnerNotifier, type OwnerNotifierOptions } from "./plugins/owner-notifier.js";
 export {
   ScopeCreepFlagger,
   type ScopeCreepFlaggerOptions,
@@ -574,6 +582,8 @@ export {
   readSkillMd,
   renderSkillMd,
   SkillRegistry,
+  type StepExecutorContext,
+  type StepExecutorFactory,
   StepExecutorRegistry,
   TaiRegistrySource,
   ToolRegistry,
@@ -644,6 +654,7 @@ export { RunWorkflowTool } from "./tools/run-workflow.js";
 export { TaskStatusTool } from "./tools/task-status.js";
 export { TaskQueryTool, TasksTool } from "./tools/tasks.js";
 export {
+  META_TOOL_NAMES,
   registerToolFactory,
   runToolFactories,
   type ToolFactory,
@@ -721,6 +732,7 @@ export {
   type TokensByWorkflow,
   tokenUsageByWorkflow,
 } from "./workflows/analytics.js";
+export { populateBuiltinExecutors } from "./workflows/builtin-executors.js";
 export {
   CancelledError,
   DeadlineError,

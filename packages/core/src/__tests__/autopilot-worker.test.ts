@@ -160,4 +160,28 @@ describe("buildTaskPrompt", () => {
     expect(prompt).toMatch(/in_review/);
     expect(prompt).toMatch(/no tool for/i);
   });
+
+  it("the default template (used by DEFAULT_CONFIG) reproduces the historical prompt", async () => {
+    const { buildTaskPrompt, DEFAULT_AUTOPILOT_TASK_PROMPT } = await import("../autopilot/worker.js");
+    const { loadConfig } = await import("../config.js");
+    // DEFAULT_CONFIG.autopilot.taskPrompt is the same constant the worker
+    // defaults to, so out-of-the-box behavior is unchanged. (No config.yaml at
+    // this nonexistent path → loadConfig returns DEFAULT_CONFIG.)
+    const cfg = loadConfig("/nonexistent/tai-config-for-test.yaml");
+    expect(cfg.autopilot?.taskPrompt).toBe(DEFAULT_AUTOPILOT_TASK_PROMPT);
+
+    const task = createProjectTask(db, { title: "T", description: "D" });
+    // Passing the config template explicitly matches the no-arg (default) form.
+    expect(buildTaskPrompt(task, DEFAULT_AUTOPILOT_TASK_PROMPT)).toBe(buildTaskPrompt(task));
+  });
+
+  it("honors a custom autopilot.taskPrompt template with the same task vars", async () => {
+    const { buildTaskPrompt } = await import("../autopilot/worker.js");
+    const task = createProjectTask(db, { title: "Custom", description: "ignored by template" });
+    const prompt = buildTaskPrompt(task, "Do {{task_id}} — {{task_title}}.");
+
+    expect(prompt).toBe(`Do ${task.id} — Custom.`);
+    // The hardcoded rules are gone when the template doesn't include them.
+    expect(prompt).not.toContain("RULES:");
+  });
 });

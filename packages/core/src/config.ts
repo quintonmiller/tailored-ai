@@ -2,8 +2,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import YAML from "yaml";
 import type { PermissionsConfig } from "./approval.js";
+import { DEFAULT_AUTOPILOT_TASK_PROMPT } from "./autopilot/task-prompt.js";
 import { DEFAULT_BRIEFING_PROMPT } from "./briefing.js";
 import { DEFAULT_SUGGESTIONS_PROMPT } from "./suggestions.js";
+import { META_TOOL_NAMES } from "./tools/tool-factories.js";
 
 export interface ModelEntry {
   provider: string;
@@ -75,8 +77,12 @@ export interface AgentDefinition {
     beforeRun?: AgentHook | AgentHook[];
     afterRun?: AgentHook | AgentHook[];
   };
-  /** Sandbox kind to run shell/file tools in. Defaults to host (no isolation). */
-  sandbox?: "host" | "docker" | "podman";
+  /**
+   * Sandbox kind to run shell/file tools in. Defaults to "host" (no isolation).
+   * Built-ins: "host", "docker", "podman". Plugins may register additional kinds
+   * via `registerSandboxFactory`.
+   */
+  sandbox?: string;
   /**
    * Skills to layer into this agent. Each entry is a skill resource id (e.g.
    * "my-org/code-reviewer"). Skill instructions append to the agent's; skill
@@ -310,6 +316,7 @@ export type PluginEntry = string | { module: string; enabled?: boolean; config?:
 /** The default plugins seeded into `config.plugins` as enabled `builtin:*` entries. */
 export const DEFAULT_PLUGIN_MODULES = [
   "builtin:agent-notifier",
+  "builtin:owner-notifier",
   "builtin:scope-creep-flagger",
   "builtin:stall-guard",
   "builtin:coder-project-guard",
@@ -388,8 +395,12 @@ export interface AgentConfig {
     maxContextTokens: number;
     temperature: number;
     maxToolRounds: number;
-    /** Default sandbox kind for agents that don't set their own. Defaults to host. */
-    sandbox?: "host" | "docker" | "podman";
+    /**
+     * Default sandbox kind for agents that don't set their own. Defaults to "host".
+     * Built-ins: "host", "docker", "podman". Plugins may register additional kinds
+     * via `registerSandboxFactory`.
+     */
+    sandbox?: string;
     /**
      * Default system-prompt composition for every agent that doesn't set its
      * own `systemPrompt`. Per-agent overrides win field-by-field (see
@@ -428,11 +439,12 @@ export interface AgentConfig {
    * providers, task backends, step executors); event-driven plugins that
    * need the runtime receive it on `ctx.runtime`.
    *
-   * The four default plugins ship here too as `builtin:*` entries
-   * (`builtin:agent-notifier`, `builtin:scope-creep-flagger`,
-   * `builtin:stall-guard`, `builtin:coder-project-guard`). Built-ins are not
-   * privileged — they are loaded through the same path as third parties; the
-   * `builtin:` prefix only tells the CLI importer to resolve them from
+   * The default plugins ship here too as `builtin:*` entries
+   * (`builtin:agent-notifier`, `builtin:owner-notifier`,
+   * `builtin:scope-creep-flagger`, `builtin:stall-guard`,
+   * `builtin:coder-project-guard`). Built-ins are not privileged — they are
+   * loaded through the same path as third parties; the `builtin:` prefix
+   * only tells the CLI importer to resolve them from
    * `@tailored-ai/core/plugins/*`.
    *
    * `enabled: false` disables an entry durably (the loader skips it). Per-
@@ -544,6 +556,11 @@ export interface AgentConfig {
     };
     ask_user?: {
       enabled: boolean;
+      /**
+       * File (relative to the global context dir) the out-of-autopilot
+       * `ask_user` fallback appends questions to. Default "inbox.md".
+       */
+      inboxFile?: string;
     };
     projects?: {
       enabled: boolean;
@@ -789,6 +806,19 @@ export interface AgentConfig {
      *  `chat_template_kwargs: { enable_thinking: false }`). */
     providerExtra?: Record<string, unknown>;
   };
+  /**
+   * Autopilot worker tuning. Today this holds the overridable task prompt —
+   * the orchestration rules the worker hands an agent when it picks up a
+   * task. DEFAULT_CONFIG ships {@link DEFAULT_AUTOPILOT_TASK_PROMPT}, so
+   * out-of-the-box behavior is unchanged. Override `taskPrompt` to reshape
+   * how autopilot drives agents. Template vars: `{{task_id}}`,
+   * `{{task_title}}`, `{{task_description}}`, `{{prior_activity}}` (the
+   * rendered prior-comment block, or empty when there are none). See
+   * docs/tasks-and-autopilot.md.
+   */
+  autopilot?: {
+    taskPrompt?: string;
+  };
 }
 
 const DEFAULT_CONFIG: AgentConfig = {
@@ -815,8 +845,9 @@ const DEFAULT_CONFIG: AgentConfig = {
   },
   agents: {},
   // The default plugin set ships installed + enabled. These reproduce the
-  // out-of-the-box workflow (Discord delivery, scope-creep flagging, stall
-  // retries, coder/reviewer project guard). Disable one with
+  // out-of-the-box workflow (agent-completed delivery, owner notifications,
+  // scope-creep flagging, stall retries, coder/reviewer project guard).
+  // Disable one with
   // `{ module: "builtin:...", enabled: false }`; deleting an entry is not
   // durable because `migrateDefaultPlugins` re-appends missing modules.
   //
@@ -848,6 +879,7 @@ const DEFAULT_CONFIG: AgentConfig = {
     projects: { enabled: true, directory: "./data/projects" },
     documents: { enabled: true },
     extract_document: { enabled: false },
+    ask_user: { enabled: true, inboxFile: "inbox.md" },
   },
   taskWatcher: {
     enabled: false,
@@ -880,6 +912,9 @@ const DEFAULT_CONFIG: AgentConfig = {
     prompt: DEFAULT_SUGGESTIONS_PROMPT,
     count: 4,
     ttlMinutes: 15,
+  },
+  autopilot: {
+    taskPrompt: DEFAULT_AUTOPILOT_TASK_PROMPT,
   },
 };
 
@@ -1011,8 +1046,8 @@ export function validateConfig(config: AgentConfig): string[] {
     }
     enabledToolNames.add(name);
   }
-  // Meta tools are always available
-  for (const name of ["delegate", "task_status", "admin", "memory", "ask_user"]) {
+  // Meta tools are always available (list is authoritative in META_TOOL_NAMES)
+  for (const name of META_TOOL_NAMES) {
     enabledToolNames.add(name);
   }
 
@@ -1115,33 +1150,23 @@ export function validateConfig(config: AgentConfig): string[] {
   // needs missing options (e.g. github without repo/token) throws on
   // construction with a clear message.
 
-  // Validate sandbox kinds
-  const validSandboxes = ["host", "docker", "podman"];
-  const defaultSandbox = config.agent.sandbox;
-  if (defaultSandbox && !validSandboxes.includes(defaultSandbox)) {
-    warnings.push(
-      `agent.sandbox "${defaultSandbox}" is not valid (use ${validSandboxes.map((s) => `"${s}"`).join(", ")})`,
-    );
-  }
-  if (defaultSandbox === "docker" && !config.sandboxes?.docker?.imageName) {
-    warnings.push(`agent.sandbox is "docker" but sandboxes.docker.imageName is not set`);
-  }
-  if (defaultSandbox === "podman" && !config.sandboxes?.podman?.imageName) {
-    warnings.push(`agent.sandbox is "podman" but sandboxes.podman.imageName is not set`);
-  }
-  for (const [agentName, agent] of Object.entries(config.agents)) {
-    const kind = agent.sandbox;
-    if (kind && !validSandboxes.includes(kind)) {
-      warnings.push(
-        `Agent "${agentName}" sandbox "${kind}" is not valid (use ${validSandboxes.map((s) => `"${s}"`).join(", ")})`,
-      );
-    }
+  // Sandbox-backend validity is not checked here either: the id is resolved
+  // dynamically through the sandbox factory registry (createSandbox throws a
+  // helpful "Known: …" error on an unknown kind), and core privileges no
+  // built-in. We do keep the "imageName not set" guard for the built-in docker
+  // and podman factories because that is a config-time detectable mistake the
+  // factory itself cannot surface until runtime.
+  const checkSandboxImageName = (kind: string | undefined, context: string) => {
     if (kind === "docker" && !config.sandboxes?.docker?.imageName) {
-      warnings.push(`Agent "${agentName}" uses sandbox "docker" but sandboxes.docker.imageName is not set`);
+      warnings.push(`${context} uses sandbox "docker" but sandboxes.docker.imageName is not set`);
     }
     if (kind === "podman" && !config.sandboxes?.podman?.imageName) {
-      warnings.push(`Agent "${agentName}" uses sandbox "podman" but sandboxes.podman.imageName is not set`);
+      warnings.push(`${context} uses sandbox "podman" but sandboxes.podman.imageName is not set`);
     }
+  };
+  checkSandboxImageName(config.agent.sandbox, "agent.sandbox");
+  for (const [agentName, agent] of Object.entries(config.agents)) {
+    checkSandboxImageName(agent.sandbox, `Agent "${agentName}"`);
   }
 
   // Validate workflows block

@@ -69,21 +69,36 @@ When using the `github` backend, `AutopilotWorker.start()` calls `backend.bootst
 
 What it does each tick:
 1. Read `autopilot_settings` (paused / quiet hours / disabled hours / token budget)
-2. If past a budget cap, skip; if quiet hours, suppress notifications
+2. If past a budget cap, skip
 3. Promote any tasks blocked due to budget back to backlog when the window rolls forward
 4. Pick one backlog task whose `assignee` matches a configured agent name; claim atomically
 5. Resolve the task's `project_id` to a `ProjectContext` (S7) so cwd + session scope match the project
 6. Build a fresh session keyed `autopilot:<task.id>` (no carry-over history; comments are the durable memory)
 7. Run the loop with a per-task `AbortController` so a single overrun doesn't cascade
-8. On success, mark task `done` (or `in_review` if the agent flagged uncertainty); on error, comment + status `blocked` + DM the owner
+8. On success, mark task `done` (or `in_review` if the agent flagged uncertainty); on error, comment + status `blocked` + emit `task.needs_human`
 
 Token usage is recorded per session/task in `token_usage`. Mid-task budget exhaustion aborts that task only; sibling conversations (chats, other autopilot runs) keep going.
 
-Morning digest: a daily Cron (configurable via `digest_time` setting) runs `buildMorningDigest()` over `digest_runs` + recent activity and DMs the result to the Discord owner. Runs are persisted in `digest_runs`.
+Morning digest: a daily Cron (configurable via `digest_time` setting) runs `buildMorningDigest()` over `digest_runs` + recent activity and emits `digest.ready`. Runs are persisted in `digest_runs`.
 
-Notifications:
-- `notifyNeedsHuman` DMs the owner when a task errors or is blocked, suppressed during quiet hours
-- The web UI's "working on" strip subscribes via `getActivity()` for live status
+### Task prompt (`autopilot.taskPrompt`)
+
+The orchestration rules the worker hands an agent are an overridable template, `config.autopilot.taskPrompt`, expanded by `buildTaskPrompt()` (`packages/core/src/autopilot/task-prompt.ts`). `DEFAULT_CONFIG` ships `DEFAULT_AUTOPILOT_TASK_PROMPT` (the rules verbatim), so behavior is unchanged unless you override it. Template vars: `{{task_id}}`, `{{task_title}}`, `{{task_description}}`, `{{prior_activity}}` (the rendered recent-comment block, or empty when there are none). Precedent: `briefing.prompt` / `suggestions.prompt`.
+
+### Notification seams (events)
+
+Core no longer decides *who* to notify or *how*. The worker, the `ask_user` tool, and the `channel_message` workflow executor emit typed runtime events instead of DMing the owner inline; the default **`builtin:owner-notifier`** plugin (`packages/core/src/plugins/owner-notifier.ts`) subscribes and delivers — same channel/recipient resolution (`runtime.resolveOutbound()` + `runtime.getOwnerId()`) and the same autopilot quiet-hours suppression that lived inline. It ships enabled in `DEFAULT_PLUGIN_MODULES`, so out-of-the-box delivery is identical to before.
+
+| Event | Emitted by | Owner-notifier delivery |
+|---|---|---|
+| `task.needs_human` | worker error/block path | owner DM, suppressed during quiet hours |
+| `digest.ready` | `runDigest()` | owner DM, never suppressed |
+| `question.asked` | `ask_user` tool | owner DM; the autopilot variant (carries `taskId`) is quiet-hours-suppressed, plain questions always deliver |
+| `form.completed` | `channel_message` step's implicit owner-DM fallback | owner DM |
+
+To ship somewhere else (Slack, Telegram, email, a pager): disable the plugin (`plugins: - { module: "builtin:owner-notifier", enabled: false }`) and subscribe your own handler to these events via `ctx.events.on(...)`. The `channel_message` executor only routes through `form.completed` for the fully-implicit "DM the owner" case (no explicit `channelId` / `userId` / per-step `channel`); explicit targets stay direct deliveries.
+
+The web UI's "working on" strip still subscribes via `getActivity()` for live status.
 
 The autopilot uses `runtime.getTaskBackend()` by default; tests override via `AutopilotWorkerOptions.taskBackend`. As of S7.5 the worker still claims one task per tick from a single backend — multi-project iteration with per-project backends is a follow-up bean.
 

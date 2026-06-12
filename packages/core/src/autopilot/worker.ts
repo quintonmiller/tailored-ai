@@ -2,18 +2,17 @@ import { Cron } from "croner";
 import { runAgentLoop } from "../agent/loop.js";
 import { runMemorySweep } from "../agent/memory-promotion.js";
 import { resetSession } from "../agent/session.js";
-import {
-  checkBudget,
-  getAutopilotSettings,
-  isInDisabledHours,
-  isInQuietHours,
-  recordTokenUsage,
-} from "../db/autopilot-queries.js";
+import { checkBudget, getAutopilotSettings, isInDisabledHours, recordTokenUsage } from "../db/autopilot-queries.js";
 import { findStuckCodingTasks } from "../db/task-queries.js";
 import type { ProjectRef } from "../projects/resolve.js";
 import type { AgentRuntime } from "../runtime.js";
 import type { Task, TaskBackend } from "../tasks/interface.js";
 import { buildMorningDigest, recordDigestRun } from "./digest.js";
+import { buildTaskPrompt } from "./task-prompt.js";
+
+// Re-export so existing importers (index.ts, tests) keep resolving
+// buildTaskPrompt / DEFAULT_AUTOPILOT_TASK_PROMPT from the worker module.
+export { buildTaskPrompt, DEFAULT_AUTOPILOT_TASK_PROMPT } from "./task-prompt.js";
 
 export interface StuckTaskWatcher {
   notify(
@@ -244,18 +243,10 @@ export class AutopilotWorker {
     }
     recordDigestRun(this.runtime.db, digest.content);
 
-    const notifier = this.runtime.resolveOutbound();
-    const ownerId = this.runtime.getOwnerId();
-    if (notifier && ownerId) {
-      try {
-        await notifier.sendDM(ownerId, digest.content);
-        console.log(`[autopilot] Morning digest delivered via ${notifier.id} DM`);
-      } catch (err) {
-        console.error("[autopilot] Digest DM failed:", (err as Error).message);
-      }
-    } else {
-      console.log(`[autopilot] Morning digest (no delivery target):\n${digest.content}`);
-    }
+    // Delivery is owned by the `builtin:owner-notifier` plugin (or any
+    // subscriber a user wires up): emit the digest as an event rather than
+    // DMing the owner inline.
+    this.runtime.events.emit("digest.ready", { content: digest.content, periodLabel: "Morning" });
   }
 
   /** Current activity, if any. */
@@ -314,26 +305,17 @@ export class AutopilotWorker {
       console.error(`[autopilot] Task ${claimed.id} failed:`, msg);
       await this.tasks.comment(claimed.id, `Error running task: ${msg}`, "autopilot");
       await this.tasks.update(claimed.id, { status: this.tasks.statuses.blocked, blocked_reason: "error" });
-      await this.notifyNeedsHuman(`Task ${claimed.id} errored: ${claimed.title}\n${msg}`);
+      // Delivery (and quiet-hours suppression) is owned by the
+      // `builtin:owner-notifier` plugin: emit the event rather than DMing inline.
+      this.runtime.events.emit("task.needs_human", {
+        taskId: claimed.id,
+        agentName: claimed.assignee ?? undefined,
+        reason: "error",
+        message: `Task ${claimed.id} errored: ${claimed.title}\n${msg}`,
+      });
     } finally {
       this.currentTask = undefined;
       this.onActivity?.(null);
-    }
-  }
-
-  private async notifyNeedsHuman(message: string): Promise<void> {
-    const settings = getAutopilotSettings(this.runtime.db);
-    if (isInQuietHours(settings)) {
-      console.log(`[autopilot] Suppressing notification during quiet hours: ${message.slice(0, 80)}`);
-      return;
-    }
-    const notifier = this.runtime.resolveOutbound();
-    const ownerId = this.runtime.getOwnerId();
-    if (!notifier || !ownerId) return;
-    try {
-      await notifier.sendDM(ownerId, message);
-    } catch (err) {
-      console.error("[autopilot] Notify DM failed:", (err as Error).message);
     }
   }
 
@@ -382,7 +364,7 @@ export class AutopilotWorker {
     const { provider, model } = await this.resolveSessionModel(agentName);
     const session = resetSession(db, sessionKey, model, provider, projectCtx?.id ?? null);
 
-    const prompt = buildTaskPrompt(taskWithComments);
+    const prompt = buildTaskPrompt(taskWithComments, this.runtime.getConfig().autopilot?.taskPrompt);
 
     // Per-task abort controller: lets us stop *this* task when the budget is hit,
     // without shutting down sibling conversations (chats, other autopilot runs).
@@ -524,54 +506,4 @@ export class AutopilotWorker {
     const provider = agent?.provider ?? config.agent.defaultProvider;
     return { provider, model };
   }
-}
-
-export function buildTaskPrompt(task: Task): string {
-  const lines = [
-    `You have picked up task ${task.id}: "${task.title}".`,
-    "",
-    "RULES:",
-    "",
-    "1. Read the task description AND all prior comments before doing anything.",
-    "   If the user has already told you something in a comment, don't ask again —",
-    "   use what you have.",
-    "",
-    "2. If this task needs a real-world action you have no tool for — booking",
-    "   appointments, sending physical mail, making phone calls, placing orders,",
-    "   anything requiring a website or API you can't reach — STOP. Do NOT call",
-    "   ask_user for more details (that just loops). Instead:",
-    `     tasks(action=update, id="${task.id}", status="in_review",`,
-    "       comment=\"Cannot complete this directly — I don't have a tool to",
-    "       <action>. Here's what I gathered: <summary>. Over to you.\")",
-    "",
-    "3. Only call ask_user when (a) you have a tool that can use the answer AND",
-    "   (b) the info isn't already in the description or prior comments.",
-    "",
-    "4. When you change status, include a `comment` describing what you did or",
-    "   why you're blocked — this is the audit log. Example:",
-    `     tasks(action=update, id="${task.id}", status="done",`,
-    '       comment="Saved a summary of the meeting notes to memory.")',
-    "   Use status=in_review instead of done when you're uncertain about the",
-    "   result.",
-    "",
-    "Task description:",
-    task.description || "(no description — infer intent from the title)",
-  ];
-
-  const comments = task.comments ?? [];
-  if (comments.length > 0) {
-    lines.push("", `Prior activity on this task (${comments.length} comment(s)):`);
-    for (const c of comments.slice(-10)) {
-      const author = c.author || "unknown";
-      const body = c.content.length > 400 ? `${c.content.slice(0, 400)}…` : c.content;
-      lines.push(`  [${author}] ${body}`);
-    }
-    lines.push(
-      "",
-      "Check the above carefully. If user answers are present, use them — do not",
-      "ask the same question again.",
-    );
-  }
-
-  return lines.join("\n");
 }

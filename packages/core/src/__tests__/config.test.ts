@@ -264,8 +264,9 @@ describe("migrateDefaultPlugins — seed missing builtin: entries", () => {
     expect(modules(cfg.plugins)).toEqual([
       "@me/my-plugin",
       "builtin:stall-guard",
-      // the three enabled not already present, in default order
+      // the enabled defaults not already present, in default order
       "builtin:agent-notifier",
+      "builtin:owner-notifier",
       "builtin:scope-creep-flagger",
       "builtin:coder-project-guard",
       // then the disabled set
@@ -337,11 +338,13 @@ describe("migrateDefaultPlugins — seed missing builtin: entries", () => {
 });
 
 describe("validateConfig — sandbox block", () => {
-  it("rejects unknown sandbox kinds at agent.sandbox", () => {
+  it("does not warn on unknown sandbox kinds — resolved dynamically via registry", () => {
     const c = baseConfig();
-    c.agent.sandbox = "firecracker" as unknown as "host";
+    c.agent.sandbox = "firecracker";
     const ws = validateConfig(c);
-    expect(ws.some((w) => w.includes(`agent.sandbox "firecracker" is not valid`))).toBe(true);
+    // Unknown kinds are caught at runtime by createSandbox, not at config-load
+    // time, so plugins can register additional kinds after config validation runs.
+    expect(ws.some((w) => w.toLowerCase().includes("firecracker"))).toBe(false);
   });
 
   it("warns when podman sandbox is selected without imageName", () => {
@@ -370,17 +373,19 @@ describe("validateConfig — sandbox block", () => {
     expect(validateConfig(c).some((w) => w.toLowerCase().includes("sandbox"))).toBe(false);
   });
 
-  it("validates per-agent sandbox overrides", () => {
+  it("validates per-agent sandbox overrides (docker/podman imageName checks)", () => {
     const c = baseConfig();
     c.agents = {
       coder: { sandbox: "docker" },
-      bad: { sandbox: "wat" as unknown as "host" },
+      // "wat" is an unknown kind — no warning at config time (registry resolves at runtime)
+      custom: { sandbox: "firecracker" },
       pman: { sandbox: "podman" },
     };
     const ws = validateConfig(c);
     expect(ws.some((w) => w.includes(`Agent "coder" uses sandbox "docker"`))).toBe(true);
-    expect(ws.some((w) => w.includes(`Agent "bad" sandbox "wat" is not valid`))).toBe(true);
     expect(ws.some((w) => w.includes(`Agent "pman" uses sandbox "podman"`))).toBe(true);
+    // Unknown kinds produce no warning — they are resolved via the registry at runtime.
+    expect(ws.some((w) => w.toLowerCase().includes("firecracker"))).toBe(false);
   });
 });
 
@@ -539,6 +544,7 @@ describe("loadConfig — default host", () => {
       "@me/custom",
       "builtin:stall-guard",
       "builtin:agent-notifier",
+      "builtin:owner-notifier",
       "builtin:scope-creep-flagger",
       "builtin:coder-project-guard",
       ...DEFAULT_DISABLED_PLUGIN_MODULES,
