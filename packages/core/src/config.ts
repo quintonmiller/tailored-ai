@@ -231,6 +231,35 @@ export interface CustomToolConfig {
   timeout_ms?: number;
 }
 
+/**
+ * One MCP server under `mcp.servers.<id>`. Exactly one transport: `command`
+ * (stdio — TAI spawns the process) or `url` (streamable HTTP). The common
+ * `mcpServers` JSON shape used by other MCP hosts maps 1:1 onto an entry
+ * here, so server configs can be copy-pasted.
+ */
+export interface McpServerConfig {
+  /** Enabled unless explicitly false — a configured server is presumed wanted. */
+  enabled?: boolean;
+  /** stdio transport: executable to spawn (resolved against PATH). */
+  command?: string;
+  args?: string[];
+  /** Extra environment for the spawned process, merged over the SDK's safe default set. `${VAR}` interpolation applies. */
+  env?: Record<string, string>;
+  cwd?: string;
+  /** Streamable-HTTP transport: the server's MCP endpoint. */
+  url?: string;
+  /** Extra HTTP headers (auth tokens etc.) for `url` servers. */
+  headers?: Record<string, string>;
+  /**
+   * Allowlist of server-side tool names to expose. Omit to expose all.
+   * Local models degrade past ~5 tools per request — prefer listing the few
+   * you need over exposing a 30-tool server wholesale.
+   */
+  tools?: string[];
+  /** Per-call timeout in milliseconds. Default 30000. */
+  timeoutMs?: number;
+}
+
 export interface CommandConfig {
   description: string;
   command?: string; // Shell command template ({{input}} interpolated)
@@ -431,6 +460,19 @@ export interface AgentConfig {
    * value is a plain channel id resolved against `channels`.
    */
   defaultChannel?: string;
+  /**
+   * MCP (Model Context Protocol) servers keyed by id. Each server's tools
+   * are discovered at startup and registered into the tool registry as
+   * `mcp_<serverId>_<toolName>` — selectable per agent like any other tool.
+   * MCP is a protocol-level capability (like `openai_compatible` for
+   * providers), so it lives in core rather than a plugin; the SDK is an
+   * optional dependency loaded on first use. A server entry is enabled
+   * unless it sets `enabled: false` — presence is intent, since unlike
+   * channels there are no seeded default entries.
+   */
+  mcp?: {
+    servers: { [serverId: string]: McpServerConfig | undefined };
+  };
   /**
    * Plugin modules to load at startup. Each entry is either a package
    * specifier (`"@some-author/tai-plugin-x"`) or an object with `module`,
@@ -868,6 +910,7 @@ const DEFAULT_CONFIG: AgentConfig = {
     kbDirectory: "./data/kb",
   },
   channels: {},
+  mcp: { servers: {} },
   tools: {
     memory: { enabled: true },
     exec: { enabled: true },
@@ -1038,10 +1081,36 @@ export function validateConfig(config: AgentConfig): string[] {
     enabledToolNames.add(name);
   }
 
+  // MCP servers: exactly one transport per entry. Misconfigured servers are
+  // skipped at load, so surface that here instead of failing silently.
+  const mcpServers = config.mcp?.servers ?? {};
+  let hasMcpServers = false;
+  for (const [id, server] of Object.entries(mcpServers)) {
+    if (!server || server.enabled === false) continue;
+    const hasCommand = typeof server.command === "string" && server.command.length > 0;
+    const hasUrl = typeof server.url === "string" && server.url.length > 0;
+    if (!hasCommand && !hasUrl) {
+      warnings.push(`mcp.servers.${id}: needs either "command" (stdio) or "url" (streamable HTTP); will be skipped`);
+    } else if (hasCommand && hasUrl) {
+      warnings.push(`mcp.servers.${id}: set "command" or "url", not both; will be skipped`);
+    } else {
+      hasMcpServers = true;
+    }
+  }
+
   // Validate agent tool references
   for (const [agentName, agent] of Object.entries(config.agents)) {
     if (agent.tools) {
       for (const toolName of agent.tools) {
+        // MCP tool names (mcp_<server>_<tool>) only exist after async
+        // discovery, so static validation can't confirm them — only flag
+        // the case where no server could ever provide one.
+        if (toolName.startsWith("mcp_")) {
+          if (!hasMcpServers) {
+            warnings.push(`Agent "${agentName}" references MCP tool "${toolName}" but no mcp.servers are configured`);
+          }
+          continue;
+        }
         if (!enabledToolNames.has(toolName)) {
           warnings.push(`Agent "${agentName}" references tool "${toolName}" which is not enabled`);
         }

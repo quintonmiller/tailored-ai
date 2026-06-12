@@ -706,3 +706,42 @@ describe("loadConfig — ollama back-compat shim", () => {
     expect(config.agent.defaultProvider).toBe("openai_compatible");
   });
 });
+
+describe("validateConfig — mcp block", () => {
+  it("accepts a server with exactly one transport", () => {
+    const c = baseConfig();
+    c.mcp = { servers: { gh: { command: "npx", args: ["-y", "some-mcp-server"] } } };
+    expect(validateConfig(c).some((w) => w.includes("mcp.servers"))).toBe(false);
+  });
+
+  it("warns when a server has neither command nor url", () => {
+    const c = baseConfig();
+    c.mcp = { servers: { broken: {} } };
+    expect(validateConfig(c).some((w) => w.includes("mcp.servers.broken"))).toBe(true);
+  });
+
+  it("warns when a server sets both command and url", () => {
+    const c = baseConfig();
+    c.mcp = { servers: { both: { command: "npx", url: "http://localhost:3001/mcp" } } };
+    expect(validateConfig(c).some((w) => w.includes("mcp.servers.both"))).toBe(true);
+  });
+
+  it("ignores disabled server entries", () => {
+    const c = baseConfig();
+    c.mcp = { servers: { off: { enabled: false } } };
+    expect(validateConfig(c).some((w) => w.includes("mcp.servers"))).toBe(false);
+  });
+
+  it("skips static validation of mcp_ agent tool refs when a server is configured", () => {
+    const c = baseConfig();
+    c.mcp = { servers: { gh: { command: "npx" } } };
+    c.agents = { helper: { tools: ["mcp_gh_search"] } };
+    expect(validateConfig(c).some((w) => w.includes("mcp_gh_search"))).toBe(false);
+  });
+
+  it("warns on mcp_ agent tool refs when no servers are configured", () => {
+    const c = baseConfig();
+    c.agents = { helper: { tools: ["mcp_gh_search"] } };
+    expect(validateConfig(c).some((w) => w.includes("mcp_gh_search"))).toBe(true);
+  });
+});
