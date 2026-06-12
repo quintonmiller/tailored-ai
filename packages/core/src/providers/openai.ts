@@ -261,4 +261,19 @@ export class OpenAIProvider implements AIProvider {
       },
     };
   }
+
+  /** Model discovery via `GET {baseUrl}/models` — works for OpenAI, vLLM, Ollama (`/v1`), LM Studio. */
+  async listModels(): Promise<string[]> {
+    const headers: Record<string, string> = {};
+    if (this.apiKey) {
+      headers.Authorization = `Bearer ${this.apiKey}`;
+    }
+    const resp = await fetch(`${this.baseUrl}/models`, { headers });
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`${this.name} API error ${resp.status}: ${text}`);
+    }
+    const data = (await resp.json()) as { data?: { id?: string }[] };
+    return (data.data ?? []).map((m) => m.id).filter((id): id is string => typeof id === "string" && id.length > 0);
+  }
 }

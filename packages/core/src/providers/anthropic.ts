@@ -335,4 +335,20 @@ export class AnthropicProvider implements AIProvider {
       },
     };
   }
+
+  /** Model discovery via `GET /v1/models` (Anthropic models list API). */
+  async listModels(): Promise<string[]> {
+    const resp = await fetch(`${this.baseUrl}/v1/models`, {
+      headers: {
+        "x-api-key": this.apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`Anthropic API error ${resp.status}: ${text}`);
+    }
+    const data = (await resp.json()) as { data?: { id?: string }[] };
+    return (data.data ?? []).map((m) => m.id).filter((id): id is string => typeof id === "string" && id.length > 0);
+  }
 }
