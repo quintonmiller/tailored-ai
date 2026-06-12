@@ -38,6 +38,8 @@ export { setupAmazon } from "./cli/setup-amazon.js";
 export { MIGRATIONS, migrate } from "./db/migrations.js";
 export { closeDb, getDb } from "./db/schema.js";
 export * from "./executor/runner.js";
+// TAI server plugin — registers /api/trusted-actions/* through core's HTTP seam.
+export { buildTrustedActionsRoutes, default as trustedActionsPlugin } from "./plugin.js";
 export { AgeStore } from "./secrets/age-store.js";
 // Server + scaffolding
 export { app, startServer } from "./server.js";

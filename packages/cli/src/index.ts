@@ -666,9 +666,15 @@ async function main() {
   //      runtime exists (see loadRuntimePlugins below).
   // The `builtin:` prefix is a load-ordering signal, not a privilege: a
   // builtin loads through the same loadPlugins path as any third party.
+  //
+  // `@tailored-ai/trusted-actions/plugin` is also a runtime-context plugin —
+  // it registers `/api/trusted-actions/*` HTTP routes through core's seam and
+  // needs `ctx.runtime` for live config + the session DB (#206). It loads in
+  // pass 2 alongside the builtins.
+  const TRUSTED_ACTIONS_PLUGIN = "@tailored-ai/trusted-actions/plugin";
   const isRuntimePlugin = (entry: import("@tailored-ai/core").PluginEntry): boolean => {
     const module = typeof entry === "string" ? entry : entry.module;
-    return typeof module === "string" && module.startsWith("builtin:");
+    return typeof module === "string" && (module.startsWith("builtin:") || module === TRUSTED_ACTIONS_PLUGIN);
   };
   const registryEntries = (config.plugins ?? []).filter((e) => !isRuntimePlugin(e));
   await loadPlugins({ ...config, plugins: registryEntries }, importer, {
@@ -714,8 +720,17 @@ async function main() {
   // this once at startup and again on every reload (see the onReload hook),
   // which also re-arms subscriptions after runtime.reload() clears the bus.
   const loadRuntimePlugins = () => {
-    const entries = (runtime.getConfig().plugins ?? []).filter(isRuntimePlugin);
-    return loadPlugins({ ...runtime.getConfig(), plugins: entries }, importer, {
+    const cfg = runtime.getConfig();
+    const entries = (cfg.plugins ?? []).filter(isRuntimePlugin);
+    // Auto-load the trusted-actions route plugin when the executor is enabled
+    // and the user hasn't declared it explicitly. Preserves the old "routes
+    // always present when configured" behavior without forcing a config edit.
+    // The importer resolves this module from the CLI's own deps (it's an
+    // optional dependency), not the plugin home — see buildImporter.
+    const taEnabled = !!cfg.trustedActions?.enabled;
+    const hasTaEntry = entries.some((e) => (typeof e === "string" ? e : e.module) === TRUSTED_ACTIONS_PLUGIN);
+    if (taEnabled && !hasTaEntry) entries.push(TRUSTED_ACTIONS_PLUGIN);
+    return loadPlugins({ ...cfg, plugins: entries }, importer, {
       context: createPluginContext({ runtime, events }),
     });
   };

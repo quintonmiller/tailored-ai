@@ -16,6 +16,7 @@ import {
 } from "./config.js";
 import { getProject } from "./db/project-queries.js";
 import { type EventBus, TypedEventBus } from "./events.js";
+import { HttpRouteRegistry } from "./http/registry.js";
 import type { MemoryBackend } from "./memory/interface.js";
 import { resolveMemoryBackend } from "./memory/registry.js";
 import { type ProjectContext, type ProjectRef, readProjectFile } from "./projects/resolve.js";
@@ -132,6 +133,13 @@ export class AgentRuntime {
   })();
   private _workflows: WorkflowRegistry = new WorkflowRegistry();
   private _workflowEngine: import("./workflows/engine.js").WorkflowEngine | undefined;
+  /**
+   * Plugin-registered HTTP routes. Lives on the runtime and deliberately
+   * survives `reload()` — the server (Hono) can't unmount routes once added,
+   * so route handlers read live runtime state on each request instead. The
+   * server iterates this once after building its app. See http/registry.ts.
+   */
+  private _httpRoutes: HttpRouteRegistry = new HttpRouteRegistry();
   private _activeProject: ProjectContext | null = null;
   /**
    * Live outbound notifiers keyed by channel id (`notifier.id`). Populated by
@@ -384,6 +392,13 @@ export class AgentRuntime {
   /** Prompt resource registry. */
   getPromptRegistry(): PromptRegistry {
     return this._promptRegistry;
+  }
+  /**
+   * Plugin HTTP route registry. The server iterates it after building its
+   * app to adapt each descriptor onto its router. Survives `reload()`.
+   */
+  getHttpRoutes(): HttpRouteRegistry {
+    return this._httpRoutes;
   }
   get generation(): number {
     return this._generation;

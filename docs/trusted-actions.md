@@ -34,7 +34,21 @@ The HITL purchase flow has these moving parts now landed on `main`:
 | Audit log | `packages/trusted-actions/src/audit/log.ts` | Hash-chained; tamper-detectable via `verifyAuditChain()` |
 | Playwright adapter | `packages/trusted-actions/src/adapters/purchase-amazon.ts` | Stealth headless Chromium + checkout flow |
 | TAI tools | `packages/core/src/tools/request-action.ts` | `purchase_item`, `request_action`, `check_action_status` |
+| TAI-side routes | `packages/trusted-actions/src/plugin.ts` | `/api/trusted-actions/*` on the TAI server — registered through core's HTTP route seam (see below) |
 | UI page | `packages/ui/src/pages/Actions.tsx` | Pending / Recent / All tabs, cancel button |
+
+### TAI-side HTTP routes (registered by the package)
+
+The `/api/trusted-actions/*` routes on the TAI server — the executor pass-throughs and the executor → TAI callback — used to live in `@tailored-ai/server`. They are product-specific, so they now ship in `@tailored-ai/trusted-actions` and register on the TAI server through core's plugin HTTP route seam (`ctx.http`, see [docs/architecture.md → Plugin HTTP Routes](./architecture.md#plugin-http-routes)).
+
+- **Where**: `packages/trusted-actions/src/plugin.ts` exports a `default(ctx)` plugin (subpath `@tailored-ai/trusted-actions/plugin`). It builds four route descriptors and registers them via `ctx.http`.
+- **Paths kept**: the routes are registered `absolute: true`, so they mount at their historical paths — the UI (`/api/trusted-actions/subscriptions`) and the executor (`/api/trusted-actions/callback`) keep working with no change.
+  - `GET  /api/trusted-actions/subscriptions` — list push subscriptions (proxies the executor).
+  - `POST /api/trusted-actions/subscriptions/:op` — `approve | reject | delete` a subscription.
+  - `GET  /api/trusted-actions/history` — recent action history.
+  - `POST /api/trusted-actions/callback` — executor → TAI terminal-status notification.
+- **Auth**: the first three are `auth: "token"` (default) — behind the server's `server.authToken` bearer check, same as every `/api/*` route. The callback is `auth: "none"` — it is called by the executor service, not a browser, and authenticates with the `trustedActions.sharedSecret` itself (exactly the behavior it had in the server). The server's auth middleware exempts it by path.
+- **Loading**: the CLI loads `@tailored-ai/trusted-actions/plugin` as a runtime-context plugin (it needs `ctx.runtime` for live config + the session DB) when `trustedActions.enabled` is set, even if the user hasn't listed it in `config.plugins`. It is an `optionalDependencies` of the CLI, so installing the CLI without the executor package still works — the routes only register when the package is present and the executor is enabled.
 
 ## Setup
 
