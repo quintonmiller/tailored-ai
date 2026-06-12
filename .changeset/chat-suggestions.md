@@ -1,7 +1,6 @@
 ---
 "@tailored-ai/core": patch
 "@tailored-ai/server": patch
-"@tailored-ai/ui": patch
 ---
 
 Add config-gated chat suggestion chips: short, clickable prompts in the Chat

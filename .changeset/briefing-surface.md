@@ -1,7 +1,6 @@
 ---
 "@tailored-ai/core": patch
 "@tailored-ai/server": patch
-"@tailored-ai/ui": patch
 ---
 
 Add a config-gated Home "briefing" surface: an LLM-written greeting/summary of
