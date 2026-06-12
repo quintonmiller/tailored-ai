@@ -73,7 +73,7 @@ For a personal install with Discord + web sessions, `keyPrefixes: ["discord:", "
 - `recall action: promote` — manual promotion of a specific note id. Requires an embedder. Pass `force: true` to re-index.
 - `promoteNote(db, embedder, noteId, opts)` — programmatic API. `recordNoteHit(db, noteId, {embedder, threshold, onPromote})` — ref-tracker + fire-and-forget promotion.
 - `runMemorySweep(db, opts)` — daily hygiene pass: extends TTL on referenced-but-expiring notes (`ref_count >= 3`, ttl ≤ now+1d → +7 days), then deletes expired low-importance notes. Returns `{deletedExpired, extendedTtl, remainingNotes, totalChunks}`.
-- AutopilotWorker schedules the sweep daily at 03:14 (via croner). Started/stopped with the worker.
+- AutopilotWorker schedules the sweep from `autopilot.memorySweepCron` (default daily at 03:14, via croner). Started/stopped with the worker.
 
 ## HTTP & UI
 
