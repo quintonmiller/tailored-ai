@@ -25,48 +25,48 @@ dependency or embed the runtime in your own service, see
 
 ## 2. Pick a provider
 
-TAI doesn't ship a model. Bring whichever you already use. The three most
-common choices:
+TAI doesn't ship a model. Bring whichever you already use.
 
-### OpenAI (or OpenAI-compatible)
+### Local (Ollama, vLLM, LM Studio)
 
-The lowest friction if you already have an API key. Works with hosted
-OpenAI, vLLM, LM Studio, Together, OpenRouter, anything that speaks the
-OpenAI chat API.
+The built-in `openai_compatible` provider works with anything that speaks
+the OpenAI chat API. Install Ollama, run `ollama pull llama3.2`, then:
 
 ```yaml
-provider:
-  type: openai
-  model: gpt-4o-mini
-  apiKey: ${OPENAI_API_KEY}
+providers:
+  openai_compatible:
+    baseUrl: http://localhost:11434/v1
+    defaultModel: llama3.2
+
+agent:
+  defaultProvider: openai_compatible
 ```
 
-### Anthropic
+### Hosted (Anthropic, OpenAI, OpenRouter, Bedrock)
+
+Hosted vendors ship as plugins:
+
+```bash
+tai plugin install @tailored-ai/provider-anthropic
+```
 
 ```yaml
-provider:
-  type: anthropic
-  model: claude-sonnet-4-6
-  apiKey: ${ANTHROPIC_API_KEY}
+providers:
+  anthropic:
+    apiKey: ${ANTHROPIC_API_KEY}
+    defaultModel: claude-haiku-4-5
+
+agent:
+  defaultProvider: anthropic
 ```
 
-### Ollama (local)
-
-For local models on your own hardware. Install Ollama, run `ollama pull
-llama3.2`, then:
-
-```yaml
-provider:
-  type: ollama
-  model: llama3.2
-```
-
-Pick one, drop it in a fresh folder as `config.yaml`. If you went with
-OpenAI or Anthropic, put the API key in a `.env` next to it.
+Swap `anthropic` for `openai`, `openrouter`, or `bedrock`; the shape stays
+the same. Pick one, drop it in a fresh folder as `config.yaml`, and put any
+API key in a `.env` next to it.
 
 ## 3. Configure the agent
 
-Add this below the `provider` block:
+Add this below the `providers` block:
 
 ```yaml
 agents:

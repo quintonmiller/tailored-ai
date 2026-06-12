@@ -210,18 +210,13 @@ function renderProviderBlock(d: ProviderDraft): string {
     if (d.apiKey) lines.push("    apiKey: ${OPENAI_COMPATIBLE_API_KEY}");
     return lines.join("\n");
   }
-  if (d.kind === "openai") {
-    return [
-      "providers:",
-      "  openai:",
-      "    apiKey: ${OPENAI_API_KEY}",
-      `    defaultModel: ${d.defaultModel}`,
-      `    baseUrl: ${d.baseUrl ?? "https://api.openai.com/v1"}`,
-    ].join("\n");
-  }
-  return ["providers:", "  anthropic:", "    apiKey: ${ANTHROPIC_API_KEY}", `    defaultModel: ${d.defaultModel}`].join(
-    "\n",
-  );
+  // Any other kind (plugin-registered: openai, anthropic, openrouter,
+  // bedrock, …): a generic block — the provider owns its config shape, the
+  // editor only seeds the universal fields.
+  const envVar = `${d.kind.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_API_KEY`;
+  const lines = ["providers:", `  ${d.kind}:`, `    apiKey: \${${envVar}}`, `    defaultModel: ${d.defaultModel}`];
+  if (d.baseUrl) lines.push(`    baseUrl: ${d.baseUrl}`);
+  return lines.join("\n");
 }
 
 function renderToolsBlock(t: ToolsDraft): string {

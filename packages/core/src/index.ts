@@ -489,7 +489,6 @@ export {
   readProjectFile,
   resolveProjectFromCwd,
 } from "./projects/resolve.js";
-export { AnthropicProvider } from "./providers/anthropic.js";
 export {
   blobToVector,
   cosine,

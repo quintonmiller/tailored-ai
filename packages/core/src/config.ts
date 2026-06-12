@@ -375,13 +375,13 @@ export interface AgentConfig {
   };
   /**
    * Configured providers keyed by id. The key is a registered provider
-   * factory id — the built-ins "openai_compatible" (vLLM / Ollama's /v1 /
-   * LM Studio / llama.cpp), "openai", "anthropic", or any plugin-registered
-   * id — and `agent.defaultProvider` selects which one is active. Each value
-   * is a backend-opaque options bag the provider reads itself, so core
-   * privileges no built-in and carries no per-provider schema. The
-   * openai-family providers read `baseUrl` / `defaultModel` / `apiKey`
-   * (plus `name` for openai_compatible).
+   * factory id — the built-in "openai_compatible" (vLLM / Ollama's /v1 /
+   * LM Studio / llama.cpp / any OpenAI-wire gateway) or any
+   * plugin-registered id ("openai", "anthropic", "openrouter", "bedrock",
+   * …) — and `agent.defaultProvider` selects which one is active. Each
+   * value is a backend-opaque options bag the provider reads itself, so
+   * core privileges no built-in and carries no per-provider schema.
+   * openai_compatible reads `baseUrl` / `defaultModel` / `apiKey` / `name`.
    */
   providers: {
     [id: string]: Record<string, unknown> | undefined;

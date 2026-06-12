@@ -1,6 +1,5 @@
 import type { AgentConfig } from "../config.js";
 import { Registry } from "../registry.js";
-import { AnthropicProvider } from "./anthropic.js";
 import type { EmbeddingProvider } from "./embedding.js";
 import type { AIProvider } from "./interface.js";
 import { OpenAIProvider } from "./openai.js";
@@ -31,21 +30,12 @@ export function registerEmbeddingFactory(id: string, factory: EmbeddingFactory):
   embeddingFactoryRegistry.register(id, factory);
 }
 
-// Built-in providers register on module load so any package that imports
-// @tailored-ai/core gets them automatically.
-
-// Built-ins read their settings from the backend-opaque `providers.<id>`
-// bag — exactly how a plugin provider would — so core privileges no
-// built-in. `requireModel` enforces the one field every provider needs.
-
-providerFactoryRegistry.register("openai", (config) => {
-  const cfg = config.providers.openai;
-  if (!cfg) throw new Error("providers.openai not configured");
-  return {
-    provider: new OpenAIProvider(asString(cfg.apiKey), asString(cfg.baseUrl)),
-    model: requireModel(cfg, "openai"),
-  };
-});
+// The one built-in provider registers on module load so any package that
+// imports @tailored-ai/core gets it automatically. It reads its settings
+// from the backend-opaque `providers.<id>` bag — exactly how a plugin
+// provider would — so core privileges no built-in. Hosted vendors live in
+// plugin packages: @tailored-ai/provider-openai, provider-anthropic,
+// provider-openrouter, provider-bedrock (#236).
 
 providerFactoryRegistry.register("openai_compatible", (config) => {
   const cfg = config.providers.openai_compatible;
@@ -56,15 +46,6 @@ providerFactoryRegistry.register("openai_compatible", (config) => {
       name: asString(cfg.name) ?? "OpenAI-compatible",
     }),
     model: requireModel(cfg, "openai_compatible"),
-  };
-});
-
-providerFactoryRegistry.register("anthropic", (config) => {
-  const cfg = config.providers.anthropic;
-  if (!cfg) throw new Error("providers.anthropic not configured");
-  return {
-    provider: new AnthropicProvider(asString(cfg.apiKey) ?? "", asString(cfg.baseUrl)),
-    model: requireModel(cfg, "anthropic"),
   };
 });
 

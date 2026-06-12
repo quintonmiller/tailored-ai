@@ -179,8 +179,10 @@ registerProviderFactory("bedrock", (config) => {
 });
 ```
 
-Then `agent.defaultProvider: bedrock` picks it. `openai.ts` and
-`anthropic.ts` in `packages/core/src/providers/` are the references.
+Then `agent.defaultProvider: bedrock` picks it. `openai.ts` in
+`packages/core/src/providers/` and the provider plugin packages
+(`packages/provider-anthropic/`, `packages/provider-bedrock/`) are the
+references.
 
 For OpenAI-compatible endpoints (vLLM, LM Studio, Together, OpenRouter),
 no new provider needed. Use `agent.defaultProvider: openai_compatible`

@@ -3,10 +3,11 @@
 // shapes — the Ink app is just a different driver.
 
 /**
- * Provider factory id. The built-ins ("openai_compatible", "openai",
- * "anthropic") are offered as presets in the editor, but any registered
- * provider id is valid — core resolves it through the provider registry, so
- * built-ins aren't privileged.
+ * Provider factory id. The one built-in ("openai_compatible") is offered as
+ * a preset; hosted vendors ("openai", "anthropic", "openrouter", "bedrock",
+ * …) register their ids from plugin packages (#236) and show up through
+ * discovery. Any registered provider id is valid — core resolves it through
+ * the provider registry, so built-ins aren't privileged.
  */
 export type ProviderKind = string;
 
@@ -91,7 +92,7 @@ export const DEFAULT_TOOLS: ToolsDraft = {
 export function defaultDraft(homeDir: string): DraftConfig {
   return {
     homeDir,
-    provider: { kind: "anthropic", defaultModel: "claude-sonnet-4-5-20250929" },
+    provider: { kind: "openai_compatible", defaultModel: "", baseUrl: "http://localhost:11434/v1" },
     tools: { ...DEFAULT_TOOLS },
     channels: { discord: false },
     plugins: [],

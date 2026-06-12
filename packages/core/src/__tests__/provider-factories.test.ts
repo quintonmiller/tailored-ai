@@ -11,8 +11,8 @@ import type { AIProvider } from "../providers/interface.js";
 
 const baseConfig = (overrides: Partial<AgentConfig> = {}): AgentConfig =>
   ({
-    agent: { defaultProvider: "openai" },
-    providers: { openai: { apiKey: "k", baseUrl: "u", defaultModel: "m" } },
+    agent: { defaultProvider: "openai_compatible" },
+    providers: { openai_compatible: { apiKey: "k", baseUrl: "u", defaultModel: "m" } },
     ...overrides,
   }) as unknown as AgentConfig;
 
@@ -27,11 +27,11 @@ describe("provider factory registry", () => {
     embeddingFactoryRegistry.unregister("custom-test");
   });
 
-  it("ships openai, anthropic, openai_compatible as built-ins", () => {
+  it("ships only openai_compatible as a built-in — hosted vendors are plugins (#236)", () => {
     const ids = providerFactoryRegistry.list();
-    expect(ids).toContain("openai");
-    expect(ids).toContain("anthropic");
     expect(ids).toContain("openai_compatible");
+    expect(ids).not.toContain("openai");
+    expect(ids).not.toContain("anthropic");
   });
 
   it("resolves a built-in provider through createProvider", () => {

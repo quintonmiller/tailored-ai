@@ -1,11 +1,10 @@
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { AnthropicProvider } from "../providers/anthropic.js";
 import type { ChatResponse } from "../providers/interface.js";
 import { OpenAIProvider } from "../providers/openai.js";
 import { assertValidChatResponse, runProviderContractSuite } from "../testing/provider-contract.js";
 
 /**
- * Dogfood: both built-in providers run through the provider contract suite
+ * Dogfood: the built-in provider runs through the provider contract suite
  * with a stubbed fetch. The stubs answer blocking chat, streaming chat
  * (`body.stream === true` — exercised once the providers implement
  * chatStream), and model listing, so the optional-capability legs of the
@@ -50,30 +49,7 @@ const openaiFetch = async (url: string | URL | Request, init?: RequestInit): Pro
   });
 };
 
-const anthropicFetch = async (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
-  const href = String(url);
-  if (href.endsWith("/v1/models")) {
-    return json({ data: [{ id: "claude-a" }, { id: "claude-b" }] });
-  }
-  const body = JSON.parse((init?.body as string) ?? "{}") as { stream?: boolean };
-  if (body.stream) {
-    return sse([
-      'event: message_start\ndata: {"message":{"usage":{"input_tokens":3}}}\n\n',
-      'event: content_block_delta\ndata: {"index":0,"delta":{"type":"text_delta","text":"OK"}}\n\n',
-      'event: message_delta\ndata: {"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n',
-      "event: message_stop\ndata: {}\n\n",
-    ]);
-  }
-  return json({
-    content: [{ type: "text", text: "OK" }],
-    stop_reason: "end_turn",
-    usage: { input_tokens: 3, output_tokens: 1 },
-  });
-};
-
 vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
-  const href = String(url);
-  if (href.includes("anthropic.test")) return anthropicFetch(url, init);
   return openaiFetch(url, init);
 });
 
@@ -86,22 +62,10 @@ runProviderContractSuite({
   },
 });
 
-runProviderContractSuite({
-  name: "anthropic (stubbed)",
-  harness: {
-    build: () => new AnthropicProvider("test-key", "http://anthropic.test"),
-  },
-});
-
 describe("listModels", () => {
   it("OpenAIProvider parses /models ids", async () => {
     const provider = new OpenAIProvider(undefined, "http://openai.test/v1");
     await expect(provider.listModels()).resolves.toEqual(["model-a", "model-b"]);
-  });
-
-  it("AnthropicProvider parses /v1/models ids", async () => {
-    const provider = new AnthropicProvider("test-key", "http://anthropic.test");
-    await expect(provider.listModels()).resolves.toEqual(["claude-a", "claude-b"]);
   });
 });
 
