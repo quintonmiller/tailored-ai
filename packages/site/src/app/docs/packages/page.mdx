@@ -5,7 +5,7 @@ export const metadata = {
 
 # Packages overview
 
-Five packages publish to npm under `@tailored-ai/*`.
+Eight packages publish to npm under `@tailored-ai/*`.
 
 | Package | One-line | Install when |
 |---|---|---|
@@ -14,6 +14,9 @@ Five packages publish to npm under `@tailored-ai/*`.
 | [`@tailored-ai/server`](/docs/packages/server) | HTTP API: Hono routes, SSE streaming, webhook intake, optional static-UI mount. | You want the HTTP surface without the CLI's REPL. |
 | [`@tailored-ai/browser-mediator`](/docs/packages/browser-mediator) | Framework-agnostic bounded browser tool. Egress allow-list, vault refs, opaque ids, HITL gates. | You want a safe browser tool for *any* agent (TAI, OpenAI function-calling, Anthropic tool-use). |
 | [`@tailored-ai/trusted-actions`](/docs/packages/trusted-actions) | HITL approval gateway for risky actions. Mobile PWA, web-push, sandboxed Docker executor. | You want an agent to *do* things (place orders, submit forms) with human sign-off. |
+| [`@tailored-ai/provider-bedrock`](/docs/packages/provider-bedrock) | AWS Bedrock model provider. Converse API, tool calling, AWS credential chain. | You want agents on Bedrock-hosted models (Claude, Nova, Llama, Mistral). |
+| [`@tailored-ai/channel-slack`](https://github.com/quintonmiller/tailored-ai/tree/main/packages/channel-slack#readme) | Slack channel plugin (Bolt, Socket Mode). | You want to talk to your agent from Slack. |
+| [`@tailored-ai/google-tools`](https://github.com/quintonmiller/tailored-ai/tree/main/packages/google-tools#readme) | Gmail, Google Calendar, Google Drive tools. | You want agents reading and acting on your Google account. |
 
 Two more packages live in the monorepo but stay private:
 
