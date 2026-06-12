@@ -1,13 +1,12 @@
 /**
  * @tailored-ai/provider-openai
  *
- * Full-featured OpenAI provider. Registers the `openai` id, deliberately
- * superseding core's minimal built-in (the registry prints a one-line
- * "Replacing existing entry" notice at startup — expected). Your existing
- * `providers.openai` config keeps working; this plugin adds reasoning-model
- * handling (o-series / gpt-5 reject `temperature` and `max_tokens`),
- * org/project headers, and extra-field passthrough. #236 tracks retiring
- * the core built-in entirely.
+ * Full-featured OpenAI provider. Registers the `openai` id — the provider
+ * that used to be a core built-in (#236). Existing `providers.openai`
+ * config keeps working and gains reasoning-model handling (o-series /
+ * gpt-5 reject `temperature` and `max_tokens`), org/project headers, and
+ * extra-field passthrough. On cores that still ship the minimal built-in,
+ * this plugin supersedes it (one-line registry notice at startup).
  *
  * Add to `config.yaml`:
  *
@@ -44,7 +43,7 @@ export interface OpenAIConfig {
 export const meta: PluginMeta = {
   name: "OpenAI provider",
   description:
-    "GPT and o-series models via chat completions — reasoning-model handling, org/project headers, streaming. Supersedes the minimal built-in.",
+    "GPT and o-series models via chat completions — reasoning-model handling, org/project headers, streaming.",
   registers: [{ kind: "provider", id: "openai", configKey: "providers.openai" }],
 };
 

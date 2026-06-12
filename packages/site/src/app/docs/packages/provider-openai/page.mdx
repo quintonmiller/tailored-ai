@@ -5,13 +5,13 @@ export const metadata = {
 
 # @tailored-ai/provider-openai
 
-GPT and o-series models via chat completions, with the request shaping current OpenAI models require and the minimal built-in `openai` provider lacks.
+GPT and o-series models via chat completions, with the request shaping current OpenAI models require.
 
-The plugin registers the same `openai` id as the built-in and supersedes it — your existing `providers.openai` block keeps working. The one-line "Replacing existing entry" notice at startup is expected ([#236](https://github.com/quintonmiller/tailored-ai/issues/236) tracks retiring the built-in).
+This plugin is the home of the `openai` provider id ([#236](https://github.com/quintonmiller/tailored-ai/issues/236) moved it out of core) — your existing `providers.openai` block keeps working. On older cores that still ship a minimal built-in, the plugin supersedes it; the one-line "Replacing existing entry" startup notice is expected there.
 
-## Why a plugin when core has `openai`?
+## Why a plugin?
 
-Reasoning models (o3, o4-mini, the gpt-5 family) **reject** `temperature` and the deprecated `max_tokens` parameter. The built-in always sends both, so it errors on those models. This plugin:
+Reasoning models (o3, o4-mini, the gpt-5 family) **reject** `temperature` and the deprecated `max_tokens` parameter — the request shaping has to track OpenAI's API, which moves faster than core should. This plugin:
 
 - omits `temperature` for reasoning models (prefix heuristic, extendable via `reasoningModels`)
 - always uses `max_completion_tokens`

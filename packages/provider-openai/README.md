@@ -2,7 +2,7 @@
 
 OpenAI model provider for [Tailored AI](https://github.com/quintonmiller/tailored-ai) agents — GPT and o-series models with the request shaping current OpenAI models require.
 
-Core ships a minimal built-in `openai` provider; this plugin registers the same id and supersedes it (you'll see a one-line "Replacing existing entry" notice at startup — expected). Existing `providers.openai` config keeps working, and gains:
+This plugin provides the `openai` provider id ([#236](https://github.com/quintonmiller/tailored-ai/issues/236) moved it out of core). Existing `providers.openai` config keeps working, and gains:
 
 - **Reasoning-model handling** — o-series and gpt-5 family models reject `temperature` and the deprecated `max_tokens`; the plugin omits temperature for them and always uses `max_completion_tokens`. The built-in sends both, which errors on these models.
 - **Org/project headers** — `OpenAI-Organization` and `OpenAI-Project` for multi-org accounts and usage attribution.
