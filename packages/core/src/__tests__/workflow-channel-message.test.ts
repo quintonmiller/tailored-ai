@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OutboundNotifier } from "../channels/outbound.js";
 import { initDatabase } from "../db/schema.js";
+import { type RuntimeEventPayload, TypedEventBus } from "../events.js";
 import { WorkflowEngine } from "../workflows/engine.js";
 import { ChannelMessageExecutor } from "../workflows/executors/channel-message.js";
 import { WorkflowRegistry } from "../workflows/registry.js";
@@ -115,6 +116,56 @@ describe("ChannelMessageExecutor", () => {
     const run = await engine.runWorkflow("wf");
     expect(run.status).toBe("failed");
     expect(run.error).toContain("no outbound channel is connected");
+  });
+
+  it("emits form.completed instead of DMing on the implicit owner fallback when a bus is wired", async () => {
+    const notifier = makeNotifier();
+    const events = new TypedEventBus();
+    const received: RuntimeEventPayload<"form.completed">[] = [];
+    events.on("form.completed", (e) => {
+      received.push(e);
+    });
+    engine = new WorkflowEngine({
+      db,
+      registry,
+      executors: [
+        new ChannelMessageExecutor({ resolveOutbound: () => notifier, getOwnerId: () => "OWNER123", events }),
+      ],
+    });
+    registry.register({
+      name: "wf",
+      steps: [{ name: "notify", type: "channel_message", message: "owned" }],
+    });
+
+    const run = await engine.runWorkflow("wf");
+    expect(run.status).toBe("completed");
+    // Delivery is now the owner-notifier plugin's job — the executor doesn't DM.
+    expect(notifier.sendDM).not.toHaveBeenCalled();
+    expect(received).toHaveLength(1);
+    expect(received[0].message).toBe("owned");
+    expect(received[0].stepName).toBe("notify");
+  });
+
+  it("DMs directly (not via event) when an explicit userId is set even with a bus wired", async () => {
+    const notifier = makeNotifier();
+    const events = new TypedEventBus();
+    const received: RuntimeEventPayload<"form.completed">[] = [];
+    events.on("form.completed", (e) => {
+      received.push(e);
+    });
+    engine = new WorkflowEngine({
+      db,
+      registry,
+      executors: [new ChannelMessageExecutor({ resolveOutbound: () => notifier, getOwnerId: () => "OWNER", events })],
+    });
+    registry.register({
+      name: "wf",
+      steps: [{ name: "notify", type: "channel_message", message: "hi", userId: "USER7" }],
+    });
+
+    await engine.runWorkflow("wf");
+    expect(notifier.sendDM).toHaveBeenCalledWith("USER7", "hi");
+    expect(received).toHaveLength(0);
   });
 
   it("fails with a clear error when neither target nor owner is configured", async () => {

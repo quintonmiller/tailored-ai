@@ -175,8 +175,10 @@ registerToolFactory("ask_user", (config, ctx) => {
   return [
     new AskUserTool({
       contextDir: ctx.contextDir,
-      resolveOutbound: () => ctx.resolveOutbound?.(),
-      getOwnerId: () => ctx.getOwnerId?.(),
+      // Event-driven delivery (#205): the tool emits question.asked and the
+      // owner-notifier plugin (or any subscriber) delivers it.
+      events: ctx.events,
+      inboxFile: config.tools.ask_user?.inboxFile ?? "inbox.md",
     }),
   ];
 });

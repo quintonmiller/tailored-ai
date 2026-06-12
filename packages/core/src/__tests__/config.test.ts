@@ -264,8 +264,9 @@ describe("migrateDefaultPlugins — seed missing builtin: entries", () => {
     expect(modules(cfg.plugins)).toEqual([
       "@me/my-plugin",
       "builtin:stall-guard",
-      // the three enabled not already present, in default order
+      // the enabled defaults not already present, in default order
       "builtin:agent-notifier",
+      "builtin:owner-notifier",
       "builtin:scope-creep-flagger",
       "builtin:coder-project-guard",
       // then the disabled set
@@ -543,6 +544,7 @@ describe("loadConfig — default host", () => {
       "@me/custom",
       "builtin:stall-guard",
       "builtin:agent-notifier",
+      "builtin:owner-notifier",
       "builtin:scope-creep-flagger",
       "builtin:coder-project-guard",
       ...DEFAULT_DISABLED_PLUGIN_MODULES,
