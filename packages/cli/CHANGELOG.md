@@ -1,5 +1,178 @@
 # @tailored-ai/cli
 
+## 0.1.8
+
+### Patch Changes
+
+- c71e7de: Finish the channel-neutral sweep in the CLI: the setup wizard/TUI editor and
+  the server runner stop special-casing Discord. The Discord channel
+  implementation and the `channels.discord` config block stay legitimately
+  Discord; only the channel-generic bookkeeping changed (single user, pre-1.0, no
+  back-compat).
+
+  CLI:
+
+  - Outbound registration in `index.ts` is now channel-generic. Instead of
+    tracking a single live `DiscordChannel` and registering/unregistering the
+    `"discord"` id by hand, the runner walks every connected channel from the
+    lifecycle manager and registers any that satisfies `OutboundNotifier`
+    (`id` + `send` + `sendDM`) into the runtime's outbound registry. A
+    `syncOutboundRegistry` helper reconciles registered ids against the live set
+    on connect and on every reload, so Slack/Telegram/etc. drop in by id with no
+    per-channel code.
+  - TUI editor models channels as a generic `Record<string, boolean>` map. The
+    reducer action `toggleDiscord` is now `toggleChannel { channelId }`; the
+    ChannelsEditor renders one toggle row per channel id (sorted, stable), and
+    the menu/detail panes iterate the map. `discord` is always seeded into the
+    draft (default false) so the built-in shows even when absent from config.
+  - The setup wizard still emits the built-in `channels.discord` block, but
+    `hydrateFromYaml` / `patchExistingYaml` read and write through the generic
+    `channels.<id>.enabled` map rather than a dedicated discord boolean, so the
+    editor can toggle arbitrary channel ids.
+
+  Core: neutralize the one autopilot log string ("no Discord target" → "no
+  delivery target") so it matches the channel-neutral delivery path.
+
+- ef7fe84: Make generic core delivery channel-neutral and remove Discord coupling from
+  code that isn't the Discord channel itself. These are breaking pre-1.0 renames
+  with no aliases (single user, pre-V1).
+
+  Renames (old → new):
+
+  - Workflow step type `discord_message` → `channel_message`; executor
+    `DiscordMessageExecutor` → `ChannelMessageExecutor`. The step gains an
+    optional `channel` (outbound channel id; absent = default channel). The
+    `DiscordSender` alias is gone — executors take `OutboundNotifier` directly.
+  - Tool `discord_dm` (`DiscordDmTool`) → `notify_owner` (`NotifyOwnerTool`),
+    resolved via `resolveOutbound(channel?)` / `getOwnerId(channel?)` with an
+    optional `channel` param and channel-neutral error text.
+  - Default plugin `builtin:discord-notifier` (`DiscordNotifier`) →
+    `builtin:agent-notifier` (`AgentNotifier`). Delivery was already
+    channel-neutral via `taskWatcher.delivery.{channel,mode,target}`; only the
+    name/log-prefix changed.
+  - Config tool key `tools.discord_dm` → `tools.notify_owner` (now
+    `{ enabled; channel? }`).
+  - Barrel: `buildDiscordNotification` is exported as `buildNotification`;
+    `DiscordSender` / `DiscordMessageExecutorOptions`-as-was are dropped in favor
+    of `ChannelMessageExecutorOptions`.
+
+  The `notify` and form-`notify` channel fields are now open strings: `email`
+  and `log` keep their special cases, every other value is an outbound channel id
+  resolved from the runtime's outbound registry.
+
+  Two cheap config migrations (only back-compat kept):
+
+  - `migrateDefaultPlugins` rewrites an existing `builtin:discord-notifier`
+    entry (string or object form, preserving `enabled` / `config`) to
+    `builtin:agent-notifier`.
+  - `loadConfig` moves a legacy `tools.discord_dm` block to `tools.notify_owner`.
+
+  Bug fix: the runtime config-reload path rebuilt tools WITHOUT the outbound
+  accessors, so reloaded `notify_owner` / `ask_user` tools silently lost channel
+  access. Reload now passes the same `resolveOutbound` / `getOwnerId` accessors as
+  the constructor.
+
+  The legitimately-Discord channel implementation
+  (`channels/discord*.ts`, `DiscordChannel`, `getDiscordConfig`, the
+  `builtin:discord` channel factory) keeps its names. Behavior for a
+  Discord-configured install is unchanged — channel id `"discord"` still works.
+
+- 290f96d: Register the four default plugins through `config.plugins` (#142).
+
+  `DiscordNotifier`, `ScopeCreepFlagger`, `StallGuard`, and `CoderProjectGuard`
+  were hardcoded `new …()` constructions in the CLI's `runServer()`. They now
+  ship as `builtin:*` entries in `config.plugins` and load through the existing
+  config-driven `loadPlugins` path, so they are user-toggleable.
+
+  - `PluginContext` gains `runtime?` (the live `AgentRuntime`) and a per-entry
+    `config` bag; each plugin module adds a `default` `register(ctx)` export that
+    wraps its class and returns a disposer.
+  - `loadPlugins` threads each entry's `config` into `ctx.config`, captures the
+    disposer on `LoadedPlugin.stop`, and skips `{ module, enabled: false }`
+    entries.
+  - The CLI importer resolves a `builtin:<name>` prefix to
+    `@tailored-ai/core/plugins/<name>` (new `./plugins/*` subpath export); no
+    builtin allowlist.
+  - `DEFAULT_CONFIG.plugins` seeds the four defaults, and `migrateDefaultPlugins`
+    re-appends any missing `builtin:` entry on load — so **`enabled: false` is the
+    durable off switch**; deleting an entry is re-added by the migration.
+  - Fixes a latent reload bug: `runtime.reload()` calls `events.clear()`, which
+    silently killed the default plugins' subscriptions until restart. The
+    `onReload` hook now disposes and re-loads the runtime plugins.
+
+  A default install behaves identically. The `scope-creep.ts` module is renamed
+  to `scope-creep-flagger.ts` so its subpath export matches the
+  `builtin:scope-creep-flagger` entry.
+
+- 3b8798e: `tai edit` provider screen: the Kind list is now discovered live (registry built-ins + providers registered by the config's plugins, probed via a capture context) instead of hardcoded, and the Model field offers a picker populated from the provider's `listModels` capability when available — free-text entry remains the fallback.
+- 98160f3: DEFAULT_CONFIG no longer ships a specific local model name (`devstral-small-2:latest`). `providers.openai_compatible.defaultModel` defaults to empty; `validateConfig` warns until a model is set, and `tai init` discovers installed models as before. The deprecated `providers.ollama` migration also stops injecting the model name.
+- 6c24fe9: `tai plugin install` / `remove` now keep config.yaml's `plugins:` list in sync (comment-preserving YAML edit; real package names resolved even for git/file/tarball specs). Pass `--no-save` to manage the list yourself.
+- f240f5e: Plugin self-description and config validation: optional `meta` and `validateConfig` named exports on plugin modules, captured by the loader onto `LoadedPlugin`, surfaced via the new `GET /api/plugins` route and startup warnings. `tai plugin list` shows package descriptions. The builtin plugins, channel-slack, and google-tools ship reference `meta`/`validateConfig` implementations.
+- c759128: Retire the built-in `openai` and `anthropic` provider registrations (#236) — they live in `@tailored-ai/provider-openai` and `@tailored-ai/provider-anthropic` now. Core keeps `openai_compatible`; unknown provider ids fail with a plugin install hint; the server model-list endpoint and editor provider rendering are now generic over registered providers.
+- 1747dbe: Stop privileging the built-in Discord channel in config. `config.channels`
+  is now a uniform id-keyed map of `{ enabled?, ...opaque options }` — the
+  special-cased typed `channels.discord` block is gone. The Discord channel,
+  like any plugin channel, owns its own schema: a new dependency-light
+  `channels/discord-config.ts` exports `DiscordConfig` + `getDiscordConfig()`,
+  which parses the opaque slice once. All readers (the Discord channel itself,
+  the cron scheduler, the discord-notifier plugin, the task-watcher, and the
+  CLI) go through it, so core carries no per-channel types.
+
+  Non-breaking: existing `channels.discord: { token, owner, … }` configs stay
+  valid (they're already option bags) — no migration, no fixture changes. The
+  `enabled` flag stays first-class on every channel via the map's value type.
+
+- ef1e01c: Stop privileging built-in LLM providers in config. `config.providers` is now
+  a generic id-keyed map of backend-opaque option bags
+  (`{ [id: string]: Record<string, unknown> }`) instead of three typed blocks
+  (`openai_compatible` / `openai` / `anthropic`). Each provider — built-in or
+  plugin — reads its own slice (`baseUrl` / `defaultModel` / `apiKey`, plus
+  `name` for openai_compatible); core carries no per-provider schema.
+  `agent.defaultProvider` still selects the active provider by id.
+
+  `populateBuiltinProviders` now registers every configured provider whose
+  factory is available by iterating the map, instead of hard-coding the three
+  built-in ids. The editor's `ProviderKind` widens to `string` so any
+  registered provider id is valid.
+
+  Non-breaking: existing flat `providers.openai_compatible: { baseUrl, … }`
+  configs remain valid (they're already option bags), so no migration is
+  needed and existing config files keep working unchanged.
+
+- 7506c28: Setup wizard now emits the `agents:` config key instead of the deprecated `profiles:` key.
+- Updated dependencies [c67120e]
+- Updated dependencies [ecb0d69]
+- Updated dependencies [a6e26a4]
+- Updated dependencies [e0b9bbe]
+- Updated dependencies [c83c58c]
+- Updated dependencies [e4e239f]
+- Updated dependencies [d398c93]
+- Updated dependencies [c71e7de]
+- Updated dependencies [08ac997]
+- Updated dependencies [ef7fe84]
+- Updated dependencies [ff81e89]
+- Updated dependencies [290f96d]
+- Updated dependencies [04181f5]
+- Updated dependencies [330a6c5]
+- Updated dependencies [d927a26]
+- Updated dependencies [02c0a5a]
+- Updated dependencies [98160f3]
+- Updated dependencies [14fdab3]
+- Updated dependencies [ba79819]
+- Updated dependencies [04181f5]
+- Updated dependencies [f240f5e]
+- Updated dependencies [10bfad3]
+- Updated dependencies [c759128]
+- Updated dependencies [a655023]
+- Updated dependencies [877795c]
+- Updated dependencies [773e16c]
+- Updated dependencies [4bf85d1]
+- Updated dependencies [1747dbe]
+- Updated dependencies [ef1e01c]
+- Updated dependencies [cdc0034]
+  - @tailored-ai/core@0.1.8
+  - @tailored-ai/server@0.1.8
+
 ## 1.0.1
 
 ### Patch Changes

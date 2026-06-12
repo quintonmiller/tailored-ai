@@ -1,5 +1,7 @@
 # @tailored-ai/browser-mediator
 
+## 0.1.8
+
 ## 1.0.1
 
 ## 1.0.0
