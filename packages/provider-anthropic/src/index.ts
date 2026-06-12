@@ -2,11 +2,11 @@
  * @tailored-ai/provider-anthropic
  *
  * Full-featured Anthropic Messages API provider. Registers the `anthropic`
- * id, deliberately superseding core's minimal built-in (the registry prints
- * a one-line "Replacing existing entry" notice at startup — expected). Your
- * existing `providers.anthropic` config keeps working; this plugin adds
- * prompt caching, version/beta headers, and extra-field passthrough on top.
- * #236 tracks retiring the core built-in entirely.
+ * id — the provider that used to be a core built-in (#236). Existing
+ * `providers.anthropic` config keeps working and gains prompt caching,
+ * version/beta headers, and extra-field passthrough. On cores that still
+ * ship the minimal built-in, this plugin supersedes it (one-line registry
+ * notice at startup).
  *
  * Add to `config.yaml`:
  *
@@ -46,8 +46,7 @@ export interface AnthropicConfig {
 
 export const meta: PluginMeta = {
   name: "Anthropic provider",
-  description:
-    "Claude models via the Messages API — prompt caching, beta headers, streaming. Supersedes the minimal built-in.",
+  description: "Claude models via the Messages API — prompt caching, beta headers, streaming.",
   registers: [{ kind: "provider", id: "anthropic", configKey: "providers.anthropic" }],
 };
 

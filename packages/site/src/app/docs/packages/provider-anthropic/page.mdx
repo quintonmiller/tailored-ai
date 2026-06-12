@@ -5,9 +5,9 @@ export const metadata = {
 
 # @tailored-ai/provider-anthropic
 
-Claude models via the Messages API, with the features the minimal built-in `anthropic` provider lacks: prompt caching, beta headers, configurable API version, extra-field passthrough, and model discovery.
+Claude models via the Messages API: prompt caching, beta headers, configurable API version, extra-field passthrough, streaming, and model discovery.
 
-The plugin registers the same `anthropic` id as the built-in and supersedes it — your existing `providers.anthropic` block keeps working. The one-line "Replacing existing entry" notice at startup is expected ([#236](https://github.com/quintonmiller/tailored-ai/issues/236) tracks retiring the built-in).
+This plugin is the home of the `anthropic` provider id ([#236](https://github.com/quintonmiller/tailored-ai/issues/236) moved it out of core) — your existing `providers.anthropic` block keeps working. On older cores that still ship a minimal built-in, the plugin supersedes it; the one-line "Replacing existing entry" startup notice is expected there.
 
 ## Install
 

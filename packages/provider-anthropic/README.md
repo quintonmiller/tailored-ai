@@ -2,7 +2,7 @@
 
 Anthropic Messages API provider for [Tailored AI](https://github.com/quintonmiller/tailored-ai) agents — Claude models with prompt caching, beta headers, streaming, and model discovery.
 
-Core ships a minimal built-in `anthropic` provider; this plugin registers the same id and supersedes it (you'll see a one-line "Replacing existing entry" notice at startup — expected). Existing `providers.anthropic` config keeps working, and gains the features below.
+This plugin provides the `anthropic` provider id ([#236](https://github.com/quintonmiller/tailored-ai/issues/236) moved it out of core). Existing `providers.anthropic` config keeps working, and gains the features below. On older cores that still ship a minimal built-in, the plugin supersedes it — the one-line "Replacing existing entry" notice at startup is expected.
 
 ## Install
 
