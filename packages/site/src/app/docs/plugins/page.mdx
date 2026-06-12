@@ -161,6 +161,7 @@ These ship from the monorepo as separate npm packages:
 | `@tailored-ai/browser-mediator` | The `browser_mediator` tool with egress allow-list, vault refs, always-HITL gates. | Already a dependency of `@tailored-ai/core`. Enable via `tools.browser_mediator: { enabled: true }`. |
 | `@tailored-ai/trusted-actions` | HITL approval gateway plus the `request_action` tool. | Install separately. Configure under `tools.request_action`. |
 | `@tailored-ai/provider-bedrock` | The `bedrock` model provider (AWS Bedrock Converse API). | Install, configure `providers.bedrock`, select with `agent.defaultProvider: bedrock`. |
+| `@tailored-ai/provider-openrouter` | The `openrouter` model provider (OpenAI-compatible). | Install, configure `providers.openrouter`, select with `agent.defaultProvider: openrouter`. |
 | `@tailored-ai/channel-slack` | The `slack` channel (Bolt, Socket Mode). | Install, configure `channels.slack`. |
 | `@tailored-ai/google-tools` | `gmail`, `google_calendar`, `google_drive` tools (via the `gog` CLI). | Install, enable under `tools.gmail` etc. |
 
