@@ -1,0 +1,47 @@
+export const metadata = {
+  title: "@tailored-ai/provider-openai",
+  description: "OpenAI model provider plugin — reasoning-model handling, org/project headers, streaming.",
+};
+
+# @tailored-ai/provider-openai
+
+GPT and o-series models via chat completions, with the request shaping current OpenAI models require.
+
+This plugin is the home of the `openai` provider id ([#236](https://github.com/quintonmiller/tailored-ai/issues/236) moved it out of core) — your existing `providers.openai` block keeps working. On older cores that still ship a minimal built-in, the plugin supersedes it; the one-line "Replacing existing entry" startup notice is expected there.
+
+## Why a plugin?
+
+Reasoning models (o3, o4-mini, the gpt-5 family) **reject** `temperature` and the deprecated `max_tokens` parameter — the request shaping has to track OpenAI's API, which moves faster than core should. This plugin:
+
+- omits `temperature` for reasoning models (prefix heuristic, extendable via `reasoningModels`)
+- always uses `max_completion_tokens`
+- adds `OpenAI-Organization` / `OpenAI-Project` headers
+- passes `ChatParams.extra` through (e.g. `reasoning_effort`)
+- implements `chatStream` and `listModels`
+
+## Install
+
+```bash
+tai plugin install @tailored-ai/provider-openai
+```
+
+## Configure
+
+```yaml
+providers:
+  openai:
+    apiKey: "${OPENAI_API_KEY}"
+    defaultModel: "gpt-5-mini"
+
+agent:
+  defaultProvider: openai
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `apiKey` | yes | Use `${OPENAI_API_KEY}` to read from the environment. |
+| `defaultModel` | yes | Any chat-completions model id. `tai edit` lists them via `listModels`. |
+| `organization` | no | `OpenAI-Organization` header. |
+| `project` | no | `OpenAI-Project` header. |
+| `reasoningModels` | no | Extra model-id prefixes treated as reasoning models. |
+| `baseUrl` | no | Default `https://api.openai.com/v1`. |
