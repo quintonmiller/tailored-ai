@@ -9,3 +9,9 @@ export {
   type OutboundCapture,
   runChannelContractSuite,
 } from "./channel-contract.js";
+export {
+  assertValidChatResponse,
+  type ProviderContractHarness,
+  type ProviderContractOptions,
+  runProviderContractSuite,
+} from "./provider-contract.js";

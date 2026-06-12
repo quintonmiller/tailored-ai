@@ -66,5 +66,14 @@ export interface AIProvider {
    */
   chatStream?(params: ChatParams): AsyncIterable<ChatStreamEvent>;
 
+  /**
+   * Optional model discovery. Implement it to let the setup wizard and
+   * config editor offer real model ids instead of free-text entry (the
+   * backend's catalog: `GET /v1/models` for OpenAI-family servers,
+   * `ListInferenceProfiles` for Bedrock, …). Returns ids in backend
+   * order; callers sort/filter for display.
+   */
+  listModels?(): Promise<string[]>;
+
   supportsTools: boolean;
 }
