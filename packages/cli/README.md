@@ -39,7 +39,7 @@ tai plugin list
 providers:
   openai_compatible:
     baseUrl: http://localhost:11434/v1
-    defaultModel: devstral-small-2:latest
+    defaultModel: qwen3:8b # any model your local server has pulled
   # openai:
   #   apiKey: ${OPENAI_API_KEY}
   #   defaultModel: gpt-4o
