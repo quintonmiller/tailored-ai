@@ -24,7 +24,7 @@ import { promisify } from "node:util";
 import type Database from "better-sqlite3";
 import { addTaskComment, updateProjectTask } from "../db/task-queries.js";
 import type { RuntimeEventPayload, Subscription } from "../events.js";
-import type { Plugin } from "../plugin-context.js";
+import type { Plugin, PluginMeta } from "../plugin-context.js";
 import type { AgentRuntime } from "../runtime.js";
 import { STALL_COMMENT_PREFIX } from "../task-watcher.js";
 
@@ -212,4 +212,10 @@ const plugin: Plugin = (ctx) => {
   const guard = new StallGuard({ runtime: ctx.runtime, maxStallRetries });
   return () => guard.stop();
 };
+export const meta: PluginMeta = {
+  name: "Stall guard",
+  description: "Retries or blocks task dispatches when the agent loop stalls (subscribes to agent.stalled).",
+  registers: [{ kind: "eventSubscriber", id: "stall-guard" }],
+};
+
 export default plugin;

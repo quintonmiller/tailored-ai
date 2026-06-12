@@ -26,7 +26,7 @@
 import { getProject } from "../db/project-queries.js";
 import { addTaskComment, updateProjectTask } from "../db/task-queries.js";
 import type { RuntimeEventPayload, Subscription } from "../events.js";
-import type { Plugin } from "../plugin-context.js";
+import type { Plugin, PluginMeta } from "../plugin-context.js";
 import type { AgentRuntime } from "../runtime.js";
 
 /** Author for guard-authored bookkeeping comments. Same sentinel the
@@ -123,4 +123,11 @@ const plugin: Plugin = (ctx) => {
   const guard = new CoderProjectGuard({ runtime: ctx.runtime, agents });
   return () => guard.stop();
 };
+export const meta: PluginMeta = {
+  name: "Coder project guard",
+  description:
+    "Refuses dispatching worktree-opted agents without a usable project path (subscribes to agent.dispatched).",
+  registers: [{ kind: "eventSubscriber", id: "coder-project-guard" }],
+};
+
 export default plugin;

@@ -33,7 +33,7 @@
 
 import { getAutopilotSettings, isInQuietHours } from "../db/autopilot-queries.js";
 import type { RuntimeEventPayload, Subscription } from "../events.js";
-import type { Plugin } from "../plugin-context.js";
+import type { Plugin, PluginMeta } from "../plugin-context.js";
 import type { AgentRuntime } from "../runtime.js";
 
 export interface OwnerNotifierOptions {
@@ -161,4 +161,11 @@ const plugin: Plugin = (ctx) => {
   const notifier = new OwnerNotifier({ runtime: ctx.runtime });
   return () => notifier.stop();
 };
+export const meta: PluginMeta = {
+  name: "Owner notifier",
+  description:
+    "Delivers task.needs_human, digest.ready, question.asked, and form.completed events to the deployment owner.",
+  registers: [{ kind: "eventSubscriber", id: "owner-notifier" }],
+};
+
 export default plugin;

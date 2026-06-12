@@ -29,7 +29,7 @@ import { SESSION_SUMMARY_TAG, sweepIdleSessions } from "../agent/summarize-sessi
 import { type CoreMemoryRow, getCoreMemorySection, setCoreMemory } from "../db/core-memory-queries.js";
 import { listNotes } from "../db/note-queries.js";
 import { getSession } from "../db/queries.js";
-import type { Plugin } from "../plugin-context.js";
+import type { Plugin, PluginMeta } from "../plugin-context.js";
 import type { AgentRuntime } from "../runtime.js";
 
 /** Defaults — all overridable from the plugin's `ctx.config` bag. */
@@ -251,4 +251,10 @@ const plugin: Plugin = (ctx) => {
   summarizer.start();
   return () => summarizer.stop();
 };
+export const meta: PluginMeta = {
+  name: "Session summarizer",
+  description: "Summarizes idle sessions into core memory so new sessions on other channels keep continuity.",
+  registers: [{ kind: "eventSubscriber", id: "session-summarizer" }],
+};
+
 export default plugin;
