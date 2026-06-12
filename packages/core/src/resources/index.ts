@@ -79,7 +79,11 @@ export {
   TaiRegistrySource,
   type TaiRegistrySourceOptions,
 } from "./sources/registry-index.js";
-export { StepExecutorRegistry } from "./step-executor-registry.js";
+export {
+  type StepExecutorContext,
+  type StepExecutorFactory,
+  StepExecutorRegistry,
+} from "./step-executor-registry.js";
 export { ToolRegistry } from "./tool-registry.js";
 export {
   BUILTIN_TRIGGER_KINDS,

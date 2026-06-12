@@ -316,6 +316,70 @@ const result = await runtime.runWorkflow("review-pr", { pr: 42 });
 `defineWorkflow` is a typed identity function — same shape as the
 YAML, just typed.
 
+## Custom step executors
+
+The built-in step types (`agent_run`, `shell`, `tool_call`, etc.) are
+registered as factories in `StepExecutorRegistry` at startup. Plugins
+and library consumers can add their own step types through the same path.
+
+### From a plugin
+
+```ts
+import type { Plugin } from "@tailored-ai/core";
+
+export default ((ctx) => {
+  ctx.stepExecutors.register("send_email", (execCtx) => ({
+    type: "send_email",
+    async execute(step, _ctx) {
+      // step is typed as WorkflowStepDef; cast to your own type
+      const s = step as { to: string; subject: string; body: string };
+      await sendEmail({ to: s.to, subject: s.subject, body: s.body });
+      return { output: "sent" };
+    },
+  }));
+}) satisfies Plugin;
+```
+
+Register before `createWorkflowEngine` runs (plugin functions run during
+CLI startup, before the engine is created). Then add steps of that type
+in workflow YAML:
+
+```yaml
+- name: notify
+  type: send_email
+  to: quint@example.com
+  subject: "Run ${input.name} finished"
+  body: "${steps.prior_step}"
+```
+
+The factory receives a `StepExecutorContext` with `runtime`, `db`,
+`resolveOutbound`, `getOwnerId`, and optional email plumbing — use only
+what you need.
+
+### Overriding a built-in
+
+Register for the same `type` string. The last-registered factory wins,
+so a plugin can swap out any built-in executor without patching core.
+
+### From library code (no plugin loader)
+
+```ts
+import { populateBuiltinExecutors } from "@tailored-ai/core";
+
+runtime.getStepExecutorRegistry().registerFactory("my_step", (ctx) =>
+  new MyStepExecutor({ db: ctx.db }),
+);
+// Then call createWorkflowEngine — it picks up the factory automatically.
+const engine = createWorkflowEngine({ runtime, db: runtime.db });
+```
+
+### FormExecutor
+
+`FormExecutor` is constructed after the engine because it needs
+`engine.forms` (the FormRegistry). This is an implementation detail of
+the built-in; custom executors that don't have a circular dependency
+should use the factory path above.
+
 ## Autopilot integration (opt-in)
 
 `AutopilotWorker` keeps its existing per-task `runAgentLoop` path as
