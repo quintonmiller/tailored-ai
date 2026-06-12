@@ -117,11 +117,71 @@ export class PluginManager {
   /**
    * Install one or more package specs (any spec npm accepts —
    * `@scope/name`, `name@1.0`, `git+https://...`, `file:./local`).
+   *
+   * Installing a package that is already a dependency under a different
+   * spec (e.g. swapping a `file:` link for a registry version) replaces
+   * the old entry. npm alone refuses that swap: arborist keeps the
+   * existing entry in the ideal tree and the install fails with ERESOLVE,
+   * so the stale entries are dropped from the manifest first and restored
+   * if npm then fails.
    */
   install(specs: string[]): { ok: boolean; stderr?: string } {
     this.bootstrap();
     if (specs.length === 0) return { ok: true };
-    return this.executor(["install", "--save", ...specs], { cwd: this.pluginDir });
+    const original = readFileSync(this.packageJsonPath, "utf8");
+    const dropped = this.dropExistingEntries(specs);
+    const result = this.executor(["install", "--save", ...specs], { cwd: this.pluginDir });
+    if (!result.ok && dropped) writeFileSync(this.packageJsonPath, original, "utf8");
+    return result;
+  }
+
+  /**
+   * Remove manifest entries that an incoming spec re-installs, so the new
+   * spec wins over whatever is currently recorded. Returns whether the
+   * manifest was rewritten.
+   */
+  private dropExistingEntries(specs: string[]): boolean {
+    let pkg: { dependencies?: Record<string, string> };
+    try {
+      pkg = JSON.parse(readFileSync(this.packageJsonPath, "utf8")) as typeof pkg;
+    } catch {
+      return false;
+    }
+    const deps = pkg.dependencies;
+    if (!deps) return false;
+    let changed = false;
+    for (const spec of specs) {
+      const name = this.specName(spec);
+      if (name && name in deps) {
+        delete deps[name];
+        changed = true;
+      }
+    }
+    if (changed) writeFileSync(this.packageJsonPath, `${JSON.stringify(pkg, null, 2)}\n`, "utf8");
+    return changed;
+  }
+
+  /**
+   * Best-effort package name for an install spec. Registry specs are
+   * parsed (`name`, `name@range`, `@scope/name@range`, `alias@npm:...`);
+   * local folder specs (`file:`, `./`, `/abs`) read the folder's manifest.
+   * Returns null when only npm can determine the name (git URLs, tarballs)
+   * — those install exactly as before.
+   */
+  private specName(spec: string): string | null {
+    if (spec.startsWith("file:") || spec.startsWith("./") || spec.startsWith("../") || spec.startsWith("/")) {
+      const dir = spec.startsWith("file:") ? spec.slice("file:".length) : spec;
+      try {
+        const raw = readFileSync(resolve(this.pluginDir, dir, "package.json"), "utf8");
+        const pkg = JSON.parse(raw) as { name?: string };
+        return typeof pkg.name === "string" && pkg.name ? pkg.name : null;
+      } catch {
+        return null;
+      }
+    }
+    if (/^(git\+|git:|github:|https?:)/.test(spec)) return null;
+    const at = spec.indexOf("@", spec.startsWith("@") ? 1 : 0);
+    return at === -1 ? spec : spec.slice(0, at);
   }
 
   /** Uninstall by package name. */
