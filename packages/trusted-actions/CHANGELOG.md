@@ -1,5 +1,70 @@
 # @tailored-ai/trusted-actions
 
+## 0.1.8
+
+### Patch Changes
+
+- e4e239f: Plugin-mounted HTTP routes; move trusted-actions endpoints out of the core
+  server (#206).
+
+  Plugins can now mount HTTP routes on the TAI server through a framework-agnostic
+  seam. Core owns a runtime `HttpRouteRegistry` of descriptors
+  (`{ method, path, handler, auth?, absolute? }`) where the handler takes a simple
+  `TaiHttpRequest` and returns a `TaiHttpResponse` — core never imports Hono.
+  Plugins register via `ctx.http.register(...)` / `ctx.http.mount(prefix, ...)`,
+  namespaced under `/api/ext/<plugin-id>/…` so they can't shadow core routes. An
+  opt-in `absolute: true` escape hatch mounts a verbatim path for first-party
+  packages preserving a legacy path; `auth: "none"` exempts a route from the
+  server bearer check for service-called webhooks. The server iterates the
+  registry after building its Hono app (`mountPluginHttpRoutes`) inside the
+  existing `server.authToken` middleware; routes register at startup and survive
+  reload (the registry persists; handlers read live runtime state).
+
+  The Amazon-specific `/api/trusted-actions/*` endpoints (executor pass-throughs +
+  the executor → TAI callback) move out of `@tailored-ai/server` into
+  `@tailored-ai/trusted-actions` (`./plugin` subpath), registered through the new
+  seam — the dogfood for the contract. They keep their historical paths via
+  `absolute: true`, so the UI keeps working; the callback keeps its exact
+  shared-secret auth via `auth: "none"`. The CLI auto-loads the route plugin as a
+  runtime-context plugin when `trustedActions.enabled`, with the package as an
+  `optionalDependencies`.
+
+  No behavior change for existing deployments: the same endpoints respond at the
+  same paths with unchanged auth.
+
+- 3615d6f: Align playwright dependency with browser-mediator (^1.49.0 → ^1.58.2).
+- 5914dbf: Stealth browser contexts no longer hardcode `en-US` / `America/Los_Angeles`. Locale and timezone are captured at `setup amazon` login time, stored in the session, and replayed; sessions saved before this change fall back to the executor host's locale/timezone. The `navigator.languages` patch now derives from the effective locale.
+- Updated dependencies [c67120e]
+- Updated dependencies [ecb0d69]
+- Updated dependencies [a6e26a4]
+- Updated dependencies [e0b9bbe]
+- Updated dependencies [c83c58c]
+- Updated dependencies [e4e239f]
+- Updated dependencies [d398c93]
+- Updated dependencies [c71e7de]
+- Updated dependencies [08ac997]
+- Updated dependencies [ef7fe84]
+- Updated dependencies [ff81e89]
+- Updated dependencies [290f96d]
+- Updated dependencies [04181f5]
+- Updated dependencies [330a6c5]
+- Updated dependencies [d927a26]
+- Updated dependencies [02c0a5a]
+- Updated dependencies [98160f3]
+- Updated dependencies [14fdab3]
+- Updated dependencies [ba79819]
+- Updated dependencies [04181f5]
+- Updated dependencies [f240f5e]
+- Updated dependencies [10bfad3]
+- Updated dependencies [c759128]
+- Updated dependencies [a655023]
+- Updated dependencies [877795c]
+- Updated dependencies [773e16c]
+- Updated dependencies [1747dbe]
+- Updated dependencies [ef1e01c]
+- Updated dependencies [cdc0034]
+  - @tailored-ai/core@0.1.8
+
 ## 1.0.1
 
 ### Patch Changes
