@@ -653,6 +653,7 @@ export { RunWorkflowTool } from "./tools/run-workflow.js";
 export { TaskStatusTool } from "./tools/task-status.js";
 export { TaskQueryTool, TasksTool } from "./tools/tasks.js";
 export {
+  META_TOOL_NAMES,
   registerToolFactory,
   runToolFactories,
   type ToolFactory,
