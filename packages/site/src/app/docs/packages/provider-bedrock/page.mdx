@@ -83,3 +83,7 @@ Anything in `ChatParams.extra` passes through as Converse's `additionalModelRequ
 | `finishReason: tool_calls / length / stop` | `stopReason: tool_use / max_tokens / end_turn` |
 
 Adjacent same-role messages merge into one turn (Converse requires alternating user/assistant turns), and empty messages are dropped (Converse rejects empty text blocks).
+
+## Streaming
+
+The provider implements `chatStream` via ConverseStream, so chat responses render incrementally in the web UI. Text arrives as deltas; tool calls are accumulated provider-side and surface complete. The IAM principal needs `bedrock:InvokeModelWithResponseStream` alongside `bedrock:InvokeModel` — without it, streaming calls fail while plain chat keeps working.

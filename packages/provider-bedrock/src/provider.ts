@@ -5,12 +5,22 @@ import {
   ConverseCommand,
   type ConverseCommandInput,
   type ConverseCommandOutput,
+  ConverseStreamCommand,
+  type ConverseStreamOutput,
   type SystemContentBlock,
   type Tool,
 } from "@aws-sdk/client-bedrock-runtime";
 import { fromNodeProviderChain } from "@aws-sdk/credential-providers";
 import type { DocumentType } from "@smithy/types";
-import type { AIProvider, ChatParams, ChatResponse, Message, ToolCall, ToolSchema } from "@tailored-ai/core";
+import type {
+  AIProvider,
+  ChatParams,
+  ChatResponse,
+  ChatStreamEvent,
+  Message,
+  ToolCall,
+  ToolSchema,
+} from "@tailored-ai/core";
 
 // --- Conversion helpers (exported for testing) ---
 
@@ -173,7 +183,7 @@ export class BedrockProvider implements AIProvider {
       });
   }
 
-  async chat(params: ChatParams): Promise<ChatResponse> {
+  private buildInput(params: ChatParams): ConverseCommandInput {
     const { system, messages } = toConverseMessages(params.messages);
 
     const input: ConverseCommandInput = {
@@ -197,14 +207,96 @@ export class BedrockProvider implements AIProvider {
       input.additionalModelRequestFields = params.extra as ConverseCommandInput["additionalModelRequestFields"];
     }
 
+    return input;
+  }
+
+  async chat(params: ChatParams): Promise<ChatResponse> {
     let data: ConverseCommandOutput;
     try {
-      data = await this.client.send(new ConverseCommand(input));
+      data = await this.client.send(new ConverseCommand(this.buildInput(params)));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(`Bedrock Converse error for model ${params.model}: ${msg}`, { cause: err });
     }
 
     return parseConverseResponse(data);
+  }
+
+  /**
+   * Streaming variant via ConverseStream. Text arrives as `delta` events;
+   * toolUse input fragments accumulate per contentBlockIndex and surface
+   * complete on `done`. Usage comes from the trailing `metadata` event.
+   */
+  async *chatStream(params: ChatParams): AsyncIterable<ChatStreamEvent> {
+    let stream: AsyncIterable<ConverseStreamOutput>;
+    try {
+      const data = await this.client.send(new ConverseStreamCommand(this.buildInput(params)));
+      if (!data.stream) {
+        throw new Error("response contained no stream");
+      }
+      stream = data.stream;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`Bedrock ConverseStream error for model ${params.model}: ${msg}`, { cause: err });
+    }
+
+    let content = "";
+    let stopReason: string | undefined;
+    const usage = { input: 0, output: 0 };
+    const toolBlocks = new Map<number, { id: string; name: string; json: string }>();
+
+    for await (const event of stream) {
+      const toolStart = event.contentBlockStart?.start?.toolUse;
+      if (toolStart) {
+        toolBlocks.set(event.contentBlockStart?.contentBlockIndex ?? 0, {
+          id: toolStart.toolUseId ?? "",
+          name: toolStart.name ?? "",
+          json: "",
+        });
+      } else if (event.contentBlockDelta?.delta) {
+        const delta = event.contentBlockDelta.delta;
+        if (delta.text) {
+          content += delta.text;
+          yield { type: "delta", content: delta.text };
+        } else if (delta.toolUse?.input) {
+          const block = toolBlocks.get(event.contentBlockDelta.contentBlockIndex ?? 0);
+          if (block) block.json += delta.toolUse.input;
+        }
+      } else if (event.messageStop) {
+        stopReason = event.messageStop.stopReason;
+      } else if (event.metadata?.usage) {
+        usage.input = event.metadata.usage.inputTokens ?? 0;
+        usage.output = event.metadata.usage.outputTokens ?? 0;
+      } else {
+        // Mid-stream service errors arrive as exception members.
+        const ex =
+          event.internalServerException ??
+          event.modelStreamErrorException ??
+          event.validationException ??
+          event.throttlingException ??
+          event.serviceUnavailableException;
+        if (ex) {
+          throw new Error(`Bedrock ConverseStream error for model ${params.model}: ${ex.message}`, { cause: ex });
+        }
+      }
+    }
+
+    const toolCalls: ToolCall[] = [...toolBlocks.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([, block]) => ({
+        id: block.id,
+        name: block.name,
+        arguments: JSON.parse(block.json || "{}") as Record<string, unknown>,
+      }));
+
+    yield {
+      type: "done",
+      response: {
+        content: content || null,
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+        usage,
+        finishReason: mapStopReason(stopReason),
+      },
+    };
   }
 }
