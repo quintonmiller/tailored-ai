@@ -832,7 +832,9 @@ const DEFAULT_CONFIG: AgentConfig = {
   providers: {
     openai_compatible: {
       baseUrl: "http://localhost:11434/v1",
-      defaultModel: "devstral-small-2:latest",
+      // Intentionally empty: there is no universal local model to assume.
+      // `tai init` discovers installed models; validateConfig warns until set.
+      defaultModel: "",
     },
   },
   agent: {
@@ -1141,6 +1143,10 @@ export function validateConfig(config: AgentConfig): string[] {
   const providerCfg = config.providers[defaultProvider as keyof typeof config.providers];
   if (!providerCfg) {
     warnings.push(`Default provider "${defaultProvider}" is not configured in providers`);
+  } else if (typeof providerCfg === "object" && "defaultModel" in providerCfg && !providerCfg.defaultModel) {
+    warnings.push(
+      `providers.${defaultProvider}.defaultModel is empty — set a model (run \`tai init\` to discover installed models) or set \`model\` per agent`,
+    );
   }
 
   // Task-backend validity is not checked here: the backend id is resolved
@@ -1480,7 +1486,7 @@ function migrateOllamaProvider(interpolated: Record<string, unknown>): void {
     const baseUrl = base.endsWith("/v1") ? base : `${base}/v1`;
     providers.openai_compatible = {
       baseUrl,
-      defaultModel: ollama.defaultModel ?? "devstral-small-2:latest",
+      defaultModel: ollama.defaultModel ?? "",
       name: "Ollama",
     };
   }
