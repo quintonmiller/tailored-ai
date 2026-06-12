@@ -504,7 +504,15 @@ export {
   registerEmbeddingFactory,
   registerProviderFactory,
 } from "./providers/factories.js";
-export type { AIProvider, ChatParams, ChatResponse, Message, ToolCall, ToolSchema } from "./providers/interface.js";
+export type {
+  AIProvider,
+  ChatParams,
+  ChatResponse,
+  ChatStreamEvent,
+  Message,
+  ToolCall,
+  ToolSchema,
+} from "./providers/interface.js";
 export type { OpenAIProviderOptions } from "./providers/openai.js";
 export { OpenAIProvider } from "./providers/openai.js";
 export {

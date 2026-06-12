@@ -51,3 +51,17 @@ Three providers are supported — set `agent.defaultProvider` in config:
 Both `openai_compatible` and `openai` share `OpenAIProvider`; the only differences are auth-header behavior and the `id`/`name` reported on the instance.
 
 **Back-compat**: configs that still use `providers.ollama` (the removed native `/api/chat` provider) are auto-migrated to `providers.openai_compatible` at load time by appending `/v1` to the base URL. A deprecation warning is printed.
+
+## Streaming (chatStream)
+
+Providers may implement the optional `chatStream(params): AsyncIterable<ChatStreamEvent>` alongside the required `chat()`. The contract (`packages/core/src/providers/interface.ts`):
+
+- `{ type: "delta", content }` — incremental assistant text, in order.
+- `{ type: "done", response }` — exactly one, last; carries the complete `ChatResponse` (tool calls, usage, finishReason). Concatenated deltas equal `done.response.content`.
+- Tool calls are never streamed partially — providers accumulate fragments internally and surface them complete on `done`.
+
+Consumption: `AgentLoopOptions.onTextDelta` is the sink. When set and the active provider implements `chatStream`, the loop streams; otherwise it falls back to blocking `chat()` silently. The chat SSE route (`POST /api/chat`) wires `onTextDelta` to a `delta` event and the web UI renders the text live; the final `response` event always supersedes streamed text, so consumers stay correct when streaming is unavailable.
+
+Retry semantics (`chatOnce` in `loop.ts`): a failure before any delta retries the stream; a failure after deltas were emitted retries with non-streaming `chat()` so consumers never see replayed text.
+
+Both `OpenAIProvider` (`stream: true` + `stream_options.include_usage`; servers that omit usage produce zeros) and `AnthropicProvider` (`/v1/messages` stream events) implement it. Provider plugins should too (#226 adds a contract-test suite for the invariants).

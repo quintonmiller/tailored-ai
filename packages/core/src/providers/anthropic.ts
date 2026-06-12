@@ -1,4 +1,13 @@
-import type { AIProvider, ChatParams, ChatResponse, Message, ToolCall, ToolSchema } from "./interface.js";
+import type {
+  AIProvider,
+  ChatParams,
+  ChatResponse,
+  ChatStreamEvent,
+  Message,
+  ToolCall,
+  ToolSchema,
+} from "./interface.js";
+import { parseSseStream } from "./sse.js";
 
 // --- Anthropic wire-format types ---
 
@@ -40,6 +49,20 @@ interface AnthropicResponse {
     input_tokens: number;
     output_tokens: number;
   };
+}
+
+/** Streaming event payloads (event type arrives via the SSE `event:` field). */
+interface AnthropicStreamPayload {
+  message?: { usage?: { input_tokens?: number } };
+  index?: number;
+  content_block?: { type: "text" } | { type: "tool_use"; id: string; name: string };
+  delta?: {
+    type?: "text_delta" | "input_json_delta";
+    text?: string;
+    partial_json?: string;
+    stop_reason?: string;
+  };
+  usage?: { output_tokens?: number };
 }
 
 // --- Conversion helpers (exported for testing) ---
@@ -188,7 +211,7 @@ export class AnthropicProvider implements AIProvider {
     this.baseUrl = baseUrl.replace(/\/$/, "");
   }
 
-  async chat(params: ChatParams): Promise<ChatResponse> {
+  private buildBody(params: ChatParams): Record<string, unknown> {
     const { system, messages } = toAnthropicMessages(params.messages);
 
     const body: Record<string, unknown> = {
@@ -206,6 +229,10 @@ export class AnthropicProvider implements AIProvider {
       body.tools = toAnthropicTools(params.tools);
     }
 
+    return body;
+  }
+
+  private async request(body: Record<string, unknown>): Promise<Response> {
     const resp = await fetch(`${this.baseUrl}/v1/messages`, {
       method: "POST",
       headers: {
@@ -221,7 +248,91 @@ export class AnthropicProvider implements AIProvider {
       throw new Error(`Anthropic API error ${resp.status}: ${text}`);
     }
 
+    return resp;
+  }
+
+  async chat(params: ChatParams): Promise<ChatResponse> {
+    const resp = await this.request(this.buildBody(params));
     const data = (await resp.json()) as AnthropicResponse;
     return parseAnthropicResponse(data);
+  }
+
+  /**
+   * Streaming variant: `stream: true` on `/v1/messages`. Text deltas come
+   * from `content_block_delta` (`text_delta`); tool-use blocks accumulate
+   * their `input_json_delta` fragments per block index and surface complete
+   * on `done`. Usage is assembled from `message_start` (input tokens) and
+   * `message_delta` (output tokens).
+   */
+  async *chatStream(params: ChatParams): AsyncIterable<ChatStreamEvent> {
+    const body = this.buildBody(params);
+    body.stream = true;
+
+    const resp = await this.request(body);
+    if (!resp.body) {
+      throw new Error("Anthropic API returned no response body for stream");
+    }
+
+    let content = "";
+    let stopReason = "end_turn";
+    const usage = { input: 0, output: 0 };
+    const toolBlocks = new Map<number, { id: string; name: string; json: string }>();
+
+    for await (const msg of parseSseStream(resp.body)) {
+      let payload: AnthropicStreamPayload;
+      try {
+        payload = JSON.parse(msg.data) as AnthropicStreamPayload;
+      } catch {
+        continue;
+      }
+
+      switch (msg.event) {
+        case "message_start":
+          usage.input = payload.message?.usage?.input_tokens ?? 0;
+          break;
+        case "content_block_start":
+          if (payload.content_block?.type === "tool_use" && payload.index !== undefined) {
+            toolBlocks.set(payload.index, {
+              id: payload.content_block.id,
+              name: payload.content_block.name,
+              json: "",
+            });
+          }
+          break;
+        case "content_block_delta":
+          if (payload.delta?.type === "text_delta" && payload.delta.text) {
+            content += payload.delta.text;
+            yield { type: "delta", content: payload.delta.text };
+          } else if (payload.delta?.type === "input_json_delta" && payload.index !== undefined) {
+            const block = toolBlocks.get(payload.index);
+            if (block) block.json += payload.delta.partial_json ?? "";
+          }
+          break;
+        case "message_delta":
+          if (payload.delta?.stop_reason) stopReason = payload.delta.stop_reason;
+          if (payload.usage?.output_tokens !== undefined) usage.output = payload.usage.output_tokens;
+          break;
+        default:
+          break; // ping, content_block_stop, message_stop
+      }
+    }
+
+    const toolCalls: ToolCall[] = [...toolBlocks.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([, block]) => ({
+        id: block.id,
+        name: block.name,
+        arguments: JSON.parse(block.json || "{}") as Record<string, unknown>,
+      }));
+
+    yield {
+      type: "done",
+      response: {
+        content: content || null,
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+        usage,
+        finishReason: mapStopReason(stopReason),
+      },
+    };
   }
 }
