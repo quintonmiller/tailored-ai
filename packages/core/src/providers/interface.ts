@@ -41,17 +41,30 @@ export interface ChatResponse {
   finishReason: "stop" | "tool_calls" | "length";
 }
 
-export interface ChatDelta {
-  content?: string;
-  toolCalls?: Partial<ToolCall>[];
-}
+/**
+ * One event from a streaming chat call. Text arrives incrementally as
+ * `delta` events; the stream ends with exactly one `done` event carrying
+ * the complete {@link ChatResponse} (including tool calls and usage).
+ *
+ * Invariant: the concatenated `delta` contents equal `done.response.content`
+ * (both empty/null when the model only emitted tool calls). Tool calls are
+ * never streamed partially — providers accumulate them internally and
+ * surface them only on `done`, since consumers need complete arguments.
+ */
+export type ChatStreamEvent = { type: "delta"; content: string } | { type: "done"; response: ChatResponse };
 
 export interface AIProvider {
   id: string;
   name: string;
 
   chat(params: ChatParams): Promise<ChatResponse>;
-  chatStream?(params: ChatParams): AsyncIterable<ChatDelta>;
+  /**
+   * Optional streaming variant of {@link chat}. Implement it to let
+   * consumers (the agent loop's `onTextDelta` sink, the chat SSE route)
+   * render assistant text as it generates. Callers always fall back to
+   * `chat()` when absent.
+   */
+  chatStream?(params: ChatParams): AsyncIterable<ChatStreamEvent>;
 
   supportsTools: boolean;
 }

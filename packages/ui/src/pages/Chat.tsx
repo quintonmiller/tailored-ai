@@ -231,7 +231,11 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
           {displayMessages.map((m, i) => (
             <MessageBubble key={i} message={m} />
           ))}
+          {store.sending && store.streamText && (
+            <MessageBubble message={{ role: "assistant", content: store.streamText }} />
+          )}
           {store.sending &&
+            !store.streamText &&
             (store.pendingTools.length > 0 ? (
               <ToolLogPanel entries={store.pendingTools} live elapsed={store.elapsed} />
             ) : (

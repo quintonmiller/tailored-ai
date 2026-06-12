@@ -846,6 +846,12 @@ export function createServer(opts: ServerOptions) {
           ...baseOpts,
           approvalHandler,
           signal: combinedSignal,
+          onTextDelta: (text) => {
+            stream.writeSSE({
+              event: "delta",
+              data: JSON.stringify({ text }),
+            });
+          },
           onToolCall: (name, args) => {
             stream.writeSSE({
               event: "tool_call",

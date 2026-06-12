@@ -1,4 +1,13 @@
-import type { AIProvider, ChatParams, ChatResponse, Message, ToolCall, ToolSchema } from "./interface.js";
+import type {
+  AIProvider,
+  ChatParams,
+  ChatResponse,
+  ChatStreamEvent,
+  Message,
+  ToolCall,
+  ToolSchema,
+} from "./interface.js";
+import { parseSseStream } from "./sse.js";
 
 export interface OpenAIMessage {
   role: string;
@@ -9,6 +18,24 @@ export interface OpenAIMessage {
     function: { name: string; arguments: string };
   }[];
   tool_call_id?: string;
+}
+
+interface OpenAIStreamChunk {
+  choices?: {
+    delta?: {
+      content?: string | null;
+      tool_calls?: {
+        index: number;
+        id?: string;
+        function?: { name?: string; arguments?: string };
+      }[];
+    };
+    finish_reason?: string | null;
+  }[];
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+  } | null;
 }
 
 interface OpenAIChatResponse {
@@ -93,7 +120,7 @@ export class OpenAIProvider implements AIProvider {
     this.name = opts.name ?? "OpenAI";
   }
 
-  async chat(params: ChatParams): Promise<ChatResponse> {
+  private buildBody(params: ChatParams): Record<string, unknown> {
     const body: Record<string, unknown> = {
       model: params.model,
       messages: toOpenAIMessages(params.messages),
@@ -112,6 +139,10 @@ export class OpenAIProvider implements AIProvider {
       Object.assign(body, params.extra);
     }
 
+    return body;
+  }
+
+  private async request(body: Record<string, unknown>): Promise<Response> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (this.apiKey) {
       headers.Authorization = `Bearer ${this.apiKey}`;
@@ -128,6 +159,11 @@ export class OpenAIProvider implements AIProvider {
       throw new Error(`${this.name} API error ${resp.status}: ${text}`);
     }
 
+    return resp;
+  }
+
+  async chat(params: ChatParams): Promise<ChatResponse> {
+    const resp = await this.request(this.buildBody(params));
     const data = (await resp.json()) as OpenAIChatResponse;
     const choice = data.choices?.[0];
     if (!choice) {
@@ -150,6 +186,79 @@ export class OpenAIProvider implements AIProvider {
         output: data.usage?.completion_tokens ?? 0,
       },
       finishReason: hasToolCalls ? "tool_calls" : "stop",
+    };
+  }
+
+  /**
+   * Streaming variant: `stream: true` + SSE chunk parsing. Text arrives as
+   * `delta` events; tool-call fragments accumulate by index and surface
+   * complete on `done`. `stream_options.include_usage` requests the final
+   * usage chunk (OpenAI, vLLM, Ollama, LM Studio all honor it); servers
+   * that omit usage produce zeros, same tolerance as `chat()`.
+   */
+  async *chatStream(params: ChatParams): AsyncIterable<ChatStreamEvent> {
+    const body = this.buildBody(params);
+    body.stream = true;
+    body.stream_options = { include_usage: true };
+
+    const resp = await this.request(body);
+    if (!resp.body) {
+      throw new Error(`${this.name} API returned no response body for stream`);
+    }
+
+    let content = "";
+    let finishReason: string | null = null;
+    let usage = { input: 0, output: 0 };
+    const toolFragments = new Map<number, { id: string; name: string; args: string }>();
+
+    for await (const msg of parseSseStream(resp.body)) {
+      if (msg.data === "[DONE]") break;
+      let chunk: OpenAIStreamChunk;
+      try {
+        chunk = JSON.parse(msg.data) as OpenAIStreamChunk;
+      } catch {
+        continue; // tolerate malformed keep-alive chunks
+      }
+
+      if (chunk.usage) {
+        usage = { input: chunk.usage.prompt_tokens ?? 0, output: chunk.usage.completion_tokens ?? 0 };
+      }
+
+      const choice = chunk.choices?.[0];
+      if (!choice) continue;
+      if (choice.finish_reason) finishReason = choice.finish_reason;
+
+      if (choice.delta?.content) {
+        content += choice.delta.content;
+        yield { type: "delta", content: choice.delta.content };
+      }
+
+      for (const tc of choice.delta?.tool_calls ?? []) {
+        const frag = toolFragments.get(tc.index) ?? { id: "", name: "", args: "" };
+        if (tc.id) frag.id = tc.id;
+        if (tc.function?.name) frag.name += tc.function.name;
+        if (tc.function?.arguments) frag.args += tc.function.arguments;
+        toolFragments.set(tc.index, frag);
+      }
+    }
+
+    const toolCalls: ToolCall[] = [...toolFragments.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([, frag]) => ({
+        id: frag.id,
+        name: frag.name,
+        arguments: JSON.parse(frag.args || "{}") as Record<string, unknown>,
+      }));
+    const hasToolCalls = toolCalls.length > 0;
+
+    yield {
+      type: "done",
+      response: {
+        content: content || null,
+        toolCalls: hasToolCalls ? toolCalls : undefined,
+        usage,
+        finishReason: hasToolCalls ? "tool_calls" : finishReason === "length" ? "length" : "stop",
+      },
     };
   }
 }

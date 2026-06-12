@@ -11,7 +11,7 @@ import {
 import { loadAllContext, loadContextFiles } from "../context.js";
 import { getCoreMemory, renderCoreMemory } from "../db/core-memory-queries.js";
 import { getSessionMessages, saveMessage } from "../db/queries.js";
-import type { AIProvider, Message, ToolCall, ToolSchema } from "../providers/interface.js";
+import type { AIProvider, ChatParams, ChatResponse, Message, ToolCall, ToolSchema } from "../providers/interface.js";
 import type { Tool, ToolContext } from "../tools/interface.js";
 import { type ActiveSkillState, createActiveSkillState } from "./active-skill.js";
 import type { SkillCatalogEntry } from "./agents.js";
@@ -39,6 +39,45 @@ async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
     }
   }
   throw lastError;
+}
+
+/**
+ * One provider call, streaming when the caller wants deltas and the
+ * provider supports them. Falls back to blocking `chat()` otherwise.
+ *
+ * Retry semantics: a failure before any delta retries the stream; a
+ * failure after deltas were emitted retries with non-streaming `chat()`
+ * so the consumer never sees replayed text (every consumer treats the
+ * final response as superseding streamed deltas anyway).
+ */
+async function chatOnce(
+  provider: AIProvider,
+  params: ChatParams,
+  onTextDelta?: (text: string) => void,
+): Promise<ChatResponse> {
+  const stream = provider.chatStream?.bind(provider);
+  if (!onTextDelta || !stream) {
+    return withRetry(() => provider.chat(params));
+  }
+  let emitted = false;
+  return withRetry(async () => {
+    if (emitted) return provider.chat(params);
+    let done: ChatResponse | undefined;
+    for await (const ev of stream(params)) {
+      if (ev.type === "delta") {
+        emitted = true;
+        try {
+          onTextDelta(ev.content);
+        } catch (e) {
+          console.error("[agent] onTextDelta callback error:", (e as Error).message);
+        }
+      } else {
+        done = ev.response;
+      }
+    }
+    if (!done) throw new Error(`${provider.name} chatStream ended without a done event`);
+    return done;
+  });
 }
 
 export interface AgentLoopOptions {
@@ -71,6 +110,13 @@ export interface AgentLoopOptions {
   onActivity?: (description: string | null) => void;
   /** Fires after each provider.chat() with token counts from the response. */
   onUsage?: (usage: { input: number; output: number }) => void;
+  /**
+   * Fires with each assistant text fragment as it generates, when the
+   * active provider implements `chatStream`. Providers without streaming
+   * fall back to blocking `chat()` silently — consumers must still handle
+   * the full response (which always supersedes streamed deltas).
+   */
+  onTextDelta?: (text: string) => void;
   /** Extra fields merged into the ToolContext passed to every tool execution. */
   toolContextExtras?: Partial<import("../tools/interface.js").ToolContext>;
   permissions?: PermissionsConfig;
@@ -667,13 +713,15 @@ async function _runAgentLoopBody(
     }
     const messages: Message[] = [{ role: "system", content: fullSystemPrompt }, ...trimmed];
 
-    const response = await withRetry(() =>
-      currentProvider.chat({
+    const response = await chatOnce(
+      currentProvider,
+      {
         model: session.model,
         messages,
         tools: toolSchemas,
         temperature,
-      }),
+      },
+      opts.onTextDelta,
     );
 
     if (opts.onUsage && response.usage) {

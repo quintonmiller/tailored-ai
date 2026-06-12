@@ -395,7 +395,10 @@ export function ChatDock() {
         {displayMessages.map((m, i) => (
           <MessageBubble key={i} message={m} />
         ))}
-        {store.sending && (
+        {store.sending && store.streamText && (
+          <MessageBubble message={{ role: "assistant", content: store.streamText }} />
+        )}
+        {store.sending && !store.streamText && (
           <div className="tool-activity tool-activity-dock">
             <div className="spinner" />
             <span>
