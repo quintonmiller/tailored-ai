@@ -72,12 +72,17 @@ export async function setupAmazon(opts?: SetupAmazonOptions): Promise<void> {
   // Save session
   console.log("Saving session...");
   const cookies = await serializeCookies(context);
+  // Capture the host locale/timezone the login context just used so replay
+  // presents the same fingerprint regardless of where the executor runs.
+  const intl = Intl.DateTimeFormat().resolvedOptions();
   const session = {
     cookies,
     userAgent:
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) " +
       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     viewport: { width: 1280, height: 720 },
+    locale: intl.locale,
+    timezoneId: intl.timeZone,
     savedAt: new Date().toISOString(),
   };
 

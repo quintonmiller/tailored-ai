@@ -15,6 +15,16 @@ export interface StealthOptions {
   viewport: { width: number; height: number };
   /** Whether to run headed (setup CLI) or headless (production). */
   headed?: boolean;
+  /** BCP-47 locale from the original login session. Defaults to the host locale. */
+  locale?: string;
+  /** IANA timezone from the original login session. Defaults to the host timezone. */
+  timezoneId?: string;
+}
+
+/** Host locale + timezone — the fingerprint-consistent defaults when the saved session predates locale capture. */
+function hostIntl(): { locale: string; timeZone: string } {
+  const resolved = Intl.DateTimeFormat().resolvedOptions();
+  return { locale: resolved.locale || "en-US", timeZone: resolved.timeZone || "UTC" };
 }
 
 /**
@@ -36,15 +46,19 @@ export async function createStealthContext(
   opts: StealthOptions,
   cookies?: string,
 ): Promise<BrowserContext> {
+  const host = hostIntl();
+  const locale = opts.locale ?? host.locale;
+  const timezoneId = opts.timezoneId ?? host.timeZone;
   const context = await browser.newContext({
     userAgent: opts.userAgent,
     viewport: opts.viewport,
-    locale: "en-US",
-    timezoneId: "America/Los_Angeles",
+    locale,
+    timezoneId,
   });
 
   // Apply stealth patches
-  await context.addInitScript(() => {
+  const languages = [locale, locale.split("-")[0]].filter((v, i, arr) => arr.indexOf(v) === i);
+  await context.addInitScript((langs) => {
     // Override navigator.webdriver
     Object.defineProperty(navigator, "webdriver", { get: () => undefined });
 
@@ -58,9 +72,9 @@ export async function createStealthContext(
       get: () => [1, 2, 3, 4, 5],
     });
 
-    // Patch languages
+    // Patch languages to match the context locale
     Object.defineProperty(navigator, "languages", {
-      get: () => ["en-US", "en"],
+      get: () => langs,
     });
 
     // Patch permissions
@@ -70,7 +84,7 @@ export async function createStealthContext(
         return Promise.resolve({ state: "prompt" });
       };
     }
-  });
+  }, languages);
 
   // Restore session cookies if provided
   if (cookies) {
