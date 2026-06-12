@@ -3,25 +3,26 @@ import type Database from "better-sqlite3";
 import type { AgentRuntime } from "../runtime.js";
 import { createSandbox } from "../sandboxes/factory.js";
 import type { SandboxKind } from "../sandboxes/interface.js";
-import { createEgressPolicy } from "../security/egress-policy.js";
+import { populateBuiltinExecutors } from "./builtin-executors.js";
 import { WorkflowEngine } from "./engine.js";
-import { AgentRunExecutor } from "./executors/agent-run.js";
-import { ChannelMessageExecutor } from "./executors/channel-message.js";
 import { FormExecutor } from "./executors/form.js";
-import { HttpRequestExecutor } from "./executors/http-request.js";
-import { LoopExecutor } from "./executors/loop.js";
-import { type EmailSender, NotifyExecutor } from "./executors/notify.js";
-import { ParallelExecutor } from "./executors/parallel.js";
-import { ShellExecutor } from "./executors/shell.js";
-import { ToolCallExecutor } from "./executors/tool-call.js";
-import { TriggerWorkflowExecutor } from "./executors/trigger-workflow.js";
-import { WorktreeExecutor } from "./executors/worktree.js";
+import type { EmailSender } from "./executors/notify.js";
 import { FileLogStore } from "./logs.js";
 
 /**
  * Build a WorkflowEngine pre-wired with the standard executors and
  * concurrency caps from the runtime's config. Returns the engine; the
  * caller is responsible for retaining a reference.
+ *
+ * Built-in executors are registered into the runtime's StepExecutorRegistry
+ * via {@link populateBuiltinExecutors} and then instantiated through
+ * `registry.buildAll(ctx)`. Plugins that registered factories before this
+ * call (via `ctx.stepExecutors.register`) are instantiated in the same pass,
+ * so built-ins and plugin executors share one construction path.
+ *
+ * The only exception is FormExecutor: it depends on the engine's FormRegistry
+ * which is only available after construction, so it is still registered via
+ * `engine.registerExecutor` post-construction.
  */
 export function createWorkflowEngine(opts: {
   runtime: AgentRuntime;
@@ -43,6 +44,23 @@ export function createWorkflowEngine(opts: {
   const defaultCap = byAgent._default ?? 2;
   const agentConcurrency = (name: string): number => byAgent[name] ?? defaultCap;
 
+  // Ensure all built-in factories are registered in the runtime's registry.
+  // Idempotent: re-registering the same type on hot-reload replaces the entry.
+  const stepRegistry = runtime.getStepExecutorRegistry();
+  populateBuiltinExecutors(stepRegistry);
+
+  // Instantiate all registered factories (built-ins + any plugin-registered)
+  // using the shared context object. The factory map is the source of truth;
+  // the hardcoded array is gone.
+  const executorCtx = {
+    runtime,
+    db,
+    resolveOutbound,
+    getOwnerId,
+    getEmail: opts.getEmail,
+    getDefaultEmailRecipients: opts.getDefaultEmailRecipients,
+  };
+
   const engine = new WorkflowEngine({
     db,
     registry: runtime.getWorkflows(),
@@ -52,30 +70,7 @@ export function createWorkflowEngine(opts: {
     // Run-scoped resolver: snapshotted at start of each run so executors and
     // sandbox prepare hit the project root instead of the server's cwd.
     getProjectPath: () => runtime.getActiveProject()?.path,
-    executors: [
-      new AgentRunExecutor({ runtime, db }),
-      new ToolCallExecutor({
-        getTools: () => runtime.getTools(),
-        // cwd defaults are last-resort; per-run StepContext.projectPath wins.
-        env: process.env as Record<string, string>,
-      }),
-      new ShellExecutor(),
-      new WorktreeExecutor(),
-      new LoopExecutor(),
-      new ParallelExecutor(),
-      new ChannelMessageExecutor({
-        resolveOutbound,
-        getOwnerId,
-      }),
-      new TriggerWorkflowExecutor(),
-      new HttpRequestExecutor({ egressPolicy: createEgressPolicy(cfg.security?.egress) }),
-      new NotifyExecutor({
-        resolveOutbound,
-        getOwnerId,
-        getEmail: opts.getEmail,
-        getDefaultEmailRecipients: opts.getDefaultEmailRecipients,
-      }),
-    ],
+    executors: stepRegistry.buildAll(executorCtx),
   });
 
   // FormExecutor depends on the engine's FormRegistry, so register it after
@@ -104,7 +99,6 @@ export function createWorkflowEngine(opts: {
   // tooling (authoring, UI listing, agent discovery via task_status) sees the
   // same surface as the engine itself. The engine remains the source of
   // truth; the registry is a discoverable view.
-  const stepRegistry = runtime.getStepExecutorRegistry();
   for (const exec of engine.listExecutors()) {
     stepRegistry.registerBuiltin(exec);
   }
