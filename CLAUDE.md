@@ -39,6 +39,7 @@ pnpm monorepo with first-party runtime packages, plugins, and docs:
 | `@tailored-ai/browser-mediator` | `packages/browser-mediator/` | Framework-agnostic browser-control surface for LLM agents (OpenAI / Anthropic / TAI adapters) | — (zero TAI deps) |
 | `@tailored-ai/channel-slack` | `packages/channel-slack/` | Slack channel plugin | `@tailored-ai/core` peer |
 | `@tailored-ai/google-tools` | `packages/google-tools/` | Gmail, Google Calendar, Google Drive tool plugin | `@tailored-ai/core` peer |
+| `@tailored-ai/provider-bedrock` | `packages/provider-bedrock/` | AWS Bedrock model provider plugin (Converse API) | `@tailored-ai/core` peer |
 | `@tailored-ai/trusted-actions` | `packages/trusted-actions/` | HITL executor for approval-gated actions | `@tailored-ai/core` |
 | `@tailored-ai/site` | `packages/site/` | Next.js docs site | private |
 | `@tailored-ai/integration-tests` | `packages/integration-tests/` | End-to-end CLI/plugin/server smoke scenarios | private |

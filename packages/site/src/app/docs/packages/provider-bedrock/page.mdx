@@ -1,0 +1,85 @@
+export const metadata = {
+  title: "@tailored-ai/provider-bedrock",
+  description: "AWS Bedrock model provider plugin. One provider id for every model your AWS account can invoke, with tool calling via the Converse API.",
+};
+
+# @tailored-ai/provider-bedrock
+
+AWS Bedrock as a model provider. One provider id, `bedrock`, covers every model your AWS account can invoke: Anthropic Claude, Amazon Nova, Meta Llama, Mistral, and the rest of the Bedrock catalog. The plugin speaks Bedrock's [Converse API](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html), which normalizes message and tool-calling shapes across model families, so agents and their tools work the same regardless of which model you pick.
+
+This is also the reference implementation for a provider plugin: a single `register(ctx)` package that adds a new entry to the provider registry. If you want to write your own provider, start from this package's source.
+
+## Install
+
+```bash
+tai plugin install @tailored-ai/provider-bedrock
+```
+
+## Configure
+
+Three pieces: load the plugin, describe the provider, select it.
+
+```yaml
+plugins:
+  - "@tailored-ai/provider-bedrock"
+
+providers:
+  bedrock:
+    defaultModel: "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    region: us-west-2        # optional: falls back to AWS_REGION / profile config
+    profile: my-profile      # optional: falls back to the default credential chain
+
+agent:
+  defaultProvider: bedrock
+```
+
+Or keep your local model as the default and give a single agent a Bedrock model:
+
+```yaml
+agents:
+  researcher:
+    provider: bedrock
+    model: "us.amazon.nova-pro-v1:0"
+```
+
+## Credentials
+
+No keys in `config.yaml`. The plugin uses the standard AWS credential chain: environment variables, `~/.aws` profiles, SSO sessions, and instance roles. `profile` pins a named profile when you have several.
+
+The IAM principal needs `bedrock:InvokeModel` on the models you use. Check your access from the same machine TAI runs on:
+
+```bash
+aws sts get-caller-identity
+aws bedrock list-foundation-models --region us-west-2
+```
+
+## Model ids
+
+Most current Bedrock models reject on-demand invocation under their bare model id and require a **cross-region inference profile** id instead. If you see `Invocation of model ID ... with on-demand throughput isn't supported`, add your region-group prefix:
+
+```text
+anthropic.claude-haiku-4-5-20251001-v1:0      ✗
+us.anthropic.claude-haiku-4-5-20251001-v1:0   ✓
+```
+
+Accounts homed in Europe or Asia-Pacific use `eu.` / `apac.`. List the profile ids your account can invoke:
+
+```bash
+aws bedrock list-inference-profiles --region us-west-2 \
+  --query 'inferenceProfileSummaries[].inferenceProfileId'
+```
+
+## Model-specific request fields
+
+Anything in `ChatParams.extra` passes through as Converse's `additionalModelRequestFields`. That is the escape hatch for per-family knobs (Anthropic's `top_k`, Nova's `inferenceConfig` extensions) without the plugin needing to know about them.
+
+## How it maps
+
+| TAI | Converse |
+|---|---|
+| Leading `system` messages | Top-level `system` blocks |
+| Assistant `toolCalls` | `toolUse` content blocks |
+| `tool` role results | User-turn `toolResult` blocks |
+| `finishReason: tool_calls / length / stop` | `stopReason: tool_use / max_tokens / end_turn` |
+
+Adjacent same-role messages merge into one turn (Converse requires alternating user/assistant turns), and empty messages are dropped (Converse rejects empty text blocks).
