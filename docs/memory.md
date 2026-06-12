@@ -11,6 +11,7 @@ Design: [memory-tiers.md](./memory-tiers.md). This doc captures the implementati
 - Tags stored as JSON arrays, filtered via SQLite `json_each()`
 - TTLs stored as ISO 8601; compared via `datetime(ttl_at) > datetime('now')` to normalize formats
 - Default TTL: 14 days. Notes with `importance >= 0.8` survive sweeps
+- Daily sweep schedule: `autopilot.memorySweepCron` (default `"14 3 * * *"`; empty string disables)
 - Project-scoped by default: pass `project_id: "global"` for cross-project notes
 - `query` action accepts `tier: any|short|long` to scope retrieval to one tier
 
