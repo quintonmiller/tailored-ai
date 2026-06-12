@@ -1,6 +1,8 @@
 import { PasswordInput, Select, TextInput } from "@inkjs/ui";
+import type { AgentConfig } from "@tailored-ai/core";
 import { Box, Text, useInput } from "ink";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { buildProbeConfig, type DiscoveredProvider, listModelsFor } from "../provider-discovery.js";
 import { resolveOnePlugin } from "../resolve.js";
 import type { Action } from "../state.js";
 import type { ProviderDraft, ProviderKind } from "../types.js";
@@ -8,6 +10,10 @@ import type { ProviderDraft, ProviderKind } from "../types.js";
 interface Props {
   provider: ProviderDraft;
   homeDir: string;
+  /** Selectable providers — registry built-ins + plugin-registered (#225). */
+  discovered?: DiscoveredProvider[];
+  /** Interpolated on-disk config — base for model-discovery probes. */
+  baseConfig?: AgentConfig;
   dispatch: (action: Action) => void;
   onExit: () => void;
 }
@@ -16,12 +22,14 @@ type Field = "kind" | "baseUrl" | "apiKey" | "defaultModel" | "save";
 type FocusState = { field: Field; editing: boolean };
 type Mode = "form" | "addCustom" | "resolving" | "customAdded";
 
-const KIND_OPTIONS: { label: string; value: string }[] = [
-  { label: "openai_compatible (Ollama, vLLM, LM Studio)", value: "openai_compatible" },
-  { label: "openai", value: "openai" },
-  { label: "anthropic", value: "anthropic" },
-  { label: "Use custom provider package…", value: "__custom__" },
-];
+/** Friendlier labels for the well-known built-ins; anything else self-labels. */
+const KIND_LABELS: Record<string, string> = {
+  openai_compatible: "openai_compatible (Ollama, vLLM, LM Studio)",
+  openai: "openai",
+  anthropic: "anthropic",
+};
+
+const FALLBACK_KINDS = ["openai_compatible", "openai", "anthropic"];
 
 const PRESET_URLS: Record<string, string> = {
   vllm: "http://127.0.0.1:8000/v1",
@@ -29,12 +37,42 @@ const PRESET_URLS: Record<string, string> = {
   lmstudio: "http://localhost:1234/v1",
 };
 
-export function ProviderEditor({ provider, homeDir, dispatch, onExit }: Props) {
+export function ProviderEditor({ provider, homeDir, discovered, baseConfig, dispatch, onExit }: Props) {
   const [draft, setDraft] = useState<ProviderDraft>(provider);
   const [focus, setFocus] = useState<FocusState>({ field: "kind", editing: false });
   const [mode, setMode] = useState<Mode>("form");
   const [busy, setBusy] = useState<string | undefined>();
   const [addedUri, setAddedUri] = useState<string | undefined>();
+  // Model catalog fetched via the provider's optional listModels (#226).
+  // undefined = none available (free-text entry); keyed so kind/baseUrl/
+  // apiKey edits refetch and stale responses are dropped.
+  const [models, setModels] = useState<string[] | undefined>();
+  const [manualModel, setManualModel] = useState(false);
+  const probeKey = useRef<string>("");
+
+  const kindIds = discovered?.length ? discovered.map((d) => d.id) : FALLBACK_KINDS;
+  const kindOptions: { label: string; value: string }[] = [
+    ...kindIds.map((id) => {
+      const source = discovered?.find((d) => d.id === id)?.source;
+      return { label: KIND_LABELS[id] ?? (source === "plugin" ? `${id} (plugin)` : id), value: id };
+    }),
+    { label: "Use custom provider package…", value: "__custom__" },
+  ];
+
+  useEffect(() => {
+    const entry = discovered?.find((d) => d.id === draft.kind);
+    if (!entry) {
+      setModels(undefined);
+      return;
+    }
+    const key = `${draft.kind}|${draft.baseUrl ?? ""}|${draft.apiKey ?? ""}`;
+    if (probeKey.current === key) return;
+    probeKey.current = key;
+    setModels(undefined);
+    void listModelsFor(entry, buildProbeConfig(draft.kind, draft, baseConfig)).then((list) => {
+      if (probeKey.current === key) setModels(list);
+    });
+  }, [discovered, draft, baseConfig]);
 
   const fields: Field[] = ["kind", ...(draft.kind === "openai_compatible" ? ["baseUrl" as Field] : []), "apiKey", "defaultModel", "save"];
 
@@ -129,9 +167,9 @@ export function ProviderEditor({ provider, homeDir, dispatch, onExit }: Props) {
         </Box>
         <Box marginTop={1} flexDirection="column">
           <Text>Next steps:</Text>
-          <Text dimColor>· tai resources install {addedUri}</Text>
-          <Text dimColor>· add a providers.&lt;id&gt; block in config.yaml for the new provider</Text>
-          <Text dimColor>· set agent.defaultProvider to that id (or pick it here once it's registered)</Text>
+          <Text dimColor>· save, then install it: tai plugin install {addedUri}</Text>
+          <Text dimColor>· reopen tai edit — the provider's id appears in the Kind list and can be selected here</Text>
+          <Text dimColor>· provider-specific options beyond defaultModel stay in its providers.&lt;id&gt; block</Text>
         </Box>
         <Box marginTop={1}>
           <Text dimColor>enter / esc to continue</Text>
@@ -149,7 +187,7 @@ export function ProviderEditor({ provider, homeDir, dispatch, onExit }: Props) {
           {focus.field === "kind" && focus.editing ? (
             <Select
               defaultValue={draft.kind}
-              options={KIND_OPTIONS}
+              options={kindOptions}
               onChange={(v) => {
                 if (v === "__custom__") {
                   closeEdit();
@@ -194,15 +232,39 @@ export function ProviderEditor({ provider, homeDir, dispatch, onExit }: Props) {
           ) : null}
         </FieldRow>
 
-        <FieldRow label="Model" value={draft.defaultModel || "(unset)"} active={focus.field === "defaultModel"}>
+        <FieldRow
+          label="Model"
+          value={draft.defaultModel || "(unset)"}
+          active={focus.field === "defaultModel"}
+          hint={models?.length ? `${models.length} models discovered` : undefined}
+        >
           {focus.field === "defaultModel" && focus.editing ? (
-            <TextInput
-              defaultValue={draft.defaultModel}
-              onSubmit={(v) => {
-                setDraft((d) => ({ ...d, defaultModel: v.trim() }));
-                closeEdit();
-              }}
-            />
+            models?.length && !manualModel ? (
+              <Select
+                defaultValue={models.includes(draft.defaultModel) ? draft.defaultModel : undefined}
+                options={[
+                  ...models.map((m) => ({ label: m, value: m })),
+                  { label: "(enter manually…)", value: "__manual__" },
+                ]}
+                onChange={(v) => {
+                  if (v === "__manual__") {
+                    setManualModel(true);
+                    return;
+                  }
+                  setDraft((d) => ({ ...d, defaultModel: v }));
+                  closeEdit();
+                }}
+              />
+            ) : (
+              <TextInput
+                defaultValue={draft.defaultModel}
+                onSubmit={(v) => {
+                  setDraft((d) => ({ ...d, defaultModel: v.trim() }));
+                  setManualModel(false);
+                  closeEdit();
+                }}
+              />
+            )
           ) : null}
         </FieldRow>
 
@@ -225,12 +287,14 @@ function FieldRow({
   value,
   active,
   dim,
+  hint,
   children,
 }: {
   label: string;
   value: string;
   active: boolean;
   dim?: boolean;
+  hint?: string;
   children?: React.ReactNode;
 }) {
   return (
@@ -239,6 +303,7 @@ function FieldRow({
         <Text color={active ? "cyan" : undefined}>
           {active ? "▶ " : "  "}
           {label}: <Text dimColor={dim}>{value}</Text>
+          {hint ? <Text dimColor> · {hint}</Text> : null}
         </Text>
       </Box>
       {children ? (

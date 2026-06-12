@@ -1,9 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
+import { type AgentConfig, loadConfig } from "@tailored-ai/core";
 import { render } from "ink";
 import { createElement } from "react";
 import { App } from "./App.js";
 import { ConflictPrompt } from "./ConflictPrompt.js";
 import { HomeDirPrompt } from "./HomeDirPrompt.js";
+import { discoverProviders } from "./provider-discovery.js";
 import { type DraftConfig, defaultDraft } from "./types.js";
 
 export type EditorMode = "init" | "edit";
@@ -90,12 +92,28 @@ export async function runEditorApp(opts: RunEditorAppOptions): Promise<RunEditor
     initialDraft = defaultDraft(homeDir);
   }
 
+  // Step 2b: discover selectable providers — built-ins from the registry,
+  // plugin providers by probing the config's plugins against a capture
+  // context (#225). The interpolated on-disk config doubles as the base
+  // the model-discovery probe runs against.
+  let baseConfig: AgentConfig | undefined;
+  if (configPath && existsSync(configPath)) {
+    try {
+      baseConfig = loadConfig(configPath);
+    } catch {
+      // Unparseable config — the editor still works with built-ins only.
+    }
+  }
+  const providers = await discoverProviders(homeDir, baseConfig);
+
   // Step 3: drive the editor.
   const finalDraft = await renderOnce<DraftConfig | null>((done) =>
     createElement(App, {
       initialDraft: structuredClone(initialDraft),
       mode: configPath ? "existing" : "new",
       originalText,
+      providers,
+      baseConfig,
       onSave: (d) => done(d),
       onCancel: () => done(null),
     }),
