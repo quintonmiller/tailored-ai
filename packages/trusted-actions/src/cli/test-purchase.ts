@@ -87,7 +87,12 @@ export async function testPurchase(opts: TestPurchaseOptions): Promise<TestPurch
   });
   const context = await createStealthContext(
     browser,
-    { userAgent: session.userAgent, viewport: session.viewport },
+    {
+      userAgent: session.userAgent,
+      viewport: session.viewport,
+      locale: session.locale,
+      timezoneId: session.timezoneId,
+    },
     session.cookies,
   );
   const page = await context.newPage();
