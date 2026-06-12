@@ -12,6 +12,7 @@
       "@tailored-ai/google-tools",
       "@tailored-ai/provider-bedrock",
       "@tailored-ai/provider-openrouter",
+      "@tailored-ai/provider-anthropic",
       "@tailored-ai/trusted-actions"
     ]
   ],
