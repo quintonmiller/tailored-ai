@@ -33,7 +33,10 @@ import type { EmbeddingFactory, ProviderFactory } from "./providers/factories.js
 import { registerEmbeddingFactory, registerProviderFactory } from "./providers/factories.js";
 import type { RepoBackendFactory } from "./repo/factory.js";
 import { registerRepoBackendFactory } from "./repo/factory.js";
+import type { StepExecutorFactory } from "./resources/step-executor-registry.js";
 import type { AgentRuntime } from "./runtime.js";
+import type { SandboxFactory } from "./sandboxes/factory.js";
+import { registerSandboxFactory } from "./sandboxes/factory.js";
 import type { TaskBackendFactory } from "./tasks/factory.js";
 import { registerTaskBackendFactory } from "./tasks/factory.js";
 import type { ToolFactory } from "./tools/tool-factories.js";
@@ -69,8 +72,25 @@ export interface RepoBackendRegistryView {
   register(id: string, factory: RepoBackendFactory): void;
 }
 
+export interface SandboxBackendRegistryView {
+  register(id: string, factory: SandboxFactory): void;
+}
+
 export interface UiProviderRegistryView {
   register(id: string, factory: UiProviderFactory): void;
+}
+
+/**
+ * Plugin view of the step-executor registry. Plugins call
+ * `ctx.stepExecutors.register(type, factory)` to inject a custom executor.
+ * The factory is called by `createWorkflowEngine` with the same context
+ * built-ins receive, so plugins get first-class parity with built-ins.
+ *
+ * `type` must match the `step.type` string in workflow YAML. Registering for
+ * an existing type overrides the built-in; the last-registered factory wins.
+ */
+export interface StepExecutorRegistryView {
+  register(type: string, factory: StepExecutorFactory): void;
 }
 
 /**
@@ -85,7 +105,26 @@ export interface PluginContext {
   memoryBackends: MemoryBackendRegistryView;
   taskBackends: TaskBackendRegistryView;
   repoBackends: RepoBackendRegistryView;
+  sandboxBackends: SandboxBackendRegistryView;
   uiProviders: UiProviderRegistryView;
+  /**
+   * Register a custom workflow step executor. Call this before the workflow
+   * engine is created (i.e. in your plugin's top-level function body) so the
+   * factory is included in the engine's executor set on startup.
+   *
+   * The registered factory receives the same {@link StepExecutorContext} as
+   * the built-ins, providing access to `runtime`, `db`, `resolveOutbound`,
+   * and the email plumbing. Only the fields you need are required.
+   *
+   * Registering for an existing `type` string (e.g. `"shell"`) overrides the
+   * built-in for that type — last-registered factory wins.
+   *
+   * @example
+   * ```ts
+   * ctx.stepExecutors.register("my_step", (ctx) => new MyStepExecutor({ db: ctx.db }));
+   * ```
+   */
+  stepExecutors: StepExecutorRegistryView;
   /**
    * Typed pub/sub bus for runtime lifecycle events. Plugins subscribe via
    * `ctx.events.on(name, handler)` and get back a disposer.
@@ -201,6 +240,7 @@ export interface CreatePluginContextOptions {
  * `default(ctx)` function get invoked with the right shape.
  */
 export function createPluginContext(opts: CreatePluginContextOptions = {}): PluginContext {
+  const { runtime } = opts;
   // Routes register against the runtime's registry so the server can read
   // them after the runtime is built. A context with no runtime — or a partial
   // runtime stub that predates the seam — gets a throwaway registry, so
@@ -215,12 +255,23 @@ export function createPluginContext(opts: CreatePluginContextOptions = {}): Plug
     memoryBackends: { register: registerMemoryBackendFactory },
     taskBackends: { register: registerTaskBackendFactory },
     repoBackends: { register: registerRepoBackendFactory },
+    sandboxBackends: { register: registerSandboxFactory },
     uiProviders: { register: registerUiProviderFactory },
     http: createHttpRegistryView(httpRegistry, opts.httpPrefix),
+    // Step executors are registered into the runtime's per-instance registry
+    // so factories reach the same registry that createWorkflowEngine reads.
+    // When no runtime is available (bare/test context) the call is a no-op —
+    // the plugin simply won't have its executor included in any engine created
+    // from a different runtime instance.
+    stepExecutors: {
+      register(type: string, factory: StepExecutorFactory): void {
+        runtime?.getStepExecutorRegistry().registerFactory(type, factory);
+      },
+    },
     // Prefer an explicit bus; else the runtime's own bus so plugin
     // subscriptions land where the runtime emits; else a fresh bus.
-    events: opts.events ?? opts.runtime?.events ?? new TypedEventBus(),
-    runtime: opts.runtime,
+    events: opts.events ?? runtime?.events ?? new TypedEventBus(),
+    runtime,
     config: opts.config ?? {},
   };
 }

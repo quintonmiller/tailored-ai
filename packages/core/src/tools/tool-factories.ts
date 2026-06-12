@@ -1,11 +1,37 @@
 import type Database from "better-sqlite3";
 import type { AgentConfig } from "../config.js";
+import type { EventBus } from "../events.js";
+import type { EmbeddingProvider } from "../providers/embedding.js";
 import { Registry } from "../registry.js";
+import type { TaskBackend } from "../tasks/interface.js";
 import type { Tool } from "./interface.js";
+import type { TaskBackendResolver, TasksToolNotify } from "./tasks.js";
 
 export interface ToolFactoryContext {
   /** Database handle (when available — some setups run without persistence). */
   db?: Database.Database;
+  /** Absolute path to config file. Used by tools that need to locate
+   *  sibling config artefacts (e.g. browser-mediator vault). */
+  configPath?: string;
+  /** Root context directory (parent of global/, agents/, kb/). */
+  contextDir?: string;
+  /** Resolve an outbound notifier for the given channel id. */
+  resolveOutbound?: (channelId?: string) => import("../channels/outbound.js").OutboundNotifier | undefined;
+  /** Resolve the owner id for the given channel id. */
+  getOwnerId?: (channelId?: string) => string | undefined;
+  /** Single task backend (simple callers / tests). */
+  taskBackend?: TaskBackend;
+  /** Per-project task backend resolver (multi-project routing). When set,
+   *  takes precedence over taskBackend. */
+  taskBackendResolver?: TaskBackendResolver;
+  /** Embedding provider getter for semantic recall. */
+  getEmbedder?: () => EmbeddingProvider | undefined;
+  /** Memory backend accessor for RecallTool / FactsTool. */
+  getMemoryBackend?: () => Promise<import("../memory/interface.js").MemoryBackend>;
+  /** Notify hook fired after a successful task mutation. */
+  notifyTaskEvent?: TasksToolNotify;
+  /** Runtime event bus. Tools emit typed events for plugin subscribers. */
+  events?: EventBus;
   /** Other arbitrary options passed through from createTools. */
   [key: string]: unknown;
 }
@@ -25,9 +51,24 @@ export function registerToolFactory(id: string, factory: ToolFactory): void {
 }
 
 /**
+ * The fixed set of meta-tool names always injected by createMetaTools().
+ * validateConfig iterates this instead of a hardcoded inline array so both
+ * stay in sync automatically.
+ */
+export const META_TOOL_NAMES: ReadonlyArray<string> = [
+  "delegate",
+  "task_status",
+  "admin",
+  "memory",
+  "ask_user",
+  "run_workflow",
+  "resource_admin",
+  "load_skill",
+];
+
+/**
  * Run every registered factory and aggregate the tools they produce. Called
- * by createTools after the always-on built-ins (memory, read, write, exec, …)
- * are constructed.
+ * by createTools; both built-in and plugin factories go through this path.
  */
 export function runToolFactories(config: AgentConfig, ctx: ToolFactoryContext): Tool[] {
   const out: Tool[] = [];

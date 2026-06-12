@@ -18,17 +18,29 @@ Deep notes on the runtime, factories, and how to add new tools/channels/provider
 
 Composition layer that constructs tools, providers, and meta tools:
 
-- **`createTools(config, contextDir, configPath?, opts?)`** — builds the tool array from config. Accepts optional `CreateToolsOptions` with `db` (for project tasks), `getDiscord`/`getOwnerId` closures (for `AskUserTool`).
+- **`createTools(config, contextDir, configPath?, opts?)`** — walks the tool-factory registry and aggregates every tool each factory produces. Both built-in and plugin tools go through the same path. Accepts optional `CreateToolsOptions` with `db`, `resolveOutbound`/`getOwnerId` closures, task backend / resolver, embedding provider, and event bus — all passed as `ToolFactoryContext` to each factory.
 - **`createProvider(config)`** — creates the AI provider + model from config.
-- **`createMetaTools(runtime, contextDir, kbDir)`** — creates delegate, task_status, and admin tools.
+- **`createMetaTools(runtime, contextDir, kbDir)`** — creates delegate, task_status, admin, run_workflow, resource_admin, load_skill, and core_memory tools.
 
 ## Adding a New Tool
 
+All tools — built-in and plugin — register through the tool-factory registry. `createTools()` is a pure registry walk with no if-chains.
+
 **Code-level tool** (requires TypeScript):
 1. Create `packages/core/src/tools/<name>.ts` implementing the `Tool` interface from `packages/core/src/tools/interface.ts`
-2. Add config type in `packages/core/src/config.ts` under `AgentConfig.tools`
-3. Wire it up in `packages/core/src/factories.ts` in the `createTools()` function
-4. Export from `packages/core/src/index.ts`
+2. Add config type in `packages/core/src/config.ts` under `AgentConfig.tools` if needed
+3. Register in `packages/core/src/tools/builtin.ts` (built-in) or in your plugin module (external):
+   ```ts
+   registerToolFactory("my_tool", (config, ctx) => {
+     if (!config.tools.my_tool?.enabled) return [];
+     return [new MyTool(config.tools.my_tool, ctx.db)];
+   });
+   ```
+4. Add the module import to `factories.ts` (built-ins) or ensure your plugin imports the file as a side effect
+5. Export from `packages/core/src/index.ts`
+
+**Plugin tool** (external package):
+Call `registerToolFactory(id, factory)` from `@tailored-ai/core` on module import. The factory receives the full `AgentConfig` and `ToolFactoryContext` (db, contextDir, resolveOutbound, etc.). Return `[]` to opt out when disabled or unconfigured.
 
 **Custom tool** (config-only, no code):
 Add an entry under `custom_tools` in `config.yaml`. Custom tools are shell command templates with `{{param}}` interpolation. They are rebuilt on every runtime reload, so adding one via the admin tool or editing `config.yaml` makes it available immediately.

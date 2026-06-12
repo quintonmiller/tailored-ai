@@ -28,9 +28,23 @@ const execFileMock = execFile as unknown as MockInstance;
 let db: Database.Database;
 let runtime: AgentRuntime;
 
-function makeRuntime(): AgentRuntime {
+/**
+ * Fake runtime for the flagger. After #204 the flagger watches the
+ * worktree-opted agents `getWorktreeAgentNames()` reports, and (in default
+ * mode) fires when the handoff target is a different configured agent.
+ * Defaults preserve the historical coder→reviewer behavior.
+ */
+function makeRuntime(opts: { worktreeAgents?: string[]; agents?: string[] } = {}): AgentRuntime {
   const events = new TypedEventBus();
-  return { db, events, getConfig: () => ({}) } as unknown as AgentRuntime;
+  const worktreeAgents = opts.worktreeAgents ?? ["coder"];
+  const agentNames = opts.agents ?? ["coder", "reviewer"];
+  const agents = Object.fromEntries(agentNames.map((n) => [n, { description: "" }]));
+  return {
+    db,
+    events,
+    getConfig: () => ({ agents }),
+    getWorktreeAgentNames: () => worktreeAgents,
+  } as unknown as AgentRuntime;
 }
 
 function readComments(db: Database.Database, taskId: string): Array<{ author: string; content: string }> {
@@ -67,7 +81,7 @@ afterEach(() => {
 });
 
 describe("ScopeCreepFlagger subscription gate", () => {
-  it("ignores events when agentName is not coder", async () => {
+  it("ignores events when the agent isn't worktree-opted", async () => {
     new ScopeCreepFlagger({ runtime });
     const task = createProjectTask(db, { title: "T" });
     runtime.events.emit("agent.completed", {
@@ -83,7 +97,7 @@ describe("ScopeCreepFlagger subscription gate", () => {
     expect(execFileMock).not.toHaveBeenCalled();
   });
 
-  it("ignores events when finalTask.assignee is not reviewer", async () => {
+  it("ignores events when the final assignee is not a known agent (human handoff)", async () => {
     new ScopeCreepFlagger({ runtime });
     const task = createProjectTask(db, { title: "T" });
     runtime.events.emit("agent.completed", {
@@ -92,6 +106,23 @@ describe("ScopeCreepFlagger subscription gate", () => {
       action: "updated",
       task: { id: task.id, title: "T", status: "in_progress", assignee: "coder" },
       finalTask: { id: task.id, title: "T", status: "in_review", assignee: "Quinton" },
+      response: "",
+      worktree: { repoPath: "/tmp/r", worktreePath: "/tmp/wt", branch: "agent/T", preservedPath: null },
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores a same-agent re-assignment (not a review handoff)", async () => {
+    new ScopeCreepFlagger({ runtime });
+    const task = createProjectTask(db, { title: "T" });
+    runtime.events.emit("agent.completed", {
+      taskId: task.id,
+      agentName: "coder",
+      action: "updated",
+      task: { id: task.id, title: "T", status: "in_progress", assignee: "coder" },
+      // Handed back to itself — no other agent reviewing.
+      finalTask: { id: task.id, title: "T", status: "in_review", assignee: "coder" },
       response: "",
       worktree: { repoPath: "/tmp/r", worktreePath: "/tmp/wt", branch: "agent/T", preservedPath: null },
     });

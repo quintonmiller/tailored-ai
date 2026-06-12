@@ -188,10 +188,18 @@ export class TaskWatcher {
       console.log(`${logPrefix} routing to assignee agent "${agentName}"`);
     }
 
-    // Vetoable dispatch event. Default CoderProjectGuard plugin
-    // refuses coder/reviewer dispatches that lack a project + path;
-    // user-installed plugins can apply additional policy here.
-    const isCodingAgent = agentName === "coder" || agentName === "reviewer";
+    // Worktree opt-in is a per-agent flag (`agents.<name>.worktree: true`),
+    // not a hardcoded name check. Agents that need an isolated checkout
+    // (coding / review roles) set it in their config; the preamble text and
+    // role semantics live in `agents.<name>.taskPreamble`. See issue #204.
+    // Read it off the lightweight agent definition (registry-first) so the
+    // dispatch decision doesn't depend on full provider/model resolution —
+    // that happens after the veto below.
+    const usesWorktree = agentName ? Boolean(this.runtime.getAgentDefinition(agentName)?.worktree) : false;
+
+    // Vetoable dispatch event. The default project guard plugin refuses
+    // worktree-opted dispatches that lack a project + path; user-installed
+    // plugins can apply additional policy here.
     const allowed = await this.runtime.events.emitAsync("agent.dispatched", {
       taskId: event.task.id,
       projectId: event.task.project_id ?? null,
@@ -262,12 +270,11 @@ export class TaskWatcher {
       }
     }
 
-    // Worktree pre-flight for coder/reviewer agents (Phase 5+6).
-    // Both work on a per-task branch — coder writes; reviewer inspects
-    // diffs and runs tests. After the loop finishes, the worktree is
-    // cleaned up but the branch is retained so future iterations
-    // (e.g. reviewer requests changes → coder re-runs) pick up the
-    // existing branch instead of starting fresh.
+    // Worktree pre-flight for worktree-opted agents (`worktree: true`).
+    // Such an agent works on a per-task branch. After the loop finishes,
+    // the worktree is cleaned up but the branch is retained so future
+    // iterations (e.g. a reviewing agent requests changes → the coding
+    // agent re-runs) pick up the existing branch instead of starting fresh.
     let worktree: Worktree | undefined;
     /**
      * Parent repo for the worktree we'll create below — captured at top
@@ -278,10 +285,10 @@ export class TaskWatcher {
      */
     let worktreeRepoPath: string | undefined;
     let projectOverride: import("./projects/resolve.js").ProjectContext | undefined;
-    // The guard rail at the top of processEvent has already refused
-    // dispatches that would lack an isolated worktree, so by this
-    // point a coding agent always has a project_id + project.path.
-    const needsWorktree = isCodingAgent && event.task.project_id;
+    // The project guard plugin has already refused dispatches that would
+    // lack an isolated worktree, so by this point a worktree-opted agent
+    // always has a project_id + project.path.
+    const needsWorktree = usesWorktree && event.task.project_id;
     if (needsWorktree) {
       const project = getProject(this.runtime.db, event.task.project_id!);
       const repoPath = project?.path;
@@ -331,129 +338,26 @@ export class TaskWatcher {
       }
     }
 
-    // Build prompt: structured task context + user-configured prompt.
-    // Coder/reviewer routes get role-specific preambles that explain the
-    // worktree + branch + per-role lifecycle.
-    const configPrompt = await expandPrompt(config.prompt, templateVars, promptsConfig);
+    // Build prompt: optional per-agent preamble + structured task context +
+    // user-configured prompt. The preamble (`agents.<name>.taskPreamble`) is
+    // a prompt template — install-specific role guidance (coder/reviewer
+    // lifecycle, review gates, handoff conventions) lives there now, not in
+    // core (#204). It's expanded through the same `{{var}}` path as the
+    // watcher's configured prompt, with the worktree path/branch (empty
+    // strings when the agent has no worktree) and owner name added on top of
+    // the base task vars.
     const ownerName = operator.displayName;
-    let rolePreamble = "";
-    if (agentName === "coder" && worktree) {
-      rolePreamble = [
-        "You are the **coder** agent. A git worktree has been set up for you:",
-        `- Worktree path (host): ${worktree.path}`,
-        `- Branch: ${worktree.branch}`,
-        "- Status: checked out (may have prior commits if this is an iteration)",
-        "",
-        "**Execution environment**: your tool calls run inside a Docker",
-        "container. The worktree above is bind-mounted at `/work` inside",
-        "the container. Use **relative paths** in tool calls (e.g.",
-        "`packages/core/src/foo.ts`), or absolute paths under `/work`",
-        "(e.g. `/work/packages/core/src/foo.ts`). Absolute paths that",
-        "point at the host repo outside the worktree will be rejected",
-        "by the sandbox boundary.",
-        "",
-        "Per-task lifecycle:",
-        "1. Read the task description AND any prior comments (esp. reviewer feedback).",
-        "2. Make the minimal change that satisfies the task or addresses the feedback.",
-        "3. Run typecheck and tests if you touched code:",
-        "   `pnpm typecheck` and `pnpm test`. Fix failures before committing.",
-        '4. `git add` + `git commit -m "<task_id>: <short summary>"`',
-        "   (The worktree is already on the right branch — no need to checkout.)",
-        `5. Hand off immediately: \`tasks(action=update, id=${event.task.id}, project_id=${event.task.project_id ?? "<project>"}, status=in_review, assignee=reviewer)\` and add a comment with the branch name + commit sha + one-line summary. **The \`project_id\` is mandatory** when the task lives on a per-project tracker (e.g. GitHub issues) — without it the tool falls back to the default backend and the update silently 404s.`,
-        "6. **Stop here.** The host pushes branches and merges them; your commit",
-        "   reaches the host via the .git bind mount as soon as `git commit`",
-        "   succeeds. `git push` is unnecessary and will fail (no SSH key in",
-        "   the container) — skip it.",
-        "7. If you cannot proceed (missing context, infra issue), update to `blocked` with a clear reason and STOP — do not fabricate paths or files.",
-        "",
-        "**Reconnaissance budget.** Tool calls are expensive — burning them on `ls`,",
-        "`cat`, and `read` without writing or committing is the #1 failure mode.",
-        "Hard limits, in order:",
-        "  - After ~15 tool calls without writing/editing any file, STOP exploring.",
-        "    Comment on the task with: (a) files you inspected, (b) what you",
-        "    concluded, (c) what's blocking implementation. Then exit.",
-        "  - Do not re-read or re-`ls` paths you've already touched this session.",
-        "    If the answer is in your scrollback, look there first.",
-        "  - When in doubt, commit the smallest viable progress. A trivial",
-        "    commit that gets reviewed beats an empty session every time.",
-        "",
-        "Do NOT touch ~/.tailored-ai/, agent.db, or config.yaml. Do NOT commit secrets.",
-        "",
-      ].join("\n");
-    } else if (agentName === "reviewer" && worktree) {
-      rolePreamble = [
-        "You are the **reviewer** agent. The coder has produced a branch you need to review.",
-        `- Worktree path: ${worktree.path}`,
-        `- Branch: ${worktree.branch}`,
-        "- Status: checked out at HEAD of the branch",
-        "",
-        "**Mandatory gates — you MUST run these BEFORE deciding.** A branch",
-        "that fails any gate cannot be approved, regardless of how clean the",
-        "diff looks. Past mistakes: approved PRs that didn't compile, that",
-        "regressed sandbox code, that pulled in unrelated commits.",
-        "",
-        "GATE 1 — Build & tests (this is the gate that catches imagined APIs):",
-        "  `pnpm install` then `pnpm typecheck` then `pnpm test`",
-        "  If ANY of those fail, REQUEST CHANGES. Quote the first failing",
-        "  error in your comment. Do not approve a branch that doesn't build.",
-        "",
-        "  **If a gate command can't run for environment reasons** (pnpm",
-        "  download failure, Node version mismatch, container missing a",
-        "  binary, etc.) treat that as a GATE 1 FAILURE — do NOT rationalize",
-        "  with 'this is infrastructure, not code'. REQUEST CHANGES with",
-        "  blocked_reason='env: <what failed>'. The supervisor and user will",
-        "  fix the environment; the branch stays unapproved until the gate",
-        "  actually runs. Approving past an unrun gate has caused multiple",
-        "  reverts already.",
-        "",
-        "GATE 2 — Rebase preflight (catches stale-base regressions):",
-        "  `git fetch origin main && git merge-base HEAD origin/main`",
-        "  If merge-base != origin/main HEAD, do a probe merge:",
-        "    `git merge --no-commit --no-ff origin/main`",
-        "    If conflicts OR post-merge `pnpm typecheck`/`pnpm test` fail,",
-        "    REQUEST CHANGES with 'needs rebase against main'. Then",
-        "    `git merge --abort` to clean up before exiting.",
-        "  Branches that delete files only because main moved forward are",
-        "  stale, not malicious — say so in the request-changes comment.",
-        "",
-        "GATE 3 — Scope check:",
-        "  Compare the merge-base diff (`git diff <merge-base>..HEAD`) to the",
-        "  task description. If the branch touches files outside the task's",
-        "  stated scope, REQUEST CHANGES with 'scope creep — split into",
-        "  separate task'. The coder is supposed to commit only this task's",
-        "  work; an extra commit for a different ptask_ id is a red flag.",
-        "",
-        "Diff vocabulary cheat-sheet:",
-        "  `git merge-base main HEAD`               → fork SHA",
-        "  `git diff <merge-base>..HEAD`            → only this branch's changes",
-        "  `git log <merge-base>..HEAD --oneline`   → only this branch's commits",
-        "  If merge-base == origin/main, the branch is up-to-date and",
-        "  `git diff main..HEAD` is identical.",
-        "",
-        "Decision (only after all three gates pass):",
-        `  **\`project_id\` is mandatory on every tasks() call.** Pass \`project_id=${event.task.project_id ?? "<project>"}\` ` +
-          "or the update silently 404s on the default backend instead of " +
-          "the project's tracker (GitHub issues, etc.).",
-        "  - **APPROVE**: " +
-          `\`tasks(action=update, id=${event.task.id}, project_id=${event.task.project_id ?? "<project>"}, status=in_review, assignee=${ownerName})\`. ` +
-          "Comment must state: (a) what was done, (b) which gates passed",
-        "    (build/test output summary, merge-base SHA, scope verified).",
-        "  - **REQUEST CHANGES**: " +
-          `\`tasks(action=update, id=${event.task.id}, project_id=${event.task.project_id ?? "<project>"}, status=in_progress, assignee=coder)\`. ` +
-          "Comment lists specific actionable items — file path, line ref,",
-        "    what's wrong, what's expected. Include the first error from the",
-        "    failing gate so the coder doesn't have to re-run it.",
-        "",
-        "You do NOT commit or amend the branch. Pushing IS allowed when",
-        "your custom configuration calls for it (e.g. to open a PR on",
-        "approve) — the worktree's per-task branch is isolated so a push",
-        "can't pollute main. Before the first push in a fresh container,",
-        "run `gh auth setup-git` to wire git's credential helper through",
-        "the GH_TOKEN your sandbox env carries.",
-        "Aim for one decisive decision per review pass — don't bounce trivial issues; do bounce real problems.",
-        "",
-      ].join("\n");
-    }
+    const preambleVars: Record<string, string> = {
+      ...templateVars,
+      worktree_path: worktree?.path ?? "",
+      worktree_branch: worktree?.branch ?? "",
+      project_id: event.task.project_id ?? "",
+      owner_name: ownerName,
+    };
+    const configPrompt = await expandPrompt(config.prompt, preambleVars, promptsConfig);
+    const rolePreamble = resolved.taskPreamble
+      ? await expandPrompt(resolved.taskPreamble, preambleVars, promptsConfig)
+      : "";
     const prompt = [
       rolePreamble,
       "Task event received. Details:",

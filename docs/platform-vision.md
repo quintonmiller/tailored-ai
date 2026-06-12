@@ -174,6 +174,12 @@ A reasonable starting set. Names are illustrative; bikeshed later.
 - `worktree.removed`
 - `sandbox.exec.failed` — observability for diagnosing flakes
 
+**Notifications / owner delivery** (shipped — #205; the default `builtin:owner-notifier` plugin subscribes and DMs the owner, replacing the inline `sendDM` calls)
+- `task.needs_human` — a task errored/blocked and needs the user; quiet-hours-suppressed
+- `digest.ready` — a periodic digest (e.g. the morning digest) is ready to deliver
+- `question.asked` — the `ask_user` tool asked the user a question (autopilot variant carries `taskId` and is quiet-hours-suppressed)
+- `form.completed` — a `channel_message` workflow step's implicit "DM the owner" fallback
+
 **Forge / repo** (emitted by RepoBackend implementations)
 - `repo.proposal.opened`
 - `repo.proposal.reviewed`

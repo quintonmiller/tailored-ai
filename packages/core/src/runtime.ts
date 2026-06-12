@@ -7,7 +7,13 @@ import type { AgentLoopOptions } from "./agent/loop.js";
 import { findOrCreateSession, type Session } from "./agent/session.js";
 import type { ApprovalRequest, ApprovalResponse } from "./approval.js";
 import type { OutboundNotifier } from "./channels/outbound.js";
-import { type AgentConfig, type AgentHook, mergeProjectOverlay, validateConfig } from "./config.js";
+import {
+  type AgentConfig,
+  type AgentDefinition,
+  type AgentHook,
+  mergeProjectOverlay,
+  validateConfig,
+} from "./config.js";
 import { getProject } from "./db/project-queries.js";
 import { type EventBus, TypedEventBus } from "./events.js";
 import { HttpRouteRegistry } from "./http/registry.js";
@@ -339,6 +345,33 @@ export class AgentRuntime {
   /** Expose the agent registry. As of S11.4 agents are first-class resources, parallel to skills/tools/etc. */
   getAgentRegistry(): AgentRegistry {
     return this._agentRegistry;
+  }
+  /**
+   * Resolve a raw {@link AgentDefinition} by name. Registry first (S11.4
+   * first-class resources), then `config.agents[name]` for back-compat.
+   * Returns undefined when the name isn't a known agent. Used by the task
+   * watcher + worktree/preamble-aware plugins to read per-agent flags
+   * (`worktree`, `taskPreamble`) without going through the full
+   * `resolveAgent` resolution (which mixes in tools/skills/models).
+   */
+  getAgentDefinition(name: string): AgentDefinition | undefined {
+    return this._agentRegistry.get(name) ?? this._config.agents?.[name];
+  }
+  /**
+   * Names of every agent that opts into isolated worktrees
+   * (`agents.<name>.worktree: true`). Spans both the registry and
+   * `config.agents`. Used as the default audience for worktree-aware
+   * plugins (e.g. the project guard) when they declare no explicit list.
+   */
+  getWorktreeAgentNames(): string[] {
+    const names = new Set<string>();
+    for (const { id, definition } of this._agentRegistry.list()) {
+      if (definition.worktree) names.add(id);
+    }
+    for (const [name, def] of Object.entries(this._config.agents ?? {})) {
+      if (def?.worktree) names.add(name);
+    }
+    return Array.from(names);
   }
   /** Expose the bundle registry. Bundles are curated collections; their members are opt-in. */
   getBundleRegistry(): BundleRegistry {

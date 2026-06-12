@@ -4,7 +4,7 @@ How tool side-effects are isolated (host / docker / podman) and how the worktree
 
 ## Sandboxes
 
-Tool side-effects (shell, file IO) can be routed through a `Sandbox` defined in `packages/core/src/sandboxes/interface.ts`. Today:
+Tool side-effects (shell, file IO) can be routed through a `Sandbox` defined in `packages/core/src/sandboxes/interface.ts`. Three built-in backends ship in core; plugins may add more through the sandbox factory registry.
 
 - **`host`** (default) — `packages/core/src/sandboxes/host.ts`. Runs commands directly on the host. No isolation.
 - **`docker`** — `packages/core/src/sandboxes/docker.ts`. Long-running container with the host cwd bind-mounted at `/work` (configurable). `prepare()` runs `docker run -d --rm -v <cwd>:/work -w /work --entrypoint sleep <image> infinity`; `exec()` runs `docker exec`; file IO goes through the bind-mount path on the host. `cleanup()` is best-effort `docker rm -f`.
@@ -34,6 +34,49 @@ sandboxes:
 ```
 
 `DockerSandbox` accepts an injected `runner: DockerRunner` for testability — tests substitute a fake; production uses `execFile('docker', ...)` directly.
+
+## Sandbox factory registry
+
+The sandbox backend is registry-backed: `sandboxFactoryRegistry` in `packages/core/src/sandboxes/factory.ts` holds `string → SandboxFactory` entries. `createSandbox` looks up the kind there, throwing a clear "Known: …" error on an unknown id — the same pattern used by task backends and repo backends.
+
+Built-ins (host / docker / podman) register themselves on module load at the bottom of `packages/core/src/sandboxes/factory.ts` — colocated with the registry (the `providers/factories.ts` pattern) so any importer of `createSandbox` sees them. They are not privileged; they go through the same `registerSandboxFactory` call a third-party plugin uses.
+
+The `sandbox` config field is an open `string` — new kinds registered by a plugin work without any change to the config type or `validateConfig`. The only static checks that remain in `validateConfig` are the "docker/podman imageName not set" guards, which are config-time detectable for the built-ins.
+
+### Registering a custom sandbox kind
+
+From a TAI plugin:
+
+```ts
+import type { Plugin } from "@tailored-ai/core";
+
+export default ((ctx) => {
+  ctx.sandboxBackends.register("firecracker", (config) => {
+    const opts = config.sandboxes?.firecracker as { kernelImage?: string } | undefined;
+    return new FirecrackerSandbox({ kernelImage: opts?.kernelImage ?? "vmlinux" });
+  });
+}) satisfies Plugin;
+```
+
+Then in `config.yaml`:
+
+```yaml
+agent:
+  sandbox: firecracker
+sandboxes:
+  firecracker:
+    kernelImage: /path/to/vmlinux
+```
+
+`FirecrackerSandbox` must implement the `Sandbox` interface from `@tailored-ai/core`.
+
+You can also register directly without a plugin context:
+
+```ts
+import { registerSandboxFactory } from "@tailored-ai/core";
+
+registerSandboxFactory("my-sandbox", (config) => new MySandbox(config));
+```
 
 ## Worktrees
 

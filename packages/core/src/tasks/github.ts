@@ -19,12 +19,12 @@ import type {
  *                  | "status:blocked" | "status:in_review"; closed → "done"
  *   tags        ↔ labels (excluding "status:*", "reason:*", and "agent:*")
  *   assignee    ↔ "agent:<name>" label when the assignee is a configured
- *                  TAI agent role (coder, reviewer, …); otherwise the
- *                  GitHub issue's first assignee login. GitHub rejects
- *                  `assignees: ["coder"]` with 422 because "coder" isn't
- *                  a real collaborator, so agent-role assignments live
- *                  in a label and only real users go through GH's
- *                  assignees API.
+ *                  TAI agent role (the names passed in `agentRoles`);
+ *                  otherwise the GitHub issue's first assignee login.
+ *                  GitHub rejects `assignees: ["coder"]` with 422 because
+ *                  "coder" isn't a real collaborator, so agent-role
+ *                  assignments live in a label and only real users go
+ *                  through GH's assignees API.
  *   author      ↔ issue.user.login
  *   rank        ↔ issue.number (lower = older issue = higher priority)
  *   blocked_reason ↔ first "reason:*" label after the prefix
@@ -34,26 +34,6 @@ import type {
 const STATUS_LABEL_PREFIX = "status:";
 const REASON_LABEL_PREFIX = "reason:";
 const AGENT_LABEL_PREFIX = "agent:";
-
-/**
- * Built-in TAI agent role names. Assignments to these never hit GitHub's
- * `assignees` API — they ride on an `agent:<role>` label instead. Callers
- * extend this set via `GitHubBackendOptions.agentRoles` to register
- * custom agents.
- */
-const DEFAULT_AGENT_ROLES = [
-  "coder",
-  "reviewer",
-  "planner",
-  "researcher",
-  "writer",
-  "default",
-  "cleanup",
-  "capability-researcher",
-  "email-fetcher",
-  "email-classifier",
-  "email-actor",
-];
 
 const STATUSES: TaskStatusMap = {
   backlog: "backlog",
@@ -78,8 +58,9 @@ export interface GitHubBackendOptions {
    * Names that should be treated as TAI agent roles rather than GitHub
    * users when used as a task assignee. Stored as `agent:<name>` labels
    * so the assignment survives a round-trip through GH without the API
-   * rejecting unknown logins. Defaults to the built-in TAI agent set
-   * (coder, reviewer, planner, etc.). Extend with custom agent names.
+   * rejecting unknown logins. The task-backend factory derives this from
+   * the install's configured agents (#204); defaults to an empty set when
+   * omitted (every assignee is then treated as a real GitHub user).
    */
   agentRoles?: string[];
   /** Inject a pre-built Octokit instance (mainly for tests). */
@@ -116,7 +97,7 @@ export class GitHubTaskBackend implements TaskBackend {
     this.owner = owner;
     this.repo = repo;
     this.octokit = opts.octokit ?? new Octokit({ auth: opts.token });
-    this.agentRoles = new Set(opts.agentRoles ?? DEFAULT_AGENT_ROLES);
+    this.agentRoles = new Set(opts.agentRoles ?? []);
   }
 
   /**

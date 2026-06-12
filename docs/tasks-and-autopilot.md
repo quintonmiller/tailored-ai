@@ -31,7 +31,7 @@ In-process task registry, persistent project tasks, pluggable backends, and the 
 Project tasks (and the autopilot worker) read/write through a pluggable `TaskBackend` interface defined in `packages/core/src/tasks/interface.ts`. Today:
 
 - **`native`** (default) — `packages/core/src/tasks/native.ts`, wraps the existing SQLite `project_tasks` table.
-- **`github`** — `packages/core/src/tasks/github.ts`, drives an arbitrary GitHub repo's Issues. Status maps to labels: `status:backlog`, `status:in_progress`, `status:blocked`, `status:in_review`. A closed issue means done. Tags are non-status, non-reason labels. Rank is the issue number (lower = older = higher priority for the autopilot). Assignee is the first `assignees[]` entry. Blocked reason maps to `reason:<value>` labels. Comments preserve the agent's `agentName` by prepending `[agent: NAME] ` to the body when the name matches `[A-Za-z0-9._-]+`; on read, the prefix is stripped and the embedded name overrides the GH user attribution. Plain comments without the prefix still attribute to the GH commenter.
+- **`github`** — `packages/core/src/tasks/github.ts`, drives an arbitrary GitHub repo's Issues. Status maps to labels: `status:backlog`, `status:in_progress`, `status:blocked`, `status:in_review`. A closed issue means done. Tags are non-status, non-reason labels. Rank is the issue number (lower = older = higher priority for the autopilot). Assignee is the first `assignees[]` entry — **unless** it's a known TAI agent role, in which case it rides on an `agent:<name>` label instead (GitHub 422s on `assignees: ["coder"]` because "coder" isn't a real collaborator). The agent-role set is **derived from your config** (#204), not a hardcoded list: every name under `agents:`, plus `taskWatcher.agent`, plus any `tasks.options.agentRoles`. Blocked reason maps to `reason:<value>` labels. Comments preserve the agent's `agentName` by prepending `[agent: NAME] ` to the body when the name matches `[A-Za-z0-9._-]+`; on read, the prefix is stripped and the embedded name overrides the GH user attribution. Plain comments without the prefix still attribute to the GH commenter.
 - **`beans`** — `packages/core/src/tasks/beans.ts`, shells out to the [beans](https://github.com/hmans/beans) CLI. Status maps: `backlog↔todo`, `in_progress↔in-progress`, `done↔completed`; `blocked` is encoded as `status=todo` plus a `status:blocked` tag (with optional `reason:*` tag for `blocked_reason`). Assignee is stored as a managed `assignee:NAME` tag (filtered out on read). beans-native `draft` and `scrapped` statuses are exposed verbatim via `extraStatuses`. Comments are appended to the body inside `<!-- beans-comment ... -->` markers and stripped from `description` on read. `claimBacklog` uses `--if-match <etag>` for optimistic concurrency. Accepts an injected `BeansRunner` for testability; production uses `execFile('beans', ...)`.
 - **`beads`** — `packages/core/src/tasks/beads.ts`, shells out to the [beads](https://github.com/steveyegge/beads) `bd` CLI. Status maps natively (`backlog↔open`, `in_progress↔in_progress`, `blocked↔blocked`, `done↔closed`); the beads-native `deferred` is exposed via `extraStatuses`. Status transitions go through `bd close` / `bd reopen` / `bd set-state --reason` (a generic reason is supplied when the caller doesn't provide one). `claimBacklog` uses `bd update --claim`. Labels map 1:1 (no `assignee:` / `status:blocked` tag prefix gymnastics needed). Limitations: per-issue delete falls back to `bd close --reason deleted`, and `bd init` must have been run on the repo before the backend will work. Accepts an injected `BeadsRunner` for testability.
 
@@ -47,7 +47,7 @@ Config:
 tasks:
   backend: github           # any registered backend id; built-ins: native | github | beans | beads
   options:                  # backend-specific, opaque to core — the selected backend reads it
-    repo: owner/repo        #   github: repo + token (+ optional agentRoles)
+    repo: owner/repo        #   github: repo + token (+ optional agentRoles to extend the derived role set)
     token: ${GITHUB_TOKEN}
     # beans/beads read: path
 ```
@@ -59,6 +59,8 @@ no built-in. The legacy `tasks.github` / `tasks.beans` / `tasks.beads` blocks
 are still accepted and folded into `tasks.options` at load with a deprecation
 warning.
 
+**Agent-role derivation.** The factory (`createTaskBackend` in `tasks/factory.ts`) builds the github backend's agent-role set from the install's own config: the union of `config.agents` keys, `config.taskWatcher.agent`, and `tasks.options.agentRoles`. There is no built-in default list — if you don't define any agents and don't set `agentRoles`, every assignee is treated as a real GitHub user. Names in the set route to `agent:<name>` labels (and `nextBacklogTask` / `query` filter on those labels) instead of GH's assignees API.
+
 When using the `github` backend, `AutopilotWorker.start()` calls `backend.bootstrap()` once on launch — this creates the four `status:*` labels (`backlog`, `in_progress`, `blocked`, `in_review`) and `reason:budget` with sensible colors if they're missing. Idempotent and non-fatal: missing-permissions or 422-already-exists errors are swallowed. Backends declare bootstrap as optional on `TaskBackend`; only `github` implements it today.
 
 ## Autopilot
@@ -67,21 +69,36 @@ When using the `github` backend, `AutopilotWorker.start()` calls `backend.bootst
 
 What it does each tick:
 1. Read `autopilot_settings` (paused / quiet hours / disabled hours / token budget)
-2. If past a budget cap, skip; if quiet hours, suppress notifications
+2. If past a budget cap, skip
 3. Promote any tasks blocked due to budget back to backlog when the window rolls forward
 4. Pick one backlog task whose `assignee` matches a configured agent name; claim atomically
 5. Resolve the task's `project_id` to a `ProjectContext` (S7) so cwd + session scope match the project
 6. Build a fresh session keyed `autopilot:<task.id>` (no carry-over history; comments are the durable memory)
 7. Run the loop with a per-task `AbortController` so a single overrun doesn't cascade
-8. On success, mark task `done` (or `in_review` if the agent flagged uncertainty); on error, comment + status `blocked` + DM the owner
+8. On success, mark task `done` (or `in_review` if the agent flagged uncertainty); on error, comment + status `blocked` + emit `task.needs_human`
 
 Token usage is recorded per session/task in `token_usage`. Mid-task budget exhaustion aborts that task only; sibling conversations (chats, other autopilot runs) keep going.
 
-Morning digest: a daily Cron (configurable via `digest_time` setting) runs `buildMorningDigest()` over `digest_runs` + recent activity and DMs the result to the Discord owner. Runs are persisted in `digest_runs`.
+Morning digest: a daily Cron (configurable via `digest_time` setting) runs `buildMorningDigest()` over `digest_runs` + recent activity and emits `digest.ready`. Runs are persisted in `digest_runs`.
 
-Notifications:
-- `notifyNeedsHuman` DMs the owner when a task errors or is blocked, suppressed during quiet hours
-- The web UI's "working on" strip subscribes via `getActivity()` for live status
+### Task prompt (`autopilot.taskPrompt`)
+
+The orchestration rules the worker hands an agent are an overridable template, `config.autopilot.taskPrompt`, expanded by `buildTaskPrompt()` (`packages/core/src/autopilot/task-prompt.ts`). `DEFAULT_CONFIG` ships `DEFAULT_AUTOPILOT_TASK_PROMPT` (the rules verbatim), so behavior is unchanged unless you override it. Template vars: `{{task_id}}`, `{{task_title}}`, `{{task_description}}`, `{{prior_activity}}` (the rendered recent-comment block, or empty when there are none). Precedent: `briefing.prompt` / `suggestions.prompt`.
+
+### Notification seams (events)
+
+Core no longer decides *who* to notify or *how*. The worker, the `ask_user` tool, and the `channel_message` workflow executor emit typed runtime events instead of DMing the owner inline; the default **`builtin:owner-notifier`** plugin (`packages/core/src/plugins/owner-notifier.ts`) subscribes and delivers — same channel/recipient resolution (`runtime.resolveOutbound()` + `runtime.getOwnerId()`) and the same autopilot quiet-hours suppression that lived inline. It ships enabled in `DEFAULT_PLUGIN_MODULES`, so out-of-the-box delivery is identical to before.
+
+| Event | Emitted by | Owner-notifier delivery |
+|---|---|---|
+| `task.needs_human` | worker error/block path | owner DM, suppressed during quiet hours |
+| `digest.ready` | `runDigest()` | owner DM, never suppressed |
+| `question.asked` | `ask_user` tool | owner DM; the autopilot variant (carries `taskId`) is quiet-hours-suppressed, plain questions always deliver |
+| `form.completed` | `channel_message` step's implicit owner-DM fallback | owner DM |
+
+To ship somewhere else (Slack, Telegram, email, a pager): disable the plugin (`plugins: - { module: "builtin:owner-notifier", enabled: false }`) and subscribe your own handler to these events via `ctx.events.on(...)`. The `channel_message` executor only routes through `form.completed` for the fully-implicit "DM the owner" case (no explicit `channelId` / `userId` / per-step `channel`); explicit targets stay direct deliveries.
+
+The web UI's "working on" strip still subscribes via `getActivity()` for live status.
 
 The autopilot uses `runtime.getTaskBackend()` by default; tests override via `AutopilotWorkerOptions.taskBackend`. As of S7.5 the worker still claims one task per tick from a single backend — multi-project iteration with per-project backends is a follow-up bean.
 
