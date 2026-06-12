@@ -1335,7 +1335,15 @@ export function killSandbox(id: string): Promise<{ ok?: boolean }> {
 }
 
 export interface ChatEvent {
-  type: "tool_call" | "tool_result" | "response" | "error" | "activity" | "approval_request" | "memory_recalled";
+  type:
+    | "delta"
+    | "tool_call"
+    | "tool_result"
+    | "response"
+    | "error"
+    | "activity"
+    | "approval_request"
+    | "memory_recalled";
   data: Record<string, unknown>;
 }
 
