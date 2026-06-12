@@ -475,6 +475,14 @@ export interface AgentConfig {
     kbDirectory: string;
   };
   tools: {
+    /**
+     * Open map: every tool — built-in or plugin — reads its config from
+     * `tools.<id>` through this index. Core types only the built-in tools'
+     * shapes below; plugin tools (e.g. @tailored-ai/google-tools' `gmail`)
+     * define and validate their own config shape at factory time. A missing
+     * or `enabled: false` entry disables the tool.
+     */
+    [toolId: string]: { enabled?: boolean; [key: string]: unknown } | undefined;
     memory?: {
       enabled: boolean;
     };
@@ -509,14 +517,6 @@ export interface AgentConfig {
       enabled: boolean;
       defaultTtlDays?: number;
     };
-    gmail?: {
-      enabled: boolean;
-      account: string;
-    };
-    google_calendar?: {
-      enabled: boolean;
-      account: string;
-    };
     claude_code?: {
       enabled: boolean;
       allowedTools?: string[];
@@ -547,12 +547,6 @@ export interface AgentConfig {
     };
     md_to_pdf?: {
       enabled: boolean;
-    };
-    google_drive?: {
-      enabled: boolean;
-      account: string;
-      folder_name?: string;
-      folder_id?: string;
     };
     ask_user?: {
       enabled: boolean;
@@ -1013,24 +1007,8 @@ export function validateConfig(config: AgentConfig): string[] {
     );
     enabledToolNames.delete("web_search");
   }
-  if (toolsConfig.gmail?.enabled && !toolsConfig.gmail.account) {
-    warnings.push(
-      "tools.gmail is enabled but account is empty (unresolved ${GOG_ACCOUNT}?); tool will be skipped at load",
-    );
-    enabledToolNames.delete("gmail");
-  }
-  if (toolsConfig.google_calendar?.enabled && !toolsConfig.google_calendar.account) {
-    warnings.push(
-      "tools.google_calendar is enabled but account is empty (unresolved ${GOG_ACCOUNT}?); tool will be skipped at load",
-    );
-    enabledToolNames.delete("google_calendar");
-  }
-  if (toolsConfig.google_drive?.enabled && !toolsConfig.google_drive.account) {
-    warnings.push(
-      "tools.google_drive is enabled but account is empty (unresolved ${GOG_ACCOUNT}?); tool will be skipped at load",
-    );
-    enabledToolNames.delete("google_drive");
-  }
+  // Plugin tools (gmail, google_calendar, google_drive, …) validate their own
+  // config at factory time — core no longer knows their shapes by name.
   // Custom tools are always available when defined. Flag malformed entries so
   // the runtime can skip them cleanly instead of crashing at construction.
   for (const [name, raw] of Object.entries(config.custom_tools ?? {})) {
