@@ -1,0 +1,51 @@
+export const metadata = {
+  title: "@tailored-ai/provider-openrouter",
+  description: "OpenRouter model provider plugin — one API key for hundreds of models.",
+};
+
+# @tailored-ai/provider-openrouter
+
+One API key for hundreds of models across vendors. OpenRouter speaks the OpenAI wire format, so this plugin is a thin configuration of core's `OpenAIProvider` — chat, streaming, tool calling, and model discovery all work out of the box.
+
+## Install
+
+```bash
+tai plugin install @tailored-ai/provider-openrouter
+```
+
+The installer adds the package to your `plugins:` list automatically.
+
+## Configure
+
+```yaml
+providers:
+  openrouter:
+    apiKey: "${OPENROUTER_API_KEY}"          # https://openrouter.ai/keys
+    defaultModel: "anthropic/claude-haiku-4.5"
+
+agent:
+  defaultProvider: openrouter
+```
+
+Per-agent override:
+
+```yaml
+agents:
+  researcher:
+    provider: openrouter
+    model: "google/gemini-2.5-flash"
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `apiKey` | yes | Use `${OPENROUTER_API_KEY}` to read from the environment. |
+| `defaultModel` | yes | An OpenRouter model id (`vendor/model`). |
+| `baseUrl` | no | Defaults to `https://openrouter.ai/api/v1`. Override for proxies. |
+
+## Model ids
+
+OpenRouter ids are `vendor/model`, optionally with a `:variant` suffix (`:free`, `:nitro`). Browse at [openrouter.ai/models](https://openrouter.ai/models) — or run `tai edit`, where the model field lists the catalog via `listModels`.
+
+## Not yet
+
+Attribution headers (`HTTP-Referer` / `X-Title`, used for OpenRouter's app rankings) and provider-routing preferences need a small core seam, tracked in [#234](https://github.com/quintonmiller/tailored-ai/issues/234).
