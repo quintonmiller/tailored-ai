@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -82,6 +82,77 @@ describe("PluginManager.install", () => {
     expect(existsSync(mgr.packageJsonPath)).toBe(false);
     mgr.install(["foo"]);
     expect(existsSync(mgr.packageJsonPath)).toBe(true);
+  });
+});
+
+describe("PluginManager.install — replacing an existing dependency", () => {
+  function writeDeps(mgr: PluginManager, deps: Record<string, string>): void {
+    mgr.bootstrap();
+    writeFileSync(mgr.packageJsonPath, JSON.stringify({ name: "tai-plugins", dependencies: deps }, null, 2), "utf8");
+  }
+
+  function depsAt(path: string): Record<string, string> {
+    return (JSON.parse(readFileSync(path, "utf8")) as { dependencies: Record<string, string> }).dependencies;
+  }
+
+  it("drops a stale registry entry before npm runs so the new spec wins", () => {
+    const mgr = new PluginManager(homeDir, fakeExecutor());
+    writeDeps(mgr, { "@org/foo": "^1.0.0", "@org/keep": "^2.0.0" });
+    let depsSeenByNpm: Record<string, string> | undefined;
+    const spy: NpmExecutor = (args, runOpts) => {
+      depsSeenByNpm = depsAt(resolve(runOpts.cwd, "package.json"));
+      calls.push({ args, cwd: runOpts.cwd });
+      return { ok: true };
+    };
+    const spyMgr = new PluginManager(homeDir, spy);
+    const res = spyMgr.install(["@org/foo@2.0.0"]);
+    expect(res.ok).toBe(true);
+    expect(depsSeenByNpm).toEqual({ "@org/keep": "^2.0.0" });
+  });
+
+  it("drops a stale file: entry when reinstalling the same package from the registry", () => {
+    const mgr = new PluginManager(homeDir, fakeExecutor());
+    const linked = resolve(homeDir, "local-pkg");
+    mkdirSync(linked, { recursive: true });
+    writeFileSync(resolve(linked, "package.json"), JSON.stringify({ name: "@org/foo", version: "1.0.0" }), "utf8");
+    writeDeps(mgr, { "@org/foo": `file:${linked}` });
+    let depsSeenByNpm: Record<string, string> | undefined;
+    const spy: NpmExecutor = (_args, runOpts) => {
+      depsSeenByNpm = depsAt(resolve(runOpts.cwd, "package.json"));
+      return { ok: true };
+    };
+    new PluginManager(homeDir, spy).install(["@org/foo@2.0.0"]);
+    expect(depsSeenByNpm).toEqual({});
+  });
+
+  it("resolves a file: spec's name from the linked manifest and drops that entry", () => {
+    const mgr = new PluginManager(homeDir, fakeExecutor());
+    const linked = resolve(homeDir, "local-pkg");
+    mkdirSync(linked, { recursive: true });
+    writeFileSync(resolve(linked, "package.json"), JSON.stringify({ name: "@org/foo", version: "9.9.9" }), "utf8");
+    writeDeps(mgr, { "@org/foo": "^1.0.0" });
+    let depsSeenByNpm: Record<string, string> | undefined;
+    const spy: NpmExecutor = (_args, runOpts) => {
+      depsSeenByNpm = depsAt(resolve(runOpts.cwd, "package.json"));
+      return { ok: true };
+    };
+    new PluginManager(homeDir, spy).install([`file:${linked}`]);
+    expect(depsSeenByNpm).toEqual({});
+  });
+
+  it("restores the original manifest when npm fails after entries were dropped", () => {
+    const mgr = new PluginManager(homeDir, fakeExecutor({ ok: false, stderr: "ERESOLVE" }));
+    writeDeps(mgr, { "@org/foo": "file:../somewhere" });
+    const res = mgr.install(["@org/foo@2.0.0"]);
+    expect(res.ok).toBe(false);
+    expect(depsAt(mgr.packageJsonPath)).toEqual({ "@org/foo": "file:../somewhere" });
+  });
+
+  it("leaves the manifest alone for unrelated names and git URLs", () => {
+    const mgr = new PluginManager(homeDir, fakeExecutor());
+    writeDeps(mgr, { "@org/keep": "^2.0.0" });
+    mgr.install(["@org/other@1.0.0", "git+https://example.com/org/keep.git"]);
+    expect(depsAt(mgr.packageJsonPath)).toEqual({ "@org/keep": "^2.0.0" });
   });
 });
 
