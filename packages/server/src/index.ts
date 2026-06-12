@@ -45,7 +45,6 @@ import {
   getNote,
   getProject,
   getProjectTask,
-  getSession,
   getSessionMessages,
   getTokenUsageInWindow,
   getWorkflowRun,
@@ -86,7 +85,6 @@ import {
   runMemorySweep,
   SESSION_SUMMARY_TAG,
   type Suggestions,
-  saveMessage,
   setSecret,
   summarizeSession,
   TaiRegistrySource,
@@ -116,6 +114,7 @@ import {
   resolveApprovalById,
   unregisterHandler,
 } from "./approval.js";
+import { mountPluginHttpRoutes, routePathToRegex } from "./http-routes.js";
 
 export interface ServerOptions {
   runtime: AgentRuntime;
@@ -307,9 +306,25 @@ export function createServer(opts: ServerOptions) {
   //      back-compat; emits no error when authToken handles the request.
   //
   // OPTIONS passes through both checks (CORS preflight).
+  //
+  // Plugin routes registered with `auth: "none"` (e.g. the trusted-actions
+  // executor callback) are exempt from the server bearer check — they do
+  // their own auth. Compiled from the route registry into method + path
+  // matchers; `:param` segments become wildcards. Checked against the
+  // concrete request path (`c.req.routePath` is the middleware's own `/api/*`
+  // pattern inside `app.use`, so it can't identify the matched handler).
+  const authExemptMatchers = runtime
+    .getHttpRoutes()
+    .list()
+    .filter((r) => r.auth === "none")
+    .map((r) => ({ method: r.method, regex: routePathToRegex(r.mountPath) }));
   app.use("/api/*", async (c, next) => {
     const method = c.req.method;
     if (method === "OPTIONS") return next();
+
+    if (authExemptMatchers.some((m) => m.method === method && m.regex.test(c.req.path))) {
+      return next();
+    }
 
     const cfg = runtime.getConfig().server;
     const authHeader = c.req.header("Authorization") ?? "";
@@ -666,134 +681,9 @@ export function createServer(opts: ServerOptions) {
     return c.json(report);
   });
 
-  // === Trusted-actions: subscription approval ===
-  //
-  // Pass-through to the executor's /internal/subscriptions endpoints,
-  // authenticating with the shared secret from config.
-
-  async function callExecutor(path: string, init: RequestInit = {}): Promise<Response> {
-    const ta = runtime.getConfig().trustedActions;
-    if (!ta?.enabled || !ta.url || !ta.sharedSecret) {
-      return new Response(JSON.stringify({ error: "Trusted-actions executor not configured" }), {
-        status: 503,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-    const url = ta.url.replace(/\/$/, "") + path;
-    return await fetch(url, {
-      ...init,
-      headers: {
-        ...(init.headers as Record<string, string> | undefined),
-        Authorization: `Bearer ${ta.sharedSecret}`,
-        "Content-Type": "application/json",
-      },
-    });
-  }
-
-  app.get("/api/trusted-actions/subscriptions", async (_c) => {
-    const r = await callExecutor("/internal/subscriptions");
-    return new Response(r.body, { status: r.status, headers: { "Content-Type": "application/json" } });
-  });
-
-  app.post("/api/trusted-actions/subscriptions/:op{approve|reject|delete}", async (c) => {
-    const op = c.req.param("op");
-    const body = await c.req.json().catch(() => ({}));
-    const r = await callExecutor(`/internal/subscriptions/${op}`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
-    return new Response(r.body, { status: r.status, headers: { "Content-Type": "application/json" } });
-  });
-
-  app.get("/api/trusted-actions/history", async (c) => {
-    const before = c.req.query("before");
-    const limit = c.req.query("limit");
-    const qs = new URLSearchParams();
-    if (before) qs.set("before", before);
-    if (limit) qs.set("limit", limit);
-    const path = `/internal/actions/history${qs.toString() ? `?${qs.toString()}` : ""}`;
-    const r = await callExecutor(path);
-    return new Response(r.body, { status: r.status, headers: { "Content-Type": "application/json" } });
-  });
-
-  /**
-   * Executor → TAI callback. Fires when an action enters a terminal
-   * state. Injects a system message into the originating session so
-   * the agent's next turn can react to the outcome.
-   *
-   * Auth: same shared secret as TAI → executor (reused in both
-   * directions). The executor's host must be allow-listed to reach
-   * TAI's port — in our setup it does so via host.docker.internal,
-   * added in the docker-compose extra_hosts.
-   */
-  app.post("/api/trusted-actions/callback", async (c) => {
-    const ta = runtime.getConfig().trustedActions;
-    if (!ta?.sharedSecret) {
-      return c.json({ error: "trustedActions not configured" }, 503);
-    }
-    const auth = c.req.header("Authorization");
-    if (auth !== `Bearer ${ta.sharedSecret}`) {
-      return c.json({ error: "Unauthorized" }, 401);
-    }
-    let body: {
-      action_id?: string;
-      type?: string;
-      status?: string;
-      session_id?: string;
-      result?: unknown;
-      error?: string | null;
-    };
-    try {
-      body = await c.req.json();
-    } catch {
-      return c.json({ error: "Invalid JSON" }, 400);
-    }
-    if (!body.action_id || !body.status) {
-      return c.json({ error: "Missing action_id or status" }, 400);
-    }
-
-    // Inject a one-line system message into the originating session so
-    // the agent can see the outcome on its next turn. Skip silently
-    // when the session_id refers to an ephemeral one-shot run (no DB
-    // row) — the caller will surface the result via the tool's own
-    // return value or via check_action_status.
-    let injected = false;
-    if (body.session_id && body.session_id !== "tai-agent") {
-      const session = getSession(runtime.db, body.session_id);
-      if (session) {
-        try {
-          const lines: string[] = [
-            `[trusted-actions notification] Action ${body.action_id} (${body.type || "unknown"}) → ${body.status}.`,
-          ];
-          if (body.result) {
-            lines.push(`result: ${JSON.stringify(body.result).slice(0, 800)}`);
-          }
-          if (body.error) lines.push(`error: ${body.error}`);
-          // Use role="user" with an explicit prefix. We can't use
-          // "system" mid-history (vLLM and other providers require
-          // system messages to be consecutive and at the start of the
-          // conversation), and "tool" requires a tool_call_id we
-          // don't have. The bracketed prefix is enough for the agent
-          // to recognize it as an automated event.
-          saveMessage(runtime.db, body.session_id, {
-            role: "user",
-            content: lines.join("\n"),
-          });
-          injected = true;
-        } catch (err) {
-          console.warn(
-            `[trusted-actions callback] could not inject into session ${body.session_id}:`,
-            err instanceof Error ? err.message : err,
-          );
-        }
-      } else {
-        console.log(
-          `[trusted-actions callback] ${body.action_id} → ${body.status} (session ${body.session_id} not persistent — no message injected)`,
-        );
-      }
-    }
-    return c.json({ received: true, injected });
-  });
+  // Trusted-actions HTTP routes (/api/trusted-actions/*) moved to the
+  // @tailored-ai/trusted-actions package — they register through core's HTTP
+  // route seam and are mounted below via `mountPluginHttpRoutes`. See #206.
 
   // === Always-on / exploratory agents ===
 
@@ -3552,6 +3442,15 @@ export function createServer(opts: ServerOptions) {
     unregisterAuthored(kind, id);
     return c.json({ ok: true });
   });
+
+  // --- Plugin-mounted HTTP routes ---
+  //
+  // Adapt every route the runtime's HttpRouteRegistry holds onto Hono. Plugins
+  // (e.g. @tailored-ai/trusted-actions) register these via `ctx.http`. Mounted
+  // after the core routes and the auth middleware (which already covers
+  // `/api/*`), and before the SPA fallback so a plugin route under `/api/ext/…`
+  // or an allow-listed absolute path wins over the static index. See #206.
+  mountPluginHttpRoutes(app, runtime);
 
   // --- UI provider (static bundle and/or custom routes) ---
 

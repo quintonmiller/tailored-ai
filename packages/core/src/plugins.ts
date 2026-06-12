@@ -1,4 +1,5 @@
 import type { AgentConfig } from "./config.js";
+import { createHttpRegistryView } from "./http/registry.js";
 import { createPluginContext, type Plugin, type PluginContext, type PluginDisposer } from "./plugin-context.js";
 
 export interface LoadedPlugin {
@@ -101,7 +102,14 @@ export async function loadPlugins(
     // plugin sees only its own settings. Other views (registries, bus,
     // runtime) are shared.
     const entryConfig = typeof entry === "object" && entry.config ? entry.config : {};
-    const ctx: PluginContext = { ...baseCtx, config: entryConfig };
+    // Namespace this plugin's HTTP routes under `/api/ext/<module>/` so two
+    // plugins can't collide. Derived from the runtime's shared registry when
+    // present; falls back to the base context's view otherwise (e.g. a
+    // partial runtime stub that predates the seam).
+    const httpRegistry =
+      typeof baseCtx.runtime?.getHttpRoutes === "function" ? baseCtx.runtime.getHttpRoutes() : undefined;
+    const http = httpRegistry ? createHttpRegistryView(httpRegistry, moduleName) : baseCtx.http;
+    const ctx: PluginContext = { ...baseCtx, config: entryConfig, http };
     try {
       const mod = (await importer(moduleName)) as { default?: unknown } | undefined;
       const register = mod?.default;

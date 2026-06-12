@@ -78,6 +78,17 @@ The server mounts a UI via the registry in `packages/core/src/ui/registry.ts`. T
 2. Register at module import: `registerUiProviderFactory("my-ui", (runtime, slice) => ...)`. `slice` is the matching `server.ui.my-ui` block from config.
 3. Tell users to set `server.ui.provider: my-ui` in their `config.yaml`. The kill-switch `server.ui.enabled: false` skips UI entirely.
 
+## Plugin HTTP Routes
+
+Plugins mount HTTP endpoints on the TAI server through a framework-agnostic seam — core never imports Hono, the dependency direction stays server → core.
+
+- **Core side** (`packages/core/src/http/registry.ts`): the runtime owns one `HttpRouteRegistry` of route descriptors `{ method, path, handler, auth?, absolute? }`. A handler is `(req: TaiHttpRequest) => Promise<TaiHttpResponse>` with simple request (method, params, query, headers, `json()`/`text()`) and response (status, headers, `json`/`body`) shapes — not a re-creation of Express. The registry survives `reload()` because Hono can't unmount routes once added; handlers read live runtime state per request.
+- **Plugin side**: a plugin registers via `ctx.http.register(descriptor)` or `ctx.http.mount(prefix, descriptors)`. Both return a disposer — call it from the plugin's own disposer so routes don't collide when the runtime re-loads the plugin on reload.
+- **Namespace**: plugin routes mount under `/api/ext/<plugin-id>/…` so they can never shadow a core route. The loader bakes the plugin's module id in as the default prefix; `mount("admin", …)` nests under `/api/ext/<plugin-id>/admin/…`.
+- **Auth**: `auth: "token"` (default) puts the route behind the server's `server.authToken` bearer check like every other `/api/*` route. `auth: "none"` exempts it — for a webhook/callback called by a service (not a browser) that authenticates with its own secret. The exemption is matched against the concrete request path in the server's auth middleware.
+- **Absolute escape hatch**: `absolute: true` opts a descriptor out of the namespace and mounts it at the verbatim `path` (which must start with `/`). Reserved for first-party packages preserving a legacy path the UI or an external service already calls — a deliberate, reviewed exception, not a default. The trusted-actions package uses it to keep `/api/trusted-actions/*` working (see [docs/trusted-actions.md](./trusted-actions.md)).
+- **Server side** (`packages/server/src/http-routes.ts`): after building the Hono app and the auth middleware, `mountPluginHttpRoutes(app, runtime)` iterates the registry and adapts each descriptor onto Hono, before the SPA static fallback. Routes register at startup (the runtime-context plugin pass runs before `createServer`).
+
 ## Admin Tool
 
 `packages/core/src/tools/admin.ts` lets the agent read/modify its own configuration at runtime:
