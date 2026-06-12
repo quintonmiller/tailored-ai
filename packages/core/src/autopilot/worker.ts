@@ -163,23 +163,36 @@ export class AutopilotWorker {
   }
 
   /**
-   * Daily memory hygiene sweep — runs at 03:14 every day, extending TTL on
-   * referenced notes and deleting expired low-importance ones.
+   * Daily memory hygiene sweep — extends TTL on referenced notes and deletes
+   * expired low-importance ones. Schedule comes from
+   * `autopilot.memorySweepCron`; an empty value disables the sweep.
    */
   private startMemorySweepCron(): void {
     if (this.memorySweepCron) return;
-    this.memorySweepCron = new Cron("14 3 * * *", () => {
-      try {
-        const report = runMemorySweep(this.runtime.db);
-        console.log(
-          `[autopilot] Memory sweep: extended ${report.extendedTtl}, deleted ${report.deletedExpired}, ` +
-            `remaining notes=${report.remainingNotes}, chunks=${report.totalChunks}`,
-        );
-      } catch (err) {
-        console.error("[autopilot] Memory sweep error:", (err as Error).message);
-      }
-    });
-    console.log("[autopilot] Memory sweep scheduled daily at 03:14");
+    const schedule = this.runtime.getConfig().autopilot?.memorySweepCron;
+    if (!schedule) {
+      console.log("[autopilot] Memory sweep disabled (autopilot.memorySweepCron is empty)");
+      return;
+    }
+    try {
+      this.memorySweepCron = new Cron(schedule, () => {
+        try {
+          const report = runMemorySweep(this.runtime.db);
+          console.log(
+            `[autopilot] Memory sweep: extended ${report.extendedTtl}, deleted ${report.deletedExpired}, ` +
+              `remaining notes=${report.remainingNotes}, chunks=${report.totalChunks}`,
+          );
+        } catch (err) {
+          console.error("[autopilot] Memory sweep error:", (err as Error).message);
+        }
+      });
+    } catch (err) {
+      console.warn(
+        `[autopilot] Invalid autopilot.memorySweepCron "${schedule}": ${(err as Error).message}; memory sweep disabled`,
+      );
+      return;
+    }
+    console.log(`[autopilot] Memory sweep scheduled (${schedule})`);
   }
 
   stop(): void {
