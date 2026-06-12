@@ -109,5 +109,6 @@ Deep notes on each subsystem live under [`docs/`](./docs/):
 | Trusted-actions HITL gateway (Amazon purchases) — setup, runbook, threat model, roadmap | [docs/trusted-actions.md](./docs/trusted-actions.md) + [runbook](./docs/trusted-actions-runbook.md) + [threats](./docs/trusted-actions-threats.md) + [roadmap](./docs/trusted-actions-roadmap.md) |
 | Browser mediator — flexible browser surface with vault refs + workflow learning (6-phase build) | [docs/browser-mediator-design.md](./docs/browser-mediator-design.md) |
 | Publishing to npm — one-time setup, per-release flow, troubleshooting | [docs/publishing.md](./docs/publishing.md) |
+| Plugin catalog: what's shipped, what's open, community priority | [docs/plugin-catalog.md](./docs/plugin-catalog.md) |
 
 When touching a subsystem, update its doc — keep this index file tight.
