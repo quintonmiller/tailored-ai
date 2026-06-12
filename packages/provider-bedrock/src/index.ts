@@ -23,7 +23,7 @@
  * here: core's `providers` config is an open map and knows nothing about
  * the `bedrock` id.
  */
-import type { Plugin } from "@tailored-ai/core";
+import type { AgentConfig, Plugin, PluginMeta } from "@tailored-ai/core";
 import { BedrockProvider } from "./provider.js";
 
 export { BedrockProvider, type BedrockProviderOptions } from "./provider.js";
@@ -33,6 +33,26 @@ export interface BedrockConfig {
   defaultModel?: string;
   region?: string;
   profile?: string;
+}
+
+export const meta: PluginMeta = {
+  name: "AWS Bedrock provider",
+  description:
+    "Bedrock-hosted models (Anthropic, Nova, Meta, Mistral, …) via the Converse API. AWS credential chain auth.",
+  registers: [{ kind: "provider", id: "bedrock", configKey: "providers.bedrock" }],
+};
+
+/** Plugin-owned config checks — the shape lives here, not in core (#229). */
+export function validateConfig(config: AgentConfig): string[] {
+  const cfg = config.providers.bedrock as BedrockConfig | undefined;
+  if (!cfg) return [];
+  const warnings: string[] = [];
+  if (!cfg.defaultModel) {
+    warnings.push(
+      'providers.bedrock is configured but defaultModel is missing — set a Bedrock model or inference-profile id, e.g. "us.anthropic.claude-haiku-4-5-20251001-v1:0"',
+    );
+  }
+  return warnings;
 }
 
 const plugin: Plugin = (ctx) => {
