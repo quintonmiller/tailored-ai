@@ -231,3 +231,99 @@ describe("BedrockProvider.chat", () => {
     );
   });
 });
+
+describe("BedrockProvider.chatStream", () => {
+  function streamOf(events: unknown[]) {
+    return (async function* () {
+      for (const e of events) yield e;
+    })();
+  }
+
+  function makeStreamProvider(events: unknown[]) {
+    const send = vi.fn(async () => ({ stream: streamOf(events) }));
+    return { provider: new BedrockProvider({ client: { send } as never }), send };
+  }
+
+  async function collect(provider: BedrockProvider, model = "us.amazon.nova-micro-v1:0") {
+    const out = [];
+    for await (const ev of provider.chatStream({ model, messages: [{ role: "user", content: "Hi" }] })) {
+      out.push(ev);
+    }
+    return out;
+  }
+
+  it("yields text deltas then one done; concatenated deltas equal done content", async () => {
+    const { provider } = makeStreamProvider([
+      { messageStart: { role: "assistant" } },
+      { contentBlockDelta: { contentBlockIndex: 0, delta: { text: "Hello" } } },
+      { contentBlockDelta: { contentBlockIndex: 0, delta: { text: " world" } } },
+      { contentBlockStop: { contentBlockIndex: 0 } },
+      { messageStop: { stopReason: "end_turn" } },
+      { metadata: { usage: { inputTokens: 5, outputTokens: 2, totalTokens: 7 }, metrics: {} } },
+    ]);
+    const events = await collect(provider);
+
+    expect(events).toEqual([
+      { type: "delta", content: "Hello" },
+      { type: "delta", content: " world" },
+      {
+        type: "done",
+        response: {
+          content: "Hello world",
+          toolCalls: undefined,
+          usage: { input: 5, output: 2 },
+          finishReason: "stop",
+        },
+      },
+    ]);
+  });
+
+  it("accumulates toolUse input fragments and surfaces complete tool calls on done", async () => {
+    const { provider } = makeStreamProvider([
+      { contentBlockDelta: { contentBlockIndex: 0, delta: { text: "Checking." } } },
+      { contentBlockStart: { contentBlockIndex: 1, start: { toolUse: { toolUseId: "tu_1", name: "get_weather" } } } },
+      { contentBlockDelta: { contentBlockIndex: 1, delta: { toolUse: { input: '{"city"' } } } },
+      { contentBlockDelta: { contentBlockIndex: 1, delta: { toolUse: { input: ':"Oslo"}' } } } },
+      { contentBlockStop: { contentBlockIndex: 1 } },
+      { messageStop: { stopReason: "tool_use" } },
+      { metadata: { usage: { inputTokens: 30, outputTokens: 11, totalTokens: 41 }, metrics: {} } },
+    ]);
+    const events = await collect(provider);
+
+    expect(events[0]).toEqual({ type: "delta", content: "Checking." });
+    const done = events[events.length - 1];
+    expect(done).toEqual({
+      type: "done",
+      response: {
+        content: "Checking.",
+        toolCalls: [{ id: "tu_1", name: "get_weather", arguments: { city: "Oslo" } }],
+        usage: { input: 30, output: 11 },
+        finishReason: "tool_calls",
+      },
+    });
+  });
+
+  it("throws on mid-stream exception events", async () => {
+    const { provider } = makeStreamProvider([
+      { contentBlockDelta: { contentBlockIndex: 0, delta: { text: "partial" } } },
+      { modelStreamErrorException: { name: "ModelStreamErrorException", message: "stream broke" } },
+    ]);
+    await expect(collect(provider)).rejects.toThrow(/Bedrock ConverseStream error for model .*stream broke/);
+  });
+
+  it("throws when the response carries no stream", async () => {
+    const send = vi.fn(async () => ({}));
+    const provider = new BedrockProvider({ client: { send } as never });
+    await expect(collect(provider)).rejects.toThrow(/response contained no stream/);
+  });
+
+  it("wraps send errors with the model id for context", async () => {
+    const send = vi.fn(async () => {
+      throw new Error("ThrottlingException: slow down");
+    });
+    const provider = new BedrockProvider({ client: { send } as never });
+    await expect(collect(provider, "amazon.nova-micro-v1:0")).rejects.toThrow(
+      /Bedrock ConverseStream error for model amazon\.nova-micro-v1:0: ThrottlingException/,
+    );
+  });
+});

@@ -44,3 +44,20 @@ describe("provider-bedrock plugin", () => {
     expect(() => factory?.(configWith({ region: "us-west-2" }))).toThrow(/requires a defaultModel/);
   });
 });
+
+describe("plugin meta + validateConfig", () => {
+  it("declares the provider registration", async () => {
+    const { meta } = await import("../index.js");
+    expect(meta.registers).toEqual([{ kind: "provider", id: "bedrock", configKey: "providers.bedrock" }]);
+    expect(meta.description).toBeTruthy();
+  });
+
+  it("warns when providers.bedrock exists without a defaultModel", async () => {
+    const { validateConfig } = await import("../index.js");
+    expect(validateConfig(configWith({ region: "us-west-2" }))).toEqual([
+      expect.stringContaining("defaultModel is missing"),
+    ]);
+    expect(validateConfig(configWith({ defaultModel: "us.amazon.nova-micro-v1:0" }))).toEqual([]);
+    expect(validateConfig(configWith(undefined))).toEqual([]);
+  });
+});

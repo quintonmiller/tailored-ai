@@ -37,7 +37,7 @@ agents:
 
 No keys go in `config.yaml`. The provider uses the standard AWS credential chain: environment variables (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`), `~/.aws/credentials` and `~/.aws/config` profiles, SSO sessions, and instance roles. Set `profile` to pin a named profile; otherwise the default chain applies.
 
-The IAM principal needs `bedrock:InvokeModel` (and `bedrock:InvokeModelWithResponseStream` if you later stream) on the models you use. Verify access from the same machine with:
+The IAM principal needs `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` on the models you use — the provider streams responses (ConverseStream) whenever the consumer asks for it, falling back to blocking Converse otherwise. Verify access from the same machine with:
 
 ```bash
 aws sts get-caller-identity
