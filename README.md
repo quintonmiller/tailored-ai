@@ -390,6 +390,16 @@ pnpm --filter @tailored-ai/core run test
 pnpm --filter @tailored-ai/server run typecheck
 ```
 
+### Where logic goes
+
+Contributions land in one of three tiers. Decide the tier before writing the code:
+
+1. **Core platform** (`packages/core`, plus the platform paths of `server`/`cli`) — held to the highest bar. Only platform code that enables plugins and components broadly belongs here: interfaces, registries, config seams, runtime correctness. Core never knows a specific plugin's name or config shape.
+2. **Built-in plugins/packages** (`google-tools`, `channel-slack`, the `builtin:*` default plugins, this kind of thing) — common functionality many deployments could use. These ship in this repo for convenience but hold no privilege: they register through the same registries as third-party plugins and can be removed or replaced without touching core.
+3. **Your deployment's logic** — config (`config.yaml`), personal agents, private workflows. This stays in your own config/repo, not in TAI.
+
+If a feature needs a core change to be buildable as a plugin, that's a missing seam: land the seam in core as its own change, then build the feature as a plugin on top of it.
+
 ## Publishing
 
 The public `@tailored-ai/*` packages are released via [Changesets](https://github.com/changesets/changesets). See [RELEASING.md](./RELEASING.md) for the per-release flow and the one-time npm + GitHub Actions setup.

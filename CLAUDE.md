@@ -50,6 +50,16 @@ pnpm monorepo with first-party runtime packages, plugins, and docs:
 - Config via `config.yaml` with `${ENV_VAR}` interpolation
 - Published CLI package is `@tailored-ai/cli`; current public install path is `npm install -g @tailored-ai/cli`
 
+## Where logic goes
+
+Before writing a feature, decide which tier it belongs to. Every change fits exactly one:
+
+1. **Core platform** (`packages/core`, plus the platform paths of `server`/`cli`) — the most sacred code. Modify it only for platform capabilities that enable plugins/components broadly: new seams (interfaces, registries, config selection), contract fixes, loop/runtime correctness. A feature that serves one use case does not belong here, even a popular one. Core must never know a plugin's name or config shape.
+2. **Built-in plugins/packages** (`packages/google-tools`, `packages/channel-slack`, `packages/core/src/plugins/builtin:*`, etc.) — common functionality that multiple people could use. Low scrutiny to add; ships in this repo and may be bundled, but registers through the same registries as a third-party plugin and must be fully removable/replaceable without breaking core.
+3. **Personal logic** — anything specific to Quinton's setup: lives in the separate `tai-personal` repo and `~/.tailored-ai/config.yaml`, never in this repo. If a change only makes sense for one deployment, it goes here.
+
+When a feature needs core changes to be buildable as a plugin (a missing seam), split the work: land the seam in core (tier 1) and the feature as a plugin (tier 2). The seam PR should make sense without the plugin.
+
 ## Current Direction
 
 TAI is a modular framework for running personal agents. Keep docs and APIs oriented around replaceable components with intelligent defaults:
