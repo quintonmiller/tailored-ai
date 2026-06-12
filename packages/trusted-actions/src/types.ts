@@ -99,6 +99,10 @@ export interface AmazonSession {
   cookies: string;
   userAgent: string;
   viewport: { width: number; height: number };
+  /** BCP-47 locale captured at login. Older sessions omit it; replay falls back to the host locale. */
+  locale?: string;
+  /** IANA timezone captured at login. Older sessions omit it; replay falls back to the host timezone. */
+  timezoneId?: string;
   defaultAddress?: string;
   savedAt: string;
   expiresAt?: string;

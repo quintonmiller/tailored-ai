@@ -159,6 +159,8 @@ export class AmazonPurchaseAdapter implements TrustedAction<AmazonPurchaseInput,
         {
           userAgent: session.userAgent,
           viewport: session.viewport,
+          locale: session.locale,
+          timezoneId: session.timezoneId,
         },
         session.cookies,
       );
