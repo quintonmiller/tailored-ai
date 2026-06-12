@@ -71,6 +71,7 @@ import {
   parseSkillMd,
   parseWorkflow,
   promoteNote,
+  providerFactoryRegistry,
   queryProjects,
   queryProjectTasks,
   type Resource,
@@ -2307,23 +2308,24 @@ export function createServer(opts: ServerOptions) {
             modelInfo[m.id] = { maxContextTokens: m.max_model_len };
           }
         }
-      } else if (providerName === "openai") {
-        const cfg = provCfg as { apiKey: string; baseUrl?: string };
-        const baseUrl = (cfg.baseUrl ?? "https://api.openai.com/v1").replace(/\/$/, "");
-        const resp = await fetch(`${baseUrl}/models`, {
-          headers: { Authorization: `Bearer ${cfg.apiKey}` },
-        });
-        if (!resp.ok) throw new Error(`OpenAI returned ${resp.status}`);
-        const data = (await resp.json()) as { data?: { id: string }[] };
-        models = (data.data ?? []).map((m) => m.id).sort();
-      } else if (providerName === "anthropic") {
-        // Anthropic has no list-models endpoint; return well-known models
-        models = [
-          "claude-opus-4-20250514",
-          "claude-sonnet-4-20250514",
-          "claude-sonnet-4-5-20250929",
-          "claude-haiku-4-5-20251001",
-        ];
+      } else {
+        // Any other provider (plugin-registered or built-in): build it via
+        // its registry factory and ask the instance for its catalog through
+        // the optional listModels capability. Providers without listModels
+        // return an empty list.
+        const factory = providerFactoryRegistry.get(providerName);
+        if (!factory) {
+          return c.json({ error: `No provider factory registered for "${providerName}"` }, 404);
+        }
+        const probeConfig = {
+          ...config,
+          agent: { ...config.agent, defaultProvider: providerName },
+        };
+        const { provider } = factory(probeConfig);
+        const listModels = (provider as { listModels?: () => Promise<string[]> }).listModels;
+        if (listModels) {
+          models = (await listModels.call(provider)).sort();
+        }
       }
 
       return c.json({ provider: providerName, models, modelInfo });

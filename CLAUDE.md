@@ -65,7 +65,7 @@ When a feature needs core changes to be buildable as a plugin (a missing seam), 
 
 TAI is a modular framework for running personal agents. Keep docs and APIs oriented around replaceable components with intelligent defaults:
 
-- Models/providers: OpenAI-compatible, OpenAI, Anthropic, OpenRouter/local gateways, and plugin providers.
+- Models/providers: OpenAI-compatible built in (local gateways); OpenAI, Anthropic, OpenRouter, Bedrock, and future vendors as provider plugins.
 - Messaging protocols/channels: Discord built in; Slack and future GitHub/Telegram/email/etc. as plugins.
 - UI: bundled web UI by default, replaceable through the UI provider registry.
 - Agents/skills/tools/resources/workflows/task backends/repo backends/sandboxes: interfaces + registries + config selection where practical.

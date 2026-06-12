@@ -20,14 +20,14 @@ describe("createProvider", () => {
   });
 
   it("throws when the selected provider has no defaultModel", () => {
-    expect(() => createProvider(cfg("openai", { openai: { apiKey: "k" } }))).toThrow(
-      /providers\.openai requires a defaultModel/,
+    expect(() => createProvider(cfg("openai_compatible", { openai_compatible: { baseUrl: "http://x/v1" } }))).toThrow(
+      /providers\.openai_compatible requires a defaultModel/,
     );
   });
 
-  it("throws a helpful registry error for an unknown provider id", () => {
+  it("throws a helpful registry error pointing at plugins for an unknown provider id", () => {
     expect(() => createProvider(cfg("mistral", { mistral: { defaultModel: "m" } }))).toThrow(
-      /No provider factory registered for "mistral".*Known:/,
+      /No provider factory registered for "mistral".*Known:.*@tailored-ai\/provider-mistral/,
     );
   });
 });

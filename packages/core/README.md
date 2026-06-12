@@ -1,8 +1,8 @@
 # @tailored-ai/core
 
 Lightweight, modular AI agent framework optimized for local LLMs (vLLM,
-Ollama, LM Studio) — with first-class support for OpenAI- and
-Anthropic-hosted models too.
+Ollama, LM Studio) — with hosted vendors (OpenAI, Anthropic, OpenRouter,
+Bedrock) available as `@tailored-ai/provider-*` plugins.
 
 The core library: a runtime, hot-reloadable config, a tool registry, a
 small set of built-in tools (read/write/exec, web fetch/search, memory,
@@ -44,9 +44,12 @@ A minimal `config.yaml` (full reference: `config.example.yaml` in the
 [repo root](https://github.com/quintonmiller/tailored-ai/blob/main/config.example.yaml)):
 
 ```yaml
-provider:
-  type: ollama          # or: openai, anthropic, vllm
-  model: llama3.2
+providers:
+  openai_compatible:
+    baseUrl: http://localhost:11434/v1   # Ollama
+    defaultModel: llama3.2
+agent:
+  defaultProvider: openai_compatible
 agents:
   default:
     instructions: "You are a helpful assistant."
@@ -61,7 +64,7 @@ agents:
 | Agent loop | `runAgentLoop`, `resolveAgent`, history compaction, retry, timing |
 | Tools | `read`, `write`, `exec`, `web_fetch`, `web_search`, `memory`, `tasks`, `delegate`, `claude_code`, `browser`, plus a `custom` tool loader |
 | Channels | Discord (`DiscordChannel`), HTTP/SSE (via `@tailored-ai/server`) |
-| Providers | `ollama`, `openai`, `anthropic`, `vllm`/OpenAI-compatible |
+| Providers | `openai_compatible` (Ollama, vLLM, LM Studio, …); hosted vendors via `@tailored-ai/provider-*` plugins |
 | Sandboxes | host, docker, podman — `createSandbox`, `globalSandboxRegistry` |
 | Worktrees | `createWorktree({ strategy: "head" \| "branch" \| "merge-to-head" })` |
 | Tasks | pluggable backends: native, GitHub Issues, beans, beads |
