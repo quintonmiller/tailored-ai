@@ -1,8 +1,8 @@
-import type { Sandbox, SandboxHandle, SandboxKind, SandboxPrepareOptions } from "./interface.js";
+import type { Sandbox, SandboxHandle, SandboxPrepareOptions } from "./interface.js";
 
 export interface ActiveSandbox {
   id: string;
-  kind: SandboxKind;
+  kind: string;
   cwd: string;
   agentName?: string;
   sessionId?: string;
