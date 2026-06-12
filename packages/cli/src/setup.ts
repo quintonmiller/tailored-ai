@@ -310,7 +310,7 @@ channels:
 ${memoryBlock}
 ${pluginsBlock}
 ${externalAgentsBlock}
-profiles:
+agents:
   researcher:
     instructions: >-
       You are a research assistant. Search the web, fetch pages,
