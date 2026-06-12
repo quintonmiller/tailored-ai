@@ -52,6 +52,7 @@ export const DOCS_NAV: DocsNavSection[] = [
       { label: "@tailored-ai/server", href: "/docs/packages/server" },
       { label: "@tailored-ai/browser-mediator", href: "/docs/packages/browser-mediator" },
       { label: "@tailored-ai/provider-bedrock", href: "/docs/packages/provider-bedrock" },
+      { label: "@tailored-ai/provider-openrouter", href: "/docs/packages/provider-openrouter" },
       { label: "@tailored-ai/trusted-actions", href: "/docs/packages/trusted-actions" },
     ],
   },

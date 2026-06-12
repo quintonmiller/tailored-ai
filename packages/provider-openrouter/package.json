@@ -1,0 +1,59 @@
+{
+  "name": "@tailored-ai/provider-openrouter",
+  "version": "0.1.7",
+  "description": "OpenRouter model provider for Tailored AI agents. Ships as a register(ctx) plugin — install with `tai plugin install @tailored-ai/provider-openrouter`, list under `plugins:`, and select with `agent.defaultProvider: openrouter`.",
+  "license": "MIT",
+  "author": "Quinton Miller",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/quintonmiller/tailored-ai.git",
+    "directory": "packages/provider-openrouter"
+  },
+  "homepage": "https://github.com/quintonmiller/tailored-ai/tree/main/packages/provider-openrouter#readme",
+  "bugs": "https://github.com/quintonmiller/tailored-ai/issues",
+  "keywords": [
+    "ai",
+    "agent",
+    "tailored-ai",
+    "openrouter",
+    "provider",
+    "llm"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@tailored-ai/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@tailored-ai/core": "workspace:*",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.0.18"
+  }
+}
