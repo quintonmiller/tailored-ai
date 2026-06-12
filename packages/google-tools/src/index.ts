@@ -5,7 +5,8 @@
  * export with a {@link PluginContext} during runtime construction; the plugin
  * registers Gmail / GoogleCalendar / GoogleDrive into `ctx.tools`. Config
  * blocks (`tools.gmail.enabled`, etc.) gate whether each tool actually
- * instantiates per agent.
+ * instantiates per agent. The shapes are owned here — core's `tools` config
+ * is an open map and knows nothing about these ids.
  *
  * Add to `config.yaml`:
  *
@@ -32,9 +33,17 @@ function gogPassword(): string {
   return process.env.GOG_KEYRING_PASSWORD ?? "";
 }
 
+/** Config shape this plugin reads from `tools.gmail` / `tools.google_calendar` / `tools.google_drive`. */
+interface GoogleToolConfig {
+  enabled?: boolean;
+  account?: string;
+  folder_name?: string;
+  folder_id?: string;
+}
+
 const plugin: Plugin = (ctx) => {
   ctx.tools.register("gmail", (config, toolCtx) => {
-    const cfg = config.tools.gmail;
+    const cfg = config.tools.gmail as GoogleToolConfig | undefined;
     if (!cfg?.enabled) return [];
     if (!cfg.account) {
       console.warn("[google-tools:gmail] tools.gmail.enabled is true but account is empty; skipping");
@@ -44,7 +53,7 @@ const plugin: Plugin = (ctx) => {
   });
 
   ctx.tools.register("google_calendar", (config) => {
-    const cfg = config.tools.google_calendar;
+    const cfg = config.tools.google_calendar as GoogleToolConfig | undefined;
     if (!cfg?.enabled) return [];
     if (!cfg.account) {
       console.warn(
@@ -56,7 +65,7 @@ const plugin: Plugin = (ctx) => {
   });
 
   ctx.tools.register("google_drive", (config, toolCtx) => {
-    const cfg = config.tools.google_drive;
+    const cfg = config.tools.google_drive as GoogleToolConfig | undefined;
     if (!cfg?.enabled) return [];
     if (!cfg.account) {
       console.warn("[google-tools:google_drive] tools.google_drive.enabled is true but account is empty; skipping");
