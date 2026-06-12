@@ -13,6 +13,7 @@
       "@tailored-ai/provider-bedrock",
       "@tailored-ai/provider-openrouter",
       "@tailored-ai/provider-anthropic",
+      "@tailored-ai/provider-openai",
       "@tailored-ai/trusted-actions"
     ]
   ],
