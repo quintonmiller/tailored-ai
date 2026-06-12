@@ -1,4 +1,7 @@
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { resolveHomeDir } from "../home.js";
+import { addPluginsToConfig, removePluginsFromConfig } from "../plugins/config-entry.js";
 import { PluginManager } from "../plugins/manager.js";
 
 const PLUGIN_USAGE = `
@@ -11,9 +14,13 @@ Commands:
   upgrade [<pkg-name>...]   Update installed plugins (all if none specified)
   help                      Show this help
 
+Options:
+  --no-save                 Don't update config.yaml's \`plugins:\` list
+
 Plugins land in \`<home>/plugins/\` and are resolved at runtime from there.
-After install, add the plugin id to \`config.yaml\`'s \`plugins:\` list to
-enable it on startup.
+Install and remove keep \`config.yaml\`'s \`plugins:\` list in sync (comments
+preserved) so the plugin is enabled on next startup; pass --no-save to
+manage the list yourself.
 `.trim();
 
 function fail(msg: string): never {
@@ -32,6 +39,7 @@ export async function runPluginCommand(argv: string[]): Promise<void> {
   // Honor -c/--config so users can scope the plugin home to a non-default config.
   // Strip flag pairs out of rest before passing to npm.
   let configOverride: string | undefined;
+  let save = true;
   const cleaned: string[] = [];
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i];
@@ -40,11 +48,14 @@ export async function runPluginCommand(argv: string[]): Promise<void> {
       i++;
     } else if (arg.startsWith("--config=")) {
       configOverride = arg.slice("--config=".length);
+    } else if (arg === "--no-save") {
+      save = false;
     } else {
       cleaned.push(arg);
     }
   }
   const homeDir = resolveHomeDir(configOverride);
+  const configPath = configOverride ? resolve(configOverride) : resolve(homeDir, "config.yaml");
   const manager = new PluginManager(homeDir);
 
   switch (subcommand) {
@@ -52,17 +63,25 @@ export async function runPluginCommand(argv: string[]): Promise<void> {
     case "add": {
       if (cleaned.length === 0) fail("Usage: tai plugin install <pkg-spec> [<pkg-spec>...]");
       console.log(`Installing into ${manager.pluginDir}...`);
+      const before = new Set(manager.list().map((p) => p.name));
       const res = manager.install(cleaned);
       if (!res.ok) {
         fail(`Install failed${res.stderr ? `: ${res.stderr}` : ""}.`);
       }
-      console.log("\nInstall complete. Add to config.yaml to enable:");
-      console.log("");
-      console.log("plugins:");
-      for (const spec of cleaned) {
-        const name = stripSpecVersion(spec);
-        console.log(`  - "${name}"`);
+      // Resolve the installed package names: the plugin home's package.json
+      // diff covers git/file/tarball specs (npm records the real name);
+      // stripSpecVersion covers reinstalls of plain npm specs.
+      const after = manager.list().map((p) => p.name);
+      const fromSpecs = new Set(cleaned.map(stripSpecVersion));
+      const names = after.filter((n) => !before.has(n) || fromSpecs.has(n));
+      console.log("\nInstall complete.");
+      if (save && existsSync(configPath) && names.length > 0) {
+        const { changed, unchanged } = addPluginsToConfig(configPath, names);
+        for (const name of changed) console.log(`Enabled in ${configPath}: ${name}`);
+        if (unchanged.length > 0) console.log(`Already in plugins list: ${unchanged.join(", ")}`);
+        return;
       }
+      printManualInstructions(names.length > 0 ? names : cleaned.map(stripSpecVersion));
       return;
     }
     case "remove":
@@ -71,7 +90,14 @@ export async function runPluginCommand(argv: string[]): Promise<void> {
       const res = manager.remove(cleaned);
       if (!res.ok) fail(`Remove failed${res.stderr ? `: ${res.stderr}` : ""}.`);
       console.log(`Removed: ${cleaned.join(", ")}`);
-      console.log("Remember to remove the entry from config.yaml's `plugins:` list as well.");
+      if (save) {
+        const { changed } = removePluginsFromConfig(configPath, cleaned);
+        if (changed.length > 0) {
+          console.log(`Removed from ${configPath}'s plugins list: ${changed.join(", ")}`);
+        }
+      } else {
+        console.log("Remember to remove the entry from config.yaml's `plugins:` list as well.");
+      }
       return;
     }
     case "list":
@@ -96,6 +122,15 @@ export async function runPluginCommand(argv: string[]): Promise<void> {
     }
     default:
       fail(`Unknown plugin command: ${subcommand}\n\n${PLUGIN_USAGE}`);
+  }
+}
+
+function printManualInstructions(names: string[]): void {
+  console.log("Add to config.yaml to enable:");
+  console.log("");
+  console.log("plugins:");
+  for (const name of names) {
+    console.log(`  - "${name}"`);
   }
 }
 
