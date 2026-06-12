@@ -15,6 +15,7 @@ import { TypedEventBus } from "../events.js";
 import { createPluginContext, type Plugin } from "../plugin-context.js";
 import agentNotifierPlugin from "../plugins/agent-notifier.js";
 import coderProjectGuardPlugin from "../plugins/coder-project-guard.js";
+import ownerNotifierPlugin from "../plugins/owner-notifier.js";
 import scopeCreepPlugin from "../plugins/scope-creep-flagger.js";
 import stallGuardPlugin from "../plugins/stall-guard.js";
 import type { AgentRuntime } from "../runtime.js";
@@ -81,6 +82,29 @@ describe("default plugins — register(ctx) contract", () => {
       });
     });
   }
+});
+
+describe("owner-notifier — register(ctx) contract", () => {
+  const OWNER_EVENTS = ["task.needs_human", "digest.ready", "question.asked", "form.completed"] as const;
+
+  it("subscribes to all owner-delivery events when ctx.runtime is present", async () => {
+    const events = new TypedEventBus();
+    const runtime = makeRuntime(events);
+    const ctx = createPluginContext({ runtime, events });
+    const stop = await ownerNotifierPlugin(ctx);
+    for (const ev of OWNER_EVENTS) expect(events.listenerCount(ev)).toBe(1);
+    expect(typeof stop).toBe("function");
+    await (stop as () => void)();
+    for (const ev of OWNER_EVENTS) expect(events.listenerCount(ev)).toBe(0);
+  });
+
+  it("no-ops when ctx.runtime is absent", async () => {
+    const events = new TypedEventBus();
+    const ctx = createPluginContext({ events }); // no runtime
+    const stop = await ownerNotifierPlugin(ctx);
+    expect(stop).toBeUndefined();
+    for (const ev of OWNER_EVENTS) expect(events.listenerCount(ev)).toBe(0);
+  });
 });
 
 describe("stall-guard — reads maxStallRetries from ctx.config", () => {

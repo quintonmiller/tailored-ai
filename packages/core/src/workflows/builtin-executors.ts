@@ -74,10 +74,13 @@ def("parallel", () => new ParallelExecutor());
 
 def(
   "channel_message",
-  ({ resolveOutbound, getOwnerId }) =>
+  ({ resolveOutbound, getOwnerId, runtime }) =>
     new ChannelMessageExecutor({
       resolveOutbound,
       getOwnerId,
+      // Implicit owner-DM fallbacks route through the form.completed event
+      // (#205); explicit channel/user targets stay direct deliveries.
+      events: runtime.events,
     }),
 );
 
