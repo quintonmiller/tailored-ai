@@ -1,0 +1,60 @@
+{
+  "name": "@tailored-ai/provider-anthropic",
+  "version": "0.1.7",
+  "description": "Anthropic Messages API provider for Tailored AI agents. Ships as a register(ctx) plugin — install with `tai plugin install @tailored-ai/provider-anthropic`; supersedes the minimal built-in `anthropic` provider with prompt caching, beta headers, and extra-field passthrough.",
+  "license": "MIT",
+  "author": "Quinton Miller",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/quintonmiller/tailored-ai.git",
+    "directory": "packages/provider-anthropic"
+  },
+  "homepage": "https://github.com/quintonmiller/tailored-ai/tree/main/packages/provider-anthropic#readme",
+  "bugs": "https://github.com/quintonmiller/tailored-ai/issues",
+  "keywords": [
+    "ai",
+    "agent",
+    "tailored-ai",
+    "anthropic",
+    "claude",
+    "provider",
+    "llm"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@tailored-ai/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@tailored-ai/core": "workspace:*",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.0.18"
+  }
+}

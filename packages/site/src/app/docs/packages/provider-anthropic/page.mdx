@@ -1,0 +1,47 @@
+export const metadata = {
+  title: "@tailored-ai/provider-anthropic",
+  description: "Anthropic Messages API provider plugin — prompt caching, beta headers, streaming.",
+};
+
+# @tailored-ai/provider-anthropic
+
+Claude models via the Messages API: prompt caching, beta headers, configurable API version, extra-field passthrough, streaming, and model discovery.
+
+This plugin is the home of the `anthropic` provider id ([#236](https://github.com/quintonmiller/tailored-ai/issues/236) moved it out of core) — your existing `providers.anthropic` block keeps working. On older cores that still ship a minimal built-in, the plugin supersedes it; the one-line "Replacing existing entry" startup notice is expected there.
+
+## Install
+
+```bash
+tai plugin install @tailored-ai/provider-anthropic
+```
+
+## Configure
+
+```yaml
+providers:
+  anthropic:
+    apiKey: "${ANTHROPIC_API_KEY}"
+    defaultModel: "claude-haiku-4-5"
+    promptCaching: true
+
+agent:
+  defaultProvider: anthropic
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `apiKey` | yes | Use `${ANTHROPIC_API_KEY}` to read from the environment. |
+| `defaultModel` | yes | A Claude model id. `tai edit` lists them via `listModels`. |
+| `promptCaching` | no | Cache breakpoints on the system prompt + tool definitions. Recommended for agents — both are re-sent every loop iteration, and cached reads cost ~10% of base input price. |
+| `defaultMaxTokens` | no | `max_tokens` fallback (the API requires one). Default `4096`. |
+| `version` | no | `anthropic-version` header. Default `2023-06-01`. |
+| `betas` | no | Beta flags for the `anthropic-beta` header. |
+| `baseUrl` | no | Default `https://api.anthropic.com`. |
+
+## Anthropic-specific parameters
+
+Fields the TAI provider contract doesn't model (extended thinking, `top_k`, …) pass through `ChatParams.extra` into the request body. Surfaces with a `providerExtra` config bag (briefing, suggestions) can use this today; per-agent `extra` isn't wired into the main loop yet.
+
+## Usage accounting
+
+Cache writes and reads are summed into `usage.input` — token counts reflect what the API processed, with no silent exclusion of cached tokens.
