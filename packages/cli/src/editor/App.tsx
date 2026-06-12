@@ -13,6 +13,7 @@ import { SlotEditor } from "./editors/SlotEditor.js";
 import { SystemPromptEditor } from "./editors/SystemPromptEditor.js";
 import { ToolsEditor } from "./editors/ToolsEditor.js";
 import { computeDiff, previewExisting, previewNew } from "./preview.js";
+import type { DiscoveredProvider } from "./provider-discovery.js";
 import { type Action, type AppState, type DetailMode, initialState, reducer } from "./state.js";
 import { YamlPane } from "./YamlPane.js";
 import type { DraftConfig } from "./types.js";
@@ -21,13 +22,17 @@ interface Props {
   initialDraft: DraftConfig;
   mode: "new" | "existing";
   originalText?: string;
+  /** Selectable provider ids discovered from the registry + plugins (#225). */
+  providers?: DiscoveredProvider[];
+  /** Interpolated on-disk config — base for provider model-discovery probes. */
+  baseConfig?: import("@tailored-ai/core").AgentConfig;
   onSave: (draft: DraftConfig) => void;
   onCancel: () => void;
 }
 
 const DETAIL_MODES: DetailMode[] = ["details", "yaml", "diff"];
 
-export function App({ initialDraft, mode, originalText, onSave, onCancel }: Props) {
+export function App({ initialDraft, mode, originalText, providers, baseConfig, onSave, onCancel }: Props) {
   const [state, dispatch] = useReducer(reducer, initialState(initialDraft, originalText));
   const { exit } = useApp();
 
@@ -110,7 +115,7 @@ export function App({ initialDraft, mode, originalText, onSave, onCancel }: Prop
         <MenuPane state={state} />
         <Box flexDirection="column" flexGrow={1} paddingX={1} borderStyle="single" borderColor="gray">
           {state.editing ? (
-            <EditorSwitch state={state} dispatch={dispatch} />
+            <EditorSwitch state={state} dispatch={dispatch} providers={providers} baseConfig={baseConfig} />
           ) : state.detailMode === "yaml" ? (
             <YamlPane text={preview.text} />
           ) : state.detailMode === "diff" ? (
@@ -140,7 +145,17 @@ export function App({ initialDraft, mode, originalText, onSave, onCancel }: Prop
   );
 }
 
-function EditorSwitch({ state, dispatch }: { state: AppState; dispatch: (a: Action) => void }) {
+function EditorSwitch({
+  state,
+  dispatch,
+  providers,
+  baseConfig,
+}: {
+  state: AppState;
+  dispatch: (a: Action) => void;
+  providers?: DiscoveredProvider[];
+  baseConfig?: import("@tailored-ai/core").AgentConfig;
+}) {
   const onExit = () => dispatch({ type: "exitEditor" });
   switch (state.selected) {
     case "provider":
@@ -148,6 +163,8 @@ function EditorSwitch({ state, dispatch }: { state: AppState; dispatch: (a: Acti
         <ProviderEditor
           provider={state.draft.provider}
           homeDir={state.draft.homeDir}
+          discovered={providers}
+          baseConfig={baseConfig}
           dispatch={dispatch}
           onExit={onExit}
         />
