@@ -1,5 +1,4 @@
 ---
-"@tailored-ai/ui": patch
 "@tailored-ai/server": patch
 ---
 
