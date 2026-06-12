@@ -403,9 +403,9 @@ WORKFLOW_TEMPLATES.push(
       return {
         name,
         description:
-          "File_drop trigger watches ./inbox/receipts. New PDF/image → agent extracts vendor, amount, date, category → posts the structured summary.",
+          "File_drop trigger watches ./receipts. New PDF/image → agent extracts vendor, amount, date, category → posts the structured summary.",
         executionMode: "graph",
-        triggers: [{ kind: "file_drop", path: "./inbox/receipts", extensions: "pdf,jpg,png", stableForMs: 2000 }],
+        triggers: [{ kind: "file_drop", path: "./receipts", extensions: "pdf,jpg,png", stableForMs: 2000 }],
         steps: [
           {
             name: "extract",
