@@ -10,6 +10,7 @@
       "@tailored-ai/server",
       "@tailored-ai/cli",
       "@tailored-ai/google-tools",
+      "@tailored-ai/provider-bedrock",
       "@tailored-ai/trusted-actions"
     ]
   ],
