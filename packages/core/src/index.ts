@@ -75,7 +75,12 @@ export {
   DockerSandbox,
   type DockerSandboxOptions,
 } from "./sandboxes/docker.js";
-export { createSandbox } from "./sandboxes/factory.js";
+export {
+  createSandbox,
+  registerSandboxFactory,
+  type SandboxFactory,
+  sandboxFactoryRegistry,
+} from "./sandboxes/factory.js";
 export { HostSandbox } from "./sandboxes/host.js";
 export type {
   Mount,
@@ -423,6 +428,8 @@ export {
   type PluginDisposer,
   type ProviderRegistryView,
   type RepoBackendRegistryView,
+  type SandboxBackendRegistryView,
+  type StepExecutorRegistryView,
   type TaskBackendRegistryView,
   type ToolRegistryView,
   type UiProviderRegistryView,
@@ -575,6 +582,8 @@ export {
   readSkillMd,
   renderSkillMd,
   SkillRegistry,
+  type StepExecutorContext,
+  type StepExecutorFactory,
   StepExecutorRegistry,
   TaiRegistrySource,
   ToolRegistry,
@@ -645,6 +654,7 @@ export { RunWorkflowTool } from "./tools/run-workflow.js";
 export { TaskStatusTool } from "./tools/task-status.js";
 export { TaskQueryTool, TasksTool } from "./tools/tasks.js";
 export {
+  META_TOOL_NAMES,
   registerToolFactory,
   runToolFactories,
   type ToolFactory,
@@ -722,6 +732,7 @@ export {
   type TokensByWorkflow,
   tokenUsageByWorkflow,
 } from "./workflows/analytics.js";
+export { populateBuiltinExecutors } from "./workflows/builtin-executors.js";
 export {
   CancelledError,
   DeadlineError,
