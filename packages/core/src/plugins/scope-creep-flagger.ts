@@ -28,7 +28,7 @@
 import type Database from "better-sqlite3";
 import { addTaskComment } from "../db/task-queries.js";
 import type { RuntimeEventPayload, Subscription } from "../events.js";
-import type { Plugin } from "../plugin-context.js";
+import type { Plugin, PluginMeta } from "../plugin-context.js";
 import type { AgentRuntime } from "../runtime.js";
 import { detectScopeCreep } from "../task-watcher.js";
 
@@ -149,4 +149,10 @@ const plugin: Plugin = (ctx) => {
   const flagger = new ScopeCreepFlagger({ runtime: ctx.runtime, watchAgents, reviewerAssignee });
   return () => flagger.stop();
 };
+export const meta: PluginMeta = {
+  name: "Scope-creep flagger",
+  description: "Flags review handoffs whose branch commits reference other task ids (subscribes to agent.completed).",
+  registers: [{ kind: "eventSubscriber", id: "scope-creep-flagger" }],
+};
+
 export default plugin;

@@ -83,7 +83,7 @@ export async function runPluginCommand(argv: string[]): Promise<void> {
         return;
       }
       for (const p of installed) {
-        console.log(`${p.name}@${p.version}`);
+        console.log(p.description ? `${p.name}@${p.version} — ${p.description}` : `${p.name}@${p.version}`);
       }
       return;
     }

@@ -113,6 +113,7 @@ export class AgentRuntime {
   private _reloadListeners: Array<() => void> = [];
   private _configLock: Promise<void> = Promise.resolve();
   private _metaTools: Tool[] = [];
+  private _loadedPlugins: import("./plugins.js").LoadedPlugin[] = [];
   private _createTools: RuntimeOptions["createTools"];
   private _createProvider: RuntimeOptions["createProvider"];
   private _createEmbedder: RuntimeOptions["createEmbedder"];
@@ -468,6 +469,22 @@ export class AgentRuntime {
    * `online.tools` allowlist doesn't accidentally strip orchestration tools. */
   getMetaTools(): Tool[] {
     return this._metaTools;
+  }
+
+  /**
+   * Record a batch of {@link LoadedPlugin} results so HTTP/UI surfaces can
+   * list what loaded (`GET /api/plugins`). Entries replace prior records
+   * with the same module name — the host calls this once per loadPlugins
+   * pass, and again when runtime-context plugins re-load on reload.
+   */
+  recordLoadedPlugins(batch: import("./plugins.js").LoadedPlugin[]): void {
+    const replaced = new Set(batch.map((p) => p.module));
+    this._loadedPlugins = [...this._loadedPlugins.filter((p) => !replaced.has(p.module)), ...batch];
+  }
+
+  /** Loaded-plugin records from every pass the host has recorded. */
+  getLoadedPlugins(): import("./plugins.js").LoadedPlugin[] {
+    return this._loadedPlugins;
   }
 
   reload(): void {

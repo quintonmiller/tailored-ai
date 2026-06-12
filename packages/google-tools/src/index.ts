@@ -21,7 +21,7 @@
  * for OAuth + transport. `GOG_KEYRING_PASSWORD` from the environment unlocks
  * stored credentials.
  */
-import type { Plugin } from "@tailored-ai/core";
+import type { AgentConfig, Plugin, PluginMeta } from "@tailored-ai/core";
 import type Database from "better-sqlite3";
 import { GmailTool } from "./gmail.js";
 import { GoogleCalendarTool } from "./google-calendar.js";
@@ -82,5 +82,35 @@ const plugin: Plugin = (ctx) => {
     ];
   });
 };
+
+export const meta: PluginMeta = {
+  name: "Google tools",
+  description: "Gmail, Google Calendar, and Google Drive tools via the gog CLI.",
+  registers: [
+    { kind: "tool", id: "gmail", configKey: "tools.gmail" },
+    { kind: "tool", id: "google_calendar", configKey: "tools.google_calendar" },
+    { kind: "tool", id: "google_drive", configKey: "tools.google_drive" },
+  ],
+};
+
+const GOOGLE_TOOL_IDS = ["gmail", "google_calendar", "google_drive"] as const;
+
+/** Plugin-owned config checks — the shapes live here, not in core (#229). */
+export function validateConfig(config: AgentConfig): string[] {
+  const warnings: string[] = [];
+  let anyEnabled = false;
+  for (const id of GOOGLE_TOOL_IDS) {
+    const cfg = config.tools[id] as GoogleToolConfig | undefined;
+    if (!cfg?.enabled) continue;
+    anyEnabled = true;
+    if (!cfg.account) {
+      warnings.push(`tools.${id}.enabled is true but account is empty — the tool will be skipped`);
+    }
+  }
+  if (anyEnabled && !process.env.GOG_KEYRING_PASSWORD) {
+    warnings.push("GOG_KEYRING_PASSWORD is not set — gog CLI calls will fail to unlock stored credentials");
+  }
+  return warnings;
+}
 
 export default plugin;

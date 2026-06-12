@@ -195,6 +195,74 @@ export interface PluginContext {
  *     }) satisfies Plugin;
  */
 export type PluginDisposer = () => void | Promise<void>;
+
+/**
+ * One thing a plugin registers, declared in {@link PluginMeta.registers}.
+ * `kind` matches the PluginContext namespace ("provider", "tool", "channel",
+ * …); the open string union keeps future namespaces representable without a
+ * core release. `configKey` is the config path users set to activate and
+ * configure the registration — the link between the `plugins:` entry that
+ * loads code and the config block that turns features on.
+ */
+export interface PluginRegistration {
+  kind:
+    | "tool"
+    | "channel"
+    | "provider"
+    | "embedding"
+    | "memoryBackend"
+    | "taskBackend"
+    | "repoBackend"
+    | "sandboxBackend"
+    | "uiProvider"
+    | "stepExecutor"
+    | "eventSubscriber"
+    | "httpRoutes"
+    | (string & {});
+  id: string;
+  /** Config path that configures it, e.g. "providers.bedrock" or "tools.gmail". */
+  configKey?: string;
+}
+
+/**
+ * Optional plugin self-description, exported as a named `meta` export next
+ * to the default register function:
+ *
+ *     export const meta: PluginMeta = {
+ *       name: "AWS Bedrock provider",
+ *       description: "Bedrock-hosted models via the Converse API.",
+ *       registers: [{ kind: "provider", id: "bedrock", configKey: "providers.bedrock" }],
+ *     };
+ *
+ * Like {@link Plugin}, this is a type-only contract — plugins keep zero
+ * runtime dependency on core. The loader captures it onto
+ * `LoadedPlugin.meta`; `GET /api/plugins` and `tai plugin list` surface it.
+ */
+export interface PluginMeta {
+  /** Human-readable name for UIs. Falls back to the module specifier. */
+  name?: string;
+  /** One or two sentences on what the plugin does. */
+  description?: string;
+  /** What this plugin registers — powers discoverability in UIs and error hints. */
+  registers?: PluginRegistration[];
+}
+
+/**
+ * Optional plugin-owned config validation, exported as a named
+ * `validateConfig` export. Core's own `validateConfig` deliberately knows
+ * nothing about plugin config shapes (the plugin owns them), so this is
+ * where a plugin checks its blocks and returns human-readable warnings:
+ *
+ *     export function validateConfig(config: AgentConfig): string[] {
+ *       const cfg = config.providers.bedrock as BedrockConfig | undefined;
+ *       return cfg && !cfg.defaultModel ? ["providers.bedrock.defaultModel is empty"] : [];
+ *     }
+ *
+ * Warnings only — a plugin cannot veto startup (factories already fail fast
+ * for hard errors). The loader collects them onto `LoadedPlugin.warnings`
+ * and prints them alongside core's config warnings.
+ */
+export type PluginConfigValidator = (config: import("./config.js").AgentConfig) => string[];
 // Each arm kept distinct (rather than `Promise<void | PluginDisposer>`) so
 // `void` never appears inside a union — covers sync no-return, sync disposer,
 // async no-return, and async disposer.

@@ -923,6 +923,24 @@ export function createServer(opts: ServerOptions) {
   });
 
   /**
+   * List loaded plugins with their load status and self-described metadata
+   * (#228/#229). The host records loadPlugins results onto the runtime;
+   * disposers stay server-side — only serializable fields go out.
+   */
+  app.get("/api/plugins", (c) => {
+    const plugins = runtime.getLoadedPlugins().map((p) => ({
+      module: p.module,
+      ok: p.ok,
+      shape: p.shape,
+      error: p.error,
+      meta: p.meta,
+      warnings: p.warnings,
+    }));
+    plugins.sort((a, b) => a.module.localeCompare(b.module));
+    return c.json({ plugins });
+  });
+
+  /**
    * List installed skills (catalog form). Drives the per-agent skill picker
    * in the UI. Returns id, description, version, instructions length, and
    * the source URI so users can see where a skill came from. Skills are

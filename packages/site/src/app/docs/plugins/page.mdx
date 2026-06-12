@@ -113,6 +113,43 @@ const runtime = new AgentRuntime({ config, db, provider, model });
 const channels = await startRegisteredChannels(runtime);
 ```
 
+## Metadata and config validation
+
+Two optional named exports sit next to the default register function.
+
+**`meta`** describes the plugin for UIs and error hints — `GET /api/plugins`
+returns it, and `registers` documents the link between the `plugins:` entry
+(which loads code) and the config blocks (which turn features on):
+
+```ts
+import type { PluginMeta } from "@tailored-ai/core";
+
+export const meta: PluginMeta = {
+  name: "AWS Bedrock provider",
+  description: "Bedrock-hosted models via the Converse API.",
+  registers: [{ kind: "provider", id: "bedrock", configKey: "providers.bedrock" }],
+};
+```
+
+**`validateConfig`** checks the plugin's own config blocks at load time.
+Core's `validateConfig` knows nothing about plugin config shapes on
+purpose — the plugin owns them:
+
+```ts
+import type { AgentConfig } from "@tailored-ai/core";
+
+export function validateConfig(config: AgentConfig): string[] {
+  const cfg = config.providers.bedrock as BedrockConfig | undefined;
+  if (cfg && !cfg.defaultModel) return ["providers.bedrock.defaultModel is empty"];
+  return [];
+}
+```
+
+Warnings print at startup alongside core's config warnings and appear on
+`GET /api/plugins`. A validator can't veto startup; factories still fail
+fast for hard errors. Both exports are type-only contracts — like the
+`Plugin` type itself, they add zero runtime dependency on core.
+
 ## First-party plugins
 
 These ship from the monorepo as separate npm packages:
