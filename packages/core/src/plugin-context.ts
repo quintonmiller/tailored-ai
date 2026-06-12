@@ -33,6 +33,8 @@ import { registerEmbeddingFactory, registerProviderFactory } from "./providers/f
 import type { RepoBackendFactory } from "./repo/factory.js";
 import { registerRepoBackendFactory } from "./repo/factory.js";
 import type { AgentRuntime } from "./runtime.js";
+import type { SandboxFactory } from "./sandboxes/factory.js";
+import { registerSandboxFactory } from "./sandboxes/factory.js";
 import type { TaskBackendFactory } from "./tasks/factory.js";
 import { registerTaskBackendFactory } from "./tasks/factory.js";
 import type { ToolFactory } from "./tools/tool-factories.js";
@@ -68,6 +70,10 @@ export interface RepoBackendRegistryView {
   register(id: string, factory: RepoBackendFactory): void;
 }
 
+export interface SandboxBackendRegistryView {
+  register(id: string, factory: SandboxFactory): void;
+}
+
 export interface UiProviderRegistryView {
   register(id: string, factory: UiProviderFactory): void;
 }
@@ -84,6 +90,7 @@ export interface PluginContext {
   memoryBackends: MemoryBackendRegistryView;
   taskBackends: TaskBackendRegistryView;
   repoBackends: RepoBackendRegistryView;
+  sandboxBackends: SandboxBackendRegistryView;
   uiProviders: UiProviderRegistryView;
   /**
    * Typed pub/sub bus for runtime lifecycle events. Plugins subscribe via
@@ -189,6 +196,7 @@ export function createPluginContext(opts: CreatePluginContextOptions = {}): Plug
     memoryBackends: { register: registerMemoryBackendFactory },
     taskBackends: { register: registerTaskBackendFactory },
     repoBackends: { register: registerRepoBackendFactory },
+    sandboxBackends: { register: registerSandboxFactory },
     uiProviders: { register: registerUiProviderFactory },
     // Prefer an explicit bus; else the runtime's own bus so plugin
     // subscriptions land where the runtime emits; else a fresh bus.
