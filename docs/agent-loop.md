@@ -65,3 +65,8 @@ Consumption: `AgentLoopOptions.onTextDelta` is the sink. When set and the active
 Retry semantics (`chatOnce` in `loop.ts`): a failure before any delta retries the stream; a failure after deltas were emitted retries with non-streaming `chat()` so consumers never see replayed text.
 
 Both `OpenAIProvider` (`stream: true` + `stream_options.include_usage`; servers that omit usage produce zeros) and `AnthropicProvider` (`/v1/messages` stream events) implement it. Provider plugins should too (#226 adds a contract-test suite for the invariants).
+
+### Provider capabilities and utilities
+
+- **Model discovery**: providers may implement the optional `listModels?(): Promise<string[]>` (`providers/interface.ts`). Both built-ins do (`GET {baseUrl}/models` for the OpenAI family, `GET /v1/models` for Anthropic); the wizard/editor can offer real model ids instead of free text.
+- **Contract-test suite**: `runProviderContractSuite` in `@tailored-ai/core/testing` (`testing/provider-contract.ts`) proves an `AIProvider` against the contract with a stubbed transport — response shape, mixed-history tolerance, tools param, streaming invariants (when `chatStream` is implemented), `listModels` shape. Provider plugins get contract coverage in ~10 LOC; `assertValidChatResponse` is exported for bespoke tests. Both built-ins dogfood the suite in `__tests__/provider-contract.test.ts`.
