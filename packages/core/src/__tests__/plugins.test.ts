@@ -194,6 +194,56 @@ describe("loadPlugins", () => {
     expect(out[0].stop).toBeUndefined();
   });
 
+  it("captures the module's meta export (#228)", async () => {
+    const meta = {
+      name: "Acme provider",
+      description: "Test provider.",
+      registers: [{ kind: "provider", id: "acme", configKey: "providers.acme" }],
+    };
+    const importer = () => Promise.resolve({ default: () => {}, meta });
+    const out = await loadPlugins(baseConfig({ plugins: ["acme"] } as never), importer);
+    expect(out[0].meta).toEqual(meta);
+  });
+
+  it("captures meta on side-effect plugins too", async () => {
+    const importer = () => Promise.resolve({ meta: { name: "Side effect" } });
+    const out = await loadPlugins(baseConfig({ plugins: ["sideways"] } as never), importer);
+    expect(out[0].shape).toBe("side-effect");
+    expect(out[0].meta).toEqual({ name: "Side effect" });
+  });
+
+  it("ignores a malformed meta export", async () => {
+    const importer = () => Promise.resolve({ default: () => {}, meta: "not-an-object" });
+    const out = await loadPlugins(baseConfig({ plugins: ["bad-meta"] } as never), importer);
+    expect(out[0].ok).toBe(true);
+    expect(out[0].meta).toBeUndefined();
+  });
+
+  it("collects and prints validateConfig warnings (#229)", async () => {
+    const importer = () =>
+      Promise.resolve({
+        default: () => {},
+        validateConfig: (config: AgentConfig) => (config.providers.acme ? [] : ["providers.acme is not configured"]),
+      });
+    const out = await loadPlugins(baseConfig({ plugins: ["acme"] } as never), importer);
+    expect(out[0].warnings).toEqual(["providers.acme is not configured"]);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("providers.acme is not configured"));
+  });
+
+  it("tolerates a throwing validateConfig without failing the load", async () => {
+    const importer = () =>
+      Promise.resolve({
+        default: () => {},
+        validateConfig: () => {
+          throw new Error("validator bug");
+        },
+      });
+    const out = await loadPlugins(baseConfig({ plugins: ["explosive"] } as never), importer);
+    expect(out[0].ok).toBe(true);
+    expect(out[0].warnings).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("validateConfig threw"));
+  });
+
   it("namespaces a plugin's ctx.http routes under its module name", async () => {
     const registry = new HttpRouteRegistry();
     // Minimal runtime stub: the loader derives the per-entry http view from

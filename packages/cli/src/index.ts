@@ -677,7 +677,7 @@ async function main() {
     return typeof module === "string" && (module.startsWith("builtin:") || module === TRUSTED_ACTIONS_PLUGIN);
   };
   const registryEntries = (config.plugins ?? []).filter((e) => !isRuntimePlugin(e));
-  await loadPlugins({ ...config, plugins: registryEntries }, importer, {
+  const registryPlugins = await loadPlugins({ ...config, plugins: registryEntries }, importer, {
     context: createPluginContext({ events }),
   });
 
@@ -712,6 +712,7 @@ async function main() {
     (path) => loadConfig(path),
     config,
   );
+  runtime.recordLoadedPlugins(registryPlugins);
 
   // Pass-2 loader for runtime-context (`builtin:*`) plugins. Re-reads the
   // entries from the runtime's CURRENT config each call so a reload picks up
@@ -719,7 +720,7 @@ async function main() {
   // so the caller can capture their `stop` disposers. runServer() invokes
   // this once at startup and again on every reload (see the onReload hook),
   // which also re-arms subscriptions after runtime.reload() clears the bus.
-  const loadRuntimePlugins = () => {
+  const loadRuntimePlugins = async () => {
     const cfg = runtime.getConfig();
     const entries = (cfg.plugins ?? []).filter(isRuntimePlugin);
     // Auto-load the trusted-actions route plugin when the executor is enabled
@@ -730,9 +731,11 @@ async function main() {
     const taEnabled = !!cfg.trustedActions?.enabled;
     const hasTaEntry = entries.some((e) => (typeof e === "string" ? e : e.module) === TRUSTED_ACTIONS_PLUGIN);
     if (taEnabled && !hasTaEntry) entries.push(TRUSTED_ACTIONS_PLUGIN);
-    return loadPlugins({ ...cfg, plugins: entries }, importer, {
+    const loaded = await loadPlugins({ ...cfg, plugins: entries }, importer, {
       context: createPluginContext({ runtime, events }),
     });
+    runtime.recordLoadedPlugins(loaded);
+    return loaded;
   };
 
   // Pull in any externalAgents declared in config.yaml. Same source list the

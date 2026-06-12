@@ -28,7 +28,7 @@
 
 import type Database from "better-sqlite3";
 import type { RuntimeEventPayload, Subscription } from "../events.js";
-import type { Plugin } from "../plugin-context.js";
+import type { Plugin, PluginMeta } from "../plugin-context.js";
 import type { AgentRuntime } from "../runtime.js";
 
 export interface AgentNotifierOptions {
@@ -246,4 +246,11 @@ const plugin: Plugin = (ctx) => {
   const notifier = new AgentNotifier({ runtime: ctx.runtime });
   return () => notifier.stop();
 };
+export const meta: PluginMeta = {
+  name: "Agent notifier",
+  description:
+    "Notifies the task channel when an agent run ends in a state that needs attention (subscribes to agent.completed).",
+  registers: [{ kind: "eventSubscriber", id: "agent-notifier" }],
+};
+
 export default plugin;

@@ -50,6 +50,8 @@ function resolveEsmEntry(pluginDir: string, name: string): string | null {
 export interface InstalledPlugin {
   name: string;
   version: string;
+  /** The installed package's npm `description`, when readable. */
+  description?: string;
 }
 
 /**
@@ -142,8 +144,20 @@ export class PluginManager {
     }
     const deps = parsed.dependencies ?? {};
     return Object.entries(deps)
-      .map(([name, version]) => ({ name, version }))
+      .map(([name, version]) => ({ name, version, description: this.readDescription(name) }))
       .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /** Read a plugin's npm description from its installed package.json. */
+  private readDescription(name: string): string | undefined {
+    const pkgPath = resolve(this.pluginDir, "node_modules", name, "package.json");
+    if (!existsSync(pkgPath)) return undefined;
+    try {
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { description?: string };
+      return typeof pkg.description === "string" && pkg.description ? pkg.description : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /** Run `npm update [name...]`. Pass no names to update everything. */

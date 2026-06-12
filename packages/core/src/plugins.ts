@@ -1,6 +1,13 @@
 import type { AgentConfig } from "./config.js";
 import { createHttpRegistryView } from "./http/registry.js";
-import { createPluginContext, type Plugin, type PluginContext, type PluginDisposer } from "./plugin-context.js";
+import {
+  createPluginContext,
+  type Plugin,
+  type PluginConfigValidator,
+  type PluginContext,
+  type PluginDisposer,
+  type PluginMeta,
+} from "./plugin-context.js";
 
 export interface LoadedPlugin {
   module: string;
@@ -18,6 +25,13 @@ export interface LoadedPlugin {
    * that returned nothing.
    */
   stop?: PluginDisposer;
+  /** The module's optional `meta` export (#228). */
+  meta?: PluginMeta;
+  /**
+   * Warnings collected from the module's optional `validateConfig` export
+   * (#229). The loader also prints them at load time.
+   */
+  warnings?: string[];
 }
 
 export type PluginImporter = (moduleName: string) => Promise<unknown>;
@@ -111,8 +125,27 @@ export async function loadPlugins(
     const http = httpRegistry ? createHttpRegistryView(httpRegistry, moduleName) : baseCtx.http;
     const ctx: PluginContext = { ...baseCtx, config: entryConfig, http };
     try {
-      const mod = (await importer(moduleName)) as { default?: unknown } | undefined;
+      const mod = (await importer(moduleName)) as
+        | { default?: unknown; meta?: unknown; validateConfig?: unknown }
+        | undefined;
       const register = mod?.default;
+      // Optional self-description (#228) — captured as-is when it's an object.
+      const meta =
+        mod?.meta && typeof mod.meta === "object" && !Array.isArray(mod.meta) ? (mod.meta as PluginMeta) : undefined;
+      // Optional plugin-owned config validation (#229). Warnings only — a
+      // throwing or misbehaving validator never blocks the load.
+      let warnings: string[] | undefined;
+      if (typeof mod?.validateConfig === "function") {
+        try {
+          const returned = (mod.validateConfig as PluginConfigValidator)(config);
+          warnings = Array.isArray(returned) ? returned.filter((w) => typeof w === "string") : undefined;
+          for (const w of warnings ?? []) {
+            console.warn(`[plugins] ${moduleName}: ${w}`);
+          }
+        } catch (err) {
+          console.warn(`[plugins] ${moduleName}: validateConfig threw: ${(err as Error).message} — ignoring`);
+        }
+      }
       if (typeof register === "function") {
         const disposer = await (register as Plugin)(ctx);
         console.log(`[plugins] loaded ${moduleName} (register)`);
@@ -121,10 +154,12 @@ export async function loadPlugins(
           ok: true,
           shape: "register",
           stop: typeof disposer === "function" ? disposer : undefined,
+          meta,
+          warnings,
         });
       } else {
         console.log(`[plugins] loaded ${moduleName} (side-effect)`);
-        results.push({ module: moduleName, ok: true, shape: "side-effect" });
+        results.push({ module: moduleName, ok: true, shape: "side-effect", meta, warnings });
       }
     } catch (err) {
       const message = (err as Error).message;
