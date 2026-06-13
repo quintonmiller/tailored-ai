@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isReasoningModel, OpenAIChatProvider } from "../provider.js";
+import { isReasoningModel, OpenAIChatProvider, toApiMessages } from "../provider.js";
 
 function jsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), { status: 200 });
@@ -78,6 +78,24 @@ describe("OpenAIChatProvider request shaping", () => {
     const { body } = await run({ reasoning_effort: "high" });
     expect(body.reasoning_effort).toBe("high");
   });
+
+  it("maps defaultThinking to reasoning_effort (#254)", async () => {
+    const { run } = spyChat("gpt-5-mini", { apiKey: "k", defaultThinking: "low" });
+    const { body } = await run();
+    expect(body.reasoning_effort).toBe("low");
+  });
+
+  it("a per-call thinking level beats the default; off/auto add nothing (#254)", async () => {
+    const fetchSpy = vi.fn(async () => jsonResponse(CHAT_RESPONSE));
+    vi.stubGlobal("fetch", fetchSpy);
+    const provider = new OpenAIChatProvider({ apiKey: "k", defaultThinking: "low" });
+    await provider.chat({ model: "gpt-5-mini", messages: [{ role: "user", content: "Hi" }], thinking: "high" });
+    await provider.chat({ model: "gpt-5-mini", messages: [{ role: "user", content: "Hi" }], thinking: "off" });
+    const body0 = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    const body1 = JSON.parse((fetchSpy.mock.calls[1][1] as RequestInit).body as string);
+    expect(body0.reasoning_effort).toBe("high");
+    expect(body1.reasoning_effort).toBeUndefined();
+  });
 });
 
 describe("OpenAIChatProvider responses", () => {
@@ -153,6 +171,68 @@ describe("OpenAIChatProvider responses", () => {
         finishReason: "tool_calls",
       },
     });
+  });
+
+  it("captures reasoning_content from chat() and streamed reasoning (#254)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({
+          choices: [
+            { message: { role: "assistant", content: "Hi", reasoning_content: "thought" }, finish_reason: "stop" },
+          ],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        }),
+      ),
+    );
+    const provider = new OpenAIChatProvider({ apiKey: "k" });
+    const resp = await provider.chat({ model: "gpt-5-mini", messages: [{ role: "user", content: "Hi" }] });
+    expect(resp.reasoning).toBe("thought");
+
+    const enc = new TextEncoder();
+    const chunks = [
+      'data: {"choices":[{"delta":{"reasoning_content":"think "}}]}\n\n',
+      'data: {"choices":[{"delta":{"reasoning_content":"hard"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n',
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+      "data: [DONE]\n\n",
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(c) {
+                for (const chunk of chunks) c.enqueue(enc.encode(chunk));
+                c.close();
+              },
+            }),
+            { status: 200 },
+          ),
+      ),
+    );
+    const events = [];
+    for await (const ev of provider.chatStream({ model: "gpt-5-mini", messages: [{ role: "user", content: "Hi" }] })) {
+      events.push(ev);
+    }
+    expect(events.filter((e) => e.type === "reasoning")).toEqual([
+      { type: "reasoning", content: "think " },
+      { type: "reasoning", content: "hard" },
+    ]);
+    const done = events.at(-1);
+    expect(done?.type === "done" && done.response.reasoning).toBe("think hard");
+  });
+
+  it("never serializes message.reasoning onto the wire (#254)", () => {
+    const serialized = JSON.stringify(
+      toApiMessages([
+        { role: "user", content: "hi" },
+        { role: "assistant", content: "a", reasoning: "REASONING_SECRET" },
+      ]),
+    );
+    expect(serialized).not.toContain("REASONING_SECRET");
+    expect(serialized).not.toContain("reasoning");
   });
 
   it("lists models with auth headers", async () => {

@@ -45,6 +45,8 @@ export interface ChatStore {
   activityDesc: string | null;
   /** Assistant text streamed so far this turn (empty when the provider doesn't stream). The final response message supersedes it. */
   streamText: string;
+  /** Reasoning/thinking streamed so far this turn (#254). Live display only; the final message carries the persisted trace. */
+  streamReasoning: string;
   pendingTools: ToolLogEntry[];
   turnStart: number | null;
   elapsed: number;
@@ -85,6 +87,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [activeTool, setActiveTool] = useState<string | null>(null);
   const [activityDesc, setActivityDesc] = useState<string | null>(null);
   const [streamText, setStreamText] = useState("");
+  const [streamReasoning, setStreamReasoning] = useState("");
   const [pendingTools, setPendingTools] = useState<ToolLogEntry[]>([]);
   const [turnStart, setTurnStart] = useState<number | null>(null);
   const [elapsed, setElapsed] = useState(0);
@@ -149,6 +152,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setPendingTools([]);
       setApprovals([]);
       setStreamText("");
+      setStreamReasoning("");
       setTurnStart(Date.now());
       setMessages((prev) => [...prev, { role: "user", content: text }]);
 
@@ -162,6 +166,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           switch (event.type) {
             case "delta":
               setStreamText((prev) => prev + ((event.data.text as string) ?? ""));
+              break;
+            case "reasoning":
+              setStreamReasoning((prev) => prev + ((event.data.text as string) ?? ""));
               break;
             case "activity":
               setActivityDesc((event.data.description as string | null | undefined) ?? null);
@@ -189,6 +196,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               // provider call (it was that round's reasoning, captured in
               // the tool log / final response, not part of the answer).
               setStreamText("");
+              setStreamReasoning("");
               setActiveTool(event.data.name as string);
               setPendingTools((prev) => [
                 ...prev,
@@ -221,6 +229,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               setActiveTool(null);
               setActivityDesc(null);
               setStreamText("");
+              setStreamReasoning("");
               setSending(false);
               setTurnStart(null);
               setApprovals([]);
@@ -239,6 +248,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                   content: event.data.content as string,
                   toolLog: finalTools.length > 0 ? finalTools : undefined,
                   recalled,
+                  reasoning: (event.data.reasoning as string | undefined) || undefined,
                 },
               ]);
               recalled = undefined;
@@ -248,6 +258,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               setActiveTool(null);
               setActivityDesc(null);
               setStreamText("");
+              setStreamReasoning("");
               setSending(false);
               setTurnStart(null);
               setApprovals([]);
@@ -287,6 +298,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setActiveTool(null);
     setActivityDesc(null);
     setStreamText("");
+    setStreamReasoning("");
     setSending(false);
     setTurnStart(null);
     const tools = pendingTools;
@@ -393,6 +405,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       activeTool,
       activityDesc,
       streamText,
+      streamReasoning,
       pendingTools,
       turnStart,
       elapsed,
@@ -424,6 +437,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       activeTool,
       activityDesc,
       streamText,
+      streamReasoning,
       pendingTools,
       turnStart,
       elapsed,

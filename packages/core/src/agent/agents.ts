@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import type { AgentConfig, AgentDefinition, AgentHook } from "../config.js";
+import type { ThinkingLevel } from "../providers/interface.js";
 import type { SkillDefinition } from "../resources/skill.js";
 import type { Tool } from "../tools/interface.js";
 import { EMPTY_HOOKS, mergeHooks, normalizeHooks, type ResolvedHooks } from "./hooks.js";
@@ -21,6 +22,8 @@ export interface ResolvedAgent {
   instructions: string;
   tools: Tool[];
   temperature: number;
+  /** Per-agent reasoning effort (#254); undefined leaves the provider on its configured default. */
+  thinking: ThinkingLevel | undefined;
   maxToolRounds: number;
   contextDir: string | undefined;
   kbDir: string | undefined;
@@ -98,6 +101,7 @@ export function resolveAgent(
     instructions: config.agent.extraInstructions,
     tools: allTools,
     temperature: config.agent.temperature,
+    thinking: undefined,
     maxToolRounds: config.agent.maxToolRounds,
     contextDir: undefined,
     kbDir: undefined,
@@ -142,6 +146,7 @@ export function resolveAgent(
     instructions: agent?.instructions ?? defaults.instructions,
     tools: defaults.tools,
     temperature: agent?.temperature ?? defaults.temperature,
+    thinking: agent?.thinking ?? defaults.thinking,
     maxToolRounds: agent?.maxToolRounds ?? defaults.maxToolRounds,
     contextDir: undefined,
     kbDir: undefined,

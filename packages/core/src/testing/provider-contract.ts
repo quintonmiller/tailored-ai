@@ -24,11 +24,14 @@ import { describe, expect, it } from "vitest";
 import type { AIProvider, ChatParams, ChatResponse, ToolSchema } from "../providers/interface.js";
 
 /**
- * Structural view of the streaming events (#227). Declared locally so the
+ * Structural view of the streaming events (#227, #254). Declared locally so the
  * suite validates the shape itself rather than trusting the compiler —
  * a plugin compiled against older core types still gets checked.
  */
-type StreamEventShape = { type: "delta"; content: string } | { type: "done"; response: ChatResponse };
+type StreamEventShape =
+  | { type: "delta"; content: string }
+  | { type: "reasoning"; content: string }
+  | { type: "done"; response: ChatResponse };
 
 const SAMPLE_TOOLS: ToolSchema[] = [
   {
@@ -182,6 +185,20 @@ export function runProviderContractSuite(opts: ProviderContractOptions): void {
       }
       const concat = deltas.map((d) => d.content).join("");
       expect(concat).toBe(done.response.content ?? "");
+
+      // Reasoning (#254) is a separate channel: when a provider streams it,
+      // each event carries string content and the concatenation equals
+      // done.response.reasoning. Providers that don't reason emit none.
+      const reasoningEvents = events.filter(
+        (e): e is Extract<StreamEventShape, { type: "reasoning" }> => e.type === "reasoning",
+      );
+      for (const r of reasoningEvents) {
+        expect(typeof r.content).toBe("string");
+      }
+      if (reasoningEvents.length > 0) {
+        const reasoningConcat = reasoningEvents.map((r) => r.content).join("");
+        expect(reasoningConcat).toBe(done.response.reasoning ?? "");
+      }
     });
 
     it("listModels() resolves to model id strings (when implemented)", async () => {

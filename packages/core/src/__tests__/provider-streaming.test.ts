@@ -17,15 +17,19 @@ function sseBody(chunks: string[]): ReadableStream<Uint8Array> {
   });
 }
 
-async function collect(stream: AsyncIterable<ChatStreamEvent>): Promise<{ deltas: string[]; done: ChatResponse }> {
+async function collect(
+  stream: AsyncIterable<ChatStreamEvent>,
+): Promise<{ deltas: string[]; reasoning: string[]; done: ChatResponse }> {
   const deltas: string[] = [];
+  const reasoning: string[] = [];
   let done: ChatResponse | undefined;
   for await (const ev of stream) {
     if (ev.type === "delta") deltas.push(ev.content);
+    else if (ev.type === "reasoning") reasoning.push(ev.content);
     else done = ev.response;
   }
   if (!done) throw new Error("stream ended without done");
-  return { deltas, done };
+  return { deltas, reasoning, done };
 }
 
 describe("parseSseStream", () => {
@@ -100,6 +104,65 @@ describe("OpenAIProvider.chatStream", () => {
     expect(body.stream).toBe(true);
     expect(body.stream_options).toEqual({ include_usage: true });
   });
+
+  it("captures reasoning_content as separate reasoning events and on done (#254)", async () => {
+    stubFetch([
+      'data: {"choices":[{"delta":{"reasoning_content":"Let me "}}]}\n\n',
+      'data: {"choices":[{"delta":{"reasoning_content":"think."}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n',
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+      "data: [DONE]\n\n",
+    ]);
+    const provider = new OpenAIProvider("key");
+    const { deltas, reasoning, done } = await collect(provider.chatStream({ model: "m", messages: [] }));
+    expect(reasoning).toEqual(["Let me ", "think."]);
+    expect(deltas).toEqual(["Hi"]); // reasoning is a separate channel from text
+    expect(done.content).toBe("Hi");
+    expect(done.reasoning).toBe("Let me think.");
+  });
+});
+
+describe("OpenAIProvider.chat reasoning capture (#254)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("captures message.reasoning_content into response.reasoning", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              choices: [{ message: { role: "assistant", content: "Hi", reasoning_content: "I thought hard." } }],
+              usage: { prompt_tokens: 3, completion_tokens: 1 },
+            }),
+            { status: 200 },
+          ),
+      ),
+    );
+    const provider = new OpenAIProvider("key");
+    const res = await provider.chat({ model: "m", messages: [] });
+    expect(res.content).toBe("Hi");
+    expect(res.reasoning).toBe("I thought hard.");
+  });
+
+  it("leaves reasoning undefined when the model emits none", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              choices: [{ message: { role: "assistant", content: "Hi" } }],
+              usage: { prompt_tokens: 3, completion_tokens: 1 },
+            }),
+            { status: 200 },
+          ),
+      ),
+    );
+    const provider = new OpenAIProvider("key");
+    const res = await provider.chat({ model: "m", messages: [] });
+    expect(res.reasoning).toBeUndefined();
+  });
 });
 
 describe("runAgentLoop onTextDelta", () => {
@@ -155,6 +218,45 @@ describe("runAgentLoop onTextDelta", () => {
     });
     expect(deltas).toEqual(["hello ", "streaming ", "world "]);
     expect(response).toBe("hello streaming world ");
+  });
+
+  it("forwards streamed reasoning to onReasoningDelta (#254)", async () => {
+    const provider: AIProvider = {
+      id: "fake",
+      name: "fake",
+      supportsTools: true,
+      async chat(): Promise<ChatResponse> {
+        return { content: "answer", reasoning: "thinking", usage: { input: 0, output: 0 }, finishReason: "stop" };
+      },
+      async *chatStream(): AsyncIterable<ChatStreamEvent> {
+        yield { type: "reasoning", content: "think " };
+        yield { type: "reasoning", content: "more" };
+        yield { type: "delta", content: "answer" };
+        yield {
+          type: "done",
+          response: {
+            content: "answer",
+            reasoning: "think more",
+            usage: { input: 1, output: 2 },
+            finishReason: "stop",
+          },
+        };
+      },
+    };
+    const session = newSession(db, "fake-model", "fake");
+    const reasoning: string[] = [];
+    const deltas: string[] = [];
+    const response = await runAgentLoop("go", {
+      ...base,
+      provider,
+      session,
+      db,
+      onTextDelta: (t) => deltas.push(t),
+      onReasoningDelta: (t) => reasoning.push(t),
+    });
+    expect(reasoning).toEqual(["think ", "more"]);
+    expect(deltas).toEqual(["answer"]);
+    expect(response).toBe("answer");
   });
 
   it("falls back to chat() when the provider has no chatStream", async () => {

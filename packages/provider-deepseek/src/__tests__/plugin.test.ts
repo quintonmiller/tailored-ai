@@ -129,6 +129,27 @@ describe("thinking-mode injection", () => {
     });
     expect(chatBody(fetchSpy).thinking).toEqual({ type: "enabled" });
   });
+
+  it("a per-agent ChatParams.thinking level overrides the configured default (#254)", async () => {
+    const fetchSpy = stubOkChat();
+    const provider = createDeepSeekProvider({ apiKey: "k", thinking: true });
+    await provider.chat({ model: "deepseek-v4-flash", messages: [{ role: "user", content: "Hi" }], thinking: "off" });
+    expect(chatBody(fetchSpy).thinking).toEqual({ type: "disabled" });
+  });
+
+  it("accepts a ThinkingLevel string as the configured default (#254)", async () => {
+    const fetchSpy = stubOkChat();
+    const provider = createDeepSeekProvider({ apiKey: "k", thinking: "medium" });
+    await provider.chat({ model: "deepseek-v4-flash", messages: [{ role: "user", content: "Hi" }] });
+    expect(chatBody(fetchSpy).thinking).toEqual({ type: "enabled" });
+  });
+
+  it("leaves the request untouched for thinking:auto (native default)", async () => {
+    const fetchSpy = stubOkChat();
+    const provider = createDeepSeekProvider({ apiKey: "k", thinking: "auto" });
+    await provider.chat({ model: "deepseek-v4-flash", messages: [{ role: "user", content: "Hi" }] });
+    expect(chatBody(fetchSpy)).not.toHaveProperty("thinking");
+  });
 });
 
 describe("plugin meta + validateConfig", () => {

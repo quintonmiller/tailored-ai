@@ -23,7 +23,8 @@
  * here: core's `providers` config is an open map and knows nothing about
  * the `bedrock` id.
  */
-import type { AgentConfig, Plugin, PluginMeta } from "@tailored-ai/core";
+import type { AgentConfig, Plugin, PluginMeta, ThinkingLevel } from "@tailored-ai/core";
+import { isThinkingLevel } from "@tailored-ai/core";
 import { BedrockProvider } from "./provider.js";
 
 export { BedrockProvider, type BedrockProviderOptions } from "./provider.js";
@@ -33,6 +34,8 @@ export interface BedrockConfig {
   defaultModel?: string;
   region?: string;
   profile?: string;
+  /** Default reasoning effort (#254) for Anthropic-family models: off | auto | low | medium | high. */
+  thinking?: ThinkingLevel;
 }
 
 export const meta: PluginMeta = {
@@ -52,6 +55,9 @@ export function validateConfig(config: AgentConfig): string[] {
       'providers.bedrock is configured but defaultModel is missing — set a Bedrock model or inference-profile id, e.g. "us.anthropic.claude-haiku-4-5-20251001-v1:0"',
     );
   }
+  if (cfg.thinking !== undefined && !isThinkingLevel(cfg.thinking)) {
+    warnings.push("providers.bedrock.thinking must be one of: off, auto, low, medium, high");
+  }
   return warnings;
 }
 
@@ -65,7 +71,11 @@ const plugin: Plugin = (ctx) => {
       );
     }
     return {
-      provider: new BedrockProvider({ region: cfg.region, profile: cfg.profile }),
+      provider: new BedrockProvider({
+        region: cfg.region,
+        profile: cfg.profile,
+        defaultThinking: isThinkingLevel(cfg.thinking) ? cfg.thinking : undefined,
+      }),
       model: cfg.defaultModel,
     };
   });

@@ -67,7 +67,8 @@ A registered factory id (a plugin's, or the literal `openai_compatible`) always 
 Providers may implement the optional `chatStream(params): AsyncIterable<ChatStreamEvent>` alongside the required `chat()`. The contract (`packages/core/src/providers/interface.ts`):
 
 - `{ type: "delta", content }` — incremental assistant text, in order.
-- `{ type: "done", response }` — exactly one, last; carries the complete `ChatResponse` (tool calls, usage, finishReason). Concatenated deltas equal `done.response.content`.
+- `{ type: "reasoning", content }` — incremental reasoning/thinking trace (#254), a separate channel from `delta`. Emitted before text; concatenated reasoning equals `done.response.reasoning`.
+- `{ type: "done", response }` — exactly one, last; carries the complete `ChatResponse` (tool calls, usage, finishReason, reasoning). Concatenated deltas equal `done.response.content`.
 - Tool calls are never streamed partially — providers accumulate fragments internally and surface them complete on `done`.
 
 Consumption: `AgentLoopOptions.onTextDelta` is the sink. When set and the active provider implements `chatStream`, the loop streams; otherwise it falls back to blocking `chat()` silently. The chat SSE route (`POST /api/chat`) wires `onTextDelta` to a `delta` event and the web UI renders the text live; the final `response` event always supersedes streamed text, so consumers stay correct when streaming is unavailable.
@@ -75,6 +76,24 @@ Consumption: `AgentLoopOptions.onTextDelta` is the sink. When set and the active
 Retry semantics (`chatOnce` in `loop.ts`): a failure before any delta retries the stream; a failure after deltas were emitted retries with non-streaming `chat()` so consumers never see replayed text.
 
 Both `OpenAIProvider` (`stream: true` + `stream_options.include_usage`; servers that omit usage produce zeros) and `AnthropicProvider` (`/v1/messages` stream events) implement it. Provider plugins should too (#226 adds a contract-test suite for the invariants).
+
+## Reasoning (#254)
+
+Reasoning models emit a thinking trace and accept an effort knob. The loop handles both ends uniformly.
+
+**Capture.** `ChatResponse.reasoning` and a streamed `reasoning` event carry the trace. The loop persists `reasoning` on the assistant `Message` (a nullable `messages.reasoning` column) and the chat SSE route forwards `reasoning` deltas + includes the final trace on the `response` event. It is **display-only**: every message→wire converter ignores `Message.reasoning`, so it is never re-sent (some APIs 400 on a re-sent reasoning-only assistant turn), and `estimateTokens` excludes it from the history budget. The web UI renders it as a collapsible "Thinking" disclosure, collapsed by default.
+
+**Control.** `ChatParams.thinking: "off" | "auto" | "low" | "medium" | "high"` is provider-agnostic; each provider maps it to its wire format. Set a per-provider default (`providers.<id>.thinking`) and/or a per-agent override (`agents.<name>.thinking`); the per-agent level wins per call (`params.thinking ?? defaultThinking`). Core ships the seam — `OpenAIProvider`'s `thinkingMap` option plus the generic exported mappers `reasoningEffortThinkingMap` and `enableThinkingTemplateMap` — and the `openai_compatible` provider exposes a `thinkingDialect` (`openai` | `vllm` | `none`) to pick one. Vendor budget/effort policy lives in each provider plugin, so core never learns a plugin's name.
+
+| Level | OpenAI (`reasoning_effort`) | DeepSeek (`thinking`) | vLLM (`enable_thinking`) | Anthropic / Bedrock (`budget_tokens`) |
+|---|---|---|---|---|
+| `off` | omit | `disabled` | `false` | omit (disabled) |
+| `auto` | omit (model default) | omit (native default) | omit (server default) | enabled @ 4096 |
+| `low` | `low` | `enabled` | `true` | 1024 |
+| `medium` | `medium` | `enabled` | `true` | 4096 |
+| `high` | `high` | `enabled` | `true` | 16000 |
+
+Note the `auto` asymmetry: effort-style APIs have no explicit "auto", so it omits the field; Anthropic/Bedrock have no `auto`, so it enables thinking at a moderate budget. Anthropic/Bedrock also bump `max_tokens` past the budget and drop `temperature` (rejected with thinking on), and Bedrock gates `reasoning_config` to Anthropic-family model ids (Nova/Llama/Mistral reject it).
 
 ### Provider capabilities and utilities
 

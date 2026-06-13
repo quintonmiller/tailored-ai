@@ -3,6 +3,13 @@ export interface Message {
   content: string | null;
   toolCalls?: ToolCall[];
   toolCallId?: string;
+  /**
+   * The model's reasoning/thinking trace for an assistant turn (#254), when
+   * the provider emits one. Captured, persisted, and rendered, but NEVER sent
+   * back to a provider — message→wire converters deliberately ignore it, since
+   * some APIs 400 on a re-sent reasoning-only assistant turn.
+   */
+  reasoning?: string;
 }
 
 export interface ToolCall {
@@ -11,6 +18,16 @@ export interface ToolCall {
   arguments: Record<string, unknown>;
 }
 
+/**
+ * Provider-agnostic reasoning/thinking effort (#254). Each provider maps it to
+ * its own wire format (OpenAI `reasoning_effort`, Anthropic/Bedrock
+ * `thinking`/`reasoning_config` budgets, DeepSeek `thinking:{type}`, vLLM
+ * `chat_template_kwargs.enable_thinking`). `off` disables thinking; `auto`
+ * leaves the model on its native default (providers without discrete effort
+ * levels treat any non-`off` level as "enabled").
+ */
+export type ThinkingLevel = "off" | "auto" | "low" | "medium" | "high";
+
 export interface ChatParams {
   model: string;
   messages: Message[];
@@ -18,9 +35,15 @@ export interface ChatParams {
   temperature?: number;
   maxTokens?: number;
   /**
+   * Reasoning effort for this call (#254). Overrides a provider's configured
+   * default. Providers that don't support reasoning ignore it.
+   */
+  thinking?: ThinkingLevel;
+  /**
    * Opaque provider-specific request fields merged into the outgoing request
    * body (e.g. vLLM's `chat_template_kwargs`). Providers that build their own
-   * request shape may ignore keys they don't understand.
+   * request shape may ignore keys they don't understand. Wins over the mapped
+   * {@link ChatParams.thinking} fragment when both target the same key.
    */
   extra?: Record<string, unknown>;
 }
@@ -39,19 +62,32 @@ export interface ChatResponse {
   toolCalls?: ToolCall[];
   usage: { input: number; output: number };
   finishReason: "stop" | "tool_calls" | "length";
+  /**
+   * The model's reasoning/thinking trace (#254), when the provider emits one
+   * (`reasoning_content`, Anthropic `thinking` blocks, Bedrock
+   * `reasoningContent`). `undefined` for providers/models that don't reason.
+   */
+  reasoning?: string;
 }
 
 /**
  * One event from a streaming chat call. Text arrives incrementally as
- * `delta` events; the stream ends with exactly one `done` event carrying
- * the complete {@link ChatResponse} (including tool calls and usage).
+ * `delta` events; reasoning (when the model emits a thinking trace) arrives as
+ * separate `reasoning` events; the stream ends with exactly one `done` event
+ * carrying the complete {@link ChatResponse} (including tool calls and usage).
  *
  * Invariant: the concatenated `delta` contents equal `done.response.content`
- * (both empty/null when the model only emitted tool calls). Tool calls are
- * never streamed partially — providers accumulate them internally and
- * surface them only on `done`, since consumers need complete arguments.
+ * (both empty/null when the model only emitted tool calls), and the
+ * concatenated `reasoning` contents equal `done.response.reasoning`. Reasoning
+ * is a separate channel and is emitted before text, so the last event is still
+ * `done`. Tool calls are never streamed partially — providers accumulate them
+ * internally and surface them only on `done`, since consumers need complete
+ * arguments.
  */
-export type ChatStreamEvent = { type: "delta"; content: string } | { type: "done"; response: ChatResponse };
+export type ChatStreamEvent =
+  | { type: "delta"; content: string }
+  | { type: "reasoning"; content: string }
+  | { type: "done"; response: ChatResponse };
 
 export interface AIProvider {
   id: string;
