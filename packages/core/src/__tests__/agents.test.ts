@@ -125,3 +125,31 @@ describe("resolveAgent", () => {
     expect(resolved.contextDir).toContain("researcher");
   });
 });
+
+describe("resolveAgent — MCP tool references", () => {
+  it("skips a missing mcp_ tool with a warning instead of throwing", () => {
+    const warnings: string[] = [];
+    const orig = console.warn;
+    console.warn = (msg: string) => warnings.push(msg);
+    try {
+      const config = makeConfig({
+        agents: { helper: { tools: ["test_tool", "mcp_github_search_issues"] } },
+      });
+      const tools = [makeTool("test_tool")];
+      const resolved = resolveAgent("helper", config, tools);
+      expect(resolved.tools.map((t) => t.name)).toEqual(["test_tool"]);
+      expect(warnings.some((w) => w.includes("mcp_github_search_issues"))).toBe(true);
+    } finally {
+      console.warn = orig;
+    }
+  });
+
+  it("includes an mcp_ tool once discovery has registered it", () => {
+    const config = makeConfig({
+      agents: { helper: { tools: ["mcp_github_search_issues"] } },
+    });
+    const tools = [makeTool("mcp_github_search_issues")];
+    const resolved = resolveAgent("helper", config, tools);
+    expect(resolved.tools.map((t) => t.name)).toEqual(["mcp_github_search_issues"]);
+  });
+});

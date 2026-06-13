@@ -173,15 +173,26 @@ export function resolveAgent(
 
   if (agent?.tools) {
     const toolMap = new Map(allTools.map((t) => [t.name, t]));
-    resolved.tools = agent.tools.map((name) => {
+    const picked: Tool[] = [];
+    for (const name of agent.tools) {
       const tool = toolMap.get(name);
-      if (!tool) {
-        throw new Error(
-          `Agent "${agentName}" references unknown tool "${name}". Available: ${allTools.map((t) => t.name).join(", ")}`,
-        );
+      if (tool) {
+        picked.push(tool);
+        continue;
       }
-      return tool;
-    });
+      // MCP tools (mcp_<server>_<tool>) register after async discovery and
+      // disappear when their server is down — skip with a warning instead
+      // of failing the whole resolve. The loop re-resolves tools every
+      // iteration, so the tool joins as soon as discovery lands.
+      if (name.startsWith("mcp_")) {
+        console.warn(`[agents] Agent "${agentName}" references MCP tool "${name}" which is not (yet) available`);
+        continue;
+      }
+      throw new Error(
+        `Agent "${agentName}" references unknown tool "${name}". Available: ${allTools.map((t) => t.name).join(", ")}`,
+      );
+    }
+    resolved.tools = picked;
   }
 
   // Resolve the agent's skills. Two modes:

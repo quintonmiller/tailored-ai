@@ -21,7 +21,7 @@ export type ResourceKind =
   | "bundle";
 
 /** Top-level source URI scheme — what {@link ResourceLoader} dispatches on. */
-export type ResourceSourceScheme = "file" | "https" | "git" | "npm" | "agent" | "tai-registry";
+export type ResourceSourceScheme = "file" | "https" | "git" | "npm" | "agent" | "tai-registry" | "mcp";
 
 export interface ResourcePermissions {
   /** Domains the resource may reach over the network. `["*"]` for any. */
