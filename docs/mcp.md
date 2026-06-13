@@ -49,6 +49,16 @@ A server that fails to connect is logged and skipped; the next reconcile retries
 
 Library consumers (not using the CLI) wire the same three calls; `McpHost` is the narrow interface the manager needs (`getConfig` + `getToolRegistry`).
 
+## Observability (#249)
+
+Success is no longer as silent as failure. Each lifecycle transition logs one line so "no log lines" stops being ambiguous:
+
+- connect: `[mcp:github] connected (3 tools: mcp_github_search, ...)`
+- tool list change: `[mcp:github] tools updated (4 tools: ...)`
+- teardown: `[mcp:github] disconnected (removed from config)` / `(shutdown)`, or `config changed — reconnecting` on a restart
+
+The startup banner gains an `MCP: github (3), linear (2)` line (printed only when servers are configured) — MCP servers connect asynchronously and aren't in the one-shot `Tools:` line. `McpManager.list()` returns `{ serverId, tools, connectedAt }` per connected server, surfaced at `GET /api/mcp` (wired via the server's `mcpStatus` option). `tai doctor` (#114) is the remaining consumer once that command exists.
+
 ## Dependency
 
 `@modelcontextprotocol/sdk` is an optional dependency of core, dynamically imported on first connect (same pattern as pdf-parse/playwright). npm installs optional deps by default; if it's absent, connecting fails with an install hint and the rest of the runtime is unaffected. No SDK types appear in core's public API — `src/mcp/client.ts` uses structural types so core compiles without the package.

@@ -130,6 +130,13 @@ export interface ServerOptions {
    * win over the SPA index. When undefined, no UI is served.
    */
   uiProvider?: UiProvider;
+  /**
+   * MCP status snapshot getter, wired by the CLI to `mcpManager.list()`.
+   * Decouples the server from core's `McpManager` — it only sees the
+   * serializable shape. Drives `GET /api/mcp` (#249). Undefined when MCP
+   * isn't wired (e.g. a host that doesn't run the manager).
+   */
+  mcpStatus?: () => Array<{ serverId: string; tools: string[]; connectedAt: number }>;
 }
 
 interface SessionActivity {
@@ -927,6 +934,23 @@ export function createServer(opts: ServerOptions) {
 
   app.get("/api/agents", (c) => {
     return c.json(runtime.getConfig().agents);
+  });
+
+  /**
+   * MCP connection status: one entry per connected server with its discovered
+   * tool names and connected-at timestamp (#249). Mirrors the startup banner
+   * and `tai doctor` so "configured but not connected" is visible instead of
+   * silent. Empty array when MCP isn't wired or no server is connected.
+   */
+  app.get("/api/mcp", (c) => {
+    const servers = (opts.mcpStatus?.() ?? []).map((s) => ({
+      serverId: s.serverId,
+      tools: s.tools,
+      toolCount: s.tools.length,
+      connectedAt: new Date(s.connectedAt).toISOString(),
+    }));
+    servers.sort((a, b) => a.serverId.localeCompare(b.serverId));
+    return c.json({ servers });
   });
 
   /**
