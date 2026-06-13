@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { fetchMessages, type SessionRow, setStoredChatSessionId } from "../api";
 import { groupTurns } from "../chat-grouping";
 import { useChatStore } from "../components/ChatContext";
-import { MessageBubble, ToolLogPanel } from "../components/MessageBubble";
+import { MessageBubble, ThinkingDisclosure, ToolLogPanel } from "../components/MessageBubble";
 import { SuggestionChips } from "../components/SuggestionChips";
 import { VoiceInputButton } from "../components/VoiceInputButton";
 import { useActiveProject } from "../hooks/useActiveProject";
@@ -231,6 +231,7 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
           {displayMessages.map((m, i) => (
             <MessageBubble key={i} message={m} />
           ))}
+          {store.sending && store.streamReasoning && <ThinkingDisclosure reasoning={store.streamReasoning} live />}
           {store.sending && store.streamText && (
             <MessageBubble message={{ role: "assistant", content: store.streamText }} />
           )}

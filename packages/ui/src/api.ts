@@ -69,6 +69,9 @@ export interface Message {
   // UI-only: emitted by the loop when injectMemory ran and produced hits.
   // Rendered as a "Recalled N notes" chip above the bubble.
   recalled?: MemoryRecall;
+  // The model's reasoning/thinking trace (#254), when it emitted one. Rendered
+  // as a collapsible "Thinking" disclosure; never sent back to the server.
+  reasoning?: string;
 }
 
 export interface HealthInfo {
@@ -1337,6 +1340,7 @@ export function killSandbox(id: string): Promise<{ ok?: boolean }> {
 export interface ChatEvent {
   type:
     | "delta"
+    | "reasoning"
     | "tool_call"
     | "tool_result"
     | "response"

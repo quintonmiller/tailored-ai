@@ -1922,6 +1922,59 @@ a.home-feed-link:hover .home-feed-text {
   border-left: 2px solid var(--border);
 }
 
+/* Thinking disclosure (#254): a model's reasoning trace, collapsed by default. */
+.thinking-disclosure {
+  align-self: flex-start;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.thinking-disclosure-toggle {
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 4px 10px;
+  font: 12px var(--font);
+  color: var(--text-dim);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+}
+
+.thinking-disclosure-toggle:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+.thinking-disclosure-live .thinking-disclosure-toggle {
+  border-style: solid;
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
+.thinking-disclosure-caret {
+  display: inline-block;
+  width: 10px;
+  text-align: center;
+  color: var(--text-dim);
+}
+
+.thinking-disclosure-body {
+  margin: 0;
+  padding: 8px 12px;
+  padding-left: 14px;
+  border-left: 2px solid var(--border);
+  font: 12px/1.5 var(--font-mono, monospace);
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
 .tool-log-entry {
   display: flex;
   flex-direction: column;

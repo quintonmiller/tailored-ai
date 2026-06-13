@@ -15,7 +15,7 @@ const COMPACT_TRUNCATE_LENGTH = 120;
 const COMPACT_TRUNCATE_LINES = 2;
 
 export function MessageBubble(props: { message: Message }) {
-  const { role, content, toolCalls, toolLog, recalled } = props.message;
+  const { role, content, toolCalls, toolLog, recalled, reasoning } = props.message;
 
   // Assistant carrier with a collapsed tool log (preferred path post-grouping).
   // Work summary goes ABOVE the final response so the response stays the
@@ -25,6 +25,7 @@ export function MessageBubble(props: { message: Message }) {
       <>
         {recalled && <RecalledChip recalled={recalled} />}
         <ToolLogPanel entries={toolLog} />
+        {reasoning && <ThinkingDisclosure reasoning={reasoning} />}
         {content && <AssistantBubble content={content} />}
       </>
     );
@@ -67,6 +68,7 @@ export function MessageBubble(props: { message: Message }) {
     return (
       <>
         {recalled && <RecalledChip recalled={recalled} />}
+        {reasoning && <ThinkingDisclosure reasoning={reasoning} />}
         <AssistantBubble content={content} />
       </>
     );
@@ -270,6 +272,33 @@ function AssistantBubble(props: { content: string }) {
         <ProposalCard key={`prop-${i}`} proposal={p} />
       ))}
     </>
+  );
+}
+
+/** Collapsible "Thinking" disclosure for a model's reasoning trace (#254). Collapsed by default. */
+export function ThinkingDisclosure({ reasoning, live }: { reasoning: string; live?: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!reasoning) return null;
+  return (
+    <div className={`thinking-disclosure${live ? " thinking-disclosure-live" : ""}`}>
+      <button
+        type="button"
+        className="thinking-disclosure-toggle"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+        title="The model's reasoning trace — not part of the answer, never re-sent"
+      >
+        {live ? (
+          <span className="tool-log-spinner" aria-hidden="true" />
+        ) : (
+          <span className="thinking-disclosure-caret" aria-hidden="true">
+            {expanded ? "▾" : "▸"}
+          </span>
+        )}
+        <span>{live ? "Thinking…" : "Thinking"}</span>
+      </button>
+      {expanded && <pre className="thinking-disclosure-body">{reasoning}</pre>}
+    </div>
   );
 }
 
