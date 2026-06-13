@@ -112,6 +112,20 @@ describe("parseApiResponse", () => {
     expect(mapStopReason("end_turn")).toBe("stop");
     expect(mapStopReason(undefined)).toBe("stop");
   });
+
+  it("captures thinking blocks into reasoning (#254)", () => {
+    const parsed = parseApiResponse({
+      content: [
+        { type: "thinking", thinking: "Let me reason. " },
+        { type: "thinking", thinking: "Almost there." },
+        { type: "text", text: "Answer" },
+      ],
+      stop_reason: "end_turn",
+      usage: { input_tokens: 3, output_tokens: 2 },
+    });
+    expect(parsed.content).toBe("Answer");
+    expect(parsed.reasoning).toBe("Let me reason. Almost there.");
+  });
 });
 
 function jsonResponse(payload: unknown): Response {
@@ -170,6 +184,30 @@ describe("AnthropicMessagesProvider", () => {
     const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
     expect(body.thinking).toEqual({ type: "enabled", budget_tokens: 2048 });
     expect(body.top_k).toBe(40);
+  });
+
+  it("maps thinking to a budget, bumps max_tokens, and drops temperature (#254)", async () => {
+    const fetchSpy = vi.fn(async () => jsonResponse(CHAT_RESPONSE));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const provider = new AnthropicMessagesProvider({ apiKey: "k", defaultMaxTokens: 4096, defaultThinking: "high" });
+    await provider.chat({ model: "m", messages: [{ role: "user", content: "Hi" }] });
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.thinking).toEqual({ type: "enabled", budget_tokens: 16000 });
+    expect(body.max_tokens).toBe(16000 + 4096); // budget + max(baseMax, 4096)
+    expect(body.max_tokens).toBeGreaterThan(16000); // API requires max_tokens > budget
+    expect(body.temperature).toBeUndefined(); // rejected when thinking is on
+  });
+
+  it("a per-call thinking level overrides the default; off disables (#254)", async () => {
+    const fetchSpy = vi.fn(async () => jsonResponse(CHAT_RESPONSE));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const provider = new AnthropicMessagesProvider({ apiKey: "k", defaultThinking: "high" });
+    await provider.chat({ model: "m", messages: [{ role: "user", content: "Hi" }], thinking: "off" });
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.thinking).toBeUndefined();
+    expect(body.temperature).toBe(0.3); // kept when thinking is off
   });
 
   it("adds cache breakpoints to system and tools when promptCaching is on", async () => {
@@ -237,6 +275,47 @@ describe("AnthropicMessagesProvider", () => {
         finishReason: "tool_calls",
       },
     });
+  });
+
+  it("streams thinking_delta as reasoning events and on done (#254)", async () => {
+    const enc = new TextEncoder();
+    const chunks = [
+      'event: message_start\ndata: {"message":{"usage":{"input_tokens":5}}}\n\n',
+      'event: content_block_start\ndata: {"index":0,"content_block":{"type":"thinking"}}\n\n',
+      'event: content_block_delta\ndata: {"index":0,"delta":{"type":"thinking_delta","thinking":"Hmm "}}\n\n',
+      'event: content_block_delta\ndata: {"index":0,"delta":{"type":"thinking_delta","thinking":"yes."}}\n\n',
+      'event: content_block_delta\ndata: {"index":1,"delta":{"type":"text_delta","text":"Answer"}}\n\n',
+      'event: message_delta\ndata: {"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}\n\n',
+      "event: message_stop\ndata: {}\n\n",
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(c) {
+                for (const chunk of chunks) c.enqueue(enc.encode(chunk));
+                c.close();
+              },
+            }),
+            { status: 200 },
+          ),
+      ),
+    );
+
+    const provider = new AnthropicMessagesProvider({ apiKey: "k" });
+    const events = [];
+    for await (const ev of provider.chatStream({ model: "m", messages: [{ role: "user", content: "Hi" }] })) {
+      events.push(ev);
+    }
+    expect(events.filter((e) => e.type === "reasoning")).toEqual([
+      { type: "reasoning", content: "Hmm " },
+      { type: "reasoning", content: "yes." },
+    ]);
+    const done = events.at(-1);
+    expect(done?.type === "done" && done.response.reasoning).toBe("Hmm yes.");
+    expect(done?.type === "done" && done.response.content).toBe("Answer");
   });
 
   it("lists models via /v1/models", async () => {

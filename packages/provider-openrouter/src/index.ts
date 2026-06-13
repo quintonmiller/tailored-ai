@@ -21,10 +21,23 @@
  * Attribution headers (`HTTP-Referer` / `X-Title`, used for OpenRouter's app
  * rankings) need the extraHeaders seam tracked in #234 and will follow.
  */
-import type { AgentConfig, Plugin, PluginMeta } from "@tailored-ai/core";
-import { OpenAIProvider } from "@tailored-ai/core";
+import type { AgentConfig, Plugin, PluginMeta, ThinkingLevel, ThinkingMapper } from "@tailored-ai/core";
+import { isThinkingLevel, OpenAIProvider } from "@tailored-ai/core";
 
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+
+/**
+ * OpenRouter's unified `reasoning` param (#254): `low`/`medium`/`high` map to
+ * `reasoning.effort`; `off` disables it; `auto` adds nothing (the upstream
+ * model's default). OpenRouter normalizes this across vendors, and reasoning
+ * text comes back on `message.reasoning` / `delta.reasoning`, which core's
+ * OpenAIProvider captures.
+ */
+const openrouterThinkingMap: ThinkingMapper = (level) => {
+  if (level === "auto") return undefined;
+  if (level === "off") return { reasoning: { enabled: false } };
+  return { reasoning: { effort: level } };
+};
 
 /** Config bag read from `providers.openrouter` — owned by this plugin. */
 export interface OpenRouterConfig {
@@ -32,6 +45,11 @@ export interface OpenRouterConfig {
   defaultModel?: string;
   /** Override for proxies/self-hosted gateways. Defaults to the public OpenRouter endpoint. */
   baseUrl?: string;
+  /**
+   * Default reasoning effort (#254): off | auto | low | medium | high. Sent as
+   * OpenRouter's `reasoning` param; a per-agent `thinking` overrides it per call.
+   */
+  thinking?: ThinkingLevel;
 }
 
 /** Build the configured provider — exported for tests and direct use. */
@@ -39,6 +57,8 @@ export function createOpenRouterProvider(cfg: OpenRouterConfig): OpenAIProvider 
   return new OpenAIProvider(cfg.apiKey, cfg.baseUrl ?? OPENROUTER_BASE_URL, {
     id: "openrouter",
     name: "OpenRouter",
+    thinkingMap: openrouterThinkingMap,
+    defaultThinking: isThinkingLevel(cfg.thinking) ? cfg.thinking : undefined,
   });
 }
 
@@ -60,6 +80,9 @@ export function validateConfig(config: AgentConfig): string[] {
     warnings.push(
       'providers.openrouter is configured but defaultModel is missing — an OpenRouter model id, e.g. "anthropic/claude-haiku-4.5"',
     );
+  }
+  if (cfg.thinking !== undefined && !isThinkingLevel(cfg.thinking)) {
+    warnings.push("providers.openrouter.thinking must be one of: off, auto, low, medium, high");
   }
   return warnings;
 }

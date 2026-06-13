@@ -75,6 +75,27 @@ describe("provider-openrouter plugin", () => {
     await provider.listModels?.();
     expect(fetchSpy.mock.calls[0][0]).toBe("http://proxy.local/v1/models");
   });
+
+  it("maps thinking to OpenRouter's reasoning param + captures reasoning (#254)", async () => {
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            choices: [{ message: { role: "assistant", content: "OK", reasoning: "because" }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 1, completion_tokens: 1 },
+          }),
+          { status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const provider = createOpenRouterProvider({ apiKey: "k", defaultModel: "m", thinking: "high" });
+    const res = await provider.chat({ model: "m", messages: [{ role: "user", content: "Hi" }] });
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.reasoning).toEqual({ effort: "high" });
+    // capture: OpenRouter returns reasoning on message.reasoning
+    expect(res.reasoning).toBe("because");
+  });
 });
 
 describe("plugin meta + validateConfig", () => {

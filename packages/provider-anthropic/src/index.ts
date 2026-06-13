@@ -21,7 +21,8 @@
  *     agent:
  *       defaultProvider: anthropic
  */
-import type { AgentConfig, Plugin, PluginMeta } from "@tailored-ai/core";
+import type { AgentConfig, Plugin, PluginMeta, ThinkingLevel } from "@tailored-ai/core";
+import { isThinkingLevel } from "@tailored-ai/core";
 import { AnthropicMessagesProvider } from "./provider.js";
 
 export {
@@ -42,6 +43,8 @@ export interface AnthropicConfig {
   betas?: string[];
   defaultMaxTokens?: number;
   promptCaching?: boolean;
+  /** Default extended-thinking effort (#254): off | auto | low | medium | high. */
+  thinking?: ThinkingLevel;
 }
 
 export const meta: PluginMeta = {
@@ -60,6 +63,9 @@ export function validateConfig(config: AgentConfig): string[] {
   }
   if (!cfg.defaultModel) {
     warnings.push('providers.anthropic is configured but defaultModel is missing — e.g. "claude-haiku-4-5"');
+  }
+  if (cfg.thinking !== undefined && !isThinkingLevel(cfg.thinking)) {
+    warnings.push("providers.anthropic.thinking must be one of: off, auto, low, medium, high");
   }
   return warnings;
 }
@@ -80,6 +86,7 @@ const plugin: Plugin = (ctx) => {
         betas: cfg.betas,
         defaultMaxTokens: cfg.defaultMaxTokens,
         promptCaching: cfg.promptCaching,
+        defaultThinking: isThinkingLevel(cfg.thinking) ? cfg.thinking : undefined,
       }),
       model: cfg.defaultModel,
     };

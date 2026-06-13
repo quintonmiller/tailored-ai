@@ -4,10 +4,37 @@ import type {
   ChatResponse,
   ChatStreamEvent,
   Message,
+  ThinkingLevel,
   ToolCall,
   ToolSchema,
 } from "@tailored-ai/core";
 import { parseSseStream } from "./sse.js";
+
+/**
+ * Anthropic extended-thinking budget (#254). `off` omits the field (thinking
+ * is off by default); `auto` enables it at a moderate budget; the effort levels
+ * map to token budgets (min 1024). Returns the budget in tokens, or null to
+ * leave thinking disabled. The number policy is vendor-specific, so it lives in
+ * this plugin, not core.
+ */
+function anthropicThinkingBudget(level: ThinkingLevel | undefined): number | null {
+  switch (level) {
+    case "low":
+      return 1024;
+    case "auto":
+    case "medium":
+      return 4096;
+    case "high":
+      return 16000;
+    default:
+      return null; // undefined | "off"
+  }
+}
+
+/** Whether a request body's `thinking` field (mapper- or extra-supplied) is enabled. */
+function isThinkingEnabled(thinking: unknown): boolean {
+  return typeof thinking === "object" && thinking !== null && (thinking as { type?: string }).type === "enabled";
+}
 
 // --- Messages API wire-format types ---
 
@@ -52,7 +79,14 @@ interface Usage {
 }
 
 interface ApiResponse {
-  content: Array<{ type: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }>;
+  content: Array<{
+    type: string;
+    text?: string;
+    thinking?: string;
+    id?: string;
+    name?: string;
+    input?: Record<string, unknown>;
+  }>;
   stop_reason: string;
   usage: Usage;
 }
@@ -65,6 +99,7 @@ interface StreamPayload {
   delta?: {
     type?: string;
     text?: string;
+    thinking?: string;
     partial_json?: string;
     stop_reason?: string;
   };
@@ -178,11 +213,14 @@ function toUsage(usage: Usage | undefined): { input: number; output: number } {
 
 export function parseApiResponse(data: ApiResponse): ChatResponse {
   let textContent = "";
+  let reasoning = "";
   const toolCalls: ToolCall[] = [];
 
   for (const block of data.content ?? []) {
     if (block.type === "text" && block.text) {
       textContent += block.text;
+    } else if (block.type === "thinking" && block.thinking) {
+      reasoning += block.thinking;
     } else if (block.type === "tool_use") {
       toolCalls.push({
         id: block.id ?? "",
@@ -195,6 +233,7 @@ export function parseApiResponse(data: ApiResponse): ChatResponse {
   return {
     content: textContent || null,
     toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+    reasoning: reasoning || undefined,
     usage: toUsage(data.usage),
     finishReason: mapStopReason(data.stop_reason),
   };
@@ -218,6 +257,8 @@ export interface AnthropicMessagesProviderOptions {
    * input cost/latency substantially on cache hits.
    */
   promptCaching?: boolean;
+  /** Default extended-thinking effort (#254). Per-call `ChatParams.thinking` overrides it. */
+  defaultThinking?: ThinkingLevel;
 }
 
 /**
@@ -237,6 +278,7 @@ export class AnthropicMessagesProvider implements AIProvider {
   private betas?: string[];
   private defaultMaxTokens: number;
   private promptCaching: boolean;
+  private defaultThinking?: ThinkingLevel;
 
   constructor(opts: AnthropicMessagesProviderOptions) {
     this.apiKey = opts.apiKey;
@@ -245,6 +287,7 @@ export class AnthropicMessagesProvider implements AIProvider {
     this.betas = opts.betas?.length ? opts.betas : undefined;
     this.defaultMaxTokens = opts.defaultMaxTokens ?? 4096;
     this.promptCaching = opts.promptCaching ?? false;
+    this.defaultThinking = opts.defaultThinking;
   }
 
   private headers(): Record<string, string> {
@@ -262,10 +305,11 @@ export class AnthropicMessagesProvider implements AIProvider {
   private buildBody(params: ChatParams): Record<string, unknown> {
     const { system, messages } = toApiMessages(params.messages, this.promptCaching);
 
+    const baseMax = params.maxTokens ?? this.defaultMaxTokens;
     const body: Record<string, unknown> = {
       model: params.model,
       messages,
-      max_tokens: params.maxTokens ?? this.defaultMaxTokens,
+      max_tokens: baseMax,
       temperature: params.temperature ?? 0.3,
     };
 
@@ -277,8 +321,22 @@ export class AnthropicMessagesProvider implements AIProvider {
       body.tools = toApiTools(params.tools, this.promptCaching);
     }
 
+    // Reasoning control (#254): enable extended thinking with a token budget.
+    // Thinking tokens count against max_tokens, so bump it to leave output
+    // room (the API requires max_tokens > budget_tokens).
+    const budget = anthropicThinkingBudget(params.thinking ?? this.defaultThinking);
+    if (budget !== null) {
+      body.thinking = { type: "enabled", budget_tokens: budget };
+      body.max_tokens = budget + Math.max(baseMax, 4096);
+    }
+
     if (params.extra) {
       Object.assign(body, params.extra);
+    }
+
+    // Anthropic rejects temperature != 1 when thinking is enabled — drop it.
+    if (isThinkingEnabled(body.thinking)) {
+      delete body.temperature;
     }
 
     return body;
@@ -321,6 +379,7 @@ export class AnthropicMessagesProvider implements AIProvider {
     }
 
     let content = "";
+    let reasoning = "";
     let stopReason: string | undefined;
     let startUsage: Usage | undefined;
     let outputTokens = 0;
@@ -351,6 +410,9 @@ export class AnthropicMessagesProvider implements AIProvider {
           if (payload.delta?.type === "text_delta" && payload.delta.text) {
             content += payload.delta.text;
             yield { type: "delta", content: payload.delta.text };
+          } else if (payload.delta?.type === "thinking_delta" && payload.delta.thinking) {
+            reasoning += payload.delta.thinking;
+            yield { type: "reasoning", content: payload.delta.thinking };
           } else if (payload.delta?.type === "input_json_delta" && payload.index !== undefined) {
             const block = toolBlocks.get(payload.index);
             if (block) block.json += payload.delta.partial_json ?? "";
@@ -380,6 +442,7 @@ export class AnthropicMessagesProvider implements AIProvider {
       response: {
         content: content || null,
         toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+        reasoning: reasoning || undefined,
         usage: { input: toUsage(startUsage).input, output: outputTokens },
         finishReason: mapStopReason(stopReason),
       },

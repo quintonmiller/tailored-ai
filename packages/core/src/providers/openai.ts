@@ -26,9 +26,11 @@ interface OpenAIStreamChunk {
   choices?: {
     delta?: {
       content?: string | null;
-      // The de-facto OpenAI-compatible reasoning channel (DeepSeek, vLLM,
-      // some gateways). Captured into `reasoning` (#254).
+      // The de-facto OpenAI-compatible reasoning channels: `reasoning_content`
+      // (DeepSeek, vLLM) and `reasoning` (OpenRouter). Captured into the
+      // unified `reasoning` field (#254).
       reasoning_content?: string | null;
+      reasoning?: string | null;
       tool_calls?: {
         index: number;
         id?: string;
@@ -49,6 +51,7 @@ interface OpenAIChatResponse {
       role: string;
       content: string | null;
       reasoning_content?: string | null;
+      reasoning?: string | null;
       tool_calls?: {
         id: string;
         type: "function";
@@ -208,7 +211,7 @@ export class OpenAIProvider implements AIProvider {
     return {
       content: choice.message.content || null,
       toolCalls: hasToolCalls ? toolCalls : undefined,
-      reasoning: choice.message.reasoning_content || undefined,
+      reasoning: choice.message.reasoning_content || choice.message.reasoning || undefined,
       usage: {
         input: data.usage?.prompt_tokens ?? 0,
         output: data.usage?.completion_tokens ?? 0,
@@ -257,9 +260,10 @@ export class OpenAIProvider implements AIProvider {
       if (!choice) continue;
       if (choice.finish_reason) finishReason = choice.finish_reason;
 
-      if (choice.delta?.reasoning_content) {
-        reasoning += choice.delta.reasoning_content;
-        yield { type: "reasoning", content: choice.delta.reasoning_content };
+      const reasoningDelta = choice.delta?.reasoning_content ?? choice.delta?.reasoning;
+      if (reasoningDelta) {
+        reasoning += reasoningDelta;
+        yield { type: "reasoning", content: reasoningDelta };
       }
 
       if (choice.delta?.content) {
