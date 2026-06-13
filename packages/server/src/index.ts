@@ -860,6 +860,12 @@ export function createServer(opts: ServerOptions) {
               data: JSON.stringify({ text }),
             });
           },
+          onReasoningDelta: (text) => {
+            stream.writeSSE({
+              event: "reasoning",
+              data: JSON.stringify({ text }),
+            });
+          },
           onToolCall: (name, args) => {
             stream.writeSSE({
               event: "tool_call",
@@ -905,9 +911,22 @@ export function createServer(opts: ServerOptions) {
           );
         }
 
+        // Surface the final turn's reasoning (#254) on the response event so
+        // the live UI can attach it without a refetch. The assistant row was
+        // saved inside the loop; read its reasoning back from the DB (avoids
+        // changing runAgentLoop's string return). On reload, the same field
+        // comes from GET /api/sessions/:id/messages.
+        const lastReasoning = [...getSessionMessages(runtime.db, session.id)]
+          .reverse()
+          .find((m) => m.role === "assistant")?.reasoning;
         await stream.writeSSE({
           event: "response",
-          data: JSON.stringify({ content: response, sessionId: session.id, sessionKey: key }),
+          data: JSON.stringify({
+            content: response,
+            reasoning: lastReasoning,
+            sessionId: session.id,
+            sessionKey: key,
+          }),
         });
       } catch (err) {
         await stream.writeSSE({

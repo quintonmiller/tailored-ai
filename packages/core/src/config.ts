@@ -4,6 +4,7 @@ import YAML from "yaml";
 import type { PermissionsConfig } from "./approval.js";
 import { DEFAULT_AUTOPILOT_TASK_PROMPT } from "./autopilot/task-prompt.js";
 import { DEFAULT_BRIEFING_PROMPT } from "./briefing.js";
+import type { ThinkingLevel } from "./providers/interface.js";
 import { DEFAULT_SUGGESTIONS_PROMPT } from "./suggestions.js";
 import { META_TOOL_NAMES } from "./tools/tool-factories.js";
 
@@ -27,6 +28,13 @@ export interface AgentDefinition {
   instructions?: string;
   tools?: string[];
   temperature?: number;
+  /**
+   * Reasoning effort for this agent (#254): off | auto | low | medium | high.
+   * Forwarded to the active provider on every chat call and mapped to its wire
+   * format; overrides the provider's configured default. Providers without
+   * reasoning support ignore it.
+   */
+  thinking?: ThinkingLevel;
   maxToolRounds?: number;
   contextDir?: string;
   /** When >0, re-prompt the model up to N times if it responds with text instead of tool calls. */
@@ -420,6 +428,12 @@ export interface AgentConfig {
    *   providers:
    *     local:    { type: openai_compatible, baseUrl: http://127.0.0.1:8000/v1, defaultModel: qwen3.6-27b }
    *     deepseek: { type: openai_compatible, baseUrl: https://api.deepseek.com, apiKey: ${DEEPSEEK_API_KEY}, defaultModel: deepseek-v4-flash }
+   *
+   * Reasoning (#254): an openai_compatible bag may also set `thinking`
+   * (default effort: off|auto|low|medium|high) and `thinkingDialect`
+   * (openai → reasoning_effort, vllm → chat_template_kwargs.enable_thinking,
+   * none → ignore; default none). Per-agent `agents.<name>.thinking` overrides
+   * the default per call. Hosted-vendor plugins map `thinking` themselves.
    */
   providers: {
     [id: string]: Record<string, unknown> | undefined;

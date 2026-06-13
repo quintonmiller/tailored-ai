@@ -19,7 +19,8 @@
  *     agent:
  *       defaultProvider: openai
  */
-import type { AgentConfig, Plugin, PluginMeta } from "@tailored-ai/core";
+import type { AgentConfig, Plugin, PluginMeta, ThinkingLevel } from "@tailored-ai/core";
+import { isThinkingLevel } from "@tailored-ai/core";
 import { OpenAIChatProvider } from "./provider.js";
 
 export {
@@ -38,6 +39,8 @@ export interface OpenAIConfig {
   organization?: string;
   project?: string;
   reasoningModels?: string[];
+  /** Default reasoning effort (#254): off | auto | low | medium | high → `reasoning_effort`. */
+  thinking?: ThinkingLevel;
 }
 
 export const meta: PluginMeta = {
@@ -58,6 +61,9 @@ export function validateConfig(config: AgentConfig): string[] {
   if (!cfg.defaultModel) {
     warnings.push('providers.openai is configured but defaultModel is missing — e.g. "gpt-5-mini"');
   }
+  if (cfg.thinking !== undefined && !isThinkingLevel(cfg.thinking)) {
+    warnings.push("providers.openai.thinking must be one of: off, auto, low, medium, high");
+  }
   return warnings;
 }
 
@@ -76,6 +82,7 @@ const plugin: Plugin = (ctx) => {
         organization: cfg.organization,
         project: cfg.project,
         reasoningModels: cfg.reasoningModels,
+        defaultThinking: isThinkingLevel(cfg.thinking) ? cfg.thinking : undefined,
       }),
       model: cfg.defaultModel,
     };

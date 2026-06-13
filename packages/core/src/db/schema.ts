@@ -526,6 +526,14 @@ export function initDatabase(dbPath: string): Database.Database {
     // Column already exists
   }
 
+  // Safe migration: assistant reasoning/thinking trace (#254). Display-only —
+  // captured and rendered, never re-sent to a provider. Not indexed.
+  try {
+    db.exec("ALTER TABLE messages ADD COLUMN reasoning TEXT");
+  } catch {
+    // Column already exists
+  }
+
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_sessions_pinned_updated
       ON sessions(pinned, updated_at);

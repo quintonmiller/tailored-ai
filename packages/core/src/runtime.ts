@@ -907,6 +907,7 @@ export class AgentRuntime {
       maxToolRounds: resolved.maxToolRounds,
       maxHistoryTokens: config.agent.maxHistoryTokens,
       temperature: resolved.temperature,
+      thinking: resolved.thinking,
       contextDir: this.contextDir,
       agentContextDir: resolved.contextDir,
       kbDir: globalKbDir,

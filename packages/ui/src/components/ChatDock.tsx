@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { groupTurns } from "../chat-grouping";
 import { useChatStore } from "./ChatContext";
-import { MessageBubble } from "./MessageBubble";
+import { MessageBubble, ThinkingDisclosure } from "./MessageBubble";
 import { SuggestionChips } from "./SuggestionChips";
 
 type DockMode = "floating" | "docked-left" | "docked-right";
@@ -395,6 +395,7 @@ export function ChatDock() {
         {displayMessages.map((m, i) => (
           <MessageBubble key={i} message={m} />
         ))}
+        {store.sending && store.streamReasoning && <ThinkingDisclosure reasoning={store.streamReasoning} live />}
         {store.sending && store.streamText && (
           <MessageBubble message={{ role: "assistant", content: store.streamText }} />
         )}

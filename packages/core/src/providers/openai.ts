@@ -4,10 +4,12 @@ import type {
   ChatResponse,
   ChatStreamEvent,
   Message,
+  ThinkingLevel,
   ToolCall,
   ToolSchema,
 } from "./interface.js";
 import { parseSseStream } from "./sse.js";
+import type { ThinkingMapper } from "./thinking.js";
 
 export interface OpenAIMessage {
   role: string;
@@ -24,6 +26,11 @@ interface OpenAIStreamChunk {
   choices?: {
     delta?: {
       content?: string | null;
+      // The de-facto OpenAI-compatible reasoning channels: `reasoning_content`
+      // (DeepSeek, vLLM) and `reasoning` (OpenRouter). Captured into the
+      // unified `reasoning` field (#254).
+      reasoning_content?: string | null;
+      reasoning?: string | null;
       tool_calls?: {
         index: number;
         id?: string;
@@ -43,6 +50,8 @@ interface OpenAIChatResponse {
     message: {
       role: string;
       content: string | null;
+      reasoning_content?: string | null;
+      reasoning?: string | null;
       tool_calls?: {
         id: string;
         type: "function";
@@ -103,6 +112,15 @@ export interface OpenAIProviderOptions {
   id?: string;
   /** Human-readable name shown in UIs and logs. */
   name?: string;
+  /**
+   * Maps a provider-agnostic {@link ThinkingLevel} to this backend's wire
+   * fields (#254). Provider plugins built on this class (DeepSeek, OpenRouter)
+   * pass their dialect's mapper. Omit to ignore `thinking` entirely — the safe
+   * default for a generic OpenAI-compatible endpoint.
+   */
+  thinkingMap?: ThinkingMapper;
+  /** Reasoning effort used when a call doesn't set `ChatParams.thinking`. */
+  defaultThinking?: ThinkingLevel;
 }
 
 export class OpenAIProvider implements AIProvider {
@@ -112,12 +130,16 @@ export class OpenAIProvider implements AIProvider {
 
   private apiKey: string;
   private baseUrl: string;
+  private thinkingMap?: ThinkingMapper;
+  private defaultThinking?: ThinkingLevel;
 
   constructor(apiKey: string | undefined, baseUrl = "https://api.openai.com/v1", opts: OpenAIProviderOptions = {}) {
     this.apiKey = apiKey ?? "";
     this.baseUrl = baseUrl.replace(/\/$/, "");
     this.id = opts.id ?? "openai";
     this.name = opts.name ?? "OpenAI";
+    this.thinkingMap = opts.thinkingMap;
+    this.defaultThinking = opts.defaultThinking;
   }
 
   private buildBody(params: ChatParams): Record<string, unknown> {
@@ -133,6 +155,14 @@ export class OpenAIProvider implements AIProvider {
 
     if (params.maxTokens) {
       body.max_tokens = params.maxTokens;
+    }
+
+    // Reasoning control (#254): map the resolved level, then let a per-call
+    // `extra` win over the mapped fragment.
+    const level = params.thinking ?? this.defaultThinking;
+    if (level && this.thinkingMap) {
+      const fragment = this.thinkingMap(level, params);
+      if (fragment) Object.assign(body, fragment);
     }
 
     if (params.extra) {
@@ -181,6 +211,7 @@ export class OpenAIProvider implements AIProvider {
     return {
       content: choice.message.content || null,
       toolCalls: hasToolCalls ? toolCalls : undefined,
+      reasoning: choice.message.reasoning_content || choice.message.reasoning || undefined,
       usage: {
         input: data.usage?.prompt_tokens ?? 0,
         output: data.usage?.completion_tokens ?? 0,
@@ -207,6 +238,7 @@ export class OpenAIProvider implements AIProvider {
     }
 
     let content = "";
+    let reasoning = "";
     let finishReason: string | null = null;
     let usage = { input: 0, output: 0 };
     const toolFragments = new Map<number, { id: string; name: string; args: string }>();
@@ -227,6 +259,12 @@ export class OpenAIProvider implements AIProvider {
       const choice = chunk.choices?.[0];
       if (!choice) continue;
       if (choice.finish_reason) finishReason = choice.finish_reason;
+
+      const reasoningDelta = choice.delta?.reasoning_content ?? choice.delta?.reasoning;
+      if (reasoningDelta) {
+        reasoning += reasoningDelta;
+        yield { type: "reasoning", content: reasoningDelta };
+      }
 
       if (choice.delta?.content) {
         content += choice.delta.content;
@@ -256,6 +294,7 @@ export class OpenAIProvider implements AIProvider {
       response: {
         content: content || null,
         toolCalls: hasToolCalls ? toolCalls : undefined,
+        reasoning: reasoning || undefined,
         usage,
         finishReason: hasToolCalls ? "tool_calls" : finishReason === "length" ? "length" : "stop",
       },

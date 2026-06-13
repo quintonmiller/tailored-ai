@@ -18,11 +18,39 @@ import type {
   ChatResponse,
   ChatStreamEvent,
   Message,
+  ThinkingLevel,
   ToolCall,
   ToolSchema,
 } from "@tailored-ai/core";
 
 // --- Conversion helpers (exported for testing) ---
+
+/**
+ * Bedrock extended-thinking budget (#254), in tokens — same policy as native
+ * Anthropic. `off` omits reasoning; `auto`/`medium` use a moderate budget;
+ * effort levels scale. Returns null to leave reasoning off.
+ */
+function bedrockThinkingBudget(level: ThinkingLevel | undefined): number | null {
+  switch (level) {
+    case "low":
+      return 1024;
+    case "auto":
+    case "medium":
+      return 4096;
+    case "high":
+      return 16000;
+    default:
+      return null; // undefined | "off"
+  }
+}
+
+/**
+ * Only Anthropic-family models on Bedrock accept `reasoning_config`; Nova,
+ * Llama, Mistral, etc. reject it, so the mapper must no-op for them.
+ */
+export function isAnthropicBedrockModel(modelId: string): boolean {
+  return /anthropic\.|claude/i.test(modelId);
+}
 
 /**
  * Convert internal messages to the Converse API format.
@@ -122,6 +150,7 @@ export function mapStopReason(reason: string | undefined): "stop" | "tool_calls"
 
 export function parseConverseResponse(data: ConverseCommandOutput): ChatResponse {
   let textContent = "";
+  let reasoning = "";
   const toolCalls: ToolCall[] = [];
 
   for (const block of data.output?.message?.content ?? []) {
@@ -133,12 +162,19 @@ export function parseConverseResponse(data: ConverseCommandOutput): ChatResponse
         name: block.toolUse.name ?? "",
         arguments: (block.toolUse.input ?? {}) as Record<string, unknown>,
       });
+    } else {
+      // reasoningContent blocks (#254) — typed loosely so we compile against
+      // SDK versions that predate the ReasoningContentBlock union.
+      const text = (block as { reasoningContent?: { reasoningText?: { text?: string } } }).reasoningContent
+        ?.reasoningText?.text;
+      if (text) reasoning += text;
     }
   }
 
   return {
     content: textContent || null,
     toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+    reasoning: reasoning || undefined,
     usage: {
       input: data.usage?.inputTokens ?? 0,
       output: data.usage?.outputTokens ?? 0,
@@ -156,6 +192,8 @@ export interface BedrockProviderOptions {
   profile?: string;
   /** Injected client for tests. When set, region/profile are ignored. */
   client?: Pick<BedrockRuntimeClient, "send">;
+  /** Default reasoning effort (#254) for Anthropic-family models. Per-call `ChatParams.thinking` overrides it. */
+  defaultThinking?: ThinkingLevel;
 }
 
 /**
@@ -173,6 +211,7 @@ export class BedrockProvider implements AIProvider {
   supportsTools = true;
 
   private client: Pick<BedrockRuntimeClient, "send">;
+  private defaultThinking?: ThinkingLevel;
 
   constructor(opts: BedrockProviderOptions = {}) {
     this.client =
@@ -181,19 +220,29 @@ export class BedrockProvider implements AIProvider {
         ...(opts.region ? { region: opts.region } : {}),
         ...(opts.profile ? { credentials: fromNodeProviderChain({ profile: opts.profile }) } : {}),
       });
+    this.defaultThinking = opts.defaultThinking;
   }
 
   private buildInput(params: ChatParams): ConverseCommandInput {
     const { system, messages } = toConverseMessages(params.messages);
 
-    const input: ConverseCommandInput = {
-      modelId: params.model,
-      messages,
-      inferenceConfig: {
-        maxTokens: params.maxTokens ?? 4096,
-        temperature: params.temperature ?? 0.3,
-      },
+    const baseMax = params.maxTokens ?? 4096;
+    const inferenceConfig: ConverseCommandInput["inferenceConfig"] = {
+      maxTokens: baseMax,
+      temperature: params.temperature ?? 0.3,
     };
+
+    // Reasoning control (#254): only Anthropic-family models accept
+    // reasoning_config. Thinking tokens count against maxTokens, so bump it and
+    // drop temperature (Anthropic rejects temperature != 1 with reasoning on).
+    const budget = bedrockThinkingBudget(params.thinking ?? this.defaultThinking);
+    const reasoningOn = budget !== null && isAnthropicBedrockModel(params.model);
+    if (reasoningOn) {
+      inferenceConfig.maxTokens = budget + Math.max(baseMax, 4096);
+      inferenceConfig.temperature = undefined;
+    }
+
+    const input: ConverseCommandInput = { modelId: params.model, messages, inferenceConfig };
 
     if (system.length > 0) {
       input.system = system;
@@ -203,8 +252,14 @@ export class BedrockProvider implements AIProvider {
       input.toolConfig = { tools: toConverseTools(params.tools) };
     }
 
-    if (params.extra) {
-      input.additionalModelRequestFields = params.extra as ConverseCommandInput["additionalModelRequestFields"];
+    // Merge (don't assign) so the reasoning_config fragment and a caller's
+    // extra coexist; a per-call extra wins.
+    const extraFields: Record<string, unknown> = {
+      ...(reasoningOn ? { reasoning_config: { type: "enabled", budget_tokens: budget } } : {}),
+      ...((params.extra as Record<string, unknown> | undefined) ?? {}),
+    };
+    if (Object.keys(extraFields).length > 0) {
+      input.additionalModelRequestFields = extraFields as ConverseCommandInput["additionalModelRequestFields"];
     }
 
     return input;
@@ -241,6 +296,7 @@ export class BedrockProvider implements AIProvider {
     }
 
     let content = "";
+    let reasoning = "";
     let stopReason: string | undefined;
     const usage = { input: 0, output: 0 };
     const toolBlocks = new Map<number, { id: string; name: string; json: string }>();
@@ -255,9 +311,13 @@ export class BedrockProvider implements AIProvider {
         });
       } else if (event.contentBlockDelta?.delta) {
         const delta = event.contentBlockDelta.delta;
+        const reasoningText = (delta as { reasoningContent?: { text?: string } }).reasoningContent?.text;
         if (delta.text) {
           content += delta.text;
           yield { type: "delta", content: delta.text };
+        } else if (reasoningText) {
+          reasoning += reasoningText;
+          yield { type: "reasoning", content: reasoningText };
         } else if (delta.toolUse?.input) {
           const block = toolBlocks.get(event.contentBlockDelta.contentBlockIndex ?? 0);
           if (block) block.json += delta.toolUse.input;
@@ -294,6 +354,7 @@ export class BedrockProvider implements AIProvider {
       response: {
         content: content || null,
         toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+        reasoning: reasoning || undefined,
         usage,
         finishReason: mapStopReason(stopReason),
       },

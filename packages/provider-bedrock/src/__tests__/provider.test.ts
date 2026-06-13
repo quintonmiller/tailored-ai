@@ -167,6 +167,22 @@ describe("parseConverseResponse", () => {
       finishReason: "stop",
     });
   });
+
+  it("captures reasoningContent into reasoning (#254)", () => {
+    const data = {
+      output: {
+        message: {
+          role: "assistant",
+          content: [{ reasoningContent: { reasoningText: { text: "thinking..." } } }, { text: "Answer" }],
+        },
+      },
+      stopReason: "end_turn",
+      usage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 },
+    } as unknown as ConverseCommandOutput;
+    const parsed = parseConverseResponse(data);
+    expect(parsed.content).toBe("Answer");
+    expect(parsed.reasoning).toBe("thinking...");
+  });
 });
 
 describe("BedrockProvider.chat", () => {
@@ -219,6 +235,46 @@ describe("BedrockProvider.chat", () => {
     expect(input.toolConfig).toEqual({ tools: toConverseTools(TOOLS) });
     expect(input.inferenceConfig).toEqual({ maxTokens: 256, temperature: 0.7 });
     expect(input.additionalModelRequestFields).toEqual({ top_k: 50 });
+  });
+
+  it("enables reasoning_config for Anthropic models: bumps maxTokens, drops temperature (#254)", async () => {
+    const { provider, send } = makeProvider();
+    await provider.chat({
+      model: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+      messages: [{ role: "user", content: "Hi" }],
+      thinking: "high",
+    });
+    const input = sentInput(send);
+    expect(input.additionalModelRequestFields).toEqual({ reasoning_config: { type: "enabled", budget_tokens: 16000 } });
+    expect(input.inferenceConfig?.maxTokens).toBe(16000 + 4096);
+    expect(input.inferenceConfig?.temperature).toBeUndefined();
+  });
+
+  it("no-ops reasoning for non-Anthropic model families (#254)", async () => {
+    const { provider, send } = makeProvider();
+    await provider.chat({
+      model: "us.amazon.nova-micro-v1:0",
+      messages: [{ role: "user", content: "Hi" }],
+      thinking: "high",
+    });
+    const input = sentInput(send);
+    expect(input.additionalModelRequestFields).toBeUndefined();
+    expect(input.inferenceConfig).toEqual({ maxTokens: 4096, temperature: 0.3 });
+  });
+
+  it("merges reasoning_config with a caller's extra; extra wins (#254)", async () => {
+    const { provider, send } = makeProvider();
+    await provider.chat({
+      model: "anthropic.claude-3-5-sonnet",
+      messages: [{ role: "user", content: "Hi" }],
+      thinking: "low",
+      extra: { anthropic_beta: ["x"] },
+    });
+    const input = sentInput(send) as { additionalModelRequestFields?: Record<string, unknown> };
+    expect(input.additionalModelRequestFields).toEqual({
+      reasoning_config: { type: "enabled", budget_tokens: 1024 },
+      anthropic_beta: ["x"],
+    });
   });
 
   it("wraps SDK errors with the model id for context", async () => {
@@ -301,6 +357,24 @@ describe("BedrockProvider.chatStream", () => {
         finishReason: "tool_calls",
       },
     });
+  });
+
+  it("streams reasoningContent deltas as reasoning events and on done (#254)", async () => {
+    const { provider } = makeStreamProvider([
+      { contentBlockDelta: { contentBlockIndex: 0, delta: { reasoningContent: { text: "Hmm " } } } },
+      { contentBlockDelta: { contentBlockIndex: 0, delta: { reasoningContent: { text: "ok." } } } },
+      { contentBlockDelta: { contentBlockIndex: 1, delta: { text: "Answer" } } },
+      { messageStop: { stopReason: "end_turn" } },
+      { metadata: { usage: { inputTokens: 4, outputTokens: 3, totalTokens: 7 }, metrics: {} } },
+    ]);
+    const events = await collect(provider);
+    expect(events.filter((e) => e.type === "reasoning")).toEqual([
+      { type: "reasoning", content: "Hmm " },
+      { type: "reasoning", content: "ok." },
+    ]);
+    const done = events.at(-1);
+    expect(done?.type === "done" && done.response.reasoning).toBe("Hmm ok.");
+    expect(done?.type === "done" && done.response.content).toBe("Answer");
   });
 
   it("throws on mid-stream exception events", async () => {

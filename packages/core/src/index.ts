@@ -517,6 +517,7 @@ export type {
   ChatResponse,
   ChatStreamEvent,
   Message,
+  ThinkingLevel,
   ToolCall,
   ToolSchema,
 } from "./providers/interface.js";
@@ -526,6 +527,14 @@ export {
   type OpenAICompatibleEmbeddingOptions,
   OpenAICompatibleEmbeddingProvider,
 } from "./providers/openai-embedding.js";
+export {
+  enableThinkingTemplateMap,
+  isThinkingLevel,
+  OPENAI_COMPATIBLE_THINKING_DIALECTS,
+  reasoningEffortThinkingMap,
+  THINKING_LEVELS,
+  type ThinkingMapper,
+} from "./providers/thinking.js";
 export { Registry } from "./registry.js";
 export type {
   AgentBody,

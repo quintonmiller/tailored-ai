@@ -15,7 +15,8 @@
  * Models (verified against the live API, 2026-06):
  *   - `deepseek-v4-flash` — V4 hybrid, lower-latency tier. Tool calling works in
  *   - `deepseek-v4-pro`     both modes; in thinking mode it emits `reasoning_content`
- *                           (which TAI drops) and needs a generous `maxTokens`.
+ *                           (captured into ChatResponse.reasoning, #254) and needs
+ *                           a generous `maxTokens`.
  *   - `deepseek-chat` / `deepseek-reasoner` — non-thinking / thinking aliases of
  *                           `deepseek-v4-flash`. Deprecated 2026-07-24; prefer the
  *                           V4 id with `thinking` instead.
@@ -35,10 +36,33 @@
  *     agent:
  *       defaultProvider: deepseek
  */
-import type { AgentConfig, ChatParams, ChatResponse, ChatStreamEvent, Plugin, PluginMeta } from "@tailored-ai/core";
-import { OpenAIProvider } from "@tailored-ai/core";
+import type { AgentConfig, Plugin, PluginMeta, ThinkingLevel, ThinkingMapper } from "@tailored-ai/core";
+import { isThinkingLevel, OpenAIProvider } from "@tailored-ai/core";
 
 export const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
+
+/**
+ * DeepSeek's thinking knob (#254): the V4 hybrids accept
+ * `thinking: { type: "enabled" | "disabled" }` and have no effort granularity,
+ * so any level except `off` enables thinking. `auto` adds nothing — the V4
+ * models think by default, so we leave the request untouched.
+ */
+const deepseekThinkingMap: ThinkingMapper = (level) => {
+  if (level === "auto") return undefined;
+  return { thinking: { type: level === "off" ? "disabled" : "enabled" } };
+};
+
+/**
+ * Resolve the per-provider default level from config. Legacy boolean form is
+ * preserved: `true` → enabled (mapped via "high"), `false` → disabled ("off").
+ * A {@link ThinkingLevel} string is used as-is; undefined leaves the model on
+ * its native default.
+ */
+function resolveDefaultThinking(thinking: boolean | ThinkingLevel | undefined): ThinkingLevel | undefined {
+  if (thinking === undefined) return undefined;
+  if (typeof thinking === "boolean") return thinking ? "high" : "off";
+  return thinking;
+}
 
 /** Config bag read from `providers.deepseek` — owned by this plugin. */
 export interface DeepSeekConfig {
@@ -47,49 +71,32 @@ export interface DeepSeekConfig {
   /** Override for proxies/self-hosted gateways. Defaults to the public DeepSeek endpoint. */
   baseUrl?: string;
   /**
-   * Thinking mode for the V4 hybrid models (`deepseek-v4-flash`/`-pro`).
+   * Default thinking mode for the V4 hybrid models (`deepseek-v4-flash`/`-pro`).
    * `false` → non-thinking: snappy, no reasoning tokens, reliable tool calls —
    * the `deepseek-chat` experience, but durable. `true` → thinking: reasons
-   * before answering (give it a generous `maxTokens`). Omit to leave each
-   * model on its native default (the V4 models think by default). Sent as
+   * before answering (give it a generous `maxTokens`). A {@link ThinkingLevel}
+   * (`off`/`auto`/`low`/`medium`/`high`) works too — DeepSeek has no effort
+   * granularity, so any non-`off` level enables thinking. Omit to leave each
+   * model on its native default (the V4 models think by default). A per-agent
+   * `thinking` (#254) overrides this default per call. Sent as
    * `thinking: { type: "enabled" | "disabled" }` on every request.
    */
-  thinking?: boolean;
+  thinking?: boolean | ThinkingLevel;
 }
 
 /**
- * `OpenAIProvider` plus DeepSeek's `thinking` toggle. When `thinking` is set,
- * every chat/stream request carries `thinking: { type }`; a per-call `extra`
- * still wins, so the loop can override it. Everything else (auth, streaming,
- * tool calls, `listModels`) is inherited unchanged.
+ * Build the configured provider — core's `OpenAIProvider` wired with DeepSeek's
+ * base URL, id, and the thinking mapper (#254). Reasoning capture
+ * (`reasoning_content`) is inherited from `OpenAIProvider`, and a per-call
+ * `extra` still wins over the mapped `thinking` fragment. Exported for tests.
  */
-class DeepSeekProvider extends OpenAIProvider {
-  private readonly thinkingExtra?: Record<string, unknown>;
-
-  constructor(cfg: DeepSeekConfig) {
-    super(cfg.apiKey, cfg.baseUrl ?? DEEPSEEK_BASE_URL, { id: "deepseek", name: "DeepSeek" });
-    if (cfg.thinking !== undefined) {
-      this.thinkingExtra = { thinking: { type: cfg.thinking ? "enabled" : "disabled" } };
-    }
-  }
-
-  private withThinking(params: ChatParams): ChatParams {
-    if (!this.thinkingExtra) return params;
-    return { ...params, extra: { ...this.thinkingExtra, ...params.extra } };
-  }
-
-  chat(params: ChatParams): Promise<ChatResponse> {
-    return super.chat(this.withThinking(params));
-  }
-
-  chatStream(params: ChatParams): AsyncIterable<ChatStreamEvent> {
-    return super.chatStream(this.withThinking(params));
-  }
-}
-
-/** Build the configured provider — exported for tests and direct use. */
 export function createDeepSeekProvider(cfg: DeepSeekConfig): OpenAIProvider {
-  return new DeepSeekProvider(cfg);
+  return new OpenAIProvider(cfg.apiKey, cfg.baseUrl ?? DEEPSEEK_BASE_URL, {
+    id: "deepseek",
+    name: "DeepSeek",
+    thinkingMap: deepseekThinkingMap,
+    defaultThinking: resolveDefaultThinking(cfg.thinking),
+  });
 }
 
 export const meta: PluginMeta = {
@@ -109,8 +116,10 @@ export function validateConfig(config: AgentConfig): string[] {
   if (!cfg.defaultModel) {
     warnings.push('providers.deepseek is configured but defaultModel is missing — e.g. "deepseek-v4-flash"');
   }
-  if (cfg.thinking !== undefined && typeof cfg.thinking !== "boolean") {
-    warnings.push("providers.deepseek.thinking must be a boolean (true = thinking, false = non-thinking)");
+  if (cfg.thinking !== undefined && typeof cfg.thinking !== "boolean" && !isThinkingLevel(cfg.thinking)) {
+    warnings.push(
+      "providers.deepseek.thinking must be a boolean or one of: off, auto, low, medium, high (true = thinking, false = non-thinking)",
+    );
   }
   return warnings;
 }

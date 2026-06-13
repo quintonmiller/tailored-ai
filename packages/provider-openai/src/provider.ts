@@ -4,9 +4,11 @@ import type {
   ChatResponse,
   ChatStreamEvent,
   Message,
+  ThinkingLevel,
   ToolCall,
   ToolSchema,
 } from "@tailored-ai/core";
+import { reasoningEffortThinkingMap } from "@tailored-ai/core";
 import { parseSseStream } from "./sse.js";
 
 // --- Wire-format types ---
@@ -26,6 +28,10 @@ interface StreamChunk {
   choices?: {
     delta?: {
       content?: string | null;
+      // Reasoning channel (#254): `reasoning_content` (most OpenAI-wire
+      // backends) or `reasoning` (some gateways).
+      reasoning_content?: string | null;
+      reasoning?: string | null;
       tool_calls?: {
         index: number;
         id?: string;
@@ -45,6 +51,8 @@ interface ApiChatResponse {
     message: {
       role: string;
       content: string | null;
+      reasoning_content?: string | null;
+      reasoning?: string | null;
       tool_calls?: {
         id: string;
         type: "function";
@@ -116,6 +124,8 @@ export interface OpenAIChatProviderOptions {
   project?: string;
   /** Extra model-id prefixes to treat as reasoning models (no temperature). */
   reasoningModels?: string[];
+  /** Default reasoning effort (#254), mapped to `reasoning_effort`. Per-call `ChatParams.thinking` overrides it. */
+  defaultThinking?: ThinkingLevel;
 }
 
 /**
@@ -135,6 +145,7 @@ export class OpenAIChatProvider implements AIProvider {
   private organization?: string;
   private project?: string;
   private reasoningModels: string[];
+  private defaultThinking?: ThinkingLevel;
 
   constructor(opts: OpenAIChatProviderOptions) {
     this.apiKey = opts.apiKey;
@@ -142,6 +153,7 @@ export class OpenAIChatProvider implements AIProvider {
     this.organization = opts.organization;
     this.project = opts.project;
     this.reasoningModels = opts.reasoningModels ?? [];
+    this.defaultThinking = opts.defaultThinking;
   }
 
   private headers(): Record<string, string> {
@@ -172,6 +184,14 @@ export class OpenAIChatProvider implements AIProvider {
       // max_tokens is deprecated and rejected by reasoning models;
       // max_completion_tokens covers every current model.
       body.max_completion_tokens = params.maxTokens;
+    }
+
+    // Reasoning control (#254): map the resolved level to `reasoning_effort`
+    // (valid only on reasoning models — the API rejects it otherwise).
+    const level = params.thinking ?? this.defaultThinking;
+    if (level) {
+      const fragment = reasoningEffortThinkingMap(level, params);
+      if (fragment) Object.assign(body, fragment);
     }
 
     if (params.extra) {
@@ -215,6 +235,7 @@ export class OpenAIChatProvider implements AIProvider {
     return {
       content: choice.message.content || null,
       toolCalls: hasToolCalls ? toolCalls : undefined,
+      reasoning: choice.message.reasoning_content || choice.message.reasoning || undefined,
       usage: {
         input: data.usage?.prompt_tokens ?? 0,
         output: data.usage?.completion_tokens ?? 0,
@@ -240,6 +261,7 @@ export class OpenAIChatProvider implements AIProvider {
     }
 
     let content = "";
+    let reasoning = "";
     let finishReason: string | null = null;
     let usage = { input: 0, output: 0 };
     const toolFragments = new Map<number, { id: string; name: string; args: string }>();
@@ -260,6 +282,12 @@ export class OpenAIChatProvider implements AIProvider {
       const choice = chunk.choices?.[0];
       if (!choice) continue;
       if (choice.finish_reason) finishReason = choice.finish_reason;
+
+      const reasoningDelta = choice.delta?.reasoning_content ?? choice.delta?.reasoning;
+      if (reasoningDelta) {
+        reasoning += reasoningDelta;
+        yield { type: "reasoning", content: reasoningDelta };
+      }
 
       if (choice.delta?.content) {
         content += choice.delta.content;
@@ -289,6 +317,7 @@ export class OpenAIChatProvider implements AIProvider {
       response: {
         content: content || null,
         toolCalls: hasToolCalls ? toolCalls : undefined,
+        reasoning: reasoning || undefined,
         usage,
         finishReason: hasToolCalls ? "tool_calls" : finishReason === "length" ? "length" : "stop",
       },

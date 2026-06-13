@@ -31,6 +31,7 @@ interface MessageRow {
   content: string | null;
   tool_calls: string | null;
   tool_call_id: string | null;
+  reasoning: string | null;
   created_at: string;
 }
 
@@ -60,12 +61,15 @@ export function getSessionByKey(db: Database.Database, key: string): SessionRow 
 }
 
 export function saveMessage(db: Database.Database, sessionId: string, msg: Message): void {
-  db.prepare("INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id) VALUES (?, ?, ?, ?, ?)").run(
+  db.prepare(
+    "INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id, reasoning) VALUES (?, ?, ?, ?, ?, ?)",
+  ).run(
     sessionId,
     msg.role,
     msg.content,
     msg.toolCalls ? JSON.stringify(msg.toolCalls) : null,
     msg.toolCallId ?? null,
+    msg.reasoning ?? null,
   );
 }
 
@@ -167,5 +171,6 @@ export function getSessionMessages(db: Database.Database, sessionId: string): Me
     content: row.content,
     toolCalls: row.tool_calls ? JSON.parse(row.tool_calls) : undefined,
     toolCallId: row.tool_call_id ?? undefined,
+    reasoning: row.reasoning ?? undefined,
   }));
 }
