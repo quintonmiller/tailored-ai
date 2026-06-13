@@ -1135,6 +1135,11 @@ export function validateConfig(config: AgentConfig): string[] {
       enabledToolNames.add(name);
     }
   }
+  // `tasks` and `task_query` are created together by the tasks tool factory
+  // (builtin.ts) — enabling `tasks` registers both. Reflect that coupling so
+  // agents that reference `task_query` don't draw a spurious "not enabled"
+  // warning on every startup.
+  if (enabledToolNames.has("tasks")) enabledToolNames.add("task_query");
   // Tools that have a hard credential gate at construction time. Listed here
   // so we can warn when a tool is "enabled" but won't actually register —
   // otherwise agents reference it, the UI silently omits it, and the user is

@@ -36,6 +36,20 @@ describe("ReadTool sandbox routing", () => {
     expect(result.output).toBe("hello");
   });
 
+  it("returns a friendly error when the path is a directory", async () => {
+    const tool = new ReadTool();
+    const result = await tool.execute({ path: "." }, ctx());
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("is a directory");
+  });
+
+  it("returns a 'File not found' error for a missing path", async () => {
+    const tool = new ReadTool();
+    const result = await tool.execute({ path: "nope.txt" }, ctx());
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("File not found");
+  });
+
   it("delegates to sandbox.readFile when sandbox+handle are set", async () => {
     const handle: SandboxHandle = { kind: "host", cwd: dir };
     const sandbox = {
