@@ -521,11 +521,20 @@ export class AgentRuntime {
       // destroyAll() runs in parallel and swallows individual errors so one
       // bad tool can't block reload.
       const oldRegistry = this._toolRegistry;
+      // Capture dynamically-registered tools (MCP-discovered,
+      // agent-authored, etc.) before destroy so they survive the
+      // registry swap (see #248, #250).
+      const dynamicResources = oldRegistry
+        .asResources()
+        .list("tool")
+        .filter((res) => res.origin.scheme !== "file");
       oldRegistry.destroyAll().catch((e) => {
         console.error("[runtime] destroyAll failed:", (e as Error).message);
       });
       const newToolRegistry = new ToolRegistry();
       for (const tool of tools) newToolRegistry.registerBuiltin(tool);
+      // Transplant dynamic tools into the new registry so they survive the swap.
+      for (const res of dynamicResources) newToolRegistry.register(res);
       const newProviderRegistry = new ProviderRegistry();
       newProviderRegistry.registerBuiltin({
         id: config.agent.defaultProvider,
