@@ -500,8 +500,10 @@ export {
   vectorToBlob,
 } from "./providers/embedding.js";
 export {
+  buildOpenAICompatibleProvider,
   type EmbeddingFactory,
   embeddingFactoryRegistry,
+  isInlineOpenAICompatible,
   type ProviderFactory,
   type ProviderFactoryResult,
   providerFactoryRegistry,
