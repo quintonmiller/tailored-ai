@@ -54,9 +54,10 @@ async function chatOnce(
   provider: AIProvider,
   params: ChatParams,
   onTextDelta?: (text: string) => void,
+  onReasoningDelta?: (text: string) => void,
 ): Promise<ChatResponse> {
   const stream = provider.chatStream?.bind(provider);
-  if (!onTextDelta || !stream) {
+  if ((!onTextDelta && !onReasoningDelta) || !stream) {
     return withRetry(() => provider.chat(params));
   }
   let emitted = false;
@@ -67,9 +68,18 @@ async function chatOnce(
       if (ev.type === "delta") {
         emitted = true;
         try {
-          onTextDelta(ev.content);
+          onTextDelta?.(ev.content);
         } catch (e) {
           console.error("[agent] onTextDelta callback error:", (e as Error).message);
+        }
+      } else if (ev.type === "reasoning") {
+        // Mark emitted so a mid-stream failure falls back to non-streaming
+        // chat() and never replays reasoning. Reasoning is a separate channel.
+        emitted = true;
+        try {
+          onReasoningDelta?.(ev.content);
+        } catch (e) {
+          console.error("[agent] onReasoningDelta callback error:", (e as Error).message);
         }
       } else {
         done = ev.response;
@@ -117,6 +127,20 @@ export interface AgentLoopOptions {
    * the full response (which always supersedes streamed deltas).
    */
   onTextDelta?: (text: string) => void;
+  /**
+   * Fires with each reasoning/thinking fragment as it generates (#254), when
+   * the active provider streams a reasoning trace. Reasoning is a separate
+   * channel from {@link onTextDelta}; it's also persisted on the assistant
+   * message regardless of streaming.
+   */
+  onReasoningDelta?: (text: string) => void;
+  /**
+   * Reasoning effort for this run (#254). Resolved per-agent by
+   * `buildLoopOptions` and forwarded to the provider on every chat call, which
+   * maps it to its own wire format. Undefined leaves the provider on its
+   * configured default.
+   */
+  thinking?: import("../providers/interface.js").ThinkingLevel;
   /** Extra fields merged into the ToolContext passed to every tool execution. */
   toolContextExtras?: Partial<import("../tools/interface.js").ToolContext>;
   permissions?: PermissionsConfig;
@@ -720,8 +744,10 @@ async function _runAgentLoopBody(
         messages,
         tools: toolSchemas,
         temperature,
+        thinking: opts.thinking,
       },
       opts.onTextDelta,
+      opts.onReasoningDelta,
     );
 
     if (opts.onUsage && response.usage) {
@@ -736,6 +762,9 @@ async function _runAgentLoopBody(
       role: "assistant",
       content: response.content,
       toolCalls: response.toolCalls,
+      // Persisted for display only — stripped from every outgoing request by
+      // the message→wire converters, so it never re-enters the model (#254).
+      reasoning: response.reasoning,
     };
     saveMessage(db, session.id, assistantMsg);
     history.push(assistantMsg);

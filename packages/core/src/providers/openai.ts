@@ -24,6 +24,9 @@ interface OpenAIStreamChunk {
   choices?: {
     delta?: {
       content?: string | null;
+      // The de-facto OpenAI-compatible reasoning channel (DeepSeek, vLLM,
+      // some gateways). Captured into `reasoning` (#254).
+      reasoning_content?: string | null;
       tool_calls?: {
         index: number;
         id?: string;
@@ -43,6 +46,7 @@ interface OpenAIChatResponse {
     message: {
       role: string;
       content: string | null;
+      reasoning_content?: string | null;
       tool_calls?: {
         id: string;
         type: "function";
@@ -181,6 +185,7 @@ export class OpenAIProvider implements AIProvider {
     return {
       content: choice.message.content || null,
       toolCalls: hasToolCalls ? toolCalls : undefined,
+      reasoning: choice.message.reasoning_content || undefined,
       usage: {
         input: data.usage?.prompt_tokens ?? 0,
         output: data.usage?.completion_tokens ?? 0,
@@ -207,6 +212,7 @@ export class OpenAIProvider implements AIProvider {
     }
 
     let content = "";
+    let reasoning = "";
     let finishReason: string | null = null;
     let usage = { input: 0, output: 0 };
     const toolFragments = new Map<number, { id: string; name: string; args: string }>();
@@ -227,6 +233,11 @@ export class OpenAIProvider implements AIProvider {
       const choice = chunk.choices?.[0];
       if (!choice) continue;
       if (choice.finish_reason) finishReason = choice.finish_reason;
+
+      if (choice.delta?.reasoning_content) {
+        reasoning += choice.delta.reasoning_content;
+        yield { type: "reasoning", content: choice.delta.reasoning_content };
+      }
 
       if (choice.delta?.content) {
         content += choice.delta.content;
@@ -256,6 +267,7 @@ export class OpenAIProvider implements AIProvider {
       response: {
         content: content || null,
         toolCalls: hasToolCalls ? toolCalls : undefined,
+        reasoning: reasoning || undefined,
         usage,
         finishReason: hasToolCalls ? "tool_calls" : finishReason === "length" ? "length" : "stop",
       },
