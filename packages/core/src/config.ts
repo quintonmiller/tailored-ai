@@ -1037,9 +1037,74 @@ export function mergeProjectOverlay(
   return deepMerge(base as unknown as Record<string, unknown>, interpolated) as unknown as AgentConfig;
 }
 
+/**
+ * Every recognized top-level `config.yaml` key. Typed as
+ * `Record<keyof AgentConfig, true>` so it can't drift from the interface: add
+ * a top-level key to {@link AgentConfig} and this map must gain it too (or the
+ * build fails), and a key here that isn't on the interface is a type error.
+ * {@link validateConfig} warns on any top-level key absent from this set —
+ * catching typos and version skew. Nested bags (`tools.<id>`, `providers.<id>`,
+ * `channels.<id>`, plugin config) are intentionally open and never checked.
+ */
+const KNOWN_TOP_LEVEL_CONFIG_KEY_MAP: Record<keyof AgentConfig, true> = {
+  server: true,
+  database: true,
+  providers: true,
+  agent: true,
+  channels: true,
+  defaultChannel: true,
+  mcp: true,
+  plugins: true,
+  externalAgents: true,
+  cron: true,
+  agents: true,
+  context: true,
+  tools: true,
+  taskWatcher: true,
+  trustedActions: true,
+  webhooks: true,
+  custom_tools: true,
+  commands: true,
+  permissions: true,
+  prompts: true,
+  tasks: true,
+  repo: true,
+  security: true,
+  sandboxes: true,
+  workflows: true,
+  exploratory: true,
+  memory: true,
+  briefing: true,
+  suggestions: true,
+  autopilot: true,
+};
+
+/** Recognized top-level config keys, as a Set for O(1) membership tests. */
+export const KNOWN_TOP_LEVEL_CONFIG_KEYS: ReadonlySet<string> = new Set(Object.keys(KNOWN_TOP_LEVEL_CONFIG_KEY_MAP));
+
+/**
+ * Deprecated top-level keys that {@link loadConfig} migrates and warns about
+ * itself — recognized, so the unknown-key check stays silent rather than
+ * double-warning. (`profiles` → `agents`.)
+ */
+const DEPRECATED_TOP_LEVEL_CONFIG_KEYS: ReadonlySet<string> = new Set(["profiles"]);
+
 /** Validate config and return warnings. Does not throw — issues are advisory. */
 export function validateConfig(config: AgentConfig): string[] {
   const warnings: string[] = [];
+
+  // Warn on unrecognized top-level keys: a feature configured under a typo'd
+  // key, or one a newer doc describes but this installed version predates, is
+  // silently ignored otherwise (#252). Top-level only — nested bags are open.
+  const supportedList = [...KNOWN_TOP_LEVEL_CONFIG_KEYS].sort().join(", ");
+  for (const key of Object.keys(config)) {
+    if (KNOWN_TOP_LEVEL_CONFIG_KEYS.has(key) || DEPRECATED_TOP_LEVEL_CONFIG_KEYS.has(key)) continue;
+    warnings.push(
+      `config.yaml: unknown top-level key "${key}" — it will be ignored. ` +
+        `If it's from newer docs your installed version may predate it; otherwise it may be a typo. ` +
+        `Supported keys: ${supportedList}`,
+    );
+  }
 
   // Collect all tool names that would be enabled
   const enabledToolNames = new Set<string>();
