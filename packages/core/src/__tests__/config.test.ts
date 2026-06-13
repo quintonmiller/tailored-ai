@@ -389,6 +389,47 @@ describe("validateConfig — sandbox block", () => {
   });
 });
 
+describe("validateConfig — unknown top-level keys (#252)", () => {
+  const unknownKeyWarnings = (c: AgentConfig) => validateConfig(c).filter((w) => w.includes("unknown top-level key"));
+
+  it("warns once on an unrecognized top-level key, naming it", () => {
+    const c = baseConfig();
+    (c as unknown as Record<string, unknown>).mpc = { servers: {} }; // typo for "mcp"
+    const ws = unknownKeyWarnings(c);
+    expect(ws).toHaveLength(1);
+    expect(ws[0]).toContain('"mpc"');
+    expect(ws[0]).toContain("Supported keys:");
+    // The hint should mention version skew so a user on an older build understands.
+    expect(ws[0].toLowerCase()).toContain("version");
+  });
+
+  it("does not warn on a clean config (all top-level keys recognized)", () => {
+    expect(unknownKeyWarnings(baseConfig())).toHaveLength(0);
+  });
+
+  it("does not warn on optional typed keys absent from DEFAULT_CONFIG", () => {
+    const c = baseConfig();
+    c.permissions = { allowedPaths: [] } as never;
+    c.memory = { embeddings: { enabled: false } } as never;
+    c.security = {} as never;
+    expect(unknownKeyWarnings(c)).toHaveLength(0);
+  });
+
+  it("tolerates the deprecated 'profiles' key (loadConfig migrates + warns for it)", () => {
+    const c = baseConfig();
+    (c as unknown as Record<string, unknown>).profiles = {};
+    expect(unknownKeyWarnings(c)).toHaveLength(0);
+  });
+
+  it("only checks the top level — unknown nested keys in open bags are fine", () => {
+    const c = baseConfig();
+    c.tools = { ...c.tools, some_future_tool: { enabled: true } } as never;
+    c.providers = { ...c.providers, groq: { baseUrl: "https://api.groq.com/openai/v1", defaultModel: "m" } };
+    c.channels = { ...c.channels, telegram: { enabled: true } } as never;
+    expect(unknownKeyWarnings(c)).toHaveLength(0);
+  });
+});
+
 describe("validateConfig — prompts block", () => {
   it("rejects non-positive maxIncludeDepth", () => {
     const c = baseConfig();
