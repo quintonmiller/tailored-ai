@@ -215,6 +215,7 @@ export type {
 export {
   DEFAULT_DISABLED_PLUGIN_MODULES,
   DEFAULT_PLUGIN_MODULES,
+  KNOWN_TOP_LEVEL_CONFIG_KEYS,
   loadConfig,
   mergeProjectOverlay,
   migrateDefaultPlugins,
