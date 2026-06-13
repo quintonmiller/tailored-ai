@@ -797,6 +797,13 @@ export interface AgentConfig {
       model?: string;
       /** Output dimension hint (used for sanity checks). */
       dim?: number;
+      /**
+       * Soft cap on characters per embedding input. Longer inputs are
+       * truncated before the request (and the cap auto-halves and retries on a
+       * context-overflow 400) so a big recall query never silently disables
+       * semantic search. Default 8000 (~2k tokens).
+       */
+      maxInputChars?: number;
     };
     /** Chunking parameters for the indexer. */
     chunks?: {
