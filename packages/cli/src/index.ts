@@ -314,6 +314,7 @@ async function runServer(
     exploratory,
     workflowEngine,
     uiProvider,
+    mcpStatus: () => mcpManager.list(),
   });
   const httpServer = start();
   channels.push({
@@ -327,6 +328,12 @@ async function runServer(
   console.log(`Provider: ${runtime.getProvider().name} | Model: ${model}`);
   console.log(`Tools: ${tools.map((t) => t.name).join(", ")}`);
   console.log(`Channels: ${[...channelManager.list().map((c) => c.name), ...channels.map((c) => c.name)].join(", ")}`);
+  // MCP servers connect asynchronously and aren't in the one-shot Tools: line
+  // above, so surface them explicitly (#249). Silent when none are configured.
+  const mcpServers = mcpManager.list();
+  if (mcpServers.length > 0) {
+    console.log(`MCP: ${mcpServers.map((s) => `${s.serverId} (${s.tools.length})`).join(", ")}`);
+  }
   if (uiProvider) {
     const label = uiProvider.id === "builtin" ? "UI" : `UI (${uiProvider.id})`;
     console.log(`${label}: http://${runtime.getConfig().server.host}:${runtime.getConfig().server.port}`);

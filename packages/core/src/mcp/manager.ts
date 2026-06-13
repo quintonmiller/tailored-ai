@@ -19,6 +19,14 @@ interface ActiveServer {
   connection: McpConnection;
   cfg: McpServerConfig;
   signature: string;
+  connectedAt: number;
+}
+
+/** Format a connected-tools summary for a log line: "(3 tools: a, b, c)". */
+function toolSummary(tools: { name: string }[]): string {
+  const names = tools.map((t) => t.name);
+  const count = `${names.length} tool${names.length === 1 ? "" : "s"}`;
+  return names.length ? `(${count}: ${names.join(", ")})` : `(${count})`;
 }
 
 /**
@@ -76,6 +84,10 @@ export class McpManager {
       } catch (err) {
         console.error(`[mcp:${id}] close error: ${(err as Error).message}`);
       }
+      // Happy-path teardown logs too, so silence stays meaningful (#249).
+      console.log(
+        want ? `[mcp:${id}] config changed — reconnecting` : `[mcp:${id}] disconnected (removed from config)`,
+      );
     }
 
     // 2. Start servers that are desired but not running.
@@ -89,7 +101,10 @@ export class McpManager {
             );
           },
         });
-        this.active.set(id, { connection, cfg, signature: JSON.stringify(cfg) });
+        this.active.set(id, { connection, cfg, signature: JSON.stringify(cfg), connectedAt: Date.now() });
+        // Log the happy path: a connected server was previously silent, so
+        // "no log lines" couldn't be told from "never ran" (#249).
+        console.log(`[mcp:${id}] connected ${toolSummary(connection.tools)}`);
       } catch (err) {
         console.error(`[mcp:${id}] failed to connect: ${(err as Error).message}`);
       }
@@ -114,6 +129,7 @@ export class McpManager {
       this.unregisterTools(registry, running.connection);
       const tools = await rediscoverTools(running.connection, running.cfg);
       for (const tool of tools) this.registerTool(registry, id, tool);
+      console.log(`[mcp:${id}] tools updated ${toolSummary(tools)}`);
     });
     this.queue = run.catch(() => {});
     return run;
@@ -141,11 +157,16 @@ export class McpManager {
     }
   }
 
-  /** Status snapshot — server id plus discovered tool names. */
-  list(): Array<{ serverId: string; tools: string[] }> {
+  /**
+   * Status snapshot — server id, discovered tool names, and the epoch-ms
+   * timestamp the server connected. Drives the startup banner, the
+   * `GET /api/mcp` route, and `tai doctor` (#249).
+   */
+  list(): Array<{ serverId: string; tools: string[]; connectedAt: number }> {
     return [...this.active.entries()].map(([serverId, s]) => ({
       serverId,
       tools: s.connection.tools.map((t) => t.name),
+      connectedAt: s.connectedAt,
     }));
   }
 
@@ -162,6 +183,7 @@ export class McpManager {
         } catch (err) {
           console.error(`[mcp:${id}] close error: ${(err as Error).message}`);
         }
+        console.log(`[mcp:${id}] disconnected (shutdown)`);
       }),
     );
   }
