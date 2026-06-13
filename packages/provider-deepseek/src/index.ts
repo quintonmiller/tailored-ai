@@ -15,7 +15,8 @@
  * Models (verified against the live API, 2026-06):
  *   - `deepseek-v4-flash` — V4 hybrid, lower-latency tier. Tool calling works in
  *   - `deepseek-v4-pro`     both modes; in thinking mode it emits `reasoning_content`
- *                           (which TAI drops) and needs a generous `maxTokens`.
+ *                           (captured into ChatResponse.reasoning, #254) and needs
+ *                           a generous `maxTokens`.
  *   - `deepseek-chat` / `deepseek-reasoner` — non-thinking / thinking aliases of
  *                           `deepseek-v4-flash`. Deprecated 2026-07-24; prefer the
  *                           V4 id with `thinking` instead.
