@@ -75,7 +75,23 @@ describe("McpManager.reconcile", () => {
     const names = host.registry.list().map((t) => t.name);
     expect(names).toContain("mcp_alpha_echo");
     expect(names).toContain("mcp_alpha_add");
-    expect(manager.list()).toEqual([{ serverId: "alpha", tools: ["mcp_alpha_echo", "mcp_alpha_add"] }]);
+    const status = manager.list();
+    expect(status).toHaveLength(1);
+    expect(status[0]).toMatchObject({ serverId: "alpha", tools: ["mcp_alpha_echo", "mcp_alpha_add"] });
+    expect(typeof status[0].connectedAt).toBe("number");
+  });
+
+  it("logs connect and disconnect on the happy path, summarizing tools (#249)", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { connect } = fakeConnect({ alpha: ["mcp_alpha_echo", "mcp_alpha_add"] });
+    const manager = new McpManager(connect);
+    const host = fakeHost({ servers: { alpha: { command: "fake-server" } } });
+
+    await manager.reconcile(host);
+    expect(logSpy).toHaveBeenCalledWith("[mcp:alpha] connected (2 tools: mcp_alpha_echo, mcp_alpha_add)");
+
+    await manager.stopAll(host);
+    expect(logSpy).toHaveBeenCalledWith("[mcp:alpha] disconnected (shutdown)");
   });
 
   it("skips disabled entries and entries without exactly one transport", async () => {
