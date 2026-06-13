@@ -420,6 +420,12 @@ export interface AgentConfig {
    *   providers:
    *     local:    { type: openai_compatible, baseUrl: http://127.0.0.1:8000/v1, defaultModel: qwen3.6-27b }
    *     deepseek: { type: openai_compatible, baseUrl: https://api.deepseek.com, apiKey: ${DEEPSEEK_API_KEY}, defaultModel: deepseek-v4-flash }
+   *
+   * Reasoning (#254): an openai_compatible bag may also set `thinking`
+   * (default effort: off|auto|low|medium|high) and `thinkingDialect`
+   * (openai → reasoning_effort, vllm → chat_template_kwargs.enable_thinking,
+   * none → ignore; default none). Per-agent `agents.<name>.thinking` overrides
+   * the default per call. Hosted-vendor plugins map `thinking` themselves.
    */
   providers: {
     [id: string]: Record<string, unknown> | undefined;

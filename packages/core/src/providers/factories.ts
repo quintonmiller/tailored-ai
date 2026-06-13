@@ -4,6 +4,7 @@ import type { EmbeddingProvider } from "./embedding.js";
 import type { AIProvider } from "./interface.js";
 import { OpenAIProvider } from "./openai.js";
 import { OpenAICompatibleEmbeddingProvider } from "./openai-embedding.js";
+import { isThinkingLevel, OPENAI_COMPATIBLE_THINKING_DIALECTS } from "./thinking.js";
 
 export interface ProviderFactoryResult {
   provider: AIProvider;
@@ -42,10 +43,18 @@ export function buildOpenAICompatibleProvider(
   id: string,
 ): ProviderFactoryResult {
   if (!cfg) throw new Error(`providers.${id} not configured`);
+  // Reasoning control (#254): an optional default level plus a dialect that
+  // picks one of core's generic OpenAI-wire mappers. Vendor budget policy
+  // stays in provider plugins; here we only expose protocol conventions.
+  const dialect = asString(cfg.thinkingDialect) ?? "none";
+  const thinkingMap = OPENAI_COMPATIBLE_THINKING_DIALECTS[dialect];
+  const defaultThinking = isThinkingLevel(cfg.thinking) ? cfg.thinking : undefined;
   return {
     provider: new OpenAIProvider(asString(cfg.apiKey), asString(cfg.baseUrl), {
       id,
       name: asString(cfg.name) ?? "OpenAI-compatible",
+      thinkingMap,
+      defaultThinking,
     }),
     model: requireModel(cfg, id),
   };

@@ -4,10 +4,12 @@ import type {
   ChatResponse,
   ChatStreamEvent,
   Message,
+  ThinkingLevel,
   ToolCall,
   ToolSchema,
 } from "./interface.js";
 import { parseSseStream } from "./sse.js";
+import type { ThinkingMapper } from "./thinking.js";
 
 export interface OpenAIMessage {
   role: string;
@@ -107,6 +109,15 @@ export interface OpenAIProviderOptions {
   id?: string;
   /** Human-readable name shown in UIs and logs. */
   name?: string;
+  /**
+   * Maps a provider-agnostic {@link ThinkingLevel} to this backend's wire
+   * fields (#254). Provider plugins built on this class (DeepSeek, OpenRouter)
+   * pass their dialect's mapper. Omit to ignore `thinking` entirely — the safe
+   * default for a generic OpenAI-compatible endpoint.
+   */
+  thinkingMap?: ThinkingMapper;
+  /** Reasoning effort used when a call doesn't set `ChatParams.thinking`. */
+  defaultThinking?: ThinkingLevel;
 }
 
 export class OpenAIProvider implements AIProvider {
@@ -116,12 +127,16 @@ export class OpenAIProvider implements AIProvider {
 
   private apiKey: string;
   private baseUrl: string;
+  private thinkingMap?: ThinkingMapper;
+  private defaultThinking?: ThinkingLevel;
 
   constructor(apiKey: string | undefined, baseUrl = "https://api.openai.com/v1", opts: OpenAIProviderOptions = {}) {
     this.apiKey = apiKey ?? "";
     this.baseUrl = baseUrl.replace(/\/$/, "");
     this.id = opts.id ?? "openai";
     this.name = opts.name ?? "OpenAI";
+    this.thinkingMap = opts.thinkingMap;
+    this.defaultThinking = opts.defaultThinking;
   }
 
   private buildBody(params: ChatParams): Record<string, unknown> {
@@ -137,6 +152,14 @@ export class OpenAIProvider implements AIProvider {
 
     if (params.maxTokens) {
       body.max_tokens = params.maxTokens;
+    }
+
+    // Reasoning control (#254): map the resolved level, then let a per-call
+    // `extra` win over the mapped fragment.
+    const level = params.thinking ?? this.defaultThinking;
+    if (level && this.thinkingMap) {
+      const fragment = this.thinkingMap(level, params);
+      if (fragment) Object.assign(body, fragment);
     }
 
     if (params.extra) {
