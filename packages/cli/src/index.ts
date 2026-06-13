@@ -24,6 +24,7 @@ import {
   loadExternalAgents,
   loadPlugins,
   loadSession,
+  McpManager,
   migrateContextDir,
   newSession,
   type ProjectContext,
@@ -115,6 +116,7 @@ let _taskWatcherRef:
 async function runServer(
   runtime: AgentRuntime,
   loadRuntimePlugins: () => Promise<import("@tailored-ai/core").LoadedPlugin[]>,
+  mcpManager: McpManager,
 ) {
   // Load the runtime-context plugins (the `builtin:*` default set: agent
   // notifier, scope-creep flagger, stall guard, coder/reviewer project
@@ -196,6 +198,14 @@ async function runServer(
       await channelManager.reconcile(runtime);
     } catch (err) {
       console.error("[channels] Reconcile error after reload:", (err as Error).message);
+    }
+
+    // MCP servers reconcile the same way; this also re-registers their
+    // tools into the fresh tool registry the reload just swapped in.
+    try {
+      await mcpManager.reconcile(runtime);
+    } catch (err) {
+      console.error("[mcp] Reconcile error after reload:", (err as Error).message);
     }
 
     // Re-sync the outbound registry against the live channel set: register
@@ -337,6 +347,7 @@ async function runServer(
     autopilot.stop();
     exploratory.stop();
     await channelManager.stopAll();
+    await mcpManager.stopAll(runtime);
     for (const ch of channels) {
       await ch.disconnect();
     }
@@ -749,6 +760,14 @@ async function main() {
   const metaTools = createMetaTools(runtime, contextDir, kbDir);
   runtime.setMetaTools(metaTools);
 
+  // Connect configured MCP servers and register their discovered tools.
+  // Lives up here (not in runServer) so single-message runs get MCP tools
+  // too. Connection failures log per-server and never block startup.
+  const mcpManager = new McpManager();
+  if (Object.values(runtime.getConfig().mcp?.servers ?? {}).some((s) => s && s.enabled !== false)) {
+    await mcpManager.reconcile(runtime);
+  }
+
   // --- Resolve active project from cwd unless --global / --project overrides ---
   let activeProject: ProjectContext | null = null;
   if (values.global) {
@@ -795,6 +814,7 @@ async function main() {
         json: values.json!,
       });
     } finally {
+      await mcpManager.stopAll(runtime);
       db.close();
     }
     return;
@@ -802,7 +822,7 @@ async function main() {
 
   // --- Server mode (default) ---
   runtime.startWatching();
-  await runServer(runtime, loadRuntimePlugins);
+  await runServer(runtime, loadRuntimePlugins, mcpManager);
 }
 
 main().catch((err) => {

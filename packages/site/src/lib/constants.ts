@@ -63,6 +63,7 @@ export const DOCS_NAV: DocsNavSection[] = [
     items: [
       { label: "Configuration", href: "/docs/configuration" },
       { label: "Custom tools", href: "/docs/custom-tools" },
+      { label: "MCP servers", href: "/docs/mcp" },
       { label: "Skills", href: "/docs/skills" },
       { label: "Plugins", href: "/docs/plugins" },
       { label: "Extending in code", href: "/docs/extending" },

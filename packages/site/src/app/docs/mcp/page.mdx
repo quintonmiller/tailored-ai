@@ -1,0 +1,63 @@
+export const metadata = {
+  title: "MCP servers",
+  description: "Connect Model Context Protocol servers and use their tools in any agent. Stdio and HTTP transports, hot reload, per-agent selection.",
+};
+
+# MCP servers
+
+TAI speaks [Model Context Protocol](https://modelcontextprotocol.io) natively. Declare a server in `config.yaml` and its tools join the registry alongside the built-ins: agents pick them by name, the loop calls them like any other tool, and config edits reconcile without a restart.
+
+This is the fastest way to add integrations. Notion, Linear, GitHub, Slack, and thousands of other services ship MCP servers. Connecting one takes a config block, not a plugin.
+
+## Connect a server
+
+```yaml
+mcp:
+  servers:
+    github:
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-github"]
+      env:
+        GITHUB_PERSONAL_ACCESS_TOKEN: ${GITHUB_TOKEN}
+      tools: [search_issues, get_issue]
+```
+
+`command` starts a local server over stdio. TAI spawns the process, keeps it alive, and shuts it down with the runtime. For remote servers, use `url` instead:
+
+```yaml
+mcp:
+  servers:
+    internal:
+      url: https://mcp.example.com/mcp
+      headers:
+        Authorization: Bearer ${MCP_TOKEN}
+```
+
+Each server takes exactly one of `command` or `url`. The fields match the `mcpServers` JSON shape used across the MCP ecosystem, so a server's published config copy-pastes straight in. `${VAR}` references resolve from your environment, same as everywhere else in `config.yaml`.
+
+## Use the tools
+
+Discovered tools register as `mcp_<serverId>_<toolName>`. Reference them in an agent's tool list:
+
+```yaml
+agents:
+  triage:
+    tools: [read, mcp_github_search_issues, mcp_github_get_issue]
+```
+
+Keep the exposed set small. Local models pick reliably from about five tools, and a 30-tool server exposed wholesale will sink tool selection. Two knobs control this: the per-server `tools:` allowlist trims what TAI discovers, and the per-agent `tools:` list trims what each agent sees.
+
+If a referenced MCP tool isn't available yet, the agent starts without it and logs a warning instead of failing. Servers connect asynchronously; the loop re-resolves tools every iteration, so the tool joins the agent's set the moment discovery lands.
+
+## Lifecycle
+
+TAI reconciles running servers against config the same way it reconciles channels. Add a server and it connects on the next reload. Change its config and it restarts with the new settings. Remove it and its tools disappear from the registry. A server that fails to connect is logged and retried on the next reconcile, and never blocks startup.
+
+Servers that emit `tools/list_changed` notifications get their tool set re-discovered live.
+
+## Notes
+
+- The MCP SDK is an optional dependency of `@tailored-ai/core`. npm installs it by default; if it's missing, connecting fails with an install hint and nothing else is affected.
+- Tools only for now. MCP resources, prompts, and sampling aren't consumed yet.
+- Tool results flatten to text. Image and audio blocks become short markers.
+- Transports: stdio and streamable HTTP. The deprecated HTTP+SSE transport isn't supported.
