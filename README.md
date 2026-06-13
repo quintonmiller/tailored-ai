@@ -242,7 +242,7 @@ If the tool set changes mid-loop (e.g. a custom tool was added), a transient sys
 ### Providers
 
 - **OpenAI-compatible** (built-in) — Generic `/v1` chat completions for Ollama, vLLM, LM Studio, Groq, Together, and similar gateways
-- **OpenAI, Anthropic, OpenRouter, AWS Bedrock** (plugins) — `@tailored-ai/provider-openai`, `provider-anthropic`, `provider-openrouter`, `provider-bedrock`; install with `tai plugin install`, configure under `providers.<id>`
+- **OpenAI, Anthropic, OpenRouter, AWS Bedrock, DeepSeek** (plugins) — `@tailored-ai/provider-openai`, `provider-anthropic`, `provider-openrouter`, `provider-bedrock`, `provider-deepseek`; install with `tai plugin install`, configure under `providers.<id>`
 
 ### Tools
 
