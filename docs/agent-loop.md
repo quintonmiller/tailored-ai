@@ -48,6 +48,18 @@ One provider is built in — set `agent.defaultProvider` in config:
 
 Hosted vendors register their ids from plugin packages (#236): `@tailored-ai/provider-openai` (`openai`), `provider-anthropic` (`anthropic`), `provider-openrouter` (`openrouter`), `provider-bedrock` (`bedrock`). The `OpenAIProvider` class stays exported from core — `openai_compatible` uses it and gateway plugins (openrouter) wrap it. An unknown `defaultProvider` id fails with a hint to install the plugin that registers it.
 
+**Multiple OpenAI-compatible endpoints (#253)**: `openai_compatible` is just the default id for the built-in `OpenAIProvider` — it isn't the only one. To run several OpenAI-wire endpoints at once (a local vLLM gateway *and* DeepSeek, Groq, Together, …), give each its own id and set `type: openai_compatible`; `agent.defaultProvider` selects among them. No per-vendor plugin needed.
+
+```yaml
+providers:
+  local:    { type: openai_compatible, baseUrl: http://127.0.0.1:8000/v1, defaultModel: qwen3.6-27b }
+  deepseek: { type: openai_compatible, baseUrl: https://api.deepseek.com, apiKey: ${DEEPSEEK_API_KEY}, defaultModel: deepseek-v4-flash }
+agent:
+  defaultProvider: local
+```
+
+A registered factory id (a plugin's, or the literal `openai_compatible`) always wins over an inline `type`. `createProvider()` does the resolution; the shared builder is exported as `buildOpenAICompatibleProvider` and the opt-in predicate as `isInlineOpenAICompatible`. Today this picks the one *default* provider — per-agent concurrent instances (different agents on different providers in one process) is a separate follow-up.
+
 **Back-compat**: configs that still use `providers.ollama` (the removed native `/api/chat` provider) are auto-migrated to `providers.openai_compatible` at load time by appending `/v1` to the base URL. A deprecation warning is printed.
 
 ## Streaming (chatStream)

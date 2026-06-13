@@ -1,7 +1,12 @@
 import type { AgentConfig } from "./config.js";
 import type { EventBus } from "./events.js";
 import type { EmbeddingProvider } from "./providers/embedding.js";
-import { embeddingFactoryRegistry, providerFactoryRegistry } from "./providers/factories.js";
+import {
+  buildOpenAICompatibleProvider,
+  embeddingFactoryRegistry,
+  isInlineOpenAICompatible,
+  providerFactoryRegistry,
+} from "./providers/factories.js";
 import type { AIProvider } from "./providers/interface.js";
 import type { TaskBackend } from "./tasks/interface.js";
 import { AdminTool } from "./tools/admin.js";
@@ -105,16 +110,27 @@ export function createTools(
 export function createProvider(config: AgentConfig): { provider: AIProvider; model: string } {
   const id = config.agent.defaultProvider;
   const factory = providerFactoryRegistry.get(id);
-  if (!factory) {
-    const known = providerFactoryRegistry.list().join(", ") || "(none)";
-    throw new Error(
-      `No provider factory registered for "${id}". Known: ${known}. ` +
-        `Hosted providers ship as plugins — install the package that registers "${id}" ` +
-        `(e.g. @tailored-ai/provider-${id}) and add it to the plugins: list, ` +
-        "or register a custom factory with registerProviderFactory().",
-    );
+  // A registered factory id always wins over an inline type (#253).
+  if (factory) return factory(config);
+
+  // No factory under this id. If the config opts into the built-in
+  // OpenAI-compatible provider — `type: openai_compatible`, or a bare
+  // `baseUrl` — build it inline under `id` so multiple OpenAI-wire endpoints
+  // (local vLLM + DeepSeek + Groq + …) can coexist without a per-vendor
+  // plugin (#253).
+  const cfg = config.providers[id];
+  if (isInlineOpenAICompatible(cfg)) {
+    return buildOpenAICompatibleProvider(cfg, id);
   }
-  return factory(config);
+
+  const known = providerFactoryRegistry.list().join(", ") || "(none)";
+  throw new Error(
+    `No provider factory registered for "${id}". Known: ${known}. ` +
+      `Hosted providers ship as plugins — install the package that registers "${id}" ` +
+      `(e.g. @tailored-ai/provider-${id}) and add it to the plugins: list, ` +
+      `register a custom factory with registerProviderFactory(), ` +
+      `or set providers.${id}.type: openai_compatible (with a baseUrl) to use the built-in OpenAI-compatible provider.`,
+  );
 }
 
 export function createMetaTools(runtime: AgentRuntime, contextDir: string, kbDir: string): Tool[] {
