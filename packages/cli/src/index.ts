@@ -200,13 +200,9 @@ async function runServer(
       console.error("[channels] Reconcile error after reload:", (err as Error).message);
     }
 
-    // MCP servers reconcile the same way; this also re-registers their
-    // tools into the fresh tool registry the reload just swapped in.
-    try {
-      await mcpManager.reconcile(runtime);
-    } catch (err) {
-      console.error("[mcp] Reconcile error after reload:", (err as Error).message);
-    }
+    // MCP servers reconcile via the onReload hook main() registered at
+    // manager construction — before the first possible reload, so the
+    // fresh tool registry always gets the tools re-registered.
 
     // Re-sync the outbound registry against the live channel set: register
     // newly-connected outbound channels, unregister ones that went away (#66).
@@ -763,7 +759,19 @@ async function main() {
   // Connect configured MCP servers and register their discovered tools.
   // Lives up here (not in runServer) so single-message runs get MCP tools
   // too. Connection failures log per-server and never block startup.
+  //
+  // The reload hook MUST be registered before any reload can fire: every
+  // runtime.reload() swaps in a fresh ToolRegistry, dropping MCP tools
+  // until the next reconcile re-registers them — and setActiveProject()
+  // below triggers exactly such a reload when a project overlay activates.
+  // Registering the hook only in runServer left a window where startup
+  // lost the tools silently.
   const mcpManager = new McpManager();
+  runtime.onReload(() => {
+    mcpManager.reconcile(runtime).catch((err) => {
+      console.error("[mcp] Reconcile error after reload:", (err as Error).message);
+    });
+  });
   if (Object.values(runtime.getConfig().mcp?.servers ?? {}).some((s) => s && s.enabled !== false)) {
     await mcpManager.reconcile(runtime);
   }
