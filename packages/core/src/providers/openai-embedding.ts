@@ -88,23 +88,26 @@ export class OpenAICompatibleEmbeddingProvider implements EmbeddingProvider {
     const post = async (clamp: number): Promise<EmbeddingsResponse> => {
       const clamped = inputs.map((s) => (s.length > clamp ? s.slice(0, clamp) : s));
       const body = JSON.stringify({ model, input: clamped });
-      return withRetry<EmbeddingsResponse>(async () => {
-        const resp = await fetch(`${this.baseUrl}/embeddings`, {
-          method: "POST",
-          headers,
-          body,
-          signal: opts.signal,
-        });
-        if (!resp.ok) {
-          const text = await resp.text().catch(() => "");
-          const err = new Error(`embeddings request failed: ${resp.status} ${text.slice(0, 200)}`);
-          // Surface the status so withRetry's isTransientError() can decide,
-          // and so the overflow check below can react to a 400.
-          (err as Error & { status?: number }).status = resp.status;
-          throw err;
-        }
-        return (await resp.json()) as EmbeddingsResponse;
-      }, { shouldRetry: isTransientError });
+      return withRetry<EmbeddingsResponse>(
+        async () => {
+          const resp = await fetch(`${this.baseUrl}/embeddings`, {
+            method: "POST",
+            headers,
+            body,
+            signal: opts.signal,
+          });
+          if (!resp.ok) {
+            const text = await resp.text().catch(() => "");
+            const err = new Error(`embeddings request failed: ${resp.status} ${text.slice(0, 200)}`);
+            // Surface the status so withRetry's isTransientError() can decide,
+            // and so the overflow check below can react to a 400.
+            (err as Error & { status?: number }).status = resp.status;
+            throw err;
+          }
+          return (await resp.json()) as EmbeddingsResponse;
+        },
+        { shouldRetry: isTransientError },
+      );
     };
 
     // Clamp oversized inputs up front, then retry with a smaller clamp if the

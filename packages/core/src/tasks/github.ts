@@ -99,8 +99,7 @@ export class GitHubTaskBackend implements TaskBackend {
     // Pin the REST API version so requests don't ride GitHub's rolling default
     // (which logs per-endpoint deprecation warnings as versions are retired).
     this.octokit =
-      opts.octokit ??
-      new Octokit({ auth: opts.token, request: { headers: { "x-github-api-version": "2022-11-28" } } });
+      opts.octokit ?? new Octokit({ auth: opts.token, request: { headers: { "x-github-api-version": "2022-11-28" } } });
     this.agentRoles = new Set(opts.agentRoles ?? []);
   }
 
