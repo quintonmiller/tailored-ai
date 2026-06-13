@@ -50,8 +50,21 @@ describe("resolveAgent", () => {
     expect(resolved.instructions).toBe("Be helpful.");
     expect(resolved.tools).toEqual(tools);
     expect(resolved.temperature).toBe(0.3);
+    expect(resolved.thinking).toBeUndefined();
     expect(resolved.maxToolRounds).toBe(10);
     expect(resolved.contextDir).toBeUndefined();
+  });
+
+  it("resolves per-agent thinking level (#254)", () => {
+    const config = makeConfig({
+      agents: {
+        deep: { thinking: "high" },
+      },
+    });
+    expect(resolveAgent("deep", config, tools).thinking).toBe("high");
+    // Agents without an override leave it undefined (provider default applies).
+    const plain = makeConfig({ agents: { plain: {} } });
+    expect(resolveAgent("plain", plain, tools).thinking).toBeUndefined();
   });
 
   it("throws for unknown agent", () => {

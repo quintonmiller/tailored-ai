@@ -4,6 +4,7 @@ import YAML from "yaml";
 import type { PermissionsConfig } from "./approval.js";
 import { DEFAULT_AUTOPILOT_TASK_PROMPT } from "./autopilot/task-prompt.js";
 import { DEFAULT_BRIEFING_PROMPT } from "./briefing.js";
+import type { ThinkingLevel } from "./providers/interface.js";
 import { DEFAULT_SUGGESTIONS_PROMPT } from "./suggestions.js";
 import { META_TOOL_NAMES } from "./tools/tool-factories.js";
 
@@ -27,6 +28,13 @@ export interface AgentDefinition {
   instructions?: string;
   tools?: string[];
   temperature?: number;
+  /**
+   * Reasoning effort for this agent (#254): off | auto | low | medium | high.
+   * Forwarded to the active provider on every chat call and mapped to its wire
+   * format; overrides the provider's configured default. Providers without
+   * reasoning support ignore it.
+   */
+  thinking?: ThinkingLevel;
   maxToolRounds?: number;
   contextDir?: string;
   /** When >0, re-prompt the model up to N times if it responds with text instead of tool calls. */
