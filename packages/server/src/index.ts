@@ -81,6 +81,7 @@ import {
   recallQueryAsync,
   renderSkillMd,
   resetSession,
+  resolveDashboardWidgets,
   resolveWorkflowsDir,
   runAgentLoop,
   runMemorySweep,
@@ -1791,6 +1792,12 @@ export function createServer(opts: ServerOptions) {
       }
       return c.json({ error: (err as Error).message }, 500);
     }
+  });
+
+  // Board page widget specs (declarative). The UI renders each via its widget
+  // renderer registry; widgets fetch their own data from `options.endpoint`.
+  app.get("/api/dashboard", (c) => {
+    return c.json({ widgets: resolveDashboardWidgets(runtime.getConfig()) });
   });
 
   app.post("/api/briefing/refresh", async (c) => {

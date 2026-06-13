@@ -4,6 +4,7 @@ import YAML from "yaml";
 import type { PermissionsConfig } from "./approval.js";
 import { DEFAULT_AUTOPILOT_TASK_PROMPT } from "./autopilot/task-prompt.js";
 import { DEFAULT_BRIEFING_PROMPT } from "./briefing.js";
+import type { DashboardWidget } from "./dashboard/index.js";
 import type { ThinkingLevel } from "./providers/interface.js";
 import { DEFAULT_SUGGESTIONS_PROMPT } from "./suggestions.js";
 import { META_TOOL_NAMES } from "./tools/tool-factories.js";
@@ -847,6 +848,18 @@ export interface AgentConfig {
     providerExtra?: Record<string, unknown>;
   };
   /**
+   * Board page widgets. Declarative specs the bundled UI renders via its widget
+   * renderer registry (types: status, metric, tasks, list, markdown, links,
+   * iframe, …). Entries here are added on top of widgets contributed by plugins
+   * (`registerDashboardWidgetProvider`) and the built-in defaults; an entry
+   * sharing a built-in/plugin widget's `id` overrides it. Set `defaults: false`
+   * to drop the built-in widgets entirely. See docs/dashboard-widgets.md.
+   */
+  dashboard?: {
+    defaults?: boolean;
+    widgets?: DashboardWidget[];
+  };
+  /**
    * Chat empty-state suggestion chips. Off by default — when disabled the
    * server's `/api/suggestions` returns `{ enabled: false }` with no provider
    * call, so there's no behavior or token cost for non-users. When enabled, the
@@ -1098,6 +1111,7 @@ const KNOWN_TOP_LEVEL_CONFIG_KEY_MAP: Record<keyof AgentConfig, true> = {
   briefing: true,
   suggestions: true,
   autopilot: true,
+  dashboard: true,
 };
 
 /** Recognized top-level config keys, as a Set for O(1) membership tests. */

@@ -8,6 +8,7 @@ import { Sidebar } from "./components/Sidebar";
 import { ToastProvider } from "./components/Toast";
 import { Agents } from "./pages/Agents";
 import { Approvals } from "./pages/Approvals";
+import { Board } from "./pages/Board";
 import { Chat } from "./pages/Chat";
 import { Config } from "./pages/Config";
 import { Dashboard } from "./pages/Dashboard";
@@ -26,6 +27,7 @@ import "./styles.css";
 
 type Route =
   | { page: "dashboard" }
+  | { page: "board" }
   | { page: "agents"; agentName?: string }
   | { page: "projects"; projectId?: string; tab?: "tasks" | "documents"; taskId?: string; docId?: string }
   | { page: "tasks"; taskId?: string; status?: string }
@@ -112,6 +114,9 @@ function parseHash(): Route {
   if (hash.startsWith("/agents")) {
     const parts = hash.split("?")[0].split("/");
     return { page: "agents", agentName: parts[2] || undefined };
+  }
+  if (hash.startsWith("/board")) {
+    return { page: "board" };
   }
   if (hash.startsWith("/tools")) {
     return { page: "tools" };
@@ -297,6 +302,7 @@ function AppShell({
         </header>
         <main className="app-main">
           {route.page === "dashboard" && <Dashboard />}
+          {route.page === "board" && <Board />}
           {route.page === "projects" && (
             <Projects projectId={route.projectId} tab={route.tab} taskId={route.taskId} docId={route.docId} />
           )}
