@@ -24,6 +24,16 @@ describe("toOpenAIMessages", () => {
     expect(result[0].content).toBe("");
   });
 
+  it("never serializes message.reasoning onto the wire (#254)", () => {
+    const messages: Message[] = [
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "answer", reasoning: "REASONING_SECRET" },
+    ];
+    const serialized = JSON.stringify(toOpenAIMessages(messages));
+    expect(serialized).not.toContain("REASONING_SECRET");
+    expect(serialized).not.toContain("reasoning");
+  });
+
   it("converts tool result messages", () => {
     const messages: Message[] = [{ role: "tool", content: "Result data", toolCallId: "tc_1" }];
     const result = toOpenAIMessages(messages);

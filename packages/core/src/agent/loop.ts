@@ -203,6 +203,8 @@ export interface AgentLoopOptions {
 }
 
 export function estimateTokens(msg: Message): number {
+  // `msg.reasoning` is intentionally excluded: it's display-only and stripped
+  // from every outgoing request (#254), so it costs no wire/history budget.
   let length = (msg.content ?? "").length;
   if (msg.toolCalls) {
     for (const tc of msg.toolCalls) {
