@@ -7761,3 +7761,79 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ── Board (dashboard widget seam) ─────────────────────────────────────── */
+.board-page { padding: 1.5rem 1.75rem 3rem; max-width: 1200px; margin: 0 auto; }
+.board-header { margin-bottom: 1.25rem; }
+.board-header h1 { font-size: 1.4rem; margin: 0; }
+.board-sub { color: var(--text-dim); font-size: 0.85rem; margin: 0.25rem 0 0; }
+.board-sub code { font-family: var(--mono, monospace); background: var(--bg-surface); padding: 0.05rem 0.3rem; border-radius: 4px; }
+
+.board-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1rem;
+}
+@media (max-width: 900px) { .board-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .board-grid { grid-template-columns: 1fr; } .widget-card { grid-column: span 1 !important; } }
+
+.widget-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem 1rem;
+  min-height: 110px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.widget-title { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); margin: 0; }
+.widget-body { flex: 1; min-height: 0; }
+.widget-empty { color: var(--text-dim); font-size: 0.85rem; margin: 0.25rem 0 0; }
+.widget-error { color: var(--red); }
+
+/* status */
+.widget-status-head { display: flex; align-items: center; gap: 0.5rem; font-size: 1rem; }
+.widget-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-dim); flex: none; }
+.widget-dot.is-ok { background: var(--green); }
+.widget-dot.is-warn { background: var(--amber); }
+.widget-dot.is-down { background: var(--red); }
+.widget-kv { display: grid; grid-template-columns: auto 1fr; gap: 0.15rem 0.75rem; margin: 0.6rem 0 0; font-size: 0.82rem; }
+.widget-kv dt { color: var(--text-dim); }
+.widget-kv dd { margin: 0; text-align: right; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* lists / tasks / activity */
+.widget-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+.widget-task { display: flex; flex-direction: column; gap: 0.15rem; }
+.widget-task-title { font-size: 0.85rem; color: var(--text); text-decoration: none; }
+.widget-task-title:hover { color: var(--accent); }
+.widget-task-meta { display: flex; align-items: center; gap: 0.4rem; }
+.widget-assignee { color: var(--text-dim); font-size: 0.72rem; }
+.widget-list-row { display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.85rem; }
+.widget-list-sub { color: var(--text-dim); }
+.widget-run { display: flex; align-items: center; gap: 0.5rem; font-size: 0.82rem; }
+.widget-run-when { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.widget-run-agent { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.widget-chip {
+  font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 0.08rem 0.4rem; border-radius: 999px; border: 1px solid var(--border);
+  color: var(--text-dim); background: var(--bg);
+}
+.widget-chip.status-blocked, .widget-chip.run-error { color: var(--red); border-color: color-mix(in srgb, var(--red) 40%, var(--border)); }
+.widget-chip.status-in_review { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 40%, var(--border)); }
+.widget-chip.run-ok { color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, var(--border)); }
+
+/* metric */
+.widget-metric { display: flex; align-items: baseline; gap: 0.35rem; flex-wrap: wrap; }
+.widget-metric-value { font-size: 2rem; font-weight: 600; line-height: 1; }
+.widget-metric-unit { color: var(--text-dim); }
+.widget-metric-label { flex-basis: 100%; color: var(--text-dim); font-size: 0.82rem; }
+
+/* links / markdown / iframe */
+.widget-links { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.3rem; }
+.widget-links a { color: var(--accent); text-decoration: none; font-size: 0.85rem; }
+.widget-links a:hover { text-decoration: underline; }
+.widget-markdown { font-size: 0.85rem; color: var(--text); }
+.widget-markdown :first-child { margin-top: 0; }
+.widget-iframe { width: 100%; border: 0; border-radius: 6px; background: var(--bg); }
