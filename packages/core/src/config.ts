@@ -797,6 +797,13 @@ export interface AgentConfig {
       model?: string;
       /** Output dimension hint (used for sanity checks). */
       dim?: number;
+      /**
+       * Soft cap on characters per embedding input. Longer inputs are
+       * truncated before the request (and the cap auto-halves and retries on a
+       * context-overflow 400) so a big recall query never silently disables
+       * semantic search. Default 8000 (~2k tokens).
+       */
+      maxInputChars?: number;
     };
     /** Chunking parameters for the indexer. */
     chunks?: {
@@ -1128,6 +1135,11 @@ export function validateConfig(config: AgentConfig): string[] {
       enabledToolNames.add(name);
     }
   }
+  // `tasks` and `task_query` are created together by the tasks tool factory
+  // (builtin.ts) — enabling `tasks` registers both. Reflect that coupling so
+  // agents that reference `task_query` don't draw a spurious "not enabled"
+  // warning on every startup.
+  if (enabledToolNames.has("tasks")) enabledToolNames.add("task_query");
   // Tools that have a hard credential gate at construction time. Listed here
   // so we can warn when a tool is "enabled" but won't actually register —
   // otherwise agents reference it, the UI silently omits it, and the user is

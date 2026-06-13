@@ -55,6 +55,17 @@ export class ReadTool implements Tool {
           : await readFile(fullPath, "utf-8");
       return { success: true, output: content };
     } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "EISDIR") {
+        return {
+          success: false,
+          output: "",
+          error: `"${fullPath}" is a directory, not a file. Use the exec tool (e.g. \`ls\`) to list its contents.`,
+        };
+      }
+      if (code === "ENOENT") {
+        return { success: false, output: "", error: `File not found: ${fullPath}` };
+      }
       return {
         success: false,
         output: "",

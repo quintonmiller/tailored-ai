@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { checkCommandAllowlist } from "./command-allowlist.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
 import { checkExecBoundary } from "./sandbox-boundary.js";
 
@@ -92,7 +93,7 @@ async function saveFullOutput(
 
 export class ExecTool implements Tool {
   name = "exec";
-  description = "Run a shell command and return its output.";
+  description = "Run a shell command and return its output. Chain steps with && or || and pipe with |.";
   parameters = {
     type: "object",
     properties: {
@@ -121,21 +122,12 @@ export class ExecTool implements Tool {
     }
 
     if (this.allowedCommands.length > 0) {
-      // Reject shell metacharacters to prevent chaining/piping past the allowlist
-      if (/[;|&`$(){}<>!#\n]/.test(command)) {
-        return {
-          success: false,
-          output: "",
-          error: `Command rejected: shell operators are not allowed when an allowlist is active.`,
-        };
-      }
-      const bin = command.split(/\s+/)[0];
-      if (!this.allowedCommands.includes(bin)) {
-        return {
-          success: false,
-          output: "",
-          error: `Command "${bin}" is not in the allowlist: ${this.allowedCommands.join(", ")}`,
-        };
+      // Permit safe compound commands (chains, pipes, redirections) while
+      // keeping the allowlist's guarantee that only listed binaries run in
+      // command position. See command-allowlist.ts for the policy.
+      const check = checkCommandAllowlist(command, this.allowedCommands);
+      if (!check.ok) {
+        return { success: false, output: "", error: check.error };
       }
     }
 

@@ -141,6 +141,28 @@ describe("validateConfig — tasks block", () => {
   });
 });
 
+describe("validateConfig — tool references", () => {
+  it("does not warn for task_query when tasks is enabled (they register together)", () => {
+    const c = baseConfig();
+    c.tools = { tasks: { enabled: true } };
+    c.agents = { coder: { tools: ["tasks", "task_query"] } };
+    expect(validateConfig(c).some((w) => w.includes("task_query"))).toBe(false);
+  });
+
+  it("still warns for task_query when tasks is disabled", () => {
+    const c = baseConfig();
+    c.tools = { tasks: { enabled: false } };
+    c.agents = { coder: { tools: ["task_query"] } };
+    expect(validateConfig(c).some((w) => w.includes('references tool "task_query"'))).toBe(true);
+  });
+
+  it("warns for a genuinely unknown tool reference", () => {
+    const c = baseConfig();
+    c.agents = { coder: { tools: ["nonexistent_tool"] } };
+    expect(validateConfig(c).some((w) => w.includes('references tool "nonexistent_tool"'))).toBe(true);
+  });
+});
+
 describe("migrateTaskBackendConfig — legacy per-backend blocks → tasks.options", () => {
   it("folds tasks.github into tasks.options and deletes the legacy block", () => {
     const cfg = { tasks: { backend: "github", github: { repo: "a/r", token: "t", agentRoles: ["coder"] } } };
