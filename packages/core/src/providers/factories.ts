@@ -30,24 +30,54 @@ export function registerEmbeddingFactory(id: string, factory: EmbeddingFactory):
   embeddingFactoryRegistry.register(id, factory);
 }
 
+/**
+ * Build core's {@link OpenAIProvider} from a `providers.<id>` options bag.
+ * Shared by the registered `openai_compatible` factory and
+ * {@link createProvider}'s inline fallback, so every OpenAI-wire endpoint —
+ * whatever id it's configured under — gets an identical provider that reads
+ * `baseUrl` / `defaultModel` / `apiKey` / `name`.
+ */
+export function buildOpenAICompatibleProvider(
+  cfg: Record<string, unknown> | undefined,
+  id: string,
+): ProviderFactoryResult {
+  if (!cfg) throw new Error(`providers.${id} not configured`);
+  return {
+    provider: new OpenAIProvider(asString(cfg.apiKey), asString(cfg.baseUrl), {
+      id,
+      name: asString(cfg.name) ?? "OpenAI-compatible",
+    }),
+    model: requireModel(cfg, id),
+  };
+}
+
+/**
+ * True when a `providers.<id>` bag should be served by the built-in
+ * {@link OpenAIProvider} even though no factory is registered under `id`:
+ * it declares `type: "openai_compatible"`, or (convenience) carries a
+ * `baseUrl` with no other `type`. This lets several OpenAI-wire endpoints
+ * coexist under distinct ids — local vLLM + DeepSeek + Groq + … — without a
+ * per-vendor plugin, while a registered factory id still wins (see #253 and
+ * {@link createProvider}). A `type` naming some other backend opts out.
+ */
+export function isInlineOpenAICompatible(cfg: Record<string, unknown> | undefined): boolean {
+  if (!cfg) return false;
+  if (typeof cfg.type === "string") return cfg.type === "openai_compatible";
+  return typeof cfg.baseUrl === "string";
+}
+
 // The one built-in provider registers on module load so any package that
 // imports @tailored-ai/core gets it automatically. It reads its settings
 // from the backend-opaque `providers.<id>` bag — exactly how a plugin
 // provider would — so core privileges no built-in. Hosted vendors live in
 // plugin packages: @tailored-ai/provider-openai, provider-anthropic,
-// provider-openrouter, provider-bedrock (#236).
+// provider-openrouter, provider-bedrock (#236). The same OpenAIProvider is
+// also reachable under any id via `type: openai_compatible` (#253) without
+// going through this named registration.
 
-providerFactoryRegistry.register("openai_compatible", (config) => {
-  const cfg = config.providers.openai_compatible;
-  if (!cfg) throw new Error("providers.openai_compatible not configured");
-  return {
-    provider: new OpenAIProvider(asString(cfg.apiKey), asString(cfg.baseUrl), {
-      id: "openai_compatible",
-      name: asString(cfg.name) ?? "OpenAI-compatible",
-    }),
-    model: requireModel(cfg, "openai_compatible"),
-  };
-});
+providerFactoryRegistry.register("openai_compatible", (config) =>
+  buildOpenAICompatibleProvider(config.providers.openai_compatible, "openai_compatible"),
+);
 
 function asString(v: unknown): string | undefined {
   return typeof v === "string" ? v : undefined;

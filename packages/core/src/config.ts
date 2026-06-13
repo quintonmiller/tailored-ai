@@ -411,6 +411,15 @@ export interface AgentConfig {
    * value is a backend-opaque options bag the provider reads itself, so
    * core privileges no built-in and carries no per-provider schema.
    * openai_compatible reads `baseUrl` / `defaultModel` / `apiKey` / `name`.
+   *
+   * To run several OpenAI-wire endpoints at once (local vLLM + DeepSeek +
+   * Groq + …) without a per-vendor plugin, give each its own id and set
+   * `type: openai_compatible` — the built-in OpenAIProvider then serves that
+   * id directly (#253). A registered factory id always wins over an inline
+   * `type`. Example:
+   *   providers:
+   *     local:    { type: openai_compatible, baseUrl: http://127.0.0.1:8000/v1, defaultModel: qwen3.6-27b }
+   *     deepseek: { type: openai_compatible, baseUrl: https://api.deepseek.com, apiKey: ${DEEPSEEK_API_KEY}, defaultModel: deepseek-v4-flash }
    */
   providers: {
     [id: string]: Record<string, unknown> | undefined;
