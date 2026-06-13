@@ -55,6 +55,7 @@ export const DOCS_NAV: DocsNavSection[] = [
       { label: "@tailored-ai/provider-openrouter", href: "/docs/packages/provider-openrouter" },
       { label: "@tailored-ai/provider-anthropic", href: "/docs/packages/provider-anthropic" },
       { label: "@tailored-ai/provider-openai", href: "/docs/packages/provider-openai" },
+      { label: "@tailored-ai/provider-deepseek", href: "/docs/packages/provider-deepseek" },
       { label: "@tailored-ai/trusted-actions", href: "/docs/packages/trusted-actions" },
     ],
   },
