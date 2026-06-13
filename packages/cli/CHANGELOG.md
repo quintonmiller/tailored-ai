@@ -1,5 +1,15 @@
 # @tailored-ai/cli
 
+## 0.1.9
+
+### Patch Changes
+
+- 4f992c9: Native MCP client support: declare Model Context Protocol servers under `mcp.servers` in config.yaml (stdio via `command` or streamable HTTP via `url`) and their tools are discovered and registered into the tool registry as `mcp_<server>_<tool>`, selectable per agent like any other tool. Servers reconcile on hot reload (start/stop/restart on config change), failed connections retry on the next reconcile, and `tools/list_changed` notifications re-discover live. The `@modelcontextprotocol/sdk` dependency is optional and loaded on first use.
+- cc238a6: `tai plugin install` now replaces an existing dependency installed under a different spec (e.g. swapping a `file:` link for a registry version) instead of failing with ERESOLVE. The stale manifest entry is dropped before npm runs and restored if the install fails.
+- Updated dependencies [4f992c9]
+  - @tailored-ai/core@0.1.9
+  - @tailored-ai/server@0.1.9
+
 ## 0.1.8
 
 ### Patch Changes

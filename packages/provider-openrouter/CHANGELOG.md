@@ -1,5 +1,12 @@
 # @tailored-ai/provider-openrouter
 
+## 0.1.9
+
+### Patch Changes
+
+- Updated dependencies [4f992c9]
+  - @tailored-ai/core@0.1.9
+
 ## 0.1.8
 
 ### Patch Changes
