@@ -1,5 +1,12 @@
 # @tailored-ai/core
 
+## 0.1.9
+
+### Patch Changes
+
+- 4f992c9: Native MCP client support: declare Model Context Protocol servers under `mcp.servers` in config.yaml (stdio via `command` or streamable HTTP via `url`) and their tools are discovered and registered into the tool registry as `mcp_<server>_<tool>`, selectable per agent like any other tool. Servers reconcile on hot reload (start/stop/restart on config change), failed connections retry on the next reconcile, and `tools/list_changed` notifications re-discover live. The `@modelcontextprotocol/sdk` dependency is optional and loaded on first use.
+  - @tailored-ai/browser-mediator@0.1.9
+
 ## 0.1.8
 
 ### Patch Changes
