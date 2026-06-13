@@ -33,7 +33,11 @@ export async function withRetry<T>(fn: () => Promise<T>, opts?: RetryOptions): P
       return await fn();
     } catch (err) {
       lastError = err as Error;
-      if (attempt < retries && shouldRetry(lastError)) {
+      // A non-retryable error must stop the loop now — previously the loop
+      // continued (only the backoff delay was skipped), so a `shouldRetry`
+      // that returned false still re-ran `fn` up to `retries` times.
+      if (!shouldRetry(lastError)) break;
+      if (attempt < retries) {
         await new Promise((r) => setTimeout(r, delay));
         delay *= 2;
       }

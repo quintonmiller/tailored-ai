@@ -82,8 +82,55 @@ export interface HealthInfo {
   tools: number;
 }
 
+// --- Backend reachability circuit breaker ---------------------------------
+// The dashboard's polling hooks fan out ~10 requests per interval. When the
+// backend is down or restarting, every one fails — in dev that floods the Vite
+// proxy with ECONNREFUSED (≈100k lines in one log window). Once a network-level
+// failure (or a 502/503/504 from the dev proxy) is seen, open the circuit and
+// fail subsequent reads fast for a growing cooldown (1s→2s→…→30s) instead of
+// hitting the network. A reachable response — or the user refocusing the tab —
+// closes it again. Mutations call `fetch` directly and bypass the breaker, so
+// user-initiated actions always attempt the network.
+let breakerFailures = 0;
+let breakerOpenUntil = 0;
+
+function closeBreaker(): void {
+  breakerFailures = 0;
+  breakerOpenUntil = 0;
+}
+
+function tripBreaker(): void {
+  breakerFailures += 1;
+  const cooldownMs = Math.min(30000, 1000 * 2 ** Math.min(breakerFailures, 5));
+  breakerOpenUntil = Date.now() + cooldownMs;
+}
+
+if (typeof window !== "undefined") {
+  // Recover immediately when the user comes back to the tab.
+  window.addEventListener("focus", closeBreaker);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") closeBreaker();
+  });
+}
+
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  if (Date.now() < breakerOpenUntil) {
+    throw new Error("backend unreachable (retrying shortly)");
+  }
+  let res: Response;
+  try {
+    res = await fetch(url, init);
+  } catch (err) {
+    tripBreaker(); // network-level failure (ECONNREFUSED, proxy reset, offline)
+    throw err;
+  }
+  // A 502/503/504 from the dev proxy means the upstream is down; trip. Any
+  // other status (incl. app 4xx/500) means the server answered — stay closed.
+  if (res.status === 502 || res.status === 503 || res.status === 504) {
+    tripBreaker();
+    throw new Error(`${res.status} ${res.statusText}`);
+  }
+  closeBreaker();
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return res.json();
 }

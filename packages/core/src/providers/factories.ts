@@ -114,5 +114,6 @@ embeddingFactoryRegistry.register("openai_compatible", (config) => {
     defaultModel: cfg.model,
     apiKey: cfg.apiKey,
     dim: cfg.dim,
+    maxInputChars: cfg.maxInputChars,
   });
 });
