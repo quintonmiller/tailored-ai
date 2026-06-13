@@ -14,6 +14,7 @@
       "@tailored-ai/provider-openrouter",
       "@tailored-ai/provider-anthropic",
       "@tailored-ai/provider-openai",
+      "@tailored-ai/provider-deepseek",
       "@tailored-ai/trusted-actions"
     ]
   ],
