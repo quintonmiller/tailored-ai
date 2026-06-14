@@ -136,10 +136,19 @@ agent's loop tight:
   spec surfaces as a `dashboard.widgets: …` startup warning (missing id/type, bad
   span, non-`/api/` endpoint, unknown type, duplicate id) instead of silently
   rendering a fallback.
-- **A no-rebuild path.** Config widgets hot-reload — an agent edits
-  `dashboard.widgets`, and `/api/dashboard` reflects it on the next request. Only
-  a brand-new renderer *type* needs a UI build. The skill steers agents to the
-  config path first.
+- **A no-rebuild path the agent can drive with one tool.** Config widgets
+  hot-reload, and `dashboard.` is in the `admin` tool's write allowlist, so a
+  running agent adds a widget with `admin` alone — no file editing:
+  1. `admin` `get_config` section `dashboard` (read the current array),
+  2. `admin` `update_config` path `dashboard.widgets` with the **full** array
+     (the write replaces it, so include the existing widgets), which reloads the
+     runtime; `/api/dashboard` reflects it on the next request.
+
+  Only a brand-new renderer *type* needs a UI build. The skill steers agents to
+  the config path first, and tells them **not** to probe the endpoint — a widget
+  is authored from the renderer reference above, not by fetching the URL (a
+  same-origin loopback `web_fetch` is blocked by egress policy, and not every
+  agent has `exec`).
 
 The canonical built-in type names live in `BUILTIN_WIDGET_TYPES` (core), shared by
 the validator, the skill, and this doc — one source of truth.

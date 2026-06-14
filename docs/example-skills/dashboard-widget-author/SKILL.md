@@ -3,8 +3,10 @@ name: dashboard-widget-author
 description: Build a Board (dashboard) widget for the TAI web UI. Use when asked to add a widget, panel, card, or page to the dashboard, or to surface some data on the Board. Knows the declarative widget seam, the built-in renderer types, and how to verify a widget without guessing.
 version: 0.1.0
 allowed-tools:
+  - admin
   - read
   - write
+  - edit
   - exec
 ---
 
@@ -38,39 +40,75 @@ If unsure, start with a config widget using `list`/`tasks`/`metric`/`markdown`.
 - `iframe`: `url`, `height`. (The only way to show an external URL — `endpoint`
   must be same-origin `/api/…`.)
 
+> Field names: TAI's `/api/…` JSON uses **snake_case** keys (`created_at`,
+> `updated_at`, `project_id`), and list rows usually carry `id` / `key` / `title` /
+> `status`. So for a `list`/`metric` over a TAI endpoint, prefer `key` or `title`
+> for `titleField` and `updated_at` for a subtitle — not camelCase guesses like
+> `createdAt`.
+
 ## Step 2a — config widget
 
-Add an entry under `dashboard.widgets` in `config.yaml`:
+A widget spec looks like this (YAML or JSON — same shape):
 
 ```yaml
-dashboard:
-  widgets:
-    - id: my-widget          # unique; reused id overrides a built-in/plugin widget
-      type: tasks
-      title: My widget
-      span: 2                 # 1–4 columns
-      order: 30              # lower = earlier
-      options:
-        endpoint: /api/project-tasks?status=in_review&limit=6
-        emptyText: Nothing here.
+id: my-widget            # unique; reused id overrides a built-in/plugin widget
+type: tasks
+title: My widget
+span: 2                   # 1–4 columns
+order: 30                # lower = earlier
+options:
+  endpoint: /api/project-tasks?status=in_review&limit=6
+  emptyText: Nothing here.
 ```
 
-Verify (no rebuild — config hot-reloads):
-1. `node -e "const {validateDashboardWidget}=require('@tailored-ai/core'); console.log(validateDashboardWidget(SPEC))"` — must print `[]`. (Or just check startup: a bad spec logs a `dashboard.widgets:` warning.)
-2. `curl -s localhost:3000/api/dashboard` — your widget id appears in `widgets`.
-3. Open `#/board` (or note that it now renders).
+**You author the whole thing with the `admin` tool — nothing else is required.**
+You do **not** need to fetch the endpoint first. Pick the renderer `type` and its
+`options` from the reference above; the `endpoint` only has to already return data.
+Do **not** loop trying to `curl`/`web_fetch` a `/api/…` URL to "check the shape" —
+same-origin loopback is blocked for `web_fetch`, and not every agent has `exec`. If
+the renderer reference doesn't tell you a field name, pick the obvious one and move
+on; the Board render is the real check. (Optional: if you happen to have `exec`,
+`curl -s localhost:3000<endpoint>` works — but never block on it.)
+
+Steps:
+
+1. `admin` `get_config` section `dashboard` — read the current `dashboard.widgets`
+   array (it may not exist yet — that's fine).
+2. `admin` `update_config` path `dashboard.widgets`, value = the **full** array
+   including any existing widgets plus your new one. The write **replaces** the
+   array, so never drop the ones already there. (Only `dashboard.*` is writable
+   here — that's intentional.) The runtime reloads automatically; no rebuild.
+
+> Editing `config.yaml` by hand also works, but the file is large and a full
+> rewrite is risky — prefer `admin.update_config` for a surgical, validated change.
+
+Verify (config hot-reloads — no rebuild) with **`admin` `get_config` section
+`dashboard`** — your new widget appears in the array. If a spec is malformed,
+`update_config` still writes it but the reload logs a `dashboard.widgets:` warning
+and the resolver drops it from `/api/dashboard`, so re-read after writing. Then note
+that it renders at `#/board`. (No need to curl — `get_config` is your check.)
 
 ## Step 2b — new renderer type
 
+This is the path for a **fully custom / interactive** widget (local state, buttons,
+forms) — anything the generic renderers can't express. Use the **`edit`** tool for
+these changes (surgical exact-match replacement); do **not** rewrite a whole file
+with `write` — `widgets.tsx` is hundreds of lines and a full overwrite is how you
+drop an existing renderer.
+
 Edit **`packages/ui/src/components/widgets.tsx`**:
 
-1. Add a component `({ widget }: WidgetProps) => ReactNode`. For endpoint-backed
-   data use the existing `useWidgetData(endpoint)` hook and the `opt(widget, key, fallback)`
-   helper — copy the closest existing renderer (`TasksWidget`, `MetricWidget`).
-2. Register it: add `myType: MyWidget` to the `widgetRenderers` map.
-3. Style it in `packages/ui/src/styles.css` under the `/* Board … */` block, reusing
-   the design tokens (`var(--text-dim)`, `var(--border)`, `var(--radius)`, …) and the
-   `.widget-*` classes already there.
+1. Add a component `({ widget }: WidgetProps) => ReactNode`. `useState`/`useEffect`
+   are already imported, so interactivity (search inputs, refresh buttons, tabs) is
+   fine. For endpoint-backed data use the existing `useWidgetData(endpoint)` hook and
+   the `opt(widget, key, fallback)` / `asArray` / `getPath` helpers — copy the closest
+   existing renderer (`ListWidget`, `TasksWidget`). Insert it with one `edit` whose
+   `old_string` is the `export const widgetRenderers` line and `new_string` is your
+   component followed by that same line.
+2. Register it: `edit` the `widgetRenderers` map to add `myType: MyWidget`.
+3. Style it in `packages/ui/src/styles.css` (append with `edit` after an existing
+   `.widget-*` rule), reusing the design tokens (`var(--text-dim)`, `var(--border)`,
+   `var(--radius)`, …) and the `.widget-*` classes already there.
 
 Then add the canonical name to `BUILTIN_WIDGET_TYPES` in
 `packages/core/src/dashboard/index.ts` so config validation recognizes it.
