@@ -326,7 +326,7 @@ function SessionExplorerWidget({ widget }: WidgetProps) {
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
-        <button className="widget-sessions-refresh" onClick={() => setNonce((n) => n + 1)}>
+        <button type="button" className="widget-sessions-refresh" onClick={() => setNonce((n) => n + 1)}>
           Refresh
         </button>
       </div>

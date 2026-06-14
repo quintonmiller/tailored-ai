@@ -275,10 +275,7 @@ describe("AdminTool.update_config", () => {
       span: 2,
       options: { endpoint: "/api/briefing", contentField: "content" },
     };
-    const result = await admin.execute(
-      { action: "update_config", path: "dashboard.widgets", value: [widget] },
-      ctx(),
-    );
+    const result = await admin.execute({ action: "update_config", path: "dashboard.widgets", value: [widget] }, ctx());
 
     expect(result.success).toBe(true);
     expect(result.output).toMatch(/Config updated at "dashboard.widgets"/);
@@ -295,10 +292,7 @@ describe("AdminTool.update_config", () => {
     const before = readFileSync(configPath, "utf-8");
     const admin = new AdminTool(runtime);
 
-    const result = await admin.execute(
-      { action: "update_config", path: "server.authToken", value: "leak" },
-      ctx(),
-    );
+    const result = await admin.execute({ action: "update_config", path: "server.authToken", value: "leak" }, ctx());
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/not in the allowed set/);
     expect(readFileSync(configPath, "utf-8")).toBe(before);
