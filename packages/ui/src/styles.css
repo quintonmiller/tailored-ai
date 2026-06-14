@@ -7792,6 +7792,11 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .widget-empty { color: var(--text-dim); font-size: 0.85rem; margin: 0.25rem 0 0; }
 .widget-error { color: var(--red); }
 
+/* clock */
+.widget-clock { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; }
+.widget-clock-time { font-size: 2rem; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; line-height: 1.1; }
+.widget-clock-date { font-size: 0.82rem; color: var(--text-dim); margin-top: 0.35rem; }
+
 /* status */
 .widget-status-head { display: flex; align-items: center; gap: 0.5rem; font-size: 1rem; }
 .widget-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-dim); flex: none; }
