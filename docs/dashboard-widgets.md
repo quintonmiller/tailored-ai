@@ -111,3 +111,35 @@ export function register(ctx) {
 The widget appears on the Board with no UI changes, because `metric` is a
 built-in renderer. A plugin needing a bespoke visual would add a renderer type
 to the UI in a separate change; everything data-shaped works out of the box.
+
+## Authoring with a TAI agent
+
+Widget development is designed to be an agent task. The pieces that make an
+agent's loop tight:
+
+- **A skill.** `docs/example-skills/dashboard-widget-author/` is a SKILL.md that
+  teaches an agent the whole flow: pick config-vs-renderer, the built-in types
+  and their options, where the files are, the guardrails, and how to verify.
+  Install + enable it on a coding agent:
+  ```bash
+  tai resources install ./docs/example-skills/dashboard-widget-author
+  # then add the skill id to the agent's `skills:` in config.yaml
+  ```
+- **A validator for fast feedback.** `validateDashboardWidget(widget)` (exported
+  from `@tailored-ai/core`) returns issue strings — empty means valid. The agent
+  can check a spec *before* a rebuild:
+  ```js
+  const { validateDashboardWidget } = require("@tailored-ai/core");
+  validateDashboardWidget({ id: "x", type: "tasks", options: { endpoint: "/api/project-tasks" } }); // []
+  ```
+  `validateConfig` runs the same check over `dashboard.widgets`, so a malformed
+  spec surfaces as a `dashboard.widgets: …` startup warning (missing id/type, bad
+  span, non-`/api/` endpoint, unknown type, duplicate id) instead of silently
+  rendering a fallback.
+- **A no-rebuild path.** Config widgets hot-reload — an agent edits
+  `dashboard.widgets`, and `/api/dashboard` reflects it on the next request. Only
+  a brand-new renderer *type* needs a UI build. The skill steers agents to the
+  config path first.
+
+The canonical built-in type names live in `BUILTIN_WIDGET_TYPES` (core), shared by
+the validator, the skill, and this doc — one source of truth.

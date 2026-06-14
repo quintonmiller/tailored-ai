@@ -15,5 +15,9 @@ without forking it.
   built-in `status`, `tasks`, `activity`, `metric`, `list`, `markdown`,
   `links`, and `iframe` renderers. Widgets are declarative specs (data, not
   React), so config or plugins can add widgets with no UI changes.
+- Agent/author enablement: `validateDashboardWidget()` + `BUILTIN_WIDGET_TYPES`
+  exports, `validateConfig` now warns on malformed `dashboard.widgets` (bad
+  type/span, non-`/api/` endpoint, duplicate id), and a `dashboard-widget-author`
+  example skill teaches an agent the whole authoring flow.
 
 See docs/dashboard-widgets.md.

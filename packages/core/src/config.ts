@@ -4,7 +4,7 @@ import YAML from "yaml";
 import type { PermissionsConfig } from "./approval.js";
 import { DEFAULT_AUTOPILOT_TASK_PROMPT } from "./autopilot/task-prompt.js";
 import { DEFAULT_BRIEFING_PROMPT } from "./briefing.js";
-import type { DashboardWidget } from "./dashboard/index.js";
+import { type DashboardWidget, validateDashboardWidget } from "./dashboard/index.js";
 import type { ThinkingLevel } from "./providers/interface.js";
 import { DEFAULT_SUGGESTIONS_PROMPT } from "./suggestions.js";
 import { META_TOOL_NAMES } from "./tools/tool-factories.js";
@@ -1427,6 +1427,24 @@ export function validateConfig(config: AgentConfig): string[] {
         `the http_request workflow step, and trigger pollers. Set this only on ` +
         `trusted networks; prefer allowHosts for narrow internal-target opt-ins.`,
     );
+  }
+
+  // Validate Board widget specs — gives an agent/human authoring a widget a
+  // precise startup signal instead of a silent fallback render.
+  const dashboardWidgets = config.dashboard?.widgets;
+  if (dashboardWidgets) {
+    const seenWidgetIds = new Set<string>();
+    for (const widget of dashboardWidgets) {
+      for (const issue of validateDashboardWidget(widget)) {
+        warnings.push(`dashboard.widgets: ${issue}`);
+      }
+      if (widget?.id) {
+        if (seenWidgetIds.has(widget.id)) {
+          warnings.push(`dashboard.widgets: duplicate widget id "${widget.id}" (the later entry wins)`);
+        }
+        seenWidgetIds.add(widget.id);
+      }
+    }
   }
 
   return warnings;
