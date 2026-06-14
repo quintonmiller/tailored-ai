@@ -88,3 +88,56 @@ export function resolveDashboardWidgets(config: AgentConfig): DashboardWidget[] 
     .filter((w) => w.enabled !== false)
     .sort((a, b) => (a.order ?? 100) - (b.order ?? 100) || (a.title ?? "").localeCompare(b.title ?? ""));
 }
+
+/**
+ * Canonical built-in renderer type names. The bundled UI implements one
+ * component per entry; this is the contract both sides share (and what
+ * {@link validateDashboardWidget} checks against). Plugins may add more types
+ * in the UI, so an unknown type is a *warning*, not an error.
+ */
+export const BUILTIN_WIDGET_TYPES = [
+  "status",
+  "metric",
+  "tasks",
+  "activity",
+  "list",
+  "markdown",
+  "links",
+  "iframe",
+] as const;
+
+/**
+ * Structurally validate a single widget spec. Returns human/agent-readable
+ * issue strings (empty = valid). Used by `validateConfig` and exposed so an
+ * agent authoring a widget can check it before a UI rebuild. The unknown-type
+ * check is advisory because plugins can register additional renderer types.
+ */
+export function validateDashboardWidget(
+  w: Partial<DashboardWidget>,
+  knownTypes: readonly string[] = BUILTIN_WIDGET_TYPES,
+): string[] {
+  const issues: string[] = [];
+  const id = typeof w.id === "string" && w.id ? w.id : "?";
+  if (!w.id || typeof w.id !== "string") issues.push("widget is missing a non-empty string `id`");
+  if (!w.type || typeof w.type !== "string") {
+    issues.push(`widget "${id}" is missing a non-empty string \`type\``);
+  } else if (!knownTypes.includes(w.type)) {
+    issues.push(
+      `widget "${id}" type "${w.type}" is not a built-in renderer (${knownTypes.join(", ")}); a plugin must register it`,
+    );
+  }
+  if (w.span !== undefined && (typeof w.span !== "number" || w.span < 1 || w.span > 4)) {
+    issues.push(`widget "${id}" \`span\` must be a number 1–4`);
+  }
+  if (w.options !== undefined && (typeof w.options !== "object" || w.options === null || Array.isArray(w.options))) {
+    issues.push(`widget "${id}" \`options\` must be an object`);
+  } else {
+    const endpoint = (w.options as Record<string, unknown> | undefined)?.endpoint;
+    if (typeof endpoint === "string" && !endpoint.startsWith("/api/")) {
+      issues.push(
+        `widget "${id}" options.endpoint must be a same-origin /api/ path (use the iframe type for external URLs)`,
+      );
+    }
+  }
+  return issues;
+}
