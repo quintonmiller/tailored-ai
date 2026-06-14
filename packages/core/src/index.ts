@@ -665,12 +665,12 @@ export { ClaudeCodeTool } from "./tools/claude-code.js";
 export { CustomTool, createCustomTools } from "./tools/custom.js";
 export { DelegateTool } from "./tools/delegate.js";
 export { DocumentsTool } from "./tools/documents.js";
+export { EditTool } from "./tools/edit.js";
 export { ExecTool } from "./tools/exec.js";
 export { ExtractDocumentTool, type ExtractDocumentToolOptions, extractText } from "./tools/extract-document.js";
 export { FactsTool } from "./tools/facts.js";
 // Gmail / GoogleCalendar / GoogleDrive moved to @tailored-ai/google-tools.
 export type { Tool, ToolContext, ToolResult } from "./tools/interface.js";
-export { EditTool } from "./tools/edit.js";
 export { MdToPdfTool } from "./tools/md-to-pdf.js";
 export { MemoryTool } from "./tools/memory.js";
 export { ProjectsTool } from "./tools/projects.js";
