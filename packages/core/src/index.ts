@@ -225,6 +225,18 @@ export { ensureContextDir, loadAllContext, loadContextFiles, migrateContextDir }
 export type { CompiledSchedule } from "./cron/schedule-dsl.js";
 export { compileSchedule, scheduleToCron } from "./cron/schedule-dsl.js";
 export { CronScheduler } from "./cron/scheduler.js";
+export { builtinDashboardWidgets } from "./dashboard/builtin.js";
+// Dashboard widget seam. Importing builtin.js self-registers the default
+// generic widgets (system status, needs-you, recent activity).
+export {
+  BUILTIN_WIDGET_TYPES,
+  type DashboardWidget,
+  type DashboardWidgetProvider,
+  dashboardWidgetRegistry,
+  registerDashboardWidgetProvider,
+  resolveDashboardWidgets,
+  validateDashboardWidget,
+} from "./dashboard/index.js";
 export type { AuditEntry, AuditVerifyResult, AuditWriteInput } from "./db/audit-log.js";
 export { AuditLog } from "./db/audit-log.js";
 export type { AutopilotSettings, BudgetStatus, TokenUsageInput } from "./db/autopilot-queries.js";
