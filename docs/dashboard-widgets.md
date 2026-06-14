@@ -49,6 +49,19 @@ Built-in defaults (`system-status`, `needs-you`, `recent-activity`) register
 through the same registry as a plugin would (no privileged built-in). Drop them
 all with `dashboard.defaults: false`, or override one by id.
 
+## Editing the layout (drag to reorder / resize)
+
+The Board has an **Edit Layout** mode (iOS-Widgets style): drag a card to reorder,
+drag its bottom-right corner to resize — **width** snaps to 1–4 columns (`span`)
+and **height** to 1–6 rows (`rowSpan`) — then **Done**. Widget content scrolls
+inside its box when it's taller than the chosen height. It persists via
+`POST /api/dashboard/layout` — the body is the widgets in display order with their
+`span` + `rowSpan`, and the route rewrites `dashboard.widgets` (order = position;
+span/rowSpan clamped). Config widgets keep their full spec; built-in/provider
+widgets get a minimal `{id, type, order, span, rowSpan}` override so the resolver
+merge preserves their core-owned title/options. So a hand-edited `dashboard.widgets`
+and a drag-edited one are the same shape — you can keep editing either way.
+
 ## Built-in renderer types
 
 | `type` | Renders | Key `options` |

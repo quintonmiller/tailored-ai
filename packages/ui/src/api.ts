@@ -119,6 +119,7 @@ export interface DashboardWidgetSpec {
   type: string;
   title?: string;
   span?: number;
+  rowSpan?: number;
   order?: number;
   enabled?: boolean;
   options?: Record<string, unknown>;
@@ -127,6 +128,21 @@ export interface DashboardWidgetSpec {
 /** Board layout: the ordered widget specs the server resolved from config + plugins. */
 export function fetchDashboard(): Promise<{ widgets: DashboardWidgetSpec[] }> {
   return jsonFetch("/api/dashboard");
+}
+
+/**
+ * Persist a Board layout (drag reorder + resize). Sends widgets in display order
+ * with their span; the server rewrites `dashboard.widgets` and returns the
+ * re-resolved layout.
+ */
+export function saveDashboardLayout(
+  widgets: Array<{ id: string; type: string; span: number; rowSpan: number }>,
+): Promise<{ widgets: DashboardWidgetSpec[] }> {
+  return jsonFetch("/api/dashboard/layout", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ widgets }),
+  });
 }
 
 /**

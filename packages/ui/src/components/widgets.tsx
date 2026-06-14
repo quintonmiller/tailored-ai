@@ -263,6 +263,26 @@ function LinksWidget({ widget }: WidgetProps) {
   );
 }
 
+/** Live clock: current time (updating every second) + today's date. No endpoint needed. */
+function ClockWidget() {
+  const [now, setNow] = useState(new Date());
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const timeStr = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const dateStr = now.toLocaleDateString([], { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+
+  return (
+    <div className="widget-clock">
+      <div className="widget-clock-time">{timeStr}</div>
+      <div className="widget-clock-date">{dateStr}</div>
+    </div>
+  );
+}
+
 /** Escape hatch: embed an external URL. */
 function IframeWidget({ widget }: WidgetProps) {
   const url = opt(widget, "url", "");
@@ -276,7 +296,6 @@ function IframeWidget({ widget }: WidgetProps) {
     />
   );
 }
-
 
 /** Interactive session explorer with client-side search and refresh. */
 function SessionExplorerWidget({ widget }: WidgetProps) {
@@ -350,6 +369,7 @@ export const widgetRenderers: Record<string, WidgetRenderer> = {
   activity: ActivityWidget,
   metric: MetricWidget,
   list: ListWidget,
+  clock: ClockWidget,
   markdown: MarkdownWidget,
   links: LinksWidget,
   iframe: IframeWidget,

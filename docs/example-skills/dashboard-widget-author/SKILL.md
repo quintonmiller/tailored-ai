@@ -96,6 +96,15 @@ these changes (surgical exact-match replacement); do **not** rewrite a whole fil
 with `write` — `widgets.tsx` is hundreds of lines and a full overwrite is how you
 drop an existing renderer.
 
+> **Paths:** use **repo-root-relative paths** (e.g. `packages/ui/src/components/widgets.tsx`)
+> for every tool — `read`/`write`/`edit` *and* `exec`. Don't prefix `/work` or a
+> home path: the file tools and a sandboxed `exec` resolve absolute paths
+> differently, but a relative path works for both. The three files you touch:
+> `packages/ui/src/components/widgets.tsx` (renderer + `widgetRenderers` map),
+> `packages/core/src/dashboard/index.ts` (`BUILTIN_WIDGET_TYPES`),
+> `packages/ui/src/styles.css` (styles). Then add the config widget with `admin`.
+> No need to explore — these are the only files.
+
 Edit **`packages/ui/src/components/widgets.tsx`**:
 
 1. Add a component `({ widget }: WidgetProps) => ReactNode`. `useState`/`useEffect`
