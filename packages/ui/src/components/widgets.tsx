@@ -277,6 +277,73 @@ function IframeWidget({ widget }: WidgetProps) {
   );
 }
 
+
+/** Interactive session explorer with client-side search and refresh. */
+function SessionExplorerWidget({ widget }: WidgetProps) {
+  const [nonce, setNonce] = useState(0);
+  const [q, setQ] = useState("");
+
+  const base = opt(widget, "endpoint", "/api/sessions?limit=25");
+  const refreshSuffix = (base.includes("?") ? "&" : "?") + `_=${nonce}`;
+  const { data, error, loading } = useWidgetData(base + refreshSuffix);
+  const rows = asArray(data, opt(widget, "itemsPath", "")) as Record<string, unknown>[];
+
+  const filtered = q
+    ? rows.filter((r) => {
+        const s = String(r.key ?? r.title ?? r.model ?? r.id ?? "").toLowerCase();
+        return s.includes(q.toLowerCase());
+      })
+    : rows;
+
+  if (loading || error) return <WidgetState loading={loading} error={error} />;
+
+  return (
+    <div>
+      <div className="widget-sessions-bar">
+        <input
+          type="search"
+          className="widget-sessions-search"
+          placeholder="Filter sessions…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+        <button className="widget-sessions-refresh" onClick={() => setNonce((n) => n + 1)}>
+          Refresh
+        </button>
+      </div>
+      {filtered.length === 0 ? (
+        <p className="widget-empty">{q ? "No sessions match." : "No sessions."}</p>
+      ) : (
+        <>
+          <ul className="widget-list">
+            {filtered.map((r, i) => {
+              const id = r.id ?? i;
+              const label = r.key ?? r.title ?? String(id);
+              const model = r.model ?? "";
+              const updated = r.updated_at ?? "";
+              return (
+                <li key={i} className="widget-list-row">
+                  <a href={`#/sessions/${id}`} className="widget-list-title">
+                    {String(label)}
+                  </a>
+                  <span className="widget-list-sub">
+                    {model ? String(model) : ""}
+                    {model && updated ? " · " : ""}
+                    {updated ? new Date(String(updated)).toLocaleDateString() : ""}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+          <p className="widget-sessions-count">
+            Showing {filtered.length} of {rows.length}
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 export const widgetRenderers: Record<string, WidgetRenderer> = {
   status: StatusWidget,
   tasks: TasksWidget,
@@ -286,6 +353,7 @@ export const widgetRenderers: Record<string, WidgetRenderer> = {
   markdown: MarkdownWidget,
   links: LinksWidget,
   iframe: IframeWidget,
+  "session-explorer": SessionExplorerWidget,
 };
 
 /** A widget card: chrome + the resolved renderer (or a graceful unknown-type fallback). */
