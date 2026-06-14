@@ -670,6 +670,7 @@ export { ExtractDocumentTool, type ExtractDocumentToolOptions, extractText } fro
 export { FactsTool } from "./tools/facts.js";
 // Gmail / GoogleCalendar / GoogleDrive moved to @tailored-ai/google-tools.
 export type { Tool, ToolContext, ToolResult } from "./tools/interface.js";
+export { EditTool } from "./tools/edit.js";
 export { MdToPdfTool } from "./tools/md-to-pdf.js";
 export { MemoryTool } from "./tools/memory.js";
 export { ProjectsTool } from "./tools/projects.js";

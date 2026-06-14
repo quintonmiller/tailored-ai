@@ -26,6 +26,7 @@ import { FactsTool } from "./facts.js";
 import { MdToPdfTool } from "./md-to-pdf.js";
 import { MemoryTool } from "./memory.js";
 import { NotifyOwnerTool } from "./notify-owner.js";
+import { EditTool } from "./edit.js";
 import { ProjectsTool } from "./projects.js";
 import { ReadTool } from "./read.js";
 import { RecallTool } from "./recall.js";
