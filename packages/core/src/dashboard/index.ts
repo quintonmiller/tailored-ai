@@ -104,6 +104,7 @@ export const BUILTIN_WIDGET_TYPES = [
   "markdown",
   "links",
   "iframe",
+  "session-explorer",
 ] as const;
 
 /**
