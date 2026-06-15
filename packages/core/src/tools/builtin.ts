@@ -20,6 +20,7 @@ import { BrowserTool } from "./browser.js";
 import { ClaudeCodeTool } from "./claude-code.js";
 import { createCustomTools } from "./custom.js";
 import { DocumentsTool } from "./documents.js";
+import { EditTool } from "./edit.js";
 import { ExecTool } from "./exec.js";
 import { ExtractDocumentTool } from "./extract-document.js";
 import { FactsTool } from "./facts.js";

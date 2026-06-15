@@ -564,6 +564,10 @@ export interface AgentConfig {
       enabled: boolean;
       allowedPaths?: string[];
     };
+    edit?: {
+      enabled: boolean;
+      allowedPaths?: string[];
+    };
     web_fetch?: {
       enabled: boolean;
     };
@@ -959,6 +963,7 @@ const DEFAULT_CONFIG: AgentConfig = {
     exec: { enabled: true },
     read: { enabled: true },
     write: { enabled: true },
+    edit: { enabled: true },
     web_fetch: { enabled: true },
     web_search: { enabled: false, provider: "brave", apiKey: "", maxResults: 5 },
     tasks: { enabled: true },
