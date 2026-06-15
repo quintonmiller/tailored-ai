@@ -107,6 +107,7 @@ Deep notes on each subsystem live under [`docs/`](./docs/):
 | Chat output tags (`<task/>`, `<proposal>`, `<ask>`, etc.) | [docs/chat-tags.md](./docs/chat-tags.md) |
 | Workflow engine | [docs/workflows.md](./docs/workflows.md) |
 | Skills: SKILL.md install + enable per agent (CLI + UI) | [docs/skills.md](./docs/skills.md) |
+| Dashboard widgets: declarative Board seam (core registry + `/api/dashboard` + UI renderers) | [docs/dashboard-widgets.md](./docs/dashboard-widgets.md) |
 | Trusted-actions HITL gateway (Amazon purchases) — setup, runbook, threat model, roadmap | [docs/trusted-actions.md](./docs/trusted-actions.md) + [runbook](./docs/trusted-actions-runbook.md) + [threats](./docs/trusted-actions-threats.md) + [roadmap](./docs/trusted-actions-roadmap.md) |
 | Browser mediator — flexible browser surface with vault refs + workflow learning (6-phase build) | [docs/browser-mediator-design.md](./docs/browser-mediator-design.md) |
 | Publishing to npm — one-time setup, per-release flow, troubleshooting | [docs/publishing.md](./docs/publishing.md) |

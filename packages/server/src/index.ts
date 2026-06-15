@@ -18,6 +18,7 @@ import {
   createDocument,
   createProject,
   createProjectTask,
+  type DashboardWidget,
   defaultLockfilePath,
   deleteDocument,
   deleteProject,
@@ -81,6 +82,7 @@ import {
   recallQueryAsync,
   renderSkillMd,
   resetSession,
+  resolveDashboardWidgets,
   resolveWorkflowsDir,
   runAgentLoop,
   runMemorySweep,
@@ -1791,6 +1793,50 @@ export function createServer(opts: ServerOptions) {
       }
       return c.json({ error: (err as Error).message }, 500);
     }
+  });
+
+  // Board page widget specs (declarative). The UI renders each via its widget
+  // renderer registry; widgets fetch their own data from `options.endpoint`.
+  app.get("/api/dashboard", (c) => {
+    return c.json({ widgets: resolveDashboardWidgets(runtime.getConfig()) });
+  });
+
+  // Persist a Board layout (drag reorder + resize). The body is the widgets in
+  // display order with their span; we rewrite `dashboard.widgets` so order/span
+  // resolve as given. Config widgets keep their full spec (only order/span
+  // change); built-in/provider widgets get a minimal id+type override so their
+  // core-owned title/options are preserved by the resolver merge.
+  app.post("/api/dashboard/layout", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as {
+      widgets?: Array<{ id?: unknown; type?: unknown; span?: unknown; rowSpan?: unknown }>;
+    };
+    const incoming = Array.isArray(body.widgets) ? body.widgets : null;
+    if (!incoming) return c.json({ error: "widgets must be an array" }, 400);
+
+    const existing = new Map((runtime.getConfig().dashboard?.widgets ?? []).map((w) => [w.id, w] as const));
+    const seen = new Set<string>();
+    const next: DashboardWidget[] = [];
+    for (let i = 0; i < incoming.length; i++) {
+      const w = incoming[i];
+      const id = typeof w?.id === "string" ? w.id : "";
+      const type = typeof w?.type === "string" ? w.type : "";
+      if (!id || !type || seen.has(id)) {
+        return c.json({ error: `invalid or duplicate widget at index ${i}` }, 400);
+      }
+      seen.add(id);
+      const span = Math.min(4, Math.max(1, Math.round(Number(w?.span) || 1)));
+      const rowSpan = Math.min(6, Math.max(1, Math.round(Number(w?.rowSpan) || 2)));
+      const order = (i + 1) * 10;
+      const prior = existing.get(id);
+      next.push(prior ? { ...prior, order, span, rowSpan } : { id, type, order, span, rowSpan });
+    }
+
+    try {
+      await writeRawConfigPath(runtime, "dashboard.widgets", next);
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 400);
+    }
+    return c.json({ widgets: resolveDashboardWidgets(runtime.getConfig()) });
   });
 
   app.post("/api/briefing/refresh", async (c) => {
