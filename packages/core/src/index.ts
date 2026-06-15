@@ -353,6 +353,21 @@ export {
 } from "./db/queries.js";
 export { initDatabase } from "./db/schema.js";
 export type {
+  Collection,
+  CollectionInput,
+  CollectionListFilter,
+  CollectionListResult,
+  CollectionStats,
+  CollectionType,
+} from "./db/collection-queries.js";
+export {
+  createCollection,
+  deleteCollection,
+  getCollection,
+  getCollectionStats,
+  listCollections,
+} from "./db/collection-queries.js";
+export type {
   ProjectTask,
   ProjectTaskWithComments,
   TaskComment,
@@ -677,6 +692,7 @@ export { ClaudeCodeTool } from "./tools/claude-code.js";
 export { CustomTool, createCustomTools } from "./tools/custom.js";
 export { DelegateTool } from "./tools/delegate.js";
 export { DocumentsTool } from "./tools/documents.js";
+export { EditTool } from "./tools/edit.js";
 export { ExecTool } from "./tools/exec.js";
 export { ExtractDocumentTool, type ExtractDocumentToolOptions, extractText } from "./tools/extract-document.js";
 export { FactsTool } from "./tools/facts.js";
