@@ -7,7 +7,7 @@ export { compactSession, formatCompactResult } from "./agent/compact.js";
 export type { ResolvedHooks } from "./agent/hooks.js";
 export { applyTemplates, EMPTY_HOOKS, executeHooks, hasHooks, mergeHooks, normalizeHooks } from "./agent/hooks.js";
 export type { AgentLoopOptions } from "./agent/loop.js";
-export { runAgentLoop } from "./agent/loop.js";
+export { runAgentLoop, stripOrphanedToolMessages } from "./agent/loop.js";
 export { BASE_SYSTEM_PROMPT } from "./agent/prompt.js";
 export type { Session } from "./agent/session.js";
 export { findOrCreateSession, loadSession, newSession, resetSession } from "./agent/session.js";
