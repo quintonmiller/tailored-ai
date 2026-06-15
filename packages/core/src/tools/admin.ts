@@ -43,6 +43,7 @@ const ALLOWED_WRITE_PREFIXES = [
   "agent.maxHistoryTokens",
   "context.",
   "permissions.",
+  "dashboard.",
 ];
 
 type CustomToolValidation = { ok: true; tool: CustomToolConfig } | { ok: false; error: string };

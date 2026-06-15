@@ -22,6 +22,7 @@ import { BRAND } from "../brand";
 
 type PageKey =
   | "dashboard"
+  | "board"
   | "agents"
   | "projects"
   | "tasks"
@@ -122,6 +123,7 @@ export function Sidebar({ page, onNavigate }: { page: PageKey; onNavigate?: () =
 
       <div className="sidebar-section">
         <SideLink href="#/" label="Home" active={page === "dashboard"} onNavigate={onNavigate} />
+        <SideLink href="#/board" label="Board" active={page === "board"} onNavigate={onNavigate} />
         <SideLink href="#/chat" label="Chat" active={page === "chat"} onNavigate={onNavigate} />
         <SideLink
           href="#/projects"

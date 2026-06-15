@@ -113,6 +113,50 @@ if (typeof window !== "undefined") {
   });
 }
 
+/** A declarative Board widget spec (mirrors core's DashboardWidget). */
+export interface DashboardWidgetSpec {
+  id: string;
+  type: string;
+  title?: string;
+  span?: number;
+  rowSpan?: number;
+  order?: number;
+  enabled?: boolean;
+  options?: Record<string, unknown>;
+}
+
+/** Board layout: the ordered widget specs the server resolved from config + plugins. */
+export function fetchDashboard(): Promise<{ widgets: DashboardWidgetSpec[] }> {
+  return jsonFetch("/api/dashboard");
+}
+
+/**
+ * Persist a Board layout (drag reorder + resize). Sends widgets in display order
+ * with their span; the server rewrites `dashboard.widgets` and returns the
+ * re-resolved layout.
+ */
+export function saveDashboardLayout(
+  widgets: Array<{ id: string; type: string; span: number; rowSpan: number }>,
+): Promise<{ widgets: DashboardWidgetSpec[] }> {
+  return jsonFetch("/api/dashboard/layout", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ widgets }),
+  });
+}
+
+/**
+ * Fetch a widget's data from its `options.endpoint`. Restricted to same-origin
+ * `/api/...` paths so a widget spec can't point the browser at an arbitrary URL
+ * (use the `iframe` widget type for external embeds).
+ */
+export function fetchWidgetData<T = unknown>(endpoint: string): Promise<T> {
+  if (!endpoint.startsWith("/api/")) {
+    return Promise.reject(new Error(`widget endpoint must be a /api/ path, got "${endpoint}"`));
+  }
+  return jsonFetch<T>(endpoint);
+}
+
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
   if (Date.now() < breakerOpenUntil) {
     throw new Error("backend unreachable (retrying shortly)");
