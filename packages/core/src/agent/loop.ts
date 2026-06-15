@@ -214,11 +214,41 @@ export function estimateTokens(msg: Message): number {
   return Math.ceil(length / 4);
 }
 
+/**
+ * Drop `role: "tool"` messages that aren't answering an open tool call. Trimming
+ * the front of the history can leave a tool result whose `assistant` +
+ * `tool_calls` parent was dropped; lenient providers (vLLM/qwen) ignore it, but
+ * strict ones (OpenAI / Anthropic / Bedrock / DeepSeek) reject the request with
+ * "Messages with role 'tool' must be a response to a preceding message with
+ * 'tool_calls'". A tool message is kept only when a preceding assistant turn
+ * opened a matching `tool_call` id (a non-tool message closes the group).
+ */
+export function stripOrphanedToolMessages(messages: Message[]): Message[] {
+  const result: Message[] = [];
+  let openIds = new Set<string>();
+  for (const msg of messages) {
+    if (msg.role === "assistant") {
+      result.push(msg);
+      openIds = new Set((msg.toolCalls ?? []).map((tc) => tc.id));
+    } else if (msg.role === "tool") {
+      if (msg.toolCallId && openIds.has(msg.toolCallId)) {
+        result.push(msg);
+        openIds.delete(msg.toolCallId); // answered — a duplicate would be orphaned
+      }
+      // else: orphaned tool result — drop it
+    } else {
+      result.push(msg);
+      openIds = new Set(); // user/system message closes any open tool-call group
+    }
+  }
+  return result;
+}
+
 export function trimHistory(messages: Message[], maxTokens: number): Message[] {
   let total = 0;
   for (const msg of messages) total += estimateTokens(msg);
 
-  if (total <= maxTokens) return messages;
+  if (total <= maxTokens) return stripOrphanedToolMessages(messages);
 
   let start = 0;
   while (start < messages.length - 1 && total > maxTokens) {
@@ -230,7 +260,7 @@ export function trimHistory(messages: Message[], maxTokens: number): Message[] {
       start++;
     }
   }
-  return ensureUserMessagePresent(messages.slice(start), messages);
+  return stripOrphanedToolMessages(ensureUserMessagePresent(messages.slice(start), messages));
 }
 
 /**
@@ -338,7 +368,7 @@ export async function trimHistoryWithSummary(
   let total = 0;
   for (const msg of messages) total += estimateTokens(msg);
 
-  if (total <= maxTokens) return { messages, summary: existingSummary };
+  if (total <= maxTokens) return { messages: stripOrphanedToolMessages(messages), summary: existingSummary };
 
   // Figure out which messages will be dropped
   let start = 0;
@@ -363,7 +393,10 @@ export async function trimHistoryWithSummary(
         role: "system",
         content: `[Earlier conversation summary: ${summary}]`,
       };
-      return { messages: ensureUserMessagePresent([summaryMsg, ...kept], messages), summary };
+      return {
+        messages: stripOrphanedToolMessages(ensureUserMessagePresent([summaryMsg, ...kept], messages)),
+        summary,
+      };
     }
   } else if (existingSummary) {
     // Re-use cached summary from a previous round
@@ -372,12 +405,12 @@ export async function trimHistoryWithSummary(
       content: `[Earlier conversation summary: ${existingSummary}]`,
     };
     return {
-      messages: ensureUserMessagePresent([summaryMsg, ...kept], messages),
+      messages: stripOrphanedToolMessages(ensureUserMessagePresent([summaryMsg, ...kept], messages)),
       summary: existingSummary,
     };
   }
 
-  return { messages: ensureUserMessagePresent(kept, messages) };
+  return { messages: stripOrphanedToolMessages(ensureUserMessagePresent(kept, messages)) };
 }
 
 /** Request approval with timeout handling. */
