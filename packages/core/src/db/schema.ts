@@ -286,6 +286,25 @@ export function initDatabase(dbPath: string): Database.Database {
       updated_at             TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS collections (
+      id          TEXT PRIMARY KEY,
+      type        TEXT NOT NULL
+        CHECK(type IN ('steelbook','tiki_mug','restaurant','bar','tiki_bar')),
+      name        TEXT NOT NULL,
+      notes       TEXT,
+      rating      INTEGER CHECK(rating >= 1 AND rating <= 5),
+      location    TEXT,
+      url         TEXT,
+      added_by    TEXT NOT NULL DEFAULT 'user'
+        CHECK(added_by IN ('user','tai')),
+      source      TEXT CHECK(source IN ('email_id','chat','manual')),
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_collections_type ON collections(type);
+    CREATE INDEX IF NOT EXISTS idx_collections_name ON collections(name);
+
     CREATE TABLE IF NOT EXISTS exploratory_runs (
       id              TEXT PRIMARY KEY,
       agent_name      TEXT NOT NULL,

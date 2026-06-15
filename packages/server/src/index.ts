@@ -13,12 +13,17 @@ import {
   type Briefing,
   type CronScheduler,
   checkBudget,
+  type CollectionListFilter,
+  type CollectionType,
   compactSession,
   countChunks,
+  createCollection,
   createDocument,
   createProject,
   createProjectTask,
+  type DashboardWidget,
   defaultLockfilePath,
+  deleteCollection,
   deleteDocument,
   deleteProject,
   deleteProjectTask,
@@ -39,6 +44,8 @@ import {
   generateBriefing,
   generateSuggestions,
   getAutopilotSettings,
+  getCollection,
+  getCollectionStats,
   getDefaultProjectId,
   getDocument,
   getExploratoryRun,
@@ -53,6 +60,7 @@ import {
   hashManifest,
   isCommand,
   Lockfile,
+  listCollections,
   listDocuments,
   listExploratoryRuns,
   listExploratoryStates,
@@ -1379,6 +1387,73 @@ export function createServer(opts: ServerOptions) {
     return c.json(comment, 201);
   });
 
+  // --- Collections (personal tracker: steelbooks, tiki mugs, restaurants, etc.) ---
+
+  app.get("/api/collections", (c) => {
+    const filter: CollectionListFilter = {};
+    const type = c.req.query("type");
+    if (type) filter.type = type as CollectionType;
+    const search = c.req.query("search");
+    if (search) filter.search = search;
+    const limitRaw = c.req.query("limit");
+    if (limitRaw) filter.limit = Math.max(1, Math.min(100, Number.parseInt(limitRaw, 10) || 20));
+    const offsetRaw = c.req.query("offset");
+    if (offsetRaw) filter.offset = Math.max(0, Number.parseInt(offsetRaw, 10) || 0);
+
+    return c.json(listCollections(runtime.db, filter));
+  });
+
+  app.get("/api/collections/stats", (c) => {
+    return c.json(getCollectionStats(runtime.db));
+  });
+
+  app.post("/api/collections", async (c) => {
+    const body = await c.req.json<{
+      type?: string;
+      name?: string;
+      notes?: string | null;
+      rating?: number | null;
+      location?: string | null;
+      url?: string | null;
+      added_by?: string;
+      source?: string;
+    }>();
+
+    if (!body.type || !body.name?.trim()) {
+      return c.json({ error: "type and name are required" }, 400);
+    }
+
+    try {
+      const item = createCollection(runtime.db, {
+        type: body.type as CollectionType,
+        name: body.name,
+        notes: body.notes,
+        rating: body.rating,
+        location: body.location,
+        url: body.url,
+        added_by: (body.added_by as "user" | "tai") ?? undefined,
+        source: (body.source as "email_id" | "chat" | "manual") ?? undefined,
+      });
+      return c.json(item, 201);
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 400);
+    }
+  });
+
+  app.get("/api/collections/:id", (c) => {
+    const { id } = c.req.param();
+    const item = getCollection(runtime.db, id);
+    if (!item) return c.json({ error: "Collection not found" }, 404);
+    return c.json(item);
+  });
+
+  app.delete("/api/collections/:id", (c) => {
+    const { id } = c.req.param();
+    const deleted = deleteCollection(runtime.db, id);
+    if (!deleted) return c.json({ error: "Collection not found" }, 404);
+    return c.json({ ok: true });
+  });
+
   // --- Facts ---
 
   app.get("/api/facts", async (c) => {
@@ -1797,6 +1872,44 @@ export function createServer(opts: ServerOptions) {
   // Board page widget specs (declarative). The UI renders each via its widget
   // renderer registry; widgets fetch their own data from `options.endpoint`.
   app.get("/api/dashboard", (c) => {
+    return c.json({ widgets: resolveDashboardWidgets(runtime.getConfig()) });
+  });
+
+  // Persist a Board layout (drag reorder + resize). The body is the widgets in
+  // display order with their span; we rewrite `dashboard.widgets` so order/span
+  // resolve as given. Config widgets keep their full spec (only order/span
+  // change); built-in/provider widgets get a minimal id+type override so their
+  // core-owned title/options are preserved by the resolver merge.
+  app.post("/api/dashboard/layout", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as {
+      widgets?: Array<{ id?: unknown; type?: unknown; span?: unknown; rowSpan?: unknown }>;
+    };
+    const incoming = Array.isArray(body.widgets) ? body.widgets : null;
+    if (!incoming) return c.json({ error: "widgets must be an array" }, 400);
+
+    const existing = new Map((runtime.getConfig().dashboard?.widgets ?? []).map((w) => [w.id, w] as const));
+    const seen = new Set<string>();
+    const next: DashboardWidget[] = [];
+    for (let i = 0; i < incoming.length; i++) {
+      const w = incoming[i];
+      const id = typeof w?.id === "string" ? w.id : "";
+      const type = typeof w?.type === "string" ? w.type : "";
+      if (!id || !type || seen.has(id)) {
+        return c.json({ error: `invalid or duplicate widget at index ${i}` }, 400);
+      }
+      seen.add(id);
+      const span = Math.min(4, Math.max(1, Math.round(Number(w?.span) || 1)));
+      const rowSpan = Math.min(6, Math.max(1, Math.round(Number(w?.rowSpan) || 2)));
+      const order = (i + 1) * 10;
+      const prior = existing.get(id);
+      next.push(prior ? { ...prior, order, span, rowSpan } : { id, type, order, span, rowSpan });
+    }
+
+    try {
+      await writeRawConfigPath(runtime, "dashboard.widgets", next);
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 400);
+    }
     return c.json({ widgets: resolveDashboardWidgets(runtime.getConfig()) });
   });
 
