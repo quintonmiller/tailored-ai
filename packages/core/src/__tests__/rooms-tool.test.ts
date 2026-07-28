@@ -146,15 +146,22 @@ describe("room tool — who is speaking", () => {
     expect(res.output).toContain("supervisor: status is green");
   });
 
-  it("rejects an addressee nobody knows and names the ones it does", async () => {
+  it("rejects an addressee nobody knows and names the ones actually in the room", async () => {
+    // The list has to match the one the wake prompt gives, which is the room's
+    // roster. Listing every identity in the deployment meant an agent was told
+    // "Known participants: supervisor, coder", addressed someone, and was
+    // corrected with a different and much longer list — two lists that
+    // disagree, and nothing to say which is authoritative.
     await createRoom("eng");
+    await run({ action: "invite", room: "eng", member: "coder" }, "supervisor");
 
     const res = await post("eng", "ping", "supervisor", { to: ["nobody"] });
 
     expect(res.success).toBe(false);
     expect(res.error).toContain("nobody");
-    expect(res.error).toContain("supervisor");
     expect(res.error).toContain("coder");
+    // Not itself: an agent cannot usefully address the message it is writing.
+    expect(res.error).not.toContain("supervisor");
     expect(messageCount()).toBe(0);
   });
 

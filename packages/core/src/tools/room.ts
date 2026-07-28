@@ -36,6 +36,8 @@ export interface RoomToolOptions {
   defaultBackend?: () => string | undefined;
   /** Where an agent's direct messages go, when one has been designated. */
   desks?: () => Record<string, string> | undefined;
+  /** Hand a message straight to another agent and return its reply. */
+  deliverAgentMessage?: (to: string, from: string, body: string) => Promise<string>;
 }
 
 const URGENCIES: RoomUrgency[] = ["high", "medium", "low"];
@@ -195,6 +197,25 @@ export class RoomTool implements Tool {
     );
   }
 
+  /**
+   * Who can be named in this room, phrased the way the wake prompt phrases it.
+   *
+   * The rejection used to list every identity in the deployment — around thirty
+   * names, most of them agents that are not here. So an agent was told "Known
+   * participants: planner, coder, quinton", addressed someone, and was
+   * corrected with a completely different and much longer list. Two lists that
+   * disagree is worse than either one alone, especially for a small model that
+   * has to guess which is authoritative.
+   */
+  private participantsIn(ref: string, identities: IdentityResolver): string[] {
+    const subscribed = this.opts.store.listSubscriptionsForRoom(ref).map((s) => identities.labelForAgent(s.agent));
+    const humans = identities
+      .all()
+      .filter((i) => i.kind === "human")
+      .map((i) => i.label);
+    return [...new Set([...subscribed, ...humans])];
+  }
+
   private windowFor(urgency: RoomUrgency): number {
     const configured = this.opts.urgencyWindowHours?.() ?? {};
     return configured[urgency] ?? DEFAULT_URGENCY_WINDOW_HOURS[urgency];
@@ -324,7 +345,8 @@ export class RoomTool implements Tool {
     const requested = Array.isArray(args.to) ? args.to.map((t) => String(t)).filter(Boolean) : [];
     const unknown = requested.filter((t) => !identities.get(t));
     if (unknown.length > 0) {
-      return fail(`Unknown participant(s): ${unknown.join(", ")}. Known: ${identities.labels().join(", ")}.`);
+      const here = this.participantsIn(ref, identities).filter((l) => l.toLowerCase() !== speaker.toLowerCase());
+      return fail(`Unknown participant(s): ${unknown.join(", ")}. In this room: ${here.join(", ") || "nobody else"}.`);
     }
     const to = requested.map((t) => identities.get(t)?.label ?? t);
 
@@ -467,11 +489,7 @@ export class RoomTool implements Tool {
    * readable and auditable rather than a side channel. The sender simply never
    * has to think about it.
    */
-  private async dm(
-    args: Record<string, unknown>,
-    context: ToolContext,
-    agentName?: string,
-  ): Promise<ToolResult> {
+  private async dm(args: Record<string, unknown>, context: ToolContext, agentName?: string): Promise<ToolResult> {
     if (!agentName) return fail("This session has no agent identity, so it cannot send a message.");
     const body = String(args.body ?? "").trim();
     if (!body) return fail("body is required for dm.");
@@ -486,41 +504,31 @@ export class RoomTool implements Tool {
     }
     if (identity.agent === agentName) return fail("You cannot message yourself.");
 
-    // A designated desk first, then one named after the agent, then a new one.
-    // Creating a second room for an agent that already has somewhere to be
-    // reached is how a server ends up with two channels meaning one thing.
+    // A designated desk means "mirror this agent's direct messages into a room
+    // I can watch". Most agents have none, and that is the point: a direct
+    // message is not a place, and creating a channel per agent to carry one was
+    // 27 channels waiting to happen.
     const desk = this.opts.desks?.()?.[identity.agent] ?? this.opts.desks?.()?.[identity.label];
-    const room =
-      (desk ? this.opts.store.getRoomByName(desk) : null) ??
-      this.opts.store.getRoomByName(identity.label) ??
-      (await this.openDeskRoom(identity.label));
-    if (!room) return fail(`Could not open a line to ${identity.label}.`);
-    const ref = formatRoomRef(room.ref);
+    const room = desk ? this.opts.store.getRoomByName(desk) : null;
+    if (room) {
+      this.opts.store.subscribe({
+        agent: identity.agent,
+        roomRef: formatRoomRef(room.ref),
+        wakeOn: "addressed",
+        source: "agent",
+      });
+      return await this.post(
+        { room: room.name, body, to: [identity.label], notify: args.notify, urgency: args.urgency, key: args.key },
+        context,
+        agentName,
+      );
+    }
 
-    // Both sides watch it: the recipient so it hears, the sender so it sees the
-    // reply without having to remember to look.
-    this.opts.store.subscribe({ agent: identity.agent, roomRef: ref, wakeOn: "addressed", source: "agent" });
-    this.opts.store.subscribe({ agent: agentName, roomRef: ref, wakeOn: "named", source: "agent" });
-
-    return await this.post(
-      { room: room.name, body, to: [identity.label], notify: args.notify, urgency: args.urgency, key: args.key },
-      context,
-      agentName,
-    );
-  }
-
-  /** The room that carries an agent's direct messages, created on first use. */
-  private async openDeskRoom(label: string): Promise<Room | null> {
-    const backendId = this.opts.defaultBackend?.() || listRoomBackends()[0]?.id;
-    if (!backendId) return null;
-    const backend = requireRoomBackend(backendId);
-    if (!backend.capabilities.create || !backend.createRoom) return null;
-
-    const room = await backend.createRoom({
-      name: label,
-      purpose: `Direct messages to ${label}. Other agents reach it here without needing to know where it is.`,
-    });
-    return this.opts.store.upsertRoom(room);
+    if (!this.opts.deliverAgentMessage) {
+      return fail("Direct messaging is not wired up in this deployment.");
+    }
+    const reply = await this.opts.deliverAgentMessage(identity.agent, agentName, body);
+    return ok(reply.trim() ? `${identity.label} replied:\n${reply.trim()}` : `Delivered to ${identity.label}.`);
   }
 
   private async create(args: Record<string, unknown>, agentName?: string): Promise<ToolResult> {
@@ -634,7 +642,11 @@ export class RoomTool implements Tool {
     const identities = this.opts.identities();
     const identity = identities.get(memberLabel);
     if (!identity) {
-      return fail(`Unknown participant "${memberLabel}". Known: ${identities.labels().join(", ")}.`);
+      // You can only remove someone who is here, so the room's own roster is
+      // both the shorter list and the only one that can contain the answer.
+      return fail(
+        `Unknown participant "${memberLabel}". In this room: ${this.participantsIn(ref, identities).join(", ") || "nobody"}.`,
+      );
     }
 
     if (identity.kind === "agent" && identity.agent) {

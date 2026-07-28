@@ -410,7 +410,7 @@ async function runSingleMessage(
   const { agent: agentName, json } = opts;
   const contextDir = runtime.contextDir;
 
-  const resolved = resolveAgent(agentName, runtime.getConfig(), runtime.getTools(), undefined, contextDir);
+  const resolved = resolveAgent(agentName, runtime.getConfig(), runtime.getResolvableTools(), undefined, contextDir);
 
   const projectId = runtime.getActiveProject()?.id ?? null;
   const session = opts.sessionId

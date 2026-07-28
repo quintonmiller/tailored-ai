@@ -885,6 +885,18 @@ export interface AgentConfig {
        * people reading along see the same thing.
        */
       purpose?: string;
+      /**
+       * Per-room overrides of the deployment-wide brakes. A coordination room
+       * where three agents hand work back and forth and an ideas room that sees
+       * one message a week want very different numbers, and a single global
+       * value has to be wrong for one of them — set low, the busy room goes
+       * quiet mid-task; set high, the quiet one is free to chatter.
+       *
+       * Unset means "use the global value", which is what every room did before
+       * these existed.
+       */
+      maxWakesPerHour?: number;
+      maxAgentTurns?: number;
     }>;
     /**
      * Who watches what. `deliver` decides when the agent looks (push on a

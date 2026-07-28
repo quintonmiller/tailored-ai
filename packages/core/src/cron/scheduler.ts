@@ -215,7 +215,7 @@ export class CronScheduler {
     const resolved = resolveAgent(
       job.agent ?? job.profile,
       this.runtime.getConfig(),
-      this.runtime.getTools(),
+      this.runtime.getResolvableTools(),
       job.model,
       this.runtime.contextDir,
     );

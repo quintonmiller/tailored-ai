@@ -105,15 +105,22 @@ describe("resolveAgent", () => {
     expect(resolved.tools.map((t) => t.name)).toEqual(["exec", "read"]);
   });
 
-  it("throws for unknown tool in agent allowlist", () => {
+  it("skips an unknown tool instead of taking the agent down with it", () => {
+    // This used to throw. In a room that meant the agent stopped answering
+    // altogether, with the reason only in a log — a one-character typo in
+    // `tools:` was indistinguishable from an agent with nothing to say. Skills
+    // and mcp_* refs always degraded here; the agent's own list now does too.
     const config = makeConfig({
       agents: {
         bad: {
-          tools: ["nonexistent_tool"],
+          tools: ["nonexistent_tool", "read"],
         },
       },
     });
-    expect(() => resolveAgent("bad", config, tools)).toThrow("unknown tool");
+
+    const resolved = resolveAgent("bad", config, tools);
+
+    expect(resolved.tools.map((t) => t.name)).toEqual(["read"]);
   });
 
   it("applies model override over agent model", () => {

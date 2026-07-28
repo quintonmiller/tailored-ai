@@ -4,6 +4,7 @@ import type Database from "better-sqlite3";
 import { resolveAgent } from "./agent/agents.js";
 import { EMPTY_HOOKS, mergeHooks, type ResolvedHooks } from "./agent/hooks.js";
 import type { AgentLoopOptions } from "./agent/loop.js";
+import { runAgentLoop } from "./agent/loop.js";
 import { findOrCreateSession, type Session } from "./agent/session.js";
 import type { ApprovalRequest, ApprovalResponse } from "./approval.js";
 import type { OutboundNotifier } from "./channels/outbound.js";
@@ -67,6 +68,8 @@ export interface RuntimeOptions {
       getOwnerId?: (channelId?: string) => string | undefined;
       /** Repeat gate for unsolicited outbound messages. See NotificationGate. */
       getNotificationGate?: () => NotificationGate | undefined;
+      /** Deliver a message straight to another agent and return its reply. */
+      deliverAgentMessage?: (to: string, from: string, body: string) => Promise<string>;
       taskBackend?: TaskBackend;
       taskBackendResolver?: import("./tools/tasks.js").TaskBackendResolver;
       getEmbedder?: () => import("./providers/embedding.js").EmbeddingProvider | undefined;
@@ -256,6 +259,26 @@ export class AgentRuntime {
     // createTools → registerBuiltin; plugins call registerBuiltin directly.
     // Same code path for both.
     return this._toolRegistry.list();
+  }
+
+  /**
+   * Every tool an agent can end up holding, registry and meta together.
+   *
+   * `buildLoopOptions` appends meta tools AFTER resolving the agent, so
+   * `admin`, `delegate` and friends are always present at run time but were
+   * invisible to the `tools:` allowlist that runs first. Naming one threw
+   * `references unknown tool "admin"` and took the agent down entirely — in
+   * rooms that meant it simply stopped answering, with the reason only in the
+   * log. This is the set to resolve an allowlist against: what the agent will
+   * actually have, rather than half of it.
+   */
+  getResolvableTools(): Tool[] {
+    const seen = new Set<string>();
+    return [...this._toolRegistry.list(), ...this._metaTools].filter((t) => {
+      if (seen.has(t.name)) return false;
+      seen.add(t.name);
+      return true;
+    });
   }
   getProvider(): AIProvider {
     return this._provider;
@@ -527,6 +550,7 @@ export class AgentRuntime {
           resolveOutbound: (id?: string) => this.resolveOutbound(id),
           getOwnerId: (id?: string) => this.getOwnerId(id),
           getNotificationGate: () => this.getNotificationGate(),
+          deliverAgentMessage: (to, from, body) => this.deliverAgentMessage(to, from, body),
           events: this.events,
         }) ?? [];
       const { provider, model } = this._createProvider(config);
@@ -868,6 +892,33 @@ export class AgentRuntime {
   }
 
   /**
+   * Hand a message to another agent and return what it says back.
+   *
+   * No room, no channel. A room was only ever carrying two things for a direct
+   * message — the delivery and the session identity — and shared sessions took
+   * the second away, leaving a Discord channel per agent as pure overhead.
+   *
+   * The exchange still lands in the recipient's session, so it is durable and
+   * inspectable; it simply is not a place.
+   */
+  async deliverAgentMessage(to: string, from: string, body: string): Promise<string> {
+    const config = this.getConfig();
+    if (!config.agents?.[to]) {
+      throw new Error(`No agent named "${to}".`);
+    }
+
+    const resolved = resolveAgent(to, config, this.getResolvableTools(), undefined, this.contextDir);
+    // The recipient's own session, so a direct line accumulates rather than
+    // starting cold every time — which is what made `delegate` unsuitable for
+    // anything resembling an ongoing conversation.
+    const key = resolved.roomSessionScope === "shared" ? `room:all:${to}` : `dm:${from}:${to}`;
+    const session = findOrCreateSession(this.db, key, resolved.model, resolved.provider);
+
+    const base = this.buildLoopOptions({ agentName: to, session });
+    return await runAgentLoop(`Direct message from ${from}:\n\n${body}`, base);
+  }
+
+  /**
    * The room directory: which rooms exist, who subscribes to them, and how far
    * each subscriber has read. See docs/rooms.md.
    *
@@ -975,7 +1026,7 @@ export class AgentRuntime {
     const resolved = resolveAgent(
       agentName,
       config,
-      this.getTools(),
+      this.getResolvableTools(),
       opts.modelOverride,
       this.contextDir,
       this.kbDir,
@@ -1051,7 +1102,7 @@ export class AgentRuntime {
         const r = resolveAgent(
           agentName,
           this._config,
-          this.getTools(),
+          this.getResolvableTools(),
           opts.modelOverride,
           this.contextDir,
           this.kbDir,

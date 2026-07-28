@@ -65,6 +65,29 @@ rooms:
     planner: { agent: planner, avatarUrl: "https://example.com/planner.png" }
 ```
 
+### One person, one name
+
+You are an identity automatically, under the label `rooms.ownerLabel` (default
+`owner`). Naming yourself explicitly is how you get called something better:
+
+```yaml
+rooms:
+  identities:
+    quinton: "107389829628612608"
+```
+
+The declared label **replaces** the implicit one rather than sitting beside it,
+matched on transport account id — the one part of a person that cannot be
+spelled two ways. Any transports the implicit identity knew about are carried
+across, so nothing stops resolving. Without this, agents were shown
+`Known participants: …, owner, quinton` for a single human and had two chances
+to pick the wrong one.
+
+Slash commands stamp the same label. `/room ping` and `/room status` used to
+record the raw Discord username, so an agent read `@t3hlazy1` in the transcript,
+addressed it, and got `Unknown participant(s): t3hlazy1` back from a validator
+that had never heard of it.
+
 ### The text-prefix fallback
 
 Without a webhook — the permission is missing, or the transport has no such
@@ -357,11 +380,39 @@ Two agents that can wake each other will, so there are three brakes:
    consumed by a single atomic statement so two concurrent wakes cannot both
    pass the same check. When it trips, traffic keeps accumulating and the
    subscription re-checks itself once the hour rolls over; nothing is lost.
+   A wake that produced **no post and no tool call is refunded**: what makes a
+   runaway expensive is replying, and an agent that read the room and had
+   nothing to add has not moved the loop forward. It cannot feed itself either,
+   because a wake needs an incoming message and a silent agent produces none.
 3. **Debouncing** — `batchSeconds`, default 3 — so a burst of five messages is
    one run that sees all five, not five runs racing into the same room.
 4. **A conversation-depth cap** — `maxAgentTurns`, default 6. After that many
    consecutive agent turns with no human, the room stops waking anyone until
-   someone speaks.
+   someone speaks. A turn that used a tool resets the count — work is progress,
+   not chatter.
+
+Both ceilings take a per-room override, because an engineering room where three
+agents hand work back and forth and an ideas channel that sees one message a
+week cannot share a number:
+
+```yaml
+rooms:
+  maxWakesPerHour: 6          # the deployment default
+  rooms:
+    - name: eng
+      ref: discord:1467386789961535693
+      maxWakesPerHour: 20     # this room is where the work happens
+      maxAgentTurns: 10
+```
+
+### Rooms that are not there
+
+A ref pointing at a deleted channel fails on every poll, every push and every
+catch-up, forever. After three consecutive failures the room is left alone for
+thirty minutes and the reason is logged once; if it comes back, the next attempt
+picks it up and says so. Nobody is unsubscribed — "is this error permanent?"
+cannot be answered from an error message, and guessing wrong turns a five-minute
+outage into a room nobody is watching.
 
 ### Who writes the addressee
 
@@ -494,7 +545,7 @@ than to ask an agent to do:
 | `/room remove agent:coder` | drop one |
 | `/room purpose [text:…]` | read or set what the room is for |
 | `/room status` | ask everyone what they are working on |
-| `/room reset agent:…` | clear an agent's memory of this room |
+| `/room reset agent:…` | clear an agent's memory (see below) |
 
 All but `status` reply privately, so managing a room does not clutter it. They
 answer straight from the database rather than going through a model, so they
@@ -514,6 +565,15 @@ missing, that is almost always why.
 `/room create` is the exception to "run it inside a room" — it is how the first
 one gets made, so it works anywhere, and `/room` is always registered rather
 than appearing only once a room exists.
+
+### What `/room reset` actually clears
+
+Whichever session that agent is using here — which depends on its
+[session scope](#one-memory-per-room-or-one-across-them). Under `shared` there
+is no such thing as forgetting one room, and the reply says so rather than
+implying a precision the storage does not have. Building the key without asking
+meant the command wiped an abandoned per-room session, reported *its* message
+count, and left the live one untouched: it looked like it worked every time.
 
 ## Making a room
 
@@ -551,6 +611,7 @@ One tool, several actions. Agents need `room` in their `tools:` list.
 | `list` | rooms it can see, and whether it is subscribed |
 | `read` | messages since its cursor — omit `room` to sweep every room it watches (reading advances the cursor) |
 | `post` | say something; `to` addresses participants |
+| `dm` | message one agent directly, no room involved |
 | `pass` | say nothing this turn |
 | `update` | replace a message you already posted, by `message_id` |
 | `react` | acknowledge with an emoji instead of a message |
@@ -562,10 +623,36 @@ One tool, several actions. Agents need `room` in their `tools:` list.
 | `subscribe` / `unsubscribe` | control whether the room wakes it |
 
 The tool registers whenever a database exists, **not** only when a transport is
-connected. `resolveAgent` throws on unknown tool names, so an agent listing
-`room` would otherwise fail to resolve at all during a Discord outage. Instead
-the tool reports "no backend connected" — a recoverable state rather than a
-broken agent.
+connected — during a Discord outage it reports "no backend connected", which is
+a recoverable state rather than a silently absent tool.
+
+### Messaging an agent without a room
+
+`dm` hands the message straight to the recipient and returns its reply. The
+exchange lands in the recipient's session, so it is durable and inspectable — it
+just is not a *place*.
+
+```
+room(action="dm", to="quinton-executive-assistant", body="Trip moved to Aug 3.")
+```
+
+It used to open a channel per recipient, which at 27 agents is 27 channels
+waiting to happen. Shared sessions removed the room's second job — `room:all:<agent>`
+does not reference a room — so materialising one to carry a single message was
+pure overhead.
+
+Mirror a particular agent's direct line into a channel you want to read:
+
+```yaml
+rooms:
+  desks:
+    quinton-executive-assistant: executive
+```
+
+Two caveats. It is **synchronous** — the sender waits for the recipient's model
+run, which suits a question and not a broadcast. And agent-to-agent DMs are not
+in Discord, so they cannot be audited by scrolling; they are in the `messages`
+table.
 
 ## Backends
 
@@ -798,13 +885,14 @@ rooms:
   enabled: true                 # master switch for the watcher; rooms stay readable either way
   ownerLabel: owner             # label for the implicit owner identity
   defaultBackend: discord       # used when an agent creates a room without naming one
-  maxWakesPerHour: 12
+  maxWakesPerHour: 12           # per-room override available on each rooms[] entry
   maxAgentTurns: 6              # agent-only turns before the room goes quiet
   maxBacklog: 30                # most messages handed to an agent in one wake
   batchSeconds: 3
   defaultPollSeconds: 900
   urgencyWindowHours: { high: 0.25, medium: 24, low: 168 }
   identities: {}
+  desks: {}                     # agent -> room, to mirror its direct line
   rooms: []
   subscriptions: []
 ```

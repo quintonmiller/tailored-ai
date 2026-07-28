@@ -217,6 +217,47 @@ describe("IdentityResolver", () => {
     expect(ids.isKnown("supervis")).toBe(false);
   });
 
+  it("does not list one person twice under two names", () => {
+    // Naming yourself in `rooms.identities` is the documented way to be called
+    // something better than "owner" — but it used to ADD a label rather than
+    // replace one, so agents were shown "Known participants: …, owner, quinton"
+    // for a single human. Two names for one person is two chances to pick the
+    // wrong one, with nothing to say they are the same account.
+    const ids = new IdentityResolver({
+      agentNames: ["coder"],
+      declared: { quinton: "107389829628612608" },
+      ownerNativeIds: { discord: "107389829628612608" },
+    });
+
+    expect(ids.labels().sort()).toEqual(["coder", "quinton"]);
+    expect(ids.get("owner")).toBeUndefined();
+    expect(ids.byNativeId("discord", "107389829628612608")?.label).toBe("quinton");
+  });
+
+  it("keeps the implicit owner when the declared human is somebody else", () => {
+    const ids = new IdentityResolver({
+      declared: { dana: "999" },
+      ownerNativeIds: { discord: "107389829628612608" },
+    });
+
+    expect(ids.labels().sort()).toEqual(["dana", "owner"]);
+    expect(ids.byNativeId("discord", "107389829628612608")?.label).toBe("owner");
+  });
+
+  it("carries the implicit owner's other transports onto the declared label", () => {
+    // The declared form is a bare Discord id; the implicit identity may know
+    // the same person on Slack. Dropping it would silently stop resolving them
+    // there — the merge is what makes replacing the label safe.
+    const ids = new IdentityResolver({
+      declared: { quinton: { human: { discord: "107389829628612608" } } },
+      ownerNativeIds: { discord: "107389829628612608", slack: "U123" },
+    });
+
+    expect(ids.get("owner")).toBeUndefined();
+    expect(ids.byNativeId("slack", "U123")?.label).toBe("quinton");
+    expect(ids.byNativeId("discord", "107389829628612608")?.label).toBe("quinton");
+  });
+
   it("lets a declared identity shadow a derived agent of the same name", () => {
     const ids = new IdentityResolver({
       agentNames: ["quinton", "coder"],
@@ -689,6 +730,40 @@ describe("RoomStore wake budget", () => {
     db.prepare("UPDATE room_subscriptions SET hour_bucket = strftime('%Y-%m-%dT%H', 'now', '-2 hours')").run();
 
     expect(store.tryConsumeWake("coder", "local:eng", 2)).toBe(true);
+    expect(store.getSubscription("coder", "local:eng")?.wakesThisHour).toBe(1);
+  });
+
+  it("gives a wake back when the agent said nothing", () => {
+    // The ceiling exists to stop two agents talking each other into the
+    // ground, and what makes that expensive is replying. An agent that read
+    // the room and had nothing to add has not moved the loop forward, but it
+    // used to pay the same price — which is how a busy room went quiet for the
+    // rest of the hour while traffic kept arriving.
+    expect(store.tryConsumeWake("coder", "local:eng", 2)).toBe(true);
+    store.refundWake("coder", "local:eng");
+
+    expect(store.getSubscription("coder", "local:eng")?.wakesThisHour).toBe(0);
+    expect(store.tryConsumeWake("coder", "local:eng", 2)).toBe(true);
+    expect(store.tryConsumeWake("coder", "local:eng", 2)).toBe(true);
+  });
+
+  it("cannot mint budget by refunding more than was spent", () => {
+    store.refundWake("coder", "local:eng");
+    store.refundWake("coder", "local:eng");
+
+    expect(store.getSubscription("coder", "local:eng")?.wakesThisHour).toBe(0);
+    expect(store.tryConsumeWake("coder", "local:eng", 1)).toBe(true);
+    expect(store.tryConsumeWake("coder", "local:eng", 1)).toBe(false);
+  });
+
+  it("does not refund across an hour boundary", () => {
+    // The spend belonged to a bucket that has already been forgotten; crediting
+    // it to the current one would hand out an extra wake every hour.
+    store.tryConsumeWake("coder", "local:eng", 1);
+    db.prepare("UPDATE room_subscriptions SET hour_bucket = strftime('%Y-%m-%dT%H', 'now', '-2 hours')").run();
+
+    store.refundWake("coder", "local:eng");
+
     expect(store.getSubscription("coder", "local:eng")?.wakesThisHour).toBe(1);
   });
 

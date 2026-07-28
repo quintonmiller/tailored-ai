@@ -130,7 +130,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
           identities: () => this.identities(),
           requestStatusUpdate: () => Promise.resolve(0),
           postAsPerson: () => Promise.resolve(),
-          resetAgentSession: () => 0,
+          resetAgentSession: () => ({ cleared: 0, scope: "room" as const }),
         });
         return;
       }
@@ -186,27 +186,35 @@ export class DiscordChannel implements Channel, OutboundNotifier {
   }
 
   /**
-   * Clear one agent's conversation for one room.
+   * Clear the conversation an agent is actually using for this room.
    *
-   * Scoped to the room's session key, so an agent's other rooms and its DM
-   * history are untouched — resetting it here should not cost it everything
-   * else it knows.
+   * Which session that is depends on the agent: `roomSessionScope: room` gives
+   * it one memory per room, `shared` gives it a single memory spanning all of
+   * them. Building the key without asking cleared the per-room session while
+   * every agent here was running shared — so the command wiped an abandoned
+   * session, reported the abandoned session's message count, and left the live
+   * one untouched. It looked like it worked every time.
+   *
+   * Under `shared` there is no such thing as forgetting one room, so the caller
+   * is told which happened and can say so rather than implying a precision the
+   * storage model does not have.
    */
-  private resetAgentSession(room: Room, agent: string): number {
-    const key = makeRoomSessionKey(formatRoomRef(room.ref), agent);
+  private resetAgentSession(room: Room, agent: string): { cleared: number; scope: "room" | "shared" } {
+    const resolved = resolveAgent(
+      agent,
+      this.runtime.getConfig(),
+      this.runtime.getResolvableTools(),
+      undefined,
+      this.runtime.contextDir,
+    );
+    const scope = resolved.roomSessionScope;
+    const key = makeRoomSessionKey(formatRoomRef(room.ref), agent, scope);
     const row = this.runtime.db
       .prepare("SELECT COUNT(*) AS n FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE key = ?)")
       .get(key) as { n: number } | undefined;
 
-    const resolved = resolveAgent(
-      agent,
-      this.runtime.getConfig(),
-      this.runtime.getTools(),
-      undefined,
-      this.runtime.contextDir,
-    );
     resetSession(this.runtime.db, key, resolved.model, resolved.provider);
-    return row?.n ?? 0;
+    return { cleared: row?.n ?? 0, scope };
   }
 
   /**
@@ -977,7 +985,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     const resolved = resolveAgent(
       agentName,
       config,
-      this.runtime.getTools(),
+      this.runtime.getResolvableTools(),
       undefined,
       this.runtime.contextDir,
       this.runtime.kbDir,

@@ -188,6 +188,9 @@ registerToolFactory("room", (config, ctx) => {
       urgencyWindowHours: () => config.rooms?.urgencyWindowHours,
       defaultBackend: () => config.rooms?.defaultBackend,
       desks: () => config.rooms?.desks,
+      deliverAgentMessage: ctx.deliverAgentMessage as
+        | ((to: string, from: string, body: string) => Promise<string>)
+        | undefined,
     }),
   ];
 });

@@ -220,7 +220,7 @@ export class TaskWatcher {
     const resolved = resolveAgent(
       agentName,
       this.runtime.getConfig(),
-      this.runtime.getTools(),
+      this.runtime.getResolvableTools(),
       undefined,
       this.runtime.contextDir,
     );

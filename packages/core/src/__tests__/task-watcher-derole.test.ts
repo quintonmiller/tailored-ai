@@ -78,6 +78,7 @@ function makeRuntime(agents: Record<string, AgentDef>): any {
     kbDir: "/tmp/kb",
     getConfig: () => config,
     getTools: () => [],
+    getResolvableTools: () => [],
     getAgentDefinition: (name: string) => agents[name],
     getWorktreeAgentNames: () =>
       Object.entries(agents)

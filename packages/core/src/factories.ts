@@ -31,6 +31,8 @@ import type { AgentRuntime } from "./runtime.js";
 
 export interface CreateToolsOptions {
   resolveOutbound?: (channelId?: string) => import("./channels/outbound.js").OutboundNotifier | undefined;
+  /** Deliver a message straight to another agent and return its reply. */
+  deliverAgentMessage?: (to: string, from: string, body: string) => Promise<string>;
   getOwnerId?: (channelId?: string) => string | undefined;
   /** Repeat gate for unsolicited outbound messages. See NotificationGate. */
   getNotificationGate?: () => import("./notifications/dedup.js").NotificationGate | undefined;
@@ -101,6 +103,7 @@ export function createTools(
     resolveOutbound: opts?.resolveOutbound,
     getOwnerId: opts?.getOwnerId,
     getNotificationGate: opts?.getNotificationGate,
+    deliverAgentMessage: opts?.deliverAgentMessage,
     taskBackend: opts?.taskBackend,
     taskBackendResolver: opts?.taskBackendResolver,
     getEmbedder: opts?.getEmbedder,
@@ -141,7 +144,10 @@ export function createMetaTools(runtime: AgentRuntime, contextDir: string, kbDir
     getConfig: () => runtime.getConfig(),
     db: runtime.db,
     getProvider: () => runtime.getProvider(),
-    getTools: () => runtime.getTools(),
+    // Resolvable, not registered: the delegate target's `tools:` allowlist may
+    // name a meta tool, and it will hold one at run time either way. Lazy, so
+    // it reads the meta tools this call is in the middle of building.
+    getTools: () => runtime.getResolvableTools(),
     contextDir,
     kbDir,
   });

@@ -77,7 +77,8 @@ export class IdentityResolver {
     }
 
     const ownerLabel = opts.ownerLabel ?? "owner";
-    if (opts.ownerNativeIds && Object.keys(opts.ownerNativeIds).length > 0) {
+    const hasOwnerIds = Boolean(opts.ownerNativeIds && Object.keys(opts.ownerNativeIds).length > 0);
+    if (hasOwnerIds) {
       this.put({ label: ownerLabel, kind: "human", nativeIds: { ...opts.ownerNativeIds } });
     }
 
@@ -87,6 +88,41 @@ export class IdentityResolver {
       const identity = normalizeDeclaration(label, decl, opts.ownerNativeIds, opts.defaultBackend);
       if (identity) this.put({ ...identity, declared: true });
     }
+
+    // One person, one name.
+    //
+    // Naming yourself in `rooms.identities` is the documented way to be called
+    // something better than "owner" — but it ADDED a label rather than
+    // replacing one, so the same account appeared twice and agents were shown
+    // "Known participants: …, owner, quinton." Two names for one person is two
+    // chances to pick the wrong one, and the model has nothing to tell it they
+    // are the same human.
+    //
+    // The declared label wins, and inherits any transports the implicit
+    // identity knew about, so nothing stops resolving.
+    if (hasOwnerIds) {
+      const implicit = this.get(ownerLabel);
+      const shadow = implicit && this.declaredSharingNativeIds(implicit);
+      if (implicit && shadow) {
+        shadow.nativeIds = { ...implicit.nativeIds, ...shadow.nativeIds };
+        this.byLabelLower.delete(ownerLabel.toLowerCase());
+      }
+    }
+  }
+
+  /**
+   * A declared human that is demonstrably the same account as `identity` —
+   * matched on transport id, the only thing about a person that cannot be
+   * spelled two ways.
+   */
+  private declaredSharingNativeIds(identity: RoomIdentity): RoomIdentity | undefined {
+    for (const other of this.byLabelLower.values()) {
+      if (other === identity || other.kind !== "human" || !other.declared) continue;
+      for (const [backend, id] of Object.entries(other.nativeIds ?? {})) {
+        if (identity.nativeIds?.[backend] === id) return other;
+      }
+    }
+    return undefined;
   }
 
   private put(identity: RoomIdentity): void {
