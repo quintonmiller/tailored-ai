@@ -85,9 +85,7 @@ export function buildRoomCommand(): SlashCommandBuilder {
     s
       .setName("reset")
       .setDescription("Clear an agent's memory of this room and start it fresh")
-      .addStringOption((o) =>
-        o.setName("agent").setDescription("Which agent").setRequired(true).setAutocomplete(true),
-      ),
+      .addStringOption((o) => o.setName("agent").setDescription("Which agent").setRequired(true).setAutocomplete(true)),
   );
 
   cmd.addSubcommand((s) =>
@@ -321,15 +319,9 @@ async function addAgent(
  * evidence and impossible to argue it out of. Its read cursor is left alone, so
  * it resumes from now rather than replaying the conversation it just forgot.
  */
-function resetAgent(
-  interaction: ChatInputCommandInteraction,
-  deps: RoomCommandDeps,
-  room: Room,
-): string {
+function resetAgent(interaction: ChatInputCommandInteraction, deps: RoomCommandDeps, room: Room): string {
   const name = (interaction.options.getString("agent") ?? "").trim();
-  const subscribed = deps.store
-    .listSubscriptionsForRoom(formatRoomRef(room.ref))
-    .some((s) => s.agent === name);
+  const subscribed = deps.store.listSubscriptionsForRoom(formatRoomRef(room.ref)).some((s) => s.agent === name);
   if (!subscribed) {
     return `**${name}** is not in "${room.name}". In this room: ${roomAgents(deps, room).join(", ") || "nobody"}.`;
   }

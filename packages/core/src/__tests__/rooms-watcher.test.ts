@@ -18,7 +18,7 @@ import { LocalRoomBackend } from "../rooms/local.js";
 import { registerRoomBackend, unregisterRoomBackend } from "../rooms/registry.js";
 import { RoomStore, type RoomSubscription, type WakeOn } from "../rooms/store.js";
 import type { RoomMessage } from "../rooms/types.js";
-import { looksLikeUninvokedPass, RoomWatcher } from "../rooms/watcher.js";
+import { describeWakeReason, looksLikeUninvokedPass, RoomWatcher } from "../rooms/watcher.js";
 import type { AgentRuntime } from "../runtime.js";
 
 let db: Database.Database;
@@ -747,5 +747,70 @@ describe("an agent that worked must not go silent", () => {
 
   it("still recognises a genuine decline", () => {
     expect(looksLikeUninvokedPass("Nothing needs attention right now.")).toBe(false);
+  });
+});
+
+describe("RoomWatcher.wakeReason", () => {
+  const identities = new IdentityResolver({
+    agentNames: ["supervisor", "coder"],
+    defaultBackend: "local",
+    declared: { quinton: "u-quinton" },
+  });
+
+  const sub = (agent: string, wakeOn: WakeOn): RoomSubscription => ({
+    id: 1,
+    agent,
+    roomRef: "local:eng",
+    deliver: "push",
+    wakeOn,
+    pollSeconds: null,
+    checkInMinutes: null,
+    lastCheckIn: null,
+    cursor: null,
+    source: "config",
+    lastWokeAt: null,
+    hourBucket: null,
+    wakesThisHour: 0,
+  });
+
+  const msg = (over: Partial<RoomMessage>): RoomMessage => ({
+    id: "1",
+    room: { backend: "local", id: "eng" },
+    cursor: "0000000000000001",
+    raw: "x",
+    body: "x",
+    to: [],
+    mentions: [],
+    authorId: "u-quinton",
+    authorLabel: "quinton",
+    fromSelf: false,
+    createdAt: "2026-07-28T00:00:00Z",
+    ...over,
+  });
+
+  it("distinguishes being named from answering the room", () => {
+    // Without this you cannot tell why an agent woke, and wake policy is where
+    // most room misbehaviour starts.
+    const watcher = makeWatcher();
+    const named = msg({ speaker: "quinton", to: ["coder"] });
+    const loose = msg({ speaker: "quinton", to: [] });
+
+    expect(watcher.wakeReason(sub("coder", "named"), named, identities)).toBe("named");
+    expect(watcher.wakeReason(sub("coder", "addressed"), loose, identities)).toBe("loose-question");
+    expect(watcher.wakeReason(sub("coder", "all"), loose, identities)).toBe("all");
+  });
+
+  it("returns null when the agent should not wake, and shouldWake agrees", () => {
+    const watcher = makeWatcher();
+    const forOther = msg({ speaker: "quinton", to: ["supervisor"] });
+
+    expect(watcher.wakeReason(sub("coder", "named"), forOther, identities)).toBeNull();
+    expect(watcher.shouldWake(sub("coder", "named"), forOther, identities)).toBe(false);
+  });
+
+  it("renders each reason in plain language", () => {
+    expect(describeWakeReason("named")).toBe("named directly");
+    expect(describeWakeReason("check-in")).toBe("scheduled check-in");
+    expect(describeWakeReason("loose-question")).toBe("a person asked the room");
   });
 });

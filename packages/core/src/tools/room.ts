@@ -53,6 +53,7 @@ export class RoomTool implements Tool {
           "read",
           "post",
           "pass",
+          "update",
           "create",
           "invite",
           "remove",
@@ -62,7 +63,7 @@ export class RoomTool implements Tool {
           "unsubscribe",
         ],
         description:
-          "list: rooms you can see. read: new messages (all your rooms when `room` is omitted). post: say something. pass: say nothing this turn. create: open a room. invite/remove: add or drop a participant. members: who is in it. purpose: read it, or set it by passing `purpose`. subscribe/unsubscribe: control whether it wakes you, and how often you look in unprompted.",
+          "list: rooms you can see. read: new messages (all your rooms when `room` is omitted). post: say something. pass: say nothing this turn. update: replace a message you already posted. create: open a room. invite/remove: add or drop a participant. members: who is in it. purpose: read it, or set it by passing `purpose`. subscribe/unsubscribe: control whether it wakes you, and how often you look in unprompted.",
       },
       room: {
         type: "string",
@@ -79,6 +80,10 @@ export class RoomTool implements Tool {
         enum: ["high", "medium", "low"],
         description:
           "How soon the same point may be raised again if nothing changes: high ~15min, medium ~daily, low ~weekly. Default high.",
+      },
+      message_id: {
+        type: "string",
+        description: "For update: the id returned when you posted. Replaces that message instead of adding one.",
       },
       key: {
         type: "string",
@@ -125,6 +130,8 @@ export class RoomTool implements Tool {
           return await this.read(args, agentName);
         case "post":
           return await this.post(args, context, agentName);
+        case "update":
+          return await this.update(args, agentName);
         case "pass":
           return this.pass(args, context);
         case "create":
@@ -315,6 +322,7 @@ export class RoomTool implements Tool {
     const gate = resolveGate(this.opts.getNotificationGate);
 
     let sent = false;
+    let postedId = "";
     let suppression = "";
     await gate.deliver(
       {
@@ -328,6 +336,7 @@ export class RoomTool implements Tool {
       async () => {
         const posted = await backend.post(room.ref.id, { body: spoken, speaker, to: finalTo });
         sent = true;
+        if (posted) postedId = posted.id;
         // Never wake ourselves on our own message.
         if (posted) this.opts.store.advanceCursor(agentName, ref, posted.cursor);
       },
@@ -345,7 +354,9 @@ export class RoomTool implements Tool {
     // Tell the watcher not to append the loop's closing text as a second
     // message: the agent has already said its piece.
     context.workingMemory?.set(`room:posted:${ref}`, "true");
-    return ok(`Posted to "${room.name}"${finalTo.length > 0 ? ` (to ${finalTo.join(", ")})` : ""}.`);
+    // The id is how a later turn edits this message instead of posting again.
+    const idNote = postedId ? ` Message id: ${postedId}` : "";
+    return ok(`Posted to "${room.name}"${finalTo.length > 0 ? ` (to ${finalTo.join(", ")})` : ""}.${idNote}`);
   }
 
   /**
@@ -368,6 +379,30 @@ export class RoomTool implements Tool {
     for (const ref of refs) context.workingMemory?.set(`room:passed:${ref}`, "true");
 
     return ok("Saying nothing this turn.");
+  }
+
+  /**
+   * Replace something already said, rather than saying it again.
+   *
+   * A recurring status posted afresh each time is a notification each time. One
+   * message that changes is quiet — which matters most for exactly the agents
+   * that run unattended.
+   */
+  private async update(args: Record<string, unknown>, agentName?: string): Promise<ToolResult> {
+    if (!agentName) return fail("This session has no agent identity, so it cannot edit a message.");
+    const body = String(args.body ?? "").trim();
+    if (!body) return fail("body is required for update.");
+    const messageId = String(args.message_id ?? "").trim();
+    if (!messageId) return fail("message_id is required for update — post first, then update that id.");
+
+    const room = this.requireRoom(args);
+    const backend = requireRoomBackend(room.ref.backend);
+    if (!backend.capabilities.edit || !backend.edit) {
+      return fail(`The "${room.ref.backend}" transport cannot edit messages; post a new one instead.`);
+    }
+
+    await backend.edit(room.ref.id, messageId, body);
+    return ok(`Updated your message in "${room.name}".`);
   }
 
   private async create(args: Record<string, unknown>, agentName?: string): Promise<ToolResult> {

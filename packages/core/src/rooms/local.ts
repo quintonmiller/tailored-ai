@@ -62,6 +62,7 @@ export class LocalRoomBackend implements RoomBackend {
     nativeSpeakers: false,
     // Parents are stored but not rendered; a reader sees a flat log.
     threads: false,
+    edit: true,
     history: true,
   };
 
@@ -120,6 +121,11 @@ export class LocalRoomBackend implements RoomBackend {
     const stored = this.toMessage(room.ref, row);
     this.notify(stored);
     return stored;
+  }
+
+  async edit(_id: string, messageId: string, body: string): Promise<void> {
+    const info = this.db.prepare("UPDATE room_messages SET content = ? WHERE id = ?").run(body, Number(messageId));
+    if (info.changes === 0) throw new Error(`No message ${messageId} to edit.`);
   }
 
   async fetchSince(id: string, cursor: string | null, limit: number): Promise<RoomMessage[]> {

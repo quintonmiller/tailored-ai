@@ -429,6 +429,7 @@ than to ask an agent to do:
 | `/room remove agent:coder` | drop one |
 | `/room purpose [text:…]` | read or set what the room is for |
 | `/room status` | ask everyone what they are working on |
+| `/room reset agent:…` | clear an agent's memory of this room |
 
 All but `status` reply privately, so managing a room does not clutter it. They
 answer straight from the database rather than going through a model, so they
@@ -486,6 +487,7 @@ One tool, several actions. Agents need `room` in their `tools:` list.
 | `read` | messages since its cursor — omit `room` to sweep every room it watches (reading advances the cursor) |
 | `post` | say something; `to` addresses participants |
 | `pass` | say nothing this turn |
+| `update` | replace a message you already posted, by `message_id` |
 | `create` | open a new room |
 | `invite` | add a participant — agents subscribe, humans get transport access |
 | `remove` | drop a participant |
@@ -597,12 +599,34 @@ File and exec tools then reject any path resolving outside it — the same
 enforcement the task watcher uses to pin coder/reviewer to their worktree, just
 declared instead of injected. A leading `~` is expanded.
 
+## Saying it again vs changing what you said
+
+Rooms were append-only, so a recurring status posted a new message every time —
+an agent checking in hourly was an hourly notification whether or not anything
+had changed. `post` now returns a message id, and `update` replaces that
+message:
+
+```
+room(action="post",   room="trip", body="status: waiting on 2 bookings")
+  -> Posted to "trip". Message id: 1531…
+
+room(action="update", room="trip", message_id="1531…", body="status: all booked")
+```
+
+One message that changes, rather than five that accumulate. `capabilities.edit`
+says whether a transport can do it; Discord edits through the webhook that
+posted, since the bot cannot edit a webhook's message any other way.
+
 ## Seeing what an agent did
 
 A message can name a **parent**, and a transport that can nest renders it —
 Discord opens a thread on the parent. The seam says "this message belongs under
 that one", not "make a thread", so a transport that nests differently, or not at
 all, is not forced into Discord's shape. `capabilities.threads` says which.
+
+The record opens with **why the agent woke** — named directly, a person asked
+the room, watching everything, or a scheduled check-in. Wake policy is where
+most room misbehaviour starts, and it was previously invisible.
 
 Turn it on to attach an agent's tool calls under its reply:
 
@@ -614,6 +638,7 @@ rooms:
 ```
 travel-coordinator  Fixed. Replaced the 3 hallucinated bars…
   └ details
+      • woke: named directly
       • `read` /home/q/trip/sd_bars_verified.md
       • `read` /home/q/trip/sd_tiki_investigation.md
       • `edit` /home/q/trip/itinerary_bar_focused.md
