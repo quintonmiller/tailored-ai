@@ -19,10 +19,12 @@ import { registerRoomBackend, unregisterRoomBackend } from "../rooms/registry.js
 import { RoomStore, type RoomSubscription, type WakeOn } from "../rooms/store.js";
 import type { RoomMessage } from "../rooms/types.js";
 import {
+  condenseOwnLine,
   describeWakeReason,
   looksLikeUninvokedPass,
   makeRoomSessionKey,
   RoomWatcher,
+  speaksAs,
   todayLine,
 } from "../rooms/watcher.js";
 import type { AgentRuntime } from "../runtime.js";
@@ -682,6 +684,101 @@ describe("RoomWatcher wake prompt", () => {
 
     unregisterRoomBackend("local");
     db.close();
+  });
+
+  it("does not quote the agent's own long message back at it in full", async () => {
+    // An agent's post comes back through the room and lands in the next wake's
+    // transcript — but it is already in that agent's session as the reply it
+    // just made. Observed: a 6.4 KB prompt of which two thirds was the agent
+    // quoting itself, answered with `pass`.
+    const db = initDatabase(":memory:");
+    const store = new RoomStore(db);
+    store.upsertRoom({ ref: { backend: "local", id: "eng" }, name: "eng" });
+    store.subscribe({ agent: "coder", roomRef: "local:eng" });
+    store.subscribe({ agent: "planner", roomRef: "local:eng" });
+
+    const backend = new LocalRoomBackend(db, store);
+    registerRoomBackend(backend);
+    const mine = `Here is the plan. ${"x".repeat(2000)}`;
+    await backend.post("eng", { body: mine, speaker: "coder", to: ["planner"] });
+    await backend.post("eng", { body: `Thanks. ${"y".repeat(2000)}`, speaker: "planner", to: ["coder"] });
+
+    const watcher = new RoomWatcher({
+      runtime: {
+        getConfig: () => ({ agents: { coder: {}, planner: {} }, defaultChannel: "local" }),
+        getOwnerId: () => undefined,
+      } as unknown as AgentRuntime,
+      store,
+    });
+
+    const identities = new IdentityResolver({ agentNames: ["coder", "planner"], defaultBackend: "local" });
+    const prompt = (
+      watcher as unknown as {
+        buildPrompt: (
+          sub: RoomSubscription,
+          messages: RoomMessage[],
+          roomName: string,
+          label: string,
+          identities: IdentityResolver,
+        ) => string;
+      }
+    ).buildPrompt(
+      store.getSubscription("coder", "local:eng")!,
+      await backend.fetchSince("eng", null, 5),
+      "eng",
+      "coder",
+      identities,
+    );
+
+    // Enough of its own message to recognise, and not the whole thing.
+    expect(prompt).toContain("Here is the plan.");
+    expect(prompt).not.toContain("x".repeat(2000));
+    expect(prompt).toContain("your own message");
+    // Everyone else is still quoted in full — that is the message it has to read.
+    expect(prompt).toContain("y".repeat(2000));
+
+    unregisterRoomBackend("local");
+    db.close();
+  });
+});
+
+describe("condenseOwnLine", () => {
+  it("leaves a short message exactly as it was", () => {
+    expect(condenseOwnLine("on it")).toBe("on it");
+  });
+
+  it("truncates a long one and says where the rest is", () => {
+    const out = condenseOwnLine("a".repeat(500));
+
+    expect(out.length).toBeLessThan(250);
+    expect(out).toContain("your own message");
+  });
+
+  it("flattens newlines, so one own-message cannot look like several speakers", () => {
+    expect(condenseOwnLine("first\nsecond")).toBe("first second");
+  });
+});
+
+describe("speaksAs", () => {
+  const identities = new IdentityResolver({
+    agentNames: ["supervisor", "coder"],
+    declared: { planner: { agent: "supervisor" } },
+  });
+
+  it("recognises the agent under its own name", () => {
+    expect(speaksAs("coder", "coder", "coder", identities)).toBe(true);
+  });
+
+  it("recognises it through a declared alias", () => {
+    // `planner: { agent: supervisor }` means a line from "planner" IS
+    // supervisor's own voice — comparing raw strings would miss it and the
+    // agent would answer itself.
+    expect(speaksAs("planner", "supervisor", "planner", identities)).toBe(true);
+  });
+
+  it("is false for anyone else, and for an absent speaker", () => {
+    expect(speaksAs("coder", "supervisor", "planner", identities)).toBe(false);
+    expect(speaksAs(undefined, "coder", "coder", identities)).toBe(false);
   });
 });
 

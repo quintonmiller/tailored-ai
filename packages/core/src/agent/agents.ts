@@ -211,11 +211,25 @@ export function resolveAgent(
       // of failing the whole resolve. The loop re-resolves tools every
       // iteration, so the tool joins as soon as discovery lands.
       if (name.startsWith("mcp_")) {
-        console.warn(`[agents] Agent "${agentName}" references MCP tool "${name}" which is not (yet) available`);
+        warnOnce(
+          `mcp:${agentName}:${name}`,
+          `[agents] Agent "${agentName}" references MCP tool "${name}" which is not (yet) available`,
+        );
         continue;
       }
-      throw new Error(
-        `Agent "${agentName}" references unknown tool "${name}". Available: ${allTools.map((t) => t.name).join(", ")}`,
+      // One bad name used to throw, which took the whole agent down.
+      //
+      // In a room that meant it stopped answering entirely, with the reason
+      // only in a log nobody reads — a one-character typo in `tools:` was
+      // indistinguishable from an agent that had nothing to say. Skills and
+      // MCP refs have always degraded here; this is the same rule applied to
+      // the agent's own list. An agent missing one tool can still work and can
+      // still be asked what went wrong; an agent that will not resolve cannot.
+      warnOnce(
+        `tool:${agentName}:${name}`,
+        `[agents] Agent "${agentName}" references unknown tool "${name}" — skipping it. Available: ${allTools
+          .map((t) => t.name)
+          .join(", ")}`,
       );
     }
     resolved.tools = picked;
@@ -315,6 +329,21 @@ function resolveAllSkillIds(
   const merged = new Set<string>(declared.filter((id) => id !== "*"));
   for (const id of all) merged.add(id);
   return Array.from(merged);
+}
+
+/**
+ * Say it once per process.
+ *
+ * `resolveAgent` runs on every wake, and the agent loop re-resolves tools on
+ * every iteration — so a warning here is not a warning, it is a stream. One
+ * misconfigured agent would fill the log, and with the error-room plugin
+ * running it would fill a channel too.
+ */
+const _warnedOnce = new Set<string>();
+function warnOnce(key: string, message: string): void {
+  if (_warnedOnce.has(key)) return;
+  _warnedOnce.add(key);
+  console.warn(message);
 }
 
 const _warnedEagerAgents = new Set<string>();

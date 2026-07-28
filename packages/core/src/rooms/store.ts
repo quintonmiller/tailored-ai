@@ -425,6 +425,34 @@ export class RoomStore {
     return info.changes > 0;
   }
 
+  /**
+   * Give a wake back when it turned out to be nothing.
+   *
+   * The ceiling is there to stop two agents talking each other into the ground,
+   * and what makes that expensive is *replying* — an agent that read the room
+   * and had nothing to add has not moved the loop forward at all. Charging it
+   * anyway is how a busy room went quiet for the rest of the hour: observed as
+   * `channel-manager hit its wake ceiling (6/hour)` five times over, while the
+   * traffic it was silent about kept arriving.
+   *
+   * Safe against the runaway it guards, because a wake needs an incoming
+   * message and a silent agent produces none — a refunded pass cannot feed
+   * itself another wake. A turn that used tools is NOT refunded: it spent real
+   * time and may well have changed something.
+   *
+   * Never goes below zero, so a stray refund cannot mint budget.
+   */
+  refundWake(agent: string, roomRef: string): void {
+    this.db
+      .prepare(
+        `UPDATE room_subscriptions
+            SET wakes_this_hour = MAX(wakes_this_hour - 1, 0)
+          WHERE agent = ? AND room_ref = ?
+            AND hour_bucket = strftime('%Y-%m-%dT%H', 'now')`,
+      )
+      .run(agent, roomRef);
+  }
+
   // --------------------------------------------------------------- members
 
   putMember(roomRef: string, member: RoomMember): void {

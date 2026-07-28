@@ -275,6 +275,25 @@ export class AdminTool implements Tool {
 
       setNestedValue(raw, path, value);
 
+      const badTools = this.unknownToolRefs(raw);
+      if (badTools.length > 0) {
+        // Refused rather than warned. A `tools:` entry that names nothing is
+        // dead weight at best; historically it threw and took the agent
+        // offline, and even now it silently costs the agent a capability it
+        // was configured to have. The write is the moment someone is looking,
+        // so it is the moment to say so.
+        return {
+          success: false,
+          output: "",
+          error:
+            `Not written — unknown tool(s) ${badTools.map((t) => `"${t}"`).join(", ")}. ` +
+            `Available: ${this.runtime
+              .getResolvableTools()
+              .map((t) => t.name)
+              .join(", ")}`,
+        } as ToolResult;
+      }
+
       // Validate round-trip
       const yaml = YAML.stringify(raw);
       try {
@@ -289,6 +308,34 @@ export class AdminTool implements Tool {
 
       return { success: true, output: `Config updated at "${path}" and reloaded.` } as ToolResult;
     });
+  }
+
+  /**
+   * Tool names in the pending config that no tool answers to.
+   *
+   * Checked against what the runtime can actually hand an agent — registry
+   * plus meta tools — because that is the set `resolveAgent` uses. Validating
+   * against `config.tools` alone reported `admin` and `delegate` as unknown,
+   * which is how a correct config learned to look broken.
+   *
+   * `mcp_*` names are exempt: those appear only after a server connects, so an
+   * agent configured ahead of discovery is right and we are early.
+   */
+  private unknownToolRefs(raw: Record<string, unknown>): string[] {
+    const known = new Set(this.runtime.getResolvableTools().map((t) => t.name));
+    const agents = raw.agents;
+    if (!agents || typeof agents !== "object") return [];
+
+    const bad = new Set<string>();
+    for (const definition of Object.values(agents as Record<string, unknown>)) {
+      const tools = (definition as { tools?: unknown } | null)?.tools;
+      if (!Array.isArray(tools)) continue;
+      for (const name of tools) {
+        if (typeof name !== "string" || name.startsWith("mcp_")) continue;
+        if (!known.has(name)) bad.add(name);
+      }
+    }
+    return [...bad];
   }
 
   private async createAgent(name: string, agent: Record<string, unknown>): Promise<ToolResult> {

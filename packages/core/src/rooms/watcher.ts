@@ -31,7 +31,7 @@ import type { RoomStore, RoomSubscription } from "./store.js";
 import { formatRoomRef, parseRoomRef, type Room, type RoomMessage } from "./types.js";
 
 /** Why an agent was woken. Surfaced in the activity record. */
-export type WakeReason = "named" | "loose-question" | "all" | "check-in";
+export type WakeReason = "named" | "loose-question" | "all" | "check-in" | "asked";
 
 export interface RoomWatcherLimits {
   maxWakesPerHour: number;
@@ -43,6 +43,11 @@ export interface RoomWatcherLimits {
   /** How much of an agent's tool use to attach under its message. */
   toolActivity: "none" | "mutations" | "all";
 }
+
+/** Consecutive backend failures before a room is given a rest. */
+const ROOM_FAILURE_LIMIT = 3;
+/** How long a room is left alone after that, before one attempt is retried. */
+const ROOM_QUARANTINE_MS = 30 * 60_000;
 
 export const ROOM_WATCHER_DEFAULTS: RoomWatcherLimits = {
   maxWakesPerHour: 12,
@@ -57,6 +62,44 @@ export interface RoomWatcherOptions {
   runtime: AgentRuntime;
   store: RoomStore;
   limits?: Partial<RoomWatcherLimits>;
+}
+
+/**
+ * Is this line the agent's own voice? Resolved through the identity layer, so
+ * a declared alias counts as the same agent as the name it points at.
+ */
+export function speaksAs(
+  speaker: string | undefined,
+  agent: string,
+  label: string,
+  identities: IdentityResolver,
+): boolean {
+  if (!speaker) return false;
+  const speakerAgent = identities.agentForLabel(speaker);
+  if (speakerAgent) return speakerAgent === agent;
+  return speaker.toLowerCase() === label.toLowerCase();
+}
+
+/** How much of its own message an agent is shown when it is quoted back to it. */
+const OWN_ECHO_CHARS = 150;
+
+/**
+ * Shorten a line the agent wrote itself.
+ *
+ * An agent's post comes back through the room and lands in the next wake's
+ * transcript, but it is already in that agent's session as the reply it just
+ * made — so a 4,000-character handoff was paying for itself twice in a context
+ * window that a 27B model has to read carefully. Observed: a 6.4 KB wake prompt
+ * of which two thirds was the agent quoting itself, answered with `pass`.
+ *
+ * Not dropped outright. The session can have been reset between the post and
+ * the wake, and a stub is enough to re-anchor "I already sent the list" without
+ * re-sending the list.
+ */
+export function condenseOwnLine(body: string): string {
+  const flat = body.replace(/\s+/g, " ").trim();
+  if (flat.length <= OWN_ECHO_CHARS) return flat;
+  return `${flat.slice(0, OWN_ECHO_CHARS).trimEnd()}… (your own message, in full above)`;
 }
 
 /**
@@ -122,6 +165,8 @@ export function describeWakeReason(reason: WakeReason): string {
       return "watching everything in this room";
     case "check-in":
       return "scheduled check-in";
+    case "asked":
+      return "asked for a status update";
   }
 }
 
@@ -183,11 +228,24 @@ export class RoomWatcher {
     });
   }
 
-  private readLimits(): RoomWatcherLimits {
+  /**
+   * The brakes in force, optionally for one room.
+   *
+   * Rooms differ enough that one global pair of numbers has to be wrong
+   * somewhere: an engineering room where three agents hand work back and forth
+   * needs more headroom than a channel that sees one message a week. Passing a
+   * ref lets that room's entry in `rooms.rooms[]` override the deployment-wide
+   * value; everything else stays global, because nothing else here has turned
+   * out to be room-specific.
+   */
+  private readLimits(roomRef?: string): RoomWatcherLimits {
     const cfg = this.runtime.getConfig().rooms;
+    const room = roomRef
+      ? cfg?.rooms?.find((r) => r.ref === roomRef || r.name === this.store.getRoomByRef(roomRef)?.name)
+      : undefined;
     return {
-      maxWakesPerHour: cfg?.maxWakesPerHour ?? this.limits.maxWakesPerHour,
-      maxAgentTurns: cfg?.maxAgentTurns ?? this.limits.maxAgentTurns,
+      maxWakesPerHour: room?.maxWakesPerHour ?? cfg?.maxWakesPerHour ?? this.limits.maxWakesPerHour,
+      maxAgentTurns: room?.maxAgentTurns ?? cfg?.maxAgentTurns ?? this.limits.maxAgentTurns,
       maxBacklog: cfg?.maxBacklog ?? this.limits.maxBacklog,
       batchSeconds: cfg?.batchSeconds ?? this.limits.batchSeconds,
       defaultPollSeconds: cfg?.defaultPollSeconds ?? this.limits.defaultPollSeconds,
@@ -388,14 +446,18 @@ export class RoomWatcher {
     const room = this.store.getRoomByRef(roomRef);
     if (!room) return;
 
-    const limits = this.readLimits();
+    const limits = this.readLimits(roomRef);
     if (!this.store.tryConsumeWake(agent, roomRef, limits.maxWakesPerHour)) return;
     this.store.recordCheckIn(agent, roomRef);
 
     const identities = this.identities();
     const label = identities.labelForAgent(agent);
     const recent = await this.fetchBacklog({ ...sub, cursor: null });
-    const transcript = recent.slice(-10).map((m) => renderTranscriptLine(m.speaker ?? m.authorLabel, m.to, m.body));
+    const transcript = recent.slice(-10).map((m) => {
+      const speaker = m.speaker ?? m.authorLabel;
+      const body = speaksAs(m.speaker, agent, label, identities) ? condenseOwnLine(m.body) : m.body;
+      return renderTranscriptLine(speaker, m.to, body);
+    });
 
     this.wakeReasons.set(`${agent} ${roomRef}`, "check-in");
     const prompt = [
@@ -409,7 +471,7 @@ export class RoomWatcher {
       'Speak only if there is something worth saying. If there is not, call room(action="pass") — a check-in that reports nothing is noise.',
     ].join("\n");
 
-    await this.runPrompted(sub, prompt, label);
+    await this.runPrompted(sub, prompt, label, "check-in");
   }
 
   private armPoll(sub: RoomSubscription): void {
@@ -450,7 +512,7 @@ export class RoomWatcher {
     // of the conversation, not of any one watcher.
     const speakerKind = enriched.speaker ? identities.get(enriched.speaker)?.kind : undefined;
     const agentTurns = this.store.noteRoomTurn(roomRef, speakerKind === "human", enriched.speaker);
-    if (agentTurns === this.readLimits().maxAgentTurns + 1) {
+    if (agentTurns === this.readLimits(roomRef).maxAgentTurns + 1) {
       console.log(
         `[rooms] ${roomRef} has run ${agentTurns} agent turns without a human — pausing automatic replies until someone speaks.`,
       );
@@ -540,11 +602,7 @@ export class RoomWatcher {
 
     // Never wake an agent on its own words — the shortest possible loop.
     // Compared through the resolver so an alias counts as the same agent.
-    if (msg.speaker) {
-      const speakerAgent = identities.agentForLabel(msg.speaker);
-      if (speakerAgent === sub.agent) return null;
-      if (!speakerAgent && msg.speaker.toLowerCase() === label.toLowerCase()) return null;
-    }
+    if (speaksAs(msg.speaker, sub.agent, label, identities)) return null;
 
     // Two agents being polite at each other is not something any single-message
     // rule can catch — every turn is a legitimate reply to a real question. Cap
@@ -552,7 +610,7 @@ export class RoomWatcher {
     // human says something. Their words still land in the room and are read as
     // context on the next real wake; only the automatic reply stops.
     const speakerIsAgent = msg.speaker ? identities.get(msg.speaker)?.kind === "agent" : false;
-    if (speakerIsAgent && agentTurns > this.readLimits().maxAgentTurns) {
+    if (speakerIsAgent && agentTurns > this.readLimits(sub.roomRef).maxAgentTurns) {
       return null;
     }
 
@@ -589,20 +647,74 @@ export class RoomWatcher {
     if (!ref) return [];
     const backend = getRoomBackend(ref.backend);
     if (!backend) return [];
+    if (this.isQuarantined(sub.roomRef)) return [];
 
-    const limits = this.readLimits();
-    let raw = await backend.fetchSince(ref.id, sub.cursor, limits.maxBacklog);
+    const limits = this.readLimits(sub.roomRef);
+    try {
+      let raw = await backend.fetchSince(ref.id, sub.cursor, limits.maxBacklog);
 
-    // A full page means there is probably more after it, and backends answer
-    // "since this cursor" with the OLDEST messages first — so in a busy room
-    // the very message that woke us could sit past the end of the page. Fall
-    // back to the most recent page, which always contains it.
-    if (raw.length >= limits.maxBacklog) {
-      raw = await backend.fetchSince(ref.id, null, limits.maxBacklog);
+      // A full page means there is probably more after it, and backends answer
+      // "since this cursor" with the OLDEST messages first — so in a busy room
+      // the very message that woke us could sit past the end of the page. Fall
+      // back to the most recent page, which always contains it.
+      if (raw.length >= limits.maxBacklog) {
+        raw = await backend.fetchSince(ref.id, null, limits.maxBacklog);
+      }
+
+      this.noteRoomReachable(sub.roomRef);
+      const identities = this.identities();
+      return raw.map((m) => enrichRoomMessage(m, identities));
+    } catch (err) {
+      this.noteRoomUnreachable(sub.roomRef, err as Error);
+      throw err;
     }
+  }
 
-    const identities = this.identities();
-    return raw.map((m) => enrichRoomMessage(m, identities));
+  // ----------------------------------------------------------- unreachable
+
+  /**
+   * Stop hammering a room that is not there.
+   *
+   * A ref pointing at a deleted channel fails on every poll, every push and
+   * every catch-up, forever — observed as the same "Discord channel … not
+   * found" for three agents, once per pass, with nothing that would ever make
+   * it stop. Each attempt is a wasted round trip and another identical line in
+   * the log.
+   *
+   * Counted rather than pattern-matched, because "is this error permanent?" is
+   * not answerable from an error message and guessing it wrong is how a
+   * five-minute outage becomes a room nobody is watching. Repeated failure is
+   * the signal; the response is to back off, not to unsubscribe anyone. If the
+   * channel comes back, the next attempt after the quiet period picks it up
+   * and says so.
+   */
+  private roomFailures = new Map<string, { count: number; quietUntil: number }>();
+
+  private isQuarantined(roomRef: string): boolean {
+    const entry = this.roomFailures.get(roomRef);
+    return entry !== undefined && entry.quietUntil > Date.now();
+  }
+
+  private noteRoomUnreachable(roomRef: string, err: Error): void {
+    const entry = this.roomFailures.get(roomRef) ?? { count: 0, quietUntil: 0 };
+    entry.count += 1;
+    if (entry.count >= ROOM_FAILURE_LIMIT) {
+      entry.quietUntil = Date.now() + ROOM_QUARANTINE_MS;
+      console.error(
+        `[rooms] ${roomRef} has failed ${entry.count} times in a row (${err.message}). ` +
+          `Pausing reads for ${Math.round(ROOM_QUARANTINE_MS / 60_000)} minutes. ` +
+          `If the channel is gone, remove the room; subscriptions are left alone.`,
+      );
+      entry.count = 0;
+    }
+    this.roomFailures.set(roomRef, entry);
+  }
+
+  private noteRoomReachable(roomRef: string): void {
+    const entry = this.roomFailures.get(roomRef);
+    if (!entry) return;
+    if (entry.quietUntil > 0) console.log(`[rooms] ${roomRef} is reachable again.`);
+    this.roomFailures.delete(roomRef);
   }
 
   // ------------------------------------------------------------------- run
@@ -626,7 +738,7 @@ export class RoomWatcher {
 
       // Budget is charged only once there is real work. Charging before the
       // backlog check let an empty wake burn one of twelve hourly slots.
-      const limits = this.readLimits();
+      const limits = this.readLimits(fresh.roomRef);
       if (!this.store.tryConsumeWake(fresh.agent, fresh.roomRef, limits.maxWakesPerHour)) {
         console.warn(
           `[rooms] ${fresh.agent} hit its wake ceiling for ${fresh.roomRef} (${limits.maxWakesPerHour}/hour). Traffic accumulates and is read on the next allowed wake.`,
@@ -654,112 +766,147 @@ export class RoomWatcher {
         fresh.role ?? undefined,
       );
 
-      const config = this.runtime.getConfig();
-      const resolved = resolveAgent(fresh.agent, config, this.runtime.getTools(), undefined, this.runtime.contextDir);
-      const session = findOrCreateSession(
-        this.runtime.db,
-        makeRoomSessionKey(fresh.roomRef, fresh.agent, resolved.roomSessionScope),
-        resolved.model,
-        resolved.provider,
-      );
-
-      const base = this.runtime.buildLoopOptions({ agentName: fresh.agent, session });
-      // Spread rather than replace: buildLoopOptions puts agentName in here,
-      // and dropping it is how task-watcher lost tool attribution.
-      const workingMemory = new Map<string, string>();
-      let reply = "";
-      // Whether this turn did anything, as opposed to only talking. Decides
-      // whether it counts toward the conversation-depth cap.
-      let usedTools = false;
-      const changed: string[] = [];
-      const activity: string[] = [];
       const reason = this.wakeReasons.get(key) ?? (fresh.wakeOn === "all" ? "all" : "named");
       this.wakeReasons.delete(key);
-      if (this.readLimits().toolActivity !== "none") {
-        activity.push(`woke: ${describeWakeReason(reason)}`);
-      }
-      try {
-        reply = await runAgentLoop(prompt, {
-          ...base,
-          toolContextExtras: { ...base.toolContextExtras, workingMemory },
-          onToolCall: (name, args) => {
-            // `pass` is how an agent declines to speak — using it is not work.
-            if (name !== "room") usedTools = true;
-            if ((name === "write" || name === "edit") && typeof args.path === "string") {
-              const file = args.path.split("/").pop();
-              if (file && !changed.includes(file)) changed.push(file);
-            }
-            const record = this.readLimits().toolActivity;
-            const mutates = name === "write" || name === "edit";
-            if (record === "all" || (record === "mutations" && mutates)) {
-              activity.push(describeToolCall(name, args));
-            }
-          },
-        });
-      } catch (err) {
-        // Advance anyway. A message the agent cannot process — a provider
-        // outage, a body that overflows its context — would otherwise be
-        // re-read on every wake, burning the whole hourly budget forever.
-        console.error(
-          `[rooms] ${fresh.agent} failed on ${fresh.roomRef}: ${(err as Error).message} — skipping past ${messages.length} message(s).`,
-        );
-        this.store.advanceCursor(fresh.agent, fresh.roomRef, messages[messages.length - 1].cursor);
-        return;
-      }
-
-      // One correction round, at most.
-      //
-      // Two things go wrong at the end of a turn, and both are better answered
-      // than papered over. A model asked to "call room(action=pass)" sometimes
-      // writes the call instead of making it — that is malformed output, and
-      // the loop already knows how to recover from being told so. And an agent
-      // that changed a file and then decides to say nothing has probably lost
-      // track of what it did; asking beats overriding, because it might have
-      // a good reason and it is still its call.
-      //
-      // Bounded to a single attempt on purpose: a weaker model that cannot
-      // produce a clean tool call will not produce one on the fifth ask
-      // either, and would spend its whole round budget being corrected.
-      const correction = looksLikeUninvokedPass(reply)
-        ? 'Your last message was not a valid tool call — it was posted as text. If you meant to stay quiet, call the room tool with action "pass". Otherwise reply normally with what you want to say.'
-        : workingMemory.get(`room:passed:${fresh.roomRef}`) === "true" && changed.length > 0
-          ? `You changed ${changed.join(", ")} since your last message but chose to say nothing. Are you sure? Reply with a short update if it is worth reporting, or pass again if it genuinely is not.`
-          : undefined;
-
-      if (correction) {
-        workingMemory.delete(`room:passed:${fresh.roomRef}`);
-        try {
-          reply = await runAgentLoop(correction, {
-            ...base,
-            toolContextExtras: { ...base.toolContextExtras, workingMemory },
-          });
-        } catch (err) {
-          console.warn(`[rooms] Correction round failed for ${fresh.agent}: ${(err as Error).message}`);
-        }
-      }
-
-      // A turn that did real work is progress, not chatter, so it must not
-      // push the room toward the depth cap. Without this, agents collaborating
-      // on a task — researching, writing files, handing off — get silenced
-      // mid-task exactly like two agents saying "thanks" at each other.
-      if (usedTools) this.store.resetAgentTurns(fresh.roomRef);
-
-      // Cursor advances whether or not the agent had anything to say — it has
-      // now seen this traffic either way. Deliberately NOT advanced past its
-      // own reply: anything that arrived mid-run sits between the two, and
-      // jumping to the reply's cursor would skip it permanently.
-      this.store.advanceCursor(fresh.agent, fresh.roomRef, messages[messages.length - 1].cursor);
-
-      const posted = await this.deliverReply(fresh, reply, label, workingMemory, messages);
-      // Attached underneath the reply, so the room reads as conversation and
-      // the record of what was actually done is one click away. Without this
-      // you can only infer an agent's actions from its own account of them,
-      // which is exactly the account that can be wrong.
-      if (posted && activity.length > 0) await this.attachActivity(fresh, posted, label, activity);
+      await this.runTurn(fresh, prompt, label, { messages, reason });
     } finally {
       this.running.delete(key);
       if (this.pending.delete(key)) this.scheduleWake(sub);
     }
+  }
+
+  /**
+   * Run one agent against one prompt and put whatever it says into the room.
+   *
+   * Every way an agent can be woken ends up here — a message that named it, a
+   * scheduled check-in, someone running `/room status`. They used to end up in
+   * two places: the wake path grew the malformed-`pass` correction and the tool
+   * activity record, and the prompted path silently did not, so the same reply
+   * behaved differently depending on what had triggered it. Nobody would ever
+   * choose that; it is just what happens when a second caller is added by copy.
+   */
+  private async runTurn(
+    sub: RoomSubscription,
+    prompt: string,
+    label: string,
+    opts: { messages?: RoomMessage[]; reason?: WakeReason } = {},
+  ): Promise<void> {
+    const { messages, reason } = opts;
+    const config = this.runtime.getConfig();
+    const resolved = resolveAgent(
+      sub.agent,
+      config,
+      this.runtime.getResolvableTools(),
+      undefined,
+      this.runtime.contextDir,
+    );
+    const session = findOrCreateSession(
+      this.runtime.db,
+      makeRoomSessionKey(sub.roomRef, sub.agent, resolved.roomSessionScope),
+      resolved.model,
+      resolved.provider,
+    );
+
+    const base = this.runtime.buildLoopOptions({ agentName: sub.agent, session });
+    // Spread rather than replace: buildLoopOptions puts agentName in here,
+    // and dropping it is how task-watcher lost tool attribution.
+    const workingMemory = new Map<string, string>();
+    let reply = "";
+    // Whether this turn did anything, as opposed to only talking. Decides
+    // whether it counts toward the conversation-depth cap.
+    let usedTools = false;
+    const changed: string[] = [];
+    const activity: string[] = [];
+    if (reason && this.readLimits().toolActivity !== "none") {
+      activity.push(`woke: ${describeWakeReason(reason)}`);
+    }
+    try {
+      reply = await runAgentLoop(prompt, {
+        ...base,
+        toolContextExtras: { ...base.toolContextExtras, workingMemory },
+        onToolCall: (name, args) => {
+          // `pass` is how an agent declines to speak — using it is not work.
+          if (name !== "room") usedTools = true;
+          if ((name === "write" || name === "edit") && typeof args.path === "string") {
+            const file = args.path.split("/").pop();
+            if (file && !changed.includes(file)) changed.push(file);
+          }
+          const record = this.readLimits().toolActivity;
+          const mutates = name === "write" || name === "edit";
+          if (record === "all" || (record === "mutations" && mutates)) {
+            activity.push(describeToolCall(name, args));
+          }
+        },
+      });
+    } catch (err) {
+      // Advance anyway. A message the agent cannot process — a provider
+      // outage, a body that overflows its context — would otherwise be
+      // re-read on every wake, burning the whole hourly budget forever.
+      console.error(
+        `[rooms] ${sub.agent} failed on ${sub.roomRef}: ${(err as Error).message}` +
+          (messages ? ` — skipping past ${messages.length} message(s).` : "."),
+      );
+      if (messages?.length) {
+        this.store.advanceCursor(sub.agent, sub.roomRef, messages[messages.length - 1].cursor);
+      }
+      return;
+    }
+
+    // One correction round, at most.
+    //
+    // Two things go wrong at the end of a turn, and both are better answered
+    // than papered over. A model asked to "call room(action=pass)" sometimes
+    // writes the call instead of making it — that is malformed output, and
+    // the loop already knows how to recover from being told so. And an agent
+    // that changed a file and then decides to say nothing has probably lost
+    // track of what it did; asking beats overriding, because it might have
+    // a good reason and it is still its call.
+    //
+    // Bounded to a single attempt on purpose: a weaker model that cannot
+    // produce a clean tool call will not produce one on the fifth ask
+    // either, and would spend its whole round budget being corrected.
+    const correction = looksLikeUninvokedPass(reply)
+      ? 'Your last message was not a valid tool call — it was posted as text. If you meant to stay quiet, call the room tool with action "pass". Otherwise reply normally with what you want to say.'
+      : workingMemory.get(`room:passed:${sub.roomRef}`) === "true" && changed.length > 0
+        ? `You changed ${changed.join(", ")} since your last message but chose to say nothing. Are you sure? Reply with a short update if it is worth reporting, or pass again if it genuinely is not.`
+        : undefined;
+
+    if (correction) {
+      workingMemory.delete(`room:passed:${sub.roomRef}`);
+      try {
+        reply = await runAgentLoop(correction, {
+          ...base,
+          toolContextExtras: { ...base.toolContextExtras, workingMemory },
+        });
+      } catch (err) {
+        console.warn(`[rooms] Correction round failed for ${sub.agent}: ${(err as Error).message}`);
+      }
+    }
+
+    // A turn that did real work is progress, not chatter, so it must not
+    // push the room toward the depth cap. Without this, agents collaborating
+    // on a task — researching, writing files, handing off — get silenced
+    // mid-task exactly like two agents saying "thanks" at each other.
+    if (usedTools) this.store.resetAgentTurns(sub.roomRef);
+
+    // Cursor advances whether or not the agent had anything to say — it has
+    // now seen this traffic either way. Deliberately NOT advanced past its
+    // own reply: anything that arrived mid-run sits between the two, and
+    // jumping to the reply's cursor would skip it permanently.
+    if (messages?.length) {
+      this.store.advanceCursor(sub.agent, sub.roomRef, messages[messages.length - 1].cursor);
+    }
+
+    const posted = await this.deliverReply(sub, reply, label, workingMemory, messages ?? []);
+    // Attached underneath the reply, so the room reads as conversation and
+    // the record of what was actually done is one click away. Without this
+    // you can only infer an agent's actions from its own account of them,
+    // which is exactly the account that can be wrong.
+    if (posted && activity.length > 0) await this.attachActivity(sub, posted, label, activity);
+
+    // Nothing said and nothing done: the wake cost the room nothing, so it
+    // should not cost the agent its place in the room for the next hour.
+    if (!posted && !usedTools) this.store.refundWake(sub.agent, sub.roomRef);
   }
 
   /**
@@ -800,7 +947,7 @@ export class RoomWatcher {
       // Deliberately not awaited: a status round-up runs several models, and
       // the slash command should answer immediately rather than hold the
       // interaction open for a minute.
-      void this.runPrompted(sub, prompt, label).catch((err) => {
+      void this.runPrompted(sub, prompt, label, "asked").catch((err) => {
         console.error(`[rooms] Status update failed for ${sub.agent}: ${(err as Error).message}`);
       });
     }
@@ -812,11 +959,11 @@ export class RoomWatcher {
    * the room. Shares the reply path with a normal wake, so `pass`, the
    * duplicate-addressee lift and repeat suppression all behave the same.
    */
-  private async runPrompted(sub: RoomSubscription, prompt: string, label: string): Promise<void> {
+  private async runPrompted(sub: RoomSubscription, prompt: string, label: string, reason: WakeReason): Promise<void> {
     const key = `${sub.agent} ${sub.roomRef}`;
     if (this.running.has(key)) return;
 
-    const limits = this.readLimits();
+    const limits = this.readLimits(sub.roomRef);
     if (!this.store.tryConsumeWake(sub.agent, sub.roomRef, limits.maxWakesPerHour)) {
       console.warn(`[rooms] ${sub.agent} is at its wake ceiling; skipping its status update.`);
       return;
@@ -824,26 +971,7 @@ export class RoomWatcher {
 
     this.running.add(key);
     try {
-      const config = this.runtime.getConfig();
-      const resolved = resolveAgent(sub.agent, config, this.runtime.getTools(), undefined, this.runtime.contextDir);
-      const session = findOrCreateSession(
-        this.runtime.db,
-        makeRoomSessionKey(sub.roomRef, sub.agent, resolved.roomSessionScope),
-        resolved.model,
-        resolved.provider,
-      );
-      const base = this.runtime.buildLoopOptions({ agentName: sub.agent, session });
-      const workingMemory = new Map<string, string>();
-      let usedTools = false;
-      const reply = await runAgentLoop(prompt, {
-        ...base,
-        toolContextExtras: { ...base.toolContextExtras, workingMemory },
-        onToolCall: (name) => {
-          if (name !== "room") usedTools = true;
-        },
-      });
-      if (usedTools) this.store.resetAgentTurns(sub.roomRef);
-      await this.deliverReply(sub, reply, label, workingMemory, []);
+      await this.runTurn(sub, prompt, label, { reason });
     } finally {
       this.running.delete(key);
     }
@@ -973,7 +1101,11 @@ export class RoomWatcher {
     purpose?: string,
     role?: string,
   ): string {
-    const lines = messages.map((m) => renderTranscriptLine(m.speaker ?? m.authorLabel, m.to, m.body));
+    const lines = messages.map((m) => {
+      const speaker = m.speaker ?? m.authorLabel;
+      const body = speaksAs(m.speaker, sub.agent, label, identities) ? condenseOwnLine(m.body) : m.body;
+      return renderTranscriptLine(speaker, m.to, body);
+    });
 
     const recipient = [...messages].reverse().find((m) => m.speaker && m.speaker !== label)?.speaker;
 

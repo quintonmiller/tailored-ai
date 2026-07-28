@@ -24,13 +24,31 @@ import { formatRoomRef, type Room } from "../rooms/types.js";
 
 export const ROOM_COMMAND_NAME = "room";
 
+/**
+ * What to call the person who ran the command.
+ *
+ * Discord hands us a username; rooms speak in identity labels. Stamping the
+ * username meant a person declared as `quinton: "1073…"` showed up in the
+ * transcript as `t3hlazy1`, so an agent addressed the only name it had seen and
+ * got `Unknown participant(s): t3hlazy1` back from a validator that had never
+ * heard of it. Resolve through the account id — the one part of a person that
+ * cannot be spelled two ways — and fall back to the username only for someone
+ * we genuinely do not know.
+ */
+function personLabel(interaction: ChatInputCommandInteraction, identities: IdentityResolver): string {
+  return identities.byNativeId("discord", interaction.user.id)?.label ?? interaction.user.username;
+}
+
 export interface RoomCommandDeps {
   store: RoomStore;
   identities: () => IdentityResolver;
   /** Ask every subscribed agent to report in. Returns how many were asked. */
   requestStatusUpdate: (room: Room, askedBy: string) => Promise<number>;
-  /** Forget an agent's conversation in a room. Returns how many messages went. */
-  resetAgentSession: (room: Room, agent: string) => number;
+  /**
+   * Forget an agent's conversation for a room. Returns how many messages went
+   * and whether that memory was this room's alone or shared across all of them.
+   */
+  resetAgentSession: (room: Room, agent: string) => { cleared: number; scope: "room" | "shared" };
   /** Post into a room as a person, addressed to one agent. */
   postAsPerson: (room: Room, speaker: string, to: string[], body: string) => Promise<void>;
 }
@@ -179,7 +197,7 @@ export async function handleRoomCommand(
         }
         // Answered publicly: the question and its answer belong in the room.
         await interaction.deferReply();
-        await deps.postAsPerson(room, interaction.user.username, [agent], message);
+        await deps.postAsPerson(room, personLabel(interaction, identities), [agent], message);
         await interaction.editReply(`Sent to **${agent}**.`);
         return true;
       }
@@ -187,7 +205,7 @@ export async function handleRoomCommand(
         // Not ephemeral: the answers land in the channel, so the request that
         // produced them should be visible too.
         await interaction.reply({ content: `Asking everyone in "${room.name}" for a status update…` });
-        const asked = await deps.requestStatusUpdate(room, interaction.user.username);
+        const asked = await deps.requestStatusUpdate(room, personLabel(interaction, deps.identities()));
         await interaction.followUp({
           content: asked > 0 ? `Asked ${asked} agent(s).` : "Nobody is subscribed to this room yet.",
           flags: MessageFlags.Ephemeral,
@@ -234,8 +252,9 @@ async function createRoom(
   const backend = getRoomBackend("discord");
   if (!backend?.createRoom) return "Discord is not connected, so no channel can be created right now.";
 
-  const room = await backend.createRoom({ name, purpose, createdBy: interaction.user.username });
-  const stored = deps.store.upsertRoom(room, interaction.user.username);
+  const opener = personLabel(interaction, deps.identities());
+  const room = await backend.createRoom({ name, purpose, createdBy: opener });
+  const stored = deps.store.upsertRoom(room, opener);
 
   const unknown: string[] = [];
   const added: string[] = [];
@@ -326,10 +345,17 @@ function resetAgent(interaction: ChatInputCommandInteraction, deps: RoomCommandD
     return `**${name}** is not in "${room.name}". In this room: ${roomAgents(deps, room).join(", ") || "nobody"}.`;
   }
 
-  const cleared = deps.resetAgentSession(room, name);
-  return cleared > 0
-    ? `**${name}** has forgotten this room — ${cleared} message(s) cleared. It keeps its place, so it starts from what happens next.`
-    : `**${name}** had nothing to forget here.`;
+  const { cleared, scope } = deps.resetAgentSession(room, name);
+  if (cleared === 0) return `**${name}** had nothing to forget.`;
+
+  // Say which memory went. An agent on a shared session has one conversation
+  // covering every room it is in, so "forgotten this room" would be a quiet
+  // lie about how much was just thrown away.
+  const what =
+    scope === "shared"
+      ? `has forgotten every room — ${cleared} message(s) cleared, because it keeps one shared memory`
+      : `has forgotten this room — ${cleared} message(s) cleared`;
+  return `**${name}** ${what}. It keeps its place, so it starts from what happens next.`;
 }
 
 function removeAgent(interaction: ChatInputCommandInteraction, deps: RoomCommandDeps, room: Room): string {
