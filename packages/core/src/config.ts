@@ -920,6 +920,16 @@ export interface AgentConfig {
     /** Transport used when an agent creates a room without naming one. */
     defaultBackend?: string;
     /**
+     * Where an agent's direct messages go, as `agent: room-name`.
+     *
+     * Without this, `room(action="dm")` opens a room named after the agent —
+     * which is right for an agent nobody has set one up for, and wrong when a
+     * room for exactly that purpose already exists under another name. Naming
+     * it here points the direct line at the room you already have instead of
+     * quietly creating a second one.
+     */
+    desks?: Record<string, string>;
+    /**
      * Attach a record of what an agent actually did underneath its message,
      * where the transport can nest (Discord opens a thread).
      *
