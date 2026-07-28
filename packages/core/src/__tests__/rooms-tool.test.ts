@@ -1018,3 +1018,46 @@ describe("room tool — self-managed check-ins", () => {
     expect(sub?.wakeOn).toBe("all");
   });
 });
+
+describe("room tool — updating a message instead of repeating it", () => {
+  it("hands back the message id so a later turn can edit it", async () => {
+    await createRoom("eng");
+
+    const res = await post("eng", "status: waiting on 2 bookings");
+
+    expect(res.success).toBe(true);
+    expect(res.output).toMatch(/Message id: \d+/);
+  });
+
+  it("replaces the message rather than adding one", async () => {
+    // A recurring status posted afresh is a notification each time. One message
+    // that changes is quiet — which matters most for unattended agents.
+    await createRoom("eng");
+    const posted = await post("eng", "status: waiting on 2 bookings");
+    const id = /Message id: (\d+)/.exec(posted.output)?.[1];
+
+    const res = await run({ action: "update", room: "eng", message_id: id, body: "status: all booked" }, "supervisor");
+
+    expect(res.success).toBe(true);
+    expect(messageCount()).toBe(1);
+    expect(contents()[0]).toContain("all booked");
+  });
+
+  it("needs the id, and says what to do without one", async () => {
+    await createRoom("eng");
+
+    const res = await run({ action: "update", room: "eng", body: "x" }, "supervisor");
+
+    expect(res.success).toBe(false);
+    expect(res.error).toMatch(/message_id is required/);
+  });
+
+  it("reports a message that is not there rather than silently doing nothing", async () => {
+    await createRoom("eng");
+
+    const res = await run({ action: "update", room: "eng", message_id: "9999", body: "x" }, "supervisor");
+
+    expect(res.success).toBe(false);
+    expect(res.error).toMatch(/9999/);
+  });
+});

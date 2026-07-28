@@ -195,12 +195,16 @@ export class DiscordChannel implements Channel, OutboundNotifier {
   private resetAgentSession(room: Room, agent: string): number {
     const key = makeRoomSessionKey(formatRoomRef(room.ref), agent);
     const row = this.runtime.db
-      .prepare(
-        "SELECT COUNT(*) AS n FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE key = ?)",
-      )
+      .prepare("SELECT COUNT(*) AS n FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE key = ?)")
       .get(key) as { n: number } | undefined;
 
-    const resolved = resolveAgent(agent, this.runtime.getConfig(), this.runtime.getTools(), undefined, this.runtime.contextDir);
+    const resolved = resolveAgent(
+      agent,
+      this.runtime.getConfig(),
+      this.runtime.getTools(),
+      undefined,
+      this.runtime.contextDir,
+    );
     resetSession(this.runtime.db, key, resolved.model, resolved.provider);
     return row?.n ?? 0;
   }

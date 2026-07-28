@@ -139,6 +139,8 @@ export interface RoomCapabilities {
   history: boolean;
   /** Can attach a message underneath another (Discord threads, say). */
   threads: boolean;
+  /** Can change a message it already sent. */
+  edit: boolean;
   /**
    * The transport can render each speaker as its own participant — a Discord
    * webhook posting under a per-message `username`, say. When true the backend
@@ -170,6 +172,15 @@ export interface RoomBackend {
    * means "the most recent `limit` messages" — NOT the entire history.
    */
   fetchSince(id: string, cursor: string | null, limit: number): Promise<RoomMessage[]>;
+
+  /**
+   * Replace the body of a message this backend sent.
+   *
+   * Append-only rooms make a recurring update post a new message every time, so
+   * a check-in that runs hourly is an hourly notification whether or not
+   * anything changed. Editing lets one message BE the status.
+   */
+  edit?(id: string, messageId: string, body: string): Promise<void>;
 
   createRoom?(opts: CreateRoomOptions): Promise<Room>;
   /**

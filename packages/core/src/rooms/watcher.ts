@@ -30,6 +30,9 @@ import { getRoomBackend, listRoomBackends, onRoomBackendChange } from "./registr
 import type { RoomStore, RoomSubscription } from "./store.js";
 import { formatRoomRef, parseRoomRef, type Room, type RoomMessage } from "./types.js";
 
+/** Why an agent was woken. Surfaced in the activity record. */
+export type WakeReason = "named" | "loose-question" | "all" | "check-in";
+
 export interface RoomWatcherLimits {
   maxWakesPerHour: number;
   /** Consecutive agent-only turns allowed before a room goes quiet. */
@@ -91,6 +94,20 @@ export function describeToolCall(name: string, args: Record<string, unknown>): s
   return `\`${name}\``;
 }
 
+/** Plain-language wake reason for the activity record. */
+export function describeWakeReason(reason: WakeReason): string {
+  switch (reason) {
+    case "named":
+      return "named directly";
+    case "loose-question":
+      return "a person asked the room";
+    case "all":
+      return "watching everything in this room";
+    case "check-in":
+      return "scheduled check-in";
+  }
+}
+
 /** Session key family for room conversations: `room:<backend>.<id>:<agent>`. */
 export function makeRoomSessionKey(roomRef: string, agent: string): string {
   return `room:${roomRef.replace(/:/g, ".")}:${agent}`;
@@ -111,6 +128,8 @@ export class RoomWatcher {
   /** One-shot retries armed when a subscription hits its hourly ceiling. */
   private hourRetries = new Map<string, ReturnType<typeof setTimeout>>();
   private checkInTimers = new Map<string, ReturnType<typeof setInterval>>();
+  /** Why each pending wake fired, so the activity record can say. */
+  private wakeReasons = new Map<string, WakeReason>();
   private offBackendChange: (() => void) | undefined;
   private started = false;
 
@@ -352,6 +371,7 @@ export class RoomWatcher {
     const recent = await this.fetchBacklog({ ...sub, cursor: null });
     const transcript = recent.slice(-10).map((m) => renderTranscriptLine(m.speaker ?? m.authorLabel, m.to, m.body));
 
+    this.wakeReasons.set(`${agent} ${roomRef}`, "check-in");
     const prompt = [
       `Room "${room.name}". You are ${label}. This is a scheduled check-in — nobody has asked you anything.`,
       ...(room.purpose ? [`Purpose: ${room.purpose}`] : []),
@@ -409,7 +429,8 @@ export class RoomWatcher {
     }
 
     for (const sub of subs) {
-      if (!this.shouldWake(sub, enriched, identities, agentTurns)) {
+      const reason = this.wakeReason(sub, enriched, identities, agentTurns);
+      if (!reason) {
         // Deliberately NOT advancing the cursor. An agent that did not wake has
         // not SEEN this message, and skipping it here is why an agent could be
         // asked about a conversation it was sitting in and know nothing about
@@ -417,6 +438,7 @@ export class RoomWatcher {
         // Backlog growth is bounded by maxBacklog instead — see fetchBacklog.
         continue;
       }
+      this.wakeReasons.set(`${sub.agent} ${sub.roomRef}`, reason);
       this.scheduleWake(sub);
     }
   }
@@ -466,13 +488,25 @@ export class RoomWatcher {
    * database, a backend, or a model.
    */
   shouldWake(sub: RoomSubscription, msg: RoomMessage, identities: IdentityResolver, agentTurns = 0): boolean {
-    if (sub.wakeOn === "none") return false;
+    return this.wakeReason(sub, msg, identities, agentTurns) !== null;
+  }
+
+  /**
+   * Why this message wakes this agent, or null for "it does not".
+   *
+   * The reason was always computed and then thrown away, which made wake policy
+   * guesswork to debug — an agent woke and you could not tell whether it was
+   * named, answering a loose question, or on a timer. Wake policy is where most
+   * room misbehaviour starts, so the reason is worth keeping.
+   */
+  wakeReason(sub: RoomSubscription, msg: RoomMessage, identities: IdentityResolver, agentTurns = 0): WakeReason | null {
+    if (sub.wakeOn === "none") return null;
 
     // Our own account with no resolvable speaker is not a human turn: it is a
     // continuation chunk of a split message, or a plain notifier post. Reading
     // it as human is how one long agent message woke every agent in the room,
     // including its author.
-    if (msg.fromSelf && !msg.speaker) return false;
+    if (msg.fromSelf && !msg.speaker) return null;
 
     const label = identities.labelForAgent(sub.agent);
 
@@ -480,8 +514,8 @@ export class RoomWatcher {
     // Compared through the resolver so an alias counts as the same agent.
     if (msg.speaker) {
       const speakerAgent = identities.agentForLabel(msg.speaker);
-      if (speakerAgent === sub.agent) return false;
-      if (!speakerAgent && msg.speaker.toLowerCase() === label.toLowerCase()) return false;
+      if (speakerAgent === sub.agent) return null;
+      if (!speakerAgent && msg.speaker.toLowerCase() === label.toLowerCase()) return null;
     }
 
     // Two agents being polite at each other is not something any single-message
@@ -491,10 +525,10 @@ export class RoomWatcher {
     // context on the next real wake; only the automatic reply stops.
     const speakerIsAgent = msg.speaker ? identities.get(msg.speaker)?.kind === "agent" : false;
     if (speakerIsAgent && agentTurns > this.readLimits().maxAgentTurns) {
-      return false;
+      return null;
     }
 
-    if (sub.wakeOn === "all") return true;
+    if (sub.wakeOn === "all") return "all";
 
     // Resolve each addressee, so "<planner> ..." wakes the agent that
     // `planner: { agent: supervisor }` points at.
@@ -506,20 +540,20 @@ export class RoomWatcher {
     // addressing rather than throw and take the wake path down with it.
     const named = [...msg.to, ...(msg.mentions ?? [])];
     const namedMe = named.some((t) => identities.agentForLabel(t) === sub.agent || addresses([t], label));
-    if (namedMe) return true;
+    if (namedMe) return "named";
 
     // "named" stops here: nothing but an explicit mention starts a run. This is
     // what keeps a room with three agents in it from producing three answers to
     // one unaddressed question — give the agent that should field loose
     // questions "addressed", and everyone else "named".
-    if (sub.wakeOn === "named") return false;
+    if (sub.wakeOn === "named") return null;
 
     // An unaddressed message from a human is for whoever is listening; an
     // unaddressed message from another agent is chatter, and answering it is
     // how two agents talk forever.
     const speakerIdentity = msg.speaker ? identities.get(msg.speaker) : undefined;
     const fromHuman = speakerIdentity ? speakerIdentity.kind === "human" : !msg.speaker;
-    return fromHuman && msg.to.length === 0;
+    return fromHuman && msg.to.length === 0 ? "loose-question" : null;
   }
 
   private async fetchBacklog(sub: RoomSubscription): Promise<RoomMessage[]> {
@@ -603,6 +637,11 @@ export class RoomWatcher {
       let usedTools = false;
       const changed: string[] = [];
       const activity: string[] = [];
+      const reason = this.wakeReasons.get(key) ?? (fresh.wakeOn === "all" ? "all" : "named");
+      this.wakeReasons.delete(key);
+      if (this.readLimits().toolActivity !== "none") {
+        activity.push(`woke: ${describeWakeReason(reason)}`);
+      }
       try {
         reply = await runAgentLoop(prompt, {
           ...base,

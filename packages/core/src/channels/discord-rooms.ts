@@ -133,6 +133,7 @@ export class DiscordRoomBackend implements RoomBackend {
     // Set once a webhook exists for the room; see ensureWebhook.
     nativeSpeakers: true,
     threads: true,
+    edit: true,
   };
 
   private readonly webhooks = new Map<string, WebhookClient>();
@@ -434,6 +435,22 @@ export class DiscordRoomBackend implements RoomBackend {
       to: message.to ?? [],
       body: message.body.trim(),
     };
+  }
+
+  /**
+   * Edit a message we sent.
+   *
+   * Goes through the webhook because that is what posted it — Discord will not
+   * let the bot edit a webhook's message through the normal message API, and
+   * every agent message is a webhook message when one is available.
+   */
+  async edit(id: string, messageId: string, body: string): Promise<void> {
+    const webhook = await this.ensureWebhook(id);
+    if (!webhook) throw new Error("Editing needs the room's webhook, which is not available.");
+    if (body.length > MAX_MESSAGE_LENGTH) {
+      throw new Error(`An edited message must fit in one message (${MAX_MESSAGE_LENGTH} characters).`);
+    }
+    await webhook.editMessage(messageId, { content: body, allowedMentions: { parse: [] } });
   }
 
   async fetchSince(id: string, cursor: string | null, limit: number): Promise<RoomMessage[]> {
