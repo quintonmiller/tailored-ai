@@ -72,6 +72,47 @@ function makeRuntime(): AgentRuntime {
   );
 }
 
+describe("runtime.getResolvableTools", () => {
+  const metaTool: Tool = {
+    name: "admin",
+    description: "meta",
+    parameters: {},
+    execute: async () => ({ success: true, output: "" }),
+  };
+
+  it("includes meta tools, which an agent's tools: list is allowed to name", () => {
+    // `buildLoopOptions` appends meta tools AFTER resolving the agent, so
+    // `admin` and `delegate` are always present at run time but were invisible
+    // to the allowlist that runs first. Naming one threw `references unknown
+    // tool "admin"` and, in a room, the agent just stopped answering.
+    const runtime = makeRuntime();
+    runtime.setMetaTools([metaTool]);
+
+    expect(runtime.getTools().map((t) => t.name)).not.toContain("admin");
+    expect(
+      runtime
+        .getResolvableTools()
+        .map((t) => t.name)
+        .sort(),
+    ).toEqual(["admin", "fake"]);
+  });
+
+  it("survives a reload, because reload swaps the registry and not the meta tools", () => {
+    const runtime = makeRuntime();
+    runtime.setMetaTools([metaTool]);
+    runtime.reload();
+
+    expect(runtime.getResolvableTools().map((t) => t.name)).toContain("admin");
+  });
+
+  it("does not list a name twice when a meta tool shadows a registered one", () => {
+    const runtime = makeRuntime();
+    runtime.setMetaTools([{ ...metaTool, name: "fake" }]);
+
+    expect(runtime.getResolvableTools().map((t) => t.name)).toEqual(["fake"]);
+  });
+});
+
 describe("runtime.getProjectByName", () => {
   it("returns a ProjectRef for a registered project with a path", () => {
     createProject(db, { id: "p1", title: "First", path: "/tmp/p1" });
