@@ -24,6 +24,7 @@ export function populateBuiltinTools(registry: ToolRegistry, opts: PopulateRegis
     db: opts.db,
     resolveOutbound: opts.resolveOutbound,
     getOwnerId: opts.getOwnerId,
+    getNotificationGate: opts.getNotificationGate,
     taskBackend: opts.taskBackend,
   });
   for (const tool of tools) {

@@ -49,6 +49,19 @@ Built-in defaults (`system-status`, `needs-you`, `recent-activity`) register
 through the same registry as a plugin would (no privileged built-in). Drop them
 all with `dashboard.defaults: false`, or override one by id.
 
+## Editing the layout (drag to reorder / resize)
+
+The Board has an **Edit Layout** mode (iOS-Widgets style): drag a card to reorder,
+drag its bottom-right corner to resize — **width** snaps to 1–4 columns (`span`)
+and **height** to 1–6 rows (`rowSpan`) — then **Done**. Widget content scrolls
+inside its box when it's taller than the chosen height. It persists via
+`POST /api/dashboard/layout` — the body is the widgets in display order with their
+`span` + `rowSpan`, and the route rewrites `dashboard.widgets` (order = position;
+span/rowSpan clamped). Config widgets keep their full spec; built-in/provider
+widgets get a minimal `{id, type, order, span, rowSpan}` override so the resolver
+merge preserves their core-owned title/options. So a hand-edited `dashboard.widgets`
+and a drag-edited one are the same shape — you can keep editing either way.
+
 ## Built-in renderer types
 
 | `type` | Renders | Key `options` |
@@ -112,6 +125,43 @@ The widget appears on the Board with no UI changes, because `metric` is a
 built-in renderer. A plugin needing a bespoke visual would add a renderer type
 to the UI in a separate change; everything data-shaped works out of the box.
 
+## Widgets that need data the agent maintains
+
+A widget over a `/api/…` endpoint only works if that endpoint already returns the data.
+For **user records the agent keeps** — a reading list, a watchlist, a collection — don't
+invent a new endpoint or a bespoke renderer. Persist the records in an existing
+agent-writable store, then point a built-in renderer at that store's read API:
+
+| Store | Tool | Read API | Good for |
+|-------|------|----------|----------|
+| Facts | `facts` | `GET /api/facts?category=…` | quick `category / entity / key = value` records |
+| Collections | `collections` | `GET /api/collections?type=…` | typed records with name / notes / rating / location / url |
+
+A reading list two ways, both **config-only, no rebuild, no new endpoint**:
+
+```yaml
+# via facts: facts set category=reading entity="Dune" key=status value="p.142 / 320"
+- id: reading
+  type: list
+  title: 📚 Reading
+  options:
+    endpoint: /api/facts?category=reading
+    itemsPath: facts
+    titleField: entity
+    subtitleField: value
+# via collections: collections add type=book name="Dune" rating=5
+- id: books
+  type: collections
+  title: 📚 Books
+  options:
+    defaultTab: book
+    tabs: [{ key: book, label: Books }]
+```
+
+`collections.type` is an open, normalized label (`book`, `board_game`, `restaurant`),
+so a new kind of collection needs no code. The `collections` renderer derives its tabs
+from `options.tabs`, else from the live type counts — so it works for any type.
+
 ## Authoring with a TAI agent
 
 Widget development is designed to be an agent task. The pieces that make an
@@ -136,10 +186,19 @@ agent's loop tight:
   spec surfaces as a `dashboard.widgets: …` startup warning (missing id/type, bad
   span, non-`/api/` endpoint, unknown type, duplicate id) instead of silently
   rendering a fallback.
-- **A no-rebuild path.** Config widgets hot-reload — an agent edits
-  `dashboard.widgets`, and `/api/dashboard` reflects it on the next request. Only
-  a brand-new renderer *type* needs a UI build. The skill steers agents to the
-  config path first.
+- **A no-rebuild path the agent can drive with one tool.** Config widgets
+  hot-reload, and `dashboard.` is in the `admin` tool's write allowlist, so a
+  running agent adds a widget with `admin` alone — no file editing:
+  1. `admin` `get_config` section `dashboard` (read the current array),
+  2. `admin` `update_config` path `dashboard.widgets` with the **full** array
+     (the write replaces it, so include the existing widgets), which reloads the
+     runtime; `/api/dashboard` reflects it on the next request.
+
+  Only a brand-new renderer *type* needs a UI build. The skill steers agents to
+  the config path first, and tells them **not** to probe the endpoint — a widget
+  is authored from the renderer reference above, not by fetching the URL (a
+  same-origin loopback `web_fetch` is blocked by egress policy, and not every
+  agent has `exec`).
 
 The canonical built-in type names live in `BUILTIN_WIDGET_TYPES` (core), shared by
 the validator, the skill, and this doc — one source of truth.

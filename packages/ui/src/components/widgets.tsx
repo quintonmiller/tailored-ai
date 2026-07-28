@@ -263,6 +263,250 @@ function LinksWidget({ widget }: WidgetProps) {
   );
 }
 
+// --- collections widget ----------------------------------------------------
+
+interface CollectionItem {
+  id: string;
+  type: string;
+  name: string;
+  notes: string | null;
+  rating: number | null;
+  location: string | null;
+  url: string | null;
+  added_by: string;
+  source: string | null;
+}
+
+interface CollectionStats {
+  byType: Record<string, number>;
+  total: number;
+}
+
+interface CollectionTab {
+  key: string;
+  label: string;
+}
+
+// Fallback only — used when neither `options.tabs` nor live stats supply types.
+const DEFAULT_COLLECTION_TABS: CollectionTab[] = [
+  { key: "restaurant", label: "Restaurants" },
+  { key: "bar", label: "Bars" },
+];
+
+function humanizeType(key: string): string {
+  return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function CollectionsWidget({ widget }: WidgetProps) {
+  const endpoint = opt(widget, "endpoint", "/api/collections");
+  const statsEndpoint = opt(widget, "statsEndpoint", "/api/collections/stats");
+  const defaultTab = opt(widget, "defaultTab", "");
+
+  const [activeTab, setActiveTab] = useState(defaultTab);
+  const [search, setSearch] = useState("");
+  const [showForm, setShowForm] = useState(false);
+  const [nonce, setNonce] = useState(0);
+
+  // form state
+  const [formName, setFormName] = useState("");
+  const [formNotes, setFormNotes] = useState("");
+  const [formRating, setFormRating] = useState(0);
+  const [formLocation, setFormLocation] = useState("");
+  const [formUrl, setFormUrl] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  const { data: statsData } = useWidgetData<CollectionStats>(statsEndpoint);
+  const stats = statsData ?? { byType: {}, total: 0 };
+
+  // Tabs come from config (`options.tabs`), else from the live type buckets,
+  // else a small default — so the widget works for any collection type.
+  const configuredTabs = opt(widget, "tabs", null) as CollectionTab[] | null;
+  const derivedTabs: CollectionTab[] = Object.keys(stats.byType).map((k) => ({ key: k, label: humanizeType(k) }));
+  const tabs = configuredTabs?.length ? configuredTabs : derivedTabs.length ? derivedTabs : DEFAULT_COLLECTION_TABS;
+  const effectiveTab = activeTab || tabs[0]?.key || "restaurant";
+
+  const searchParam = search ? `&search=${encodeURIComponent(search)}` : "";
+  const { data, error, loading } = useWidgetData<{ items: CollectionItem[]; total: number }>(
+    `${endpoint}?type=${effectiveTab}&limit=20${searchParam}&_=${nonce}`,
+  );
+
+  const items = data?.items ?? [];
+  const statMap = stats.byType;
+
+  const handleSubmit = async () => {
+    if (!formName.trim()) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      const res = await fetch("/api/collections", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: effectiveTab,
+          name: formName.trim(),
+          notes: formNotes.trim() || undefined,
+          rating: formRating > 0 ? formRating : undefined,
+          location: formLocation.trim() || undefined,
+          url: formUrl.trim() || undefined,
+        }),
+      });
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(err.error ?? "Failed to add");
+      }
+      setFormName("");
+      setFormNotes("");
+      setFormRating(0);
+      setFormLocation("");
+      setFormUrl("");
+      setShowForm(false);
+      setNonce((n) => n + 1);
+    } catch (e) {
+      setSubmitError((e as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const renderStars = (rating: number) => "⭐".repeat(rating) + (rating < 5 ? "☆".repeat(5 - rating) : "");
+
+  return (
+    <div className="widget-collections">
+      <div className="widget-collections-tabs">
+        {tabs.map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            className={`widget-collections-tab ${tab.key === effectiveTab ? "is-active" : ""}`}
+            onClick={() => {
+              setActiveTab(tab.key);
+              setSearch("");
+              setShowForm(false);
+            }}
+          >
+            {tab.label}
+            {(statMap[tab.key] ?? 0) > 0 && <span className="widget-collections-badge">{statMap[tab.key]}</span>}
+          </button>
+        ))}
+      </div>
+
+      <div className="widget-collections-bar">
+        <input
+          type="search"
+          className="widget-collections-search"
+          placeholder={`Search ${tabs.find((t) => t.key === effectiveTab)?.label ?? effectiveTab}…`}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <button type="button" className="widget-collections-add-btn" onClick={() => setShowForm(!showForm)}>
+          {showForm ? "✕" : "+"}
+        </button>
+      </div>
+
+      {showForm && (
+        <div className="widget-collections-form">
+          <input
+            type="text"
+            placeholder="Name *"
+            value={formName}
+            onChange={(e) => setFormName(e.target.value)}
+            className="widget-collections-input"
+          />
+          <input
+            type="text"
+            placeholder="Notes"
+            value={formNotes}
+            onChange={(e) => setFormNotes(e.target.value)}
+            className="widget-collections-input"
+          />
+          <select
+            value={formRating}
+            onChange={(e) => setFormRating(Number(e.target.value))}
+            className="widget-collections-select"
+          >
+            <option value={0}>Rating (optional)</option>
+            {[1, 2, 3, 4, 5].map((n) => (
+              <option key={n} value={n}>
+                {"⭐".repeat(n)}
+              </option>
+            ))}
+          </select>
+          <input
+            type="text"
+            placeholder="Location"
+            value={formLocation}
+            onChange={(e) => setFormLocation(e.target.value)}
+            className="widget-collections-input"
+          />
+          <input
+            type="url"
+            placeholder="URL"
+            value={formUrl}
+            onChange={(e) => setFormUrl(e.target.value)}
+            className="widget-collections-input"
+          />
+          {submitError && <p className="widget-collections-error">{submitError}</p>}
+          <button
+            type="button"
+            className="widget-collections-submit"
+            disabled={submitting || !formName.trim()}
+            onClick={handleSubmit}
+          >
+            {submitting ? "Adding…" : "Add"}
+          </button>
+        </div>
+      )}
+
+      {loading ? (
+        <WidgetState loading={true} error={null} />
+      ) : error ? (
+        <WidgetState loading={false} error={error} />
+      ) : items.length === 0 ? (
+        <p className="widget-empty">
+          {search
+            ? `No ${effectiveTab.replace(/_/g, " ")} matching "${search}".`
+            : `No ${effectiveTab.replace(/_/g, " ")} yet. Ask TAI to add one or use the + button.`}
+        </p>
+      ) : (
+        <ul className="widget-list">
+          {items.map((item) => (
+            <li key={item.id} className="widget-collections-row">
+              <div className="widget-collections-row-head">
+                {item.added_by === "tai" && (
+                  <span
+                    className="widget-collections-tai-badge"
+                    title={item.source ? `Added from ${item.source}` : "Added by TAI"}
+                  >
+                    🤖
+                  </span>
+                )}
+                <span className="widget-collections-name">{item.name}</span>
+                {item.rating != null && <span className="widget-collections-stars">{renderStars(item.rating)}</span>}
+              </div>
+              <div className="widget-collections-row-meta">
+                {item.location && <span className="widget-collections-location">📍 {item.location}</span>}
+                {item.url && (
+                  <a
+                    href={item.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="widget-collections-link"
+                    title={item.url}
+                  >
+                    🔗
+                  </a>
+                )}
+                {item.notes && <span className="widget-collections-notes">{item.notes}</span>}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 /** Live clock: current time (updating every second) + today's date. No endpoint needed. */
 function ClockWidget() {
   const [now, setNow] = useState(new Date());
@@ -283,7 +527,6 @@ function ClockWidget() {
   );
 }
 
-
 /** Escape hatch: embed an external URL. */
 function IframeWidget({ widget }: WidgetProps) {
   const url = opt(widget, "url", "");
@@ -297,7 +540,6 @@ function IframeWidget({ widget }: WidgetProps) {
     />
   );
 }
-
 
 /** Interactive session explorer with client-side search and refresh. */
 function SessionExplorerWidget({ widget }: WidgetProps) {
@@ -328,7 +570,7 @@ function SessionExplorerWidget({ widget }: WidgetProps) {
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
-        <button className="widget-sessions-refresh" onClick={() => setNonce((n) => n + 1)}>
+        <button type="button" className="widget-sessions-refresh" onClick={() => setNonce((n) => n + 1)}>
           Refresh
         </button>
       </div>
@@ -365,6 +607,320 @@ function SessionExplorerWidget({ widget }: WidgetProps) {
   );
 }
 
+/** Agent-generated recommendations with source attribution.
+ *
+ * The `value` field carries a source prefix + optional JSON action payload:
+ *
+ *   source: email subject | {"actions":[{"type":"create_task","label":"Create task","payload":{...}}]}
+ *
+ * Supported action types:
+ *   create_task     → POST /api/project-tasks
+ *   add_collection  → POST /api/collections
+ *   log             → writes a recommendation_response fact (no API needed)
+ *
+ * Every card with no explicit actions gets a default "Mark done" (log) button.
+ * All actions + dismiss write a `recommendation_response` fact so the agent
+ * can see what happened.
+ */
+interface RecAction {
+  type: "create_task" | "add_collection" | "log";
+  label: string;
+  payload: Record<string, unknown>;
+}
+
+interface RecResult { source: string; actions: RecAction[] }
+
+const DEFAULT_DONE: RecAction = { type: "log", label: "Mark done", payload: { status: "done" } };
+
+function parseRecActions(raw: string): RecResult {
+  const m = raw.match(/\|\s*(\{"actions"\s*:\s*\[.+\]\})\s*$/);
+  if (!m) return { source: raw, actions: [] };
+  try {
+    const wrapper = JSON.parse(m[1]) as { actions: RecAction[] };
+    const source = raw.slice(0, m.index!).trim();
+    return { source: source.length ? source : raw, actions: wrapper.actions ?? [] };
+  } catch {
+    return { source: raw, actions: [] };
+  }
+}
+
+async function logRecResponse(factId: string, status: string, label?: string): Promise<boolean> {
+  try {
+    const res = await fetch("/api/facts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        category: "recommendation_response",
+        entity: factId,
+        key: `${status}${label ? ` (${label})` : ""}`,
+        value: new Date().toISOString(),
+        project_id: "global",
+      }),
+    });
+    return res.ok;
+  } catch {
+    // non-fatal — recommendation is still removed from view
+    return true;
+  }
+}
+
+async function dispatchRecAction(action: RecAction): Promise<boolean> {
+  const { type, payload } = action;
+  let url: string;
+  let body: Record<string, unknown>;
+
+  switch (type) {
+    case "log":
+      return true; // handled via logRecResponse only
+    case "create_task":
+      url = "/api/project-tasks";
+      body = {
+        title: payload.title,
+        description: payload.description,
+        tags: payload.tags,
+        assignee: payload.assignee,
+        rank: payload.rank,
+      };
+      break;
+    case "add_collection":
+      url = "/api/collections";
+      body = {
+        type: payload.type,
+        name: payload.name,
+        notes: payload.notes,
+        rating: payload.rating,
+        location: payload.location,
+        url: payload.url,
+      };
+      break;
+    default:
+      return false;
+  }
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+function RecommendationsWidget({ widget }: WidgetProps) {
+  const endpoint = opt(widget, "endpoint", "/api/facts?category=recommendation&limit=20");
+  const { data, error, loading } = useWidgetData<{ facts: Array<{ id: string; key: string; value: string; created_at: string | null }> }>(endpoint, 60000);
+  const [dismissing, setDismissing] = useState<string | null>(null);
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const [acting, setActing] = useState<Record<string, string>>({});
+  const [actionResults, setActionResults] = useState<Record<string, string>>({});
+
+  const facts = (data?.facts ?? []).filter((f) => !dismissed.has(f.id));
+
+  const removeCard = async (id: string) => {
+    setDismissing(id);
+    try {
+      await fetch(`/api/facts/${encodeURIComponent(id)}`, { method: "DELETE" });
+      setDismissed((prev) => new Set(prev).add(id));
+    } catch { /* keep visible */ }
+    finally { setDismissing(null); }
+  };
+
+  const handleDismiss = async (factId: string) => {
+    await logRecResponse(factId, "dismissed");
+    await removeCard(factId);
+  };
+
+  const handleAction = async (factId: string, action: RecAction) => {
+    setActing((prev) => ({ ...prev, [factId]: action.label }));
+    const ok = await dispatchRecAction(action);
+    if (ok) {
+      await logRecResponse(factId, "acted", action.label);
+      setActionResults((prev) => ({ ...prev, [factId]: `✓ ${action.label} — done` }));
+      setTimeout(() => removeCard(factId), 1200);
+    } else {
+      setActionResults((prev) => ({ ...prev, [factId]: `✗ Failed` }));
+      setActing((prev) => { const n = { ...prev }; delete n[factId]; return n; });
+    }
+  };
+
+  if (error) return <WidgetState loading={false} error={error} />;
+  if (loading) return <WidgetState loading={true} error={null} />;
+
+  if (facts.length === 0) {
+    return <p className="widget-empty">{opt(widget, "emptyText", "All clear — no recommendations right now.")}</p>;
+  }
+
+  return (
+    <div className="widget-recommendations">
+      {facts.map((f) => {
+        const { source, actions } = parseRecActions(f.value ?? "");
+        const result = actionResults[f.id];
+        const activeLabel = acting[f.id];
+        // if no explicit actions, default to "Mark done"
+        const buttons: RecAction[] = actions.length > 0 ? actions : [DEFAULT_DONE];
+        return (
+          <div key={f.id} className={`widget-rec-card${result ? " widget-rec-done" : ""}`}>
+            <p className="widget-rec-text">{f.key}</p>
+            {source && !result && <p className="widget-rec-source">{source}</p>}
+            {result && <p className="widget-rec-result">{result}</p>}
+            <div className="widget-rec-meta">
+              {f.created_at && !result && (
+                <time className="widget-rec-time" dateTime={f.created_at}>
+                  {new Date(f.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                </time>
+              )}
+              {!result && (
+                <div className="widget-rec-actions">
+                  {buttons.map((btn, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      className="widget-rec-action-btn"
+                      disabled={!!activeLabel}
+                      onClick={() => handleAction(f.id, btn)}
+                    >
+                      {activeLabel === btn.label ? "…" : btn.label}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className="widget-rec-dismiss"
+                    disabled={dismissing === f.id}
+                    onClick={() => handleDismiss(f.id)}
+                    title="Dismiss"
+                  >
+                    {dismissing === f.id ? "…" : "✕"}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* --- decisions widget ---------------------------------------------------- */
+/** Agent-blocking questions surfaced as cards. User picks an option → decision_response fact.
+ *
+ *   value: source: ptask stuck | {"options":[{"label":"Archive","payload":{"decision":"archive"}},{"label":"Retry","payload":{"decision":"retry"}}]}
+ */
+interface DecisionOption {
+  label: string;
+  payload: Record<string, unknown>;
+}
+
+function parseDecisionValue(raw: string): { source: string; options: DecisionOption[] } {
+  const m = raw.match(/\|\s*(\{"options"\s*:\s*\[.+\]\})\s*$/);
+  if (!m) return { source: raw, options: [] };
+  try {
+    const wrapper = JSON.parse(m[1]) as { options: DecisionOption[] };
+    const source = raw.slice(0, m.index!).trim();
+    return { source: source.length ? source : raw, options: wrapper.options ?? [] };
+  } catch {
+    return { source: raw, options: [] };
+  }
+}
+
+async function logDecisionResponse(factId: string, label: string, payload: Record<string, unknown>): Promise<boolean> {
+  try {
+    const res = await fetch("/api/facts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        category: "decision_response",
+        entity: factId,
+        key: label,
+        value: JSON.stringify(payload),
+        project_id: "global",
+      }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+function DecisionsWidget({ widget }: WidgetProps) {
+  const endpoint = opt(widget, "endpoint", "/api/facts?category=decision_needed&limit=20");
+  const { data, error, loading } = useWidgetData<{ facts: Array<{ id: string; key: string; value: string; created_at: string | null }> }>(endpoint, 60000);
+  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const [acting, setActing] = useState<Record<string, string>>({});
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+
+  const facts = (data?.facts ?? []).filter((f) => !dismissed.has(f.id));
+
+  const handleOption = async (factId: string, option: DecisionOption) => {
+    setActing((prev) => ({ ...prev, [factId]: option.label }));
+    const ok = await logDecisionResponse(factId, option.label, option.payload);
+    if (ok) {
+      setAnswers((prev) => ({ ...prev, [factId]: option.label }));
+    }
+    setActing((prev) => { const n = { ...prev }; delete n[factId]; return n; });
+  };
+
+  const dismiss = async (id: string) => {
+    try {
+      await fetch(`/api/facts/${encodeURIComponent(id)}`, { method: "DELETE" });
+      setDismissed((prev) => new Set(prev).add(id));
+    } catch { /* keep visible */ }
+  };
+
+  if (error) return <WidgetState loading={false} error={error} />;
+  if (loading) return <WidgetState loading={true} error={null} />;
+
+  if (facts.length === 0) {
+    return <p className="widget-empty">{opt(widget, "emptyText", "No decisions pending.")}</p>;
+  }
+
+  return (
+    <div className="widget-decisions">
+      {facts.map((f) => {
+        const { source, options } = parseDecisionValue(f.value ?? "");
+        const answer = answers[f.id];
+        const activeLabel = acting[f.id];
+        return (
+          <div key={f.id} className={`widget-dec-card${answer ? " widget-dec-answered" : ""}`}>
+            <p className="widget-dec-text">
+              <span className="widget-dec-icon">?</span> {f.key}
+            </p>
+            {source && !answer && <p className="widget-dec-source">{source}</p>}
+            {answer && <p className="widget-dec-answer">✓ {answer}</p>}
+            {!answer && (
+              <div className="widget-dec-options">
+                {options.map((opt, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    className="widget-dec-btn"
+                    disabled={!!activeLabel}
+                    onClick={() => handleOption(f.id, opt)}
+                  >
+                    {activeLabel === opt.label ? "…" : opt.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            <button
+              type="button"
+              className="widget-dec-dismiss"
+              disabled={false}
+              onClick={() => dismiss(f.id)}
+              title="Dismiss"
+            >
+              ✕
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export const widgetRenderers: Record<string, WidgetRenderer> = {
   status: StatusWidget,
   tasks: TasksWidget,
@@ -376,6 +932,9 @@ export const widgetRenderers: Record<string, WidgetRenderer> = {
   links: LinksWidget,
   iframe: IframeWidget,
   "session-explorer": SessionExplorerWidget,
+  collections: CollectionsWidget,
+  recommendations: RecommendationsWidget,
+  decisions: DecisionsWidget,
 };
 
 /** A widget card: chrome + the resolved renderer (or a graceful unknown-type fallback). */

@@ -288,8 +288,7 @@ export function initDatabase(dbPath: string): Database.Database {
 
     CREATE TABLE IF NOT EXISTS collections (
       id          TEXT PRIMARY KEY,
-      type        TEXT NOT NULL
-        CHECK(type IN ('steelbook','tiki_mug','restaurant','bar','tiki_bar')),
+      type        TEXT NOT NULL,
       name        TEXT NOT NULL,
       notes       TEXT,
       rating      INTEGER CHECK(rating >= 1 AND rating <= 5),
@@ -398,6 +397,132 @@ export function initDatabase(dbPath: string): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_email_seen_from
       ON email_seen(from_addr);
 
+    -- notification_log: what the agent has already pushed at the owner unprompted.
+    -- Backs the "don't tell me the same thing twice" gate (NotificationGate).
+    -- One row per (source, channel, target, dedup_key); repeats bump counters
+    -- instead of inserting, so the table stays small and readable.
+    --
+    -- Only PROACTIVE sends land here — cron deliveries, owner-notifier events,
+    -- notify_owner from a background tick. Replies to something the user asked
+    -- for never pass through the gate, so they are always free to repeat.
+    CREATE TABLE IF NOT EXISTS notification_log (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      source           TEXT NOT NULL,
+      channel          TEXT NOT NULL,
+      target           TEXT NOT NULL,
+      dedup_key        TEXT NOT NULL,
+      normalized       TEXT NOT NULL,
+      preview          TEXT,
+      first_sent_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      last_sent_at     TEXT NOT NULL DEFAULT (datetime('now')),
+      last_seen_at     TEXT NOT NULL DEFAULT (datetime('now')),
+      sent_count       INTEGER NOT NULL DEFAULT 0,
+      suppressed_count INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_notification_log_key
+      ON notification_log(source, channel, target, dedup_key);
+    CREATE INDEX IF NOT EXISTS idx_notification_log_recent
+      ON notification_log(source, channel, target, last_sent_at);
+
+    -- rooms: the deployment's directory of multi-party conversation rooms.
+    -- A "room" is a named destination on some transport (a Discord channel, a
+    -- Slack channel, a local sqlite room) that several agents and humans share.
+    -- Distinct from "channels", which are the transports themselves.
+    --
+    -- This lives in SQLite rather than config.yaml on purpose: ChannelLifecycleManager
+    -- restarts a transport whenever its config block changes (lifecycle.ts), so
+    -- writing a newly-created room into channels.discord.* would drop and
+    -- reconnect the Discord gateway every time an agent opened a room.
+    CREATE TABLE IF NOT EXISTS rooms (
+      ref         TEXT PRIMARY KEY,
+      backend     TEXT NOT NULL,
+      native_id   TEXT NOT NULL,
+      name        TEXT NOT NULL,
+      -- What the room is for, in the agents' own terms. Injected into every
+      -- wake prompt, and mirrored to the transport's own description field
+      -- (Discord's channel topic) so people see it too.
+      purpose     TEXT,
+      created_by  TEXT,
+      agent_turns INTEGER NOT NULL DEFAULT 0,
+      -- Who spoke last, so a reply split across several transport messages
+      -- counts as the one turn it actually is.
+      last_speaker TEXT,
+      -- Webhook credential for transports that can post under a per-message
+      -- display name (Discord). Lets each agent appear as its own participant
+      -- instead of riding a "[speaker]" text prefix on one shared bot account.
+      -- The token is a credential: anyone holding it can post into this room
+      -- under any name, so it stays in the local database and never in config.
+      webhook_id    TEXT,
+      webhook_token TEXT,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_rooms_name ON rooms(name);
+    CREATE INDEX IF NOT EXISTS idx_rooms_backend ON rooms(backend, native_id);
+
+    -- room_subscriptions: who is watching what, and how loudly.
+    --
+    -- Two independent axes, because they answer different questions:
+    --   deliver  = WHEN do I look?    push (transport event) | poll (interval)
+    --   wake_on  = WHAT makes me run? addressed | all | none
+    -- 'none' is a read-only subscription: the agent sees the room in its room
+    -- list and can read it on demand, but nothing there ever starts a loop.
+    --
+    -- cursor is the last message the agent has SEEN (advanced by reads and by
+    -- its own posts, so an agent never wakes on its own message). hour_bucket +
+    -- wakes_this_hour are the runaway-loop brake: two agents talking to each
+    -- other cannot exceed max_wakes_per_hour between them.
+    CREATE TABLE IF NOT EXISTS room_subscriptions (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent           TEXT NOT NULL,
+      room_ref        TEXT NOT NULL,
+      deliver         TEXT NOT NULL DEFAULT 'push',
+      wake_on         TEXT NOT NULL DEFAULT 'addressed',
+      poll_seconds    INTEGER,
+      -- Wake this agent every N minutes even when nobody has said anything, so
+      -- it can act on time passing rather than only on being spoken to.
+      check_in_minutes INTEGER,
+      last_check_in    TEXT,
+      cursor          TEXT,
+      source          TEXT NOT NULL DEFAULT 'config',
+      last_woke_at    TEXT,
+      hour_bucket     TEXT,
+      wakes_this_hour INTEGER NOT NULL DEFAULT 0,
+      created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_room_subscriptions_key
+      ON room_subscriptions(agent, room_ref);
+    CREATE INDEX IF NOT EXISTS idx_room_subscriptions_room
+      ON room_subscriptions(room_ref);
+
+    -- room_messages: storage for the built-in "local" room backend only.
+    -- Transport-backed rooms (Discord, Slack) keep their history on the
+    -- transport and are read back through the backend's fetchSince.
+    CREATE TABLE IF NOT EXISTS room_messages (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      room_ref     TEXT NOT NULL,
+      author_id    TEXT NOT NULL,
+      author_label TEXT NOT NULL,
+      content      TEXT NOT NULL,
+      created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_room_messages_room
+      ON room_messages(room_ref, id);
+
+    -- room_members: membership for the "local" backend, and a cache of
+    -- transport-side membership for backends that can report it.
+    CREATE TABLE IF NOT EXISTS room_members (
+      room_ref   TEXT NOT NULL,
+      member_id  TEXT NOT NULL,
+      label      TEXT NOT NULL,
+      kind       TEXT NOT NULL DEFAULT 'unknown',
+      added_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (room_ref, member_id)
+    );
+
     -- audit_log: append-only, SHA-256 chained ledger for config/permission changes.
     -- Schema: id, timestamp, actor, action, before (JSON), after (JSON), context (JSON), hash, prev_hash.
     -- Triggers enforce append-only: UPDATE and DELETE are rejected.
@@ -491,6 +616,34 @@ export function initDatabase(dbPath: string): Database.Database {
   }
 
   try {
+    db.exec("ALTER TABLE rooms ADD COLUMN agent_turns INTEGER NOT NULL DEFAULT 0");
+  } catch {
+    // Column already exists
+  }
+
+  // `topic` was the original name; `purpose` says what it is actually for.
+  try {
+    db.exec("ALTER TABLE rooms RENAME COLUMN topic TO purpose");
+  } catch {
+    // Already renamed, or the table was created with `purpose` from the start.
+  }
+
+  for (const sql of [
+    "ALTER TABLE rooms ADD COLUMN webhook_id TEXT",
+    "ALTER TABLE rooms ADD COLUMN webhook_token TEXT",
+    "ALTER TABLE rooms ADD COLUMN purpose TEXT",
+    "ALTER TABLE room_subscriptions ADD COLUMN check_in_minutes INTEGER",
+    "ALTER TABLE room_subscriptions ADD COLUMN last_check_in TEXT",
+    "ALTER TABLE rooms ADD COLUMN last_speaker TEXT",
+  ]) {
+    try {
+      db.exec(sql);
+    } catch {
+      // Column already exists
+    }
+  }
+
+  try {
     db.exec("ALTER TABLE projects ADD COLUMN path TEXT");
   } catch {
     // Column already exists
@@ -551,6 +704,42 @@ export function initDatabase(dbPath: string): Database.Database {
     db.exec("ALTER TABLE messages ADD COLUMN reasoning TEXT");
   } catch {
     // Column already exists
+  }
+
+  // Safe migration: drop the legacy hard-coded type CHECK on collections so the
+  // `type` column is an open label (steelbook, restaurant, book, …). Earlier DBs
+  // created the table with CHECK(type IN ('steelbook',…)); rebuild them in place,
+  // preserving rows. SQLite can't ALTER a CHECK away, so recreate the table.
+  try {
+    const ddl = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'collections'").get() as
+      | { sql?: string }
+      | undefined;
+    if (ddl?.sql?.includes("CHECK(type IN")) {
+      db.exec(`
+        BEGIN;
+        ALTER TABLE collections RENAME TO collections_legacy;
+        CREATE TABLE collections (
+          id          TEXT PRIMARY KEY,
+          type        TEXT NOT NULL,
+          name        TEXT NOT NULL,
+          notes       TEXT,
+          rating      INTEGER CHECK(rating >= 1 AND rating <= 5),
+          location    TEXT,
+          url         TEXT,
+          added_by    TEXT NOT NULL DEFAULT 'user' CHECK(added_by IN ('user','tai')),
+          source      TEXT CHECK(source IN ('email_id','chat','manual')),
+          created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT INTO collections SELECT * FROM collections_legacy;
+        DROP TABLE collections_legacy;
+        CREATE INDEX IF NOT EXISTS idx_collections_type ON collections(type);
+        CREATE INDEX IF NOT EXISTS idx_collections_name ON collections(name);
+        COMMIT;
+      `);
+    }
+  } catch {
+    // Table absent or already rebuilt
   }
 
   db.exec(`

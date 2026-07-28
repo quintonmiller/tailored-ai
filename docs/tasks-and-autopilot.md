@@ -102,6 +102,59 @@ The web UI's "working on" strip still subscribes via `getActivity()` for live st
 
 The autopilot uses `runtime.getTaskBackend()` by default; tests override via `AutopilotWorkerOptions.taskBackend`. As of S7.5 the worker still claims one task per tick from a single backend — multi-project iteration with per-project backends is a follow-up bean.
 
+## Verification gate
+
+By default nothing stops an agent (or the autopilot finalizer) from setting a
+task `done` without proving the work — a `done` is an assertion, not evidence.
+The **`builtin:verify-gate`** plugin (`packages/core/src/plugins/verify-gate.ts`,
+seeded `enabled: false`) closes that hole. It subscribes to `task.transitioned`
+and, when a task reaches the backend's `done` status without a recorded
+verification verdict, routes it back to the review stage instead of letting it
+close.
+
+The contract is a **convention, not a schema**:
+
+- The task creator writes an **`## Acceptance`** section (and a `verify:` shell
+  command when one exists) in the description — the observable check that proves
+  the task is done.
+- The reviewing agent runs that check and posts a comment whose latest verdict
+  is `VERIFY: PASS` (with evidence) or `VERIFY: FAIL`. The gate only lets `done`
+  stand when the most recent reviewer verdict is `PASS`; the gate's own
+  bookkeeping comments are ignored.
+- An unverified `done` is reverted to `in_review`, re-assigned to the reviewer,
+  and a `task.dispatch_requested` is emitted so the watcher re-runs the
+  reviewer. After `maxBounces` rounds it stops and emits `task.needs_human`, so
+  a task can't loop forever.
+
+It hardcodes no agent name. Config (`{ module: "builtin:verify-gate", config: … }`):
+
+```yaml
+- module: builtin:verify-gate
+  config:
+    reviewerAssignee: reviewer       # default bounce target
+    reviewerByTag:                   # per-kind override, checked first
+      kind:config: verifier          #   live-surface → non-worktree verifier (curls the running app)
+      kind:code: reviewer            #   repo change → worktree reviewer (builds/tests the branch)
+    requireTags: [kind:code, kind:config]  # only gate tagged work; PA tasks self-close
+    maxBounces: 2                    # then escalate to a human
+    # passMarker / failMarker / doneStatus / reviewStatus are overridable too
+```
+
+`reviewerByTag` matters because the two kinds verify differently: a code task
+needs a worktree to build/test the branch, but a config / live-surface task
+needs a *running instance* to curl — and a non-worktree verifier agent
+(`worktree: false`, with `exec`) isn't blocked by `coder-project-guard` on a
+project that has no git path. So config tasks get functionally verified instead
+of stalling on "project has no path".
+
+`requireTags` is the scope knob: leave it unset to gate every `→ done`, or list
+the tags your implementation tasks carry so plain assistant/PA tasks ("escalate
+X", "log Y") still close themselves. The autopilot worker emits
+`task.transitioned` on its force-finalize path, so the gate sees an
+autopilot-completed task the same as an agent-driven `done`. Like the other
+built-in guards it's a replaceable opinion — disable it and ship your own
+subscriber to change the policy.
+
 ## Briefing surface
 
 The morning digest is delivered out-of-band (default channel). The **briefing** is the on-demand, in-UI counterpart: an LLM-written greeting/summary the web UI shows at the top of Home. It is off by default, so there's no behavior or token cost unless a user enables it.

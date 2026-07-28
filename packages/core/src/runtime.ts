@@ -19,6 +19,7 @@ import { type EventBus, TypedEventBus } from "./events.js";
 import { HttpRouteRegistry } from "./http/registry.js";
 import type { MemoryBackend } from "./memory/interface.js";
 import { resolveMemoryBackend } from "./memory/registry.js";
+import { NotificationGate } from "./notifications/dedup.js";
 import { type ProjectContext, type ProjectRef, readProjectFile } from "./projects/resolve.js";
 import type { AIProvider } from "./providers/interface.js";
 import { AgentRegistry } from "./resources/agent.js";
@@ -31,6 +32,10 @@ import { SkillRegistry } from "./resources/skill.js";
 import { StepExecutorRegistry } from "./resources/step-executor-registry.js";
 import { ToolRegistry } from "./resources/tool-registry.js";
 import { populateBuiltinTriggers, TriggerKindRegistry } from "./resources/trigger-registry.js";
+import { LocalRoomBackend } from "./rooms/local.js";
+import { getRoomBackend, registerRoomBackend } from "./rooms/registry.js";
+import { RoomStore } from "./rooms/store.js";
+import { formatRoomRef, parseRoomRef } from "./rooms/types.js";
 import { createSandbox } from "./sandboxes/factory.js";
 import { globalSandboxRegistry } from "./sandboxes/registry.js";
 import { createTaskBackend } from "./tasks/factory.js";
@@ -60,6 +65,8 @@ export interface RuntimeOptions {
       db?: Database.Database;
       resolveOutbound?: (channelId?: string) => OutboundNotifier | undefined;
       getOwnerId?: (channelId?: string) => string | undefined;
+      /** Repeat gate for unsolicited outbound messages. See NotificationGate. */
+      getNotificationGate?: () => NotificationGate | undefined;
       taskBackend?: TaskBackend;
       taskBackendResolver?: import("./tools/tasks.js").TaskBackendResolver;
       getEmbedder?: () => import("./providers/embedding.js").EmbeddingProvider | undefined;
@@ -152,6 +159,10 @@ export class AgentRuntime {
    */
   private _outbound = new Map<string, OutboundNotifier>();
 
+  /** Lazily built in {@link getNotificationGate}; reads config live, so reload-safe. */
+  private _notificationGate?: NotificationGate;
+  private _roomStore?: RoomStore;
+
   constructor(
     opts: RuntimeOptions,
     loadConfig: (path: string) => AgentConfig,
@@ -182,6 +193,7 @@ export class AgentRuntime {
         getMemoryBackend: () => this.getMemoryBackend(),
         resolveOutbound: (id?: string) => this.resolveOutbound(id),
         getOwnerId: (id?: string) => this.getOwnerId(id),
+        getNotificationGate: () => this.getNotificationGate(),
         events: this.events,
       }) ?? [];
     for (const tool of builtinTools) this._toolRegistry.registerBuiltin(tool);
@@ -514,6 +526,7 @@ export class AgentRuntime {
           getMemoryBackend: () => this.getMemoryBackend(),
           resolveOutbound: (id?: string) => this.resolveOutbound(id),
           getOwnerId: (id?: string) => this.getOwnerId(id),
+          getNotificationGate: () => this.getNotificationGate(),
           events: this.events,
         }) ?? [];
       const { provider, model } = this._createProvider(config);
@@ -840,6 +853,96 @@ export class AgentRuntime {
   }
 
   /**
+   * Repeat suppression for unsolicited messages. Every proactive sender (cron
+   * delivery, owner-notifier, notify_owner from a tick) routes through this so
+   * "have I already said this?" is answered in one place against one table.
+   *
+   * Deliberately NOT applied to chat replies: if the user asks the same thing
+   * twice they get an answer twice.
+   */
+  getNotificationGate(): NotificationGate {
+    if (!this._notificationGate) {
+      this._notificationGate = new NotificationGate(this.db, () => this.getConfig().notifications?.dedup);
+    }
+    return this._notificationGate;
+  }
+
+  /**
+   * The room directory: which rooms exist, who subscribes to them, and how far
+   * each subscriber has read. See docs/rooms.md.
+   *
+   * Registering the built-in `local` backend is deferred to first use rather
+   * than done in the constructor — the backend registry is a module singleton
+   * (the #47 follow-up), so a test that never touches rooms should not have
+   * its handle replaced by the next runtime that gets constructed.
+   */
+  getRoomStore(): RoomStore {
+    if (!this._roomStore) {
+      this._roomStore = new RoomStore(this.db);
+      // The tool factory registers `local` too, for the CLI paths that never
+      // construct a store. Whoever gets there first wins; re-registering would
+      // only log a misleading "duplicate registration" warning at startup.
+      if (!getRoomBackend("local")) {
+        registerRoomBackend(new LocalRoomBackend(this.db, this._roomStore));
+      }
+    }
+    return this._roomStore;
+  }
+
+  /**
+   * Bring `room_subscriptions` in line with config: declared rooms are
+   * registered, declared subscriptions upserted, and config-sourced rows that
+   * are no longer declared removed. Rows an agent created for itself
+   * (source = "agent") are left alone — a config reload must not silently
+   * unsubscribe an agent from a room it opened.
+   */
+  reconcileRooms(): void {
+    const cfg = this.getConfig().rooms;
+    const store = this.getRoomStore();
+
+    for (const declared of cfg?.rooms ?? []) {
+      const ref = declared?.ref ? parseRoomRef(declared.ref) : null;
+      if (!declared?.name || !ref) continue;
+      // Config wins on where a name points. Without this, correcting a ref in
+      // config.yaml hits the name-uniqueness guard and the stale row keeps the
+      // name — the change parses, logs a warning, and does nothing.
+      const existing = store.getRoomByName(declared.name);
+      const existingRef = existing ? formatRoomRef(existing.ref) : null;
+      if (existingRef && existingRef !== formatRoomRef(ref)) {
+        console.log(`[rooms] Re-pointing "${declared.name}" from ${existingRef} to ${formatRoomRef(ref)}.`);
+        store.repointRoom(existingRef, ref);
+      }
+      try {
+        store.upsertRoom({ ref, name: declared.name, purpose: declared.purpose });
+      } catch (err) {
+        console.warn(`[rooms] ${(err as Error).message}`);
+      }
+    }
+
+    const keep: Array<{ agent: string; roomRef: string }> = [];
+    for (const sub of cfg?.subscriptions ?? []) {
+      if (!sub?.agent || !sub?.room) continue;
+      const room = store.resolve(sub.room);
+      const roomRef = room ? formatRoomRef(room.ref) : parseRoomRef(sub.room) ? sub.room : null;
+      if (!roomRef) {
+        console.warn(`[rooms] Subscription for "${sub.agent}" names unknown room "${sub.room}" — skipped.`);
+        continue;
+      }
+      store.subscribe({
+        agent: sub.agent,
+        roomRef,
+        deliver: sub.deliver,
+        wakeOn: sub.wakeOn,
+        pollSeconds: sub.pollSeconds ?? null,
+        checkInMinutes: sub.checkInMinutes ?? null,
+        source: "config",
+      });
+      keep.push({ agent: sub.agent, roomRef });
+    }
+    store.pruneConfigSubscriptions(keep);
+  }
+
+  /**
    * Build a standard AgentLoopOptions from the current runtime state.
    * Callers can spread additional fields (onToolCall, onToolResult, etc.) on top.
    */
@@ -938,6 +1041,10 @@ export class AgentRuntime {
       // in the loop body (see agent/loop.ts ToolContext construction).
       toolContextExtras: {
         agentName: agentName ?? (config.agents?.default ? "default" : undefined),
+        // Declared per-agent boundary. Same enforcement the task watcher
+        // injects for worktrees, so an agent granted `write` is confined to
+        // where it is supposed to work rather than the whole filesystem.
+        ...(resolved.fileBoundary ? { workingDirectoryBoundary: resolved.fileBoundary } : {}),
       },
       getTools: () => {
         const r = resolveAgent(

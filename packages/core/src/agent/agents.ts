@@ -1,4 +1,5 @@
-import { join } from "node:path";
+import { homedir } from "node:os";
+import { join, resolve as resolvePath } from "node:path";
 import type { AgentConfig, AgentDefinition, AgentHook } from "../config.js";
 import type { ThinkingLevel } from "../providers/interface.js";
 import type { SkillDefinition } from "../resources/skill.js";
@@ -16,6 +17,18 @@ export interface SkillCatalogEntry {
   description: string;
 }
 
+/**
+ * Resolve a configured boundary to an absolute path. A leading `~` is expanded
+ * because people write it and the check is a string-prefix comparison — an
+ * unexpanded tilde would match nothing and silently confine the agent to a
+ * directory that does not exist.
+ */
+function expandBoundary(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  const expanded = raw === "~" || raw.startsWith("~/") ? join(homedir(), raw.slice(1)) : raw;
+  return resolvePath(expanded);
+}
+
 export interface ResolvedAgent {
   model: string;
   provider: string;
@@ -25,6 +38,8 @@ export interface ResolvedAgent {
   /** Per-agent reasoning effort (#254); undefined leaves the provider on its configured default. */
   thinking: ThinkingLevel | undefined;
   maxToolRounds: number;
+  /** Hard filesystem boundary; undefined means the deployment-wide rules apply. */
+  fileBoundary: string | undefined;
   contextDir: string | undefined;
   kbDir: string | undefined;
   nudgeOnText: number;
@@ -103,6 +118,7 @@ export function resolveAgent(
     temperature: config.agent.temperature,
     thinking: undefined,
     maxToolRounds: config.agent.maxToolRounds,
+    fileBoundary: undefined,
     contextDir: undefined,
     kbDir: undefined,
     nudgeOnText: 0,
@@ -148,6 +164,7 @@ export function resolveAgent(
     temperature: agent?.temperature ?? defaults.temperature,
     thinking: agent?.thinking ?? defaults.thinking,
     maxToolRounds: agent?.maxToolRounds ?? defaults.maxToolRounds,
+    fileBoundary: expandBoundary(agent?.fileBoundary),
     contextDir: undefined,
     kbDir: undefined,
     nudgeOnText: agent?.nudgeOnText ?? 0,

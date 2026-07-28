@@ -262,3 +262,39 @@ describe("AdminTool.create_tool", () => {
     expect(readFileSync(configPath, "utf-8")).toBe(before);
   });
 });
+
+describe("AdminTool.update_config", () => {
+  it("writes a dashboard widget through the allowlisted dashboard. prefix", async () => {
+    const { runtime, configPath } = buildRuntime("agents: {}\n");
+    const admin = new AdminTool(runtime);
+
+    const widget = {
+      id: "today-briefing",
+      type: "markdown",
+      title: "Today's briefing",
+      span: 2,
+      options: { endpoint: "/api/briefing", contentField: "content" },
+    };
+    const result = await admin.execute({ action: "update_config", path: "dashboard.widgets", value: [widget] }, ctx());
+
+    expect(result.success).toBe(true);
+    expect(result.output).toMatch(/Config updated at "dashboard.widgets"/);
+
+    const written = YAML.parse(readFileSync(configPath, "utf-8")) as {
+      dashboard: { widgets: Array<{ id: string; type: string }> };
+    };
+    expect(written.dashboard.widgets[0].id).toBe("today-briefing");
+    expect(written.dashboard.widgets[0].type).toBe("markdown");
+  });
+
+  it("rejects a path outside the write allowlist", async () => {
+    const { runtime, configPath } = buildRuntime("agents: {}\n");
+    const before = readFileSync(configPath, "utf-8");
+    const admin = new AdminTool(runtime);
+
+    const result = await admin.execute({ action: "update_config", path: "server.authToken", value: "leak" }, ctx());
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/not in the allowed set/);
+    expect(readFileSync(configPath, "utf-8")).toBe(before);
+  });
+});

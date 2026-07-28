@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { resolveAgent } from "../agent/agents.js";
 import type { AgentConfig } from "../config.js";
@@ -164,5 +165,29 @@ describe("resolveAgent — MCP tool references", () => {
     const tools = [makeTool("mcp_github_search_issues")];
     const resolved = resolveAgent("helper", config, tools);
     expect(resolved.tools.map((t) => t.name)).toEqual(["mcp_github_search_issues"]);
+  });
+});
+
+describe("per-agent file boundary", () => {
+  it("resolves a configured boundary to an absolute path", () => {
+    const config = makeConfig({
+      agents: { planner: { fileBoundary: "/home/quint/research/travel" } },
+    });
+
+    expect(resolveAgent("planner", config, [], undefined, "/ctx").fileBoundary).toBe("/home/quint/research/travel");
+  });
+
+  it("expands a leading ~, which would otherwise confine the agent to nowhere", () => {
+    // The boundary check is a path-prefix comparison, so an unexpanded "~"
+    // matches nothing and every write is rejected with a confusing error.
+    const config = makeConfig({ agents: { planner: { fileBoundary: "~/research" } } });
+
+    expect(resolveAgent("planner", config, [], undefined, "/ctx").fileBoundary).toBe(`${homedir()}/research`);
+  });
+
+  it("is undefined when unset, so deployment-wide rules still apply", () => {
+    const config = makeConfig({ agents: { planner: {} } });
+
+    expect(resolveAgent("planner", config, [], undefined, "/ctx").fileBoundary).toBeUndefined();
   });
 });

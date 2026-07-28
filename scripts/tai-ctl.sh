@@ -22,6 +22,10 @@
 #    (core, server, cli) before touching the running process — so build
 #    errors abort the cycle with the old agent still serving. Pass
 #    `--no-build` to skip when you know nothing changed (faster).
+#  - Starting vllm blocks until its health endpoint answers (the engine can
+#    crash ~a minute in during memory profiling). A failed boot exits nonzero
+#    and cleans up, rather than falsely reporting "started". Tune the wait with
+#    VLLM_START_TIMEOUT (default 300s).
 
 set -euo pipefail
 
@@ -62,10 +66,40 @@ spawn() {
   echo "  $name started (pid $pid, log $log)"
 }
 
+# Poll the vllm health endpoint until it answers, the process dies, or we time
+# out. Returns 0 only when ready. Takes the session-leader pid so we can fail
+# fast when the engine crashes during startup instead of waiting the full window.
+await_vllm_ready() {
+  local pid="$1" timeout="$2" started=$SECONDS
+  while (( SECONDS - started < timeout )); do
+    if curl -fsS --max-time 2 "$VLLM_HEALTH_URL" >/dev/null 2>&1; then
+      echo "  vllm ready (took $((SECONDS - started))s)"
+      return 0
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+      echo "  vllm process exited during startup (after $((SECONDS - started))s)" >&2
+      return 1
+    fi
+    sleep 2
+  done
+  echo "  vllm still not answering after ${timeout}s" >&2
+  return 1
+}
+
 start_vllm() {
   if is_running vllm; then echo "  vllm already running (pid $(cat "$(pid_file vllm)"))"; return; fi
   [[ -x "$VLLM_SCRIPT" ]] || { echo "  vllm script not found / not executable: $VLLM_SCRIPT" >&2; return 1; }
-  spawn vllm "$VLLM_SCRIPT"
+  spawn vllm "$VLLM_SCRIPT" || return 1
+  # spawn() only confirms the process launched; the vllm engine can still abort
+  # ~a minute later during memory profiling (e.g. the KV cache won't fit the
+  # requested context). Block on the health endpoint so a failed boot exits
+  # nonzero instead of leaving a dead process reported as "started".
+  echo "  waiting for vllm to become ready (up to ${VLLM_START_TIMEOUT:-300}s)..."
+  if ! await_vllm_ready "$(cat "$(pid_file vllm)")" "${VLLM_START_TIMEOUT:-300}"; then
+    echo "  vllm failed to start — see $(log_file vllm)" >&2
+    stop_one vllm >/dev/null 2>&1 || true
+    return 1
+  fi
 }
 
 start_agent() {

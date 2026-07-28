@@ -1,7 +1,23 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 
-export type CollectionType = "steelbook" | "tiki_mug" | "restaurant" | "bar" | "tiki_bar";
+/**
+ * A collection's `type` is an open, normalized string (e.g. "steelbook",
+ * "restaurant", "book", "board_game") — not a fixed enum. Callers pass any
+ * label; `normalizeCollectionType` snake_cases it so "Board Game" and
+ * "board_game" collapse to one bucket. Keeping this open is what lets an agent
+ * track an arbitrary collection without a core code change.
+ */
+export type CollectionType = string;
+
+/** Lowercase + snake_case a free-text type label into a stable bucket key. */
+export function normalizeCollectionType(raw: string): string {
+  return String(raw)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
 
 export interface Collection {
   id: string;
@@ -41,11 +57,8 @@ export interface CollectionListResult {
 }
 
 export interface CollectionStats {
-  steelbooks: number;
-  tiki_mugs: number;
-  restaurants: number;
-  bars: number;
-  tiki_bars: number;
+  /** Per-type counts, keyed by the normalized type label. */
+  byType: Record<string, number>;
   total: number;
 }
 
@@ -115,34 +128,23 @@ export function listCollections(db: Database.Database, filter: CollectionListFil
 
 export function getCollectionStats(db: Database.Database): CollectionStats {
   const rows = db
-    .prepare("SELECT type, COUNT(*) as count FROM collections GROUP BY type")
+    .prepare("SELECT type, COUNT(*) as count FROM collections GROUP BY type ORDER BY count DESC")
     .all() as Array<{ type: string; count: number }>;
 
-  const map: Record<string, number> = {};
+  const byType: Record<string, number> = {};
+  let total = 0;
   for (const r of rows) {
-    map[r.type] = r.count;
+    byType[r.type] = r.count;
+    total += r.count;
   }
 
-  const steelbooks = map.steelbook ?? 0;
-  const tiki_mugs = map.tiki_mug ?? 0;
-  const restaurants = map.restaurant ?? 0;
-  const bars = map.bar ?? 0;
-  const tiki_bars = map.tiki_bar ?? 0;
-
-  return {
-    steelbooks,
-    tiki_mugs,
-    restaurants,
-    bars,
-    tiki_bars,
-    total: steelbooks + tiki_mugs + restaurants + bars + tiki_bars,
-  };
+  return { byType, total };
 }
 
 export function createCollection(db: Database.Database, input: CollectionInput): Collection {
-  const validTypes: CollectionType[] = ["steelbook", "tiki_mug", "restaurant", "bar", "tiki_bar"];
-  if (!validTypes.includes(input.type)) {
-    throw new Error(`Invalid collection type: ${input.type}`);
+  const type = normalizeCollectionType(input.type ?? "");
+  if (!type) {
+    throw new Error("type is required (e.g. steelbook, restaurant, book)");
   }
   if (!input.name?.trim()) {
     throw new Error("name is required");
@@ -161,7 +163,7 @@ export function createCollection(db: Database.Database, input: CollectionInput):
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
-    input.type,
+    type,
     input.name.trim(),
     input.notes ?? null,
     input.rating ?? null,

@@ -13,13 +13,19 @@
  */
 
 import { resolve } from "node:path";
+import { IdentityResolver } from "../rooms/identities.js";
+import { LocalRoomBackend } from "../rooms/local.js";
+import { getRoomBackend, listRoomBackends, registerRoomBackend } from "../rooms/registry.js";
+import { RoomStore } from "../rooms/store.js";
 import { createEgressPolicy } from "../security/egress-policy.js";
 import { createTaskBackend } from "../tasks/factory.js";
 import { AskUserTool } from "./ask-user.js";
 import { BrowserTool } from "./browser.js";
 import { ClaudeCodeTool } from "./claude-code.js";
+import { CollectionsTool } from "./collections.js";
 import { createCustomTools } from "./custom.js";
 import { DocumentsTool } from "./documents.js";
+import { EditTool } from "./edit.js";
 import { ExecTool } from "./exec.js";
 import { ExtractDocumentTool } from "./extract-document.js";
 import { FactsTool } from "./facts.js";
@@ -29,6 +35,7 @@ import { NotifyOwnerTool } from "./notify-owner.js";
 import { ProjectsTool } from "./projects.js";
 import { ReadTool } from "./read.js";
 import { RecallTool } from "./recall.js";
+import { RoomTool } from "./room.js";
 import { TaskQueryTool, TasksTool } from "./tasks.js";
 import { registerToolFactory } from "./tool-factories.js";
 import { WebFetchTool } from "./web-fetch.js";
@@ -60,6 +67,11 @@ registerToolFactory("read", (config) => {
 registerToolFactory("write", (config) => {
   if (config.tools.write?.enabled === false) return [];
   return [new WriteTool(config.tools.write?.allowedPaths)];
+});
+
+registerToolFactory("edit", (config) => {
+  if (config.tools.edit?.enabled === false) return [];
+  return [new EditTool(config.tools.edit?.allowedPaths ?? config.tools.write?.allowedPaths)];
 });
 
 registerToolFactory("web_fetch", (config) => {
@@ -131,7 +143,51 @@ registerToolFactory("notify_owner", (config, ctx) => {
     new NotifyOwnerTool(
       (id) => resolveOutbound(id ?? channel),
       (id) => getOwnerId(id ?? channel),
+      ctx.getNotificationGate,
     ),
+  ];
+});
+
+// The room tool registers whenever there's a database, NOT only when a room
+// transport is connected. resolveAgent throws on unknown tool names
+// (agents.ts), so an agent listing `room` would fail to resolve at all during
+// a Discord outage — the tool itself reports "no backend connected" instead,
+// which is a recoverable state rather than a broken agent.
+registerToolFactory("room", (config, ctx) => {
+  if (config.tools.room?.enabled === false) return [];
+  if (!ctx.db) return [];
+  const db = ctx.db;
+  const store = new RoomStore(db);
+
+  // The `local` backend is registered by AgentRuntime.getRoomStore(), which
+  // only the long-running server path calls. Single-message and CLI runs build
+  // tools without ever touching it, so the tool would come up with no backends
+  // at all. Registering here too makes `room create` work in every mode.
+  if (!getRoomBackend("local")) registerRoomBackend(new LocalRoomBackend(db, store));
+
+  const getOwnerId = ctx.getOwnerId;
+  const buildIdentities = () => {
+    const ownerNativeIds: Record<string, string> = {};
+    for (const backend of listRoomBackends()) {
+      const id = getOwnerId?.(backend.id);
+      if (id) ownerNativeIds[backend.id] = id;
+    }
+    return new IdentityResolver({
+      agentNames: Object.keys(config.agents ?? {}),
+      declared: config.rooms?.identities,
+      ownerNativeIds,
+      ownerLabel: config.rooms?.ownerLabel,
+      defaultBackend: config.defaultChannel,
+    });
+  };
+  return [
+    new RoomTool({
+      store,
+      identities: buildIdentities,
+      getNotificationGate: ctx.getNotificationGate,
+      urgencyWindowHours: () => config.rooms?.urgencyWindowHours,
+      defaultBackend: () => config.rooms?.defaultBackend,
+    }),
   ];
 });
 
@@ -154,6 +210,12 @@ registerToolFactory("projects", (config, ctx) => {
   if (config.tools.projects?.enabled === false) return [];
   if (!ctx.db) return [];
   return [new ProjectsTool(ctx.db)];
+});
+
+registerToolFactory("collections", (config, ctx) => {
+  if (config.tools.collections?.enabled === false) return [];
+  if (!ctx.db) return [];
+  return [new CollectionsTool(ctx.db)];
 });
 
 registerToolFactory("documents", (config, ctx) => {
