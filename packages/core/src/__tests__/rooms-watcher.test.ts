@@ -18,7 +18,13 @@ import { LocalRoomBackend } from "../rooms/local.js";
 import { registerRoomBackend, unregisterRoomBackend } from "../rooms/registry.js";
 import { RoomStore, type RoomSubscription, type WakeOn } from "../rooms/store.js";
 import type { RoomMessage } from "../rooms/types.js";
-import { describeWakeReason, looksLikeUninvokedPass, RoomWatcher, todayLine } from "../rooms/watcher.js";
+import {
+  describeWakeReason,
+  looksLikeUninvokedPass,
+  makeRoomSessionKey,
+  RoomWatcher,
+  todayLine,
+} from "../rooms/watcher.js";
 import type { AgentRuntime } from "../runtime.js";
 
 let db: Database.Database;
@@ -825,5 +831,27 @@ describe("todayLine", () => {
 
   it("names the weekday, since that is what people plan around", () => {
     expect(todayLine(new Date("2026-08-01T09:00:00"))).toContain("Saturday");
+  });
+});
+
+describe("room session scope", () => {
+  it("keeps rooms apart by default", () => {
+    // What an agent does in one room cannot leak into another.
+    expect(makeRoomSessionKey("discord:A", "coder")).toBe("room:discord.A:coder");
+    expect(makeRoomSessionKey("discord:B", "coder")).toBe("room:discord.B:coder");
+    expect(makeRoomSessionKey("discord:A", "coder")).not.toBe(makeRoomSessionKey("discord:B", "coder"));
+  });
+
+  it("collapses every room into one session when shared", () => {
+    // An agent added to a new room otherwise starts blank — which is how
+    // freshly-added agents reported unassigned tasks as their own work.
+    expect(makeRoomSessionKey("discord:A", "ea", "shared")).toBe("room:all:ea");
+    expect(makeRoomSessionKey("discord:B", "ea", "shared")).toBe("room:all:ea");
+  });
+
+  it("still separates agents from each other when shared", () => {
+    expect(makeRoomSessionKey("discord:A", "ea", "shared")).not.toBe(
+      makeRoomSessionKey("discord:A", "coder", "shared"),
+    );
   });
 });
