@@ -7,7 +7,7 @@ export { compactSession, formatCompactResult } from "./agent/compact.js";
 export type { ResolvedHooks } from "./agent/hooks.js";
 export { applyTemplates, EMPTY_HOOKS, executeHooks, hasHooks, mergeHooks, normalizeHooks } from "./agent/hooks.js";
 export type { AgentLoopOptions } from "./agent/loop.js";
-export { runAgentLoop, stripOrphanedToolMessages } from "./agent/loop.js";
+export { isStallStop, type LoopStop, runAgentLoop, stripOrphanedToolMessages } from "./agent/loop.js";
 export { BASE_SYSTEM_PROMPT } from "./agent/prompt.js";
 export type { Session } from "./agent/session.js";
 export { findOrCreateSession, loadSession, newSession, resetSession } from "./agent/session.js";
@@ -197,6 +197,7 @@ export {
   EgressBlockedError,
 } from "./browser/mediator.js";
 export { asNotifier } from "./channels/discord-builtin.js";
+export { DiscordRoomBackend, type DiscordRoomBackendOptions } from "./channels/discord-rooms.js";
 export type { CommandContext, CommandResult, ParsedCommand } from "./commands.js";
 export { executeCommand, isCommand, parseCommand } from "./commands.js";
 export type {
@@ -261,6 +262,22 @@ export {
   type MemoryChunkInput,
   semanticSearch,
 } from "./db/chunk-queries.js";
+export type {
+  Collection,
+  CollectionInput,
+  CollectionListFilter,
+  CollectionListResult,
+  CollectionStats,
+  CollectionType,
+} from "./db/collection-queries.js";
+export {
+  createCollection,
+  deleteCollection,
+  getCollection,
+  getCollectionStats,
+  listCollections,
+  normalizeCollectionType,
+} from "./db/collection-queries.js";
 export type { DocumentMeta } from "./db/document-queries.js";
 export { createDocument, deleteDocument, getDocument, listDocuments, updateDocument } from "./db/document-queries.js";
 // Email-seen helpers — re-exported so external plugin packages (e.g.
@@ -352,21 +369,6 @@ export {
   updateSessionMeta,
 } from "./db/queries.js";
 export { initDatabase } from "./db/schema.js";
-export type {
-  Collection,
-  CollectionInput,
-  CollectionListFilter,
-  CollectionListResult,
-  CollectionStats,
-  CollectionType,
-} from "./db/collection-queries.js";
-export {
-  createCollection,
-  deleteCollection,
-  getCollection,
-  getCollectionStats,
-  listCollections,
-} from "./db/collection-queries.js";
 export type {
   ProjectTask,
   ProjectTaskWithComments,
@@ -460,6 +462,16 @@ export {
 } from "./memory/registry.js";
 export { SqliteMemoryBackend } from "./memory/sqlite-backend.js";
 export {
+  DEDUP_DEFAULTS,
+  type NotificationCandidate,
+  type NotificationDecision,
+  type NotificationDedupConfig,
+  NotificationGate,
+  type NotificationVerdict,
+  normalizeForDedup,
+  wordSetSimilarity,
+} from "./notifications/dedup.js";
+export {
   type ChannelRegistryView,
   type CreatePluginContextOptions,
   createPluginContext,
@@ -504,6 +516,7 @@ export {
   StallGuard,
   type StallGuardOptions,
 } from "./plugins/stall-guard.js";
+export { VerifyGate, type VerifyGateOptions } from "./plugins/verify-gate.js";
 export { type LoadedPlugin, type LoadPluginsOptions, loadPlugins } from "./plugins.js";
 export type {
   ProjectContext,
@@ -654,6 +667,54 @@ export {
   TrustStore,
   validateManifest,
 } from "./resources/index.js";
+export {
+  addresses,
+  extractLeadingAddressees,
+  formatEnvelope,
+  isValidIdentityLabel,
+  type ParsedEnvelope,
+  parseEnvelope,
+  renderTranscriptLine,
+} from "./rooms/envelope.js";
+export {
+  enrichRoomMessage,
+  IdentityResolver,
+  type IdentityResolverOptions,
+  type RoomIdentity,
+  type RoomIdentityConfig,
+} from "./rooms/identities.js";
+export { LocalRoomBackend } from "./rooms/local.js";
+export {
+  getRoomBackend,
+  listRoomBackends,
+  registerRoomBackend,
+  requireRoomBackend,
+  roomBackendRegistry,
+  unregisterRoomBackend,
+} from "./rooms/registry.js";
+export { type Deliver, RoomStore, type RoomSubscription, type WakeOn } from "./rooms/store.js";
+export {
+  type CreateRoomOptions,
+  DEFAULT_URGENCY_WINDOW_HOURS,
+  formatRoomRef,
+  type OutboundRoomMessage,
+  parseRoomRef,
+  type Room,
+  type RoomBackend,
+  type RoomCapabilities,
+  type RoomMember,
+  type RoomMemberKind,
+  type RoomMessage,
+  type RoomRef,
+  type RoomUrgency,
+} from "./rooms/types.js";
+export {
+  makeRoomSessionKey,
+  ROOM_WATCHER_DEFAULTS,
+  RoomWatcher,
+  type RoomWatcherLimits,
+  type RoomWatcherOptions,
+} from "./rooms/watcher.js";
 export type { RuntimeOptions } from "./runtime.js";
 export { AgentRuntime } from "./runtime.js";
 export {
@@ -689,6 +750,7 @@ export {
   sanitizeToolResult,
 } from "./tools/browser-output-sanitizer.js";
 export { ClaudeCodeTool } from "./tools/claude-code.js";
+export { CollectionsTool } from "./tools/collections.js";
 export { CustomTool, createCustomTools } from "./tools/custom.js";
 export { DelegateTool } from "./tools/delegate.js";
 export { DocumentsTool } from "./tools/documents.js";
@@ -714,6 +776,7 @@ export {
 } from "./tools/recall-query.js";
 export { ResourceAdminTool, type ResourceAdminToolOptions } from "./tools/resource-admin.js";
 export { isTransientError, withRetry } from "./tools/retry.js";
+export { RoomTool, type RoomToolOptions } from "./tools/room.js";
 export { RunWorkflowTool } from "./tools/run-workflow.js";
 export { TaskStatusTool } from "./tools/task-status.js";
 export { TaskQueryTool, TasksTool } from "./tools/tasks.js";

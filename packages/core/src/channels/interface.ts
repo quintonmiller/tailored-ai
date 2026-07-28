@@ -26,4 +26,12 @@ export interface Channel {
    * concept simply omit the method.
    */
   indicateWorking?(target: string): () => void;
+
+  /**
+   * Optional capability: expose this transport's named destinations as rooms,
+   * so several agents and humans can hold one conversation in one place.
+   * Present only while connected — a room backend wrapping a dead client is
+   * worse than none. Transports with no group concept omit it.
+   */
+  rooms?: import("../rooms/types.js").RoomBackend;
 }

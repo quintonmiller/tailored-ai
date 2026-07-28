@@ -837,3 +837,42 @@ describe("validateConfig — mcp block", () => {
     expect(validateConfig(c).some((w) => w.includes("mcp_gh_search"))).toBe(true);
   });
 });
+
+describe("agent tools written as a JSON string", () => {
+  it("parses a JSON-array string into a real list", () => {
+    // What an agent creating another agent actually writes. A string is
+    // iterable, so leaving it meant resolveAgent walked it character by
+    // character and failed on `unknown tool "["` — days later, at first use.
+    const dir = mkdtempSync(join(tmpdir(), "tai-agent-tools-"));
+    const path = join(dir, "config.yaml");
+    writeFileSync(path, 'agents:\n  generalist:\n    tools: \'["read", "memory"]\'\n    skills: \'["a"]\'\n');
+
+    const config = loadConfig(path);
+
+    expect(config.agents?.generalist?.tools).toEqual(["read", "memory"]);
+    expect(config.agents?.generalist?.skills).toEqual(["a"]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("leaves a non-JSON string alone and reports it by name", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tai-agent-tools-"));
+    const path = join(dir, "config.yaml");
+    writeFileSync(path, "agents:\n  broken:\n    tools: read, memory\n");
+
+    const warnings = validateConfig(loadConfig(path));
+
+    expect(warnings.some((w) => w.includes("agents.broken.tools") && w.includes("list"))).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("says nothing about a well-formed list", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tai-agent-tools-"));
+    const path = join(dir, "config.yaml");
+    writeFileSync(path, "agents:\n  fine:\n    tools:\n      - read\n      - memory\n");
+
+    const warnings = validateConfig(loadConfig(path));
+
+    expect(warnings.filter((w) => w.includes("agents.fine"))).toEqual([]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});

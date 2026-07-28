@@ -21,9 +21,15 @@ import { loadAllContext, loadContextFiles } from "../context.js";
 import { getSessionMessages } from "../db/queries.js";
 import { createProjectTask, queryProjectTasks } from "../db/task-queries.js";
 import type { ProjectRef } from "../projects/resolve.js";
+import { IdentityResolver } from "../rooms/identities.js";
+import { getRoomBackend, registerRoomBackend, unregisterRoomBackend } from "../rooms/registry.js";
+import { formatRoomRef, type Room } from "../rooms/types.js";
+import { makeRoomSessionKey } from "../rooms/watcher.js";
 import type { AgentRuntime } from "../runtime.js";
 import { DiscordApprovalHandler } from "./discord-approval.js";
 import { getDiscordConfig } from "./discord-config.js";
+import { buildRoomCommand, handleRoomAutocomplete, handleRoomCommand } from "./discord-room-commands.js";
+import { DiscordRoomBackend } from "./discord-rooms.js";
 import type { Channel } from "./interface.js";
 import type { OutboundNotifier } from "./outbound.js";
 
@@ -64,6 +70,14 @@ export interface DiscordChannelOptions {
 }
 
 export class DiscordChannel implements Channel, OutboundNotifier {
+  /** Room capability, present only while the gateway is connected. */
+  rooms: DiscordRoomBackend | undefined;
+  /**
+   * How `/room status` reaches the watcher. Set by the host once the watcher
+   * exists; absent in embeds that run channels without one.
+   */
+  roomStatusRequester: ((room: Room, askedBy: string) => Promise<number>) | undefined;
+
   id = "discord";
   type = "discord";
 
@@ -72,6 +86,9 @@ export class DiscordChannel implements Channel, OutboundNotifier {
   private processing = new Set<string>();
   private userAgents = new Map<string, string>();
   private registeredCommandsHash = "";
+  private disconnected = false;
+  /** Serializes command syncs; concurrent overwrites registered everything twice. */
+  private commandSync: Promise<void> = Promise.resolve();
 
   constructor(opts: DiscordChannelOptions) {
     this.runtime = opts.runtime;
@@ -98,11 +115,25 @@ export class DiscordChannel implements Channel, OutboundNotifier {
       this.syncCommands().catch((err) => {
         console.error("[discord] Failed to sync application commands:", (err as Error).message);
       });
+      // Rooms register only once the gateway is ready: listRooms reads the
+      // guild channel cache, which is empty until then. Registering earlier
+      // would make an agent's `room list` come back empty for no visible reason.
+      this.registerRooms();
     });
 
     this.client.on(Events.MessageCreate, (msg) => this.handleMessage(msg));
 
     this.client.on(Events.InteractionCreate, (interaction) => {
+      if (interaction.isAutocomplete()) {
+        handleRoomAutocomplete(interaction, {
+          store: this.runtime.getRoomStore(),
+          identities: () => this.identities(),
+          requestStatusUpdate: () => Promise.resolve(0),
+          postAsPerson: () => Promise.resolve(),
+          resetAgentSession: () => 0,
+        });
+        return;
+      }
       if (!interaction.isChatInputCommand()) return;
       this.handleInteraction(interaction).catch((err) => {
         console.error("[discord] Interaction handler error:", (err as Error).message);
@@ -141,8 +172,121 @@ export class DiscordChannel implements Channel, OutboundNotifier {
   }
 
   async disconnect(): Promise<void> {
+    this.disconnected = true;
+    // Unregister before destroying the client: a room backend holding a dead
+    // client would fail every call with a confusing discord.js error instead
+    // of the registry's "no backend connected". Only drop the registry entry
+    // if it is still ours — a newer connection may already have replaced it.
+    if (this.rooms && getRoomBackend("discord") === this.rooms) {
+      unregisterRoomBackend("discord");
+    }
+    this.rooms = undefined;
     this.client.destroy();
     console.log("[discord] Disconnected");
+  }
+
+  /**
+   * Clear one agent's conversation for one room.
+   *
+   * Scoped to the room's session key, so an agent's other rooms and its DM
+   * history are untouched — resetting it here should not cost it everything
+   * else it knows.
+   */
+  private resetAgentSession(room: Room, agent: string): number {
+    const key = makeRoomSessionKey(formatRoomRef(room.ref), agent);
+    const row = this.runtime.db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE key = ?)",
+      )
+      .get(key) as { n: number } | undefined;
+
+    const resolved = resolveAgent(agent, this.runtime.getConfig(), this.runtime.getTools(), undefined, this.runtime.contextDir);
+    resetSession(this.runtime.db, key, resolved.model, resolved.provider);
+    return row?.n ?? 0;
+  }
+
+  /**
+   * Post into a room on a person's behalf.
+   *
+   * Posted through the room backend rather than plain `channel.send` so the
+   * normal machinery applies: the agent is addressed properly, the watcher sees
+   * a human turn (which resets the conversation-depth count), and the message
+   * lands under the person's own name rather than the bot's.
+   */
+  private async postAsPerson(room: Room, speaker: string, to: string[], body: string): Promise<void> {
+    const backend = this.rooms;
+    if (!backend) throw new Error("Discord is not connected.");
+    await backend.post(room.ref.id, { body, speaker, to });
+  }
+
+  /**
+   * True when this Discord channel is a room somebody actually watches. A
+   * registered-but-unsubscribed room still falls through to the normal mention
+   * handler, so registering a room never silently makes the bot go quiet.
+   */
+  private isRoomChannel(channelId: string): boolean {
+    try {
+      // Gate on LIVE state, not just on rows in the database. With
+      // `rooms.enabled: false` the subscription rows still exist but nothing
+      // services them, and suppressing the mention path on their account
+      // would make the bot go silent in that channel with no explanation.
+      if (this.runtime.getConfig().rooms?.enabled === false) return false;
+      if (!this.rooms) return false;
+
+      const store = this.runtime.getRoomStore();
+      const ref = `discord:${channelId}`;
+      if (!store.getRoomByRef(ref)) return false;
+      return store.listSubscriptionsForRoom(ref).length > 0;
+    } catch {
+      // Room bookkeeping must never swallow a normal Discord message.
+      return false;
+    }
+  }
+
+  /**
+   * Expose this connection as a room backend. Identity awareness is threaded
+   * in so a human typing "[note] ..." isn't parsed as a message from an agent
+   * named `note`; the resolver is rebuilt per call to follow config reloads.
+   */
+  private registerRooms(): void {
+    // A ClientReady queued on a client the lifecycle manager already tore down
+    // would otherwise register a backend wrapping a destroyed connection.
+    if (this.disconnected) return;
+
+    const discordConfig = getDiscordConfig(this.runtime.getConfig());
+    const backend = new DiscordRoomBackend(this.client, {
+      guildId: discordConfig?.guildId,
+      allowedGuilds: discordConfig?.allowedGuilds,
+      isKnownIdentity: (label) => this.identities().isKnown(label),
+      // Gives each agent its own name and picture in the channel, instead of a
+      // "[speaker]" prefix on one shared bot account.
+      store: this.runtime.getRoomStore(),
+      avatarFor: (label) => this.identities().get(label)?.avatarUrl,
+      // Lets "@quinton" go out as a real Discord mention that notifies, and
+      // come back in resolvable to the identity rather than a bare snowflake.
+      nativeIdFor: (label) => this.identities().get(label)?.nativeIds?.discord,
+      labelForNativeId: (nativeId) => this.identities().byNativeId("discord", nativeId)?.label,
+    });
+    this.rooms = backend;
+    registerRoomBackend(backend);
+  }
+
+  /**
+   * Room identities as of right now. Rebuilt per call so a config reload takes
+   * effect without a reconnect. An absent owner id is omitted rather than
+   * registered as "" — an empty native id would make this resolver think
+   * `owner` exists while the tool's resolver, which skips falsy ids, disagrees.
+   */
+  private identities(): IdentityResolver {
+    const live = this.runtime.getConfig();
+    const ownerId = this.runtime.getOwnerId("discord");
+    return new IdentityResolver({
+      agentNames: Object.keys(live.agents ?? {}),
+      declared: live.rooms?.identities,
+      ownerNativeIds: ownerId ? { discord: ownerId } : {},
+      ownerLabel: live.rooms?.ownerLabel,
+      defaultBackend: "discord",
+    });
   }
 
   /**
@@ -210,6 +354,11 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     if (discordConfig.allowedGuilds?.length) {
       if (!discordConfig.allowedGuilds.includes(msg.guild.id)) return false;
     }
+
+    // A registered room owns its own routing. Without this, "@TAI <coder> take
+    // a look" in a room fires twice — once down this legacy mention path and
+    // once through the woken agent — and the user gets two replies.
+    if (this.isRoomChannel(msg.channelId)) return false;
 
     // Only respond to @mentions in guilds
     if (discordConfig.respondToMentions !== false) {
@@ -517,6 +666,12 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     );
     commands.push(tasksCmd as SlashCommandBuilder);
 
+    // /room is always registered, including when there are no rooms yet — its
+    // `create` subcommand is how the first one gets made, so gating on "a room
+    // exists" would lock the door from the inside. The other subcommands say
+    // plainly that the channel isn't a room.
+    commands.push(buildRoomCommand());
+
     // Config-driven commands
     for (const [name, cmd] of Object.entries(config.commands)) {
       // Discord command names must be 1-32 chars, lowercase, no spaces
@@ -544,28 +699,81 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     return commands;
   }
 
+  /**
+   * Publish the slash commands.
+   *
+   * Two things here are deliberate.
+   *
+   * **Guild-scoped when we know the guild.** Global commands can take up to an
+   * hour to reach clients, which reads exactly like "the commands don't work".
+   * A guild overwrite is visible immediately, so a deployment that names its
+   * guild gets commands the moment the bot starts. Without a guild id we fall
+   * back to global and say so, because that delay is worth warning about.
+   *
+   * **One bulk overwrite, never a clear-then-write.** The overwrite already
+   * replaces the whole set; clearing first only widens the window in which a
+   * second sync can interleave. Two syncs landing together that way left every
+   * command registered twice.
+   */
   private async syncCommands(): Promise<void> {
-    const token = getDiscordConfig(this.runtime.getConfig())?.token;
+    const config = getDiscordConfig(this.runtime.getConfig());
+    const token = config?.token;
     const clientId = this.client.user?.id;
     if (!token || !clientId) return;
 
     const commands = this.buildSlashCommands();
     const body = commands.map((c) => c.toJSON());
-    const json = JSON.stringify(body);
-
-    // Skip if nothing changed
-    const hash = createHash("sha256").update(json).digest("hex");
+    const guildId = config?.guildId ?? this.client.guilds.cache.first()?.id;
+    const hash = createHash("sha256").update(JSON.stringify({ body, guildId })).digest("hex");
     if (hash === this.registeredCommandsHash) return;
 
-    const rest = new REST().setToken(token);
-    // Clear all existing commands first, then register new ones
-    await rest.put(Routes.applicationCommands(clientId), { body: [] });
-    await rest.put(Routes.applicationCommands(clientId), { body });
-    this.registeredCommandsHash = hash;
-    console.log(`[discord] Synced ${commands.length} application command(s)`);
+    // Serialize: onReload and ClientReady can both land here at once.
+    this.commandSync = this.commandSync
+      .then(async () => {
+        if (hash === this.registeredCommandsHash) return;
+        const rest = new REST().setToken(token);
+        if (guildId) {
+          await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body });
+          // Global copies would show up alongside the guild ones as duplicates.
+          await rest.put(Routes.applicationCommands(clientId), { body: [] });
+          console.log(`[discord] Synced ${commands.length} command(s) to guild ${guildId} — available now`);
+        } else {
+          await rest.put(Routes.applicationCommands(clientId), { body });
+          console.log(
+            `[discord] Synced ${commands.length} global command(s). Discord can take up to an hour to show these; set channels.discord.guildId for instant registration.`,
+          );
+        }
+        this.registeredCommandsHash = hash;
+      })
+      .catch((err) => {
+        console.error(`[discord] Command sync failed: ${(err as Error).message}`);
+      });
+
+    await this.commandSync;
   }
 
   private async handleInteraction(interaction: ChatInputCommandInteraction): Promise<void> {
+    // Room management answers from the database, not the model — it should not
+    // queue behind whatever the agent is doing, and it must not be swallowed by
+    // the per-user "already processing" guard below.
+    if (
+      await handleRoomCommand(
+        interaction,
+        {
+          store: this.runtime.getRoomStore(),
+          identities: () => this.identities(),
+          requestStatusUpdate: (room, askedBy) =>
+            this.roomStatusRequester?.(room, askedBy) ??
+            Promise.reject(new Error("The room watcher is not running, so nobody can be asked.")),
+          postAsPerson: (room, speaker, to, body) => this.postAsPerson(room, speaker, to, body),
+          resetAgentSession: (room, agent) => this.resetAgentSession(room, agent),
+        },
+        this.runtime.getConfig(),
+      )
+    ) {
+      return;
+    }
+
     const userId = interaction.user.id;
     const userKey = this.runtime.makeSessionKey({ channelId: "discord", userId });
 

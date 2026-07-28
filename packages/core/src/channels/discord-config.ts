@@ -18,6 +18,8 @@ export interface DiscordConfig {
   token?: string;
   owner?: string;
   allowedGuilds?: string[];
+  /** Guild new rooms are created in. Only needed when the bot is in several. */
+  guildId?: string;
   respondToDMs?: boolean;
   respondToMentions?: boolean;
   projectMappings?: DiscordProjectMapping[];
@@ -37,6 +39,7 @@ export function getDiscordConfig(config: AgentConfig): DiscordConfig | undefined
     token: asString(r.token),
     owner: asString(r.owner),
     allowedGuilds: asStringArray(r.allowedGuilds),
+    guildId: asString(r.guildId),
     respondToDMs: asBoolean(r.respondToDMs),
     respondToMentions: asBoolean(r.respondToMentions),
     projectMappings: asProjectMappings(r.projectMappings),

@@ -32,6 +32,8 @@ import type { AgentRuntime } from "./runtime.js";
 export interface CreateToolsOptions {
   resolveOutbound?: (channelId?: string) => import("./channels/outbound.js").OutboundNotifier | undefined;
   getOwnerId?: (channelId?: string) => string | undefined;
+  /** Repeat gate for unsolicited outbound messages. See NotificationGate. */
+  getNotificationGate?: () => import("./notifications/dedup.js").NotificationGate | undefined;
   db?: import("better-sqlite3").Database;
   /** Override the task backend. Defaults to `createTaskBackend(config, db)` when `db` is provided. */
   taskBackend?: TaskBackend;
@@ -98,6 +100,7 @@ export function createTools(
     contextDir,
     resolveOutbound: opts?.resolveOutbound,
     getOwnerId: opts?.getOwnerId,
+    getNotificationGate: opts?.getNotificationGate,
     taskBackend: opts?.taskBackend,
     taskBackendResolver: opts?.taskBackendResolver,
     getEmbedder: opts?.getEmbedder,

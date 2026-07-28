@@ -507,6 +507,17 @@ export class AutopilotWorker {
         : "Finished without explicitly closing the task (no final response). Marking done.";
       await this.tasks.comment(task.id, content, agentName);
       await this.tasks.update(task.id, { status: this.tasks.statuses.done });
+      // Announce the transition the backend update performed so subscribers
+      // (e.g. the verify-gate) treat this force-finalize the same as an
+      // agent-driven `done`. The TasksTool emits this for agent calls; the
+      // worker writes the backend directly, so it must announce its own.
+      this.runtime.events.emit("task.transitioned", {
+        taskId: task.id,
+        projectId: finalTask.project_id ?? undefined,
+        from: inProgress,
+        to: this.tasks.statuses.done,
+        assignee: finalTask.assignee ?? null,
+      });
     }
     // All other status-change comments were posted by the agent itself via the
     // tasks tool — see TasksTool.update. No extra audit comment needed here.

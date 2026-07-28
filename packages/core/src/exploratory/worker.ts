@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { runAgentLoop } from "../agent/loop.js";
+import { isStallStop, type LoopStop, runAgentLoop } from "../agent/loop.js";
 import { resetSession } from "../agent/session.js";
 import type { AgentDefinition, OnlineAgentConfig } from "../config.js";
 import { isInTimeWindow, recordTokenUsage } from "../db/autopilot-queries.js";
@@ -18,9 +18,66 @@ import {
 import { createNote, listNotes } from "../db/note-queries.js";
 import { appendTickLog } from "../db/tick-log-queries.js";
 import type { AgentRuntime } from "../runtime.js";
-import { detectStall } from "../task-watcher.js";
 import { SleepTool } from "../tools/sleep.js";
 import { buildTickContext, renderTickSituation } from "./tick-context.js";
+
+/**
+ * Passed to `AbortController.abort()` when the per-tick token cap trips, and
+ * read back off `LoopStop.reason`. Without it a budget abort is
+ * indistinguishable from a runtime shutdown — both just "aborted".
+ */
+export const BUDGET_ABORT_REASON = "exploratory:token-budget";
+
+/** Notes carrying tick self-feedback. Kept below the sweep keep-threshold so they expire. */
+const STALL_NOTE_TAGS = ["stall", "self-feedback"];
+const STALL_NOTE_IMPORTANCE = 0.4;
+const STALL_NOTE_TTL_DAYS = 7;
+
+/**
+ * Record (or update) the "you stalled last tick" self-feedback note.
+ *
+ * One note per (agent, reason) carrying an occurrence count, rather than one
+ * per stall. The previous append-only version wrote a byte-identical row every
+ * time and, at importance 0.8, sat exactly on `sweepExpiredNotes`'s keep
+ * threshold — so the debris was immortal while real notes expired around it.
+ * On one deployment it grew to 215 rows, 48% of the entire note store, and
+ * crowded genuine memories out of recall ranking.
+ */
+export function recordStallNote(
+  db: Parameters<typeof createNote>[0],
+  agentName: string,
+  projectId: string | null,
+  stallReason: string,
+): void {
+  const ttl = new Date(Date.now() + STALL_NOTE_TTL_DAYS * 86_400_000).toISOString().replace("T", " ").slice(0, 19);
+  const existing = listNotes(db, { agent: agentName, tag: "stall", limit: 50 }).find((n) =>
+    n.content.includes(`stalled with "${stallReason}"`),
+  );
+
+  if (existing) {
+    const seen = /\(seen (\d+)x/.exec(existing.content);
+    const count = (seen ? Number(seen[1]) : 1) + 1;
+    const base = existing.content.replace(/\s*\(seen \d+x[^)]*\)\s*$/, "");
+    db.prepare("UPDATE notes SET content = ?, ttl_at = ?, created_at = datetime('now') WHERE id = ?").run(
+      `${base} (seen ${count}x, latest ${new Date().toISOString().slice(0, 10)})`,
+      ttl,
+      existing.id,
+    );
+    return;
+  }
+
+  createNote(db, {
+    agent: agentName,
+    project_id: projectId,
+    content:
+      `Previous tick stalled with "${stallReason}". ` +
+      `Likely cause: too much exploration with no commit/exit. ` +
+      `Next tick: pick a smaller scope, or write a status note and Sleep early.`,
+    tags: STALL_NOTE_TAGS,
+    importance: STALL_NOTE_IMPORTANCE,
+    ttl_at: ttl,
+  });
+}
 
 export interface ExploratoryWorkerOptions {
   runtime: AgentRuntime;
@@ -184,6 +241,8 @@ export class ExploratoryWorker {
     // reactive limits (token use untracked, maxToolRounds from baseOpts below).
     const tokenCap = online.budgets?.tokens_per_tick ?? Number.POSITIVE_INFINITY;
     const explicitToolCallCap = online.budgets?.tool_calls_per_tick;
+    /** Set by the loop's onStop callback; decides status without parsing prose. */
+    let stop: LoopStop | undefined;
 
     try {
       const basePrompt = await this.buildTickPrompt(agentName, def);
@@ -254,11 +313,18 @@ export class ExploratoryWorker {
           if (promptTokens + completionTokens >= tokenCap) {
             console.log(`[exploratory] ${agentName} hit per-tick token cap (${tokenCap}) — aborting`);
             status = "budget";
-            abortController.abort();
+            abortController.abort(BUDGET_ABORT_REASON);
           }
         },
         onToolCall: (name) => {
           toolCalls.push(name);
+        },
+        // Structural stop signal. The loop RETURNS "[Agent stopped: ...]" for
+        // aborts rather than throwing, so the catch below never sees them —
+        // reading the reason off the returned prose used to reclassify every
+        // budget abort as a stall (and wrote a duplicate note each time).
+        onStop: (s) => {
+          stop = s;
         },
       });
       summary = response.slice(0, 1000);
@@ -275,29 +341,50 @@ export class ExploratoryWorker {
       runtimeSignal.removeEventListener("abort", onRuntimeAbort);
     }
 
-    // Stall detection. When the loop returns `[Agent stopped: …]` (max
-    // rounds, repeated identical calls, shutdown), the exploratory worker
-    // previously classified it as "noop" because no outputs were produced
-    // — burying the failure. Now we reclassify to `error`, leave a recall
-    // note tagged `stall` so the agent sees it next tick, and bump the
-    // backoff so we don't immediately retry the same stuck shape.
-    // task-watcher has its own stall recovery (retry-then-block); this is
-    // the analog for exploratory ticks.
-    const stallReason = detectStall(summary ?? "");
-    if (stallReason) {
+    // Stall detection. A tick that ran out of rounds or looped on identical
+    // calls is genuinely stuck: mark it, and leave a note the agent will see
+    // next tick so it can pick a smaller scope.
+    //
+    // An abort is NOT a stall. The budget cap and runtime shutdown both abort
+    // the loop, and the loop reports those by RETURNING "[Agent stopped: ...]"
+    // rather than throwing — so the catch above never sees them. Reading the
+    // reason off that string (the old `detectStall(summary)` call) classified
+    // every capped tick as a stall and wrote an identical note each time:
+    // 81 byte-identical notes in 10 days on this deployment, on top of 134
+    // from the previous era. Branch on the structural signal instead.
+    if (stop?.kind === "aborted") {
+      // Budget aborts keep status "budget" (set at the cap). A shutdown abort
+      // is the operator's doing, not the agent's — record it as a no-op rather
+      // than an error. ("cancelled" would be clearer but is not in the
+      // exploratory_runs status CHECK constraint; see db/schema.ts.)
+      if (status === "ok") {
+        if (stop.reason === BUDGET_ABORT_REASON) {
+          status = "budget";
+        } else {
+          status = "noop";
+          summary = summary || "Tick cancelled — runtime shut down mid-run.";
+        }
+      }
+    } else if (stop?.kind === "max-rounds" && explicitToolCallCap !== undefined) {
+      // tool_calls_per_tick is implemented as maxToolRounds, so a tick that
+      // spends its configured allowance exits via max-rounds. That is the
+      // budget working, not the agent getting stuck — calling it a stall would
+      // recreate the exact bug this block fixes, one path over.
+      if (status === "ok") status = "budget";
+    } else if (stop && isStallStop(stop) && status === "ok") {
+      // The `status === "ok"` guard matters: a budget abort raised during the
+      // final permitted round is never observed by the loop's top-of-while
+      // check, so it exits via max-rounds instead — and without the guard that
+      // would relabel an already-correct "budget" as a stall.
+      const stallReason = stop.kind === "max-rounds" ? "max tool rounds reached" : "repeated identical tool calls";
       status = "error";
       errorMsg = `loop-stalled: ${stallReason}`;
       try {
-        createNote(db, {
-          agent: agentName,
-          project_id: projectId,
-          content:
-            `Previous tick stalled with "${stallReason}". ` +
-            `Likely cause: too much exploration with no commit/exit. ` +
-            `Next tick: pick a smaller scope, or write a status note and Sleep early.`,
-          tags: ["stall", "self-feedback"],
-          importance: 0.8,
-        });
+        // Dedup: one note per (agent, reason), with a count, instead of a new
+        // row per stall. Also below the 0.8 sweep keep-threshold and given a
+        // TTL, so self-feedback expires — the old notes sat exactly ON the
+        // threshold, making debris immortal while real memory expired.
+        recordStallNote(db, agentName, projectId, stallReason);
       } catch (err) {
         console.error(`[exploratory] failed to record stall note: ${(err as Error).message}`);
       }

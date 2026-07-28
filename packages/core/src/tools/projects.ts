@@ -15,6 +15,7 @@ export class ProjectsTool implements Tool {
       id: { type: "string", description: "Project ID (for get, update, delete)." },
       title: { type: "string", description: "Project title (for create, update)." },
       description: { type: "string", description: "Project description (for create, update)." },
+      path: { type: "string", description: "Path to the project's git repo (for create, update)." },
       status: {
         type: "string",
         description: "Status: active, completed, archived.",
@@ -38,6 +39,7 @@ export class ProjectsTool implements Tool {
     // Accept common aliases
     const id = (args.id ?? args.project_id) as string | undefined;
     const title = (args.title ?? args.name) as string | undefined;
+    const path = args.path as string | undefined;
 
     try {
       switch (action) {
@@ -47,6 +49,7 @@ export class ProjectsTool implements Tool {
             args.description as string | undefined,
             args.status as string | undefined,
             args.due_date as string | undefined,
+            path,
           );
         case "list":
           return this.list(args.status as string | undefined, args.search as string | undefined);
@@ -59,6 +62,7 @@ export class ProjectsTool implements Tool {
             args.description as string | undefined,
             args.status as string | undefined,
             args.due_date as string | undefined,
+            path,
           );
         case "delete":
           return this.remove(id);
@@ -70,10 +74,10 @@ export class ProjectsTool implements Tool {
     }
   }
 
-  private create(title?: string, description?: string, status?: string, due_date?: string): ToolResult {
+  private create(title?: string, description?: string, status?: string, due_date?: string, path?: string): ToolResult {
     if (!title) return { success: false, output: "", error: "title is required for create." };
 
-    const project = createProject(this.db, { title, description, status, due_date });
+    const project = createProject(this.db, { title, description, status, due_date, path });
     return {
       success: true,
       output: `Created project "${project.title}" (${project.id})\nStatus: ${project.status}`,
@@ -110,13 +114,14 @@ export class ProjectsTool implements Tool {
       `Status: ${project.status}`,
       `Tasks: ${project.task_count} | Documents: ${project.document_count}`,
     ];
+    if (project.path) lines.push(`Path: ${project.path}`);
     if (project.due_date) lines.push(`Due: ${project.due_date}`);
     if (project.description) lines.push(`\n${project.description}`);
 
     return { success: true, output: lines.join("\n") };
   }
 
-  private update(id?: string, title?: string, description?: string, status?: string, due_date?: string): ToolResult {
+  private update(id?: string, title?: string, description?: string, status?: string, due_date?: string, path?: string): ToolResult {
     if (!id) return { success: false, output: "", error: "id is required for update." };
 
     const project = updateProject(this.db, id, {
@@ -124,6 +129,7 @@ export class ProjectsTool implements Tool {
       description: description ?? undefined,
       status: status ?? undefined,
       due_date: due_date ?? undefined,
+      path: path ?? undefined,
     });
 
     if (!project) return { success: false, output: "", error: `Project ${id} not found.` };

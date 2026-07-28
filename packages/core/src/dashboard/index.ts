@@ -33,6 +33,8 @@ export interface DashboardWidget {
   title?: string;
   /** Column span hint, 1–4. The grid clamps out-of-range values. Default 1. */
   span?: number;
+  /** Row span hint (height), 1–6. The grid clamps out-of-range values. Default 2. */
+  rowSpan?: number;
   /** Sort key; lower renders first. Default 100. */
   order?: number;
   /** Set false to hide without deleting the entry. Default true (shown). */
@@ -105,7 +107,10 @@ export const BUILTIN_WIDGET_TYPES = [
   "links",
   "iframe",
   "session-explorer",
+  "collections",
   "clock",
+  "recommendations",
+  "decisions",
 ] as const;
 
 /**
@@ -130,6 +135,9 @@ export function validateDashboardWidget(
   }
   if (w.span !== undefined && (typeof w.span !== "number" || w.span < 1 || w.span > 4)) {
     issues.push(`widget "${id}" \`span\` must be a number 1–4`);
+  }
+  if (w.rowSpan !== undefined && (typeof w.rowSpan !== "number" || w.rowSpan < 1 || w.rowSpan > 6)) {
+    issues.push(`widget "${id}" \`rowSpan\` must be a number 1–6`);
   }
   if (w.options !== undefined && (typeof w.options !== "object" || w.options === null || Array.isArray(w.options))) {
     issues.push(`widget "${id}" \`options\` must be an object`);
