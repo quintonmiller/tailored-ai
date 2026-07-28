@@ -223,7 +223,18 @@ subscriptions:
   - { agent: researcher, room: eng, wakeOn: none }
 ```
 
-#### A role within a room
+#### Agents can see the date
+
+A room is a place where time passes: check-ins fire on a clock, purposes carry
+dates, agents get asked how long until something. But an agent only knows the
+date if it happens to carry a clock tool, and most do not — so it infers, and
+gets it wrong. Every wake prompt now opens with the current date.
+
+Ten tokens. A coordinator running a trip on an hourly check-in previously said
+"two days out" when it was one, and had the departure date wrong until it was
+corrected by hand.
+
+### A role within a room
 
 `purpose` says what a room is about. `role` says what one agent is for *in it*,
 so the same agent is not the same agent everywhere:

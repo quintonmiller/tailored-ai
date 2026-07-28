@@ -94,6 +94,23 @@ export function describeToolCall(name: string, args: Record<string, unknown>): s
   return `\`${name}\``;
 }
 
+/**
+ * Today's date, for the wake prompt.
+ *
+ * A room is a place where time passes: check-ins fire on a clock, purposes
+ * carry dates, and agents are asked how long until something. An agent only
+ * knows the date if it happens to carry a clock tool, and most do not — so it
+ * infers, and gets it wrong. Ten tokens spent here beats a wrong deadline.
+ */
+export function todayLine(now = new Date()): string {
+  return `Today is ${now.toLocaleDateString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  })}.`;
+}
+
 /** Plain-language wake reason for the activity record. */
 export function describeWakeReason(reason: WakeReason): string {
   switch (reason) {
@@ -373,7 +390,8 @@ export class RoomWatcher {
 
     this.wakeReasons.set(`${agent} ${roomRef}`, "check-in");
     const prompt = [
-      `Room "${room.name}". You are ${label}. This is a scheduled check-in — nobody has asked you anything.`,
+      `Room "${room.name}". You are ${label}. ${todayLine()}`,
+      "This is a scheduled check-in — nobody has asked you anything.",
       ...(room.purpose ? [`Purpose: ${room.purpose}`] : []),
       ...(sub.role ? [`Your role here: ${sub.role}`] : []),
       "",
@@ -763,6 +781,7 @@ export class RoomWatcher {
         `Room "${room.name}". You are ${label}.`,
         ...(room.purpose ? [`Purpose: ${room.purpose}`] : []),
         "",
+        todayLine(),
         `${askedBy} asked everyone here for a status update.`,
         "",
         "Reply with what you are working on right now, in one or two sentences.",
@@ -962,7 +981,7 @@ export class RoomWatcher {
       .join(", ");
 
     return [
-      `Room "${roomName}". You are ${label}.`,
+      `Room "${roomName}". You are ${label}. ${todayLine()}`,
       // The room's standing instructions. First line, before the transcript,
       // because it frames everything below it.
       ...(purpose ? [`Purpose: ${purpose}`] : []),

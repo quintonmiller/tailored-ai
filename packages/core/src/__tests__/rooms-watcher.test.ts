@@ -18,7 +18,7 @@ import { LocalRoomBackend } from "../rooms/local.js";
 import { registerRoomBackend, unregisterRoomBackend } from "../rooms/registry.js";
 import { RoomStore, type RoomSubscription, type WakeOn } from "../rooms/store.js";
 import type { RoomMessage } from "../rooms/types.js";
-import { describeWakeReason, looksLikeUninvokedPass, RoomWatcher } from "../rooms/watcher.js";
+import { describeWakeReason, looksLikeUninvokedPass, RoomWatcher, todayLine } from "../rooms/watcher.js";
 import type { AgentRuntime } from "../runtime.js";
 
 let db: Database.Database;
@@ -812,5 +812,18 @@ describe("RoomWatcher.wakeReason", () => {
     expect(describeWakeReason("named")).toBe("named directly");
     expect(describeWakeReason("check-in")).toBe("scheduled check-in");
     expect(describeWakeReason("loose-question")).toBe("a person asked the room");
+  });
+});
+
+describe("todayLine", () => {
+  it("gives the agent a date it can reason from", () => {
+    // Without it an agent infers the date and gets deadlines wrong — the
+    // coordinator said "two days out" when it was one, and had the flight date
+    // wrong until corrected.
+    expect(todayLine(new Date("2026-07-30T12:00:00"))).toBe("Today is Thursday, July 30, 2026.");
+  });
+
+  it("names the weekday, since that is what people plan around", () => {
+    expect(todayLine(new Date("2026-08-01T09:00:00"))).toContain("Saturday");
   });
 });
