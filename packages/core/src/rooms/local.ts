@@ -63,6 +63,7 @@ export class LocalRoomBackend implements RoomBackend {
     // Parents are stored but not rendered; a reader sees a flat log.
     threads: false,
     edit: true,
+    reactions: false,
     history: true,
   };
 

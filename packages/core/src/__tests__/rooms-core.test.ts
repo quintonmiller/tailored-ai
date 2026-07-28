@@ -1302,3 +1302,43 @@ describe("describeToolCall", () => {
     expect(describeToolCall("current_datetime", {})).toBe("`current_datetime`");
   });
 });
+
+describe("per-room roles and quiet posting", () => {
+  let db: Database.Database;
+  let store: RoomStore;
+
+  beforeEach(() => {
+    db = initDatabase(":memory:");
+    store = new RoomStore(db);
+    store.upsertRoom({ ref: { backend: "local", id: "eng" }, name: "eng" });
+  });
+
+  afterEach(() => db.close());
+
+  it("keeps a role per subscription, not per agent", () => {
+    // The same agent should behave differently in two rooms; only its global
+    // instructions existed before.
+    store.upsertRoom({ ref: { backend: "local", id: "trip" }, name: "trip" });
+    store.subscribe({ agent: "coordinator", roomRef: "local:eng", role: "review code changes" });
+    store.subscribe({ agent: "coordinator", roomRef: "local:trip", role: "keep the itinerary current" });
+
+    expect(store.getSubscription("coordinator", "local:eng")?.role).toBe("review code changes");
+    expect(store.getSubscription("coordinator", "local:trip")?.role).toBe("keep the itinerary current");
+  });
+
+  it("keeps an existing role when re-subscribing without one", () => {
+    // A config reconcile must not silently strip an agent's role.
+    store.subscribe({ agent: "coder", roomRef: "local:eng", role: "implement" });
+    store.subscribe({ agent: "coder", roomRef: "local:eng", wakeOn: "all" });
+
+    const sub = store.getSubscription("coder", "local:eng");
+    expect(sub?.role).toBe("implement");
+    expect(sub?.wakeOn).toBe("all");
+  });
+
+  it("leaves the role unset when nobody asked for one", () => {
+    store.subscribe({ agent: "coder", roomRef: "local:eng" });
+
+    expect(store.getSubscription("coder", "local:eng")?.role).toBeNull();
+  });
+});

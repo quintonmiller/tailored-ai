@@ -112,6 +112,16 @@ export interface OutboundRoomMessage {
   speaker?: string;
   /** TAI identities being addressed. */
   to?: string[];
+  /**
+   * Whether addressing a person should actually interrupt them.
+   *
+   * Posting and pinging are different acts. The room is the record — an agent
+   * should write to it freely, and someone reads it when they choose. A
+   * notification is an interrupt, and interrupts are only worth it when the
+   * agent genuinely needs that person. Default false: the name appears in the
+   * transcript without a notification behind it.
+   */
+  notify?: boolean;
 }
 
 export interface CreateRoomOptions {
@@ -141,6 +151,8 @@ export interface RoomCapabilities {
   threads: boolean;
   /** Can change a message it already sent. */
   edit: boolean;
+  /** Can mark a message without posting one. */
+  reactions: boolean;
   /**
    * The transport can render each speaker as its own participant — a Discord
    * webhook posting under a per-message `username`, say. When true the backend
@@ -181,6 +193,15 @@ export interface RoomBackend {
    * anything changed. Editing lets one message BE the status.
    */
   edit?(id: string, messageId: string, body: string): Promise<void>;
+
+  /**
+   * Mark a message without posting one.
+   *
+   * Acknowledgement otherwise costs a whole turn, which is what produces
+   * "Roger." and "Standing by." A reaction says the same thing without adding
+   * a message, waking anyone, or counting toward the conversation-depth cap.
+   */
+  react?(id: string, messageId: string, emoji: string): Promise<void>;
 
   createRoom?(opts: CreateRoomOptions): Promise<Room>;
   /**

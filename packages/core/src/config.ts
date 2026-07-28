@@ -889,6 +889,13 @@ export interface AgentConfig {
        * their own through the `room` tool.
        */
       checkInMinutes?: number;
+      /**
+       * What this agent is for in this room. The room's `purpose` says what the
+       * room is about; this says what one participant's job in it is, so the
+       * same agent can behave differently in two rooms. Keep it short — it
+       * competes with the purpose for a small prompt budget.
+       */
+      role?: string;
     }>;
     /** Hourly wake ceiling per (agent, room). The runaway-loop brake. Default 12. */
     maxWakesPerHour?: number;

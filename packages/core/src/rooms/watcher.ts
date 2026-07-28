@@ -375,6 +375,7 @@ export class RoomWatcher {
     const prompt = [
       `Room "${room.name}". You are ${label}. This is a scheduled check-in — nobody has asked you anything.`,
       ...(room.purpose ? [`Purpose: ${room.purpose}`] : []),
+      ...(sub.role ? [`Your role here: ${sub.role}`] : []),
       "",
       ...(transcript.length > 0 ? ["Recent conversation:", ...transcript, ""] : []),
       "Look at whether anything here needs attention now: a deadline approaching, something you said you would do, something waiting on someone.",
@@ -616,7 +617,15 @@ export class RoomWatcher {
       const room = this.store.getRoomByRef(fresh.roomRef);
       const identities = this.identities();
       const label = identities.labelForAgent(fresh.agent);
-      const prompt = this.buildPrompt(fresh, messages, room?.name ?? fresh.roomRef, label, identities, room?.purpose);
+      const prompt = this.buildPrompt(
+        fresh,
+        messages,
+        room?.name ?? fresh.roomRef,
+        label,
+        identities,
+        room?.purpose,
+        fresh.role ?? undefined,
+      );
 
       const config = this.runtime.getConfig();
       const resolved = resolveAgent(fresh.agent, config, this.runtime.getTools(), undefined, this.runtime.contextDir);
@@ -913,7 +922,10 @@ export class RoomWatcher {
         // already refuses to wake an agent on its own words, and jumping the
         // cursor forward would silently swallow anything that arrived while
         // the agent was composing this reply.
-        posted = await backend.post(ref.id, { body: spoken, speaker: label, to });
+        // An automatic reply never pings. It is a turn in a conversation the
+        // person will read when they look; if an agent actually needs them it
+        // says so through `room(action="post", notify=true)`.
+        posted = await backend.post(ref.id, { body: spoken, speaker: label, to, notify: false });
       },
     );
     return posted;
@@ -931,6 +943,7 @@ export class RoomWatcher {
     label: string,
     identities: IdentityResolver,
     purpose?: string,
+    role?: string,
   ): string {
     const lines = messages.map((m) => renderTranscriptLine(m.speaker ?? m.authorLabel, m.to, m.body));
 
@@ -953,6 +966,10 @@ export class RoomWatcher {
       // The room's standing instructions. First line, before the transcript,
       // because it frames everything below it.
       ...(purpose ? [`Purpose: ${purpose}`] : []),
+      // What this agent is for HERE, under what the room is for. An agent that
+      // coordinates a trip and reviews code is not the same agent in both
+      // rooms, and only its global instructions existed before.
+      ...(role ? [`Your role here: ${role}`] : []),
       "",
       "New messages:",
       ...lines,
