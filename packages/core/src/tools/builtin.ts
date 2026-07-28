@@ -187,6 +187,7 @@ registerToolFactory("room", (config, ctx) => {
       getNotificationGate: ctx.getNotificationGate,
       urgencyWindowHours: () => config.rooms?.urgencyWindowHours,
       defaultBackend: () => config.rooms?.defaultBackend,
+      desks: () => config.rooms?.desks,
     }),
   ];
 });

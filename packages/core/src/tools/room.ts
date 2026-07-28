@@ -34,6 +34,8 @@ export interface RoomToolOptions {
   urgencyWindowHours?: () => Partial<Record<RoomUrgency, number>> | undefined;
   /** Backend used when a room is created without naming one. */
   defaultBackend?: () => string | undefined;
+  /** Where an agent's direct messages go, when one has been designated. */
+  desks?: () => Record<string, string> | undefined;
 }
 
 const URGENCIES: RoomUrgency[] = ["high", "medium", "low"];
@@ -52,6 +54,7 @@ export class RoomTool implements Tool {
           "list",
           "read",
           "post",
+          "dm",
           "pass",
           "update",
           "react",
@@ -64,7 +67,7 @@ export class RoomTool implements Tool {
           "unsubscribe",
         ],
         description:
-          "list: rooms you can see. read: new messages (all your rooms when `room` is omitted). post: say something. pass: say nothing this turn. update: replace a message you already posted. react: acknowledge with an emoji instead of a message. create: open a room. invite/remove: add or drop a participant. members: who is in it. purpose: read it, or set it by passing `purpose`. subscribe/unsubscribe: control whether it wakes you, and how often you look in unprompted.",
+          "list: rooms you can see. read: new messages (all your rooms when `room` is omitted). post: say something. dm: message one agent directly, wherever it is. pass: say nothing this turn. update: replace a message you already posted. react: acknowledge with an emoji instead of a message. create: open a room. invite/remove: add or drop a participant. members: who is in it. purpose: read it, or set it by passing `purpose`. subscribe/unsubscribe: control whether it wakes you, and how often you look in unprompted.",
       },
       room: {
         type: "string",
@@ -106,7 +109,11 @@ export class RoomTool implements Tool {
         description: "What the room is for. Shown as the Discord channel topic and given to every agent woken here.",
       },
       backend: { type: "string", description: "Transport for create, e.g. 'discord' or 'local'." },
-      member: { type: "string", description: "Participant to add. Required for invite." },
+      member: { type: "string", description: "Participant to add. Required for invite or remove." },
+      agent: {
+        type: "string",
+        description: "For dm: which agent to message. You do not need to know where it is.",
+      },
       wake_on: {
         type: "string",
         enum: ["named", "addressed", "all", "none"],
@@ -140,6 +147,8 @@ export class RoomTool implements Tool {
           return await this.read(args, agentName);
         case "post":
           return await this.post(args, context, agentName);
+        case "dm":
+          return await this.dm(args, context, agentName);
         case "update":
           return await this.update(args, agentName);
         case "react":
@@ -444,6 +453,74 @@ export class RoomTool implements Tool {
 
     await backend.react(room.ref.id, messageId, emoji);
     return ok(`Marked it ${emoji}.`);
+  }
+
+  /**
+   * Message another agent without knowing where it is.
+   *
+   * Every other way of reaching an agent makes the sender do bookkeeping: find
+   * the room, check it is in it, subscribe it. That is fine when you are having
+   * a conversation and wrong when you just need to tell someone something.
+   *
+   * Underneath it is still a room — every agent has one that carries its
+   * direct messages, created on first use — so the traffic is durable,
+   * readable and auditable rather than a side channel. The sender simply never
+   * has to think about it.
+   */
+  private async dm(
+    args: Record<string, unknown>,
+    context: ToolContext,
+    agentName?: string,
+  ): Promise<ToolResult> {
+    if (!agentName) return fail("This session has no agent identity, so it cannot send a message.");
+    const body = String(args.body ?? "").trim();
+    if (!body) return fail("body is required for dm.");
+
+    const target = String(args.agent ?? args.to ?? args.member ?? "").trim();
+    if (!target) return fail("agent is required for dm — who are you messaging?");
+
+    const identities = this.opts.identities();
+    const identity = identities.get(target);
+    if (!identity || identity.kind !== "agent" || !identity.agent) {
+      return fail(`No agent called "${target}". Known: ${identities.labels().join(", ")}.`);
+    }
+    if (identity.agent === agentName) return fail("You cannot message yourself.");
+
+    // A designated desk first, then one named after the agent, then a new one.
+    // Creating a second room for an agent that already has somewhere to be
+    // reached is how a server ends up with two channels meaning one thing.
+    const desk = this.opts.desks?.()?.[identity.agent] ?? this.opts.desks?.()?.[identity.label];
+    const room =
+      (desk ? this.opts.store.getRoomByName(desk) : null) ??
+      this.opts.store.getRoomByName(identity.label) ??
+      (await this.openDeskRoom(identity.label));
+    if (!room) return fail(`Could not open a line to ${identity.label}.`);
+    const ref = formatRoomRef(room.ref);
+
+    // Both sides watch it: the recipient so it hears, the sender so it sees the
+    // reply without having to remember to look.
+    this.opts.store.subscribe({ agent: identity.agent, roomRef: ref, wakeOn: "addressed", source: "agent" });
+    this.opts.store.subscribe({ agent: agentName, roomRef: ref, wakeOn: "named", source: "agent" });
+
+    return await this.post(
+      { room: room.name, body, to: [identity.label], notify: args.notify, urgency: args.urgency, key: args.key },
+      context,
+      agentName,
+    );
+  }
+
+  /** The room that carries an agent's direct messages, created on first use. */
+  private async openDeskRoom(label: string): Promise<Room | null> {
+    const backendId = this.opts.defaultBackend?.() || listRoomBackends()[0]?.id;
+    if (!backendId) return null;
+    const backend = requireRoomBackend(backendId);
+    if (!backend.capabilities.create || !backend.createRoom) return null;
+
+    const room = await backend.createRoom({
+      name: label,
+      purpose: `Direct messages to ${label}. Other agents reach it here without needing to know where it is.`,
+    });
+    return this.opts.store.upsertRoom(room);
   }
 
   private async create(args: Record<string, unknown>, agentName?: string): Promise<ToolResult> {
