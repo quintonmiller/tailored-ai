@@ -54,6 +54,7 @@ export class RoomTool implements Tool {
           "post",
           "pass",
           "update",
+          "react",
           "create",
           "invite",
           "remove",
@@ -63,7 +64,7 @@ export class RoomTool implements Tool {
           "unsubscribe",
         ],
         description:
-          "list: rooms you can see. read: new messages (all your rooms when `room` is omitted). post: say something. pass: say nothing this turn. update: replace a message you already posted. create: open a room. invite/remove: add or drop a participant. members: who is in it. purpose: read it, or set it by passing `purpose`. subscribe/unsubscribe: control whether it wakes you, and how often you look in unprompted.",
+          "list: rooms you can see. read: new messages (all your rooms when `room` is omitted). post: say something. pass: say nothing this turn. update: replace a message you already posted. react: acknowledge with an emoji instead of a message. create: open a room. invite/remove: add or drop a participant. members: who is in it. purpose: read it, or set it by passing `purpose`. subscribe/unsubscribe: control whether it wakes you, and how often you look in unprompted.",
       },
       room: {
         type: "string",
@@ -83,7 +84,16 @@ export class RoomTool implements Tool {
       },
       message_id: {
         type: "string",
-        description: "For update: the id returned when you posted. Replaces that message instead of adding one.",
+        description: "Message id — for update (replaces it) or react (marks it).",
+      },
+      emoji: {
+        type: "string",
+        description: 'For react: e.g. "✅" done, "👀" working on it. Acknowledges without posting a message.',
+      },
+      notify: {
+        type: "boolean",
+        description:
+          "Interrupt the people in `to` with a real notification. Default false — the room is a record they read when they choose. Use only when you need them now.",
       },
       key: {
         type: "string",
@@ -132,6 +142,8 @@ export class RoomTool implements Tool {
           return await this.post(args, context, agentName);
         case "update":
           return await this.update(args, agentName);
+        case "react":
+          return await this.react(args, agentName);
         case "pass":
           return this.pass(args, context);
         case "create":
@@ -334,7 +346,12 @@ export class RoomTool implements Tool {
         windowHours: this.windowFor(urgency),
       },
       async () => {
-        const posted = await backend.post(room.ref.id, { body: spoken, speaker, to: finalTo });
+        const posted = await backend.post(room.ref.id, {
+          body: spoken,
+          speaker,
+          to: finalTo,
+          notify: args.notify === true,
+        });
         sent = true;
         if (posted) postedId = posted.id;
         // Never wake ourselves on our own message.
@@ -403,6 +420,30 @@ export class RoomTool implements Tool {
 
     await backend.edit(room.ref.id, messageId, body);
     return ok(`Updated your message in "${room.name}".`);
+  }
+
+  /**
+   * Acknowledge without saying anything.
+   *
+   * "Got it" costs a turn, wakes whoever is watching, and pushes the room
+   * toward its depth cap — for zero information. A reaction carries the same
+   * meaning at none of that cost, which is the cheapest available answer to
+   * rooms filling up with politeness.
+   */
+  private async react(args: Record<string, unknown>, agentName?: string): Promise<ToolResult> {
+    if (!agentName) return fail("This session has no agent identity.");
+    const messageId = String(args.message_id ?? "").trim();
+    if (!messageId) return fail("message_id is required for react.");
+    const emoji = String(args.emoji ?? "").trim() || "✅";
+
+    const room = this.requireRoom(args);
+    const backend = requireRoomBackend(room.ref.backend);
+    if (!backend.capabilities.reactions || !backend.react) {
+      return fail(`The "${room.ref.backend}" transport cannot react; say something short instead.`);
+    }
+
+    await backend.react(room.ref.id, messageId, emoji);
+    return ok(`Marked it ${emoji}.`);
   }
 
   private async create(args: Record<string, unknown>, agentName?: string): Promise<ToolResult> {

@@ -134,6 +134,7 @@ export class DiscordRoomBackend implements RoomBackend {
     nativeSpeakers: true,
     threads: true,
     edit: true,
+    reactions: true,
   };
 
   private readonly webhooks = new Map<string, WebhookClient>();
@@ -285,8 +286,11 @@ export class DiscordRoomBackend implements RoomBackend {
    * plain `@label`, which is exactly right: agents are woken by the room
    * watcher, not by Discord.
    */
-  private renderAddressee(label: string): string {
-    const nativeId = this.opts.nativeIdFor?.(label);
+  private renderAddressee(label: string, notify: boolean): string {
+    // Without `notify`, a person's name stays plain text: still addressed, and
+    // still legible in the transcript, but their phone does not light up. A
+    // real mention is an interrupt and is spent only when asked for.
+    const nativeId = notify ? this.opts.nativeIdFor?.(label) : undefined;
     return nativeId ? `<@${nativeId}>` : `@${label}`;
   }
 
@@ -294,7 +298,8 @@ export class DiscordRoomBackend implements RoomBackend {
    * The account ids a message deliberately addresses. Passed as the mention
    * allowlist so those pings land while `@everyone` in a body stays inert.
    */
-  private mentionedIds(to: string[] | undefined): string[] {
+  private mentionedIds(to: string[] | undefined, notify: boolean): string[] {
+    if (!notify) return [];
     const ids: string[] = [];
     for (const label of to ?? []) {
       const nativeId = this.opts.nativeIdFor?.(label);
@@ -355,9 +360,9 @@ export class DiscordRoomBackend implements RoomBackend {
     const text = formatEnvelope({
       to: message.to,
       body: message.body,
-      renderAddressee: (l) => this.renderAddressee(l),
+      renderAddressee: (l) => this.renderAddressee(l, message.notify === true),
     });
-    const users = this.mentionedIds(message.to);
+    const users = this.mentionedIds(message.to, message.notify === true);
 
     const threadId = message.parentId ? await this.threadFor(id, message.parentId) : undefined;
 
@@ -414,12 +419,15 @@ export class DiscordRoomBackend implements RoomBackend {
           speaker: message.speaker,
           to: i === 0 ? message.to : [],
           body: part,
-          renderAddressee: (l) => this.renderAddressee(l),
+          renderAddressee: (l) => this.renderAddressee(l, message.notify === true),
         }),
         // parse: [] keeps @everyone/@here inert — unlike every other Discord
         // mention form they are live in raw content and take no brackets —
         // while `users` lets through exactly who we addressed.
-        allowedMentions: { parse: [], users: i === 0 ? this.mentionedIds(message.to) : [] },
+        allowedMentions: {
+          parse: [],
+          users: i === 0 ? this.mentionedIds(message.to, message.notify === true) : [],
+        },
       });
     }
     if (!last) return null;
@@ -451,6 +459,12 @@ export class DiscordRoomBackend implements RoomBackend {
       throw new Error(`An edited message must fit in one message (${MAX_MESSAGE_LENGTH} characters).`);
     }
     await webhook.editMessage(messageId, { content: body, allowedMentions: { parse: [] } });
+  }
+
+  async react(id: string, messageId: string, emoji: string): Promise<void> {
+    const channel = await this.requireTextChannel(id);
+    const message = await channel.messages.fetch(messageId);
+    await message.react(emoji);
   }
 
   async fetchSince(id: string, cursor: string | null, limit: number): Promise<RoomMessage[]> {

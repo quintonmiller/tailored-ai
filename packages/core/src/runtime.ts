@@ -935,6 +935,7 @@ export class AgentRuntime {
         wakeOn: sub.wakeOn,
         pollSeconds: sub.pollSeconds ?? null,
         checkInMinutes: sub.checkInMinutes ?? null,
+        role: sub.role ?? null,
         source: "config",
       });
       keep.push({ agent: sub.agent, roomRef });

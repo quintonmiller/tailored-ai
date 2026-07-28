@@ -127,6 +127,23 @@ take no brackets. Nobody is named "everyone", so they never parse as an
 addressee, and every send path passes `parse: []` so a body containing one
 cannot ping a soul.
 
+### Posting is not pinging
+
+The room is the record: agents write to it freely, and a person reads it when
+they choose. A notification is an interrupt, and worth spending only when an
+agent actually needs someone.
+
+So addressing a person is plain text by default — visible in the transcript,
+silent on their phone. A real mention takes asking for one:
+
+```
+room(action="post", room="trip", to=["quinton"], body="itinerary updated")
+room(action="post", room="trip", to=["quinton"], body="need a decision on the hotel", notify=true)
+```
+
+Automatic replies never notify. An agent woken by a message is continuing a
+conversation, not raising something.
+
 ### People get a real mention
 
 A participant with an account is written as an actual Discord mention, so they
@@ -206,7 +223,21 @@ subscriptions:
   - { agent: researcher, room: eng, wakeOn: none }
 ```
 
-### Checking in without being asked
+#### A role within a room
+
+`purpose` says what a room is about. `role` says what one agent is for *in it*,
+so the same agent is not the same agent everywhere:
+
+```yaml
+subscriptions:
+  - { agent: coordinator, room: trip, role: "Keep the itinerary current." }
+  - { agent: coordinator, room: eng,  role: "Review changes before they land." }
+```
+
+Injected under the purpose in that agent's wake prompt. Keep it short — it
+competes with the purpose for a small budget.
+
+## Checking in without being asked
 
 Messages are not the only reason to act — a deadline gets closer, a promised
 follow-up comes due. `checkInMinutes` wakes an agent on a timer even when
@@ -488,6 +519,7 @@ One tool, several actions. Agents need `room` in their `tools:` list.
 | `post` | say something; `to` addresses participants |
 | `pass` | say nothing this turn |
 | `update` | replace a message you already posted, by `message_id` |
+| `react` | acknowledge with an emoji instead of a message |
 | `create` | open a new room |
 | `invite` | add a participant — agents subscribe, humans get transport access |
 | `remove` | drop a participant |
@@ -598,6 +630,19 @@ agents:
 File and exec tools then reject any path resolving outside it — the same
 enforcement the task watcher uses to pin coder/reviewer to their worktree, just
 declared instead of injected. A leading `~` is expanded.
+
+## Acknowledging without speaking
+
+"Got it" costs a turn: it wakes whoever is watching and pushes the room toward
+its depth cap, for no information. A reaction says the same thing at none of
+that cost:
+
+```
+room(action="react", room="eng", message_id="1531…", emoji="✅")
+```
+
+This is the cheapest answer to rooms filling with politeness — it removes the
+reason to speak, where `maxAgentTurns` only caps how often agents may.
 
 ## Saying it again vs changing what you said
 

@@ -23,6 +23,8 @@ export interface RoomSubscription {
   /** Wake every N minutes regardless of traffic. Null means only on messages. */
   checkInMinutes: number | null;
   lastCheckIn: string | null;
+  /** What this agent is for in this room, injected into its wake prompt. */
+  role: string | null;
   cursor: string | null;
   /** "config" rows are rewritten from config on every reconcile; "agent" rows persist. */
   source: "config" | "agent";
@@ -50,6 +52,7 @@ interface SubscriptionRow {
   poll_seconds: number | null;
   check_in_minutes: number | null;
   last_check_in: string | null;
+  role: string | null;
   cursor: string | null;
   source: string;
   last_woke_at: string | null;
@@ -86,6 +89,7 @@ function toSubscription(row: SubscriptionRow): RoomSubscription {
     pollSeconds: row.poll_seconds,
     checkInMinutes: row.check_in_minutes,
     lastCheckIn: row.last_check_in,
+    role: row.role,
     cursor: row.cursor,
     source: row.source === "agent" ? "agent" : "config",
     lastWokeAt: row.last_woke_at,
@@ -200,6 +204,7 @@ export class RoomStore {
     wakeOn?: WakeOn;
     pollSeconds?: number | null;
     checkInMinutes?: number | null;
+    role?: string | null;
     source?: "config" | "agent";
     /** Starting cursor for brand-new subscriptions only. */
     initialCursor?: string | null;
@@ -207,13 +212,14 @@ export class RoomStore {
     this.db
       .prepare(
         `INSERT INTO room_subscriptions
-           (agent, room_ref, deliver, wake_on, poll_seconds, check_in_minutes, source, cursor)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           (agent, room_ref, deliver, wake_on, poll_seconds, check_in_minutes, role, source, cursor)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(agent, room_ref) DO UPDATE SET
            deliver          = excluded.deliver,
            wake_on          = excluded.wake_on,
            poll_seconds     = excluded.poll_seconds,
            check_in_minutes = COALESCE(excluded.check_in_minutes, room_subscriptions.check_in_minutes),
+           role             = COALESCE(excluded.role, room_subscriptions.role),
            source           = excluded.source`,
       )
       .run(
@@ -223,6 +229,7 @@ export class RoomStore {
         input.wakeOn ?? "addressed",
         input.pollSeconds ?? null,
         input.checkInMinutes ?? null,
+        input.role ?? null,
         input.source ?? "agent",
         input.initialCursor ?? null,
       );

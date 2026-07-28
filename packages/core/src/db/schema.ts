@@ -483,6 +483,9 @@ export function initDatabase(dbPath: string): Database.Database {
       -- Wake this agent every N minutes even when nobody has said anything, so
       -- it can act on time passing rather than only on being spoken to.
       check_in_minutes INTEGER,
+      -- What this agent is for in THIS room. The room purpose says what the
+      -- room is about; this says what one participant's job in it is.
+      role             TEXT,
       last_check_in    TEXT,
       cursor          TEXT,
       source          TEXT NOT NULL DEFAULT 'config',
@@ -635,6 +638,7 @@ export function initDatabase(dbPath: string): Database.Database {
     "ALTER TABLE room_subscriptions ADD COLUMN check_in_minutes INTEGER",
     "ALTER TABLE room_subscriptions ADD COLUMN last_check_in TEXT",
     "ALTER TABLE rooms ADD COLUMN last_speaker TEXT",
+    "ALTER TABLE room_subscriptions ADD COLUMN role TEXT",
   ]) {
     try {
       db.exec(sql);
