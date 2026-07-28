@@ -125,8 +125,17 @@ export function describeWakeReason(reason: WakeReason): string {
   }
 }
 
-/** Session key family for room conversations: `room:<backend>.<id>:<agent>`. */
-export function makeRoomSessionKey(roomRef: string, agent: string): string {
+/**
+ * Session key for a room conversation.
+ *
+ * Per-room by default (`room:<backend>.<id>:<agent>`), so what an agent does in
+ * one place cannot leak into another. `shared` collapses every room into one
+ * session (`room:all:<agent>`) for an agent that should carry a thread between
+ * places — at the cost of mixing unrelated context and growing history with the
+ * number of rooms.
+ */
+export function makeRoomSessionKey(roomRef: string, agent: string, scope: "room" | "shared" = "room"): string {
+  if (scope === "shared") return `room:all:${agent}`;
   return `room:${roomRef.replace(/:/g, ".")}:${agent}`;
 }
 
@@ -649,7 +658,7 @@ export class RoomWatcher {
       const resolved = resolveAgent(fresh.agent, config, this.runtime.getTools(), undefined, this.runtime.contextDir);
       const session = findOrCreateSession(
         this.runtime.db,
-        makeRoomSessionKey(fresh.roomRef, fresh.agent),
+        makeRoomSessionKey(fresh.roomRef, fresh.agent, resolved.roomSessionScope),
         resolved.model,
         resolved.provider,
       );
@@ -819,7 +828,7 @@ export class RoomWatcher {
       const resolved = resolveAgent(sub.agent, config, this.runtime.getTools(), undefined, this.runtime.contextDir);
       const session = findOrCreateSession(
         this.runtime.db,
-        makeRoomSessionKey(sub.roomRef, sub.agent),
+        makeRoomSessionKey(sub.roomRef, sub.agent, resolved.roomSessionScope),
         resolved.model,
         resolved.provider,
       );

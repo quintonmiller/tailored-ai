@@ -223,7 +223,30 @@ subscriptions:
   - { agent: researcher, room: eng, wakeOn: none }
 ```
 
-#### Agents can see the date
+#### One memory per room, or one across them
+
+An agent gets a session per room by default. What it does in one place cannot
+leak into another — but an agent moved into a new room starts blank. Eleven
+agents freshly added to a channel, asked what they were working on, had nothing
+in that session and reported the same two unassigned tasks as their own work.
+
+```yaml
+agents:
+  quinton-executive-assistant:
+    roomSessionScope: shared    # room (default) | shared
+```
+
+`shared` gives one session across every room, for an agent that should carry a
+thread between places. The cost is real: unrelated context mixes, and history
+grows with the number of rooms rather than the conversation — an agent in
+fourteen rooms pays for all fourteen on every turn.
+
+Worth separating two things that look alike. Continuity of **conversation** is
+what this setting buys. Continuity of **work** is better served by durable
+state — `task_query(mine=true)`, notes, facts — which is already cross-room and
+does not grow the prompt.
+
+### Agents can see the date
 
 A room is a place where time passes: check-ins fire on a clock, purposes carry
 dates, agents get asked how long until something. But an agent only knows the

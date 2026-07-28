@@ -48,6 +48,24 @@ export interface AgentDefinition {
    * leading `~` is expanded.
    */
   fileBoundary?: string;
+  /**
+   * Whether this agent remembers each room separately or all of them together.
+   *
+   * `room` (default) gives it a session per room: clean isolation, and an agent
+   * moved into a new room starts blank — which is how eleven agents, freshly
+   * added to a channel, all reported the same unassigned tasks as their own
+   * work when asked what they were doing.
+   *
+   * `shared` gives it one session across every room. An assistant that should
+   * carry a thread between places wants this. The cost is real: context from
+   * unrelated rooms mixes, and history grows with the number of rooms rather
+   * than the conversation, so it competes for the same token budget everywhere.
+   *
+   * Note that continuity of WORK is better served by durable state — tasks
+   * assigned to the agent, notes, facts — which is already cross-room. This is
+   * continuity of CONVERSATION.
+   */
+  roomSessionScope?: "room" | "shared";
   contextDir?: string;
   /** When >0, re-prompt the model up to N times if it responds with text instead of tool calls. */
   nudgeOnText?: number;

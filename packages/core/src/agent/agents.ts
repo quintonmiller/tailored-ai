@@ -40,6 +40,8 @@ export interface ResolvedAgent {
   maxToolRounds: number;
   /** Hard filesystem boundary; undefined means the deployment-wide rules apply. */
   fileBoundary: string | undefined;
+  /** Whether room sessions are isolated per room or shared across them. */
+  roomSessionScope: "room" | "shared";
   contextDir: string | undefined;
   kbDir: string | undefined;
   nudgeOnText: number;
@@ -119,6 +121,7 @@ export function resolveAgent(
     thinking: undefined,
     maxToolRounds: config.agent.maxToolRounds,
     fileBoundary: undefined,
+    roomSessionScope: "room" as const,
     contextDir: undefined,
     kbDir: undefined,
     nudgeOnText: 0,
@@ -165,6 +168,7 @@ export function resolveAgent(
     thinking: agent?.thinking ?? defaults.thinking,
     maxToolRounds: agent?.maxToolRounds ?? defaults.maxToolRounds,
     fileBoundary: expandBoundary(agent?.fileBoundary),
+    roomSessionScope: agent?.roomSessionScope === "shared" ? "shared" : "room",
     contextDir: undefined,
     kbDir: undefined,
     nudgeOnText: agent?.nudgeOnText ?? 0,

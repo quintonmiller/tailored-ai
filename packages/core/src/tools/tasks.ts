@@ -414,10 +414,23 @@ function diffTaskFields(before: Task, after: Task): string[] {
   return changes;
 }
 
+/**
+ * Whose task this is, in words, from the reader's point of view.
+ *
+ * Always says something. Silence about ownership reads as "unowned, therefore
+ * available, therefore probably mine".
+ */
+export function describeOwner(assignee: string | null | undefined, reader?: string): string {
+  const owner = assignee?.trim();
+  if (!owner) return "unassigned (not yours)";
+  if (reader && owner.toLowerCase() === reader.toLowerCase()) return "yours";
+  return `assigned to ${owner}`;
+}
+
 export class TaskQueryTool implements Tool {
   name = "task_query";
   description =
-    'List, search, and filter project tasks across all statuses. Use this — not the `tasks` tool — for any read across multiple tasks. For example, `task_query(status="backlog", limit=10)` lists the top 10 pending tasks.';
+    'List, search, and filter project tasks across all statuses. Use this — not the `tasks` tool — for any read across multiple tasks. For example, `task_query(mine=true)` is what YOU are working on; `task_query(status="backlog", limit=10)` lists the top 10 pending tasks across everyone.';
   parameters = {
     type: "object",
     properties: {
@@ -427,6 +440,10 @@ export class TaskQueryTool implements Tool {
       },
       author: { type: "string", description: "Filter by author." },
       assignee: { type: "string", description: "Filter by assignee (agent or user)." },
+      mine: {
+        type: "boolean",
+        description: "Only tasks assigned to you. Use this to answer what YOU are working on.",
+      },
       tags: { type: "string", description: "Filter by tags (comma-separated, any match)." },
       updated_after: { type: "string", description: "ISO datetime — only tasks updated after this." },
       search: { type: "string", description: "Search title and description." },
@@ -443,9 +460,17 @@ export class TaskQueryTool implements Tool {
     this.resolveBackend = asResolver(backendOrResolver);
   }
 
-  async execute(args: Record<string, unknown>, _context: ToolContext): Promise<ToolResult> {
+  async execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     try {
       const filter: TaskFilter = {};
+
+      // "What am I working on" needs an answer grounded in something. A room
+      // session cannot supply it — sessions are per (room, agent), so an agent
+      // added to a new room starts blank — which is how eleven agents came to
+      // report the same two unassigned tasks as their own work.
+      if (args.mine === true && context.agentName) {
+        filter.assignee = context.agentName;
+      }
 
       if (args.status) {
         const s = (args.status as string)
@@ -481,8 +506,11 @@ export class TaskQueryTool implements Tool {
       const lines = [`${total} task(s) found${tasks.length < total ? ` (showing ${tasks.length})` : ""}:\n`];
       for (const t of tasks) {
         const tagStr = t.tags.length ? ` [${t.tags.join(", ")}]` : "";
-        const assigneeStr = t.assignee ? ` @${t.assignee}` : "";
-        lines.push(`- ${t.title} (${t.id}) — ${t.status}${assigneeStr}${tagStr}`);
+        // Ownership is stated on every line, including when there is none.
+        // Rendering an unassigned task as bare text made "no assignee" look
+        // like "no information", and an agent reading an in-progress task with
+        // nothing next to it has no reason to think it is not its own.
+        lines.push(`- ${t.title} (${t.id}) — ${t.status} · ${describeOwner(t.assignee, context.agentName)}${tagStr}`);
       }
 
       return { success: true, output: lines.join("\n") };
