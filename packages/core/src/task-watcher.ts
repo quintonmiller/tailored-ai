@@ -395,18 +395,30 @@ export class TaskWatcher {
             })()
           : undefined;
 
+      const base = this.runtime.buildLoopOptions({
+        session,
+        agentName,
+        extraTools,
+        project: projectOverride ?? null,
+      });
+
       response = await runAgentLoop(prompt, {
-        ...this.runtime.buildLoopOptions({
-          session,
-          agentName,
-          extraTools,
-          project: projectOverride ?? null,
-        }),
+        ...base,
         // Hard sandbox boundary: when there's a worktree, file/exec tools
         // reject paths that resolve outside it. Closes the absolute-path
         // escape where a coder could write into the parent checkout via
         // an absolute path that skips past the worktree root.
-        toolContextExtras: worktree ? { workingDirectoryBoundary: worktree.path } : undefined,
+        //
+        // Spread, not replaced. `buildLoopOptions` puts `agentName` in here
+        // along with the agent's declared `fileBoundary`, and assigning a bare
+        // object dropped both on every dispatch: the worktree branch lost agent
+        // attribution (so core-memory and Sleep could not tell who was
+        // speaking) and the non-worktree branch lost the boundary as well. The
+        // two busiest agents in a deployment run this path.
+        toolContextExtras: {
+          ...base.toolContextExtras,
+          ...(worktree ? { workingDirectoryBoundary: worktree.path } : {}),
+        },
         sandboxMounts: parentRepoGitDir ? [{ hostPath: parentRepoGitDir, sandboxPath: parentRepoGitDir }] : undefined,
         onToolCall: (name, args) => {
           console.log(`${logPrefix} tool: ${name}(${JSON.stringify(args)})`);

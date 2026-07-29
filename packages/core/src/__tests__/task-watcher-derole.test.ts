@@ -87,7 +87,9 @@ function makeRuntime(agents: Record<string, AgentDef>): any {
     getPrimaryOwner: () => ({ channelId: "c", userId: "u", displayName: "Owner" }),
     makeSessionKey: () => "key",
     resolveHooks: () => ({ beforeRun: [], afterRun: [] }),
-    buildLoopOptions: () => ({}),
+    buildLoopOptions: ({ agentName }: { agentName?: string }) => ({
+      toolContextExtras: { agentName, workingDirectoryBoundary: "/declared/boundary" },
+    }),
   };
 }
 
@@ -120,6 +122,43 @@ describe("task-watcher worktree opt-in (#204)", () => {
     expect(createWorktreeMock).toHaveBeenCalledTimes(1);
     const opts = createWorktreeMock.mock.calls[0][0];
     expect(opts.repoDir).toBe("/tmp/repo");
+  });
+
+  it("keeps agentName and the declared boundary when a worktree is created", async () => {
+    // `toolContextExtras` was assigned rather than spread, so buildLoopOptions'
+    // object — carrying agentName and the agent's declared fileBoundary — was
+    // discarded on every dispatch. The worktree branch lost attribution (so
+    // core-memory and Sleep could not tell who was speaking); the other branch
+    // lost the boundary too. The two busiest agents run this path.
+    createWorktreeMock.mockResolvedValue({
+      path: "/tmp/wt",
+      branch: "agent/x",
+      cleanup: async () => ({}),
+    });
+    createProject(db, { id: "proj1", title: "Repo", path: "/tmp/repo" });
+    const runtime = makeRuntime({ fixer: { worktree: true } });
+    const watcher = new TaskWatcher({ runtime }) as any;
+    const task = createProjectTask(db, { title: "Fix it", assignee: "fixer", project_id: "proj1" });
+
+    await watcher.processEvent({ action: "updated", task: { ...task, tags: [] } });
+
+    const extras = runAgentLoopMock.mock.calls[0][1].toolContextExtras;
+    expect(extras.agentName).toBe("fixer");
+    // The worktree wins for the boundary — that is the point of the worktree.
+    expect(extras.workingDirectoryBoundary).toBe("/tmp/wt");
+  });
+
+  it("keeps the declared boundary when there is no worktree", async () => {
+    createProject(db, { id: "proj1", title: "Repo", path: "/tmp/repo" });
+    const runtime = makeRuntime({ plain: { description: "no worktree" } });
+    const watcher = new TaskWatcher({ runtime }) as any;
+    const task = createProjectTask(db, { title: "Do it", assignee: "plain", project_id: "proj1" });
+
+    await watcher.processEvent({ action: "updated", task: { ...task, tags: [] } });
+
+    const extras = runAgentLoopMock.mock.calls[0][1].toolContextExtras;
+    expect(extras.agentName).toBe("plain");
+    expect(extras.workingDirectoryBoundary).toBe("/declared/boundary");
   });
 
   it("does NOT create a worktree for an agent named 'coder' that lacks the flag", async () => {
