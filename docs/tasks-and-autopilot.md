@@ -41,6 +41,33 @@ Every backend declares its native status enum via `statuses: { backlog, inProgre
 
 The `tasks` and `task_query` agent tools still go directly to SQLite — migrating them to the backend interface is tracked as a follow-up bean.
 
+### `task_query` makes you say whose tasks you mean
+
+`assignee` is required. There is no default, deliberately:
+
+```
+task_query(assignee="me")                       your own work
+task_query(assignee="all", status="backlog")    the whole queue
+task_query(assignee="unassigned")               tasks nobody owns
+task_query(assignee=["coder", "reviewer"])      a named subset
+```
+
+It used to default to everyone, which reads as harmless until an agent is asked
+what it is working on. In this deployment the only two `in_progress` rows were
+the owner's reading list — a novel and an audiobook, both unassigned — and
+several agents reported them as work in flight. Because that claim then lived in
+each agent's own session, later status updates repeated it without querying
+anything at all, and the book title `REAMDE` drifted into "generating a README in
+Neal Stephenson's style".
+
+No default fixes that. "Everyone" is wrong for an agent reporting on itself;
+"me" is wrong for a planner surveying the board. Omitting it returns an error
+naming the four options, which the model gets one round to act on.
+
+`unassigned` is a real value rather than the absence of a filter, so "nobody owns
+this" and "I didn't ask" stay distinct — conflating them is what made an
+unowned task look available, and therefore look like yours.
+
 Config:
 
 ```yaml
@@ -101,6 +128,59 @@ To ship somewhere else (Slack, Telegram, email, a pager): disable the plugin (`p
 The web UI's "working on" strip still subscribes via `getActivity()` for live status.
 
 The autopilot uses `runtime.getTaskBackend()` by default; tests override via `AutopilotWorkerOptions.taskBackend`. As of S7.5 the worker still claims one task per tick from a single backend — multi-project iteration with per-project backends is a follow-up bean.
+
+## Verification gate
+
+By default nothing stops an agent (or the autopilot finalizer) from setting a
+task `done` without proving the work — a `done` is an assertion, not evidence.
+The **`builtin:verify-gate`** plugin (`packages/core/src/plugins/verify-gate.ts`,
+seeded `enabled: false`) closes that hole. It subscribes to `task.transitioned`
+and, when a task reaches the backend's `done` status without a recorded
+verification verdict, routes it back to the review stage instead of letting it
+close.
+
+The contract is a **convention, not a schema**:
+
+- The task creator writes an **`## Acceptance`** section (and a `verify:` shell
+  command when one exists) in the description — the observable check that proves
+  the task is done.
+- The reviewing agent runs that check and posts a comment whose latest verdict
+  is `VERIFY: PASS` (with evidence) or `VERIFY: FAIL`. The gate only lets `done`
+  stand when the most recent reviewer verdict is `PASS`; the gate's own
+  bookkeeping comments are ignored.
+- An unverified `done` is reverted to `in_review`, re-assigned to the reviewer,
+  and a `task.dispatch_requested` is emitted so the watcher re-runs the
+  reviewer. After `maxBounces` rounds it stops and emits `task.needs_human`, so
+  a task can't loop forever.
+
+It hardcodes no agent name. Config (`{ module: "builtin:verify-gate", config: … }`):
+
+```yaml
+- module: builtin:verify-gate
+  config:
+    reviewerAssignee: reviewer       # default bounce target
+    reviewerByTag:                   # per-kind override, checked first
+      kind:config: verifier          #   live-surface → non-worktree verifier (curls the running app)
+      kind:code: reviewer            #   repo change → worktree reviewer (builds/tests the branch)
+    requireTags: [kind:code, kind:config]  # only gate tagged work; PA tasks self-close
+    maxBounces: 2                    # then escalate to a human
+    # passMarker / failMarker / doneStatus / reviewStatus are overridable too
+```
+
+`reviewerByTag` matters because the two kinds verify differently: a code task
+needs a worktree to build/test the branch, but a config / live-surface task
+needs a *running instance* to curl — and a non-worktree verifier agent
+(`worktree: false`, with `exec`) isn't blocked by `coder-project-guard` on a
+project that has no git path. So config tasks get functionally verified instead
+of stalling on "project has no path".
+
+`requireTags` is the scope knob: leave it unset to gate every `→ done`, or list
+the tags your implementation tasks carry so plain assistant/PA tasks ("escalate
+X", "log Y") still close themselves. The autopilot worker emits
+`task.transitioned` on its force-finalize path, so the gate sees an
+autopilot-completed task the same as an agent-driven `done`. Like the other
+built-in guards it's a replaceable opinion — disable it and ship your own
+subscriber to change the policy.
 
 ## Briefing surface
 

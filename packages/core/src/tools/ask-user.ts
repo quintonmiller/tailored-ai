@@ -78,11 +78,24 @@ export class AskUserTool implements Tool {
     }
 
     const channels: string[] = [];
-    const globalDir = resolve(this.contextDir, "global");
-    await ensureContextDir(globalDir);
+    // NOT under global/. That directory is injected verbatim into every
+    // agent's prompt on every turn, so writing questions there made an outbox
+    // for one person double as a broadcast to everyone — and nothing ever
+    // removed an answered one.
+    //
+    // What that looked like in practice: five questions accumulated over three
+    // weeks, about a task archived in May and a hotel booking already made,
+    // read by 27 agents on every single turn for two months. One of them
+    // eventually reported the hotel question as its own outstanding work. The
+    // file was 2.4 KB — half the entire global context budget — and none of it
+    // was true any more.
+    //
+    // The inbox is a queue for Quinton, not context for agents. It lives one
+    // level up, where `loadAllContext` does not look.
+    await ensureContextDir(this.contextDir);
 
     // Append to the configured inbox file.
-    const inboxPath = resolve(globalDir, this.inboxFile);
+    const inboxPath = resolve(this.contextDir, this.inboxFile);
     const timestamp = new Date().toISOString();
     const entry = `\n[QUESTION] ${timestamp}\n${question}\n`;
     try {

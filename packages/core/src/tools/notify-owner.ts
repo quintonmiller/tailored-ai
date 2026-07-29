@@ -1,4 +1,5 @@
 import type { OutboundNotifier } from "../channels/outbound.js";
+import { type NotificationGateLike, resolveGate } from "../notifications/dedup.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
 
 /**
@@ -36,9 +37,11 @@ export class NotifyOwnerTool implements Tool {
   constructor(
     private resolveOutbound: (channelId?: string) => OutboundNotifier | undefined,
     private getOwnerId: (channelId?: string) => string | undefined,
+    /** Repeat gate. Omitted in tests / embeddings where no db is available. */
+    private getGate?: () => NotificationGateLike | undefined,
   ) {}
 
-  async execute(args: Record<string, unknown>, _context: ToolContext): Promise<ToolResult> {
+  async execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     const message = args.message as string | undefined;
     if (!message || typeof message !== "string") {
       return { success: false, output: "", error: "message is required and must be a string." };
@@ -63,7 +66,35 @@ export class NotifyOwnerTool implements Tool {
       };
     }
 
+    // Repeat-gate only the unprompted case. A background tick or autopilot run
+    // is the agent deciding on its own that the user should hear something, and
+    // that is what repeats. When the user is present and asked for something,
+    // send it however many times they ask.
+    const proactive = Boolean(context.exploratoryRunId || context.autopilotTaskId);
+    const gate = proactive ? resolveGate(this.getGate) : undefined;
+
     try {
+      if (gate) {
+        const decision = await gate.deliver(
+          {
+            source: `tool:notify_owner:${context.agentName ?? "unknown"}`,
+            channel: out.id,
+            target,
+            content: message,
+          },
+          () => out.sendDM(target, message),
+          (msg) => console.log(msg),
+        );
+        if (!decision.send) {
+          return {
+            success: true,
+            output:
+              `Not sent — the owner already received this ${decision.firstSentAt ? `on ${decision.firstSentAt}` : "recently"}. ` +
+              `Say something new, or leave it for the next digest.`,
+          };
+        }
+        return { success: true, output: `Sent DM to ${target} (${message.length} chars).` };
+      }
       await out.sendDM(target, message);
       return { success: true, output: `Sent DM to ${target} (${message.length} chars).` };
     } catch (err) {

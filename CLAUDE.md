@@ -105,6 +105,8 @@ Deep notes on each subsystem live under [`docs/`](./docs/):
 | Tiered memory (recall, embeddings, promotion, sweep, HTTP/UI) | [docs/memory.md](./docs/memory.md) + design [docs/memory-tiers.md](./docs/memory-tiers.md) + storage-registry [docs/memory-storage-registry.md](./docs/memory-storage-registry.md) |
 | Sandboxes (host/docker/podman) and `git worktree` helpers | [docs/sandboxes-and-worktrees.md](./docs/sandboxes-and-worktrees.md) |
 | Chat output tags (`<task/>`, `<proposal>`, `<ask>`, etc.) | [docs/chat-tags.md](./docs/chat-tags.md) |
+| Notifications: repeat suppression for unsolicited messages (`NotificationGate`) | [docs/notifications.md](./docs/notifications.md) |
+| Rooms: shared multi-agent conversations (backend seam, envelopes, subscriptions, wake policy) | [docs/rooms.md](./docs/rooms.md) |
 | Workflow engine | [docs/workflows.md](./docs/workflows.md) |
 | Skills: SKILL.md install + enable per agent (CLI + UI) | [docs/skills.md](./docs/skills.md) |
 | Dashboard widgets: declarative Board seam (core registry + `/api/dashboard` + UI renderers) | [docs/dashboard-widgets.md](./docs/dashboard-widgets.md) |
@@ -112,5 +114,6 @@ Deep notes on each subsystem live under [`docs/`](./docs/):
 | Browser mediator — flexible browser surface with vault refs + workflow learning (6-phase build) | [docs/browser-mediator-design.md](./docs/browser-mediator-design.md) |
 | Publishing to npm — one-time setup, per-release flow, troubleshooting | [docs/publishing.md](./docs/publishing.md) |
 | MCP client: config-declared servers, tool discovery, lifecycle | [docs/mcp.md](./docs/mcp.md) |
+| Audit findings + open action items (2026-07-28): boundaries, trust, skills, context | [docs/audit-2026-07-28.md](./docs/audit-2026-07-28.md) |
 
 When touching a subsystem, update its doc — keep this index file tight.

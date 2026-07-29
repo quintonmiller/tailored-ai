@@ -11,15 +11,19 @@ import {
   type AutopilotWorker,
   addTaskComment,
   type Briefing,
+  type CollectionListFilter,
+  type CollectionType,
   type CronScheduler,
   checkBudget,
   compactSession,
   countChunks,
+  createCollection,
   createDocument,
   createProject,
   createProjectTask,
   type DashboardWidget,
   defaultLockfilePath,
+  deleteCollection,
   deleteDocument,
   deleteProject,
   deleteProjectTask,
@@ -40,6 +44,8 @@ import {
   generateBriefing,
   generateSuggestions,
   getAutopilotSettings,
+  getCollection,
+  getCollectionStats,
   getDefaultProjectId,
   getDocument,
   getExploratoryRun,
@@ -54,6 +60,7 @@ import {
   hashManifest,
   isCommand,
   Lockfile,
+  listCollections,
   listDocuments,
   listExploratoryRuns,
   listExploratoryStates,
@@ -1378,6 +1385,73 @@ export function createServer(opts: ServerOptions) {
     }
 
     return c.json(comment, 201);
+  });
+
+  // --- Collections (personal tracker: steelbooks, tiki mugs, restaurants, etc.) ---
+
+  app.get("/api/collections", (c) => {
+    const filter: CollectionListFilter = {};
+    const type = c.req.query("type");
+    if (type) filter.type = type as CollectionType;
+    const search = c.req.query("search");
+    if (search) filter.search = search;
+    const limitRaw = c.req.query("limit");
+    if (limitRaw) filter.limit = Math.max(1, Math.min(100, Number.parseInt(limitRaw, 10) || 20));
+    const offsetRaw = c.req.query("offset");
+    if (offsetRaw) filter.offset = Math.max(0, Number.parseInt(offsetRaw, 10) || 0);
+
+    return c.json(listCollections(runtime.db, filter));
+  });
+
+  app.get("/api/collections/stats", (c) => {
+    return c.json(getCollectionStats(runtime.db));
+  });
+
+  app.post("/api/collections", async (c) => {
+    const body = await c.req.json<{
+      type?: string;
+      name?: string;
+      notes?: string | null;
+      rating?: number | null;
+      location?: string | null;
+      url?: string | null;
+      added_by?: string;
+      source?: string;
+    }>();
+
+    if (!body.type || !body.name?.trim()) {
+      return c.json({ error: "type and name are required" }, 400);
+    }
+
+    try {
+      const item = createCollection(runtime.db, {
+        type: body.type as CollectionType,
+        name: body.name,
+        notes: body.notes,
+        rating: body.rating,
+        location: body.location,
+        url: body.url,
+        added_by: (body.added_by as "user" | "tai") ?? undefined,
+        source: (body.source as "email_id" | "chat" | "manual") ?? undefined,
+      });
+      return c.json(item, 201);
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 400);
+    }
+  });
+
+  app.get("/api/collections/:id", (c) => {
+    const { id } = c.req.param();
+    const item = getCollection(runtime.db, id);
+    if (!item) return c.json({ error: "Collection not found" }, 404);
+    return c.json(item);
+  });
+
+  app.delete("/api/collections/:id", (c) => {
+    const { id } = c.req.param();
+    const deleted = deleteCollection(runtime.db, id);
+    if (!deleted) return c.json({ error: "Collection not found" }, 404);
+    return c.json({ ok: true });
   });
 
   // --- Facts ---

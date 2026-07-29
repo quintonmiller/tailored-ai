@@ -3,7 +3,7 @@
  * emits `question.asked` (delivery owned by the owner-notifier plugin) and
  * writes out-of-autopilot questions to the configured inbox file.
  */
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type Database from "better-sqlite3";
@@ -67,7 +67,7 @@ describe("AskUserTool", () => {
 
     expect(res.success).toBe(true);
     expect(res.output).toContain("questions.md");
-    const inbox = readFileSync(resolve(contextDir, "global", "questions.md"), "utf-8");
+    const inbox = readFileSync(resolve(contextDir, "questions.md"), "utf-8");
     expect(inbox).toContain("[QUESTION]");
     expect(inbox).toContain("Coffee or tea?");
     // No taskId on the out-of-autopilot event.
@@ -78,7 +78,21 @@ describe("AskUserTool", () => {
     const tool = new AskUserTool({ contextDir, inboxFile: "inbox.md" });
     const res = await tool.execute({ question: "Anybody there?" }, ctx());
     expect(res.success).toBe(true);
-    const inbox = readFileSync(resolve(contextDir, "global", "inbox.md"), "utf-8");
+    const inbox = readFileSync(resolve(contextDir, "inbox.md"), "utf-8");
     expect(inbox).toContain("Anybody there?");
+  });
+
+  it("keeps the inbox out of the directory that is injected into every prompt", async () => {
+    // `global/` is read verbatim into every agent's system prompt on every
+    // turn. Writing questions there made a queue for one person double as a
+    // broadcast to all of them, and nothing ever removed an answered one:
+    // five stale questions, 2.4 KB, read by 27 agents for two months, until an
+    // agent reported one of them as its own outstanding work.
+    const tool = new AskUserTool({ contextDir, inboxFile: "inbox.md" });
+
+    await tool.execute({ question: "Which day works?" }, ctx({ db, agentName: "default" }));
+
+    expect(readFileSync(resolve(contextDir, "inbox.md"), "utf-8")).toContain("Which day works?");
+    expect(existsSync(resolve(contextDir, "global", "inbox.md"))).toBe(false);
   });
 });

@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { resolveAgent } from "../agent/agents.js";
 import type { AgentConfig } from "../config.js";
@@ -104,15 +105,22 @@ describe("resolveAgent", () => {
     expect(resolved.tools.map((t) => t.name)).toEqual(["exec", "read"]);
   });
 
-  it("throws for unknown tool in agent allowlist", () => {
+  it("skips an unknown tool instead of taking the agent down with it", () => {
+    // This used to throw. In a room that meant the agent stopped answering
+    // altogether, with the reason only in a log — a one-character typo in
+    // `tools:` was indistinguishable from an agent with nothing to say. Skills
+    // and mcp_* refs always degraded here; the agent's own list now does too.
     const config = makeConfig({
       agents: {
         bad: {
-          tools: ["nonexistent_tool"],
+          tools: ["nonexistent_tool", "read"],
         },
       },
     });
-    expect(() => resolveAgent("bad", config, tools)).toThrow("unknown tool");
+
+    const resolved = resolveAgent("bad", config, tools);
+
+    expect(resolved.tools.map((t) => t.name)).toEqual(["read"]);
   });
 
   it("applies model override over agent model", () => {
@@ -164,5 +172,29 @@ describe("resolveAgent — MCP tool references", () => {
     const tools = [makeTool("mcp_github_search_issues")];
     const resolved = resolveAgent("helper", config, tools);
     expect(resolved.tools.map((t) => t.name)).toEqual(["mcp_github_search_issues"]);
+  });
+});
+
+describe("per-agent file boundary", () => {
+  it("resolves a configured boundary to an absolute path", () => {
+    const config = makeConfig({
+      agents: { planner: { fileBoundary: "/home/quint/research/travel" } },
+    });
+
+    expect(resolveAgent("planner", config, [], undefined, "/ctx").fileBoundary).toBe("/home/quint/research/travel");
+  });
+
+  it("expands a leading ~, which would otherwise confine the agent to nowhere", () => {
+    // The boundary check is a path-prefix comparison, so an unexpanded "~"
+    // matches nothing and every write is rejected with a confusing error.
+    const config = makeConfig({ agents: { planner: { fileBoundary: "~/research" } } });
+
+    expect(resolveAgent("planner", config, [], undefined, "/ctx").fileBoundary).toBe(`${homedir()}/research`);
+  });
+
+  it("is undefined when unset, so deployment-wide rules still apply", () => {
+    const config = makeConfig({ agents: { planner: {} } });
+
+    expect(resolveAgent("planner", config, [], undefined, "/ctx").fileBoundary).toBeUndefined();
   });
 });

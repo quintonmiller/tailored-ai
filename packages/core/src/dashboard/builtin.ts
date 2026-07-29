@@ -23,6 +23,7 @@ export function builtinDashboardWidgets(config: AgentConfig): DashboardWidget[] 
       order: 10,
       options: { endpoint: "/api/health" },
     },
+    { id: "live-clock", type: "clock", title: "Clock", span: 1, order: 5 },
     {
       id: "needs-you",
       type: "tasks",

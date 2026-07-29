@@ -5,6 +5,12 @@ import type { Tool, ToolContext, ToolResult } from "./interface.js";
 
 const FILENAME_RE = /^[a-zA-Z0-9_-]+\.md$/;
 const MAX_SEARCH_OUTPUT = 3000;
+/**
+ * Where a scope-less write goes when the session has no agent identity.
+ * A sibling of `global/`, so `loadAllContext` — which reads `global/` and
+ * `agents/<name>/` — never picks it up.
+ */
+const UNSCOPED_DIR = "unscoped";
 
 type Scope = "global" | "profile" | "knowledge";
 
@@ -100,7 +106,7 @@ export class MemoryTool implements Tool {
       if (!content) {
         return { success: false, output: "", error: "content is required for write." };
       }
-      return this.write(filename, content, scope, agentDir, kbDir, agentKbDir);
+      return this.write(filename, content, scope, agentDir, kbDir, agentKbDir, context);
     }
 
     if (action === "append") {
@@ -108,7 +114,7 @@ export class MemoryTool implements Tool {
       if (!content) {
         return { success: false, output: "", error: "content is required for append." };
       }
-      return this.append(filename, content, scope, agentDir, kbDir, agentKbDir);
+      return this.append(filename, content, scope, agentDir, kbDir, agentKbDir, context);
     }
 
     return { success: false, output: "", error: `Unknown action "${action}".` };
@@ -199,24 +205,88 @@ export class MemoryTool implements Tool {
     agentDir?: string,
     kbDir?: string,
     agentKbDir?: string,
+    context?: ToolContext,
   ): Promise<ToolResult> {
     if (scope === "knowledge") {
       const targetDir = agentKbDir ?? kbDir;
       if (!targetDir) {
         return { success: false, output: "", error: "No knowledge base directory configured." };
       }
-      return this.writeToDir(filename, content, targetDir, "knowledge");
+      return this.writeToDir(filename, content, targetDir, "knowledge", [kbDir, agentKbDir]);
     }
 
     const targetDir = this.resolveDefaultDir(scope, agentDir);
-    const label = targetDir === this.globalDir ? "global" : "profile";
-    return this.writeToDir(filename, content, targetDir, label);
+    const label = this.labelFor(targetDir, agentDir);
+    this.noteGlobalWrite(label, filename, scope, context);
+    return this.writeToDir(filename, content, targetDir, label, [this.globalDir, agentDir, targetDir]);
   }
 
-  private async writeToDir(filename: string, content: string, dir: string, label: string): Promise<ToolResult> {
+  /**
+   * A write to the global directory changes every agent's prompt. Say so.
+   *
+   * Not blocked — an agent curating shared knowledge is a legitimate thing to
+   * want, and whether it is allowed is a permissions question, not something to
+   * hardcode here. But it happened silently, which is how a queue of answered
+   * questions came to be read by 27 agents on every turn for two months. The
+   * point is that it stops being invisible.
+   *
+   * `scope === undefined` is called out separately because that path is not a
+   * choice the model made: with no agent context directory, an unscoped
+   * "profile" write falls through to global. The agent asked for its own notes
+   * and wrote to everyone's.
+   */
+  private noteGlobalWrite(label: string, filename: string, scope: Scope | undefined, context?: ToolContext): void {
+    if (label !== "global") return;
+    const who = context?.agentName ?? "an un-named session";
+    const how = scope === "global" ? "explicitly" : "by falling back from profile scope (no agent context dir)";
+    console.warn(
+      `[memory] ${who} wrote ${filename} to GLOBAL context ${how}. ` +
+        `Every agent reads this on every turn — check it is meant to be shared, and that it is dated.`,
+    );
+  }
+
+  /**
+   * Refuse to write anywhere but this tool's own roots.
+   *
+   * A containment invariant, deliberately not `checkSandboxBoundary`. The two
+   * answer different questions: a boundary asks "may this agent touch this part
+   * of the filesystem", and three live agents have one pointing at a research
+   * folder that has nothing to do with where their notes live — checking it
+   * here would reject every legitimate memory write they make. This asks the
+   * narrower question the tool can actually answer: is the target inside a
+   * directory this tool owns?
+   *
+   * Cheap, and it closes a real gap. `memory` never checked anything, while
+   * `scope: "global"` writes into the directory injected into every agent's
+   * prompt on every turn.
+   */
+  private withinOwnRoots(target: string, roots: Array<string | undefined>): boolean {
+    const full = resolve(target);
+    return roots.some((root) => {
+      if (!root) return false;
+      const base = resolve(root);
+      return full === base || full.startsWith(`${base}/`);
+    });
+  }
+
+  private async writeToDir(
+    filename: string,
+    content: string,
+    dir: string,
+    label: string,
+    roots?: Array<string | undefined>,
+  ): Promise<ToolResult> {
+    const target = resolve(dir, filename);
+    if (roots && !this.withinOwnRoots(target, roots)) {
+      return {
+        success: false,
+        output: "",
+        error: `Refusing to write outside the memory directories. "${filename}" resolves outside this tool's own roots.`,
+      };
+    }
     try {
       await ensureContextDir(dir);
-      await writeFile(resolve(dir, filename), content, "utf-8");
+      await writeFile(target, content, "utf-8");
       return { success: true, output: `Saved ${filename} [${label}]` };
     } catch (err) {
       return { success: false, output: "", error: `Failed to write: ${(err as Error).message}` };
@@ -230,24 +300,40 @@ export class MemoryTool implements Tool {
     agentDir?: string,
     kbDir?: string,
     agentKbDir?: string,
+    context?: ToolContext,
   ): Promise<ToolResult> {
     if (scope === "knowledge") {
       const targetDir = agentKbDir ?? kbDir;
       if (!targetDir) {
         return { success: false, output: "", error: "No knowledge base directory configured." };
       }
-      return this.appendToDir(filename, content, targetDir, "knowledge");
+      return this.appendToDir(filename, content, targetDir, "knowledge", [kbDir, agentKbDir]);
     }
 
     const targetDir = this.resolveDefaultDir(scope, agentDir);
-    const label = targetDir === this.globalDir ? "global" : "profile";
-    return this.appendToDir(filename, content, targetDir, label);
+    const label = this.labelFor(targetDir, agentDir);
+    this.noteGlobalWrite(label, filename, scope, context);
+    return this.appendToDir(filename, content, targetDir, label, [this.globalDir, agentDir, targetDir]);
   }
 
-  private async appendToDir(filename: string, content: string, dir: string, label: string): Promise<ToolResult> {
+  private async appendToDir(
+    filename: string,
+    content: string,
+    dir: string,
+    label: string,
+    roots?: Array<string | undefined>,
+  ): Promise<ToolResult> {
+    const target = resolve(dir, filename);
+    if (roots && !this.withinOwnRoots(target, roots)) {
+      return {
+        success: false,
+        output: "",
+        error: `Refusing to write outside the memory directories. "${filename}" resolves outside this tool's own roots.`,
+      };
+    }
     try {
       await ensureContextDir(dir);
-      await appendFile(resolve(dir, filename), `\n${content}`, "utf-8");
+      await appendFile(target, `\n${content}`, "utf-8");
       return { success: true, output: `Appended to ${filename} [${label}]` };
     } catch (err) {
       return { success: false, output: "", error: `Failed to append: ${(err as Error).message}` };
@@ -314,10 +400,34 @@ export class MemoryTool implements Tool {
     };
   }
 
+  /**
+   * Where a write lands.
+   *
+   * `global` and a resolvable `profile` are the caller's own choice. The third
+   * case is the one that bit: a "profile" write from a session with no agent
+   * context directory — an un-named CLI run, a Slack message, an API call —
+   * used to fall through to the GLOBAL directory. The caller asked for its own
+   * notes and got everyone's prompt, silently.
+   *
+   * The fallback is now a sibling directory that nothing injects. Deliberately
+   * a redirect rather than an error: `scope` is optional, and hard-failing an
+   * omitted optional parameter to make the model retry with the right enum
+   * value is the loop a small local model handles worst. It turns a quiet
+   * correctness bug into a loud stall. Same shape as moving the `ask_user`
+   * inbox out of `global/` — change where it goes, do not add a gate.
+   */
+  /** What to call the directory in the result, so "saved" says where. */
+  private labelFor(targetDir: string, agentDir?: string): string {
+    if (targetDir === this.globalDir) return "global";
+    if (agentDir && targetDir === agentDir) return "profile";
+    return UNSCOPED_DIR;
+  }
+
   private resolveDefaultDir(scope: Scope | undefined, agentDir?: string): string {
     if (scope === "global") return this.globalDir;
-    if (scope === "profile" && agentDir) return agentDir;
-    // Default: profile dir if available, otherwise global
-    return agentDir ?? this.globalDir;
+    if (agentDir) return agentDir;
+    if (scope === "profile") return resolve(this.globalDir, "..", UNSCOPED_DIR);
+    // No scope and no agent identity: not a request to write to every prompt.
+    return resolve(this.globalDir, "..", UNSCOPED_DIR);
   }
 }

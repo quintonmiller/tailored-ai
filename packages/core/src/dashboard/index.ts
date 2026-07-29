@@ -107,7 +107,10 @@ export const BUILTIN_WIDGET_TYPES = [
   "links",
   "iframe",
   "session-explorer",
+  "collections",
   "clock",
+  "recommendations",
+  "decisions",
 ] as const;
 
 /**

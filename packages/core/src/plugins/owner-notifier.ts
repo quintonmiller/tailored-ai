@@ -33,6 +33,7 @@
 
 import { getAutopilotSettings, isInQuietHours } from "../db/autopilot-queries.js";
 import type { RuntimeEventPayload, Subscription } from "../events.js";
+import { normalizeForDedup, resolveGate } from "../notifications/dedup.js";
 import type { Plugin, PluginMeta } from "../plugin-context.js";
 import type { AgentRuntime } from "../runtime.js";
 
@@ -65,7 +66,15 @@ export class OwnerNotifier {
       console.log(`[owner-notifier] Suppressing notification during quiet hours: ${e.message.slice(0, 80)}`);
       return;
     }
-    await this.dmOwner(e.message, "[owner-notifier] Notify DM failed:");
+    // Keyed on the task and reason: two different tasks failing overnight must
+    // never collapse into one notification just because their message bodies
+    // read alike.
+    await this.dmOwner(
+      e.message,
+      "[owner-notifier] Notify DM failed:",
+      "owner-notifier:needs_human",
+      e.taskId ? `task:${e.taskId}:${e.reason ?? "needs_human"}` : undefined,
+    );
   }
 
   private async onDigest(e: RuntimeEventPayload<"digest.ready">): Promise<void> {
@@ -73,8 +82,15 @@ export class OwnerNotifier {
     const ownerId = this.runtime.getOwnerId();
     if (out && ownerId) {
       try {
-        await out.sendDM(ownerId, e.content);
-        console.log(`[owner-notifier] ${e.periodLabel} digest delivered via ${out.id} DM`);
+        // Digests repeat heavily when nothing happened — the body differs only
+        // in a token count, which exact hashing would miss but the similarity
+        // tier catches. An empty digest is not news.
+        const decision = await resolveGate(() => this.runtime.getNotificationGate?.()).deliver(
+          { source: `owner-notifier:digest:${e.periodLabel}`, channel: out.id, target: ownerId, content: e.content },
+          () => out.sendDM(ownerId, e.content),
+          (msg) => console.log(msg),
+        );
+        if (decision.send) console.log(`[owner-notifier] ${e.periodLabel} digest delivered via ${out.id} DM`);
       } catch (err) {
         console.error("[owner-notifier] Digest DM failed:", (err as Error).message);
       }
@@ -91,28 +107,25 @@ export class OwnerNotifier {
         console.log(`[owner-notifier] Suppressing task question during quiet hours: ${e.question.slice(0, 80)}`);
         return;
       }
-      const out = this.runtime.resolveOutbound();
-      const ownerId = this.runtime.getOwnerId();
-      if (out && ownerId) {
-        try {
-          await out.sendDM(ownerId, `Task ${e.taskId} is blocked — agent needs input:\n${e.question}`);
-        } catch {
-          // Best-effort notification; the question is already recorded as a comment.
-        }
-      }
+      // Keyed on the task, so re-asking the same blocked question every tick
+      // doesn't re-DM. A genuinely different question on the same task still
+      // gets through (the key includes the question text).
+      await this.dmOwner(
+        `Task ${e.taskId} is blocked — agent needs input:\n${e.question}`,
+        "[owner-notifier] Task question DM failed:",
+        "owner-notifier:question",
+        `task:${e.taskId}:${normalizeForDedup(e.question).slice(0, 120)}`,
+      );
       return;
     }
 
-    // Out-of-autopilot question: always deliver (the inbox file already has it).
-    const out = this.runtime.resolveOutbound();
-    const ownerId = this.runtime.getOwnerId();
-    if (out && ownerId) {
-      try {
-        await out.sendDM(ownerId, `Question from autonomous agent:\n${e.question}`);
-      } catch (err) {
-        console.error("[owner-notifier] Question DM failed:", (err as Error).message);
-      }
-    }
+    // Out-of-autopilot question: the inbox file already has it, so a repeat DM
+    // adds nothing.
+    await this.dmOwner(
+      `Question from autonomous agent:\n${e.question}`,
+      "[owner-notifier] Question DM failed:",
+      "owner-notifier:question",
+    );
   }
 
   private async onForm(e: RuntimeEventPayload<"form.completed">): Promise<void> {
@@ -134,12 +147,24 @@ export class OwnerNotifier {
     return isInQuietHours(settings);
   }
 
-  private async dmOwner(message: string, errPrefix: string): Promise<void> {
+  /**
+   * DM the owner, but only if we haven't already told them this.
+   *
+   * Everything this plugin sends is unsolicited, so it all goes through the
+   * repeat gate. `dedupKey` should be the identity of the underlying fact when
+   * one exists (`task:<id>:blocked`) — that keeps suppressing across rewordings,
+   * which content hashing alone cannot do when a model restates the same news.
+   */
+  private async dmOwner(message: string, errPrefix: string, source: string, dedupKey?: string): Promise<void> {
     const out = this.runtime.resolveOutbound();
     const ownerId = this.runtime.getOwnerId();
     if (!out || !ownerId) return;
     try {
-      await out.sendDM(ownerId, message);
+      await resolveGate(() => this.runtime.getNotificationGate?.()).deliver(
+        { source, channel: out.id, target: ownerId, content: message, key: dedupKey },
+        () => out.sendDM(ownerId, message),
+        (msg) => console.log(msg),
+      );
     } catch (err) {
       console.error(errPrefix, (err as Error).message);
     }

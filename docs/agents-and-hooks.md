@@ -114,16 +114,56 @@ tool: "tool_name"            # required — name of any registered tool
 args:                        # optional — arguments passed to the tool
   key: "value"               # string values support {{template}} interpolation
 skipIf: "regex_pattern"      # optional — if output matches, skip the rest of the pipeline
+onError: "abort"             # optional — "abort" (default) or "continue"
 ```
 
 - **`tool`** — the tool to execute (must exist in the full tool set, not agent-filtered)
 - **`args`** — key/value pairs passed to the tool. String values support `{{var}}` template interpolation.
 - **`skipIf`** — a regex tested against the tool output. If it matches, the remaining hooks and the agent loop are skipped (for `beforeRun`), or remaining `afterRun` hooks are skipped.
+- **`onError`** — what to do when the hook throws, is missing, or returns `success: false`. Defaults to `abort`.
+
+### Failing hooks stop the pipeline
+
+A `beforeRun` hook exists to put data in the prompt. If it fails there is no
+data, and a prompt that promises data it doesn't have invites the model to
+invent it.
+
+A failed hook (throws, missing tool, or `success: false`) stops the remaining
+hooks and reports `failed` to the caller. What happens next is the caller's
+choice, and the two differ deliberately:
+
+- **Cron aborts the run.** Nobody is waiting on a cron summary, and a fabricated
+  one is worse than none.
+- **Chat, delegate, and task-watcher still run the agent.** A hook failure must
+  never leave you talking to a silent assistant, so these proceed without the
+  hook's output.
+
+This is not hypothetical. A deployment whose Gmail token had expired ran this
+hook every 30 minutes:
+
+```yaml
+hooks:
+  beforeRun:
+    tool: gmail
+    args: { action: search, query: "after:{{last_run_epoch}}" }
+    skipIf: ^No results
+prompt: "Below are my recent emails. Summarize any that need my attention."
+```
+
+The tool returned `success: false` with an empty output. `skipIf` didn't match
+the empty string, so the run proceeded and handed the model a prompt asserting
+emails were present when none were. The model obliged, hallucinating an inbox
+and DMing the summary — 320 times in 10 days.
+
+Set `onError: "continue"` only when the hook is genuinely optional enrichment.
 
 ### Execution flow
 
 1. **beforeRun hooks** execute sequentially before `runAgentLoop`
    - If any hook's `skipIf` matches, the agent loop is skipped entirely
+   - If any hook fails (and its `onError` is the default `abort`), the remaining
+     hooks are skipped and `failed` is returned; cron then aborts the run, while
+     chat/delegate/task-watcher continue
    - In cron, non-empty hook outputs are prepended to the prompt as context
 2. The agent loop runs normally
 3. **afterRun hooks** execute sequentially after `runAgentLoop`

@@ -4,6 +4,8 @@ description: Build a Board (dashboard) widget for the TAI web UI. Use when asked
 version: 0.1.0
 allowed-tools:
   - admin
+  - facts
+  - collections
   - read
   - write
   - edit
@@ -16,16 +18,58 @@ The Board (`#/board`) renders **declarative widget specs** the server returns fr
 `GET /api/dashboard`. A widget is data — `{ id, type, title, span, order, options }` —
 not React. Full reference: `docs/dashboard-widgets.md`.
 
-## Step 1 — pick the path (this is the most important decision)
+## Step 1 — answer two questions before you build anything
 
-- **Config widget (NO code, prefer this).** If the data is already at a `/api/…`
-  endpoint and one of the built-in renderer types fits, you only add a spec to
-  `dashboard.widgets` in `config.yaml`. No rebuild, no UI change. **~90% of
-  requests are this.**
-- **New renderer type (code).** Only when no built-in type can display the data.
-  You add one React component to the UI bundle and register it.
+Most widget requests fail one of two ways: the agent invents a new API endpoint and
+renderer it can't actually build, or it leaves a placeholder ("stub") widget on the
+live dashboard. Both come from skipping these questions. Answer them first.
+
+### Q1 — where does the data come from?
+
+| The data… | Then… | Code? |
+|---|---|---|
+| is **already** at a `/api/…` endpoint (tasks, sessions, briefing, health, facts, collections, …) | config widget pointing at it | none |
+| is **user records you maintain** (a reading list, a watchlist, a collection, a habit log) | **persist it in an existing agent-writable store, then point a widget at that store's read API** | none |
+| needs **computation/integration no endpoint provides** (calls an external service, joins data) | a **new `/api/…` endpoint** — this is **core-repo (`autonomous-agent`) work**, not a config change | server |
+
+The middle row is the one people get wrong. You do **not** invent `/api/reading` or a
+"reading-tracker" renderer for a reading list. TAI already ships agent-writable stores
+with read APIs and renderers — use them:
+
+- **`facts`** (tool → `GET /api/facts`) — quick records as `category / entity / key = value`.
+  A reading list: `facts set category=reading entity="<book title>" key=status value="p.142 / 320"`.
+  Render with a `list` widget: `endpoint: /api/facts?category=reading`, `itemsPath: facts`,
+  `titleField: entity`, `subtitleField: value`. **Config-only, no rebuild.**
+- **`collections`** (tool → `GET /api/collections`) — richer typed records with
+  `name / notes / rating / location / url`, shown by the interactive `collections`
+  renderer (tabs, search, add-form, star ratings). For "track my restaurants / steelbooks /
+  games / books." `collections add type=book name="Dune" rating=5`, then a
+  `{ type: collections }` widget (or a `list` over `/api/collections?type=book`).
+
+So: **seed the store with the `facts`/`collections` tool, then add a config widget over
+its read API.** That is the whole job — no new endpoint, no new renderer, no stub.
+
+### Q2 — can a built-in renderer display it?
+
+- **Yes** (`status`/`metric`/`tasks`/`activity`/`list`/`markdown`/`links`/`iframe`) →
+  config widget. **~90% of requests are this.** Done.
+- **No** — it needs a custom layout or interactivity no built-in type can express →
+  a **new renderer type**, which is a React component in the **UI bundle = core-repo
+  (`autonomous-agent`) work** (see "Repo boundary" below).
 
 If unsure, start with a config widget using `list`/`tasks`/`metric`/`markdown`.
+
+## Repo boundary — config is personal, code is core
+
+> **A widget *spec* is personal config; a widget's *renderer* and its *endpoint* are
+> core code.** Renderers live in `packages/ui/…` and endpoints in `packages/server/…`,
+> which exist **only in the `autonomous-agent` (TAI core) repo** — not in a `tai-personal`
+> config worktree. If you are working in a personal-config repo/worktree and the request
+> needs a new renderer type or a new `/api/…` endpoint, you **cannot** build it there.
+> Do **not** fake it with a markdown "stub" widget. Either (a) re-scope to a config
+> widget over an existing store (Q1 — almost always possible), or (b) hand it back /
+> file it as an `autonomous-agent` core task. Never leave a placeholder widget on the
+> live dashboard.
 
 ## Built-in renderer types
 
@@ -127,6 +171,14 @@ of your new `type` → check the Board.
 
 ## Guardrails
 
+- **Never ship a stub.** If you can't build the real widget, do not leave a markdown
+  placeholder ("This is a stub — the full version needs…") on the live dashboard. A
+  stub is a silent failure: it looks done but isn't. Re-scope to a config widget over
+  an existing store (Q1), or escalate it as core-repo work. Nothing on the Board should
+  be fake.
+- **Reuse a store before inventing an endpoint.** For user records, `facts` or
+  `collections` (Q1) almost always removes the need for any new `/api/…` route or
+  renderer. Reach for a new endpoint only when real computation/integration is involved.
 - Keep widgets **declarative and data-driven**. No business logic in a renderer —
   if it needs server work, add/extend a `/api/…` endpoint and point `endpoint` at it.
 - `options.endpoint` must be a same-origin `/api/…` path. External content → `iframe`.
