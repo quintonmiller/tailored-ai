@@ -1064,6 +1064,7 @@ export class AgentRuntime {
       temperature: resolved.temperature,
       thinking: resolved.thinking,
       contextDir: this.contextDir,
+      contextWarnTokens: config.context?.warnTokens,
       agentContextDir: resolved.contextDir,
       kbDir: globalKbDir,
       agentKbDir: resolved.kbDir,

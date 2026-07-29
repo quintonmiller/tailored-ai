@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { warnIfContextIsLarge } from "../agent/loop.js";
 import {
   type AgentConfig,
   DEFAULT_DISABLED_PLUGIN_MODULES,
@@ -175,6 +176,26 @@ describe("validateConfig — tool references", () => {
 
     expect(warnings.some((w) => w.includes('unknown key "system_prompt"'))).toBe(true);
     expect(warnings.some((w) => w.includes('Did you mean "systemPrompt"'))).toBe(true);
+  });
+
+  it("keeps the context-size warning configurable, so a deliberate choice can silence it", () => {
+    // A warning that fires on a correct configuration teaches people to ignore
+    // the whole class. A deployment running large, specific context on a long
+    // context window is making a choice, not a mistake.
+    const big = "x".repeat(40_000);
+
+    const warnings: string[] = [];
+    const original = console.warn;
+    console.warn = (m: string) => warnings.push(m);
+    try {
+      warnIfContextIsLarge(big, "coder", 0);
+      expect(warnings).toEqual([]);
+
+      warnIfContextIsLarge(big, "planner", 100);
+      expect(warnings.some((w) => w.includes("context.warnTokens"))).toBe(true);
+    } finally {
+      console.warn = original;
+    }
   });
 
   it("recognises an abbreviation, which edit distance alone cannot", () => {

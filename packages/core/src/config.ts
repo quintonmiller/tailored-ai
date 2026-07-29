@@ -589,6 +589,17 @@ export interface AgentConfig {
   context: {
     directory: string;
     kbDirectory: string;
+    /**
+     * Warn when the injected `<context>` block exceeds this many tokens.
+     * 0 disables. Default 4000.
+     *
+     * It is a smoke alarm, not a limit — nothing truncates context, so growth
+     * silently comes out of the history budget instead and shows up as an
+     * agent that forgets. A deployment that deliberately runs large, specific
+     * context on a long-window model should raise this rather than learn to
+     * ignore the warning.
+     */
+    warnTokens?: number;
   };
   tools: {
     /**
@@ -1142,6 +1153,7 @@ const DEFAULT_CONFIG: AgentConfig = {
   context: {
     directory: "./data/context",
     kbDirectory: "./data/kb",
+    warnTokens: 4000,
   },
   channels: {},
   mcp: { servers: {} },

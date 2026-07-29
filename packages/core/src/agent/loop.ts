@@ -124,6 +124,8 @@ export interface AgentLoopOptions {
   maxHistoryTokens: number;
   temperature: number;
   contextDir?: string;
+  /** Token threshold for the oversized-context warning. 0 disables. */
+  contextWarnTokens?: number;
   agentContextDir?: string;
   kbDir?: string;
   agentKbDir?: string;
@@ -586,22 +588,24 @@ export async function runAgentLoop(userMessage: string, opts: AgentLoopOptions):
  * cannot make. Once per agent per process, because it is a property of the
  * configuration, not of the turn.
  */
-const CONTEXT_WARN_TOKENS = 750;
+export const DEFAULT_CONTEXT_WARN_TOKENS = 4000;
 const _warnedContextAgents = new Set<string>();
 
-export function warnIfContextIsLarge(contextContent: string, agentName?: string): void {
+export function warnIfContextIsLarge(contextContent: string, agentName?: string, threshold?: number): void {
   if (!contextContent) return;
+  const limit = threshold ?? DEFAULT_CONTEXT_WARN_TOKENS;
+  if (limit <= 0) return;
   const tokens = estimateTokens({ role: "system", content: contextContent });
-  if (tokens <= CONTEXT_WARN_TOKENS) return;
+  if (tokens <= limit) return;
 
   const key = agentName ?? "(unnamed)";
   if (_warnedContextAgents.has(key)) return;
   _warnedContextAgents.add(key);
   console.warn(
-    `[context] ${key}: context files are ~${tokens} tokens, injected on every turn ` +
-      `(guideline is ~500 for local models). Nothing truncates this — it comes out of the ` +
-      `history budget instead. Move agent-specific material out of the global directory, ` +
-      `or delete what has gone stale.`,
+    `[context] ${key}: context files are ~${tokens} tokens and are injected on every turn. ` +
+      `Nothing truncates them — they come out of the history budget instead. If that is deliberate, ` +
+      `raise or disable context.warnTokens; otherwise check for agent-specific material in the ` +
+      `global directory, or content that has gone stale.`,
   );
 }
 
@@ -615,7 +619,7 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
   } else if (contextDir) {
     contextContent = await loadAllContext(contextDir, agentContextDir);
   }
-  warnIfContextIsLarge(contextContent, opts.toolContextExtras?.agentName as string | undefined);
+  warnIfContextIsLarge(contextContent, opts.toolContextExtras?.agentName as string | undefined, opts.contextWarnTokens);
   const catalogBlock = renderSkillCatalog(opts.skillCatalog);
 
   // Core memory: always-injected identity layer (docs/agent-unification.md).
