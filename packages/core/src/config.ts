@@ -1320,6 +1320,73 @@ export const KNOWN_TOP_LEVEL_CONFIG_KEYS: ReadonlySet<string> = new Set(Object.k
  */
 const DEPRECATED_TOP_LEVEL_CONFIG_KEYS: ReadonlySet<string> = new Set(["profiles"]);
 
+/**
+ * Every key an agent block may carry. Keep in sync with {@link AgentDefinition}
+ * and with `AGENT_DEFINITION_FIELDS` in resources/agent.ts, which enforces the
+ * same list one layer down.
+ */
+const KNOWN_AGENT_KEYS: ReadonlySet<string> = new Set([
+  "description",
+  "model",
+  "provider",
+  "models",
+  "instructions",
+  "tools",
+  "temperature",
+  "thinking",
+  "maxToolRounds",
+  "fileBoundary",
+  "roomSessionScope",
+  "contextDir",
+  "nudgeOnText",
+  "nudgeMessage",
+  "skipGlobalContext",
+  "summarizeOnTrim",
+  "worktree",
+  "taskPreamble",
+  "injectMemory",
+  "budgetWarnings",
+  "memoryInjectBudgetTokens",
+  "memoryInjectLimit",
+  "hooks",
+  "sandbox",
+  "skills",
+  "skillLoading",
+  "online",
+  "systemPrompt",
+]);
+
+/**
+ * Closest known key by edit distance, for "did you mean". Only offered for a
+ * near miss — a wild guess is worse than no guess, because it sends someone to
+ * rename a key that was never the problem.
+ */
+function nearestKey(input: string, candidates: ReadonlySet<string>): string | undefined {
+  const normalize = (s: string) => s.toLowerCase().replace(/[_-]/g, "");
+  const target = normalize(input);
+  let best: { key: string; distance: number } | undefined;
+  for (const candidate of candidates) {
+    const distance = editDistance(target, normalize(candidate));
+    if (distance <= 2 && (!best || distance < best.distance)) best = { key: candidate, distance };
+  }
+  return best?.key;
+}
+
+function editDistance(a: string, b: string): number {
+  const rows = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array<number>(b.length).fill(0)]);
+  for (let j = 0; j <= b.length; j++) rows[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      rows[i][j] = Math.min(
+        rows[i - 1][j] + 1,
+        rows[i][j - 1] + 1,
+        rows[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+    }
+  }
+  return rows[a.length][b.length];
+}
+
 /** Validate config and return warnings. Does not throw — issues are advisory. */
 export function validateConfig(config: AgentConfig): string[] {
   const warnings: string[] = [];
@@ -1410,6 +1477,23 @@ export function validateConfig(config: AgentConfig): string[] {
 
   // Validate agent tool references
   for (const [agentName, agent] of Object.entries(config.agents)) {
+    // An unknown key inside an agent block.
+    //
+    // Top-level keys have been checked since #252, but the comment there says
+    // "nested bags are open" — and an agent block is not a bag, it is a typed
+    // record. Four agents in one deployment carried their whole persona under
+    // `system_prompt:` instead of `instructions:`. It parsed, it round-tripped
+    // into their manifests, and it reached nothing: those agents ran with an
+    // empty instructions layer for weeks with no warning anywhere.
+    for (const key of Object.keys(agent ?? {})) {
+      if (KNOWN_AGENT_KEYS.has(key)) continue;
+      const suggestion = nearestKey(key, KNOWN_AGENT_KEYS);
+      warnings.push(
+        `Agent "${agentName}": unknown key "${key}" — it will be ignored` +
+          (suggestion ? `. Did you mean "${suggestion}"?` : ". Keys are camelCase."),
+      );
+    }
+
     if (agent.tools) {
       for (const toolName of agent.tools) {
         // MCP tool names (mcp_<server>_<tool>) only exist after async
