@@ -285,6 +285,35 @@ describe("validateConfig — dashboard widgets", () => {
   });
 });
 
+describe("validateConfig — dashboard widgets", () => {
+  it("does not warn for valid widgets", () => {
+    const c = baseConfig();
+    c.dashboard = { widgets: [{ id: "a", type: "tasks", options: { endpoint: "/api/project-tasks" } }] };
+    expect(validateConfig(c).some((w) => w.startsWith("dashboard.widgets"))).toBe(false);
+  });
+
+  it("warns on a malformed widget (missing type) and a non-/api endpoint", () => {
+    const c = baseConfig();
+    c.dashboard = {
+      widgets: [{ id: "bad" } as never, { id: "ext", type: "list", options: { endpoint: "https://evil.example" } }],
+    };
+    const ws = validateConfig(c).filter((w) => w.startsWith("dashboard.widgets"));
+    expect(ws.some((w) => w.includes("`type`"))).toBe(true);
+    expect(ws.some((w) => w.includes("/api/"))).toBe(true);
+  });
+
+  it("warns on duplicate widget ids", () => {
+    const c = baseConfig();
+    c.dashboard = {
+      widgets: [
+        { id: "dup", type: "list" },
+        { id: "dup", type: "tasks" },
+      ],
+    };
+    expect(validateConfig(c).some((w) => w.includes('duplicate widget id "dup"'))).toBe(true);
+  });
+});
+
 describe("migrateTaskBackendConfig — legacy per-backend blocks → tasks.options", () => {
   it("folds tasks.github into tasks.options and deletes the legacy block", () => {
     const cfg = { tasks: { backend: "github", github: { repo: "a/r", token: "t", agentRoles: ["coder"] } } };
