@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { CustomToolConfig } from "../config.js";
 import { runShellCommand, shellEscape } from "../shell.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
+import { checkExecBoundary } from "./sandbox-boundary.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -43,7 +44,28 @@ export class CustomTool implements Tool {
     };
   }
 
-  async execute(args: Record<string, unknown>, _context: ToolContext): Promise<ToolResult> {
+  /**
+   * Run the command, under the same rules as `exec`.
+   *
+   * This used to take its context and discard it — the parameter was named
+   * `_context` — and end at `runShellCommand`, which is `bash -c` on the host.
+   * So a custom tool was an unsandboxed host shell no matter what the calling
+   * agent's `sandbox` or `fileBoundary` said, and for a container-sandboxed
+   * agent that was a complete escape. The agent did not have to be adversarial
+   * to find it: one asked, in a room, whether it should "update the tool to use
+   * the host's playwright path instead" because its container lacked browser
+   * binaries. That would have worked, and nothing would have reported it.
+   *
+   * A boundary a well-meaning agent can walk through while trying to help is
+   * not a boundary. Same two guards `exec` applies, in the same order.
+   *
+   * The load-bearing one is the second: for an agent with `sandbox: docker` the
+   * command now runs INSIDE the container instead of on the host, which is the
+   * escape. `checkExecBoundary` is narrower than its name suggests — it catches
+   * a parent-repo escape from a worktree-shaped boundary and nothing else — so
+   * it closes a real hole for worktree agents but is not general confinement.
+   */
+  async execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     // Build replacement map first, then substitute in one pass to prevent
     // a param value containing {{other}} from being interpolated again.
     const replacements = new Map<string, string>();
@@ -71,6 +93,27 @@ export class CustomTool implements Tool {
     const unresolved = cmd.match(/\{\{(\w+)\}\}/g);
     if (unresolved) {
       return { success: false, output: "", error: `Unresolved placeholders: ${unresolved.join(", ")}` };
+    }
+
+    // Checked AFTER substitution, so a boundary cannot be escaped by smuggling
+    // the path in through a parameter.
+    const boundaryCheck = checkExecBoundary(cmd, context);
+    if (!boundaryCheck.ok) {
+      console.warn(`[custom_tools] ${this.name} rejected: ${boundaryCheck.error}`);
+      return { success: false, output: "", error: boundaryCheck.error };
+    }
+
+    if (context.sandbox && context.sandboxHandle) {
+      const result = await context.sandbox.exec(context.sandboxHandle, cmd, {
+        cwd: context.workingDirectory,
+        env: context.env,
+        timeoutMs: this.timeoutMs,
+      });
+      const output = result.stdout + (result.stderr ? `\n[stderr]: ${result.stderr}` : "");
+      if (result.exitCode !== 0) {
+        return { success: false, output, error: result.stderr || `exit code ${result.exitCode}` };
+      }
+      return { success: true, output };
     }
 
     return runShellCommand(cmd, this.timeoutMs);

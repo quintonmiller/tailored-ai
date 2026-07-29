@@ -30,10 +30,30 @@ function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
   return current;
 }
 
-// Paths the agent is allowed to modify. Anything else is blocked.
+/**
+ * Paths the agent is allowed to modify. Anything else is blocked.
+ *
+ * Three prefixes were removed because each turned a config editor into
+ * something else entirely. `admin` is a meta tool appended to every agent
+ * (runtime.ts, `extraTools`), so an agent's `tools:` list cannot decline it —
+ * whatever is writable here is writable by all of them.
+ *
+ * - `custom_tools.` was arbitrary host code. `CustomTool` runs its `command`
+ *   through `bash -c` with no boundary and no sandbox routing, so an agent
+ *   could write itself a shell and call it in the same run — tools re-resolve
+ *   every round. For a container-sandboxed agent that is a complete escape.
+ * - `permissions.` was the approval gate governing this very call. An agent
+ *   that hit a prompt could set `defaultMode: auto` and retry.
+ * - `context.` redirects where the prompt-injected context files are read from
+ *   and written to, which is a way to rewrite every agent's instructions
+ *   without touching a single agent.
+ *
+ * A human can still set all three by editing config.yaml. That is the
+ * distinction being drawn: these are decisions for whoever runs the
+ * deployment, not for something running inside it.
+ */
 const ALLOWED_WRITE_PREFIXES = [
   "agents.",
-  "custom_tools.",
   "commands.",
   "cron.jobs",
   "cron.enabled",
@@ -41,8 +61,6 @@ const ALLOWED_WRITE_PREFIXES = [
   "agent.temperature",
   "agent.maxToolRounds",
   "agent.maxHistoryTokens",
-  "context.",
-  "permissions.",
   "dashboard.",
 ];
 
@@ -379,17 +397,19 @@ export class AdminTool implements Tool {
 
       setNestedValue(raw, `custom_tools.${name}`, validation.tool);
 
-      let allowlistPatched = false;
-      if (needsAllowlistPatch && agentName) {
-        const current = (getNestedValue(raw, `agents.${agentName}.tools`) as string[] | undefined) ?? [
-          ...(agentDef?.tools ?? []),
-        ];
-        if (!current.includes(name)) {
-          current.push(name);
-          setNestedValue(raw, `agents.${agentName}.tools`, current);
-          allowlistPatched = true;
-        }
-      }
+      // Deliberately NOT added to the calling agent's `tools:` list.
+      //
+      // Creating a tool and being allowed to run it are different decisions.
+      // Self-granting collapsed them: an agent with no `exec` could write a
+      // shell-backed tool and hand it to itself in one call, which is shell it
+      // was never granted. The tool now honours the caller's boundary and
+      // sandbox, so this is no longer an escape — but for an agent with no
+      // declared boundary it is still an unbounded host shell, and whether an
+      // agent gets one is not the agent's call.
+      //
+      // Said out loud in the result rather than done quietly, so the agent
+      // knows why its new tool is not callable yet.
+      const allowlistPatched = false;
 
       const yaml = YAML.stringify(raw);
       try {
@@ -412,7 +432,12 @@ export class AdminTool implements Tool {
       lines.push(`parameters: { ${paramSummary} }`);
       lines.push(`command: ${validation.tool.command}`);
       if (validation.tool.timeout_ms !== undefined) lines.push(`timeout_ms: ${validation.tool.timeout_ms}`);
-      if (allowlistPatched) {
+      if (needsAllowlistPatch && agentName) {
+        lines.push(
+          `NOT added to agent "${agentName}" tools allowlist — creating a tool and being allowed ` +
+            `to run it are separate decisions. Ask Quinton to add "${name}" to that agent's tools list.`,
+        );
+      } else if (allowlistPatched) {
         lines.push(`Added "${name}" to agent "${agentName}" tools allowlist.`);
       } else if (agentName && agentDef?.tools && agentDef.tools.includes(name)) {
         lines.push(`Already in agent "${agentName}" tools allowlist.`);
