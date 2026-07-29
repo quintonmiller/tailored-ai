@@ -1366,7 +1366,14 @@ function nearestKey(input: string, candidates: ReadonlySet<string>): string | un
   const target = normalize(input);
   let best: { key: string; distance: number } | undefined;
   for (const candidate of candidates) {
-    const distance = editDistance(target, normalize(candidate));
+    const normalized = normalize(candidate);
+    // An abbreviation is a typo shape edit distance cannot see: `temp` is seven
+    // edits from `temperature` and obviously means it. Found in the wild — an
+    // agent authored `temp: 0.3` into its own config and ran at the default
+    // temperature instead, silently. Three characters minimum, so `on` does not
+    // match `online`.
+    const isPrefix = target.length >= 3 && normalized.startsWith(target);
+    const distance = isPrefix ? 1 : editDistance(target, normalized);
     if (distance <= 2 && (!best || distance < best.distance)) best = { key: candidate, distance };
   }
   return best?.key;
