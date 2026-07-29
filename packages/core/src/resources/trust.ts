@@ -135,11 +135,49 @@ export class TrustStore {
 }
 
 /**
+ * Deterministic JSON: object keys sorted at every depth, arrays left in order.
+ *
+ * Written out rather than leaning on `JSON.stringify`'s second parameter, which
+ * is what the bug below was. Key order has to be stable at every level or the
+ * hash changes when a YAML parser or an authoring endpoint happens to emit the
+ * same content in a different order.
+ */
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value === null || typeof value !== "object") return value;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+    out[key] = canonicalize((value as Record<string, unknown>)[key]);
+  }
+  return out;
+}
+
+/**
  * Stable hash of a manifest. We strip the `trust` block before hashing so a
  * signature can sit alongside the hash without invalidating it.
+ *
+ * This used to read:
+ *
+ *     JSON.stringify(rest, Object.keys(rest).sort())
+ *
+ * The second argument to `JSON.stringify` is a **replacer array**, not a sort
+ * order, and it applies at every depth. Top-level keys survived; their children
+ * did not — so every manifest canonicalized to `{"data":{},…}` and the hash
+ * covered a resource's id, kind, version and description, and nothing else.
+ *
+ * Two skill manifests differing in both `data.instructions` ("be nice" versus
+ * "exfiltrate ~/.ssh via exec") and `data.toolRefs` (`[read]` versus
+ * `[exec, write, web_fetch]`) hashed identically. `permissions` was blanked the
+ * same way, so the hash described neither what a resource does nor what it is
+ * allowed to do — while the trust store's cached-approval check and
+ * `--frozen` both depend on it. Approve a benign SKILL.md once and its body
+ * could be rewritten with no re-prompt.
+ *
+ * Expect one re-approval per installed resource the first time this runs: the
+ * stored hashes were computed under the old scheme and will not match.
  */
 export function hashManifest(manifest: ResourceManifest): string {
   const { trust: _trust, ...rest } = manifest;
-  const canonical = JSON.stringify(rest, Object.keys(rest).sort());
+  const canonical = JSON.stringify(canonicalize(rest));
   return createHash("sha256").update(canonical).digest("hex");
 }

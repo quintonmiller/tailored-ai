@@ -28,6 +28,8 @@ import {
   migrateContextDir,
   newSession,
   type ProjectContext,
+  type Room,
+  RoomWatcher,
   registerUiProviderFactory,
   resolveAgent,
   resolveProjectFromCwd,
@@ -180,6 +182,37 @@ async function runServer(
   const exploratory = new ExploratoryWorker({ runtime });
   exploratory.start();
 
+  // Rooms: reconcile the declared subscription set, then arm the watcher.
+  // Ordering matters — the watcher reads subscriptions when it starts, and
+  // push subscriptions bind to whichever room backends are registered by
+  // then, which is why this sits after channelManager.reconcile().
+  const roomWatcher = new RoomWatcher({ runtime, store: runtime.getRoomStore() });
+  const startRooms = () => {
+    try {
+      // Let /room status reach the watcher. Re-pointed on every reconcile
+      // because the lifecycle manager may have replaced the channel object.
+      const discord = channelManager.get("discord")?.channel as
+        | { roomStatusRequester?: (room: Room, askedBy: string) => Promise<number> }
+        | undefined;
+      if (discord) {
+        discord.roomStatusRequester = (room, askedBy) => roomWatcher.requestStatusUpdate(room, askedBy);
+      }
+      // Skip reconcile entirely when rooms are off. Writing subscription rows
+      // that nothing services would still make Discord stand its mention
+      // handler down for those channels — the bot would go quiet with no
+      // visible cause.
+      if (runtime.getConfig().rooms?.enabled === false) {
+        roomWatcher.stop();
+        return;
+      }
+      runtime.reconcileRooms();
+      roomWatcher.start();
+    } catch (err) {
+      console.error("[rooms] Startup error:", (err as Error).message);
+    }
+  };
+  startRooms();
+
   // Hot-reload: the lifecycle manager reconciles the channel set against
   // the new config. The outbound registry then re-syncs off whatever the
   // manager produced — for every channel, not just Discord.
@@ -207,6 +240,11 @@ async function runServer(
     // Re-sync the outbound registry against the live channel set: register
     // newly-connected outbound channels, unregister ones that went away (#66).
     syncOutboundRegistry(runtime, channelManager, registeredOutbound);
+
+    // Re-arm rooms last: start() tears down every listener and timer first,
+    // so a reload cannot leave a second watcher running against the old
+    // subscription set.
+    startRooms();
   });
 
   // The CLI registers "builtin" above (top-level side-effect); plugin
@@ -349,6 +387,7 @@ async function runServer(
     await disposeRuntimePlugins();
     autopilot.stop();
     exploratory.stop();
+    roomWatcher.stop();
     await channelManager.stopAll();
     await mcpManager.stopAll(runtime);
     for (const ch of channels) {
@@ -371,7 +410,7 @@ async function runSingleMessage(
   const { agent: agentName, json } = opts;
   const contextDir = runtime.contextDir;
 
-  const resolved = resolveAgent(agentName, runtime.getConfig(), runtime.getTools(), undefined, contextDir);
+  const resolved = resolveAgent(agentName, runtime.getConfig(), runtime.getResolvableTools(), undefined, contextDir);
 
   const projectId = runtime.getActiveProject()?.id ?? null;
   const session = opts.sessionId

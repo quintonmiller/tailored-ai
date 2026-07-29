@@ -90,6 +90,30 @@ async function chatOnce(
   });
 }
 
+/**
+ * Why an agent loop ended. Reported through {@link AgentLoopOptions.onStop} so
+ * callers branch on structure instead of parsing the loop's prose.
+ *
+ * - `complete` — the model stopped calling tools and answered. The normal exit.
+ * - `sleep` — the agent ended its own turn deliberately (Sleep tool).
+ * - `aborted` — `options.signal` fired. `requestedByCaller` distinguishes an
+ *   abort the caller asked for (token budget, runtime shutdown) from anything
+ *   else, which is the difference between "working as configured" and "stuck".
+ * - `max-rounds` — hit `maxToolRounds`. A genuine stall.
+ * - `repeated-calls` — the model looped on identical tool calls. A genuine stall.
+ */
+export type LoopStop =
+  | { kind: "complete" }
+  | { kind: "sleep"; reason?: string }
+  | { kind: "aborted"; requestedByCaller: boolean; reason?: string }
+  | { kind: "max-rounds"; rounds: number }
+  | { kind: "repeated-calls" };
+
+/** True when the loop ended because it got stuck, rather than finishing or being told to stop. */
+export function isStallStop(stop: LoopStop): boolean {
+  return stop.kind === "max-rounds" || stop.kind === "repeated-calls";
+}
+
 export interface AgentLoopOptions {
   provider: AIProvider;
   session: Session;
@@ -100,6 +124,8 @@ export interface AgentLoopOptions {
   maxHistoryTokens: number;
   temperature: number;
   contextDir?: string;
+  /** Token threshold for the oversized-context warning. 0 disables. */
+  contextWarnTokens?: number;
   agentContextDir?: string;
   kbDir?: string;
   agentKbDir?: string;
@@ -120,6 +146,16 @@ export interface AgentLoopOptions {
   onActivity?: (description: string | null) => void;
   /** Fires after each provider.chat() with token counts from the response. */
   onUsage?: (usage: { input: number; output: number }) => void;
+  /**
+   * Fires exactly once when the loop ends, reporting WHY out-of-band.
+   *
+   * Callers previously had to infer this by string-matching the returned text
+   * for `"[Agent stopped: ...]"`, which cannot distinguish an abort the caller
+   * itself requested (a budget cap) from the agent genuinely getting stuck —
+   * and misses a stall entirely when the model returned prose alongside it.
+   * Branch on this, not on the returned string.
+   */
+  onStop?: (stop: LoopStop) => void;
   /**
    * Fires with each assistant text fragment as it generates, when the
    * active provider implements `chatStream`. Providers without streaming
@@ -478,7 +514,20 @@ async function executeToolCall(
   const permission = evaluatePermission(call.name, call.arguments, opts.permissions);
   if (permission === "approve") {
     if (!opts.approvalHandler) {
-      // No handler — auto-approve for backward compat (cron, webhooks, etc.)
+      // Nothing can ask: cron, rooms, the task watcher, webhooks — every path
+      // with no human attached. This used to be an empty block with a comment,
+      // so a policy of "approve" quietly became "auto" precisely where nobody
+      // was watching, and the config said one thing while the deployment did
+      // another.
+      //
+      // Still permissive by default, on purpose. Flipping it would stop
+      // autonomous runs that have worked for months, and a guard that breaks
+      // what it protects is the shape this codebase keeps hitting. What
+      // changes is that it says so.
+      if ((opts.permissions?.noHandlerAction ?? "auto") === "reject") {
+        return `Tool call rejected: "${call.name}" needs approval and no approver is available on this path. Ask Quinton directly, or do the part that does not need approval.`;
+      }
+      warnNoApprover(call.name);
     } else {
       const request: ApprovalRequest = {
         requestId: createApprovalRequestId(),
@@ -532,6 +581,65 @@ export async function runAgentLoop(userMessage: string, opts: AgentLoopOptions):
   }
 }
 
+/**
+ * Say something when the context block gets big.
+ *
+ * The `<context>` layer is the one part of the system prompt with no cap: it is
+ * every `.md` in the global directory plus every `.md` in the agent's, read
+ * whole, from disk, on every turn. When it grows, nothing truncates it —
+ * `historyBudget = maxHistoryTokens - systemPromptTokens`, so it quietly eats
+ * the conversation instead, and the symptom is an agent that forgets rather
+ * than an agent with a big prompt.
+ *
+ * Observed before this existed: 4.6 KB of global context, of which 2.4 KB was a
+ * stale question queue belonging to one agent, injected into all 27 — roughly
+ * 2.3× the "keep preambles under ~500 tokens" guideline in CLAUDE.md, spent
+ * before any agent said anything.
+ *
+ * Warned rather than truncated. Cutting a context file mid-sentence would be a
+ * silent, confusing loss, and which file to drop is a judgement this code
+ * cannot make. Once per agent per process, because it is a property of the
+ * configuration, not of the turn.
+ */
+/**
+ * A call that needed approval ran because nothing could ask.
+ *
+ * Once per tool per process: this is a property of how the deployment is
+ * wired, not of the turn, and repeating it every time would bury it. Say
+ * `noHandlerAction: reject` to make the policy real on these paths.
+ */
+const _warnedNoApprover = new Set<string>();
+function warnNoApprover(toolName: string): void {
+  if (_warnedNoApprover.has(toolName)) return;
+  _warnedNoApprover.add(toolName);
+  console.warn(
+    `[permissions] "${toolName}" is configured to need approval, but this path has no approver ` +
+      `(cron, rooms, task watcher or webhook) — running it anyway. ` +
+      `Set permissions.noHandlerAction: reject to refuse instead.`,
+  );
+}
+
+export const DEFAULT_CONTEXT_WARN_TOKENS = 4000;
+const _warnedContextAgents = new Set<string>();
+
+export function warnIfContextIsLarge(contextContent: string, agentName?: string, threshold?: number): void {
+  if (!contextContent) return;
+  const limit = threshold ?? DEFAULT_CONTEXT_WARN_TOKENS;
+  if (limit <= 0) return;
+  const tokens = estimateTokens({ role: "system", content: contextContent });
+  if (tokens <= limit) return;
+
+  const key = agentName ?? "(unnamed)";
+  if (_warnedContextAgents.has(key)) return;
+  _warnedContextAgents.add(key);
+  console.warn(
+    `[context] ${key}: context files are ~${tokens} tokens and are injected on every turn. ` +
+      `Nothing truncates them — they come out of the history budget instead. If that is deliberate, ` +
+      `raise or disable context.warnTokens; otherwise check for agent-specific material in the ` +
+      `global directory, or content that has gone stale.`,
+  );
+}
+
 async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): Promise<string> {
   const { session, db, extraInstructions, contextDir, agentContextDir } = opts;
 
@@ -542,6 +650,7 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
   } else if (contextDir) {
     contextContent = await loadAllContext(contextDir, agentContextDir);
   }
+  warnIfContextIsLarge(contextContent, opts.toolContextExtras?.agentName as string | undefined, opts.contextWarnTokens);
   const catalogBlock = renderSkillCatalog(opts.skillCatalog);
 
   // Core memory: always-injected identity layer (docs/agent-unification.md).
@@ -690,6 +799,15 @@ async function _runAgentLoopBody(
 
   while (rounds < maxToolRounds) {
     if (opts.signal?.aborted) {
+      // `reason` is whatever the caller passed to AbortController.abort(). It
+      // is how a caller-imposed stop (budget, shutdown) is told apart from a
+      // stall — see LoopStop.
+      const reason = opts.signal.reason;
+      opts.onStop?.({
+        kind: "aborted",
+        requestedByCaller: true,
+        reason: typeof reason === "string" ? reason : undefined,
+      });
       return "[Agent stopped: shutdown requested]";
     }
     // Sleep tool sets workingMemory["tick_done"] = "true" to terminate
@@ -701,6 +819,7 @@ async function _runAgentLoopBody(
       // generic terminator. Falls back to a tag if the agent forgot
       // to provide a reason (shouldn't happen — Sleep requires one).
       const reason = context.workingMemory.get("tick_summary");
+      opts.onStop?.({ kind: "sleep", reason });
       return reason ? `[Sleep] ${reason}` : "[Tick concluded via Sleep]";
     }
     rounds++;
@@ -824,6 +943,7 @@ async function _runAgentLoopBody(
         history.push(nudgeMsg);
         continue;
       }
+      opts.onStop?.({ kind: "complete" });
       return response.content ?? "";
     }
 
@@ -871,10 +991,14 @@ async function _runAgentLoopBody(
     lastResultSignature = resultSignature;
 
     if (repeatCount >= MAX_REPEATED_CALLS) {
+      // Fires even when the model produced prose alongside the loop — that is
+      // precisely the case a string-matching caller cannot see.
+      opts.onStop?.({ kind: "repeated-calls" });
       return response.content || "[Agent stopped: repeated identical tool calls detected]";
     }
   }
 
+  opts.onStop?.({ kind: "max-rounds", rounds });
   return "[Agent stopped: max tool rounds reached]";
 }
 

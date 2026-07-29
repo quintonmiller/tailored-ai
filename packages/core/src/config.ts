@@ -37,6 +37,35 @@ export interface AgentDefinition {
    */
   thinking?: ThinkingLevel;
   maxToolRounds?: number;
+  /**
+   * Hard filesystem boundary for this agent. File and exec tools reject any
+   * path resolving outside it — the same enforcement the task watcher uses to
+   * pin coder/reviewer to their worktree, but declared rather than injected.
+   *
+   * Needed because `tools.write.allowedPaths` is deployment-wide: granting an
+   * agent `write` otherwise grants it the whole filesystem, and an agent that
+   * reads web pages is an agent that can be talked into writing things. A
+   * leading `~` is expanded.
+   */
+  fileBoundary?: string;
+  /**
+   * Whether this agent remembers each room separately or all of them together.
+   *
+   * `room` (default) gives it a session per room: clean isolation, and an agent
+   * moved into a new room starts blank — which is how eleven agents, freshly
+   * added to a channel, all reported the same unassigned tasks as their own
+   * work when asked what they were doing.
+   *
+   * `shared` gives it one session across every room. An assistant that should
+   * carry a thread between places wants this. The cost is real: context from
+   * unrelated rooms mixes, and history grows with the number of rooms rather
+   * than the conversation, so it competes for the same token budget everywhere.
+   *
+   * Note that continuity of WORK is better served by durable state — tasks
+   * assigned to the agent, notes, facts — which is already cross-room. This is
+   * continuity of CONVERSATION.
+   */
+  roomSessionScope?: "room" | "shared";
   contextDir?: string;
   /** When >0, re-prompt the model up to N times if it responds with text instead of tool calls. */
   nudgeOnText?: number;
@@ -186,6 +215,17 @@ export interface AgentHook {
   args?: Record<string, unknown>;
   /** Regex — if the tool output matches, skip the rest of the pipeline. */
   skipIf?: string;
+  /**
+   * What to do when this hook errors (throws, is missing, or returns
+   * `success: false`).
+   *
+   * - `"abort"` (default): stop and don't run the agent. A hook's job is to put
+   *   data in the prompt; if it failed there is no data, and a prompt that
+   *   promises data it doesn't have invites the model to invent it.
+   * - `"continue"`: proceed anyway with an empty output for this hook. Only
+   *   correct when the hook is genuinely optional enrichment.
+   */
+  onError?: "abort" | "continue";
 }
 
 /** @deprecated Use AgentHook instead. */
@@ -235,7 +275,17 @@ export interface CronJobConfig {
 
 export interface CustomToolConfig {
   description: string;
-  parameters: Record<string, { type: string; description: string }>;
+  parameters: Record<
+    string,
+    {
+      type: string;
+      description: string;
+      /** Omit-able by the model. Defaults to true, which is how it has always behaved. */
+      required?: boolean;
+      /** Substituted when the model leaves the parameter out. */
+      default?: string | number | boolean;
+    }
+  >;
   command: string;
   timeout_ms?: number;
 }
@@ -370,7 +420,7 @@ export const DEFAULT_PLUGIN_MODULES = [
  * like the enabled set, but the loader skips them until enabled. Once a user
  * sets `enabled: true`, the migration leaves their entry untouched.
  */
-export const DEFAULT_DISABLED_PLUGIN_MODULES = ["builtin:session-summarizer"] as const;
+export const DEFAULT_DISABLED_PLUGIN_MODULES = ["builtin:session-summarizer", "builtin:verify-gate"] as const;
 
 export interface AgentConfig {
   server: {
@@ -539,6 +589,17 @@ export interface AgentConfig {
   context: {
     directory: string;
     kbDirectory: string;
+    /**
+     * Warn when the injected `<context>` block exceeds this many tokens.
+     * 0 disables. Default 4000.
+     *
+     * It is a smoke alarm, not a limit — nothing truncates context, so growth
+     * silently comes out of the history budget instead and shows up as an
+     * agent that forgets. A deployment that deliberately runs large, specific
+     * context on a long-window model should raise this rather than learn to
+     * ignore the warning.
+     */
+    warnTokens?: number;
   };
   tools: {
     /**
@@ -629,6 +690,9 @@ export interface AgentConfig {
     projects?: {
       enabled: boolean;
       directory?: string;
+    };
+    collections?: {
+      enabled: boolean;
     };
     documents?: {
       enabled: boolean;
@@ -782,6 +846,140 @@ export interface AgentConfig {
     enabled?: boolean;
     /** How often the worker scans for due agents, in ms. Default 60000. */
     baseIntervalMs?: number;
+  };
+  /**
+   * Outbound notification policy. Applies only to messages the agent sends
+   * unprompted (cron deliveries, owner-notifier events, notify_owner from a
+   * background tick). Replies to something the user asked for do not pass
+   * through here and are never suppressed.
+   */
+  notifications?: {
+    /** Repeat suppression — "don't tell me what I've already heard". */
+    dedup?: import("./notifications/dedup.js").NotificationDedupConfig;
+  };
+  /**
+   * Shared rooms: multi-party conversations that several agents and humans
+   * take part in. A room is a destination *within* a transport (a Discord
+   * channel), which is why this is separate from `channels` — those are the
+   * transports themselves.
+   *
+   * Core owns addressing, membership, subscriptions and wake policy. What an
+   * agent actually says in a room is prompt and plugin territory.
+   * See docs/rooms.md.
+   */
+  rooms?: {
+    /** Master switch for the watcher. Rooms are readable either way. */
+    enabled?: boolean;
+    /**
+     * Extra participants, beyond the agents in `agents:` (which are added
+     * automatically under their own names) and the owner. Usually just a
+     * friendlier label for yourself:
+     *
+     *     identities:
+     *       quinton: "107389829628612608"
+     *       planner: { agent: planner, avatarUrl: "https://…/planner.png" }
+     *
+     * `avatarUrl` is used on transports that can post under a display name
+     * (Discord webhooks); elsewhere it is ignored.
+     */
+    identities?: Record<string, import("./rooms/identities.js").RoomIdentityConfig>;
+    /** Label for the implicit owner identity. Default "owner". */
+    ownerLabel?: string;
+    /** Rooms to register at startup. Agents may create more at runtime. */
+    rooms?: Array<{
+      name: string;
+      /** Canonical `<backend>:<id>`, e.g. `discord:1467386788640460822`. */
+      ref: string;
+      /**
+       * What the room is for. Given to every agent woken here, and mirrored to
+       * the transport's own description field (Discord's channel topic) so
+       * people reading along see the same thing.
+       */
+      purpose?: string;
+      /**
+       * Per-room overrides of the deployment-wide brakes. A coordination room
+       * where three agents hand work back and forth and an ideas room that sees
+       * one message a week want very different numbers, and a single global
+       * value has to be wrong for one of them — set low, the busy room goes
+       * quiet mid-task; set high, the quiet one is free to chatter.
+       *
+       * Unset means "use the global value", which is what every room did before
+       * these existed.
+       */
+      maxWakesPerHour?: number;
+      maxAgentTurns?: number;
+    }>;
+    /**
+     * Who watches what. `deliver` decides when the agent looks (push on a
+     * transport event, or poll on an interval); `wakeOn` decides what makes it
+     * run: `named` only when someone writes its name, `addressed` also on loose
+     * questions from a person, `all` on everything, `none` never. Both axes are
+     * independent — poll+all is a digest, push+named is an instant answer that
+     * stays quiet otherwise, and anything+none is a read-only seat.
+     */
+    subscriptions?: Array<{
+      agent: string;
+      /** Room name or `<backend>:<id>` ref. */
+      room: string;
+      deliver?: "push" | "poll";
+      wakeOn?: "named" | "addressed" | "all" | "none";
+      pollSeconds?: number;
+      /**
+       * Also wake this agent every N minutes with nothing new said, so it can
+       * act on time passing rather than only on being spoken to. Agents can set
+       * their own through the `room` tool.
+       */
+      checkInMinutes?: number;
+      /**
+       * What this agent is for in this room. The room's `purpose` says what the
+       * room is about; this says what one participant's job in it is, so the
+       * same agent can behave differently in two rooms. Keep it short — it
+       * competes with the purpose for a small prompt budget.
+       */
+      role?: string;
+    }>;
+    /** Hourly wake ceiling per (agent, room). The runaway-loop brake. Default 12. */
+    maxWakesPerHour?: number;
+    /**
+     * Consecutive agent-only turns allowed before a room stops waking anyone.
+     * Two agents thanking each other is not a loop any single-message rule can
+     * see. A human speaking resets the count. Default 6.
+     */
+    maxAgentTurns?: number;
+    /** Most messages handed to an agent in one wake. Default 30. */
+    maxBacklog?: number;
+    /** Burst-collapsing delay before a wake fires, in seconds. Default 3. */
+    batchSeconds?: number;
+    /** Interval for `deliver: poll` subscriptions that don't set one. Default 900. */
+    defaultPollSeconds?: number;
+    /**
+     * How long a point stays "already said" per urgency, in hours. Only
+     * suppresses repeats — new information is never held back. Defaults:
+     * high 0.25, medium 24, low 168.
+     */
+    urgencyWindowHours?: Partial<Record<import("./rooms/types.js").RoomUrgency, number>>;
+    /** Transport used when an agent creates a room without naming one. */
+    defaultBackend?: string;
+    /**
+     * Where an agent's direct messages go, as `agent: room-name`.
+     *
+     * Without this, `room(action="dm")` opens a room named after the agent —
+     * which is right for an agent nobody has set one up for, and wrong when a
+     * room for exactly that purpose already exists under another name. Naming
+     * it here points the direct line at the room you already have instead of
+     * quietly creating a second one.
+     */
+    desks?: Record<string, string>;
+    /**
+     * Attach a record of what an agent actually did underneath its message,
+     * where the transport can nest (Discord opens a thread).
+     *
+     * `none` (default) keeps rooms as pure conversation. `mutations` shows only
+     * calls that changed something. `all` shows reads too — more noise, but
+     * reads are where a wrong answer usually comes from: an agent that read the
+     * document contradicting it is only visible if you can see the read.
+     */
+    toolActivity?: "none" | "mutations" | "all";
   };
   /** Tiered memory settings (notes, chunks, embeddings). See docs/memory-tiers.md. */
   memory?: {
@@ -955,6 +1153,7 @@ const DEFAULT_CONFIG: AgentConfig = {
   context: {
     directory: "./data/context",
     kbDirectory: "./data/kb",
+    warnTokens: 4000,
   },
   channels: {},
   mcp: { servers: {} },
@@ -970,6 +1169,8 @@ const DEFAULT_CONFIG: AgentConfig = {
     facts: { enabled: true },
     recall: { enabled: true, defaultTtlDays: 14 },
     projects: { enabled: true, directory: "./data/projects" },
+    collections: { enabled: true },
+    room: { enabled: true },
     documents: { enabled: true },
     extract_document: { enabled: false },
     ask_user: { enabled: true, inboxFile: "inbox.md" },
@@ -1090,6 +1291,8 @@ const KNOWN_TOP_LEVEL_CONFIG_KEY_MAP: Record<keyof AgentConfig, true> = {
   database: true,
   providers: true,
   agent: true,
+  notifications: true,
+  rooms: true,
   channels: true,
   defaultChannel: true,
   mcp: true,
@@ -1128,6 +1331,80 @@ export const KNOWN_TOP_LEVEL_CONFIG_KEYS: ReadonlySet<string> = new Set(Object.k
  * double-warning. (`profiles` → `agents`.)
  */
 const DEPRECATED_TOP_LEVEL_CONFIG_KEYS: ReadonlySet<string> = new Set(["profiles"]);
+
+/**
+ * Every key an agent block may carry. Keep in sync with {@link AgentDefinition}
+ * and with `AGENT_DEFINITION_FIELDS` in resources/agent.ts, which enforces the
+ * same list one layer down.
+ */
+const KNOWN_AGENT_KEYS: ReadonlySet<string> = new Set([
+  "description",
+  "model",
+  "provider",
+  "models",
+  "instructions",
+  "tools",
+  "temperature",
+  "thinking",
+  "maxToolRounds",
+  "fileBoundary",
+  "roomSessionScope",
+  "contextDir",
+  "nudgeOnText",
+  "nudgeMessage",
+  "skipGlobalContext",
+  "summarizeOnTrim",
+  "worktree",
+  "taskPreamble",
+  "injectMemory",
+  "budgetWarnings",
+  "memoryInjectBudgetTokens",
+  "memoryInjectLimit",
+  "hooks",
+  "sandbox",
+  "skills",
+  "skillLoading",
+  "online",
+  "systemPrompt",
+]);
+
+/**
+ * Closest known key by edit distance, for "did you mean". Only offered for a
+ * near miss — a wild guess is worse than no guess, because it sends someone to
+ * rename a key that was never the problem.
+ */
+function nearestKey(input: string, candidates: ReadonlySet<string>): string | undefined {
+  const normalize = (s: string) => s.toLowerCase().replace(/[_-]/g, "");
+  const target = normalize(input);
+  let best: { key: string; distance: number } | undefined;
+  for (const candidate of candidates) {
+    const normalized = normalize(candidate);
+    // An abbreviation is a typo shape edit distance cannot see: `temp` is seven
+    // edits from `temperature` and obviously means it. Found in the wild — an
+    // agent authored `temp: 0.3` into its own config and ran at the default
+    // temperature instead, silently. Three characters minimum, so `on` does not
+    // match `online`.
+    const isPrefix = target.length >= 3 && normalized.startsWith(target);
+    const distance = isPrefix ? 1 : editDistance(target, normalized);
+    if (distance <= 2 && (!best || distance < best.distance)) best = { key: candidate, distance };
+  }
+  return best?.key;
+}
+
+function editDistance(a: string, b: string): number {
+  const rows = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array<number>(b.length).fill(0)]);
+  for (let j = 0; j <= b.length; j++) rows[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      rows[i][j] = Math.min(
+        rows[i - 1][j] + 1,
+        rows[i][j - 1] + 1,
+        rows[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+    }
+  }
+  return rows[a.length][b.length];
+}
 
 /** Validate config and return warnings. Does not throw — issues are advisory. */
 export function validateConfig(config: AgentConfig): string[] {
@@ -1219,6 +1496,23 @@ export function validateConfig(config: AgentConfig): string[] {
 
   // Validate agent tool references
   for (const [agentName, agent] of Object.entries(config.agents)) {
+    // An unknown key inside an agent block.
+    //
+    // Top-level keys have been checked since #252, but the comment there says
+    // "nested bags are open" — and an agent block is not a bag, it is a typed
+    // record. Four agents in one deployment carried their whole persona under
+    // `system_prompt:` instead of `instructions:`. It parsed, it round-tripped
+    // into their manifests, and it reached nothing: those agents ran with an
+    // empty instructions layer for weeks with no warning anywhere.
+    for (const key of Object.keys(agent ?? {})) {
+      if (KNOWN_AGENT_KEYS.has(key)) continue;
+      const suggestion = nearestKey(key, KNOWN_AGENT_KEYS);
+      warnings.push(
+        `Agent "${agentName}": unknown key "${key}" — it will be ignored` +
+          (suggestion ? `. Did you mean "${suggestion}"?` : ". Keys are camelCase."),
+      );
+    }
+
     if (agent.tools) {
       for (const toolName of agent.tools) {
         // MCP tool names (mcp_<server>_<tool>) only exist after async
@@ -1391,6 +1685,12 @@ export function validateConfig(config: AgentConfig): string[] {
         `permissions.defaultMode "${config.permissions.defaultMode}" is not valid (use "auto" or "approve")`,
       );
     }
+    const validNoHandler = ["auto", "reject"];
+    if (config.permissions.noHandlerAction && !validNoHandler.includes(config.permissions.noHandlerAction)) {
+      warnings.push(
+        `permissions.noHandlerAction "${config.permissions.noHandlerAction}" is not valid (use "auto" or "reject")`,
+      );
+    }
     const validTimeoutActions = ["reject", "auto_approve"];
     if (config.permissions.timeoutAction && !validTimeoutActions.includes(config.permissions.timeoutAction)) {
       warnings.push(
@@ -1452,6 +1752,64 @@ export function validateConfig(config: AgentConfig): string[] {
     }
   }
 
+  // An agent whose `tools` is not a list resolves character by character and
+  // dies on the first bracket — but only when something finally invokes it,
+  // which can be days after the config was written.
+  for (const [name, agent] of Object.entries(config.agents ?? {})) {
+    for (const field of ["tools", "skills"] as const) {
+      const value = (agent as Record<string, unknown> | undefined)?.[field];
+      if (value === undefined || Array.isArray(value)) continue;
+      warnings.push(
+        `agents.${name}.${field} must be a list of names — got ${typeof value}. ` +
+          `Write it as a YAML list, or as JSON like ["read", "memory"].`,
+      );
+    }
+  }
+
+  // Rooms: a subscription naming an agent that doesn't exist, or a ref in the
+  // wrong shape, means an agent silently never wakes — the failure mode this
+  // codebase keeps hitting (config that parses but is never read).
+  const roomsConfig = config.rooms;
+  if (roomsConfig) {
+    const declaredRoomNames = new Set((roomsConfig.rooms ?? []).map((r) => r?.name).filter(Boolean));
+    for (const room of roomsConfig.rooms ?? []) {
+      if (!room?.name) {
+        warnings.push(`rooms.rooms: an entry is missing "name" and will be skipped`);
+        continue;
+      }
+      if (!room.ref || !/^[^:]+:.+$/.test(room.ref)) {
+        warnings.push(
+          `rooms.rooms."${room.name}": "ref" must look like <backend>:<id> (e.g. discord:1467386788640460822) — got ${JSON.stringify(room.ref)}`,
+        );
+      }
+    }
+
+    for (const sub of roomsConfig.subscriptions ?? []) {
+      const label = `rooms.subscriptions[${sub?.agent ?? "?"} -> ${sub?.room ?? "?"}]`;
+      if (!sub?.agent) {
+        warnings.push(`${label}: missing "agent"`);
+      } else if (config.agents && !config.agents[sub.agent]) {
+        warnings.push(`${label}: unknown agent "${sub.agent}" — it will never wake`);
+      }
+      if (!sub?.room) {
+        warnings.push(`${label}: missing "room"`);
+      } else if (!declaredRoomNames.has(sub.room) && !/^[^:]+:.+$/.test(sub.room)) {
+        warnings.push(`${label}: "${sub.room}" is neither a room declared in rooms.rooms nor a <backend>:<id> ref`);
+      }
+      if (sub?.deliver && sub.deliver !== "push" && sub.deliver !== "poll") {
+        warnings.push(`${label}: deliver must be "push" or "poll" — got ${JSON.stringify(sub.deliver)}`);
+      }
+      if (sub?.wakeOn && !["named", "addressed", "all", "none"].includes(sub.wakeOn)) {
+        warnings.push(
+          `${label}: wakeOn must be "named", "addressed", "all" or "none" — got ${JSON.stringify(sub.wakeOn)}`,
+        );
+      }
+      if (sub?.deliver === "poll" && sub.pollSeconds !== undefined && sub.pollSeconds < 30) {
+        warnings.push(`${label}: pollSeconds ${sub.pollSeconds} is below the 30s floor and will hammer the transport`);
+      }
+    }
+  }
+
   return warnings;
 }
 
@@ -1478,6 +1836,7 @@ export function loadConfig(configPath?: string): AgentConfig {
   migrateTaskBackendConfig(interpolated);
   migrateNotifyOwnerTool(interpolated);
   coerceCronJobs(interpolated);
+  coerceAgentStringArrays(interpolated);
   // After coerceCronJobs so a JSON-string cron.jobs is already an array.
   migrateDeliveryConfig(interpolated);
 
@@ -1646,6 +2005,41 @@ function coerceCronJobs(interpolated: Record<string, unknown>): void {
   } catch (err) {
     console.warn(`[config] cron.jobs is a string but not valid JSON: ${(err as Error).message}`);
     cron.jobs = [];
+  }
+}
+
+/**
+ * Tolerate an agent's `tools` / `skills` written as a JSON string.
+ *
+ * An agent that creates another agent writes JSON, because that is what models
+ * emit — `tools: '["read", "memory"]'`. Nothing rejected it, and a string is
+ * iterable, so `resolveAgent` walked it character by character and died on
+ * `unknown tool "["`. The agent looked created, passed every check, and only
+ * failed the first time something tried to run it.
+ *
+ * Parse it here instead. A string that is not a JSON array is left alone so
+ * validateConfig can complain about it by name.
+ */
+function coerceAgentStringArrays(interpolated: Record<string, unknown>): void {
+  const agents = interpolated.agents as Record<string, Record<string, unknown>> | undefined;
+  if (!agents || typeof agents !== "object") return;
+
+  for (const [name, agent] of Object.entries(agents)) {
+    if (!agent || typeof agent !== "object") continue;
+    for (const field of ["tools", "skills"] as const) {
+      const value = agent[field];
+      if (typeof value !== "string") continue;
+      try {
+        const parsed = JSON.parse(value);
+        if (Array.isArray(parsed) && parsed.every((v) => typeof v === "string")) {
+          agent[field] = parsed;
+          console.warn(`[config] agents.${name}.${field} was a JSON string; parsed it into a list.`);
+        }
+      } catch {
+        // Left as-is on purpose: validateConfig names the agent and the field,
+        // which is far more use than a parse error from here.
+      }
+    }
   }
 }
 

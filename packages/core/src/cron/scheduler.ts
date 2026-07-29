@@ -8,6 +8,7 @@ import { runAgentLoop } from "../agent/loop.js";
 import { findOrCreateSession, resetSession } from "../agent/session.js";
 import type { CronJobConfig } from "../config.js";
 import { saveMessage } from "../db/queries.js";
+import { PASSTHROUGH_GATE, resolveGate } from "../notifications/dedup.js";
 import type { ProjectRef } from "../projects/resolve.js";
 import { expandPrompt } from "../prompts/expand.js";
 import type { AgentRuntime } from "../runtime.js";
@@ -81,11 +82,16 @@ export class CronScheduler {
     this.start();
   }
 
+  /**
+   * Run a job right now because someone asked (the UI's "Run now", the API).
+   * Marked solicited, so its output bypasses repeat suppression — the user
+   * asked for this specific answer and must get it even if it is unchanged.
+   */
   triggerJob(name: string): void {
     const config = this.runtime.getConfig();
     const job = config.cron.jobs.find((j) => j.name === name);
     if (!job) throw new Error(`Unknown job: ${name}`);
-    this.runJob(job).catch((err) => {
+    this.runJob(job, { solicited: true }).catch((err) => {
       console.error(`[cron] Error running triggered job "${name}":`, err);
     });
   }
@@ -197,7 +203,7 @@ export class CronScheduler {
     }
   }
 
-  private async runJob(job: CronJobConfig): Promise<void> {
+  private async runJob(job: CronJobConfig, opts?: { solicited?: boolean }): Promise<void> {
     if (job.workflow) {
       await this.runWorkflowJob(job);
       return;
@@ -209,7 +215,7 @@ export class CronScheduler {
     const resolved = resolveAgent(
       job.agent ?? job.profile,
       this.runtime.getConfig(),
-      this.runtime.getTools(),
+      this.runtime.getResolvableTools(),
       job.model,
       this.runtime.contextDir,
     );
@@ -233,7 +239,7 @@ export class CronScheduler {
 
     // --- beforeRun hooks ---
     if (hooks.beforeRun.length > 0) {
-      const { outputs, skipped } = await executeHooks(
+      const { outputs, skipped, failed, failure } = await executeHooks(
         hooks.beforeRun,
         allTools,
         templateVars,
@@ -244,6 +250,18 @@ export class CronScheduler {
       if (skipped) {
         console.log(`[cron] "${job.name}" skipped by beforeRun hook`);
         this.updateLastRun(job.name);
+        return;
+      }
+      // Fail closed. The hook was supposed to supply the material this job's
+      // prompt talks about; without it the model is being asked to summarize
+      // data that isn't there, and it will oblige by making some up.
+      if (failed) {
+        // Deliberately does NOT advance last_run. `{{last_run_epoch}}` is the
+        // cursor hooks query from ("mail since I last looked"); moving it past
+        // a window that was never processed would silently lose that window's
+        // data once the hook is fixed. Scheduling comes from croner, not from
+        // last_run, so leaving it alone costs nothing.
+        console.error(`[cron] "${job.name}" aborted — beforeRun ${failure}`);
         return;
       }
       // Prepend non-empty hook outputs to the prompt as context
@@ -278,8 +296,12 @@ export class CronScheduler {
       await executeHooks(hooks.afterRun, allTools, afterVars, session.id, logPrefix, this.runtime.getConfig().prompts);
     }
 
-    if (response && !response.trim().toUpperCase().includes("NO_ACTION")) {
-      await this.deliver(job, response);
+    // Anchored, not a substring search: the sentinel has to BE the response.
+    // `includes()` also matched a response that merely mentioned NO_ACTION
+    // ("this is not a NO_ACTION situation"), silently dropping a real summary.
+    const isNoAction = /^\[?NO[_\s]?ACTION\]?[.!]?$/i.test((response ?? "").trim());
+    if (response && !isNoAction) {
+      await this.deliver(job, response, opts?.solicited === true);
     } else {
       console.log(`[cron] "${job.name}" returned NO_ACTION, skipping delivery`);
     }
@@ -298,7 +320,7 @@ export class CronScheduler {
     console.log(`[cron] Added note to session "${sessionKey}": "${prompt.slice(0, 80)}"`);
   }
 
-  private async deliver(job: CronJobConfig, response: string): Promise<void> {
+  private async deliver(job: CronJobConfig, response: string, solicited = false): Promise<void> {
     const delivery = job.delivery;
     const channelId = delivery?.channel ?? "log";
 
@@ -318,14 +340,27 @@ export class CronScheduler {
       return;
     }
 
+    // Scheduled output is unsolicited — nobody asked for it at the moment it
+    // fires — so it goes through the repeat gate. A job whose state hasn't
+    // changed keeps producing the same summary; the user should hear it once.
+    //
+    // A run the user triggered is the opposite case: they asked for this
+    // answer now, so it always goes out, unchanged or not. It still records a
+    // send so the window advances.
+    const gate = solicited ? PASSTHROUGH_GATE : resolveGate(() => this.runtime.getNotificationGate?.());
+
     if (mode === "dm") {
       const userId = delivery?.target ?? this.runtime.getOwnerId(channelId);
       if (!userId) {
         console.error(`[cron] Job "${job.name}" dm delivery has no target user id and no owner for ${channelId}`);
         return;
       }
-      await out.sendDM(userId, response);
-      console.log(`[cron] Delivered "${job.name}" response as DM to user ${userId}`);
+      const decision = await gate.deliver(
+        { source: `cron:${job.name}`, channel: channelId, target: userId, content: response },
+        () => out.sendDM(userId, response),
+        (msg) => console.log(msg),
+      );
+      if (decision.send) console.log(`[cron] Delivered "${job.name}" response as DM to user ${userId}`);
       return;
     }
 
@@ -333,8 +368,13 @@ export class CronScheduler {
       console.error(`[cron] Job "${job.name}" channel delivery has no target channel id`);
       return;
     }
-    await out.send(delivery.target, response);
-    console.log(`[cron] Delivered "${job.name}" response to ${channelId} channel ${delivery.target}`);
+    const target = delivery.target;
+    const decision = await gate.deliver(
+      { source: `cron:${job.name}`, channel: channelId, target, content: response },
+      () => out.send(target, response),
+      (msg) => console.log(msg),
+    );
+    if (decision.send) console.log(`[cron] Delivered "${job.name}" response to ${channelId} channel ${target}`);
   }
 
   private upsertJobRow(job: CronJobConfig): void {

@@ -163,3 +163,57 @@ describe("evaluatePermission", () => {
     expect(evaluatePermission("exec", { command: "anything" }, perms)).toBe("auto");
   });
 });
+
+describe("evaluatePermission — rules that reach an absent argument", () => {
+  const perms = (rules: Array<{ match: Record<string, string | null>; action: "auto" | "approve" }>) =>
+    ({
+      defaultMode: "auto",
+      timeoutMs: 0,
+      timeoutAction: "reject",
+      tools: { memory: { mode: "conditional", rules } },
+    }) as unknown as PermissionsConfig;
+
+  it("matches a rule that requires the argument to be absent", () => {
+    // Previously inexpressible: any missing argument failed the match outright,
+    // so a rule could only describe what the model DID pass. The dangerous call
+    // is often the one that passes nothing and takes a default.
+    const p = perms([{ match: { scope: null }, action: "approve" }]);
+
+    expect(evaluatePermission("memory", { file: "notes.md" }, p)).toBe("approve");
+    expect(evaluatePermission("memory", { file: "notes.md", scope: "profile" }, p)).toBe("auto");
+  });
+
+  it("treats an empty string as absent, because models emit it for 'unset'", () => {
+    const p = perms([{ match: { scope: null }, action: "approve" }]);
+
+    expect(evaluatePermission("memory", { scope: "" }, p)).toBe("approve");
+  });
+
+  it("still requires a present argument for a regex rule", () => {
+    const p = perms([{ match: { scope: "^global$" }, action: "approve" }]);
+
+    expect(evaluatePermission("memory", { scope: "global" }, p)).toBe("approve");
+    expect(evaluatePermission("memory", {}, p)).toBe("auto");
+    expect(evaluatePermission("memory", { scope: "" }, p)).toBe("auto");
+  });
+
+  it("combines present and absent conditions in one rule", () => {
+    const p = perms([{ match: { action: "^write$", scope: null }, action: "approve" }]);
+
+    expect(evaluatePermission("memory", { action: "write" }, p)).toBe("approve");
+    expect(evaluatePermission("memory", { action: "write", scope: "profile" }, p)).toBe("auto");
+    expect(evaluatePermission("memory", { action: "read" }, p)).toBe("auto");
+  });
+
+  it("keeps first-match-wins, so a specific rule can precede a catch-all", () => {
+    const p = perms([
+      { match: { scope: "^global$" }, action: "approve" },
+      { match: { scope: null }, action: "approve" },
+      { match: {}, action: "auto" },
+    ]);
+
+    expect(evaluatePermission("memory", { scope: "global" }, p)).toBe("approve");
+    expect(evaluatePermission("memory", {}, p)).toBe("approve");
+    expect(evaluatePermission("memory", { scope: "profile" }, p)).toBe("auto");
+  });
+});

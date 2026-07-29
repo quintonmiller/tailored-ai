@@ -162,7 +162,12 @@ describe("AdminTool.create_tool", () => {
     expect(tools.find((t) => t.name === "greet")).toBeDefined();
   });
 
-  it("auto-appends the new tool to the invoking agent's allowlist", async () => {
+  it("does NOT grant the new tool to the invoking agent", async () => {
+    // Creating a tool and being allowed to run it are separate decisions.
+    // Self-granting collapsed them: an agent with no `exec` could write a
+    // shell-backed tool and hand it to itself in one auto-approved call, which
+    // is shell it was never granted. It says so in the result rather than
+    // quietly doing less, so the agent knows why the tool is not callable.
     const initial = YAML.stringify({
       agents: { coder: { tools: ["memory"] } },
     });
@@ -183,12 +188,15 @@ describe("AdminTool.create_tool", () => {
     );
 
     expect(result.success).toBe(true);
-    expect(result.output).toMatch(/Added "lint" to agent "coder"/);
+    expect(result.output).toMatch(/NOT added to agent "coder"/);
 
     const written = YAML.parse(readFileSync(configPath, "utf-8")) as {
       agents: { coder: { tools: string[] } };
+      custom_tools: Record<string, unknown>;
     };
-    expect(written.agents.coder.tools).toContain("lint");
+    // The tool exists; the grant does not.
+    expect(written.custom_tools.lint).toBeDefined();
+    expect(written.agents.coder.tools).not.toContain("lint");
     expect(written.agents.coder.tools).toContain("memory");
   });
 

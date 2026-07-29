@@ -3,8 +3,17 @@ import { randomUUID } from "node:crypto";
 // --- Permission rule types ---
 
 export interface PermissionRule {
-  /** Map of tool parameter names to regex patterns. All must match for the rule to apply. Empty = catch-all. */
-  match: Record<string, string>;
+  /**
+   * Map of tool parameter names to regex patterns. All must match for the rule
+   * to apply. Empty = catch-all.
+   *
+   * A `null` pattern means **the argument must be absent**. That case was
+   * previously inexpressible: any missing argument failed the match outright,
+   * so a rule could only ever describe what the model *did* pass. The dangerous
+   * call is often the one that passes nothing and takes a default — an
+   * unscoped write, an unfiltered query — and no rule could reach it.
+   */
+  match: Record<string, string | null>;
   /** What to do when this rule matches. */
   action: "auto" | "approve";
 }
@@ -17,6 +26,21 @@ export interface ToolPermissionConfig {
 export interface PermissionsConfig {
   /** Fallback mode for tools without explicit config. Default: "auto". */
   defaultMode: "auto" | "approve";
+  /**
+   * What to do when a call needs approval but nothing can ask: cron, rooms, the
+   * task watcher, webhooks — every path without a human attached.
+   *
+   * `"auto"` (default) runs it anyway, which is what the code always did. That
+   * is deliberate back-compat: flipping it would stop autonomous runs that have
+   * worked for months, and a guard that breaks the thing it protects is the
+   * failure mode this codebase keeps hitting. It now logs instead of passing in
+   * silence.
+   *
+   * `"reject"` refuses the call and tells the agent why, which is what a
+   * deployment wanting its `approve` rules to mean something on headless paths
+   * should set.
+   */
+  noHandlerAction?: "auto" | "reject";
   /** Timeout in ms for approval requests. 0 = wait forever. Default: 300000 (5 min). */
   timeoutMs: number;
   /** What to do when timeout expires. Default: "reject". */
@@ -86,7 +110,19 @@ function matchesRule(rule: PermissionRule, args: Record<string, unknown>): boole
 
   for (const [paramName, pattern] of entries) {
     const value = args[paramName];
-    if (value === undefined || value === null) return false;
+    // An empty string counts as absent. Models routinely emit `scope: ""` for
+    // "I did not set this", and the tools in this codebase already read it that
+    // way — a rule that disagreed with the tool it governs would be worse than
+    // no rule.
+    const absent = value === undefined || value === null || value === "";
+
+    // `null` pattern: the rule wants this argument NOT to be there.
+    if (pattern === null) {
+      if (!absent) return false;
+      continue;
+    }
+
+    if (absent) return false;
     try {
       const regex = new RegExp(pattern);
       if (!regex.test(String(value))) return false;

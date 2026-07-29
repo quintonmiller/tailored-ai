@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { warnIfContextIsLarge } from "../agent/loop.js";
 import {
   type AgentConfig,
   DEFAULT_DISABLED_PLUGIN_MODULES,
@@ -160,6 +161,127 @@ describe("validateConfig — tool references", () => {
     const c = baseConfig();
     c.agents = { coder: { tools: ["nonexistent_tool"] } };
     expect(validateConfig(c).some((w) => w.includes('references tool "nonexistent_tool"'))).toBe(true);
+  });
+
+  it("names an unknown key inside an agent block, and guesses the right one", () => {
+    // Top-level keys have been checked since #252, but agent blocks were left
+    // open. Four agents carried their entire persona under `system_prompt:`
+    // instead of `instructions:` — it parsed, it round-tripped into their
+    // manifests, and it reached nothing. They ran with an empty instructions
+    // layer for weeks with no warning anywhere.
+    const c = baseConfig();
+    c.agents = { generalist: { system_prompt: "You are a generalist." } as never };
+
+    const warnings = validateConfig(c);
+
+    expect(warnings.some((w) => w.includes('unknown key "system_prompt"'))).toBe(true);
+    expect(warnings.some((w) => w.includes('Did you mean "systemPrompt"'))).toBe(true);
+  });
+
+  it("keeps the context-size warning configurable, so a deliberate choice can silence it", () => {
+    // A warning that fires on a correct configuration teaches people to ignore
+    // the whole class. A deployment running large, specific context on a long
+    // context window is making a choice, not a mistake.
+    const big = "x".repeat(40_000);
+
+    const warnings: string[] = [];
+    const original = console.warn;
+    console.warn = (m: string) => warnings.push(m);
+    try {
+      warnIfContextIsLarge(big, "coder", 0);
+      expect(warnings).toEqual([]);
+
+      warnIfContextIsLarge(big, "planner", 100);
+      expect(warnings.some((w) => w.includes("context.warnTokens"))).toBe(true);
+    } finally {
+      console.warn = original;
+    }
+  });
+
+  it("recognises an abbreviation, which edit distance alone cannot", () => {
+    // Found in the wild: an agent authored `temp: 0.3` into its own config and
+    // ran at the default temperature instead. "temp" is seven edits from
+    // "temperature" and obviously means it.
+    const c = baseConfig();
+    c.agents = { "travel-coordinator": { temp: 0.3 } as never };
+
+    expect(validateConfig(c).some((w) => w.includes('Did you mean "temperature"'))).toBe(true);
+  });
+
+  it("does not treat a two-character key as an abbreviation of anything", () => {
+    const c = baseConfig();
+    c.agents = { coder: { on: true } as never };
+
+    const warnings = validateConfig(c).filter((w) => w.includes('unknown key "on"'));
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).not.toContain("Did you mean");
+  });
+
+  it("does not guess when the key resembles nothing", () => {
+    const c = baseConfig();
+    c.agents = { coder: { wibble: 1 } as never };
+
+    const warnings = validateConfig(c).filter((w) => w.includes('unknown key "wibble"'));
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).not.toContain("Did you mean");
+  });
+
+  it("stays quiet about every real agent key", () => {
+    // The guard is only useful if it does not cry wolf; a false warning on a
+    // correct key teaches people to ignore the whole class.
+    const c = baseConfig();
+    c.agents = {
+      full: {
+        description: "d",
+        instructions: "i",
+        tools: ["read"],
+        temperature: 0.3,
+        maxToolRounds: 5,
+        fileBoundary: "/tmp",
+        roomSessionScope: "shared",
+        injectMemory: true,
+        budgetWarnings: true,
+        skipGlobalContext: true,
+        summarizeOnTrim: true,
+        worktree: true,
+        skills: ["x"],
+        skillLoading: "progressive",
+        systemPrompt: { base: "b" },
+      } as never,
+    };
+
+    expect(validateConfig(c).filter((w) => w.includes("unknown key"))).toEqual([]);
+  });
+});
+
+describe("validateConfig — dashboard widgets", () => {
+  it("does not warn for valid widgets", () => {
+    const c = baseConfig();
+    c.dashboard = { widgets: [{ id: "a", type: "tasks", options: { endpoint: "/api/project-tasks" } }] };
+    expect(validateConfig(c).some((w) => w.startsWith("dashboard.widgets"))).toBe(false);
+  });
+
+  it("warns on a malformed widget (missing type) and a non-/api endpoint", () => {
+    const c = baseConfig();
+    c.dashboard = {
+      widgets: [{ id: "bad" } as never, { id: "ext", type: "list", options: { endpoint: "https://evil.example" } }],
+    };
+    const ws = validateConfig(c).filter((w) => w.startsWith("dashboard.widgets"));
+    expect(ws.some((w) => w.includes("`type`"))).toBe(true);
+    expect(ws.some((w) => w.includes("/api/"))).toBe(true);
+  });
+
+  it("warns on duplicate widget ids", () => {
+    const c = baseConfig();
+    c.dashboard = {
+      widgets: [
+        { id: "dup", type: "list" },
+        { id: "dup", type: "tasks" },
+      ],
+    };
+    expect(validateConfig(c).some((w) => w.includes('duplicate widget id "dup"'))).toBe(true);
   });
 });
 
@@ -835,5 +957,44 @@ describe("validateConfig — mcp block", () => {
     const c = baseConfig();
     c.agents = { helper: { tools: ["mcp_gh_search"] } };
     expect(validateConfig(c).some((w) => w.includes("mcp_gh_search"))).toBe(true);
+  });
+});
+
+describe("agent tools written as a JSON string", () => {
+  it("parses a JSON-array string into a real list", () => {
+    // What an agent creating another agent actually writes. A string is
+    // iterable, so leaving it meant resolveAgent walked it character by
+    // character and failed on `unknown tool "["` — days later, at first use.
+    const dir = mkdtempSync(join(tmpdir(), "tai-agent-tools-"));
+    const path = join(dir, "config.yaml");
+    writeFileSync(path, 'agents:\n  generalist:\n    tools: \'["read", "memory"]\'\n    skills: \'["a"]\'\n');
+
+    const config = loadConfig(path);
+
+    expect(config.agents?.generalist?.tools).toEqual(["read", "memory"]);
+    expect(config.agents?.generalist?.skills).toEqual(["a"]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("leaves a non-JSON string alone and reports it by name", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tai-agent-tools-"));
+    const path = join(dir, "config.yaml");
+    writeFileSync(path, "agents:\n  broken:\n    tools: read, memory\n");
+
+    const warnings = validateConfig(loadConfig(path));
+
+    expect(warnings.some((w) => w.includes("agents.broken.tools") && w.includes("list"))).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("says nothing about a well-formed list", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tai-agent-tools-"));
+    const path = join(dir, "config.yaml");
+    writeFileSync(path, "agents:\n  fine:\n    tools:\n      - read\n      - memory\n");
+
+    const warnings = validateConfig(loadConfig(path));
+
+    expect(warnings.filter((w) => w.includes("agents.fine"))).toEqual([]);
+    rmSync(dir, { recursive: true, force: true });
   });
 });

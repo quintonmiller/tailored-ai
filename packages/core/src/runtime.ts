@@ -4,6 +4,7 @@ import type Database from "better-sqlite3";
 import { resolveAgent } from "./agent/agents.js";
 import { EMPTY_HOOKS, mergeHooks, type ResolvedHooks } from "./agent/hooks.js";
 import type { AgentLoopOptions } from "./agent/loop.js";
+import { runAgentLoop } from "./agent/loop.js";
 import { findOrCreateSession, type Session } from "./agent/session.js";
 import type { ApprovalRequest, ApprovalResponse } from "./approval.js";
 import type { OutboundNotifier } from "./channels/outbound.js";
@@ -19,6 +20,7 @@ import { type EventBus, TypedEventBus } from "./events.js";
 import { HttpRouteRegistry } from "./http/registry.js";
 import type { MemoryBackend } from "./memory/interface.js";
 import { resolveMemoryBackend } from "./memory/registry.js";
+import { NotificationGate } from "./notifications/dedup.js";
 import { type ProjectContext, type ProjectRef, readProjectFile } from "./projects/resolve.js";
 import type { AIProvider } from "./providers/interface.js";
 import { AgentRegistry } from "./resources/agent.js";
@@ -31,6 +33,10 @@ import { SkillRegistry } from "./resources/skill.js";
 import { StepExecutorRegistry } from "./resources/step-executor-registry.js";
 import { ToolRegistry } from "./resources/tool-registry.js";
 import { populateBuiltinTriggers, TriggerKindRegistry } from "./resources/trigger-registry.js";
+import { LocalRoomBackend } from "./rooms/local.js";
+import { getRoomBackend, registerRoomBackend } from "./rooms/registry.js";
+import { RoomStore } from "./rooms/store.js";
+import { formatRoomRef, parseRoomRef } from "./rooms/types.js";
 import { createSandbox } from "./sandboxes/factory.js";
 import { globalSandboxRegistry } from "./sandboxes/registry.js";
 import { createTaskBackend } from "./tasks/factory.js";
@@ -60,6 +66,10 @@ export interface RuntimeOptions {
       db?: Database.Database;
       resolveOutbound?: (channelId?: string) => OutboundNotifier | undefined;
       getOwnerId?: (channelId?: string) => string | undefined;
+      /** Repeat gate for unsolicited outbound messages. See NotificationGate. */
+      getNotificationGate?: () => NotificationGate | undefined;
+      /** Deliver a message straight to another agent and return its reply. */
+      deliverAgentMessage?: (to: string, from: string, body: string) => Promise<string>;
       taskBackend?: TaskBackend;
       taskBackendResolver?: import("./tools/tasks.js").TaskBackendResolver;
       getEmbedder?: () => import("./providers/embedding.js").EmbeddingProvider | undefined;
@@ -152,6 +162,10 @@ export class AgentRuntime {
    */
   private _outbound = new Map<string, OutboundNotifier>();
 
+  /** Lazily built in {@link getNotificationGate}; reads config live, so reload-safe. */
+  private _notificationGate?: NotificationGate;
+  private _roomStore?: RoomStore;
+
   constructor(
     opts: RuntimeOptions,
     loadConfig: (path: string) => AgentConfig,
@@ -182,6 +196,7 @@ export class AgentRuntime {
         getMemoryBackend: () => this.getMemoryBackend(),
         resolveOutbound: (id?: string) => this.resolveOutbound(id),
         getOwnerId: (id?: string) => this.getOwnerId(id),
+        getNotificationGate: () => this.getNotificationGate(),
         events: this.events,
       }) ?? [];
     for (const tool of builtinTools) this._toolRegistry.registerBuiltin(tool);
@@ -244,6 +259,26 @@ export class AgentRuntime {
     // createTools → registerBuiltin; plugins call registerBuiltin directly.
     // Same code path for both.
     return this._toolRegistry.list();
+  }
+
+  /**
+   * Every tool an agent can end up holding, registry and meta together.
+   *
+   * `buildLoopOptions` appends meta tools AFTER resolving the agent, so
+   * `admin`, `delegate` and friends are always present at run time but were
+   * invisible to the `tools:` allowlist that runs first. Naming one threw
+   * `references unknown tool "admin"` and took the agent down entirely — in
+   * rooms that meant it simply stopped answering, with the reason only in the
+   * log. This is the set to resolve an allowlist against: what the agent will
+   * actually have, rather than half of it.
+   */
+  getResolvableTools(): Tool[] {
+    const seen = new Set<string>();
+    return [...this._toolRegistry.list(), ...this._metaTools].filter((t) => {
+      if (seen.has(t.name)) return false;
+      seen.add(t.name);
+      return true;
+    });
   }
   getProvider(): AIProvider {
     return this._provider;
@@ -514,6 +549,8 @@ export class AgentRuntime {
           getMemoryBackend: () => this.getMemoryBackend(),
           resolveOutbound: (id?: string) => this.resolveOutbound(id),
           getOwnerId: (id?: string) => this.getOwnerId(id),
+          getNotificationGate: () => this.getNotificationGate(),
+          deliverAgentMessage: (to, from, body) => this.deliverAgentMessage(to, from, body),
           events: this.events,
         }) ?? [];
       const { provider, model } = this._createProvider(config);
@@ -840,6 +877,124 @@ export class AgentRuntime {
   }
 
   /**
+   * Repeat suppression for unsolicited messages. Every proactive sender (cron
+   * delivery, owner-notifier, notify_owner from a tick) routes through this so
+   * "have I already said this?" is answered in one place against one table.
+   *
+   * Deliberately NOT applied to chat replies: if the user asks the same thing
+   * twice they get an answer twice.
+   */
+  getNotificationGate(): NotificationGate {
+    if (!this._notificationGate) {
+      this._notificationGate = new NotificationGate(this.db, () => this.getConfig().notifications?.dedup);
+    }
+    return this._notificationGate;
+  }
+
+  /**
+   * Hand a message to another agent and return what it says back.
+   *
+   * No room, no channel. A room was only ever carrying two things for a direct
+   * message — the delivery and the session identity — and shared sessions took
+   * the second away, leaving a Discord channel per agent as pure overhead.
+   *
+   * The exchange still lands in the recipient's session, so it is durable and
+   * inspectable; it simply is not a place.
+   */
+  async deliverAgentMessage(to: string, from: string, body: string): Promise<string> {
+    const config = this.getConfig();
+    if (!config.agents?.[to]) {
+      throw new Error(`No agent named "${to}".`);
+    }
+
+    const resolved = resolveAgent(to, config, this.getResolvableTools(), undefined, this.contextDir);
+    // The recipient's own session, so a direct line accumulates rather than
+    // starting cold every time — which is what made `delegate` unsuitable for
+    // anything resembling an ongoing conversation.
+    const key = resolved.roomSessionScope === "shared" ? `room:all:${to}` : `dm:${from}:${to}`;
+    const session = findOrCreateSession(this.db, key, resolved.model, resolved.provider);
+
+    const base = this.buildLoopOptions({ agentName: to, session });
+    return await runAgentLoop(`Direct message from ${from}:\n\n${body}`, base);
+  }
+
+  /**
+   * The room directory: which rooms exist, who subscribes to them, and how far
+   * each subscriber has read. See docs/rooms.md.
+   *
+   * Registering the built-in `local` backend is deferred to first use rather
+   * than done in the constructor — the backend registry is a module singleton
+   * (the #47 follow-up), so a test that never touches rooms should not have
+   * its handle replaced by the next runtime that gets constructed.
+   */
+  getRoomStore(): RoomStore {
+    if (!this._roomStore) {
+      this._roomStore = new RoomStore(this.db);
+      // The tool factory registers `local` too, for the CLI paths that never
+      // construct a store. Whoever gets there first wins; re-registering would
+      // only log a misleading "duplicate registration" warning at startup.
+      if (!getRoomBackend("local")) {
+        registerRoomBackend(new LocalRoomBackend(this.db, this._roomStore));
+      }
+    }
+    return this._roomStore;
+  }
+
+  /**
+   * Bring `room_subscriptions` in line with config: declared rooms are
+   * registered, declared subscriptions upserted, and config-sourced rows that
+   * are no longer declared removed. Rows an agent created for itself
+   * (source = "agent") are left alone — a config reload must not silently
+   * unsubscribe an agent from a room it opened.
+   */
+  reconcileRooms(): void {
+    const cfg = this.getConfig().rooms;
+    const store = this.getRoomStore();
+
+    for (const declared of cfg?.rooms ?? []) {
+      const ref = declared?.ref ? parseRoomRef(declared.ref) : null;
+      if (!declared?.name || !ref) continue;
+      // Config wins on where a name points. Without this, correcting a ref in
+      // config.yaml hits the name-uniqueness guard and the stale row keeps the
+      // name — the change parses, logs a warning, and does nothing.
+      const existing = store.getRoomByName(declared.name);
+      const existingRef = existing ? formatRoomRef(existing.ref) : null;
+      if (existingRef && existingRef !== formatRoomRef(ref)) {
+        console.log(`[rooms] Re-pointing "${declared.name}" from ${existingRef} to ${formatRoomRef(ref)}.`);
+        store.repointRoom(existingRef, ref);
+      }
+      try {
+        store.upsertRoom({ ref, name: declared.name, purpose: declared.purpose });
+      } catch (err) {
+        console.warn(`[rooms] ${(err as Error).message}`);
+      }
+    }
+
+    const keep: Array<{ agent: string; roomRef: string }> = [];
+    for (const sub of cfg?.subscriptions ?? []) {
+      if (!sub?.agent || !sub?.room) continue;
+      const room = store.resolve(sub.room);
+      const roomRef = room ? formatRoomRef(room.ref) : parseRoomRef(sub.room) ? sub.room : null;
+      if (!roomRef) {
+        console.warn(`[rooms] Subscription for "${sub.agent}" names unknown room "${sub.room}" — skipped.`);
+        continue;
+      }
+      store.subscribe({
+        agent: sub.agent,
+        roomRef,
+        deliver: sub.deliver,
+        wakeOn: sub.wakeOn,
+        pollSeconds: sub.pollSeconds ?? null,
+        checkInMinutes: sub.checkInMinutes ?? null,
+        role: sub.role ?? null,
+        source: "config",
+      });
+      keep.push({ agent: sub.agent, roomRef });
+    }
+    store.pruneConfigSubscriptions(keep);
+  }
+
+  /**
    * Build a standard AgentLoopOptions from the current runtime state.
    * Callers can spread additional fields (onToolCall, onToolResult, etc.) on top.
    */
@@ -871,7 +1026,7 @@ export class AgentRuntime {
     const resolved = resolveAgent(
       agentName,
       config,
-      this.getTools(),
+      this.getResolvableTools(),
       opts.modelOverride,
       this.contextDir,
       this.kbDir,
@@ -909,6 +1064,7 @@ export class AgentRuntime {
       temperature: resolved.temperature,
       thinking: resolved.thinking,
       contextDir: this.contextDir,
+      contextWarnTokens: config.context?.warnTokens,
       agentContextDir: resolved.contextDir,
       kbDir: globalKbDir,
       agentKbDir: resolved.kbDir,
@@ -938,12 +1094,16 @@ export class AgentRuntime {
       // in the loop body (see agent/loop.ts ToolContext construction).
       toolContextExtras: {
         agentName: agentName ?? (config.agents?.default ? "default" : undefined),
+        // Declared per-agent boundary. Same enforcement the task watcher
+        // injects for worktrees, so an agent granted `write` is confined to
+        // where it is supposed to work rather than the whole filesystem.
+        ...(resolved.fileBoundary ? { workingDirectoryBoundary: resolved.fileBoundary } : {}),
       },
       getTools: () => {
         const r = resolveAgent(
           agentName,
           this._config,
-          this.getTools(),
+          this.getResolvableTools(),
           opts.modelOverride,
           this.contextDir,
           this.kbDir,

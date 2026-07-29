@@ -101,6 +101,36 @@ export interface RuntimeEventMap {
   };
 
   /**
+   * A message landed in a room, before any wake decision is made. This is the
+   * seam for behavior core deliberately does not implement: routing rules,
+   * custom escalation, mirroring a room somewhere else. Subscribers see every
+   * message, including ones no agent wakes on.
+   */
+  "room.message": {
+    /** Canonical `<backend>:<id>`. */
+    roomRef: string;
+    messageId: string;
+    /** TAI identity that spoke, when one was resolved. */
+    speaker?: string;
+    /** TAI identities addressed. Empty means the room at large. */
+    to: string[];
+    /** Envelope-stripped text. */
+    body: string;
+    fromSelf: boolean;
+  };
+
+  /**
+   * A room message caused an agent to wake. Emitted after the wake budget is
+   * consumed, so a subscriber counting these sees real runs, not intents.
+   */
+  "room.woke": {
+    roomRef: string;
+    agent: string;
+    /** How many messages the agent was handed. */
+    messageCount: number;
+  };
+
+  /**
    * The runtime finished a config reload. Subscribers re-arming
    * themselves after a reload can use this rather than wiring into
    * the existing `onReload` hook directly.

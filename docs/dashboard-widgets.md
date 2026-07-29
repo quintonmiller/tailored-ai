@@ -125,6 +125,43 @@ The widget appears on the Board with no UI changes, because `metric` is a
 built-in renderer. A plugin needing a bespoke visual would add a renderer type
 to the UI in a separate change; everything data-shaped works out of the box.
 
+## Widgets that need data the agent maintains
+
+A widget over a `/api/…` endpoint only works if that endpoint already returns the data.
+For **user records the agent keeps** — a reading list, a watchlist, a collection — don't
+invent a new endpoint or a bespoke renderer. Persist the records in an existing
+agent-writable store, then point a built-in renderer at that store's read API:
+
+| Store | Tool | Read API | Good for |
+|-------|------|----------|----------|
+| Facts | `facts` | `GET /api/facts?category=…` | quick `category / entity / key = value` records |
+| Collections | `collections` | `GET /api/collections?type=…` | typed records with name / notes / rating / location / url |
+
+A reading list two ways, both **config-only, no rebuild, no new endpoint**:
+
+```yaml
+# via facts: facts set category=reading entity="Dune" key=status value="p.142 / 320"
+- id: reading
+  type: list
+  title: 📚 Reading
+  options:
+    endpoint: /api/facts?category=reading
+    itemsPath: facts
+    titleField: entity
+    subtitleField: value
+# via collections: collections add type=book name="Dune" rating=5
+- id: books
+  type: collections
+  title: 📚 Books
+  options:
+    defaultTab: book
+    tabs: [{ key: book, label: Books }]
+```
+
+`collections.type` is an open, normalized label (`book`, `board_game`, `restaurant`),
+so a new kind of collection needs no code. The `collections` renderer derives its tabs
+from `options.tabs`, else from the live type counts — so it works for any type.
+
 ## Authoring with a TAI agent
 
 Widget development is designed to be an agent task. The pieces that make an

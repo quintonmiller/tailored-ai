@@ -19,6 +19,12 @@ export interface ToolFactoryContext {
   resolveOutbound?: (channelId?: string) => import("../channels/outbound.js").OutboundNotifier | undefined;
   /** Resolve the owner id for the given channel id. */
   getOwnerId?: (channelId?: string) => string | undefined;
+  /**
+   * Repeat gate for unsolicited outbound messages. Tools that push at the user
+   * without being asked should route through it; tools answering a request
+   * should not.
+   */
+  getNotificationGate?: () => import("../notifications/dedup.js").NotificationGate | undefined;
   /** Single task backend (simple callers / tests). */
   taskBackend?: TaskBackend;
   /** Per-project task backend resolver (multi-project routing). When set,

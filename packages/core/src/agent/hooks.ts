@@ -37,7 +37,20 @@ export function mergeHooks(
  */
 export const applyTemplates = applyVars;
 
-/** Execute a list of hooks sequentially. Returns outputs and whether a skipIf matched. */
+/**
+ * Execute a list of hooks sequentially.
+ *
+ * Returns the hook outputs, whether a `skipIf` matched, and whether a hook
+ * FAILED. Callers that use hooks to supply data must honor `failed` — a
+ * beforeRun hook exists to put something in the prompt, so when it errors the
+ * prompt's premise is false and running anyway invites the model to invent the
+ * missing data. That is not hypothetical: a dead Gmail token made this hook
+ * error every 30 minutes while the prompt still said "Below are my recent
+ * emails", and the model duly hallucinated an inbox for weeks.
+ *
+ * A tool that reports `success: false` counts as failed even when it doesn't
+ * throw — otherwise its empty output silently flows on as if it were real.
+ */
 export async function executeHooks(
   hooks: AgentHook[],
   allTools: Tool[],
@@ -45,7 +58,7 @@ export async function executeHooks(
   sessionId: string,
   logPrefix = "[hooks]",
   promptsConfig?: AgentConfig["prompts"],
-): Promise<{ outputs: string[]; skipped: boolean }> {
+): Promise<{ outputs: string[]; skipped: boolean; failed: boolean; failure?: string }> {
   const outputs: string[] = [];
 
   const context: ToolContext = {
@@ -57,7 +70,12 @@ export async function executeHooks(
   for (const hook of hooks) {
     const tool = allTools.find((t: Tool) => t.name === hook.tool);
     if (!tool) {
+      // A missing tool is a configuration problem (plugin disabled, tool
+      // renamed), not the data problem this fail-closed path guards against —
+      // and it produced no output before either. Skipping keeps a disabled
+      // plugin from taking every unrelated hook down with it.
       console.error(`${logPrefix} Hook tool "${hook.tool}" not found, skipping hook`);
+      outputs.push("");
       continue;
     }
 
@@ -74,6 +92,17 @@ export async function executeHooks(
 
     try {
       const result = await tool.execute(resolvedArgs, context);
+      // A tool can report failure without throwing. Treat that as a failure too:
+      // its output is empty, so `skipIf` won't match and the empty string would
+      // otherwise be handed to the model as though it were real data.
+      if (result.success === false) {
+        const failure = `hook "${hook.tool}" returned an error: ${result.error ?? "(no detail)"}`;
+        console.error(`${logPrefix} ${failure}`);
+        if (hook.onError !== "continue") return { outputs, skipped: false, failed: true, failure };
+        outputs.push("");
+        continue;
+      }
+
       const output = result.output || "";
       outputs.push(output);
 
@@ -81,13 +110,15 @@ export async function executeHooks(
         const regex = new RegExp(hook.skipIf);
         if (regex.test(output)) {
           console.log(`${logPrefix} hook skipIf matched ("${hook.skipIf}"), skipping`);
-          return { outputs, skipped: true };
+          return { outputs, skipped: true, failed: false };
         }
       }
     } catch (err) {
-      console.error(`${logPrefix} hook "${hook.tool}" failed:`, (err as Error).message);
+      const failure = `hook "${hook.tool}" failed: ${(err as Error).message}`;
+      console.error(`${logPrefix} ${failure}`);
+      if (hook.onError !== "continue") return { outputs, skipped: false, failed: true, failure };
     }
   }
 
-  return { outputs, skipped: false };
+  return { outputs, skipped: false, failed: false };
 }

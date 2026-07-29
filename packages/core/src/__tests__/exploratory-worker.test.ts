@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { LoopStop } from "../agent/loop.js";
 import type { AgentConfig } from "../config.js";
 import {
   ensureExploratoryState,
@@ -12,6 +13,13 @@ import { createNote } from "../db/note-queries.js";
 import { initDatabase } from "../db/schema.js";
 import { ExploratoryWorker } from "../exploratory/worker.js";
 import type { AgentRuntime } from "../runtime.js";
+
+/** The slice of AgentLoopOptions the stub loops in this file actually use. */
+type LoopStubOpts = {
+  onUsage?: (u: { input: number; output: number }) => void;
+  onStop?: (s: LoopStop) => void;
+  signal?: AbortSignal;
+};
 
 let db: Database.Database;
 
@@ -384,7 +392,32 @@ describe("ExploratoryWorker.runAgent", () => {
     expect(state.tokens_today).toBe(400);
   });
 
-  it("aborts and marks status=budget when per-tick token cap is hit", async () => {
+  /**
+   * Stub that behaves like the REAL loop on abort: it RETURNS the sentinel
+   * string and reports the reason through onStop. It does not throw.
+   *
+   * The previous version of this stub threw, which exercised a catch branch
+   * production never reaches — so the suite stayed green while every
+   * budget-capped tick in production was being recorded as a stall.
+   */
+  function abortingLoop(usage = { input: 400, output: 200 }) {
+    return vi.fn(async (_prompt: string, opts: LoopStubOpts) => {
+      opts.onUsage?.(usage);
+      if (opts.signal?.aborted) {
+        const reason = opts.signal.reason;
+        opts.onStop?.({
+          kind: "aborted",
+          requestedByCaller: true,
+          reason: typeof reason === "string" ? reason : undefined,
+        });
+        return "[Agent stopped: shutdown requested]";
+      }
+      opts.onStop?.({ kind: "complete" });
+      return "ok";
+    });
+  }
+
+  it("marks a per-tick token-cap abort as budget, not a stall", async () => {
     const config = baseConfig({
       agents: {
         watcher: {
@@ -393,23 +426,82 @@ describe("ExploratoryWorker.runAgent", () => {
         },
       },
     });
-    const stubLoop = vi.fn(
-      async (
-        _prompt: string,
-        opts: { onUsage?: (u: { input: number; output: number }) => void; signal?: AbortSignal },
-      ) => {
-        opts.onUsage?.({ input: 400, output: 200 }); // 600 > 500
-        // simulate the model honoring the abort
-        if (opts.signal?.aborted) throw new Error("aborted");
-        return "ok";
-      },
-    );
     const worker = new ExploratoryWorker({
       runtime: mockRuntime(config),
-      runLoop: stubLoop as never,
+      runLoop: abortingLoop() as never,
     });
+
     const run = await worker.runAgent("watcher", config.agents.watcher);
+
     expect(run.status).toBe("budget");
+    expect(run.error ?? "").not.toMatch(/loop-stalled/);
+  });
+
+  it("writes no stall note when the abort was the budget cap we asked for", async () => {
+    // The regression: 81 byte-identical notes accumulated in 10 days because
+    // every capped tick was misread as the agent getting stuck.
+    const config = baseConfig({
+      agents: {
+        watcher: { tools: ["recall"], online: { enabled: true, budgets: { tokens_per_tick: 500 } } },
+      },
+    });
+    const worker = new ExploratoryWorker({
+      runtime: mockRuntime(config),
+      runLoop: abortingLoop() as never,
+    });
+
+    for (let i = 0; i < 3; i++) {
+      updateExploratoryState(db, "watcher", { last_tick_at: null });
+      await worker.runAgent("watcher", config.agents.watcher);
+    }
+
+    const stallNotes = db.prepare("SELECT COUNT(*) c FROM notes WHERE content LIKE 'Previous tick stalled%'").get() as {
+      c: number;
+    };
+    expect(stallNotes.c).toBe(0);
+  });
+
+  it("collapses repeated genuine stalls into one counted note", async () => {
+    const config = baseConfig({ agents: { watcher: { tools: ["recall"], online: { enabled: true } } } });
+    const stallingLoop = vi.fn(async (_prompt: string, opts: LoopStubOpts) => {
+      opts.onStop?.({ kind: "max-rounds", rounds: 10 });
+      return "[Agent stopped: max tool rounds reached]";
+    });
+    const worker = new ExploratoryWorker({ runtime: mockRuntime(config), runLoop: stallingLoop as never });
+
+    for (let i = 0; i < 4; i++) {
+      updateExploratoryState(db, "watcher", { last_tick_at: null });
+      await worker.runAgent("watcher", config.agents.watcher);
+    }
+
+    const notes = db
+      .prepare("SELECT content, importance, ttl_at FROM notes WHERE content LIKE 'Previous tick stalled%'")
+      .all() as Array<{ content: string; importance: number | null; ttl_at: string | null }>;
+
+    expect(notes).toHaveLength(1);
+    expect(notes[0].content).toContain("seen 4x");
+    // Must sit BELOW the sweep keep-threshold (0.8) and carry a TTL, or this
+    // self-feedback outlives the real memories it competes with in recall.
+    expect(notes[0].importance).toBeLessThan(0.8);
+    expect(notes[0].ttl_at).not.toBeNull();
+  });
+
+  it("records a runtime shutdown as a no-op rather than an agent failure", async () => {
+    const config = baseConfig({ agents: { watcher: { tools: ["recall"], online: { enabled: true } } } });
+    const shutdownLoop = vi.fn(async (_prompt: string, opts: LoopStubOpts) => {
+      opts.onStop?.({ kind: "aborted", requestedByCaller: true, reason: "runtime:shutdown" });
+      return "[Agent stopped: shutdown requested]";
+    });
+    const worker = new ExploratoryWorker({ runtime: mockRuntime(config), runLoop: shutdownLoop as never });
+
+    const run = await worker.runAgent("watcher", config.agents.watcher);
+
+    expect(run.status).toBe("noop");
+    expect(run.error ?? "").not.toMatch(/loop-stalled/);
+    const stallNotes = db.prepare("SELECT COUNT(*) c FROM notes WHERE content LIKE 'Previous tick stalled%'").get() as {
+      c: number;
+    };
+    expect(stallNotes.c).toBe(0);
   });
 
   it("narrows tools to online.tools subset when provided", async () => {
