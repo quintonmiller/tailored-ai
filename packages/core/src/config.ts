@@ -1685,6 +1685,12 @@ export function validateConfig(config: AgentConfig): string[] {
         `permissions.defaultMode "${config.permissions.defaultMode}" is not valid (use "auto" or "approve")`,
       );
     }
+    const validNoHandler = ["auto", "reject"];
+    if (config.permissions.noHandlerAction && !validNoHandler.includes(config.permissions.noHandlerAction)) {
+      warnings.push(
+        `permissions.noHandlerAction "${config.permissions.noHandlerAction}" is not valid (use "auto" or "reject")`,
+      );
+    }
     const validTimeoutActions = ["reject", "auto_approve"];
     if (config.permissions.timeoutAction && !validTimeoutActions.includes(config.permissions.timeoutAction)) {
       warnings.push(
