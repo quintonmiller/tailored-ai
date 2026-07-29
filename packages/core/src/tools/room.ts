@@ -578,13 +578,22 @@ export class RoomTool implements Tool {
     // An agent joins a room by subscribing; a human joins by being granted
     // access on the transport. Same verb, two different mechanisms.
     if (identity.kind === "agent" && identity.agent) {
-      // "named" by default: an invited agent speaks when spoken to. Only the
-      // room's host answers messages addressed to nobody in particular —
+      // "named" for a new seat: an invited agent speaks when spoken to. Only
+      // the room's host answers messages addressed to nobody in particular —
       // otherwise every agent in the room replies to every message.
-      const wakeOn = WAKE_MODES.includes(String(args.wake_on) as WakeOn) ? (String(args.wake_on) as WakeOn) : "named";
-      this.opts.store.subscribe({ agent: identity.agent, roomRef: ref, wakeOn, source: "agent" });
+      //
+      // Passed only when this call actually said something about it. Inviting
+      // someone who is already here is not a statement about how they should
+      // wake, and writing the default anyway silently undid their own setting:
+      // an agent set itself to `all`, was invited to the same room later, and
+      // dropped back to `named` while the subscribe that set it had already
+      // reported success. Re-inviting is now a no-op on wake policy.
+      const asked = WAKE_MODES.includes(String(args.wake_on) as WakeOn) ? (String(args.wake_on) as WakeOn) : undefined;
+      const existing = this.opts.store.getSubscription(identity.agent, ref);
+      const wakeOn = asked ?? (existing ? undefined : "named");
+      const sub = this.opts.store.subscribe({ agent: identity.agent, roomRef: ref, wakeOn, source: "agent" });
       this.opts.store.putMember(ref, { id: identity.agent, label: identity.label, kind: "agent" });
-      return ok(`${identity.label} now watches "${room.name}" (${wakeOn}).`);
+      return ok(`${identity.label} now watches "${room.name}" (${sub.wakeOn}).`);
     }
 
     const nativeId = identity.nativeIds?.[room.ref.backend];

@@ -21,6 +21,7 @@ import type { RoomMessage } from "../rooms/types.js";
 import {
   condenseOwnLine,
   describeWakeReason,
+  looksLikeRawToolCall,
   looksLikeUninvokedPass,
   makeRoomSessionKey,
   RoomWatcher,
@@ -756,6 +757,36 @@ describe("condenseOwnLine", () => {
 
   it("flattens newlines, so one own-message cannot look like several speakers", () => {
     expect(condenseOwnLine("first\nsecond")).toBe("first second");
+  });
+});
+
+describe("looksLikeRawToolCall", () => {
+  it("catches the Hermes-style blob a 27B model posted into a room", () => {
+    const observed = [
+      "<tool_call>",
+      "function=room>",
+      "<parameter=action>",
+      "post",
+      "</parameter>",
+      "<parameter=body>",
+      "Working on two tasks: a README by Neal Stephenson and the Harry Potter audiobook.",
+      "</parameter>",
+    ].join("\n");
+
+    expect(looksLikeRawToolCall(observed)).toBe(true);
+  });
+
+  it("catches the pieces on their own, since the markup is usually truncated", () => {
+    expect(looksLikeRawToolCall("<parameter=body> hi </parameter>")).toBe(true);
+    expect(looksLikeRawToolCall("<function=room>")).toBe(true);
+    expect(looksLikeRawToolCall("<|python_tag|>")).toBe(true);
+  });
+
+  it("leaves ordinary prose alone, including prose about tools", () => {
+    expect(looksLikeRawToolCall("I called the room tool with action=post and it worked.")).toBe(false);
+    expect(looksLikeRawToolCall('Use `room(action="pass")` when you have nothing to add.')).toBe(false);
+    expect(looksLikeRawToolCall("The parameter=value syntax in the docs is wrong.")).toBe(false);
+    expect(looksLikeRawToolCall("a < b and c > d")).toBe(false);
   });
 });
 

@@ -41,6 +41,33 @@ Every backend declares its native status enum via `statuses: { backlog, inProgre
 
 The `tasks` and `task_query` agent tools still go directly to SQLite — migrating them to the backend interface is tracked as a follow-up bean.
 
+### `task_query` makes you say whose tasks you mean
+
+`assignee` is required. There is no default, deliberately:
+
+```
+task_query(assignee="me")                       your own work
+task_query(assignee="all", status="backlog")    the whole queue
+task_query(assignee="unassigned")               tasks nobody owns
+task_query(assignee=["coder", "reviewer"])      a named subset
+```
+
+It used to default to everyone, which reads as harmless until an agent is asked
+what it is working on. In this deployment the only two `in_progress` rows were
+the owner's reading list — a novel and an audiobook, both unassigned — and
+several agents reported them as work in flight. Because that claim then lived in
+each agent's own session, later status updates repeated it without querying
+anything at all, and the book title `REAMDE` drifted into "generating a README in
+Neal Stephenson's style".
+
+No default fixes that. "Everyone" is wrong for an agent reporting on itself;
+"me" is wrong for a planner surveying the board. Omitting it returns an error
+naming the four options, which the model gets one round to act on.
+
+`unassigned` is a real value rather than the absence of a filter, so "nobody owns
+this" and "I didn't ask" stay distinct — conflating them is what made an
+unowned task look available, and therefore look like yours.
+
 Config:
 
 ```yaml

@@ -626,6 +626,55 @@ describe("RoomStore subscriptions", () => {
   });
 });
 
+describe("RoomStore.subscribe — whose opinion wins", () => {
+  let db: Database.Database;
+  let store: RoomStore;
+
+  beforeEach(() => {
+    db = initDatabase(":memory:");
+    store = new RoomStore(db);
+    store.upsertRoom(room("eng", "eng"));
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it("keeps a wake mode the agent chose when a later call has no opinion", () => {
+    // `invite` and `create` have no wake mode to offer, but passed the default
+    // anyway — so an agent that set itself to "all" was silently put back to
+    // "named" the next time someone invited it to the room it was already in,
+    // while the subscribe that set "all" had truthfully reported success.
+    store.subscribe({ agent: "coder", roomRef: "local:eng", wakeOn: "all", source: "agent" });
+
+    const after = store.subscribe({ agent: "coder", roomRef: "local:eng", source: "agent" });
+
+    expect(after.wakeOn).toBe("all");
+    expect(store.getSubscription("coder", "local:eng")?.wakeOn).toBe("all");
+  });
+
+  it("still applies a wake mode when one is actually named", () => {
+    store.subscribe({ agent: "coder", roomRef: "local:eng", wakeOn: "all", source: "agent" });
+
+    expect(store.subscribe({ agent: "coder", roomRef: "local:eng", wakeOn: "none", source: "agent" }).wakeOn).toBe(
+      "none",
+    );
+  });
+
+  it("uses the default for a seat that does not exist yet", () => {
+    const fresh = store.subscribe({ agent: "reviewer", roomRef: "local:eng", source: "agent" });
+
+    expect(fresh.wakeOn).toBe("addressed");
+    expect(fresh.deliver).toBe("push");
+  });
+
+  it("preserves delivery the same way", () => {
+    store.subscribe({ agent: "coder", roomRef: "local:eng", deliver: "poll", source: "agent" });
+
+    expect(store.subscribe({ agent: "coder", roomRef: "local:eng", source: "agent" }).deliver).toBe("poll");
+  });
+});
+
 describe("RoomStore cursors", () => {
   let db: Database.Database;
   let store: RoomStore;

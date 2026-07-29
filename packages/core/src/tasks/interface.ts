@@ -60,7 +60,15 @@ export interface TaskUpdateInput {
 export interface TaskFilter {
   status?: string | string[];
   author?: string;
-  assignee?: string;
+  /**
+   * Who the task is assigned to.
+   *
+   * A single name, several names, or the sentinel `null` meaning "nobody" —
+   * unassigned tasks are a real category, not an absent filter, and conflating
+   * the two is how an agent asking what it was working on got handed the
+   * owner's unassigned reading list.
+   */
+  assignee?: string | Array<string | null> | null;
   tags?: string[];
   updatedAfter?: string;
   search?: string;
@@ -126,4 +134,37 @@ export interface TaskBackend {
   claimBacklog(id: string): Promise<Task | undefined>;
   /** Move all tasks blocked due to "budget" back to backlog. Returns how many were unblocked. */
   unblockBudgetTasks(): Promise<number>;
+}
+
+/**
+ * The concrete names in an assignee filter, for backends whose native query
+ * takes plain strings. Drops the "unassigned" sentinel, which no remote issue
+ * tracker has a word for.
+ *
+ * Whatever a backend does with these, it must still run {@link matchesAssignee}
+ * over the result: narrowing after the fact is always safe, and a backend that
+ * quietly ignored the filter would hand back everyone's tasks — which is the
+ * failure the required `assignee` argument exists to prevent.
+ */
+export function assigneeNames(filter: TaskFilter["assignee"]): string[] {
+  if (filter === undefined || filter === null) return [];
+  const list = Array.isArray(filter) ? filter : [filter];
+  return list.filter((a): a is string => typeof a === "string" && a.trim() !== "");
+}
+
+/**
+ * Does this task's assignee satisfy the filter?
+ *
+ * `undefined` filter means "no opinion" and matches everything. `null` — or a
+ * `null` inside a list — means "assigned to nobody", which is a real category
+ * and not the absence of a question. An empty string counts as unassigned,
+ * because backends differ on whether clearing an assignment writes NULL or "".
+ */
+export function matchesAssignee(assignee: string | null | undefined, filter: TaskFilter["assignee"]): boolean {
+  if (filter === undefined) return true;
+  const owner = assignee?.trim() ?? "";
+  const wanted = Array.isArray(filter) ? filter : [filter];
+  return wanted.some((w) =>
+    w === null ? owner === "" : typeof w === "string" && w.toLowerCase() === owner.toLowerCase(),
+  );
 }

@@ -120,6 +120,30 @@ export function looksLikeUninvokedPass(body: string): boolean {
 }
 
 /**
+ * A reply that is the model's tool-call syntax, emitted as prose.
+ *
+ * Observed in the wild from a 27B local model asked for a status update:
+ *
+ *     <tool_call>
+ *     function=room>
+ *     <parameter=action> post </parameter>
+ *     <parameter=body> Working on two tasks… </parameter>
+ *
+ * The message it meant to send was sitting right there in the markup, and the
+ * tempting fix is to dig it out. That means teaching core to parse one model
+ * family's tool dialect and guessing when the parse is ambiguous — and a wrong
+ * guess posts words the agent did not choose, under its name. Telling it the
+ * output was malformed costs one round and leaves the wording its own.
+ *
+ * Matched on markers rather than structure, because the markup is often
+ * truncated or malformed — that is why it failed to parse in the first place.
+ * These strings do not occur in ordinary prose.
+ */
+export function looksLikeRawToolCall(body: string): boolean {
+  return /<\/?tool_call>|<\|?(tool_call|python_tag)\|?>|<function=|<parameter=/i.test(body);
+}
+
+/**
  * One line describing a tool call, for the activity record.
  *
  * Shows the argument that identifies WHAT was acted on — a path, a query — and
@@ -294,6 +318,8 @@ export class RoomWatcher {
       if (sub.checkInMinutes && sub.checkInMinutes > 0) this.armCheckIn(sub);
     }
 
+    this.warnAboutRoomlessSubscribers(subs);
+
     for (const backendId of pushBackends) {
       const backend = getRoomBackend(backendId);
       if (!backend?.onMessage) {
@@ -415,6 +441,34 @@ export class RoomWatcher {
    * agent can only ever react, so anything time-based waits for a human to
    * remember to ask.
    */
+  /**
+   * Say so when an agent is in a room it cannot speak in.
+   *
+   * Every wake prompt ends with `call room(action="pass")` if you have nothing
+   * to add. An agent whose `tools:` allowlist omits `room` cannot do that, so
+   * it types the instruction as prose instead — and from the outside that looks
+   * like a model too weak to make a tool call, which is the wrong diagnosis and
+   * leads to the wrong fix. Four agents here were in that state, including the
+   * busiest one in the deployment.
+   *
+   * A warning rather than an auto-grant. Handing an agent a tool its
+   * configuration withholds is a decision for whoever wrote the config; being
+   * unable to see why it is behaving strangely is not.
+   */
+  private warnAboutRoomlessSubscribers(subs: RoomSubscription[]): void {
+    const agents = this.runtime.getConfig().agents ?? {};
+    const roomless = [...new Set(subs.filter((s) => s.wakeOn !== "none").map((s) => s.agent))].filter((name) => {
+      const tools = agents[name]?.tools;
+      // No allowlist means every tool, which includes this one.
+      return Array.isArray(tools) && !tools.includes("room");
+    });
+    if (roomless.length === 0) return;
+    console.warn(
+      `[rooms] These agents are subscribed to rooms but their "tools:" list omits "room", so they cannot post or pass: ${roomless.join(", ")}. ` +
+        `They will answer wake prompts with text, including the literal words 'room(action="pass")'.`,
+    );
+  }
+
   private armCheckIn(sub: RoomSubscription): void {
     const minutes = sub.checkInMinutes ?? 0;
     if (minutes <= 0) return;
@@ -867,9 +921,11 @@ export class RoomWatcher {
     // either, and would spend its whole round budget being corrected.
     const correction = looksLikeUninvokedPass(reply)
       ? 'Your last message was not a valid tool call — it was posted as text. If you meant to stay quiet, call the room tool with action "pass". Otherwise reply normally with what you want to say.'
-      : workingMemory.get(`room:passed:${sub.roomRef}`) === "true" && changed.length > 0
-        ? `You changed ${changed.join(", ")} since your last message but chose to say nothing. Are you sure? Reply with a short update if it is worth reporting, or pass again if it genuinely is not.`
-        : undefined;
+      : looksLikeRawToolCall(reply)
+        ? "Your last message came out as raw tool-call markup rather than a tool call, so nothing was sent. Say what you wanted to say as plain text — you are already in the room, and a reply does not need a tool call."
+        : workingMemory.get(`room:passed:${sub.roomRef}`) === "true" && changed.length > 0
+          ? `You changed ${changed.join(", ")} since your last message but chose to say nothing. Are you sure? Reply with a short update if it is worth reporting, or pass again if it genuinely is not.`
+          : undefined;
 
     if (correction) {
       workingMemory.delete(`room:passed:${sub.roomRef}`);
@@ -1042,6 +1098,16 @@ export class RoomWatcher {
     // agent's decision to stay quiet was inverted into a message. Read it as
     // the intent it plainly is — unless it changed something, handled above.
     if (looksLikeUninvokedPass(body)) return null;
+    // Raw tool-call markup that survived its correction round. Suppressed
+    // rather than posted — `<parameter=body>` in a channel is noise a person
+    // has to decode — but logged, not swallowed: the agent tried to say
+    // something and failed, and that is worth being able to find out about.
+    if (looksLikeRawToolCall(body)) {
+      console.warn(
+        `[rooms] ${sub.agent} produced tool-call markup instead of a message in ${sub.roomRef}, twice. Not posted: ${body.slice(0, 160)}`,
+      );
+      return null;
+    }
     if (workingMemory.get(`room:posted:${sub.roomRef}`) === "true") return null;
     // The agent explicitly chose to stay quiet. Posting its closing thought
     // anyway would make `pass` decorative.

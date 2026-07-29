@@ -203,12 +203,12 @@ describe("TaskQueryTool — per-project routing", () => {
 
     const tool = new TaskQueryTool(resolver);
 
-    const defResult = await tool.execute({ limit: 10 }, ctx);
+    const defResult = await tool.execute({ assignee: "all", limit: 10 }, ctx);
     expect(defResult.success).toBe(true);
     expect(defResult.output).toContain("default-only");
     expect(defResult.output).not.toContain("alt-only");
 
-    const altResult = await tool.execute({ project_id: "alt", limit: 10 }, ctx);
+    const altResult = await tool.execute({ assignee: "all", project_id: "alt", limit: 10 }, ctx);
     expect(altResult.success).toBe(true);
     expect(altResult.output).toContain("alt-only");
     expect(altResult.output).not.toContain("default-only");

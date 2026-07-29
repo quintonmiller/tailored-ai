@@ -9,6 +9,7 @@ import type {
   TaskStatusMap,
   TaskUpdateInput,
 } from "./interface.js";
+import { assigneeNames, matchesAssignee } from "./interface.js";
 
 /**
  * Beads (https://github.com/steveyegge/beads) task backend. Shells out to
@@ -208,7 +209,13 @@ export class BeadsTaskBackend implements TaskBackend {
         if (native) args.push("--status", native);
       }
     }
-    if (filter?.assignee) args.push("--assignee", filter.assignee);
+    // beads takes a single `--assignee`, with no way to say "nobody" or "any of
+    // these". Push it down only when it is exactly one name — otherwise let the
+    // list come back wide and narrow it below. Narrowing after the fact is
+    // always safe; a filter silently dropped is not.
+    const wantedAssignees = assigneeNames(filter?.assignee);
+    const canPushDown = wantedAssignees.length === 1 && !Array.isArray(filter?.assignee);
+    if (canPushDown) args.push("--assignee", wantedAssignees[0]);
     if (filter?.tags && filter.tags.length > 0) args.push("--label", filter.tags.join(","));
     if (filter?.search) args.push("--title-contains", filter.search);
     if (filter?.updatedAfter) args.push("--updated-after", filter.updatedAfter);
@@ -219,6 +226,10 @@ export class BeadsTaskBackend implements TaskBackend {
     }
     const issues = JSON.parse(r.stdout || "[]") as BeadsIssue[];
     let tasks = issues.map(toTask);
+
+    // Unconditional, even when the filter was pushed down: it costs nothing and
+    // it means the answer is right whatever `bd list` decided to do with it.
+    if (filter?.assignee !== undefined) tasks = tasks.filter((t) => matchesAssignee(t.assignee, filter.assignee));
 
     if (filter?.search) {
       const needle = filter.search.toLowerCase();

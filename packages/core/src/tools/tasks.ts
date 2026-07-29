@@ -427,23 +427,84 @@ export function describeOwner(assignee: string | null | undefined, reader?: stri
   return `assigned to ${owner}`;
 }
 
+/**
+ * Resolve the required `assignee` argument to a {@link TaskFilter} value.
+ *
+ * `assignee` is mandatory, and that is the entire point. It used to default to
+ * "everybody", so an agent asked what it was working on ran the widest possible
+ * query and read back whatever it found — which in this deployment was the
+ * owner's unassigned reading list, two books sitting at `in_progress`. Several
+ * agents reported them as work in flight, and because the claim then lived in
+ * their own session they kept repeating it without querying anything at all.
+ *
+ * A default cannot fix that. "Everyone" is wrong for an agent reporting on
+ * itself and "me" is wrong for a planner surveying the queue, so the caller has
+ * to say which it means. Omitting it is a validation error the model is told
+ * how to fix, which is the loop that already works elsewhere.
+ *
+ * Returns `undefined` for "all" — no filter — and `null` for "unassigned",
+ * which the query layer treats as a real value rather than an absent one.
+ */
+export function resolveAssigneeFilter(
+  raw: unknown,
+  self?: string,
+): { ok: true; value: string | Array<string | null> | null | undefined } | { ok: false; error: string } {
+  const one = (v: string): string | null | undefined => {
+    const s = v.trim();
+    if (s.toLowerCase() === "all") return undefined;
+    if (s.toLowerCase() === "unassigned" || s.toLowerCase() === "none") return null;
+    if (s.toLowerCase() === "me") return self ?? "";
+    return s;
+  };
+
+  if (Array.isArray(raw)) {
+    const names = raw.filter((v): v is string => typeof v === "string" && v.trim() !== "");
+    if (names.length === 0)
+      return { ok: false, error: 'assignee was an empty list. Use "all", "me", "unassigned", or agent names.' };
+    // "all" inside a list is a contradiction, and guessing which half the
+    // caller meant is worse than saying so.
+    if (names.some((n) => n.trim().toLowerCase() === "all")) {
+      return { ok: false, error: 'assignee cannot mix "all" with specific names — "all" already includes them.' };
+    }
+    const resolved = names.map(one).filter((v) => v !== undefined) as Array<string | null>;
+    if (resolved.some((v) => v === "")) {
+      return { ok: false, error: '"me" needs a named agent, and this session has none. Name the assignee explicitly.' };
+    }
+    return { ok: true, value: resolved };
+  }
+
+  if (typeof raw !== "string" || raw.trim() === "") {
+    return {
+      ok: false,
+      error:
+        'assignee is required. Use "me" for your own work, "all" for everyone, "unassigned" for tasks nobody owns, or an agent name (or a list of them).',
+    };
+  }
+
+  const value = one(raw);
+  if (value === "") {
+    return { ok: false, error: '"me" needs a named agent, and this session has none. Name the assignee explicitly.' };
+  }
+  return { ok: true, value };
+}
+
 export class TaskQueryTool implements Tool {
   name = "task_query";
   description =
-    'List, search, and filter project tasks across all statuses. Use this — not the `tasks` tool — for any read across multiple tasks. For example, `task_query(mine=true)` is what YOU are working on; `task_query(status="backlog", limit=10)` lists the top 10 pending tasks across everyone.';
+    'List, search, and filter project tasks across all statuses. Use this — not the `tasks` tool — for any read across multiple tasks. For example, `task_query(assignee="me")` is what YOU are working on; `task_query(assignee="all", status="backlog", limit=10)` lists the top 10 pending tasks across everyone.';
   parameters = {
     type: "object",
     properties: {
+      assignee: {
+        type: "string",
+        description:
+          'Required. Whose tasks: "me" (yours), "all" (everyone), "unassigned" (nobody owns them), an agent name, or a list of agent names. Say which you mean — an unassigned task is not yours.',
+      },
       status: {
         type: "string",
         description: "Filter by status (comma-separated for multiple).",
       },
       author: { type: "string", description: "Filter by author." },
-      assignee: { type: "string", description: "Filter by assignee (agent or user)." },
-      mine: {
-        type: "boolean",
-        description: "Only tasks assigned to you. Use this to answer what YOU are working on.",
-      },
       tags: { type: "string", description: "Filter by tags (comma-separated, any match)." },
       updated_after: { type: "string", description: "ISO datetime — only tasks updated after this." },
       search: { type: "string", description: "Search title and description." },
@@ -451,7 +512,7 @@ export class TaskQueryTool implements Tool {
       order_by: { type: "string", description: "Ordering: 'rank' or 'updated_at' (default)." },
       limit: { type: "number", description: "Max results (default 20)." },
     },
-    required: [],
+    required: ["assignee"],
   };
 
   private resolveBackend: TaskBackendResolver;
@@ -464,13 +525,14 @@ export class TaskQueryTool implements Tool {
     try {
       const filter: TaskFilter = {};
 
-      // "What am I working on" needs an answer grounded in something. A room
-      // session cannot supply it — sessions are per (room, agent), so an agent
-      // added to a new room starts blank — which is how eleven agents came to
-      // report the same two unassigned tasks as their own work.
-      if (args.mine === true && context.agentName) {
-        filter.assignee = context.agentName;
-      }
+      // `mine: true` is the old spelling of `assignee: "me"`. Kept working
+      // rather than broken: it is in prompts and skills already written, and a
+      // silently-ignored argument would widen the query to everyone, which is
+      // the exact failure this parameter exists to prevent.
+      const rawAssignee = args.mine === true ? "me" : (args.assignee ?? args.owner);
+      const resolved = resolveAssigneeFilter(rawAssignee, context.agentName);
+      if (!resolved.ok) return { success: false, output: "", error: resolved.error };
+      if (resolved.value !== undefined) filter.assignee = resolved.value;
 
       if (args.status) {
         const s = (args.status as string)
@@ -480,8 +542,6 @@ export class TaskQueryTool implements Tool {
         filter.status = s.length === 1 ? s[0] : s;
       }
       if (args.author) filter.author = args.author as string;
-      if (args.assignee) filter.assignee = (args.assignee ?? args.owner) as string;
-      else if (args.owner) filter.assignee = args.owner as string;
       if (args.tags) {
         filter.tags = (args.tags as string)
           .split(",")
