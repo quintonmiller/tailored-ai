@@ -5,6 +5,7 @@ import { resolveAgent } from "./agent/agents.js";
 import { EMPTY_HOOKS, mergeHooks, type ResolvedHooks } from "./agent/hooks.js";
 import type { AgentLoopOptions } from "./agent/loop.js";
 import { runAgentLoop } from "./agent/loop.js";
+import { canSelfModify } from "./agent/prompt.js";
 import { findOrCreateSession, type Session } from "./agent/session.js";
 import type { ApprovalRequest, ApprovalResponse } from "./approval.js";
 import type { OutboundNotifier } from "./channels/outbound.js";
@@ -1091,6 +1092,10 @@ export class AgentRuntime {
       memoryInjectEmbedder: this._embedder,
       budgetWarnings: resolved.budgetWarnings,
       permissions: config.permissions,
+      // From `resolved.tools` — the agent's own `tools:` list — deliberately
+      // NOT the deduped set below, which has the meta tools appended and would
+      // therefore be true for every agent, dropping the paragraph for nobody.
+      selfModifying: canSelfModify(resolved.tools),
       sandbox,
       skillCatalog: resolved.skillCatalog,
       systemPrompt: resolved.systemPrompt,

@@ -138,6 +138,14 @@ export interface AgentLoopOptions {
   skipGlobalContext?: boolean;
   /** When true, summarize dropped history instead of silently discarding it. Uses an extra provider call. */
   summarizeOnTrim?: boolean;
+  /**
+   * Whether this agent is meant to reconfigure itself. Drives the
+   * self-modification paragraph in the base prompt. Set by
+   * `runtime.buildLoopOptions` from the agent's **declared** tools; defaults to
+   * false, which is the conservative shape for callers that build options by
+   * hand. See `canSelfModify`.
+   */
+  selfModifying?: boolean;
   getTools?: () => Tool[];
   getProvider?: () => AIProvider;
   onToolCall?: (name: string, args: Record<string, unknown>) => void;
@@ -708,7 +716,11 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
   // + chat_live_state + recall_memory. Identity (core) first, then live_state,
   // then recall. live_state only appears in chat; ticks build their own
   // Situation block in the worker. Agents can override via systemPrompt config.
-  const resolvedBase = resolveBase(opts.systemPrompt);
+  // The self-modification paragraph is told only to agents that hold a tool
+  // which can carry it out. Read from the resolved tool set rather than config,
+  // so it tracks what the agent can actually do this turn — including a skill's
+  // narrowing and any per-call extras.
+  const resolvedBase = resolveBase(opts.systemPrompt, { selfModifying: opts.selfModifying });
   const customLayers = resolveCustomLayers(opts.systemPrompt?.custom);
   const fullSystemPrompt = composeSystemPrompt(
     resolvedBase,
