@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { BASE_SYSTEM_PROMPT } from "./prompt.js";
+import { type BasePromptOptions, buildBaseSystemPrompt } from "./prompt.js";
 
 export const DEFAULT_LAYER_ORDER = [
   "base",
@@ -71,16 +71,22 @@ export function mergeSystemPromptOverrides(
   return merged;
 }
 
-export function resolveBase(override: SystemPromptOverride | undefined): string {
+/**
+ * `opts` shapes the built-in base only. An explicit `base`/`baseFile` override
+ * is returned verbatim: a deployment that wrote its own base prompt owns every
+ * sentence in it, and silently appending a paragraph would be the same class of
+ * surprise this parameter exists to remove.
+ */
+export function resolveBase(override: SystemPromptOverride | undefined, opts?: BasePromptOptions): string {
   if (override?.base !== undefined) return override.base;
   if (override?.baseFile) {
     if (!existsSync(override.baseFile)) {
-      console.warn(`[system-prompt] baseFile "${override.baseFile}" not found — falling back to BASE_SYSTEM_PROMPT`);
-      return BASE_SYSTEM_PROMPT;
+      console.warn(`[system-prompt] baseFile "${override.baseFile}" not found — falling back to the built-in base`);
+      return buildBaseSystemPrompt(opts);
     }
     return readFileSync(override.baseFile, "utf8");
   }
-  return BASE_SYSTEM_PROMPT;
+  return buildBaseSystemPrompt(opts);
 }
 
 export function resolveCustomLayers(custom: CustomLayer[] | undefined): Record<string, string> {
