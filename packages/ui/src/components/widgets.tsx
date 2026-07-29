@@ -628,7 +628,10 @@ interface RecAction {
   payload: Record<string, unknown>;
 }
 
-interface RecResult { source: string; actions: RecAction[] }
+interface RecResult {
+  source: string;
+  actions: RecAction[];
+}
 
 const DEFAULT_DONE: RecAction = { type: "log", label: "Mark done", payload: { status: "done" } };
 
@@ -711,7 +714,9 @@ async function dispatchRecAction(action: RecAction): Promise<boolean> {
 
 function RecommendationsWidget({ widget }: WidgetProps) {
   const endpoint = opt(widget, "endpoint", "/api/facts?category=recommendation&limit=20");
-  const { data, error, loading } = useWidgetData<{ facts: Array<{ id: string; key: string; value: string; created_at: string | null }> }>(endpoint, 60000);
+  const { data, error, loading } = useWidgetData<{
+    facts: Array<{ id: string; key: string; value: string; created_at: string | null }>;
+  }>(endpoint, 60000);
   const [dismissing, setDismissing] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [acting, setActing] = useState<Record<string, string>>({});
@@ -724,8 +729,11 @@ function RecommendationsWidget({ widget }: WidgetProps) {
     try {
       await fetch(`/api/facts/${encodeURIComponent(id)}`, { method: "DELETE" });
       setDismissed((prev) => new Set(prev).add(id));
-    } catch { /* keep visible */ }
-    finally { setDismissing(null); }
+    } catch {
+      /* keep visible */
+    } finally {
+      setDismissing(null);
+    }
   };
 
   const handleDismiss = async (factId: string) => {
@@ -742,7 +750,11 @@ function RecommendationsWidget({ widget }: WidgetProps) {
       setTimeout(() => removeCard(factId), 1200);
     } else {
       setActionResults((prev) => ({ ...prev, [factId]: `✗ Failed` }));
-      setActing((prev) => { const n = { ...prev }; delete n[factId]; return n; });
+      setActing((prev) => {
+        const n = { ...prev };
+        delete n[factId];
+        return n;
+      });
     }
   };
 
@@ -847,7 +859,9 @@ async function logDecisionResponse(factId: string, label: string, payload: Recor
 
 function DecisionsWidget({ widget }: WidgetProps) {
   const endpoint = opt(widget, "endpoint", "/api/facts?category=decision_needed&limit=20");
-  const { data, error, loading } = useWidgetData<{ facts: Array<{ id: string; key: string; value: string; created_at: string | null }> }>(endpoint, 60000);
+  const { data, error, loading } = useWidgetData<{
+    facts: Array<{ id: string; key: string; value: string; created_at: string | null }>;
+  }>(endpoint, 60000);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [acting, setActing] = useState<Record<string, string>>({});
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -860,14 +874,20 @@ function DecisionsWidget({ widget }: WidgetProps) {
     if (ok) {
       setAnswers((prev) => ({ ...prev, [factId]: option.label }));
     }
-    setActing((prev) => { const n = { ...prev }; delete n[factId]; return n; });
+    setActing((prev) => {
+      const n = { ...prev };
+      delete n[factId];
+      return n;
+    });
   };
 
   const dismiss = async (id: string) => {
     try {
       await fetch(`/api/facts/${encodeURIComponent(id)}`, { method: "DELETE" });
       setDismissed((prev) => new Set(prev).add(id));
-    } catch { /* keep visible */ }
+    } catch {
+      /* keep visible */
+    }
   };
 
   if (error) return <WidgetState loading={false} error={error} />;
