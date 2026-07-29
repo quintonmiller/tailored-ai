@@ -121,7 +121,14 @@ export class ProjectsTool implements Tool {
     return { success: true, output: lines.join("\n") };
   }
 
-  private update(id?: string, title?: string, description?: string, status?: string, due_date?: string, path?: string): ToolResult {
+  private update(
+    id?: string,
+    title?: string,
+    description?: string,
+    status?: string,
+    due_date?: string,
+    path?: string,
+  ): ToolResult {
     if (!id) return { success: false, output: "", error: "id is required for update." };
 
     const project = updateProject(this.db, id, {

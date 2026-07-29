@@ -9,6 +9,7 @@ import type {
   TaskStatusMap,
   TaskUpdateInput,
 } from "./interface.js";
+import { assigneeNames, matchesAssignee } from "./interface.js";
 
 /**
  * GitHub Issues task backend.
@@ -326,12 +327,20 @@ export class GitHubTaskBackend implements TaskBackend {
     if (filter?.tags) labels.push(...filter.tags);
     // Agent-role assignees live on labels, not on GH's assignees API.
     // Route the filter accordingly.
+    // GitHub takes one assignee, and has no query for "any of these". Push the
+    // filter down only when it is a single name; anything wider comes back
+    // unfiltered and is narrowed in memory below. "unassigned" maps to GitHub's
+    // own `none` sentinel.
     let assigneeQuery: string | undefined;
-    if (filter?.assignee) {
-      if (this.agentRoles.has(filter.assignee)) {
-        labels.push(`${AGENT_LABEL_PREFIX}${filter.assignee}`);
+    const wantedAssignees = assigneeNames(filter?.assignee);
+    if (filter?.assignee === null) {
+      assigneeQuery = "none";
+    } else if (wantedAssignees.length === 1 && !Array.isArray(filter?.assignee)) {
+      const only = wantedAssignees[0];
+      if (this.agentRoles.has(only)) {
+        labels.push(`${AGENT_LABEL_PREFIX}${only}`);
       } else {
-        assigneeQuery = filter.assignee;
+        assigneeQuery = only;
       }
     }
 
@@ -360,6 +369,11 @@ export class GitHubTaskBackend implements TaskBackend {
     // Filter out pull requests (the issues endpoint returns both).
     const issues = r.data.filter((i) => !("pull_request" in i && i.pull_request));
     let tasks = issues.map((i) => this.toTask(i as IssueLike));
+
+    // Unconditional, even when the filter was pushed down: an agent-role
+    // assignee lives on a label here, so the API-side filter and the caller's
+    // question are not always the same question.
+    if (filter?.assignee !== undefined) tasks = tasks.filter((t) => matchesAssignee(t.assignee, filter.assignee));
 
     if (filter?.search) {
       const needle = filter.search.toLowerCase();

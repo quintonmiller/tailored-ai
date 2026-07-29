@@ -317,7 +317,9 @@ async function addAgent(
   room: Room,
 ): Promise<string> {
   const name = (interaction.options.getString("agent") ?? "").trim();
-  const wakeOn = (interaction.options.getString("wake") ?? "named") as "named" | "addressed" | "all" | "none";
+  // Undefined when the option was left out, so re-adding an agent that is
+  // already here does not quietly reset a wake mode it chose for itself.
+  const asked = interaction.options.getString("wake") as "named" | "addressed" | "all" | "none" | null;
 
   // Adding an agent that does not exist would look like it worked and then
   // never speak, which is the failure mode this codebase keeps hitting.
@@ -326,8 +328,10 @@ async function addAgent(
     return `No agent named "${name}". Configured agents: ${known || "none"}.`;
   }
 
-  deps.store.subscribe({ agent: name, roomRef: formatRoomRef(room.ref), wakeOn, source: "agent" });
-  return `**${name}** now watches "${room.name}" (${wakeOn}). Takes effect immediately.`;
+  const ref = formatRoomRef(room.ref);
+  const wakeOn = asked ?? (deps.store.getSubscription(name, ref) ? undefined : "named");
+  const sub = deps.store.subscribe({ agent: name, roomRef: ref, wakeOn, source: "agent" });
+  return `**${name}** now watches "${room.name}" (${sub.wakeOn}). Takes effect immediately.`;
 }
 
 /**

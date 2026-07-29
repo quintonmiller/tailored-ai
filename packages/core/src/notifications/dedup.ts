@@ -83,12 +83,7 @@ export interface NotificationCandidate {
   windowHours?: number;
 }
 
-export type NotificationVerdict =
-  | "new"
-  | "repeat-exact"
-  | "repeat-similar"
-  | "repeat-key"
-  | "dedup-disabled";
+export type NotificationVerdict = "new" | "repeat-exact" | "repeat-similar" | "repeat-key" | "dedup-disabled";
 
 export interface NotificationDecision {
   /** Whether the caller should actually send. */
@@ -391,7 +386,14 @@ export class NotificationGate implements NotificationGateLike {
            last_sent_at = datetime('now'),
            last_seen_at = datetime('now')`,
       )
-      .run(candidate.source, candidate.channel, candidate.target, dedupKey, normalized, candidate.content.slice(0, 200));
+      .run(
+        candidate.source,
+        candidate.channel,
+        candidate.target,
+        dedupKey,
+        normalized,
+        candidate.content.slice(0, 200),
+      );
   }
 
   /**

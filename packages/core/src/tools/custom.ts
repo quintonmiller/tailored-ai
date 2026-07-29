@@ -1,6 +1,6 @@
-import type { CustomToolConfig } from "../config.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { CustomToolConfig } from "../config.js";
 import { runShellCommand, shellEscape } from "../shell.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
 

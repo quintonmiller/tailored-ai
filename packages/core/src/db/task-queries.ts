@@ -31,7 +31,15 @@ export interface ProjectTaskWithComments extends ProjectTask {
 export interface TaskQueryFilter {
   status?: string | string[];
   author?: string;
-  assignee?: string;
+  /**
+   * Who the task is assigned to.
+   *
+   * A single name, several names, or the sentinel `null` meaning "nobody" —
+   * unassigned tasks are a real category, not an absent filter, and conflating
+   * the two is how an agent asking what it was working on got handed the
+   * owner's unassigned reading list.
+   */
+  assignee?: string | Array<string | null> | null;
   tags?: string[];
   updatedAfter?: string;
   search?: string;
@@ -345,9 +353,25 @@ export function queryProjectTasks(db: Database.Database, filter?: TaskQueryFilte
     params.push(filter.author);
   }
 
-  if (filter?.assignee) {
-    conditions.push("assignee = ?");
-    params.push(filter.assignee);
+  // `undefined` means "do not filter"; `null` means "assigned to nobody". They
+  // are different questions and used to collapse into the same one, because an
+  // unassigned task fails a truthiness check exactly like an absent filter.
+  if (filter?.assignee !== undefined) {
+    const wanted = Array.isArray(filter.assignee) ? filter.assignee : [filter.assignee];
+    const names = wanted.filter((a): a is string => typeof a === "string" && a.trim() !== "");
+    const wantsUnassigned = wanted.some((a) => a === null);
+
+    const clauses: string[] = [];
+    if (names.length > 0) {
+      clauses.push(`assignee IN (${names.map(() => "?").join(", ")})`);
+      params.push(...names);
+    }
+    // Both forms of "nobody": SQL NULL, and the empty string a backend may
+    // write when it clears an assignment.
+    if (wantsUnassigned) clauses.push("(assignee IS NULL OR assignee = '')");
+    // An assignee filter that names nobody at all matches nothing, rather than
+    // silently degrading to "everyone" — which is the failure being fixed.
+    conditions.push(clauses.length > 0 ? `(${clauses.join(" OR ")})` : "0");
   }
 
   if (filter?.tags && filter.tags.length > 0) {

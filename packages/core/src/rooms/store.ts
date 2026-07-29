@@ -209,6 +209,9 @@ export class RoomStore {
     /** Starting cursor for brand-new subscriptions only. */
     initialCursor?: string | null;
   }): RoomSubscription {
+    // Whether this is a new seat or an existing one decides whether the
+    // defaults below apply at all. Read once, before the write.
+    const existing = this.getSubscription(input.agent, input.roomRef);
     this.db
       .prepare(
         `INSERT INTO room_subscriptions
@@ -225,8 +228,20 @@ export class RoomStore {
       .run(
         input.agent,
         input.roomRef,
-        input.deliver ?? "push",
-        input.wakeOn ?? "addressed",
+        // Only a caller that named a value gets to change one. `invite` and
+        // `create` have no wake mode to offer, so they used to write the
+        // default over whatever the agent had chosen — an agent set itself to
+        // `all`, someone invited it to the same room later, and it silently
+        // dropped back, while the subscribe call that set it had truthfully
+        // reported success. Existing rows keep what they have; only a new row
+        // takes the default.
+        //
+        // Resolved here rather than with COALESCE on the conflict clause:
+        // SQLite checks NOT NULL against the INSERT values before it decides
+        // the conflict applies, so a null never survives long enough to be
+        // coalesced.
+        input.deliver ?? existing?.deliver ?? "push",
+        input.wakeOn ?? existing?.wakeOn ?? "addressed",
         input.pollSeconds ?? null,
         input.checkInMinutes ?? null,
         input.role ?? null,
