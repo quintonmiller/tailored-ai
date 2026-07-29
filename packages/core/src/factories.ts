@@ -143,13 +143,13 @@ export function createMetaTools(runtime: AgentRuntime, contextDir: string, kbDir
   const delegateTool = new DelegateTool({
     getConfig: () => runtime.getConfig(),
     db: runtime.db,
-    getProvider: () => runtime.getProvider(),
     // Resolvable, not registered: the delegate target's `tools:` allowlist may
     // name a meta tool, and it will hold one at run time either way. Lazy, so
     // it reads the meta tools this call is in the middle of building.
     getTools: () => runtime.getResolvableTools(),
     contextDir,
     kbDir,
+    runtime,
   });
   const taskStatusTool = new TaskStatusTool();
   const adminTool = new AdminTool(runtime);

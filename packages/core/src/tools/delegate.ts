@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { resolve } from "node:path";
 import type Database from "better-sqlite3";
 import { type ResolvedAgent, resolveAgent } from "../agent/agents.js";
 import { executeHooks } from "../agent/hooks.js";
@@ -8,16 +7,28 @@ import { newSession } from "../agent/session.js";
 import { startTask } from "../agent/tasks.js";
 import type { AgentConfig } from "../config.js";
 import { ensureContextDir } from "../context.js";
-import type { AIProvider } from "../providers/interface.js";
+import type { AgentRuntime } from "../runtime.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
 
 export interface DelegateToolOptions {
   getConfig: () => AgentConfig;
   db: Database.Database;
-  getProvider: () => AIProvider;
   getTools: () => Tool[];
   contextDir: string;
   kbDir: string;
+  /**
+   * The runtime, so the sub-agent's loop options come from
+   * {@link AgentRuntime.buildLoopOptions} rather than being rebuilt here.
+   *
+   * They used to be assembled by hand, and carried 13 of the ~25 fields the
+   * real one sets — missing every confinement field. A sub-agent inherited no
+   * sandbox, so delegating to a `sandbox: docker` agent ran its `write`/`exec`
+   * on the host; no `workingDirectoryBoundary`, so a declared `fileBoundary`
+   * did not apply; and no `agentName`, so its writes were attributed to nobody.
+   * `delegate` is a meta tool on every agent, so that was reachable from
+   * anywhere.
+   */
+  runtime: AgentRuntime;
 }
 
 export class DelegateTool implements Tool {
@@ -35,18 +46,18 @@ export class DelegateTool implements Tool {
 
   private getConfig: () => AgentConfig;
   private db: Database.Database;
-  private getProvider: () => AIProvider;
   private getTools: () => Tool[];
   private contextDir: string;
   private kbDir: string;
+  private runtime: AgentRuntime;
 
   constructor(opts: DelegateToolOptions) {
     this.getConfig = opts.getConfig;
     this.db = opts.db;
-    this.getProvider = opts.getProvider;
     this.getTools = opts.getTools;
     this.contextDir = opts.contextDir;
     this.kbDir = opts.kbDir;
+    this.runtime = opts.runtime;
   }
 
   async execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
@@ -86,20 +97,24 @@ export class DelegateTool implements Tool {
         if (skipped) return "(skipped by beforeRun hook)";
       }
 
-      const response = await runAgentLoop(task, {
-        provider: this.getProvider(),
+      // The same options a top-level turn for this agent would get — sandbox,
+      // boundary, agent attribution, cwd, shutdown signal — instead of a
+      // hand-rolled subset. `includeMetaTools: false` keeps the sub-agent's
+      // tool set exactly its own `tools:` list, as before: this is a
+      // confinement fix and should not hand a sub-agent `admin` or a second
+      // `delegate` on the way past.
+      const base = this.runtime.buildLoopOptions({
         session,
-        db: this.db,
-        tools: resolved.tools,
-        extraInstructions: resolved.instructions,
-        maxToolRounds: resolved.maxToolRounds,
-        maxHistoryTokens: config.agent.maxHistoryTokens,
-        temperature: resolved.temperature,
-        contextDir: this.contextDir,
-        agentContextDir: resolved.contextDir,
-        kbDir: resolve(this.kbDir, "global"),
-        agentKbDir: resolved.kbDir,
-        permissions: context.permissions,
+        agentName,
+        includeMetaTools: false,
+      });
+
+      const response = await runAgentLoop(task, {
+        ...base,
+        // The caller's approver, so a sub-agent's gated call still reaches the
+        // human who asked for the delegation rather than falling through to
+        // `noHandlerAction`.
+        permissions: context.permissions ?? base.permissions,
         approvalHandler: context.approvalHandler,
       });
 

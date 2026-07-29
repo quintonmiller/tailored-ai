@@ -1012,6 +1012,17 @@ export class AgentRuntime {
      * fully-loaded {@link ProjectContext}.
      */
     project?: ProjectRef | ProjectContext | null;
+    /**
+     * Append the meta tools (`delegate`, `admin`, `core_memory`, …) that every
+     * top-level turn gets. Default true.
+     *
+     * `delegate` sets this false. A sub-agent that held `delegate` could
+     * delegate again, and one that held `admin` could rewrite the config from
+     * inside a nested run — neither of which the caller asked for. The agent's
+     * own `tools:` list still wins: a meta tool named there is already in
+     * `resolved.tools` and is unaffected by this flag.
+     */
+    includeMetaTools?: boolean;
   }): AgentLoopOptions {
     const agentName = opts.agentName ?? opts.profileName;
     const config = this._config;
@@ -1032,7 +1043,7 @@ export class AgentRuntime {
       this.kbDir,
       resolveOpts,
     );
-    const extraTools = [...this._metaTools, ...(opts.extraTools ?? [])];
+    const extraTools = [...(opts.includeMetaTools === false ? [] : this._metaTools), ...(opts.extraTools ?? [])];
     const globalKbDir = resolve(this.kbDir, "global");
 
     // Deduplicate tools by name (agent tools take priority, extra tools fill gaps)
