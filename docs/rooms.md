@@ -544,18 +544,55 @@ than to ask an agent to do:
 | `/room add agent:coder wake:named` | add an agent |
 | `/room remove agent:coder` | drop one |
 | `/room purpose [text:…]` | read or set what the room is for |
+| `/room all message:…` | say something to every agent that can wake |
 | `/room status` | ask everyone what they are working on |
 | `/room reset agent:…` | clear an agent's memory (see below) |
 
-All but `status` reply privately, so managing a room does not clutter it. They
-answer straight from the database rather than going through a model, so they
-stay responsive while an agent is mid-run.
+All but `all` and `status` reply privately, so managing a room does not clutter
+it. They answer straight from the database rather than going through a model, so
+they stay responsive while an agent is mid-run.
 
-`/room status` wakes each agent directly rather than posting a synthetic
-"quinton asks…" message — putting words in a person's mouth in the transcript,
-or posting under their display name, is a line worth not crossing. Each answer
-arrives under its own name, and a person asking resets the
-[conversation-depth](#runaway-protection) count.
+### Reaching agents: `ping`, `all`, `status`
+
+Three commands talk *to* agents, and the difference is worth knowing.
+
+| | who hears it | whose words | in the transcript? |
+|---|---|---|---|
+| `ping agent:… message:…` | one agent | yours | yes, posted as you |
+| `all message:…` | every agent that can wake | yours | yes, posted as you |
+| `status` | every agent that can wake | a canned question | no |
+
+`/room all` posts your message into the room addressed to every subscriber whose
+`wakeOn` is not `none`. Addressing them by name is what makes it work: an agent
+on `wakeOn: named` or `addressed` will not stir for a message that names nobody,
+so simply typing in the channel reaches only the `wakeOn: all` subscribers.
+
+Because it goes through the room as an ordinary post, everything else applies
+unchanged — `room(action="pass")` still lets an agent stay quiet and repeat
+suppression still holds.
+
+> **Declare yourself in `rooms.identities` first.** A room message is parsed back
+> out of Discord as an envelope, and a name is only accepted as the *speaker*
+> when the identity layer already knows it. Run `/room all` from an account with
+> no `rooms.identities` entry and the message can come back with no speaker and
+> `fromSelf: true`, which the wake logic drops for every subscriber before it
+> even looks at who was addressed — the message lands in the channel and wakes
+> nobody. The command warns you when it cannot resolve your account, and prints
+> the exact line to add. The same condition is why the
+> [conversation-depth](#runaway-protection) count only resets for a speaker the
+> identity layer recognises.
+
+Agents on `wakeOn: none` are left out of both the addressee list and the "sent
+to N" count. They would not hear it, and counting them would make the
+confirmation a claim the command cannot back. If *every* subscriber is
+`wakeOn: none`, it says so instead of posting — "nobody is here" and "everybody
+is deaf" need different fixes.
+
+`/room status` is the one that does **not** put a message in the transcript. It
+wakes each agent directly rather than posting a synthetic "quinton asks…" —
+putting words in a person's mouth, or posting under their display name, is a
+line worth not crossing. `/room all` is not that case: the words are genuinely
+yours, so they appear under your name. Each answer arrives under its own name.
 
 Slash commands register to the guild named by `channels.discord.guildId` (or
 the bot's only guild), where Discord shows them immediately. Without a guild id
