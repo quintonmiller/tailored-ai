@@ -514,7 +514,20 @@ async function executeToolCall(
   const permission = evaluatePermission(call.name, call.arguments, opts.permissions);
   if (permission === "approve") {
     if (!opts.approvalHandler) {
-      // No handler — auto-approve for backward compat (cron, webhooks, etc.)
+      // Nothing can ask: cron, rooms, the task watcher, webhooks — every path
+      // with no human attached. This used to be an empty block with a comment,
+      // so a policy of "approve" quietly became "auto" precisely where nobody
+      // was watching, and the config said one thing while the deployment did
+      // another.
+      //
+      // Still permissive by default, on purpose. Flipping it would stop
+      // autonomous runs that have worked for months, and a guard that breaks
+      // what it protects is the shape this codebase keeps hitting. What
+      // changes is that it says so.
+      if ((opts.permissions?.noHandlerAction ?? "auto") === "reject") {
+        return `Tool call rejected: "${call.name}" needs approval and no approver is available on this path. Ask Quinton directly, or do the part that does not need approval.`;
+      }
+      warnNoApprover(call.name);
     } else {
       const request: ApprovalRequest = {
         requestId: createApprovalRequestId(),
@@ -588,6 +601,24 @@ export async function runAgentLoop(userMessage: string, opts: AgentLoopOptions):
  * cannot make. Once per agent per process, because it is a property of the
  * configuration, not of the turn.
  */
+/**
+ * A call that needed approval ran because nothing could ask.
+ *
+ * Once per tool per process: this is a property of how the deployment is
+ * wired, not of the turn, and repeating it every time would bury it. Say
+ * `noHandlerAction: reject` to make the policy real on these paths.
+ */
+const _warnedNoApprover = new Set<string>();
+function warnNoApprover(toolName: string): void {
+  if (_warnedNoApprover.has(toolName)) return;
+  _warnedNoApprover.add(toolName);
+  console.warn(
+    `[permissions] "${toolName}" is configured to need approval, but this path has no approver ` +
+      `(cron, rooms, task watcher or webhook) — running it anyway. ` +
+      `Set permissions.noHandlerAction: reject to refuse instead.`,
+  );
+}
+
 export const DEFAULT_CONTEXT_WARN_TOKENS = 4000;
 const _warnedContextAgents = new Set<string>();
 
