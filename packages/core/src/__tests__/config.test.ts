@@ -177,6 +177,26 @@ describe("validateConfig — tool references", () => {
     expect(warnings.some((w) => w.includes('Did you mean "systemPrompt"'))).toBe(true);
   });
 
+  it("recognises an abbreviation, which edit distance alone cannot", () => {
+    // Found in the wild: an agent authored `temp: 0.3` into its own config and
+    // ran at the default temperature instead. "temp" is seven edits from
+    // "temperature" and obviously means it.
+    const c = baseConfig();
+    c.agents = { "job-search-coordinator": { temp: 0.3 } as never };
+
+    expect(validateConfig(c).some((w) => w.includes('Did you mean "temperature"'))).toBe(true);
+  });
+
+  it("does not treat a two-character key as an abbreviation of anything", () => {
+    const c = baseConfig();
+    c.agents = { coder: { on: true } as never };
+
+    const warnings = validateConfig(c).filter((w) => w.includes('unknown key "on"'));
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).not.toContain("Did you mean");
+  });
+
   it("does not guess when the key resembles nothing", () => {
     const c = baseConfig();
     c.agents = { coder: { wibble: 1 } as never };
