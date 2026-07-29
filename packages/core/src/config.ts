@@ -682,8 +682,15 @@ export interface AgentConfig {
     ask_user?: {
       enabled: boolean;
       /**
-       * File (relative to the global context dir) the out-of-autopilot
-       * `ask_user` fallback appends questions to. Default "inbox.md".
+       * File the out-of-autopilot `ask_user` fallback appends questions to,
+       * relative to the **base context dir** — one level above `global/`.
+       * Default "inbox.md".
+       *
+       * Deliberately not inside `global/`: that directory is injected into
+       * every agent's system prompt, so an inbox there broadcast a queue of
+       * questions-for-a-human to all 28 agents, which then reported months-old
+       * entries as live outstanding work. It is a queue for a person, not
+       * context for agents.
        */
       inboxFile?: string;
     };

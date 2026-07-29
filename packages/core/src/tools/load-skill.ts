@@ -14,8 +14,8 @@ export interface LoadSkillToolOptions {
  * Side effects:
  *   - Sets `context.activeSkill.current` so the loop can enforce the skill's
  *     allowed-tools list on subsequent tool calls.
- *   - Records `rootPath` (when known) so file/exec tools can scope themselves
- *     to the skill's bundle.
+ *   - Records `rootPath` (when known). Recorded only — no tool reads it. See
+ *     `ActiveSkillRecord.rootPath`.
  *
  * Calling with `name: "__deactivate__"` clears the active skill (the agent can
  * use this when it's done with the loaded skill's task).
@@ -84,7 +84,11 @@ export class LoadSkillTool implements Tool {
     });
 
     const instructions = def?.instructions ?? "";
-    const header = `[skill activated: ${name}${allowedTools.length > 0 ? ` — tools narrowed to: ${allowedTools.join(", ")}` : ""}${rootPath ? ` — scoped to: ${rootPath}` : ""}]`;
+    // Says only what is true. This used to append ` — scoped to: ${rootPath}`,
+    // which told the model it was confined to a directory nothing enforced,
+    // and disclosed the install path to do it. `tools narrowed to:` stays —
+    // the loop really does gate on that list.
+    const header = `[skill activated: ${name}${allowedTools.length > 0 ? ` — tools narrowed to: ${allowedTools.join(", ")}` : ""}]`;
     return {
       success: true,
       output: `${header}\n\n${instructions}`.trim(),

@@ -70,18 +70,59 @@ agents:
   default:
     skills:
       - my-skill
-    skillLoading: progressive   # default; use "eager" only for tiny prompts
+    skillLoading: progressive   # set this explicitly — omitting it gets "eager"
 ```
 
 ## Loading modes
 
 | Mode | When |
 |---|---|
-| **`progressive`** (default) | The agent sees a catalog of skill ids + descriptions in its system prompt and calls `load_skill(name)` on demand. Small system prompt; instructions only appear when needed. |
-| **`eager`** (deprecated) | Skill instructions / tools / hooks merge into the agent at resolve time and ride along in every prompt. Bloats the prompt; use only for tiny always-on skills. |
+| **`progressive`** (recommended) | The agent sees a catalog of skill ids + descriptions in its system prompt and calls `load_skill(name)` on demand. Small system prompt; instructions only appear when needed. |
+| **`eager`** (deprecated, and what you get by omitting the key) | Skill instructions / tools / hooks merge into the agent at resolve time and ride along in every prompt. Bloats the prompt; use only for tiny always-on skills. |
+
+> **Write `skillLoading` explicitly.** With the key omitted the resolver falls
+> back to `eager` — the deprecated mode, which then warns. This doc used to call
+> `progressive` the default, so following it and omitting the key got you the
+> path it told you to avoid.
+>
+> `tai resources enable` and the UI agent editor both write `progressive` for
+> you, so this only bites hand-edited config.
+
+The two modes also treat `allowed-tools` differently, in ways that are easy to
+trip over — see [Tool access](#tool-access) below.
 
 `load_skill` also narrows the tool set to the skill's `allowed-tools` for the
 remainder of the loop.
+
+## Tool access
+
+`allowed-tools` means **opposite things** in the two modes. This is the single
+biggest source of surprise in the subsystem, so read this before writing the
+key.
+
+| | `eager` | `progressive` |
+|---|---|---|
+| A tool the agent **has** | already available | **rejected** unless the skill also names it |
+| A tool the agent **lacks** | **granted** — merged in from the host tool set | answers `Unknown tool` |
+| Net effect | a grant list | a hard allowlist |
+
+Two consequences worth stating plainly:
+
+- **A skill cannot grant a tool progressively.** Naming one the agent lacks
+  does not add it; it narrows the allowlist to a name that resolves to nothing.
+- **Naming too few tools is worse than naming none.** An empty `allowed-tools`
+  means "no restriction". A partial list silently revokes everything the agent
+  had that the skill did not think to mention — including tools it needs for
+  unrelated parts of the same turn.
+
+The model is not told about the narrowing: it still sees the full tool schemas
+after activation, so it keeps calling tools it can see and collects rejections.
+If a skill looks like it is "not working", check for rejection messages before
+suspecting the instructions.
+
+Under `eager` there is a further wrinkle: because the merge happens at resolve
+time from the host tool set, editing a `SKILL.md` on disk **widens a live
+agent's capabilities** with no approval step.
 
 ## Sample skill
 
