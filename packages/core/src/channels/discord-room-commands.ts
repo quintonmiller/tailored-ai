@@ -3,7 +3,13 @@
  *
  * These do the same things the `room` tool does, but for a person rather than
  * an agent: see who is here, add or drop an agent, read or set what the room is
- * for, ask everyone what they are working on.
+ * for, ask everyone what they are working on, say something to all of them.
+ *
+ * Three ways to reach agents, and the difference matters:
+ *   `ping <agent> <msg>` — one agent, your words, posted as you.
+ *   `all <msg>`          — every agent that can wake, your words, posted as you.
+ *   `status`             — every agent, a canned question, no message in the
+ *                          transcript (see `requestStatusUpdate`).
  *
  * Kept as one command with subcommands rather than six top-level commands.
  * Discord shows them under one entry, and the deployment's global command
@@ -36,7 +42,22 @@ export const ROOM_COMMAND_NAME = "room";
  * we genuinely do not know.
  */
 function personLabel(interaction: ChatInputCommandInteraction, identities: IdentityResolver): string {
-  return identities.byNativeId("discord", interaction.user.id)?.label ?? interaction.user.username;
+  return declaredLabel(interaction, identities) ?? interaction.user.username;
+}
+
+/**
+ * The declared identity of whoever ran the command, or null when all we have is
+ * a Discord username.
+ *
+ * The difference is load-bearing, not cosmetic. A room message is parsed back
+ * out of Discord as an envelope, and `[someone]` is only accepted as a speaker
+ * when that name is a known identity. An undeclared username fails that check,
+ * so the message comes back with no speaker and `fromSelf: true` — and
+ * `wakeReason` drops it for every subscriber before it ever looks at who was
+ * addressed. The post lands in the channel and wakes nobody.
+ */
+function declaredLabel(interaction: ChatInputCommandInteraction, identities: IdentityResolver): string | null {
+  return identities.byNativeId("discord", interaction.user.id)?.label ?? null;
 }
 
 export interface RoomCommandDeps {
@@ -124,6 +145,13 @@ export function buildRoomCommand(): SlashCommandBuilder {
 
   cmd.addSubcommand((s) => s.setName("status").setDescription("Ask every agent here what it is working on"));
 
+  cmd.addSubcommand((s) =>
+    s
+      .setName("all")
+      .setDescription("Say something to every agent in this room")
+      .addStringOption((o) => o.setName("message").setDescription("What to say").setRequired(true)),
+  );
+
   return cmd as SlashCommandBuilder;
 }
 
@@ -201,6 +229,50 @@ export async function handleRoomCommand(
         await interaction.editReply(`Sent to **${agent}**.`);
         return true;
       }
+      case "all": {
+        const message = (interaction.options.getString("message") ?? "").trim();
+        if (!message) {
+          await interaction.reply({
+            content: "Nothing to send — the message was empty.",
+            flags: MessageFlags.Ephemeral,
+          });
+          return true;
+        }
+        const identities = deps.identities();
+        const agents = wakeableAgents(deps, room);
+        if (agents.length === 0) {
+          const subscribed = roomAgents(deps, room).length;
+          await interaction.reply({
+            content:
+              subscribed === 0
+                ? `Nobody is subscribed to "${room.name}" yet. Add someone with \`/room add\`.`
+                : `All ${subscribed} agent(s) in "${room.name}" have \`wakeOn: none\`, so none of them would hear this. \`/room members\` shows their settings.`,
+            flags: MessageFlags.Ephemeral,
+          });
+          return true;
+        }
+        // Posted as the person, addressed to everyone who can hear it — unlike
+        // `status`, the words are genuinely theirs, so putting them in the
+        // transcript under their own name is accurate rather than a fake human
+        // turn. Going through the room means the ordinary wake path applies:
+        // `pass` still works and repeat suppression still holds.
+        //
+        // The agent-turn counter also resets — but only for a speaker the
+        // identity layer recognises, since that reset keys off the message
+        // parsing back as a human turn. See `declaredLabel`.
+        const declared = declaredLabel(interaction, identities);
+        const speaker = declared ?? interaction.user.username;
+        await interaction.deferReply();
+        await deps.postAsPerson(room, speaker, agents, message);
+        await interaction.editReply(
+          `Sent to ${agents.length} agent(s): ${agents.join(", ")}.${
+            declared
+              ? ""
+              : `\n\n⚠️ Your Discord account isn't declared under \`rooms.identities\`, so agents may not recognise **${speaker}** as a person and none of them may answer. Add \`${speaker}: "${interaction.user.id}"\` under \`rooms.identities\` to fix it.`
+          }`,
+        );
+        return true;
+      }
       case "status": {
         // Not ephemeral: the answers land in the channel, so the request that
         // produced them should be visible too.
@@ -217,12 +289,51 @@ export async function handleRoomCommand(
         return true;
     }
   } catch (err) {
-    await interaction
-      .reply({ content: `Failed: ${(err as Error).message}`, flags: MessageFlags.Ephemeral })
-      .catch(() => {
-        // The interaction may already be answered; the error is logged upstream.
-      });
+    await reportFailure(interaction, err);
     return true;
+  }
+}
+
+/**
+ * Tell the user a subcommand failed, whatever state the interaction is in.
+ *
+ * This used to be an unconditional `interaction.reply()`. For the branches that
+ * defer first (`ping`, `all`) or reply first (`status`), discord.js throws
+ * `InteractionAlreadyReplied` — and the throw was swallowed by an empty
+ * `.catch()`, leaving the user on a "thinking…" spinner forever. Nothing logged
+ * it either: `handleRoomCommand` returned true, so the caller's own error
+ * handler never saw it, and the comment claiming it was "logged upstream" was
+ * simply wrong.
+ *
+ * A command that fails silently is worse than one that throws, because the only
+ * evidence is a spinner that never resolves.
+ */
+async function reportFailure(interaction: ChatInputCommandInteraction, err: unknown): Promise<void> {
+  const message = `Failed: ${(err as Error).message}`;
+  // Log first and unconditionally — whatever Discord does with the reply, the
+  // operator needs the stack.
+  console.error(`[discord] /room ${safeSubcommand(interaction)} failed:`, err);
+  try {
+    if (interaction.deferred && !interaction.replied) {
+      await interaction.editReply(message);
+    } else if (interaction.replied) {
+      await interaction.followUp({ content: message, flags: MessageFlags.Ephemeral });
+    } else {
+      await interaction.reply({ content: message, flags: MessageFlags.Ephemeral });
+    }
+  } catch (nested) {
+    // The interaction genuinely cannot be answered (expired, or Discord is
+    // down). Already logged above, so there is nothing further to do.
+    console.error("[discord] could not deliver the failure notice:", nested);
+  }
+}
+
+/** Subcommand name for logging, without throwing when there isn't one. */
+function safeSubcommand(interaction: ChatInputCommandInteraction): string {
+  try {
+    return interaction.options.getSubcommand();
+  } catch {
+    return "(unknown)";
   }
 }
 
@@ -279,6 +390,22 @@ async function createRoom(
 export function roomAgents(deps: RoomCommandDeps, room: Room): string[] {
   const identities = deps.identities();
   return deps.store.listSubscriptionsForRoom(formatRoomRef(room.ref)).map((s) => identities.labelForAgent(s.agent));
+}
+
+/**
+ * The agents in a room that a message can actually reach.
+ *
+ * `wakeOn: "none"` is a subscription that reads but never wakes, so addressing
+ * one is silent. Excluding them keeps the reply's count honest — "sent to 9" is
+ * a claim about delivery, and counting an agent that cannot hear it makes the
+ * command lie about what it did. Mirrors the filter `requestStatusUpdate` uses.
+ */
+export function wakeableAgents(deps: RoomCommandDeps, room: Room): string[] {
+  const identities = deps.identities();
+  return deps.store
+    .listSubscriptionsForRoom(formatRoomRef(room.ref))
+    .filter((s) => s.wakeOn !== "none")
+    .map((s) => identities.labelForAgent(s.agent));
 }
 
 /**
