@@ -161,6 +161,58 @@ describe("validateConfig — tool references", () => {
     c.agents = { coder: { tools: ["nonexistent_tool"] } };
     expect(validateConfig(c).some((w) => w.includes('references tool "nonexistent_tool"'))).toBe(true);
   });
+
+  it("names an unknown key inside an agent block, and guesses the right one", () => {
+    // Top-level keys have been checked since #252, but agent blocks were left
+    // open. Four agents carried their entire persona under `system_prompt:`
+    // instead of `instructions:` — it parsed, it round-tripped into their
+    // manifests, and it reached nothing. They ran with an empty instructions
+    // layer for weeks with no warning anywhere.
+    const c = baseConfig();
+    c.agents = { generalist: { system_prompt: "You are a generalist." } as never };
+
+    const warnings = validateConfig(c);
+
+    expect(warnings.some((w) => w.includes('unknown key "system_prompt"'))).toBe(true);
+    expect(warnings.some((w) => w.includes('Did you mean "systemPrompt"'))).toBe(true);
+  });
+
+  it("does not guess when the key resembles nothing", () => {
+    const c = baseConfig();
+    c.agents = { coder: { wibble: 1 } as never };
+
+    const warnings = validateConfig(c).filter((w) => w.includes('unknown key "wibble"'));
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).not.toContain("Did you mean");
+  });
+
+  it("stays quiet about every real agent key", () => {
+    // The guard is only useful if it does not cry wolf; a false warning on a
+    // correct key teaches people to ignore the whole class.
+    const c = baseConfig();
+    c.agents = {
+      full: {
+        description: "d",
+        instructions: "i",
+        tools: ["read"],
+        temperature: 0.3,
+        maxToolRounds: 5,
+        fileBoundary: "/tmp",
+        roomSessionScope: "shared",
+        injectMemory: true,
+        budgetWarnings: true,
+        skipGlobalContext: true,
+        summarizeOnTrim: true,
+        worktree: true,
+        skills: ["x"],
+        skillLoading: "progressive",
+        systemPrompt: { base: "b" },
+      } as never,
+    };
+
+    expect(validateConfig(c).filter((w) => w.includes("unknown key"))).toEqual([]);
+  });
 });
 
 describe("validateConfig — dashboard widgets", () => {

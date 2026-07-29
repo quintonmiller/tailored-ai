@@ -566,6 +566,45 @@ export async function runAgentLoop(userMessage: string, opts: AgentLoopOptions):
   }
 }
 
+/**
+ * Say something when the context block gets big.
+ *
+ * The `<context>` layer is the one part of the system prompt with no cap: it is
+ * every `.md` in the global directory plus every `.md` in the agent's, read
+ * whole, from disk, on every turn. When it grows, nothing truncates it —
+ * `historyBudget = maxHistoryTokens - systemPromptTokens`, so it quietly eats
+ * the conversation instead, and the symptom is an agent that forgets rather
+ * than an agent with a big prompt.
+ *
+ * Observed before this existed: 4.6 KB of global context, of which 2.4 KB was a
+ * stale question queue belonging to one agent, injected into all 27 — roughly
+ * 2.3× the "keep preambles under ~500 tokens" guideline in CLAUDE.md, spent
+ * before any agent said anything.
+ *
+ * Warned rather than truncated. Cutting a context file mid-sentence would be a
+ * silent, confusing loss, and which file to drop is a judgement this code
+ * cannot make. Once per agent per process, because it is a property of the
+ * configuration, not of the turn.
+ */
+const CONTEXT_WARN_TOKENS = 750;
+const _warnedContextAgents = new Set<string>();
+
+export function warnIfContextIsLarge(contextContent: string, agentName?: string): void {
+  if (!contextContent) return;
+  const tokens = estimateTokens({ role: "system", content: contextContent });
+  if (tokens <= CONTEXT_WARN_TOKENS) return;
+
+  const key = agentName ?? "(unnamed)";
+  if (_warnedContextAgents.has(key)) return;
+  _warnedContextAgents.add(key);
+  console.warn(
+    `[context] ${key}: context files are ~${tokens} tokens, injected on every turn ` +
+      `(guideline is ~500 for local models). Nothing truncates this — it comes out of the ` +
+      `history budget instead. Move agent-specific material out of the global directory, ` +
+      `or delete what has gone stale.`,
+  );
+}
+
 async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): Promise<string> {
   const { session, db, extraInstructions, contextDir, agentContextDir } = opts;
 
@@ -576,6 +615,7 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
   } else if (contextDir) {
     contextContent = await loadAllContext(contextDir, agentContextDir);
   }
+  warnIfContextIsLarge(contextContent, opts.toolContextExtras?.agentName as string | undefined);
   const catalogBlock = renderSkillCatalog(opts.skillCatalog);
 
   // Core memory: always-injected identity layer (docs/agent-unification.md).

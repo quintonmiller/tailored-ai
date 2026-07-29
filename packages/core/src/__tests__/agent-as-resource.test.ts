@@ -40,6 +40,57 @@ function baseConfig(agents: Record<string, AgentDefinition> = {}): AgentConfig {
   } as unknown as AgentConfig;
 }
 
+describe("parseAgentData — fields that must survive the manifest", () => {
+  it("carries every AgentDefinition field through, not a remembered subset", () => {
+    // These four were dropped by an allowlist that only listed the fields
+    // someone had remembered to copy. The cost: `fileBoundary` never reached
+    // toolContextExtras, so agents holding write+edit ran with a declared
+    // filesystem confinement that did nothing, and thirteen agents set
+    // `injectMemory: true` and never got an injected memory. Both were
+    // configured, both round-tripped into the manifest, neither was read.
+    const parsed = parseAgentData({
+      id: "travel-coordinator",
+      kind: "agent",
+      version: "1",
+      data: {
+        fileBoundary: "/home/quint/research/travel",
+        roomSessionScope: "shared",
+        injectMemory: true,
+        budgetWarnings: true,
+        memoryInjectLimit: 5,
+        thinking: "high",
+      },
+    } as never);
+
+    expect(parsed.fileBoundary).toBe("/home/quint/research/travel");
+    expect(parsed.roomSessionScope).toBe("shared");
+    expect(parsed.injectMemory).toBe(true);
+    expect(parsed.budgetWarnings).toBe(true);
+    expect(parsed.memoryInjectLimit).toBe(5);
+    expect(parsed.thinking).toBe("high");
+  });
+
+  it("warns about a field it does not recognise rather than dropping it in silence", () => {
+    const warnings: string[] = [];
+    const original = console.warn;
+    console.warn = (msg: string) => warnings.push(msg);
+    try {
+      const parsed = parseAgentData({
+        id: "generalist",
+        kind: "agent",
+        version: "1",
+        data: { system_prompt: "You are a generalist.", instructions: "real" },
+      } as never);
+
+      expect(parsed.instructions).toBe("real");
+      expect((parsed as Record<string, unknown>).system_prompt).toBeUndefined();
+      expect(warnings.some((w) => w.includes('unknown field "system_prompt"'))).toBe(true);
+    } finally {
+      console.warn = original;
+    }
+  });
+});
+
 describe("agentDefinitionToManifest + parseAgentData round-trip", () => {
   it("preserves all common AgentDefinition fields", () => {
     const def: AgentDefinition = {

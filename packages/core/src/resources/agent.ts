@@ -18,10 +18,61 @@ export interface AgentBody {
 }
 
 /**
- * Convert a manifest into an {@link AgentDefinition}. Validation is lenient:
- * unknown fields pass through, and string/number/boolean/array fields are
- * type-checked when present. Returning a partial object is intentional —
- * `resolveAgent` already supplies sensible defaults for every field.
+ * Every field an {@link AgentDefinition} recognises.
+ *
+ * The list exists so that a field can be *dropped* only on purpose. What it
+ * replaces was an allowlist of the fields someone remembered to copy, under a
+ * docstring promising that "unknown fields pass through" — which was the
+ * opposite of what the code did. Anything not enumerated above the pass-through
+ * below was silently discarded on its way from the manifest to the loop.
+ *
+ * What that cost, in one deployment: `fileBoundary` never reached
+ * `toolContextExtras`, so three agents holding `write` and `edit` ran with a
+ * declared filesystem confinement that did nothing. Thirteen agents set
+ * `injectMemory: true` and never got a single injected memory. Both were
+ * configured, both round-tripped into the manifest, and neither was ever read.
+ *
+ * Keep in sync with `AgentDefinition` in config.ts. A field missing here is
+ * inert config, which is the hardest kind of bug to see: it parses, it
+ * persists, and it does nothing.
+ */
+const AGENT_DEFINITION_FIELDS = new Set<string>([
+  "description",
+  "model",
+  "provider",
+  "models",
+  "instructions",
+  "tools",
+  "temperature",
+  "thinking",
+  "maxToolRounds",
+  "fileBoundary",
+  "roomSessionScope",
+  "contextDir",
+  "nudgeOnText",
+  "nudgeMessage",
+  "skipGlobalContext",
+  "summarizeOnTrim",
+  "worktree",
+  "taskPreamble",
+  "injectMemory",
+  "budgetWarnings",
+  "memoryInjectBudgetTokens",
+  "memoryInjectLimit",
+  "hooks",
+  "sandbox",
+  "skills",
+  "skillLoading",
+  "online",
+  "systemPrompt",
+]);
+
+/**
+ * Convert a manifest into an {@link AgentDefinition}. Known fields are
+ * type-checked when present and otherwise copied through; a field this build
+ * does not recognise is warned about rather than dropped in silence.
+ * Returning a partial object is intentional — `resolveAgent` already supplies
+ * sensible defaults for every field.
  */
 export function parseAgentData(manifest: ResourceManifest): AgentDefinition {
   const data = manifest.data ?? {};
@@ -114,6 +165,26 @@ export function parseAgentData(manifest: ResourceManifest): AgentDefinition {
     // Trust the AgentDefinition shape — SystemPromptOverride is a thin
     // structural type that composeSystemPrompt validates at use time.
     out.systemPrompt = v as AgentDefinition["systemPrompt"];
+  }
+
+  // Everything the typed blocks above did not claim.
+  //
+  // A recognised field is copied through, so adding one to AgentDefinition no
+  // longer requires remembering to add it here as well — forgetting that is
+  // what made `fileBoundary` and `injectMemory` inert. An unrecognised one is
+  // reported: `system_prompt` (the snake_case spelling of `systemPrompt`) sat
+  // in four agents' config carrying their entire persona, round-tripped
+  // faithfully into their manifests, and was read by nothing.
+  for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
+    if (value == null || key in out) continue;
+    if (AGENT_DEFINITION_FIELDS.has(key)) {
+      (out as Record<string, unknown>)[key] = value;
+      continue;
+    }
+    console.warn(
+      `[agents] ${manifest.id}: unknown field "${key}" — it will be ignored. ` +
+        `Check the spelling (fields are camelCase), or remove it.`,
+    );
   }
 
   return out;
