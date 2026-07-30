@@ -4,12 +4,22 @@ import type { ToolContext } from "./interface.js";
 
 /**
  * Path-prefixes that bypass the boundary check even when set. These are
- * agent-internal scratch locations that the exec tool writes to and the
- * model is expected to read back (e.g. truncated exec output caches).
- * Without the allowlist, the boundary check would reject the model's
- * own follow-up reads of files we told it about.
+ * agent-internal scratch locations that TAI writes to and the model is
+ * expected to read back (truncated tool and exec output caches). Without the
+ * allowlist, the boundary check would reject the model's own follow-up reads
+ * of files we told it about — a pointer we hand out and then refuse.
+ *
+ * `$TAI_HOME` is honoured because both writers resolve their directory
+ * against it first; hardcoding only the homedir path left the allowlist
+ * pointing somewhere nothing writes whenever TAI_HOME was set.
  */
-const SCRATCH_ALLOWLIST: string[] = [join(homedir(), ".tai", "exec-outputs")];
+function scratchRoots(): string[] {
+  const bases = [join(homedir(), ".tai")];
+  if (process.env.TAI_HOME) bases.unshift(process.env.TAI_HOME);
+  return bases.flatMap((base) => [join(base, "exec-outputs"), join(base, "tool-outputs")]);
+}
+
+const SCRATCH_ALLOWLIST: string[] = scratchRoots();
 
 /**
  * If `context.workingDirectoryBoundary` is set, ensure `fullPath` resolves
