@@ -9,6 +9,8 @@ export { applyTemplates, EMPTY_HOOKS, executeHooks, hasHooks, mergeHooks, normal
 export type { AgentLoopOptions } from "./agent/loop.js";
 export { isStallStop, type LoopStop, runAgentLoop, stripOrphanedToolMessages } from "./agent/loop.js";
 export { BASE_SYSTEM_PROMPT } from "./agent/prompt.js";
+export type { RewindPreview } from "./agent/rewind.js";
+export { countTurns, previewRewind, rewindSession, undoRewind } from "./agent/rewind.js";
 export type { Session } from "./agent/session.js";
 export { findOrCreateSession, loadSession, newSession, resetSession } from "./agent/session.js";
 export type { TaskInfo } from "./agent/tasks.js";
