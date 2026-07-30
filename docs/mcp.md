@@ -35,6 +35,7 @@ agents:
 Two local-model guardrails:
 
 - **Keep the exposed set small.** A 30-tool MCP server wholesale will sink tool selection on local models (~5 tools per request is the ceiling — see CLAUDE.md). Use the per-server `tools:` allowlist and per-agent `tools:` lists.
+- **An agent that declares `tools:` and omits the `mcp_*` names cannot call them, and nothing says so.** The server still connects, still logs `connected (3 tools: …)`, and still looks healthy — the tools are simply unreachable from that agent. Observed in the reference deployment: a `github` server connected on **81 consecutive startups** while every one of its 30 agents declared a `tools:` list that named none of them. If a server looks fine and no agent ever calls it, check the allowlists before the server.
 - An agent's `mcp_*` reference that isn't (yet) discovered is **skipped with a warning, not an error** — servers connect asynchronously and can be down. The loop re-resolves tools every iteration, so the tool joins the agent's set as soon as discovery lands, without a restart.
 
 ## Lifecycle
@@ -45,7 +46,9 @@ Two local-model guardrails:
 - hot reload: `runtime.onReload(...)` reconciles again — this also re-registers tools into the fresh registry that `runtime.reload()` swapped in
 - shutdown: `stopAll()` closes connections (and kills stdio children)
 
-A server that fails to connect is logged and skipped; the next reconcile retries it. Servers that emit `notifications/tools/list_changed` get their tool set re-discovered live. Registered tools carry origin `mcp:<serverId>/<toolName>` (`scheme: "mcp"`), visible in `listWithManifests()` / the resources UI.
+A server that fails to connect is logged and skipped; the next reconcile retries it — **explicit reconciles always retry, ignoring any backoff**, because startup and config reload are human-driven and the human may have just fixed the credential.
+
+**A dropped connection reconnects on its own.** The client registers `onclose`; a drop unregisters that server's tools and schedules a reconnect with an escalating delay. Before this, nothing watched for it: the connection stayed in the active set with an unchanged config signature, reconcile skipped it, and the server stayed dead until a restart while its tools remained registered and every call returned `MCP call failed`. The escalation resets only after a connection survives 60s — resetting on "it connected" lets a connect-then-drop server retry every second forever. Servers that emit `notifications/tools/list_changed` get their tool set re-discovered live. Registered tools carry origin `mcp:<serverId>/<toolName>` (`scheme: "mcp"`), visible in `listWithManifests()` / the resources UI.
 
 Library consumers (not using the CLI) wire the same three calls; `McpHost` is the narrow interface the manager needs (`getConfig` + `getToolRegistry`).
 
@@ -56,6 +59,10 @@ Success is no longer as silent as failure. Each lifecycle transition logs one li
 - connect: `[mcp:github] connected (3 tools: mcp_github_search, ...)`
 - tool list change: `[mcp:github] tools updated (4 tools: ...)`
 - teardown: `[mcp:github] disconnected (removed from config)` / `(shutdown)`, or `config changed — reconnecting` on a restart
+
+**A rejected credential is named as one.** Connect failures are classified: `401`, `403`, `invalid_token`, `invalid api key`, `authentication failed` and `expired token` log as `AUTH FAILED`, name the config key to check, and say plainly that retrying will not fix it — the fix is a person minting a token. Transport failures (`ECONNREFUSED`, socket hang-ups, timeouts, `500`) are deliberately *not* classified this way; crying wolf would make the label worthless. This matters for credentials that expire on a schedule — a Notion PAT lasts a year at most.
+
+`McpManager.status()` returns `{ id, connected, tools, retryInMs?, authFailure? }` per configured server — the data an integration-health surface needs (#207).
 
 The startup banner gains an `MCP: github (3), linear (2)` line (printed only when servers are configured) — MCP servers connect asynchronously and aren't in the one-shot `Tools:` line. `McpManager.list()` returns `{ serverId, tools, connectedAt }` per connected server, surfaced at `GET /api/mcp` (wired via the server's `mcpStatus` option). `tai doctor` (#114) is the remaining consumer once that command exists.
 
