@@ -42,7 +42,7 @@ function makeDeps(result: RewindResult, agents = ["iris"]) {
       }) as unknown as IdentityResolver,
     requestStatusUpdate: async () => 0,
     resetAgentSession: () => ({ cleared: 0, scope: "room" as const }),
-    rewindAgentSession: (_room, agent, turns) => {
+    rewindAgentSession: async (_room, agent, turns) => {
       calls.push({ agent, turns });
       return result;
     },

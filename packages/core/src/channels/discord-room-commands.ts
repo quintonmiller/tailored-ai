@@ -78,12 +78,12 @@ export interface RoomCommandDeps {
     room: Room,
     agent: string,
     turns: number,
-  ) => {
+  ) => Promise<{
     scope: "room" | "shared";
     rewound?: { turns: number; messages: number; excerpt: string };
     restored?: number;
     remaining: number;
-  };
+  }>;
   /** Post into a room as a person, addressed to one agent. */
   postAsPerson: (room: Room, speaker: string, to: string[], body: string) => Promise<void>;
 }
@@ -236,7 +236,10 @@ export async function handleRoomCommand(
         await interaction.reply({ content: resetAgent(interaction, deps, room), flags: MessageFlags.Ephemeral });
         return true;
       case "rewind":
-        await interaction.reply({ content: rewindAgent(interaction, deps, room), flags: MessageFlags.Ephemeral });
+        await interaction.reply({
+          content: await rewindAgent(interaction, deps, room),
+          flags: MessageFlags.Ephemeral,
+        });
         return true;
       case "remove":
         await interaction.reply({ content: removeAgent(interaction, deps, room), flags: MessageFlags.Ephemeral });
@@ -533,7 +536,11 @@ function resetAgent(interaction: ChatInputCommandInteraction, deps: RoomCommandD
  * turns, and nobody remembers exactly how many turns ago something was said,
  * so the count alone gives no way to tell a correct cut from an off-by-one.
  */
-function rewindAgent(interaction: ChatInputCommandInteraction, deps: RoomCommandDeps, room: Room): string {
+async function rewindAgent(
+  interaction: ChatInputCommandInteraction,
+  deps: RoomCommandDeps,
+  room: Room,
+): Promise<string> {
   const name = (interaction.options.getString("agent") ?? "").trim();
   const subscribed = deps.store.listSubscriptionsForRoom(formatRoomRef(room.ref)).some((s) => s.agent === name);
   if (!subscribed) {
@@ -541,7 +548,7 @@ function rewindAgent(interaction: ChatInputCommandInteraction, deps: RoomCommand
   }
 
   const turns = interaction.options.getInteger("turns") ?? 1;
-  const result = deps.rewindAgentSession(room, name, turns);
+  const result = await deps.rewindAgentSession(room, name, turns);
 
   // Shared-session agents keep one conversation across every room they are in,
   // so "this room" would be a quiet lie about the reach of the change — the

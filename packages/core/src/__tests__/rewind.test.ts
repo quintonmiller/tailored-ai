@@ -9,7 +9,7 @@
  */
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { countTurns, previewRewind, rewindSession, undoRewind } from "../agent/rewind.js";
+import { countTurns, messageExcerpt, previewRewind, rewindSession, undoRewind } from "../agent/rewind.js";
 import { newSession } from "../agent/session.js";
 import { getSessionMessages, saveMessage } from "../db/queries.js";
 import { initDatabase } from "../db/schema.js";
@@ -146,5 +146,58 @@ describe("getSessionMessages", () => {
     rewindSession(db, KEY, 1);
 
     expect(getSessionMessages(db, sessionId)).toHaveLength(4);
+  });
+});
+
+/**
+ * Caught in production on the first real use. The quote came back as
+ *
+ *   > Room "iris-quinton". You are iris. Today is Thursday, July 30, 2026…
+ *
+ * which is byte-identical on every turn in that room, so it told you nothing
+ * about where the cut landed — the only thing the excerpt is for.
+ */
+describe("messageExcerpt", () => {
+  const roomPrompt = [
+    'Room "iris-quinton". You are iris. Today is Thursday, July 30, 2026.',
+    "Purpose: Private 1-on-1 between Iris and Quinton. Direct conversation space.",
+    "",
+    "New messages:",
+    "quinton (to iris): can you look at the deployment plan",
+    "",
+    "Reply as iris. Your reply goes to quinton — write only your message.",
+    "Known participants: quinton.",
+  ].join("\n");
+
+  it("quotes what was said, not the preamble", () => {
+    expect(messageExcerpt(roomPrompt)).toBe("quinton (to iris): can you look at the deployment plan");
+  });
+
+  it("drops the reply instructions, which are as fixed as the preamble", () => {
+    expect(messageExcerpt(roomPrompt)).not.toContain("Reply as");
+    expect(messageExcerpt(roomPrompt)).not.toContain("Known participants");
+  });
+
+  it("distinguishes two turns in the same room", () => {
+    const other = roomPrompt.replace("can you look at the deployment plan", "never mind, different question");
+    expect(messageExcerpt(roomPrompt)).not.toBe(messageExcerpt(other));
+  });
+
+  it("leaves a plain message alone", () => {
+    expect(messageExcerpt("just a normal CLI prompt")).toBe("just a normal CLI prompt");
+  });
+
+  it("falls back to the raw text rather than quoting nothing", () => {
+    // A prompt that has the marker but no body would otherwise render as an
+    // empty quote, which reads as "nothing was taken back".
+    expect(messageExcerpt("New messages:")).toBe("New messages:");
+  });
+
+  it("handles a missing message", () => {
+    expect(messageExcerpt(null)).toBe("");
+  });
+
+  it("respects the length limit", () => {
+    expect(messageExcerpt(`New messages:\n${"x".repeat(500)}`, 40)).toHaveLength(40);
   });
 });

@@ -132,7 +132,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
           requestStatusUpdate: () => Promise.resolve(0),
           postAsPerson: () => Promise.resolve(),
           resetAgentSession: () => ({ cleared: 0, scope: "room" as const }),
-          rewindAgentSession: () => ({ scope: "room" as const, remaining: 0 }),
+          rewindAgentSession: async () => ({ scope: "room" as const, remaining: 0 }),
         });
         return;
       }
@@ -227,16 +227,16 @@ export class DiscordChannel implements Channel, OutboundNotifier {
    * on a `shared` scope has one conversation covering every room it is in, so
    * the scope comes back with the result and the caller says so.
    */
-  private rewindAgentSession(
+  private async rewindAgentSession(
     room: Room,
     agent: string,
     turns: number,
-  ): {
+  ): Promise<{
     scope: "room" | "shared";
     rewound?: { turns: number; messages: number; excerpt: string };
     restored?: number;
     remaining: number;
-  } {
+  }> {
     const resolved = resolveAgent(
       agent,
       this.runtime.getConfig(),
@@ -250,6 +250,31 @@ export class DiscordChannel implements Channel, OutboundNotifier {
 
     const restored = turns === 0 ? (undoRewind(db, key)?.restored ?? 0) : undefined;
     const rewound = turns > 0 ? (rewindSession(db, key, turns) ?? undefined) : undefined;
+
+    // Move the room cursor to now, or the watcher hands the conversation
+    // straight back.
+    //
+    // A room's wake prompt is built from the BACKEND's messages, not from the
+    // session — `fetchSince(roomId, sub.cursor)`. Rewinding only the session
+    // therefore hid the exchange from the agent's memory and then re-fed it as
+    // "New messages:" on the very next wake, agent's own last post included.
+    // Observed: an agent quoted the message it had just been made to forget.
+    //
+    // Only this room's cursor moves. A shared-scope agent has one memory across
+    // several rooms, but advancing all of them would silently drop genuinely
+    // unread messages from rooms nobody asked about.
+    if (turns > 0) {
+      try {
+        const backend = getRoomBackend(room.ref.backend);
+        const latest = await backend?.fetchSince(room.ref.id, null, 1);
+        const newest = latest?.[latest.length - 1]?.cursor;
+        if (newest) this.runtime.getRoomStore().advanceCursor(agent, formatRoomRef(room.ref), newest);
+      } catch (err) {
+        // A cursor that could not be moved means the next wake replays the
+        // rewound turn. Worth saying; not worth failing the rewind over.
+        console.warn(`[rooms] rewind could not advance ${agent}'s cursor in "${room.name}": ${(err as Error).message}`);
+      }
+    }
 
     const sessionIds = (db.prepare("SELECT id FROM sessions WHERE key = ?").all(key) as { id: string }[]).map(
       (r) => r.id,
