@@ -63,6 +63,37 @@ function cutPoint(db: Database.Database, sessionIds: string[], turns: number): n
   return starts[starts.length - 1].id;
 }
 
+/**
+ * The part of a turn a person would recognise as "the message".
+ *
+ * A room turn's `user` message is a whole constructed prompt: an identity
+ * preamble, the room purpose, the new messages, then reply instructions. The
+ * preamble is byte-identical on every turn in a given room, so quoting the raw
+ * content showed the same boilerplate wherever the cut landed —
+ *
+ *     > Room "iris-quinton". You are iris. Today is Thursday, July 30, 2026…
+ *
+ * which defeats the only reason the excerpt exists: telling a correct cut from
+ * an off-by-one. Falls back to the raw content for turns that are not room
+ * prompts (CLI, DMs, task dispatches), which have no preamble to strip.
+ */
+export function messageExcerpt(content: string | null, limit = 140): string {
+  const raw = content ?? "";
+  const marker = "New messages:";
+  const start = raw.indexOf(marker);
+  let body = start === -1 ? raw : raw.slice(start + marker.length);
+
+  // The reply instructions that close a room prompt are as fixed as the
+  // preamble, and just as unhelpful in a quote.
+  const end = body.search(/\n\s*\nReply as /);
+  if (end !== -1) body = body.slice(0, end);
+
+  const cleaned = body.replace(/\s+/g, " ").trim();
+  // A prompt shaped unexpectedly should degrade to the raw text rather than to
+  // an empty quote, which would read as "nothing was taken back".
+  return (cleaned || raw.replace(/\s+/g, " ").trim()).slice(0, limit);
+}
+
 function describe(db: Database.Database, sessionIds: string[], fromId: number, turns: number): RewindPreview {
   const placeholders = sessionIds.map(() => "?").join(",");
   const rows = db
@@ -74,7 +105,7 @@ function describe(db: Database.Database, sessionIds: string[], fromId: number, t
     .all(...sessionIds, fromId) as Row[];
 
   const first = rows[0];
-  const excerpt = (first?.content ?? "").replace(/\s+/g, " ").trim().slice(0, 140);
+  const excerpt = messageExcerpt(first?.content ?? null);
   return {
     turns,
     messages: rows.length,
