@@ -97,6 +97,26 @@ Plugins mount HTTP endpoints on the TAI server through a framework-agnostic seam
 - Writes trigger `runtime.reload()` for immediate effect
 - Available in all tool closures alongside delegate and task_status (meta tools)
 
+## Writing config
+
+Every runtime write to `config.yaml` goes through `packages/core/src/config-write.ts`:
+
+| Function | Use |
+|---|---|
+| `updateRawConfig(host, mutate)` | Patch the parsed document. The document is parsed strictly first — a patch computed on top of a parse failure would write the patch over an empty doc and drop the rest of the file. |
+| `writeRawConfigText(host, text)` | Replace the whole file (the raw editor). Parses before writing. |
+
+Both validate the result as the config it *would become* (`normalizeRawConfig`, so migrations and defaults are applied exactly as at load) and throw `ConfigWriteRejected` — leaving the file untouched — if the write would introduce config that parses but is never read. Non-blocking findings come back as `warnings` for the caller to surface.
+
+Two rules worth knowing before adding a check:
+
+- **Refuse on the delta, not the total.** A deployment accumulates findings unrelated to the next write (a tool whose credential env var isn't exported in this shell). Judging a write on the total makes the config permanently unwritable for reasons that have nothing to do with the change. Findings are compared against a pre-write snapshot by message identity.
+- **Only "parses but is never read" refuses.** Unknown keys are never transient and the author is right there. Everything else `validateConfig` reports — a tool not currently enabled, a provider a plugin registers later — warns.
+
+This exists because the same gap kept producing the same bug: an agent wrote itself `name:` and `temp:` instead of `temperature:`, every layer accepted it, and it ran at the default temperature for a day. `validateConfig` had detected exactly that since #252; it just ran at startup, into a log, after the write.
+
+Checks needing the live tool registry (`unknownToolRefs`) stay in the admin tool — the shared writer deliberately knows nothing about runtime state. Out of scope by design: `packages/cli/src/setup.ts` (out-of-process, no runtime) and `google-tools`' `persistFolderId` (holds only a `configPath`).
+
 ## Conventions
 
 - No default parameter values that duplicate config defaults (config.ts `DEFAULT_CONFIG` is the single source of truth)

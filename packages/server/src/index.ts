@@ -13,6 +13,7 @@ import {
   type Briefing,
   type CollectionListFilter,
   type CollectionType,
+  ConfigWriteRejected,
   type CronScheduler,
   checkBudget,
   compactSession,
@@ -108,11 +109,13 @@ import {
   updateNote,
   updateProject,
   updateProjectTask,
+  updateRawConfig,
   updateSessionMeta,
   validateWorkflow,
   type WorkflowEngine,
   type WorkflowTrigger,
   writeRawConfigPath,
+  writeRawConfigText,
 } from "@tailored-ai/core";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
@@ -1157,29 +1160,31 @@ export function createServer(opts: ServerOptions) {
       return c.json({ error: '"enabled" (boolean) is required' }, 400);
     }
 
+    // Existence is checked against the file before the write rather than
+    // inside it: the shared writer's callback has no way to report "404" and
+    // returning from it would still rewrite the document for a job that
+    // isn't there.
+    const currentCron = readRawConfig(runtime.configPath).cron as Record<string, unknown> | undefined;
+    const currentJobs = (currentCron?.jobs ?? []) as Record<string, unknown>[];
+    if (!currentJobs.some((j) => j.name === name)) {
+      return c.json({ error: `Job "${name}" not found in config` }, 404);
+    }
+
     try {
-      return await runtime.withConfigLock(() => {
-        const raw = readFileSync(runtime.configPath, "utf-8");
-        const doc = (YAML.parse(raw) as Record<string, unknown>) ?? {};
+      await updateRawConfig(runtime, (doc) => {
         const cron = doc.cron as Record<string, unknown> | undefined;
         const jobs = (cron?.jobs as Record<string, unknown>[]) ?? [];
         const job = jobs.find((j) => j.name === name);
-        if (!job) {
-          return c.json({ error: `Job "${name}" not found in config` }, 404);
-        }
-
+        if (!job) return;
         if (body.enabled) {
           delete job.enabled; // default is true, keep config clean
         } else {
           job.enabled = false;
         }
-
-        writeFileSync(runtime.configPath, YAML.stringify(doc), "utf-8");
-        runtime.reload();
-        return c.json({ ok: true });
       });
+      return c.json({ ok: true });
     } catch (err) {
-      return c.json({ error: (err as Error).message }, 500);
+      return c.json({ error: (err as Error).message }, err instanceof ConfigWriteRejected ? 400 : 500);
     }
   });
 
@@ -2241,10 +2246,7 @@ export function createServer(opts: ServerOptions) {
       return c.json({ error: "data is required" }, 400);
     }
     try {
-      return await runtime.withConfigLock(() => {
-        const raw = existsSync(runtime.configPath) ? readFileSync(runtime.configPath, "utf-8") : "";
-        const doc = (YAML.parse(raw) as Record<string, unknown>) ?? {};
-
+      const { warnings } = await updateRawConfig(runtime, (doc) => {
         // Navigate to parent and set the leaf key
         let parent: Record<string, unknown> = doc;
         for (let i = 0; i < path.length - 1; i++) {
@@ -2259,13 +2261,10 @@ export function createServer(opts: ServerOptions) {
         } else {
           parent[leafKey] = body.data;
         }
-
-        writeFileSync(runtime.configPath, YAML.stringify(doc), "utf-8");
-        runtime.reload();
-        return c.json({ ok: true });
       });
+      return c.json({ ok: true, warnings });
     } catch (err) {
-      return c.json({ error: (err as Error).message }, 500);
+      return c.json({ error: (err as Error).message }, err instanceof ConfigWriteRejected ? 400 : 500);
     }
   });
 
@@ -2285,13 +2284,15 @@ export function createServer(opts: ServerOptions) {
       return c.json({ error: "content is required" }, 400);
     }
     try {
-      return await runtime.withConfigLock(() => {
-        writeFileSync(runtime.configPath, body.content, "utf-8");
-        runtime.reload();
-        return c.json({ ok: true, message: "Config saved and reloaded." });
-      });
+      // Parsed and validated before it lands. This route used to write the
+      // request body straight to disk: because runtime.reload() swallows its
+      // own failures, unparseable YAML answered 200 {"ok":true} while the
+      // process kept serving the previous config, and the damage only showed
+      // up at the next restart.
+      const { warnings } = await writeRawConfigText(runtime, body.content);
+      return c.json({ ok: true, message: "Config saved and reloaded.", warnings });
     } catch (err) {
-      return c.json({ error: (err as Error).message }, 500);
+      return c.json({ error: (err as Error).message }, err instanceof ConfigWriteRejected ? 400 : 500);
     }
   });
 
@@ -2358,10 +2359,7 @@ export function createServer(opts: ServerOptions) {
     }
 
     try {
-      return await runtime.withConfigLock(() => {
-        const raw = existsSync(runtime.configPath) ? readFileSync(runtime.configPath, "utf-8") : "";
-        const doc = (YAML.parse(raw) as Record<string, unknown>) ?? {};
-
+      const { warnings } = await updateRawConfig(runtime, (doc) => {
         // --- Update providers section (connection details only) ---
         const existingProviders = (doc.providers as Record<string, Record<string, unknown>> | undefined) ?? {};
         const providers: Record<string, unknown> = {};
@@ -2426,13 +2424,10 @@ export function createServer(opts: ServerOptions) {
           }
           doc.agents = agents;
         }
-
-        writeFileSync(runtime.configPath, YAML.stringify(doc), "utf-8");
-        runtime.reload();
-        return c.json({ ok: true, message: "Provider config saved and reloaded." });
       });
+      return c.json({ ok: true, message: "Provider config saved and reloaded.", warnings });
     } catch (err) {
-      return c.json({ error: (err as Error).message }, 500);
+      return c.json({ error: (err as Error).message }, err instanceof ConfigWriteRejected ? 400 : 500);
     }
   });
 
