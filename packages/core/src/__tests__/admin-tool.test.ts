@@ -272,6 +272,53 @@ describe("AdminTool.create_tool", () => {
 });
 
 describe("AdminTool.update_config", () => {
+  /**
+   * Observed in the wild: an agent created another agent with `name:` and
+   * `temp:` instead of `temperature:`. The write succeeded, the manifest
+   * export carried the typo forward, and the new agent ran at the default
+   * temperature for a day. The tool call is the moment someone is looking.
+   */
+  it("refuses an agent block whose keys would never be read", async () => {
+    const { runtime, configPath } = buildRuntime("agents: {}\n");
+    const admin = new AdminTool(runtime);
+    const before = readFileSync(configPath, "utf-8");
+
+    const result = await admin.execute(
+      {
+        action: "create_agent",
+        name: "notion-manager",
+        value: { description: "Notion SME", name: "notion-manager", temp: 0.3 },
+      },
+      ctx(),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('unknown key "temp"');
+    expect(result.error).toContain('Did you mean "temperature"');
+    // Nothing partially applied.
+    expect(readFileSync(configPath, "utf-8")).toBe(before);
+  });
+
+  it("writes the same agent once its keys are real", async () => {
+    const { runtime, configPath } = buildRuntime("agents: {}\n");
+    const admin = new AdminTool(runtime);
+
+    const result = await admin.execute(
+      {
+        action: "create_agent",
+        name: "notion-manager",
+        value: { description: "Notion SME", temperature: 0.3 },
+      },
+      ctx(),
+    );
+
+    expect(result.success).toBe(true);
+    const written = YAML.parse(readFileSync(configPath, "utf-8")) as {
+      agents: Record<string, { temperature: number }>;
+    };
+    expect(written.agents["notion-manager"].temperature).toBe(0.3);
+  });
+
   it("writes a dashboard widget through the allowlisted dashboard. prefix", async () => {
     const { runtime, configPath } = buildRuntime("agents: {}\n");
     const admin = new AdminTool(runtime);

@@ -216,12 +216,16 @@ export type {
 export {
   DEFAULT_DISABLED_PLUGIN_MODULES,
   DEFAULT_PLUGIN_MODULES,
+  findUnknownKeys,
   KNOWN_TOP_LEVEL_CONFIG_KEYS,
   loadConfig,
   mergeProjectOverlay,
   migrateDefaultPlugins,
+  normalizeRawConfig,
   validateConfig,
 } from "./config.js";
+export type { ConfigWriteHost, ConfigWriteResult } from "./config-write.js";
+export { ConfigWriteRejected, updateRawConfig, writeRawConfigText } from "./config-write.js";
 export { ensureContextDir, loadAllContext, loadContextFiles, migrateContextDir } from "./context.js";
 export type { CompiledSchedule } from "./cron/schedule-dsl.js";
 export { compileSchedule, scheduleToCron } from "./cron/schedule-dsl.js";

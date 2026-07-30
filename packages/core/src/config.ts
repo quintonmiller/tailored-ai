@@ -1414,21 +1414,74 @@ function editDistance(a: string, b: string): number {
 }
 
 /** Validate config and return warnings. Does not throw — issues are advisory. */
-export function validateConfig(config: AgentConfig): string[] {
-  const warnings: string[] = [];
-
-  // Warn on unrecognized top-level keys: a feature configured under a typo'd
-  // key, or one a newer doc describes but this installed version predates, is
-  // silently ignored otherwise (#252). Top-level only — nested bags are open.
+/**
+ * Unrecognized top-level keys: a feature configured under a typo'd key, or one
+ * a newer doc describes but this installed version predates, is silently
+ * ignored otherwise (#252). Top-level only — nested bags are open.
+ */
+function unknownTopLevelKeys(config: AgentConfig): string[] {
   const supportedList = [...KNOWN_TOP_LEVEL_CONFIG_KEYS].sort().join(", ");
+  const found: string[] = [];
   for (const key of Object.keys(config)) {
     if (KNOWN_TOP_LEVEL_CONFIG_KEYS.has(key) || DEPRECATED_TOP_LEVEL_CONFIG_KEYS.has(key)) continue;
-    warnings.push(
+    found.push(
       `config.yaml: unknown top-level key "${key}" — it will be ignored. ` +
         `If it's from newer docs your installed version may predate it; otherwise it may be a typo. ` +
         `Supported keys: ${supportedList}`,
     );
   }
+  return found;
+}
+
+/**
+ * An unknown key inside one agent block.
+ *
+ * Top-level keys have been checked since #252, but the comment there says
+ * "nested bags are open" — and an agent block is not a bag, it is a typed
+ * record. Four agents in one deployment carried their whole persona under
+ * `system_prompt:` instead of `instructions:`. It parsed, it round-tripped
+ * into their manifests, and it reached nothing: those agents ran with an
+ * empty instructions layer for weeks with no warning anywhere.
+ */
+function unknownAgentKeysFor(agentName: string, agent: AgentDefinition | undefined): string[] {
+  const found: string[] = [];
+  for (const key of Object.keys(agent ?? {})) {
+    if (KNOWN_AGENT_KEYS.has(key)) continue;
+    const suggestion = nearestKey(key, KNOWN_AGENT_KEYS);
+    found.push(
+      `Agent "${agentName}": unknown key "${key}" — it will be ignored` +
+        (suggestion ? `. Did you mean "${suggestion}"?` : ". Keys are camelCase."),
+    );
+  }
+  return found;
+}
+
+/**
+ * The subset of config problems meaning "this parses but is never read".
+ *
+ * Split out of {@link validateConfig} because a *write* has to answer a
+ * narrower question than startup does. Most of what validateConfig reports can
+ * be legitimately transient — a tool whose credential env var isn't exported
+ * yet, a provider a plugin registers later — and refusing a write on those
+ * would make the config unwritable for reasons unrelated to the write. An
+ * unrecognized key is never transient: nothing will ever read it, and the
+ * author is right there to fix it.
+ *
+ * Emits the same strings `validateConfig` does, so a caller can diff against a
+ * pre-write snapshot by message identity.
+ */
+export function findUnknownKeys(config: AgentConfig): string[] {
+  const found = unknownTopLevelKeys(config);
+  for (const [agentName, agent] of Object.entries(config.agents ?? {})) {
+    found.push(...unknownAgentKeysFor(agentName, agent));
+  }
+  return found;
+}
+
+export function validateConfig(config: AgentConfig): string[] {
+  const warnings: string[] = [];
+
+  warnings.push(...unknownTopLevelKeys(config));
 
   // Collect all tool names that would be enabled
   const enabledToolNames = new Set<string>();
@@ -1503,22 +1556,7 @@ export function validateConfig(config: AgentConfig): string[] {
 
   // Validate agent tool references
   for (const [agentName, agent] of Object.entries(config.agents)) {
-    // An unknown key inside an agent block.
-    //
-    // Top-level keys have been checked since #252, but the comment there says
-    // "nested bags are open" — and an agent block is not a bag, it is a typed
-    // record. Four agents in one deployment carried their whole persona under
-    // `system_prompt:` instead of `instructions:`. It parsed, it round-tripped
-    // into their manifests, and it reached nothing: those agents ran with an
-    // empty instructions layer for weeks with no warning anywhere.
-    for (const key of Object.keys(agent ?? {})) {
-      if (KNOWN_AGENT_KEYS.has(key)) continue;
-      const suggestion = nearestKey(key, KNOWN_AGENT_KEYS);
-      warnings.push(
-        `Agent "${agentName}": unknown key "${key}" — it will be ignored` +
-          (suggestion ? `. Did you mean "${suggestion}"?` : ". Keys are camelCase."),
-      );
-    }
+    warnings.push(...unknownAgentKeysFor(agentName, agent));
 
     if (agent.tools) {
       for (const toolName of agent.tools) {
@@ -1820,16 +1858,17 @@ export function validateConfig(config: AgentConfig): string[] {
   return warnings;
 }
 
-export function loadConfig(configPath?: string): AgentConfig {
-  const path = configPath ?? resolve(process.cwd(), "config.yaml");
-
-  if (!existsSync(path)) {
-    return DEFAULT_CONFIG;
-  }
-
-  const raw = readFileSync(path, "utf-8");
-  const parsed = YAML.parse(raw) as Record<string, unknown>;
-  const interpolated = deepInterpolate(parsed) as Record<string, unknown>;
+/**
+ * Everything `loadConfig` does after `YAML.parse`: interpolation, the
+ * back-compat migrations, and the merge over `DEFAULT_CONFIG`.
+ *
+ * Exported so a *pending* write can be validated as the config it would
+ * become rather than as the raw document. Validating the raw document
+ * instead would miss every problem the migrations introduce or hide, and
+ * would report defaults as missing.
+ */
+export function normalizeRawConfig(parsed: Record<string, unknown>): AgentConfig {
+  const interpolated = deepInterpolate(parsed ?? {}) as Record<string, unknown>;
 
   // Backward compat: if YAML has 'profiles:' key, merge into 'agents:' and warn
   if (interpolated.profiles && typeof interpolated.profiles === "object") {
@@ -1856,6 +1895,17 @@ export function loadConfig(configPath?: string): AgentConfig {
   // re-appends any missing default modules to whatever the user has.
   migrateDefaultPlugins(merged);
   return merged;
+}
+
+export function loadConfig(configPath?: string): AgentConfig {
+  const path = configPath ?? resolve(process.cwd(), "config.yaml");
+
+  if (!existsSync(path)) {
+    return DEFAULT_CONFIG;
+  }
+
+  const raw = readFileSync(path, "utf-8");
+  return normalizeRawConfig(YAML.parse(raw) as Record<string, unknown>);
 }
 
 /**

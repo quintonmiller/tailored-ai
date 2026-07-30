@@ -1,6 +1,7 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import YAML from "yaml";
 import type { CustomToolConfig } from "../config.js";
+import { ConfigWriteRejected, updateRawConfig } from "../config-write.js";
 import type { AgentRuntime } from "../runtime.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
 
@@ -163,16 +164,16 @@ export function readRawConfig(configPath: string): Record<string, unknown> {
 
 /**
  * Write a path-scoped patch to the raw YAML config and trigger a runtime
- * reload. Serialized via `runtime.withConfigLock`. `value === undefined`
- * deletes the path. Throws if the resulting YAML doesn't round-trip.
+ * reload. `value === undefined` deletes the path. Throws
+ * {@link ConfigWriteRejected} — leaving the file untouched — if the result
+ * would carry config that parses but is never read.
  */
 export async function writeRawConfigPath(
   runtime: AgentRuntime,
   path: string,
   value: unknown | undefined,
 ): Promise<void> {
-  return runtime.withConfigLock(() => {
-    const raw = readRawConfig(runtime.configPath);
+  await updateRawConfig(runtime, (raw) => {
     if (value === undefined) {
       // Delete the path.
       const keys = path.split(".");
@@ -186,10 +187,6 @@ export async function writeRawConfigPath(
     } else {
       setNestedValue(raw, path, value);
     }
-    const yaml = YAML.stringify(raw);
-    YAML.parse(yaml); // validate round-trip
-    writeFileSync(runtime.configPath, yaml, "utf-8");
-    runtime.reload();
   });
 }
 
@@ -245,7 +242,13 @@ export class AdminTool implements Tool {
         return this.updateConfig(args.path as string, args.value);
       case "create_agent":
       case "create_profile": // backward compat alias
-        return this.createAgent(args.name as string, (args.agent ?? args.profile) as Record<string, unknown>);
+        // `value` is accepted because the parameter schema advertises it for
+        // create_agent, and a model that reads the schema and sends it should
+        // not get "agent object is required" back.
+        return this.createAgent(
+          args.name as string,
+          (args.agent ?? args.profile ?? args.value) as Record<string, unknown>,
+        );
       case "create_tool":
         return this.createTool(args.name as string, args.tool as Record<string, unknown>, context);
       case "list_agents":
@@ -282,50 +285,42 @@ export class AdminTool implements Tool {
       };
     }
 
-    return this.runtime.withConfigLock(() => {
-      let raw: Record<string, unknown>;
-      try {
-        const content = readFileSync(this.runtime.configPath, "utf-8");
-        raw = (YAML.parse(content) as Record<string, unknown>) ?? {};
-      } catch {
-        raw = {};
-      }
+    // Checked before the write rather than inside it: this one needs the live
+    // tool registry, which the shared writer deliberately knows nothing about.
+    // Refused rather than warned. A `tools:` entry that names nothing is dead
+    // weight at best; historically it threw and took the agent offline, and
+    // even now it silently costs the agent a capability it was configured to
+    // have. The write is the moment someone is looking, so it is the moment to
+    // say so.
+    const candidate = readRawConfig(this.runtime.configPath);
+    setNestedValue(candidate, path, value);
+    const badTools = this.unknownToolRefs(candidate);
+    if (badTools.length > 0) {
+      return {
+        success: false,
+        output: "",
+        error:
+          `Not written — unknown tool(s) ${badTools.map((t) => `"${t}"`).join(", ")}. ` +
+          `Available: ${this.runtime
+            .getResolvableTools()
+            .map((t) => t.name)
+            .join(", ")}`,
+      };
+    }
 
-      setNestedValue(raw, path, value);
-
-      const badTools = this.unknownToolRefs(raw);
-      if (badTools.length > 0) {
-        // Refused rather than warned. A `tools:` entry that names nothing is
-        // dead weight at best; historically it threw and took the agent
-        // offline, and even now it silently costs the agent a capability it
-        // was configured to have. The write is the moment someone is looking,
-        // so it is the moment to say so.
-        return {
-          success: false,
-          output: "",
-          error:
-            `Not written — unknown tool(s) ${badTools.map((t) => `"${t}"`).join(", ")}. ` +
-            `Available: ${this.runtime
-              .getResolvableTools()
-              .map((t) => t.name)
-              .join(", ")}`,
-        } as ToolResult;
-      }
-
-      // Validate round-trip
-      const yaml = YAML.stringify(raw);
-      try {
-        YAML.parse(yaml);
-      } catch (err) {
-        return { success: false, output: "", error: `Generated invalid YAML: ${(err as Error).message}` } as ToolResult;
-      }
-
-      writeFileSync(this.runtime.configPath, yaml, "utf-8");
+    try {
+      const { warnings } = await updateRawConfig(this.runtime, (raw) => {
+        setNestedValue(raw, path, value);
+      });
       console.log(`[admin] Updated config path "${path}"`);
-      this.runtime.reload();
-
-      return { success: true, output: `Config updated at "${path}" and reloaded.` } as ToolResult;
-    });
+      const note = warnings.length > 0 ? `\nStill worth a look: ${warnings.join("; ")}` : "";
+      return { success: true, output: `Config updated at "${path}" and reloaded.${note}` };
+    } catch (err) {
+      if (err instanceof ConfigWriteRejected) {
+        return { success: false, output: "", error: err.message };
+      }
+      return { success: false, output: "", error: `Config not written: ${(err as Error).message}` };
+    }
   }
 
   /**
@@ -386,43 +381,35 @@ export class AdminTool implements Tool {
     const agentDef = agentName ? config.agents[agentName] : undefined;
     const needsAllowlistPatch = !!(agentDef?.tools && !agentDef.tools.includes(name));
 
-    return this.runtime.withConfigLock(() => {
-      let raw: Record<string, unknown>;
-      try {
-        const content = readFileSync(this.runtime.configPath, "utf-8");
-        raw = (YAML.parse(content) as Record<string, unknown>) ?? {};
-      } catch {
-        raw = {};
+    // Deliberately NOT added to the calling agent's `tools:` list.
+    //
+    // Creating a tool and being allowed to run it are different decisions.
+    // Self-granting collapsed them: an agent with no `exec` could write a
+    // shell-backed tool and hand it to itself in one call, which is shell it
+    // was never granted. The tool now honours the caller's boundary and
+    // sandbox, so this is no longer an escape — but for an agent with no
+    // declared boundary it is still an unbounded host shell, and whether an
+    // agent gets one is not the agent's call.
+    //
+    // Said out loud in the result rather than done quietly, so the agent
+    // knows why its new tool is not callable yet.
+    const allowlistPatched = false;
+
+    try {
+      await updateRawConfig(this.runtime, (raw) => {
+        setNestedValue(raw, `custom_tools.${name}`, validation.tool);
+      });
+    } catch (err) {
+      if (err instanceof ConfigWriteRejected) {
+        return { success: false, output: "", error: err.message };
       }
+      return { success: false, output: "", error: `Tool not created: ${(err as Error).message}` };
+    }
+    console.log(
+      `[admin] Created custom tool "${name}"${allowlistPatched ? ` (allowlisted on agent "${agentName}")` : ""}`,
+    );
 
-      setNestedValue(raw, `custom_tools.${name}`, validation.tool);
-
-      // Deliberately NOT added to the calling agent's `tools:` list.
-      //
-      // Creating a tool and being allowed to run it are different decisions.
-      // Self-granting collapsed them: an agent with no `exec` could write a
-      // shell-backed tool and hand it to itself in one call, which is shell it
-      // was never granted. The tool now honours the caller's boundary and
-      // sandbox, so this is no longer an escape — but for an agent with no
-      // declared boundary it is still an unbounded host shell, and whether an
-      // agent gets one is not the agent's call.
-      //
-      // Said out loud in the result rather than done quietly, so the agent
-      // knows why its new tool is not callable yet.
-      const allowlistPatched = false;
-
-      const yaml = YAML.stringify(raw);
-      try {
-        YAML.parse(yaml);
-      } catch (err) {
-        return { success: false, output: "", error: `Generated invalid YAML: ${(err as Error).message}` } as ToolResult;
-      }
-      writeFileSync(this.runtime.configPath, yaml, "utf-8");
-      console.log(
-        `[admin] Created custom tool "${name}"${allowlistPatched ? ` (allowlisted on agent "${agentName}")` : ""}`,
-      );
-      this.runtime.reload();
-
+    {
       const lines: string[] = [];
       lines.push(`Tool "${name}" created and reloaded.`);
       lines.push(`description: ${validation.tool.description}`);
@@ -446,8 +433,8 @@ export class AdminTool implements Tool {
       }
       lines.push(`Call it on the next round as "${name}".`);
 
-      return { success: true, output: lines.join("\n") } as ToolResult;
-    });
+      return { success: true, output: lines.join("\n") };
+    }
   }
 
   private listAgents(): ToolResult {
