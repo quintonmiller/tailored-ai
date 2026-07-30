@@ -11,6 +11,42 @@ Agents are named configurations defined in `config.yaml` under `agents:`. They c
 - Sub-agents are depth-1 only (they don't get the delegate tool)
 - Each delegation creates an ephemeral session keyed `delegate:<parentSessionId>:<uuid>`
 
+### Knowing how a delegation went
+
+**Synchronous** (`async` omitted or false) blocks and returns the sub-agent's
+answer. A sub-agent that ran out of tool rounds, or looped on the same call, is
+reported as a **failure** — `success: false` with the reason and the partial
+output. It used to come back as a successful call whose text happened to be
+`[Agent stopped: …]`, which the caller could not distinguish from an answer;
+observed live, an EA silently retried instead of reporting the problem.
+
+**Asynchronous** (`async: true`) returns a task id immediately and runs the
+sub-agent in the background.
+
+| | you get | you find out by |
+|---|---|---|
+| `async: true` | task id | calling `task_status(taskId: …)` yourself |
+| `async: true, notify: true` | task id | being sent the result when it finishes |
+
+`notify: false` is the default: a clean hand-off where you hear nothing back.
+`notify: true` delivers the outcome — success *or* failure — into your own
+session through the same path as `room(action="dm")`, attributed to the agent
+that did the work.
+
+Two limits worth knowing, both from the in-memory task registry
+(`agent/tasks.ts`):
+
+- **Results are dropped after an hour**, and eviction is lazy — it runs when the
+  next background task starts, so a burst of delegations can sweep an unread
+  result early. Observed live: a result sat unread for 51 minutes, 9 minutes
+  from being evicted, because the delegating agent had no way to know it was
+  ready.
+- **Nothing survives a restart.** In-flight and completed background tasks are
+  gone with no notice to whoever delegated them.
+
+So an agent that delegates without `notify` and then tells someone "I'll follow
+up" is promising something it cannot do. The tool result says as much.
+
 **CLI usage:**
 ```bash
 pnpm run dev -- -a researcher -m "Find AI news"   # use a named agent
