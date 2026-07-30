@@ -29,6 +29,12 @@ import { makeRoomSessionKey } from "../rooms/watcher.js";
 import type { AgentRuntime } from "../runtime.js";
 import { DiscordApprovalHandler } from "./discord-approval.js";
 import { getDiscordConfig } from "./discord-config.js";
+import {
+  buildMemoryCommand,
+  handleMemoryAutocomplete,
+  handleMemoryCommand,
+  type MemoryCommandDeps,
+} from "./discord-memory-commands.js";
 import { buildRoomCommand, handleRoomAutocomplete, handleRoomCommand } from "./discord-room-commands.js";
 import { DiscordRoomBackend } from "./discord-rooms.js";
 import type { Channel } from "./interface.js";
@@ -126,6 +132,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
 
     this.client.on(Events.InteractionCreate, (interaction) => {
       if (interaction.isAutocomplete()) {
+        handleMemoryAutocomplete(interaction, this.memoryCommandDeps());
         handleRoomAutocomplete(interaction, {
           store: this.runtime.getRoomStore(),
           identities: () => this.identities(),
@@ -185,6 +192,18 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     this.rooms = undefined;
     this.client.destroy();
     console.log("[discord] Disconnected");
+  }
+
+  /** Deps for `/memory`. Agent names come from the registry first, so authored-resource agents appear too. */
+  private memoryCommandDeps(): MemoryCommandDeps {
+    return {
+      db: this.runtime.db,
+      listAgents: () => {
+        const ids = (this.runtime.getAgentRegistry?.().list?.() ?? []).map((r) => r.id);
+        const fromConfig = Object.keys(this.runtime.getConfig().agents ?? {});
+        return [...new Set([...ids, ...fromConfig])].sort();
+      },
+    };
   }
 
   /**
@@ -753,6 +772,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     // exists" would lock the door from the inside. The other subcommands say
     // plainly that the channel isn't a room.
     commands.push(buildRoomCommand());
+    commands.push(buildMemoryCommand());
 
     // Config-driven commands
     for (const [name, cmd] of Object.entries(config.commands)) {
@@ -835,6 +855,13 @@ export class DiscordChannel implements Channel, OutboundNotifier {
   }
 
   private async handleInteraction(interaction: ChatInputCommandInteraction): Promise<void> {
+    // Same reasoning as the room commands below: answers straight from the
+    // database, so it must not queue behind a running agent or be swallowed by
+    // the per-user "already processing" guard.
+    if (await handleMemoryCommand(interaction, this.memoryCommandDeps(), this.runtime.getConfig())) {
+      return;
+    }
+
     // Room management answers from the database, not the model — it should not
     // queue behind whatever the agent is doing, and it must not be swallowed by
     // the per-user "already processing" guard below.
