@@ -1088,6 +1088,8 @@ export class AgentRuntime {
       extraInstructions: resolved.instructions,
       maxToolRounds: resolved.maxToolRounds,
       maxHistoryTokens: config.agent.maxHistoryTokens,
+      maxToolOutputChars: config.agent.maxToolOutputChars,
+      toolOutputLimits: collectToolOutputLimits(config),
       temperature: resolved.temperature,
       thinking: resolved.thinking,
       contextDir: this.contextDir,
@@ -1217,4 +1219,23 @@ export class AgentRuntime {
       return this._provider;
     }
   }
+}
+
+/**
+ * Per-tool output caps declared as `tools.<id>.maxOutputChars`.
+ *
+ * Resolved here, in the one place config becomes loop options, so the key is
+ * read somewhere rather than being another setting that parses and reaches
+ * nothing. `tools:` is an open map, so an MCP tool can be named by its
+ * resolved `mcp_<server>_<tool>` id and the loop's lookup will find it.
+ */
+function collectToolOutputLimits(config: AgentConfig): Record<string, number> | undefined {
+  let limits: Record<string, number> | undefined;
+  for (const [toolId, toolCfg] of Object.entries(config.tools ?? {})) {
+    const declared = (toolCfg as { maxOutputChars?: unknown } | undefined)?.maxOutputChars;
+    if (typeof declared !== "number" || !Number.isFinite(declared)) continue;
+    limits ??= {};
+    limits[toolId] = declared;
+  }
+  return limits;
 }

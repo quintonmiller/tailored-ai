@@ -19,6 +19,7 @@ import { buildChatLiveState, renderChatLiveState } from "./chat-live-state.js";
 import { buildMemoryBlockWithMeta } from "./memory-inject.js";
 import type { Session } from "./session.js";
 import { composeSystemPrompt, resolveBase, resolveCustomLayers, type SystemPromptOverride } from "./system-prompt.js";
+import { capToolOutput, resolveToolOutputLimit } from "./tool-output.js";
 
 const MAX_RETRIES = 1;
 const RETRY_DELAY_MS = 1000;
@@ -122,6 +123,12 @@ export interface AgentLoopOptions {
   extraInstructions: string;
   maxToolRounds: number;
   maxHistoryTokens: number;
+  /** Chars of a single tool result that reach history. 0 disables. Defaults to {@link DEFAULT_MAX_TOOL_OUTPUT_CHARS}. */
+  maxToolOutputChars?: number;
+  /** Per-tool override of `maxToolOutputChars`, keyed by resolved tool name. */
+  toolOutputLimits?: Record<string, number>;
+  /** Where full pre-truncation output is kept. Defaults to `$TAI_HOME/tool-outputs`. */
+  toolOutputDir?: string;
   temperature: number;
   contextDir?: string;
   /** Token threshold for the oversized-context warning. 0 disables. */
@@ -561,7 +568,18 @@ async function executeToolCall(
   const startTime = Date.now();
   const result = await tool.execute(call.arguments, context);
   const durationMs = Date.now() - startTime;
-  let resultOutput = result.success ? result.output : `Error: ${result.error ?? "Unknown error"}`;
+  const rawOutput = result.success ? result.output : `Error: ${result.error ?? "Unknown error"}`;
+  // Capped here, at the one conversion from ToolResult to the string that
+  // becomes history. Every tool — builtin, custom, plugin, MCP — funnels
+  // through this call, and it sits upstream of onToolResult, the tool
+  // Message, saveMessage and the repeat detector, so all of them see the
+  // same bounded string.
+  let resultOutput = await capToolOutput(rawOutput, {
+    toolName: call.name,
+    limit: resolveToolOutputLimit(call.name, opts.toolOutputLimits, opts.maxToolOutputChars),
+    sessionId: opts.session.id,
+    scratchDir: opts.toolOutputDir,
+  });
   if (approvalTimeMs !== undefined) {
     resultOutput += `\n[approved in ${approvalTimeMs}ms, tool completed in ${durationMs}ms]`;
   } else if (durationMs >= 100) {

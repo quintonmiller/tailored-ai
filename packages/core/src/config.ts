@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import YAML from "yaml";
+import { DEFAULT_MAX_TOOL_OUTPUT_CHARS } from "./agent/tool-output.js";
 import type { PermissionsConfig } from "./approval.js";
 import { DEFAULT_AUTOPILOT_TASK_PROMPT } from "./autopilot/task-prompt.js";
 import { DEFAULT_BRIEFING_PROMPT } from "./briefing.js";
@@ -495,6 +496,12 @@ export interface AgentConfig {
     models?: ModelEntry[];
     extraInstructions: string;
     maxHistoryTokens: number;
+    /**
+     * Chars of a single tool result that reach the conversation. `0` disables.
+     * Override per tool with `tools.<id>.maxOutputChars` — including MCP tools,
+     * keyed by their resolved `mcp_<server>_<tool>` name.
+     */
+    maxToolOutputChars: number;
     maxContextTokens: number;
     temperature: number;
     maxToolRounds: number;
@@ -1135,6 +1142,7 @@ const DEFAULT_CONFIG: AgentConfig = {
     defaultProvider: "openai_compatible",
     extraInstructions: "",
     maxHistoryTokens: 2000,
+    maxToolOutputChars: DEFAULT_MAX_TOOL_OUTPUT_CHARS,
     maxContextTokens: 32768,
     temperature: 0.3,
     maxToolRounds: 10,
