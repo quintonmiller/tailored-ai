@@ -138,3 +138,25 @@ describe("resolveToolOutputLimit", () => {
     expect(resolveToolOutputLimit("read", { read: 0 }, 32_000)).toBe(0);
   });
 });
+
+describe("the marker's file pointer is readable", () => {
+  /**
+   * A pointer we hand out and then refuse is worse than no pointer. Agents
+   * with a worktree boundary (coder, reviewer, anything the task watcher
+   * dispatches) are exactly the ones that hit large outputs.
+   */
+  it("is inside the sandbox scratch allowlist", async () => {
+    const { checkSandboxBoundary } = await import("../tools/sandbox-boundary.js");
+    const { homedir } = await import("node:os");
+
+    const pointer = join(homedir(), ".tai", "tool-outputs", "s1", "some_tool-abc123.txt");
+    const verdict = checkSandboxBoundary(pointer, {
+      sessionId: "s1",
+      workingDirectory: "/tmp/worktree",
+      workingDirectoryBoundary: "/tmp/worktree",
+      env: {},
+    } as never);
+
+    expect(verdict.ok).toBe(true);
+  });
+});
