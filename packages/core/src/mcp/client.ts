@@ -93,8 +93,34 @@ export interface ConnectOptions {
    * required to send it.
    */
   onToolListChanged?: () => void;
+  /**
+   * Called when the connection drops on its own — the stdio child exited, or
+   * the HTTP endpoint stopped answering.
+   *
+   * Nothing watched for this before, and the consequence was not a noisy log
+   * but a permanently dead server: the connection stayed in the manager's
+   * active set with an unchanged config signature, so reconcile skipped it
+   * forever. Its tools stayed registered and every call returned
+   * "MCP call failed", which the agent cannot distinguish from a bad request.
+   */
+  onClose?: () => void;
   /** Test seam: bypass config-driven transport construction. */
   createTransport?: () => Promise<unknown> | unknown;
+}
+
+/**
+ * Whether a failure means "a human must go and fix a credential".
+ *
+ * Worth separating from every other failure because the response differs: a
+ * 503 wants a retry, an expired token wants a person. Notion PATs expire (a
+ * year at most), so this is a scheduled outage the deployment should be able to
+ * name rather than discover through an agent behaving oddly.
+ */
+export function isAuthFailure(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  return /\b(401|403)\b|unauthorized|forbidden|invalid[_ -]?(token|api[_ -]?key|credentials)|authentication failed|expired[_ -]?token/i.test(
+    msg,
+  );
 }
 
 /**
@@ -134,6 +160,12 @@ export async function connectMcpServer(
 
   const client = new sdk.Client({ name: "tailored-ai", version: "0.0.0" });
   await client.connect(transport);
+
+  if (opts.onClose) {
+    // Assigned defensively: `onclose` is on the SDK's Protocol base class, but
+    // the structural type here deliberately does not model the whole SDK.
+    (client as unknown as { onclose?: () => void }).onclose = () => opts.onClose?.();
+  }
 
   if (opts.onToolListChanged) {
     // Catch-all handler instead of a schema-bound one so we don't need the
