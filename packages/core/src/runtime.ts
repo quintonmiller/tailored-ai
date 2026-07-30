@@ -17,6 +17,7 @@ import {
   validateConfig,
 } from "./config.js";
 import { getProject } from "./db/project-queries.js";
+import { updateSessionModelProvider } from "./db/queries.js";
 import { type EventBus, TypedEventBus } from "./events.js";
 import { HttpRouteRegistry } from "./http/registry.js";
 import type { MemoryBackend } from "./memory/interface.js";
@@ -1080,7 +1081,7 @@ export class AgentRuntime {
     const agentProvider = this.resolveAgentProvider(resolved.provider, agentName);
     return {
       provider: agentProvider,
-      session: opts.session,
+      session: this.alignSessionToAgent(opts.session, resolved),
       db: this.db,
       cwd: callProject?.path,
       tools: dedup([...resolved.tools, ...extraTools]),
@@ -1145,6 +1146,33 @@ export class AgentRuntime {
       // mid-run, the same way `getTools` re-resolves tools.
       getProvider: () => this.resolveAgentProvider(resolved.provider, agentName),
     };
+  }
+
+  /**
+   * Make the session's model and provider match the agent that is about to run.
+   *
+   * The loop sends `session.model`, not the resolved agent's model. Callers
+   * that create the session before they know which agent will handle it —
+   * every server route does, `findOrCreateSession(db, key, runtime.getModel(),
+   * config.agent.defaultProvider)` — therefore stamped it with the deployment
+   * defaults. Once an agent could select its own provider, that mismatch
+   * became visible in the worst way: the request went to the agent's provider
+   * carrying the *global* model name, so a correctly-configured agent failed
+   * with "qwen3.6-27b-vllm is not a valid model ID" from OpenRouter.
+   *
+   * Corrected here rather than in each caller because this is the single place
+   * that knows both the session and the resolved agent. The row is updated too,
+   * so the transcript records the model that actually answered.
+   */
+  private alignSessionToAgent(session: Session, resolved: { model: string; provider: string }): Session {
+    if (session.model === resolved.model && session.provider === resolved.provider) return session;
+    try {
+      updateSessionModelProvider(this.db, session.id, resolved.model, resolved.provider);
+    } catch {
+      // A caller with a synthetic session (tests, dry runs) may have no row.
+      // The in-memory correction below is what the loop actually reads.
+    }
+    return { ...session, model: resolved.model, provider: resolved.provider };
   }
 
   /**

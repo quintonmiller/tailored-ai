@@ -163,3 +163,38 @@ describe("model defaulting", () => {
     expect(resolveAgent("onRemote", withModel, []).model).toBe("vendor/something-else");
   });
 });
+
+/**
+ * The other half of the same bug. The loop sends `session.model`, and every
+ * server route creates the session with the deployment defaults before it
+ * knows which agent will handle the turn. Once an agent could select its own
+ * provider, the mismatch became visible in the worst way: the request reached
+ * the agent's provider carrying the *global* model name.
+ */
+describe("session model follows the agent", () => {
+  const staleSession = () => ({ id: "s-stale", model: "local-model", provider: "local" }) as never;
+
+  it("sends the agent's model, not the one stamped on the session", () => {
+    const opts = runtime.buildLoopOptions({ session: staleSession(), agentName: "onRemote" });
+
+    expect(opts.session.model).toBe("vendor/remote-model");
+    expect(opts.session.provider).toBe("remote");
+  });
+
+  it("leaves a session alone when it already matches", () => {
+    const session = { id: "s-ok", model: "local-model", provider: "local" } as never;
+    const opts = runtime.buildLoopOptions({ session, agentName: "onDefault" });
+
+    expect(opts.session).toBe(session);
+  });
+
+  it("keeps the rest of the session intact", () => {
+    const opts = runtime.buildLoopOptions({
+      session: { id: "s-keep", model: "local-model", provider: "local", projectId: "p1" } as never,
+      agentName: "onRemote",
+    });
+
+    expect(opts.session.id).toBe("s-keep");
+    expect((opts.session as { projectId?: string }).projectId).toBe("p1");
+  });
+});
