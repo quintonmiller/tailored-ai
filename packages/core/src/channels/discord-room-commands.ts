@@ -152,7 +152,11 @@ export function buildRoomCommand(): SlashCommandBuilder {
           .setDescription("How many turns to take back. 0 restores the last rewind.")
           .setRequired(false)
           .setMinValue(0)
-          .setMaxValue(50),
+          // 50 was arbitrary and too low: a shared-scope agent accumulates one
+          // conversation across every room it is in, and the first real use
+          // needed 77. The cap only guards against a fat-fingered 9999, and a
+          // rewind is reversible with turns:0, so it can afford to be generous.
+          .setMaxValue(1000),
       ),
   );
 
