@@ -159,8 +159,21 @@ export function resolveAgent(
     }
   }
 
+  // An agent that names its own provider and no model should get THAT
+  // provider's default model, not the global provider's. Falling through to
+  // `defaults.model` sent one provider's model name to another's endpoint,
+  // which surfaces as a confusing 404 for a model that does exist — just not
+  // there.
+  const agentProviderDefaultModel =
+    agent?.provider && agent.provider !== config.agent.defaultProvider
+      ? config.providers[agent.provider]?.defaultModel
+      : undefined;
+
   const resolved: ResolvedAgent = {
-    model: modelOverride ?? agent?.model ?? defaults.model,
+    model:
+      modelOverride ??
+      agent?.model ??
+      (typeof agentProviderDefaultModel === "string" ? agentProviderDefaultModel : defaults.model),
     provider: agent?.provider ?? defaults.provider,
     instructions: agent?.instructions ?? defaults.instructions,
     tools: defaults.tools,
