@@ -81,6 +81,26 @@ function serialize(raw: Record<string, unknown>): string {
 }
 
 /**
+ * `validateConfig`, which must never decide the fate of a write.
+ *
+ * Its checks assume the shapes `DEFAULT_CONFIG` supplies, and a bare `agents:`
+ * (or `tools:`, `cron:`, `providers:`) parses as null and survives `deepMerge`
+ * — `Object.entries(null)` then throws. Called unguarded *after* the file was
+ * written, that turned a completed write into a reported failure: the HTTP
+ * route answered 500 and the admin tool said "Config not written", while
+ * config.yaml had already been replaced and the runtime reloaded.
+ *
+ * Warnings are advisory. A failure to compute them is itself a warning.
+ */
+function advisoryWarnings(config: AgentConfig): string[] {
+  try {
+    return validateConfig(config);
+  } catch (err) {
+    return [`config validation could not complete: ${(err as Error).message}`];
+  }
+}
+
+/**
  * Apply `mutate` to the parsed config document, validate the result, and write
  * it — or throw {@link ConfigWriteRejected} and leave the file untouched.
  *
@@ -118,9 +138,12 @@ export async function updateRawConfig(
     const introduced = introducedIssues(before, after);
     if (introduced.length > 0) throw new ConfigWriteRejected(introduced);
 
+    // Computed before the write so nothing between here and the return can
+    // report a completed write as a failed one.
+    const warnings = advisoryWarnings(after);
     writeFileSync(host.configPath, text, "utf-8");
     host.reload();
-    return { warnings: validateConfig(after) };
+    return { warnings };
   });
 }
 
@@ -153,8 +176,11 @@ export async function writeRawConfigText(host: ConfigWriteHost, text: string): P
     const introduced = introducedIssues(before, after);
     if (introduced.length > 0) throw new ConfigWriteRejected(introduced);
 
+    // Computed before the write so nothing between here and the return can
+    // report a completed write as a failed one.
+    const warnings = advisoryWarnings(after);
     writeFileSync(host.configPath, text, "utf-8");
     host.reload();
-    return { warnings: validateConfig(after) };
+    return { warnings };
   });
 }

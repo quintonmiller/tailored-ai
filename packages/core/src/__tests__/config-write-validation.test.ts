@@ -213,3 +213,37 @@ describe("findUnknownKeys", () => {
     expect(findUnknownKeys(config)).toEqual([]);
   });
 });
+
+/**
+ * Found by adversarial review. `validateConfig` assumes the shapes
+ * DEFAULT_CONFIG supplies, but a bare `agents:` parses as null and survives
+ * deepMerge, so `Object.entries(null)` throws. Called unguarded after the
+ * write, that reported a completed write as a failure — 500 from the HTTP
+ * route, "Config not written" from the admin tool — while the file had
+ * already been replaced and the runtime reloaded.
+ */
+describe("a config shape that breaks validateConfig", () => {
+  const bare = ["agents:", "agent:", "  temperature: 0.4"].join("\n");
+
+  it("does not report a completed write as a failed one", async () => {
+    const host = makeHost(VALID);
+
+    const result = await writeRawConfigText(host, bare);
+
+    expect(host.read()).toBe(bare);
+    expect(host.reloads).toBe(1);
+    // Said out loud rather than thrown.
+    expect(result.warnings.some((w) => w.includes("could not complete"))).toBe(true);
+  });
+
+  it("survives the same shape through a patch", async () => {
+    const host = makeHost(bare);
+
+    const result = await updateRawConfig(host, (raw) => {
+      raw.server = { port: 3001 };
+    });
+
+    expect(YAML.parse(host.read()).server.port).toBe(3001);
+    expect(result.warnings.length).toBeGreaterThan(0);
+  });
+});
