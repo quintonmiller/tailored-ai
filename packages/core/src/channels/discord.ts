@@ -15,6 +15,7 @@ import { compactSession, formatCompactResult } from "../agent/compact.js";
 import { executeHooks } from "../agent/hooks.js";
 import { estimateTokens, runAgentLoop } from "../agent/loop.js";
 import { BASE_SYSTEM_PROMPT } from "../agent/prompt.js";
+import { countTurns, rewindSession, undoRewind } from "../agent/rewind.js";
 import { findOrCreateSession, resetSession } from "../agent/session.js";
 import { executeCommand, isCommand } from "../commands.js";
 import { loadAllContext, loadContextFiles } from "../context.js";
@@ -131,6 +132,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
           requestStatusUpdate: () => Promise.resolve(0),
           postAsPerson: () => Promise.resolve(),
           resetAgentSession: () => ({ cleared: 0, scope: "room" as const }),
+          rewindAgentSession: () => ({ scope: "room" as const, remaining: 0 }),
         });
         return;
       }
@@ -215,6 +217,49 @@ export class DiscordChannel implements Channel, OutboundNotifier {
 
     resetSession(this.runtime.db, key, resolved.model, resolved.provider);
     return { cleared: row?.n ?? 0, scope };
+  }
+
+  /**
+   * Take an agent's conversation back N turns, or restore the last rewind when
+   * `turns` is 0.
+   *
+   * Shares `reset`'s session-key resolution, and therefore its caveat: an agent
+   * on a `shared` scope has one conversation covering every room it is in, so
+   * the scope comes back with the result and the caller says so.
+   */
+  private rewindAgentSession(
+    room: Room,
+    agent: string,
+    turns: number,
+  ): {
+    scope: "room" | "shared";
+    rewound?: { turns: number; messages: number; excerpt: string };
+    restored?: number;
+    remaining: number;
+  } {
+    const resolved = resolveAgent(
+      agent,
+      this.runtime.getConfig(),
+      this.runtime.getResolvableTools(),
+      undefined,
+      this.runtime.contextDir,
+    );
+    const scope = resolved.roomSessionScope;
+    const key = makeRoomSessionKey(formatRoomRef(room.ref), agent, scope);
+    const db = this.runtime.db;
+
+    const restored = turns === 0 ? (undoRewind(db, key)?.restored ?? 0) : undefined;
+    const rewound = turns > 0 ? (rewindSession(db, key, turns) ?? undefined) : undefined;
+
+    const sessionIds = (db.prepare("SELECT id FROM sessions WHERE key = ?").all(key) as { id: string }[]).map(
+      (r) => r.id,
+    );
+    return {
+      scope,
+      rewound: rewound ? { turns: rewound.turns, messages: rewound.messages, excerpt: rewound.excerpt } : undefined,
+      restored,
+      remaining: countTurns(db, sessionIds),
+    };
   }
 
   /**
@@ -779,6 +824,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
             Promise.reject(new Error("The room watcher is not running, so nobody can be asked.")),
           postAsPerson: (room, speaker, to, body) => this.postAsPerson(room, speaker, to, body),
           resetAgentSession: (room, agent) => this.resetAgentSession(room, agent),
+          rewindAgentSession: (room, agent, turns) => this.rewindAgentSession(room, agent, turns),
         },
         this.runtime.getConfig(),
       )

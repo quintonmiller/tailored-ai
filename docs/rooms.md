@@ -547,6 +547,7 @@ than to ask an agent to do:
 | `/room all message:…` | say something to every agent that can wake |
 | `/room status` | ask everyone what they are working on |
 | `/room reset agent:…` | clear an agent's memory (see below) |
+| `/room rewind agent:… [turns:N]` | take a conversation back N turns; `turns:0` undoes (see below) |
 
 All but `all` and `status` reply privately, so managing a room does not clutter
 it. They answer straight from the database rather than going through a model, so
@@ -611,6 +612,39 @@ is no such thing as forgetting one room, and the reply says so rather than
 implying a precision the storage does not have. Building the key without asking
 meant the command wiped an abandoned per-room session, reported *its* message
 count, and left the live one untouched: it looked like it worked every time.
+
+### `/room rewind` — the smaller version
+
+`reset` throws the whole conversation away, which is right when it is a total
+loss and wrong every other time. Most conversations that go bad go bad at a
+point you can name: one misread instruction compounded over six turns, one tool
+result that poisons every later answer, two agents being polite at each other
+until the turn cap stops them. What you want then is to drop the tail, not the
+history.
+
+```
+/room rewind agent:iris             # take back the last turn
+/room rewind agent:iris turns:5     # take back five
+/room rewind agent:iris turns:0     # put the last rewind back
+```
+
+A turn starts at a user message and runs until the next one, so one turn is one
+thing you said plus everything the agent did about it.
+
+**Nothing is deleted.** A rewound message keeps its row and gains a `rewound_at`
+stamp; `getSessionMessages` skips stamped rows, so the model stops seeing them
+while the transcript stays whole. That is what makes `turns:0` possible, and
+"one turn too many" is the obvious mistake to make with a command like this.
+Repeated rewinds compose, and each undo restores exactly one of them — rewinding
+twice and undoing once lands you one step back, not where you started.
+
+Because history is re-read from the database every round, a rewind takes effect
+on the agent's next turn. Nothing needs restarting.
+
+The reply quotes the opening of the first message being taken back. A rewind is
+counted in turns and nobody remembers exactly how many turns ago something was
+said, so the count alone gives you no way to tell a correct cut from an
+off-by-one. It also reports the session scope, for the same reason `reset` does.
 
 ## Making a room
 
