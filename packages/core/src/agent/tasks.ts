@@ -38,7 +38,24 @@ function evictFinished(): void {
   }
 }
 
-export function startTask(description: string, fn: () => Promise<string>): TaskInfo {
+/**
+ * Run `fn` in the background and return a handle immediately.
+ *
+ * `onFinish` fires once, after the record is updated, whether the task
+ * succeeded or failed. Without it the only way to learn an outcome was to ask:
+ * an agent delegated work, was handed an id, promised to follow up, and had no
+ * mechanism to do so. Observed live — a research task finished in 49s and sat
+ * unread for 51 minutes, until a person asked.
+ *
+ * The callback is fire-and-forget and its failures are contained. A notifier
+ * that throws must not corrupt the registry or mask the task's own result,
+ * which is the only thing anyone can still recover afterwards.
+ */
+export function startTask(
+  description: string,
+  fn: () => Promise<string>,
+  onFinish?: (info: TaskInfo) => void | Promise<void>,
+): TaskInfo {
   evictFinished();
 
   const id = `task_${randomUUID().slice(0, 8)}`;
@@ -50,16 +67,29 @@ export function startTask(description: string, fn: () => Promise<string>): TaskI
   };
   tasks.set(id, info);
 
+  const settle = () => {
+    if (!onFinish) return;
+    try {
+      void Promise.resolve(onFinish(info)).catch((err) => {
+        console.error(`[tasks] ${id} finished but notifying failed: ${(err as Error).message}`);
+      });
+    } catch (err) {
+      console.error(`[tasks] ${id} finished but notifying threw: ${(err as Error).message}`);
+    }
+  };
+
   fn().then(
     (result) => {
       info.status = "completed";
       info.completedAt = Date.now();
       info.result = result;
+      settle();
     },
     (err) => {
       info.status = "failed";
       info.completedAt = Date.now();
       info.error = (err as Error).message;
+      settle();
     },
   );
 
