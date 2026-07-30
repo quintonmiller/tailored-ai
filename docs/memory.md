@@ -87,3 +87,26 @@ HTTP API (M7) — under `/api/memory/`:
 - `POST /sweep` — runs `runMemorySweep` on demand
 
 UI (M7): `#/memory` page with stats tiles, recall search, most-referenced panel, full note list with delete/promote actions. Dashboard gains a `Memory` section showing the same stats + top-referenced links to `#/memory`. See `packages/ui/src/pages/Memory.tsx`.
+
+## `/memory` — core memory from Discord
+
+Note that everything above is about *notes*. Core memory is the other store: per-agent, section-based, and injected into the system prompt on every turn (see [Injection & loop integration](#injection--loop-integration)).
+
+```
+/memory show   agent:iris [section:persona]
+/memory set    agent:iris section:persona content:…
+/memory append agent:iris section:persona content:…
+/memory clear  agent:iris section:persona
+```
+
+Sections are the fixed set in `CORE_MEMORY_SECTIONS`: `persona`, `active_threads`, `recent_summary`, `open_questions`, `user_state`.
+
+Why it exists: until this, the only writer was the agent itself through the `core_memory` tool, and there was no reader outside the database. An agent could write itself a persona that shaped every later answer, and nobody could see it — let alone correct it. Sessions could already be reset and rewound; core memory could only be changed by asking the agent nicely.
+
+Three properties worth keeping if you touch it:
+
+- **`set` and `clear` return the text they destroyed.** There is no history table for core memory, so without that an overwrite is unrecoverable. Same reason `/room rewind` hides rather than deletes.
+- **Replies are ephemeral.** A persona is usually written in the first person; a channel is the wrong place to print it.
+- **`updated_by` records the person, not the agent.** Almost every existing row is self-authored, so "who wrote this" is the first thing you want when a persona looks wrong.
+
+An unknown agent or section is refused before any write — a typo would otherwise create core memory nothing ever reads.
