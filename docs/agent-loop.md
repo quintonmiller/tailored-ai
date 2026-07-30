@@ -36,6 +36,34 @@ Warnings are printed at CLI startup via `[config] Warning: ...`. Exported from `
 - Applied to `web_fetch` and `web_search` tools
 - Exported from `@tailored-ai/core`
 
+## Tool Output Cap
+
+A single tool result is bounded before it reaches the conversation. `capToolOutput()` in `packages/core/src/agent/tool-output.ts` runs at the one place a `ToolResult` becomes the string that enters history (`executeToolCall`), so builtin, custom, plugin and MCP tools are all covered by one check — and it sits upstream of `onToolResult`, the `tool` Message, `saveMessage()` and the repeat detector.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `agent.maxToolOutputChars` | 32000 | Chars of one result that reach history. `0` disables. |
+| `tools.<id>.maxOutputChars` | — | Per-tool override, by resolved tool name. |
+
+MCP tools aren't keyed in `tools:` by discovery — they arrive as `mcp_<server>_<tool>`. Because the lookup is by resolved name and `tools:` is an open map, naming one there works:
+
+```yaml
+tools:
+  mcp_notion_API-post-search:
+    maxOutputChars: 8000
+```
+
+Over the limit, the result becomes a head+tail summary led by a marker naming the tool, the real size, and a path to the full output (kept under `$TAI_HOME/tool-outputs/<session>/`). The marker says explicitly that repeating the call returns the same truncated string — the obvious move for a model handed a partial answer is to run it again.
+
+Two properties worth preserving if you touch this:
+
+- **The output is deterministic for a given input.** The scratch file is named by content hash, not timestamp. The loop's stuck-model detector compares consecutive tool results verbatim, so a unique path in the marker would make two identical results compare unequal and silently disable the guard that catches a model re-issuing the truncated call. (`exec`'s own older truncation names its file by timestamp and *does* have this bug.)
+- **A persistence failure still truncates.** Returning the full string because the scratch write failed would reinstate the blowup this exists to prevent.
+
+Why it exists: one `mcp_notion_API-post-search` with `page_size: 50` returned 70,485 chars / 27,187 real tokens against an 18,800-token budget. `trimHistory` evicted from the front until it fit — which meant evicting the user's question — and `ensureUserMessagePresent` spliced the *first* user message back in, so the agent answered a welcome message from an hour earlier and introduced itself. Three times in forty minutes. The symptom reads as amnesia, never as a large tool result.
+
+`exec` keeps its own stricter truncation (4000 bytes, line-based) tuned for test-runner output; this cap is the outer bound for everything else.
+
 ## Tool Execution Timing
 
 Tools taking >= 100ms have `[completed in Xms]` appended to their output, giving the LLM visibility into slow operations.

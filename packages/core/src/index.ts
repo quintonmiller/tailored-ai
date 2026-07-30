@@ -13,6 +13,8 @@ export type { Session } from "./agent/session.js";
 export { findOrCreateSession, loadSession, newSession, resetSession } from "./agent/session.js";
 export type { TaskInfo } from "./agent/tasks.js";
 export { getTask, listTasks, startTask } from "./agent/tasks.js";
+export type { CapToolOutputOptions } from "./agent/tool-output.js";
+export { capToolOutput, DEFAULT_MAX_TOOL_OUTPUT_CHARS, resolveToolOutputLimit } from "./agent/tool-output.js";
 export type {
   ApprovalHandler,
   ApprovalRequest,
