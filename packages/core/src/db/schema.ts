@@ -710,6 +710,22 @@ export function initDatabase(dbPath: string): Database.Database {
     // Column already exists
   }
 
+  // Safe migration: conversation rewind. A rewound message keeps its row and
+  // gains the number of the rewind that hid it; `getSessionMessages` skips
+  // stamped rows. Soft rather than a DELETE so the transcript survives, the
+  // operation is auditable, and one turn too many can be undone — which is the
+  // obvious mistake to make with a rewind command.
+  //
+  // A counter rather than a timestamp: undo has to restore exactly one rewind,
+  // and two rewinds in the same millisecond share an ISO string. That is not a
+  // hypothetical — it failed on the first full test run. Ordering that decides
+  // correctness should not depend on clock resolution.
+  try {
+    db.exec("ALTER TABLE messages ADD COLUMN rewound_batch INTEGER");
+  } catch {
+    // Column already exists
+  }
+
   // Safe migration: drop the legacy hard-coded type CHECK on collections so the
   // `type` column is an open label (steelbook, restaurant, book, …). Earlier DBs
   // created the table with CHECK(type IN ('steelbook',…)); rebuild them in place,

@@ -163,8 +163,18 @@ export function findIdleSessions(
     .all(...params, limit) as SessionRow[];
 }
 
+/**
+ * The conversation as the model should see it.
+ *
+ * Rewound rows are skipped rather than deleted (see `agent/rewind.ts`), so a
+ * rewind takes effect on the very next turn — history is re-read from here on
+ * every round — while the transcript stays whole and the rewind stays
+ * reversible.
+ */
 export function getSessionMessages(db: Database.Database, sessionId: string): Message[] {
-  const rows = db.prepare("SELECT * FROM messages WHERE session_id = ? ORDER BY id ASC").all(sessionId) as MessageRow[];
+  const rows = db
+    .prepare("SELECT * FROM messages WHERE session_id = ? AND rewound_batch IS NULL ORDER BY id ASC")
+    .all(sessionId) as MessageRow[];
 
   return rows.map((row) => ({
     role: row.role as Message["role"],

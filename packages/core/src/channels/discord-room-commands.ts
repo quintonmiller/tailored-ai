@@ -70,6 +70,20 @@ export interface RoomCommandDeps {
    * and whether that memory was this room's alone or shared across all of them.
    */
   resetAgentSession: (room: Room, agent: string) => { cleared: number; scope: "room" | "shared" };
+  /**
+   * Take an agent's conversation back N turns, or restore the last rewind when
+   * `turns` is 0. Nothing is deleted — see `agent/rewind.ts`.
+   */
+  rewindAgentSession: (
+    room: Room,
+    agent: string,
+    turns: number,
+  ) => {
+    scope: "room" | "shared";
+    rewound?: { turns: number; messages: number; excerpt: string };
+    restored?: number;
+    remaining: number;
+  };
   /** Post into a room as a person, addressed to one agent. */
   postAsPerson: (room: Room, speaker: string, to: string[], body: string) => Promise<void>;
 }
@@ -125,6 +139,21 @@ export function buildRoomCommand(): SlashCommandBuilder {
       .setName("reset")
       .setDescription("Clear an agent's memory of this room and start it fresh")
       .addStringOption((o) => o.setName("agent").setDescription("Which agent").setRequired(true).setAutocomplete(true)),
+  );
+
+  cmd.addSubcommand((s) =>
+    s
+      .setName("rewind")
+      .setDescription("Take an agent's conversation back a few turns. Nothing is deleted — undo with turns: 0")
+      .addStringOption((o) => o.setName("agent").setDescription("Which agent").setRequired(true).setAutocomplete(true))
+      .addIntegerOption((o) =>
+        o
+          .setName("turns")
+          .setDescription("How many turns to take back. 0 restores the last rewind.")
+          .setRequired(false)
+          .setMinValue(0)
+          .setMaxValue(50),
+      ),
   );
 
   cmd.addSubcommand((s) =>
@@ -205,6 +234,9 @@ export async function handleRoomCommand(
         return true;
       case "reset":
         await interaction.reply({ content: resetAgent(interaction, deps, room), flags: MessageFlags.Ephemeral });
+        return true;
+      case "rewind":
+        await interaction.reply({ content: rewindAgent(interaction, deps, room), flags: MessageFlags.Ephemeral });
         return true;
       case "remove":
         await interaction.reply({ content: removeAgent(interaction, deps, room), flags: MessageFlags.Ephemeral });
@@ -487,6 +519,49 @@ function resetAgent(interaction: ChatInputCommandInteraction, deps: RoomCommandD
       ? `has forgotten every room — ${cleared} message(s) cleared, because it keeps one shared memory`
       : `has forgotten this room — ${cleared} message(s) cleared`;
   return `**${name}** ${what}. It keeps its place, so it starts from what happens next.`;
+}
+
+/**
+ * Take a conversation back a few turns, or restore the last rewind.
+ *
+ * Distinct from `reset`, which throws the whole conversation away. Most
+ * conversations that go wrong go wrong at a point you can name — one misread
+ * instruction, one tool result that poisons everything after it — and what you
+ * want then is to drop the tail, not the history.
+ *
+ * The reply quotes the first thing being taken back. A rewind is counted in
+ * turns, and nobody remembers exactly how many turns ago something was said,
+ * so the count alone gives no way to tell a correct cut from an off-by-one.
+ */
+function rewindAgent(interaction: ChatInputCommandInteraction, deps: RoomCommandDeps, room: Room): string {
+  const name = (interaction.options.getString("agent") ?? "").trim();
+  const subscribed = deps.store.listSubscriptionsForRoom(formatRoomRef(room.ref)).some((s) => s.agent === name);
+  if (!subscribed) {
+    return `**${name}** is not in "${room.name}". In this room: ${roomAgents(deps, room).join(", ") || "nobody"}.`;
+  }
+
+  const turns = interaction.options.getInteger("turns") ?? 1;
+  const result = deps.rewindAgentSession(room, name, turns);
+
+  // Shared-session agents keep one conversation across every room they are in,
+  // so "this room" would be a quiet lie about the reach of the change — the
+  // same distinction `reset` draws.
+  const reach = result.scope === "shared" ? " across every room, since it keeps one shared memory" : "";
+
+  if (turns === 0) {
+    if (!result.restored) return `**${name}** has no rewind to undo.`;
+    return `Restored ${result.restored} message(s) to **${name}**${reach}. ${result.remaining} turn(s) visible.`;
+  }
+
+  if (!result.rewound) return `**${name}** has nothing to take back.`;
+
+  const { turns: took, messages, excerpt } = result.rewound;
+  const quoted = excerpt ? `\n> ${excerpt}${excerpt.length >= 140 ? "…" : ""}` : "";
+  return (
+    `**${name}** rewound ${took} turn(s) — ${messages} message(s) hidden${reach}. ` +
+    `${result.remaining} turn(s) left. Nothing was deleted; \`/room rewind agent:${name} turns:0\` puts it back.` +
+    `\nFirst thing taken back:${quoted}`
+  );
 }
 
 function removeAgent(interaction: ChatInputCommandInteraction, deps: RoomCommandDeps, room: Room): string {
