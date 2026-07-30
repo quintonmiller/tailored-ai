@@ -82,7 +82,11 @@ export interface RuntimeOptions {
       events?: EventBus;
     },
   ) => Tool[];
-  createProvider: (config: AgentConfig) => { provider: AIProvider; model: string };
+  /**
+   * Build a provider. Called with no `providerId` for the deployment default,
+   * and with one when an agent declares its own `provider:`.
+   */
+  createProvider: (config: AgentConfig, providerId?: string) => { provider: AIProvider; model: string };
   /** Optional embedding-provider factory. Returns undefined when embeddings are disabled. */
   createEmbedder?: (config: AgentConfig) => import("./providers/embedding.js").EmbeddingProvider | undefined;
 }
@@ -120,6 +124,11 @@ export class AgentRuntime {
   private _watcher: FSWatcher | undefined;
   private _debounceTimer: ReturnType<typeof setTimeout> | undefined;
   private _shutdownController = new AbortController();
+
+  /** One warning per agent+provider pair: a property of the config, not the turn. */
+  private _warnedMissingProviders = new Set<string>();
+  /** Providers built for agents that name one other than the default. Cleared on reload so config edits take. */
+  private _agentProviders = new Map<string, AIProvider>();
 
   private _reloadListeners: Array<() => void> = [];
   private _configLock: Promise<void> = Promise.resolve();
@@ -588,6 +597,10 @@ export class AgentRuntime {
         ?.catch((e) => console.error("[runtime] memory backend close failed:", (e as Error).message));
       this._provider = provider;
       this._model = model;
+      // Rebuilt lazily against the new config, same as the default provider —
+      // otherwise an edited apiKey or baseUrl would keep hitting the old one.
+      this._agentProviders.clear();
+      this._warnedMissingProviders.clear();
       this._generation++;
       this._workflows.setDirectory(resolveWorkflowsDir(config.workflows?.directory));
       this._workflows.reloadFromDisk();
@@ -1064,8 +1077,9 @@ export class AgentRuntime {
     });
 
     const callProject = opts.project !== undefined ? opts.project : this._activeProject;
+    const agentProvider = this.resolveAgentProvider(resolved.provider, agentName);
     return {
-      provider: this._provider,
+      provider: agentProvider,
       session: opts.session,
       db: this.db,
       cwd: callProject?.path,
@@ -1127,7 +1141,52 @@ export class AgentRuntime {
         );
         return dedup([...r.tools, ...extraTools]);
       },
-      getProvider: () => this._provider,
+      // Re-resolved rather than captured so a hot reload swaps the provider
+      // mid-run, the same way `getTools` re-resolves tools.
+      getProvider: () => this.resolveAgentProvider(resolved.provider, agentName),
     };
+  }
+
+  /**
+   * The provider an agent actually runs on.
+   *
+   * `AgentDefinition.provider` parsed, was validated against `config.providers`,
+   * and was written into the session record — but nothing ever selected with
+   * it. Every agent ran on `agent.defaultProvider` regardless. An agent
+   * configured for a different vendor sent that vendor's model name to the
+   * default endpoint, which comes back as a 404 for a model that exists,
+   * pointing at the wrong service.
+   *
+   * A declared-but-unregistered provider falls back to the default and says so
+   * once: the plugin that would register it may simply not be installed, and
+   * taking the agent offline is a worse answer than running it with a named
+   * fallback. `validateConfig` flags the same condition at startup.
+   */
+  private resolveAgentProvider(providerId: string | undefined, agentName: string | undefined): AIProvider {
+    const config = this.getConfig();
+    if (!providerId || providerId === config.agent.defaultProvider) return this._provider;
+
+    const cached = this._agentProviders.get(providerId);
+    if (cached) return cached;
+
+    try {
+      const { provider, model } = this._createProvider(this.getConfig(), providerId);
+      this._agentProviders.set(providerId, provider);
+      // Registered so `/api` provider listings and any registry consumer see
+      // the ones agents actually run on, not only the deployment default.
+      this._providerRegistry.registerBuiltin({ id: providerId, provider, defaultModel: model });
+      return provider;
+    } catch (err) {
+      const key = `${agentName ?? "(default)"}:${providerId}`;
+      if (!this._warnedMissingProviders.has(key)) {
+        this._warnedMissingProviders.add(key);
+        console.warn(
+          `[runtime] agent "${agentName ?? "(default)"}" asks for provider "${providerId}" but it could not be built ` +
+            `(${(err as Error).message}). Falling back to "${config.agent.defaultProvider}" — its models differ, so ` +
+            `calls may fail with a model-not-found error.`,
+        );
+      }
+      return this._provider;
+    }
   }
 }

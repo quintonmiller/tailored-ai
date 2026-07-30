@@ -113,8 +113,13 @@ export function createTools(
   });
 }
 
-export function createProvider(config: AgentConfig): { provider: AIProvider; model: string } {
-  const id = config.agent.defaultProvider;
+/**
+ * Build a provider. Defaults to `agent.defaultProvider`; pass `providerId` to
+ * build a different one, which is how an agent with its own `provider:` gets
+ * the endpoint it asked for instead of the deployment's default.
+ */
+export function createProvider(config: AgentConfig, providerId?: string): { provider: AIProvider; model: string } {
+  const id = providerId ?? config.agent.defaultProvider;
   const factory = providerFactoryRegistry.get(id);
   // A registered factory id always wins over an inline type (#253).
   if (factory) return factory(config);
