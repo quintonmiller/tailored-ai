@@ -39,7 +39,7 @@ import {
   TypedEventBus,
   validateConfig,
 } from "@tailored-ai/core";
-import { createServer } from "@tailored-ai/server";
+import { checkPortAvailable, createServer, portInUseMessage } from "@tailored-ai/server";
 import dotenv from "dotenv";
 import { CliApprovalHandler } from "./approval.js";
 import { runPluginCommand } from "./commands/plugin.js";
@@ -126,6 +126,27 @@ async function runServer(
   // return disposers we hold for shutdown + reload. Previously these were
   // hardcoded `new …()` constructions here; #142 routes them through
   // config.plugins so they're user-toggleable (`enabled: false`).
+  // Claim the port before anything with side effects starts.
+  //
+  // The Discord gateway login, cron and autopilot all come up well before the
+  // HTTP bind below, so a second instance started by mistake logs a second bot
+  // into the guild and fires cron for several seconds before the port
+  // collision kills it. The port is deliberately shared between instances —
+  // it is the lock that keeps only one running — so the collision is expected
+  // and has to be legible rather than a raw stack trace.
+  {
+    const { host, port } = runtime.getConfig().server;
+    const probe = await checkPortAvailable(host, port);
+    if (!probe.ok) {
+      console.error(
+        probe.code === "EADDRINUSE"
+          ? portInUseMessage(host, port)
+          : `[server] cannot bind ${host}:${port} (${probe.code})`,
+      );
+      process.exit(1);
+    }
+  }
+
   let runtimePlugins = await loadRuntimePlugins();
   const disposeRuntimePlugins = async () => {
     for (const p of runtimePlugins) {
