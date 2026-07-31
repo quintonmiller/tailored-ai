@@ -128,6 +128,7 @@ import {
   unregisterHandler,
 } from "./approval.js";
 import { mountPluginHttpRoutes, routePathToRegex } from "./http-routes.js";
+import { checkPortAvailable, portInUseMessage } from "./port.js";
 
 export interface ServerOptions {
   runtime: AgentRuntime;
@@ -3719,8 +3720,22 @@ export function createServer(opts: ServerOptions) {
     const server = serve({ fetch: app.fetch, port, hostname }, () => {
       console.log(`[server] HTTP listening on http://${hostname}:${port}`);
     });
+    // Without a listener, a bind failure is an unhandled 'error' event: the
+    // process dies on a raw stack trace that never names the port. The case
+    // that matters is a second instance started by mistake — the port is the
+    // lock that stops two deployments running at once, so it has to say so.
+    server.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EADDRINUSE") {
+        console.error(portInUseMessage(hostname, port));
+        process.exit(1);
+      }
+      console.error(`[server] listen failed on ${hostname}:${port}:`, err.message);
+      process.exit(1);
+    });
     return server;
   }
 
   return { app, start };
 }
+
+export { checkPortAvailable, portInUseMessage } from "./port.js";
