@@ -4,10 +4,11 @@ How to run more than one TAI deployment on one machine — the intended case bei
 personal instance and a work instance with separate Discord bots, only one running
 at a time.
 
-Status: **partly supported.** `TAI_HOME` is now honoured everywhere ([#311]), so
-`-c <config>` selects a whole instance. The service script still has no instance
-dimension ([#312]) and a double start still fails opaquely ([#313]). This doc
-records what holds, what leaks, and what is left.
+Status: **supported, not yet exercised.** `TAI_HOME` is honoured everywhere
+([#311]) so `-c <config>` selects a whole instance, and `tai-ctl.sh` takes an
+instance on every command ([#312]). A double start still fails opaquely ([#313]),
+and no second instance has actually been stood up yet. This doc records what
+holds, what leaks, and what is left.
 
 [#311]: https://github.com/quintonmiller/tailored-ai/issues/311
 [#312]: https://github.com/quintonmiller/tailored-ai/issues/312
@@ -81,35 +82,42 @@ has a `tai.lock` yet, so nothing is broken today; deciding it inside a "honour
 
 ## The service script
 
-`scripts/tai-ctl.sh` has no instance dimension:
-
-- `RUN_DIR=$HOME/.tai/run` and `LOG_DIR=$HOME/.tai/logs` are fixed, so two instances
-  share `agent.pid` and `agent.log`. `stop` kills whichever process the file names,
-  `status` reports the wrong one, logs interleave with no marker.
-- `start_agent` runs `pnpm run dev` with **no `TAI_HOME` and no `-c`**. Instance
-  identity is inherited ambiently from the invoking shell, so a bare `tai-ctl start`
-  always boots the default home regardless of intent.
-- `resolve_targets` maps `default` to `vllm agent`, so switching instances reloads a
-  27B model for no reason. vLLM has nothing to do with which instance is running.
-
-### Recommended shape
+`scripts/tai-ctl.sh` takes an instance:
 
 ```
-tai-ctl.sh start work|personal [targets]
-tai-ctl.sh switch work
+tai-ctl.sh start   -i personal [agent|ui|vllm|all] [--no-build]
+tai-ctl.sh restart -i personal agent
+tai-ctl.sh switch  -i work            # stop the others, start this one
+tai-ctl.sh status                     # every instance; -i narrows it
+tai-ctl.sh instances                  # what's declared, and who holds the agent slot
 ```
 
-- Instance is a **required positional**, never inherited from the environment.
-- Spawn with `env -i … TAI_HOME=$home` — `TAI_HOME` rather than `-c`, because core
-  reads the env var directly and nothing sets it; a scrubbed env also stops a
-  shell-exported `DISCORD_TOKEN` reaching the wrong home (`dotenv` does not override
-  values already in `process.env`).
-- Namespace run and log dirs by instance.
-- Enforce exclusivity with the pid file plus a sibling `agent.instance` naming its
-  owner. `start work` while that says `personal` refuses and says so. This is the
-  accidental guard that already exists at `is_running agent`, made honest: pid
-  liveness is the truth, so there is nothing stale to clean up after a crash.
-- Drop `vllm` from the default targets and manage it as a peer service.
+Instances are declared in `~/.tai/instances.conf` as `name=/path/to/home`, one per
+line. The file is created on first run holding the single instance that already
+exists.
+
+`-i` is required by every command that touches `agent` or `ui`. With two homes
+sharing one port and one machine, an unqualified `restart` is a coin flip, and
+getting it wrong means the work bot answering personal messages. `vllm` needs no
+instance — one model server serves all of them — so its pid and log stay outside
+the per-instance directories, and it is no longer in the default target set:
+switching instances has nothing to do with the model server, and reloading a 27B
+model to restart an agent costs minutes for nothing.
+
+Three details worth keeping if you touch it:
+
+- **The agent is spawned with a scrubbed environment** (`env -i`) carrying an
+  explicit `TAI_HOME`. The scrub matters more than the assignment: `dotenv` does
+  not overwrite a variable already present in the environment, so a
+  `DISCORD_TOKEN` exported in the invoking shell outranks the instance's own
+  `.env`, and the wrong bot logs in with no error anywhere.
+- **Exclusivity is enforced by scanning every instance's pid file for a live
+  process**, not by a stored owner marker. Pid liveness is the only truth, so a
+  crashed instance releases the slot with nothing stale to clean up.
+- **The old flat layout is adopted on first run.** `agent.pid` and `agent.log`
+  used to sit directly in `~/.tai/{run,logs}`; an agent started under the previous
+  script would otherwise be invisible to `stop` — reported as "not running" while
+  it went on holding port 3000.
 
 ## Ports
 
