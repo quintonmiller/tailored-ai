@@ -183,6 +183,13 @@ export class ExploratoryWorker {
       this.skip("(global)", "config-disabled");
       return;
     }
+    // Gated on the tick, not on `runAgent`: the manual-run route
+    // (POST /api/exploratory/agents/:name/run) goes straight to `runAgent`,
+    // and a person clicking "run this one now" is not what a pause is for.
+    if (this.runtime.isAgentsPaused("autonomous")) {
+      this.skip("(global)", "paused");
+      return;
+    }
     this.running = true;
     try {
       const agents = config.agents ?? {};

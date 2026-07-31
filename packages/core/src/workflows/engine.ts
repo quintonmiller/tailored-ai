@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import { cancelOrphanedForms } from "../db/form-queries.js";
+import { isAgentsPaused, type RunKind } from "../db/runtime-settings-queries.js";
 import {
   createWorkflowRun,
   getWorkflowRun,
@@ -62,6 +63,17 @@ export interface StepContext {
 export interface RunOptions {
   /** When true, side-effecting executors log instead of executing. */
   dryRun?: boolean;
+  /**
+   * This run continues work that is already in flight — a `trigger_workflow`
+   * child, not a fresh start.
+   *
+   * The global pause blocks NEW autonomous runs and lets running ones finish.
+   * A child workflow is the second half of a parent that started before the
+   * pause, so refusing it would fail the parent mid-run: exactly the
+   * inconsistent half-done state the "in-flight runs finish" rule exists to
+   * avoid. The parent was gated when it started; that decision stands.
+   */
+  continuation?: boolean;
 }
 
 export interface StepResult {
@@ -115,6 +127,27 @@ export class DeadlineError extends WorkflowError {
     this.name = "DeadlineError";
   }
 }
+/**
+ * Refused before it started because agents are globally paused. Its own class
+ * so a caller can tell "you switched this off" apart from "this is broken" —
+ * a poller that logs both identically is how a pause turns into an incident
+ * report.
+ */
+export class PausedError extends WorkflowError {
+  constructor(message = "agents are paused") {
+    super(message);
+    this.name = "PausedError";
+  }
+}
+
+/**
+ * Triggers that mean "nothing living asked for this run".
+ *
+ * `http` is the UI's Run button and `tool` is a step inside an agent that is
+ * already running — both trace back to a person, so neither is gated under
+ * the default pause scope.
+ */
+const AUTONOMOUS_TRIGGERS = new Set<WorkflowTrigger>(["cron", "webhook", "programmatic"]);
 
 interface RunHandle {
   abort: AbortController;
@@ -241,6 +274,15 @@ export class WorkflowEngine {
     const reg = this.registry.get(name);
     if (!reg) throw new WorkflowError(`unknown workflow: ${name}`);
     const def = reg.definition;
+
+    // The single fan-in for every workflow-driven run: all eight pollers, the
+    // webhook routes and cron all arrive here, so one check covers them.
+    // Refused before the run row is created — a paused deployment should not
+    // accumulate a cancelled row per poller per tick.
+    const kind: RunKind = AUTONOMOUS_TRIGGERS.has(trigger) && !options.continuation ? "autonomous" : "human";
+    if (isAgentsPaused(this.db, kind)) {
+      throw new PausedError(`workflow "${name}" not started: agents are paused (trigger: ${trigger})`);
+    }
 
     const run = createWorkflowRun(this.db, {
       workflow_name: name,

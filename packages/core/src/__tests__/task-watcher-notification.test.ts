@@ -7,6 +7,7 @@
  */
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { isAgentsPaused } from "../db/runtime-settings-queries.js";
 import { initDatabase } from "../db/schema.js";
 import { createProjectTask, getProjectTask, updateProjectTask } from "../db/task-queries.js";
 import { TypedEventBus } from "../events.js";
@@ -18,6 +19,7 @@ let db: Database.Database;
 function makeFakeRuntime(): any {
   return {
     db,
+    isAgentsPaused: (kind: "autonomous" | "human") => isAgentsPaused(db, kind),
     events: new TypedEventBus(),
     getConfig: () => ({
       agents: { coder: { description: "" }, reviewer: { description: "" } },
@@ -81,6 +83,7 @@ describe("task-watcher coding-agent dispatch guard rail", () => {
     const dbForTest = db;
     const runtime: any = {
       db: dbForTest,
+      isAgentsPaused: (kind: "autonomous" | "human") => isAgentsPaused(db, kind),
       events: new TypedEventBus(),
       contextDir: "/tmp/ctx",
       getConfig: () => ({
@@ -142,6 +145,7 @@ describe("task-watcher coding-agent dispatch guard rail", () => {
     });
     const runtime: any = {
       db: dbForTest,
+      isAgentsPaused: (kind: "autonomous" | "human") => isAgentsPaused(db, kind),
       events: new TypedEventBus(),
       contextDir: "/tmp/ctx",
       getConfig: () => ({
@@ -175,6 +179,7 @@ describe("task-watcher notify() force flag", () => {
   it("bypasses the lastFiredAssignee gate when force=true", () => {
     const runtime: any = {
       db,
+      isAgentsPaused: (kind: "autonomous" | "human") => isAgentsPaused(db, kind),
       events: new TypedEventBus(),
       getConfig: () => ({
         agents: { coder: { description: "" } },
@@ -242,6 +247,7 @@ describe("task-watcher notifyById per-project routing", () => {
     };
     const runtime: any = {
       db,
+      isAgentsPaused: (kind: "autonomous" | "human") => isAgentsPaused(db, kind),
       events: new TypedEventBus(),
       getConfig: () => ({
         agents: { coder: { description: "" } },
@@ -287,6 +293,7 @@ describe("task-watcher notifyById per-project routing", () => {
     const stubBackend = { name: "stub", get: async () => undefined };
     const runtime: any = {
       db,
+      isAgentsPaused: (kind: "autonomous" | "human") => isAgentsPaused(db, kind),
       events: new TypedEventBus(),
       getConfig: () => ({
         agents: {},

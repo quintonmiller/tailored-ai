@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AutopilotWorker } from "../autopilot/worker.js";
+import { isAgentsPaused } from "../db/runtime-settings-queries.js";
 import { initDatabase } from "../db/schema.js";
 import { createProjectTask, findStuckCodingTasks, updateProjectTask } from "../db/task-queries.js";
 
@@ -90,6 +91,7 @@ describe("AutopilotWorker.scanStuckTasks", () => {
     };
     const runtime: any = {
       db,
+      isAgentsPaused: (kind: "autonomous" | "human") => isAgentsPaused(db, kind),
       getConfig: () => ({
         agents: Object.fromEntries((opts.agents ?? ["coder", "reviewer"]).map((a) => [a, {}])),
       }),
@@ -128,6 +130,7 @@ describe("AutopilotWorker.scanStuckTasks", () => {
   it("no-ops cleanly when no taskWatcher is wired", async () => {
     const runtime: any = {
       db,
+      isAgentsPaused: (kind: "autonomous" | "human") => isAgentsPaused(db, kind),
       getConfig: () => ({ agents: { coder: {} } }),
       getTaskBackend: () => ({ name: "stub" }),
     };
