@@ -15,6 +15,7 @@ import {
   getCoreMemorySection,
   setCoreMemory,
 } from "../db/core-memory-queries.js";
+import { splitMessage } from "./split-message.js";
 
 /**
  * `/memory` — read and edit what an agent remembers about itself.
@@ -31,8 +32,12 @@ import {
 
 export const MEMORY_COMMAND_NAME = "memory";
 
-/** Discord hard-caps a message at 2000; leave room for the framing around the content. */
-const MAX_BODY = 1700;
+/**
+ * Most messages one `show` will send. Core memory is capped at 8192 bytes when
+ * rendered into a prompt, so five is comfortably more than a legitimate memory
+ * needs — it exists so a pathological row cannot post forty messages.
+ */
+const MAX_CHUNKS = 5;
 
 export interface MemoryCommandDeps {
   db: import("better-sqlite3").Database;
@@ -90,12 +95,6 @@ export function buildMemoryCommand(): SlashCommandBuilder {
   return cmd;
 }
 
-/** Clip to something Discord will accept, saying so rather than truncating silently. */
-function clip(text: string, limit = MAX_BODY): string {
-  if (text.length <= limit) return text;
-  return `${text.slice(0, limit)}\n… [${text.length - limit} more chars — the full text is in core memory]`;
-}
-
 function isSection(value: string): value is CoreMemorySection {
   return (CORE_MEMORY_SECTIONS as string[]).includes(value);
 }
@@ -104,14 +103,24 @@ function sectionList(): string {
   return CORE_MEMORY_SECTIONS.join(", ");
 }
 
+/**
+ * Render in full. Splitting across messages is the caller's job.
+ *
+ * The first version clipped each section to 900 chars and the whole reply to
+ * 1700, which made the command useless for the memories most worth reading: a
+ * 2,328-char persona came back as a third of itself, and asking for that one
+ * section did not help because the per-section clip applied either way. Core
+ * memory is the text that shapes every one of an agent's turns — showing two
+ * thirds of it is worse than not showing it, because it reads as complete.
+ */
 function renderRows(agent: string, rows: CoreMemoryRow[]): string {
   if (rows.length === 0) return `**${agent}** has no core memory. Sections it could have: ${sectionList()}.`;
   const parts = rows.map(
     (r) =>
       `__${r.section}__ · ${r.content.length} chars · last written by ${r.updated_by ?? "unknown"} ${r.updated_at}\n` +
-      (r.content.trim() ? `\`\`\`\n${clip(r.content, 900)}\n\`\`\`` : "_(empty)_"),
+      (r.content.trim() ? `\`\`\`\n${r.content}\n\`\`\`` : "_(empty)_"),
   );
-  return `**${agent}** core memory\n\n${clip(parts.join("\n\n"))}`;
+  return `**${agent}** core memory\n\n${parts.join("\n\n")}`;
 }
 
 export function handleMemoryAutocomplete(interaction: AutocompleteInteraction, deps: MemoryCommandDeps): void {
@@ -144,7 +153,21 @@ export async function handleMemoryCommand(
   if (interaction.commandName !== MEMORY_COMMAND_NAME) return false;
 
   try {
-    await interaction.reply({ content: run(interaction, deps), flags: MessageFlags.Ephemeral });
+    // Sent across as many messages as it takes. A section can legitimately run
+    // past Discord's 2,000-char ceiling, and the whole point of reading core
+    // memory is seeing all of it.
+    const all = splitMessage(run(interaction, deps));
+    const chunks = all.slice(0, MAX_CHUNKS);
+    // Said out loud. Dropping the tail quietly is the failure this change
+    // exists to undo — a partial answer that reads as a complete one.
+    if (all.length > chunks.length) {
+      chunks[chunks.length - 1] +=
+        "\n\n_…" + (all.length - chunks.length) + " more message(s) not shown. Ask for one `section:` at a time._";
+    }
+    await interaction.reply({ content: chunks[0], flags: MessageFlags.Ephemeral });
+    for (const chunk of chunks.slice(1)) {
+      await interaction.followUp({ content: chunk, flags: MessageFlags.Ephemeral });
+    }
   } catch (err) {
     console.error("[discord] /memory failed:", err);
     const message = `That didn't work: ${(err as Error).message}`;
@@ -188,7 +211,7 @@ function run(interaction: ChatInputCommandInteraction, deps: MemoryCommandDeps):
   // The previous text comes back in every reply that destroys some. Core
   // memory has no history table, so without this an overwrite is unrecoverable
   // — the same reason `/room rewind` hides rather than deletes.
-  const recoverable = before.trim() ? `\n\nWhat was there before:\n\`\`\`\n${clip(before, 1200)}\n\`\`\`` : "";
+  const recoverable = before.trim() ? `\n\nWhat was there before:\n\`\`\`\n${before}\n\`\`\`` : "";
 
   switch (sub) {
     case "set": {

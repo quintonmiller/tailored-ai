@@ -189,3 +189,72 @@ describe("guards", () => {
     expect(await run(interaction)).toBe(false);
   });
 });
+
+/**
+ * Found in use: `/memory show` clipped each section to 900 chars and the whole
+ * reply to 1700, so the memories most worth reading came back as a third of
+ * themselves — and asking for that one section did not help, because the
+ * per-section clip applied either way. Core memory is the text that shapes
+ * every one of an agent's turns; two thirds of it is worse than none, because
+ * it reads as complete.
+ */
+describe("long memories", () => {
+  const LONG = "x".repeat(2328); // the real size of default.persona
+
+  beforeEach(() => {
+    setCoreMemory(db, {
+      agent: "kiki",
+      project_id: null,
+      section: "persona",
+      content: LONG,
+      updated_by: "kiki",
+    });
+  });
+
+  it("sends the whole section, across as many messages as it takes", async () => {
+    const { interaction, replies } = makeInteraction("show", { agent: "kiki", section: "persona" });
+
+    await run(interaction);
+
+    expect(replies.length).toBeGreaterThan(1);
+    const joined = replies.join("");
+    expect(joined).toContain(LONG.slice(0, 500));
+    expect(joined).toContain(LONG.slice(-500));
+  });
+
+  it("keeps every message within Discord's limit", async () => {
+    const { interaction, replies } = makeInteraction("show", { agent: "kiki", section: null });
+
+    await run(interaction);
+
+    for (const r of replies) expect(r.length).toBeLessThanOrEqual(2000);
+  });
+
+  /** The old behaviour's real sin was that the truncation was invisible. */
+  it("says so when it could not show everything", async () => {
+    setCoreMemory(db, {
+      agent: "kiki",
+      project_id: null,
+      section: "persona",
+      content: "y".repeat(40_000),
+      updated_by: "kiki",
+    });
+    const { interaction, replies } = makeInteraction("show", { agent: "kiki", section: "persona" });
+
+    await run(interaction);
+
+    expect(replies.join("")).toMatch(/more message\(s\) not shown/);
+  });
+
+  it("hands back the whole prior text on set, so it can actually be pasted back", async () => {
+    const { interaction, replies } = makeInteraction("set", {
+      agent: "kiki",
+      section: "persona",
+      content: "short",
+    });
+
+    await run(interaction);
+
+    expect(replies.join("")).toContain(LONG.slice(-300));
+  });
+});
