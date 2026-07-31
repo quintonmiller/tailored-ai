@@ -114,6 +114,7 @@ Deep notes on each subsystem live under [`docs/`](./docs/):
 | Browser mediator — flexible browser surface with vault refs + workflow learning (6-phase build) | [docs/browser-mediator-design.md](./docs/browser-mediator-design.md) |
 | Publishing to npm — one-time setup, per-release flow, troubleshooting | [docs/publishing.md](./docs/publishing.md) |
 | MCP client: config-declared servers, tool discovery, lifecycle | [docs/mcp.md](./docs/mcp.md) |
+| Running two instances (work/personal) on one machine: what `TAI_HOME` isolates and what leaks | [docs/multi-instance.md](./docs/multi-instance.md) |
 | Audit findings + open action items (2026-07-28): boundaries, trust, skills, context | [docs/audit-2026-07-28.md](./docs/audit-2026-07-28.md) |
 
 When touching a subsystem, update its doc — keep this index file tight.
