@@ -131,6 +131,31 @@ export interface RuntimeEventMap {
   };
 
   /**
+   * An agent's seat in a room was taken or given up.
+   *
+   * Membership was previously a thing you could only discover by asking:
+   * `/room members` told you, and nothing else did. An agent that created a
+   * room "for a private 1-on-1" and stayed subscribed to it read nine hours of
+   * that conversation, because being in a room and looking like you are in a
+   * room were different facts. This is the event that lets them be the same
+   * one — the built-in `builtin:room-announcer` plugin subscribes and says so
+   * in the room itself.
+   *
+   * Emitted only for changes that actually happened: a re-subscribe that
+   * changes nothing is not a join, and unsubscribing an agent that was not
+   * there is not a leave. `source` says where the change came from — `config`
+   * rows are re-applied on every reconcile, so a subscriber that treats them
+   * as news will be wrong on every boot.
+   */
+  "room.membership_changed": {
+    /** Canonical `<backend>:<id>`. */
+    roomRef: string;
+    agent: string;
+    change: "joined" | "left";
+    source: "config" | "agent";
+  };
+
+  /**
    * The runtime finished a config reload. Subscribers re-arming
    * themselves after a reload can use this rather than wiring into
    * the existing `onReload` hook directly.

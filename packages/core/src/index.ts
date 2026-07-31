@@ -508,6 +508,12 @@ export {
 export { CoderProjectGuard, type CoderProjectGuardOptions } from "./plugins/coder-project-guard.js";
 export { OwnerNotifier, type OwnerNotifierOptions } from "./plugins/owner-notifier.js";
 export {
+  parseRoomTimestamp,
+  RoomAnnouncer,
+  type RoomAnnouncerConfig,
+  type RoomAnnouncerOptions,
+} from "./plugins/room-announcer.js";
+export {
   ScopeCreepFlagger,
   type ScopeCreepFlaggerOptions,
   writeScopeWarning,
