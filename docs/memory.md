@@ -110,3 +110,5 @@ Three properties worth keeping if you touch it:
 - **`updated_by` records the person, not the agent.** Almost every existing row is self-authored, so "who wrote this" is the first thing you want when a persona looks wrong.
 
 An unknown agent or section is refused before any write — a typo would otherwise create core memory nothing ever reads.
+
+Core memory is keyed by agent name and does not travel: `/clone-agent from:kiki to:nova` copies a configuration and leaves the persona behind, so the clone starts empty. See [Agents & Delegation](./agents-and-hooks.md#clone-agent--copy-a-configuration-and-nothing-else).

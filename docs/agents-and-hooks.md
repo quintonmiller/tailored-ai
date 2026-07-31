@@ -81,6 +81,26 @@ cron:
       agent: "researcher"
 ```
 
+### `/clone-agent` — copy a configuration, and nothing else
+
+```
+/clone-agent from:kiki to:nova
+```
+
+Writes a copy of `kiki`'s definition under `agents.nova` in `config.yaml` and reports both halves of what it did: the fields it carried over, one line each, and the things it deliberately left behind.
+
+Nothing else travels. **Core memory, sessions, notes and room subscriptions are all keyed by agent name and stay with the original** — `nova` starts with an empty persona, no history, and membership in no room, so nothing can wake it until you add it to one. That is the reason the command exists: done by hand this was one copy and three checks, and the interesting failure was always the silent one — a "fresh" clone that inherited the original's persona, or that woke up in its rooms and answered as if it had been there all along.
+
+Three things about the implementation (`packages/core/src/channels/discord-clone-agent.ts`) are load-bearing:
+
+- **The source is read registry-first**, the same precedence [`resolveAgent`](#agents--delegation) uses. An agent that has been migrated to `data/authored-resources/agent/<id>/manifest.yaml` still has its old block sitting in `config.yaml`; reading that block would clone what the agent used to be, wrong in fields that still parse. The reply says which one it read.
+- **The write goes through `updateRawConfig`** (`packages/core/src/config-write.ts`), so a clone that would introduce config that parses but is never read is refused with the file untouched, and the reasons come back in the reply.
+- **Every refusal happens before the write** — unknown source, a target name outside `[A-Za-z0-9_-]+`, or a target that already exists in either the registry or `config.yaml`.
+
+It is a top-level command rather than a subcommand of `/agent`, because `/agent` already carries a required top-level option and Discord forbids a command that has both options and subcommands.
+
+**No restart is needed.** `updateRawConfig` reloads the runtime and `resolveAgent` falls back to `config.agents`, so the clone answers immediately. The agent registry is only populated from disk in the `AgentRuntime` constructor, so the clone lives in `config.yaml` until the next restart migrates it into its own manifest — which changes nothing about whether it resolves.
+
 ### Task-watcher fields: `worktree` and `taskPreamble`
 
 Two agent fields shape how the task watcher dispatches to a named agent. Both are off/empty by default, so core ships no built-in coding workflow (#204) — you opt your own agents in.
