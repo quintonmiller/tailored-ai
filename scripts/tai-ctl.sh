@@ -1,31 +1,50 @@
 #!/usr/bin/env bash
 # tai-ctl — start/stop/restart the TAI stack so it survives the controlling shell.
-# Services: vllm (model server), agent (HTTP + Discord + cron), ui (Vite dev).
+#
+# Services: agent (HTTP + Discord + cron) and ui (Vite dev) belong to an
+# instance; vllm (model server) is shared by all of them.
 #
 # Usage:
-#   scripts/tai-ctl.sh start    [vllm|agent|ui|all] [--no-build]   # default: vllm + agent
-#   scripts/tai-ctl.sh stop     [vllm|agent|ui|all]
-#   scripts/tai-ctl.sh restart  [vllm|agent|ui|all] [--no-build]
-#   scripts/tai-ctl.sh build                          # rebuild core+server+cli, no restart
-#   scripts/tai-ctl.sh status
-#   scripts/tai-ctl.sh logs     <service> [tail-lines]
+#   scripts/tai-ctl.sh start   -i <instance> [agent|ui|vllm|all] [--no-build]
+#   scripts/tai-ctl.sh stop    -i <instance> [agent|ui|vllm|all]
+#   scripts/tai-ctl.sh restart -i <instance> [agent|ui|vllm|all] [--no-build]
+#   scripts/tai-ctl.sh switch  -i <instance>          # stop the others, start this one
+#   scripts/tai-ctl.sh status  [-i <instance>]        # omit -i to see every instance
+#   scripts/tai-ctl.sh logs    -i <instance> <service> [tail-lines]
+#   scripts/tai-ctl.sh instances                      # list what's configured
+#   scripts/tai-ctl.sh build                          # rebuild core+server+cli
 #   scripts/tai-ctl.sh wait-vllm [timeout-seconds]    # block until /v1/models 200s
 #
+# Instances are declared in ~/.tai/instances.conf as `name=/path/to/home`,
+# one per line. The file is created on first run holding the single instance
+# that already exists.
+#
 # Design notes:
+#  - `-i` is required by every command that touches `agent` or `ui`. Naming the
+#    instance on each invocation is the whole point: with two homes sharing one
+#    port and one machine, an unqualified `restart` is a coin flip, and getting
+#    it wrong means the work bot answering personal messages.
 #  - Each service is launched with `setsid` so it becomes its own session
 #    leader. We store the session-leader PID, and stop with `kill -- -PID`
 #    so the whole process group dies (pnpm → node children included).
-#  - All output goes to ~/.tai/logs/<service>.log. The controlling shell
-#    can exit; the services keep running.
-#  - PID files live in ~/.tai/run/<service>.pid.
+#  - The agent is spawned with a scrubbed environment carrying an explicit
+#    TAI_HOME. Core reads that variable to find its keys, scratch and sandbox
+#    allowlist, and `dotenv` does not override values already in the
+#    environment — so an exported DISCORD_TOKEN in the invoking shell would
+#    otherwise silently outrank the instance's own `.env`.
+#  - agent/ui pid + log files are namespaced per instance under ~/.tai/{run,logs};
+#    vllm's are not, because one model server serves every instance.
+#  - Only one instance may hold the `agent` slot at a time. Enforced by scanning
+#    every instance's pid file for a live process, so pid liveness is the only
+#    truth and a crash leaves nothing stale to clean up. The shared port 3000 is
+#    the second, kernel-level lock behind it.
 #  - `restart` and `start` automatically rebuild the agent's compiled deps
 #    (core, server, cli) before touching the running process — so build
 #    errors abort the cycle with the old agent still serving. Pass
 #    `--no-build` to skip when you know nothing changed (faster).
-#  - Starting vllm blocks until its health endpoint answers (the engine can
-#    crash ~a minute in during memory profiling). A failed boot exits nonzero
-#    and cleans up, rather than falsely reporting "started". Tune the wait with
-#    VLLM_START_TIMEOUT (default 300s).
+#  - vllm is never in the default target set. Switching instances has nothing
+#    to do with the model server, and reloading a 27B model to restart an
+#    agent costs minutes for no reason.
 
 set -euo pipefail
 
@@ -34,26 +53,146 @@ VLLM_DIR="${VLLM_DIR:-$HOME/vllm-qwen-managed}"
 VLLM_SCRIPT="${VLLM_SCRIPT:-$VLLM_DIR/start-qwen3.6-27b-vllm.sh}"
 VLLM_HEALTH_URL="${VLLM_HEALTH_URL:-http://127.0.0.1:8000/v1/models}"
 
-RUN_DIR="$HOME/.tai/run"
-LOG_DIR="$HOME/.tai/logs"
-mkdir -p "$RUN_DIR" "$LOG_DIR"
+TAI_STATE_DIR="${TAI_STATE_DIR:-$HOME/.tai}"
+RUN_ROOT="$TAI_STATE_DIR/run"
+LOG_ROOT="$TAI_STATE_DIR/logs"
+INSTANCES_CONF="$TAI_STATE_DIR/instances.conf"
+mkdir -p "$RUN_ROOT" "$LOG_ROOT"
 
 SERVICES=(vllm agent ui)
+# Services that belong to one instance. vllm is deliberately absent.
+INSTANCE_SERVICES=(agent ui)
 
-pid_file()  { echo "$RUN_DIR/$1.pid"; }
-log_file()  { echo "$LOG_DIR/$1.log"; }
+INSTANCE=""
+
+# --------------------------------------------------------------------------
+# Instances
+# --------------------------------------------------------------------------
+
+# Create the file on first run so the mechanism is discoverable and editable,
+# seeded with the deployment that already exists.
+ensure_instances_conf() {
+  [[ -f "$INSTANCES_CONF" ]] && return 0
+  cat >"$INSTANCES_CONF" <<EOF
+# TAI instances: <name>=<home directory>
+# The home holds config.yaml, .env, agent.db and data/.
+# Add a line to declare another; each needs its own Discord application.
+personal=$HOME/.tailored-ai
+EOF
+  echo "  created $INSTANCES_CONF (one instance: personal)" >&2
+}
+
+instance_names() {
+  ensure_instances_conf
+  # Trim per line, not with `tr -d`, which would eat the newlines too and
+  # return every instance concatenated into one name.
+  sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$INSTANCES_CONF" |
+    cut -d= -f1 |
+    sed -e 's/[[:space:]]//g' |
+    grep -v '^$' || true
+}
+
+instance_home() {
+  ensure_instances_conf
+  local want="$1" name home
+  while IFS='=' read -r name home; do
+    name="$(echo "$name" | tr -d '[:space:]')"
+    [[ -z "$name" || "$name" == \#* ]] && continue
+    if [[ "$name" == "$want" ]]; then
+      echo "${home%%#*}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+      return 0
+    fi
+  done < <(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' "$INSTANCES_CONF")
+  return 1
+}
+
+require_instance() {
+  if [[ -z "$INSTANCE" ]]; then
+    echo "error: instance required — say which deployment to act on." >&2
+    echo "" >&2
+    for n in $(instance_names); do
+      echo "  $0 $CURRENT_SUB -i $n ${ORIGINAL_TARGET:-}" >&2
+    done
+    echo "" >&2
+    echo "Declared in $INSTANCES_CONF." >&2
+    return 1
+  fi
+  local home
+  if ! home="$(instance_home "$INSTANCE")"; then
+    echo "error: no instance named '$INSTANCE'. Known: $(instance_names | tr '\n' ' ')" >&2
+    echo "Declared in $INSTANCES_CONF." >&2
+    return 1
+  fi
+  if [[ ! -d "$home" ]]; then
+    echo "error: instance '$INSTANCE' points at $home, which does not exist." >&2
+    echo "Create it with: TAI_HOME=$home tai init" >&2
+    return 1
+  fi
+  INSTANCE_HOME="$home"
+  mkdir -p "$RUN_ROOT/$INSTANCE" "$LOG_ROOT/$INSTANCE"
+}
+
+# --------------------------------------------------------------------------
+# Paths
+# --------------------------------------------------------------------------
+
+is_instance_service() {
+  for s in "${INSTANCE_SERVICES[@]}"; do [[ "$1" == "$s" ]] && return 0; done
+  return 1
+}
+
+# agent/ui are per-instance; vllm is shared by all of them.
+pid_file() {
+  if is_instance_service "$1"; then echo "$RUN_ROOT/${2:-$INSTANCE}/$1.pid"; else echo "$RUN_ROOT/$1.pid"; fi
+}
+
+log_file() {
+  if is_instance_service "$1"; then echo "$LOG_ROOT/${2:-$INSTANCE}/$1.log"; else echo "$LOG_ROOT/$1.log"; fi
+}
+
+# The layout before instances existed put agent.pid and agent.log straight in
+# ~/.tai/{run,logs}. A live agent started under the old script would otherwise
+# be invisible to `stop` here — reported as "not running" while it kept the
+# port. Adopt it into the first declared instance, once.
+migrate_flat_layout() {
+  local first; first="$(instance_names | head -1)"
+  [[ -n "$first" ]] || return 0
+  for svc in "${INSTANCE_SERVICES[@]}"; do
+    mkdir -p "$RUN_ROOT/$first" "$LOG_ROOT/$first"
+    if [[ -f "$RUN_ROOT/$svc.pid" ]]; then
+      mv "$RUN_ROOT/$svc.pid" "$RUN_ROOT/$first/$svc.pid"
+      echo "  adopted running $svc into instance '$first'" >&2
+    fi
+    if [[ -f "$LOG_ROOT/$svc.log" ]]; then
+      mv "$LOG_ROOT/$svc.log" "$LOG_ROOT/$first/$svc.log"
+    fi
+  done
+}
 
 is_running() {
-  local pid; pid="$(cat "$(pid_file "$1")" 2>/dev/null || echo "")"
+  local pid; pid="$(cat "$(pid_file "$1" "${2:-}")" 2>/dev/null || echo "")"
   [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
 }
 
-# Spawn $* as a new session leader, redirect output to $log, record PID.
+# Which instance currently holds a live $1, if any. Pid liveness is the only
+# truth here, so a crashed instance releases the slot with nothing to clean up.
+service_owner() {
+  local svc="$1" name
+  for name in $(instance_names); do
+    if is_running "$svc" "$name"; then echo "$name"; return 0; fi
+  done
+  return 1
+}
+
+# --------------------------------------------------------------------------
+# Spawning
+# --------------------------------------------------------------------------
+
 spawn() {
   local name="$1"; shift
   local log; log="$(log_file "$name")"
+  mkdir -p "$(dirname "$log")"
   : >>"$log"
-  # setsid gives us a fresh session+process group. Disown via & and stdin from /dev/null.
   setsid bash -c "exec \"\$@\" >>'$log' 2>&1" _ "$@" </dev/null &
   local pid=$!
   echo "$pid" > "$(pid_file "$name")"
@@ -63,12 +202,24 @@ spawn() {
     rm -f "$(pid_file "$name")"
     return 1
   fi
-  echo "  $name started (pid $pid, log $log)"
+  echo "  [$INSTANCE] $name started (pid $pid, log $log)"
 }
 
-# Poll the vllm health endpoint until it answers, the process dies, or we time
-# out. Returns 0 only when ready. Takes the session-leader pid so we can fail
-# fast when the engine crashes during startup instead of waiting the full window.
+# Launch with only what a shell needs, plus this instance's TAI_HOME.
+#
+# The scrub is the point, not the TAI_HOME. `dotenv` does not overwrite a
+# variable already present in the environment, so a DISCORD_TOKEN or
+# OPENROUTER_API_KEY exported in the invoking shell outranks the instance's own
+# `.env` — and the wrong bot logs in with no error anywhere.
+spawn_in_home() {
+  local name="$1" cmd="$2"
+  spawn "$name" env -i \
+    PATH="$PATH" HOME="$HOME" USER="${USER:-}" LOGNAME="${LOGNAME:-}" \
+    SHELL="${SHELL:-/bin/bash}" LANG="${LANG:-}" TZ="${TZ:-}" TERM="${TERM:-dumb}" \
+    TAI_HOME="$INSTANCE_HOME" \
+    bash -c "cd '$REPO_DIR' && exec $cmd"
+}
+
 await_vllm_ready() {
   local pid="$1" timeout="$2" started=$SECONDS
   while (( SECONDS - started < timeout )); do
@@ -102,25 +253,41 @@ start_vllm() {
   fi
 }
 
+# Refuse rather than race. Both instances bind port 3000, so a second start
+# would die on EADDRINUSE anyway — but only after logging a second Discord bot
+# in and firing cron for a few seconds. Saying no here is cheaper and legible.
+guard_exclusive() {
+  local svc="$1" owner
+  if owner="$(service_owner "$svc")" && [[ "$owner" != "$INSTANCE" ]]; then
+    echo "  refusing: instance '$owner' is already running $svc (pid $(cat "$(pid_file "$svc" "$owner")"))." >&2
+    echo "  Stop it first:  $0 stop -i $owner $svc" >&2
+    echo "  Or switch:      $0 switch -i $INSTANCE" >&2
+    return 1
+  fi
+}
+
 start_agent() {
-  if is_running agent; then echo "  agent already running (pid $(cat "$(pid_file agent)"))"; return; fi
-  spawn agent bash -c "cd '$REPO_DIR' && exec pnpm run dev"
+  if is_running agent; then echo "  [$INSTANCE] agent already running (pid $(cat "$(pid_file agent)"))"; return; fi
+  guard_exclusive agent || return 1
+  spawn_in_home agent "pnpm run dev"
 }
 
 start_ui() {
-  if is_running ui; then echo "  ui already running (pid $(cat "$(pid_file ui)"))"; return; fi
-  spawn ui bash -c "cd '$REPO_DIR' && exec pnpm run dev:ui"
+  if is_running ui; then echo "  [$INSTANCE] ui already running (pid $(cat "$(pid_file ui)"))"; return; fi
+  guard_exclusive ui || return 1
+  spawn_in_home ui "pnpm run dev:ui"
 }
 
 stop_one() {
-  local name="$1"
-  if ! is_running "$name"; then
-    echo "  $name not running"
-    rm -f "$(pid_file "$name")"
+  local name="$1" inst="${2:-$INSTANCE}"
+  local label; label="$(is_instance_service "$name" && echo "[$inst] $name" || echo "$name")"
+  if ! is_running "$name" "$inst"; then
+    echo "  $label not running"
+    rm -f "$(pid_file "$name" "$inst")"
     return
   fi
-  local pid; pid="$(cat "$(pid_file "$name")")"
-  echo "  stopping $name (pgid $pid)..."
+  local pid; pid="$(cat "$(pid_file "$name" "$inst")")"
+  echo "  stopping $label (pgid $pid)..."
   # Kill the whole process group, then escalate to KILL if needed.
   kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
   for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -128,55 +295,58 @@ stop_one() {
     kill -0 "$pid" 2>/dev/null || break
   done
   if kill -0 "$pid" 2>/dev/null; then
-    echo "  $name didn't exit, sending KILL"
+    echo "  $label didn't exit, sending KILL"
     kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
   fi
-  rm -f "$(pid_file "$name")"
-  echo "  $name stopped"
+  rm -f "$(pid_file "$name" "$inst")"
+  echo "  $label stopped"
 }
+
+# --------------------------------------------------------------------------
+# Argument parsing
+# --------------------------------------------------------------------------
 
 resolve_targets() {
   local arg="${1:-default}"
   case "$arg" in
-    default) echo "vllm agent" ;;
+    default) echo "agent" ;;
     all)     echo "vllm agent ui" ;;
     vllm|agent|ui) echo "$arg" ;;
     *) echo "unknown service: $arg" >&2; return 1 ;;
   esac
 }
 
-# Walk $@, split out flags (--no-build) from positional args. Sets globals
-# `parsed_targets_arg` and `parsed_skip_build` for callers.
-parse_action_args() {
-  parsed_targets_arg=""
-  parsed_skip_build=0
-  for a in "$@"; do
-    case "$a" in
-      --no-build) parsed_skip_build=1 ;;
-      --*) echo "unknown flag: $a" >&2; return 1 ;;
-      *)
-        if [[ -z "$parsed_targets_arg" ]]; then
-          parsed_targets_arg="$a"
-        else
-          echo "unexpected extra argument: $a" >&2; return 1
-        fi
-        ;;
-    esac
-  done
-}
-
 targets_include_agent() {
-  for t in $1; do
-    [[ "$t" == "agent" ]] && return 0
-  done
+  for t in $1; do [[ "$t" == "agent" ]] && return 0; done
   return 1
 }
 
-# Synchronous build of the workspace packages the agent depends on. Blocks
-# until tsc finishes; returns nonzero on failure so callers can abort
-# without taking down the running agent. We build core + server + cli
-# explicitly (rather than `pnpm run build`) to skip the UI / site bundles
-# — those have their own dev servers and don't matter for `agent`.
+targets_need_instance() {
+  for t in $1; do is_instance_service "$t" && return 0; done
+  return 1
+}
+
+# Walk $@, splitting flags (-i <name>, --no-build) from the single positional
+# target. Sets `parsed_targets_arg`, `parsed_skip_build` and `INSTANCE`.
+parse_action_args() {
+  parsed_targets_arg=""
+  parsed_skip_build=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -i|--instance)
+        [[ $# -ge 2 ]] || { echo "error: $1 needs an instance name" >&2; return 1; }
+        INSTANCE="$2"; shift 2 ;;
+      -i=*|--instance=*) INSTANCE="${1#*=}"; shift ;;
+      --no-build) parsed_skip_build=1; shift ;;
+      --*|-*) echo "unknown flag: $1" >&2; return 1 ;;
+      *)
+        if [[ -z "$parsed_targets_arg" ]]; then parsed_targets_arg="$1"; shift
+        else echo "unexpected extra argument: $1" >&2; return 1; fi ;;
+    esac
+  done
+  ORIGINAL_TARGET="$parsed_targets_arg"
+}
+
 do_build() {
   echo "  building @tailored-ai/core + @tailored-ai/server + @tailored-ai/cli..."
   local started=$SECONDS
@@ -189,9 +359,14 @@ do_build() {
   echo "  build ok (${elapsed}s)"
 }
 
+# --------------------------------------------------------------------------
+# Commands
+# --------------------------------------------------------------------------
+
 cmd_start() {
   parse_action_args "$@" || return 1
   local targets; targets="$(resolve_targets "${parsed_targets_arg:-default}")"
+  targets_need_instance "$targets" && { require_instance || return 1; }
   if [[ $parsed_skip_build -eq 0 ]] && targets_include_agent "$targets"; then
     do_build || return 1
   fi
@@ -199,13 +374,16 @@ cmd_start() {
 }
 
 cmd_stop() {
-  local targets; targets="$(resolve_targets "${1:-default}")"
+  parse_action_args "$@" || return 1
+  local targets; targets="$(resolve_targets "${parsed_targets_arg:-default}")"
+  targets_need_instance "$targets" && { require_instance || return 1; }
   for t in $targets; do stop_one "$t"; done
 }
 
 cmd_restart() {
   parse_action_args "$@" || return 1
   local targets; targets="$(resolve_targets "${parsed_targets_arg:-default}")"
+  targets_need_instance "$targets" && { require_instance || return 1; }
   # Build *before* stopping anything so a compile error doesn't drop the
   # running agent. UI / vllm restarts don't need the workspace build.
   if [[ $parsed_skip_build -eq 0 ]] && targets_include_agent "$targets"; then
@@ -216,29 +394,67 @@ cmd_restart() {
   for t in $targets; do "start_$t"; done
 }
 
-cmd_build() {
-  do_build
+# Hand the agent + ui slots to one instance. vllm is untouched — it serves
+# every instance and reloading it here would cost minutes for nothing.
+cmd_switch() {
+  parse_action_args "$@" || return 1
+  require_instance || return 1
+  local name
+  for name in $(instance_names); do
+    [[ "$name" == "$INSTANCE" ]] && continue
+    for svc in "${INSTANCE_SERVICES[@]}"; do
+      is_running "$svc" "$name" && stop_one "$svc" "$name"
+    done
+  done
+  sleep 1
+  if [[ $parsed_skip_build -eq 0 ]]; then do_build || return 1; fi
+  start_agent
 }
 
 cmd_status() {
-  printf "%-7s  %-10s  %-8s  %s\n" SERVICE STATE PID LOG
-  for s in "${SERVICES[@]}"; do
-    local pid="-" state="stopped"
-    if is_running "$s"; then
-      pid="$(cat "$(pid_file "$s")")"
-      state="running"
-    fi
-    printf "%-7s  %-10s  %-8s  %s\n" "$s" "$state" "$pid" "$(log_file "$s")"
+  parse_action_args "$@" || return 1
+  printf "%-10s  %-7s  %-9s  %-8s  %s\n" INSTANCE SERVICE STATE PID LOG
+
+  local pid state
+  pid="-"; state="stopped"
+  if is_running vllm; then pid="$(cat "$(pid_file vllm)")"; state="running"; fi
+  printf "%-10s  %-7s  %-9s  %-8s  %s\n" "(shared)" "vllm" "$state" "$pid" "$(log_file vllm)"
+
+  local names; names="$(instance_names)"
+  [[ -n "$INSTANCE" ]] && names="$INSTANCE"
+  for name in $names; do
+    local home; home="$(instance_home "$name" || echo '?')"
+    for svc in "${INSTANCE_SERVICES[@]}"; do
+      pid="-"; state="stopped"
+      if is_running "$svc" "$name"; then pid="$(cat "$(pid_file "$svc" "$name")")"; state="running"; fi
+      printf "%-10s  %-7s  %-9s  %-8s  %s\n" "$name" "$svc" "$state" "$pid" "$(log_file "$svc" "$name")"
+    done
+    printf "%-10s  %-7s  %s\n" "$name" "home" "$home"
   done
 }
 
 cmd_logs() {
-  local name="${1:-}"; local n="${2:-80}"
-  [[ -n "$name" ]] || { echo "usage: logs <service> [tail-lines]" >&2; return 1; }
+  parse_action_args "$@" || return 1
+  local name="$parsed_targets_arg"
+  [[ -n "$name" ]] || { echo "usage: logs -i <instance> <service> [tail-lines]" >&2; return 1; }
+  is_instance_service "$name" && { require_instance || return 1; }
   local log; log="$(log_file "$name")"
   [[ -f "$log" ]] || { echo "no log yet: $log" >&2; return 1; }
-  tail -n "$n" "$log"
+  tail -n "${LOG_LINES:-80}" "$log"
 }
+
+cmd_instances() {
+  printf "%-10s  %-9s  %s\n" INSTANCE AGENT HOME
+  for name in $(instance_names); do
+    local state="stopped"
+    is_running agent "$name" && state="running"
+    printf "%-10s  %-9s  %s\n" "$name" "$state" "$(instance_home "$name" || echo '?')"
+  done
+  echo ""
+  echo "Declared in $INSTANCES_CONF"
+}
+
+cmd_build() { do_build; }
 
 cmd_wait_vllm() {
   local timeout="${1:-180}"
@@ -254,20 +470,31 @@ cmd_wait_vllm() {
   return 1
 }
 
-usage() {
-  sed -n '2,22p' "$0"
-}
+usage() { sed -n '2,26p' "$0"; }
 
 main() {
-  local sub="${1:-}"
+  CURRENT_SUB="${1:-}"
+  local sub="$CURRENT_SUB"
   shift || true
+  # `logs` takes a trailing line count that isn't a target; peel it off first.
+  if [[ "$sub" == "logs" ]]; then
+    local last="${*: -1}"
+    if [[ "$last" =~ ^[0-9]+$ ]]; then LOG_LINES="$last"; set -- "${@:1:$#-1}"; fi
+  fi
+  case "$sub" in
+    start|stop|restart|switch|status|logs|instances)
+      ensure_instances_conf
+      migrate_flat_layout ;;
+  esac
   case "$sub" in
     start)     cmd_start "$@" ;;
     stop)      cmd_stop "$@" ;;
     restart)   cmd_restart "$@" ;;
-    build)     cmd_build ;;
-    status)    cmd_status ;;
+    switch)    cmd_switch "$@" ;;
+    status)    cmd_status "$@" ;;
     logs)      cmd_logs "$@" ;;
+    instances) cmd_instances ;;
+    build)     cmd_build ;;
     wait-vllm) cmd_wait_vllm "$@" ;;
     ""|-h|--help) usage ;;
     *) echo "unknown command: $sub" >&2; usage; exit 2 ;;
