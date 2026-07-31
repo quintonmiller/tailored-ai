@@ -8,6 +8,7 @@
  */
 
 import type Database from "better-sqlite3";
+import type { EventBus } from "../events.js";
 import { formatRoomRef, type Room, type RoomMember, type RoomRef } from "./types.js";
 
 export type WakeOn = "named" | "addressed" | "all" | "none";
@@ -99,7 +100,17 @@ function toSubscription(row: SubscriptionRow): RoomSubscription {
 }
 
 export class RoomStore {
-  constructor(private readonly db: Database.Database) {}
+  /**
+   * @param events Optional bus for `room.membership_changed`. Optional because
+   * the store is the room's system of record and has to work without one —
+   * plenty of callers construct it bare, and membership bookkeeping that
+   * depended on somebody listening would be a worse trade than a missed
+   * announcement.
+   */
+  constructor(
+    private readonly db: Database.Database,
+    private readonly events?: EventBus,
+  ) {}
 
   // ---------------------------------------------------------------- rooms
 
@@ -248,12 +259,36 @@ export class RoomStore {
         input.source ?? "agent",
         input.initialCursor ?? null,
       );
+    // Only a seat that did not exist a moment ago is a join. Subscribing is
+    // idempotent by design — config reconcile rewrites every declared row on
+    // every reload, and `invite` re-subscribes an agent that is already here —
+    // so emitting on each call would announce a membership change that never
+    // happened, dozens of times per boot.
+    if (!existing) {
+      this.events?.emit("room.membership_changed", {
+        roomRef: input.roomRef,
+        agent: input.agent,
+        change: "joined",
+        source: input.source ?? "agent",
+      });
+    }
     return this.getSubscription(input.agent, input.roomRef)!;
   }
 
   unsubscribe(agent: string, roomRef: string): boolean {
+    // Read the row before deleting it: its `source` is the only record of
+    // whether this seat was declared in config or taken by the agent itself,
+    // and it is gone by the time the delete returns.
+    const existing = this.getSubscription(agent, roomRef);
     const info = this.db.prepare("DELETE FROM room_subscriptions WHERE agent = ? AND room_ref = ?").run(agent, roomRef);
-    return info.changes > 0;
+    if (info.changes === 0) return false;
+    this.events?.emit("room.membership_changed", {
+      roomRef,
+      agent,
+      change: "left",
+      source: existing?.source ?? "agent",
+    });
+    return true;
   }
 
   getSubscription(agent: string, roomRef: string): RoomSubscription | null {
