@@ -18,6 +18,14 @@ import {
 } from "./config.js";
 import { getProject } from "./db/project-queries.js";
 import { updateSessionModelProvider } from "./db/queries.js";
+import {
+  getRuntimeSettings,
+  type PauseScope,
+  pauseBlocks,
+  type RunKind,
+  type RuntimeSettings,
+  setAgentsPaused,
+} from "./db/runtime-settings-queries.js";
 import { type EventBus, TypedEventBus } from "./events.js";
 import { HttpRouteRegistry } from "./http/registry.js";
 import type { MemoryBackend } from "./memory/interface.js";
@@ -457,6 +465,47 @@ export class AgentRuntime {
   /** Signal all in-flight agent loops to stop gracefully. */
   initiateShutdown(): void {
     this._shutdownController.abort();
+  }
+
+  // ------------------------------------------------------------ pause switch
+
+  /**
+   * Is a run of this kind blocked right now?
+   *
+   * Read live from SQLite on every call, never cached. A cached copy would
+   * mean the pause does not land until something reloads, and the whole
+   * reason this lives in the database rather than config is that reloading
+   * bounces the channel the owner just used to ask for it.
+   *
+   * `"autonomous"` covers anything a timer, poller, webhook or another agent
+   * started; `"human"` covers a person typing. Under the default scope only
+   * the first is blocked — see {@link PauseScope}.
+   */
+  isAgentsPaused(kind: RunKind): boolean {
+    return pauseBlocks(getRuntimeSettings(this.db), kind);
+  }
+
+  /** Full pause state, for surfaces that report *why* rather than just refuse. */
+  getPauseState(): RuntimeSettings {
+    return getRuntimeSettings(this.db);
+  }
+
+  /**
+   * Flip the switch and announce it. Returns the state after the write, so a
+   * caller reports what is true rather than what it asked for.
+   */
+  setAgentsPaused(opts: { paused: boolean; scope?: PauseScope; by?: string | null }): RuntimeSettings {
+    const before = getRuntimeSettings(this.db);
+    const after = setAgentsPaused(this.db, opts);
+    if (before.agents_paused !== after.agents_paused || before.pause_scope !== after.pause_scope) {
+      this.events.emit("agents.pause_changed", {
+        paused: after.agents_paused,
+        scope: after.pause_scope,
+        by: after.paused_by ?? undefined,
+        at: after.updated_at,
+      });
+    }
+    return after;
   }
 
   /** The project whose `.tai.yaml` overlay is merged into the active config (or null in global mode). */
@@ -917,6 +966,16 @@ export class AgentRuntime {
    * inspectable; it simply is not a place.
    */
   async deliverAgentMessage(to: string, from: string, body: string): Promise<string> {
+    // One agent starting a whole new loop in another agent, unattended, is the
+    // exact shape of the incident this switch exists for — a room with the
+    // room taken out. Gated even though a person may be somewhere up the
+    // chain: unlike `delegate`, which returns a sub-answer into the caller's
+    // own run, this hands the recipient an independent turn that can reply,
+    // and two of those facing each other is the loop.
+    if (this.isAgentsPaused("autonomous")) {
+      throw new Error(`Agents are paused, so "${to}" was not messaged. Use /resume in Discord to lift it.`);
+    }
+
     const config = this.getConfig();
     if (!config.agents?.[to]) {
       throw new Error(`No agent named "${to}".`);

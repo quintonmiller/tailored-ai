@@ -95,6 +95,7 @@ When using the `github` backend, `AutopilotWorker.start()` calls `backend.bootst
 `packages/core/src/autopilot/worker.ts` is a long-running worker that wakes on an interval (default 30s), claims one backlog task per tick from the configured `TaskBackend`, and runs it through the agent loop or a workflow. Started by the CLI in server mode.
 
 What it does each tick:
+0. Check the deployment-wide [pause switch](./architecture.md#the-global-pause-switch). `autopilot_settings.paused` stops autopilot; `/pause` stops everything, so the owner does not have to remember which of six subsystems is running in order to stop the spending. The same switch also stops the stuck-task re-dispatch scan, stall retries, and the tasks tool handing work to another agent — the paths that re-fire an agent without a person asking.
 1. Read `autopilot_settings` (paused / quiet hours / disabled hours / token budget)
 2. If past a budget cap, skip
 3. Promote any tasks blocked due to budget back to backlog when the window rolls forward

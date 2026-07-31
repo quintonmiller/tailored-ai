@@ -10,6 +10,7 @@ import {
   updateExploratoryState,
 } from "../db/exploratory-queries.js";
 import { createNote } from "../db/note-queries.js";
+import { isAgentsPaused } from "../db/runtime-settings-queries.js";
 import { initDatabase } from "../db/schema.js";
 import { ExploratoryWorker } from "../exploratory/worker.js";
 import type { AgentRuntime } from "../runtime.js";
@@ -46,6 +47,8 @@ function mockRuntime(config: AgentConfig, overrides: Partial<AgentRuntime> = {})
   const base = {
     db,
     contextDir: "/tmp/exploratory-test-context",
+    // Real table, not a stub: the tick's pause gate has to be exercisable.
+    isAgentsPaused: (kind: "autonomous" | "human") => isAgentsPaused(db, kind),
     getConfig: () => config,
     getProvider: () => ({ id: "mock", chat: async () => ({}) }),
     getModel: () => "mock-model",

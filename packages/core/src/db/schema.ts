@@ -118,6 +118,31 @@ export function initDatabase(dbPath: string): Database.Database {
 
     INSERT OR IGNORE INTO autopilot_settings (id) VALUES (1);
 
+    -- runtime_settings: deployment-wide switches that must take effect NOW.
+    -- Singleton, same shape as autopilot_settings above and for the same
+    -- reason: the flag is read live on every check, so flipping it changes
+    -- behaviour on the next tick with no restart and no reload.
+    --
+    -- Deliberately NOT config.yaml. A config write calls runtime.reload(),
+    -- and ChannelLifecycleManager restarts a transport whose config block
+    -- changed — so pausing from Discord would drop the Discord gateway, i.e.
+    -- destroy the surface you just used to ask for the pause. Same reasoning
+    -- that put rooms in SQLite (see docs/rooms.md).
+    --
+    -- pause_scope is the open label 'autonomous' | 'all'; NULL when not
+    -- paused. paused_at / paused_by exist so "why is nothing running?" has an
+    -- answer that does not require reading a log.
+    CREATE TABLE IF NOT EXISTS runtime_settings (
+      id            INTEGER PRIMARY KEY CHECK (id = 1),
+      agents_paused INTEGER NOT NULL DEFAULT 0,
+      pause_scope   TEXT,
+      paused_at     TEXT,
+      paused_by     TEXT,
+      updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    INSERT OR IGNORE INTO runtime_settings (id) VALUES (1);
+
     CREATE TABLE IF NOT EXISTS digest_runs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       fired_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -667,6 +692,21 @@ export function initDatabase(dbPath: string): Database.Database {
     db.exec("ALTER TABLE autopilot_settings ADD COLUMN digest_time TEXT DEFAULT '08:00'");
   } catch {
     // Column already exists
+  }
+
+  // Safe migration: global pause switch. Listed individually so a database
+  // that got `runtime_settings` from an earlier cut picks up later columns.
+  for (const sql of [
+    "ALTER TABLE runtime_settings ADD COLUMN agents_paused INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE runtime_settings ADD COLUMN pause_scope TEXT",
+    "ALTER TABLE runtime_settings ADD COLUMN paused_at TEXT",
+    "ALTER TABLE runtime_settings ADD COLUMN paused_by TEXT",
+  ]) {
+    try {
+      db.exec(sql);
+    } catch {
+      // Column already exists
+    }
   }
 
   // Safe migration: ref_count on notes (M6 — reference-count promotion).
