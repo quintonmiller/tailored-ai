@@ -17,7 +17,7 @@ import {
   resolveProjectFromCwd,
   updateProject,
 } from "@tailored-ai/core";
-import { resolveHomeDir } from "../home.js";
+import { adoptHomeDir } from "../home.js";
 
 const SUBCOMMANDS = ["init", "list", "show", "add", "remove", "help"] as const;
 
@@ -46,7 +46,7 @@ function generateProjectId(): string {
 }
 
 function openDbFromConfig(configOverride?: string) {
-  const homeDir = resolveHomeDir(configOverride);
+  const homeDir = adoptHomeDir(configOverride);
   const configPath = configOverride ? resolve(configOverride) : resolve(homeDir, "config.yaml");
   if (!existsSync(configPath)) {
     fail(`No config.yaml found at ${configPath}. Run \`tai --init\` first.`);
