@@ -944,7 +944,7 @@ export class AgentRuntime {
    */
   getRoomStore(): RoomStore {
     if (!this._roomStore) {
-      this._roomStore = new RoomStore(this.db);
+      this._roomStore = new RoomStore(this.db, this.events);
       // The tool factory registers `local` too, for the CLI paths that never
       // construct a store. Whoever gets there first wins; re-registering would
       // only log a misleading "duplicate registration" warning at startup.

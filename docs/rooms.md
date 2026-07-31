@@ -553,6 +553,11 @@ All but `all` and `status` reply privately, so managing a room does not clutter
 it. They answer straight from the database rather than going through a model, so
 they stay responsive while an agent is mid-run.
 
+`add` and `remove` are the exception to "privately": the reply is still private,
+but the membership change itself is posted in the room by
+[`builtin:room-announcer`](#announcing-who-is-here). Who is in a room is
+everyone's business, not just that of whoever typed the command.
+
 ### Reaching agents: `ping`, `all`, `status`
 
 Three commands talk *to* agents, and the difference is worth knowing.
@@ -801,9 +806,57 @@ Plugins observe room traffic through the runtime event bus:
 |---|---|
 | `room.message` | any message lands, before any wake decision — including traffic nobody wakes on |
 | `room.woke` | a wake actually consumed budget and started a run |
+| `room.membership_changed` | an agent took or gave up a seat — see [Announcing who is here](#announcing-who-is-here) |
 
 This is the seam for behavior core deliberately does not implement: routing
 rules, custom escalation, mirroring a room elsewhere.
+
+`room.membership_changed` fires only for changes that actually happened: a
+re-subscribe that changed nothing is not a join, and unsubscribing an agent that
+was not there is not a leave. Its `source` says whether the change came from
+`config` or from an agent, which matters because config-declared subscriptions
+are re-applied on every reconcile.
+
+## Announcing who is here
+
+`builtin:room-announcer` posts a line in the room when an agent joins or leaves
+it:
+
+```
+room  **channel-manager** created this room and joined it.
+room  **kiki** joined this room.
+room  **channel-manager** left this room.
+```
+
+It is on by default. Membership was previously something you could only find out
+by asking — `/room members` told you, and nothing else did. An agent that opened
+a room described as a private 1-on-1 stayed subscribed to it, because creating a
+room subscribes you, and read nine hours of that conversation across seventy
+wake prompts. Nothing had ever suggested there was anything to look for.
+
+The creator's own join gets its own sentence, because it is a side effect of
+opening the room rather than a decision anyone made about who should be in it —
+and it is the case that went unnoticed.
+
+**Config-declared subscriptions are never announced.** `rooms.subscriptions` is
+re-applied on every reconcile and re-created wholesale on a fresh database, so
+announcing those would post a wall of joins on every boot — which is how a
+signal meant to make membership visible would instead teach everyone to skip it.
+
+```yaml
+plugins:
+  - module: builtin:room-announcer
+    config:
+      speaker: room             # identity the line is posted under
+      creationWindowSeconds: 10 # creator join still reads as "created it" within this
+      announceJoins: true
+      announceLeaves: true
+```
+
+Announcing is a workflow opinion, so it is a plugin rather than a property of
+rooms: core emits `room.membership_changed`, and a deployment that wants
+different wording, a different destination or nothing at all sets
+`enabled: false` and subscribes its own handler.
 
 ## Confining an agent to its files
 
@@ -940,7 +993,7 @@ problem it solves:
 | table | holds |
 |---|---|
 | `rooms` | the name → `<backend>:<id>` directory |
-| `room_subscriptions` | who watches what, their cursor, and their hourly wake budget |
+| `room_subscriptions` | who watches what, their cursor, and their hourly wake budget — a row appearing or disappearing emits `room.membership_changed` |
 | `room_messages` | message storage for the `local` backend only |
 | `room_members` | `local` membership, plus a cache of transport-side membership |
 

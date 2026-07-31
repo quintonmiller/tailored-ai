@@ -409,6 +409,11 @@ export const DEFAULT_PLUGIN_MODULES = [
   "builtin:scope-creep-flagger",
   "builtin:stall-guard",
   "builtin:coder-project-guard",
+  // On by default: an agent silently sitting in a room it created is the
+  // failure this closes, and a default that has to be switched on would not
+  // have closed it. Costs one line per real membership change, and nothing at
+  // all for the config-declared subscriptions re-applied on every reload.
+  "builtin:room-announcer",
 ] as const;
 
 /**
