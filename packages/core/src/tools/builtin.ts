@@ -157,7 +157,10 @@ registerToolFactory("room", (config, ctx) => {
   if (config.tools.room?.enabled === false) return [];
   if (!ctx.db) return [];
   const db = ctx.db;
-  const store = new RoomStore(db);
+  // The tool gets its own store rather than the runtime's, so it needs the bus
+  // handed to it directly — without this, every membership change an agent
+  // makes through the `room` tool (create, invite, remove) would be silent.
+  const store = new RoomStore(db, ctx.events);
 
   // The `local` backend is registered by AgentRuntime.getRoomStore(), which
   // only the long-running server path calls. Single-message and CLI runs build
