@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type Database from "better-sqlite3";
+import { taiHome } from "../home.js";
 
 /**
  * Per-workflow secrets store. Values are encrypted at rest using AES-256-GCM
@@ -39,7 +40,7 @@ export function getSecretsKey(dataDir?: string): Buffer {
     cachedKey = Buffer.from(envHex, "hex");
     return cachedKey;
   }
-  const dir = resolve(dataDir ?? process.env.TAI_HOME ?? `${process.env.HOME ?? "."}/.tailored-ai`);
+  const dir = dataDir ? resolve(dataDir) : taiHome();
   const keyPath = resolve(dir, "secrets.key");
   if (existsSync(keyPath)) {
     const hex = readFileSync(keyPath, "utf-8").trim();

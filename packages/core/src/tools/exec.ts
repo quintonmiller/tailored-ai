@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { taiHomePath } from "../home.js";
 import { checkCommandAllowlist } from "./command-allowlist.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
 import { checkExecBoundary } from "./sandbox-boundary.js";
@@ -9,18 +9,17 @@ import { checkExecBoundary } from "./sandbox-boundary.js";
 /**
  * Where the exec tool writes the full output of a truncated command.
  *
- * Precedence:
- *   1. Constructor-supplied `scratchDir` (factories pass `<TAI_HOME>/exec-outputs`).
- *   2. `TAI_HOME` env var (`$TAI_HOME/exec-outputs`).
- *   3. Legacy default `~/.tai/exec-outputs`.
+ * A constructor-supplied `scratchDir` wins; otherwise this instance's home.
  *
  * Closes #60: previously the hardcoded ~/.tai/exec-outputs path ignored
  * every configured home, and a write failure there could hang the tool
- * promise.
+ * promise. The `~/.tai` fallback that replaced it was only reachable when
+ * `TAI_HOME` was unset — which, since nothing assigned it, was always. That
+ * is why a real install accumulates 441 session directories under a path no
+ * config mentions.
  */
 function resolveScratchDir(override: string | undefined, sessionId: string | undefined): string {
-  const base = override ?? (process.env.TAI_HOME ? join(process.env.TAI_HOME, "exec-outputs") : undefined);
-  const dir = resolve(base ?? join(homedir(), ".tai", "exec-outputs"));
+  const dir = override ? resolve(override) : taiHomePath("exec-outputs");
   return join(dir, sessionId || "unknown");
 }
 

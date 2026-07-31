@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { resolveHomeDir } from "../home.js";
+import { adoptHomeDir } from "../home.js";
 import { addPluginsToConfig, removePluginsFromConfig } from "../plugins/config-entry.js";
 import { PluginManager } from "../plugins/manager.js";
 
@@ -54,7 +54,7 @@ export async function runPluginCommand(argv: string[]): Promise<void> {
       cleaned.push(arg);
     }
   }
-  const homeDir = resolveHomeDir(configOverride);
+  const homeDir = adoptHomeDir(configOverride);
   const configPath = configOverride ? resolve(configOverride) : resolve(homeDir, "config.yaml");
   const manager = new PluginManager(homeDir);
 

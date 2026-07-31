@@ -145,7 +145,7 @@ describe("the marker's file pointer is readable", () => {
    * with a worktree boundary (coder, reviewer, anything the task watcher
    * dispatches) are exactly the ones that hit large outputs.
    */
-  it("is inside the sandbox scratch allowlist", async () => {
+  it("is inside the sandbox scratch allowlist, including the legacy ~/.tai location", async () => {
     const { checkSandboxBoundary } = await import("../tools/sandbox-boundary.js");
     const { homedir } = await import("node:os");
 

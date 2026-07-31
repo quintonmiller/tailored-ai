@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type Database from "better-sqlite3";
+import { taiHome } from "../home.js";
 
 /**
  * Age-encrypted secrets vault keyed by `ns.key` (namespace.key).
@@ -34,7 +35,7 @@ export function getVaultKey(dataDir?: string): Buffer {
     cachedKey = Buffer.from(envHex, "hex");
     return cachedKey;
   }
-  const dir = resolve(dataDir ?? process.env.TAI_HOME ?? `${process.env.HOME ?? "."}/.tailored-ai`);
+  const dir = dataDir ? resolve(dataDir) : taiHome();
   const keyPath = resolve(dir, "vault.key");
   if (existsSync(keyPath)) {
     const hex = readFileSync(keyPath, "utf-8").trim();

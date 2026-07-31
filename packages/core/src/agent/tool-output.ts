@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { taiHomePath } from "../home.js";
 
 /**
  * Bound how much of a tool's output reaches the conversation.
@@ -47,8 +47,8 @@ export interface CapToolOutputOptions {
 }
 
 function scratchRoot(override: string | undefined, sessionId: string | undefined): string {
-  const base = override ?? (process.env.TAI_HOME ? join(process.env.TAI_HOME, "tool-outputs") : undefined);
-  return join(resolve(base ?? join(homedir(), ".tai", "tool-outputs")), sessionId || "unknown");
+  const base = override ? resolve(override) : taiHomePath("tool-outputs");
+  return join(base, sessionId || "unknown");
 }
 
 /**

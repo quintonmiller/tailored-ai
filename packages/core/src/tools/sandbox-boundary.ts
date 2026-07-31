@@ -1,5 +1,5 @@
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { legacyScratchHome, taiHome } from "../home.js";
 import type { ToolContext } from "./interface.js";
 
 /**
@@ -9,17 +9,20 @@ import type { ToolContext } from "./interface.js";
  * allowlist, the boundary check would reject the model's own follow-up reads
  * of files we told it about — a pointer we hand out and then refuse.
  *
- * `$TAI_HOME` is honoured because both writers resolve their directory
- * against it first; hardcoding only the homedir path left the allowlist
- * pointing somewhere nothing writes whenever TAI_HOME was set.
+ * Computed per call, not once at import. The list has to agree with where the
+ * writers actually write, and the writers resolve against `TAI_HOME`, which
+ * the CLI publishes from `main()` — after every module body in the process has
+ * already run. Snapshotting this into a module-level `const` read the value
+ * from before that assignment, so on any instance started with `-c` the
+ * allowlist named a directory nothing wrote to.
+ *
+ * The legacy `~/.tai` base stays on the list even though nothing writes there
+ * now: pointers handed out before the move live in session history forever.
  */
 function scratchRoots(): string[] {
-  const bases = [join(homedir(), ".tai")];
-  if (process.env.TAI_HOME) bases.unshift(process.env.TAI_HOME);
+  const bases = [taiHome(), legacyScratchHome()];
   return bases.flatMap((base) => [join(base, "exec-outputs"), join(base, "tool-outputs")]);
 }
-
-const SCRATCH_ALLOWLIST: string[] = scratchRoots();
 
 /**
  * If `context.workingDirectoryBoundary` is set, ensure `fullPath` resolves
@@ -44,7 +47,7 @@ export function checkSandboxBoundary(
   // Scratch allowlist — e.g. the exec-output truncation cache. The model
   // is told about these paths when its commands produce too much output;
   // it must be able to read them back.
-  for (const prefix of SCRATCH_ALLOWLIST) {
+  for (const prefix of scratchRoots()) {
     if (target === prefix || target.startsWith(`${prefix}/`)) return { ok: true };
   }
   return {

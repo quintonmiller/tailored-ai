@@ -448,6 +448,7 @@ export { ExploratoryWorker } from "./exploratory/worker.js";
 export { type LoadedExternalAgent, loadExternalAgents } from "./external-agents.js";
 export type { CreateToolsOptions } from "./factories.js";
 export { createEmbedder, createMetaTools, createProvider, createTools } from "./factories.js";
+export { DEFAULT_HOME_DIR_NAME, legacyScratchHome, taiHome, taiHomePath } from "./home.js";
 export {
   createHttpRegistryView,
   HTTP_ROUTE_NAMESPACE,
