@@ -1,12 +1,33 @@
-import { existsSync, readFileSync, rmSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { ExecTool } from "../tools/exec.js";
 import type { ToolContext } from "../tools/interface.js";
 
 const SESSION = "test-truncation";
-const OUTPUT_DIR = join(homedir(), ".tai", "exec-outputs", SESSION);
+
+/**
+ * Scratch goes to a throwaway home for the length of this file.
+ *
+ * The default is now the instance's home rather than a hardcoded `~/.tai`,
+ * and this suite really does run the tool — so without an override it would
+ * write test fixtures straight into whatever deployment lives at
+ * `~/.tailored-ai`. It did, once, before this was added.
+ */
+const TEST_HOME = mkdtempSync(join(tmpdir(), "tai-exec-test-"));
+const OUTPUT_DIR = join(TEST_HOME, "exec-outputs", SESSION);
+const PRIOR_HOME = process.env.TAI_HOME;
+
+beforeAll(() => {
+  process.env.TAI_HOME = TEST_HOME;
+});
+
+afterAll(() => {
+  if (PRIOR_HOME === undefined) delete process.env.TAI_HOME;
+  else process.env.TAI_HOME = PRIOR_HOME;
+  rmSync(TEST_HOME, { recursive: true, force: true });
+});
 
 function makeCtx(): ToolContext {
   return {
@@ -56,7 +77,7 @@ describe("ExecTool output truncation", () => {
   }, 15_000);
 
   it("honors a custom scratchDir (regression for #60)", async () => {
-    const scratchRoot = join(homedir(), ".tai-test-scratch");
+    const scratchRoot = join(TEST_HOME, "custom-scratch");
     if (existsSync(scratchRoot)) rmSync(scratchRoot, { recursive: true, force: true });
     try {
       const tool = new ExecTool(undefined, undefined, scratchRoot);

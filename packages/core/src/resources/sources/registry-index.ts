@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { taiHomePath } from "../../home.js";
 import type { FetchOptions, FetchResult, ResourceKind, ResourceSource } from "../interface.js";
 
 export interface RegistryIndexEntry {
@@ -168,10 +168,9 @@ export class RegistryDispatchError extends Error {
 }
 
 function defaultIndexResolver(name: string): string | null {
-  const candidates = [
-    process.env.TAI_REGISTRY_INDEX,
-    resolve(process.env.HOME ?? ".", ".tailored-ai/registries", `${name}.json`),
-  ].filter(Boolean) as string[];
+  const candidates = [process.env.TAI_REGISTRY_INDEX, taiHomePath("registries", `${name}.json`)].filter(
+    Boolean,
+  ) as string[];
   for (const p of candidates) {
     if (existsSync(p)) return p;
   }

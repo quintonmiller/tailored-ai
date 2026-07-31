@@ -1,5 +1,5 @@
-import { homedir } from "node:os";
 import { resolve } from "node:path";
+import { taiHomePath } from "../home.js";
 import { discoverBundleMembers, parseBundleData } from "./bundle.js";
 import type {
   FetchOptions,
@@ -41,8 +41,13 @@ export class ResourceLoader {
   private resolvers: Map<ResourceManifest["kind"], BodyResolver>;
   private cacheDir: string;
 
+  /** Where fetched resource trees are cached — instance-scoped, so worth being able to read. */
+  get cachePath(): string {
+    return this.cacheDir;
+  }
+
   constructor(opts: ResourceLoaderOptions = {}) {
-    this.cacheDir = opts.cacheDir ?? resolve(homedir(), ".tailored-ai/cache/resources");
+    this.cacheDir = opts.cacheDir ? resolve(opts.cacheDir) : taiHomePath("cache", "resources");
     const sources = opts.sources ?? [new FileResourceSource(), new AgentResourceSource()];
     for (const s of sources) this.sources.set(s.scheme, s);
     this.resolvers = new Map(Object.entries(opts.resolvers ?? {}) as [ResourceManifest["kind"], BodyResolver][]);

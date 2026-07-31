@@ -4,9 +4,14 @@ How to run more than one TAI deployment on one machine — the intended case bei
 personal instance and a work instance with separate Discord bots, only one running
 at a time.
 
-Status: **investigated, not yet supported.** `TAI_HOME` looks like the seam for this
-and mostly is, but four things ignore it and the service script has no instance
-dimension at all. This doc records what holds, what leaks, and what has to change.
+Status: **partly supported.** `TAI_HOME` is now honoured everywhere ([#311]), so
+`-c <config>` selects a whole instance. The service script still has no instance
+dimension ([#312]) and a double start still fails opaquely ([#313]). This doc
+records what holds, what leaks, and what is left.
+
+[#311]: https://github.com/quintonmiller/tailored-ai/issues/311
+[#312]: https://github.com/quintonmiller/tailored-ai/issues/312
+[#313]: https://github.com/quintonmiller/tailored-ai/issues/313
 
 ## The seam that already exists
 
@@ -28,53 +33,51 @@ Everything derived from `homeDir` is genuinely per-instance today:
 
 That is most of the state, and it is clean.
 
-## What leaks
+## What used to leak, and how it was closed
 
-### `TAI_HOME` is never set
+Nine modules answered "where is home?" for themselves and did not agree. Five read
+`TAI_HOME` — which nothing in the repo ever assigned, so all five took their
+fallback branch on every run. Four ignored it outright and resolved against
+`homedir()` or `$HOME`. `tai -c <other home>` therefore got its own config and
+database while writing its keys and cached output into the default home. The
+giveaway on a real install was `~/.tai/exec-outputs` accumulating hundreds of
+session directories, a path no config mentions.
 
-The CLI resolves `homeDir` and then never assigns `process.env.TAI_HOME` — there is
-no such assignment anywhere in the repo. Every module that isolates by *reading*
-that variable is therefore blind to `-c`:
+All nine now derive from one function, `taiHome()` in `packages/core/src/home.ts`,
+and `packages/cli/src/home.ts` `adoptHomeDir()` publishes the resolved home as
+`TAI_HOME` at every entry point. That assignment is what makes `-c` and the
+environment variable the same instruction.
 
-- `vault/vault.ts` — AES master key
-- `workflows/secrets.ts` — secrets key
-- `tools/exec.ts` — `exec-outputs` scratch
-- `agent/tool-output.ts` — `tool-outputs` scratch
-- `tools/sandbox-boundary.ts` — the scratch allowlist
+Two properties are load-bearing and easy to undo by accident:
 
-Symptom on a live install: `~/.tai/exec-outputs` accumulates session directories,
-which only happens when `TAI_HOME` is unset. So `tai -c <other home>` gets its own
-config and database while writing its secrets keys and scratch output into the
-default home.
+- **The environment is read on every call, never at module load.** `import` runs
+  every module body before `main()` parses `-c`, so anything that caches the
+  answer in a top-level `const` captures the value from before the CLI publishes
+  it. `tools/sandbox-boundary.ts` did exactly that, which would have left the
+  scratch allowlist naming a directory nothing writes to on any instance started
+  with `-c` — the fix present in the source and absent at runtime.
+- **The legacy `~/.tai` scratch stays readable.** Truncated tool and exec results
+  hand the model an absolute path to the full text, and those pointers live in
+  session history indefinitely. Nothing writes there now, but a boundaried agent
+  re-reading a month-old pointer must not be refused because the write location
+  moved.
 
-**Fix:** assign `process.env.TAI_HOME = homeDir` immediately after `resolveHomeDir`,
-at every call site. One line each; it makes `-c` behave like the env var.
+Scratch output consequently moves from `~/.tai/{exec,tool}-outputs` to
+`<home>/{exec,tool}-outputs`. Existing files stay where they are; nothing reads
+them except on demand.
 
-### Four paths ignore `TAI_HOME` entirely
-
-These read `homedir()` or `$HOME` directly, so no environment variable can separate
-them:
-
-| module | consequence |
-|---|---|
-| `resources/trust.ts` | Trusting a resource in one instance grants it in the other |
-| `resources/loader.ts` | One shared resource cache; a tree fetched by one is reused by the other with no re-approval |
-| `resources/sources/registry-index.ts` | Shared registry index (`TAI_REGISTRY_INDEX` takes a single path, so it cannot express per-instance) |
-| `tools/sandbox-boundary.ts` | `~/.tai` is *unconditionally* on the scratch allowlist, so a boundaried agent may read the other instance's cached output |
-
-The last is the newest and the easiest to miss: the allowlist entry was added so an
-agent could read back its own truncated tool output, and it unshifts `TAI_HOME`
-without ever removing the legacy path.
-
-**Fix:** default these to `TAI_HOME` rather than `homedir()`, thread the resolved
-home into the server (which constructs `TrustStore` and `ResourceLoader` with no
-path), and drop the unconditional `~/.tai` base when `TAI_HOME` is set.
-
-### `tai.lock` resolves against `cwd`
+### Still shared: `tai.lock` resolves against `cwd`
 
 `resources/lockfile.ts` `defaultLockfilePath()` uses `process.cwd()`, and the server
 calls it with no argument. Both instances launched from the same checkout share one
 lockfile.
+
+Left alone deliberately. Whether `tai.lock` is repo-scoped (like `package-lock.json`,
+which is what the cwd default implies and what the CLI's `--lockfile` flag reads as)
+or instance-scoped is a design question, and the answer differs between the
+interactive CLI and a long-running server that has no meaningful cwd. No deployment
+has a `tai.lock` yet, so nothing is broken today; deciding it inside a "honour
+`TAI_HOME`" change would have been a silent semantic switch.
 
 ## The service script
 

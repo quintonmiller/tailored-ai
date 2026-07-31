@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
+import { taiHomePath } from "../home.js";
 import type { ResourceManifest, ResourcePermissions } from "./interface.js";
 
 export type TrustDecision = "trust" | "trust-once" | "deny";
@@ -49,8 +49,13 @@ export class TrustStore {
   private state: TrustStoreShape;
 
   constructor(path?: string) {
-    this.path = path ?? resolve(homedir(), ".tailored-ai/trust.json");
+    this.path = path ? resolve(path) : taiHomePath("trust.json");
     this.state = this.load();
+  }
+
+  /** Which file this store is backed by — the instance it belongs to, made legible. */
+  get storePath(): string {
+    return this.path;
   }
 
   private load(): TrustStoreShape {

@@ -46,7 +46,7 @@ import { runPluginCommand } from "./commands/plugin.js";
 import { runProjectCommand } from "./commands/project.js";
 import { runResourcesCommand } from "./commands/resources.js";
 import { runVaultCommand } from "./commands/vault.js";
-import { isSetupDone, resolveHomeDir, resolveHomePaths } from "./home.js";
+import { adoptHomeDir, isSetupDone, resolveHomePaths } from "./home.js";
 import { syncOutboundRegistry } from "./outbound-sync.js";
 import { PluginManager } from "./plugins/manager.js";
 import { runSetupWizard, type SetupMode } from "./setup.js";
@@ -510,7 +510,7 @@ async function runSetupCommand(mode: SetupMode, args: string[]): Promise<void> {
     return;
   }
 
-  const homeDir = resolveHomeDir(values.config);
+  const homeDir = adoptHomeDir(values.config);
   const configPath = values.config ? resolve(values.config) : resolve(homeDir, "config.yaml");
   const configExists = isSetupDone(homeDir);
 
@@ -592,7 +592,7 @@ async function main() {
   }
 
   // --- Resolve home directory ---
-  let homeDir = resolveHomeDir(values.config);
+  let homeDir = adoptHomeDir(values.config);
   let configPath = values.config ? resolve(values.config) : resolve(homeDir, "config.yaml");
 
   // --- List agents (works before full init, just needs config) ---

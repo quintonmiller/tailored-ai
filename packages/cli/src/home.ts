@@ -29,6 +29,29 @@ export function resolveHomeDir(configOverride?: string): string {
 }
 
 /**
+ * Resolve the home directory and publish it as `TAI_HOME` for the rest of the
+ * process.
+ *
+ * `resolveHomeDir` reads `TAI_HOME` but nothing ever wrote it — there was not
+ * one assignment in the repo. Core is a library and never sees `-c`, so the
+ * modules that isolate per-instance state by reading the variable (the vault
+ * key, the workflow secrets key, exec and tool-output scratch, the sandbox
+ * scratch allowlist) were blind to it. `tai -c <other home>` got its own
+ * config and database while writing its keys and cached output into
+ * `~/.tailored-ai`; the giveaway on a live install was `~/.tai/exec-outputs`
+ * filling up, which only happens when `TAI_HOME` is unset.
+ *
+ * Assigning here is what makes `-c` and `TAI_HOME` the same instruction. Call
+ * this instead of `resolveHomeDir` at every entry point; `resolveHomeDir`
+ * stays pure for callers that only want to know the answer.
+ */
+export function adoptHomeDir(configOverride?: string): string {
+  const homeDir = resolveHomeDir(configOverride);
+  process.env.TAI_HOME = homeDir;
+  return homeDir;
+}
+
+/**
  * Check if setup has been completed (config.yaml exists in home dir).
  */
 export function isSetupDone(homeDir: string): boolean {
