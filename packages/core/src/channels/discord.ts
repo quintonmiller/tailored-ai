@@ -28,6 +28,12 @@ import { formatRoomRef, type Room } from "../rooms/types.js";
 import { makeRoomSessionKey } from "../rooms/watcher.js";
 import type { AgentRuntime } from "../runtime.js";
 import { DiscordApprovalHandler } from "./discord-approval.js";
+import {
+  buildCloneAgentCommand,
+  type CloneAgentDeps,
+  handleCloneAgentAutocomplete,
+  handleCloneAgentCommand,
+} from "./discord-clone-agent.js";
 import { getDiscordConfig } from "./discord-config.js";
 import {
   buildMemoryCommand,
@@ -102,6 +108,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     this.client.on(Events.InteractionCreate, (interaction) => {
       if (interaction.isAutocomplete()) {
         handleMemoryAutocomplete(interaction, this.memoryCommandDeps());
+        handleCloneAgentAutocomplete(interaction, this.cloneAgentDeps());
         handleRoomAutocomplete(interaction, {
           store: this.runtime.getRoomStore(),
           identities: () => this.identities(),
@@ -163,15 +170,37 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     console.log("[discord] Disconnected");
   }
 
+  /** Every agent that exists, registry and config.yaml together, so authored-resource agents appear too. */
+  private agentNames(): string[] {
+    const ids = (this.runtime.getAgentRegistry?.().list?.() ?? []).map((r) => r.id);
+    const fromConfig = Object.keys(this.runtime.getConfig().agents ?? {});
+    return [...new Set([...ids, ...fromConfig])].sort();
+  }
+
   /** Deps for `/memory`. Agent names come from the registry first, so authored-resource agents appear too. */
   private memoryCommandDeps(): MemoryCommandDeps {
     return {
       db: this.runtime.db,
-      listAgents: () => {
-        const ids = (this.runtime.getAgentRegistry?.().list?.() ?? []).map((r) => r.id);
-        const fromConfig = Object.keys(this.runtime.getConfig().agents ?? {});
-        return [...new Set([...ids, ...fromConfig])].sort();
+      listAgents: () => this.agentNames(),
+    };
+  }
+
+  /**
+   * Deps for `/clone-agent`. The lookup is registry-first for the same reason
+   * `resolveAgent` is: an agent already migrated to an authored-resource
+   * manifest keeps a stale block in config.yaml, and cloning that block would
+   * copy what the agent used to be.
+   */
+  private cloneAgentDeps(): CloneAgentDeps {
+    return {
+      host: this.runtime,
+      lookupAgent: (id) => {
+        const fromRegistry = this.runtime.getAgentRegistry?.().get?.(id);
+        if (fromRegistry) return { definition: fromRegistry, origin: "registry" };
+        const fromConfig = this.runtime.getConfig().agents?.[id];
+        return fromConfig ? { definition: fromConfig, origin: "config" } : undefined;
       },
+      listAgents: () => this.agentNames(),
     };
   }
 
@@ -742,6 +771,9 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     // plainly that the channel isn't a room.
     commands.push(buildRoomCommand());
     commands.push(buildMemoryCommand());
+    // Top-level rather than a subcommand of `/agent`: that one already takes a
+    // required top-level option, and Discord forbids having both.
+    commands.push(buildCloneAgentCommand());
 
     // Config-driven commands
     for (const [name, cmd] of Object.entries(config.commands)) {
@@ -828,6 +860,12 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     // database, so it must not queue behind a running agent or be swallowed by
     // the per-user "already processing" guard.
     if (await handleMemoryCommand(interaction, this.memoryCommandDeps(), this.runtime.getConfig())) {
+      return;
+    }
+
+    // Same reasoning: it answers from the config and the agent registry, never
+    // from the model, so it must not queue behind a running agent.
+    if (await handleCloneAgentCommand(interaction, this.cloneAgentDeps(), this.runtime.getConfig())) {
       return;
     }
 
