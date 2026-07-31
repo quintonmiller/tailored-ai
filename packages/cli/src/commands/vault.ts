@@ -10,7 +10,7 @@ import {
   vaultList,
   vaultSet,
 } from "@tailored-ai/core";
-import { resolveHomeDir } from "../home.js";
+import { adoptHomeDir } from "../home.js";
 
 const USAGE = `
 Usage: tai vault <command> [args]
@@ -37,7 +37,7 @@ function openDb(configOverride: string | undefined, dbOverride: string | undefin
   if (dbOverride) {
     return initDatabase(resolve(process.cwd(), dbOverride));
   }
-  const home = resolveHomeDir(configOverride);
+  const home = adoptHomeDir(configOverride);
   return initDatabase(resolve(home, "data", "agent.db"));
 }
 

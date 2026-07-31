@@ -55,8 +55,8 @@ registerToolFactory("memory", (config, ctx) => {
 
 registerToolFactory("exec", (config) => {
   if (config.tools.exec?.enabled === false) return [];
-  const scratchDir = process.env.TAI_HOME ? resolve(process.env.TAI_HOME, "exec-outputs") : undefined;
-  return [new ExecTool(config.tools.exec?.allowedCommands, undefined, scratchDir)];
+  // Left to ExecTool, which resolves it from this instance's home.
+  return [new ExecTool(config.tools.exec?.allowedCommands)];
 });
 
 registerToolFactory("read", (config) => {

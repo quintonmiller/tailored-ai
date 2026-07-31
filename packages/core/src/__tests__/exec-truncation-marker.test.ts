@@ -1,12 +1,26 @@
-import { existsSync, rmSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { ExecTool } from "../tools/exec.js";
 import type { ToolContext } from "../tools/interface.js";
 
 const SESSION = "test-truncation-marker";
-const OUTPUT_DIR = join(homedir(), ".tai", "exec-outputs", SESSION);
+
+/** Throwaway home — see the note in exec-truncation.test.ts. */
+const TEST_HOME = mkdtempSync(join(tmpdir(), "tai-exec-marker-test-"));
+const OUTPUT_DIR = join(TEST_HOME, "exec-outputs", SESSION);
+const PRIOR_HOME = process.env.TAI_HOME;
+
+beforeAll(() => {
+  process.env.TAI_HOME = TEST_HOME;
+});
+
+afterAll(() => {
+  if (PRIOR_HOME === undefined) delete process.env.TAI_HOME;
+  else process.env.TAI_HOME = PRIOR_HOME;
+  rmSync(TEST_HOME, { recursive: true, force: true });
+});
 
 function makeCtx(): ToolContext {
   return {
