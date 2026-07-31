@@ -376,6 +376,13 @@ export {
   saveMessage,
   updateSessionMeta,
 } from "./db/queries.js";
+export type { PauseScope, RunKind, RuntimeSettings } from "./db/runtime-settings-queries.js";
+export {
+  getRuntimeSettings,
+  isAgentsPaused,
+  pauseBlocks,
+  setAgentsPaused,
+} from "./db/runtime-settings-queries.js";
 export { initDatabase } from "./db/schema.js";
 export type {
   ProjectTask,

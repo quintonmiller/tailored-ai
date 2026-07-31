@@ -142,6 +142,10 @@ export class AutopilotWorker {
   async scanStuckTasks(): Promise<{ requeued: number; skipped: number }> {
     const watcher = this.getTaskWatcher?.();
     if (!watcher) return { requeued: 0, skipped: 0 };
+    // Timer-driven re-dispatch. `notify(..., {force: true})` deliberately
+    // bypasses the assignee gate, so without this a pause would leave the one
+    // path that re-fires the same agent over and over still running.
+    if (this.runtime.isAgentsPaused("autonomous")) return { requeued: 0, skipped: 0 };
     const config = this.runtime.getConfig();
     const knownAgents = Object.keys(config.agents ?? {});
     if (knownAgents.length === 0) return { requeued: 0, skipped: 0 };
@@ -286,6 +290,10 @@ export class AutopilotWorker {
     const settings = getAutopilotSettings(db);
 
     if (settings.paused) return;
+    // Autopilot's own pause switch covers autopilot. This one covers the whole
+    // deployment, so the owner does not have to remember which of six things
+    // is running in order to stop the spending.
+    if (this.runtime.isAgentsPaused("autonomous")) return;
     if (isInDisabledHours(settings)) return;
 
     const budget = checkBudget(db, settings);

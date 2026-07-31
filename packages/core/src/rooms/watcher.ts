@@ -80,6 +80,25 @@ export function speaksAs(
   return speaker.toLowerCase() === label.toLowerCase();
 }
 
+/**
+ * Did a person say this?
+ *
+ * One definition, two readers: the wake policy uses it to decide whether an
+ * unaddressed line is a loose question or agent chatter, and the global pause
+ * uses it to decide whether a wake is autonomous. Those two must agree — a
+ * second, subtly different copy of this rule is how you end up with a pause
+ * that swallows the owner's own messages in some rooms and not others.
+ *
+ * An unresolvable speaker counts as human. Backends are third-party and a
+ * message we cannot attribute is more likely a person on a transport we do
+ * not model than an agent, and the failure modes are asymmetric: waking on a
+ * human wrongly costs one run, ignoring one loses the conversation.
+ */
+export function isFromHuman(msg: RoomMessage, identities: IdentityResolver): boolean {
+  const identity = msg.speaker ? identities.get(msg.speaker) : undefined;
+  return identity ? identity.kind === "human" : !msg.speaker;
+}
+
 /** How much of its own message an agent is shown when it is quoted back to it. */
 const OWN_ECHO_CHARS = 150;
 
@@ -494,6 +513,10 @@ export class RoomWatcher {
    * bar for speaking is "something needs attention", not "I looked".
    */
   async runCheckIn(agent: string, roomRef: string): Promise<void> {
+    // A clock fired and nobody said anything — the purest autonomous run there
+    // is, and no scope distinction to make: there is no human turn to protect.
+    if (this.runtime.isAgentsPaused("autonomous")) return;
+
     const sub = this.store.getSubscription(agent, roomRef);
     if (!sub?.checkInMinutes) return;
 
@@ -596,6 +619,13 @@ export class RoomWatcher {
     if (messages.length === 0) return;
 
     const identities = this.identities();
+    // The poll timer is autonomous, but what it finds may not be. Deciding on
+    // the batch rather than on the timer is what keeps a poll-delivered room
+    // answering the owner while paused — gating the timer itself would make
+    // `deliver: poll` rooms go silent for humans too, which is the "looks
+    // broken rather than paused" failure this design exists to avoid.
+    if (this.pausedForMessages(messages, identities)) return;
+
     const agentTurns = this.store.agentTurns(roomRef);
     const wakeworthy = messages.some((m) => this.shouldWake(sub, m, identities, agentTurns));
     if (!wakeworthy) {
@@ -691,9 +721,7 @@ export class RoomWatcher {
     // An unaddressed message from a human is for whoever is listening; an
     // unaddressed message from another agent is chatter, and answering it is
     // how two agents talk forever.
-    const speakerIdentity = msg.speaker ? identities.get(msg.speaker) : undefined;
-    const fromHuman = speakerIdentity ? speakerIdentity.kind === "human" : !msg.speaker;
-    return fromHuman && msg.to.length === 0 ? "loose-question" : null;
+    return isFromHuman(msg, identities) && msg.to.length === 0 ? "loose-question" : null;
   }
 
   private async fetchBacklog(sub: RoomSubscription): Promise<RoomMessage[]> {
@@ -773,6 +801,20 @@ export class RoomWatcher {
 
   // ------------------------------------------------------------------- run
 
+  /**
+   * Should this batch of room traffic be refused because agents are paused?
+   *
+   * The discriminator is who spoke, not what woke us. Under the default scope
+   * a human in the batch means someone is waiting on an answer and the run
+   * goes ahead; an all-agent batch is the chatter loop and stops. Under
+   * `scope: all` nothing wakes.
+   */
+  private pausedForMessages(messages: RoomMessage[], identities: IdentityResolver): boolean {
+    if (this.runtime.isAgentsPaused("human")) return true;
+    if (!this.runtime.isAgentsPaused("autonomous")) return false;
+    return !messages.some((m) => isFromHuman(m, identities));
+  }
+
   private async runWake(sub: RoomSubscription): Promise<void> {
     const key = `${sub.agent} ${sub.roomRef}`;
     if (this.running.has(key)) {
@@ -789,6 +831,13 @@ export class RoomWatcher {
       const fresh = this.store.getSubscription(sub.agent, sub.roomRef) ?? sub;
       const messages = await this.fetchBacklog(fresh);
       if (messages.length === 0) return;
+
+      // The backstop for every wake path — push, poll, debounce, and the
+      // hourly-ceiling retry all land here. A batch with a human in it is a
+      // person waiting for an answer; a batch of only agents is two agents
+      // talking to each other, which is the run that cost $4 in twenty
+      // minutes and the reason this switch exists.
+      if (this.pausedForMessages(messages, this.identities())) return;
 
       // Budget is charged only once there is real work. Charging before the
       // backlog check let an empty wake burn one of twelve hourly slots.

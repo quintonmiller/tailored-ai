@@ -408,6 +408,22 @@ async function runSingleMessage(
   opts: { agent?: string; sessionId?: string; json: boolean },
 ) {
   const { agent: agentName, json } = opts;
+
+  // Only `scope: all` blocks a person at a terminal. Said plainly and exited
+  // non-zero so a script that shells out to `tai -m` fails loudly rather than
+  // reading an empty response as an answer.
+  if (runtime.isAgentsPaused("human")) {
+    const state = runtime.getPauseState();
+    const detail = `Agents are paused (scope: ${state.pause_scope ?? "all"})${state.paused_at ? ` since ${state.paused_at}` : ""}.`;
+    if (json) {
+      console.log(JSON.stringify({ error: detail, paused: true, scope: state.pause_scope }));
+    } else {
+      console.error(`${detail} Nothing ran. Use /resume in Discord to lift it.`);
+    }
+    process.exitCode = 1;
+    return;
+  }
+
   const contextDir = runtime.contextDir;
 
   const resolved = resolveAgent(agentName, runtime.getConfig(), runtime.getResolvableTools(), undefined, contextDir);
