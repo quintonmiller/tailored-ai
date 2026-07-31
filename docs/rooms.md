@@ -391,6 +391,14 @@ Two agents that can wake each other will, so there are three brakes:
    someone speaks. A turn that used a tool resets the count — work is progress,
    not chatter.
 
+All four are automatic. The manual one is `/pause` — the
+[global pause switch](./architecture.md#the-global-pause-switch) — for when the
+brakes above were not enough and you want everything stopped from a phone. In
+rooms it discriminates by speaker, using the same `isFromHuman` rule the wake
+policy uses: a batch containing a human still wakes the agent, a batch of only
+agents does not. Scheduled check-ins stop outright, since nobody asked for
+them. `/pause scope:all` silences the human case too.
+
 Both ceilings take a per-room override, because an engineering room where three
 agents hand work back and forth and an ideas channel that sees one message a
 week cannot share a number:

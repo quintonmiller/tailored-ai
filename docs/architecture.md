@@ -14,6 +14,43 @@ Deep notes on the runtime, factories, and how to add new tools/channels/provider
 - The agent loop accepts optional `getTools`/`getProvider` closures to re-resolve per iteration. Tool-change detection injects a transient system message when the tool set changes mid-loop.
 - All subsystems (server, discord, cron, delegate) hold a runtime reference and read state at request time.
 
+## The global pause switch
+
+`/pause` in Discord stops agents starting new runs on their own, without stopping TAI. `/resume` lifts it.
+
+It exists because every other off switch is the wrong shape. Killing the process loses in-flight work. Editing config calls `reload()`, and `ChannelLifecycleManager` restarts a transport whose config block changed — so pausing from Discord would drop the Discord gateway you just used to ask for it. `autopilot pause` covers one of six subsystems that can start a run.
+
+### What it blocks, and what it deliberately does not
+
+`/pause` blocks **autonomous** runs: anything nothing living asked for.
+
+| Gate | Site |
+|---|---|
+| All workflow-driven runs — cron, webhooks, all eight trigger pollers (email, calendar, RSS, weather, sensor, finance, geofence, file-drop) | `workflows/engine.ts` `runWorkflow`, by `trigger` |
+| Webhook routes with `action: agent` (these reach the loop *without* the workflow engine) | `packages/server/src/index.ts`, webhook route |
+| Cron timer firings | `cron/scheduler.ts` `runScheduled` |
+| Autopilot ticks and the stuck-task re-dispatch scan | `autopilot/worker.ts` `runTick`, `scanStuckTasks` |
+| Exploratory ticks | `exploratory/worker.ts` `tick` |
+| Stall retries (`task.dispatch_requested`) and the tasks tool handing work to another agent | `task-watcher.ts` `handleDispatchRequest`, `notifyById` |
+| Room check-ins, and wakes caused only by other agents | `rooms/watcher.ts` `runCheckIn`, `pollOnce`, `runWake` |
+| One agent starting a loop in another | `runtime.ts` `deliverAgentMessage` |
+
+It deliberately leaves **human-initiated** runs working: `POST /api/chat`, `POST /api/command`, Discord DMs and slash commands, Slack, the CLI, cron "Run now", `/room status`, the exploratory manual-run route, `runWorkflow` with trigger `http` or `tool`, and an agent answering *you* in a room.
+
+That split is the whole design. A pause that also kills your own messages is indistinguishable from an outage, and it takes away the instruments you would use to find out what went wrong — `/memory`, `/room status`, asking an agent what it just did. `/pause scope:all` blocks the human paths too; each of them then says it is paused rather than going quiet, for the same reason.
+
+**In-flight runs finish.** The gates refuse new runs only. Aborting a half-finished tool call turns an expensive mistake into an expensive mistake plus an inconsistent worktree. A `trigger_workflow` child passes `continuation: true` so a pause cannot cut a running parent in half.
+
+### Reading and writing it
+
+State is the `runtime_settings` singleton table (`agents_paused`, `pause_scope`, `paused_at`, `paused_by`) — the same shape as `autopilot_settings`, and in SQLite for the reload reason above.
+
+- `runtime.isAgentsPaused("autonomous" | "human")` — read live on **every** check. Never cache it; a cached copy means the pause does not land until something reloads, which is the one failure this feature cannot have.
+- `runtime.getPauseState()` — the full row, for surfaces that report *why* rather than just refuse.
+- `runtime.setAgentsPaused({ paused, scope?, by? })` — writes and, on a real change, emits `agents.pause_changed` on the runtime bus.
+
+Adding an autonomous entry point? Gate it. The two that are easy to miss are paths that reach `runAgentLoop` without passing through `runWorkflow` (the webhook `action: agent` route) and paths where one agent starts another (`deliverAgentMessage`). See also [rooms](./rooms.md#runaway-protection) and [tasks & autopilot](./tasks-and-autopilot.md#autopilot).
+
 ## Factories (`packages/core/src/factories.ts`)
 
 Composition layer that constructs tools, providers, and meta tools:

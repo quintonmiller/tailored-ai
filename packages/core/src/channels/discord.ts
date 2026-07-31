@@ -41,6 +41,12 @@ import {
   handleMemoryCommand,
   type MemoryCommandDeps,
 } from "./discord-memory-commands.js";
+import {
+  buildPauseCommand,
+  buildResumeCommand,
+  handlePauseCommand,
+  type PauseCommandDeps,
+} from "./discord-pause-commands.js";
 import { buildRoomCommand, handleRoomAutocomplete, handleRoomCommand } from "./discord-room-commands.js";
 import { DiscordRoomBackend } from "./discord-rooms.js";
 import type { Channel } from "./interface.js";
@@ -175,6 +181,22 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     const ids = (this.runtime.getAgentRegistry?.().list?.() ?? []).map((r) => r.id);
     const fromConfig = Object.keys(this.runtime.getConfig().agents ?? {});
     return [...new Set([...ids, ...fromConfig])].sort();
+  }
+
+  /** What a person gets back when `scope: all` is in force. Names the way out. */
+  private pausedNotice(): string {
+    const state = this.runtime.getPauseState();
+    const since = state.paused_at ? ` since ${state.paused_at}` : "";
+    const who = state.paused_by ? ` by ${state.paused_by}` : "";
+    return `Agents are paused (**all**)${since}${who}, so nothing ran. \`/resume\` lifts it; \`/pause\` (no scope) blocks background runs but keeps answering you.`;
+  }
+
+  /** Deps for `/pause` and `/resume`. Straight through to the runtime's live switch. */
+  private pauseCommandDeps(): PauseCommandDeps {
+    return {
+      getPauseState: () => this.runtime.getPauseState(),
+      setAgentsPaused: (opts) => this.runtime.setAgentsPaused(opts),
+    };
   }
 
   /** Deps for `/memory`. Agent names come from the registry first, so authored-resource agents appear too. */
@@ -636,6 +658,15 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     agentName?: string,
     project?: ProjectRef | null,
   ): Promise<void> {
+    // Only `scope: all` reaches here — under the default scope a person's own
+    // message is deliberately still answered. Said out loud rather than
+    // dropped: silence from a paused agent is indistinguishable from a broken
+    // one, which is the confusion the whole design is arranged to prevent.
+    if (this.runtime.isAgentsPaused("human")) {
+      await msg.reply(this.pausedNotice());
+      return;
+    }
+
     const stopTyping = this.indicateWorking(msg.channelId);
 
     try {
@@ -771,6 +802,10 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     // plainly that the channel isn't a room.
     commands.push(buildRoomCommand());
     commands.push(buildMemoryCommand());
+    // Top-level and two words long, because the moment you need them you are
+    // on a phone and something is on fire.
+    commands.push(buildPauseCommand());
+    commands.push(buildResumeCommand());
     // Top-level rather than a subcommand of `/agent`: that one already takes a
     // required top-level option, and Discord forbids having both.
     commands.push(buildCloneAgentCommand());
@@ -856,6 +891,13 @@ export class DiscordChannel implements Channel, OutboundNotifier {
   }
 
   private async handleInteraction(interaction: ChatInputCommandInteraction): Promise<void> {
+    // First, and above the "already processing" guard: a stop button that
+    // queues behind the thing it is stopping is not a stop button. Also the
+    // one command that must still answer under `scope: all`.
+    if (await handlePauseCommand(interaction, this.pauseCommandDeps())) {
+      return;
+    }
+
     // Same reasoning as the room commands below: answers straight from the
     // database, so it must not queue behind a running agent or be swallowed by
     // the per-user "already processing" guard.
@@ -1046,6 +1088,9 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     content: string,
     agentName?: string,
   ): Promise<string | undefined> {
+    // See runAgentAndReply: reached only under `scope: all`.
+    if (this.runtime.isAgentsPaused("human")) return this.pausedNotice();
+
     const config = this.runtime.getConfig();
     const model = this.runtime.getModel();
 

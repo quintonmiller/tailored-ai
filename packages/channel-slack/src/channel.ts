@@ -191,6 +191,14 @@ export class SlackChannel implements Channel, OutboundNotifier {
   }
 
   private async runAgent(userKey: string, content: string, project: ProjectRef | null): Promise<string | undefined> {
+    // A Slack message is a person talking, so only `scope: all` stops it. The
+    // reply says so rather than going quiet — an agent that silently ignores
+    // you reads as broken, not paused.
+    if (this.runtime.isAgentsPaused("human")) {
+      const state = this.runtime.getPauseState();
+      return `Agents are paused (scope: ${state.pause_scope ?? "all"})${state.paused_at ? ` since ${state.paused_at}` : ""}, so nothing ran.`;
+    }
+
     const session = this.runtime.findOrCreateSession({ key: userKey, project });
     const hooks = this.runtime.resolveHooks({});
     const logPrefix = `[slack] [${userKey}]`;

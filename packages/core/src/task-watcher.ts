@@ -56,6 +56,13 @@ export class TaskWatcher {
    * same agent to run again — typically StallGuard retrying a stall).
    */
   private handleDispatchRequest(e: import("./events.js").RuntimeEventPayload<"task.dispatch_requested">): void {
+    // A plugin asking for a re-run — StallGuard retrying a stall, typically.
+    // Nothing human is behind it, and a retry loop that keeps retrying through
+    // a pause is precisely the thing the owner reached for the switch to stop.
+    if (this.runtime.isAgentsPaused("autonomous")) {
+      console.log(`[task-watcher] [${e.taskId}] dispatch request dropped: agents are paused`);
+      return;
+    }
     // Best-effort: drop the request if we can't find the task. The plugin
     // logged a reason already, no need to double-warn.
     const row = this.runtime.db.prepare("SELECT * FROM project_tasks WHERE id = ?").get(e.taskId) as
@@ -84,6 +91,15 @@ export class TaskWatcher {
    * fetches from the right backend.
    */
   notifyById(action: TaskEvent["action"], taskId: string, projectId?: string): void {
+    // The only caller is the tasks tool, i.e. an agent that just filed or
+    // reassigned work. Letting this through while paused is how one agent
+    // keeps a second one busy — the exact shape of the runaway the switch is
+    // for. The task itself is still written; only the dispatch stops, so the
+    // work is waiting rather than lost when the pause lifts.
+    if (this.runtime.isAgentsPaused("autonomous")) {
+      console.log(`[task-watcher] [${taskId}] ${action} dispatch skipped: agents are paused`);
+      return;
+    }
     if (projectId) {
       // Per-project lookup: backend.get is async. Fire the notify when it
       // resolves; swallow errors so a flaky GH API call doesn't break the

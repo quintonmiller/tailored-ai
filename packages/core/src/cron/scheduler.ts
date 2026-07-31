@@ -57,11 +57,7 @@ export class CronScheduler {
         continue;
       }
 
-      const timer = new Cron(compiledCron, () => {
-        this.runJob(job).catch((err) => {
-          console.error(`[cron] Error running job "${job.name}":`, err);
-        });
-      });
+      const timer = new Cron(compiledCron, () => this.runScheduled(job));
 
       this.timers.push(timer);
       const friendly = compiledCron === job.schedule ? job.schedule : `${job.schedule} → ${compiledCron}`;
@@ -80,6 +76,24 @@ export class CronScheduler {
   restart(): void {
     this.stop();
     this.start();
+  }
+
+  /**
+   * The clock fired. A named method rather than a closure inside `start()` so
+   * the pause decision is reachable without standing up a real cron timer.
+   *
+   * Checked here and deliberately NOT in `runJob`: `triggerJob` shares
+   * `runJob`, and the UI's "Run now" is a person asking for one specific
+   * answer — exactly the thing a pause should leave them.
+   */
+  private runScheduled(job: CronJobConfig): void {
+    if (this.runtime.isAgentsPaused("autonomous")) {
+      console.log(`[cron] Skipping "${job.name}": agents are paused`);
+      return;
+    }
+    this.runJob(job).catch((err) => {
+      console.error(`[cron] Error running job "${job.name}":`, err);
+    });
   }
 
   /**

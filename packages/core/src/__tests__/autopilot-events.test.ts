@@ -7,6 +7,7 @@
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AutopilotWorker } from "../autopilot/worker.js";
+import { isAgentsPaused } from "../db/runtime-settings-queries.js";
 import { initDatabase } from "../db/schema.js";
 import { createProjectTask } from "../db/task-queries.js";
 import { type RuntimeEventPayload, TypedEventBus } from "../events.js";
@@ -19,6 +20,9 @@ function makeRuntime(events: TypedEventBus, over: Record<string, unknown> = {}):
   return {
     db,
     events,
+    // Wired to the real table rather than stubbed false, so a test that flips
+    // the global pause sees the worker actually honour it.
+    isAgentsPaused: (kind: "autonomous" | "human") => isAgentsPaused(db, kind),
     getConfig: () => ({ agents: { default: { description: "" } }, ...over }),
     getTaskBackend: () => fakeBackend,
   } as unknown as AgentRuntime;

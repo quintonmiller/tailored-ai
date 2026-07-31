@@ -20,18 +20,22 @@ export class TriggerWorkflowExecutor implements StepExecutor {
     if (s.fireAndForget) {
       // Don't await — return the child runId immediately. The promise's
       // failure is logged via the engine's run.failed event, not here.
-      const pending = ctx.engine.runWorkflow(s.workflow, childInput, "programmatic").catch((err: Error) => {
-        // Surface via console only — fire-and-forget contract means this
-        // step does not block on child success/failure.
-        console.warn(`[trigger_workflow] child "${s.workflow}" failed: ${err.message}`);
-      });
+      const pending = ctx.engine
+        .runWorkflow(s.workflow, childInput, "programmatic", { continuation: true })
+        .catch((err: Error) => {
+          // Surface via console only — fire-and-forget contract means this
+          // step does not block on child success/failure.
+          console.warn(`[trigger_workflow] child "${s.workflow}" failed: ${err.message}`);
+        });
       // Best-effort to capture an early runId; if the parent races ahead we
       // simply report unknown. Most callers only need to know "kicked off".
       void pending;
       return { output: { workflow: s.workflow, fireAndForget: true } };
     }
 
-    const child = await ctx.engine.runWorkflow(s.workflow, childInput, "programmatic");
+    // `continuation`: the parent is mid-run, so the global pause must not cut
+    // it in half. See RunOptions.continuation in engine.ts.
+    const child = await ctx.engine.runWorkflow(s.workflow, childInput, "programmatic", { continuation: true });
     if (child.status === "failed") {
       throw new Error(`trigger_workflow "${s.workflow}" failed: ${child.error ?? "unknown error"}`);
     }

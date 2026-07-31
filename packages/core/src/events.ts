@@ -165,6 +165,26 @@ export interface RuntimeEventMap {
   };
 
   /**
+   * The global pause switch was flipped. Emitted only on a real change — a
+   * `/pause` while already paused reports the current state and says nothing
+   * here, so a subscriber counting these sees decisions, not keystrokes.
+   *
+   * The seam exists so a deployment can react to being paused without core
+   * knowing how: post to a status channel, flip a dashboard tile, page
+   * someone if it stays paused for an hour. Core's own gates read the
+   * database directly and do not depend on this event arriving.
+   */
+  "agents.pause_changed": {
+    paused: boolean;
+    /** `null` on resume; otherwise the scope now in force. */
+    scope: "autonomous" | "all" | null;
+    /** Who asked, when the surface knows. */
+    by?: string;
+    /** When the change landed (SQLite `datetime('now')`). */
+    at: string;
+  };
+
+  /**
    * An agent loop finished running for a task. Carries the initial task
    * (as the watcher saw it when routing), the final task state (which
    * may differ — the agent may have transitioned status / re-assigned

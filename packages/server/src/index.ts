@@ -248,6 +248,22 @@ function fragmentToFact(fragment: MemoryFragment): Record<string, unknown> {
   };
 }
 
+/**
+ * The body every paused route returns. Uniform on purpose: a client should be
+ * able to detect "paused" once and render it the same way everywhere, rather
+ * than string-matching a different error message per endpoint.
+ */
+function pausedPayload(runtime: AgentRuntime): Record<string, unknown> {
+  const state = runtime.getPauseState();
+  return {
+    error: "Agents are paused",
+    paused: true,
+    scope: state.pause_scope,
+    since: state.paused_at,
+    by: state.paused_by,
+  };
+}
+
 export function createServer(opts: ServerOptions) {
   const startTime = Date.now();
   const { runtime } = opts;
@@ -818,6 +834,14 @@ export function createServer(opts: ServerOptions) {
 
     if (!message?.trim()) {
       return c.json({ error: "message is required" }, 400);
+    }
+
+    // Reached only under `scope: all` — the default pause deliberately keeps
+    // the owner's own chat working, since it is how you inspect a deployment
+    // you have just stopped. Answered as JSON rather than an empty SSE stream
+    // so the UI can say why instead of hanging.
+    if (runtime.isAgentsPaused("human")) {
+      return c.json(pausedPayload(runtime), 503);
     }
 
     const config = runtime.getConfig();
@@ -2000,6 +2024,14 @@ export function createServer(opts: ServerOptions) {
       return c.json({ error: "input is required" }, 400);
     }
 
+    // Same reasoning as /api/chat: only `scope: all` blocks a person's own
+    // slash command. Checked before the command is parsed so the non-agent
+    // branches (new_session, compact, help) refuse too — under `all` nothing
+    // should quietly half-work.
+    if (runtime.isAgentsPaused("human")) {
+      return c.json(pausedPayload(runtime), 503);
+    }
+
     if (!isCommand(input)) {
       return c.json({ error: "Input must start with /" }, 400);
     }
@@ -2590,7 +2622,25 @@ export function createServer(opts: ServerOptions) {
       return c.json({ ok: true, action: "workflow", workflow: wfName, status: "pending" }, 202);
     }
 
-    // action === 'agent' — send through agent loop
+    // action === 'agent' — send through agent loop.
+    //
+    // This one does NOT go through the workflow engine, so the gate in
+    // `runWorkflow` never sees it: a webhook route with `action: agent` calls
+    // `runAgentLoop` directly a few lines below. A third party POSTing to a
+    // URL is not a human at a keyboard, so it is autonomous under any scope.
+    if (runtime.isAgentsPaused("autonomous")) {
+      const state = runtime.getPauseState();
+      return c.json(
+        {
+          error: "Agents are paused",
+          paused: true,
+          scope: state.pause_scope,
+          since: state.paused_at,
+        },
+        503,
+      );
+    }
+
     const model = runtime.getModel();
     const sessionKey = route.sessionKey ?? `webhook:${routePath}`;
 
