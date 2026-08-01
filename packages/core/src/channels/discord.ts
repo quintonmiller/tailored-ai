@@ -19,6 +19,7 @@ import { estimateTokens, runAgentLoop } from "../agent/loop.js";
 import { BASE_SYSTEM_PROMPT } from "../agent/prompt.js";
 import { countTurns, rewindSession, undoRewind } from "../agent/rewind.js";
 import { findOrCreateSession, resetSession } from "../agent/session.js";
+import { slashCommandRegistry } from "../commands/registry.js";
 import { executeCommand, isCommand } from "../commands.js";
 import { loadAllContext, loadContextFiles } from "../context.js";
 import { getSessionMessages } from "../db/queries.js";
@@ -50,6 +51,7 @@ import {
   handlePauseCommand,
   type PauseCommandDeps,
 } from "./discord-pause-commands.js";
+import { buildPluginCommands, handlePluginAutocomplete, handlePluginCommand } from "./discord-plugin-commands.js";
 import { buildRoomCommand, handleRoomAutocomplete, handleRoomCommand } from "./discord-room-commands.js";
 import { DiscordRoomBackend } from "./discord-rooms.js";
 import type { Channel } from "./interface.js";
@@ -116,22 +118,28 @@ export class DiscordChannel implements Channel, OutboundNotifier {
 
     this.client.on(Events.InteractionCreate, (interaction) => {
       if (interaction.isAutocomplete()) {
-        // Autocomplete answers from config and the database — agent names,
-        // memory section names, room names. Suggesting them to someone who may
-        // not run the command leaks the same information the command would.
+        // Authorization before dispatch, plugin or built-in. Autocomplete
+        // answers from config and the database — agent names, memory section
+        // names, room names — so suggesting them to someone who may not run the
+        // command leaks the same information the command would.
         if (!authorizeInteraction(this.identityOf(interaction), this.authorizationPolicy()).ok) {
           interaction.respond([]).catch(() => {});
           return;
         }
-        handleMemoryAutocomplete(interaction, this.memoryCommandDeps());
-        handleCloneAgentAutocomplete(interaction, this.cloneAgentDeps());
-        handleRoomAutocomplete(interaction, {
-          store: this.runtime.getRoomStore(),
-          identities: () => this.identities(),
-          requestStatusUpdate: () => Promise.resolve(0),
-          postAsPerson: () => Promise.resolve(),
-          resetAgentSession: () => ({ cleared: 0, scope: "room" as const }),
-          rewindAgentSession: async () => ({ scope: "room" as const, remaining: 0 }),
+        // Plugin commands first: a registered name can never be a built-in
+        // (the registry refuses reserved names), so this cannot shadow one.
+        handlePluginAutocomplete(interaction).then((handled) => {
+          if (handled) return;
+          handleMemoryAutocomplete(interaction, this.memoryCommandDeps());
+          handleCloneAgentAutocomplete(interaction, this.cloneAgentDeps());
+          handleRoomAutocomplete(interaction, {
+            store: this.runtime.getRoomStore(),
+            identities: () => this.identities(),
+            requestStatusUpdate: () => Promise.resolve(0),
+            postAsPerson: () => Promise.resolve(),
+            resetAgentSession: () => ({ cleared: 0, scope: "room" as const }),
+            rewindAgentSession: async () => ({ scope: "room" as const, remaining: 0 }),
+          });
         });
         return;
       }
@@ -810,6 +818,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     // `create` subcommand is how the first one gets made, so gating on "a room
     // exists" would lock the door from the inside. The other subcommands say
     // plainly that the channel isn't a room.
+    commands.push(...buildPluginCommands());
     commands.push(buildRoomCommand());
     commands.push(buildMemoryCommand());
     // Top-level and two words long, because the moment you need them you are
@@ -907,7 +916,14 @@ export class DiscordChannel implements Channel, OutboundNotifier {
    */
   private authorizationPolicy(): AuthorizationPolicy {
     const cfg = getDiscordConfig(this.runtime.getConfig());
-    return { owner: cfg?.owner, allowedGuilds: cfg?.allowedGuilds };
+    return {
+      owner: cfg?.owner,
+      allowedGuilds: cfg?.allowedGuilds,
+      // Read per interaction: a plugin can register or drop a command at any
+      // reload, and a cached map would enforce a restriction the plugin has
+      // since changed.
+      pluginRestrictions: slashCommandRegistry.restrictions(),
+    };
   }
 
   private identityOf(interaction: ChatInputCommandInteraction | AutocompleteInteraction): InteractionIdentity {
@@ -945,6 +961,10 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     // First, and above the "already processing" guard: a stop button that
     // queues behind the thing it is stopping is not a stop button. Also the
     // one command that must still answer under `scope: all`.
+    if (await handlePluginCommand(interaction)) {
+      return;
+    }
+
     if (await handlePauseCommand(interaction, this.pauseCommandDeps())) {
       return;
     }

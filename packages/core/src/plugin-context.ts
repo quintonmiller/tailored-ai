@@ -25,6 +25,8 @@
 
 import type { ChannelFactory } from "./channels/registry.js";
 import { registerChannelFactory } from "./channels/registry.js";
+import type { SlashCommandRegistryView } from "./commands/registry.js";
+import { slashCommandRegistry } from "./commands/registry.js";
 import { type EventBus, TypedEventBus } from "./events.js";
 import { createHttpRegistryView, type HttpRegistryView, HttpRouteRegistry } from "./http/registry.js";
 import type { MemoryBackendFactory } from "./memory/registry.js";
@@ -125,6 +127,29 @@ export interface PluginContext {
    * ```
    */
   stepExecutors: StepExecutorRegistryView;
+  /**
+   * Slash-command surface — register chat commands the channels expose.
+   *
+   * Transport-neutral: you describe the command and its options, and each
+   * channel adapts that onto its own command surface (Discord today). Unlike
+   * HTTP routes these cannot be namespaced — chat platforms use a flat command
+   * namespace with no separator — so `register` throws on a name that is
+   * built-in or already taken rather than silently shadowing it.
+   *
+   * Returns a disposer; call it from your plugin's `stop()` so a disabled
+   * plugin stops advertising its commands.
+   *
+   * @example
+   * ```ts
+   * ctx.commands.register({
+   *   name: "instance",
+   *   description: "Show or switch the running TAI instance",
+   *   options: [{ name: "name", description: "Instance", type: "string" }],
+   *   handler: async (inv) => ({ content: `switching to ${inv.options.name}` }),
+   * });
+   * ```
+   */
+  commands: SlashCommandRegistryView;
   /**
    * Typed pub/sub bus for runtime lifecycle events. Plugins subscribe via
    * `ctx.events.on(name, handler)` and get back a disposer.
@@ -335,6 +360,12 @@ export function createPluginContext(opts: CreatePluginContextOptions = {}): Plug
       register(type: string, factory: StepExecutorFactory): void {
         runtime?.getStepExecutorRegistry().registerFactory(type, factory);
       },
+    },
+    // Process-wide, like the channel/provider factory registries: the channels
+    // that serve these commands read the same module-level registry, and the
+    // Discord client re-syncs from it on every config reload.
+    commands: {
+      register: (descriptor) => slashCommandRegistry.register(descriptor),
     },
     // Prefer an explicit bus; else the runtime's own bus so plugin
     // subscriptions land where the runtime emits; else a fresh bus.
