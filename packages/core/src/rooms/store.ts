@@ -321,14 +321,14 @@ export class RoomStore {
 
   /** Drop config-sourced subscriptions that are no longer declared. */
   pruneConfigSubscriptions(keep: Array<{ agent: string; roomRef: string }>): number {
-    const keepKeys = new Set(keep.map((k) => `${k.agent} ${k.roomRef}`));
+    const keepKeys = new Set(keep.map((k) => `${k.agent}\0${k.roomRef}`));
     const existing = this.db
       .prepare("SELECT id, agent, room_ref FROM room_subscriptions WHERE source = 'config'")
       .all() as Array<{ id: number; agent: string; room_ref: string }>;
     const stmt = this.db.prepare("DELETE FROM room_subscriptions WHERE id = ?");
     let removed = 0;
     for (const row of existing) {
-      if (keepKeys.has(`${row.agent} ${row.room_ref}`)) continue;
+      if (keepKeys.has(`${row.agent}\0${row.room_ref}`)) continue;
       stmt.run(row.id);
       removed += 1;
     }
