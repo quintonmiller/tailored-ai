@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import {
+  type AutocompleteInteraction,
   type ChatInputCommandInteraction,
   Client,
   type Message as DiscordMessage,
   Events,
   GatewayIntentBits,
+  MessageFlags,
   Partials,
   REST,
   Routes,
@@ -28,6 +30,7 @@ import { formatRoomRef, type Room } from "../rooms/types.js";
 import { makeRoomSessionKey } from "../rooms/watcher.js";
 import type { AgentRuntime } from "../runtime.js";
 import { DiscordApprovalHandler } from "./discord-approval.js";
+import { type AuthorizationPolicy, authorizeInteraction, type InteractionIdentity } from "./discord-authorization.js";
 import {
   buildCloneAgentCommand,
   type CloneAgentDeps,
@@ -113,6 +116,13 @@ export class DiscordChannel implements Channel, OutboundNotifier {
 
     this.client.on(Events.InteractionCreate, (interaction) => {
       if (interaction.isAutocomplete()) {
+        // Autocomplete answers from config and the database — agent names,
+        // memory section names, room names. Suggesting them to someone who may
+        // not run the command leaks the same information the command would.
+        if (!authorizeInteraction(this.identityOf(interaction), this.authorizationPolicy()).ok) {
+          interaction.respond([]).catch(() => {});
+          return;
+        }
         handleMemoryAutocomplete(interaction, this.memoryCommandDeps());
         handleCloneAgentAutocomplete(interaction, this.cloneAgentDeps());
         handleRoomAutocomplete(interaction, {
@@ -890,7 +900,48 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     await this.commandSync;
   }
 
+  /**
+   * Build the authorization policy from current config. Read per interaction
+   * rather than cached: config is hot-reloadable, and a stale owner id is the
+   * kind of thing you only notice after it has let the wrong person in.
+   */
+  private authorizationPolicy(): AuthorizationPolicy {
+    const cfg = getDiscordConfig(this.runtime.getConfig());
+    return { owner: cfg?.owner, allowedGuilds: cfg?.allowedGuilds };
+  }
+
+  private identityOf(interaction: ChatInputCommandInteraction | AutocompleteInteraction): InteractionIdentity {
+    return {
+      commandName: interaction.commandName,
+      // Not every command has subcommands; getSubcommand throws rather than
+      // returning null when there are none.
+      subcommand: (() => {
+        try {
+          return interaction.options.getSubcommand(false) ?? undefined;
+        } catch {
+          return undefined;
+        }
+      })(),
+      userId: interaction.user.id,
+      guildId: interaction.guildId ?? undefined,
+    };
+  }
+
   private async handleInteraction(interaction: ChatInputCommandInteraction): Promise<void> {
+    // Above everything: `shouldRespond` gates MessageCreate, and interactions
+    // never passed through it. Without this, any member of any guild the bot
+    // is in can stop the deployment or rewrite an agent's memory.
+    const decision = authorizeInteraction(this.identityOf(interaction), this.authorizationPolicy());
+    if (!decision.ok) {
+      await interaction
+        .reply({
+          content: `\`/${interaction.commandName}\` refused: ${decision.reason}`,
+          flags: MessageFlags.Ephemeral,
+        })
+        .catch(() => {});
+      return;
+    }
+
     // First, and above the "already processing" guard: a stop button that
     // queues behind the thing it is stopping is not a stop button. Also the
     // one command that must still answer under `scope: all`.
