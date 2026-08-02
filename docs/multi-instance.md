@@ -194,3 +194,30 @@ Both instances run as the same unix user with `exec`, `read` and `write` and no
 filesystem sandbox by default. A work agent can read the personal `agent.db` and
 `.env` with a single tool call. Instance separation is organizational; for real
 containment, use separate unix users or a sandbox.
+
+## Switching from Discord
+
+A plugin can register `/instance` to report which deployment is running and switch
+between them, using the slash-command seam described in
+[architecture.md](./architecture.md#plugin-slash-commands). It is deployment-specific —
+it shells out to `tai-ctl.sh` and reads `~/.tai/instances.conf` — so it belongs in the
+plugin home, not this repo.
+
+Worth writing down because the obvious implementation cannot work: **the switch kills
+the process serving the command.** `tai-ctl.sh switch` stops the running agent, and the
+plugin is running inside that agent. Two things make it survivable:
+
+- **Run the switch fully detached.** `spawn(..., { detached: true })` puts the child in
+  a new session via `setsid`, so `kill -- -PID` on the agent's process group does not
+  reach it. stdio must go to a file rather than inherited pipes, which would keep the
+  child tethered to the dying parent, and `unref()` lets the parent exit without waiting.
+- **Make the child sleep first.** Discord needs the interaction reply to land before the
+  process disappears. Reply, then switch a few seconds later.
+
+Get either wrong and the symptom is identical: Discord shows "the application did not
+respond", and nothing is running afterwards. The detachment is worth testing directly —
+send `SIGTERM` to the parent's whole process group and check the child still runs.
+
+Restrict the command to the configured `channels.discord.owner`. Everyone in the guild
+can see a registered command, and without the check any of them could stop the agent the
+others are talking to.

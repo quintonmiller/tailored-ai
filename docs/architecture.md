@@ -126,6 +126,17 @@ Plugins mount HTTP endpoints on the TAI server through a framework-agnostic seam
 - **Absolute escape hatch**: `absolute: true` opts a descriptor out of the namespace and mounts it at the verbatim `path` (which must start with `/`). Reserved for first-party packages preserving a legacy path the UI or an external service already calls — a deliberate, reviewed exception, not a default. The trusted-actions package uses it to keep `/api/trusted-actions/*` working (see [docs/trusted-actions.md](./trusted-actions.md)).
 - **Server side** (`packages/server/src/http-routes.ts`): after building the Hono app and the auth middleware, `mountPluginHttpRoutes(app, runtime)` iterates the registry and adapts each descriptor onto Hono, before the SPA static fallback. Routes register at startup (the runtime-context plugin pass runs before `createServer`).
 
+## Plugin Slash Commands
+
+Plugins register chat commands through the same shape as the HTTP seam above — core owns transport-neutral descriptors, each channel adapts them, and core never imports discord.js from the registry.
+
+- **Core side** (`packages/core/src/commands/registry.ts`): a module-level `SlashCommandRegistry` of descriptors `{ name, description, options?, ephemeral?, handler }`. A handler takes a `SlashCommandInvocation` (`command`, resolved `options`, `user`, `channelId`, `guildId`) and returns `{ content, ephemeral? }`. Options are `string | integer | number | boolean`, optionally with fixed `choices` or an `autocomplete` callback. Nothing here is Discord-shaped, so a Slack or Telegram channel can serve the same descriptors.
+- **Plugin side**: `ctx.commands.register(descriptor)` returns a disposer — call it from the plugin's disposer so a disabled plugin stops advertising its commands. The Discord client re-syncs from the registry on every config reload.
+- **No namespace, so collisions are refused**: HTTP routes hide plugin paths under `/api/ext/<id>/`, but chat platforms give you a flat command namespace with no separator to hide a prefix behind. `register` therefore throws on a name in `RESERVED_COMMAND_NAMES` (the built-ins) or one another plugin already took. Refusing is the honest failure — the alternative is a plugin silently shadowing `/room` or `/memory` for a whole guild. Names must match `/^[a-z0-9_-]{1,32}$/`, the narrowest constraint across the platforms we target.
+- **Discord side** (`packages/core/src/channels/discord-plugin-commands.ts`): `buildPluginCommands()` adapts descriptors onto `SlashCommandBuilder` for the sync; `handlePluginCommand` / `handlePluginAutocomplete` dispatch interactions and return `true` when they owned one. The reply is **deferred before the handler runs** — handlers do arbitrary work (shelling out to a service script, for instance) and Discord kills an interaction that goes three seconds without a response. A handler that throws is caught and reported into the interaction rather than left hanging as "the application did not respond".
+
+A worked example, including the awkward case of a command whose side effect kills the process serving it, is in [docs/multi-instance.md](./multi-instance.md#switching-from-discord).
+
 ## Admin Tool
 
 `packages/core/src/tools/admin.ts` lets the agent read/modify its own configuration at runtime:
