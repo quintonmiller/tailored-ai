@@ -202,6 +202,20 @@ export {
 } from "./browser/mediator.js";
 export { asNotifier } from "./channels/discord-builtin.js";
 export { DiscordRoomBackend, type DiscordRoomBackendOptions } from "./channels/discord-rooms.js";
+export type {
+  SlashCommandDescriptor,
+  SlashCommandInvocation,
+  SlashCommandOption,
+  SlashCommandOptionType,
+  SlashCommandRegistryView,
+  SlashCommandReply,
+} from "./commands/registry.js";
+export {
+  RESERVED_COMMAND_NAMES,
+  SlashCommandConflictError,
+  SlashCommandRegistry,
+  slashCommandRegistry,
+} from "./commands/registry.js";
 export type { CommandContext, CommandResult, ParsedCommand } from "./commands.js";
 export { executeCommand, isCommand, parseCommand } from "./commands.js";
 export type {
