@@ -34,9 +34,9 @@ export const ROOM_COMMAND_NAME = "room";
  * What to call the person who ran the command.
  *
  * Discord hands us a username; rooms speak in identity labels. Stamping the
- * username meant a person declared as `quinton: "1073…"` showed up in the
- * transcript as `t3hlazy1`, so an agent addressed the only name it had seen and
- * got `Unknown participant(s): t3hlazy1` back from a validator that had never
+ * username meant a person declared as `alex: "1073…"` showed up in the
+ * transcript as `discorduser`, so an agent addressed the only name it had seen and
+ * got `Unknown participant(s): discorduser` back from a validator that had never
  * heard of it. Resolve through the account id — the one part of a person that
  * cannot be spelled two ways — and fall back to the username only for someone
  * we genuinely do not know.

@@ -20,23 +20,23 @@ const CONFIG = { agents: {} } as unknown as AgentConfig;
 beforeEach(() => {
   db = initDatabase(":memory:");
   setCoreMemory(db, {
-    agent: "kiki",
+    agent: "iris",
     project_id: null,
     section: "persona",
     content: "I am an intern who mostly wants to have fun.",
-    updated_by: "kiki",
+    updated_by: "iris",
   });
 });
 
 afterEach(() => db.close());
 
-const deps = (): MemoryCommandDeps => ({ db, listAgents: () => ["kiki", "planner"] });
+const deps = (): MemoryCommandDeps => ({ db, listAgents: () => ["iris", "planner"] });
 
 function makeInteraction(sub: string, opts: Record<string, string | null>) {
   const replies: string[] = [];
   const interaction = {
     commandName: "memory",
-    user: { id: "1", username: "quinton" },
+    user: { id: "1", username: "alex" },
     deferred: false,
     replied: false,
     options: {
@@ -57,28 +57,28 @@ function makeInteraction(sub: string, opts: Record<string, string | null>) {
 const run = (i: unknown) => handleMemoryCommand(i as any, deps(), CONFIG);
 
 const read = (section: "persona" | "active_threads") =>
-  getCoreMemorySection(db, { agent: "kiki", project_id: null }, section)?.content ?? "";
+  getCoreMemorySection(db, { agent: "iris", project_id: null }, section)?.content ?? "";
 
 describe("/memory show", () => {
   it("reads a section, with who wrote it and when", async () => {
-    const { interaction, replies } = makeInteraction("show", { agent: "kiki", section: "persona" });
+    const { interaction, replies } = makeInteraction("show", { agent: "iris", section: "persona" });
 
     await run(interaction);
 
     expect(replies[0]).toContain("mostly wants to have fun");
     // Who wrote it matters: almost all of these are self-authored.
-    expect(replies[0]).toContain("kiki");
+    expect(replies[0]).toContain("iris");
   });
 
   it("reads every section when none is named", async () => {
     setCoreMemory(db, {
-      agent: "kiki",
+      agent: "iris",
       project_id: null,
       section: "active_threads",
       content: "onboarding",
-      updated_by: "kiki",
+      updated_by: "iris",
     });
-    const { interaction, replies } = makeInteraction("show", { agent: "kiki", section: null });
+    const { interaction, replies } = makeInteraction("show", { agent: "iris", section: null });
 
     await run(interaction);
 
@@ -97,7 +97,7 @@ describe("/memory show", () => {
 
 describe("/memory set", () => {
   it("replaces the section", async () => {
-    const { interaction } = makeInteraction("set", { agent: "kiki", section: "persona", content: "Focused now." });
+    const { interaction } = makeInteraction("set", { agent: "iris", section: "persona", content: "Focused now." });
 
     await run(interaction);
 
@@ -110,7 +110,7 @@ describe("/memory set", () => {
    */
   it("hands back what it replaced, so the change can be reversed", async () => {
     const { interaction, replies } = makeInteraction("set", {
-      agent: "kiki",
+      agent: "iris",
       section: "persona",
       content: "Focused now.",
     });
@@ -124,7 +124,7 @@ describe("/memory set", () => {
 
 describe("/memory append", () => {
   it("adds without losing what was there", async () => {
-    const { interaction } = makeInteraction("append", { agent: "kiki", section: "persona", content: "Also punctual." });
+    const { interaction } = makeInteraction("append", { agent: "iris", section: "persona", content: "Also punctual." });
 
     await run(interaction);
 
@@ -135,7 +135,7 @@ describe("/memory append", () => {
 
 describe("/memory clear", () => {
   it("empties the section and hands back the old text", async () => {
-    const { interaction, replies } = makeInteraction("clear", { agent: "kiki", section: "persona", content: null });
+    const { interaction, replies } = makeInteraction("clear", { agent: "iris", section: "persona", content: null });
 
     await run(interaction);
 
@@ -164,7 +164,7 @@ describe("guards", () => {
   });
 
   it("refuses an unknown section and lists the real ones", async () => {
-    const { interaction, replies } = makeInteraction("set", { agent: "kiki", section: "vibes", content: "x" });
+    const { interaction, replies } = makeInteraction("set", { agent: "iris", section: "vibes", content: "x" });
 
     await run(interaction);
 
@@ -174,16 +174,16 @@ describe("guards", () => {
   });
 
   it("records the person as the author, not the agent", async () => {
-    const { interaction } = makeInteraction("set", { agent: "kiki", section: "persona", content: "Set by hand." });
+    const { interaction } = makeInteraction("set", { agent: "iris", section: "persona", content: "Set by hand." });
 
     await run(interaction);
 
-    const row = getCoreMemorySection(db, { agent: "kiki", project_id: null }, "persona");
-    expect(row?.updated_by).toBe("quinton");
+    const row = getCoreMemorySection(db, { agent: "iris", project_id: null }, "persona");
+    expect(row?.updated_by).toBe("alex");
   });
 
   it("ignores interactions that are not /memory", async () => {
-    const { interaction } = makeInteraction("show", { agent: "kiki", section: null });
+    const { interaction } = makeInteraction("show", { agent: "iris", section: null });
     interaction.commandName = "room";
 
     expect(await run(interaction)).toBe(false);
@@ -203,16 +203,16 @@ describe("long memories", () => {
 
   beforeEach(() => {
     setCoreMemory(db, {
-      agent: "kiki",
+      agent: "iris",
       project_id: null,
       section: "persona",
       content: LONG,
-      updated_by: "kiki",
+      updated_by: "iris",
     });
   });
 
   it("sends the whole section, across as many messages as it takes", async () => {
-    const { interaction, replies } = makeInteraction("show", { agent: "kiki", section: "persona" });
+    const { interaction, replies } = makeInteraction("show", { agent: "iris", section: "persona" });
 
     await run(interaction);
 
@@ -223,7 +223,7 @@ describe("long memories", () => {
   });
 
   it("keeps every message within Discord's limit", async () => {
-    const { interaction, replies } = makeInteraction("show", { agent: "kiki", section: null });
+    const { interaction, replies } = makeInteraction("show", { agent: "iris", section: null });
 
     await run(interaction);
 
@@ -233,13 +233,13 @@ describe("long memories", () => {
   /** The old behaviour's real sin was that the truncation was invisible. */
   it("says so when it could not show everything", async () => {
     setCoreMemory(db, {
-      agent: "kiki",
+      agent: "iris",
       project_id: null,
       section: "persona",
       content: "y".repeat(40_000),
-      updated_by: "kiki",
+      updated_by: "iris",
     });
-    const { interaction, replies } = makeInteraction("show", { agent: "kiki", section: "persona" });
+    const { interaction, replies } = makeInteraction("show", { agent: "iris", section: "persona" });
 
     await run(interaction);
 
@@ -248,7 +248,7 @@ describe("long memories", () => {
 
   it("hands back the whole prior text on set, so it can actually be pasted back", async () => {
     const { interaction, replies } = makeInteraction("set", {
-      agent: "kiki",
+      agent: "iris",
       section: "persona",
       content: "short",
     });

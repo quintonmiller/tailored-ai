@@ -16,7 +16,7 @@
 
 /**
  * A room address. Rendered as `<backend>:<id>` — e.g.
- * `discord:1467386788640460822` or `local:standup`.
+ * `discord:1234567890123456789` or `local:standup`.
  */
 export interface RoomRef {
   backend: string;

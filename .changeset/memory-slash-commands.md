@@ -12,10 +12,10 @@ see it, let alone correct it. Sessions could already be reset and rewound; core
 memory could only be changed by asking the agent nicely.
 
 ```
-/memory show   agent:kiki [section:persona]
-/memory set    agent:kiki section:persona content:…
-/memory append agent:kiki section:persona content:…
-/memory clear  agent:kiki section:persona
+/memory show   agent:iris [section:persona]
+/memory set    agent:iris section:persona content:…
+/memory append agent:iris section:persona content:…
+/memory clear  agent:iris section:persona
 ```
 
 `set` and `clear` return the text they destroyed. Core memory has no history

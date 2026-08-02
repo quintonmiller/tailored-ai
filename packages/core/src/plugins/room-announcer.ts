@@ -2,11 +2,11 @@
  * Room announcer — says out loud who is in the room.
  *
  * Membership used to be a thing you had to go and ask about. An agent called
- * `channel-manager` opened a room described as "Private 1-on-1 between Kiki and
- * Quinton", stayed subscribed to it because creating a room subscribes you, and
- * quietly read nine hours of that conversation across seventy wake prompts.
- * `/room members` would have shown it the whole time. Nobody had a reason to
- * look, because nothing had ever suggested there was anything to see.
+ * `channel-manager` created a room, stayed subscribed to it because creating a
+ * room subscribes you, and went on receiving everything said there long after
+ * it had any reason to. `/room members` would have shown it the whole time.
+ * Nobody had a reason to look, because nothing had ever suggested there was
+ * anything to see.
  *
  * Slack solves this by putting the fact in the transcript, where it is read by
  * everyone who reads the room and by nobody who does not have to. This does the

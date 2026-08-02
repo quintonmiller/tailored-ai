@@ -203,7 +203,7 @@ describe("validateConfig — tool references", () => {
     // ran at the default temperature instead. "temp" is seven edits from
     // "temperature" and obviously means it.
     const c = baseConfig();
-    c.agents = { "job-search-coordinator": { temp: 0.3 } as never };
+    c.agents = { "travel-coordinator": { temp: 0.3 } as never };
 
     expect(validateConfig(c).some((w) => w.includes('Did you mean "temperature"'))).toBe(true);
   });

@@ -59,13 +59,13 @@ describe("LocalRoomBackend.createRoom", () => {
   });
 
   it("trims the name and records who opened the room", async () => {
-    const room = await backend.createRoom({ name: "  Eng  ", purpose: "the eng room", createdBy: "quinton" });
+    const room = await backend.createRoom({ name: "  Eng  ", purpose: "the eng room", createdBy: "alex" });
 
     expect(room.name).toBe("Eng");
     expect(room.ref.id).toBe("eng");
     const stored = await backend.getRoom("eng");
     expect(stored?.purpose).toBe("the eng room");
-    expect(stored?.createdBy).toBe("quinton");
+    expect(stored?.createdBy).toBe("alex");
   });
 
   it("suffixes -2 then -3 when different names slugify to the same id", async () => {
@@ -92,10 +92,10 @@ describe("LocalRoomBackend.createRoom", () => {
   });
 
   it("seeds members as kind 'unknown' — the backend cannot classify identities", async () => {
-    const room = await backend.createRoom({ name: "eng", members: ["coder", "quinton"] });
+    const room = await backend.createRoom({ name: "eng", members: ["coder", "alex"] });
 
     const members = await backend.listMembers(room.ref.id);
-    expect(members.map((m) => m.label).sort()).toEqual(["coder", "quinton"]);
+    expect(members.map((m) => m.label).sort()).toEqual(["alex", "coder"]);
     expect(members.every((m) => m.kind === "unknown")).toBe(true);
 
     await backend.addMember(room.ref.id, "supervisor");
@@ -104,10 +104,10 @@ describe("LocalRoomBackend.createRoom", () => {
 
   it("only lists rooms this backend owns", async () => {
     await backend.createRoom({ name: "eng" });
-    store.upsertRoom({ ref: { backend: "discord", id: "1467386788640460822" }, name: "general" });
+    store.upsertRoom({ ref: { backend: "discord", id: "1234567890123456789" }, name: "general" });
 
     expect((await backend.listRooms()).map((r) => r.ref.id)).toEqual(["eng"]);
-    expect(await backend.getRoom("1467386788640460822")).toBeNull();
+    expect(await backend.getRoom("1234567890123456789")).toBeNull();
   });
 });
 
@@ -117,14 +117,14 @@ describe("LocalRoomBackend messages", () => {
     const posted = await backend.post("eng", {
       body: "requirements are drafted — questions?",
       speaker: "supervisor",
-      to: ["coder", "quinton"],
+      to: ["coder", "alex"],
     });
 
-    expect(posted?.raw).toBe("[supervisor] @coder @quinton requirements are drafted — questions?");
+    expect(posted?.raw).toBe("[supervisor] @coder @alex requirements are drafted — questions?");
 
     const [fetched] = await backend.fetchSince("eng", null, 10);
     expect(fetched.speaker).toBe("supervisor");
-    expect(fetched.to).toEqual(["coder", "quinton"]);
+    expect(fetched.to).toEqual(["coder", "alex"]);
     expect(fetched.body).toBe("requirements are drafted — questions?");
     expect(fetched.authorId).toBe("supervisor");
     expect(fetched.authorLabel).toBe("supervisor");
@@ -365,24 +365,24 @@ function message(over: Partial<RoomMessage> = {}): RoomMessage {
   };
 }
 
-/** supervisor + coder are agents; quinton is a human. */
+/** supervisor + coder are agents; alex is a human. */
 const identities = () =>
   new IdentityResolver({
     agentNames: ["supervisor", "coder"],
-    declared: { quinton: { human: { local: "u-1" } } },
+    declared: { alex: { human: { local: "u-1" } } },
   });
 
 describe("RoomWatcher.shouldWake — wakeOn: none", () => {
   it("never wakes, even when directly addressed by a human", () => {
     const watcher = makeWatcher();
-    const addressed = message({ speaker: "quinton", to: ["coder"], body: "coder, ship it" });
+    const addressed = message({ speaker: "alex", to: ["coder"], body: "coder, ship it" });
 
     expect(watcher.shouldWake(sub("coder", "none"), addressed, identities())).toBe(false);
   });
 
   it("never wakes on general traffic either", () => {
     const watcher = makeWatcher();
-    expect(watcher.shouldWake(sub("coder", "none"), message({ speaker: "quinton" }), identities())).toBe(false);
+    expect(watcher.shouldWake(sub("coder", "none"), message({ speaker: "alex" }), identities())).toBe(false);
   });
 });
 
@@ -415,14 +415,14 @@ describe("RoomWatcher.shouldWake — self-talk (the anti-runaway guarantee)", ()
     // the agent posts as "planner" and must not hear itself back.
     const ids = new IdentityResolver({
       agentNames: ["supervisor"],
-      declared: { planner: { agent: "night-shift" }, quinton: { human: { local: "u-1" } } },
+      declared: { planner: { agent: "night-shift" }, alex: { human: { local: "u-1" } } },
     });
     const watcher = makeWatcher(["supervisor"]);
 
     expect(watcher.shouldWake(sub("night-shift", "all"), message({ speaker: "planner" }), ids)).toBe(false);
     // ...but being named by that label still wakes it.
     expect(
-      watcher.shouldWake(sub("night-shift", "addressed"), message({ speaker: "quinton", to: ["planner"] }), ids),
+      watcher.shouldWake(sub("night-shift", "addressed"), message({ speaker: "alex", to: ["planner"] }), ids),
     ).toBe(true);
   });
 });
@@ -437,7 +437,7 @@ describe("RoomWatcher.shouldWake — wakeOn: all", () => {
 
   it("wakes on a human's message that names nobody", () => {
     const watcher = makeWatcher();
-    expect(watcher.shouldWake(sub("coder", "all"), message({ speaker: "quinton" }), identities())).toBe(true);
+    expect(watcher.shouldWake(sub("coder", "all"), message({ speaker: "alex" }), identities())).toBe(true);
   });
 
   it("wakes on a message with no attributable speaker at all", () => {
@@ -456,14 +456,14 @@ describe("RoomWatcher.shouldWake — wakeOn: addressed", () => {
 
   it("wakes when named alongside someone else", () => {
     const watcher = makeWatcher();
-    const both = message({ speaker: "quinton", to: ["supervisor", "coder"] });
+    const both = message({ speaker: "alex", to: ["supervisor", "coder"] });
 
     expect(watcher.shouldWake(sub("coder", "addressed"), both, identities())).toBe(true);
   });
 
   it("does not wake agent A when only agent B is addressed", () => {
     const watcher = makeWatcher();
-    const forSupervisor = message({ speaker: "quinton", to: ["supervisor"], body: "plan this" });
+    const forSupervisor = message({ speaker: "alex", to: ["supervisor"], body: "plan this" });
 
     expect(watcher.shouldWake(sub("coder", "addressed"), forSupervisor, identities())).toBe(false);
     expect(watcher.shouldWake(sub("supervisor", "addressed"), forSupervisor, identities())).toBe(true);
@@ -478,7 +478,7 @@ describe("RoomWatcher.shouldWake — wakeOn: addressed", () => {
 
   it("wakes on a human talking to the room with no addressee", () => {
     const watcher = makeWatcher();
-    const openQuestion = message({ speaker: "quinton", to: [], body: "is the deploy green?" });
+    const openQuestion = message({ speaker: "alex", to: [], body: "is the deploy green?" });
 
     expect(watcher.shouldWake(sub("coder", "addressed"), openQuestion, identities())).toBe(true);
   });
@@ -511,7 +511,7 @@ describe("RoomWatcher.shouldWake — the 'named' mode", () => {
   const identities = new IdentityResolver({
     agentNames: ["supervisor", "coder", "reviewer"],
     defaultBackend: "local",
-    declared: { quinton: "u-quinton" },
+    declared: { alex: "u-alex" },
   });
 
   const sub = (agent: string, wakeOn: "named" | "addressed"): RoomSubscription => ({
@@ -534,11 +534,11 @@ describe("RoomWatcher.shouldWake — the 'named' mode", () => {
     cursor: "0000000000000001",
     raw: body,
     body,
-    speaker: "quinton",
+    speaker: "alex",
     to,
     mentions: [],
-    authorId: "u-quinton",
-    authorLabel: "quinton",
+    authorId: "u-alex",
+    authorLabel: "alex",
     fromSelf: false,
     createdAt: "2026-07-27T00:00:00Z",
   });
@@ -574,7 +574,7 @@ describe("RoomWatcher.shouldWake — conversation depth", () => {
   const identities = new IdentityResolver({
     agentNames: ["supervisor", "coder"],
     defaultBackend: "local",
-    declared: { quinton: "u-quinton" },
+    declared: { alex: "u-alex" },
   });
 
   const sub = (agent: string): RoomSubscription => ({
@@ -618,7 +618,7 @@ describe("RoomWatcher.shouldWake — conversation depth", () => {
 
   it("still wakes for a human no matter how deep the agents went", () => {
     const watcher = makeWatcher();
-    const fromHuman = msg("quinton", "u-quinton", ["coder"]);
+    const fromHuman = msg("alex", "u-alex", ["coder"]);
 
     expect(watcher.shouldWake(sub("coder"), fromHuman, identities, 99)).toBe(true);
   });
@@ -649,7 +649,7 @@ describe("RoomWatcher wake prompt", () => {
             "email-fetcher": {},
           },
           defaultChannel: "local",
-          rooms: { identities: { quinton: "u-quinton" } },
+          rooms: { identities: { alex: "u-alex" } },
         }),
         getOwnerId: () => undefined,
       } as unknown as AgentRuntime,
@@ -674,12 +674,12 @@ describe("RoomWatcher wake prompt", () => {
       new IdentityResolver({
         agentNames: ["coder", "planner", "researcher", "email-fetcher"],
         defaultBackend: "local",
-        declared: { quinton: "u-quinton" },
+        declared: { alex: "u-alex" },
       }),
     );
 
     expect(prompt).toContain("planner");
-    expect(prompt).toContain("quinton");
+    expect(prompt).toContain("alex");
     expect(prompt).not.toContain("researcher");
     expect(prompt).not.toContain("email-fetcher");
 
@@ -817,7 +817,7 @@ describe("RoomWatcher — context and mid-body pings", () => {
   const identities = new IdentityResolver({
     agentNames: ["default", "generalist"],
     defaultBackend: "local",
-    declared: { quinton: "u-quinton" },
+    declared: { alex: "u-alex" },
   });
 
   const sub = (agent: string, wakeOn: WakeOn): RoomSubscription => ({
@@ -842,8 +842,8 @@ describe("RoomWatcher — context and mid-body pings", () => {
     body: "x",
     to: [],
     mentions: [],
-    authorId: "u-quinton",
-    authorLabel: "quinton",
+    authorId: "u-alex",
+    authorLabel: "alex",
     fromSelf: false,
     createdAt: "2026-07-27T00:00:00Z",
     ...over,
@@ -855,7 +855,7 @@ describe("RoomWatcher — context and mid-body pings", () => {
     // human, but generalist is the one being paged.
     const paged = msg({
       speaker: "default",
-      to: ["quinton"],
+      to: ["alex"],
       mentions: ["generalist"],
       body: "Done, added the tool. @generalist you're up",
     });
@@ -865,7 +865,7 @@ describe("RoomWatcher — context and mid-body pings", () => {
 
   it("does not wake an agent merely mentioned by name in prose", () => {
     const watcher = makeWatcher();
-    const prose = msg({ speaker: "quinton", to: ["default"], mentions: [], body: "review generalist's tools" });
+    const prose = msg({ speaker: "alex", to: ["default"], mentions: [], body: "review generalist's tools" });
 
     expect(watcher.shouldWake(sub("generalist", "named"), prose, identities)).toBe(false);
   });
@@ -888,7 +888,7 @@ describe("RoomWatcher.wakeReason", () => {
   const identities = new IdentityResolver({
     agentNames: ["supervisor", "coder"],
     defaultBackend: "local",
-    declared: { quinton: "u-quinton" },
+    declared: { alex: "u-alex" },
   });
 
   const sub = (agent: string, wakeOn: WakeOn): RoomSubscription => ({
@@ -915,8 +915,8 @@ describe("RoomWatcher.wakeReason", () => {
     body: "x",
     to: [],
     mentions: [],
-    authorId: "u-quinton",
-    authorLabel: "quinton",
+    authorId: "u-alex",
+    authorLabel: "alex",
     fromSelf: false,
     createdAt: "2026-07-28T00:00:00Z",
     ...over,
@@ -926,8 +926,8 @@ describe("RoomWatcher.wakeReason", () => {
     // Without this you cannot tell why an agent woke, and wake policy is where
     // most room misbehaviour starts.
     const watcher = makeWatcher();
-    const named = msg({ speaker: "quinton", to: ["coder"] });
-    const loose = msg({ speaker: "quinton", to: [] });
+    const named = msg({ speaker: "alex", to: ["coder"] });
+    const loose = msg({ speaker: "alex", to: [] });
 
     expect(watcher.wakeReason(sub("coder", "named"), named, identities)).toBe("named");
     expect(watcher.wakeReason(sub("coder", "addressed"), loose, identities)).toBe("loose-question");
@@ -936,7 +936,7 @@ describe("RoomWatcher.wakeReason", () => {
 
   it("returns null when the agent should not wake, and shouldWake agrees", () => {
     const watcher = makeWatcher();
-    const forOther = msg({ speaker: "quinton", to: ["supervisor"] });
+    const forOther = msg({ speaker: "alex", to: ["supervisor"] });
 
     expect(watcher.wakeReason(sub("coder", "named"), forOther, identities)).toBeNull();
     expect(watcher.shouldWake(sub("coder", "named"), forOther, identities)).toBe(false);

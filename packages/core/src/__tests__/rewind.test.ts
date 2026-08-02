@@ -16,7 +16,7 @@ import { initDatabase } from "../db/schema.js";
 
 let db: Database.Database;
 let sessionId: string;
-const KEY = "room:discord.1:kiki";
+const KEY = "room:discord.1:iris";
 
 beforeEach(() => {
   db = initDatabase(":memory:");
@@ -152,25 +152,25 @@ describe("getSessionMessages", () => {
 /**
  * Caught in production on the first real use. The quote came back as
  *
- *   > Room "kiki-quinton". You are kiki. Today is Thursday, July 30, 2026…
+ *   > Room "eng". You are planner. Today is …
  *
  * which is byte-identical on every turn in that room, so it told you nothing
  * about where the cut landed — the only thing the excerpt is for.
  */
 describe("messageExcerpt", () => {
   const roomPrompt = [
-    'Room "kiki-quinton". You are kiki. Today is Thursday, July 30, 2026.',
-    "Purpose: Private 1-on-1 between Kiki and Quinton. Direct conversation space.",
+    'Room "eng". You are planner. Today is Thursday, July 30, 2026.',
+    "Purpose: Engineering coordination. Keep messages short and concrete.",
     "",
     "New messages:",
-    "quinton (to kiki): can you look at the deployment plan",
+    "alex (to planner): can you look at the deployment plan",
     "",
-    "Reply as kiki. Your reply goes to quinton — write only your message.",
-    "Known participants: quinton.",
+    "Reply as planner. Your reply goes to alex — write only your message.",
+    "Known participants: alex.",
   ].join("\n");
 
   it("quotes what was said, not the preamble", () => {
-    expect(messageExcerpt(roomPrompt)).toBe("quinton (to kiki): can you look at the deployment plan");
+    expect(messageExcerpt(roomPrompt)).toBe("alex (to planner): can you look at the deployment plan");
   });
 
   it("drops the reply instructions, which are as fixed as the preamble", () => {

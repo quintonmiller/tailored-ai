@@ -65,29 +65,29 @@ afterEach(() => {
 describe("RoomStore membership events", () => {
   it("emits joined for a seat that did not exist", () => {
     const seen = changes();
-    store.subscribe({ agent: "kiki", roomRef: REF, source: "agent" });
+    store.subscribe({ agent: "iris", roomRef: REF, source: "agent" });
 
-    expect(seen).toEqual([{ roomRef: REF, agent: "kiki", change: "joined", source: "agent" }]);
+    expect(seen).toEqual([{ roomRef: REF, agent: "iris", change: "joined", source: "agent" }]);
   });
 
   it("does not emit for an idempotent re-subscribe", () => {
-    store.subscribe({ agent: "kiki", roomRef: REF, source: "agent" });
+    store.subscribe({ agent: "iris", roomRef: REF, source: "agent" });
     const seen = changes();
 
     // Both shapes of "already here": an exact repeat, and a re-subscribe that
     // changes the wake mode. Neither is a membership change.
-    store.subscribe({ agent: "kiki", roomRef: REF, source: "agent" });
-    store.subscribe({ agent: "kiki", roomRef: REF, wakeOn: "all", source: "agent" });
+    store.subscribe({ agent: "iris", roomRef: REF, source: "agent" });
+    store.subscribe({ agent: "iris", roomRef: REF, wakeOn: "all", source: "agent" });
 
     expect(seen).toEqual([]);
   });
 
   it("emits left when a row was actually deleted", () => {
-    store.subscribe({ agent: "kiki", roomRef: REF, source: "agent" });
+    store.subscribe({ agent: "iris", roomRef: REF, source: "agent" });
     const seen = changes();
 
-    expect(store.unsubscribe("kiki", REF)).toBe(true);
-    expect(seen).toEqual([{ roomRef: REF, agent: "kiki", change: "left", source: "agent" }]);
+    expect(store.unsubscribe("iris", REF)).toBe(true);
+    expect(seen).toEqual([{ roomRef: REF, agent: "iris", change: "left", source: "agent" }]);
   });
 
   it("does not emit when unsubscribe removed nothing", () => {
@@ -99,8 +99,8 @@ describe("RoomStore membership events", () => {
 
   it("labels config-declared subscriptions as such, both joining and leaving", () => {
     const seen = changes();
-    store.subscribe({ agent: "kiki", roomRef: REF, source: "config" });
-    store.unsubscribe("kiki", REF);
+    store.subscribe({ agent: "iris", roomRef: REF, source: "config" });
+    store.unsubscribe("iris", REF);
 
     expect(seen.map((e) => e.source)).toEqual(["config", "config"]);
   });
@@ -109,8 +109,8 @@ describe("RoomStore membership events", () => {
     // Every CLI path and most tests construct the store bare. Membership
     // bookkeeping must not depend on anyone listening.
     const bare = new RoomStore(db);
-    expect(() => bare.subscribe({ agent: "kiki", roomRef: REF, source: "agent" })).not.toThrow();
-    expect(bare.unsubscribe("kiki", REF)).toBe(true);
+    expect(() => bare.subscribe({ agent: "iris", roomRef: REF, source: "agent" })).not.toThrow();
+    expect(bare.unsubscribe("iris", REF)).toBe(true);
   });
 });
 
@@ -118,21 +118,21 @@ describe("RoomAnnouncer", () => {
   it("says so in the room when an agent joins", async () => {
     new RoomAnnouncer({ runtime: makeRuntime() });
 
-    store.subscribe({ agent: "kiki", roomRef: REF, source: "agent" });
+    store.subscribe({ agent: "iris", roomRef: REF, source: "agent" });
     await flush();
 
-    expect(announcements()).toEqual(["[room] **kiki** joined this room."]);
+    expect(announcements()).toEqual(["[room] **iris** joined this room."]);
   });
 
   it("says so when an agent leaves", async () => {
     new RoomAnnouncer({ runtime: makeRuntime() });
-    store.subscribe({ agent: "kiki", roomRef: REF, source: "agent" });
+    store.subscribe({ agent: "iris", roomRef: REF, source: "agent" });
     await flush();
 
-    store.unsubscribe("kiki", REF);
+    store.unsubscribe("iris", REF);
     await flush();
 
-    expect(announcements().at(-1)).toBe("[room] **kiki** left this room.");
+    expect(announcements().at(-1)).toBe("[room] **iris** left this room.");
   });
 
   it("renders the creator's own join as the side effect of creating the room", async () => {
@@ -140,9 +140,9 @@ describe("RoomAnnouncer", () => {
     // the creator, so `channel-manager` was in a room it opened "for someone
     // else" and nothing ever said so.
     new RoomAnnouncer({ runtime: makeRuntime() });
-    store.upsertRoom({ ref: { backend: "local", id: "kiki-1on1" }, name: "kiki-1on1" }, "channel-manager");
+    store.upsertRoom({ ref: { backend: "local", id: "iris-1on1" }, name: "iris-1on1" }, "channel-manager");
 
-    store.subscribe({ agent: "channel-manager", roomRef: "local:kiki-1on1", source: "agent" });
+    store.subscribe({ agent: "channel-manager", roomRef: "local:iris-1on1", source: "agent" });
     await flush();
 
     expect(announcements()).toEqual(["[room] **channel-manager** created this room and joined it."]);
@@ -166,9 +166,9 @@ describe("RoomAnnouncer", () => {
     // joins on every boot, which is how a signal becomes noise.
     new RoomAnnouncer({ runtime: makeRuntime() });
 
-    store.subscribe({ agent: "kiki", roomRef: REF, source: "config" });
+    store.subscribe({ agent: "iris", roomRef: REF, source: "config" });
     store.subscribe({ agent: "coder", roomRef: REF, source: "config" });
-    store.unsubscribe("kiki", REF);
+    store.unsubscribe("iris", REF);
     await flush();
 
     expect(announcements()).toEqual([]);
@@ -178,10 +178,10 @@ describe("RoomAnnouncer", () => {
     new RoomAnnouncer({ runtime: makeRuntime() });
 
     store.subscribe({ agent: "coder", roomRef: REF, source: "config" });
-    store.subscribe({ agent: "kiki", roomRef: REF, source: "agent" });
+    store.subscribe({ agent: "iris", roomRef: REF, source: "agent" });
     await flush();
 
-    expect(announcements()).toEqual(["[room] **kiki** joined this room."]);
+    expect(announcements()).toEqual(["[room] **iris** joined this room."]);
   });
 
   it("is a no-op for a room that no longer resolves", async () => {
@@ -189,7 +189,7 @@ describe("RoomAnnouncer", () => {
 
     events.emit("room.membership_changed", {
       roomRef: "local:deleted",
-      agent: "kiki",
+      agent: "iris",
       change: "joined",
       source: "agent",
     });
@@ -202,7 +202,7 @@ describe("RoomAnnouncer", () => {
     new RoomAnnouncer({ runtime: makeRuntime() });
     unregisterRoomBackend("local");
 
-    store.subscribe({ agent: "kiki", roomRef: REF, source: "agent" });
+    store.subscribe({ agent: "iris", roomRef: REF, source: "agent" });
     await flush();
 
     expect(announcements()).toEqual([]);
@@ -214,7 +214,7 @@ describe("RoomAnnouncer", () => {
     const announcer = new RoomAnnouncer({ runtime: makeRuntime() });
     announcer.stop();
 
-    store.subscribe({ agent: "kiki", roomRef: REF, source: "agent" });
+    store.subscribe({ agent: "iris", roomRef: REF, source: "agent" });
     await flush();
 
     expect(announcements()).toEqual([]);

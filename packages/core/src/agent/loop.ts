@@ -540,7 +540,7 @@ async function executeToolCall(
       // what it protects is the shape this codebase keeps hitting. What
       // changes is that it says so.
       if ((opts.permissions?.noHandlerAction ?? "auto") === "reject") {
-        return `Tool call rejected: "${call.name}" needs approval and no approver is available on this path. Ask Quinton directly, or do the part that does not need approval.`;
+        return `Tool call rejected: "${call.name}" needs approval and no approver is available on this path. Ask the owner directly, or do the part that does not need approval.`;
       }
       warnNoApprover(call.name);
     } else {

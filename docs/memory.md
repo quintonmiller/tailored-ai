@@ -93,10 +93,10 @@ UI (M7): `#/memory` page with stats tiles, recall search, most-referenced panel,
 Note that everything above is about *notes*. Core memory is the other store: per-agent, section-based, and injected into the system prompt on every turn (see [Injection & loop integration](#injection--loop-integration)).
 
 ```
-/memory show   agent:kiki [section:persona]
-/memory set    agent:kiki section:persona content:…
-/memory append agent:kiki section:persona content:…
-/memory clear  agent:kiki section:persona
+/memory show   agent:iris [section:persona]
+/memory set    agent:iris section:persona content:…
+/memory append agent:iris section:persona content:…
+/memory clear  agent:iris section:persona
 ```
 
 Sections are the fixed set in `CORE_MEMORY_SECTIONS`: `persona`, `active_threads`, `recent_summary`, `open_questions`, `user_state`.
@@ -111,4 +111,4 @@ Three properties worth keeping if you touch it:
 
 An unknown agent or section is refused before any write — a typo would otherwise create core memory nothing ever reads.
 
-Core memory is keyed by agent name and does not travel: `/clone-agent from:kiki to:nova` copies a configuration and leaves the persona behind, so the clone starts empty. See [Agents & Delegation](./agents-and-hooks.md#clone-agent--copy-a-configuration-and-nothing-else).
+Core memory is keyed by agent name and does not travel: `/clone-agent from:iris to:juno` copies a configuration and leaves the persona behind, so the clone starts empty. See [Agents & Delegation](./agents-and-hooks.md#clone-agent--copy-a-configuration-and-nothing-else).

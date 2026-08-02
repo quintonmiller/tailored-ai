@@ -3,7 +3,7 @@
 ## Status: BLOCKED — PWA Infrastructure Not Yet Implemented
 
 **Date:** 2025-05-22
-**Verified by:** CORAL (code inspection), Quinton (device test — pending)
+**Verified by:** CORAL (code inspection), the owner (device test — pending)
 
 ## Prerequisite Check
 

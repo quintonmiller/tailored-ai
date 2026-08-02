@@ -5,7 +5,7 @@
 Add `/clone-agent` — copy an agent's configuration to a new name, and nothing else.
 
 ```
-/clone-agent from:kiki to:nova
+/clone-agent from:iris to:juno
 ```
 
 Done by hand this is one copy and three checks: duplicate the block under

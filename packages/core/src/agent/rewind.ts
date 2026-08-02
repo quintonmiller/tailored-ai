@@ -71,7 +71,7 @@ function cutPoint(db: Database.Database, sessionIds: string[], turns: number): n
  * preamble is byte-identical on every turn in a given room, so quoting the raw
  * content showed the same boilerplate wherever the cut landed —
  *
- *     > Room "kiki-quinton". You are kiki. Today is Thursday, July 30, 2026…
+ *     > Room "eng". You are planner. Today is …
  *
  * which defeats the only reason the excerpt exists: telling a correct cut from
  * an off-by-one. Falls back to the raw content for turns that are not room

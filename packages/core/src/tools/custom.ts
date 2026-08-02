@@ -80,7 +80,7 @@ export class CustomTool implements Tool {
     // Anyone writing a shell template quotes their variables — `ls "{{path}}"`
     // is the correct-looking thing to write, and it is what a model writes.
     // But the value is escaped on the way in, so the two layers combined to
-    // `ls "'/home/quint/…'"` and the quotes became part of the filename. The
+    // `ls "'/home/user/…'"` and the quotes became part of the filename. The
     // command then failed with "No such file or directory" for a directory
     // that plainly existed, and the agent reasonably concluded the path was
     // wrong. Escaping still happens; it just is not doubled.

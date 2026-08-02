@@ -108,7 +108,7 @@ function makeInteraction(opts: Record<string, string | null>) {
   const replies: string[] = [];
   const interaction = {
     commandName: "clone-agent",
-    user: { id: "1", username: "quinton" },
+    user: { id: "1", username: "alex" },
     deferred: false,
     replied: false,
     options: {
@@ -137,9 +137,9 @@ function onDisk(name: string): Record<string, unknown> | undefined {
   return raw.agents?.[name];
 }
 
-const KIKI = `
+const IRIS = `
 agents:
-  kiki:
+  iris:
     description: intern
     provider: openai_compatible
     model: qwen3.6-27b
@@ -150,15 +150,15 @@ agents:
     worktree: true
 `;
 
-beforeEach(() => buildRuntime(KIKI));
+beforeEach(() => buildRuntime(IRIS));
 afterEach(() => db.close());
 
 describe("a faithful clone", () => {
   it("copies every field of the source definition, unchanged", async () => {
-    await clone("kiki", "nova");
+    await clone("iris", "juno");
 
-    expect(onDisk("nova")).toEqual(onDisk("kiki"));
-    expect(onDisk("nova")).toMatchObject({
+    expect(onDisk("juno")).toEqual(onDisk("iris"));
+    expect(onDisk("juno")).toMatchObject({
       description: "intern",
       provider: "openai_compatible",
       model: "qwen3.6-27b",
@@ -170,16 +170,16 @@ describe("a faithful clone", () => {
   });
 
   it("leaves the source alone", async () => {
-    const before = onDisk("kiki");
+    const before = onDisk("iris");
 
-    await clone("kiki", "nova");
+    await clone("iris", "juno");
 
-    expect(onDisk("kiki")).toEqual(before);
+    expect(onDisk("iris")).toEqual(before);
   });
 
   /** So the copy can be seen to be faithful without opening config.yaml. */
   it("reports the fields it carried over", async () => {
-    const reply = await clone("kiki", "nova");
+    const reply = await clone("iris", "juno");
 
     expect(reply).toContain("provider");
     expect(reply).toContain("qwen3.6-27b");
@@ -192,7 +192,7 @@ describe("a faithful clone", () => {
   });
 
   it("names what it deliberately did not copy", async () => {
-    const reply = await clone("kiki", "nova");
+    const reply = await clone("iris", "juno");
 
     expect(reply).toContain("Not copied");
     expect(reply).toContain("core memory");
@@ -222,36 +222,36 @@ describe("what stays behind", () => {
 
   beforeEach(() => {
     setCoreMemory(db, {
-      agent: "kiki",
+      agent: "iris",
       project_id: null,
       section: "persona",
       content: "I am an intern who mostly wants to have fun.",
-      updated_by: "kiki",
+      updated_by: "iris",
     });
     db.prepare("INSERT INTO sessions (id, key, model, provider) VALUES (?, ?, ?, ?)").run(
       "s1",
-      "discord:kiki",
+      "discord:iris",
       "m",
       "p",
     );
-    db.prepare("INSERT INTO room_subscriptions (agent, room_ref) VALUES (?, ?)").run("kiki", "discord:1");
+    db.prepare("INSERT INTO room_subscriptions (agent, room_ref) VALUES (?, ?)").run("iris", "discord:1");
   });
 
   it("creates no core memory, sessions, notes or room subscriptions for the clone", async () => {
-    await clone("kiki", "nova");
+    await clone("iris", "juno");
 
-    expect(count("core_memory", "nova")).toBe(0);
-    expect(count("room_subscriptions", "nova")).toBe(0);
-    expect(count("notes", "nova")).toBe(0);
+    expect(count("core_memory", "juno")).toBe(0);
+    expect(count("room_subscriptions", "juno")).toBe(0);
+    expect(count("notes", "juno")).toBe(0);
     // Sessions are keyed, not agent-columned: no new row at all is the check.
     expect((db.prepare("SELECT COUNT(*) AS n FROM sessions").get() as { n: number }).n).toBe(1);
   });
 
   it("leaves the source's own memory and subscriptions untouched", async () => {
-    await clone("kiki", "nova");
+    await clone("iris", "juno");
 
-    expect(count("core_memory", "kiki")).toBe(1);
-    expect(count("room_subscriptions", "kiki")).toBe(1);
+    expect(count("core_memory", "iris")).toBe(1);
+    expect(count("room_subscriptions", "iris")).toBe(1);
   });
 });
 
@@ -259,37 +259,37 @@ describe("refusals — all before anything is written", () => {
   it("refuses an unknown source and lists the agents that exist", async () => {
     const before = readFileSync(configPath, "utf-8");
 
-    const reply = await clone("kiky", "nova");
+    const reply = await clone("irys", "juno");
 
     expect(reply).toContain("No agent named");
-    expect(reply).toContain("kiki");
+    expect(reply).toContain("iris");
     expect(readFileSync(configPath, "utf-8")).toBe(before);
   });
 
   it.each(["no spaces", "with.dot", "", "slash/name", "emoji✨"])("refuses the target name %j", async (bad) => {
     const before = readFileSync(configPath, "utf-8");
 
-    const reply = await clone("kiki", bad);
+    const reply = await clone("iris", bad);
 
     expect(reply).toContain("not a usable agent name");
     expect(readFileSync(configPath, "utf-8")).toBe(before);
   });
 
   it("refuses a target that already exists rather than overwriting it", async () => {
-    await clone("kiki", "nova");
-    const after = onDisk("nova");
+    await clone("iris", "juno");
+    const after = onDisk("juno");
 
-    const reply = await clone("kiki", "nova");
+    const reply = await clone("iris", "juno");
 
     expect(reply).toContain("already exists");
-    expect(onDisk("nova")).toEqual(after);
+    expect(onDisk("juno")).toEqual(after);
   });
 
   /** A registry-only agent has no config.yaml block, so a config-only check would miss it. */
   it("refuses a target that exists only in the registry", async () => {
     runtime.getAgentRegistry().registerBuiltin({ id: "ghost", definition: { model: "from-registry" } });
 
-    const reply = await clone("kiki", "ghost");
+    const reply = await clone("iris", "ghost");
 
     expect(reply).toContain("already exists");
     expect(onDisk("ghost")).toBeUndefined();
@@ -306,25 +306,25 @@ describe("refusals — all before anything is written", () => {
 describe("source precedence", () => {
   it("copies the registry definition, not the stale config.yaml block", async () => {
     runtime.getAgentRegistry().registerBuiltin({
-      id: "kiki",
+      id: "iris",
       definition: { model: "current-model", temperature: 0.1, instructions: "The migrated persona." },
     });
 
-    const reply = await clone("kiki", "nova");
+    const reply = await clone("iris", "juno");
 
-    expect(onDisk("nova")).toEqual({
+    expect(onDisk("juno")).toEqual({
       model: "current-model",
       temperature: 0.1,
       instructions: "The migrated persona.",
     });
-    expect(onDisk("nova")).not.toMatchObject({ model: "qwen3.6-27b" });
+    expect(onDisk("juno")).not.toMatchObject({ model: "qwen3.6-27b" });
     expect(reply).toContain("authored-resource manifest");
   });
 
   it("says when it fell back to config.yaml", async () => {
-    runtime.getAgentRegistry().unregister("kiki");
+    runtime.getAgentRegistry().unregister("iris");
 
-    const reply = await clone("kiki", "nova");
+    const reply = await clone("iris", "juno");
 
     expect(reply).toContain("`config.yaml` block");
   });
@@ -339,9 +339,9 @@ describe("source precedence", () => {
  */
 describe("usable without a restart", () => {
   it("resolves through the same path the agent loop uses", async () => {
-    await clone("kiki", "nova");
+    await clone("iris", "juno");
 
-    const resolved = resolveAgent("nova", runtime.getConfig(), [], undefined, undefined, undefined, {
+    const resolved = resolveAgent("juno", runtime.getConfig(), [], undefined, undefined, undefined, {
       resolveAgentDef: (id) => runtime.getAgentRegistry().get(id),
     });
 
@@ -351,14 +351,14 @@ describe("usable without a restart", () => {
   });
 
   it("is in the live config straight away, and not yet in the registry", async () => {
-    await clone("kiki", "nova");
+    await clone("iris", "juno");
 
-    expect(runtime.getConfig().agents.nova).toBeDefined();
-    expect(runtime.getAgentRegistry().get("nova")).toBeUndefined();
+    expect(runtime.getConfig().agents.juno).toBeDefined();
+    expect(runtime.getAgentRegistry().get("juno")).toBeUndefined();
   });
 
   it("says so, because the honest answer is what makes the command one action", async () => {
-    const reply = await clone("kiki", "nova");
+    const reply = await clone("iris", "juno");
 
     expect(reply).toContain("no restart needed");
   });
@@ -366,10 +366,10 @@ describe("usable without a restart", () => {
 
 describe("dispatch", () => {
   it("ignores interactions that are not /clone-agent", async () => {
-    const { interaction } = makeInteraction({ from: "kiki", to: "nova" });
+    const { interaction } = makeInteraction({ from: "iris", to: "juno" });
     interaction.commandName = "memory";
 
     expect(await handleCloneAgentCommand(interaction as any, deps(), runtime.getConfig())).toBe(false);
-    expect(onDisk("nova")).toBeUndefined();
+    expect(onDisk("juno")).toBeUndefined();
   });
 });

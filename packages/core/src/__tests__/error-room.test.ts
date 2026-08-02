@@ -4,7 +4,7 @@ import { errorSignature, redactSecrets } from "../plugins/error-room.js";
 describe("redactSecrets", () => {
   it("redacts credential-shaped values before they leave the process", () => {
     // A token posted to a channel is a token you have to rotate.
-    expect(redactSecrets("token: MTQ2NzM4NjU3OTEyNjQ1NjQ2NQ.G0_rbx.HUrW7iw4G4A2IZ")).toBe("token: [redacted]");
+    expect(redactSecrets("token: MTIzNDU2Nzg5MDEyMzQ1Njc4.GaBcDe.fGhIjKlMnOpQr")).toBe("token: [redacted]");
     expect(redactSecrets("api_key=sk-abcdef123456")).toBe("api_key=[redacted]");
     expect(redactSecrets("Authorization: Bearer eyJhbGciOi.abc")).toContain("[redacted]");
   });
@@ -15,7 +15,7 @@ describe("redactSecrets", () => {
   });
 
   it("leaves an ordinary error message readable", () => {
-    const msg = "ls: cannot access '/home/quint/research': No such file or directory";
+    const msg = "ls: cannot access '/home/user/research': No such file or directory";
     expect(redactSecrets(msg)).toBe(msg);
   });
 });

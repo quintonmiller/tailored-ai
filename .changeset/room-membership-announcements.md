@@ -4,11 +4,10 @@
 
 Rooms announce who joined and who left, so membership stops being invisible.
 
-An agent called `channel-manager` opened a room described as "Private 1-on-1
-between Kiki and Quinton", stayed subscribed to it because
-`room(action="create")` subscribes the creator, and read nine hours of that
-conversation across seventy wake prompts. `/room members` would have shown it
-the whole time. Nobody looked, because nothing had ever suggested there was
+An agent called `channel-manager` created a room, stayed subscribed to it
+because `room(action="create")` subscribes the creator, and went on receiving
+everything said there long afterwards. `/room members` would have shown it the
+whole time. Nobody looked, because nothing had ever suggested there was
 anything to see. Being in a room and looking like you are in a room were
 different facts.
 
@@ -19,7 +18,7 @@ different facts.
   is not a leave. The store takes the bus as an optional constructor argument,
   so bare constructions keep working.
 - **`builtin:room-announcer`**, on by default, posts one line into the affected
-  room: `**kiki** joined this room.` / `**kiki** left this room.` The creator's
+  room: `**iris** joined this room.` / `**iris** left this room.` The creator's
   own join gets its own sentence — `**channel-manager** created this room and
   joined it.` — because it is a side effect of opening the room rather than a
   decision about who should be in it, and it is the case that went unnoticed.

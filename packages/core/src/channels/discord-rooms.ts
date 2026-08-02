@@ -111,7 +111,7 @@ export interface DiscordRoomBackendOptions {
   /**
    * Discord account id behind an identity label, when it has one. Humans do;
    * agents post through a webhook and have no account, so they never will.
-   * Used to turn "@quinton" into a real mention that actually notifies.
+   * Used to turn "@alex" into a real mention that actually notifies.
    */
   nativeIdFor?: (label: string) => string | undefined;
   /** Inverse of {@link DiscordRoomBackendOptions.nativeIdFor}, for inbound mentions. */
@@ -571,7 +571,7 @@ export class DiscordRoomBackend implements RoomBackend {
       id: msg.id,
       room: { backend: this.id, id: msg.channelId },
       cursor: padSnowflake(msg.id),
-      // The mention-resolved form, so a reader sees "@quinton" rather than a
+      // The mention-resolved form, so a reader sees "@alex" rather than a
       // bare snowflake it cannot interpret.
       raw: content,
       body: parsed.body,

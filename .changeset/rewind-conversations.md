@@ -12,9 +12,9 @@ poisons every later answer, two agents being polite at each other until the
 turn cap stops them. What you want then is to drop the tail, not the history.
 
 ```
-/room rewind agent:kiki             # take back the last turn
-/room rewind agent:kiki turns:5     # take back five
-/room rewind agent:kiki turns:0     # put the last rewind back
+/room rewind agent:iris             # take back the last turn
+/room rewind agent:iris turns:5     # take back five
+/room rewind agent:iris turns:0     # put the last rewind back
 ```
 
 Nothing is deleted. A rewound message keeps its row and gains a `rewound_at`

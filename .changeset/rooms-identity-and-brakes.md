@@ -9,8 +9,8 @@ Found by reading what the agents actually did rather than the code:
 - **One person, one name.** A declared human identity now replaces the implicit
   `owner` instead of sitting beside it, matched on transport account id, and
   slash commands stamp that label rather than the raw Discord username. Agents
-  were shown `owner` and `quinton` for one human, read `@t3hlazy1` in the
-  transcript, and got `Unknown participant(s): t3hlazy1` from a validator that
+  were shown `owner` and `alex` for one human, read `@discorduser` in the
+  transcript, and got `Unknown participant(s): discorduser` from a validator that
   had never heard of it.
 - **`/room reset` clears the session the agent is using.** It built the key
   without asking for the agent's session scope, so with `roomSessionScope:

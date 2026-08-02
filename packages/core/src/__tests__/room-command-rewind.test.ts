@@ -17,8 +17,8 @@ import type { Room } from "../rooms/types.js";
 
 const ROOM: Room = {
   ref: { backend: "discord", id: "123" },
-  name: "kiki-quinton",
-  purpose: "Private 1-on-1.",
+  name: "eng",
+  purpose: "Engineering coordination.",
 } as unknown as Room;
 
 const sub = (agent: string): RoomSubscription =>
@@ -26,7 +26,7 @@ const sub = (agent: string): RoomSubscription =>
 
 type RewindResult = ReturnType<RoomCommandDeps["rewindAgentSession"]>;
 
-function makeDeps(result: RewindResult, agents = ["kiki"]) {
+function makeDeps(result: RewindResult, agents = ["iris"]) {
   const calls: Array<{ agent: string; turns: number }> = [];
   const subs = agents.map(sub);
   const deps: RoomCommandDeps = {
@@ -56,7 +56,7 @@ function makeInteraction(agent: string, turns: number | null) {
   const interaction = {
     commandName: "room",
     channelId: "123",
-    user: { id: "1073", username: "t3hlazy1" },
+    user: { id: "1073", username: "discorduser" },
     deferred: false,
     replied: false,
     options: {
@@ -92,11 +92,11 @@ describe("/room rewind", () => {
       rewound: { turns: 1, messages: 2, excerpt: "tell me about X" },
       remaining: 5,
     });
-    const { interaction } = makeInteraction("kiki", null);
+    const { interaction } = makeInteraction("iris", null);
 
     await run(interaction, deps);
 
-    expect(calls).toEqual([{ agent: "kiki", turns: 1 }]);
+    expect(calls).toEqual([{ agent: "iris", turns: 1 }]);
   });
 
   it("quotes what it took back and says how to undo it", async () => {
@@ -105,7 +105,7 @@ describe("/room rewind", () => {
       rewound: { turns: 2, messages: 5, excerpt: "tell me about X" },
       remaining: 3,
     });
-    const { interaction, replies } = makeInteraction("kiki", 2);
+    const { interaction, replies } = makeInteraction("iris", 2);
 
     await run(interaction, deps);
 
@@ -128,7 +128,7 @@ describe("/room rewind", () => {
       rewound: { turns: 1, messages: 2, excerpt: "hi" },
       remaining: 4,
     });
-    const { interaction, replies } = makeInteraction("kiki", 1);
+    const { interaction, replies } = makeInteraction("iris", 1);
 
     await run(interaction, deps);
 
@@ -141,7 +141,7 @@ describe("/room rewind", () => {
       rewound: { turns: 1, messages: 2, excerpt: "hi" },
       remaining: 4,
     });
-    const { interaction, replies } = makeInteraction("kiki", 1);
+    const { interaction, replies } = makeInteraction("iris", 1);
 
     await run(interaction, deps);
 
@@ -150,17 +150,17 @@ describe("/room rewind", () => {
 
   it("restores the last rewind when asked for 0 turns", async () => {
     const { deps, calls } = makeDeps({ scope: "room", restored: 4, remaining: 6 });
-    const { interaction, replies } = makeInteraction("kiki", 0);
+    const { interaction, replies } = makeInteraction("iris", 0);
 
     await run(interaction, deps);
 
-    expect(calls).toEqual([{ agent: "kiki", turns: 0 }]);
+    expect(calls).toEqual([{ agent: "iris", turns: 0 }]);
     expect(replies.join(" ")).toContain("Restored 4 message(s)");
   });
 
   it("says so when there is no rewind to undo", async () => {
     const { deps } = makeDeps({ scope: "room", restored: 0, remaining: 6 });
-    const { interaction, replies } = makeInteraction("kiki", 0);
+    const { interaction, replies } = makeInteraction("iris", 0);
 
     await run(interaction, deps);
 
@@ -169,7 +169,7 @@ describe("/room rewind", () => {
 
   it("says so when there is nothing to take back", async () => {
     const { deps } = makeDeps({ scope: "room", remaining: 0 });
-    const { interaction, replies } = makeInteraction("kiki", 1);
+    const { interaction, replies } = makeInteraction("iris", 1);
 
     await run(interaction, deps);
 
@@ -177,13 +177,13 @@ describe("/room rewind", () => {
   });
 
   it("refuses an agent that is not in the room, and lists who is", async () => {
-    const { deps, calls } = makeDeps({ scope: "room", remaining: 0 }, ["kiki"]);
+    const { deps, calls } = makeDeps({ scope: "room", remaining: 0 }, ["iris"]);
     const { interaction, replies } = makeInteraction("planner", 1);
 
     await run(interaction, deps);
 
     expect(calls).toHaveLength(0);
     expect(replies.join(" ")).toContain("not in");
-    expect(replies.join(" ")).toContain("kiki");
+    expect(replies.join(" ")).toContain("iris");
   });
 });
