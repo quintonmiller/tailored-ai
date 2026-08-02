@@ -19,7 +19,7 @@ When activated, produce a concise morning briefing. Walk these four sources in o
 
 2. **Today's calendar** — call `google_calendar` with `action: "list_events"` and the day's window. Show events in chronological order with start time and title. Note conflicts if any.
 
-3. **Tasks at the user** — call `tasks` with `action: "list"` and filter for `status: "in_review"` AND `assignee: "Quinton"`. These are PRs / decisions waiting on the human. If >5, mention the count and the 3 oldest.
+3. **Tasks at the user** — call `tasks` with `action: "list"` and filter for `status: "in_review"` AND `assignee: "Alex"`. These are PRs / decisions waiting on the human. If >5, mention the count and the 3 oldest.
 
 4. **Overnight memory** — call `memory` with `action: "search"` and a recency-biased query for the last ~12 hours. Surface anything tagged `for-user`, `cleanup`, or marked urgent.
 

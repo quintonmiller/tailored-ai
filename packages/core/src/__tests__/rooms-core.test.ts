@@ -65,7 +65,7 @@ describe("parseEnvelope", () => {
   });
 
   it("never reads a Discord channel link, role ping or emoji as an addressee", () => {
-    expect(parseEnvelope("<#1467386788640460822> is where that lives").to).toEqual([]);
+    expect(parseEnvelope("<#1234567890123456789> is where that lives").to).toEqual([]);
     expect(parseEnvelope("<@&998877> heads up").to).toEqual([]);
     expect(parseEnvelope("<:shipit:1234> nice").to).toEqual([]);
     expect(parseEnvelope("<:shipit:1234> nice").body).toBe("<:shipit:1234> nice");
@@ -83,8 +83,8 @@ describe("parseEnvelope", () => {
   });
 
   it("still finds the speaker when the body opens with a Discord mention", () => {
-    const parsed = parseEnvelope("[quinton] <@123456> what's the status?", (l) => l === "quinton");
-    expect(parsed.speaker).toBe("quinton");
+    const parsed = parseEnvelope("[alex] <@123456> what's the status?", (l) => l === "alex");
+    expect(parsed.speaker).toBe("alex");
     expect(parsed.to).toEqual([]);
     expect(parsed.body).toBe("<@123456> what's the status?");
   });
@@ -220,28 +220,28 @@ describe("IdentityResolver", () => {
   it("does not list one person twice under two names", () => {
     // Naming yourself in `rooms.identities` is the documented way to be called
     // something better than "owner" — but it used to ADD a label rather than
-    // replace one, so agents were shown "Known participants: …, owner, quinton"
+    // replace one, so agents were shown "Known participants: …, owner, alex"
     // for a single human. Two names for one person is two chances to pick the
     // wrong one, with nothing to say they are the same account.
     const ids = new IdentityResolver({
       agentNames: ["coder"],
-      declared: { quinton: "107389829628612608" },
-      ownerNativeIds: { discord: "107389829628612608" },
+      declared: { alex: "111111111111111111" },
+      ownerNativeIds: { discord: "111111111111111111" },
     });
 
-    expect(ids.labels().sort()).toEqual(["coder", "quinton"]);
+    expect(ids.labels().sort()).toEqual(["alex", "coder"]);
     expect(ids.get("owner")).toBeUndefined();
-    expect(ids.byNativeId("discord", "107389829628612608")?.label).toBe("quinton");
+    expect(ids.byNativeId("discord", "111111111111111111")?.label).toBe("alex");
   });
 
   it("keeps the implicit owner when the declared human is somebody else", () => {
     const ids = new IdentityResolver({
       declared: { dana: "999" },
-      ownerNativeIds: { discord: "107389829628612608" },
+      ownerNativeIds: { discord: "111111111111111111" },
     });
 
     expect(ids.labels().sort()).toEqual(["dana", "owner"]);
-    expect(ids.byNativeId("discord", "107389829628612608")?.label).toBe("owner");
+    expect(ids.byNativeId("discord", "111111111111111111")?.label).toBe("owner");
   });
 
   it("carries the implicit owner's other transports onto the declared label", () => {
@@ -249,49 +249,49 @@ describe("IdentityResolver", () => {
     // the same person on Slack. Dropping it would silently stop resolving them
     // there — the merge is what makes replacing the label safe.
     const ids = new IdentityResolver({
-      declared: { quinton: { human: { discord: "107389829628612608" } } },
-      ownerNativeIds: { discord: "107389829628612608", slack: "U123" },
+      declared: { alex: { human: { discord: "111111111111111111" } } },
+      ownerNativeIds: { discord: "111111111111111111", slack: "U123" },
     });
 
     expect(ids.get("owner")).toBeUndefined();
-    expect(ids.byNativeId("slack", "U123")?.label).toBe("quinton");
-    expect(ids.byNativeId("discord", "107389829628612608")?.label).toBe("quinton");
+    expect(ids.byNativeId("slack", "U123")?.label).toBe("alex");
+    expect(ids.byNativeId("discord", "111111111111111111")?.label).toBe("alex");
   });
 
   it("lets a declared identity shadow a derived agent of the same name", () => {
     const ids = new IdentityResolver({
-      agentNames: ["quinton", "coder"],
-      declared: { quinton: "107389829628612608" },
+      agentNames: ["alex", "coder"],
+      declared: { alex: "111111111111111111" },
     });
 
-    expect(ids.get("quinton")?.kind).toBe("human");
-    expect(ids.get("quinton")?.agent).toBeUndefined();
+    expect(ids.get("alex")?.kind).toBe("human");
+    expect(ids.get("alex")?.agent).toBeUndefined();
     expect(ids.all()).toHaveLength(2);
   });
 
   it("treats a bare string declaration as a human account id", () => {
     const ids = new IdentityResolver({
       defaultBackend: "discord",
-      declared: { quinton: "107389829628612608" },
+      declared: { alex: "111111111111111111" },
     });
 
-    expect(ids.get("quinton")).toEqual({
-      label: "quinton",
+    expect(ids.get("alex")).toEqual({
+      label: "alex",
       kind: "human",
       declared: true,
-      nativeIds: { discord: "107389829628612608" },
+      nativeIds: { discord: "111111111111111111" },
     });
   });
 
   it("files a bare string under the deployment's default transport, not a hardcoded one", () => {
     const slackOnly = new IdentityResolver({
       defaultBackend: "slack",
-      declared: { quinton: "U123" },
+      declared: { alex: "U123" },
     });
 
     // Guessing "discord" here would leave the human unrecognizable on Slack,
     // and shouldWake's human/agent split would then misfire on their messages.
-    expect(slackOnly.byNativeId("slack", "U123")?.label).toBe("quinton");
+    expect(slackOnly.byNativeId("slack", "U123")?.label).toBe("alex");
     expect(slackOnly.byNativeId("discord", "U123")).toBeUndefined();
   });
 
@@ -358,10 +358,10 @@ describe("IdentityResolver", () => {
   });
 
   it("honours a custom owner label", () => {
-    const ids = new IdentityResolver({ ownerNativeIds: { discord: "42" }, ownerLabel: "quinton" });
+    const ids = new IdentityResolver({ ownerNativeIds: { discord: "42" }, ownerLabel: "alex" });
 
     expect(ids.isKnown("owner")).toBe(false);
-    expect(ids.get("quinton")?.nativeIds).toEqual({ discord: "42" });
+    expect(ids.get("alex")?.nativeIds).toEqual({ discord: "42" });
   });
 
   it("does not alias the owner's ids to later mutations of the input", () => {
@@ -382,14 +382,14 @@ describe("IdentityResolver", () => {
   it("resolves a native account id back to its identity, per backend", () => {
     const ids = new IdentityResolver({
       agentNames: ["coder"],
-      ownerNativeIds: { discord: "107389829628612608" },
+      ownerNativeIds: { discord: "111111111111111111" },
       declared: { ops: { human: { slack: "U123" } } },
     });
 
-    expect(ids.byNativeId("discord", "107389829628612608")?.label).toBe("owner");
+    expect(ids.byNativeId("discord", "111111111111111111")?.label).toBe("owner");
     expect(ids.byNativeId("slack", "U123")?.label).toBe("ops");
     // Right id, wrong transport: a Discord id must never match a Slack lookup.
-    expect(ids.byNativeId("slack", "107389829628612608")).toBeUndefined();
+    expect(ids.byNativeId("slack", "111111111111111111")).toBeUndefined();
     expect(ids.byNativeId("discord", "nobody")).toBeUndefined();
   });
 });
@@ -437,7 +437,7 @@ describe("RoomStore rooms", () => {
   it("rejects a name clash across backends too", () => {
     store.upsertRoom(room("eng-1", "eng"));
 
-    expect(() => store.upsertRoom({ ref: { backend: "discord", id: "1467386788640460822" }, name: "eng" })).toThrow(
+    expect(() => store.upsertRoom({ ref: { backend: "discord", id: "1234567890123456789" }, name: "eng" })).toThrow(
       /already used by local:eng-1/,
     );
   });
@@ -891,7 +891,7 @@ describe("RoomStore.repointRoom", () => {
     store.subscribe({ agent: "coder", roomRef: "discord:OLD", source: "config" });
     store.subscribe({ agent: "planner", roomRef: "discord:OLD", wakeOn: "all", source: "agent" });
     store.advanceCursor("coder", "discord:OLD", "0000000000000009");
-    store.putMember("discord:OLD", { id: "u1", label: "quinton", kind: "human" });
+    store.putMember("discord:OLD", { id: "u1", label: "alex", kind: "human" });
   });
 
   afterEach(() => db.close());
@@ -909,7 +909,7 @@ describe("RoomStore.repointRoom", () => {
     ).toEqual(["coder", "planner"]);
     // An agent-created subscription survives a config-driven re-point.
     expect(store.getSubscription("planner", "discord:NEW")?.wakeOn).toBe("all");
-    expect(store.listMembers("discord:NEW").map((m) => m.label)).toEqual(["quinton"]);
+    expect(store.listMembers("discord:NEW").map((m) => m.label)).toEqual(["alex"]);
   });
 
   it("clears cursors, because a cursor only means something in its own channel", () => {
@@ -966,7 +966,7 @@ describe("RoomStore conversation depth", () => {
 });
 
 describe("extractLeadingAddressees", () => {
-  const known = (l: string) => ["coder", "planner", "quinton"].includes(l.toLowerCase());
+  const known = (l: string) => ["coder", "planner", "alex"].includes(l.toLowerCase());
 
   it("lifts the bracketed form the format asks for", () => {
     expect(extractLeadingAddressees("<coder> on it", known)).toEqual({ to: ["coder"], body: "on it" });
@@ -1065,7 +1065,7 @@ describe("RoomStore webhooks", () => {
 });
 
 describe("the @name addressing form", () => {
-  const known = (l: string) => ["coder", "planner", "quinton"].includes(l.toLowerCase());
+  const known = (l: string) => ["coder", "planner", "alex"].includes(l.toLowerCase());
 
   it("emits @name, not the bracketed form", () => {
     expect(formatEnvelope({ speaker: "planner", to: ["coder"], body: "ready?" })).toBe("[planner] @coder ready?");
@@ -1080,9 +1080,9 @@ describe("the @name addressing form", () => {
   });
 
   it("reads a mix of both forms", () => {
-    expect(parseEnvelope("[planner] @coder <quinton> look", known)).toEqual({
+    expect(parseEnvelope("[planner] @coder <alex> look", known)).toEqual({
       speaker: "planner",
-      to: ["coder", "quinton"],
+      to: ["coder", "alex"],
       body: "look",
     });
   });
@@ -1139,15 +1139,15 @@ describe("the @name addressing form", () => {
 });
 
 describe("addressing a real account", () => {
-  const known = (l: string) => ["coder", "planner", "quinton"].includes(l.toLowerCase());
-  const OWNER = "107389829628612608";
+  const known = (l: string) => ["coder", "planner", "alex"].includes(l.toLowerCase());
+  const OWNER = "111111111111111111";
   // What the Discord backend supplies: humans have an account, agents don't.
-  const render = (label: string) => (label === "quinton" ? `<@${OWNER}>` : `@${label}`);
+  const render = (label: string) => (label === "alex" ? `<@${OWNER}>` : `@${label}`);
 
   it("renders a human as a real mention and an agent as plain text", () => {
     const wire = formatEnvelope({
       speaker: "planner",
-      to: ["coder", "quinton"],
+      to: ["coder", "alex"],
       body: "need a decision here",
       renderAddressee: render,
     });
@@ -1158,30 +1158,30 @@ describe("addressing a real account", () => {
   });
 
   it("still writes plain @name when no renderer is supplied", () => {
-    expect(formatEnvelope({ speaker: "planner", to: ["quinton"], body: "hi" })).toBe("[planner] @quinton hi");
+    expect(formatEnvelope({ speaker: "planner", to: ["alex"], body: "hi" })).toBe("[planner] @alex hi");
   });
 
   it("round-trips: a rendered mention resolves back to its label", () => {
     const wire = formatEnvelope({
       speaker: "planner",
-      to: ["coder", "quinton"],
+      to: ["coder", "alex"],
       body: "need a decision here",
       renderAddressee: render,
     });
 
     // What the Discord backend does on the way back in, before parsing.
-    const resolved = wire.replace(/<@!?(\d+)>/g, (whole, id) => (id === OWNER ? "@quinton" : whole));
+    const resolved = wire.replace(/<@!?(\d+)>/g, (whole, id) => (id === OWNER ? "@alex" : whole));
 
     expect(parseEnvelope(resolved, known)).toEqual({
       speaker: "planner",
-      to: ["coder", "quinton"],
+      to: ["coder", "alex"],
       body: "need a decision here",
     });
   });
 
   it("leaves an unrecognised account mention as-is rather than inventing a label", () => {
     const raw = "[planner] <@999999999999> take a look";
-    const resolved = raw.replace(/<@!?(\d+)>/g, (whole, id) => (id === OWNER ? "@quinton" : whole));
+    const resolved = raw.replace(/<@!?(\d+)>/g, (whole, id) => (id === OWNER ? "@alex" : whole));
 
     expect(resolved).toBe(raw);
     // Unresolvable, so it stays body text — never a phantom addressee.
@@ -1234,11 +1234,11 @@ describe("addressing that nearly worked", () => {
 });
 
 describe("mentions anywhere in a message", () => {
-  const known = (l: string) => ["coder", "generalist", "quinton"].includes(l.toLowerCase());
+  const known = (l: string) => ["coder", "generalist", "alex"].includes(l.toLowerCase());
 
   it("finds a call-out made mid-sentence", () => {
     // The real case: "Done. Created list_directory. @generalist you're up" —
-    // formally addressed to Quinton, but generalist is clearly being paged.
+    // formally addressed to Alex, but generalist is clearly being paged.
     expect(mentionsIn("Done, added the tool. @generalist you're up to test it", known)).toEqual(["generalist"]);
   });
 
@@ -1328,7 +1328,7 @@ describe("a turn is a speaker run, not a message", () => {
     store.noteRoomTurn("local:eng", false, "researcher");
     store.noteRoomTurn("local:eng", false, "coordinator");
 
-    expect(store.noteRoomTurn("local:eng", true, "quinton")).toBe(0);
+    expect(store.noteRoomTurn("local:eng", true, "alex")).toBe(0);
     // The next agent message starts a fresh run rather than continuing one.
     expect(store.noteRoomTurn("local:eng", false, "researcher")).toBe(1);
   });
@@ -1355,7 +1355,7 @@ describe("looksLikeUninvokedPass", () => {
 });
 
 describe("a misspelt addressee", () => {
-  const names = ["default", "travel-coordinator", "travel-researcher", "booking-tracker", "quinton"];
+  const names = ["default", "travel-coordinator", "travel-researcher", "booking-tracker", "alex"];
   const known = (l: string) => names.includes(l.toLowerCase());
   const candidates = () => names;
 

@@ -59,9 +59,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const pause = (scope: "autonomous" | "all" = "autonomous") =>
-  setAgentsPaused(db, { paused: true, scope, by: "quinton" });
-const resume = () => setAgentsPaused(db, { paused: false, by: "quinton" });
+const pause = (scope: "autonomous" | "all" = "autonomous") => setAgentsPaused(db, { paused: true, scope, by: "alex" });
+const resume = () => setAgentsPaused(db, { paused: false, by: "alex" });
 
 /**
  * Runtime double carrying only what the gates touch. `isAgentsPaused` is
@@ -98,7 +97,7 @@ describe("pause storage", () => {
     const s = pause("autonomous");
     expect(s.agents_paused).toBe(true);
     expect(s.pause_scope).toBe("autonomous");
-    expect(s.paused_by).toBe("quinton");
+    expect(s.paused_by).toBe("alex");
     expect(s.paused_at).toBeTruthy();
   });
 
@@ -117,7 +116,7 @@ describe("pause storage", () => {
     // which is exactly what a service restart does.
     const path = `/tmp/tai-pause-restart-${process.pid}-${Date.now()}.db`;
     const first = initDatabase(path);
-    setAgentsPaused(first, { paused: true, scope: "all", by: "quinton" });
+    setAgentsPaused(first, { paused: true, scope: "all", by: "alex" });
     first.close();
 
     const second = initDatabase(path);
@@ -440,7 +439,7 @@ describe("RoomWatcher", () => {
     return makeRuntime({
       getConfig: () => ({
         agents: { supervisor: {}, coder: {} },
-        rooms: { identities: { quinton: { human: { local: "u-1" } } } },
+        rooms: { identities: { alex: { human: { local: "u-1" } } } },
       }),
     });
   }
@@ -520,7 +519,7 @@ describe("RoomWatcher", () => {
     // The load-bearing case. If a person asking a question in a room goes
     // unanswered, the deployment reads as broken rather than paused.
     pause();
-    const { w, sub, runTurn } = await makeWatcher([message({ speaker: "quinton", body: "status?" })]);
+    const { w, sub, runTurn } = await makeWatcher([message({ speaker: "alex", body: "status?" })]);
     await runWake(w, sub);
     expect(runTurn).toHaveBeenCalledTimes(1);
   });
@@ -529,7 +528,7 @@ describe("RoomWatcher", () => {
     pause();
     const { w, sub, runTurn } = await makeWatcher([
       message({ id: "1", speaker: "supervisor", body: "chatter" }),
-      message({ id: "2", speaker: "quinton", body: "actually, stop" }),
+      message({ id: "2", speaker: "alex", body: "actually, stop" }),
     ]);
     await runWake(w, sub);
     expect(runTurn).toHaveBeenCalledTimes(1);
@@ -537,7 +536,7 @@ describe("RoomWatcher", () => {
 
   it("scope 'all' silences the human wake too", async () => {
     pause("all");
-    const { w, sub, runTurn } = await makeWatcher([message({ speaker: "quinton", body: "status?" })]);
+    const { w, sub, runTurn } = await makeWatcher([message({ speaker: "alex", body: "status?" })]);
     await runWake(w, sub);
     expect(runTurn).not.toHaveBeenCalled();
   });
@@ -553,7 +552,7 @@ describe("RoomWatcher", () => {
 
   it("lets the poll path through for a human — gating the timer would silence humans too", async () => {
     pause();
-    const { w, runTurn } = await makeWatcher([message({ speaker: "quinton", body: "status?" })], { deliver: "poll" });
+    const { w, runTurn } = await makeWatcher([message({ speaker: "alex", body: "status?" })], { deliver: "poll" });
     await w.pollOnce("coder", ROOM);
     expect(runTurn).toHaveBeenCalledTimes(1);
   });
@@ -625,7 +624,7 @@ describe("/pause and /resume", () => {
     const replies: string[] = [];
     const i = {
       commandName,
-      user: { id: "1", username: "quinton" },
+      user: { id: "1", username: "alex" },
       deferred: false,
       replied: false,
       options: { getString: (n: string) => (n === "scope" ? (scope ?? null) : null) },
@@ -722,8 +721,8 @@ describe("pause events", () => {
     const seen: Array<{ paused: boolean; scope: string | null }> = [];
     rt.events.on("agents.pause_changed", (e) => seen.push({ paused: e.paused, scope: e.scope }));
 
-    rt.setAgentsPaused({ paused: true, scope: "autonomous", by: "quinton" });
-    rt.setAgentsPaused({ paused: false, by: "quinton" });
+    rt.setAgentsPaused({ paused: true, scope: "autonomous", by: "alex" });
+    rt.setAgentsPaused({ paused: false, by: "alex" });
 
     expect(seen).toEqual([
       { paused: true, scope: "autonomous" },

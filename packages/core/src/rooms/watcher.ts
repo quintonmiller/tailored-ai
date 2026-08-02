@@ -1017,7 +1017,7 @@ export class RoomWatcher {
   /**
    * Ask every agent in a room what it is working on.
    *
-   * Each agent is woken directly rather than by posting a synthetic "quinton
+   * Each agent is woken directly rather than by posting a synthetic "alex
    * asks…" message into the room. Faking a human turn would put words in a
    * person's mouth in the transcript, and TAI posting under someone's display
    * name is a line worth not crossing. The request is visible anyway — the

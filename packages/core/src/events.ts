@@ -135,8 +135,8 @@ export interface RuntimeEventMap {
    *
    * Membership was previously a thing you could only discover by asking:
    * `/room members` told you, and nothing else did. An agent that created a
-   * room "for a private 1-on-1" and stayed subscribed to it read nine hours of
-   * that conversation, because being in a room and looking like you are in a
+   * room stayed subscribed to it and went on receiving everything said there
+   * long afterwards, because being in a room and looking like you are in a
    * room were different facts. This is the event that lets them be the same
    * one — the built-in `builtin:room-announcer` plugin subscribes and says so
    * in the room itself.

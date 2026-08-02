@@ -21,7 +21,7 @@ constructed prompt — identity preamble, room purpose, new messages, reply
 instructions — and the preamble is byte-identical on every turn in a room. So
 the quote came back as
 
-    > Room "iris-quinton". You are iris. Today is Thursday, July 30, 2026…
+    > Room "eng". You are planner. Today is …
 
 which told you nothing about where the cut landed, the only thing the excerpt
 is for. It now quotes the messages block and falls back to the raw text for

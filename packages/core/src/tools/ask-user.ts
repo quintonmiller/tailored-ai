@@ -90,7 +90,7 @@ export class AskUserTool implements Tool {
     // file was 2.4 KB — half the entire global context budget — and none of it
     // was true any more.
     //
-    // The inbox is a queue for Quinton, not context for agents. It lives one
+    // The inbox is a queue for the owner, not context for agents. It lives one
     // level up, where `loadAllContext` does not look.
     await ensureContextDir(this.contextDir);
 

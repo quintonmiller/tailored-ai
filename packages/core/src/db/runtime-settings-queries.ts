@@ -118,7 +118,7 @@ export function setAgentsPaused(
        WHERE id = 1`,
     ).run(opts.scope ?? "autonomous", opts.by ?? null);
   } else {
-    // paused_by / paused_at are cleared too: a stale "paused by quinton at
+    // paused_by / paused_at are cleared too: a stale "paused by alex at
     // 02:14" next to agents_paused = 0 reads like it is still paused.
     db.prepare(
       `UPDATE runtime_settings

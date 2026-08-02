@@ -202,7 +202,7 @@ export class RoomTool implements Tool {
    *
    * The rejection used to list every identity in the deployment — around thirty
    * names, most of them agents that are not here. So an agent was told "Known
-   * participants: planner, coder, quinton", addressed someone, and was
+   * participants: planner, coder, alex", addressed someone, and was
    * corrected with a completely different and much longer list. Two lists that
    * disagree is worse than either one alone, especially for a small model that
    * has to guess which is authoritative.

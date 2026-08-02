@@ -105,7 +105,7 @@ describe("ScopeCreepFlagger subscription gate", () => {
       agentName: "coder",
       action: "updated",
       task: { id: task.id, title: "T", status: "in_progress", assignee: "coder" },
-      finalTask: { id: task.id, title: "T", status: "in_review", assignee: "Quinton" },
+      finalTask: { id: task.id, title: "T", status: "in_review", assignee: "Alex" },
       response: "",
       worktree: { repoPath: "/tmp/r", worktreePath: "/tmp/wt", branch: "agent/T", preservedPath: null },
     });

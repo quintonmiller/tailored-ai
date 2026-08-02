@@ -241,7 +241,7 @@ Keep Playwright's Chromium up to date (`pnpm update playwright`).
 
 ## Pre-production sign-off checklist
 
-Quinton (me) signs this off before the first real purchase:
+The deployment owner signs this off before the first real purchase:
 
 - [ ] T1 verify ran, prompt-injection demo showed the right card
 - [ ] T2 file-permission checks passed

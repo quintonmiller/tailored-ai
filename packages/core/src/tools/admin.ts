@@ -422,7 +422,7 @@ export class AdminTool implements Tool {
       if (needsAllowlistPatch && agentName) {
         lines.push(
           `NOT added to agent "${agentName}" tools allowlist — creating a tool and being allowed ` +
-            `to run it are separate decisions. Ask Quinton to add "${name}" to that agent's tools list.`,
+            `to run it are separate decisions. Ask the owner to add "${name}" to that agent's tools list.`,
         );
       } else if (allowlistPatched) {
         lines.push(`Added "${name}" to agent "${agentName}" tools allowlist.`);

@@ -6,8 +6,8 @@ at once — a Discord channel where a supervisor, a coder and you can all talk:
 ```
 [supervisor] @coder I've created a requirements doc. Please review and let me know if any questions.
 [coder] @supervisor Looks good, however one question about the retry policy.
-[supervisor] @coder Good question. Two options: bounded backoff, or a dead-letter queue. @quinton what's your preference?
-Quinton: Let's go with option B.
+[supervisor] @coder Good question. Two options: bounded backoff, or a dead-letter queue. @alex what's your preference?
+Alex: Let's go with option B.
 ```
 
 Rooms are not the same thing as channels. A **channel** is a transport
@@ -25,11 +25,11 @@ plugins.
 ```yaml
 rooms:
   identities:
-    quinton: "107389829628612608"   # your Discord user id
+    alex: "111111111111111111"   # your Discord user id
 
   rooms:
     - name: eng
-      ref: discord:1467386788640460822
+      ref: discord:1234567890123456789
       topic: Requirements and review
 
   subscriptions:
@@ -73,19 +73,19 @@ You are an identity automatically, under the label `rooms.ownerLabel` (default
 ```yaml
 rooms:
   identities:
-    quinton: "107389829628612608"
+    alex: "111111111111111111"
 ```
 
 The declared label **replaces** the implicit one rather than sitting beside it,
 matched on transport account id — the one part of a person that cannot be
 spelled two ways. Any transports the implicit identity knew about are carried
 across, so nothing stops resolving. Without this, agents were shown
-`Known participants: …, owner, quinton` for a single human and had two chances
+`Known participants: …, owner, alex` for a single human and had two chances
 to pick the wrong one.
 
 Slash commands stamp the same label. `/room ping` and `/room status` used to
-record the raw Discord username, so an agent read `@t3hlazy1` in the transcript,
-addressed it, and got `Unknown participant(s): t3hlazy1` back from a validator
+record the raw Discord username, so an agent read `@discorduser` in the transcript,
+addressed it, and got `Unknown participant(s): discorduser` back from a validator
 that had never heard of it.
 
 ### The text-prefix fallback
@@ -129,7 +129,7 @@ person:
 ```yaml
 rooms:
   identities:
-    quinton: "107389829628612608"        # shorthand: a human, by account id
+    alex: "111111111111111111"        # shorthand: a human, by account id
     ops: { human: { discord: "2223334445556667" } }
     planner: { agent: supervisor }        # an alias for an existing agent
 ```
@@ -160,8 +160,8 @@ So addressing a person is plain text by default — visible in the transcript,
 silent on their phone. A real mention takes asking for one:
 
 ```
-room(action="post", room="trip", to=["quinton"], body="itinerary updated")
-room(action="post", room="trip", to=["quinton"], body="need a decision on the hotel", notify=true)
+room(action="post", room="trip", to=["alex"], body="itinerary updated")
+room(action="post", room="trip", to=["alex"], body="need a decision on the hotel", notify=true)
 ```
 
 Automatic replies never notify. An agent woken by a message is continuing a
@@ -170,11 +170,11 @@ conversation, not raising something.
 ### People get a real mention
 
 A participant with an account is written as an actual Discord mention, so they
-are highlighted and notified rather than seeing the letters "@quinton":
+are highlighted and notified rather than seeing the letters "@alex":
 
 ```
-planner   @coder <@107389829628612608> need a decision on the retry policy
-                 ^ renders as a live @quinton mention
+planner   @coder <@111111111111111111> need a decision on the retry policy
+                 ^ renders as a live @alex mention
 ```
 
 Agents stay plain `@coder` — they speak through a webhook and have no account
@@ -255,7 +255,7 @@ in that session and reported the same two unassigned tasks as their own work.
 
 ```yaml
 agents:
-  quinton-executive-assistant:
+  executive-assistant:
     roomSessionScope: shared    # room (default) | shared
 ```
 
@@ -346,7 +346,7 @@ message is:
 | `low` | 7 days |
 
 ```
-room(action="post", room="eng", to=["quinton"],
+room(action="post", room="eng", to=["alex"],
      body="The deploy is still blocked on the missing API key.",
      urgency="medium", key="task:ptask_ab12:blocked")
 ```
@@ -408,7 +408,7 @@ rooms:
   maxWakesPerHour: 6          # the deployment default
   rooms:
     - name: eng
-      ref: discord:1467386789961535693
+      ref: discord:222222222222222222
       maxWakesPerHour: 20     # this room is where the work happens
       maxAgentTurns: 10
 ```
@@ -527,7 +527,7 @@ along see exactly what the agents were told.
 rooms:
   rooms:
     - name: eng
-      ref: discord:1467386789961535693
+      ref: discord:222222222222222222
       purpose: >-
         Engineering coordination. planner breaks work down; coder implements;
         reviewer checks. Keep messages short and concrete. Do not reply just to
@@ -603,7 +603,7 @@ confirmation a claim the command cannot back. If *every* subscriber is
 is deaf" need different fixes.
 
 `/room status` is the one that does **not** put a message in the transcript. It
-wakes each agent directly rather than posting a synthetic "quinton asks…" —
+wakes each agent directly rather than posting a synthetic "alex asks…" —
 putting words in a person's mouth, or posting under their display name, is a
 line worth not crossing. `/room all` is not that case: the words are genuinely
 yours, so they appear under your name. Each answer arrives under its own name.
@@ -679,7 +679,7 @@ every deployment:
 rooms:
   rooms:
     - name: research
-      ref: discord:1531540381450375229
+      ref: discord:333333333333333333
       purpose: Scratch space for research spikes.
 ```
 
@@ -717,7 +717,7 @@ exchange lands in the recipient's session, so it is durable and inspectable — 
 just is not a *place*.
 
 ```
-room(action="dm", to="quinton-executive-assistant", body="Trip moved to Aug 3.")
+room(action="dm", to="executive-assistant", body="Trip moved to Aug 3.")
 ```
 
 It used to open a channel per recipient, which at 27 agents is 27 channels
@@ -730,7 +730,7 @@ Mirror a particular agent's direct line into a channel you want to read:
 ```yaml
 rooms:
   desks:
-    quinton-executive-assistant: executive
+    executive-assistant: executive
 ```
 
 Two caveats. It is **synchronous** — the sender waits for the recipient's model
@@ -837,10 +837,10 @@ room  **channel-manager** left this room.
 ```
 
 It is on by default. Membership was previously something you could only find out
-by asking — `/room members` told you, and nothing else did. An agent that opened
-a room described as a private 1-on-1 stayed subscribed to it, because creating a
-room subscribes you, and read nine hours of that conversation across seventy
-wake prompts. Nothing had ever suggested there was anything to look for.
+by asking — `/room members` told you, and nothing else did. An agent that
+created a room stayed subscribed to it, because creating a room subscribes you,
+and went on receiving everything said there long afterwards. Nothing had ever
+suggested there was anything to look for.
 
 The creator's own join gets its own sentence, because it is a side effect of
 opening the room rather than a decision anyone made about who should be in it —

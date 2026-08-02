@@ -895,7 +895,7 @@ export interface AgentConfig {
      * friendlier label for yourself:
      *
      *     identities:
-     *       quinton: "107389829628612608"
+     *       alex: "111111111111111111"
      *       planner: { agent: planner, avatarUrl: "https://…/planner.png" }
      *
      * `avatarUrl` is used on transports that can post under a display name
@@ -907,7 +907,7 @@ export interface AgentConfig {
     /** Rooms to register at startup. Agents may create more at runtime. */
     rooms?: Array<{
       name: string;
-      /** Canonical `<backend>:<id>`, e.g. `discord:1467386788640460822`. */
+      /** Canonical `<backend>:<id>`, e.g. `discord:1234567890123456789`. */
       ref: string;
       /**
        * What the room is for. Given to every agent woken here, and mirrored to
@@ -1837,7 +1837,7 @@ export function validateConfig(config: AgentConfig): string[] {
       }
       if (!room.ref || !/^[^:]+:.+$/.test(room.ref)) {
         warnings.push(
-          `rooms.rooms."${room.name}": "ref" must look like <backend>:<id> (e.g. discord:1467386788640460822) — got ${JSON.stringify(room.ref)}`,
+          `rooms.rooms."${room.name}": "ref" must look like <backend>:<id> (e.g. discord:1234567890123456789) — got ${JSON.stringify(room.ref)}`,
         );
       }
     }

@@ -383,7 +383,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
       // "[speaker]" prefix on one shared bot account.
       store: this.runtime.getRoomStore(),
       avatarFor: (label) => this.identities().get(label)?.avatarUrl,
-      // Lets "@quinton" go out as a real Discord mention that notifies, and
+      // Lets "@alex" go out as a real Discord mention that notifies, and
       // come back in resolvable to the identity rather than a bare snowflake.
       nativeIdFor: (label) => this.identities().get(label)?.nativeIds?.discord,
       labelForNativeId: (nativeId) => this.identities().byNativeId("discord", nativeId)?.label,
