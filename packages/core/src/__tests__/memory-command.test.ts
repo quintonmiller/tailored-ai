@@ -36,7 +36,7 @@ function makeInteraction(sub: string, opts: Record<string, string | null>) {
   const replies: string[] = [];
   const interaction = {
     commandName: "memory",
-    user: { id: "1", username: "quinton" },
+    user: { id: "1", username: "alex" },
     deferred: false,
     replied: false,
     options: {
@@ -179,7 +179,7 @@ describe("guards", () => {
     await run(interaction);
 
     const row = getCoreMemorySection(db, { agent: "iris", project_id: null }, "persona");
-    expect(row?.updated_by).toBe("quinton");
+    expect(row?.updated_by).toBe("alex");
   });
 
   it("ignores interactions that are not /memory", async () => {

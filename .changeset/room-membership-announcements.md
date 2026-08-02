@@ -4,11 +4,10 @@
 
 Rooms announce who joined and who left, so membership stops being invisible.
 
-An agent called `channel-manager` opened a room described as "Private 1-on-1
-between Iris and Quinton", stayed subscribed to it because
-`room(action="create")` subscribes the creator, and read nine hours of that
-conversation across seventy wake prompts. `/room members` would have shown it
-the whole time. Nobody looked, because nothing had ever suggested there was
+An agent called `channel-manager` created a room, stayed subscribed to it
+because `room(action="create")` subscribes the creator, and went on receiving
+everything said there long afterwards. `/room members` would have shown it the
+whole time. Nobody looked, because nothing had ever suggested there was
 anything to see. Being in a room and looking like you are in a room were
 different facts.
 

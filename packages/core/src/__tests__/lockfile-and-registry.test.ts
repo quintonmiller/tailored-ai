@@ -142,7 +142,7 @@ describe("Lockfile", () => {
 
   it("still ignores the trust block, so a signature can sit beside the hash", () => {
     const bare = { id: "x", kind: "skill" as const, version: "1.0.0", description: "d", data: { a: 1 } };
-    const signed = { ...bare, trust: { approvedAt: "2026-07-28", by: "quinton" } };
+    const signed = { ...bare, trust: { approvedAt: "2026-07-28", by: "alex" } };
 
     expect(hashManifest(bare)).toBe(hashManifest(signed as never));
   });

@@ -55,8 +55,8 @@ describe("AgentNotifier suppress-delivery filter", () => {
 
   it("delivers when assignee is a person (not a defined agent)", () => {
     const n = new AgentNotifier({ runtime: makeRuntime() });
-    expect(n.shouldSuppressDelivery("Quinton", "in_review")).toBe(false);
-    expect(n.shouldSuppressDelivery("107389829628612608", "in_review")).toBe(false);
+    expect(n.shouldSuppressDelivery("Alex", "in_review")).toBe(false);
+    expect(n.shouldSuppressDelivery("111111111111111111", "in_review")).toBe(false);
     n.stop();
   });
 
@@ -83,18 +83,18 @@ describe("AgentNotifier envelope (buildNotification)", () => {
   it("renders task id, title, status, assignee in the header", async () => {
     const task = createProjectTask(db, { title: "Add foo support" });
     const final = { id: task.id, title: "Add foo support", status: "in_review" };
-    const msg = await buildNotification(db, final, "Quinton", "in_review", "", isKnownAgent);
+    const msg = await buildNotification(db, final, "Alex", "in_review", "", isKnownAgent);
     expect(msg).toContain(task.id);
     expect(msg).toContain("Add foo support");
     expect(msg).toContain("status: in_review");
-    expect(msg).toContain("assignee: Quinton");
+    expect(msg).toContain("assignee: Alex");
   });
 
   it("surfaces the latest task comment as a blockquote", async () => {
     const task = createProjectTask(db, { title: "T" });
     addTaskComment(db, task.id, { author: "reviewer", content: "APPROVED — looks great" });
     const final = { id: task.id, title: "T", status: "in_review" };
-    const msg = await buildNotification(db, final, "Quinton", "in_review", "", isKnownAgent);
+    const msg = await buildNotification(db, final, "Alex", "in_review", "", isKnownAgent);
     expect(msg).toContain("> *reviewer*:");
     expect(msg).toContain("APPROVED — looks great");
   });
@@ -106,7 +106,7 @@ describe("AgentNotifier envelope (buildNotification)", () => {
       content: "Branch: agent/feature-x. Commit: abc1234. Summary: did the thing.",
     });
     const final = { id: task.id, title: "T", status: "in_review" };
-    const msg = await buildNotification(db, final, "Quinton", "in_review", "", isKnownAgent);
+    const msg = await buildNotification(db, final, "Alex", "in_review", "", isKnownAgent);
     expect(msg).toContain("ready for your review");
     expect(msg).toContain("git diff main..agent/feature-x");
     expect(msg).toContain("git merge --ff-only agent/feature-x");
@@ -131,7 +131,7 @@ describe("AgentNotifier envelope (buildNotification)", () => {
     const msg = await buildNotification(
       db,
       final,
-      "Quinton",
+      "Alex",
       "in_review",
       "Long detailed approved review with many points and so on... extra trailing text",
       isKnownAgent,

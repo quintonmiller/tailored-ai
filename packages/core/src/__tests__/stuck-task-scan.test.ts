@@ -65,7 +65,7 @@ describe("findStuckCodingTasks", () => {
   });
 
   it("excludes assignees not in the agent set", () => {
-    const human = createProjectTask(db, { title: "user-task", assignee: "Quinton" });
+    const human = createProjectTask(db, { title: "user-task", assignee: "Alex" });
     backdate(human.id, 60 * 60);
     const found = findStuckCodingTasks(db, {
       assignees: ["coder", "reviewer"],

@@ -17,8 +17,8 @@ import type { Room } from "../rooms/types.js";
 
 const ROOM: Room = {
   ref: { backend: "discord", id: "123" },
-  name: "iris-quinton",
-  purpose: "Private 1-on-1.",
+  name: "eng",
+  purpose: "Engineering coordination.",
 } as unknown as Room;
 
 const sub = (agent: string): RoomSubscription =>
@@ -56,7 +56,7 @@ function makeInteraction(agent: string, turns: number | null) {
   const interaction = {
     commandName: "room",
     channelId: "123",
-    user: { id: "1073", username: "t3hlazy1" },
+    user: { id: "1073", username: "discorduser" },
     deferred: false,
     replied: false,
     options: {

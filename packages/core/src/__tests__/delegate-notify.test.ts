@@ -223,7 +223,7 @@ describe("delegate — a stalled sub-agent is not a success", () => {
   it("reports failure when the sub-agent runs out of tool rounds", async () => {
     const { tool, cleanup } = harness(true);
 
-    const res = await tool.execute({ agent: "researcher", task: "look it up" }, ctx("quinton-executive-assistant"));
+    const res = await tool.execute({ agent: "researcher", task: "look it up" }, ctx("executive-assistant"));
 
     // The live bug: success:true with the stall marker as output, so the caller
     // retried instead of reporting the problem.
@@ -236,7 +236,7 @@ describe("delegate — a stalled sub-agent is not a success", () => {
   it("still reports success when the sub-agent actually answers", async () => {
     const { tool, cleanup } = harness(false);
 
-    const res = await tool.execute({ agent: "researcher", task: "look it up" }, ctx("quinton-executive-assistant"));
+    const res = await tool.execute({ agent: "researcher", task: "look it up" }, ctx("executive-assistant"));
 
     expect(res.success).toBe(true);
     cleanup();
@@ -249,7 +249,7 @@ describe("delegate — async tells the truth about follow-up", () => {
 
     const res = await tool.execute(
       { agent: "researcher", task: "look it up", async: true },
-      ctx("quinton-executive-assistant"),
+      ctx("executive-assistant"),
     );
 
     expect(res.output).toContain("Nobody will tell you");
@@ -263,13 +263,13 @@ describe("delegate — async tells the truth about follow-up", () => {
 
     const res = await tool.execute(
       { agent: "researcher", task: "look it up", async: true, notify: true },
-      ctx("quinton-executive-assistant"),
+      ctx("executive-assistant"),
     );
     expect(res.output).toContain("You will be sent the result");
     await new Promise((r) => setTimeout(r, 80));
 
     expect(delivered).toHaveLength(1);
-    expect(delivered[0].to).toBe("quinton-executive-assistant");
+    expect(delivered[0].to).toBe("executive-assistant");
     expect(delivered[0].from).toBe("researcher");
     expect(delivered[0].body).toContain("has finished");
     cleanup();

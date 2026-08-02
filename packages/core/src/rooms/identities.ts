@@ -1,7 +1,7 @@
 /**
  * Who can be named in a room.
  *
- * A room identity is a short label — `supervisor`, `coder`, `quinton` — that
+ * A room identity is a short label — `supervisor`, `coder`, `alex` — that
  * maps to either a configured agent or a human's per-transport account id.
  * Labels are what appear inside `[...]` and `<...>` envelopes.
  *
@@ -37,7 +37,7 @@ export interface RoomIdentity {
  * human on the default channel:
  *
  *     identities:
- *       quinton: "107389829628612608"
+ *       alex: "111111111111111111"
  *       ops:     { human: { discord: "22233344455566677" } }
  *       planner: { agent: supervisor }
  */
@@ -53,7 +53,7 @@ export type RoomIdentityConfig =
 export interface IdentityResolverOptions {
   /**
    * Backend a bare-string identity belongs to when the owner's transports are
-   * unknown. Without it a `quinton: "1073..."` shorthand in a Slack-only
+   * unknown. Without it a `alex: "1073..."` shorthand in a Slack-only
    * deployment would be filed under "discord" and never match.
    */
   defaultBackend?: string;
@@ -83,7 +83,7 @@ export class IdentityResolver {
     }
 
     // Declared identities win over derived ones, so an explicit
-    // `quinton: "1073..."` can shadow an agent that happens to share the name.
+    // `alex: "1073..."` can shadow an agent that happens to share the name.
     for (const [label, decl] of Object.entries(opts.declared ?? {})) {
       const identity = normalizeDeclaration(label, decl, opts.ownerNativeIds, opts.defaultBackend);
       if (identity) this.put({ ...identity, declared: true });
@@ -94,7 +94,7 @@ export class IdentityResolver {
     // Naming yourself in `rooms.identities` is the documented way to be called
     // something better than "owner" — but it ADDED a label rather than
     // replacing one, so the same account appeared twice and agents were shown
-    // "Known participants: …, owner, quinton." Two names for one person is two
+    // "Known participants: …, owner, alex." Two names for one person is two
     // chances to pick the wrong one, and the model has nothing to tell it they
     // are the same human.
     //

@@ -130,8 +130,8 @@ describe("getPrimaryOwner", () => {
   });
 
   it("uses ownerName for displayName when present", () => {
-    const r = withConfig({ channels: { discord: { owner: "U-9", ownerName: "Quinton" } } });
-    expect(r.getPrimaryOwner()).toEqual({ channelId: "discord", userId: "U-9", displayName: "Quinton" });
+    const r = withConfig({ channels: { discord: { owner: "U-9", ownerName: "Alex" } } });
+    expect(r.getPrimaryOwner()).toEqual({ channelId: "discord", userId: "U-9", displayName: "Alex" });
   });
 
   it("falls back to synthetic owner when a channel exists but declares no owner", () => {

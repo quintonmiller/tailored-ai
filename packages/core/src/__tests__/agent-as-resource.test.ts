@@ -53,7 +53,7 @@ describe("parseAgentData — fields that must survive the manifest", () => {
       kind: "agent",
       version: "1",
       data: {
-        fileBoundary: "/home/quint/research/travel",
+        fileBoundary: "/home/user/research/travel",
         roomSessionScope: "shared",
         injectMemory: true,
         budgetWarnings: true,
@@ -62,7 +62,7 @@ describe("parseAgentData — fields that must survive the manifest", () => {
       },
     } as never);
 
-    expect(parsed.fileBoundary).toBe("/home/quint/research/travel");
+    expect(parsed.fileBoundary).toBe("/home/user/research/travel");
     expect(parsed.roomSessionScope).toBe("shared");
     expect(parsed.injectMemory).toBe(true);
     expect(parsed.budgetWarnings).toBe(true);

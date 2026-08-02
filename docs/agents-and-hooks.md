@@ -84,12 +84,12 @@ cron:
 ### `/clone-agent` — copy a configuration, and nothing else
 
 ```
-/clone-agent from:iris to:nova
+/clone-agent from:iris to:juno
 ```
 
-Writes a copy of `iris`'s definition under `agents.nova` in `config.yaml` and reports both halves of what it did: the fields it carried over, one line each, and the things it deliberately left behind.
+Writes a copy of `iris`'s definition under `agents.juno` in `config.yaml` and reports both halves of what it did: the fields it carried over, one line each, and the things it deliberately left behind.
 
-Nothing else travels. **Core memory, sessions, notes and room subscriptions are all keyed by agent name and stay with the original** — `nova` starts with an empty persona, no history, and membership in no room, so nothing can wake it until you add it to one. That is the reason the command exists: done by hand this was one copy and three checks, and the interesting failure was always the silent one — a "fresh" clone that inherited the original's persona, or that woke up in its rooms and answered as if it had been there all along.
+Nothing else travels. **Core memory, sessions, notes and room subscriptions are all keyed by agent name and stay with the original** — `juno` starts with an empty persona, no history, and membership in no room, so nothing can wake it until you add it to one. That is the reason the command exists: done by hand this was one copy and three checks, and the interesting failure was always the silent one — a "fresh" clone that inherited the original's persona, or that woke up in its rooms and answered as if it had been there all along.
 
 Three things about the implementation (`packages/core/src/channels/discord-clone-agent.ts`) are load-bearing:
 

@@ -33,7 +33,7 @@ function makeDeps(subs: RoomSubscription[]) {
   const identities = {
     get: (name: string) => (subs.some((s) => s.agent === name) ? { kind: "agent", agent: name } : undefined),
     labelForAgent: (a: string) => a,
-    byNativeId: () => ({ label: "quinton" }),
+    byNativeId: () => ({ label: "alex" }),
     labels: () => subs.map((s) => s.agent),
   } as unknown as IdentityResolver;
 
@@ -63,7 +63,7 @@ function makeInteraction(message: string, userId = "1073") {
   const interaction = {
     commandName: "room",
     channelId: "123",
-    user: { id: userId, username: "t3hlazy1" },
+    user: { id: userId, username: "discorduser" },
     deferred: false,
     replied: false,
     options: {
@@ -116,9 +116,9 @@ describe("/room all", () => {
     // biome-ignore lint/suspicious/noExplicitAny: hand-built Discord interaction double
     await handleRoomCommand(interaction as any, deps, CONFIG);
 
-    // `t3hlazy1` in a transcript is how an agent ended up addressing a name no
+    // `discorduser` in a transcript is how an agent ended up addressing a name no
     // validator had heard of.
-    expect(posted[0].speaker).toBe("quinton");
+    expect(posted[0].speaker).toBe("alex");
   });
 
   it("leaves out agents that opted out of waking, and does not count them", async () => {

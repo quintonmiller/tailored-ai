@@ -178,10 +178,10 @@ describe("resolveAgent — MCP tool references", () => {
 describe("per-agent file boundary", () => {
   it("resolves a configured boundary to an absolute path", () => {
     const config = makeConfig({
-      agents: { planner: { fileBoundary: "/home/quint/research/travel" } },
+      agents: { planner: { fileBoundary: "/home/user/research/travel" } },
     });
 
-    expect(resolveAgent("planner", config, [], undefined, "/ctx").fileBoundary).toBe("/home/quint/research/travel");
+    expect(resolveAgent("planner", config, [], undefined, "/ctx").fileBoundary).toBe("/home/user/research/travel");
   });
 
   it("expands a leading ~, which would otherwise confine the agent to nowhere", () => {
