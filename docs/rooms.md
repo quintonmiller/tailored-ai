@@ -692,6 +692,34 @@ subscription gets its timer, a `checkInMinutes` gets its interval, and the
 first push subscription for a backend gets its listener — without a reload.
 Changes are coalesced, so a config reconcile that adds twenty subscriptions
 re-arms once rather than twenty times.
+### Taking turns
+
+When one message names two agents, both are woken. By default they now run
+**one at a time**, in the order they were triggered:
+
+```yaml
+rooms:
+  turnTaking: serial      # default; `concurrent` restores the old behaviour
+  rooms:
+    - name: eng
+      ref: discord:1234567890123456789
+      turnTaking: concurrent   # per-room override
+```
+
+The point is not tidiness, it is context. A wake fetches the room's backlog
+when it *starts*, not when it was triggered — so chaining is enough to put the
+first agent's reply into the second agent's prompt, with no change to the
+prompt itself. Under `concurrent` both prompts are built from the message
+alone and each agent answers as though it were the only one asked.
+
+Serialization is per room. Two rooms still run in parallel, and an agent that
+is slow in one room does not hold up another. Within a room it does mean the
+second agent waits for the first, so a hung model turn delays the others until
+the loop's own timeout fires.
+
+`/room status` is deliberately exempt: it is a person asking everyone at once,
+and it answers immediately rather than queueing behind whatever the room is
+already doing.
 
 ## The `room` tool
 

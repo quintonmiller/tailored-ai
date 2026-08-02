@@ -43,6 +43,15 @@ export interface RoomWatcherLimits {
   defaultPollSeconds: number;
   /** How much of an agent's tool use to attach under its message. */
   toolActivity: "none" | "mutations" | "all";
+  /**
+   * Whether agents woken by the same room take turns.
+   *
+   * `serial` runs them one at a time, in the order they were triggered, so the
+   * second agent's prompt contains the first agent's reply. `concurrent` is the
+   * old behaviour: everyone woken by one message answers it at the same time,
+   * in parallel, none of them aware the others were asked.
+   */
+  turnTaking: "concurrent" | "serial";
 }
 
 /** Consecutive backend failures before a room is given a rest. */
@@ -64,6 +73,7 @@ export const ROOM_WATCHER_DEFAULTS: RoomWatcherLimits = {
   batchSeconds: 3,
   defaultPollSeconds: 900,
   toolActivity: "none",
+  turnTaking: "serial",
 };
 
 export interface RoomWatcherOptions {
@@ -247,6 +257,19 @@ export class RoomWatcher {
   private running = new Set<string>();
   /** Triggers that arrived mid-run and must be re-armed when it finishes. */
   private pending = new Set<string>();
+  /**
+   * One FIFO chain per room, so agents woken by the same message take turns.
+   * Keyed by roomRef; the value is the tail of that room's queue.
+   */
+  private roomChains = new Map<string, Promise<void>>();
+  /**
+   * Wakes already sitting on a chain, keyed `${agent} ${roomRef}`. A second
+   * trigger for an agent that is still queued is dropped rather than enqueued
+   * twice — the queued run re-fetches the backlog when it starts, so it will
+   * see the newer message anyway. This is also what stops `wakeOn: "all"`
+   * double-waking an agent on a reply that arrived while it was waiting.
+   */
+  private queued = new Set<string>();
   /** One-shot retries armed when a subscription hits its hourly ceiling. */
   private hourRetries = new Map<string, ReturnType<typeof setTimeout>>();
   private checkInTimers = new Map<string, ReturnType<typeof setInterval>>();
@@ -304,6 +327,7 @@ export class RoomWatcher {
       batchSeconds: cfg?.batchSeconds ?? this.limits.batchSeconds,
       defaultPollSeconds: cfg?.defaultPollSeconds ?? this.limits.defaultPollSeconds,
       toolActivity: cfg?.toolActivity ?? this.limits.toolActivity,
+      turnTaking: room?.turnTaking ?? cfg?.turnTaking ?? this.limits.turnTaking,
     };
   }
 
@@ -503,6 +527,10 @@ export class RoomWatcher {
     for (const timer of this.checkInTimers.values()) clearInterval(timer);
     this.checkInTimers.clear();
     this.pending.clear();
+    // In-flight runs finish on their own; dropping the chains just stops
+    // anything new queueing behind them.
+    this.roomChains.clear();
+    this.queued.clear();
   }
 
   /**
@@ -702,12 +730,53 @@ export class RoomWatcher {
 
     const timer = setTimeout(() => {
       this.debounces.delete(key);
-      void this.runWake(sub).catch((err) => {
-        console.error(`[rooms] Wake failed for ${key}: ${(err as Error).message}`);
-      });
+      this.dispatchWake(sub, key);
     }, this.limits.batchSeconds * 1000);
     timer.unref?.();
     this.debounces.set(key, timer);
+  }
+
+  /**
+   * Hand a due wake to the room, taking turns or not.
+   *
+   * One message naming two agents wakes both. Dispatched concurrently they
+   * answer the same question in parallel and neither sees the other, because
+   * each prompt is built from the backlog as it stood when the message landed.
+   * Chained, the second agent's `fetchBacklog` runs *after* the first has
+   * posted, so the reply is ordinary room traffic by the time it is read — the
+   * prompt builder needs no changes at all.
+   *
+   * The chain is per room, not global: two rooms still run in parallel, and an
+   * agent slow in one room does not hold up another.
+   */
+  private dispatchWake(sub: RoomSubscription, key: string): void {
+    const run = () =>
+      this.runWake(sub).catch((err) => {
+        console.error(`[rooms] Wake failed for ${key}: ${(err as Error).message}`);
+      });
+
+    if (this.readLimits(sub.roomRef).turnTaking !== "serial") {
+      void run();
+      return;
+    }
+
+    // Already waiting its turn: drop this trigger rather than queue a second
+    // run. The queued one re-fetches the backlog when it starts, so it will
+    // pick up whatever arrived in the meantime.
+    if (this.queued.has(key)) return;
+    this.queued.add(key);
+
+    const tail = this.roomChains.get(sub.roomRef) ?? Promise.resolve();
+    const next = tail.then(() => {
+      this.queued.delete(key);
+      return run();
+    });
+    this.roomChains.set(sub.roomRef, next);
+    // Let the map forget a room once its queue drains, so a long-lived
+    // deployment does not accumulate a settled promise per room it ever saw.
+    void next.finally(() => {
+      if (this.roomChains.get(sub.roomRef) === next) this.roomChains.delete(sub.roomRef);
+    });
   }
 
   /**

@@ -1075,5 +1075,156 @@ describe("RoomWatcher re-arms when subscriptions change", () => {
 
     expect(spy).toHaveBeenCalled();
     watcher.stop();
+// Turn-taking: agents woken by the same room run one at a time
+// --------------------------------------------------------------------------
+
+/**
+ * One message naming two agents woke both, and both were dispatched without
+ * being awaited — so they answered the same question in parallel and neither
+ * saw the other. The fix chains them per room; the payoff is that the second
+ * agent's backlog fetch happens after the first has posted, so the reply is
+ * ordinary room traffic by the time it is read.
+ */
+describe("RoomWatcher turn-taking", () => {
+  /** Records the order runWake bodies start and finish. */
+  function instrument(watcher: RoomWatcher, log: string[], delayMs = 0) {
+    return vi
+      .spyOn(watcher as unknown as { runWake: (s: RoomSubscription) => Promise<void> }, "runWake")
+      .mockImplementation(async (s: RoomSubscription) => {
+        log.push(`start:${s.agent}`);
+        if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
+        log.push(`end:${s.agent}`);
+      });
+  }
+
+  const dispatch = (watcher: RoomWatcher, s: RoomSubscription) =>
+    (watcher as unknown as { dispatchWake: (x: RoomSubscription, k: string) => void }).dispatchWake(
+      s,
+      `${s.agent} ${s.roomRef}`,
+    );
+
+  it("serial: the second agent does not start until the first has finished", async () => {
+    const watcher = makeWatcher(["coder", "planner"]);
+    const log: string[] = [];
+    instrument(watcher, log, 5);
+
+    dispatch(watcher, sub("coder", "named"));
+    dispatch(watcher, sub("planner", "named"));
+    await vi.waitFor(() => expect(log).toHaveLength(4));
+
+    expect(log).toEqual(["start:coder", "end:coder", "start:planner", "end:planner"]);
+  });
+
+  it("concurrent: both start before either finishes", async () => {
+    const watcher = new RoomWatcher({
+      runtime: makeRuntime(["coder", "planner"]),
+      store,
+      limits: { turnTaking: "concurrent" },
+    });
+    const log: string[] = [];
+    instrument(watcher, log, 5);
+
+    dispatch(watcher, sub("coder", "named"));
+    dispatch(watcher, sub("planner", "named"));
+    await vi.waitFor(() => expect(log).toHaveLength(4));
+
+    expect(log.slice(0, 2)).toEqual(["start:coder", "start:planner"]);
+  });
+
+  /** A second trigger while queued is dropped — the queued run re-reads the backlog. */
+  it("coalesces a repeat trigger for an agent already waiting its turn", async () => {
+    const watcher = makeWatcher(["coder", "planner"]);
+    const log: string[] = [];
+    const spy = instrument(watcher, log, 5);
+
+    dispatch(watcher, sub("coder", "named"));
+    dispatch(watcher, sub("planner", "named"));
+    dispatch(watcher, sub("planner", "named"));
+    await vi.waitFor(() => expect(log).toHaveLength(4));
+
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  /** Two rooms are independent: a slow agent in one must not hold up the other. */
+  it("does not serialize across rooms", async () => {
+    const watcher = makeWatcher(["coder", "planner"]);
+    const log: string[] = [];
+    instrument(watcher, log, 5);
+
+    dispatch(watcher, sub("coder", "named"));
+    dispatch(watcher, sub("planner", "named", { roomRef: "local:other" }));
+    await vi.waitFor(() => expect(log).toHaveLength(4));
+
+    expect(log.slice(0, 2)).toEqual(["start:coder", "start:planner"]);
+  });
+
+  /** A throwing run must not wedge the room's queue behind it. */
+  it("keeps the queue moving when a run throws", async () => {
+    const watcher = makeWatcher(["coder", "planner"]);
+    const log: string[] = [];
+    vi.spyOn(watcher as unknown as { runWake: (s: RoomSubscription) => Promise<void> }, "runWake").mockImplementation(
+      async (s: RoomSubscription) => {
+        if (s.agent === "coder") throw new Error("model exploded");
+        log.push(`ran:${s.agent}`);
+      },
+    );
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    dispatch(watcher, sub("coder", "named"));
+    dispatch(watcher, sub("planner", "named"));
+    await vi.waitFor(() => expect(log).toEqual(["ran:planner"]));
+  });
+});
+
+/**
+ * The payoff, end to end against the real store and backend.
+ *
+ * Ordering alone would be a curiosity. What makes it worth doing is that
+ * `runWake` fetches the backlog when it *starts*, not when the trigger was
+ * queued — so chaining is enough to put the first agent's reply into the
+ * second agent's prompt with no change to the prompt builder.
+ */
+describe("RoomWatcher turn-taking: the second agent reads the first's reply", () => {
+  it("serial: planner's backlog contains what coder posted", async () => {
+    // fetchBacklog resolves the backend from the registry, not from the local
+    // variable the other tests use directly.
+    registerRoomBackend(backend);
+    await backend.createRoom({ name: "eng" });
+    store.subscribe({ agent: "planner", roomRef: "local:eng", deliver: "push", wakeOn: "all", source: "config" });
+    const watcher = makeWatcher(["coder", "planner"]);
+    const seen: string[] = [];
+
+    vi.spyOn(watcher as unknown as { runWake: (s: RoomSubscription) => Promise<void> }, "runWake").mockImplementation(
+      async (s: RoomSubscription) => {
+        if (s.agent === "coder") {
+          // A real model turn takes tens of seconds. Without this delay the post
+          // lands before planner fetches even when they run concurrently, and
+          // the test passes either way — proving nothing.
+          await new Promise((r) => setTimeout(r, 20));
+          await backend.post("eng", { body: "on it — retry policy is bounded backoff", speaker: "coder" });
+          return;
+        }
+        const fetch = (
+          watcher as unknown as {
+            fetchBacklog: (x: RoomSubscription) => Promise<RoomMessage[]>;
+          }
+        ).fetchBacklog.bind(watcher);
+        for (const m of await fetch(store.getSubscription("planner", "local:eng") as RoomSubscription)) {
+          seen.push(m.body);
+        }
+      },
+    );
+
+    const d = (s: RoomSubscription) =>
+      (watcher as unknown as { dispatchWake: (x: RoomSubscription, k: string) => void }).dispatchWake(
+        s,
+        `${s.agent} ${s.roomRef}`,
+      );
+    d(sub("coder", "all"));
+    d(sub("planner", "all"));
+
+    await vi.waitFor(() => expect(seen.length).toBeGreaterThan(0));
+    expect(seen.some((b) => b.includes("bounded backoff"))).toBe(true);
+    unregisterRoomBackend("local");
   });
 });
