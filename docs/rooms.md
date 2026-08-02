@@ -686,6 +686,13 @@ rooms:
 Creating a channel needs Manage Channels. A room made at runtime lives in the
 database, so it survives restarts without a config edit.
 
+Subscribing at runtime takes effect immediately. The watcher listens for
+`room.membership_changed` and re-arms itself, so a new `deliver: poll`
+subscription gets its timer, a `checkInMinutes` gets its interval, and the
+first push subscription for a backend gets its listener — without a reload.
+Changes are coalesced, so a config reconcile that adds twenty subscriptions
+re-arms once rather than twenty times.
+
 ## The `room` tool
 
 One tool, several actions. Agents need `room` in their `tools:` list.

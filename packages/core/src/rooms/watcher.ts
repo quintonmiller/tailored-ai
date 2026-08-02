@@ -22,6 +22,7 @@
 import { resolveAgent } from "../agent/agents.js";
 import { runAgentLoop } from "../agent/loop.js";
 import { findOrCreateSession } from "../agent/session.js";
+import type { Subscription } from "../events.js";
 import { PASSTHROUGH_GATE } from "../notifications/dedup.js";
 import type { AgentRuntime } from "../runtime.js";
 import { addresses, extractLeadingAddressees, renderTranscriptLine } from "./envelope.js";
@@ -48,6 +49,13 @@ export interface RoomWatcherLimits {
 const ROOM_FAILURE_LIMIT = 3;
 /** How long a room is left alone after that, before one attempt is retried. */
 const ROOM_QUARANTINE_MS = 30 * 60_000;
+/**
+ * How long to wait for membership changes to settle before re-arming. Long
+ * enough to collapse a config reconcile (one event per subscription) and an
+ * agent inviting several peers in one turn; short enough that a human running
+ * `/room add` sees it take effect while still looking at the screen.
+ */
+const REARM_DEBOUNCE_MS = 250;
 
 export const ROOM_WATCHER_DEFAULTS: RoomWatcherLimits = {
   maxWakesPerHour: 12,
@@ -245,6 +253,9 @@ export class RoomWatcher {
   /** Why each pending wake fired, so the activity record can say. */
   private wakeReasons = new Map<string, WakeReason>();
   private offBackendChange: (() => void) | undefined;
+  private membershipSubscription: Subscription | undefined;
+  /** Coalesces a burst of membership changes into one re-arm. */
+  private rearmTimer: ReturnType<typeof setTimeout> | undefined;
   private started = false;
 
   constructor(opts: RoomWatcherOptions) {
@@ -315,6 +326,19 @@ export class RoomWatcher {
     // at boot and never fires.
     this.offBackendChange = onRoomBackendChange(() => {
       if (this.started) this.rearm();
+    });
+
+    // Subscriptions are armed here, once, from the set that existed at this
+    // moment. Anything added later — `/room add`, the room tool's invite, a
+    // config reconcile — was written to the database and then never armed: a
+    // new `deliver: poll` subscription had no timer, `checkInMinutes` had no
+    // interval, and the first push subscription for a backend had no listener.
+    // The write succeeded and reported success, so from the outside the agent
+    // simply never spoke again.
+    // Optional only for the runtime doubles in tests and embeds that construct
+    // a watcher without a bus; the real runtime always has one.
+    this.membershipSubscription = this.runtime.events?.on("room.membership_changed", () => {
+      if (this.started) this.scheduleRearm();
     });
 
     const subs = this.store.listSubscriptions();
@@ -422,6 +446,31 @@ export class RoomWatcher {
     console.log(`[rooms] ${sub.agent} joined ${sub.roomRef} — starting from the latest message.`);
   }
 
+  /**
+   * Re-arm after a membership change, coalescing a burst into one pass.
+   *
+   * A config reconcile emits one event per subscription it adds or prunes, and
+   * an agent can invite several peers in a single turn. Re-arming per event
+   * would tear down and rebuild every timer in the deployment N times.
+   *
+   * The tradeoff this accepts: `rearm()` rebuilds *all* timers, so any poll or
+   * check-in clock in flight restarts. A subscription changing every few
+   * minutes could therefore keep starving a long poll interval. Arming
+   * incrementally — touching only the subscription that changed — avoids that
+   * and is the better end state; this is the small version that makes the
+   * documented feature work at all. Subscriptions change rarely in practice,
+   * and never firing is worse than firing late.
+   */
+  private scheduleRearm(): void {
+    if (this.rearmTimer) clearTimeout(this.rearmTimer);
+    this.rearmTimer = setTimeout(() => {
+      this.rearmTimer = undefined;
+      if (this.started) this.rearm();
+    }, REARM_DEBOUNCE_MS);
+    // Do not hold the process open just to re-arm.
+    this.rearmTimer.unref?.();
+  }
+
   /** Re-bind listeners and timers without tearing down the backend watch. */
   private rearm(): void {
     const wasStarted = this.started;
@@ -433,6 +482,10 @@ export class RoomWatcher {
     this.started = false;
     this.offBackendChange?.();
     this.offBackendChange = undefined;
+    this.membershipSubscription?.dispose();
+    this.membershipSubscription = undefined;
+    if (this.rearmTimer) clearTimeout(this.rearmTimer);
+    this.rearmTimer = undefined;
     for (const off of this.unsubscribers) {
       try {
         off();
