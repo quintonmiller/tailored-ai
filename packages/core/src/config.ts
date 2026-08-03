@@ -927,6 +927,8 @@ export interface AgentConfig {
        */
       maxWakesPerHour?: number;
       maxAgentTurns?: number;
+      /** Override the deployment-wide `rooms.turnTaking` for this room. */
+      turnTaking?: "concurrent" | "serial";
     }>;
     /**
      * Who watches what. `deliver` decides when the agent looks (push on a
@@ -999,6 +1001,14 @@ export interface AgentConfig {
      * document contradicting it is only visible if you can see the read.
      */
     toolActivity?: "none" | "mutations" | "all";
+    /**
+     * Whether agents woken by the same room take turns. `serial` (default)
+     * runs them one at a time in trigger order, so an agent named alongside
+     * another sees that one's reply before it answers. `concurrent` restores
+     * the older behaviour where everyone woken by one message answers it in
+     * parallel, none of them aware the others were asked.
+     */
+    turnTaking?: "concurrent" | "serial";
   };
   /** Tiered memory settings (notes, chunks, embeddings). See docs/memory-tiers.md. */
   memory?: {
