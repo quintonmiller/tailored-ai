@@ -1026,6 +1026,64 @@ rooms: core emits `room.membership_changed`, and a deployment that wants
 different wording, a different destination or nothing at all sets
 `enabled: false` and subscribes its own handler.
 
+## Reading direct messages
+
+An agent can message another directly — `room(action="dm")`, and `delegate` when
+it hands a finished task back. That is not a room, so it leaves no transcript:
+before `builtin:dm-mirror` the only evidence was a session row you had to
+already suspect existed to go looking for.
+
+`deliverAgentMessage` emits **`agent.messaged`** once per exchange, after the
+recipient's loop returns, so one event carries the message and its reply
+together rather than two half-facts to correlate. `via` says which surface
+produced it — `dm` or `delegate`. A delivery that throws emits nothing, so a
+subscriber counting these counts conversations rather than attempts.
+
+`builtin:dm-mirror` turns that into a line in a room:
+
+```
+dm  **coder → nova**
+    are you free tonight?
+
+    **nova replied**
+    yes, after eight
+```
+
+**It is off by default**, unlike the announcer. A mirror copies traffic that is
+private by default into a place other people read, which should be a decision
+somebody made out loud rather than something a version bump switches on.
+
+```yaml
+plugins:
+  - module: builtin:dm-mirror
+    enabled: true
+    config:
+      room: dm-log        # required — name or <backend>:<id>
+      via: [dm]           # add "delegate" to include task handoff
+      agents: []          # empty mirrors everyone
+      maxBodyChars: 500   # per side, message and reply
+      speaker: dm
+```
+
+### The loop it must not create
+
+A mirror that wakes an agent is a machine for making its own input: the line
+lands in the room, the room wakes an agent, the agent answers, something
+delivers a message, and the mirror posts again. Two guards, because one is not
+enough:
+
+- **It posts with no `to`**, so nobody is addressed and a `wakeOn: "named"`
+  watcher does not wake.
+- **It refuses to run** when the target room has any subscriber whose `wakeOn`
+  is not `"none"` — `wakeOn: "all"` wakes on an unaddressed line too, so the
+  first guard does not cover it. The refusal names the subscription that caused
+  it and is re-checked on every reload, because an agent can subscribe *itself*
+  to a room at runtime and turn a safe configuration into a loop with no config
+  edit.
+
+So the mirror room wants either no subscribers at all or only `wakeOn: none`
+readers. Refusing is loud and reversible; a loop is neither.
+
 ## Confining an agent to its files
 
 `tools.write.allowedPaths` is deployment-wide, so granting an agent `write`
