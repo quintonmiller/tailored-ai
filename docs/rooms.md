@@ -720,12 +720,102 @@ Triggers arriving inside that gap accumulate on the pending entry instead of
 starting another turn, so the agent runs on a predictable cadence rather than
 on demand. It is per agent and counted across every room, so there is no
 per-room override — a room cannot decide how often an agent runs everywhere
-else.
+else. It is also the one setting batching cannot run without, for the reason
+given under [Reading several rooms in one turn](#reading-several-rooms-in-one-turn).
 
 Note what this does and does not do. It bounds how often an agent is
-*scheduled*. An entry naming ten rooms still starts a turn per room today;
-collapsing those into one turn that reads every room at once is a separate
-change with its own prompt and reply-routing decisions.
+*scheduled*. An entry naming ten rooms starts a turn per room unless those
+rooms opted into being read together — see below.
+
+### Reading several rooms in one turn
+
+A subscription can ask to be read alongside the agent's other batched rooms:
+
+```yaml
+rooms:
+  minWakeIntervalMinutes: 5   # required for batching, see below
+  subscriptions:
+    - agent: coder
+      room: eng
+      batch: true
+    - agent: coder
+      room: ops
+      batch: true
+```
+
+**`minWakeIntervalMinutes` is required, not recommended.** Batching is refused
+outright while it is 0, with a warning naming the agent, and the rooms keep
+their own turns. The reason is arithmetic: a combined turn is charged to
+whichever room holds the newest message, so the charged room *rotates*, and an
+agent batching nine rooms with round-robin traffic gets 12 × 9 = 108 combined
+turns an hour before any counter refuses. A feature whose purpose is lowering
+wake volume would be multiplying the runaway ceiling by the batch size. The
+per-agent floor is the only brake that counts an agent rather than a room, so
+without one the honest answer is to refuse.
+
+**Two is the floor.** One room with `batch: true` and nothing to batch with
+keeps its own turn exactly as before, so turning the flag on in one place
+changes nothing. Rooms that did not ask for it keep their own turns even when
+the same wake also covers a batch.
+
+The combined turn gets one prompt with a `## room` section per room that has
+something new. Rooms with nothing new are left out entirely — an empty heading
+invites an answer to a room that asked nothing. At most five messages per room,
+under one hard transcript budget covering both the transcript and each section's
+heading, purpose and role lines. Every room the wake policy said yes to is
+guaranteed at least its newest message; whatever budget is left over goes
+newest-traffic-first, so nine idle rooms cannot crowd out the room that asked a
+question ten seconds ago, and the room that *caused* the wake cannot be starved
+by a chattier neighbour either. A room the budget leaves out keeps its cursor, is
+read on the next wake, and emits no `room.woke` — nothing of it reached the
+model.
+
+**The pause switch applies room by room.** Under the default `scope:
+autonomous`, a person waiting in one room licenses a turn about *that* room: the
+rooms holding nothing but agent-to-agent traffic are dropped from the batch
+before the prompt is built, keeping their cursors. Judged over the batch as a
+whole it would be the other way round — one human anywhere would un-pause every
+room the agent watches and invite it to post in all of them, which is the exact
+runaway the switch exists for. Under `scope: all` nothing runs.
+
+Posting is explicit, because a turn covering several rooms has no default
+destination:
+
+```
+room(action="post", room="eng", body="bounded backoff, capped at five")
+room(action="pass")     # no room: stay quiet in all of them
+```
+
+Text that names no room gets one correction round naming the rooms and asking
+which; text that still names none is dropped with a log line rather than posted
+somewhere plausible. Single-room wakes keep their forgiving behaviour, where the
+reply goes to the one room it could have been for.
+
+Two triggers stay outside the batch. A **scheduled check-in** keeps its own
+turn, because it is a different kind of prompt — nobody said anything, and a
+digest that only runs when something is new would swallow it in exactly the
+quiet rooms it exists for. And a **poll tick** over a batch where nothing
+deserves a wake runs nothing at all: poll timers fire whether or not anything
+happened, so without that check batching would raise wake volume rather than
+lower it. The traffic is still there next time, and is the context for whatever
+finally does wake the agent.
+
+Two more things worth knowing before turning this on:
+
+- **The wake budget.** A combined turn charges one wake, against the room whose
+  newest message is most recent. The hourly ceiling is a per-`(agent, room)`
+  counter and cannot express "this agent ran once", so for a batching deployment
+  `minWakeIntervalMinutes` is the throttle that actually binds — which is why
+  batching will not run without it — and the hourly ceiling is a backstop that
+  only sees the primary room.
+- **The anti-chatter brake.** A batched turn that used a tool clears
+  `agent_turns` only in the rooms it actually posted to. The counter belongs to
+  one room's conversation, so work done in one room is no reason to release the
+  brake in another where two agents are looping.
+- **The session.** A combined turn uses the shared session key
+  (`room:all:<agent>`), because filing a cross-room conversation under whichever
+  room happened to be primary would hide it from the next wake with a different
+  primary. An agent that batches is effectively `roomSessionScope: shared`.
 
 ### Taking turns
 

@@ -20,7 +20,7 @@
  */
 
 import { resolveAgent } from "../agent/agents.js";
-import { runAgentLoop } from "../agent/loop.js";
+import { estimateTokens, runAgentLoop } from "../agent/loop.js";
 import { findOrCreateSession } from "../agent/session.js";
 import type { Subscription } from "../events.js";
 import { PASSTHROUGH_GATE } from "../notifications/dedup.js";
@@ -30,7 +30,13 @@ import { enrichRoomMessage, IdentityResolver } from "./identities.js";
 import { getRoomBackend, listRoomBackends, onRoomBackendChange } from "./registry.js";
 import type { RoomStore, RoomSubscription } from "./store.js";
 import { formatRoomRef, parseRoomRef, type Room, type RoomMessage } from "./types.js";
-import { type WakeEntry, WakeQueue } from "./wake-queue.js";
+import { type WakeEntry, WakeQueue, type WakeTrigger } from "./wake-queue.js";
+
+/**
+ * Working-memory key naming the rooms a turn was woken for, comma-separated.
+ * Read by the `room` tool so `pass` with no argument can scope itself.
+ */
+export const WAKE_ROOMS_KEY = "room:wake-rooms";
 
 /** Why an agent was woken. Surfaced in the activity record. */
 export type WakeReason = "named" | "loose-question" | "all" | "check-in" | "asked";
@@ -253,6 +259,169 @@ export function makeRoomSessionKey(roomRef: string, agent: string, scope: "room"
   return `room:${roomRef.replace(/:/g, ".")}:${agent}`;
 }
 
+/**
+ * Most messages shown from any one room in a combined wake.
+ *
+ * Low on purpose. The point of reading nine rooms at once is to see what is
+ * going on in all of them, not to read any one of them thoroughly — the agent
+ * still has `room(action="read")` when a room turns out to need attention.
+ */
+const BATCH_ROOM_MESSAGES = 5;
+
+/**
+ * Rough ceiling on the whole transcript of a combined wake, in estimated
+ * tokens.
+ *
+ * A *single*-room wake prompt has been measured at 6.4 KB. Ten of those is not
+ * a prompt, it is a context window with an agent buried in it, and a 27B local
+ * model reading it will answer the loudest room rather than the one that asked.
+ * One hard total, allocated newest-first, is the only version of this that
+ * survives a deployment adding a tenth room.
+ */
+const BATCH_TRANSCRIPT_TOKENS = 1200;
+
+/**
+ * When the newest message in a room landed. Used to pick which room a combined
+ * wake is really about.
+ *
+ * Timestamps rather than cursors, because a cursor only orders messages within
+ * one backend — a Discord snowflake and a local rowid do not compare. Parsing
+ * accepts whatever the backend wrote and treats anything unreadable as ancient,
+ * so a backend with an odd date format loses the tie-break rather than the
+ * whole wake.
+ */
+export function newestMessageAt(messages: RoomMessage[]): number {
+  let newest = 0;
+  for (const m of messages) {
+    const at = Date.parse(m.createdAt);
+    if (Number.isFinite(at) && at > newest) newest = at;
+  }
+  return newest;
+}
+
+/**
+ * Choose what a combined wake shows, newest traffic first.
+ *
+ * The obvious allocation — an equal quota per room — is the wrong one. Nine
+ * idle rooms would each spend their share on last week's chatter and crowd out
+ * the room that asked a question ten seconds ago, which is the only room the
+ * wake existed for. So slots go to whoever holds the most recent unshown
+ * message, until the per-room cap or the total budget runs out.
+ *
+ * With one exception, and it matters: `mustInclude` names the rooms the wake
+ * policy actually said yes to, and each of those gets its newest message before
+ * the newest-first pass spends anything. Without that, the room that was the
+ * sole reason the turn ran could lose every slot to a chattier neighbour, keep
+ * its cursor, and be squeezed out again on the next wake — a charged turn in
+ * which the triggering room is never read, repeating forever.
+ *
+ * `framing` is what a room's heading, purpose and role lines cost. Charged the
+ * first time a room takes a message, because they are printed only for rooms
+ * that appear — purposes are free-text config, and nine of them are real prompt
+ * that has to come out of the same budget as the transcript.
+ *
+ * A room that gets no slot at all is not in the result, and the caller leaves
+ * its cursor alone: it was never shown, so it has not been read.
+ */
+export function selectBatchTranscript(
+  rooms: Array<{ roomRef: string; messages: RoomMessage[]; framing?: number }>,
+  opts: {
+    budgetTokens?: number;
+    perRoom?: number;
+    cost?: (msg: RoomMessage) => number;
+    /** Rooms guaranteed at least their newest message. */
+    mustInclude?: Iterable<string>;
+  } = {},
+): Map<string, RoomMessage[]> {
+  const perRoom = opts.perRoom ?? BATCH_ROOM_MESSAGES;
+  const cost = opts.cost ?? ((msg: RoomMessage) => estimateTokens({ role: "user", content: msg.body }));
+  let budget = opts.budgetTokens ?? BATCH_TRANSCRIPT_TOKENS;
+
+  // Backends answer oldest-first, so the tail is the newest and popping takes
+  // messages in the order this wants to spend on them.
+  const pools = rooms.map((r) => ({
+    roomRef: r.roomRef,
+    framing: r.framing ?? 0,
+    rest: [...r.messages],
+    taken: [] as RoomMessage[],
+  }));
+
+  const take = (pool: (typeof pools)[number]): boolean => {
+    const msg = pool.rest.pop();
+    if (!msg) return false;
+    // Charged after the message is taken, so the single most recent message is
+    // always shown even when it is larger than the whole budget. A prompt that
+    // overshoots by one message beats one that omits the message that woke the
+    // agent.
+    if (pool.taken.length === 0) budget -= pool.framing;
+    pool.taken.unshift(msg);
+    budget -= cost(msg);
+    return true;
+  };
+
+  const required = new Set(opts.mustInclude ?? []);
+  for (const pool of pools) {
+    if (required.has(pool.roomRef)) take(pool);
+  }
+
+  while (budget > 0) {
+    let pick: (typeof pools)[number] | undefined;
+    let pickedAt = Number.NEGATIVE_INFINITY;
+    for (const pool of pools) {
+      if (pool.rest.length === 0 || pool.taken.length >= perRoom) continue;
+      const at = Date.parse(pool.rest[pool.rest.length - 1].createdAt);
+      const when = Number.isFinite(at) ? at : 0;
+      if (when > pickedAt) {
+        pickedAt = when;
+        pick = pool;
+      }
+    }
+    if (!pick) break;
+    if (!take(pick)) break;
+  }
+
+  const shown = new Map<string, RoomMessage[]>();
+  for (const pool of pools) {
+    if (pool.taken.length > 0) shown.set(pool.roomRef, pool.taken);
+  }
+  return shown;
+}
+
+/**
+ * The order room locks are taken in, and the only definition of it.
+ *
+ * Plain code-unit order rather than `localeCompare`: what the deadlock argument
+ * needs is a total order every caller agrees on, and locale collation is not
+ * one — it can call two distinct refs equal, which leaves their relative order
+ * up to the sort and puts two agents back on opposite paths.
+ */
+export function compareRoomRefs(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** One room's contribution to a combined wake. */
+interface BatchSection {
+  sub: RoomSubscription;
+  room: Room | null;
+  messages: RoomMessage[];
+}
+
+/**
+ * The rooms one turn covers, when several were collapsed into it.
+ *
+ * Present only on a batched turn. Everything that reads it has a single-room
+ * branch right beside it, because a wake for one room must behave exactly as it
+ * did before batching existed.
+ */
+interface BatchedTurn {
+  /** The subscriptions actually shown, in the order they appear in the prompt. */
+  subs: RoomSubscription[];
+  /** What each room contributed, so each cursor advances to what it showed. */
+  shown: Map<string, RoomMessage[]>;
+  /** Room names as the agent saw them, for the correction round. */
+  names: string[];
+}
+
 export class RoomWatcher {
   private readonly runtime: AgentRuntime;
   private readonly store: RoomStore;
@@ -293,6 +462,18 @@ export class RoomWatcher {
   private queued = new Set<string>();
   /** One-shot retries armed when a subscription hits its hourly ceiling. */
   private hourRetries = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Agents already told that batching needs a per-agent floor. See batchingAllowed. */
+  private batchWarned = new Set<string>();
+  /**
+   * Distinguishes one batch attempt from the next.
+   *
+   * The per-room queue drops a second trigger that arrives under a key already
+   * waiting, which is right for a repeat wake of the same room and wrong for a
+   * batch: two attempts for one agent can name different rooms, so collapsing
+   * them loses whichever rooms the in-flight one does not cover — and the drop
+   * path marks nothing pending, so nothing ever comes back for them.
+   */
+  private batchSeq = 0;
   private checkInTimers = new Map<string, ReturnType<typeof setInterval>>();
   /** Why each pending wake fired, so the activity record can say. */
   private wakeReasons = new Map<string, WakeReason>();
@@ -751,20 +932,54 @@ export class RoomWatcher {
   /**
    * An entry came due. The queue decided *when*; this decides *what*.
    *
+   * One entry can name several rooms, and they do not all want the same
+   * treatment: rooms that opted into batching are collapsed into one turn that
+   * reads all of them, and everything else keeps a turn of its own.
+   *
    * The subscription is re-read rather than carried on the queue entry: it may
    * have been changed or removed while the entry waited, and acting on a stale
    * copy is how an unsubscribed agent gets one more turn.
    */
   private onWakeDue(entry: WakeEntry): void {
-    // One entry can name several rooms. Each still gets its own turn here —
-    // collapsing them into a single turn that reads every room at once is a
-    // separate change with its own prompt, cursor and reply-routing decisions.
+    const targets: Array<{ sub: RoomSubscription; triggers: Set<WakeTrigger> }> = [];
     for (const [roomRef, triggers] of entry.targets) {
       const sub = this.store.getSubscription(entry.agent, roomRef);
       // Re-read rather than carry the subscription on the entry: it may have
       // been changed or removed while the entry waited, and acting on a stale
       // copy is how an unsubscribed agent gets one more turn.
       if (!sub) continue;
+      targets.push({ sub, triggers });
+    }
+
+    // Rooms whose subscription opted into batching are read together, in one
+    // turn. Two is the floor: one room batched with nothing is an ordinary
+    // wake wearing a stranger prompt and a worse reply path, so it stays where
+    // it was. That is also what makes turning the flag on somewhere harmless —
+    // a deployment with a single `batch: true` behaves exactly as before.
+    //
+    // A room due only for a scheduled check-in is left out on purpose. A
+    // check-in is a different kind of turn — nobody said anything, and the
+    // prompt is about time passing — and a digest that only runs when something
+    // is new would swallow it in exactly the quiet rooms it exists for.
+    const batchable = targets.filter((t) => t.sub.batch && (t.triggers.has("message") || t.triggers.has("poll")));
+    // Asked whenever any room wanted batching rather than only when two did, so
+    // a deployment that set the flag and is not getting batching hears why.
+    const allowed = batchable.length > 0 && this.batchingAllowed(entry.agent);
+    const combined = allowed && batchable.length >= 2;
+    if (combined) {
+      const rooms = batchable.map((t) => t.sub.roomRef).join(", ");
+      void this.runBatchedWake(
+        entry.agent,
+        batchable.map((t) => t.sub),
+      ).catch((err) => {
+        console.error(`[rooms] Batched wake failed for ${entry.agent} over ${rooms}: ${(err as Error).message}`);
+      });
+    }
+
+    // Everything else still gets a turn per room.
+    const batched = new Set(combined ? batchable.map((t) => t.sub.roomRef) : []);
+    for (const { sub, triggers } of targets.filter((t) => !batched.has(t.sub.roomRef))) {
+      const roomRef = sub.roomRef;
       const key = `${entry.agent} ${roomRef}`;
       // A room that both received a message and came due for a check-in is one
       // turn, not two. Message wins: it has something concrete to answer.
@@ -780,6 +995,39 @@ export class RoomWatcher {
         });
       }
     }
+  }
+
+  /**
+   * May this agent's rooms be read together at all?
+   *
+   * Only with a per-agent floor under it. The hourly ceiling is a counter on an
+   * `(agent, room)` row, and a combined turn is charged to whichever room holds
+   * the newest message — so the charged room *rotates*, and an agent batching
+   * nine rooms with round-robin traffic gets 12 × 9 = 108 combined turns an hour
+   * before any counter refuses. That is a ninefold increase in the runaway
+   * ceiling produced by a feature whose entire purpose is lowering wake volume.
+   *
+   * `minWakeIntervalMinutes` is the only brake that counts an agent rather than
+   * a room, and it defaults to 0. So batching without it is refused rather than
+   * quietly granted: an operator who wanted fewer wakes and got a higher ceiling
+   * instead has been failed silently, which is the worse outcome. The rooms keep
+   * their own turns and their own per-room ceilings, exactly as before the flag
+   * existed.
+   */
+  private batchingAllowed(agent: string): boolean {
+    if ((this.readLimits().minWakeIntervalMinutes ?? 0) > 0) return true;
+    // Once per agent for the life of the process. Repeating it on every wake
+    // would bury the log, and re-warning after each config reload would mean
+    // re-warning on every membership change, since that re-arms the watcher.
+    if (!this.batchWarned.has(agent)) {
+      this.batchWarned.add(agent);
+      console.warn(
+        `[rooms] ${agent} has rooms with "batch: true" but rooms.minWakeIntervalMinutes is 0, so they keep their own turns. ` +
+          `A combined turn spans rooms and the hourly ceiling counts one room at a time, so it cannot bound one — ` +
+          `set rooms.minWakeIntervalMinutes to enable batching.`,
+      );
+    }
+    return false;
   }
 
   /**
@@ -838,6 +1086,31 @@ export class RoomWatcher {
       if (this.roomChains.get(roomRef) === next) this.roomChains.delete(roomRef);
     });
     return next;
+  }
+
+  /**
+   * Run something on several rooms' queues at once.
+   *
+   * Each per-room chain is a lock on that room, and a turn spanning N rooms has
+   * to hold all N. Acquiring them in a globally agreed order is what stops two
+   * agents with overlapping batches deadlocking — one taking eng then ops while
+   * the other takes ops then eng, each waiting on a chain the other owns and
+   * neither ever finishing.
+   *
+   * This is the only place that order is decided, and `compareRoomRefs` is the
+   * only definition of it. There used to be a second sort in the caller with a
+   * different comparator and a comment claiming the two agreed; they did not
+   * for mixed-case refs, and either one alone was enough to make the deadlock
+   * tests pass, so neither was actually pinned by anything.
+   *
+   * Nested rather than awaited in parallel, so the rooms are genuinely held for
+   * the duration of the turn rather than each released as it is acquired.
+   */
+  private onRoomTurns(roomRefs: string[], key: string, fn: () => Promise<void>): Promise<void> {
+    const ordered = [...new Set(roomRefs)].sort(compareRoomRefs);
+    const acquire = (i: number): Promise<void> =>
+      i >= ordered.length ? fn() : this.onRoomTurn(ordered[i], key, () => acquire(i + 1));
+    return acquire(0);
   }
 
   /**
@@ -998,6 +1271,29 @@ export class RoomWatcher {
     return !messages.some((m) => isFromHuman(m, identities));
   }
 
+  /**
+   * Which of these rooms a combined turn may still read while agents are
+   * paused.
+   *
+   * The same rule as `pausedForMessages`, applied per room rather than to the
+   * batch as a whole — and that difference is the whole point. Asked once over
+   * every message in the batch, "is anyone human here?" answers yes if a person
+   * is waiting in *any* room, which un-pauses all the others: room B, whose
+   * traffic is nothing but two agents talking to each other, gets rendered into
+   * the prompt as a section and the agent is explicitly invited to post there.
+   * That is the runaway the switch exists to stop, arriving through the feature
+   * meant to reduce wake volume.
+   *
+   * A human waiting in one room licenses a turn about that room. The rooms that
+   * lose their section keep their cursors and are read whenever the pause lifts
+   * or a person says something in them.
+   */
+  private roomsAllowedWhilePaused(sections: BatchSection[], identities: IdentityResolver): BatchSection[] {
+    if (this.runtime.isAgentsPaused("human")) return [];
+    if (!this.runtime.isAgentsPaused("autonomous")) return sections;
+    return sections.filter((s) => s.messages.some((m) => isFromHuman(m, identities)));
+  }
+
   private async runWake(sub: RoomSubscription): Promise<void> {
     const key = `${sub.agent} ${sub.roomRef}`;
     if (this.running.has(key)) {
@@ -1062,6 +1358,176 @@ export class RoomWatcher {
   }
 
   /**
+   * One turn for several rooms at once.
+   *
+   * The per-room path answers each room in isolation, which is right for an
+   * agent watching one busy room and wrong for one watching nine quiet ones: it
+   * runs nine model turns, each blind to the other eight, and each costing a
+   * wake. A person with nine channels open does not get interrupted nine times;
+   * they look at what accumulated and decide what to do.
+   *
+   * What it costs, said plainly: the agent no longer gets a reply destination
+   * for free. Anything it wants to say has to name a room through the tool, and
+   * text that names none is dropped rather than guessed at.
+   */
+  private runBatchedWake(agent: string, subs: RoomSubscription[]): Promise<void> {
+    // Lock order belongs to onRoomTurns and is decided there; the rooms are
+    // handed over in the order they were named, and the prompt's sections
+    // follow that.
+    //
+    // The key is unique per attempt on purpose. A shared `batch:<agent>` key
+    // meant a second batch arriving while the first was between locks hit the
+    // queue's dedupe at the first room and vanished whole — no turn, nothing
+    // marked pending, and quite possibly rooms the in-flight batch never
+    // covered. Two attempts overlapping is handled where it can be handled
+    // correctly: runBatchedTurn holds the per-room in-flight guard, and the
+    // second attempt re-reads the backlog and returns before charging anything
+    // if the first already read it.
+    const key = `batch:${agent}#${++this.batchSeq}`;
+    return this.onRoomTurns(
+      subs.map((s) => s.roomRef),
+      key,
+      () => this.runBatchedTurn(agent, subs),
+    );
+  }
+
+  /** The body of a combined wake, once every room it covers is held. */
+  private async runBatchedTurn(agent: string, subs: RoomSubscription[]): Promise<void> {
+    const keys = subs.map((s) => `${agent} ${s.roomRef}`);
+    // The same in-flight guard the per-room path uses, over every room in the
+    // batch, so a combined turn and a solo one can never work the same room at
+    // once. Triggers are held rather than dropped: whichever run finishes first
+    // re-schedules them, and a re-armed wake that finds nothing new returns
+    // before it charges anything.
+    if (keys.some((k) => this.running.has(k))) {
+      for (const k of keys) this.pending.add(k);
+      return;
+    }
+    for (const k of keys) this.running.add(k);
+
+    try {
+      const identities = this.identities();
+      const sections: BatchSection[] = [];
+      for (const stale of subs) {
+        // Re-read: a cursor may have moved while the entry waited.
+        const sub = this.store.getSubscription(agent, stale.roomRef) ?? stale;
+        try {
+          const messages = await this.fetchBacklog(sub);
+          if (messages.length === 0) continue;
+          sections.push({ sub, room: this.store.getRoomByRef(sub.roomRef), messages });
+        } catch (err) {
+          // One unreachable transport must not blank out the other rooms. The
+          // same call `readAll` makes, for the same reason.
+          console.warn(`[rooms] Could not read ${sub.roomRef} for ${agent}: ${(err as Error).message}`);
+        }
+      }
+      if (sections.length === 0) return;
+
+      // The pause switch, applied room by room rather than to the batch as a
+      // whole — and this order matters, because everything below reads `live`.
+      const live = this.roomsAllowedWhilePaused(sections, identities);
+      if (live.length === 0) return;
+
+      // At least one room has to hold something the wake policy would have
+      // woken this agent for. Otherwise a poll tick — which enqueues on its
+      // timer, unconditionally — would turn any unread chatter anywhere in the
+      // batch into a model turn, and batching would *raise* wake volume, which
+      // is the opposite of the point. This is the check `pollOnce` already
+      // makes, applied across the batch rather than to one room.
+      //
+      // Kept as the set of rooms rather than a yes/no, because the transcript
+      // budget needs to know which rooms are the reason this turn is running.
+      // The rest of the traffic still gets shown: what does not deserve a wake
+      // on its own is exactly the context that makes the room that does
+      // deserve one legible.
+      const triggering = new Set(
+        live
+          .filter((s) => {
+            const agentTurns = this.store.agentTurns(s.sub.roomRef);
+            return s.messages.some((m) => this.shouldWake(s.sub, m, identities, agentTurns));
+          })
+          .map((s) => s.sub.roomRef),
+      );
+      // Cursors stay where they are, so nothing is lost — this traffic is
+      // re-read on the next wake, and is the context for it.
+      if (triggering.size === 0) return;
+
+      // One wake for one model turn, charged to the room with the newest
+      // message — the one that most plausibly triggered this. Charging every
+      // room would spend N slots on a single turn and starve the quiet rooms
+      // fastest, which is exactly backwards.
+      //
+      const label = identities.labelForAgent(agent);
+      const { prompt, shown } = this.buildBatchedPrompt(agent, label, live, identities, triggering);
+      const covered = live.filter((s) => shown.has(s.sub.roomRef));
+
+      // The ceiling is one atomic UPDATE on an (agent, room) row, so it cannot
+      // express "this agent ran once" at all. The real ceiling for a batching
+      // deployment is the per-agent `rooms.minWakeIntervalMinutes`, which is why
+      // batching refuses to run without one — see batchingAllowed. This stays a
+      // backstop, and an honest one only for the room it charges.
+      //
+      // Charged *after* the prompt is built, and only against a room the prompt
+      // actually covers. Choosing it beforehand meant the newest-message room
+      // won — and once a triggering room is guaranteed a slot, the newest room
+      // need not be in the prompt at all. A quiet room would then spend its
+      // hourly budget on turns that never read it, which is the opposite of
+      // what the counter is for.
+      const primary = covered.reduce((a, b) => (newestMessageAt(b.messages) > newestMessageAt(a.messages) ? b : a));
+      const limits = this.readLimits(primary.sub.roomRef);
+      if (!this.store.tryConsumeWake(agent, primary.sub.roomRef, limits.maxWakesPerHour)) {
+        console.warn(
+          `[rooms] ${agent} hit its wake ceiling for ${primary.sub.roomRef} (${limits.maxWakesPerHour}/hour), holding its combined wake over ${live.map((s) => s.sub.roomRef).join(", ")}. Traffic accumulates and is read on the next allowed wake.`,
+        );
+        // Every room, not just the primary: one retry would re-arm a single
+        // room, and a batch of one falls back to the per-room path. Their
+        // timers all fire in the same tick, so the queue merges them back into
+        // one entry.
+        for (const section of live) this.retryAfterHour(section.sub);
+        return;
+      }
+
+      // One event per room, not one for the batch: a subscriber asking "was
+      // this room read?" wants the same answer whether or not the deployment
+      // batches.
+      //
+      // Emitted over what was *shown*, and after the prompt is built, because
+      // that is the only point at which the answer is known. Announcing every
+      // section would report a room as woken — with a full message count — while
+      // the transcript budget had squeezed it out of the prompt entirely and its
+      // cursor was deliberately left alone. Same rule as the cursor: shown is
+      // read, and nothing else is.
+      for (const section of covered) {
+        this.runtime.events?.emit("room.woke", {
+          roomRef: section.sub.roomRef,
+          agent,
+          messageCount: shown.get(section.sub.roomRef)?.length ?? 0,
+        });
+      }
+
+      // The activity record can only name one reason, so it names the primary
+      // room's — the same room the wake was charged to.
+      const primaryKey = `${agent} ${primary.sub.roomRef}`;
+      const reason = this.wakeReasons.get(primaryKey) ?? (primary.sub.wakeOn === "all" ? "all" : "named");
+      for (const sub of subs) this.wakeReasons.delete(`${agent} ${sub.roomRef}`);
+
+      await this.runTurn(primary.sub, prompt, label, {
+        reason,
+        batch: {
+          subs: covered.map((s) => s.sub),
+          shown,
+          names: covered.map((s) => s.room?.name ?? s.sub.roomRef),
+        },
+      });
+    } finally {
+      for (const key of keys) this.running.delete(key);
+      for (const sub of subs) {
+        if (this.pending.delete(`${agent} ${sub.roomRef}`)) this.scheduleWake(sub);
+      }
+    }
+  }
+
+  /**
    * Run one agent against one prompt and put whatever it says into the room.
    *
    * Every way an agent can be woken ends up here — a message that named it, a
@@ -1075,9 +1541,12 @@ export class RoomWatcher {
     sub: RoomSubscription,
     prompt: string,
     label: string,
-    opts: { messages?: RoomMessage[]; reason?: WakeReason } = {},
+    opts: { messages?: RoomMessage[]; reason?: WakeReason; batch?: BatchedTurn } = {},
   ): Promise<void> {
-    const { messages, reason } = opts;
+    const { messages, reason, batch } = opts;
+    // Every room this turn covers. One for an ordinary wake; the whole batch
+    // for a combined one, and `sub` is then only the room it was charged to.
+    const rooms = batch ? batch.subs.map((s) => s.roomRef) : [sub.roomRef];
     const config = this.runtime.getConfig();
     const resolved = resolveAgent(
       sub.agent,
@@ -1088,7 +1557,11 @@ export class RoomWatcher {
     );
     const session = findOrCreateSession(
       this.runtime.db,
-      makeRoomSessionKey(sub.roomRef, sub.agent, resolved.roomSessionScope),
+      // A combined turn has no single room, so a per-room session key would
+      // file a cross-room conversation under whichever room happened to be
+      // primary — and the next wake, with a different primary, would not find
+      // it. Shared is the only key that describes what this turn is.
+      makeRoomSessionKey(sub.roomRef, sub.agent, batch ? "shared" : resolved.roomSessionScope),
       resolved.model,
       resolved.provider,
     );
@@ -1097,6 +1570,10 @@ export class RoomWatcher {
     // Spread rather than replace: buildLoopOptions puts agentName in here,
     // and dropping it is how task-watcher lost tool attribution.
     const workingMemory = new Map<string, string>();
+    // Which rooms this turn is about. `room(action="pass")` with no argument
+    // reads it, so declining to speak silences exactly the rooms the agent was
+    // woken for rather than every room in the deployment.
+    workingMemory.set(WAKE_ROOMS_KEY, rooms.join(","));
     let reply = "";
     // Whether this turn did anything, as opposed to only talking. Decides
     // whether it counts toward the conversation-depth cap.
@@ -1128,13 +1605,12 @@ export class RoomWatcher {
       // Advance anyway. A message the agent cannot process — a provider
       // outage, a body that overflows its context — would otherwise be
       // re-read on every wake, burning the whole hourly budget forever.
+      const skipped = batch ? [...batch.shown.values()].reduce((n, seen) => n + seen.length, 0) : messages?.length;
       console.error(
-        `[rooms] ${sub.agent} failed on ${sub.roomRef}: ${(err as Error).message}` +
-          (messages ? ` — skipping past ${messages.length} message(s).` : "."),
+        `[rooms] ${sub.agent} failed on ${rooms.join(", ")}: ${(err as Error).message}` +
+          (skipped ? ` — skipping past ${skipped} message(s).` : "."),
       );
-      if (messages?.length) {
-        this.store.advanceCursor(sub.agent, sub.roomRef, messages[messages.length - 1].cursor);
-      }
+      this.advanceShownCursors(sub, messages, batch);
       return;
     }
 
@@ -1151,16 +1627,31 @@ export class RoomWatcher {
     // Bounded to a single attempt on purpose: a weaker model that cannot
     // produce a clean tool call will not produce one on the fifth ask
     // either, and would spend its whole round budget being corrected.
+    //
+    // A combined turn adds a third: text with no room named. There is no
+    // destination to fall back on, so the same round that recovers malformed
+    // output is spent asking which room it was for.
+    const passed = rooms.some((ref) => workingMemory.get(`room:passed:${ref}`) === "true");
+    const spokeThroughTool = rooms.some((ref) => workingMemory.get(`room:posted:${ref}`) === "true");
     const correction = looksLikeUninvokedPass(reply)
-      ? 'Your last message was not a valid tool call — it was posted as text. If you meant to stay quiet, call the room tool with action "pass". Otherwise reply normally with what you want to say.'
+      ? batch
+        ? this.batchCorrection(batch, "Your last message was posted as text rather than made as a tool call.")
+        : 'Your last message was not a valid tool call — it was posted as text. If you meant to stay quiet, call the room tool with action "pass". Otherwise reply normally with what you want to say.'
       : looksLikeRawToolCall(reply)
-        ? "Your last message came out as raw tool-call markup rather than a tool call, so nothing was sent. Say what you wanted to say as plain text — you are already in the room, and a reply does not need a tool call."
-        : workingMemory.get(`room:passed:${sub.roomRef}`) === "true" && changed.length > 0
-          ? `You changed ${changed.join(", ")} since your last message but chose to say nothing. Are you sure? Reply with a short update if it is worth reporting, or pass again if it genuinely is not.`
-          : undefined;
+        ? batch
+          ? this.batchCorrection(
+              batch,
+              "Your last message came out as raw tool-call markup rather than a tool call, so nothing was sent.",
+            )
+          : "Your last message came out as raw tool-call markup rather than a tool call, so nothing was sent. Say what you wanted to say as plain text — you are already in the room, and a reply does not need a tool call."
+        : batch && reply.trim().length > 0 && !spokeThroughTool && !passed
+          ? this.batchCorrection(batch, "A message needs one of them, so nothing has been sent yet.")
+          : passed && changed.length > 0
+            ? `You changed ${changed.join(", ")} since your last message but chose to say nothing. Are you sure? Reply with a short update if it is worth reporting, or pass again if it genuinely is not.`
+            : undefined;
 
     if (correction) {
-      workingMemory.delete(`room:passed:${sub.roomRef}`);
+      for (const ref of rooms) workingMemory.delete(`room:passed:${ref}`);
       try {
         reply = await runAgentLoop(correction, {
           ...base,
@@ -1175,17 +1666,31 @@ export class RoomWatcher {
     // push the room toward the depth cap. Without this, agents collaborating
     // on a task — researching, writing files, handing off — get silenced
     // mid-task exactly like two agents saying "thanks" at each other.
-    if (usedTools) this.store.resetAgentTurns(sub.roomRef);
-
-    // Cursor advances whether or not the agent had anything to say — it has
-    // now seen this traffic either way. Deliberately NOT advanced past its
-    // own reply: anything that arrived mid-run sits between the two, and
-    // jumping to the reply's cursor would skip it permanently.
-    if (messages?.length) {
-      this.store.advanceCursor(sub.agent, sub.roomRef, messages[messages.length - 1].cursor);
+    //
+    // Only the rooms this turn actually spoke in, though. `agent_turns` counts
+    // one room's conversation, so clearing it across a batch would let a tool
+    // call in room A wipe the anti-chatter brake in room B where two agents are
+    // looping — a brake released by a turn that room never saw. The
+    // `room:posted:` markers are the record of where it spoke. The single-room
+    // path posts after this point, so it keeps its one room unconditionally,
+    // exactly as before.
+    if (usedTools) {
+      const spokeIn = batch ? rooms.filter((ref) => workingMemory.get(`room:posted:${ref}`) === "true") : rooms;
+      for (const ref of spokeIn) this.store.resetAgentTurns(ref);
     }
 
-    const posted = await this.deliverReply(sub, reply, label, workingMemory, messages ?? []);
+    this.advanceShownCursors(sub, messages, batch);
+
+    // A combined turn has no single destination, so text that named no room is
+    // not posted anywhere — and with no message of ours to hang it under, the
+    // tool-activity record has nowhere to go either. Worth knowing before
+    // turning `toolActivity` on alongside batching.
+    let posted: RoomMessage | null = null;
+    if (batch) {
+      this.dropUnroutedReply(sub.agent, batch, reply, workingMemory);
+    } else {
+      posted = await this.deliverReply(sub, reply, label, workingMemory, messages ?? []);
+    }
     // Attached underneath the reply, so the room reads as conversation and
     // the record of what was actually done is one click away. Without this
     // you can only infer an agent's actions from its own account of them,
@@ -1194,7 +1699,83 @@ export class RoomWatcher {
 
     // Nothing said and nothing done: the wake cost the room nothing, so it
     // should not cost the agent its place in the room for the next hour.
-    if (!posted && !usedTools) this.store.refundWake(sub.agent, sub.roomRef);
+    // A combined turn speaks through the tool, so what counts as "said" is
+    // whether any of its rooms got a post — re-read, because the correction
+    // round may have produced one.
+    const said = batch ? rooms.some((ref) => workingMemory.get(`room:posted:${ref}`) === "true") : posted !== null;
+    if (!said && !usedTools) this.store.refundWake(sub.agent, sub.roomRef);
+  }
+
+  /**
+   * The one correction a combined turn can give, whatever went wrong.
+   *
+   * Every route out of a batched turn is the same route: name a room or pass.
+   * The single-room branches correct toward plain text — "you are already in the
+   * room, a reply does not need a tool call" — which is true there and actively
+   * wrong here, because plain text in a combined turn names no room and is
+   * dropped. An agent told to reply as text and then ignored for doing so has
+   * been given a round to fail in.
+   */
+  private batchCorrection(batch: BatchedTurn, problem: string): string {
+    const n = batch.names.length;
+    return (
+      `This turn covers ${n} ${n === 1 ? "room" : "rooms"}: ${batch.names.join(", ")}. ${problem} ` +
+      `Send it with room(action="post", room="<one of those names>", body="…"), once per room you want to answer, ` +
+      `or call room(action="pass") to stay quiet in all of them.`
+    );
+  }
+
+  /**
+   * Move each covered room's cursor to the last message it was shown.
+   *
+   * The rule is the same one the per-room path has always followed: the cursor
+   * records what was *shown*, not what was acted on, so an agent is never asked
+   * about a conversation it was never given. Deliberately NOT advanced past its
+   * own reply — anything that arrived mid-run sits between the two, and jumping
+   * to the reply's cursor would skip it permanently.
+   *
+   * A room the transcript budget squeezed out entirely is absent from `shown`,
+   * keeps its cursor, and is read on the next wake.
+   */
+  private advanceShownCursors(sub: RoomSubscription, messages?: RoomMessage[], batch?: BatchedTurn): void {
+    if (batch) {
+      for (const [roomRef, seen] of batch.shown) {
+        this.store.advanceCursor(sub.agent, roomRef, seen[seen.length - 1].cursor);
+      }
+      return;
+    }
+    if (messages?.length) {
+      this.store.advanceCursor(sub.agent, sub.roomRef, messages[messages.length - 1].cursor);
+    }
+  }
+
+  /**
+   * What becomes of a combined turn's closing text.
+   *
+   * A single-room wake posts it: there is exactly one place it could be for. A
+   * combined turn has several, and picking one would put words in a channel the
+   * agent did not choose — the failure that is hardest to spot from the outside
+   * and worst to explain afterwards. The agent has already had its correction
+   * round naming the rooms, so text arriving here is the second miss: say so in
+   * the log and drop it. Honest failure beats a plausible message in the wrong
+   * channel.
+   */
+  private dropUnroutedReply(
+    agent: string,
+    batch: BatchedTurn,
+    reply: string,
+    workingMemory: Map<string, string>,
+  ): void {
+    const body = (reply ?? "").trim();
+    if (!body) return;
+    // The agent said its piece through the tool, or chose silence. Either way
+    // the closing text is commentary on a decision already made.
+    if (batch.subs.some((s) => workingMemory.get(`room:posted:${s.roomRef}`) === "true")) return;
+    if (batch.subs.some((s) => workingMemory.get(`room:passed:${s.roomRef}`) === "true")) return;
+    if (looksLikeUninvokedPass(body)) return;
+    console.warn(
+      `[rooms] ${agent} answered a combined wake over ${batch.names.join(", ")} with text naming no room, twice. Not posted: ${body.slice(0, 160)}`,
+    );
   }
 
   /**
@@ -1443,6 +2024,94 @@ export class RoomWatcher {
       // and the escape hatch is a tool call rather than a sentinel word.
       'If you have nothing to add — you would only be acknowledging, agreeing, or thanking someone — call room(action="pass") instead of replying.',
     ].join("\n");
+  }
+
+  /**
+   * The wake prompt for several rooms at once.
+   *
+   * Shaped like the `readAll` digest the room tool already produces, because
+   * that is the shape an agent has seen before: a `## room` section per room
+   * with something in it, and nothing at all for the rest. An empty heading is
+   * not neutral — it is a line inviting an answer to a room that asked nothing.
+   *
+   * Returns what it actually showed alongside the text. The budget decides
+   * which rooms make it in, and the cursor rule is "advance what was shown", so
+   * the caller cannot work that out for itself without repeating the
+   * allocation.
+   */
+  private buildBatchedPrompt(
+    agent: string,
+    label: string,
+    sections: BatchSection[],
+    identities: IdentityResolver,
+    mustInclude: Iterable<string> = [],
+  ): { prompt: string; shown: Map<string, RoomMessage[]> } {
+    const render = (m: RoomMessage): string => {
+      const speaker = m.speaker ?? m.authorLabel;
+      const body = speaksAs(m.speaker, agent, label, identities) ? condenseOwnLine(m.body) : m.body;
+      return renderTranscriptLine(speaker, m.to, body);
+    };
+
+    // Built before the allocation rather than after it, so the budget can be
+    // charged for them. The heading, purpose and role are as real as the
+    // transcript they frame — purposes are free-text config, and nine rooms of
+    // them used to arrive outside the budget entirely, which made the one hard
+    // total this design turns on a total over only part of the prompt.
+    const framing = new Map<string, string[]>();
+    for (const section of sections) {
+      framing.set(section.sub.roomRef, [
+        // The registered name, because that is the string `room="…"` takes.
+        `## ${section.room?.name ?? section.sub.roomRef}`,
+        // Same two framing lines as a single-room wake, for the same reason:
+        // the purpose says what the room is for, the role says what this
+        // agent is for in it, and both belong above the transcript they
+        // frame. Participants are left out — nine rooms' rosters is a lot of
+        // prompt, and naming someone who is not there is answered by the
+        // tool, which lists the room's participants when it rejects a name.
+        ...(section.room?.purpose ? [`Purpose: ${section.room.purpose}`] : []),
+        ...(section.sub.role ? [`Your role here: ${section.sub.role}`] : []),
+      ]);
+    }
+
+    const shown = selectBatchTranscript(
+      sections.map((s) => ({
+        roomRef: s.sub.roomRef,
+        messages: s.messages,
+        framing: estimateTokens({ role: "user", content: (framing.get(s.sub.roomRef) ?? []).join("\n") }),
+      })),
+      {
+        // Charged against the line as it will appear, so an agent's own 4 KB
+        // post — condensed to a stub before it is shown — cannot squeeze
+        // another room's question out of the prompt.
+        cost: (m) => estimateTokens({ role: "user", content: render(m) }),
+        mustInclude,
+      },
+    );
+
+    const names: string[] = [];
+    const blocks: string[] = [];
+    for (const section of sections) {
+      const picked = shown.get(section.sub.roomRef);
+      if (!picked?.length) continue;
+      names.push(section.room?.name ?? section.sub.roomRef);
+      blocks.push([...(framing.get(section.sub.roomRef) ?? []), ...picked.map(render)].join("\n"));
+    }
+
+    const prompt = [
+      `You are ${label}. ${todayLine()}`,
+      `New messages in ${names.length} of the rooms you watch: ${names.join(", ")}.`,
+      "",
+      blocks.join("\n\n"),
+      "",
+      // Positive instructions with the exact call in them. A combined turn has
+      // no default destination, so how to speak is the one thing this prompt
+      // has to get across; "don't reply as text" is exactly the negative
+      // phrasing a local model reads straight past.
+      'Answer wherever there is something worth saying: room(action="post", room="<room name>", body="…"), once per room. Address someone by naming them in `to`.',
+      'To stay quiet in all of these rooms, call room(action="pass") with no room.',
+    ].join("\n");
+
+    return { prompt, shown };
   }
 
   /** True once start() has armed listeners. Exposed for status output. */

@@ -1061,6 +1061,11 @@ export class AgentRuntime {
         pollSeconds: sub.pollSeconds ?? null,
         checkInMinutes: sub.checkInMinutes ?? null,
         role: sub.role ?? null,
+        // Written explicitly rather than left undefined, so deleting `batch:
+        // true` from config turns batching off. Safe because config-sourced
+        // rows are rewritten from config on every reconcile anyway; rows an
+        // agent took for itself are never touched here.
+        batch: sub.batch === true,
         source: "config",
       });
       keep.push({ agent: sub.agent, roomRef });

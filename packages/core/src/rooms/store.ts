@@ -26,6 +26,12 @@ export interface RoomSubscription {
   lastCheckIn: string | null;
   /** What this agent is for in this room, injected into its wake prompt. */
   role: string | null;
+  /**
+   * Read this room together with the agent's other batched rooms, in one turn.
+   * Only ever collapses with another batched room — one on its own behaves
+   * exactly as it did before the flag existed.
+   */
+  batch: boolean;
   cursor: string | null;
   /** "config" rows are rewritten from config on every reconcile; "agent" rows persist. */
   source: "config" | "agent";
@@ -54,6 +60,7 @@ interface SubscriptionRow {
   check_in_minutes: number | null;
   last_check_in: string | null;
   role: string | null;
+  batch: number;
   cursor: string | null;
   source: string;
   last_woke_at: string | null;
@@ -91,6 +98,7 @@ function toSubscription(row: SubscriptionRow): RoomSubscription {
     checkInMinutes: row.check_in_minutes,
     lastCheckIn: row.last_check_in,
     role: row.role,
+    batch: row.batch === 1,
     cursor: row.cursor,
     source: row.source === "agent" ? "agent" : "config",
     lastWokeAt: row.last_woke_at,
@@ -216,6 +224,7 @@ export class RoomStore {
     pollSeconds?: number | null;
     checkInMinutes?: number | null;
     role?: string | null;
+    batch?: boolean;
     source?: "config" | "agent";
     /** Starting cursor for brand-new subscriptions only. */
     initialCursor?: string | null;
@@ -226,14 +235,15 @@ export class RoomStore {
     this.db
       .prepare(
         `INSERT INTO room_subscriptions
-           (agent, room_ref, deliver, wake_on, poll_seconds, check_in_minutes, role, source, cursor)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           (agent, room_ref, deliver, wake_on, poll_seconds, check_in_minutes, role, batch, source, cursor)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(agent, room_ref) DO UPDATE SET
            deliver          = excluded.deliver,
            wake_on          = excluded.wake_on,
            poll_seconds     = excluded.poll_seconds,
            check_in_minutes = COALESCE(excluded.check_in_minutes, room_subscriptions.check_in_minutes),
            role             = COALESCE(excluded.role, room_subscriptions.role),
+           batch            = excluded.batch,
            source           = excluded.source`,
       )
       .run(
@@ -256,6 +266,10 @@ export class RoomStore {
         input.pollSeconds ?? null,
         input.checkInMinutes ?? null,
         input.role ?? null,
+        // Same reason `deliver` and `wakeOn` are resolved here: the column is
+        // NOT NULL, so a null cannot ride through to be COALESCEd on conflict.
+        // A caller that says nothing about batching leaves it as it was.
+        (input.batch ?? existing?.batch ?? false) ? 1 : 0,
         input.source ?? "agent",
         input.initialCursor ?? null,
       );

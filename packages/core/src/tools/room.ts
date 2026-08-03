@@ -23,6 +23,7 @@ import { enrichRoomMessage, type IdentityResolver } from "../rooms/identities.js
 import { getRoomBackend, listRoomBackends, requireRoomBackend } from "../rooms/registry.js";
 import type { RoomStore, WakeOn } from "../rooms/store.js";
 import { DEFAULT_URGENCY_WINDOW_HOURS, formatRoomRef, type Room, type RoomUrgency } from "../rooms/types.js";
+import { WAKE_ROOMS_KEY } from "../rooms/watcher.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
 
 export interface RoomToolOptions {
@@ -420,10 +421,23 @@ export class RoomTool implements Tool {
     const raw = String(args.room ?? "").trim();
     const room = raw ? this.opts.store.resolve(raw) : null;
 
-    // Mark every room the agent might have been woken for when it didn't name
-    // one — a small model that omits the argument still gets silence, which is
-    // what it asked for.
-    const refs = room ? [formatRoomRef(room.ref)] : this.opts.store.listRooms().map((r) => formatRoomRef(r.ref));
+    // With no argument, silence the rooms this turn was actually woken for.
+    // A small model that omits it still gets what it asked for, and for the
+    // single-room wake that is most of them the result is identical.
+    //
+    // It used to mark *every* registered room, which was harmless while a wake
+    // only ever concerned one — and became silent self-censorship the moment a
+    // turn could span several: an agent answering one room and passing on the
+    // rest would suppress its own answer.
+    const woken = (context.workingMemory?.get(WAKE_ROOMS_KEY) ?? "")
+      .split(",")
+      .map((r) => r.trim())
+      .filter(Boolean);
+    const refs = room ? [formatRoomRef(room.ref)] : woken;
+
+    if (refs.length === 0) {
+      return ok("Nothing to pass on — this turn was not woken for a room. Name one with `room` to be explicit.");
+    }
     for (const ref of refs) context.workingMemory?.set(`room:passed:${ref}`, "true");
 
     return ok("Saying nothing this turn.");

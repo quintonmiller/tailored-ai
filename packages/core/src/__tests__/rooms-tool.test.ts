@@ -933,18 +933,48 @@ describe("room tool — declining to speak", () => {
     expect(messageCount()).toBe(0);
   });
 
-  it("passes every room when the agent omits which one", async () => {
+  it("passes the rooms the turn was woken for when the agent omits which one", async () => {
     // A small model that drops the argument should still get silence rather
-    // than an error it will ignore.
+    // than an error it will ignore — but only for the rooms it was woken for.
     await createRoom("eng");
     await createRoom("ops");
-    const wm = new Map<string, string>();
+    const wm = new Map<string, string>([["room:wake-rooms", "local:eng"]]);
 
     const res = await run({ action: "pass" }, "coder", wm);
 
     expect(res.success).toBe(true);
     expect(wm.get("room:passed:local:eng")).toBe("true");
+    expect(wm.get("room:passed:local:ops"), "a room this turn was not about").toBeUndefined();
+  });
+
+  /**
+   * The bug this replaced: marking every registered room was harmless while a
+   * wake only ever concerned one, and became self-censorship the moment a turn
+   * could span several — answering one room and passing would suppress the
+   * answer.
+   */
+  it("passes every room the turn was woken for, and no others", async () => {
+    await createRoom("eng");
+    await createRoom("ops");
+    await createRoom("random");
+    const wm = new Map<string, string>([["room:wake-rooms", "local:eng,local:ops"]]);
+
+    await run({ action: "pass" }, "coder", wm);
+
+    expect(wm.get("room:passed:local:eng")).toBe("true");
     expect(wm.get("room:passed:local:ops")).toBe("true");
+    expect(wm.get("room:passed:local:random")).toBeUndefined();
+  });
+
+  it("says so when the turn was not woken for any room", async () => {
+    await createRoom("eng");
+    const wm = new Map<string, string>();
+
+    const res = await run({ action: "pass" }, "coder", wm);
+
+    expect(res.success).toBe(true);
+    expect(res.output).toMatch(/not woken for a room/i);
+    expect(wm.get("room:passed:local:eng")).toBeUndefined();
   });
 
   it("does not blow up without working memory", async () => {
