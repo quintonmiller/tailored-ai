@@ -426,7 +426,11 @@ export const DEFAULT_PLUGIN_MODULES = [
  * like the enabled set, but the loader skips them until enabled. Once a user
  * sets `enabled: true`, the migration leaves their entry untouched.
  */
-export const DEFAULT_DISABLED_PLUGIN_MODULES = ["builtin:session-summarizer", "builtin:verify-gate"] as const;
+export const DEFAULT_DISABLED_PLUGIN_MODULES = [
+  "builtin:session-summarizer",
+  "builtin:verify-gate",
+  "builtin:dm-mirror",
+] as const;
 
 export interface AgentConfig {
   server: {

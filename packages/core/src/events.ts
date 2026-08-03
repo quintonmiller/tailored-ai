@@ -156,6 +156,36 @@ export interface RuntimeEventMap {
   };
 
   /**
+   * One agent sent another a direct message and got an answer back.
+   *
+   * Everything an agent does in a room leaves a transcript somebody can read.
+   * A direct message left a session row and nothing else — no event, so no
+   * plugin could mirror, audit, count or escalate one without patching core.
+   * A pair of agents could talk all night and the only evidence was a row you
+   * had to already suspect existed to go looking for.
+   *
+   * Emitted once per exchange, **after** the recipient's loop returns, so one
+   * event carries the message and its reply together. Emitting on entry and
+   * again on return would hand every subscriber two half-facts to correlate,
+   * and the unit anyone wants is the exchange. A delivery that throws emits
+   * nothing, so counting these counts exchanges that happened rather than
+   * attempts that were made.
+   *
+   * `via` separates the two callers of the same delivery path: `dm` is an
+   * agent choosing to speak to another, `delegate` is the machinery handing a
+   * finished task back. A mirror that cannot tell them apart either drowns in
+   * delegation traffic or misses it.
+   */
+  "agent.messaged": {
+    from: string;
+    to: string;
+    body: string;
+    reply: string;
+    /** Which surface produced it — `"dm"`, `"delegate"`, or a plugin's own. */
+    via: string;
+  };
+
+  /**
    * The runtime finished a config reload. Subscribers re-arming
    * themselves after a reload can use this rather than wiring into
    * the existing `onReload` hook directly.

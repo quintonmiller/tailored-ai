@@ -528,6 +528,7 @@ export {
   emojiForStatus,
 } from "./plugins/agent-notifier.js";
 export { CoderProjectGuard, type CoderProjectGuardOptions } from "./plugins/coder-project-guard.js";
+export { DmMirror, type DmMirrorConfig, type DmMirrorOptions, truncate } from "./plugins/dm-mirror.js";
 export { OwnerNotifier, type OwnerNotifierOptions } from "./plugins/owner-notifier.js";
 export {
   parseRoomTimestamp,

@@ -222,7 +222,7 @@ export class DelegateTool implements Tool {
             ``,
             `Error: ${info.error ?? "unknown"}`,
           ].join("\n");
-    await this.runtime.deliverAgentMessage(to, from, body);
+    await this.runtime.deliverAgentMessage(to, from, body, "delegate");
   }
 }
 
