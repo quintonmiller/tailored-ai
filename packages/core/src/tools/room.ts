@@ -717,9 +717,7 @@ export class RoomTool implements Tool {
       source: "agent",
     });
     const cadence = sub.checkInMinutes ? `, checking in every ${sub.checkInMinutes} min` : "";
-    return ok(
-      `Subscribed to "${room.name}" (${sub.deliver}/${sub.wakeOn}${cadence}). Takes effect on the next reload.`,
-    );
+    return ok(`Subscribed to "${room.name}" (${sub.deliver}/${sub.wakeOn}${cadence}). Takes effect immediately.`);
   }
 
   private unsubscribe(args: Record<string, unknown>, agentName?: string): ToolResult {
