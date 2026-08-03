@@ -1009,6 +1009,15 @@ export interface AgentConfig {
      * parallel, none of them aware the others were asked.
      */
     turnTaking?: "concurrent" | "serial";
+    /**
+     * Shortest gap between one agent's wakes, in minutes, counted across every
+     * room it watches. Messages, poll ticks and check-ins arriving inside the
+     * gap accumulate onto the pending wake rather than starting another turn,
+     * so an agent in a busy deployment runs on a predictable cadence instead of
+     * once per room per burst. Unset (the default) leaves an agent as
+     * responsive as its traffic.
+     */
+    minWakeIntervalMinutes?: number;
   };
   /** Tiered memory settings (notes, chunks, embeddings). See docs/memory-tiers.md. */
   memory?: {
