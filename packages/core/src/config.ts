@@ -958,6 +958,20 @@ export interface AgentConfig {
        * competes with the purpose for a small prompt budget.
        */
       role?: string;
+      /**
+       * Read this room together with the agent's other batched rooms: one wake,
+       * one prompt with a section per room, one reply decision.
+       *
+       * Takes effect only when at least two of the rooms that woke the agent
+       * are batched — one on its own keeps today's per-room turn exactly — and
+       * only when `rooms.minWakeIntervalMinutes` is set. A combined turn spans
+       * rooms and the hourly ceiling counts one room at a time, so the per-agent
+       * floor is the only thing that can bound it; without one, batching is
+       * refused with a warning rather than granted a higher ceiling. The agent
+       * posts with `room(action="post", room="…")`, since a batched turn has no
+       * single destination to fall back on.
+       */
+      batch?: boolean;
     }>;
     /** Hourly wake ceiling per (agent, room). The runaway-loop brake. Default 12. */
     maxWakesPerHour?: number;
@@ -1016,6 +1030,10 @@ export interface AgentConfig {
      * so an agent in a busy deployment runs on a predictable cadence instead of
      * once per room per burst. Unset (the default) leaves an agent as
      * responsive as its traffic.
+     *
+     * Required to use `batch: true` on any subscription: it is the only ceiling
+     * that counts an agent rather than an (agent, room) pair, and a turn that
+     * spans rooms cannot be bounded by a per-room counter.
      */
     minWakeIntervalMinutes?: number;
   };

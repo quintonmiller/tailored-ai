@@ -511,6 +511,11 @@ export function initDatabase(dbPath: string): Database.Database {
       -- What this agent is for in THIS room. The room purpose says what the
       -- room is about; this says what one participant's job in it is.
       role             TEXT,
+      -- Opt this room into being read together with the agent's other batched
+      -- rooms, in one turn with one prompt, rather than a turn of its own.
+      -- Off by default: collapsing rooms trades per-room focus for one look at
+      -- everything, and that is a deployment's call to make, not a default.
+      batch            INTEGER NOT NULL DEFAULT 0,
       last_check_in    TEXT,
       cursor          TEXT,
       source          TEXT NOT NULL DEFAULT 'config',
@@ -664,6 +669,7 @@ export function initDatabase(dbPath: string): Database.Database {
     "ALTER TABLE room_subscriptions ADD COLUMN last_check_in TEXT",
     "ALTER TABLE rooms ADD COLUMN last_speaker TEXT",
     "ALTER TABLE room_subscriptions ADD COLUMN role TEXT",
+    "ALTER TABLE room_subscriptions ADD COLUMN batch INTEGER NOT NULL DEFAULT 0",
   ]) {
     try {
       db.exec(sql);
