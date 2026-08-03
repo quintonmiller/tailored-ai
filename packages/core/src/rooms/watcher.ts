@@ -30,6 +30,7 @@ import { enrichRoomMessage, IdentityResolver } from "./identities.js";
 import { getRoomBackend, listRoomBackends, onRoomBackendChange } from "./registry.js";
 import type { RoomStore, RoomSubscription } from "./store.js";
 import { formatRoomRef, parseRoomRef, type Room, type RoomMessage } from "./types.js";
+import { WakeQueue, type WakeRequest } from "./wake-queue.js";
 
 /** Why an agent was woken. Surfaced in the activity record. */
 export type WakeReason = "named" | "loose-question" | "all" | "check-in" | "asked";
@@ -252,7 +253,17 @@ export class RoomWatcher {
 
   private unsubscribers: Array<() => void> = [];
   private pollTimers = new Map<string, ReturnType<typeof setInterval>>();
-  private debounces = new Map<string, ReturnType<typeof setTimeout>>();
+  /**
+   * Who is due to run, and why. Owns the timing and the coalescing for every
+   * path that starts a room turn; what actually runs is decided in `onDue`.
+   */
+  private readonly wakeQueue = new WakeQueue({
+    // Only the message path waits: a burst of five messages in two seconds
+    // should be one turn that sees all five. A poll tick and a check-in are
+    // already the product of their own interval and are due immediately.
+    delayMs: (trigger) => (trigger === "message" ? this.limits.batchSeconds * 1000 : 0),
+    onDue: (request) => this.onWakeDue(request),
+  });
   /** In-flight runs, so one agent never processes a room twice at once. */
   private running = new Set<string>();
   /** Triggers that arrived mid-run and must be re-armed when it finishes. */
@@ -520,8 +531,7 @@ export class RoomWatcher {
     this.unsubscribers = [];
     for (const timer of this.pollTimers.values()) clearInterval(timer);
     this.pollTimers.clear();
-    for (const timer of this.debounces.values()) clearTimeout(timer);
-    this.debounces.clear();
+    this.wakeQueue.clear();
     for (const timer of this.hourRetries.values()) clearTimeout(timer);
     this.hourRetries.clear();
     for (const timer of this.checkInTimers.values()) clearInterval(timer);
@@ -575,9 +585,7 @@ export class RoomWatcher {
     const key = `${sub.agent} ${sub.roomRef}`;
     const timer = setInterval(
       () => {
-        void this.runCheckIn(sub.agent, sub.roomRef).catch((err) => {
-          console.error(`[rooms] Check-in failed for ${key}: ${(err as Error).message}`);
-        });
+        this.wakeQueue.enqueue({ agent: sub.agent, roomRef: sub.roomRef, trigger: "check-in" });
       },
       minutes * 60 * 1000,
     );
@@ -638,9 +646,7 @@ export class RoomWatcher {
     const seconds = sub.pollSeconds ?? this.limits.defaultPollSeconds;
     const key = `${sub.agent} ${sub.roomRef}`;
     const timer = setInterval(() => {
-      void this.pollOnce(sub.agent, sub.roomRef).catch((err) => {
-        console.error(`[rooms] Poll failed for ${key}: ${(err as Error).message}`);
-      });
+      this.wakeQueue.enqueue({ agent: sub.agent, roomRef: sub.roomRef, trigger: "poll" });
     }, seconds * 1000);
     timer.unref?.();
     this.pollTimers.set(key, timer);
@@ -726,16 +732,35 @@ export class RoomWatcher {
    * each other into the same room.
    */
   private scheduleWake(sub: RoomSubscription): void {
-    const key = `${sub.agent} ${sub.roomRef}`;
-    const existing = this.debounces.get(key);
-    if (existing) clearTimeout(existing);
+    this.wakeQueue.enqueue({ agent: sub.agent, roomRef: sub.roomRef, trigger: "message" });
+  }
 
-    const timer = setTimeout(() => {
-      this.debounces.delete(key);
-      this.dispatchWake(sub, key);
-    }, this.limits.batchSeconds * 1000);
-    timer.unref?.();
-    this.debounces.set(key, timer);
+  /**
+   * An entry came due. The queue decided *when*; this decides *what*.
+   *
+   * The subscription is re-read rather than carried on the queue entry: it may
+   * have been changed or removed while the entry waited, and acting on a stale
+   * copy is how an unsubscribed agent gets one more turn.
+   */
+  private onWakeDue(request: WakeRequest): void {
+    const sub = this.store.getSubscription(request.agent, request.roomRef);
+    if (!sub) return;
+    const key = `${request.agent} ${request.roomRef}`;
+    switch (request.trigger) {
+      case "message":
+        this.dispatchWake(sub, key);
+        return;
+      case "poll":
+        void this.pollOnce(request.agent, request.roomRef).catch((err) => {
+          console.error(`[rooms] Poll failed for ${key}: ${(err as Error).message}`);
+        });
+        return;
+      case "check-in":
+        void this.runCheckIn(request.agent, request.roomRef).catch((err) => {
+          console.error(`[rooms] Check-in failed for ${key}: ${(err as Error).message}`);
+        });
+        return;
+    }
   }
 
   /**
