@@ -13,6 +13,7 @@
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initDatabase } from "../db/schema.js";
+import { TypedEventBus } from "../events.js";
 import { IdentityResolver } from "../rooms/identities.js";
 import { LocalRoomBackend } from "../rooms/local.js";
 import { registerRoomBackend, unregisterRoomBackend } from "../rooms/registry.js";
@@ -981,5 +982,98 @@ describe("room session scope", () => {
     expect(makeRoomSessionKey("discord:A", "ea", "shared")).not.toBe(
       makeRoomSessionKey("discord:A", "coder", "shared"),
     );
+  });
+});
+
+// --------------------------------------------------------------------------
+// RoomWatcher re-arms on membership change
+// --------------------------------------------------------------------------
+
+/**
+ * Subscriptions were armed once, from whatever existed when `start()` ran.
+ * Anything added afterwards — `/room add`, the room tool's invite, a config
+ * reconcile — was written to the database and never armed: no poll timer, no
+ * check-in interval, and no push listener if it was the first subscription for
+ * that backend. The write reported success and the agent then never spoke.
+ */
+describe("RoomWatcher re-arms when subscriptions change", () => {
+  const makeBusRuntime = (bus: TypedEventBus, agents = ["coder"]) =>
+    ({
+      getConfig: () => ({ agents: Object.fromEntries(agents.map((a) => [a, {}])) }),
+      getOwnerId: () => undefined,
+      events: bus,
+    }) as unknown as AgentRuntime;
+
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("re-reads subscriptions after one is added", async () => {
+    const bus = new TypedEventBus();
+    const busStore = new RoomStore(db, bus);
+    await backend.createRoom({ name: "eng" });
+    const watcher = new RoomWatcher({ runtime: makeBusRuntime(bus), store: busStore });
+
+    watcher.start();
+    const spy = vi.spyOn(busStore, "listSubscriptions");
+
+    busStore.subscribe({ agent: "coder", roomRef: "local:eng", deliver: "poll", wakeOn: "all", source: "agent" });
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(spy).toHaveBeenCalled();
+    watcher.stop();
+  });
+
+  /** A config reconcile emits one event per subscription; N events, one re-arm. */
+  it("coalesces a burst into a single re-arm", async () => {
+    const bus = new TypedEventBus();
+    const busStore = new RoomStore(db, bus);
+    await backend.createRoom({ name: "eng" });
+    const watcher = new RoomWatcher({ runtime: makeBusRuntime(bus, ["a", "b", "c"]), store: busStore });
+
+    watcher.start();
+    const spy = vi.spyOn(busStore, "listSubscriptions");
+
+    for (const agent of ["a", "b", "c"]) {
+      busStore.subscribe({ agent, roomRef: "local:eng", deliver: "poll", wakeOn: "all", source: "config" });
+    }
+    await vi.advanceTimersByTimeAsync(500);
+
+    // start() reads the set once per re-arm. Three subscribes, one read.
+    expect(spy).toHaveBeenCalledTimes(1);
+    watcher.stop();
+  });
+
+  it("stops listening once the watcher is stopped", async () => {
+    const bus = new TypedEventBus();
+    const busStore = new RoomStore(db, bus);
+    await backend.createRoom({ name: "eng" });
+    const watcher = new RoomWatcher({ runtime: makeBusRuntime(bus), store: busStore });
+
+    watcher.start();
+    watcher.stop();
+    const spy = vi.spyOn(busStore, "listSubscriptions");
+
+    busStore.subscribe({ agent: "coder", roomRef: "local:eng", deliver: "poll", wakeOn: "all", source: "agent" });
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  /** Unsubscribing must drop the timer, not just the row. */
+  it("re-reads subscriptions after one is removed", async () => {
+    const bus = new TypedEventBus();
+    const busStore = new RoomStore(db, bus);
+    await backend.createRoom({ name: "eng" });
+    busStore.subscribe({ agent: "coder", roomRef: "local:eng", deliver: "poll", wakeOn: "all", source: "agent" });
+    const watcher = new RoomWatcher({ runtime: makeBusRuntime(bus), store: busStore });
+
+    watcher.start();
+    const spy = vi.spyOn(busStore, "listSubscriptions");
+
+    busStore.unsubscribe("coder", "local:eng");
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(spy).toHaveBeenCalled();
+    watcher.stop();
   });
 });
