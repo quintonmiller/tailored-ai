@@ -744,6 +744,7 @@ export {
   type RoomRef,
   type RoomUrgency,
 } from "./rooms/types.js";
+export { queueKey, WakeQueue, type WakeQueueOptions, type WakeRequest, type WakeTrigger } from "./rooms/wake-queue.js";
 export {
   makeRoomSessionKey,
   ROOM_WATCHER_DEFAULTS,
