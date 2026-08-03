@@ -10,7 +10,7 @@
  * much traffic arrives.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { queueKey, WakeQueue, type WakeRequest } from "../rooms/wake-queue.js";
+import { queueKey, type WakeEntry, WakeQueue, type WakeRequest } from "../rooms/wake-queue.js";
 
 const req = (over: Partial<WakeRequest> = {}): WakeRequest => ({
   agent: "coder",
@@ -19,15 +19,18 @@ const req = (over: Partial<WakeRequest> = {}): WakeRequest => ({
   ...over,
 });
 
-const make = (onDue: (r: WakeRequest) => void, delay = 3000) => new WakeQueue({ delayMs: () => delay, onDue });
+const make = (onDue: (e: WakeEntry) => void, delay = 3000) => new WakeQueue({ delayMs: () => delay, onDue });
+
+/** Rooms named by an entry, sorted so assertions do not depend on insertion order. */
+const roomsOf = (e: WakeEntry) => [...e.targets.keys()].sort();
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 describe("coalescing", () => {
   it("runs once for a burst, and only after the delay", async () => {
-    const due: WakeRequest[] = [];
-    const q = make((r) => due.push(r));
+    const due: WakeEntry[] = [];
+    const q = make((e) => due.push(e));
 
     q.enqueue(req());
     q.enqueue(req());
@@ -48,61 +51,157 @@ describe("coalescing", () => {
     expect(q.size).toBe(1);
   });
 
-  it("keeps separate entries per agent, room and trigger", () => {
+  /**
+   * The change this phase exists for: an agent is one entry however many of
+   * its rooms are busy. Different agents stay separate.
+   */
+  it("merges every room and trigger for one agent into a single entry", () => {
     const q = make(() => {});
 
     q.enqueue(req());
-    q.enqueue(req({ agent: "planner" }));
     q.enqueue(req({ roomRef: "local:ops" }));
     q.enqueue(req({ trigger: "poll" }));
+    q.enqueue(req({ agent: "planner" }));
 
-    expect(q.size).toBe(4);
+    expect(q.size).toBe(2);
+    const coder = q.list().find((e) => e.agent === "coder");
+    expect(roomsOf(coder as WakeEntry)).toEqual(["local:eng", "local:ops"]);
+    expect([...(coder as WakeEntry).targets.get("local:eng")!].sort()).toEqual(["message", "poll"]);
+  });
+
+  it("tells the caller every room that made the agent due", async () => {
+    const due: WakeEntry[] = [];
+    const q = make((e) => due.push(e));
+
+    for (const r of ["local:a", "local:b", "local:c", "local:d"]) q.enqueue(req({ roomRef: r }));
+    await vi.advanceTimersByTimeAsync(3100);
+
+    expect(due).toHaveLength(1);
+    expect(roomsOf(due[0])).toEqual(["local:a", "local:b", "local:c", "local:d"]);
   });
 
   /**
-   * A later message restarts the wait rather than being dropped, so the turn
-   * that eventually runs has seen everything.
+   * Once an agent is due at a time, more traffic can only make it sooner.
+   * Resetting the timer on every message would let a room that never goes
+   * quiet postpone a turn indefinitely — the starvation the old per-room
+   * debounce could produce.
    */
-  it("a repeat enqueue extends the wait", async () => {
-    const due: WakeRequest[] = [];
-    const q = make((r) => due.push(r));
+  it("a repeat enqueue does not postpone a turn already scheduled", async () => {
+    const due: WakeEntry[] = [];
+    const q = make((e) => due.push(e));
 
     q.enqueue(req());
     await vi.advanceTimersByTimeAsync(2000);
     q.enqueue(req());
-    await vi.advanceTimersByTimeAsync(2000);
-
-    expect(due).toHaveLength(0);
-
     await vi.advanceTimersByTimeAsync(1100);
+
     expect(due).toHaveLength(1);
+  });
+
+  /** A trigger that is due sooner pulls the whole entry forward. */
+  it("an immediate trigger pulls a waiting entry forward", async () => {
+    const due: WakeEntry[] = [];
+    const q = new WakeQueue({
+      delayMs: (t) => (t === "message" ? 3000 : 0),
+      onDue: (e) => due.push(e),
+    });
+
+    q.enqueue(req({ trigger: "message" }));
+    q.enqueue(req({ roomRef: "local:ops", trigger: "poll" }));
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(due).toHaveLength(1);
+    expect(roomsOf(due[0])).toEqual(["local:eng", "local:ops"]);
   });
 });
 
 describe("delay by trigger", () => {
   /** A poll tick and a check-in are already the product of their own interval. */
   it("lets each trigger set its own wait", async () => {
-    const due: WakeRequest[] = [];
+    const due: WakeEntry[] = [];
     const q = new WakeQueue({
       delayMs: (t) => (t === "message" ? 3000 : 0),
-      onDue: (r) => due.push(r),
+      onDue: (e) => due.push(e),
     });
 
-    q.enqueue(req({ trigger: "poll" }));
-    q.enqueue(req({ trigger: "message" }));
+    q.enqueue(req({ agent: "planner", trigger: "poll" }));
+    q.enqueue(req({ agent: "coder", trigger: "message" }));
     await vi.advanceTimersByTimeAsync(10);
 
-    expect(due.map((d) => d.trigger)).toEqual(["poll"]);
+    expect(due.map((d) => d.agent)).toEqual(["planner"]);
 
     await vi.advanceTimersByTimeAsync(3100);
-    expect(due.map((d) => d.trigger)).toEqual(["poll", "message"]);
+    expect(due.map((d) => d.agent)).toEqual(["planner", "coder"]);
+  });
+});
+
+describe("minimum interval between an agent's wakes", () => {
+  /** The throttle: traffic accumulates instead of starting another turn. */
+  it("holds a second wake until the interval has passed", async () => {
+    let clock = 0;
+    const due: WakeEntry[] = [];
+    const q = new WakeQueue({
+      delayMs: () => 0,
+      minIntervalMs: () => 60_000,
+      onDue: (e) => due.push(e),
+      now: () => clock,
+    });
+
+    q.enqueue(req());
+    await vi.advanceTimersByTimeAsync(10);
+    expect(due).toHaveLength(1);
+
+    clock = 10_000;
+    q.enqueue(req({ roomRef: "local:ops" }));
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(due, "still inside the interval").toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(due).toHaveLength(2);
+    expect(roomsOf(due[1])).toEqual(["local:ops"]);
+  });
+
+  /** Everything that arrived during the wait is on the entry when it fires. */
+  it("accumulates rooms across the whole cooldown", async () => {
+    let clock = 0;
+    const due: WakeEntry[] = [];
+    const q = new WakeQueue({
+      delayMs: () => 0,
+      minIntervalMs: () => 60_000,
+      onDue: (e) => due.push(e),
+      now: () => clock,
+    });
+
+    q.enqueue(req());
+    await vi.advanceTimersByTimeAsync(10);
+
+    clock = 5_000;
+    q.enqueue(req({ roomRef: "local:a" }));
+    clock = 30_000;
+    q.enqueue(req({ roomRef: "local:b" }));
+    await vi.advanceTimersByTimeAsync(70_000);
+
+    expect(due).toHaveLength(2);
+    expect(roomsOf(due[1])).toEqual(["local:a", "local:b"]);
+  });
+
+  it("is off by default", async () => {
+    const due: WakeEntry[] = [];
+    const q = make((e) => due.push(e), 0);
+
+    q.enqueue(req());
+    await vi.advanceTimersByTimeAsync(10);
+    q.enqueue(req());
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(due).toHaveLength(2);
   });
 });
 
 describe("lifecycle", () => {
   it("forgets an entry once it comes due, so the next one waits again", async () => {
-    const due: WakeRequest[] = [];
-    const q = make((r) => due.push(r));
+    const due: WakeEntry[] = [];
+    const q = make((e) => due.push(e));
 
     q.enqueue(req());
     await vi.advanceTimersByTimeAsync(3100);
@@ -116,8 +215,8 @@ describe("lifecycle", () => {
   });
 
   it("clear() drops everything without firing it", async () => {
-    const due: WakeRequest[] = [];
-    const q = make((r) => due.push(r));
+    const due: WakeEntry[] = [];
+    const q = make((e) => due.push(e));
 
     q.enqueue(req());
     q.enqueue(req({ agent: "planner" }));
@@ -134,8 +233,8 @@ describe("lifecycle", () => {
     q.enqueue(req());
     q.enqueue(req({ agent: "planner" }));
 
-    expect(q.has(req())).toBe(true);
-    expect(q.has(req({ agent: "reviewer" }))).toBe(false);
+    expect(q.has("coder")).toBe(true);
+    expect(q.has("reviewer")).toBe(false);
     expect(
       q
         .list()
@@ -151,10 +250,8 @@ describe("queueKey", () => {
    * than per-agent-per-room is a change here and to how entries merge, not a
    * change to any caller — which is the reason this is a named function.
    */
-  it("separates agent, room and trigger", () => {
-    expect(queueKey(req())).toBe(queueKey(req()));
+  it("is the agent, and nothing else", () => {
+    expect(queueKey(req())).toBe(queueKey(req({ roomRef: "local:ops", trigger: "poll" })));
     expect(queueKey(req())).not.toBe(queueKey(req({ agent: "planner" })));
-    expect(queueKey(req())).not.toBe(queueKey(req({ roomRef: "local:ops" })));
-    expect(queueKey(req())).not.toBe(queueKey(req({ trigger: "poll" })));
   });
 });

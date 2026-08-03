@@ -30,7 +30,7 @@ import { enrichRoomMessage, IdentityResolver } from "./identities.js";
 import { getRoomBackend, listRoomBackends, onRoomBackendChange } from "./registry.js";
 import type { RoomStore, RoomSubscription } from "./store.js";
 import { formatRoomRef, parseRoomRef, type Room, type RoomMessage } from "./types.js";
-import { WakeQueue, type WakeRequest } from "./wake-queue.js";
+import { type WakeEntry, WakeQueue } from "./wake-queue.js";
 
 /** Why an agent was woken. Surfaced in the activity record. */
 export type WakeReason = "named" | "loose-question" | "all" | "check-in" | "asked";
@@ -53,6 +53,12 @@ export interface RoomWatcherLimits {
    * in parallel, none of them aware the others were asked.
    */
   turnTaking: "concurrent" | "serial";
+  /**
+   * Shortest gap between one agent's wakes, in minutes, across every room it
+   * watches. Triggers arriving inside the gap accumulate rather than starting a
+   * turn. 0 (the default) leaves an agent as responsive as its traffic.
+   */
+  minWakeIntervalMinutes: number;
 }
 
 /** Consecutive backend failures before a room is given a rest. */
@@ -75,6 +81,7 @@ export const ROOM_WATCHER_DEFAULTS: RoomWatcherLimits = {
   defaultPollSeconds: 900,
   toolActivity: "none",
   turnTaking: "serial",
+  minWakeIntervalMinutes: 0,
 };
 
 export interface RoomWatcherOptions {
@@ -262,7 +269,10 @@ export class RoomWatcher {
     // should be one turn that sees all five. A poll tick and a check-in are
     // already the product of their own interval and are due immediately.
     delayMs: (trigger) => (trigger === "message" ? this.limits.batchSeconds * 1000 : 0),
-    onDue: (request) => this.onWakeDue(request),
+    // Read per call: config is hot-reloadable, and a cooldown the operator has
+    // just relaxed should take effect on the next trigger, not the next restart.
+    minIntervalMs: () => (this.readLimits().minWakeIntervalMinutes ?? 0) * 60_000,
+    onDue: (entry) => this.onWakeDue(entry),
   });
   /** In-flight runs, so one agent never processes a room twice at once. */
   private running = new Set<string>();
@@ -339,6 +349,9 @@ export class RoomWatcher {
       defaultPollSeconds: cfg?.defaultPollSeconds ?? this.limits.defaultPollSeconds,
       toolActivity: cfg?.toolActivity ?? this.limits.toolActivity,
       turnTaking: room?.turnTaking ?? cfg?.turnTaking ?? this.limits.turnTaking,
+      // Per agent, so no per-room override: a room cannot decide how often an
+      // agent runs everywhere else.
+      minWakeIntervalMinutes: cfg?.minWakeIntervalMinutes ?? this.limits.minWakeIntervalMinutes,
     };
   }
 
@@ -742,24 +755,30 @@ export class RoomWatcher {
    * have been changed or removed while the entry waited, and acting on a stale
    * copy is how an unsubscribed agent gets one more turn.
    */
-  private onWakeDue(request: WakeRequest): void {
-    const sub = this.store.getSubscription(request.agent, request.roomRef);
-    if (!sub) return;
-    const key = `${request.agent} ${request.roomRef}`;
-    switch (request.trigger) {
-      case "message":
+  private onWakeDue(entry: WakeEntry): void {
+    // One entry can name several rooms. Each still gets its own turn here —
+    // collapsing them into a single turn that reads every room at once is a
+    // separate change with its own prompt, cursor and reply-routing decisions.
+    for (const [roomRef, triggers] of entry.targets) {
+      const sub = this.store.getSubscription(entry.agent, roomRef);
+      // Re-read rather than carry the subscription on the entry: it may have
+      // been changed or removed while the entry waited, and acting on a stale
+      // copy is how an unsubscribed agent gets one more turn.
+      if (!sub) continue;
+      const key = `${entry.agent} ${roomRef}`;
+      // A room that both received a message and came due for a check-in is one
+      // turn, not two. Message wins: it has something concrete to answer.
+      if (triggers.has("message")) {
         this.dispatchWake(sub, key);
-        return;
-      case "poll":
-        void this.pollOnce(request.agent, request.roomRef).catch((err) => {
+      } else if (triggers.has("poll")) {
+        void this.pollOnce(entry.agent, roomRef).catch((err) => {
           console.error(`[rooms] Poll failed for ${key}: ${(err as Error).message}`);
         });
-        return;
-      case "check-in":
-        void this.runCheckIn(request.agent, request.roomRef).catch((err) => {
+      } else {
+        void this.runCheckIn(entry.agent, roomRef).catch((err) => {
           console.error(`[rooms] Check-in failed for ${key}: ${(err as Error).message}`);
         });
-        return;
+      }
     }
   }
 
