@@ -692,6 +692,41 @@ subscription gets its timer, a `checkInMinutes` gets its interval, and the
 first push subscription for a backend gets its listener — without a reload.
 Changes are coalesced, so a config reconcile that adds twenty subscriptions
 re-arms once rather than twenty times.
+### One wake queue per agent
+
+Every trigger — a message in a room the agent watches, a poll tick, a check-in
+coming due — puts the agent in a queue. An agent already waiting is not added
+twice; the new room and trigger join the entry it already has.
+
+So the queue holds at most one entry per agent, however busy the deployment is.
+Ten rooms and a thousand messages produce one entry naming ten rooms, where
+before they produced ten separate schedulings that knew nothing about each
+other.
+
+An entry fires at the earliest time any of its triggers asks for, so a poll tick
+that is already due is not held back by a message still inside its batching
+window. More traffic can only make a turn sooner, never later — resetting the
+timer on every message would let a room that never goes quiet postpone a turn
+indefinitely.
+
+To put a floor under how often an agent runs:
+
+```yaml
+rooms:
+  minWakeIntervalMinutes: 5   # unset by default
+```
+
+Triggers arriving inside that gap accumulate on the pending entry instead of
+starting another turn, so the agent runs on a predictable cadence rather than
+on demand. It is per agent and counted across every room, so there is no
+per-room override — a room cannot decide how often an agent runs everywhere
+else.
+
+Note what this does and does not do. It bounds how often an agent is
+*scheduled*. An entry naming ten rooms still starts a turn per room today;
+collapsing those into one turn that reads every room at once is a separate
+change with its own prompt and reply-routing decisions.
+
 ### Taking turns
 
 When one message names two agents, both are woken. By default they now run
