@@ -629,7 +629,9 @@ export class RoomWatcher {
       'Speak only if there is something worth saying. If there is not, call room(action="pass") — a check-in that reports nothing is noise.',
     ].join("\n");
 
-    await this.runPrompted(sub, prompt, label, "check-in");
+    await this.onRoomTurn(roomRef, `check-in:${agent} ${roomRef}`, () =>
+      this.runPrompted(sub, prompt, label, "check-in"),
+    );
   }
 
   private armPoll(sub: RoomSubscription): void {
@@ -715,7 +717,7 @@ export class RoomWatcher {
       // Re-reading it each tick is cheap; losing it is not.
       return;
     }
-    await this.runWake(sub);
+    await this.onRoomTurn(roomRef, `poll:${agent} ${roomRef}`, () => this.runWake(sub));
   }
 
   /**
@@ -750,33 +752,48 @@ export class RoomWatcher {
    * agent slow in one room does not hold up another.
    */
   private dispatchWake(sub: RoomSubscription, key: string): void {
-    const run = () =>
+    void this.onRoomTurn(sub.roomRef, `push:${key}`, () =>
       this.runWake(sub).catch((err) => {
         console.error(`[rooms] Wake failed for ${key}: ${(err as Error).message}`);
-      });
+      }),
+    );
+  }
 
-    if (this.readLimits(sub.roomRef).turnTaking !== "serial") {
-      void run();
-      return;
-    }
+  /**
+   * Run something on this room's queue.
+   *
+   * Every path that starts an agent turn for a room goes through here — the
+   * push debounce, a poll tick, a scheduled check-in — because turn-taking
+   * that covered only one of them would leave the others racing exactly as
+   * before. `/room status` is the deliberate exception and calls its runner
+   * directly: it is a person asking every agent at once and should answer
+   * immediately rather than queue behind whatever the room is doing.
+   *
+   * `key` is scoped by caller so a poll tick and a push wake for the same
+   * agent and room are not mistaken for each other; each path keeps its own
+   * coalescing behaviour.
+   */
+  private onRoomTurn(roomRef: string, key: string, fn: () => Promise<void>): Promise<void> {
+    if (this.readLimits(roomRef).turnTaking !== "serial") return fn();
 
     // Already waiting its turn: drop this trigger rather than queue a second
     // run. The queued one re-fetches the backlog when it starts, so it will
     // pick up whatever arrived in the meantime.
-    if (this.queued.has(key)) return;
+    if (this.queued.has(key)) return Promise.resolve();
     this.queued.add(key);
 
-    const tail = this.roomChains.get(sub.roomRef) ?? Promise.resolve();
+    const tail = this.roomChains.get(roomRef) ?? Promise.resolve();
     const next = tail.then(() => {
       this.queued.delete(key);
-      return run();
+      return fn();
     });
-    this.roomChains.set(sub.roomRef, next);
+    this.roomChains.set(roomRef, next);
     // Let the map forget a room once its queue drains, so a long-lived
     // deployment does not accumulate a settled promise per room it ever saw.
     void next.finally(() => {
-      if (this.roomChains.get(sub.roomRef) === next) this.roomChains.delete(sub.roomRef);
+      if (this.roomChains.get(roomRef) === next) this.roomChains.delete(roomRef);
     });
+    return next;
   }
 
   /**

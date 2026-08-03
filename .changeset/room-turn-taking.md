@@ -12,4 +12,6 @@ Serialization is per room, not global: two rooms still run in parallel, and an a
 
 A repeat trigger for an agent already waiting its turn is now dropped rather than queued twice. The queued run re-reads the backlog when it starts, so it sees the newer message anyway — which also stops `wakeOn: "all"` waking an agent a second time for a reply that arrived while it was still in the queue.
 
+Every path that starts a turn for a room goes through the queue — the push debounce, a poll tick, and a scheduled check-in. Turn-taking that covered only the push path would have left the other two racing exactly as before, since both reached their runners directly.
+
 `/room status` is deliberately left off the chain. It is a person asking every agent at once and answers immediately, which is the reason it was written not to await in the first place.

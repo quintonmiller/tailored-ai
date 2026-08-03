@@ -1075,6 +1075,10 @@ describe("RoomWatcher re-arms when subscriptions change", () => {
 
     expect(spy).toHaveBeenCalled();
     watcher.stop();
+  });
+});
+
+// --------------------------------------------------------------------------
 // Turn-taking: agents woken by the same room run one at a time
 // --------------------------------------------------------------------------
 
@@ -1156,6 +1160,32 @@ describe("RoomWatcher turn-taking", () => {
     await vi.waitFor(() => expect(log).toHaveLength(4));
 
     expect(log.slice(0, 2)).toEqual(["start:coder", "start:planner"]);
+  });
+
+  /**
+   * Turn-taking that covered only the push path would leave the other two
+   * racing exactly as before: `pollOnce` and `runCheckIn` reached their
+   * runners directly, so a poll tick could start while a pushed wake was
+   * still mid-turn in the same room.
+   */
+  it("serializes a poll tick against a pushed wake in the same room", async () => {
+    const watcher = makeWatcher(["coder", "planner"]);
+    const log: string[] = [];
+    instrument(watcher, log, 5);
+    const turn = (key: string, agent: string) =>
+      (
+        watcher as unknown as {
+          onRoomTurn: (r: string, k: string, f: () => Promise<void>) => Promise<void>;
+        }
+      ).onRoomTurn("local:eng", key, () =>
+        (watcher as unknown as { runWake: (s: RoomSubscription) => Promise<void> }).runWake(sub(agent, "all")),
+      );
+
+    void turn("push:coder local:eng", "coder");
+    void turn("poll:planner local:eng", "planner");
+    await vi.waitFor(() => expect(log).toHaveLength(4));
+
+    expect(log).toEqual(["start:coder", "end:coder", "start:planner", "end:planner"]);
   });
 
   /** A throwing run must not wedge the room's queue behind it. */
