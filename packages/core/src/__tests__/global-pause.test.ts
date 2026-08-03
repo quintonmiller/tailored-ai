@@ -606,6 +606,26 @@ describe("AgentRuntime.deliverAgentMessage", () => {
     resume();
     await expect(call(makeRuntime({ getConfig: () => ({ agents: {} }) }))).rejects.toThrow(/No agent named/);
   });
+
+  /**
+   * A delivery that never happened must not look like one that did. Both
+   * refusals above return before the loop, so `agent.messaged` — the event a
+   * mirror or an audit counts — stays silent for them.
+   */
+  it("emits nothing for a delivery that was refused", async () => {
+    const seen: unknown[] = [];
+    const events = new TypedEventBus();
+    events.on("agent.messaged", (e) => {
+      seen.push(e);
+    });
+
+    pause();
+    await expect(call(makeRuntime({ events }))).rejects.toThrow(/paused/i);
+    resume();
+    await expect(call(makeRuntime({ events, getConfig: () => ({ agents: {} }) }))).rejects.toThrow(/No agent named/);
+
+    expect(seen).toHaveLength(0);
+  });
 });
 
 // ==========================================================================

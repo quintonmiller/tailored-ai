@@ -964,8 +964,12 @@ export class AgentRuntime {
    *
    * The exchange still lands in the recipient's session, so it is durable and
    * inspectable; it simply is not a place.
+   *
+   * `via` labels the surface that produced the delivery for `agent.messaged`
+   * subscribers. Defaults to `"dm"` — the agent-chose-to-speak case — so the
+   * only caller that has to say anything is the one that is something else.
    */
-  async deliverAgentMessage(to: string, from: string, body: string): Promise<string> {
+  async deliverAgentMessage(to: string, from: string, body: string, via = "dm"): Promise<string> {
     // One agent starting a whole new loop in another agent, unattended, is the
     // exact shape of the incident this switch exists for — a room with the
     // room taken out. Gated even though a person may be somewhere up the
@@ -989,7 +993,14 @@ export class AgentRuntime {
     const session = findOrCreateSession(this.db, key, resolved.model, resolved.provider);
 
     const base = this.buildLoopOptions({ agentName: to, session });
-    return await runAgentLoop(`Direct message from ${from}:\n\n${body}`, base);
+    const reply = await runAgentLoop(`Direct message from ${from}:\n\n${body}`, base);
+
+    // After the loop, so one event is one complete exchange. A delivery that
+    // threw never reaches this line, which is deliberate: a subscriber
+    // counting these counts conversations, not attempts.
+    this.events.emit("agent.messaged", { from, to, body, reply, via });
+
+    return reply;
   }
 
   /**
