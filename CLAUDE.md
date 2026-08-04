@@ -75,10 +75,9 @@ TAI is a modular framework for running personal agents. Keep docs and APIs orien
 
 ## Key Design Decisions
 
-- **Short system prompts**: Local models degrade with prompts >500 tokens. Keep them concise.
-- **Few tools per request**: Max ~5 tools. Local models struggle to pick from large sets.
-- **Low temperature**: Default 0.3 for deterministic tool selection.
-- **No conditional response tokens**: Never use patterns like "reply NO_REPLY if..." — local models misinterpret these.
+- **Prompts and tool sets earn their size**: instructions and tools compete for the model's attention and for the history budget, so cut what isn't pulling weight. No fixed ceiling — this file used to give one (500-token prompts, ~5 tools), measured on the small local model of the day and since falsified: a 27-31B model took a ~1100-character persona better than a thin one, and the reference deployment runs 41 tools. Measure on the model you ship, don't trust a remembered limit.
+- **No conditional response tokens**: never use patterns like "reply NO_REPLY if...". Smaller models read the sentinel as the answer. The general failure — an instruction that offers a way out gets taken — is still live, so only offer one where you genuinely want silence.
+- **Low temperature**: default 0.3 for deterministic tool selection.
 - **Simple agent loop**: No complex state machines. Loop: chat → tool calls → chat → stop.
 - **Hot-reloadable runtime**: Config, tools, and provider are mutable at runtime. The agent loop re-resolves tools each iteration so changes take effect immediately without restart.
 - **Replaceable opinions**: Default behavior should be useful, but workflow opinions should move toward plugins/event subscribers instead of hardcoded core paths.
@@ -87,7 +86,7 @@ TAI is a modular framework for running personal agents. Keep docs and APIs orien
 
 - No default parameter values that duplicate config defaults (config.ts `DEFAULT_CONFIG` is the single source of truth)
 - All configurable values go in `config.yaml` / `AgentConfig`
-- Tool descriptions: 1-2 sentences max (for local model compatibility)
+- Tool descriptions: 1-2 sentences. Long ones crowd the request without helping selection
 - Prefer `node:` prefixed imports for Node.js built-ins
 - **Releases stay on 0.x** until a deliberate V1. Mark **every changeset `patch`** — pre-1.0 a `minor`/`major` on `core` escalates the whole `fixed` group to `1.0.0`. npm publish is **manual + approval-gated** (`workflow_dispatch` + the `npm-publish` environment; never on push). CI runs `pnpm run guard:pre-v1`, which fails the build if any publishable version is `>= 1.0.0` or any changeset isn't `patch`. See [docs/publishing.md](./docs/publishing.md).
 
