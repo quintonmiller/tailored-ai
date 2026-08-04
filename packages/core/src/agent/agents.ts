@@ -45,6 +45,8 @@ export interface ResolvedAgent {
   maxToolRounds: number;
   /** Hard filesystem boundary; undefined means the deployment-wide rules apply. */
   fileBoundary: string | undefined;
+  /** Per-agent exec command rules; undefined means only the deployment rules apply. */
+  execRules: import("../tools/command-allowlist.js").CommandRules | undefined;
   /** Whether room sessions are isolated per room or shared across them. */
   roomSessionScope: "room" | "shared";
   contextDir: string | undefined;
@@ -127,6 +129,7 @@ export function resolveAgent(
     maxTokens: config.agent.maxTokens,
     maxToolRounds: config.agent.maxToolRounds,
     fileBoundary: undefined,
+    execRules: undefined,
     roomSessionScope: "room" as const,
     contextDir: undefined,
     kbDir: undefined,
@@ -188,6 +191,7 @@ export function resolveAgent(
     maxTokens: agent?.maxTokens ?? defaults.maxTokens,
     maxToolRounds: agent?.maxToolRounds ?? defaults.maxToolRounds,
     fileBoundary: expandBoundary(agent?.fileBoundary),
+    execRules: agent?.exec,
     roomSessionScope: agent?.roomSessionScope === "shared" ? "shared" : "room",
     contextDir: undefined,
     kbDir: undefined,

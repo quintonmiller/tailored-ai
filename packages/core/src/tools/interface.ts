@@ -12,6 +12,17 @@ export interface ToolContext {
    * filesystem (default, researcher, etc.).
    */
   workingDirectoryBoundary?: string;
+  /**
+   * Command rules declared by the agent currently running, combined with the
+   * deployment's by `exec` per `tools.exec.mode`. Set from
+   * `agents.<name>.exec` by `AgentRuntime.buildLoopOptions`.
+   *
+   * Lives on the context rather than on the tool because one ExecTool instance
+   * is shared by every agent — the same reason `workingDirectoryBoundary` is
+   * here. Applies to the `exec` tool only; `custom_tools` run a fixed command
+   * and never consult it.
+   */
+  execRules?: import("./command-allowlist.js").CommandRules;
   env: Record<string, string>;
   agentContextDir?: string;
   kbDir?: string;

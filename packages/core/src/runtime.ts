@@ -1207,6 +1207,7 @@ export class AgentRuntime {
         // injects for worktrees, so an agent granted `write` is confined to
         // where it is supposed to work rather than the whole filesystem.
         ...(resolved.fileBoundary ? { workingDirectoryBoundary: resolved.fileBoundary } : {}),
+        ...(resolved.execRules ? { execRules: resolved.execRules } : {}),
       },
       getTools: () => {
         const r = resolveAgent(
