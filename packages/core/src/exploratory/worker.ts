@@ -309,14 +309,12 @@ export class ExploratoryWorker {
         maxToolRounds: toolCallCap,
         signal: abortController.signal,
         toolContextExtras: { agentName, exploratoryRunId: run.id },
+        usageSource: "exploratory",
+        // The loop records the token_usage row now; this callback only keeps
+        // the running total the per-tick cap is checked against.
         onUsage: (usage) => {
           promptTokens += usage.input;
           completionTokens += usage.output;
-          recordTokenUsage(db, {
-            sessionId: session.id,
-            promptTokens: usage.input,
-            completionTokens: usage.output,
-          });
           if (promptTokens + completionTokens >= tokenCap) {
             console.log(`[exploratory] ${agentName} hit per-tick token cap (${tokenCap}) — aborting`);
             status = "budget";

@@ -648,6 +648,25 @@ export function initDatabase(dbPath: string): Database.Database {
     // Column already exists
   }
 
+  // Safe migration: attribute token usage. Recording moved into the agent loop
+  // so every call is counted, not just autopilot and exploratory — `source`
+  // keeps the autopilot budget scoped to what it used to cover, and `agent`
+  // answers "which agent is this costing me", which nothing could before.
+  for (const sql of [
+    "ALTER TABLE token_usage ADD COLUMN agent TEXT",
+    "ALTER TABLE token_usage ADD COLUMN source TEXT",
+  ]) {
+    try {
+      db.exec(sql);
+    } catch {
+      // Column already exists
+    }
+  }
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_token_usage_source_created ON token_usage(source, created_at);
+    CREATE INDEX IF NOT EXISTS idx_token_usage_agent_created ON token_usage(agent, created_at);
+  `);
+
   try {
     db.exec("ALTER TABLE rooms ADD COLUMN agent_turns INTEGER NOT NULL DEFAULT 0");
   } catch {
