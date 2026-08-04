@@ -54,9 +54,14 @@ registerToolFactory("memory", (config, ctx) => {
 });
 
 registerToolFactory("exec", (config) => {
-  if (config.tools.exec?.enabled === false) return [];
-  // Left to ExecTool, which resolves it from this instance's home.
-  return [new ExecTool(config.tools.exec?.allowedCommands)];
+  const cfg = config.tools.exec;
+  if (cfg?.enabled === false) return [];
+  // `allowedCommands` is the original key and `allow` the current one; both
+  // mean the same thing, so a deployment part-way through the rename gets the
+  // union rather than silently losing one of them.
+  const allow = [...(cfg?.allowedCommands ?? []), ...(cfg?.allow ?? [])];
+  // scratchDir is left to ExecTool, which resolves it from this instance's home.
+  return [new ExecTool({ allow, deny: cfg?.deny ?? [] }, undefined, undefined, cfg?.mode)];
 });
 
 registerToolFactory("read", (config) => {

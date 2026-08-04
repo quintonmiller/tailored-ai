@@ -790,6 +790,12 @@ export {
 } from "./tools/browser-output-sanitizer.js";
 export { ClaudeCodeTool } from "./tools/claude-code.js";
 export { CollectionsTool } from "./tools/collections.js";
+export type {
+  CommandRules,
+  CommandRulesMode,
+  EffectiveCommandRules,
+} from "./tools/command-allowlist.js";
+export { checkCommandAllowlist, checkCommandRules, mergeCommandRules } from "./tools/command-allowlist.js";
 export { CustomTool, createCustomTools } from "./tools/custom.js";
 export { DelegateTool } from "./tools/delegate.js";
 export { DocumentsTool } from "./tools/documents.js";
