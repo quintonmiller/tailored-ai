@@ -95,10 +95,11 @@ a new channel.
 
 ## Design philosophy
 
-- **Short system prompts.** Local models degrade past ~500 tokens.
-- **Few tools per request.** Local models struggle with large tool menus.
+- **Prompts and tool sets earn their size.** Both compete for the model's
+  attention and for the history budget, so cut what isn't pulling weight —
+  but measure against the model you ship on rather than a fixed ceiling.
 - **No conditional response tokens.** "Reply NO_REPLY if …" patterns
-  misfire on small models.
+  misfire on smaller models, which read the sentinel as the answer.
 - **Simple agent loop.** chat → tool calls → chat → stop. No state machines.
 - **Hot-reloadable.** Config, tools, and provider are mutable at runtime.
 
