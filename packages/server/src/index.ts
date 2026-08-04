@@ -11,6 +11,7 @@ import {
   type AutopilotWorker,
   addTaskComment,
   type Briefing,
+  BUDGETED_TOKEN_SOURCES,
   type CollectionListFilter,
   type CollectionType,
   ConfigWriteRejected,
@@ -1853,13 +1854,55 @@ export function createServer(opts: ServerOptions) {
 
   app.get("/api/autopilot/usage", (c) => {
     const settings = getAutopilotSettings(runtime.db);
+    // Scoped to the sources the caps actually govern, so `usage` and
+    // `budget.cap` describe the same thing. Deployment-wide totals — which now
+    // include chat, rooms and cron — live at /api/usage.
     const usage = {
-      "1h": getTokenUsageInWindow(runtime.db, 1),
-      "5h": getTokenUsageInWindow(runtime.db, 5),
-      "24h": getTokenUsageInWindow(runtime.db, 24),
+      "1h": getTokenUsageInWindow(runtime.db, 1, BUDGETED_TOKEN_SOURCES),
+      "5h": getTokenUsageInWindow(runtime.db, 5, BUDGETED_TOKEN_SOURCES),
+      "24h": getTokenUsageInWindow(runtime.db, 24, BUDGETED_TOKEN_SOURCES),
     };
     const budget = checkBudget(runtime.db, settings);
     return c.json({ usage, budget });
+  });
+
+  /**
+   * Where the tokens went. `?hours=` sets the window (default 24).
+   *
+   * The loop records every provider call, so this covers chat, room wakes,
+   * cron and delegation as well as autopilot and exploratory — none of which
+   * were counted before. Grouped both ways because they answer different
+   * questions: `bySource` says which subsystem is spending, `byAgent` says
+   * which agent is.
+   */
+  app.get("/api/usage", (c) => {
+    const hours = Math.max(1, Math.min(24 * 90, Number(c.req.query("hours") ?? 24) || 24));
+    const window = `-${hours} hours`;
+    const group = (column: "source" | "agent") =>
+      runtime.db
+        .prepare(
+          `SELECT COALESCE(${column}, '(unattributed)') AS key,
+                  SUM(prompt_tokens)     AS prompt,
+                  SUM(completion_tokens) AS completion,
+                  COUNT(*)               AS calls
+             FROM token_usage
+            WHERE created_at >= datetime('now', ?)
+            GROUP BY 1
+            ORDER BY prompt DESC`,
+        )
+        .all(window);
+
+    const totals = runtime.db
+      .prepare(
+        `SELECT COALESCE(SUM(prompt_tokens), 0)     AS prompt,
+                COALESCE(SUM(completion_tokens), 0) AS completion,
+                COUNT(*)                            AS calls
+           FROM token_usage
+          WHERE created_at >= datetime('now', ?)`,
+      )
+      .get(window);
+
+    return c.json({ hours, totals, bySource: group("source"), byAgent: group("agent") });
   });
 
   // --- Briefing endpoints ---

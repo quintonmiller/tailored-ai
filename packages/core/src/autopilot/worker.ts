@@ -2,7 +2,7 @@ import { Cron } from "croner";
 import { runAgentLoop } from "../agent/loop.js";
 import { runMemorySweep } from "../agent/memory-promotion.js";
 import { resetSession } from "../agent/session.js";
-import { checkBudget, getAutopilotSettings, isInDisabledHours, recordTokenUsage } from "../db/autopilot-queries.js";
+import { checkBudget, getAutopilotSettings, isInDisabledHours } from "../db/autopilot-queries.js";
 import { findStuckCodingTasks } from "../db/task-queries.js";
 import type { ProjectRef } from "../projects/resolve.js";
 import type { AgentRuntime } from "../runtime.js";
@@ -405,15 +405,13 @@ export class AutopilotWorker {
         ...loopOpts,
         signal: taskAbort.signal,
         toolContextExtras: { autopilotTaskId: task.id, agentName },
+        usageSource: "autopilot",
+        usageTaskId: task.id,
+        // The loop records the token_usage row now; this callback only keeps
+        // the running total and enforces the mid-task budget stop.
         onUsage: (usage) => {
           promptTokens += usage.input;
           completionTokens += usage.output;
-          recordTokenUsage(db, {
-            sessionId: session.id,
-            taskId: task.id,
-            promptTokens: usage.input,
-            completionTokens: usage.output,
-          });
           // Mid-task budget check — hard stop at the next LLM-round boundary for this task only.
           const budget = checkBudget(db);
           if (budget.exceeded) {

@@ -262,8 +262,9 @@ export {
 } from "./dashboard/index.js";
 export type { AuditEntry, AuditVerifyResult, AuditWriteInput } from "./db/audit-log.js";
 export { AuditLog } from "./db/audit-log.js";
-export type { AutopilotSettings, BudgetStatus, TokenUsageInput } from "./db/autopilot-queries.js";
+export type { AutopilotSettings, BudgetStatus, TokenUsageInput, TokenUsageSource } from "./db/autopilot-queries.js";
 export {
+  BUDGETED_TOKEN_SOURCES,
   checkBudget,
   getAutopilotSettings,
   getTokenUsageInWindow,
