@@ -159,7 +159,7 @@ export class ExecTool implements Tool {
     }
 
     return new Promise<ToolResult>((resolveTool) => {
-      execFile(
+      const child = execFile(
         "bash",
         ["-c", command],
         {
@@ -191,6 +191,19 @@ export class ExecTool implements Tool {
           }
         },
       );
+
+      // An agent's command has no interactive input, but execFile hands the
+      // child an open stdin pipe that is never written to and never closed.
+      // Any CLI that reads stdin when it is not a TTY then blocks until the
+      // timeout kills it — and the kill discards the buffers, so the agent
+      // sees empty stdout, empty stderr and a bare "Command failed", which
+      // reads as "that binary isn't installed" rather than "it is waiting".
+      //
+      // Observed with the Notion CLI: `ntn api v1/users/me` returned fine,
+      // while `ntn api v1/users/me | jq -r .name` hung for the full 30s.
+      // `stdio` is not honoured by execFile (it owns the pipes to buffer
+      // them), so close the stream on the returned child instead.
+      child.stdin?.end();
     });
   }
 }
