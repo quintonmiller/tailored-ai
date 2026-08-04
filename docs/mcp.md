@@ -32,9 +32,9 @@ agents:
     tools: [read, mcp_github_search_issues]
 ```
 
-Two local-model guardrails:
+Two guardrails:
 
-- **Keep the exposed set small.** A 30-tool MCP server wholesale will sink tool selection on local models (~5 tools per request is the ceiling — see CLAUDE.md). Use the per-server `tools:` allowlist and per-agent `tools:` lists.
+- **Keep the exposed set small.** Mounting a 30-tool MCP server wholesale hurts tool selection, and the smaller the model the more it hurts. Use the per-server `tools:` allowlist and per-agent `tools:` lists to expose only what that agent actually needs.
 - **An agent that declares `tools:` and omits the `mcp_*` names cannot call them, and nothing says so.** The server still connects, still logs `connected (3 tools: …)`, and still looks healthy — the tools are simply unreachable from that agent. Observed in the reference deployment: a `github` server connected on **81 consecutive startups** while every one of its 30 agents declared a `tools:` list that named none of them. If a server looks fine and no agent ever calls it, check the allowlists before the server.
 - An agent's `mcp_*` reference that isn't (yet) discovered is **skipped with a warning, not an error** — servers connect asynchronously and can be down. The loop re-resolves tools every iteration, so the tool joins the agent's set as soon as discovery lands, without a restart.
 
