@@ -64,6 +64,27 @@ export interface AgentDefinition {
    */
   fileBoundary?: string;
   /**
+   * Command rules for THIS agent's `exec` tool — the same `allow`/`deny` shape
+   * as `tools.exec`, combined with it per `tools.exec.mode` (default
+   * `intersect`, meaning an agent can only narrow).
+   *
+   * The deployment allowlist is one shared list on one shared ExecTool
+   * instance, so granting `exec` to an agent otherwise grants everything on it.
+   * This is what makes `exec` safe to hand out for a single narrow purpose:
+   *
+   * ```yaml
+   * agents:
+   *   researcher:
+   *     tools: [exec, web_search]
+   *     exec:
+   *       allow: [ntn]
+   * ```
+   *
+   * Note this scopes the `exec` TOOL only. Entries under `custom_tools` run
+   * their own fixed command and never consult these rules.
+   */
+  exec?: import("./tools/command-allowlist.js").CommandRules;
+  /**
    * Whether this agent remembers each room separately or all of them together.
    *
    * `room` (default) gives it a session per room: clean isolation, and an agent
@@ -652,7 +673,25 @@ export interface AgentConfig {
     };
     exec?: {
       enabled: boolean;
+      /**
+       * Legacy plain allowlist. Still honoured, and equivalent to `allow`.
+       * When both are set they are concatenated.
+       */
       allowedCommands?: string[];
+      /**
+       * Deployment-wide command rules. The identical `allow`/`deny` shape is
+       * available per agent at `agents.<name>.exec`.
+       */
+      allow?: string[];
+      deny?: string[];
+      /**
+       * How per-agent rules combine with these. `intersect` (default) lets an
+       * agent only narrow; `override` lets it replace these outright.
+       *
+       * Deployment-level on purpose — an agent that could choose `override`
+       * for itself would make `intersect` guarantee nothing.
+       */
+      mode?: import("./tools/command-allowlist.js").CommandRulesMode;
     };
     read?: {
       enabled: boolean;
@@ -1431,6 +1470,7 @@ const KNOWN_AGENT_KEYS: ReadonlySet<string> = new Set([
   "maxTokens",
   "maxToolRounds",
   "fileBoundary",
+  "exec",
   "roomSessionScope",
   "contextDir",
   "nudgeOnText",

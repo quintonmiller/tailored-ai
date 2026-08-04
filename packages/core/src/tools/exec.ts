@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { taiHomePath } from "../home.js";
-import { checkCommandAllowlist } from "./command-allowlist.js";
+import { type CommandRules, type CommandRulesMode, checkCommandRules, mergeCommandRules } from "./command-allowlist.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
 import { checkExecBoundary } from "./sandbox-boundary.js";
 
@@ -104,12 +104,20 @@ export class ExecTool implements Tool {
     required: ["command"],
   };
 
-  private allowedCommands: string[];
+  private rules: CommandRules;
+  private mode: CommandRulesMode;
   private timeoutMs: number;
   private scratchDir: string | undefined;
 
-  constructor(allowedCommands?: string[], timeoutMs: number = 30_000, scratchDir?: string) {
-    this.allowedCommands = allowedCommands ?? [];
+  constructor(
+    rules?: CommandRules | string[],
+    timeoutMs: number = 30_000,
+    scratchDir?: string,
+    mode: CommandRulesMode = "intersect",
+  ) {
+    // A bare array is the historical `allowedCommands` argument.
+    this.rules = Array.isArray(rules) ? { allow: rules } : (rules ?? {});
+    this.mode = mode;
     this.timeoutMs = timeoutMs;
     this.scratchDir = scratchDir;
   }
@@ -120,14 +128,15 @@ export class ExecTool implements Tool {
       return { success: false, output: "", error: "No command provided." };
     }
 
-    if (this.allowedCommands.length > 0) {
-      // Permit safe compound commands (chains, pipes, redirections) while
-      // keeping the allowlist's guarantee that only listed binaries run in
-      // command position. See command-allowlist.ts for the policy.
-      const check = checkCommandAllowlist(command, this.allowedCommands);
-      if (!check.ok) {
-        return { success: false, output: "", error: check.error };
-      }
+    // One ExecTool instance serves every agent, so the per-agent rules arrive
+    // on the context and are merged here rather than baked in at construction.
+    // Permits safe compound commands (chains, pipes, redirections) while
+    // keeping the guarantee that only permitted binaries run in command
+    // position. See command-allowlist.ts for the policy.
+    const effective = mergeCommandRules(this.rules, context.execRules, this.mode);
+    const check = checkCommandRules(command, effective);
+    if (!check.ok) {
+      return { success: false, output: "", error: check.error };
     }
 
     const boundaryCheck = checkExecBoundary(command, context);

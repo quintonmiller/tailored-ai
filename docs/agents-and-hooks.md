@@ -27,6 +27,45 @@ agents:
     maxTokens: 16384       # this one needs room
 ```
 
+### `exec` — per-agent command rules
+
+The deployment allowlist is one list on one shared `ExecTool` instance, so
+granting an agent `exec` grants it everything on that list. `agents.<name>.exec`
+takes the same `allow` / `deny` shape as `tools.exec` and narrows it for that
+agent alone, which is what makes `exec` safe to hand out for one purpose:
+
+```yaml
+tools:
+  exec:
+    allow: [git, ls, ntn]
+    deny: [rm]
+    mode: intersect        # default; `override` lets an agent replace these
+agents:
+  researcher:
+    tools: [exec, web_search]
+    exec:
+      allow: [ntn]         # this agent gets ntn and nothing else
+```
+
+Both lists accept glob patterns (`*`, `?`), matched against the command name in
+**every** command position — so `ntn api x && rm -rf /` is rejected on the
+second segment. `deny` always wins over `allow`, at both levels.
+
+Three properties worth knowing:
+
+- **`mode` is deployment-level only.** An agent that could choose `override` for
+  itself would make `intersect` guarantee nothing.
+- **Under `intersect` an agent can only narrow.** An allow list that intersects
+  to nothing denies everything rather than reverting to unrestricted — the
+  opposite would fail open.
+- **This scopes the `exec` tool, not the agent.** `custom_tools` run their own
+  fixed command and never consult these rules, so `exec: {allow: [ntn]}` means
+  "this agent's exec tool can only run ntn", not "this agent can only run ntn".
+
+Rules travel with `resolveAgent` → `buildLoopOptions` → `ToolContext.execRules`,
+the same path as `fileBoundary`. Delegated sub-agents inherit them, because
+`DelegateTool` builds its loop options from the runtime.
+
 - `packages/core/src/agent/agents.ts` — `resolveAgent()` merges a named agent with agent defaults
 - `packages/core/src/tools/delegate.ts` — `DelegateTool` lets the agent spawn a sub-agent with a specific agent config
 - Sub-agents are depth-1 only (they don't get the delegate tool)

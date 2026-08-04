@@ -48,6 +48,7 @@ const AGENT_DEFINITION_FIELDS = new Set<string>([
   "maxTokens",
   "maxToolRounds",
   "fileBoundary",
+  "exec",
   "roomSessionScope",
   "contextDir",
   "nudgeOnText",
