@@ -91,6 +91,34 @@ agents:
 The two modes also treat `allowed-tools` differently, in ways that are easy to
 trip over — see [Tool access](#tool-access) below.
 
+### Progressive means the agent has to choose to load it
+
+Nothing loads a skill for the agent. The catalog block says so in as many words —
+that the instructions are not in the prompt, that each line is a label, and that a
+skill should be loaded before a task it covers *even when the agent thinks it
+already knows how*. That last clause exists because of a real failure: an agent
+woken for Notion work, with the notion skill in its catalog, made **zero**
+`load_skill` calls and worked from its own session history instead, repeating a
+broken pipeline the skill warns against — twice, in a warning it never read.
+
+Watch for it, because it fails quietly:
+
+```sql
+-- did the agent actually load the skill on its last run?
+SELECT COUNT(*) FROM messages
+WHERE session_id = ? AND tool_calls LIKE '%load_skill%';
+```
+
+Nothing logs a skipped skill, and the answer often looks fine because the agent
+recovers by trial and error several rounds later than it needed to.
+
+**When to reach for `eager` anyway.** If an agent's whole job is the skill, the
+catalog round-trip is pure overhead and the risk of it being skipped is not worth
+the tokens saved. A single-purpose agent — one where you would be surprised to see
+it do anything *but* that skill — is the case for `eager`. It is only safe when the
+skill declares no `allowed-tools`, or declares a complete one; see
+[Tool access](#tool-access).
+
 `load_skill` also narrows the tool set to the skill's `allowed-tools` for the
 remainder of the loop.
 
