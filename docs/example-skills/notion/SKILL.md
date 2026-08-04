@@ -1,7 +1,7 @@
 ---
 name: notion
 description: Read and write Notion — search pages, query databases, read a page, create or update pages — using the `ntn` CLI through `exec`, filtering responses with `jq`. Use whenever asked to look something up in Notion, record something there, or when a task references a Notion page or database.
-version: 0.5.0
+version: 0.6.0
 ---
 
 # Working with Notion
@@ -26,6 +26,22 @@ ntn api v1/blocks/<block_id>/children -X PATCH -d '{"children":[...]}'
 ```
 
 Output is JSON. The method is inferred from the path; `-X` only overrides it.
+
+### Querying a database goes through its *data source*
+
+`v1/databases/{id}/query` no longer exists — it answers `400 invalid_request_url`,
+which is easy to misread as a malformed command. Rows live on a **data source**,
+and a database id is not a data source id. Fetch the database to get one:
+
+```
+ntn api v1/databases/<database_id> | jq -c '.data_sources'
+# [{"id":"77e578e1-...","name":"Job Search Pipeline"}]
+
+ntn api v1/data_sources/<data_source_id>/query -d '{"page_size":3}' | jq '.results | length'
+```
+
+`v1/databases/{id}` (retrieve), `POST v1/databases` (create) and
+`PATCH v1/databases/{id}` (update) all still work. It is only *query* that moved.
 
 **Don't guess at endpoints — ask.** These exist so you don't have to:
 
