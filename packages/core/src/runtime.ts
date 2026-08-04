@@ -1167,6 +1167,7 @@ export class AgentRuntime {
       toolOutputLimits: collectToolOutputLimits(config),
       temperature: resolved.temperature,
       thinking: resolved.thinking,
+      maxTokens: resolved.maxTokens,
       contextDir: this.contextDir,
       contextWarnTokens: config.context?.warnTokens,
       agentContextDir: resolved.contextDir,

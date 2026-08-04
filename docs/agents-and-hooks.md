@@ -4,7 +4,28 @@ How named agents, delegation, hook pipelines, cron jobs, and prompt templating a
 
 ## Agents & Delegation
 
-Agents are named configurations defined in `config.yaml` under `agents:`. They can override model, description, instructions, tools (allowlist), temperature, maxToolRounds, and hooks.
+Agents are named configurations defined in `config.yaml` under `agents:`. They can override model, description, instructions, tools (allowlist), temperature, maxTokens, maxToolRounds, and hooks.
+
+### `maxTokens`
+
+Caps what the model may generate per call. Resolution is
+`agents.<name>.maxTokens` → `agent.maxTokens` → omitted, and omitted is the
+default: sending an invented number would cap generation on every deployment
+that never asked for one.
+
+Set it on any metered provider. Some reserve the model's whole output window
+against your balance for the length of a request when the field is absent —
+OpenRouter reserves 65536 tokens per call and answers 402 once the balance stops
+covering that reservation, even when the reply itself would have cost cents. It
+reads as a provider refusing every request while the account is in credit.
+
+```yaml
+agent:
+  maxTokens: 4096          # deployment-wide default
+agents:
+  writer:
+    maxTokens: 16384       # this one needs room
+```
 
 - `packages/core/src/agent/agents.ts` — `resolveAgent()` merges a named agent with agent defaults
 - `packages/core/src/tools/delegate.ts` — `DelegateTool` lets the agent spawn a sub-agent with a specific agent config

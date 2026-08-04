@@ -52,6 +52,7 @@ describe("resolveAgent", () => {
     expect(resolved.tools).toEqual(tools);
     expect(resolved.temperature).toBe(0.3);
     expect(resolved.thinking).toBeUndefined();
+    expect(resolved.maxTokens).toBeUndefined();
     expect(resolved.maxToolRounds).toBe(10);
     expect(resolved.contextDir).toBeUndefined();
   });
@@ -66,6 +67,29 @@ describe("resolveAgent", () => {
     // Agents without an override leave it undefined (provider default applies).
     const plain = makeConfig({ agents: { plain: {} } });
     expect(resolveAgent("plain", plain, tools).thinking).toBeUndefined();
+  });
+
+  it("resolves maxTokens per agent, falling back to the deployment default", () => {
+    const config = makeConfig({
+      agent: { ...makeConfig().agent, maxTokens: 2048 },
+      agents: {
+        chatty: { maxTokens: 8192 },
+        inherits: {},
+      },
+    });
+
+    expect(resolveAgent("chatty", config, tools).maxTokens).toBe(8192);
+    expect(resolveAgent("inherits", config, tools).maxTokens).toBe(2048);
+    expect(resolveAgent(undefined, config, tools).maxTokens).toBe(2048);
+  });
+
+  it("leaves maxTokens undefined when nothing sets it", () => {
+    // The field must be omitted rather than defaulted: sending a number we
+    // invented would cap generation on every deployment that never asked for
+    // one, and providers already have sensible defaults of their own.
+    const config = makeConfig({ agents: { plain: {} } });
+    expect(resolveAgent("plain", config, tools).maxTokens).toBeUndefined();
+    expect(resolveAgent(undefined, config, tools).maxTokens).toBeUndefined();
   });
 
   it("throws for unknown agent", () => {

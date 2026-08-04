@@ -37,6 +37,11 @@ export interface ResolvedAgent {
   temperature: number;
   /** Per-agent reasoning effort (#254); undefined leaves the provider on its configured default. */
   thinking: ThinkingLevel | undefined;
+  /**
+   * Cap on generated tokens per call. Undefined omits the field from the
+   * request, leaving each provider on its own default.
+   */
+  maxTokens: number | undefined;
   maxToolRounds: number;
   /** Hard filesystem boundary; undefined means the deployment-wide rules apply. */
   fileBoundary: string | undefined;
@@ -119,6 +124,7 @@ export function resolveAgent(
     tools: allTools,
     temperature: config.agent.temperature,
     thinking: undefined,
+    maxTokens: config.agent.maxTokens,
     maxToolRounds: config.agent.maxToolRounds,
     fileBoundary: undefined,
     roomSessionScope: "room" as const,
@@ -179,6 +185,7 @@ export function resolveAgent(
     tools: defaults.tools,
     temperature: agent?.temperature ?? defaults.temperature,
     thinking: agent?.thinking ?? defaults.thinking,
+    maxTokens: agent?.maxTokens ?? defaults.maxTokens,
     maxToolRounds: agent?.maxToolRounds ?? defaults.maxToolRounds,
     fileBoundary: expandBoundary(agent?.fileBoundary),
     roomSessionScope: agent?.roomSessionScope === "shared" ? "shared" : "room",

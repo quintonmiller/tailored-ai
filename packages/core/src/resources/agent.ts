@@ -45,6 +45,7 @@ const AGENT_DEFINITION_FIELDS = new Set<string>([
   "tools",
   "temperature",
   "thinking",
+  "maxTokens",
   "maxToolRounds",
   "fileBoundary",
   "roomSessionScope",
