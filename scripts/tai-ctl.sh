@@ -19,6 +19,9 @@
 # one per line. The file is created on first run holding the single instance
 # that already exists.
 #
+# Per-machine settings go in ~/.tai/env, which is sourced if present — the
+# place to pin VLLM_SCRIPT, REPO_DIR or VLLM_DIR for a particular box.
+#
 # Design notes:
 #  - `-i` is required by every command that touches `agent` or `ui`. Naming the
 #    instance on each invocation is the whole point: with two homes sharing one
@@ -48,12 +51,22 @@
 
 set -euo pipefail
 
+TAI_STATE_DIR="${TAI_STATE_DIR:-$HOME/.tai}"
+
+# Optional per-machine settings, sourced before the defaults below so a box can
+# pin things like VLLM_SCRIPT without editing this file or exporting from a
+# shell rc (which only reaches interactive shells, not cron or a detached
+# service). Write entries in `VAR="${VAR:-value}"` form so an explicit
+# `VAR=... tai-ctl ...` on the command line still outranks the file.
+TAI_ENV_FILE="${TAI_ENV_FILE:-$TAI_STATE_DIR/env}"
+# shellcheck source=/dev/null
+[ -f "$TAI_ENV_FILE" ] && . "$TAI_ENV_FILE"
+
 REPO_DIR="${REPO_DIR:-$HOME/repos/autonomous-agent}"
 VLLM_DIR="${VLLM_DIR:-$HOME/vllm-qwen-managed}"
 VLLM_SCRIPT="${VLLM_SCRIPT:-$VLLM_DIR/start-qwen3.6-27b-vllm.sh}"
 VLLM_HEALTH_URL="${VLLM_HEALTH_URL:-http://127.0.0.1:8000/v1/models}"
 
-TAI_STATE_DIR="${TAI_STATE_DIR:-$HOME/.tai}"
 RUN_ROOT="$TAI_STATE_DIR/run"
 LOG_ROOT="$TAI_STATE_DIR/logs"
 INSTANCES_CONF="$TAI_STATE_DIR/instances.conf"
