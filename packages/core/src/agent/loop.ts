@@ -1085,7 +1085,13 @@ function renderSkillCatalog(catalog: SkillCatalogEntry[] | undefined): string {
     "",
     "",
     "## Available skills",
-    "Activate one with `load_skill(name: <id>)`. The skill's full instructions and tool allowlist load only when activated.",
+    "**These are not loaded.** Below is one line per skill — a label, not the instructions.",
+    "The instructions are not in this prompt until you call `load_skill(name: <id>)`.",
+    "",
+    "Load a skill before starting a task it covers — **including when you already know how**.",
+    "A skill is the current shared instructions and gets corrected over time; your recollection",
+    "of a tool is whatever happened to work last time, which may since have changed or may",
+    "never have been right.",
     "",
   ];
   for (const s of catalog) {
