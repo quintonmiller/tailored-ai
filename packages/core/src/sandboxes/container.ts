@@ -163,7 +163,7 @@ export class ContainerSandbox implements Sandbox {
 function defaultRunner(bin: string): ContainerRunner {
   return (args, opts) =>
     new Promise((resolveOut) => {
-      execFile(
+      const child = execFile(
         bin,
         args,
         { timeout: opts?.timeoutMs ?? 60_000, maxBuffer: 8 * 1024 * 1024 },
@@ -179,6 +179,11 @@ function defaultRunner(bin: string): ContainerRunner {
           resolveOut({ exitCode: 0, stdout, stderr });
         },
       );
+      // Same reason as the host sandbox: an unclosed stdin pipe makes any
+      // stdin-reading command inside the container hang until the timeout.
+      // `docker exec` without `-i` gets no stdin anyway, so closing it here
+      // only removes a way for the wrapper itself to stall.
+      child.stdin?.end();
     });
 }
 
