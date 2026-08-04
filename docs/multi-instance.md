@@ -96,6 +96,14 @@ Instances are declared in `~/.tai/instances.conf` as `name=/path/to/home`, one p
 line. The file is created on first run holding the single instance that already
 exists.
 
+Per-machine settings go in `~/.tai/env`, sourced before `tai-ctl`'s own defaults
+if the file exists. Write entries as `VAR="${VAR:-value}"` so a one-off
+`VAR=... tai-ctl ...` still outranks the file. This is where `VLLM_SCRIPT` belongs
+on a box that fronts vLLM with a router: the built-in default starts a single
+model server directly, so without the pin a plain `tai-ctl restart vllm` quietly
+swaps a multi-model setup for a one-model one. A shell rc cannot do this job —
+it reaches interactive shells, not cron or a detached service.
+
 `-i` is required by every command that touches `agent` or `ui`. With two homes
 sharing one port and one machine, an unqualified `restart` is a coin flip, and
 getting it wrong means the work bot answering personal messages. `vllm` needs no
