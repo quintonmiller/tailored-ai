@@ -2,7 +2,7 @@ import { Cron } from "croner";
 import { runAgentLoop } from "../agent/loop.js";
 import { runMemorySweep } from "../agent/memory-promotion.js";
 import { resetSession } from "../agent/session.js";
-import { checkBudget, getAutopilotSettings, isInDisabledHours, recordTokenUsage } from "../db/autopilot-queries.js";
+import { checkBudget, getAutopilotSettings, isInDisabledHours } from "../db/autopilot-queries.js";
 import { findStuckCodingTasks } from "../db/task-queries.js";
 import type { ProjectRef } from "../projects/resolve.js";
 import type { AgentRuntime } from "../runtime.js";

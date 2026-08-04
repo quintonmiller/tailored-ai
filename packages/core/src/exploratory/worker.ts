@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { isStallStop, type LoopStop, runAgentLoop } from "../agent/loop.js";
 import { resetSession } from "../agent/session.js";
 import type { AgentDefinition, OnlineAgentConfig } from "../config.js";
-import { isInTimeWindow, recordTokenUsage } from "../db/autopilot-queries.js";
+import { isInTimeWindow } from "../db/autopilot-queries.js";
 import {
   completeExploratoryRun,
   createExploratoryRun,

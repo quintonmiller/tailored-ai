@@ -126,9 +126,7 @@ export function getTokenUsageInWindow(
   hours: number,
   sources?: readonly TokenUsageSource[],
 ): number {
-  const scope = sources?.length
-    ? ` AND (source IN (${sources.map(() => "?").join(", ")}) OR source IS NULL)`
-    : "";
+  const scope = sources?.length ? ` AND (source IN (${sources.map(() => "?").join(", ")}) OR source IS NULL)` : "";
   const row = db
     .prepare(
       `SELECT COALESCE(SUM(prompt_tokens + completion_tokens), 0) AS total
