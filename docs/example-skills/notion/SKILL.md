@@ -1,7 +1,7 @@
 ---
 name: notion
 description: Read and write Notion — search pages, query databases, read a page, create or update pages — using the `ntn` CLI through `exec`, filtering responses with `jq`. Use whenever asked to look something up in Notion, record something there, or when a task references a Notion page or database.
-version: 0.2.0
+version: 0.3.0
 ---
 
 # Working with Notion
@@ -26,19 +26,39 @@ ntn api v1/blocks/<block_id>/children -X PATCH
 
 Output is JSON. Read it directly.
 
+## Always wrap `ntn api` in `timeout`, and write to a file
+
+`ntn api` gets its HTTP response in milliseconds and then **does not exit for
+about 27 seconds** — it sits on the keep-alive connection. Run it bare and your
+call is killed by the tool timeout with no output, which looks exactly like the
+CLI being missing. It is not; the data was already there.
+
+So the shape to use is always:
+
+```
+timeout 5 ntn api v1/users/me > /tmp/n.json 2>&1
+jq -r .name /tmp/n.json
+```
+
+`timeout 5` ends the process once the response has landed. The redirect means
+the body is on disk regardless. Then read it with `jq`, which takes a filename
+and behaves normally.
+
 ## Filter before you read
 
 A Notion API response is a large JSON document, and reading one whole into the
 conversation costs far more than the answer is worth. You have `jq` — use it.
 
 ```
-ntn api v1/search -X POST query="roadmap" | jq -r '.results[] | "\(.id)  \(.properties.title.title[0].plain_text // .url)"'
-ntn api v1/pages/<id> | jq '.properties | keys'
-ntn api v1/data_sources/<id>/query -X POST | jq '.results | length'
+timeout 5 ntn api v1/search -X POST query="roadmap" > /tmp/s.json 2>&1
+jq -r '.results[] | "\(.id)  \(.properties.title.title[0].plain_text // .url)"' /tmp/s.json
+
+timeout 5 ntn api v1/pages/<id> > /tmp/p.json 2>&1
+jq '.properties | keys' /tmp/p.json
 ```
 
-Also available: `head`, `tail`, `wc`, `grep`, `cut`, `tr`, `sort`, `uniq`. Pipe
-`| head -50` onto anything you are not sure about before asking for the whole
+Also available: `head`, `tail`, `wc`, `grep`, `cut`, `tr`, `sort`, `uniq`. Put
+`| head -50` on anything you are not sure about before asking for the whole
 thing.
 
 `curl` and `python3` are **not** available to you, deliberately. If a job seems
