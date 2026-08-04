@@ -192,6 +192,13 @@ export interface AgentLoopOptions {
    * configured default.
    */
   thinking?: import("../providers/interface.js").ThinkingLevel;
+  /**
+   * Cap on generated tokens per chat call. Resolved per-agent by
+   * `buildLoopOptions` and forwarded on every call. Undefined omits the field,
+   * leaving the provider on its own default — which on a metered provider can
+   * mean reserving the model's full output window per request.
+   */
+  maxTokens?: number;
   /** Extra fields merged into the ToolContext passed to every tool execution. */
   toolContextExtras?: Partial<import("../tools/interface.js").ToolContext>;
   permissions?: PermissionsConfig;
@@ -929,6 +936,7 @@ async function _runAgentLoopBody(
         tools: toolSchemas,
         temperature,
         thinking: opts.thinking,
+        maxTokens: opts.maxTokens,
       },
       opts.onTextDelta,
       opts.onReasoningDelta,
