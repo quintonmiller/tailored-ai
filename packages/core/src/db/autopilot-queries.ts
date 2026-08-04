@@ -67,31 +67,73 @@ export function updateAutopilotSettings(
   return getAutopilotSettings(db);
 }
 
+/**
+ * What drove a provider call. Recorded on every row so cost can be attributed,
+ * and so budget windows can stay scoped to the work they were written for.
+ *
+ * `loop` covers everything the agent loop runs that no more specific caller
+ * claimed: chat, room wakes, cron, delegation.
+ */
+export type TokenUsageSource = "loop" | "autopilot" | "exploratory";
+
+/**
+ * Sources the autopilot token budget counts. Autopilot's caps were written when
+ * `token_usage` held only these two, so widening the table must not silently
+ * widen the budget — a room-heavy hour would otherwise pause autopilot for
+ * reasons that have nothing to do with autopilot.
+ */
+export const BUDGETED_TOKEN_SOURCES: readonly TokenUsageSource[] = ["autopilot", "exploratory"];
+
 export interface TokenUsageInput {
   sessionId?: string;
   taskId?: string;
+  /** Agent the call ran as, when known. Null for unnamed/default sessions. */
+  agent?: string;
+  /**
+   * Omitting this stores NULL, which {@link BUDGETED_TOKEN_SOURCES} counts —
+   * the pre-existing behaviour, kept so an external caller that records usage
+   * without knowing about sources does not silently fall out of the budget.
+   * The agent loop always passes one explicitly.
+   */
+  source?: TokenUsageSource;
   promptTokens: number;
   completionTokens: number;
 }
 
 export function recordTokenUsage(db: Database.Database, input: TokenUsageInput): void {
-  db.prepare("INSERT INTO token_usage (session_id, task_id, prompt_tokens, completion_tokens) VALUES (?, ?, ?, ?)").run(
+  db.prepare(
+    "INSERT INTO token_usage (session_id, task_id, agent, source, prompt_tokens, completion_tokens) VALUES (?, ?, ?, ?, ?, ?)",
+  ).run(
     input.sessionId ?? null,
     input.taskId ?? null,
+    input.agent ?? null,
+    input.source ?? null,
     input.promptTokens,
     input.completionTokens,
   );
 }
 
-/** Total (prompt + completion) tokens used within the last N hours. */
-export function getTokenUsageInWindow(db: Database.Database, hours: number): number {
+/**
+ * Total (prompt + completion) tokens in the last N hours.
+ *
+ * `sources` defaults to every source — the honest answer to "what did this
+ * deployment spend". Budget checks pass {@link BUDGETED_TOKEN_SOURCES} instead.
+ * Rows written before `source` existed are NULL and count as autopilot-era
+ * usage, which is what they were.
+ */
+export function getTokenUsageInWindow(
+  db: Database.Database,
+  hours: number,
+  sources?: readonly TokenUsageSource[],
+): number {
+  const scope = sources?.length ? ` AND (source IN (${sources.map(() => "?").join(", ")}) OR source IS NULL)` : "";
   const row = db
     .prepare(
       `SELECT COALESCE(SUM(prompt_tokens + completion_tokens), 0) AS total
        FROM token_usage
-       WHERE created_at >= datetime('now', ?)`,
+       WHERE created_at >= datetime('now', ?)${scope}`,
     )
-    .get(`-${hours} hours`) as { total: number };
+    .get(`-${hours} hours`, ...(sources ?? [])) as { total: number };
   return row.total;
 }
 
@@ -114,15 +156,16 @@ export function checkBudget(db: Database.Database, settings?: AutopilotSettings)
 
   for (const w of windows) {
     if (w.cap === null || w.cap <= 0) continue;
-    const usage = getTokenUsageInWindow(db, w.hours);
+    const usage = getTokenUsageInWindow(db, w.hours, BUDGETED_TOKEN_SOURCES);
     if (usage >= w.cap) {
       const row = db
         .prepare(
           `SELECT datetime(MIN(created_at), ?) AS t
            FROM token_usage
-           WHERE created_at >= datetime('now', ?)`,
+           WHERE created_at >= datetime('now', ?)
+             AND (source IN (${BUDGETED_TOKEN_SOURCES.map(() => "?").join(", ")}) OR source IS NULL)`,
         )
-        .get(`+${w.hours} hours`, `-${w.hours} hours`) as { t: string | null };
+        .get(`+${w.hours} hours`, `-${w.hours} hours`, ...BUDGETED_TOKEN_SOURCES) as { t: string | null };
       return { exceeded: true, window: w.label, usage, cap: w.cap, nextWindowRollAt: row.t ?? undefined };
     }
   }

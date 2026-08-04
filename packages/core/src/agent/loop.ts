@@ -9,6 +9,7 @@ import {
   type PermissionsConfig,
 } from "../approval.js";
 import { loadAllContext, loadContextFiles } from "../context.js";
+import { recordTokenUsage } from "../db/autopilot-queries.js";
 import { getCoreMemory, renderCoreMemory } from "../db/core-memory-queries.js";
 import { getSessionMessages, saveMessage } from "../db/queries.js";
 import type { AIProvider, ChatParams, ChatResponse, Message, ToolCall, ToolSchema } from "../providers/interface.js";
@@ -161,6 +162,18 @@ export interface AgentLoopOptions {
   onActivity?: (description: string | null) => void;
   /** Fires after each provider.chat() with token counts from the response. */
   onUsage?: (usage: { input: number; output: number }) => void;
+  /**
+   * What to attribute this run's token usage to. The loop writes a
+   * `token_usage` row per provider call regardless; this only labels it.
+   *
+   * Defaults to `"loop"`, which covers chat, room wakes, cron and delegation —
+   * everything that previously recorded nothing at all, leaving the table a
+   * ledger of autopilot and exploratory only and no way to ask what the rest
+   * cost. Callers that own a more specific budget pass their own label.
+   */
+  usageSource?: import("../db/autopilot-queries.js").TokenUsageSource;
+  /** Task to attribute usage to, for callers that run a loop per task. */
+  usageTaskId?: string;
   /**
    * Fires exactly once when the loop ends, reporting WHY out-of-band.
    *
@@ -818,6 +831,9 @@ async function _runAgentLoopBody(
   history: Message[],
 ): Promise<string> {
   const { provider, session, db, tools, maxToolRounds, maxHistoryTokens, temperature } = opts;
+  // Same source the core-memory lookup uses: every entry point that runs a
+  // named agent sets it. Undefined for the default/unnamed session.
+  const usageAgent = opts.toolContextExtras?.agentName as string | undefined;
 
   let rounds = 0;
   let prevToolNames: string[] | undefined;
@@ -942,11 +958,29 @@ async function _runAgentLoopBody(
       opts.onReasoningDelta,
     );
 
-    if (opts.onUsage && response.usage) {
+    if (response.usage) {
+      // Record before the callback: a throwing consumer must not cost us the
+      // accounting row, which is the whole point of measuring here rather than
+      // leaving it to each caller (only two of which ever did).
       try {
-        opts.onUsage(response.usage);
+        recordTokenUsage(db, {
+          sessionId: session.id,
+          taskId: opts.usageTaskId,
+          agent: usageAgent,
+          source: opts.usageSource ?? "loop",
+          promptTokens: response.usage.input,
+          completionTokens: response.usage.output,
+        });
       } catch (e) {
-        console.error("[agent] onUsage callback error:", (e as Error).message);
+        console.error("[agent] token usage recording failed:", (e as Error).message);
+      }
+
+      if (opts.onUsage) {
+        try {
+          opts.onUsage(response.usage);
+        } catch (e) {
+          console.error("[agent] onUsage callback error:", (e as Error).message);
+        }
       }
     }
 

@@ -105,7 +105,33 @@ What it does each tick:
 7. Run the loop with a per-task `AbortController` so a single overrun doesn't cascade
 8. On success, mark task `done` (or `in_review` if the agent flagged uncertainty); on error, comment + status `blocked` + emit `task.needs_human`
 
-Token usage is recorded per session/task in `token_usage`. Mid-task budget exhaustion aborts that task only; sibling conversations (chats, other autopilot runs) keep going.
+Mid-task budget exhaustion aborts that task only; sibling conversations (chats, other autopilot runs) keep going.
+
+### Token accounting
+
+`runAgentLoop` writes one `token_usage` row per provider call, so **every** call
+is counted — chat, room wakes, cron and delegation as well as autopilot and
+exploratory. It records before invoking the caller's `onUsage`, so a consumer
+that throws cannot cost the accounting row.
+
+Rows carry `agent` and `source`:
+
+| source | what it covers |
+|---|---|
+| `loop` | default — chat, room wakes, cron, delegation |
+| `autopilot` | task-watcher dispatches (also carries `task_id`) |
+| `exploratory` | exploratory ticks |
+
+**The autopilot budget is scoped to `BUDGETED_TOKEN_SOURCES`** (`autopilot` +
+`exploratory`), which is what `token_usage` held when the caps were written.
+Counting everything would let a busy hour in the rooms pause autopilot for
+reasons that have nothing to do with autopilot. Rows predating the column have a
+NULL source and still count, because that is what they were — and a direct
+`recordTokenUsage` that omits the source stores NULL for the same reason, so an
+external caller doesn't silently fall out of the budget.
+
+Read it back with `GET /api/usage?hours=24` (deployment-wide, grouped by source
+and by agent) or `GET /api/autopilot/usage` (budgeted scope, alongside the caps).
 
 Morning digest: a daily Cron (configurable via `digest_time` setting) runs `buildMorningDigest()` over `digest_runs` + recent activity and emits `digest.ready`. Runs are persisted in `digest_runs`.
 
