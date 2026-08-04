@@ -37,6 +37,20 @@ export interface AgentDefinition {
    * reasoning support ignore it.
    */
   thinking?: ThinkingLevel;
+  /**
+   * Cap on tokens the model may generate per call, sent as the provider's
+   * `max_tokens` (or equivalent). Falls back to `agent.maxTokens`, and when
+   * neither is set the field is omitted entirely — which leaves each provider
+   * on its own default.
+   *
+   * Worth setting on any metered provider. Some of them reserve the model's
+   * full output window against your balance for the duration of a request when
+   * the field is absent: OpenRouter reserves 65536 tokens per call and rejects
+   * with 402 once the balance no longer covers that reservation, even though
+   * the reply would have cost a fraction of it. The symptom is a provider that
+   * refuses every request while the account is nominally in credit.
+   */
+  maxTokens?: number;
   maxToolRounds?: number;
   /**
    * Hard filesystem boundary for this agent. File and exec tools reject any
@@ -513,6 +527,13 @@ export interface AgentConfig {
     maxToolOutputChars: number;
     maxContextTokens: number;
     temperature: number;
+    /**
+     * Deployment-wide cap on generated tokens per call, overridable per agent
+     * with `agents.<name>.maxTokens`. Left unset by default so providers keep
+     * their own behaviour; see {@link AgentDefinition.maxTokens} for why a
+     * metered provider wants a value here.
+     */
+    maxTokens?: number;
     maxToolRounds: number;
     /**
      * Default sandbox kind for agents that don't set their own. Defaults to "host".
@@ -1407,6 +1428,7 @@ const KNOWN_AGENT_KEYS: ReadonlySet<string> = new Set([
   "tools",
   "temperature",
   "thinking",
+  "maxTokens",
   "maxToolRounds",
   "fileBoundary",
   "roomSessionScope",
