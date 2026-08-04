@@ -1,7 +1,7 @@
 ---
 name: notion
 description: Read and write Notion — search pages, query databases, read a page, create or update pages — using the `ntn` CLI through `exec`, filtering responses with `jq`. Use whenever asked to look something up in Notion, record something there, or when a task references a Notion page or database.
-version: 0.2.0
+version: 0.4.0
 ---
 
 # Working with Notion
@@ -32,14 +32,16 @@ A Notion API response is a large JSON document, and reading one whole into the
 conversation costs far more than the answer is worth. You have `jq` — use it.
 
 ```
+ntn api v1/users/me | jq -r .name
 ntn api v1/search -X POST query="roadmap" | jq -r '.results[] | "\(.id)  \(.properties.title.title[0].plain_text // .url)"'
 ntn api v1/pages/<id> | jq '.properties | keys'
 ntn api v1/data_sources/<id>/query -X POST | jq '.results | length'
 ```
 
-Also available: `head`, `tail`, `wc`, `grep`, `cut`, `tr`, `sort`, `uniq`. Pipe
-`| head -50` onto anything you are not sure about before asking for the whole
-thing.
+Also available: `head`, `tail`, `wc`, `grep`, `cut`, `tr`, `sort`, `uniq` and
+`timeout`. Put `| head -50` on anything you are not sure about before asking for
+the whole thing, and `timeout 20 ntn ...` if you have reason to think a call
+might sit.
 
 `curl` and `python3` are **not** available to you, deliberately. If a job seems
 to need either, it is a job for a human, not a workaround.
