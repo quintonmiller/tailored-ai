@@ -1,7 +1,7 @@
 ---
 name: notion
 description: Read and write Notion — search pages, query databases, read a page, create or update pages — using the `ntn` CLI through `exec`, filtering responses with `jq`. Use whenever asked to look something up in Notion, record something there, or when a task references a Notion page or database.
-version: 0.4.0
+version: 0.5.0
 ---
 
 # Working with Notion
@@ -13,18 +13,31 @@ cannot reply at all.
 
 ## What you have
 
-The `ntn` CLI, run through `exec`. Its `api` subcommand is a thin wrapper over
-the Notion REST API:
+The `ntn` CLI, run through `exec`. It is installed — you do not need to check.
+Its `api` subcommand is a thin wrapper over the Notion REST API, and `-d` takes
+the request body as JSON:
 
 ```
-ntn api v1/search -X POST query="quarterly plan"
+ntn api v1/search -d '{"query":"quarterly plan","page_size":5}'
+ntn api v1/users/me
 ntn api v1/pages/<page_id>
 ntn api v1/data_sources/<data_source_id>/query -X POST
-ntn api v1/pages -X POST parent[page_id]=<id> properties[title][title][0][text][content]="Title"
-ntn api v1/blocks/<block_id>/children -X PATCH
+ntn api v1/blocks/<block_id>/children -X PATCH -d '{"children":[...]}'
 ```
 
-Output is JSON. Read it directly.
+Output is JSON. The method is inferred from the path; `-X` only overrides it.
+
+**Don't guess at endpoints — ask.** These exist so you don't have to:
+
+```
+ntn api ls                       # every supported endpoint
+ntn api v1/search --spec         # the parameters for one endpoint
+ntn api v1/search --docs         # the full official docs for it
+```
+
+Reaching for `--help` on the wrong subcommand, or inventing one like
+`ntn pages list`, burns rounds and tells you nothing. `ntn api ls` answers it in
+one call.
 
 ## Filter before you read
 
@@ -33,15 +46,20 @@ conversation costs far more than the answer is worth. You have `jq` — use it.
 
 ```
 ntn api v1/users/me | jq -r .name
-ntn api v1/search -X POST query="roadmap" | jq -r '.results[] | "\(.id)  \(.properties.title.title[0].plain_text // .url)"'
+ntn api v1/search -d '{"query":"roadmap"}' | jq -r '.results[] | "\(.id)  \(.url)"'
+ntn api v1/search -d '{"filter":{"property":"object","value":"page"}}' | jq '.results | length'
 ntn api v1/pages/<id> | jq '.properties | keys'
-ntn api v1/data_sources/<id>/query -X POST | jq '.results | length'
 ```
 
-Also available: `head`, `tail`, `wc`, `grep`, `cut`, `tr`, `sort`, `uniq` and
-`timeout`. Put `| head -50` on anything you are not sure about before asking for
-the whole thing, and `timeout 20 ntn ...` if you have reason to think a call
-might sit.
+**Never write `2>&1` before a `jq`.** It merges error text into the JSON stream
+and `jq` dies with `parse error: Invalid numeric literal` — which looks like the
+API returned garbage when in fact your command printed a warning. Let stderr go
+its own way; you will still see it if the command fails.
+
+Also available: `cat`, `head`, `tail`, `wc`, `grep`, `cut`, `tr`, `sort`, `uniq`,
+`which` and `timeout`. Put `| head -50` on anything you are not sure about before
+asking for the whole thing, and `timeout 20 ntn ...` if you have reason to think
+a call might sit.
 
 `curl` and `python3` are **not** available to you, deliberately. If a job seems
 to need either, it is a job for a human, not a workaround.
