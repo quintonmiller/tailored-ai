@@ -49,6 +49,17 @@ export class HostSandbox implements Sandbox {
           resolveOut({ exitCode: 0, stdout, stderr });
         },
       );
+      // Close stdin, for the same reason `exec` does: execFile hands the child
+      // a pipe that is never written to and never closed, so any CLI that
+      // reads stdin when it is not a TTY blocks until the timeout kills it,
+      // and the kill discards the buffers — the caller sees empty output and a
+      // bare failure, indistinguishable from a missing binary.
+      //
+      // This path is the one that actually runs in a live deployment:
+      // `buildLoopOptions` gives every agent a sandbox, defaulting to host, so
+      // `ExecTool` returns here and never reaches its own execFile call.
+      child.stdin?.end();
+
       if (opts?.signal) {
         opts.signal.addEventListener("abort", () => child.kill("SIGTERM"), { once: true });
       }
