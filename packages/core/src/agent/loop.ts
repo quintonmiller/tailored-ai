@@ -19,7 +19,13 @@ import type { SkillCatalogEntry } from "./agents.js";
 import { buildChatLiveState, renderChatLiveState } from "./chat-live-state.js";
 import { buildMemoryBlockWithMeta } from "./memory-inject.js";
 import type { Session } from "./session.js";
-import { composeSystemPrompt, resolveBase, resolveCustomLayers, type SystemPromptOverride } from "./system-prompt.js";
+import {
+  composeSystemPrompt,
+  composeTailBlock,
+  resolveBase,
+  resolveCustomLayers,
+  type SystemPromptOverride,
+} from "./system-prompt.js";
 import { capToolOutput, resolveToolOutputLimit } from "./tool-output.js";
 
 const MAX_RETRIES = 1;
@@ -844,20 +850,25 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
   // narrowing and any per-call extras.
   const resolvedBase = resolveBase(opts.systemPrompt, { selfModifying: opts.selfModifying });
   const customLayers = resolveCustomLayers(opts.systemPrompt?.custom);
-  const fullSystemPrompt = composeSystemPrompt(
-    resolvedBase,
-    {
-      instructions: extraInstructions,
-      context: contextContent,
-      skill_catalog: catalogBlock,
-      core_memory: coreMemoryBlock,
-      chat_live_state: chatLiveBlock,
-      recall_memory: memoryBlock,
-    },
-    opts.systemPrompt,
-    customLayers,
-  );
+  const builtInLayers = {
+    instructions: extraInstructions,
+    context: contextContent,
+    skill_catalog: catalogBlock,
+    core_memory: coreMemoryBlock,
+    chat_live_state: chatLiveBlock,
+    recall_memory: memoryBlock,
+  };
+  const fullSystemPrompt = composeSystemPrompt(resolvedBase, builtInLayers, opts.systemPrompt, customLayers);
   const systemPromptTokens = estimateTokens({ role: "system", content: fullSystemPrompt });
+
+  // Layers that change every turn ride behind the history instead of in front
+  // of it, so the prompt and the history stay a cacheable prefix. Role "user"
+  // rather than "system" for the same reason the tool-update notice below is:
+  // vLLM in strict OpenAI mode rejects mid-history system messages.
+  const tailBlock = composeTailBlock(builtInLayers, opts.systemPrompt, customLayers);
+  const tailMsg: Message | undefined = tailBlock
+    ? { role: "user", content: `[System: current context, refreshed each turn]\n\n${tailBlock}` }
+    : undefined;
 
   const history = getSessionMessages(db, session.id);
 
@@ -900,7 +911,7 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
   };
 
   try {
-    return await _runAgentLoopBody(userMessage, opts, context, fullSystemPrompt, systemPromptTokens, history);
+    return await _runAgentLoopBody(userMessage, opts, context, fullSystemPrompt, systemPromptTokens, history, tailMsg);
   } finally {
     await cleanupSandbox();
   }
@@ -913,8 +924,10 @@ async function _runAgentLoopBody(
   fullSystemPrompt: string,
   systemPromptTokens: number,
   history: Message[],
+  tailMsg?: Message,
 ): Promise<string> {
   const { provider, session, db, tools, maxToolRounds, maxHistoryTokens, temperature } = opts;
+  const tailTokens = tailMsg ? estimateTokens(tailMsg) : 0;
   // Same source the core-memory lookup uses: every entry point that runs a
   // named agent sets it. Undefined for the default/unnamed session.
   const usageAgent = opts.toolContextExtras?.agentName as string | undefined;
@@ -1009,8 +1022,10 @@ async function _runAgentLoopBody(
     }
     prevToolNames = currentToolNames;
 
-    // Reserve token budget for the system prompt so history + prompt fits in context
-    const historyBudget = Math.max(0, maxHistoryTokens - systemPromptTokens);
+    // Reserve token budget for the system prompt so history + prompt fits in
+    // context. The tail costs the same whichever side of the history it sits
+    // on, so it is reserved too.
+    const historyBudget = Math.max(0, maxHistoryTokens - systemPromptTokens - tailTokens);
     let trimmed: Message[];
     if (opts.summarizeOnTrim) {
       const currentProvider = opts.getProvider ? opts.getProvider() : provider;
@@ -1027,6 +1042,7 @@ async function _runAgentLoopBody(
       trimmed = trimHistory(history, historyBudget);
     }
     const messages: Message[] = [{ role: "system", content: fullSystemPrompt }, ...trimmed];
+    if (tailMsg) messages.push(tailMsg);
 
     const chain = opts.getModelChain?.() ?? [];
     const candidates: ModelCandidate[] =

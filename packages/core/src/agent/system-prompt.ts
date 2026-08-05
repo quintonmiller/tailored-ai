@@ -29,6 +29,18 @@ export interface SystemPromptOverride {
    * to strip). Unknown names emit a warning. When undefined, DEFAULT_LAYER_ORDER applies.
    */
   order?: string[];
+  /**
+   * Layers to render *after* the message history instead of inside the system
+   * prompt, as a trailing turn. Prompt caching matches an exact token prefix,
+   * so anything rebuilt per turn invalidates the cache for everything after it
+   * — and the system prompt sits in front of the entire history. Moving the
+   * volatile layers behind the history leaves the prompt and the history as a
+   * stable prefix.
+   *
+   * Only applies to layers that also appear in `order`. Defaults to
+   * DEFAULT_TAIL_LAYERS; set `[]` to keep everything in the system prompt.
+   */
+  tail?: string[];
   /** Custom layers. Reference them by name in `order` to insert. */
   custom?: CustomLayer[];
 }
@@ -67,6 +79,7 @@ export function mergeSystemPromptOverrides(
     merged.baseFile = global.baseFile;
   }
   merged.order = perAgent.order ?? global.order;
+  merged.tail = perAgent.tail ?? global.tail;
   merged.custom = perAgent.custom ?? global.custom;
   return merged;
 }
@@ -115,6 +128,57 @@ export function resolveCustomLayers(custom: CustomLayer[] | undefined): Record<s
   return out;
 }
 
+/**
+ * Layers that are rebuilt from scratch on every turn, and so are moved out of
+ * the system prompt by default (see `SystemPromptOverride.tail`).
+ */
+export const DEFAULT_TAIL_LAYERS = ["chat_live_state", "recall_memory"] as const;
+
+/**
+ * Which layers render after the history rather than inside the system prompt.
+ *
+ * Intersected with `order`, so `order` keeps its "names not listed are omitted"
+ * meaning: a layer stripped there stays stripped rather than reappearing in the
+ * tail. `base` is never eligible — it is the prompt.
+ */
+export function resolveTailLayers(override: SystemPromptOverride | undefined): string[] {
+  // An explicit `order` is a statement about placement, so the default tail
+  // does not get to overrule it — that deployment opts in by naming `tail`.
+  if (override?.tail === undefined && override?.order !== undefined) return [];
+  const requested = override?.tail ?? DEFAULT_TAIL_LAYERS;
+  const inOrder = new Set<string>(override?.order ?? DEFAULT_LAYER_ORDER);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const name of requested) {
+    if (name === "base") {
+      console.warn(`[system-prompt] Layer "base" cannot move to the tail — ignoring`);
+      continue;
+    }
+    if (seen.has(name) || !inOrder.has(name)) continue;
+    seen.add(name);
+    out.push(name);
+  }
+  return out;
+}
+
+function collect(names: Iterable<string>, blocks: Record<string, string>, where: string): string[] {
+  const parts: string[] = [];
+  const seen = new Set<string>();
+  for (const name of names) {
+    if (seen.has(name)) {
+      console.warn(`[system-prompt] Duplicate layer "${name}" in ${where} — skipping second occurrence`);
+      continue;
+    }
+    seen.add(name);
+    if (name in blocks) {
+      parts.push(blocks[name]);
+    } else {
+      console.warn(`[system-prompt] Unknown layer "${name}" in ${where} — skipping`);
+    }
+  }
+  return parts;
+}
+
 export function composeSystemPrompt(
   base: string,
   builtIn: BuiltInLayers,
@@ -122,24 +186,32 @@ export function composeSystemPrompt(
   customContent: Record<string, string>,
 ): string {
   const order = override?.order ?? DEFAULT_LAYER_ORDER;
+  const tail = new Set(resolveTailLayers(override));
   const blocks: Record<string, string> = {
     base,
     ...builtIn,
     ...customContent,
   };
-  const parts: string[] = [];
-  const seen = new Set<string>();
-  for (const name of order) {
-    if (seen.has(name)) {
-      console.warn(`[system-prompt] Duplicate layer "${name}" in order — skipping second occurrence`);
-      continue;
-    }
-    seen.add(name);
-    if (name in blocks) {
-      parts.push(blocks[name]);
-    } else {
-      console.warn(`[system-prompt] Unknown layer "${name}" in order — skipping`);
-    }
-  }
-  return parts.join("");
+  return collect(
+    [...order].filter((name) => !tail.has(name)),
+    blocks,
+    "order",
+  ).join("");
+}
+
+/**
+ * Render the tail layers into the block that follows the history.
+ *
+ * Returns "" when nothing moves, so callers can skip the extra message
+ * entirely rather than sending an empty one.
+ */
+export function composeTailBlock(
+  builtIn: BuiltInLayers,
+  override: SystemPromptOverride | undefined,
+  customContent: Record<string, string>,
+): string {
+  const tail = resolveTailLayers(override);
+  if (tail.length === 0) return "";
+  const blocks: Record<string, string> = { ...builtIn, ...customContent };
+  return collect(tail, blocks, "tail").join("").trim();
 }
