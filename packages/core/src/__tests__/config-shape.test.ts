@@ -206,3 +206,82 @@ describe("integration with the existing streams", () => {
     expect(findShapeIssues(config({}))).toEqual([]);
   });
 });
+
+/**
+ * The walk covered `agents.<name>.*` — the per-agent overrides — and skipped
+ * the global `agent:` block above it, where the deployment-wide defaults live.
+ * Reproduced against a live config: a bad `temperature` on a named agent was
+ * flagged, the same mistake on `agent.temperature` was not.
+ */
+describe("findShapeIssues — the global agent block", () => {
+  it("catches a quoted maxTokens, which is truthy and reaches the wire", () => {
+    // `if (params.maxTokens) { body.max_completion_tokens = params.maxTokens }`
+    // — a non-empty string passes that guard.
+    const issues = findShapeIssues(config({ agent: { maxTokens: "8192" } }));
+    expect(issues.join("\n")).toContain("`maxTokens`");
+    expect(issues.join("\n")).toContain("must be a number");
+    expect(issues.join("\n")).toContain("Write `8192` without them");
+  });
+
+  it("catches the same mistakes it already caught one level down", () => {
+    const named = findShapeIssues(config({ agents: { coder: { temperature: "warm" } } }));
+    const global = findShapeIssues(config({ agent: { temperature: "warm" } }));
+    expect(named).toHaveLength(1);
+    expect(global).toHaveLength(1);
+    expect(global[0]).toContain("`temperature`");
+  });
+
+  it("names the block it found the problem in", () => {
+    const issues = findShapeIssues(config({ agent: { maxToolRounds: "10" } }));
+    expect(issues[0]).toMatch(/^agent/);
+  });
+
+  it("validates the deployment fallback chain, not only per-agent chains", () => {
+    const issues = findShapeIssues(config({ agent: { models: [{ provider: "local", model: 5 }] } }));
+    // Indexed, so the rung is findable in a chain of five.
+    expect(issues.join("\n")).toContain("`models.0.model` must be a string");
+  });
+
+  it("does not demand fields the loader fills in", () => {
+    // Presence is not this checker's business — DEFAULT_CONFIG supplies the
+    // rest, and "required" on a field nobody wrote would be pure noise.
+    expect(findShapeIssues({ agent: { temperature: 0.3 } } as unknown as AgentConfig)).toEqual([]);
+  });
+
+  it("reaches the write gate, so a bad write is refused rather than warned about", () => {
+    expect(findInertConfig(config({ agent: { maxTokens: "8192" } })).join("\n")).toContain("`maxTokens`");
+  });
+});
+
+describe("findShapeIssues — other top-level blocks", () => {
+  it("catches a quoted number in memory.embeddings", () => {
+    const issues = findShapeIssues(config({ memory: { embeddings: { enabled: true, dim: "1024" } } }));
+    expect(issues.join("\n")).toContain("`dim`");
+  });
+
+  it("catches a quoted flag in memory.embeddings", () => {
+    const issues = findShapeIssues(config({ memory: { embeddings: { enabled: "false" } } }));
+    expect(issues.join("\n")).toContain("currently reads as `true`");
+  });
+
+  it("catches a quoted number in memory.chunks", () => {
+    expect(findShapeIssues(config({ memory: { chunks: { overlap: "200" } } })).join("\n")).toContain("`overlap`");
+  });
+
+  it("checks tasks.backend without judging the backend's own options bag", () => {
+    expect(findShapeIssues(config({ tasks: { backend: 5 } })).join("\n")).toContain("`backend`");
+    // `options` is the selected backend's business, per CLAUDE.md.
+    expect(findShapeIssues(config({ tasks: { backend: "github", options: { repo: 5 } } }))).toEqual([]);
+  });
+
+  it("leaves valid blocks alone", () => {
+    const issues = findShapeIssues(
+      config({
+        agent: { temperature: 0.3, maxTokens: 8192, models: [{ provider: "local", model: "m", thinking: "high" }] },
+        memory: { embeddings: { enabled: true, dim: 1024 }, chunks: { overlap: 200 } },
+        tasks: { backend: "native", options: { path: "/x" } },
+      }),
+    );
+    expect(issues).toEqual([]);
+  });
+});
