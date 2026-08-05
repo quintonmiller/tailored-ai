@@ -279,6 +279,9 @@ export class AnthropicMessagesProvider implements AIProvider {
   private defaultMaxTokens: number;
   private promptCaching: boolean;
   private defaultThinking?: ThinkingLevel;
+  /** Models that answered a `temperature` with a 400, learned at runtime. */
+  private rejectsTemperature = new Set<string>();
+  private warnedTemperature = new Set<string>();
 
   constructor(opts: AnthropicMessagesProviderOptions) {
     this.apiKey = opts.apiKey;
@@ -302,7 +305,7 @@ export class AnthropicMessagesProvider implements AIProvider {
     return headers;
   }
 
-  private buildBody(params: ChatParams): Record<string, unknown> {
+  private buildBody(params: ChatParams, dropTemperature = false): Record<string, unknown> {
     const { system, messages } = toApiMessages(params.messages, this.promptCaching);
 
     const baseMax = params.maxTokens ?? this.defaultMaxTokens;
@@ -310,8 +313,11 @@ export class AnthropicMessagesProvider implements AIProvider {
       model: params.model,
       messages,
       max_tokens: baseMax,
-      temperature: params.temperature ?? 0.3,
     };
+
+    if (!dropTemperature) {
+      body.temperature = params.temperature ?? 0.3;
+    }
 
     if (system) {
       body.system = system;
@@ -342,23 +348,54 @@ export class AnthropicMessagesProvider implements AIProvider {
     return body;
   }
 
-  private async request(body: Record<string, unknown>): Promise<Response> {
-    const resp = await fetch(`${this.baseUrl}/v1/messages`, {
-      method: "POST",
-      headers: this.headers(),
-      body: JSON.stringify(body),
-    });
+  /**
+   * POST, dropping `temperature` if the model turns out to reject it.
+   *
+   * Newer Claude models answer any `temperature` — including the 0.3 default
+   * this plugin sends when a caller supplies none — with
+   * "`temperature` is deprecated for this model." Sending nothing is not a
+   * workaround, because the default is applied here rather than by the API. So
+   * the model is learned from its own refusal and remembered for the process,
+   * the same way the OpenAI provider handles `reasoning_effort` (#385).
+   *
+   * Once dropped, a further 400 is rethrown: retrying an unrelated failure with
+   * a different body turns one clear error into two confusing ones.
+   */
+  private async request(params: ChatParams, stream: boolean): Promise<Response> {
+    let dropTemperature = this.rejectsTemperature.has(params.model);
 
-    if (!resp.ok) {
+    for (;;) {
+      const body = this.buildBody(params, dropTemperature);
+      if (stream) body.stream = true;
+
+      const resp = await fetch(`${this.baseUrl}/v1/messages`, {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify(body),
+      });
+
+      if (resp.ok) return resp;
+
       const text = await resp.text();
-      throw new Error(`Anthropic API error ${resp.status}: ${text}`);
-    }
+      const err = new Error(`Anthropic API error ${resp.status}: ${text}`);
+      if (resp.status !== 400 || dropTemperature || !/temperature.{0,30}(deprecated|not supported)/i.test(text)) {
+        throw err;
+      }
 
-    return resp;
+      this.rejectsTemperature.add(params.model);
+      if (!this.warnedTemperature.has(params.model)) {
+        this.warnedTemperature.add(params.model);
+        console.warn(
+          `[anthropic] ${params.model} does not accept a temperature; sending none. ` +
+            `agent.temperature has no effect on this model.`,
+        );
+      }
+      dropTemperature = true;
+    }
   }
 
   async chat(params: ChatParams): Promise<ChatResponse> {
-    const resp = await this.request(this.buildBody(params));
+    const resp = await this.request(params, false);
     const data = (await resp.json()) as ApiResponse;
     return parseApiResponse(data);
   }
@@ -370,10 +407,7 @@ export class AnthropicMessagesProvider implements AIProvider {
    * on `done`. Usage assembles from `message_start` and `message_delta`.
    */
   async *chatStream(params: ChatParams): AsyncIterable<ChatStreamEvent> {
-    const body = this.buildBody(params);
-    body.stream = true;
-
-    const resp = await this.request(body);
+    const resp = await this.request(params, true);
     if (!resp.body) {
       throw new Error("Anthropic API returned no response body for stream");
     }
