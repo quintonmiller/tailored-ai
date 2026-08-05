@@ -113,33 +113,75 @@ request must carry it:
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/health
 ```
 
-### The dashboard caveat
+### For a browser, use `server.proxyAuth`
 
-**The bundled web UI does not send the token.** Its fetch wrapper
-(`packages/ui/src/api.ts`) sets no `Authorization` header, and `server.authToken`
-gates every `/api/*` route including GETs. So with a token set, the dashboard
-loads and then fails every request.
+A bearer token works for scripts and channels, but the bundled dashboard cannot
+use one. A token has to ride on an `Authorization` header, and `EventSource`
+cannot send headers, so the SSE streams the dashboard depends on (chat, the
+event feed) are unreachable to a token-only client.
 
-That leaves three honest options:
+`server.proxyAuth` is the browser-facing credential. It accepts a session
+cookie, which SSE does carry:
+
+```yaml
+server:
+  host: 0.0.0.0
+  proxyAuth:
+    enabled: true
+    password: ${TAI_DASHBOARD_PASSWORD}
+```
+
+Restart, open the dashboard, and you get a login form. A correct password mints
+an HttpOnly, SameSite=Lax session cookie that lasts a week. `Secure` is added
+when the request arrived over TLS (either directly or via `x-forwarded-proto`
+from a proxy).
+
+The password also works as a bearer, so one credential covers both:
+
+```bash
+curl -H "Authorization: Bearer $PASSWORD" https://tai.example.com/api/health
+```
+
+Set `authToken` alongside it if you want scripts on a separate secret. Both are
+accepted when `proxyAuth` is on.
+
+Rotating the password invalidates every issued session, because the session
+HMAC is keyed by the password itself. Failed logins are throttled per client IP
+(10 per 15 minutes), read from `x-forwarded-for` so one attacker cannot lock
+out everyone behind the same proxy.
+
+Enabling `proxyAuth` with an empty password fails every request closed with a
+500 rather than falling open, and TAI warns about it at startup.
+
+### Choosing an exposure
 
 | Option | Dashboard | Setup |
 |---|---|---|
-| **Loopback + SSH tunnel** *(recommended)* | works | `ssh -L 3000:127.0.0.1:3000 user@host` |
-| **Authenticating reverse proxy** | works | Caddy/nginx basic-auth, Cloudflare Access, Tailscale Serve, oauth2-proxy |
-| **Publish directly with a token** | API only | scripts and channels work; browser does not |
+| **`proxyAuth` + TLS** | works | a password in config, a proxy terminating TLS |
+| **Loopback + SSH tunnel** | works | `ssh -L 3000:127.0.0.1:3000 user@host`, no config |
+| **Authenticating reverse proxy** | works | Caddy/nginx basic-auth, Cloudflare Access, Tailscale Serve |
+| **`authToken` only** | API only | scripts and channels work, browsers do not |
 
-Do not solve this by removing the token from a publicly-published port. That
-serves the whole dashboard, unauthenticated, to anyone who finds the IP.
+Do not publish the port with no credential at all. That serves the whole
+dashboard, unauthenticated, to anyone who finds the IP.
 
-`server.proxyAuth` looks like the answer and is not: the middleware exists
-(`packages/server/src/auth/proxy-auth.ts`) but is never mounted, and the
-`/api/auth/login` endpoint its login page posts to does not exist. Setting it
-authenticates nothing. TAI warns about this at startup. Wiring it up is the
-change that would make remote dashboard access work directly.
+Put TLS in front of `proxyAuth` before exposing it to the internet. The
+password crosses the wire on login, and the session cookie on every request
+after that.
 
 ### Reverse proxy sketch
 
-Caddy, terminating TLS and doing the auth TAI can't yet do in the browser:
+Caddy terminating TLS in front of `proxyAuth`:
+
+```caddyfile
+tai.example.com {
+    reverse_proxy 127.0.0.1:3000
+}
+```
+
+Caddy sets `x-forwarded-proto: https`, so the session cookie is issued with
+`Secure`. If you would rather the proxy own authentication entirely, add
+`basic_auth` and leave `proxyAuth` off:
 
 ```caddyfile
 tai.example.com {
@@ -150,10 +192,11 @@ tai.example.com {
 }
 ```
 
-Keep the container published to `127.0.0.1:3000` so the proxy is the only path
-in. With the proxy authenticating, you may drop TAI's own token
-(`--no-auth-token` at init, or clear `server.authToken`) so the dashboard's
-requests pass — the proxy is what is guarding the door.
+Keep the container published to `127.0.0.1:3000` either way, so the proxy is
+the only path in. With the proxy authenticating, drop TAI's own credential
+(`--no-auth-token` at init, or clear `server.authToken`) so requests pass
+through: the proxy is what guards the door, and two login prompts for one
+dashboard help nobody.
 
 ## Day-to-day
 
@@ -235,10 +278,6 @@ co-located model server.
 
 Known gaps, tracked here so they are not rediscovered:
 
-- **Dashboard cannot authenticate remotely.** Mount the proxy-auth middleware
-  and implement `/api/auth/login` / `/api/auth/logout`; the cookie it mints
-  covers SSE, which a bearer header cannot. This is the highest-value fix for
-  self-hosting.
 - **Image is ~880 MB.** `typescript`, `rxjs` and a musl-only `lightningcss`
   binary land in a `--prod` deploy, so something declares a build tool as a
   runtime dependency. A dependency audit should cut this substantially.

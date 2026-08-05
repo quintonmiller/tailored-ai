@@ -76,10 +76,9 @@ Permissions needed: `ec2:RunInstances`, `CreateSecurityGroup`,
 
 ## Getting in
 
-Port 3000 is closed by default. TAI's bundled dashboard cannot send an API
-token (see [Self-hosting](/docs/self-hosting#exposing-it)), so publishing it
-would give you either an unauthenticated dashboard or one that 401s on every
-request. Use a tunnel:
+Port 3000 is closed by default. The instance serves plain HTTP, so an open port
+is unauthenticated, or carries a login password in cleartext, until TLS sits in
+front of it. A tunnel needs neither:
 
 ```bash
 ssh -L 3000:127.0.0.1:3000 ec2-user@<ip>
@@ -93,8 +92,13 @@ ssh ec2-user@<ip> 'cd /opt/tai/docker/tai && sudo docker compose logs tai'
 ```
 
 To open the port anyway, use `--allow-http-from <cidr>`. `0.0.0.0/0`
-additionally requires `--force-public`, because opening a dashboard that cannot
-authenticate to the whole internet should not be reachable by typing a CIDR.
+additionally requires `--force-public`, because publishing an unencrypted
+dashboard to the whole internet should not be reachable by typing a CIDR.
+
+For a durable public deployment, set
+[`server.proxyAuth`](/docs/self-hosting#for-a-browser-use-serverproxyauth) on
+the instance and put a TLS-terminating proxy in front. The dashboard then works
+in a browser with a password.
 
 ## Options
 

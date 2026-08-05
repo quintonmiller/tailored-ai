@@ -243,8 +243,8 @@ export async function runHeadlessInit(opts: HeadlessInitOptions): Promise<Headle
       `\n  API auth token (generated, stored in ${paths.envPath}):\n` +
         `    ${authToken}\n` +
         `  Every /api/* request must send \`Authorization: Bearer <token>\`.\n` +
-        `  The bundled dashboard does not send it yet — reach the UI over an SSH\n` +
-        `  tunnel or an authenticating reverse proxy. See docs/self-hosting.md.\n` +
+        `  For browser access, set server.proxyAuth instead: it mints a session\n` +
+        `  cookie, which the dashboard's SSE streams can carry. See docs/self-hosting.md.\n` +
         `  This is the only time the token is printed.`,
     );
   }

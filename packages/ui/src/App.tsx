@@ -176,7 +176,12 @@ export function App() {
     const originalFetch = window.fetch;
     window.fetch = async function (...args) {
       const res = await originalFetch.apply(this, args);
-      if (res.status === 401 && typeof args[0] === "string" && args[0].startsWith("/api/")) {
+      const url = typeof args[0] === "string" ? args[0] : "";
+      // The auth endpoints are exempt. A 401 from /api/auth/login means "wrong
+      // password", which the login form has to read and display; bouncing it
+      // through this interceptor rejected the promise before the form could
+      // check res.ok, so every wrong password reported "Network error".
+      if (res.status === 401 && url.startsWith("/api/") && !url.startsWith("/api/auth/")) {
         window.location.hash = "/login";
         // Return a rejected promise so callers know the request failed
         return Promise.reject(new Error("Unauthorized"));

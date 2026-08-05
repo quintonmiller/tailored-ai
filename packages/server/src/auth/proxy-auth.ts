@@ -21,13 +21,91 @@ import { getCookie } from "hono/cookie";
 export interface ProxyAuthConfig {
   enabled: boolean;
   password: string;
-  /** When true, GET routes also require auth. Default true when enabled. */
-  required_for_read?: boolean;
 }
 
 const SESSION_TTL_SEC = 7 * 24 * 60 * 60; // 1 week
-const SESSION_COOKIE = "tai_session";
+export const SESSION_COOKIE = "tai_session";
 
+/** Endpoints that must stay reachable without a session, or nobody could ever
+ * get one. Matched against the concrete request path. */
+export const AUTH_PUBLIC_PATHS = new Set(["/api/auth/login", "/api/auth/logout"]);
+
+/**
+ * Does this request carry a valid proxy-auth credential?
+ *
+ * Split out of the middleware so the main auth middleware in index.ts can
+ * consult it as one of several accepted credentials, rather than running two
+ * competing gates whose interaction nobody can predict.
+ */
+export function hasValidProxyAuth(
+  config: ProxyAuthConfig,
+  opts: { bearer: string; cookie: string | undefined },
+): boolean {
+  if (!config.password) return false;
+  if (opts.bearer && constantTimeEquals(opts.bearer, config.password)) return true;
+  return !!opts.cookie && verifySessionToken(opts.cookie, config.password);
+}
+
+/** Verify a login attempt. Separate from session minting so the caller can
+ * rate-limit between the two. */
+export function verifyPassword(config: ProxyAuthConfig, presented: string): boolean {
+  if (!config.password || !presented) return false;
+  return constantTimeEquals(presented, config.password);
+}
+
+/**
+ * Failed-login throttle, per client.
+ *
+ * A password endpoint on an internet-facing box with no throttle is a
+ * brute-force target, and this one guards every session, memory and tool
+ * result the agent holds. In-memory and per-process on purpose: TAI runs as a
+ * single instance (SQLite takes one writer), so there is no second replica for
+ * a shared store to coordinate with.
+ */
+export class LoginThrottle {
+  private attempts = new Map<string, { count: number; until: number }>();
+
+  constructor(
+    private readonly maxAttempts = 10,
+    private readonly windowMs = 15 * 60 * 1000,
+  ) {}
+
+  /** Seconds the caller must wait, or 0 when the attempt may proceed. */
+  retryAfter(key: string, now = Date.now()): number {
+    const entry = this.attempts.get(key);
+    if (!entry) return 0;
+    if (now >= entry.until) {
+      this.attempts.delete(key);
+      return 0;
+    }
+    if (entry.count < this.maxAttempts) return 0;
+    return Math.ceil((entry.until - now) / 1000);
+  }
+
+  recordFailure(key: string, now = Date.now()): void {
+    const entry = this.attempts.get(key);
+    if (!entry || now >= entry.until) {
+      this.attempts.set(key, { count: 1, until: now + this.windowMs });
+      return;
+    }
+    entry.count += 1;
+  }
+
+  /** A correct password clears the record, so one bad day at the keyboard
+   * doesn't lock you out for the rest of the window. */
+  recordSuccess(key: string): void {
+    this.attempts.delete(key);
+  }
+}
+
+/**
+ * Standalone middleware form.
+ *
+ * The server mounts its auth as a single gate (see index.ts) so the
+ * interaction between `authToken` and `proxyAuth` is decidable in one place.
+ * This is kept for embedders who want proxy auth in front of their own Hono
+ * app without adopting the rest of TAI's server.
+ */
 export function makeProxyAuthMiddleware(config: ProxyAuthConfig): MiddlewareHandler {
   return async (c, next) => {
     if (!config.enabled) return next();
@@ -35,19 +113,11 @@ export function makeProxyAuthMiddleware(config: ProxyAuthConfig): MiddlewareHand
       // Misconfiguration — fail closed.
       return c.json({ error: "proxyAuth enabled but no password configured" }, 500);
     }
+    if (AUTH_PUBLIC_PATHS.has(c.req.path)) return next();
 
-    // 1. Bearer token: direct password compare.
-    const authHeader = c.req.header("Authorization");
-    if (authHeader?.startsWith("Bearer ")) {
-      const presented = authHeader.slice(7);
-      if (constantTimeEquals(presented, config.password)) {
-        return next();
-      }
-    }
-
-    // 2. Session cookie: HMAC-verified blob.
-    const cookie = getCookie(c, SESSION_COOKIE);
-    if (cookie && verifySessionToken(cookie, config.password)) {
+    const authHeader = c.req.header("Authorization") ?? "";
+    const bearer = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+    if (hasValidProxyAuth(config, { bearer, cookie: getCookie(c, SESSION_COOKIE) })) {
       return next();
     }
 

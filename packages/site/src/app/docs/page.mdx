@@ -70,10 +70,9 @@ and are tested. So do the declarative `plugins: [...]` loader,
 `tai plugin install`, and bearer-token auth on the HTTP API
 (`server.authToken`).
 
-One gap worth knowing before you expose the API: the bundled dashboard
-does not send that token, so remote browser access needs a tunnel or an
-authenticating proxy. [Self-hosting](/docs/self-hosting) covers the
-options.
+For browser access, `server.proxyAuth` issues a session cookie the dashboard
+can carry (a bearer token cannot ride on SSE).
+[Self-hosting](/docs/self-hosting) covers the exposure options.
 
 ## Where to go next
 

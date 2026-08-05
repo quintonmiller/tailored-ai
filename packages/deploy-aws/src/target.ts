@@ -112,9 +112,11 @@ function ensureSecurityGroup(
   }
   const groupId = created.value.GroupId;
 
-  // Ingress is opt-in per port. Nothing is opened that was not asked for —
-  // notably not 3000, whose default is "no rule at all", because the bundled
-  // dashboard cannot authenticate and the SSH tunnel is the supported path.
+  // Ingress is opt-in per port. Nothing is opened that was not asked for,
+  // notably not 3000, whose default is "no rule at all". The instance serves
+  // plain HTTP, so an open 3000 is unauthenticated (or sends a proxyAuth
+  // password in cleartext) until TLS is in front of it. The SSH tunnel needs
+  // neither.
   if (sshCidr) {
     const res = aws.run([
       "ec2",
