@@ -1,0 +1,59 @@
+# Tailored AI — self-hosted, single container.
+#
+#   cd docker/tai
+#   cp .env.example .env      # set TAI_MODEL and TAI_BASE_URL at minimum
+#   docker compose up -d
+#   docker compose logs -f    # first boot prints the generated API token
+#
+# The shape is one container and one volume, and that is not an accident:
+# state is SQLite, which takes a single writer, so there is no second replica
+# to run. Scale up (a bigger box, a faster model) rather than out.
+
+name: tai
+
+services:
+  tai:
+    build:
+      context: ../..
+      dockerfile: docker/tai/Dockerfile
+    image: ${TAI_IMAGE:-tai:local}
+    container_name: tai
+    restart: unless-stopped
+
+    # Published to loopback on the host. Anything else — a LAN address, or
+    # 0.0.0.0 — puts the dashboard on the network, and the bundled UI cannot
+    # send the API token yet (see docs/self-hosting.md), so the choice there is
+    # between an unauthenticated dashboard and a dashboard that 401s. Put a
+    # reverse proxy or a tunnel in front instead of widening this line.
+    ports:
+      - "${TAI_PUBLISH_ADDR:-127.0.0.1}:${TAI_PUBLISH_PORT:-3000}:3000"
+
+    # One volume holds everything: config.yaml, .env, agent.db, data/, and
+    # installed plugins. Back this up and you have backed up the instance.
+    volumes:
+      - tai-data:/data
+
+    # Reaching a model server running on the host (Ollama, vLLM, llama-swap,
+    # LM Studio). On Docker Desktop host.docker.internal already resolves;
+    # on Linux this mapping is what makes it work, and without it
+    # TAI_BASE_URL=http://host.docker.internal:11434/v1 fails DNS at the
+    # first message rather than at startup.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    env_file:
+      - .env
+
+    # SIGTERM should end it promptly; tini in the image forwards the signal.
+    # The default 10s grace is enough for the loop to finish a tool call and
+    # for SQLite to checkpoint its WAL.
+    stop_grace_period: 20s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  tai-data:

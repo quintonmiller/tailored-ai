@@ -797,13 +797,25 @@ describe("validateConfig — server exposure warning", () => {
     expect(warnings.some((w) => w.includes("server.host"))).toBe(false);
   });
 
-  it("does not warn when proxyAuth is enabled", () => {
+  // proxyAuth used to suppress the exposure warning. It authenticates nothing
+  // — the middleware is never mounted and /api/auth/login is not implemented —
+  // so it must neither silence the host warning nor pass unremarked.
+  it("still warns about exposure when only proxyAuth is set", () => {
     const c = {
       ...baseConfig(),
       server: { port: 3000, host: "0.0.0.0", proxyAuth: { enabled: true, password: "p" } },
     };
     const warnings = validateConfig(c);
-    expect(warnings.some((w) => w.includes("server.host"))).toBe(false);
+    expect(warnings.some((w) => w.includes("server.host"))).toBe(true);
+  });
+
+  it("warns that proxyAuth is not implemented, even on a loopback bind", () => {
+    const c = {
+      ...baseConfig(),
+      server: { port: 3000, host: "127.0.0.1", proxyAuth: { enabled: true, password: "p" } },
+    };
+    const warnings = validateConfig(c);
+    expect(warnings.some((w) => w.includes("proxyAuth"))).toBe(true);
   });
 
   it("warns when apiKey is set but no authToken (apiKey only gates mutations)", () => {
