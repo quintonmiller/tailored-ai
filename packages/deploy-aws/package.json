@@ -1,0 +1,60 @@
+{
+  "name": "@tailored-ai/deploy-aws",
+  "version": "0.1.9",
+  "description": "AWS deploy target for Tailored AI — runs TAI on a single EC2 instance with a persistent EBS volume. Install with `tai plugin install @tailored-ai/deploy-aws`, then `tai deploy up aws-ec2`.",
+  "license": "MIT",
+  "author": "Quinton Miller",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/quintonmiller/tailored-ai.git",
+    "directory": "packages/deploy-aws"
+  },
+  "homepage": "https://github.com/quintonmiller/tailored-ai/tree/main/packages/deploy-aws#readme",
+  "bugs": "https://github.com/quintonmiller/tailored-ai/issues",
+  "keywords": [
+    "ai",
+    "agent",
+    "tailored-ai",
+    "aws",
+    "ec2",
+    "deploy",
+    "self-hosting"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@tailored-ai/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@tailored-ai/core": "workspace:*",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.0.18"
+  }
+}
