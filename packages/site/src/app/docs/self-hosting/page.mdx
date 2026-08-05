@@ -279,8 +279,9 @@ that work the moment you boot the image.
 
 ### Keeping it small
 
-The image is ~670 MB, of which ~160 MB is TAI. It was 880 MB until a
-dependency audit found that `pnpm deploy --prod` drops `devDependencies` but
+The image is ~670 MB, of which 136 MB is TAI and its dependencies. It was
+886 MB until a dependency audit found that
+`pnpm deploy --prod` drops `devDependencies` but
 keeps `peerDependencies` marked `optional`. A test runner, a TypeScript
 compiler and a browser driver were shipping to every self-hoster, none of them
 reachable from the entrypoint.

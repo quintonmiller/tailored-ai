@@ -283,8 +283,10 @@ engines upstream.
 
 ### Keeping it that way
 
-The image is ~670 MB, of which ~160 MB is TAI and its dependencies. It was
-880 MB until [#375](https://github.com/quintonmiller/tailored-ai/issues/375):
+`docker images` reports ~670 MB, of which 136 MB is TAI and its dependencies
+(`du -sb /app`); the rest is Debian slim, Node, git and curl. It was 886 MB
+with a 281 MB `/app` until
+[#375](https://github.com/quintonmiller/tailored-ai/issues/375):
 `pnpm deploy --prod` drops `devDependencies` but keeps `peerDependencies`
 marked `optional`, so vitest (with vite, rollup, esbuild and lightningcss),
 `md-to-pdf` (with `typescript` and a second browser driver) and Playwright all
@@ -297,7 +299,7 @@ dependency that wants a second look rather than a guard that wants raising:
 |---|---|
 | `pnpm run guard:runtime-deps` | fails CI if a first-party package declares a build tool or browser driver under `dependencies` |
 | `scripts/prune-dev-peers.mjs` | drops optional peers that are also devDependencies of a first-party package, then collects what that orphans |
-| size ceiling in `docker-image.yml` | fails the publish if the built image exceeds it |
+| size ceiling in `docker-image.yml` | fails the publish if `/app` exceeds 170 MB |
 
 ## Deploying to a cloud provider
 

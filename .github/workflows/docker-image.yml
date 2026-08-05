@@ -161,20 +161,26 @@ jobs:
           [ "$code" = "200" ] || { echo "::error::expected 200 with the token, got $code"; exit 1; }
           echo "[smoke] healthy, auth enforced"
 
-          # Size ceiling. The image was 880 MB until #375 found that
-          # `pnpm deploy --prod` keeps optional peerDependencies — a test
+          # Size ceiling on the deploy tree. /app was 281 MB until #375 found
+          # that `pnpm deploy --prod` keeps optional peerDependencies — a test
           # runner, a compiler and a browser driver the runtime cannot reach.
-          # This is the backstop for that: prune-dev-peers running is not
-          # something the boot test can observe, but the size is.
+          # This is the backstop: whether prune-dev-peers actually matched is
+          # not something the boot test can observe, but the size is.
+          #
+          # Measured with `du -sb /app` rather than `docker image inspect
+          # .Size`, which under the containerd image store reports a number
+          # smaller than the /app layer it contains — a ceiling on that would
+          # never fire. This is exact bytes, and it is the part this repo
+          # controls; base-image drift is not something a PR here should fail
+          # on.
           #
           # Raise it deliberately, with the reason in the commit message.
           # Do not raise it to make a red build green.
-          LIMIT_MB=760
-          BYTES=$(docker image inspect "$TAG" --format '{{.Size}}')
-          MB=$((BYTES / 1000 / 1000))
-          echo "[smoke] image size: ${MB} MB (ceiling ${LIMIT_MB} MB)"
+          LIMIT_MB=170
+          MB=$(( $(docker exec tai-smoke du -sb /app | cut -f1) / 1000 / 1000 ))
+          echo "[smoke] /app: ${MB} MB (ceiling ${LIMIT_MB} MB)"
           if [ "$MB" -gt "$LIMIT_MB" ]; then
-            echo "::error::image is ${MB} MB, over the ${LIMIT_MB} MB ceiling. \
+            echo "::error::/app is ${MB} MB, over the ${LIMIT_MB} MB ceiling. \
           Something large became reachable — check for a new runtime dependency, \
           or for prune-dev-peers no longer matching. See issue #375."
             exit 1
