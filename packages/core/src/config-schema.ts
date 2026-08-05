@@ -163,6 +163,7 @@ const SystemPromptOverrideSchema = z.object({
   base: z.string().optional(),
   baseFile: z.string().optional(),
   order: z.array(z.string()).optional(),
+  tail: z.array(z.string()).optional(),
   custom: z.array(CustomLayerSchema).optional(),
 });
 type _SystemPromptOverrideMatches = AssertTrue<

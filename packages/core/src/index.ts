@@ -166,11 +166,14 @@ export {
   type BuiltInLayers,
   type CustomLayer,
   composeSystemPrompt,
+  composeTailBlock,
   DEFAULT_LAYER_ORDER,
+  DEFAULT_TAIL_LAYERS,
   type DefaultLayerName,
   mergeSystemPromptOverrides,
   resolveBase,
   resolveCustomLayers,
+  resolveTailLayers,
   type SystemPromptOverride,
 } from "./agent/system-prompt.js";
 export type { DigestResult, DigestSection } from "./autopilot/digest.js";

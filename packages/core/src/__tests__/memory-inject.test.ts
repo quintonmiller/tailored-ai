@@ -91,11 +91,11 @@ describe("buildMemoryBlock", () => {
 // ---------------------------------------------------------------------------
 
 interface CapturingProvider extends AIProvider {
-  calls: Array<{ system: string; history: Message[] }>;
+  calls: Array<{ system: string; injected: string; history: Message[] }>;
 }
 
 function makeProvider(scriptedReplies: Array<{ content: string }>): CapturingProvider {
-  const calls: Array<{ system: string; history: Message[] }> = [];
+  const calls: Array<{ system: string; injected: string; history: Message[] }> = [];
   let i = 0;
   return {
     id: "fake",
@@ -105,7 +105,11 @@ function makeProvider(scriptedReplies: Array<{ content: string }>): CapturingPro
     chat: async (params) => {
       const messages = params.messages;
       const system = messages.find((m) => m.role === "system")?.content ?? "";
-      calls.push({ system, history: messages });
+      // `recall_memory` rides behind the history now (see the prompt-tail
+      // work), so asserting on the system message alone would pass vacuously.
+      // These tests are about whether recall reaches the model at all.
+      const injected = `${system}\n${messages[messages.length - 1]?.content ?? ""}`;
+      calls.push({ system, injected, history: messages });
       const reply = scriptedReplies[Math.min(i, scriptedReplies.length - 1)];
       i++;
       return {
@@ -141,10 +145,10 @@ describe("runAgentLoop memory injection (M3)", () => {
       session,
     });
 
-    expect(provider.calls[0].system).not.toContain("[Relevant memory]");
+    expect(provider.calls[0].injected).not.toContain("[Relevant memory]");
   });
 
-  it("injects relevant notes into the system prompt when injectMemory is true", async () => {
+  it("injects relevant notes when injectMemory is true", async () => {
     createNote(db, { content: "previously: server uses port 8080", project_id: "p" });
     createNote(db, { content: "unrelated note about cookies", project_id: "p" });
     const session = newSession(db, "fake-model", "fake", undefined, "p");
@@ -157,7 +161,7 @@ describe("runAgentLoop memory injection (M3)", () => {
       injectMemory: true,
     });
 
-    const sys = provider.calls[0].system;
+    const sys = provider.calls[0].injected;
     expect(sys).toContain("[Relevant memory]");
     expect(sys).toContain("server uses port 8080");
     expect(sys).not.toContain("cookies");
@@ -176,8 +180,8 @@ describe("runAgentLoop memory injection (M3)", () => {
       injectMemory: true,
     });
 
-    expect(provider.calls[0].system).toContain("p-only marker");
-    expect(provider.calls[0].system).not.toContain("q-only marker");
+    expect(provider.calls[0].injected).toContain("p-only marker");
+    expect(provider.calls[0].injected).not.toContain("q-only marker");
   });
 
   it("emits no block when there are no relevant hits", async () => {
@@ -192,7 +196,7 @@ describe("runAgentLoop memory injection (M3)", () => {
       injectMemory: true,
     });
 
-    expect(provider.calls[0].system).not.toContain("[Relevant memory]");
+    expect(provider.calls[0].injected).not.toContain("[Relevant memory]");
   });
 });
 

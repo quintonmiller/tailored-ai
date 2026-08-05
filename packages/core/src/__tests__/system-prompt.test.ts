@@ -6,10 +6,13 @@ import { BASE_SYSTEM_PROMPT } from "../agent/prompt.js";
 import {
   type BuiltInLayers,
   composeSystemPrompt,
+  composeTailBlock,
   DEFAULT_LAYER_ORDER,
+  DEFAULT_TAIL_LAYERS,
   mergeSystemPromptOverrides,
   resolveBase,
   resolveCustomLayers,
+  resolveTailLayers,
 } from "../agent/system-prompt.js";
 
 const layers: BuiltInLayers = {
@@ -32,9 +35,9 @@ describe("system-prompt composer", () => {
     warnSpy.mockRestore();
   });
 
-  it("returns default order when no override given", () => {
+  it("returns default order when no override given, less the tail layers", () => {
     const out = composeSystemPrompt("[base]", layers, undefined, {});
-    expect(out).toBe("[base][inst][ctx][cat][core][live][recall]");
+    expect(out).toBe("[base][inst][ctx][cat][core]");
   });
 
   it("uses default base when override is undefined", () => {
@@ -177,5 +180,70 @@ describe("system-prompt composer", () => {
       "chat_live_state",
       "recall_memory",
     ]);
+  });
+
+  describe("tail layers", () => {
+    it("moves the per-turn layers out of the prompt by default", () => {
+      expect(resolveTailLayers(undefined)).toEqual([...DEFAULT_TAIL_LAYERS]);
+      expect(composeTailBlock(layers, undefined, {})).toBe("[live][recall]");
+    });
+
+    it("keeps every layer exactly once across prompt and tail", () => {
+      const prompt = composeSystemPrompt("[base]", layers, undefined, {});
+      const tail = composeTailBlock(layers, undefined, {});
+      for (const block of ["[base]", "[inst]", "[ctx]", "[cat]", "[core]", "[live]", "[recall]"]) {
+        expect(`${prompt}${tail}`.split(block)).toHaveLength(2);
+      }
+    });
+
+    it("an explicit order keeps placement — the default tail does not overrule it", () => {
+      const override = { order: ["recall_memory", "base", "instructions"] };
+      expect(resolveTailLayers(override)).toEqual([]);
+      expect(composeSystemPrompt("[base]", layers, override, {})).toBe("[recall][base][inst]");
+      expect(composeTailBlock(layers, override, {})).toBe("");
+    });
+
+    it("an explicit order opts in by naming tail", () => {
+      const override = { order: ["base", "instructions", "recall_memory"], tail: ["recall_memory"] };
+      expect(composeSystemPrompt("[base]", layers, override, {})).toBe("[base][inst]");
+      expect(composeTailBlock(layers, override, {})).toBe("[recall]");
+    });
+
+    it("tail: [] keeps everything in the system prompt", () => {
+      const out = composeSystemPrompt("[base]", layers, { tail: [] }, {});
+      expect(out).toBe("[base][inst][ctx][cat][core][live][recall]");
+      expect(composeTailBlock(layers, { tail: [] }, {})).toBe("");
+    });
+
+    it("a layer stripped from order stays stripped rather than reappearing in the tail", () => {
+      const override = { order: ["base", "instructions"], tail: ["recall_memory"] };
+      expect(composeSystemPrompt("[base]", layers, override, {})).toBe("[base][inst]");
+      expect(composeTailBlock(layers, override, {})).toBe("");
+    });
+
+    it("refuses to move base", () => {
+      expect(resolveTailLayers({ tail: ["base"] })).toEqual([]);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('"base" cannot move'));
+    });
+
+    it("carries custom layers into the tail", () => {
+      const override = {
+        order: [...DEFAULT_LAYER_ORDER, "vol"],
+        tail: ["vol"],
+        custom: [{ name: "vol", content: "[v]" }],
+      };
+      expect(composeTailBlock(layers, override, { vol: "[v]" })).toBe("[v]");
+      expect(composeSystemPrompt("[base]", layers, override, { vol: "[v]" })).not.toContain("[v]");
+    });
+
+    it("per-agent tail wins over the global one", () => {
+      expect(mergeSystemPromptOverrides({ tail: ["recall_memory"] }, { tail: [] })?.tail).toEqual([]);
+      expect(mergeSystemPromptOverrides({ tail: ["recall_memory"] }, { base: "x" })?.tail).toEqual(["recall_memory"]);
+    });
+
+    it("returns an empty tail when the moved layers are themselves empty", () => {
+      const empty: BuiltInLayers = { ...layers, chat_live_state: "", recall_memory: "" };
+      expect(composeTailBlock(empty, undefined, {})).toBe("");
+    });
   });
 });
