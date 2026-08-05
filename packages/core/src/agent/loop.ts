@@ -1158,10 +1158,14 @@ async function _runAgentLoopBody(
     // out of budget just spends another round arriving at the same place.
     if (response.finishReason === "length") {
       const noOutput = !(response.content ?? "").trim() && !response.toolCalls?.length;
+      // The rung that answered may carry its own cap, so report the one that
+      // actually bit. Naming the deployment default when a fallback's override
+      // is what truncated the turn sends the operator to the wrong setting.
+      const effectiveMaxTokens = answeredBy.maxTokens ?? opts.maxTokens;
       const stop = {
         kind: "truncated" as const,
         model: answeredBy.model,
-        maxTokens: opts.maxTokens,
+        maxTokens: effectiveMaxTokens,
         outputTokens: response.usage?.output,
         spentOnReasoning: noOutput && !!response.reasoning,
       };
@@ -1176,7 +1180,7 @@ async function _runAgentLoopBody(
       }
       // Answered, but cut off mid-sentence. Worth a line; not worth discarding.
       console.warn(
-        `[agent] ${answeredBy.model} hit its output limit mid-reply (maxTokens ${opts.maxTokens ?? "unset"})`,
+        `[agent] ${answeredBy.model} hit its output limit mid-reply (maxTokens ${effectiveMaxTokens ?? "unset"})`,
       );
     }
 
