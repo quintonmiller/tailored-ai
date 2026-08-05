@@ -234,6 +234,7 @@ export type {
 export {
   DEFAULT_DISABLED_PLUGIN_MODULES,
   DEFAULT_PLUGIN_MODULES,
+  findInertConfig,
   findUnknownKeys,
   KNOWN_TOP_LEVEL_CONFIG_KEYS,
   loadConfig,
@@ -242,6 +243,7 @@ export {
   normalizeRawConfig,
   validateConfig,
 } from "./config.js";
+export { AGENT_DEFINITION_KEYS, AgentDefinitionSchema, CronJobConfigSchema, findShapeIssues } from "./config-schema.js";
 export type { ConfigWriteHost, ConfigWriteResult } from "./config-write.js";
 export { ConfigWriteRejected, updateRawConfig, writeRawConfigText } from "./config-write.js";
 export { ensureContextDir, loadAllContext, loadContextFiles, migrateContextDir } from "./context.js";

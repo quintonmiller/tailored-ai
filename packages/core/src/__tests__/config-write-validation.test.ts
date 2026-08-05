@@ -79,6 +79,36 @@ describe("updateRawConfig", () => {
     expect(err.issues[0]).toContain('Did you mean "temperature"');
   });
 
+  it("refuses a value that is the wrong type for its field, and leaves the file untouched", async () => {
+    // The other half of "parses but is never read": the key is right and the
+    // value is text. An agent asked to disable a cron job wrote `enabled:
+    // "false"`, reported "Done", and the job ran four more times over six
+    // hours — `job.enabled !== false` is true for a string.
+    const before = host.read();
+
+    const err = await updateRawConfig(host, (raw) => {
+      raw.cron = { enabled: true, jobs: [{ name: "sweep", schedule: "0 * * * *", prompt: "go", enabled: "false" }] };
+    }).catch((e) => e as ConfigWriteRejected);
+
+    expect(err).toBeInstanceOf(ConfigWriteRejected);
+    expect(err.issues[0]).toContain("must be a boolean");
+    expect(err.issues[0]).toContain("reads as `true`");
+    expect(host.read()).toBe(before);
+    expect(host.reloads).toBe(0);
+  });
+
+  it("does not block an unrelated write on a shape mistake that was already there", async () => {
+    const dirty = makeHost(["agents:", "  writer:", "    temperature: 0.3", "    injectMemory: 'true'"].join("\n"));
+
+    // Pre-existing findings are the deployment's problem, not this write's.
+    const result = await updateRawConfig(dirty, (raw) => {
+      (raw.agents as Record<string, Record<string, unknown>>).writer.temperature = 0.9;
+    });
+
+    expect(YAML.parse(dirty.read()).agents.writer.temperature).toBe(0.9);
+    expect(result.warnings.some((w) => w.includes("`injectMemory`"))).toBe(true);
+  });
+
   it("refuses an unknown key on a newly created agent", async () => {
     await expect(
       updateRawConfig(host, (raw) => {

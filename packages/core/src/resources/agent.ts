@@ -1,4 +1,5 @@
 import type { AgentDefinition } from "../config.js";
+import { AGENT_DEFINITION_KEYS, AgentDefinitionSchema, shapeIssues } from "../config-schema.js";
 import type { Resource, ResourceManifest, ResourceOrigin } from "./interface.js";
 import { ResourceRegistry } from "./registry.js";
 
@@ -18,171 +19,56 @@ export interface AgentBody {
 }
 
 /**
- * Every field an {@link AgentDefinition} recognises.
+ * Convert a manifest into an {@link AgentDefinition}. Every field is
+ * type-checked against `AgentDefinitionSchema` and then copied through
+ * verbatim; a field this build does not recognise is warned about rather than
+ * dropped in silence. Returning a partial object is intentional —
+ * `resolveAgent` already supplies sensible defaults for every field.
  *
- * The list exists so that a field can be *dropped* only on purpose. What it
- * replaces was an allowlist of the fields someone remembered to copy, under a
- * docstring promising that "unknown fields pass through" — which was the
- * opposite of what the code did. Anything not enumerated above the pass-through
- * below was silently discarded on its way from the manifest to the loop.
+ * This used to be a hand-written allowlist of the fields someone had
+ * remembered to copy, under a docstring promising that "unknown fields pass
+ * through" — the opposite of what the code did. Anything not enumerated was
+ * silently discarded on its way from the manifest to the loop. What that cost,
+ * in one deployment: `fileBoundary` never reached `toolContextExtras`, so three
+ * agents holding `write` and `edit` ran with a declared filesystem confinement
+ * that did nothing, and thirteen agents set `injectMemory: true` and never got
+ * a single injected memory. Both were configured, both round-tripped into the
+ * manifest, and neither was ever read.
  *
- * What that cost, in one deployment: `fileBoundary` never reached
- * `toolContextExtras`, so three agents holding `write` and `edit` ran with a
- * declared filesystem confinement that did nothing. Thirteen agents set
- * `injectMemory: true` and never got a single injected memory. Both were
- * configured, both round-tripped into the manifest, and neither was ever read.
- *
- * Keep in sync with `AgentDefinition` in config.ts. A field missing here is
- * inert config, which is the hardest kind of bug to see: it parses, it
- * persists, and it does nothing.
- */
-const AGENT_DEFINITION_FIELDS = new Set<string>([
-  "description",
-  "model",
-  "provider",
-  "models",
-  "instructions",
-  "tools",
-  "temperature",
-  "thinking",
-  "maxTokens",
-  "maxToolRounds",
-  "fileBoundary",
-  "exec",
-  "roomSessionScope",
-  "contextDir",
-  "nudgeOnText",
-  "nudgeMessage",
-  "skipGlobalContext",
-  "summarizeOnTrim",
-  "worktree",
-  "taskPreamble",
-  "injectMemory",
-  "budgetWarnings",
-  "memoryInjectBudgetTokens",
-  "memoryInjectLimit",
-  "hooks",
-  "sandbox",
-  "skills",
-  "skillLoading",
-  "online",
-  "systemPrompt",
-]);
-
-/**
- * Convert a manifest into an {@link AgentDefinition}. Known fields are
- * type-checked when present and otherwise copied through; a field this build
- * does not recognise is warned about rather than dropped in silence.
- * Returning a partial object is intentional — `resolveAgent` already supplies
- * sensible defaults for every field.
+ * The list that replaced it had the same weakness one level up: it was still
+ * hand-maintained, so a field could be added to the interface and forgotten
+ * here. It now derives from the schema, which cannot drift from the interface
+ * without failing the build.
  */
 export function parseAgentData(manifest: ResourceManifest): AgentDefinition {
   const data = manifest.data ?? {};
   if (typeof data !== "object" || Array.isArray(data)) {
     throw new Error(`agent ${manifest.id}: manifest.data must be an object`);
   }
-  const out: AgentDefinition = {};
 
-  for (const key of [
-    "description",
-    "model",
-    "provider",
-    "instructions",
-    "nudgeMessage",
-    "contextDir",
-    "taskPreamble",
-  ] as const) {
-    const v = (data as Record<string, unknown>)[key];
-    if (v == null) continue;
-    if (typeof v !== "string") {
-      throw new Error(`agent ${manifest.id}: data.${key} must be a string`);
-    }
-    (out as Record<string, unknown>)[key] = v;
-  }
-
-  for (const key of ["temperature", "maxToolRounds", "nudgeOnText"] as const) {
-    const v = (data as Record<string, unknown>)[key];
-    if (v == null) continue;
-    if (typeof v !== "number") {
-      throw new Error(`agent ${manifest.id}: data.${key} must be a number`);
-    }
-    (out as Record<string, unknown>)[key] = v;
-  }
-
-  for (const key of ["skipGlobalContext", "summarizeOnTrim", "worktree"] as const) {
-    const v = (data as Record<string, unknown>)[key];
-    if (v == null) continue;
-    if (typeof v !== "boolean") {
-      throw new Error(`agent ${manifest.id}: data.${key} must be a boolean`);
-    }
-    (out as Record<string, unknown>)[key] = v;
-  }
-
-  for (const key of ["tools", "skills"] as const) {
-    const v = (data as Record<string, unknown>)[key];
-    if (v == null) continue;
-    if (!Array.isArray(v) || v.some((x) => typeof x !== "string")) {
-      throw new Error(`agent ${manifest.id}: data.${key} must be an array of strings`);
-    }
-    (out as Record<string, unknown>)[key] = v;
-  }
-
-  if ((data as Record<string, unknown>).models != null) {
-    const v = (data as Record<string, unknown>).models;
-    if (!Array.isArray(v)) {
-      throw new Error(`agent ${manifest.id}: data.models must be an array`);
-    }
-    out.models = v as AgentDefinition["models"];
-  }
-
-  if ((data as Record<string, unknown>).hooks != null) {
-    const v = (data as Record<string, unknown>).hooks;
-    if (typeof v !== "object" || Array.isArray(v)) {
-      throw new Error(`agent ${manifest.id}: data.hooks must be an object`);
-    }
-    out.hooks = v as AgentDefinition["hooks"];
-  }
-
-  if ((data as Record<string, unknown>).sandbox != null) {
-    const v = (data as Record<string, unknown>).sandbox;
-    if (v !== "host" && v !== "docker" && v !== "podman") {
-      throw new Error(`agent ${manifest.id}: data.sandbox must be host|docker|podman`);
-    }
-    out.sandbox = v;
-  }
-
-  if ((data as Record<string, unknown>).skillLoading != null) {
-    const v = (data as Record<string, unknown>).skillLoading;
-    if (v !== "eager" && v !== "progressive") {
-      throw new Error(`agent ${manifest.id}: data.skillLoading must be eager|progressive`);
-    }
-    out.skillLoading = v;
-  }
-
-  if ((data as Record<string, unknown>).systemPrompt != null) {
-    const v = (data as Record<string, unknown>).systemPrompt;
-    if (typeof v !== "object" || Array.isArray(v)) {
-      throw new Error(`agent ${manifest.id}: data.systemPrompt must be an object`);
-    }
-    // Trust the AgentDefinition shape — SystemPromptOverride is a thin
-    // structural type that composeSystemPrompt validates at use time.
-    out.systemPrompt = v as AgentDefinition["systemPrompt"];
-  }
-
-  // Everything the typed blocks above did not claim.
-  //
-  // A recognised field is copied through, so adding one to AgentDefinition no
-  // longer requires remembering to add it here as well — forgetting that is
-  // what made `fileBoundary` and `injectMemory` inert. An unrecognised one is
-  // reported: `system_prompt` (the snake_case spelling of `systemPrompt`) sat
-  // in four agents' config carrying their entire persona, round-tripped
-  // faithfully into their manifests, and was read by nothing.
+  // `key:` with nothing after it has always counted as absent here, and stays
+  // that way: a manifest is parsed at startup, where a rejection costs the
+  // whole agent. config.yaml is held to the stricter reading, because there
+  // the identical finding is a warning rather than a dead agent.
+  const present: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
-    if (value == null || key in out) continue;
-    if (AGENT_DEFINITION_FIELDS.has(key)) {
+    if (value != null) present[key] = value;
+  }
+
+  const issues = shapeIssues(`agent ${manifest.id}`, AgentDefinitionSchema, present, "data");
+  if (issues.length > 0) throw new Error(issues.join("; "));
+
+  // Copied rather than taken from the schema's output, which would strip
+  // unrecognised keys nested inside a known field without saying so.
+  const out: AgentDefinition = {};
+  for (const [key, value] of Object.entries(present)) {
+    if (AGENT_DEFINITION_KEYS.has(key)) {
       (out as Record<string, unknown>)[key] = value;
       continue;
     }
+    // `system_prompt` (the snake_case spelling of `systemPrompt`) sat in four
+    // agents' config carrying their entire persona, round-tripped faithfully
+    // into their manifests, and was read by nothing.
     console.warn(
       `[agents] ${manifest.id}: unknown field "${key}" — it will be ignored. ` +
         `Check the spelling (fields are camelCase), or remove it.`,
