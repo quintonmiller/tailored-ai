@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import type Database from "better-sqlite3";
 import { resolveAgent } from "./agent/agents.js";
 import { EMPTY_HOOKS, mergeHooks, type ResolvedHooks } from "./agent/hooks.js";
-import type { AgentLoopOptions } from "./agent/loop.js";
+import type { AgentLoopOptions, ModelCandidate } from "./agent/loop.js";
 import { runAgentLoop } from "./agent/loop.js";
 import { canSelfModify } from "./agent/prompt.js";
 import { findOrCreateSession, type Session } from "./agent/session.js";
@@ -13,6 +13,7 @@ import {
   type AgentConfig,
   type AgentDefinition,
   type AgentHook,
+  type ModelEntry,
   mergeProjectOverlay,
   validateConfig,
 } from "./config.js";
@@ -1153,7 +1154,14 @@ export class AgentRuntime {
     });
 
     const callProject = opts.project !== undefined ? opts.project : this._activeProject;
-    const agentProvider = this.resolveAgentProvider(resolved.provider, agentName);
+    // `provider` is the chain's head, not an independently-resolved provider.
+    // Resolving it separately made an unbuildable head warn twice for one cause,
+    // and the louder of the two warnings said it was degrading to the default
+    // with mismatched models — which is exactly what the chain then did not do.
+    // Falling back to `resolveAgentProvider` only when the chain is empty keeps
+    // callers that build options by hand on the old path.
+    const headCandidate = this.resolveModelChain(resolved.models, agentName)[0];
+    const agentProvider = headCandidate?.provider ?? this.resolveAgentProvider(resolved.provider, agentName);
     return {
       provider: agentProvider,
       session: this.alignSessionToAgent(opts.session, resolved),
@@ -1223,7 +1231,10 @@ export class AgentRuntime {
       },
       // Re-resolved rather than captured so a hot reload swaps the provider
       // mid-run, the same way `getTools` re-resolves tools.
-      getProvider: () => this.resolveAgentProvider(resolved.provider, agentName),
+      getProvider: () =>
+        this.resolveModelChain(resolved.models, agentName)[0]?.provider ??
+        this.resolveAgentProvider(resolved.provider, agentName),
+      getModelChain: () => this.resolveModelChain(resolved.models, agentName),
     };
   }
 
@@ -1270,6 +1281,31 @@ export class AgentRuntime {
    * fallback. `validateConfig` flags the same condition at startup.
    */
   private resolveAgentProvider(providerId: string | undefined, agentName: string | undefined): AIProvider {
+    const built = this.tryBuildProvider(providerId);
+    if (!(built instanceof Error)) return built;
+
+    const config = this.getConfig();
+    const key = `agent:${agentName ?? "(default)"}:${providerId}`;
+    if (!this._warnedMissingProviders.has(key)) {
+      this._warnedMissingProviders.add(key);
+      console.warn(
+        `[runtime] agent "${agentName ?? "(default)"}" asks for provider "${providerId}" but it could not be built ` +
+          `(${built.message}). Falling back to "${config.agent.defaultProvider}" — its models differ, so ` +
+          `calls may fail with a model-not-found error.`,
+      );
+    }
+    return this._provider;
+  }
+
+  /**
+   * Build a provider by id, or return the Error explaining why not. Separate
+   * from {@link resolveAgentProvider} because the two callers want opposite
+   * things from a failure: an agent's declared provider degrades to the
+   * deployment default, while a rung of a fallback chain is simply dropped —
+   * substituting the default there would silently duplicate whichever entry
+   * already points at it.
+   */
+  private tryBuildProvider(providerId: string | undefined): AIProvider | Error {
     const config = this.getConfig();
     if (!providerId || providerId === config.agent.defaultProvider) return this._provider;
 
@@ -1284,17 +1320,48 @@ export class AgentRuntime {
       this._providerRegistry.registerBuiltin({ id: providerId, provider, defaultModel: model });
       return provider;
     } catch (err) {
-      const key = `${agentName ?? "(default)"}:${providerId}`;
-      if (!this._warnedMissingProviders.has(key)) {
+      return err as Error;
+    }
+  }
+
+  /**
+   * Turn a resolved fallback chain into callable candidates, dropping any whose
+   * provider cannot be built. Re-run every loop iteration, so installing a
+   * plugin and reloading brings its rung to life without a restart.
+   *
+   * Returning fewer entries than were configured is the intended outcome, not a
+   * failure: a chain of [local, cloud] on a box where the cloud plugin is
+   * missing should still run on local rather than refuse to start.
+   */
+  private resolveModelChain(entries: ModelEntry[], agentName: string | undefined): ModelCandidate[] {
+    const candidates: ModelCandidate[] = [];
+    const skipped: Array<{ entry: ModelEntry; error: Error }> = [];
+    for (const entry of entries) {
+      const built = this.tryBuildProvider(entry.provider);
+      if (built instanceof Error) {
+        skipped.push({ entry, error: built });
+        continue;
+      }
+      candidates.push({ provider: built, model: entry.model, label: entry.provider });
+    }
+
+    // "Skipping it" is only true when something survives to be skipped *to*.
+    // When every rung drops out, the caller degrades to the deployment default
+    // and says so — reporting both makes one cause read as two problems, and
+    // the skip message is the less useful half.
+    if (candidates.length > 0) {
+      for (const { entry, error } of skipped) {
+        const key = `chain:${agentName ?? "(default)"}:${entry.provider}`;
+        if (this._warnedMissingProviders.has(key)) continue;
         this._warnedMissingProviders.add(key);
         console.warn(
-          `[runtime] agent "${agentName ?? "(default)"}" asks for provider "${providerId}" but it could not be built ` +
-            `(${(err as Error).message}). Falling back to "${config.agent.defaultProvider}" — its models differ, so ` +
-            `calls may fail with a model-not-found error.`,
+          `[runtime] fallback entry "${entry.provider}" (${entry.model}) for agent ` +
+            `"${agentName ?? "(default)"}" could not be built (${error.message}) — skipping it. ` +
+            `Install the plugin that registers "${entry.provider}" to bring this rung back.`,
         );
       }
-      return this._provider;
     }
+    return candidates;
   }
 }
 

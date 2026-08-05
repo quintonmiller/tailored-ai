@@ -26,7 +26,17 @@ export interface AgentDefinition {
   description?: string;
   model?: string;
   provider?: string;
-  /** Ordered priority list of provider+model combinations. First available is used. */
+  /**
+   * Ordered fallback chain of provider+model pairs. The first entry is the
+   * primary; each later one is tried when the entry before it cannot be built
+   * (its provider plugin is missing) or its call fails.
+   *
+   * Takes precedence over this agent's `model`/`provider` when both are set,
+   * with a warning — a chain whose head is not where the pin points would be
+   * stranger than either rule alone. An agent that sets only `model`/`provider`
+   * is *not* opted into the deployment-wide `agent.models[]` chain: pinning one
+   * model exists to send this agent somewhere specific.
+   */
   models?: ModelEntry[];
   instructions?: string;
   tools?: string[];
@@ -537,7 +547,16 @@ export interface AgentConfig {
   };
   agent: {
     defaultProvider: string;
-    /** Ordered priority list of provider+model combinations. First available is used. */
+    /**
+     * Deployment-wide fallback chain. The first entry is the primary; each
+     * later one is tried when the entry before it cannot be built or its call
+     * fails. Inherited by every agent that does not pin its own
+     * `model`/`provider` or declare its own `models[]`.
+     *
+     * Unset means a one-entry chain built from `defaultProvider` and that
+     * provider's `defaultModel` — no failover, which is what a deployment with
+     * one model has always had.
+     */
     models?: ModelEntry[];
     extraInstructions: string;
     maxHistoryTokens: number;
