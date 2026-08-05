@@ -107,13 +107,18 @@ describe("FileLogStore.pruneOldRuns", () => {
       name: "wf",
       steps: [{ name: "s", type: "shell", command: "x" }],
     });
-    // Need different started_at values; sleep 1s between two runs to advance
-    // the second-resolution timestamp, then a third.
+    // Timestamps are set explicitly rather than slept for. `started_at` is
+    // second-resolution, so the old version paused 1.1s between runs to force
+    // distinct values — 2.2s of wall clock whose correctness depended on the
+    // suite not being under load.
     const a = await engine.runWorkflow("wf");
-    await new Promise((r) => setTimeout(r, 1100));
     const b = await engine.runWorkflow("wf");
-    await new Promise((r) => setTimeout(r, 1100));
     const c = await engine.runWorkflow("wf");
+    const at = (id: string, when: string) =>
+      db.prepare("UPDATE workflow_runs SET started_at = ? WHERE id = ?").run(when, id);
+    at(a.id, "2026-01-01 00:00:01");
+    at(b.id, "2026-01-01 00:00:02");
+    at(c.id, "2026-01-01 00:00:03");
 
     expect(readdirSync(store.baseDir).sort()).toEqual([a.id, b.id, c.id].sort());
     const deleted = store.pruneOldRuns(db, 2);
@@ -122,7 +127,27 @@ describe("FileLogStore.pruneOldRuns", () => {
     expect(remaining).toContain(c.id);
     expect(remaining).toContain(b.id);
     expect(remaining).not.toContain(a.id);
-  }, 8000);
+  });
+
+  it("keeps the newest of runs that started in the same second", async () => {
+    // The ambiguity the ordering fix removes. `datetime('now')` has second
+    // resolution, so a workflow that fans out puts several runs on the same
+    // timestamp; without a tiebreak, "the two newest" was whichever two SQLite
+    // felt like returning, and prune deleted the logs of a run it should have
+    // kept.
+    registry.register({ name: "wf", steps: [{ name: "s", type: "shell", command: "x" }] });
+    const runs = [await engine.runWorkflow("wf"), await engine.runWorkflow("wf"), await engine.runWorkflow("wf")];
+    for (const r of runs) {
+      db.prepare("UPDATE workflow_runs SET started_at = ? WHERE id = ?").run("2026-01-01 00:00:00", r.id);
+    }
+
+    expect(store.pruneOldRuns(db, 2)).toBe(1);
+    const remaining = readdirSync(store.baseDir);
+    // Insert order is the only meaning "newest" can have inside one second.
+    expect(remaining).toContain(runs[2].id);
+    expect(remaining).toContain(runs[1].id);
+    expect(remaining).not.toContain(runs[0].id);
+  });
 
   it("keeps everything when retain >= run count", async () => {
     registry.register({
