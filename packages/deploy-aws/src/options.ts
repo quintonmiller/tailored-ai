@@ -16,9 +16,14 @@
  * builds the TAI image itself: a pnpm install plus `tsc -b` plus a Vite
  * production build. On 2 GB that either OOM-kills the build or thrashes swap
  * for an hour, and the failure surfaces as a container that never appears with
- * the real cause buried in cloud-init logs. Once a prebuilt image is published
- * and the instance only has to `docker pull`, t3.small becomes the right
- * default and this comment should be revisited. */
+ * the real cause buried in cloud-init logs.
+ *
+ * A prebuilt image now exists (`ghcr.io/quintonmiller/tai`, #374) and it is
+ * down to ~670 MB (#375), so the remaining work for a t3.small default is in
+ * user-data.ts: `docker pull` the published tag instead of cloning and
+ * building. Note that only `:edge` publishes automatically — `:latest` is
+ * gated on a `docker-publish` environment that has to exist first. Sizing is
+ * about the build, not the pull; do not drop this without that change. */
 export const DEFAULT_INSTANCE_TYPE = "t3.medium";
 
 /** Root volume size in GB. The image build plus its layer cache needs well

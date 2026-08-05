@@ -262,8 +262,42 @@ directory. Keep `tools.exec.allowedCommands` tight anyway.
 image — that needs a Docker socket, and mounting one hands the agent root on
 the host. Use the default `host` sandbox and rely on the container itself.
 
-Not included: no Playwright browsers (the browser-mediator tools need the
-`trusted-actions` image), and no model server — TAI talks to one over HTTP.
+Not included: no Playwright (neither the driver nor the browsers — the
+browser-mediator tools need the `trusted-actions` image), no `md-to-pdf`, and
+no model server. TAI talks to a model over HTTP.
+
+The `browser` and `md_to_pdf` tools are still registered and still listed to
+the agent. They import their engine lazily, so calling one returns the install
+instruction rather than failing at startup:
+
+```
+playwright is not installed. Run `npm install playwright && npx playwright
+install chromium` to enable the browser tool.
+```
+
+Kept, because each backs a feature that works out of the box:
+`@modelcontextprotocol/sdk` (5 MB, [MCP](./mcp.md)), `pdf-parse` and
+`tesseract.js` (58 MB together, the `extract_document` tool's PDF and OCR
+paths). Those two are most of what remains — both vendor several prebuilt
+engines upstream.
+
+### Keeping it that way
+
+The image is ~670 MB, of which ~160 MB is TAI and its dependencies. It was
+880 MB until [#375](https://github.com/quintonmiller/tailored-ai/issues/375):
+`pnpm deploy --prod` drops `devDependencies` but keeps `peerDependencies`
+marked `optional`, so vitest (with vite, rollup, esbuild and lightningcss),
+`md-to-pdf` (with `typescript` and a second browser driver) and Playwright all
+shipped to every self-hoster, none of them reachable from the entrypoint.
+
+Three things hold the line, and a change that trips one is usually a
+dependency that wants a second look rather than a guard that wants raising:
+
+| | |
+|---|---|
+| `pnpm run guard:runtime-deps` | fails CI if a first-party package declares a build tool or browser driver under `dependencies` |
+| `scripts/prune-dev-peers.mjs` | drops optional peers that are also devDependencies of a first-party package, then collects what that orphans |
+| size ceiling in `docker-image.yml` | fails the publish if the built image exceeds it |
 
 ## Deploying to a cloud provider
 
@@ -294,10 +328,6 @@ co-located model server.
 
 Known gaps, tracked here so they are not rediscovered:
 
-- **Image is ~880 MB.** `typescript`, `rxjs` and a musl-only `lightningcss`
-  binary land in a `--prod` deploy, so something declares a build tool as a
-  runtime dependency. A dependency audit should cut this substantially, and it
-  is the last thing standing between the AWS target and a `t3.small` default.
 - **`sandbox: docker` is unavailable in the container.** Per-agent container
   isolation needs a Docker socket, and mounting one hands the agent root on the
   host. A rootless or socket-proxied path would close this.

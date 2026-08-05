@@ -16,14 +16,13 @@ importers:
         version: 2.31.0(@types/node@22.19.11)
 
   packages/browser-mediator:
-    dependencies:
-      playwright:
-        specifier: ^1.58.2
-        version: 1.58.2
     devDependencies:
       '@types/node':
         specifier: ^22.10.0
         version: 22.19.11
+      playwright:
+        specifier: ^1.58.2
+        version: 1.58.2
       typescript:
         specifier: ^5.7.0
         version: 5.9.3

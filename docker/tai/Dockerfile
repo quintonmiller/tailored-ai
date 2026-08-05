@@ -68,7 +68,16 @@ RUN pnpm --filter @tailored-ai/browser-mediator build \
 # 4. Assemble a self-contained tree at /deploy. `--legacy` is required on
 #    pnpm 10 for workspace deps without injection (same as the
 #    trusted-actions image). `--prod` drops devDependencies.
-RUN pnpm --filter @tailored-ai/cli deploy --prod --legacy /deploy
+#
+#    `--prod` does NOT drop optional peerDependencies, which is how a test
+#    runner and a browser driver used to reach the runtime image: vitest
+#    (with vite, rollup, esbuild x2 and lightningcss) and Playwright, ~150 MB
+#    that nothing here can import. prune-dev-peers removes the ones this
+#    repo's own manifests mark dev-time, then collects what that orphans.
+#    See issue #375.
+COPY scripts/prune-dev-peers.mjs scripts/
+RUN pnpm --filter @tailored-ai/cli deploy --prod --legacy /deploy \
+ && node scripts/prune-dev-peers.mjs /deploy
 
 # The optional @tailored-ai/trusted-actions dep is not built here, so its
 # bin symlink dangles. Left in place deliberately: `tai` never resolves it
