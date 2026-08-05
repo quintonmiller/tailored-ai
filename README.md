@@ -47,10 +47,21 @@ tai edit                                    # open the TUI settings editor
 For a server, VPS, or cloud VM rather than a laptop:
 
 ```bash
+docker run -d --name tai -p 127.0.0.1:3000:3000 -v tai-data:/data \
+  -e TAI_MODEL=llama3.2 -e TAI_BASE_URL=http://host.docker.internal:11434/v1 \
+  --add-host host.docker.internal:host-gateway \
+  ghcr.io/quintonmiller/tai:latest
+
+docker logs -f tai        # first boot prints the generated API token
+```
+
+Multi-arch (amd64 + arm64), so the same tag runs on a Pi or a Graviton box.
+Or build from source with compose:
+
+```bash
 cd docker/tai
 cp .env.example .env      # set TAI_MODEL and TAI_BASE_URL
 docker compose up -d
-docker compose logs -f    # first boot prints the generated API token
 ```
 
 One container, one volume — `TAI_HOME` holds config, database, and plugins.

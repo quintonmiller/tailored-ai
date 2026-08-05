@@ -10,15 +10,36 @@ Run TAI on a machine that isn't your laptop. The supported shape is one
 container and one volume.
 
 ```bash
+docker run -d --name tai \
+  -p 127.0.0.1:3000:3000 \
+  -v tai-data:/data \
+  --add-host host.docker.internal:host-gateway \
+  -e TAI_MODEL=llama3.2 \
+  -e TAI_BASE_URL=http://host.docker.internal:11434/v1 \
+  ghcr.io/quintonmiller/tai:latest
+
+docker logs -f tai            # first boot prints the generated API token
+```
+
+Images are multi-arch, so the same tag runs on a Raspberry Pi, a Graviton
+instance, or an x86 server. `:latest` is the released tag and `:edge` tracks
+the tip of `main`.
+
+The dashboard is now on `http://127.0.0.1:3000` on the host. Read
+[Exposing it](#exposing-it) before you change that.
+
+With compose, which wires the volume, port publish, and healthcheck for you:
+
+```bash
 git clone https://github.com/quintonmiller/tailored-ai
 cd tailored-ai/docker/tai
 cp .env.example .env          # set TAI_MODEL and TAI_BASE_URL
 docker compose up -d
-docker compose logs -f        # first boot prints the generated API token
+docker compose logs -f
 ```
 
-The dashboard is now on `http://127.0.0.1:3000` on the host. Read
-[Exposing it](#exposing-it) before you change that.
+That builds from source. Set `TAI_IMAGE=ghcr.io/quintonmiller/tai:latest` in
+the same `.env` to pull the published image instead.
 
 ## One container, one volume
 
