@@ -61,6 +61,7 @@ Modes:
                           Add --non-interactive to set up without a terminal
   edit                    Edit an existing config (run \`tai edit --help\`)
   project <cmd>           Manage registered projects (run \`tai project help\`)
+  deploy <cmd>            Deploy this instance somewhere (run \`tai deploy help\`)
 
 Options:
   -c, --config <path>     Path to config.yaml (uses its directory as home)
@@ -646,6 +647,11 @@ async function main() {
   }
   if (argv[0] === "plugin" || argv[0] === "plugins") {
     await runPluginCommand(argv.slice(1));
+    return;
+  }
+  if (argv[0] === "deploy") {
+    const { runDeployCommand } = await import("./commands/deploy.js");
+    await runDeployCommand(argv.slice(1));
     return;
   }
   if (argv[0] === "init" || argv[0] === "edit") {

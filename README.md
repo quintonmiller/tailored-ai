@@ -65,6 +65,16 @@ Setting up without a terminal (cloud-init, CI, a container build):
 tai init --non-interactive --model llama3.2 --base-url http://localhost:11434/v1
 ```
 
+`tai deploy` wraps this behind a target seam. `docker` is built in; cloud
+providers register the same way from plugin packages, so adding one does not
+mean forking TAI. See [docs/deploy-targets.md](./docs/deploy-targets.md).
+
+```bash
+tai deploy list
+tai deploy plan docker    # describe what `up` would do, change nothing
+tai deploy up docker
+```
+
 ### Develop from source
 
 ```bash

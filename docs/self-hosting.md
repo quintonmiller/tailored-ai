@@ -208,6 +208,16 @@ Not included: no Playwright browsers (the browser-mediator tools need the
 
 ## Deploying to a cloud provider
 
+`tai deploy` drives this. TAI ships a `docker` target for the local machine;
+cloud providers are plugins that register through the same seam — see
+[deploy-targets.md](./deploy-targets.md) for the contract and how to write one.
+
+```bash
+tai deploy list
+tai deploy plan docker      # describe what `up` would do, change nothing
+tai deploy up docker
+```
+
 A single VM with a persistent disk is the right target: EC2 or Lightsail on
 AWS, Compute Engine on GCP, a Droplet, a Hetzner box. Install Docker, clone,
 `docker compose up -d`, put Caddy in front.
