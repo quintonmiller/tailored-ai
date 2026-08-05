@@ -161,6 +161,84 @@ describe("AnthropicMessagesProvider", () => {
     expect(body.max_tokens).toBe(8192);
   });
 
+  /**
+   * claude-sonnet-5 answers any `temperature` with
+   * "`temperature` is deprecated for this model." Supplying none is not a
+   * workaround, because the 0.3 default is applied here rather than by the API,
+   * so every call to that model failed — including as a fallback rung, which is
+   * the worst moment to discover it. Captured live 2026-08-05.
+   */
+  describe("temperature-rejecting models", () => {
+    const TEMP_400 = () =>
+      new Response(
+        JSON.stringify({
+          type: "error",
+          error: { type: "invalid_request_error", message: "`temperature` is deprecated for this model." },
+        }),
+        { status: 400 },
+      );
+
+    it("retries without temperature and succeeds", async () => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const fetchSpy = vi.fn(async (_u: string, init: RequestInit) =>
+        JSON.parse(init.body as string).temperature === undefined ? jsonResponse(CHAT_RESPONSE) : TEMP_400(),
+      );
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const provider = new AnthropicMessagesProvider({ apiKey: "k" });
+      const res = await provider.chat({ model: "claude-sonnet-5", messages: [{ role: "user", content: "Hi" }] });
+
+      expect(res.content).toBe("OK");
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string).temperature).toBe(0.3);
+      expect(JSON.parse((fetchSpy.mock.calls[1][1] as RequestInit).body as string).temperature).toBeUndefined();
+    });
+
+    it("remembers the model, so the next call omits it first time", async () => {
+      // This file restores globals but not spies, so console.warn keeps its
+      // history across tests; clear it or the previous case's warning counts.
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      warn.mockClear();
+      const fetchSpy = vi.fn(async (_u: string, init: RequestInit) =>
+        JSON.parse(init.body as string).temperature === undefined ? jsonResponse(CHAT_RESPONSE) : TEMP_400(),
+      );
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const provider = new AnthropicMessagesProvider({ apiKey: "k" });
+      const call = () => provider.chat({ model: "claude-sonnet-5", messages: [{ role: "user", content: "Hi" }] });
+      await call();
+      await call();
+
+      expect(fetchSpy).toHaveBeenCalledTimes(3); // 2 for the first call, 1 for the second
+      // Silent would be wrong: agent.temperature genuinely stops applying.
+      expect(warn.mock.calls.filter((c) => String(c[0]).includes("does not accept a temperature"))).toHaveLength(1);
+    });
+
+    it("rethrows a 400 that is not about temperature, without retrying", async () => {
+      const fetchSpy = vi.fn(
+        async () => new Response(JSON.stringify({ error: { message: "credit balance is too low" } }), { status: 400 }),
+      );
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const provider = new AnthropicMessagesProvider({ apiKey: "k" });
+      await expect(
+        provider.chat({ model: "claude-sonnet-5", messages: [{ role: "user", content: "Hi" }] }),
+      ).rejects.toThrow(/credit balance/);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves a model that accepts temperature alone", async () => {
+      const fetchSpy = vi.fn(async () => jsonResponse(CHAT_RESPONSE));
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const provider = new AnthropicMessagesProvider({ apiKey: "k" });
+      await provider.chat({ model: "claude-haiku-4-5", messages: [{ role: "user", content: "Hi" }], temperature: 0.7 });
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string).temperature).toBe(0.7);
+    });
+  });
+
   it("omits the beta header when no betas configured", async () => {
     const fetchSpy = vi.fn(async () => jsonResponse(CHAT_RESPONSE));
     vi.stubGlobal("fetch", fetchSpy);
