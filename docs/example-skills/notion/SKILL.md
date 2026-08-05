@@ -1,7 +1,7 @@
 ---
 name: notion
 description: Read and write Notion — search pages, query databases, read a page, create or update pages — using the `ntn` CLI through `exec`, filtering responses with `jq`. Use whenever asked to look something up in Notion, record something there, or when a task references a Notion page or database.
-version: 0.6.0
+version: 0.7.0
 ---
 
 # Working with Notion
@@ -72,13 +72,97 @@ and `jq` dies with `parse error: Invalid numeric literal` — which looks like t
 API returned garbage when in fact your command printed a warning. Let stderr go
 its own way; you will still see it if the command fails.
 
+**Every block's text is in `rich_text`, never `text`.** `.heading_2.text[0]`
+returns null for every heading there has ever been. Written the usual way —
+`.heading_2.text[0].plain_text // "—"` — the fallback swallows it and you get a
+page whose headings all render as `—`. That is not an empty page; it is a wrong
+jq path, and mistaking one for the other is how an agent concludes its own
+finished work never landed. The path is the same for every block type:
+
+```
+ntn api v1/blocks/<page_id>/children |
+  jq -r '.results[] | "\(.id) \(.type) \(.[.type].rich_text[0].plain_text // "")"'
+```
+
+`.[.type]` indexes the payload by the block's own type, so one expression covers
+headings, paragraphs, list items and callouts without a chain of `//` fallbacks
+to get wrong.
+
 Also available: `cat`, `head`, `tail`, `wc`, `grep`, `cut`, `tr`, `sort`, `uniq`,
-`which` and `timeout`. Put `| head -50` on anything you are not sure about before
-asking for the whole thing, and `timeout 20 ntn ...` if you have reason to think
-a call might sit.
+`which` and `timeout`. Trim inside `jq` — `'.results[0:20]'` or
+`'[limit(20; .results[])]'` — rather than piping to `head`: `head` closes the pipe
+early and `ntn` sometimes dies printing a Rust panic about a broken pipe, on top
+of output that was actually fine. Use `timeout 20 ntn ...` if you have reason to
+think a call might sit.
 
 `curl` and `python3` are **not** available to you, deliberately. If a job seems
 to need either, it is a job for a human, not a workaround.
+
+## Writing a page body
+
+**A table is a block type, not a text format.** Notion has no markdown. Writing
+`{"type":"paragraph","paragraph":{"rich_text":[{"text":{"content":"| Option | Cost |"}}]}}`
+produces a paragraph containing pipe characters — it renders as a line of
+punctuation, not a table, and nothing in the response says so. A real one:
+
+```json
+{"type":"table","table":{
+  "table_width":3, "has_column_header":true, "has_row_header":false,
+  "children":[
+    {"type":"table_row","table_row":{"cells":[
+      [{"type":"text","text":{"content":"Option"}}],
+      [{"type":"text","text":{"content":"Cost"}}],
+      [{"type":"text","text":{"content":"Notes"}}]]}},
+    {"type":"table_row","table_row":{"cells":[
+      [{"type":"text","text":{"content":"Finnhub"}}],
+      [{"type":"text","text":{"content":"$0/mo"}}],
+      [{"type":"text","text":{"content":"60 req/min"}}]]}}
+  ]}}
+```
+
+Each cell is an **array** of rich-text objects, so `cells` is an array of arrays.
+`table_width` and `children` are both required: a table is created with its rows
+or not at all, and cannot be filled in afterwards the way a page can. Rows cap at
+100 per table, cells at 100 per row.
+
+When a table is more structure than the content deserves, a bulleted list is
+honest and renders correctly. A wall of pipes is neither.
+
+**The exact shape of any block is one call away.** Don't reconstruct it from
+memory and don't infer it from what a read returned — a response carries fields
+(`id`, `created_time`, `annotations`, `plain_text`) that a request will reject:
+
+```
+ntn api 'v1/blocks/{block_id}/children' -X PATCH --docs | grep -n 'title: Table' -A 20
+```
+
+That is the request schema the server validates against, which is why it settles
+arguments about field names that guessing does not.
+
+**Append to the page id, or you will nest by accident.**
+`PATCH v1/blocks/<id>/children` adds children *to whatever `<id>` names*. Passing
+a paragraph's id tucks the whole section inside that paragraph, where it is
+invisible at the top level and looks to the next reader like the write never
+happened. Page ids and block ids are the same shape and there is nothing in the
+response to tell you which one you used. Re-read the page's top-level children
+after writing, and count them.
+
+**Quiet your writes.** A successful `PATCH .../children` echoes every block it
+created, in full — tens of kilobytes for one section, all of it content you
+already know. End the command with `| jq '{created: (.results | length)}'`.
+
+## Removing blocks
+
+There is no bulk delete: `ntn api v1/blocks/<id> -X DELETE` removes exactly one
+block, and clearing a page this way is one call per block.
+
+**Deleting a block deletes everything under it.** So delete the top-level block
+and stop — walking into its children to remove them one by one first is work the
+parent delete was going to do anyway.
+
+Before rebuilding a page, plan the whole body and write it in one or two calls.
+Fifty deletes followed by a rewrite is the same page and a much longer wait, and
+each round is a chance to lose track of which id you are on.
 
 ## Two constraints that will bite you
 
@@ -102,9 +186,11 @@ result. Do not guess an id, and do not invent one from a page name.
 
 ## Do not do this
 
-- **Do not archive or delete.** `archived: true` is a delete as far as anyone
-  reading Notion is concerned. If something looks like it should go, say so and
-  let a human do it.
+- **Do not archive a page.** `archived: true` on a page is a delete as far as
+  anyone reading Notion is concerned, and it takes the whole body with it. If a
+  page looks like it should go, say so and let a human do it. Removing blocks
+  *within* a page you were asked to edit is ordinary editing and needs no
+  permission — this rule is about losing a page, not about tidying one.
 - **Do not treat a failed call as an empty result.** A 4xx means your request was
   wrong; an empty `results` array means nothing matched. Reporting "there is
   nothing in Notion about X" because a call 400'd is how a wrong answer becomes a
