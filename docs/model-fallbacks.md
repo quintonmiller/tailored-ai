@@ -92,15 +92,21 @@ at all, so **every GPT-5.6 call from TAI currently 400s**. Teaching that plugin
 (404 on chat completions); `gpt-5.2-codex` and `gpt-5.1-codex-mini` are
 deprecated. `gpt-5.5`, `gpt-5.4` and `gpt-5-mini` work unchanged.
 
-**Anthropic caches the system prompt and tools, never the history.**
-`@tailored-ai/provider-anthropic` places `cache_control: ephemeral` on the last
-system block and the last tool definition, which is the correct shape for that
-API but covers only ~23% of a typical request here (system + tools is roughly
-12k of a 45k-token prompt). It is also **off by default** — set
-`promptCaching: true` explicitly. The result is that Claude costs 16-30x more
-per equivalent turn than an automatic-prefix-caching vendor, which is a property
-of the integration rather than of the sticker price. Adding a breakpoint on the
-history would close most of that gap.
+**Anthropic caches only what you mark.** `@tailored-ai/provider-anthropic` used
+to place `cache_control: ephemeral` on the last system block and the last tool
+definition and nothing else — the correct shape for that API, but only ~23% of a
+typical request here (system + tools is roughly 12k of a 45k-token prompt),
+against ~86% for a vendor that caches the whole prefix. That alone made Claude
+16-30x more expensive per equivalent turn, as a property of the integration
+rather than the sticker price.
+
+A third breakpoint now rides on the history, on the second-to-last message so
+each turn reads what the previous one wrote, and `promptCaching` defaults to
+`true`. Two failure modes to know about: a breakpoint under the minimum
+cacheable length (1024 tokens, 2048 for Haiku) is accepted and silently ignored,
+and cache writes bill at 1.25x. The plugin skips the breakpoint below the floor
+and warns once per model if a marked request reports neither a cache read nor a
+write — `cache_creation_input_tokens` is the only evidence either way.
 
 ## Failover
 

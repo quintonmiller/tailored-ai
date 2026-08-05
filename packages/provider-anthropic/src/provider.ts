@@ -49,12 +49,14 @@ interface ToolUseBlock {
   id: string;
   name: string;
   input: Record<string, unknown>;
+  cache_control?: { type: "ephemeral" };
 }
 
 interface ToolResultBlock {
   type: "tool_result";
   tool_use_id: string;
   content: string;
+  cache_control?: { type: "ephemeral" };
 }
 
 type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock;
@@ -178,6 +180,67 @@ function toBlocks(content: string | ContentBlock[]): ContentBlock[] {
   return content;
 }
 
+/**
+ * Smallest prefix Anthropic will cache. Below it a breakpoint is accepted and
+ * silently ignored, which looks exactly like one that works — hence
+ * {@link AnthropicMessagesProvider}'s check of `cache_creation_input_tokens`.
+ */
+export function minCacheableTokens(model: string): number {
+  return /haiku/i.test(model) ? 2048 : 1024;
+}
+
+/** ~4 chars/token. Only ever compared against the floor above, so precision buys nothing. */
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+function blockText(block: ContentBlock): string {
+  if (block.type === "text") return block.text;
+  if (block.type === "tool_result") return block.content;
+  return `${block.name}${JSON.stringify(block.input)}`;
+}
+
+function messageTokens(msg: ApiMessage): number {
+  if (typeof msg.content === "string") return estimateTokens(msg.content);
+  return msg.content.reduce((n, b) => n + estimateTokens(blockText(b)), 0);
+}
+
+/**
+ * Put a rolling cache breakpoint on the history.
+ *
+ * Anthropic caches what you mark and nothing else, so the two existing
+ * breakpoints (system, tools) left the expensive part — the conversation —
+ * re-read at full price every turn. On the reference deployment's traffic that
+ * was ~23% of the prompt cacheable against ~86% for vendors that cache the
+ * whole prefix automatically.
+ *
+ * The mark goes on the *second-to-last* message rather than the last. The tail
+ * of a conversation is rewritten every turn; one message back is the newest
+ * point that will still be a prefix of the next request, so each turn reads
+ * what the previous one wrote and writes only its own delta. (Anthropic also
+ * probes ~20 blocks behind a breakpoint, so the read survives the gap.)
+ *
+ * Skipped below the minimum cacheable length: a breakpoint there is ignored,
+ * and it would waste one of the four the API allows.
+ *
+ * Mutates `messages` — it is built fresh per request by {@link toApiMessages}.
+ */
+export function applyHistoryCacheBreakpoint(messages: ApiMessage[], model: string, prefixTokens: number): boolean {
+  const target = messages.length - 2;
+  if (target < 0) return false;
+
+  let tokens = prefixTokens;
+  for (let i = 0; i <= target; i++) tokens += messageTokens(messages[i]);
+  if (tokens < minCacheableTokens(model)) return false;
+
+  const msg = messages[target];
+  const blocks = toBlocks(msg.content);
+  if (blocks.length === 0) return false;
+  msg.content = blocks;
+  blocks[blocks.length - 1].cache_control = { type: "ephemeral" };
+  return true;
+}
+
 /** Convert tool schemas; with caching, the last tool carries the breakpoint (tools cache as a prefix). */
 export function toApiTools(tools: ToolSchema[], promptCaching: boolean): ToolDef[] {
   const defs: ToolDef[] = tools.map((t) => ({
@@ -252,9 +315,14 @@ export interface AnthropicMessagesProviderOptions {
   /** `max_tokens` when the caller doesn't set one (the API requires it). Defaults to 4096. */
   defaultMaxTokens?: number;
   /**
-   * Add ephemeral cache breakpoints to the system prompt and tool
-   * definitions. Agent loops re-send both every iteration, so this cuts
-   * input cost/latency substantially on cache hits.
+   * Add ephemeral cache breakpoints to the system prompt, the tool
+   * definitions and the message history. An agent loop re-sends all three on
+   * every one of its rounds, so this is most of the input bill.
+   *
+   * Defaults to **true**. Anthropic caches only what you mark, unlike OpenAI
+   * and DeepSeek which cache the whole prefix automatically; off-by-default
+   * meant a correct integration quietly cost several times what it needed to.
+   * Set `false` to send no breakpoints at all.
    */
   promptCaching?: boolean;
   /** Default extended-thinking effort (#254). Per-call `ChatParams.thinking` overrides it. */
@@ -282,6 +350,9 @@ export class AnthropicMessagesProvider implements AIProvider {
   /** Models that answered a `temperature` with a 400, learned at runtime. */
   private rejectsTemperature = new Set<string>();
   private warnedTemperature = new Set<string>();
+  /** Models we placed a history breakpoint for, and ones we have since complained about. */
+  private markedHistory = new Set<string>();
+  private warnedNoCache = new Set<string>();
 
   constructor(opts: AnthropicMessagesProviderOptions) {
     this.apiKey = opts.apiKey;
@@ -289,7 +360,7 @@ export class AnthropicMessagesProvider implements AIProvider {
     this.version = opts.version ?? "2023-06-01";
     this.betas = opts.betas?.length ? opts.betas : undefined;
     this.defaultMaxTokens = opts.defaultMaxTokens ?? 4096;
-    this.promptCaching = opts.promptCaching ?? false;
+    this.promptCaching = opts.promptCaching ?? true;
     this.defaultThinking = opts.defaultThinking;
   }
 
@@ -325,6 +396,15 @@ export class AnthropicMessagesProvider implements AIProvider {
 
     if (params.tools?.length) {
       body.tools = toApiTools(params.tools, this.promptCaching);
+    }
+
+    if (this.promptCaching) {
+      // System and tools sit in front of the messages, so they count toward
+      // the history breakpoint's prefix.
+      const prefix = JSON.stringify(system ?? "").length / 4 + JSON.stringify(body.tools ?? "").length / 4;
+      if (applyHistoryCacheBreakpoint(messages, params.model, Math.ceil(prefix))) {
+        this.markedHistory.add(params.model);
+      }
     }
 
     // Reasoning control (#254): enable extended thinking with a token budget.
@@ -394,9 +474,31 @@ export class AnthropicMessagesProvider implements AIProvider {
     }
   }
 
+  /**
+   * A breakpoint under the minimum cacheable length is accepted and ignored,
+   * so a broken cache setup and a working one look identical from the outside.
+   * The usage counters are the only evidence, so check them: if we marked the
+   * history and the API neither wrote nor read a cache entry, say so once.
+   */
+  private checkCacheEngaged(model: string, usage: Usage | undefined): void {
+    if (!this.promptCaching || !this.markedHistory.has(model) || this.warnedNoCache.has(model)) return;
+    if ((usage?.cache_creation_input_tokens ?? 0) > 0 || (usage?.cache_read_input_tokens ?? 0) > 0) {
+      // Working. Stop looking — one confirmation is enough for the process.
+      this.markedHistory.delete(model);
+      return;
+    }
+    this.warnedNoCache.add(model);
+    console.warn(
+      `[anthropic] ${model} reported no cache read or write despite prompt caching being on. ` +
+        `The prompt is probably under the ${minCacheableTokens(model)}-token minimum, ` +
+        `or this model does not support caching.`,
+    );
+  }
+
   async chat(params: ChatParams): Promise<ChatResponse> {
     const resp = await this.request(params, false);
     const data = (await resp.json()) as ApiResponse;
+    this.checkCacheEngaged(params.model, data.usage);
     return parseApiResponse(data);
   }
 
@@ -470,6 +572,8 @@ export class AnthropicMessagesProvider implements AIProvider {
         name: block.name,
         arguments: JSON.parse(block.json || "{}") as Record<string, unknown>,
       }));
+
+    this.checkCacheEngaged(params.model, startUsage);
 
     yield {
       type: "done",

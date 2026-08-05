@@ -16,7 +16,7 @@
  *       anthropic:
  *         apiKey: "${ANTHROPIC_API_KEY}"
  *         defaultModel: "claude-haiku-4-5"
- *         promptCaching: true          # optional — cache system prompt + tools
+ *         promptCaching: true          # optional — on by default
  *         betas: []                    # optional — anthropic-beta header values
  *     agent:
  *       defaultProvider: anthropic
@@ -28,7 +28,9 @@ import { AnthropicMessagesProvider } from "./provider.js";
 export {
   AnthropicMessagesProvider,
   type AnthropicMessagesProviderOptions,
+  applyHistoryCacheBreakpoint,
   mapStopReason,
+  minCacheableTokens,
   parseApiResponse,
   toApiMessages,
   toApiTools,
