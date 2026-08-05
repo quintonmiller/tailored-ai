@@ -20,7 +20,6 @@ providers:
   anthropic:
     apiKey: "${ANTHROPIC_API_KEY}"     # https://console.anthropic.com
     defaultModel: "claude-haiku-4-5"
-    promptCaching: true                # optional, recommended for agents
 
 agent:
   defaultProvider: anthropic
@@ -30,7 +29,7 @@ agent:
 |---|---|---|
 | `apiKey` | yes | Use `${ANTHROPIC_API_KEY}` to read from the environment. |
 | `defaultModel` | yes | A Claude model id, e.g. `claude-haiku-4-5`. `tai edit` lists them via `listModels`. |
-| `promptCaching` | no | Adds ephemeral cache breakpoints to the system prompt and tool definitions. Agent loops re-send both every iteration, so cache hits cut input cost (cached reads are ~10% of base price) and latency. Default `false`. |
+| `promptCaching` | no | Adds ephemeral cache breakpoints to the system prompt, the tool definitions and the message history. An agent loop re-sends all three on every round, so cache hits cut input cost (cached reads are ~10% of base price) and latency. Default `true`; set `false` to send no breakpoints. |
 | `defaultMaxTokens` | no | `max_tokens` when the agent doesn't set one (the API requires it). Default `4096`. |
 | `version` | no | `anthropic-version` header. Default `2023-06-01`. |
 | `betas` | no | List of beta flags, sent as the `anthropic-beta` header (e.g. `context-1m-2025-08-07`). |
