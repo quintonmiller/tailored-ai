@@ -21,7 +21,9 @@ That also rules out Fargate, App Runner and Cloud Run: SQLite on EFS breaks WAL 
 3. Launches one instance with an encrypted gp3 root volume and IMDSv2 required.
 4. cloud-init installs Docker, clones TAI, builds the image, starts the container, and installs a systemd unit so it comes back after a reboot.
 
-The build happens on the instance and takes roughly 5–15 minutes. Watch it:
+The build happens on the instance. Measured at about 3m30s on a `t3.medium`
+from `run-instances` to a healthy container; a smaller instance type will be
+slower. Watch it:
 
 ```bash
 ssh ec2-user@<ip> 'sudo tail -f /var/log/cloud-init-output.log'

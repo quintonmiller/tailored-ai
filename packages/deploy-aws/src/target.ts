@@ -458,8 +458,8 @@ token, so the supported way in is an SSH tunnel:
         summary: `launched ${instance.InstanceId}`,
         url: ip ? `http://${ip}:3000` : undefined,
         details: [
-          "The instance is now building the image. That takes roughly 5-15 minutes;",
-          "the container will not answer until it finishes.",
+          "The instance is now building the image — about 3-5 minutes on a t3.medium,",
+          "longer on a smaller type. The container will not answer until it finishes.",
           "",
           ...(opts.keyName && ip
             ? [
