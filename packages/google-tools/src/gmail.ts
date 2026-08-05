@@ -9,6 +9,7 @@ import {
   updateEmailDisposition,
 } from "@tailored-ai/core";
 import type Database from "better-sqlite3";
+import { spawnFailureReason } from "./gog-error.js";
 
 export class GmailTool implements Tool {
   name = "gmail";
@@ -81,7 +82,9 @@ export class GmailTool implements Tool {
         (error, stdout, stderr) => {
           resolve({
             stdout,
-            stderr,
+            // A spawn failure (ENOENT/EACCES) produces no stderr, so carry the
+            // reason out separately or the caller reports the wrong subsystem.
+            stderr: error ? (spawnFailureReason(error) ?? stderr) : stderr,
             code: error ? ((error as unknown as { code?: number }).code ?? 1) : 0,
           });
         },
