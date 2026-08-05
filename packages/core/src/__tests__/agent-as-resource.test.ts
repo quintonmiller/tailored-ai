@@ -124,9 +124,16 @@ describe("agentDefinitionToManifest + parseAgentData round-trip", () => {
     expect(() => parseAgentData({ kind: "agent", id: "x", version: "0.0.0", data: { tools: [1, 2] } })).toThrow(
       /tools/,
     );
-    expect(() => parseAgentData({ kind: "agent", id: "x", version: "0.0.0", data: { sandbox: "spaceship" } })).toThrow(
-      /sandbox/,
-    );
+  });
+
+  it("accepts a sandbox kind core does not know, because a plugin may register it", () => {
+    // This used to be checked against a hardcoded `host|docker|podman`, which
+    // made a plugin-registered kind fail to load the agent at all — and the
+    // plugin registers its factory well after the manifest is parsed. The
+    // check belongs at use time, where `createSandbox` already does it against
+    // the live registry with a "Known: …" message.
+    const parsed = parseAgentData({ kind: "agent", id: "x", version: "0.0.0", data: { sandbox: "firecracker" } });
+    expect(parsed.sandbox).toBe("firecracker");
   });
 });
 
