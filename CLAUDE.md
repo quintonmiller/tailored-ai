@@ -99,6 +99,7 @@ Deep notes on each subsystem live under [`docs/`](./docs/):
 |---|---|
 | AgentRuntime, factories, adding tools/channels/providers, admin tool | [docs/architecture.md](./docs/architecture.md) |
 | Agent loop: history compaction, validation, retry, timing, providers | [docs/agent-loop.md](./docs/agent-loop.md) |
+| Choosing a cloud model, falling back off local vLLM: measured cost/cache, provider quirks, `scripts/tai-model.mjs` | [docs/model-fallbacks.md](./docs/model-fallbacks.md) |
 | Named agents, delegation, hooks, cron jobs, prompt expansion | [docs/agents-and-hooks.md](./docs/agents-and-hooks.md) |
 | Background tasks, project tasks, pluggable backends, autopilot | [docs/tasks-and-autopilot.md](./docs/tasks-and-autopilot.md) |
 | Repo backend (forge seam): push branch + manage proposals (PR/MR), default `gh` impl, events | [docs/repo-backend.md](./docs/repo-backend.md) |

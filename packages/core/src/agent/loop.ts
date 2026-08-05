@@ -25,6 +25,18 @@ import { capToolOutput, resolveToolOutputLimit } from "./tool-output.js";
 const MAX_RETRIES = 1;
 const RETRY_DELAY_MS = 1000;
 
+/**
+ * One rung of the fallback chain: a built provider and the model to ask it for.
+ * `label` is what the operator sees in a log line, so it names the configured
+ * provider id rather than the provider's display name — two entries can share
+ * an implementation (both OpenAI-compatible) and differ only by id.
+ */
+export interface ModelCandidate {
+  provider: AIProvider;
+  model: string;
+  label: string;
+}
+
 async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
   let lastError: Error | undefined;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -57,13 +69,20 @@ async function chatOnce(
   params: ChatParams,
   onTextDelta?: (text: string) => void,
   onReasoningDelta?: (text: string) => void,
+  retry = true,
 ): Promise<ChatResponse> {
+  // `retry` is false for every rung of a fallback chain except the last: when a
+  // different model is standing by, spending a second and another failed call
+  // on the one that just refused is worse than moving on. The last rung keeps
+  // the transient-blip retry, which is what a single-model deployment has
+  // always had.
+  const attempt = retry ? withRetry : <T>(fn: () => Promise<T>) => fn();
   const stream = provider.chatStream?.bind(provider);
   if ((!onTextDelta && !onReasoningDelta) || !stream) {
-    return withRetry(() => provider.chat(params));
+    return attempt(() => provider.chat(params));
   }
   let emitted = false;
-  return withRetry(async () => {
+  return attempt(async () => {
     if (emitted) return provider.chat(params);
     let done: ChatResponse | undefined;
     for await (const ev of stream(params)) {
@@ -90,6 +109,60 @@ async function chatOnce(
     if (!done) throw new Error(`${provider.name} chatStream ended without a done event`);
     return done;
   });
+}
+
+/**
+ * Walk a fallback chain until one candidate answers.
+ *
+ * Each rung gets one attempt; the last also gets the transient retry, so a
+ * one-entry chain behaves exactly as a single provider always did. Any failure
+ * moves to the next rung — including a 4xx, because "this model refuses this
+ * request" is precisely when a different model is worth trying, and because a
+ * provider error arrives as an `Error` whose status is only in its message.
+ *
+ * Deltas already emitted by a failed candidate are not replayed or withdrawn:
+ * the consumer contract is that the final response supersedes streamed deltas.
+ * Crossing models mid-turn makes that visible as a flicker, which is a better
+ * outcome than failing a turn while a working model sits in the list.
+ *
+ * Throws the *first* error when everything fails. The first rung is the one the
+ * operator configured as primary, so its failure is the one that explains the
+ * outage; later rungs failing is expected once the primary is down.
+ */
+export async function chatWithFallback(
+  candidates: ModelCandidate[],
+  params: Omit<ChatParams, "model">,
+  onTextDelta?: (text: string) => void,
+  onReasoningDelta?: (text: string) => void,
+): Promise<{ response: ChatResponse; candidate: ModelCandidate; fellBack: boolean }> {
+  if (candidates.length === 0) throw new Error("no model candidates configured");
+  let firstError: Error | undefined;
+  for (let i = 0; i < candidates.length; i++) {
+    const candidate = candidates[i];
+    const isLast = i === candidates.length - 1;
+    try {
+      const response = await chatOnce(
+        candidate.provider,
+        { ...params, model: candidate.model },
+        onTextDelta,
+        onReasoningDelta,
+        isLast,
+      );
+      if (i > 0) {
+        console.warn(`[agent] answered by fallback ${candidate.label} (${candidate.model}) after ${i} failed`);
+      }
+      return { response, candidate, fellBack: i > 0 };
+    } catch (err) {
+      const error = err as Error;
+      firstError ??= error;
+      if (isLast) break;
+      console.warn(
+        `[agent] ${candidate.label} (${candidate.model}) failed, trying ${candidates[i + 1].label} ` +
+          `(${candidates[i + 1].model}): ${error.message}`,
+      );
+    }
+  }
+  throw firstError;
 }
 
 /**
@@ -156,6 +229,17 @@ export interface AgentLoopOptions {
   selfModifying?: boolean;
   getTools?: () => Tool[];
   getProvider?: () => AIProvider;
+  /**
+   * The agent's fallback chain, re-resolved every iteration so a config reload
+   * takes effect mid-run like `getTools`/`getProvider` do. When absent (or
+   * returning an empty list) the loop uses `provider` + `session.model` alone,
+   * which is what every caller that builds options by hand still gets.
+   *
+   * Building a candidate can fail — a provider whose plugin is not installed —
+   * so the resolver drops those rather than surfacing them here. A chain that
+   * resolves to nothing falls back to the single provider for the same reason.
+   */
+  getModelChain?: () => ModelCandidate[];
   onToolCall?: (name: string, args: Record<string, unknown>) => void;
   onToolResult?: (name: string, result: string) => void;
   /** Fires with a short description when the agent emits reasoning text before tool calls. Fires null when the loop ends. */
@@ -944,10 +1028,13 @@ async function _runAgentLoopBody(
     }
     const messages: Message[] = [{ role: "system", content: fullSystemPrompt }, ...trimmed];
 
-    const response = await chatOnce(
-      currentProvider,
+    const chain = opts.getModelChain?.() ?? [];
+    const candidates: ModelCandidate[] =
+      chain.length > 0 ? chain : [{ provider: currentProvider, model: session.model, label: currentProvider.id }];
+
+    const { response } = await chatWithFallback(
+      candidates,
       {
-        model: session.model,
         messages,
         tools: toolSchemas,
         temperature,
