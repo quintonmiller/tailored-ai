@@ -172,15 +172,21 @@ is worse than moving on.
 turn; now it fails the turn only when every rung is down. A chain of one behaves
 exactly as before.
 
-Two things it deliberately does not do:
+One thing it deliberately does not do: **no quality-based escalation.** It fails
+over on errors, not on a weak answer. Cascading by difficulty or confidence is
+#173.
 
-- **No quality-based escalation.** It fails over on errors, not on a weak answer.
-  Cascading by difficulty or confidence is #173.
-- **No per-rung context budget.** `historyBudget` is computed once from
-  `maxHistoryTokens` before the call, so falling back to a model with a smaller
-  window can produce a request that model rejects — which then falls through to
-  the next rung. `ModelEntry.maxContextTokens` is still only read by the
-  `/context` display.
+**The context budget is per rung.** A rung that declares a `maxContextTokens`
+smaller than `agent.maxHistoryTokens` has its history re-trimmed to fit before
+the call, and a log line names what was dropped and for whom. Rungs that declare
+no window, or a roomy one, are handed the same array as the head and pay
+nothing. Without this a chain mixing window sizes builds a request the head
+accepts and the fallback rejects — and if every remaining rung is smaller, the
+turn fails looking like an outage rather than a budget mistake.
+
+The re-trim is the plain one even under `summarizeOnTrim`: summarising costs a
+model call, and spending one on the degraded path to build a prettier request
+the rung might still reject is the wrong trade.
 
 Switching the *primary* is still an operator action: flip
 `agent.defaultProvider`, or reorder `agent.models[]`.

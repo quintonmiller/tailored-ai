@@ -1349,6 +1349,7 @@ export class AgentRuntime {
         thinking: entry.thinking,
         temperature: entry.temperature,
         maxTokens: entry.maxTokens,
+        maxContextTokens: entry.maxContextTokens,
       });
     }
 

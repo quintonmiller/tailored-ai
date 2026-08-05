@@ -57,6 +57,12 @@ export interface ModelCandidate {
   thinking?: ThinkingLevel;
   temperature?: number;
   maxTokens?: number;
+  /**
+   * This model's context window, from `ModelEntry.maxContextTokens`. Used to
+   * size the history for *this* rung: a chain that mixes window sizes would
+   * otherwise hand a fallback a request built for the head.
+   */
+  maxContextTokens?: number;
 }
 
 /**
@@ -165,14 +171,19 @@ async function chatOnce(
  * Throws the *first* error when everything fails. The first rung is the one the
  * operator configured as primary, so its failure is the one that explains the
  * outage; later rungs failing is expected once the primary is down.
+ *
+ * `params` may be a function of the candidate, which is how a rung with a
+ * smaller context window gets a request sized for it rather than one built for
+ * the head of the chain. A plain object behaves as it always did.
  */
 export async function chatWithFallback(
   candidates: ModelCandidate[],
-  params: Omit<ChatParams, "model">,
+  params: Omit<ChatParams, "model"> | ((candidate: ModelCandidate) => Omit<ChatParams, "model">),
   onTextDelta?: (text: string) => void,
   onReasoningDelta?: (text: string) => void,
 ): Promise<{ response: ChatResponse; candidate: ModelCandidate; fellBack: boolean }> {
   if (candidates.length === 0) throw new Error("no model candidates configured");
+  const paramsFor = typeof params === "function" ? params : () => params;
   let firstError: Error | undefined;
   for (let i = 0; i < candidates.length; i++) {
     const candidate = candidates[i];
@@ -180,7 +191,9 @@ export async function chatWithFallback(
     try {
       const response = await chatOnce(
         candidate.provider,
-        applyCandidateParams(params, candidate),
+        // Two independent per-rung adjustments: the caller sizes the request
+        // for this rung, then the rung's own overrides land on top.
+        applyCandidateParams(paramsFor(candidate), candidate),
         onTextDelta,
         onReasoningDelta,
         isLast,
@@ -1103,15 +1116,52 @@ async function _runAgentLoopBody(
     const candidates: ModelCandidate[] =
       chain.length > 0 ? chain : [{ provider: currentProvider, model: session.model, label: currentProvider.id }];
 
-    const { response, candidate: answeredBy } = await chatWithFallback(
-      candidates,
-      {
-        messages,
+    /**
+     * The history above was sized from `maxHistoryTokens`, which is a
+     * deployment-wide number, not this rung's window. A chain that mixes window
+     * sizes would otherwise build a request the head can accept and the
+     * fallback cannot — and if every remaining rung is smaller, the turn fails
+     * looking like an outage rather than a budget mistake.
+     *
+     * Re-trimmed only when the rung is actually smaller, so the common case
+     * (every rung roomy, or a chain of one) reuses the array untouched and pays
+     * nothing. `maxContextTokens` is the whole request, so the system prompt
+     * comes out of it too.
+     *
+     * The re-trim is the plain one even under `summarizeOnTrim`: summarising is
+     * an async model call, and spending one on the degraded path to produce a
+     * prettier request the rung might still reject is the wrong trade. A
+     * request the fallback accepts beats a well-summarised one it does not.
+     */
+    const paramsFor = (candidate: ModelCandidate): Omit<ChatParams, "model"> => {
+      const base = {
         tools: toolSchemas,
         temperature,
         thinking: opts.thinking,
         maxTokens: opts.maxTokens,
-      },
+      };
+      const window = candidate.maxContextTokens;
+      if (window === undefined || window >= maxHistoryTokens) return { ...base, messages };
+
+      const rungBudget = Math.max(0, window - systemPromptTokens - tailTokens);
+      const refitted = trimHistory(history, rungBudget);
+      if (refitted.length < trimmed.length) {
+        console.warn(
+          `[agent] ${candidate.label} (${candidate.model}) has a ${window}-token window against a ` +
+            `${maxHistoryTokens}-token budget — trimming ${trimmed.length - refitted.length} more message(s) for it.`,
+        );
+      }
+      // The volatile tail rides behind the history and must survive the refit:
+      // rebuilding the array from the system prompt alone would drop the live
+      // state and recall the model is meant to read this turn.
+      const refittedMessages: Message[] = [{ role: "system", content: fullSystemPrompt }, ...refitted];
+      if (tailMsg) refittedMessages.push(tailMsg);
+      return { ...base, messages: refittedMessages };
+    };
+
+    const { response, candidate: answeredBy } = await chatWithFallback(
+      candidates,
+      paramsFor,
       opts.onTextDelta,
       opts.onReasoningDelta,
     );
