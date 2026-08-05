@@ -119,6 +119,7 @@ import {
   writeRawConfigText,
 } from "@tailored-ai/core";
 import { Hono } from "hono";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { streamSSE } from "hono/streaming";
 import YAML from "yaml";
 import {
@@ -128,6 +129,14 @@ import {
   resolveApprovalById,
   unregisterHandler,
 } from "./approval.js";
+import {
+  AUTH_PUBLIC_PATHS,
+  createSessionToken,
+  hasValidProxyAuth,
+  LoginThrottle,
+  SESSION_COOKIE,
+  verifyPassword,
+} from "./auth/proxy-auth.js";
 import { mountPluginHttpRoutes, routePathToRegex } from "./http-routes.js";
 import { checkPortAvailable, portInUseMessage } from "./port.js";
 
@@ -163,6 +172,33 @@ interface SessionActivity {
 }
 
 const activityRegistry = new Map<string, SessionActivity>();
+
+/**
+ * Failed-login throttle for `/api/auth/login`. Module-scoped so it survives a
+ * config reload: rebuilding it on every reload would hand an attacker a reset
+ * button, since `config.yaml` is watched and reloads are frequent.
+ */
+const loginThrottle = new LoginThrottle();
+
+/**
+ * Did this request arrive over TLS?
+ *
+ * `x-forwarded-proto` is what a terminating reverse proxy sets, and a proxy is
+ * the expected deployment. Falls back to the request URL for a direct HTTPS
+ * bind. Getting this wrong in the safe direction (deciding "not TLS") costs a
+ * cookie flag; getting it wrong the other way makes login silently fail,
+ * because the browser accepts a 200 and then drops a `Secure` cookie
+ * delivered over plain HTTP.
+ */
+export function isHttps(forwardedProto: string | undefined, url: string): boolean {
+  const proto = forwardedProto?.split(",")[0]?.trim().toLowerCase();
+  if (proto) return proto === "https";
+  try {
+    return new URL(url).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Constant-time compare for bearer tokens. Buffers of different length
@@ -343,6 +379,15 @@ export function createServer(opts: ServerOptions) {
   //   2. server.apiKey (legacy) — gates only mutating verbs. Kept for
   //      back-compat; emits no error when authToken handles the request.
   //
+  // `server.proxyAuth`, when enabled, supersedes both: it accepts a session
+  // COOKIE as well as a bearer, which is what lets a browser authenticate.
+  // A bearer header cannot travel on an EventSource connection, so SSE — the
+  // chat stream, the event feed — is unreachable to a token-only dashboard.
+  // That is why the bundled UI could not be used with authToken alone.
+  //
+  // One gate, not two stacked middlewares: with both credentials configured,
+  // "which one decides" has to be answerable by reading a single function.
+  //
   // OPTIONS passes through both checks (CORS preflight).
   //
   // Plugin routes registered with `auth: "none"` (e.g. the trusted-actions
@@ -368,6 +413,29 @@ export function createServer(opts: ServerOptions) {
     const authHeader = c.req.header("Authorization") ?? "";
     const presented = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
 
+    if (cfg.proxyAuth?.enabled) {
+      // Login and logout must stay reachable, or there is no way to obtain the
+      // session the rest of the routes demand.
+      if (AUTH_PUBLIC_PATHS.has(c.req.path)) return next();
+
+      if (!cfg.proxyAuth.password) {
+        // Fail closed. An enabled gate with no secret must not degrade into
+        // an open one.
+        return c.json({ error: "proxyAuth is enabled but server.proxyAuth.password is empty" }, 500);
+      }
+
+      const proxyConfig = { enabled: true, password: cfg.proxyAuth.password };
+      if (hasValidProxyAuth(proxyConfig, { bearer: presented, cookie: getCookie(c, SESSION_COOKIE) })) {
+        return next();
+      }
+      // An operator may run scripts on authToken while browsers use the
+      // cookie. Honour both rather than forcing a choice.
+      if (cfg.authToken && safeBearerEquals(presented, cfg.authToken)) {
+        return next();
+      }
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+
     if (cfg.authToken) {
       if (!safeBearerEquals(presented, cfg.authToken)) {
         return c.json({ error: "Unauthorized" }, 401);
@@ -383,6 +451,67 @@ export function createServer(opts: ServerOptions) {
       }
     }
     return next();
+  });
+
+  // --- Auth routes ---
+  //
+  // Only mounted conceptually: they answer regardless of whether proxyAuth is
+  // on, so a UI probing them gets a clear "not enabled" rather than a 404 it
+  // has to guess about.
+
+  app.post("/api/auth/login", async (c) => {
+    const cfg = runtime.getConfig().server;
+    if (!cfg.proxyAuth?.enabled) {
+      return c.json({ error: "proxyAuth is not enabled" }, 404);
+    }
+    if (!cfg.proxyAuth.password) {
+      return c.json({ error: "proxyAuth is enabled but server.proxyAuth.password is empty" }, 500);
+    }
+
+    // Throttle by forwarded client IP when present. TAI behind a reverse proxy
+    // sees the proxy's address on every request, which would otherwise make
+    // one attacker's failures throttle every legitimate user.
+    const clientKey = c.req.header("x-forwarded-for")?.split(",")[0]?.trim() || c.req.header("x-real-ip") || "unknown";
+    const wait = loginThrottle.retryAfter(clientKey);
+    if (wait > 0) {
+      return c.json({ error: `Too many attempts. Try again in ${wait}s.` }, 429, {
+        "Retry-After": String(wait),
+      });
+    }
+
+    let password = "";
+    try {
+      const body = (await c.req.json()) as { password?: unknown };
+      if (typeof body?.password === "string") password = body.password;
+    } catch {
+      // Malformed body counts as a failed attempt, not a 400: an attacker
+      // should not get a cheaper probe by sending garbage.
+    }
+
+    const proxyConfig = { enabled: true, password: cfg.proxyAuth.password };
+    if (!verifyPassword(proxyConfig, password)) {
+      loginThrottle.recordFailure(clientKey);
+      return c.json({ error: "Invalid password" }, 401);
+    }
+    loginThrottle.recordSuccess(clientKey);
+
+    const session = createSessionToken(cfg.proxyAuth.password);
+    setCookie(c, session.cookieName, session.token, {
+      httpOnly: true,
+      sameSite: "Lax",
+      path: "/",
+      maxAge: session.maxAgeSec,
+      // Only mark Secure when the request actually arrived over TLS. Setting
+      // it unconditionally makes login silently fail on a plain-HTTP LAN
+      // deployment: the browser accepts the response and drops the cookie.
+      secure: isHttps(c.req.header("x-forwarded-proto"), c.req.url),
+    });
+    return c.json({ ok: true, expiresAt: session.expiresAt.toISOString() });
+  });
+
+  app.post("/api/auth/logout", (c) => {
+    deleteCookie(c, SESSION_COOKIE, { path: "/" });
+    return c.json({ ok: true });
   });
 
   // --- API routes ---

@@ -110,31 +110,73 @@ request must carry it:
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/health
 ```
 
-### The dashboard cannot send that token
+### For a browser, use `server.proxyAuth`
 
-The bundled web UI sets no `Authorization` header, and `server.authToken`
-gates every `/api/*` route including GETs. With a token set, the dashboard
-loads and then fails every request.
+A bearer token covers scripts and channels. It cannot cover the dashboard: a
+token rides on an `Authorization` header, `EventSource` cannot send headers,
+and the dashboard depends on SSE for chat and the event feed.
 
-So pick one of three:
+`server.proxyAuth` is the browser-facing credential. It accepts a session
+cookie, which SSE does carry.
+
+```yaml
+server:
+  host: 0.0.0.0
+  proxyAuth:
+    enabled: true
+    password: ${TAI_DASHBOARD_PASSWORD}
+```
+
+Restart and the dashboard shows a login form. A correct password mints an
+HttpOnly, SameSite=Lax cookie good for a week. `Secure` is added when the
+request arrived over TLS, read from `x-forwarded-proto` when a proxy
+terminates it.
+
+The password doubles as a bearer, so one credential covers both surfaces:
+
+```bash
+curl -H "Authorization: Bearer $PASSWORD" https://tai.example.com/api/health
+```
+
+Set `authToken` alongside it to give scripts their own secret. Both are
+accepted while `proxyAuth` is on.
+
+Rotating the password invalidates every issued session, because the session
+signature is keyed by the password. Failed logins are throttled per client IP,
+ten per fifteen minutes, read from `x-forwarded-for` so one attacker cannot
+lock out everyone behind the same proxy. Enabling `proxyAuth` with an empty
+password fails every request closed rather than falling open.
+
+Put TLS in front before exposing it. The password crosses the wire on login,
+and the cookie on every request after.
+
+### Choosing an exposure
 
 | Option | Dashboard | Setup |
 |---|---|---|
-| **Loopback plus an SSH tunnel** (recommended) | works | `ssh -L 3000:127.0.0.1:3000 user@host` |
-| **Authenticating reverse proxy** | works | Caddy or nginx basic-auth, Cloudflare Access, Tailscale Serve, oauth2-proxy |
-| **Publish with a token** | API only | scripts and channels work, browsers do not |
+| **`proxyAuth` plus TLS** | works | a password in config, a proxy terminating TLS |
+| **Loopback plus an SSH tunnel** | works | `ssh -L 3000:127.0.0.1:3000 user@host`, no config |
+| **Authenticating reverse proxy** | works | Caddy or nginx basic-auth, Cloudflare Access, Tailscale Serve |
+| **`authToken` only** | API only | scripts and channels work, browsers do not |
 
-Do not solve this by dropping the token from a publicly published port. That
-serves the whole dashboard, unauthenticated, to anyone who finds the IP.
-
-`server.proxyAuth` looks like the answer and is not. The middleware exists in
-the source but is never mounted, and the `/api/auth/login` endpoint its login
-page posts to does not exist, so enabling it authenticates nothing. TAI warns
-about this at startup.
+Do not publish the port with no credential at all. That serves the whole
+dashboard, unauthenticated, to anyone who finds the IP.
 
 ### Reverse proxy
 
-Caddy, terminating TLS and doing the auth TAI cannot yet do in the browser:
+Caddy terminating TLS in front of `proxyAuth`:
+
+```caddyfile
+tai.example.com {
+    reverse_proxy 127.0.0.1:3000
+}
+```
+
+Caddy sets `x-forwarded-proto: https`, so the session cookie is issued with
+`Secure`.
+
+To let the proxy own authentication instead, add `basic_auth` and leave
+`proxyAuth` off:
 
 ```caddyfile
 tai.example.com {
@@ -145,10 +187,10 @@ tai.example.com {
 }
 ```
 
-Keep the container published to `127.0.0.1:3000` so the proxy is the only way
-in. With the proxy authenticating, drop TAI's own token (`--no-auth-token` at
-init, or clear `server.authToken`) so the dashboard's requests pass. The proxy
-is what guards the door.
+Keep the container published to `127.0.0.1:3000` either way, so the proxy is
+the only way in. When the proxy authenticates, drop TAI's own credential
+(`--no-auth-token` at init, or clear `server.authToken`) so requests pass
+through. Two login prompts for one dashboard help nobody.
 
 ## Day to day
 

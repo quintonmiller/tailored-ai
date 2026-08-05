@@ -50,3 +50,7 @@ docker/trusted-actions/app/
 docker/trusted-actions/data/
 docker/trusted-actions/secrets/
 docker/trusted-actions/screenshots/
+
+# Editor-tool session cache. Holds absolute paths and session ids from
+# whoever last ran the tooling, so it is per-machine, not per-repo.
+.impeccable/

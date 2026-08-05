@@ -797,25 +797,26 @@ describe("validateConfig — server exposure warning", () => {
     expect(warnings.some((w) => w.includes("server.host"))).toBe(false);
   });
 
-  // proxyAuth used to suppress the exposure warning. It authenticates nothing
-  // — the middleware is never mounted and /api/auth/login is not implemented —
-  // so it must neither silence the host warning nor pass unremarked.
-  it("still warns about exposure when only proxyAuth is set", () => {
+  it("does not warn when proxyAuth is enabled with a password", () => {
     const c = {
       ...baseConfig(),
       server: { port: 3000, host: "0.0.0.0", proxyAuth: { enabled: true, password: "p" } },
     };
     const warnings = validateConfig(c);
-    expect(warnings.some((w) => w.includes("server.host"))).toBe(true);
+    expect(warnings.some((w) => w.includes("server.host"))).toBe(false);
   });
 
-  it("warns that proxyAuth is not implemented, even on a loopback bind", () => {
+  // An enabled gate with no secret is worse than no gate: it reads as
+  // protection. The server fails those requests closed; this warns about it.
+  it("warns when proxyAuth is enabled with an empty password", () => {
     const c = {
       ...baseConfig(),
-      server: { port: 3000, host: "127.0.0.1", proxyAuth: { enabled: true, password: "p" } },
+      server: { port: 3000, host: "0.0.0.0", proxyAuth: { enabled: true, password: "" } },
     };
     const warnings = validateConfig(c);
-    expect(warnings.some((w) => w.includes("proxyAuth"))).toBe(true);
+    expect(warnings.some((w) => w.includes("proxyAuth.password is empty"))).toBe(true);
+    // Still counts as exposed, since an empty password authenticates nobody.
+    expect(warnings.some((w) => w.includes("server.host"))).toBe(true);
   });
 
   it("warns when apiKey is set but no authToken (apiKey only gates mutations)", () => {

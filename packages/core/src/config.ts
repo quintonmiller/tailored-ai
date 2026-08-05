@@ -1862,29 +1862,27 @@ export function validateConfig(config: AgentConfig): string[] {
   // output becomes readable by anyone on the network unless auth is set.
   // Flag loud at startup.
   //
-  // `server.proxyAuth` deliberately does NOT count as auth here. Its
-  // middleware (`packages/server/src/auth/proxy-auth.ts`) is written but never
-  // mounted, and the `/api/auth/login` endpoint its login page posts to does
-  // not exist — so `proxyAuth.enabled: true` authenticates nothing. Treating
-  // it as auth made this warning silent on exactly the deployments that most
-  // needed it: someone binds 0.0.0.0, sets proxyAuth, and gets an open
-  // dashboard plus the reassurance of no warning. Once the middleware is
-  // actually mounted, add it back to `hasAuth` in the same change.
+  // `server.proxyAuth` counts as auth again now that the server actually
+  // mounts it and serves /api/auth/login. It briefly did not: the middleware
+  // existed but was never wired, so enabling it authenticated nothing while
+  // silencing this very warning. An enabled gate with an empty password is
+  // still worse than no gate, because it reads as protection, so that case
+  // gets its own warning below and the server fails those requests closed.
   const host = config.server.host;
   const looksLoopback = host === "127.0.0.1" || host === "localhost" || host === "::1";
-  const hasAuth = !!config.server.authToken;
+  const proxyAuthUsable = !!(config.server.proxyAuth?.enabled && config.server.proxyAuth.password);
+  const hasAuth = !!config.server.authToken || proxyAuthUsable;
   if (!looksLoopback && !hasAuth) {
     warnings.push(
-      `server.host="${host}" exposes the API beyond loopback but server.authToken is not set ` +
-        `— all reads are unauthenticated. Set server.authToken to a strong secret, or bind ` +
-        `to 127.0.0.1 and reach it through an SSH tunnel or an authenticating reverse proxy.`,
+      `server.host="${host}" exposes the API beyond loopback but neither server.authToken nor ` +
+        `server.proxyAuth is usable — all reads are unauthenticated. Set server.authToken to a ` +
+        `strong secret, enable server.proxyAuth with a password, or bind to 127.0.0.1.`,
     );
   }
-  if (config.server.proxyAuth?.enabled) {
+  if (config.server.proxyAuth?.enabled && !config.server.proxyAuth.password) {
     warnings.push(
-      `server.proxyAuth.enabled is set but proxy auth is not implemented — the middleware is ` +
-        `never mounted and /api/auth/login does not exist, so this setting authenticates ` +
-        `nothing. Use server.authToken, or authenticate in front of TAI.`,
+      `server.proxyAuth.enabled is true but server.proxyAuth.password is empty — every API ` +
+        `request will fail with a 500 rather than fall open. Set a password or disable proxyAuth.`,
     );
   }
 

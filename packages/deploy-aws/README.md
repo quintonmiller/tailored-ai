@@ -31,7 +31,7 @@ ssh ec2-user@<ip> 'sudo tail -f /var/log/cloud-init-output.log'
 
 ## Getting in
 
-**Port 3000 is closed by default.** TAI's bundled dashboard cannot send an API token, so publishing it would mean either an unauthenticated dashboard or one that 401s on every request. The supported path is an SSH tunnel:
+**Port 3000 is closed by default.** The instance serves plain HTTP, so an open port is unauthenticated (or carries a `proxyAuth` password in cleartext) until you put TLS in front of it. The tunnel needs neither:
 
 ```bash
 ssh -L 3000:127.0.0.1:3000 ec2-user@<ip>
@@ -44,7 +44,9 @@ The generated API token is printed once in the container log:
 ssh ec2-user@<ip> 'cd /opt/tai/docker/tai && sudo docker compose logs tai'
 ```
 
-If you want the port open, `--allow-http-from <cidr>` does it. `0.0.0.0/0` additionally requires `--force-public`, because opening a dashboard that cannot authenticate to the whole internet should not be reachable by typing a CIDR.
+If you want the port open, `--allow-http-from <cidr>` does it. `0.0.0.0/0` additionally requires `--force-public`, because publishing an unencrypted dashboard to the whole internet should not be reachable by typing a CIDR.
+
+For a durable public deployment, set `server.proxyAuth` on the instance and put a TLS-terminating proxy in front. [Self-hosting](../../docs/self-hosting.md) covers both.
 
 ## Options
 
