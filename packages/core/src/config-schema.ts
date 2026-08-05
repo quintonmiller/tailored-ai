@@ -170,6 +170,64 @@ type _SystemPromptOverrideMatches = AssertTrue<
 >;
 
 /**
+ * The global `agent:` block — the deployment-wide defaults every agent
+ * inherits. Anchored to `AgentConfig["agent"]` rather than a named interface
+ * because that block is declared inline; the drift assertion works the same.
+ *
+ * Validated `.partial()` at the call site. Presence is not this checker's
+ * business — `DEFAULT_CONFIG` supplies anything missing, and reporting
+ * "required" for a field the loader fills in would be noise. What matters is
+ * that a value which *is* written is the type it is declared to be.
+ */
+const AgentSettingsSchema = z.object({
+  defaultProvider: z.string(),
+  models: z.array(ModelEntrySchema).optional(),
+  extraInstructions: z.string(),
+  maxHistoryTokens: z.number(),
+  maxToolOutputChars: z.number(),
+  maxContextTokens: z.number(),
+  temperature: z.number(),
+  maxTokens: z.number().optional(),
+  maxToolRounds: z.number(),
+  sandbox: z.string().optional(),
+  systemPrompt: SystemPromptOverrideSchema.optional(),
+});
+type _AgentSettingsMatches = AssertTrue<Identical<z.infer<typeof AgentSettingsSchema>, AgentConfig["agent"]>>;
+
+/** `tasks.backend` selects a registered backend; `options` is the backend's own opaque bag. */
+const TasksConfigSchema = z.object({
+  backend: z.string().optional(),
+  options: z.record(z.unknown()).optional(),
+});
+type _TasksConfigMatches = AssertTrue<Identical<z.infer<typeof TasksConfigSchema>, NonNullable<AgentConfig["tasks"]>>>;
+
+/**
+ * Two closed sub-blocks of `memory:`. Not the whole block — the rest is larger
+ * and can follow — but these are all scalars, which is where a quoted number
+ * hides best.
+ */
+const MemoryEmbeddingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  type: z.string().optional(),
+  baseUrl: z.string().optional(),
+  apiKey: z.string().optional(),
+  model: z.string().optional(),
+  dim: z.number().optional(),
+  maxInputChars: z.number().optional(),
+});
+type _MemoryEmbeddingsMatches = AssertTrue<
+  Identical<z.infer<typeof MemoryEmbeddingsSchema>, NonNullable<NonNullable<AgentConfig["memory"]>["embeddings"]>>
+>;
+
+const MemoryChunksSchema = z.object({
+  maxChunkChars: z.number().optional(),
+  overlap: z.number().optional(),
+});
+type _MemoryChunksMatches = AssertTrue<
+  Identical<z.infer<typeof MemoryChunksSchema>, NonNullable<NonNullable<AgentConfig["memory"]>["chunks"]>>
+>;
+
+/**
  * One agent block. Every field on {@link AgentDefinition}, in the same order,
  * so the two read side by side.
  *
@@ -387,6 +445,26 @@ export function shapeIssues(scope: string, schema: z.ZodTypeAny, value: unknown,
  */
 export function findShapeIssues(config: AgentConfig): string[] {
   const found: string[] = [];
+
+  // The deployment-wide defaults. Checked `.partial()`: this is a type
+  // checker, not a required-fields checker, and `DEFAULT_CONFIG` fills the
+  // gaps. `agent.maxTokens: "8192"` is the case that motivated it — a
+  // non-empty string is truthy, so the loop's `if (params.maxTokens)` guard
+  // does not catch it and the quoted value goes out on the wire.
+  if (config.agent != null) {
+    found.push(...shapeIssues("agent", AgentSettingsSchema.partial(), config.agent));
+  }
+
+  if (config.tasks != null) {
+    found.push(...shapeIssues("tasks", TasksConfigSchema, config.tasks));
+  }
+
+  if (config.memory?.embeddings != null) {
+    found.push(...shapeIssues("memory.embeddings", MemoryEmbeddingsSchema, config.memory.embeddings));
+  }
+  if (config.memory?.chunks != null) {
+    found.push(...shapeIssues("memory.chunks", MemoryChunksSchema, config.memory.chunks));
+  }
 
   for (const [name, agent] of Object.entries(config.agents ?? {})) {
     if (agent == null) continue;
