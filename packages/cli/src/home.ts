@@ -78,6 +78,10 @@ export function resolveHomePaths(homeDir: string): HomePaths {
 export async function ensureHomeStructure(homeDir: string): Promise<void> {
   const dirs = [
     homeDir,
+    // The workflow engine watches <home>/workflows and logs an ENOENT warning
+    // when it is missing, so every fresh install printed a failure for a
+    // directory nothing had been asked to create yet.
+    resolve(homeDir, "workflows"),
     resolve(homeDir, "data"),
     resolve(homeDir, "data", "context"),
     resolve(homeDir, "data", "context", "global"),

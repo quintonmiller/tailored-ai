@@ -1,0 +1,53 @@
+# Build context filter for every image in docker/ (all of them use the repo
+# root as context, because they build workspace packages).
+#
+# Two reasons this file matters beyond build speed:
+#
+#  1. Secrets. A developer checkout has config.yaml, .env, and agent.db sitting
+#     at the root. None are needed to build anything, and anything present in
+#     the context can be baked into a layer by a careless COPY. Keep them out
+#     of the context and that class of mistake stops being possible.
+#  2. Size. .worktrees/ can hold dozens of full checkouts and node_modules is
+#     multi-gigabyte; without this, every build uploads all of it to the daemon
+#     before running the first instruction.
+
+# ── Dependencies and build output (rebuilt inside the image) ────────────────
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+ui-dist/
+**/ui-dist/
+*.tsbuildinfo
+**/*.tsbuildinfo
+.next/
+**/.next/
+
+# ── VCS and agent scratch ───────────────────────────────────────────────────
+.git/
+.gitignore
+.github/
+.worktrees/
+.claude/
+
+# ── Local instance state — secrets live here ────────────────────────────────
+config.yaml
+.env
+.env.*
+!.env.example
+*.db
+*.db-shm
+*.db-wal
+data/
+docker/trusted-actions/data/
+docker/trusted-actions/secrets/
+docker/trusted-actions/screenshots/
+
+# ── Not part of any runtime image ───────────────────────────────────────────
+packages/site/
+packages/integration-tests/
+docs/
+workflows/
+*.md
+!README.md
+.changeset/

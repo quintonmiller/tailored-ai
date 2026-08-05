@@ -1861,14 +1861,30 @@ export function validateConfig(config: AgentConfig): string[] {
   // dashboard from another machine), every session, chat history, and tool
   // output becomes readable by anyone on the network unless auth is set.
   // Flag loud at startup.
+  //
+  // `server.proxyAuth` deliberately does NOT count as auth here. Its
+  // middleware (`packages/server/src/auth/proxy-auth.ts`) is written but never
+  // mounted, and the `/api/auth/login` endpoint its login page posts to does
+  // not exist — so `proxyAuth.enabled: true` authenticates nothing. Treating
+  // it as auth made this warning silent on exactly the deployments that most
+  // needed it: someone binds 0.0.0.0, sets proxyAuth, and gets an open
+  // dashboard plus the reassurance of no warning. Once the middleware is
+  // actually mounted, add it back to `hasAuth` in the same change.
   const host = config.server.host;
   const looksLoopback = host === "127.0.0.1" || host === "localhost" || host === "::1";
-  const hasAuth = !!(config.server.authToken || config.server.proxyAuth?.enabled);
+  const hasAuth = !!config.server.authToken;
   if (!looksLoopback && !hasAuth) {
     warnings.push(
-      `server.host="${host}" exposes the API beyond loopback but neither server.authToken ` +
-        `nor server.proxyAuth.enabled is set — all reads are unauthenticated. ` +
-        `Set server.authToken to a strong secret, or bind to 127.0.0.1.`,
+      `server.host="${host}" exposes the API beyond loopback but server.authToken is not set ` +
+        `— all reads are unauthenticated. Set server.authToken to a strong secret, or bind ` +
+        `to 127.0.0.1 and reach it through an SSH tunnel or an authenticating reverse proxy.`,
+    );
+  }
+  if (config.server.proxyAuth?.enabled) {
+    warnings.push(
+      `server.proxyAuth.enabled is set but proxy auth is not implemented — the middleware is ` +
+        `never mounted and /api/auth/login does not exist, so this setting authenticates ` +
+        `nothing. Use server.authToken, or authenticate in front of TAI.`,
     );
   }
 

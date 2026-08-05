@@ -254,12 +254,62 @@ function renderExternalAgentsBlock(agents: ResolvedPlugin[]): string {
   return `\n${lines.join("\n")}\n`;
 }
 
-export function renderNewConfig(d: DraftConfig): string {
+/**
+ * Same three hosts core's `validateConfig` treats as loopback. Kept in sync
+ * deliberately: this decides whether headless init mints an auth token, and
+ * core decides whether to warn that one is missing. If the two lists drifted,
+ * one of them would be wrong about the same config.
+ */
+export function isLoopbackHost(host: string): boolean {
+  return host === "127.0.0.1" || host === "localhost" || host === "::1";
+}
+
+/**
+ * Server block overrides for {@link renderNewConfig}.
+ *
+ * The Ink wizard never sets these — a wizard run happens on a machine with a
+ * terminal, where loopback is the right default. The headless path
+ * (`tai init --non-interactive`, which is what a container's first boot runs)
+ * does, because a server bound to 127.0.0.1 inside a container is reachable
+ * only from inside that container.
+ */
+export interface ServerRenderOptions {
+  host?: string;
+  port?: number;
+  /**
+   * Emit `authToken: ${<name>}` referencing this env var. The token itself is
+   * never written into config.yaml — config.yaml is the file people paste into
+   * issues, and it is the one most likely to end up committed.
+   */
+  authTokenEnvVar?: string;
+}
+
+export function renderNewConfig(d: DraftConfig, server: ServerRenderOptions = {}): string {
   const providerBlock = renderProviderBlock(d.provider);
   const toolsBlock = renderToolsBlock(d.tools);
   const pluginsBlock = renderPluginsBlock(d.plugins);
   const externalAgentsBlock = renderExternalAgentsBlock(d.externalAgents);
   const discordEnabled = d.channels.discord ? "true" : "false";
+  // The researcher sample only claims web_search when web_search is actually
+  // on. It used to list it unconditionally while the tool defaults to off,
+  // so every fresh install booted with `Agent "researcher" references tool
+  // "web_search" which is not enabled` — a warning on a file TAI itself just
+  // wrote, which teaches people that startup warnings are noise. They are not:
+  // the network-exposure warning prints through the same channel.
+  const researcherSearchTool = d.tools.web_search
+    ? "\n      - web_search"
+    : "\n      # - web_search   # add once tools.web_search.enabled is true";
+  const host = server.host ?? "127.0.0.1";
+  const port = server.port ?? 3000;
+  const authTokenLine = server.authTokenEnvVar ? `\n  authToken: \${${server.authTokenEnvVar}}` : "";
+  // The loopback default carries a warning about unbinding it. Once the host
+  // IS unbound that warning is stale advice, so swap in the note that applies.
+  const hostComment = isLoopbackHost(host)
+    ? `  # Loopback by default — the dashboard and HTTP API are unauthenticated unless
+  # server.authToken or server.proxyAuth is set. To expose beyond localhost,
+  # set host: 0.0.0.0 AND configure auth.\n`
+    : `  # Bound beyond loopback, so every route is gated by server.authToken.
+  # Put this behind a reverse proxy with TLS before exposing it to the internet.\n`;
   const uiBlock =
     d.ui === "disabled"
       ? "\n  ui:\n    enabled: false"
@@ -273,11 +323,8 @@ export function renderNewConfig(d: DraftConfig): string {
 # Docs: https://github.com/quintonmiller/tailored-ai
 
 server:
-  port: 3000
-  # Loopback by default — the dashboard and HTTP API are unauthenticated unless
-  # server.authToken or server.proxyAuth is set. To expose beyond localhost,
-  # set host: 0.0.0.0 AND configure auth.
-  host: 127.0.0.1${uiBlock}
+  port: ${port}
+${hostComment}  host: ${host}${authTokenLine}${uiBlock}
 
 database:
   path: ./agent.db
@@ -310,8 +357,7 @@ agents:
     instructions: >-
       You are a research assistant. Search the web, fetch pages,
       and summarize findings concisely.
-    tools:
-      - web_search
+    tools:${researcherSearchTool}
       - web_fetch
       - memory
     temperature: 0.5

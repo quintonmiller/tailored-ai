@@ -445,6 +445,18 @@ export {
   updateWorkflowRun,
   updateWorkflowStep,
 } from "./db/workflow-queries.js";
+// Deploy-target contract. Types only — the registry and the `tai deploy`
+// command live in @tailored-ai/cli, because nothing in the agent runtime needs
+// to know how the instance was deployed. See deploy/types.ts.
+export type {
+  DeployContext,
+  DeployPlan,
+  DeployResult,
+  DeployStatus,
+  DeployStep,
+  DeployTarget,
+  DeployTargets,
+} from "./deploy/types.js";
 export {
   type AgentCompletedTask,
   type AgentCompletedWorktree,

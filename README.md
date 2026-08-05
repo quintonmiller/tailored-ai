@@ -42,6 +42,39 @@ tai project list
 tai edit                                    # open the TUI settings editor
 ```
 
+### Self-host with Docker
+
+For a server, VPS, or cloud VM rather than a laptop:
+
+```bash
+cd docker/tai
+cp .env.example .env      # set TAI_MODEL and TAI_BASE_URL
+docker compose up -d
+docker compose logs -f    # first boot prints the generated API token
+```
+
+One container, one volume — `TAI_HOME` holds config, database, and plugins.
+First boot writes `config.yaml` from the environment and leaves it alone
+afterward. Read [docs/self-hosting.md](./docs/self-hosting.md) before exposing
+the port: the bundled dashboard cannot yet send an API token, so remote access
+goes through an SSH tunnel or an authenticating reverse proxy.
+
+Setting up without a terminal (cloud-init, CI, a container build):
+
+```bash
+tai init --non-interactive --model llama3.2 --base-url http://localhost:11434/v1
+```
+
+`tai deploy` wraps this behind a target seam. `docker` is built in; cloud
+providers register the same way from plugin packages, so adding one does not
+mean forking TAI. See [docs/deploy-targets.md](./docs/deploy-targets.md).
+
+```bash
+tai deploy list
+tai deploy plan docker    # describe what `up` would do, change nothing
+tai deploy up docker
+```
+
 ### Develop from source
 
 ```bash
