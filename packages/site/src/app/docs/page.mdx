@@ -66,9 +66,14 @@ TAI shines when the agent needs to do something while you're not watching.
 This is v0.1. The runtime, tools, agents, channels, memory, workflows,
 cron, HTTP API, and the eight extension registries (tool, channel,
 provider, embedding, task backend, step executor, trigger, skill) ship
-and are tested. The declarative `plugins: [...]` loader and built-in
-HTTP auth are v0.2 work. Pages marked "v0.2" describe finalized
-interfaces with the loader still landing.
+and are tested. So do the declarative `plugins: [...]` loader,
+`tai plugin install`, and bearer-token auth on the HTTP API
+(`server.authToken`).
+
+One gap worth knowing before you expose the API: the bundled dashboard
+does not send that token, so remote browser access needs a tunnel or an
+authenticating proxy. [Self-hosting](/docs/self-hosting) covers the
+options.
 
 ## Where to go next
 
@@ -79,6 +84,10 @@ If you have an hour and want the full picture: read
 [Architecture](/docs/architecture), then [Agents](/docs/agents), then
 [Tools](/docs/tools). The rest of the Concepts section can be read in any
 order.
+
+If you're putting it on a server: [Self-hosting](/docs/self-hosting) covers
+the Docker image, unattended setup, and how to expose it without handing your
+chat history to the internet.
 
 If you're picking a package to install: [Packages overview](/docs/packages)
 maps the five `@tailored-ai/*` packages and when to install which.

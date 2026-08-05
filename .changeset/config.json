@@ -15,6 +15,7 @@
       "@tailored-ai/provider-anthropic",
       "@tailored-ai/provider-openai",
       "@tailored-ai/provider-deepseek",
+      "@tailored-ai/deploy-aws",
       "@tailored-ai/trusted-actions"
     ]
   ],

@@ -1,0 +1,157 @@
+export const metadata = {
+  title: "@tailored-ai/deploy-aws",
+  description:
+    "AWS deploy target. Runs TAI on a single EC2 instance with an encrypted EBS volume, via tai deploy up aws-ec2.",
+};
+
+# @tailored-ai/deploy-aws
+
+Runs TAI on a single EC2 instance with an encrypted EBS root volume.
+
+```bash
+tai plugin install @tailored-ai/deploy-aws
+tai deploy plan aws-ec2 -- --model llama3.2 --key-name my-key
+tai deploy up   aws-ec2 -- --model llama3.2 --key-name my-key
+```
+
+Needs AWS CLI v2 with usable credentials. The plugin shells out to `aws`
+rather than bundling the SDK, so credentials work however they already work
+for you: environment variables, `~/.aws`, `AWS_PROFILE`, SSO, or an instance
+role. There is no second credential path to get wrong.
+
+## One instance, deliberately
+
+TAI's state is SQLite and takes a single writer. There is no autoscaling group
+to build and no load balancer to put in front. Scale by giving the box more,
+not by adding boxes.
+
+That also rules out Fargate, App Runner, and Cloud Run rather than merely
+disfavouring them. SQLite on EFS breaks WAL locking, and scale-to-zero stops
+cron and autopilot, which is most of what a personal agent does while you are
+not looking at it.
+
+## What `up` does
+
+1. Resolves the latest Amazon Linux 2023 AMI for your region from SSM.
+2. Creates a security group (`<name>-sg`) and opens only what you asked for.
+3. Launches one instance with an encrypted gp3 root volume and IMDSv2 required.
+4. cloud-init installs Docker, clones TAI, builds the image, starts the
+   container, and installs a systemd unit so it returns after a reboot.
+
+The build runs on the instance. Measured at about 3m30s on a `t3.medium` from
+`run-instances` to a healthy container. Watch it:
+
+```bash
+ssh ec2-user@<ip> 'sudo tail -f /var/log/cloud-init-output.log'
+```
+
+## `plan` asks AWS instead of guessing
+
+`plan` sends the real launch request with `--dry-run`, so AWS validates the
+AMI, instance type, block devices, tags, user-data, and your IAM permissions
+server-side while creating nothing.
+
+```
+   1. resolve the latest AL2023 AMI (ami-0ed2b71371a7efa24)
+ ! 2. create security group tai-sg
+   3. leave port 3000 closed — reach the dashboard over an SSH tunnel
+ ! 4. launch one t3.medium with a 20GB encrypted gp3 root volume
+   5. cloud-init installs Docker, clones TAI, builds the image, starts the container
+
+Notes:
+  - AWS account 111122223333 as arn:aws:iam::111122223333:user/you
+  - region us-west-2
+  - AWS accepted the launch request (dry run)
+  - about $31.97/month (t3.medium $30.37 + 20GB gp3 $1.60), plus egress
+```
+
+`up` refuses when that comes back with a problem, so a bad key pair name costs
+you a message rather than a half-built deployment. The plan quotes the monthly
+cost, because a command that starts billing should say so.
+
+Permissions needed: `ec2:RunInstances`, `CreateSecurityGroup`,
+`AuthorizeSecurityGroupIngress`, `CreateTags`, `DescribeInstances`,
+`DescribeVpcs`, `DescribeSecurityGroups`, `TerminateInstances`, and
+`ssm:GetParameter`.
+
+## Getting in
+
+Port 3000 is closed by default. TAI's bundled dashboard cannot send an API
+token (see [Self-hosting](/docs/self-hosting#exposing-it)), so publishing it
+would give you either an unauthenticated dashboard or one that 401s on every
+request. Use a tunnel:
+
+```bash
+ssh -L 3000:127.0.0.1:3000 ec2-user@<ip>
+# then open http://127.0.0.1:3000
+```
+
+The generated API token prints once in the container log:
+
+```bash
+ssh ec2-user@<ip> 'cd /opt/tai/docker/tai && sudo docker compose logs tai'
+```
+
+To open the port anyway, use `--allow-http-from <cidr>`. `0.0.0.0/0`
+additionally requires `--force-public`, because opening a dashboard that cannot
+authenticate to the whole internet should not be reachable by typing a CIDR.
+
+## Options
+
+Everything goes after `--`:
+
+| Flag | Default | |
+|---|---|---|
+| `--region <r>` | `AWS_REGION`, else your configured profile | |
+| `--name <n>` | `tai` | Names tags and the security group |
+| `--instance-type <t>` | `t3.medium` | |
+| `--volume-size <gb>` | `20` | |
+| `--ami <id>` | latest AL2023 | |
+| `--key-name <k>` | none | Existing EC2 key pair, enables SSH |
+| `--allow-ssh-from <cidr>` | your detected public IP | |
+| `--allow-http-from <cidr>` | nobody | |
+| `--force-public` | off | Required for `0.0.0.0/0` |
+| `--subnet-id <s>` | default VPC | |
+| `--repo`, `--repo-ref` | this repo, `main` | What to build |
+| `--model <name>` | `TAI_MODEL` | **Required** |
+| `--base-url <url>` | `TAI_BASE_URL` | |
+| `--provider <id>` | `TAI_PROVIDER` | |
+| `--api-key <key>` | `TAI_API_KEY` | |
+
+`t3.medium` rather than the cheaper `t3.small` because the instance builds the
+image itself: a pnpm install, a `tsc -b`, and a Vite production build. On 2 GB
+that gets OOM-killed.
+
+## State lives in tags
+
+`status` and `down` find the instance by filtering on `tai:managed` and
+`tai:name`. There is no local state file to desync, and the commands work from
+any machine with credentials.
+
+## Tearing down
+
+```bash
+tai deploy down aws-ec2
+```
+
+Terminates the instance. The root volume is `DeleteOnTermination` and holds the
+database, so this destroys your TAI state. Unlike the built-in `docker` target,
+which stops a container and keeps its volume, there is no halfway state here
+worth preserving, and the command says so rather than implying the data
+survives.
+
+The security group is left in place. It costs nothing and is reused next time.
+
+## Security
+
+- Root volume encrypted.
+- IMDSv2 required (`HttpTokens=required`), so a container-level SSRF cannot
+  walk off with instance credentials.
+- The provider API key is written to a root-owned `0600` file on the instance,
+  not passed through user-data. Anything that can read instance metadata can
+  read user-data forever.
+- The container publishes its port to the instance's loopback only, so widening
+  the security group by hand does not instantly put the dashboard online.
+
+See [Deploy targets](/docs/deploy-targets) for the seam this plugin registers
+through.

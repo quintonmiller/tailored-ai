@@ -41,6 +41,7 @@ pnpm monorepo with first-party runtime packages, plugins, and docs:
 | `@tailored-ai/google-tools` | `packages/google-tools/` | Gmail, Google Calendar, Google Drive tool plugin | `@tailored-ai/core` peer |
 | `@tailored-ai/provider-bedrock` | `packages/provider-bedrock/` | AWS Bedrock model provider plugin (Converse API) | `@tailored-ai/core` peer |
 | `@tailored-ai/provider-deepseek` | `packages/provider-deepseek/` | DeepSeek model provider plugin (OpenAI-compatible) | `@tailored-ai/core` peer |
+| `@tailored-ai/deploy-aws` | `packages/deploy-aws/` | AWS deploy target plugin (`tai deploy up aws-ec2`) | `@tailored-ai/core` peer |
 | `@tailored-ai/trusted-actions` | `packages/trusted-actions/` | HITL executor for approval-gated actions | `@tailored-ai/core` |
 | `@tailored-ai/site` | `packages/site/` | Next.js docs site | private |
 | `@tailored-ai/integration-tests` | `packages/integration-tests/` | End-to-end CLI/plugin/server smoke scenarios | private |
