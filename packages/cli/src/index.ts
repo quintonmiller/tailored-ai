@@ -58,6 +58,7 @@ Modes:
   (default)               Start server (HTTP + UI + channels + cron)
   -m, --message <text>    Send a single message and exit
   init                    Create a new config (run \`tai init --help\`)
+                          Add --non-interactive to set up without a terminal
   edit                    Edit an existing config (run \`tai edit --help\`)
   project <cmd>           Manage registered projects (run \`tai project help\`)
 
@@ -511,6 +512,28 @@ async function runSingleMessage(
   }
 }
 
+const INIT_HEADLESS_USAGE = `Usage: tai init --non-interactive [options]
+
+Write config.yaml without a terminal. This is what a container entrypoint,
+cloud-init script, or CI fixture runs — the interactive wizard needs a TTY
+and cannot complete unattended.
+
+Options (each falls back to the env var in brackets):
+  --provider <id>     Provider factory id            [TAI_PROVIDER]      (openai_compatible)
+  --model <name>      Default model  (required)      [TAI_MODEL]
+  --base-url <url>    Provider base URL              [TAI_BASE_URL]
+  --api-key <key>     Provider API key -> .env       [TAI_API_KEY]
+  --host <addr>       Bind address                   [TAI_SERVER_HOST]   (127.0.0.1)
+  --port <n>          Bind port                      [TAI_SERVER_PORT]   (3000)
+  --auth-token <tok>  API bearer token -> .env       [TAI_AUTH_TOKEN]
+  --no-auth-token     Skip token generation entirely
+  --no-ui             Set server.ui.enabled: false (headless deployments)
+  --force             Overwrite an existing config.yaml
+  --dry-run           Print the plan and write nothing
+
+Binding beyond loopback with no token supplied generates one and prints it
+once. Pass --no-auth-token only when something in front of TAI authenticates.`;
+
 async function runSetupCommand(mode: SetupMode, args: string[]): Promise<void> {
   const { values } = parseArgs({
     args,
@@ -518,17 +541,39 @@ async function runSetupCommand(mode: SetupMode, args: string[]): Promise<void> {
       config: { type: "string", short: "c" },
       "dry-run": { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
+      // Headless init (`tai init --non-interactive`). Accepted in `edit` mode
+      // too so a typo there fails on the mode check below with a useful
+      // message rather than on strict parseArgs with "unknown option".
+      "non-interactive": { type: "boolean", default: false },
+      yes: { type: "boolean", short: "y", default: false },
+      provider: { type: "string" },
+      model: { type: "string" },
+      "base-url": { type: "string" },
+      "api-key": { type: "string" },
+      host: { type: "string" },
+      port: { type: "string" },
+      "auth-token": { type: "string" },
+      "no-auth-token": { type: "boolean", default: false },
+      "no-ui": { type: "boolean", default: false },
+      force: { type: "boolean", default: false },
     },
     strict: true,
   });
 
+  const headless = values["non-interactive"] || values.yes;
+
   if (values.help) {
     const usage =
       mode === "init"
-        ? "Usage: tai init [-c <config>] [--dry-run]\n\nCreate a new config.yaml. Prompts before overwriting an existing one."
+        ? `Usage: tai init [-c <config>] [--dry-run]\n\nCreate a new config.yaml. Prompts before overwriting an existing one.\n\n${INIT_HEADLESS_USAGE}`
         : "Usage: tai edit [-c <config>] [--dry-run]\n\nOpen the settings editor against an existing config.yaml.";
     console.log(usage);
     return;
+  }
+
+  if (headless && mode !== "init") {
+    console.error("--non-interactive is only supported by `tai init`.");
+    process.exit(1);
   }
 
   const homeDir = adoptHomeDir(values.config);
@@ -538,6 +583,29 @@ async function runSetupCommand(mode: SetupMode, args: string[]): Promise<void> {
   if (mode === "edit" && !configExists) {
     console.error(`No config found at ${configPath}. Run \`tai init\` first.`);
     process.exit(1);
+  }
+
+  if (headless) {
+    const { runHeadlessInit } = await import("./setup-headless.js");
+    try {
+      await runHeadlessInit({
+        homeDir,
+        provider: values.provider,
+        model: values.model,
+        baseUrl: values["base-url"],
+        apiKey: values["api-key"],
+        host: values.host,
+        port: values.port === undefined ? undefined : Number.parseInt(values.port, 10),
+        authToken: values["no-auth-token"] ? false : values["auth-token"],
+        ui: values["no-ui"] ? false : undefined,
+        force: values.force,
+        dryRun: values["dry-run"],
+      });
+    } catch (err) {
+      console.error(`Error: ${(err as Error).message}`);
+      process.exit(1);
+    }
+    return;
   }
 
   try {
@@ -703,6 +771,22 @@ async function main() {
       console.log("  To use it: tai -c ./config.yaml");
       console.log("  To set up a new home directory: tai --init");
       console.log();
+    }
+
+    // Without a terminal the Ink wizard throws TTYError from deep inside
+    // React, which surfaces as a stack trace that says nothing about what the
+    // operator should do. Any unattended first run lands here — a container,
+    // a systemd unit, `nohup tai &` — so answer with the command that works.
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      console.error(
+        `No config found at ${configPath}, and there is no terminal to run the setup wizard in.\n\n` +
+          `Create one non-interactively:\n` +
+          `  tai init --non-interactive --model <name> [--base-url <url>]\n\n` +
+          `Run \`tai init --help\` for the full option list. Every flag also reads\n` +
+          `an env var (TAI_MODEL, TAI_BASE_URL, TAI_SERVER_HOST, …), so a container\n` +
+          `can be configured entirely through its environment.`,
+      );
+      process.exit(1);
     }
 
     // With --init on an existing install, mode=init makes the wizard ask
