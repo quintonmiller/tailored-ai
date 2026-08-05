@@ -157,8 +157,9 @@ Arguments after \`--\` are passed to \`docker compose up\`, e.g.
       details: [
         "First boot generates an API token and prints it once:",
         `  docker ${composeArgs(composeDir, ["logs", "tai"]).join(" ")}`,
-        "Before exposing this beyond loopback, read docs/self-hosting.md — the",
-        "bundled dashboard cannot send an API token yet.",
+        "Before exposing this beyond loopback, read docs/self-hosting.md.",
+        "For browser access set server.proxyAuth; authToken alone gates the API",
+        "but not the dashboard, whose SSE streams cannot carry a bearer header.",
       ],
     };
   },

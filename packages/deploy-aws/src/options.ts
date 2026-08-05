@@ -177,16 +177,16 @@ export function validateOptions(opts: AwsEc2Options): string[] {
   }
 
   // Opening the dashboard to the world is a different thing from opening it to
-  // your office. TAI's bundled UI cannot send an API token, so a public port
-  // 3000 is either an unauthenticated dashboard or a dashboard that 401s on
-  // every request — neither is something to arrive at by typing a CIDR.
+  // your office. This target cannot see the instance's config, so it cannot
+  // know whether server.proxyAuth is set there, and a plain HTTP port on a
+  // public IP carries the login password in cleartext even when it is.
   if (opts.allowHttpFrom === "0.0.0.0/0" && !opts.forcePublic) {
     problems.push(
-      "--allow-http-from 0.0.0.0/0 publishes the dashboard to the entire internet. " +
-        "TAI's bundled UI cannot authenticate, so this serves chat history, memory and " +
-        "tool output to anyone who finds the IP. Reach it over the SSH tunnel instead " +
-        "(the default), put an authenticating proxy in front, or pass --force-public if " +
-        "you have genuinely accounted for this.",
+      "--allow-http-from 0.0.0.0/0 publishes port 3000 to the entire internet, over plain " +
+        "HTTP. Anyone who finds the IP reads chat history, memory and tool output unless " +
+        "server.proxyAuth is configured on the instance, and even then the password crosses " +
+        "the wire in cleartext. Use the SSH tunnel (the default), put a TLS-terminating " +
+        "proxy in front, or pass --force-public if you have genuinely accounted for this.",
     );
   }
 
