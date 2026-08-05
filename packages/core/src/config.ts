@@ -20,6 +20,28 @@ export interface ModelEntry {
    * `agent.maxContextTokens`. Falls back to the global default when unset.
    */
   maxContextTokens?: number;
+  /**
+   * Reasoning effort for this rung only. A chain that heads at a small local
+   * model and falls back to a strong cloud reasoner wants different answers at
+   * each end, and one global `agent.thinking` cannot give them: setting it for
+   * the head wastes the fallback, setting it for the fallback burdens the head.
+   * The provider's `defaultThinking` is keyed by provider, so two rungs on the
+   * same provider still could not differ.
+   *
+   * Unset means inherit whatever the call resolved (per-agent, then global,
+   * then the provider's own default).
+   */
+  thinking?: import("./providers/interface.js").ThinkingLevel;
+  /** Sampling temperature for this rung only. Unset means inherit. */
+  temperature?: number;
+  /**
+   * Output cap for this rung only. Unset means inherit `agent.maxTokens`.
+   *
+   * Worth setting alongside `thinking`: on a reasoning model this caps
+   * reasoning *plus* visible output, so a rung that reasons harder generally
+   * needs a bigger cap than the one that does not.
+   */
+  maxTokens?: number;
 }
 
 export interface AgentDefinition {

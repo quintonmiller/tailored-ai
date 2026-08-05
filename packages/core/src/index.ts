@@ -8,6 +8,7 @@ export type { ResolvedHooks } from "./agent/hooks.js";
 export { applyTemplates, EMPTY_HOOKS, executeHooks, hasHooks, mergeHooks, normalizeHooks } from "./agent/hooks.js";
 export type { AgentLoopOptions, ModelCandidate } from "./agent/loop.js";
 export {
+  applyCandidateParams,
   describeTruncation,
   isStallStop,
   type LoopStop,
