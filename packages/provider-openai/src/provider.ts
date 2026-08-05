@@ -8,7 +8,7 @@ import type {
   ToolCall,
   ToolSchema,
 } from "@tailored-ai/core";
-import { reasoningEffortThinkingMap } from "@tailored-ai/core";
+import { ProviderHttpError, QuirkMemo, reasoningEffortThinkingMap, runQuirkLadder, WarnOnce } from "@tailored-ai/core";
 import { parseSseStream } from "./sse.js";
 
 // --- Wire-format types ---
@@ -190,8 +190,8 @@ export class OpenAIChatProvider implements AIProvider {
    * learns instead: one corrective retry the first time a model surprises it,
    * then the right shape for the rest of the process.
    */
-  private effortQuirks = new Map<string, { allowsNone?: boolean; effortWithTools?: boolean }>();
-  private warnedEffortDropped = new Set<string>();
+  private effortQuirks = new QuirkMemo<{ allowsNone?: boolean; effortWithTools?: boolean }>(() => ({}));
+  private warn = new WarnOnce();
 
   private buildBody(params: ChatParams, effortMode: EffortMode = "configured"): Record<string, unknown> {
     const body: Record<string, unknown> = {
@@ -236,7 +236,7 @@ export class OpenAIChatProvider implements AIProvider {
 
   /** The shape to try first, given what this model has already taught us. */
   private plannedEffortMode(params: ChatParams): EffortMode {
-    const quirk = this.effortQuirks.get(params.model);
+    const quirk = this.effortQuirks.peek(params.model);
     if (!quirk) return "configured";
     if (params.tools?.length && quirk.effortWithTools === false) {
       return quirk.allowsNone === false ? "omit" : { set: "none" };
@@ -257,14 +257,13 @@ export class OpenAIChatProvider implements AIProvider {
    * confusing ones.
    */
   private recoverFromEffortError(params: ChatParams, mode: EffortMode, err: Error): EffortMode | undefined {
-    const quirk = this.effortQuirks.get(params.model) ?? {};
+    const quirk = this.effortQuirks.for(params.model);
 
     // "…are not supported for <model> in /v1/chat/completions" — the model can
     // take tools or reasoning, not both. Fires even when no field was sent, so
     // omitting is not a workaround; only the literal "none" is.
     if (/Function tools with reasoning_effort are not supported/i.test(err.message)) {
       quirk.effortWithTools = false;
-      this.effortQuirks.set(params.model, quirk);
       this.warnEffortDropped(params, "cannot combine reasoning with function tools on /chat/completions");
       return quirk.allowsNone === false ? "omit" : { set: "none" };
     }
@@ -276,7 +275,6 @@ export class OpenAIChatProvider implements AIProvider {
     const rejected = err.message.match(/'reasoning_effort' does not support '([^']+)'/i)?.[1];
     if (rejected) {
       if (rejected === "none") quirk.allowsNone = false;
-      this.effortQuirks.set(params.model, quirk);
 
       const supported = [...err.message.matchAll(/'([a-z]+)'/gi)]
         .map((m) => m[1])
@@ -298,9 +296,8 @@ export class OpenAIChatProvider implements AIProvider {
   private warnEffortDropped(params: ChatParams, reason: string): void {
     const level = this.resolvedLevel(params);
     if (!level || level === "off" || level === "auto") return;
-    if (this.warnedEffortDropped.has(params.model)) return;
-    this.warnedEffortDropped.add(params.model);
-    console.warn(
+    this.warn.say(
+      `effort:${params.model}`,
       `[openai] ${params.model} ${reason}, so thinking="${level}" is not being honoured for this model. ` +
         `Requests still succeed. The Responses API is the endpoint that supports reasoning alongside tools.`,
     );
@@ -311,19 +308,12 @@ export class OpenAIChatProvider implements AIProvider {
    * rejects it. Bounded by refusing to retry a shape that has already failed.
    */
   private async requestChat(params: ChatParams, extra?: Record<string, unknown>): Promise<Response> {
-    let mode = this.plannedEffortMode(params);
-    const tried = new Set<string>();
-    for (;;) {
-      tried.add(typeof mode === "string" ? mode : `set:${mode.set}`);
-      try {
-        return await this.request({ ...this.buildBody(params, mode), ...extra });
-      } catch (err) {
-        const next = this.recoverFromEffortError(params, mode, err as Error);
-        if (!next) throw err;
-        if (tried.has(typeof next === "string" ? next : `set:${next.set}`)) throw err;
-        mode = next;
-      }
-    }
+    return runQuirkLadder<EffortMode, Response>({
+      initial: this.plannedEffortMode(params),
+      key: (mode) => (typeof mode === "string" ? mode : `set:${mode.set}`),
+      attempt: (mode) => this.request({ ...this.buildBody(params, mode), ...extra }),
+      recover: (mode, err) => this.recoverFromEffortError(params, mode, err),
+    });
   }
 
   private async request(body: Record<string, unknown>): Promise<Response> {
@@ -335,7 +325,7 @@ export class OpenAIChatProvider implements AIProvider {
 
     if (!resp.ok) {
       const text = await resp.text();
-      throw new Error(`OpenAI API error ${resp.status}: ${text}`);
+      throw new ProviderHttpError(resp.status, text, `OpenAI API error ${resp.status}: ${text}`);
     }
 
     return resp;

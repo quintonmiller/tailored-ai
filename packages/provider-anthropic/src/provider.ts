@@ -8,6 +8,7 @@ import type {
   ToolCall,
   ToolSchema,
 } from "@tailored-ai/core";
+import { ProviderHttpError, QuirkMemo, runQuirkLadder, WarnOnce } from "@tailored-ai/core";
 import { parseSseStream } from "./sse.js";
 
 /**
@@ -347,12 +348,11 @@ export class AnthropicMessagesProvider implements AIProvider {
   private defaultMaxTokens: number;
   private promptCaching: boolean;
   private defaultThinking?: ThinkingLevel;
-  /** Models that answered a `temperature` with a 400, learned at runtime. */
-  private rejectsTemperature = new Set<string>();
-  private warnedTemperature = new Set<string>();
-  /** Models we placed a history breakpoint for, and ones we have since complained about. */
+  /** Request-shape constraints learned from this model's own refusals. */
+  private quirks = new QuirkMemo<{ rejectsTemperature?: boolean }>(() => ({}));
+  private warn = new WarnOnce();
+  /** Models we placed a history breakpoint for and have not yet seen a cache hit or write from. */
   private markedHistory = new Set<string>();
-  private warnedNoCache = new Set<string>();
 
   constructor(opts: AnthropicMessagesProviderOptions) {
     this.apiKey = opts.apiKey;
@@ -429,49 +429,54 @@ export class AnthropicMessagesProvider implements AIProvider {
   }
 
   /**
-   * POST, dropping `temperature` if the model turns out to reject it.
+   * The only refusal this provider knows how to correct.
    *
    * Newer Claude models answer any `temperature` — including the 0.3 default
-   * this plugin sends when a caller supplies none — with
-   * "`temperature` is deprecated for this model." Sending nothing is not a
-   * workaround, because the default is applied here rather than by the API. So
-   * the model is learned from its own refusal and remembered for the process,
-   * the same way the OpenAI provider handles `reasoning_effort` (#385).
+   * this plugin sends when a caller supplies none — with "`temperature` is
+   * deprecated for this model." Sending nothing is not a workaround, because
+   * the default is applied here rather than by the API, so the model has to be
+   * learned from its own refusal.
    *
-   * Once dropped, a further 400 is rethrown: retrying an unrelated failure with
-   * a different body turns one clear error into two confusing ones.
+   * Anything else, and any 400 once the field is already gone, returns
+   * undefined and is rethrown untouched: retrying an unrelated failure with a
+   * different body turns one clear error into two confusing ones.
    */
+  private recoverFromTemperatureError(model: string, dropped: boolean, err: Error): boolean | undefined {
+    if (dropped) return undefined;
+    const http = err instanceof ProviderHttpError ? err : undefined;
+    if (http?.status !== 400) return undefined;
+    if (!/temperature.{0,30}(deprecated|not supported)/i.test(http.bodyText)) return undefined;
+
+    this.quirks.for(model).rejectsTemperature = true;
+    this.warn.say(
+      `temperature:${model}`,
+      `[anthropic] ${model} does not accept a temperature; sending none. ` +
+        `agent.temperature has no effect on this model.`,
+    );
+    return true;
+  }
+
+  /** POST, dropping `temperature` if the model turns out to reject it. */
   private async request(params: ChatParams, stream: boolean): Promise<Response> {
-    let dropTemperature = this.rejectsTemperature.has(params.model);
+    return runQuirkLadder<boolean, Response>({
+      initial: this.quirks.peek(params.model)?.rejectsTemperature ?? false,
+      key: (dropped) => (dropped ? "no-temperature" : "temperature"),
+      attempt: async (dropped) => {
+        const body = this.buildBody(params, dropped);
+        if (stream) body.stream = true;
 
-    for (;;) {
-      const body = this.buildBody(params, dropTemperature);
-      if (stream) body.stream = true;
+        const resp = await fetch(`${this.baseUrl}/v1/messages`, {
+          method: "POST",
+          headers: this.headers(),
+          body: JSON.stringify(body),
+        });
+        if (resp.ok) return resp;
 
-      const resp = await fetch(`${this.baseUrl}/v1/messages`, {
-        method: "POST",
-        headers: this.headers(),
-        body: JSON.stringify(body),
-      });
-
-      if (resp.ok) return resp;
-
-      const text = await resp.text();
-      const err = new Error(`Anthropic API error ${resp.status}: ${text}`);
-      if (resp.status !== 400 || dropTemperature || !/temperature.{0,30}(deprecated|not supported)/i.test(text)) {
-        throw err;
-      }
-
-      this.rejectsTemperature.add(params.model);
-      if (!this.warnedTemperature.has(params.model)) {
-        this.warnedTemperature.add(params.model);
-        console.warn(
-          `[anthropic] ${params.model} does not accept a temperature; sending none. ` +
-            `agent.temperature has no effect on this model.`,
-        );
-      }
-      dropTemperature = true;
-    }
+        const text = await resp.text();
+        throw new ProviderHttpError(resp.status, text, `Anthropic API error ${resp.status}: ${text}`);
+      },
+      recover: (dropped, err) => this.recoverFromTemperatureError(params.model, dropped, err),
+    });
   }
 
   /**
@@ -481,14 +486,13 @@ export class AnthropicMessagesProvider implements AIProvider {
    * history and the API neither wrote nor read a cache entry, say so once.
    */
   private checkCacheEngaged(model: string, usage: Usage | undefined): void {
-    if (!this.promptCaching || !this.markedHistory.has(model) || this.warnedNoCache.has(model)) return;
-    if ((usage?.cache_creation_input_tokens ?? 0) > 0 || (usage?.cache_read_input_tokens ?? 0) > 0) {
-      // Working. Stop looking — one confirmation is enough for the process.
-      this.markedHistory.delete(model);
-      return;
-    }
-    this.warnedNoCache.add(model);
-    console.warn(
+    if (!this.promptCaching || !this.markedHistory.has(model)) return;
+    // Stop looking either way — one confirmation, or one complaint, is enough
+    // for the process.
+    this.markedHistory.delete(model);
+    if ((usage?.cache_creation_input_tokens ?? 0) > 0 || (usage?.cache_read_input_tokens ?? 0) > 0) return;
+    this.warn.say(
+      `cache:${model}`,
       `[anthropic] ${model} reported no cache read or write despite prompt caching being on. ` +
         `The prompt is probably under the ${minCacheableTokens(model)}-token minimum, ` +
         `or this model does not support caching.`,
