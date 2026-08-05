@@ -128,6 +128,29 @@ agent:
       model: deepseek-v4-pro
 ```
 
+A rung can carry its own `thinking`, `temperature` and `maxTokens`. One global
+setting cannot serve both ends of a chain that heads at a small local model and
+falls back to a strong cloud reasoner — set it for the head and the fallback is
+wasted, set it for the fallback and the head is burdened — and the provider's
+`defaultThinking` is keyed by provider, so two rungs on the same provider could
+not differ. Anything left unset inherits what the call already resolved:
+
+```yaml
+agent:
+  models:
+    - provider: openai_compatible   # local, small: reasoning is a poor trade
+      model: qwen3.6-27b-vllm
+      thinking: off
+    - provider: openai              # cloud, strong reasoner: worth paying for
+      model: gpt-5.6-luna
+      thinking: high
+      maxTokens: 32000              # reasoning shares this cap with output
+```
+
+Raise `maxTokens` on any rung you raise `thinking` on. It is a cap on reasoning
+*plus* visible output, so a hard turn on a reasoning model can spend the whole
+budget thinking and return an empty message.
+
 Each rung is tried in order. A rung is skipped when its provider cannot be built
 (the plugin is not installed), and moved past when its call throws — including
 on a 4xx, because "this model refuses this request" is exactly when a different
