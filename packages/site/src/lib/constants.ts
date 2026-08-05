@@ -44,6 +44,13 @@ export const DOCS_NAV: DocsNavSection[] = [
     ],
   },
   {
+    label: "Deploy",
+    items: [
+      { label: "Self-hosting", href: "/docs/self-hosting" },
+      { label: "Deploy targets", href: "/docs/deploy-targets" },
+    ],
+  },
+  {
     label: "Packages",
     items: [
       { label: "Overview", href: "/docs/packages" },
@@ -56,6 +63,7 @@ export const DOCS_NAV: DocsNavSection[] = [
       { label: "@tailored-ai/provider-anthropic", href: "/docs/packages/provider-anthropic" },
       { label: "@tailored-ai/provider-openai", href: "/docs/packages/provider-openai" },
       { label: "@tailored-ai/provider-deepseek", href: "/docs/packages/provider-deepseek" },
+      { label: "@tailored-ai/deploy-aws", href: "/docs/packages/deploy-aws" },
       { label: "@tailored-ai/trusted-actions", href: "/docs/packages/trusted-actions" },
     ],
   },
