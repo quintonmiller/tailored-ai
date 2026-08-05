@@ -27,6 +27,32 @@ Warnings are printed at CLI startup via `[config] Warning: ...`. Exported from `
 - Basic type matching (string, number, boolean, array)
 - Returns clear errors with expected parameter list to the LLM
 
+## Model fallback chain
+
+The provider call walks an ordered chain of provider+model pairs
+(`chatWithFallback` in `agent/loop.ts`) rather than calling one provider. The
+chain comes from `ResolvedAgent.models`, is rebuilt every iteration through
+`AgentLoopOptions.getModelChain` so a config reload takes effect mid-run, and is
+never empty — a deployment that declares no `models[]` gets a one-entry chain and
+behaves exactly as it always did.
+
+- Each rung gets **one** attempt; the last also gets the transient retry below.
+  A model that just refused is not worth a second call while a working one waits.
+- **Any** throw advances to the next rung, including 4xx. A provider error
+  arrives as an `Error` whose status is only in its message, and "this model
+  refuses this request" is when a different model is worth trying.
+- Building a rung can fail (its plugin is not installed); those are dropped by
+  `runtime.resolveModelChain` with a one-time warning rather than surfacing.
+- When every rung fails, the **first** error is thrown: the primary's failure is
+  the one that explains the outage.
+- Deltas already streamed by a failed rung are not withdrawn. The consumer
+  contract is that the final response supersedes streamed deltas, so crossing
+  models mid-turn shows as a flicker rather than corrupting the transcript.
+
+Configuration, precedence and the two things this deliberately does not do
+(quality-based escalation, per-rung context budgets) are in
+[model-fallbacks.md](./model-fallbacks.md).
+
 ## Retry Utility
 
 `packages/core/src/tools/retry.ts` provides `withRetry()` and `isTransientError()` for exponential backoff on external API calls:

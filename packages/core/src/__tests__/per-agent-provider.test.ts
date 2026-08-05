@@ -47,6 +47,13 @@ const YAML_CONFIG = [
   "  onMissing:",
   "    description: names a provider nothing registers",
   "    provider: nowhere",
+  "  onChainWithGap:",
+  "    description: a fallback chain whose first rung cannot be built",
+  "    models:",
+  "      - provider: nowhere",
+  "        model: ghost-model",
+  "      - provider: remote",
+  "        model: vendor/remote-model",
 ].join("\n");
 
 let runtime: AgentRuntime;
@@ -131,6 +138,36 @@ describe("per-agent provider", () => {
     providerFor("onMissing");
 
     expect(warn.mock.calls.filter((c) => String(c[0]).includes("nowhere"))).toHaveLength(1);
+  });
+
+  /**
+   * One unbuildable provider is one problem, and must read as one. The chain
+   * resolver and the degrade-to-default path both have something true to say
+   * about it, and saying both made a single missing plugin look like two
+   * failures — with the less useful half ("skipping it") printed first.
+   */
+  it("reports an unbuildable rung once, and only as a skip when a rung survives", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const provider = providerFor("onChainWithGap");
+
+    // The surviving rung answers; nothing degraded to the deployment default.
+    expect(provider.id).toBe("remote");
+    const about = warn.mock.calls.filter((c) => String(c[0]).includes("nowhere"));
+    expect(about).toHaveLength(1);
+    expect(String(about[0][0])).toContain("skipping it");
+    expect(String(about[0][0])).not.toContain("Falling back to");
+  });
+
+  it("explains the degrade rather than the skip when no rung survives", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(providerFor("onMissing").id).toBe("local");
+    const about = warn.mock.calls.filter((c) => String(c[0]).includes("nowhere"));
+    expect(about).toHaveLength(1);
+    // "Skipping it" would be a lie here: there is nothing to skip to.
+    expect(String(about[0][0])).toContain("Falling back to");
+    expect(String(about[0][0])).not.toContain("skipping it");
   });
 
   it("re-resolves through getProvider so a hot reload can swap it", () => {
