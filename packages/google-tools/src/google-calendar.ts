@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import type { Tool, ToolContext, ToolResult } from "@tailored-ai/core";
+import { spawnFailureReason } from "./gog-error.js";
 
 export class GoogleCalendarTool implements Tool {
   name = "google_calendar";
@@ -66,7 +67,9 @@ export class GoogleCalendarTool implements Tool {
         (error, stdout, stderr) => {
           resolve({
             stdout,
-            stderr,
+            // A spawn failure (ENOENT/EACCES) produces no stderr, so carry the
+            // reason out separately or the caller reports the wrong subsystem.
+            stderr: error ? (spawnFailureReason(error) ?? stderr) : stderr,
             code: error ? ((error as unknown as { code?: number }).code ?? 1) : 0,
           });
         },
