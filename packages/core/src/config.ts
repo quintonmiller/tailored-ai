@@ -5,6 +5,7 @@ import { DEFAULT_MAX_TOOL_OUTPUT_CHARS } from "./agent/tool-output.js";
 import type { PermissionsConfig } from "./approval.js";
 import { DEFAULT_AUTOPILOT_TASK_PROMPT } from "./autopilot/task-prompt.js";
 import { DEFAULT_BRIEFING_PROMPT } from "./briefing.js";
+import { AGENT_DEFINITION_KEYS, findShapeIssues } from "./config-schema.js";
 import { type DashboardWidget, validateDashboardWidget } from "./dashboard/index.js";
 import type { ThinkingLevel } from "./providers/interface.js";
 import { DEFAULT_SUGGESTIONS_PROMPT } from "./suggestions.js";
@@ -1454,42 +1455,17 @@ export const KNOWN_TOP_LEVEL_CONFIG_KEYS: ReadonlySet<string> = new Set(Object.k
 const DEPRECATED_TOP_LEVEL_CONFIG_KEYS: ReadonlySet<string> = new Set(["profiles"]);
 
 /**
- * Every key an agent block may carry. Keep in sync with {@link AgentDefinition}
- * and with `AGENT_DEFINITION_FIELDS` in resources/agent.ts, which enforces the
- * same list one layer down.
+ * Every key an agent block may carry, derived from `AgentDefinitionSchema`
+ * rather than retyped here.
+ *
+ * It used to be a hand-written copy of {@link AgentDefinition}'s fields, and so
+ * did `AGENT_DEFINITION_FIELDS` in resources/agent.ts — three lists of the same
+ * thing kept in step by a docstring asking you to. Adding a field to the
+ * interface and forgetting one of them produced config that parsed, persisted,
+ * and was read by nothing. Both now read the schema, which cannot drift from
+ * the interface without failing the build.
  */
-const KNOWN_AGENT_KEYS: ReadonlySet<string> = new Set([
-  "description",
-  "model",
-  "provider",
-  "models",
-  "instructions",
-  "tools",
-  "temperature",
-  "thinking",
-  "maxTokens",
-  "maxToolRounds",
-  "fileBoundary",
-  "exec",
-  "roomSessionScope",
-  "contextDir",
-  "nudgeOnText",
-  "nudgeMessage",
-  "skipGlobalContext",
-  "summarizeOnTrim",
-  "worktree",
-  "taskPreamble",
-  "injectMemory",
-  "budgetWarnings",
-  "memoryInjectBudgetTokens",
-  "memoryInjectLimit",
-  "hooks",
-  "sandbox",
-  "skills",
-  "skillLoading",
-  "online",
-  "systemPrompt",
-]);
+const KNOWN_AGENT_KEYS: ReadonlySet<string> = AGENT_DEFINITION_KEYS;
 
 /**
  * Closest known key by edit distance, for "did you mean". Only offered for a
@@ -1579,25 +1555,38 @@ function unknownAgentKeysFor(agentName: string, agent: AgentDefinition | undefin
  * narrower question than startup does. Most of what validateConfig reports can
  * be legitimately transient — a tool whose credential env var isn't exported
  * yet, a provider a plugin registers later — and refusing a write on those
- * would make the config unwritable for reasons unrelated to the write. An
- * unrecognized key is never transient: nothing will ever read it, and the
- * author is right there to fix it.
+ * would make the config unwritable for reasons unrelated to the write. These
+ * are never transient: nothing will ever read them, and the author is right
+ * there to fix it.
+ *
+ * Two kinds qualify. A key nothing recognizes, and a key whose *value* is not
+ * the type the field is declared as — `enabled: "false"` is read by
+ * `job.enabled !== false` as enabled, so the setting does the opposite of what
+ * it says. Both parse, both survive a round-trip, and neither has ever been
+ * visible at the moment someone wrote it.
  *
  * Emits the same strings `validateConfig` does, so a caller can diff against a
  * pre-write snapshot by message identity.
  */
-export function findUnknownKeys(config: AgentConfig): string[] {
+export function findInertConfig(config: AgentConfig): string[] {
   const found = unknownTopLevelKeys(config);
   for (const [agentName, agent] of Object.entries(config.agents ?? {})) {
     found.push(...unknownAgentKeysFor(agentName, agent));
   }
+  found.push(...findShapeIssues(config));
   return found;
 }
+
+/** @deprecated Renamed to {@link findInertConfig}, which now also reports type mismatches. */
+export const findUnknownKeys = findInertConfig;
 
 export function validateConfig(config: AgentConfig): string[] {
   const warnings: string[] = [];
 
   warnings.push(...unknownTopLevelKeys(config));
+  // Shape before semantics: a check that reads `job.enabled` has nothing
+  // useful to say about a value that is the wrong type in the first place.
+  warnings.push(...findShapeIssues(config));
 
   // Collect all tool names that would be enabled
   const enabledToolNames = new Set<string>();

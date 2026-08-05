@@ -57,7 +57,7 @@ describe("agent systemPrompt round-trip", () => {
       ...baseManifest,
       data: { systemPrompt: "not-an-object" },
     };
-    expect(() => parseAgentData(m)).toThrow(/systemPrompt must be an object/);
+    expect(() => parseAgentData(m)).toThrow(/`data\.systemPrompt` must be an object/);
   });
 
   it("agentDefinitionToManifest preserves systemPrompt", () => {

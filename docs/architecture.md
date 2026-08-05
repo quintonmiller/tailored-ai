@@ -159,11 +159,34 @@ Both validate the result as the config it *would become* (`normalizeRawConfig`, 
 Two rules worth knowing before adding a check:
 
 - **Refuse on the delta, not the total.** A deployment accumulates findings unrelated to the next write (a tool whose credential env var isn't exported in this shell). Judging a write on the total makes the config permanently unwritable for reasons that have nothing to do with the change. Findings are compared against a pre-write snapshot by message identity.
-- **Only "parses but is never read" refuses.** Unknown keys are never transient and the author is right there. Everything else `validateConfig` reports — a tool not currently enabled, a provider a plugin registers later — warns.
+- **Only "parses but is never read" refuses.** `findInertConfig` decides: an unrecognized key, or a value that is not the type its field is declared as. Neither is transient, and the author is right there. Everything else `validateConfig` reports — a tool not currently enabled, a provider a plugin registers later — warns.
 
 This exists because the same gap kept producing the same bug: an agent wrote itself `name:` and `temp:` instead of `temperature:`, every layer accepted it, and it ran at the default temperature for a day. `validateConfig` had detected exactly that since #252; it just ran at startup, into a log, after the write.
 
 Checks needing the live tool registry (`unknownToolRefs`) stay in the admin tool — the shared writer deliberately knows nothing about runtime state. Out of scope by design: `packages/cli/src/setup.ts` (out-of-process, no runtime) and `google-tools`' `persistFolderId` (holds only a `configPath`).
+
+## Validating config shape
+
+`packages/core/src/config-schema.ts` holds zod schemas for the parts of `config.yaml` core owns. `validateConfig` was always a *semantic* checker (this tool needs an api key, that agent references a tool nobody enabled) and stays one; the schema is the layer in front of it that asks whether a value is the type the interface says it is.
+
+`AgentConfig` is a TypeScript interface, so nothing survives to runtime to compare against. What that allowed:
+
+```yaml
+cron:
+  jobs:
+    - name: nightly-sweep
+      enabled: "false"     # quoted — `job.enabled !== false` is true for a string
+```
+
+The job stayed scheduled after an agent was asked to disable it and reported "Done". The reported finding now names the inversion outright: *"A non-empty string is truthy, so this currently reads as `true`. Write `false` without them."*
+
+Three rules for anything added here:
+
+- **The interface stays; the schema is checked against it.** `Identical<z.infer<typeof Schema>, TheInterface>` fails the build if either side gains, loses, or retypes a field. Inferring the type from the schema instead would delete every doc comment on `AgentDefinition`, which is the only place the *why* of a field is written down.
+- **Derive key lists, never retype them.** `KNOWN_AGENT_KEYS` (config.ts) and the manifest field list (`resources/agent.ts`) both read `AGENT_DEFINITION_KEYS`, which is `Object.keys(AgentDefinitionSchema.shape)`. As three hand-maintained copies, they drifted: `fileBoundary` never reached `toolContextExtras` (three agents ran with a declared filesystem confinement that did nothing) and thirteen agents set `injectMemory: true` and never got one.
+- **Closed records get full checks; open bags get `enabled` only.** `AgentDefinition` and `CronJobConfig` are core's. `tools.*`, `channels.*` and `mcp.servers.*` hold plugin config whose shape core must never know, so the only field judged there is the one they all share — and `enabled: "false"` enables the thing it claims to disable in every one of them.
+
+Severity differs by caller, deliberately. `validateConfig` and the write gate report; `parseAgentData` throws, because a manifest with a mistyped field cannot be turned into a definition — so it keeps the older, laxer reading of `key:` with no value (absent, not an error), where a rejection would cost the whole agent.
 
 ## Conventions
 

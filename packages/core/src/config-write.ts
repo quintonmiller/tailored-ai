@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import * as YAML from "yaml";
-import { type AgentConfig, findUnknownKeys, normalizeRawConfig, validateConfig } from "./config.js";
+import { type AgentConfig, findInertConfig, normalizeRawConfig, validateConfig } from "./config.js";
 
 /**
  * The one door every runtime write to `config.yaml` goes through.
@@ -69,8 +69,8 @@ function readCurrentRaw(configPath: string): Record<string, unknown> {
  * judged only on what it actually introduces.
  */
 function introducedIssues(before: AgentConfig | undefined, after: AgentConfig): string[] {
-  const existing = new Set(before ? findUnknownKeys(before) : []);
-  return findUnknownKeys(after).filter((issue) => !existing.has(issue));
+  const existing = new Set(before ? findInertConfig(before) : []);
+  return findInertConfig(after).filter((issue) => !existing.has(issue));
 }
 
 /** Round-trip through the serializer the write will use, so the check sees what lands on disk. */
