@@ -182,17 +182,41 @@ export async function chatWithFallback(
  *   else, which is the difference between "working as configured" and "stuck".
  * - `max-rounds` — hit `maxToolRounds`. A genuine stall.
  * - `repeated-calls` — the model looped on identical tool calls. A genuine stall.
+ * - `truncated` — the model hit its output cap before writing anything. Not a
+ *   stall: it did work, it was billed for it, and none of it survived.
  */
 export type LoopStop =
   | { kind: "complete" }
   | { kind: "sleep"; reason?: string }
   | { kind: "aborted"; requestedByCaller: boolean; reason?: string }
   | { kind: "max-rounds"; rounds: number }
-  | { kind: "repeated-calls" };
+  | { kind: "repeated-calls" }
+  | { kind: "truncated"; model: string; maxTokens?: number; outputTokens?: number; spentOnReasoning: boolean };
 
 /** True when the loop ended because it got stuck, rather than finishing or being told to stop. */
 export function isStallStop(stop: LoopStop): boolean {
   return stop.kind === "max-rounds" || stop.kind === "repeated-calls";
+}
+
+/**
+ * Explain a turn that hit the output cap before saying anything.
+ *
+ * `maxTokens` goes out as `max_completion_tokens`, which on a reasoning model
+ * caps reasoning *plus* visible output rather than output alone. A hard turn
+ * can therefore spend the whole budget thinking and return an empty message
+ * with `finish_reason: "length"`, billed in full. An empty assistant message is
+ * indistinguishable from a model that had nothing to say, and that ambiguity is
+ * how the class of bug survives — so name it, and say which knob moves it.
+ */
+export function describeTruncation(stop: Extract<LoopStop, { kind: "truncated" }>): string {
+  const parts = [`${stop.model} reached its output limit before writing a reply`];
+  if (stop.maxTokens !== undefined) parts.push(`maxTokens is ${stop.maxTokens}`);
+  if (stop.outputTokens !== undefined) parts.push(`${stop.outputTokens} output tokens were billed`);
+  if (stop.spentOnReasoning) parts.push("the budget went to reasoning, which shares this cap with the answer");
+  const advice = stop.spentOnReasoning
+    ? "Raise maxTokens for this model, or lower its reasoning effort."
+    : "Raise maxTokens for this model.";
+  return `${parts.join(" — ")}. ${advice}`;
 }
 
 export interface AgentLoopOptions {
@@ -1048,7 +1072,7 @@ async function _runAgentLoopBody(
     const candidates: ModelCandidate[] =
       chain.length > 0 ? chain : [{ provider: currentProvider, model: session.model, label: currentProvider.id }];
 
-    const { response } = await chatWithFallback(
+    const { response, candidate: answeredBy } = await chatWithFallback(
       candidates,
       {
         messages,
@@ -1097,6 +1121,33 @@ async function _runAgentLoopBody(
     };
     saveMessage(db, session.id, assistantMsg);
     history.push(assistantMsg);
+
+    // Truncation is checked before the nudge and before the complete path: a
+    // turn cut off mid-thought has not finished, and nudging a model that ran
+    // out of budget just spends another round arriving at the same place.
+    if (response.finishReason === "length") {
+      const noOutput = !(response.content ?? "").trim() && !response.toolCalls?.length;
+      const stop = {
+        kind: "truncated" as const,
+        model: answeredBy.model,
+        maxTokens: opts.maxTokens,
+        outputTokens: response.usage?.output,
+        spentOnReasoning: noOutput && !!response.reasoning,
+      };
+      if (noOutput) {
+        const explanation = describeTruncation(stop);
+        console.warn(`[agent] ${explanation}`);
+        opts.onStop?.(stop);
+        // Returned rather than logged only: an empty string here reads as "the
+        // model had nothing to say", which is the misdiagnosis this exists to
+        // prevent.
+        return explanation;
+      }
+      // Answered, but cut off mid-sentence. Worth a line; not worth discarding.
+      console.warn(
+        `[agent] ${answeredBy.model} hit its output limit mid-reply (maxTokens ${opts.maxTokens ?? "unset"})`,
+      );
+    }
 
     if (response.finishReason === "stop" || !response.toolCalls?.length) {
       // Nudge: if the model stopped with text but hasn't completed its task, re-prompt
