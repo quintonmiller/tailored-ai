@@ -620,6 +620,13 @@ export {
   OpenAICompatibleEmbeddingProvider,
 } from "./providers/openai-embedding.js";
 export {
+  ProviderHttpError,
+  type QuirkLadderOptions,
+  QuirkMemo,
+  runQuirkLadder,
+  WarnOnce,
+} from "./providers/quirks.js";
+export {
   enableThinkingTemplateMap,
   isThinkingLevel,
   OPENAI_COMPATIBLE_THINKING_DIALECTS,

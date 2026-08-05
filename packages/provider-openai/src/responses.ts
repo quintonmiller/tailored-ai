@@ -27,6 +27,7 @@ import type {
   ToolCall,
   ToolSchema,
 } from "@tailored-ai/core";
+import { ProviderHttpError, QuirkMemo, runQuirkLadder, WarnOnce } from "@tailored-ai/core";
 import { isReasoningModel } from "./provider.js";
 import { parseSseStream } from "./sse.js";
 
@@ -292,8 +293,8 @@ export class OpenAIResponsesProvider implements AIProvider {
   private reasoningSummary: "auto" | "concise" | "detailed" | "off";
   private store: boolean;
 
-  private quirks = new Map<string, Quirks>();
-  private warned = new Set<string>();
+  private quirks = new QuirkMemo<Quirks>(() => ({ rejectedEfforts: new Set() }));
+  private warn = new WarnOnce();
   /** call_id → the reasoning items emitted in the same response. */
   private reasoningByCall = new Map<string, OutputItem[]>();
 
@@ -318,18 +319,9 @@ export class OpenAIResponsesProvider implements AIProvider {
     return headers;
   }
 
-  private quirksFor(model: string): Quirks {
-    let q = this.quirks.get(model);
-    if (!q) {
-      q = { rejectedEfforts: new Set() };
-      this.quirks.set(model, q);
-    }
-    return q;
-  }
-
   /** The attempt to make first, given everything learned about this model. */
   private firstAttempt(params: ChatParams): Attempt {
-    const q = this.quirksFor(params.model);
+    const q = this.quirks.for(params.model);
     const level = params.thinking ?? this.defaultThinking;
 
     let effort = level ? toEffort(level) : undefined;
@@ -379,13 +371,13 @@ export class OpenAIResponsesProvider implements AIProvider {
    * most likely to be reworded without notice.
    */
   private recover(model: string, attempt: Attempt, apiError: ApiError | undefined, err: Error): Attempt | undefined {
-    const q = this.quirksFor(model);
+    const q = this.quirks.for(model);
     const message = apiError?.message ?? err.message;
 
     // "Your organization must be verified to generate reasoning summaries."
     if (attempt.summary && /verified to generate reasoning summaries/i.test(message)) {
       q.noSummary = true;
-      this.warnOnce(
+      this.warn.say(
         `summary:${model}`,
         `[openai] ${model}: this org is not verified for reasoning summaries, so no reasoning trace will be captured. ` +
           `Verify at https://platform.openai.com/settings/organization/general, or set providers.openai.reasoningSummary: off to silence this.`,
@@ -406,7 +398,7 @@ export class OpenAIResponsesProvider implements AIProvider {
     const best = nearestEffort(attempt.effort, supported);
     if (best) {
       q.forcedEffort = best;
-      this.warnOnce(
+      this.warn.say(
         `effort:${model}`,
         `[openai] ${model} does not accept reasoning effort '${attempt.effort}' — using '${best}' instead.`,
       );
@@ -415,17 +407,11 @@ export class OpenAIResponsesProvider implements AIProvider {
 
     // Omitting is accepted by every model measured on this endpoint, so it is a
     // terminal rung rather than another guess.
-    this.warnOnce(
+    this.warn.say(
       `effort:${model}`,
       `[openai] ${model} rejected reasoning effort '${attempt.effort}'; falling back to the model's own default.`,
     );
     return { ...attempt, effort: undefined };
-  }
-
-  private warnOnce(key: string, message: string): void {
-    if (this.warned.has(key)) return;
-    this.warned.add(key);
-    console.warn(message);
   }
 
   /**
@@ -434,40 +420,31 @@ export class OpenAIResponsesProvider implements AIProvider {
    * invariant of the error messages.
    */
   private async request(params: ChatParams, stream: boolean): Promise<Response> {
-    let attempt = this.firstAttempt(params);
-    const tried = new Set<string>();
+    return runQuirkLadder<Attempt, Response>({
+      initial: this.firstAttempt(params),
+      key: (attempt) => `${attempt.effort ?? "-"}|${attempt.summary ?? "-"}`,
+      attempt: async (attempt) => {
+        const body = this.buildBody(params, attempt);
+        if (stream) body.stream = true;
 
-    for (;;) {
-      const key = `${attempt.effort ?? "-"}|${attempt.summary ?? "-"}`;
-      tried.add(key);
+        const resp = await fetch(`${this.baseUrl}/responses`, {
+          method: "POST",
+          headers: this.headers(),
+          body: JSON.stringify(body),
+        });
+        if (resp.ok) return resp;
 
-      const body = this.buildBody(params, attempt);
-      if (stream) body.stream = true;
-
-      const resp = await fetch(`${this.baseUrl}/responses`, {
-        method: "POST",
-        headers: this.headers(),
-        body: JSON.stringify(body),
-      });
-
-      if (resp.ok) return resp;
-
-      const text = await resp.text();
-      const err = new Error(`OpenAI API error ${resp.status}: ${text}`);
-      if (resp.status !== 400) throw err;
-
-      let apiError: ApiError | undefined;
-      try {
-        apiError = (JSON.parse(text) as { error?: ApiError }).error;
-      } catch {
-        // Non-JSON body: fall through to prose matching on the message.
-      }
-
-      const next = this.recover(params.model, attempt, apiError, err);
-      if (!next) throw err;
-      if (tried.has(`${next.effort ?? "-"}|${next.summary ?? "-"}`)) throw err;
-      attempt = next;
-    }
+        const text = await resp.text();
+        throw new ProviderHttpError(resp.status, text, `OpenAI API error ${resp.status}: ${text}`);
+      },
+      recover: (attempt, err) => {
+        const http = err instanceof ProviderHttpError ? err : undefined;
+        if (http?.status !== 400) return undefined;
+        // Structured when the body is JSON; the prose is the fallback.
+        const apiError = http.json<{ error?: ApiError }>()?.error;
+        return this.recover(params.model, attempt, apiError, err);
+      },
+    });
   }
 
   /** Remember the reasoning that produced these calls, for the next turn. */

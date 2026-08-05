@@ -107,6 +107,32 @@ custom_tools:
 3. Add provider creation in `packages/core/src/factories.ts` in the `createProvider()` function
 4. Export from `packages/core/src/index.ts`
 
+### Learning a model's request-shape quirks
+
+Vendors reject request shapes per model, in ways no version rule predicts:
+`gpt-5.3-chat-latest` takes only `medium` reasoning effort while `gpt-5.2` takes
+anything, and newer Claude models 400 on any `temperature` at all. The API tells
+you, so the shape is: send, read the refusal, correct, remember for the process.
+
+`packages/core/src/providers/quirks.ts` holds the parts that generalise:
+
+- `runQuirkLadder({ initial, key, attempt, recover })` — retries with corrected
+  shapes until one is accepted. Termination is structural: a shape whose `key`
+  has already been tried is never tried again, so the loop is bounded by the
+  number of distinct shapes rather than by a counter or by trusting error text.
+- `QuirkMemo` — per-model learned facts, created on first touch.
+- `WarnOnce` — say it once per (model, quirk). Silently degrading a request the
+  caller asked for is the failure these recoveries exist to avoid, but the
+  correction repeats on every call.
+- `ProviderHttpError` — carries status and body to `recover`, so recognition
+  never re-parses a message the provider formatted itself.
+
+`recover` returning `undefined` rethrows untouched, and that is the right
+default: retrying an unrelated failure with a different body turns one clear
+error into two confusing ones. Recognition itself stays in the provider — which
+400s are recoverable and what the fix is, is vendor knowledge that does not
+generalise.
+
 ## Adding a UI Provider
 
 The server mounts a UI via the registry in `packages/core/src/ui/registry.ts`. The CLI ships the bundled web dashboard as the `"builtin"` provider; plugins register additional providers at import time.
