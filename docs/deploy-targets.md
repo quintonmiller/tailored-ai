@@ -21,6 +21,14 @@ tai deploy up docker -- --force-recreate    # args after `--` go to the target
 | `DeployTarget` and friends | `@tailored-ai/core` (types only) | The package every plugin already depends on. The import erases at compile time, so the runtime cost is nil. |
 | Registry, discovery, `tai deploy` | `@tailored-ai/cli` | Deployment is a CLI-time concern. The agent runtime never needs to know how it was deployed, so an implementation in the runtime library would be weight every embedder pays for and nobody uses. |
 | `docker` target | `@tailored-ai/cli` | A reference implementation, so the seam is exercised rather than assumed. |
+| `aws-ec2` target | `@tailored-ai/deploy-aws` | A real cloud target, shipped as a plugin like any third party's. |
+
+## Available targets
+
+| Target | Package | |
+|---|---|---|
+| `docker` | built in | Container on this machine. |
+| `aws-ec2` | `@tailored-ai/deploy-aws` | Single EC2 instance, encrypted EBS volume. [README](../packages/deploy-aws/README.md) |
 
 ## Writing one
 
