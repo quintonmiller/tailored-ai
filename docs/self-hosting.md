@@ -20,28 +20,44 @@ adding containers. Two containers on one volume will corrupt the database.
 
 ## Quick start
 
-```bash
-git clone https://github.com/quintonmiller/tailored-ai
-cd tailored-ai/docker/tai
-cp .env.example .env          # set TAI_MODEL and TAI_BASE_URL
-docker compose up -d
-docker compose logs -f        # first boot prints the generated API token
-```
-
-The dashboard is on `http://127.0.0.1:3000` on the host. Read
-[Exposing it](#exposing-it) before changing that.
-
-Without compose:
+Run the published image. No clone, no build:
 
 ```bash
-docker build -t tai:local -f docker/tai/Dockerfile .
 docker run -d --name tai \
   -p 127.0.0.1:3000:3000 \
   -v tai-data:/data \
   --add-host host.docker.internal:host-gateway \
   -e TAI_MODEL=llama3.2 \
   -e TAI_BASE_URL=http://host.docker.internal:11434/v1 \
-  tai:local
+  ghcr.io/quintonmiller/tai:latest
+
+docker logs -f tai            # first boot prints the generated API token
+```
+
+Images are multi-arch (amd64 and arm64), so the same tag runs on a Raspberry
+Pi, a Graviton instance, or an x86 server. `:latest` is the released tag;
+`:edge` tracks the tip of `main`.
+
+With compose, which wires the volume, port publish, and healthcheck for you:
+
+```bash
+git clone https://github.com/quintonmiller/tailored-ai
+cd tailored-ai/docker/tai
+cp .env.example .env          # set TAI_MODEL and TAI_BASE_URL
+docker compose up -d          # builds from source
+docker compose logs -f
+```
+
+Set `TAI_IMAGE=ghcr.io/quintonmiller/tai:latest` in that `.env` to pull the
+published image instead of building.
+
+The dashboard is on `http://127.0.0.1:3000` on the host. Read
+[Exposing it](#exposing-it) before changing that.
+
+To build the image yourself rather than pull it:
+
+```bash
+docker build -t tai:local -f docker/tai/Dockerfile .
 ```
 
 `--add-host host.docker.internal:host-gateway` is what lets the container reach
@@ -280,8 +296,8 @@ Known gaps, tracked here so they are not rediscovered:
 
 - **Image is ~880 MB.** `typescript`, `rxjs` and a musl-only `lightningcss`
   binary land in a `--prod` deploy, so something declares a build tool as a
-  runtime dependency. A dependency audit should cut this substantially.
-- **No published image.** Builds are local; a GHCR publish on release would
-  turn the quick start into `docker run ghcr.io/...`.
-- **No multi-arch build.** The Dockerfile builds for the host architecture.
-  arm64 (Raspberry Pi, Graviton, Apple silicon) needs a buildx matrix.
+  runtime dependency. A dependency audit should cut this substantially, and it
+  is the last thing standing between the AWS target and a `t3.small` default.
+- **`sandbox: docker` is unavailable in the container.** Per-agent container
+  isolation needs a Docker socket, and mounting one hands the agent root on the
+  host. A rootless or socket-proxied path would close this.

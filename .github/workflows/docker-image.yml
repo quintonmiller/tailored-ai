@@ -1,0 +1,175 @@
+name: Docker image
+
+# Publishes the TAI runtime image to GHCR.
+#
+# Two channels, mirroring the npm split in release.yml, and for the same
+# reason: a moving dev tag should be cheap and automatic, while the tag people
+# actually deploy should be a deliberate act.
+#
+#   * push to main        → `edge` and `sha-<commit>`. Never touches `latest`.
+#   * workflow_dispatch   → `latest` and the CLI's version (e.g. `0.1.9`),
+#                           gated on the `docker-publish` environment so a
+#                           maintainer approves before a deployable tag moves.
+#
+# Unlike npm, a Docker tag can be re-pointed, so the blast radius of a bad
+# publish is smaller. `latest` is still gated: `docker run ghcr.io/…/tai` with
+# no tag is the quick-start command in the docs, and that should not change
+# under people without someone deciding it should.
+#
+# One-time setup: nothing. GHCR authenticates with the built-in GITHUB_TOKEN.
+# The package starts private — make it public in the repo's Packages settings
+# if the quick start should work without a login.
+
+on:
+  push:
+    branches: [main]
+    # Skip runs that cannot change the image. A docs-only commit rebuilding
+    # and republishing `edge` is pure noise (and ~20 minutes of arm64
+    # emulation).
+    paths:
+      - "docker/tai/**"
+      - "packages/cli/**"
+      - "packages/core/**"
+      - "packages/server/**"
+      - "packages/ui/**"
+      - "packages/browser-mediator/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/docker-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  # Serialize per ref. Two runs pushing the same tag is a race whose winner is
+  # decided by whichever build finishes last, which is not a useful rule.
+  group: docker-image-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/tai
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # arm64 builds under QEMU emulation, and better-sqlite3 compiles from
+    # source. That is slow, and the default 360-minute cap is too generous to
+    # notice a hang.
+    timeout-minutes: 90
+    environment: ${{ github.event_name == 'workflow_dispatch' && 'docker-publish' || '' }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Read the CLI version
+        # The image version tracks @tailored-ai/cli, which is what the image
+        # actually runs. Every publishable package moves together (`fixed` in
+        # .changeset/config.json), so this is the release version.
+        id: version
+        run: echo "version=$(node -p "require('./packages/cli/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tags
+        id: tags
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            {
+              echo "tags<<EOF"
+              echo "${IMAGE}:latest"
+              echo "${IMAGE}:${{ steps.version.outputs.version }}"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "tags<<EOF"
+              echo "${IMAGE}:edge"
+              echo "${IMAGE}:sha-${GITHUB_SHA::12}"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/tai/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          # Cache through the registry so an arm64 rebuild does not redo the
+          # whole emulated compile on every push.
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
+          provenance: true
+          sbom: true
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.description=Tailored AI agent runtime
+            org.opencontainers.image.licenses=MIT
+
+      - name: Smoke-test the amd64 image
+        # A pushed image that cannot start is worse than no image: the tag
+        # exists, so `docker run` fails at the user rather than at us. Pull the
+        # tag that was actually published and boot it.
+        run: |
+          set -euo pipefail
+          TAG=$(echo "${{ steps.tags.outputs.tags }}" | head -1)
+          echo "[smoke] $TAG"
+          docker run -d --name tai-smoke -p 127.0.0.1:3000:3000 \
+            -e TAI_MODEL=smoke-model -e TAI_BASE_URL=http://127.0.0.1:9/v1 \
+            "$TAG"
+
+          for i in $(seq 1 60); do
+            state=$(docker inspect --format '{{.State.Health.Status}}' tai-smoke 2>/dev/null || echo starting)
+            [ "$state" = "healthy" ] && break
+            [ "$state" = "unhealthy" ] && { echo "::error::container went unhealthy"; break; }
+            sleep 5
+          done
+
+          docker logs tai-smoke
+          state=$(docker inspect --format '{{.State.Health.Status}}' tai-smoke)
+          if [ "$state" != "healthy" ]; then
+            echo "::error::image did not become healthy (state=$state)"
+            exit 1
+          fi
+
+          # The token is generated on first boot; the API must reject without
+          # it and accept with it.
+          TOKEN=$(docker exec tai-smoke sh -c 'sed -n "s/^TAI_AUTH_TOKEN=//p" /data/.env')
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/api/health)
+          [ "$code" = "401" ] || { echo "::error::expected 401 without a token, got $code"; exit 1; }
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/health)
+          [ "$code" = "200" ] || { echo "::error::expected 200 with the token, got $code"; exit 1; }
+          echo "[smoke] healthy, auth enforced"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Image"
+            echo ''
+            echo '```'
+            echo "${{ steps.tags.outputs.tags }}"
+            echo '```'
+            echo ''
+            echo "Platforms: linux/amd64, linux/arm64"
+          } >> "$GITHUB_STEP_SUMMARY"
