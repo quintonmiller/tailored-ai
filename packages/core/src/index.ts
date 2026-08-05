@@ -7,7 +7,13 @@ export { compactSession, formatCompactResult } from "./agent/compact.js";
 export type { ResolvedHooks } from "./agent/hooks.js";
 export { applyTemplates, EMPTY_HOOKS, executeHooks, hasHooks, mergeHooks, normalizeHooks } from "./agent/hooks.js";
 export type { AgentLoopOptions, ModelCandidate } from "./agent/loop.js";
-export { isStallStop, type LoopStop, runAgentLoop, stripOrphanedToolMessages } from "./agent/loop.js";
+export {
+  describeTruncation,
+  isStallStop,
+  type LoopStop,
+  runAgentLoop,
+  stripOrphanedToolMessages,
+} from "./agent/loop.js";
 export { BASE_SYSTEM_PROMPT } from "./agent/prompt.js";
 export type { RewindPreview } from "./agent/rewind.js";
 export { countTurns, previewRewind, rewindSession, undoRewind } from "./agent/rewind.js";

@@ -27,6 +27,25 @@ agents:
     maxTokens: 16384       # this one needs room
 ```
 
+**On a reasoning model this caps reasoning plus the answer, not the answer.**
+It goes out as `max_completion_tokens`, and reasoning tokens are billed against
+it, so a hard turn can spend the whole budget thinking and return an empty
+message — paid for in full. OpenAI's own guidance is to leave ~25k for reasoning
+plus output; 4096 is comfortable for a chat model and thin for a reasoning one.
+Measured reasoning shares on a *trivial* one-step task ranged from 0 to 453
+tokens, and `gpt-5-mini` spent 384 of 420 output tokens on reasoning for a
+single tool call.
+
+When that happens the loop says so rather than surfacing an empty turn: it names
+the model, the cap and whether reasoning consumed it, reports
+`{ kind: "truncated", … }` through `onStop`, and returns the explanation as the
+turn's text. An empty assistant message is otherwise indistinguishable from a
+model that had nothing to say.
+
+A rung of a fallback chain can carry its own `maxTokens`, which is usually what
+you want when the rungs differ in how hard they reason — see
+[model-fallbacks.md](./model-fallbacks.md).
+
 ### `exec` — per-agent command rules
 
 The deployment allowlist is one list on one shared `ExecTool` instance, so
