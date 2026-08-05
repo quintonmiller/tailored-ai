@@ -96,6 +96,9 @@ const ModelEntrySchema = z.object({
   provider: z.string(),
   model: z.string(),
   maxContextTokens: z.number().optional(),
+  thinking: z.enum(["off", "auto", "low", "medium", "high"]).optional(),
+  temperature: z.number().optional(),
+  maxTokens: z.number().optional(),
 });
 type _ModelEntryMatches = AssertTrue<Identical<z.infer<typeof ModelEntrySchema>, ModelEntry>>;
 

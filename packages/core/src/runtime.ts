@@ -1342,7 +1342,14 @@ export class AgentRuntime {
         skipped.push({ entry, error: built });
         continue;
       }
-      candidates.push({ provider: built, model: entry.model, label: entry.provider });
+      candidates.push({
+        provider: built,
+        model: entry.model,
+        label: entry.provider,
+        thinking: entry.thinking,
+        temperature: entry.temperature,
+        maxTokens: entry.maxTokens,
+      });
     }
 
     // "Skipping it" is only true when something survives to be skipped *to*.

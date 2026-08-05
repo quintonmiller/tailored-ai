@@ -12,7 +12,15 @@ import { loadAllContext, loadContextFiles } from "../context.js";
 import { recordTokenUsage } from "../db/autopilot-queries.js";
 import { getCoreMemory, renderCoreMemory } from "../db/core-memory-queries.js";
 import { getSessionMessages, saveMessage } from "../db/queries.js";
-import type { AIProvider, ChatParams, ChatResponse, Message, ToolCall, ToolSchema } from "../providers/interface.js";
+import type {
+  AIProvider,
+  ChatParams,
+  ChatResponse,
+  Message,
+  ThinkingLevel,
+  ToolCall,
+  ToolSchema,
+} from "../providers/interface.js";
 import type { Tool, ToolContext } from "../tools/interface.js";
 import { type ActiveSkillState, createActiveSkillState } from "./active-skill.js";
 import type { SkillCatalogEntry } from "./agents.js";
@@ -41,6 +49,29 @@ export interface ModelCandidate {
   provider: AIProvider;
   model: string;
   label: string;
+  /**
+   * Per-rung overrides from `ModelEntry`. Absent means inherit the value the
+   * call already resolved — a rung that says nothing behaves exactly as it did
+   * before these existed.
+   */
+  thinking?: ThinkingLevel;
+  temperature?: number;
+  maxTokens?: number;
+}
+
+/**
+ * Fold a rung's overrides into the call's params.
+ *
+ * Explicitly per-field rather than a spread of the candidate: `undefined` on an
+ * override must mean "inherit", and `{...params, ...candidate}` would instead
+ * erase the inherited value with it.
+ */
+export function applyCandidateParams(params: Omit<ChatParams, "model">, candidate: ModelCandidate): ChatParams {
+  const out: ChatParams = { ...params, model: candidate.model };
+  if (candidate.thinking !== undefined) out.thinking = candidate.thinking;
+  if (candidate.temperature !== undefined) out.temperature = candidate.temperature;
+  if (candidate.maxTokens !== undefined) out.maxTokens = candidate.maxTokens;
+  return out;
 }
 
 async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
@@ -149,7 +180,7 @@ export async function chatWithFallback(
     try {
       const response = await chatOnce(
         candidate.provider,
-        { ...params, model: candidate.model },
+        applyCandidateParams(params, candidate),
         onTextDelta,
         onReasoningDelta,
         isLast,
@@ -1127,10 +1158,14 @@ async function _runAgentLoopBody(
     // out of budget just spends another round arriving at the same place.
     if (response.finishReason === "length") {
       const noOutput = !(response.content ?? "").trim() && !response.toolCalls?.length;
+      // The rung that answered may carry its own cap, so report the one that
+      // actually bit. Naming the deployment default when a fallback's override
+      // is what truncated the turn sends the operator to the wrong setting.
+      const effectiveMaxTokens = answeredBy.maxTokens ?? opts.maxTokens;
       const stop = {
         kind: "truncated" as const,
         model: answeredBy.model,
-        maxTokens: opts.maxTokens,
+        maxTokens: effectiveMaxTokens,
         outputTokens: response.usage?.output,
         spentOnReasoning: noOutput && !!response.reasoning,
       };
@@ -1145,7 +1180,7 @@ async function _runAgentLoopBody(
       }
       // Answered, but cut off mid-sentence. Worth a line; not worth discarding.
       console.warn(
-        `[agent] ${answeredBy.model} hit its output limit mid-reply (maxTokens ${opts.maxTokens ?? "unset"})`,
+        `[agent] ${answeredBy.model} hit its output limit mid-reply (maxTokens ${effectiveMaxTokens ?? "unset"})`,
       );
     }
 

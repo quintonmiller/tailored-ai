@@ -144,3 +144,27 @@ describe("describeTruncation", () => {
     expect(out).not.toContain("maxTokens is");
   });
 });
+
+describe("truncation on a rung with its own cap", () => {
+  it("names the cap that actually bit, not the deployment default", async () => {
+    // A rung can override `maxTokens` (ModelEntry). Reporting `agent.maxTokens`
+    // when a fallback's own cap is what truncated the turn sends the operator
+    // to the wrong setting.
+    const { text } = await run(provider({ content: null }), {
+      maxTokens: 8192,
+      getModelChain: () => [
+        { provider: provider({ content: null }), model: "cloud-reasoner", label: "openai", maxTokens: 1024 },
+      ],
+    });
+    expect(text).toContain("maxTokens is 1024");
+    expect(text).not.toContain("maxTokens is 8192");
+  });
+
+  it("falls back to the deployment cap when the rung sets none", async () => {
+    const { text } = await run(provider({ content: null }), {
+      maxTokens: 8192,
+      getModelChain: () => [{ provider: provider({ content: null }), model: "m", label: "p" }],
+    });
+    expect(text).toContain("maxTokens is 8192");
+  });
+});
