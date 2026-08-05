@@ -22,11 +22,16 @@ layout, not of the model:
   round loop) and history only grows, so every round after the first presents a
   prefix the provider has already seen. With **7.8 rounds per run** on average,
   that alone makes ~86% of prompt tokens cache-eligible.
-- Across runs, almost nothing carries over: `renderChatLiveState` writes a
-  millisecond-precision `**Now:**` line into the `chat_live_state` layer, and
-  everything after that point in the request — `recall_memory` plus the entire
-  message history — is a cache miss on the next run. Moving that timestamp, or
-  the layer, would raise the ceiling above 86%.
+- Across runs this used to carry almost nothing over. `chat_live_state` and
+  `recall_memory` are rebuilt every turn and both sat *inside* the system
+  prompt, so everything behind them — including the entire message history —
+  missed on the next run. Both layers now ride behind the history
+  (`SystemPromptOverride.tail`), leaving the prompt and the history as a stable
+  prefix.
+
+  Rounding the `**Now:**` clock, the obvious cheap fix, would not have worked:
+  the same block renders relative ages (`5m ago`, `3d`) and a live task list, so
+  it varies every turn whatever the header says. Placement was the only lever.
 
 To estimate the cacheable fraction for a deployment, group `token_usage` rows
 into runs and treat each run's largest prompt as the only fresh tokens:

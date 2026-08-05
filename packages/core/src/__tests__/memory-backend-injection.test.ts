@@ -35,9 +35,14 @@ function makeProvider(): MockProvider {
     calls,
     chat: async (params) => {
       const messages = params.messages;
+      // `recall_memory` rides behind the history now (see the prompt-tail
+      // work), so the injected block is the system message plus the trailing
+      // turn. This test is about which backend served the recall, not where
+      // the result was placed.
       const sys = (messages.find((m) => m.role === "system")?.content ?? "") as string;
+      const tail = (messages[messages.length - 1]?.content ?? "") as string;
       calls.push({
-        system: sys,
+        system: `${sys}\n${tail}`,
         messages: messages.filter((m) => m.role !== "system"),
       });
       return { content: "ok", usage: { input: 0, output: 0 }, finishReason: "stop" };

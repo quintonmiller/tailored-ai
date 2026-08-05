@@ -111,6 +111,36 @@ The default system prompt is seven layers in this order:
 | `chat_live_state` | Recent ticks and pending tasks. Chat only, not background ticks. |
 | `recall_memory` | Relevance-ranked recall hits when `injectMemory: true`. |
 
+The last two are rebuilt every turn, so by default they are sent *after*
+the message history rather than inside the system prompt. Prompt caching
+matches an exact token prefix: a block that changes each turn invalidates
+everything behind it, and the system prompt sits in front of the whole
+conversation. Moving the volatile layers to the end leaves the prompt and
+the history cacheable, which is most of what a metered provider bills you
+for. The model still sees both blocks, once, labelled as system context.
+
+Control it with `tail`:
+
+```yaml
+agents:
+  strict:
+    systemPrompt:
+      tail: []          # keep every layer in the system prompt
+```
+
+Setting `order` yourself turns the default off — you have stated where
+each layer goes, so nothing moves unless you also name `tail`:
+
+```yaml
+agents:
+  custom:
+    systemPrompt:
+      order: [base, instructions, context, core_memory, recall_memory]
+      tail: [recall_memory]
+```
+
+A layer left out of `order` stays out; `tail` never brings it back.
+
 Replace the base entirely:
 
 ```yaml
