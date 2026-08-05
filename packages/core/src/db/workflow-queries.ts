@@ -178,8 +178,14 @@ export function listWorkflowRuns(
   }
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const limit = filter.limit ?? 100;
+  // `started_at` is `datetime('now')` — second resolution — so runs started in
+  // the same second tie, and SQLite returns tied rows in whatever order it
+  // likes. Anything asking for "the N newest" then gets an arbitrary N of them:
+  // `pruneOldRuns` deletes the logs of a run it should have kept, and the run
+  // list shows a fan-out in scrambled order. `rowid` is monotonic with insert
+  // order, which is exactly the tiebreak "newest" means here.
   const rows = db
-    .prepare(`SELECT * FROM workflow_runs ${whereSql} ORDER BY started_at DESC LIMIT ?`)
+    .prepare(`SELECT * FROM workflow_runs ${whereSql} ORDER BY started_at DESC, rowid DESC LIMIT ?`)
     .all(...params, limit) as RunRow[];
   return rows.map(rowToRun);
 }
