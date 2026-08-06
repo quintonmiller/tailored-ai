@@ -480,10 +480,21 @@ export function initDatabase(dbPath: string): Database.Database {
       -- under any name, so it stays in the local database and never in config.
       webhook_id    TEXT,
       webhook_token TEXT,
+      -- When this room was retired. NULL means live. A timestamp rather than a
+      -- boolean so "when did we stop watching this?" is answerable at all.
+      -- An archived room keeps its subscriptions, cursors, roles and check-in
+      -- cadences; the watcher simply stops arming them, which is what makes
+      -- archiving reversible where removeRoom is not.
+      archived_at    TEXT,
+      archived_by    TEXT,
+      archive_reason TEXT,
       created_at  TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_rooms_name ON rooms(name);
+    -- idx_rooms_name_active (unique among LIVE rooms only) is created further
+    -- down, with the archive migrations: it is a partial index over
+    -- archived_at, and on a database predating that column this block would
+    -- abort with "no such column" before any migration had a chance to add it.
     CREATE INDEX IF NOT EXISTS idx_rooms_backend ON rooms(backend, native_id);
 
     -- room_subscriptions: who is watching what, and how loudly.
@@ -689,12 +700,32 @@ export function initDatabase(dbPath: string): Database.Database {
     "ALTER TABLE rooms ADD COLUMN last_speaker TEXT",
     "ALTER TABLE room_subscriptions ADD COLUMN role TEXT",
     "ALTER TABLE room_subscriptions ADD COLUMN batch INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE rooms ADD COLUMN archived_at TEXT",
+    "ALTER TABLE rooms ADD COLUMN archived_by TEXT",
+    "ALTER TABLE rooms ADD COLUMN archive_reason TEXT",
   ]) {
     try {
       db.exec(sql);
     } catch {
       // Column already exists
     }
+  }
+
+  // Room names are unique among LIVE rooms only, so archiving "trip" frees the
+  // name for the next one — which is the usual reason to retire a room at all.
+  //
+  // The old index was unconditionally unique, and it has to be DROPPED rather
+  // than left beside the new one: an index is a constraint, so leaving it would
+  // keep rejecting the reuse this whole feature exists to allow, while the new
+  // index sat there looking like it had taken effect. Runs after the ALTERs
+  // above because it is partial over a column they may have just added.
+  try {
+    db.exec("DROP INDEX IF EXISTS idx_rooms_name");
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_rooms_name_active ON rooms(name) WHERE archived_at IS NULL");
+  } catch (err) {
+    // A pre-existing duplicate name would fail the CREATE. Leave the database
+    // usable and say which room to rename, rather than aborting startup.
+    console.warn(`[rooms] Could not create idx_rooms_name_active: ${(err as Error).message}`);
   }
 
   try {

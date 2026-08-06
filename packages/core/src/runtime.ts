@@ -1054,6 +1054,21 @@ export class AgentRuntime {
       } catch (err) {
         console.warn(`[rooms] ${(err as Error).message}`);
       }
+
+      // Tri-state: true archives, false restores, absent leaves the stored
+      // state alone. Absence cannot mean "live" — this runs on every reload, so
+      // it would undo every runtime archive the moment anything touched config.
+      // Both writes are idempotent, so a reload re-asserting the same value is
+      // a no-op rather than a re-stamped timestamp or a repeated announcement.
+      if (declared.archived === true) {
+        store.archiveRoom(formatRoomRef(ref), { by: "config", reason: "Archived in config." });
+      } else if (declared.archived === false) {
+        try {
+          store.unarchiveRoom(formatRoomRef(ref), { by: "config" });
+        } catch (err) {
+          console.warn(`[rooms] ${(err as Error).message}`);
+        }
+      }
     }
 
     const keep: Array<{ agent: string; roomRef: string }> = [];

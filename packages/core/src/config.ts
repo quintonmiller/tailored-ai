@@ -1035,6 +1035,21 @@ export interface AgentConfig {
       maxAgentTurns?: number;
       /** Override the deployment-wide `rooms.turnTaking` for this room. */
       turnTaking?: "concurrent" | "serial";
+      /**
+       * Retire this room, or bring it back.
+       *
+       * Three states, not two. `true` archives, `false` un-archives, and
+       * **leaving the key out changes nothing** — because `reconcileRooms()`
+       * runs on every config reload, and treating absence as "not archived"
+       * would resurrect every room an agent or a `/room archive` retired at
+       * runtime, on the next reload, silently.
+       *
+       * Deliberately unlike `batch` on a subscription, which IS rewritten from
+       * config every time: batching is a config opinion, archiving is usually a
+       * runtime act. So config can state either intent explicitly, and states
+       * nothing by saying nothing.
+       */
+      archived?: boolean;
     }>;
     /**
      * Who watches what. `deliver` decides when the agent looks (push on a

@@ -100,6 +100,8 @@ export class ErrorRoom {
   private postedThisHour = 0;
   private hourBucket = "";
   private withheld = 0;
+  /** So an archived target room is complained about once, not per batch. */
+  private warnedArchived = false;
 
   constructor(runtime: AgentRuntime, config: ErrorRoomConfig) {
     this.runtime = runtime;
@@ -193,6 +195,20 @@ export class ErrorRoom {
 
     const room = this.runtime.getRoomStore().resolve(this.config.room ?? "");
     if (!room) return;
+    // Errors posted into an archived room reach nobody: no agent is woken there
+    // and nobody is reading it. Say so once, on the console, which is the very
+    // place this plugin exists to get failures out of.
+    if (room.archivedAt) {
+      if (!this.warnedArchived) {
+        this.warnedArchived = true;
+        console.warn(
+          `[error-room] "${room.name}" is archived, so errors are not being reported there. ` +
+            `Unarchive it or point \`room:\` at a live one.`,
+        );
+      }
+      return;
+    }
+    this.warnedArchived = false;
     const ref = parseRoomRef(`${room.ref.backend}:${room.ref.id}`);
     const backend = ref ? getRoomBackend(ref.backend) : undefined;
     if (!ref || !backend) return;

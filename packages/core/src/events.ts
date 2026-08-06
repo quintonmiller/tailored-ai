@@ -156,6 +156,35 @@ export interface RuntimeEventMap {
   };
 
   /**
+   * A room was retired, or brought back.
+   *
+   * Distinct from `room.membership_changed` on purpose: nobody joined and
+   * nobody left. Every seat in the room keeps its cursor, its role and its
+   * check-in cadence, and simply stops being armed — which is what makes the
+   * change reversible, and what makes "left" the wrong word for it.
+   *
+   * The watcher listens so archiving takes effect without a restart, exactly
+   * as a membership change already does. `builtin:room-announcer` listens so
+   * the room is told before it goes quiet: one agent archiving a shared room
+   * silences everyone else in it, and that should not be something the others
+   * discover by never being woken again.
+   */
+  "room.archived": {
+    /** Canonical `<backend>:<id>`. */
+    roomRef: string;
+    name: string;
+    /** TAI identity that archived it, when one was known. */
+    by?: string;
+    reason?: string;
+  };
+
+  "room.unarchived": {
+    roomRef: string;
+    name: string;
+    by?: string;
+  };
+
+  /**
    * One agent sent another a direct message and got an answer back.
    *
    * Everything an agent does in a room leaves a transcript somebody can read.

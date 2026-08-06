@@ -49,6 +49,18 @@ export interface Room {
   /** TAI identity that opened the room, when it was opened through TAI. */
   createdBy?: string;
   createdAt?: string;
+  /**
+   * When this room was retired. Undefined means live.
+   *
+   * An archived room stops waking anyone — no polls, no check-ins, no push —
+   * while keeping its transcript and every subscription's cursor, role and
+   * cadence, so bringing it back restores the room rather than an empty shell.
+   * It stays readable by name or ref and refuses writes, and it releases its
+   * name so a new room can take it.
+   */
+  archivedAt?: string;
+  archivedBy?: string;
+  archiveReason?: string;
 }
 
 export type RoomMemberKind = "agent" | "human" | "unknown";
