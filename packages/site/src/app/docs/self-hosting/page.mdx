@@ -261,8 +261,34 @@ directory. Keep `tools.exec.allowedCommands` tight anyway.
 It needs a Docker socket, and mounting one hands the agent root on the host.
 Use the default `host` sandbox and rely on the container itself.
 
-Not included: Playwright browsers (the browser-mediator tools need the
-`trusted-actions` image) and a model server. TAI talks to one over HTTP.
+Not included: Playwright, `md-to-pdf`, and a model server. TAI talks to a model
+over HTTP, and the browser tools ship in the `trusted-actions` image.
+
+The `browser` and `md_to_pdf` tools are still registered. Each imports its
+engine lazily, so calling one returns the install instruction instead of
+failing at startup:
+
+```
+playwright is not installed. Run `npm install playwright && npx playwright
+install chromium` to enable the browser tool.
+```
+
+What stays: `@modelcontextprotocol/sdk` for [MCP](/docs/mcp), plus `pdf-parse`
+and `tesseract.js` for the `extract_document` tool. Those three back features
+that work the moment you boot the image.
+
+### Keeping it small
+
+The image is ~670 MB, of which 136 MB is TAI and its dependencies. It was
+886 MB until a dependency audit found that
+`pnpm deploy --prod` drops `devDependencies` but
+keeps `peerDependencies` marked `optional`. A test runner, a TypeScript
+compiler and a browser driver were shipping to every self-hoster, none of them
+reachable from the entrypoint.
+
+A CI guard now fails the build when a first-party package declares a build tool
+under `dependencies`, a prune step drops development-time optional peers, and
+the publish workflow enforces a size ceiling.
 
 ## Deploying to a cloud provider
 
