@@ -23,7 +23,7 @@ import { enrichRoomMessage, type IdentityResolver } from "../rooms/identities.js
 import { getRoomBackend, listRoomBackends, requireRoomBackend } from "../rooms/registry.js";
 import type { RoomStore, WakeOn } from "../rooms/store.js";
 import { DEFAULT_URGENCY_WINDOW_HOURS, formatRoomRef, type Room, type RoomUrgency } from "../rooms/types.js";
-import { WAKE_ROOMS_KEY } from "../rooms/watcher.js";
+import { roomPostedKey, WAKE_ROOMS_KEY } from "../rooms/watcher.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
 
 export interface RoomToolOptions {
@@ -401,8 +401,10 @@ export class RoomTool implements Tool {
     }
 
     // Tell the watcher not to append the loop's closing text as a second
-    // message: the agent has already said its piece.
-    context.workingMemory?.set(`room:posted:${ref}`, "true");
+    // message: the agent has already said its piece. The same marker is what
+    // charges the turn its wake, so it is set only on the path where the
+    // backend actually accepted the message.
+    context.workingMemory?.set(roomPostedKey(ref), "true");
     // The id is how a later turn edits this message instead of posting again.
     const idNote = postedId ? ` Message id: ${postedId}` : "";
     return ok(`Posted to "${room.name}"${finalTo.length > 0 ? ` (to ${finalTo.join(", ")})` : ""}.${idNote}`);
