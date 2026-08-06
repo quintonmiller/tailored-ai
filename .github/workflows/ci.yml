@@ -37,6 +37,13 @@ jobs:
         # in docs/publishing.md. Runs before build so it fails fast.
         run: pnpm run guard:pre-v1
 
+      - name: Runtime dependency guard (keep the self-host image lean)
+        # Everything a first-party package lists under `dependencies` ships to
+        # every self-hoster via `pnpm deploy --prod`. Fails the build if a
+        # build tool or browser driver is declared as one — the bug that put
+        # 14 MB of Playwright in an image with no browsers (#375).
+        run: pnpm run guard:runtime-deps
+
       - name: Lint
         run: pnpm run lint
 

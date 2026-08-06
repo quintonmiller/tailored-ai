@@ -68,17 +68,9 @@
     "zod": "^3.25.76"
   },
   "peerDependencies": {
-    "md-to-pdf": "^5.2.4",
-    "playwright": "^1.58.2",
     "vitest": "^4.0.0"
   },
   "peerDependenciesMeta": {
-    "md-to-pdf": {
-      "optional": true
-    },
-    "playwright": {
-      "optional": true
-    },
     "vitest": {
       "optional": true
     }
