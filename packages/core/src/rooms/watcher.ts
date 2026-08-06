@@ -38,6 +38,24 @@ import { type WakeEntry, WakeQueue, type WakeTrigger } from "./wake-queue.js";
  */
 export const WAKE_ROOMS_KEY = "room:wake-rooms";
 
+/**
+ * Prefix for the per-room marker meaning "the agent already posted here through
+ * the `room` tool this turn". Written by the tool once the backend call
+ * returns, read by the watcher to suppress a duplicate delivery and to decide
+ * whether the turn spoke.
+ *
+ * Shared rather than spelled out at each site because the wake accounting reads
+ * it by prefix: a writer and a reader that disagreed by one character would
+ * make every tool post look silent again, which is the bug this constant exists
+ * to keep fixed.
+ */
+export const ROOM_POSTED_PREFIX = "room:posted:";
+
+/** Working-memory key recording that the agent posted to `roomRef`. */
+export function roomPostedKey(roomRef: string): string {
+  return `${ROOM_POSTED_PREFIX}${roomRef}`;
+}
+
 /** Why an agent was woken. Surfaced in the activity record. */
 export type WakeReason = "named" | "loose-question" | "all" | "check-in" | "asked";
 
@@ -1632,7 +1650,7 @@ export class RoomWatcher {
     // destination to fall back on, so the same round that recovers malformed
     // output is spent asking which room it was for.
     const passed = rooms.some((ref) => workingMemory.get(`room:passed:${ref}`) === "true");
-    const spokeThroughTool = rooms.some((ref) => workingMemory.get(`room:posted:${ref}`) === "true");
+    const spokeThroughTool = rooms.some((ref) => workingMemory.get(roomPostedKey(ref)) === "true");
     const correction = looksLikeUninvokedPass(reply)
       ? batch
         ? this.batchCorrection(batch, "Your last message was posted as text rather than made as a tool call.")
@@ -1675,7 +1693,7 @@ export class RoomWatcher {
     // path posts after this point, so it keeps its one room unconditionally,
     // exactly as before.
     if (usedTools) {
-      const spokeIn = batch ? rooms.filter((ref) => workingMemory.get(`room:posted:${ref}`) === "true") : rooms;
+      const spokeIn = batch ? rooms.filter((ref) => workingMemory.get(roomPostedKey(ref)) === "true") : rooms;
       for (const ref of spokeIn) this.store.resetAgentTurns(ref);
     }
 
@@ -1699,10 +1717,30 @@ export class RoomWatcher {
 
     // Nothing said and nothing done: the wake cost the room nothing, so it
     // should not cost the agent its place in the room for the next hour.
-    // A combined turn speaks through the tool, so what counts as "said" is
-    // whether any of its rooms got a post — re-read, because the correction
-    // round may have produced one.
-    const said = batch ? rooms.some((ref) => workingMemory.get(`room:posted:${ref}`) === "true") : posted !== null;
+    //
+    // "Said" has to cover both routes into a room, and for a long time it did
+    // not. `deliverReply` returns null when the agent posted through the `room`
+    // tool — it stands down precisely *because* the message is already there —
+    // and `usedTools` deliberately excludes the whole `room` tool so that
+    // `pass` reads as silence. A turn whose only call was `room(action="post")`
+    // therefore looked silent on both counts and was handed its wake back: it
+    // spoke, it armed the next agent's wake, and it paid nothing. That made the
+    // documented way to speak — the only way to address someone, set `notify`,
+    // or post to a room you did not wake in — the one way that was free, and
+    // left `maxWakesPerHour` disengaged for exactly the agent-to-agent traffic
+    // it exists to bound.
+    //
+    // Any successful post counts, not just one in `rooms`: the refund's safety
+    // argument is that a silent agent produces no incoming message and so
+    // cannot feed itself another wake. An agent that posted anywhere is not
+    // silent. The marker is only set once the backend call returns, so a
+    // notification-gate suppression still reads as silence, correctly.
+    //
+    // Re-read here rather than reusing `spokeThroughTool` above, because the
+    // correction round may have produced a post since.
+    const said =
+      posted !== null ||
+      [...workingMemory].some(([key, value]) => key.startsWith(ROOM_POSTED_PREFIX) && value === "true");
     if (!said && !usedTools) this.store.refundWake(sub.agent, sub.roomRef);
   }
 
@@ -1770,7 +1808,7 @@ export class RoomWatcher {
     if (!body) return;
     // The agent said its piece through the tool, or chose silence. Either way
     // the closing text is commentary on a decision already made.
-    if (batch.subs.some((s) => workingMemory.get(`room:posted:${s.roomRef}`) === "true")) return;
+    if (batch.subs.some((s) => workingMemory.get(roomPostedKey(s.roomRef)) === "true")) return;
     if (batch.subs.some((s) => workingMemory.get(`room:passed:${s.roomRef}`) === "true")) return;
     if (looksLikeUninvokedPass(body)) return;
     console.warn(
@@ -1921,7 +1959,7 @@ export class RoomWatcher {
       );
       return null;
     }
-    if (workingMemory.get(`room:posted:${sub.roomRef}`) === "true") return null;
+    if (workingMemory.get(roomPostedKey(sub.roomRef)) === "true") return null;
     // The agent explicitly chose to stay quiet. Posting its closing thought
     // anyway would make `pass` decorative.
     if (workingMemory.get(`room:passed:${sub.roomRef}`) === "true") return null;

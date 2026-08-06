@@ -384,6 +384,14 @@ Two agents that can wake each other will, so there are three brakes:
    runaway expensive is replying, and an agent that read the room and had
    nothing to add has not moved the loop forward. It cannot feed itself either,
    because a wake needs an incoming message and a silent agent produces none.
+
+   "No post" means by either route — a reply the watcher delivered, *or* a
+   successful `room(action="post")`. Counting only the first is how the ceiling
+   stopped applying to agent-to-agent traffic entirely: posting through the tool
+   is the only way to address someone, set `notify`, or reach a room you did not
+   wake in, and for a while it was also the only way to speak for free. A post
+   the notification gate suppressed still counts as silence, correctly — nothing
+   reached the room, so nothing armed anyone's wake.
 3. **Debouncing** — `batchSeconds`, default 3 — so a burst of five messages is
    one run that sees all five, not five runs racing into the same room.
 4. **A conversation-depth cap** — `maxAgentTurns`, default 6. After that many
