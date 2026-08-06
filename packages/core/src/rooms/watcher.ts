@@ -497,6 +497,8 @@ export class RoomWatcher {
   private wakeReasons = new Map<string, WakeReason>();
   private offBackendChange: (() => void) | undefined;
   private membershipSubscription: Subscription | undefined;
+  /** Re-arm on `room.archived` / `room.unarchived`, disposed with the rest. */
+  private archiveSubscriptions: Subscription[] = [];
   /** Coalesces a burst of membership changes into one re-arm. */
   private rearmTimer: ReturnType<typeof setTimeout> | undefined;
   private started = false;
@@ -588,7 +590,19 @@ export class RoomWatcher {
       if (this.started) this.scheduleRearm();
     });
 
-    const subs = this.store.listSubscriptions();
+    // Archiving is a re-arm for the same reason a membership change is: timers
+    // are created here and nowhere else, so a room retired at runtime would go
+    // on polling and checking in until the next restart.
+    for (const event of ["room.archived", "room.unarchived"] as const) {
+      const sub = this.runtime.events?.on(event, () => {
+        if (this.started) this.scheduleRearm();
+      });
+      if (sub) this.archiveSubscriptions.push(sub);
+    }
+
+    // Archived rooms are excluded here, which is what stops their poll timers,
+    // check-in timers and push fan-out from ever being created.
+    const subs = this.store.listActiveSubscriptions();
     if (subs.length === 0) return;
 
     // One push listener per backend, not per subscription: the backend emits
@@ -731,6 +745,8 @@ export class RoomWatcher {
     this.offBackendChange = undefined;
     this.membershipSubscription?.dispose();
     this.membershipSubscription = undefined;
+    for (const sub of this.archiveSubscriptions) sub.dispose();
+    this.archiveSubscriptions = [];
     if (this.rearmTimer) clearTimeout(this.rearmTimer);
     this.rearmTimer = undefined;
     for (const off of this.unsubscribers) {
@@ -776,6 +792,10 @@ export class RoomWatcher {
    * A warning rather than an auto-grant. Handing an agent a tool its
    * configuration withholds is a decision for whoever wrote the config; being
    * unable to see why it is behaving strangely is not.
+   */
+  /**
+   * Called with the ACTIVE subscription set, so an agent whose only rooms are
+   * archived is not named on every boot for a tool it no longer needs.
    */
   private warnAboutRoomlessSubscribers(subs: RoomSubscription[]): void {
     const agents = this.runtime.getConfig().agents ?? {};
@@ -823,6 +843,9 @@ export class RoomWatcher {
 
     const room = this.store.getRoomByRef(roomRef);
     if (!room) return;
+    // The interval may outlive the archive by one tick — it is cleared on
+    // re-arm, and the re-arm is debounced.
+    if (room.archivedAt) return;
 
     const limits = this.readLimits(roomRef);
     if (!this.store.tryConsumeWake(agent, roomRef, limits.maxWakesPerHour)) return;
@@ -869,6 +892,11 @@ export class RoomWatcher {
   /** Push path: a backend reported a new message. */
   async onMessage(msg: RoomMessage): Promise<void> {
     const roomRef = formatRoomRef(msg.room);
+    // The push listener is per BACKEND, not per room — one Discord handler
+    // receives every channel — so an archived room's traffic still arrives here
+    // and has to be dropped explicitly. Before `noteRoomTurn`, so chatter in a
+    // retired room does not push a counter that nothing will ever reset.
+    if (this.store.isArchived(roomRef)) return;
     const subs = this.store.listSubscriptionsForRoom(roomRef).filter((s) => s.deliver === "push");
     if (subs.length === 0) return;
 
@@ -913,6 +941,9 @@ export class RoomWatcher {
 
   /** Poll path: check one subscription for anything new. */
   async pollOnce(agent: string, roomRef: string): Promise<void> {
+    // Public, and reachable from the startup drain as well as a poll timer, so
+    // it carries its own guard rather than trusting every caller to hold one.
+    if (this.store.isArchived(roomRef)) return;
     const sub = this.store.getSubscription(agent, roomRef);
     if (!sub || sub.wakeOn === "none") return;
 
@@ -1313,6 +1344,12 @@ export class RoomWatcher {
   }
 
   private async runWake(sub: RoomSubscription): Promise<void> {
+    // The queue holds one entry per agent naming several rooms, and an entry
+    // can outlive an archive that happened after it was enqueued. Checked at
+    // fire time as well as at arm time, so nothing already in flight slips
+    // through and charges a wake against a retired room.
+    if (this.store.isArchived(sub.roomRef)) return;
+
     const key = `${sub.agent} ${sub.roomRef}`;
     if (this.running.has(key)) {
       // Don't drop the trigger. A message that lands while the agent is still
@@ -1389,6 +1426,12 @@ export class RoomWatcher {
    * text that names none is dropped rather than guessed at.
    */
   private runBatchedWake(agent: string, subs: RoomSubscription[]): Promise<void> {
+    // Drop archived rooms before anything locks or reads them, the same way the
+    // pause switch drops rooms holding only agent traffic. Their cursors stay
+    // put, so unarchiving hands the agent what it missed rather than nothing.
+    subs = subs.filter((s) => !this.store.isArchived(s.roomRef));
+    if (subs.length === 0) return Promise.resolve();
+
     // Lock order belongs to onRoomTurns and is decided there; the rooms are
     // handed over in the order they were named, and the prompt's sections
     // follow that.

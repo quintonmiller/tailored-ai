@@ -1,7 +1,12 @@
 # Archiving rooms — design
 
-Plan for retiring a room without destroying it. Companion to [rooms.md](./rooms.md),
-which describes rooms as they are today. Nothing here is built yet.
+Why retiring a room works the way it does. Companion to
+[rooms.md](./rooms.md#archiving-a-room), which is the user-facing description.
+
+**Status: Phases 1 and 2 are built.** Phase 3 (reflecting the archive onto the
+transport) and everything under "Deliberately deferred" are not. This document
+is kept because the decisions below are the ones a reviewer would want to argue
+with, and they are not visible from the code.
 
 ## The gap
 
@@ -163,9 +168,9 @@ No hard-delete surface, no retention sweep. `removeRoom` keeps its two test call
 gains no production one. If a room genuinely must be erased, that is a decision worth
 making by hand against the database, with the transcript in front of you.
 
-## Phase 1 — state and enforcement
+## Phase 1 — state and enforcement — **built**
 
-Self-contained, testable against the `local` backend with no transport connected. One PR.
+Self-contained, testable against the `local` backend with no transport connected.
 
 ### Schema — `packages/core/src/db/schema.ts`
 
@@ -249,14 +254,22 @@ Worth measuring on the deployed 27–31B model before and after, per the repo's 
 about not trusting remembered limits — and worth trimming the description in the same PR
 if the measurement says so.
 
-## Phase 2 — human surfaces and plugins
+## Phase 2 — human surfaces and plugins — **built**
 
 ### Discord — `packages/core/src/channels/discord-room-commands.ts`
 
 | command | notes |
 |---|---|
-| `/room archive [reason:…]` | run inside the room. Posts publicly first, then confirms privately |
-| `/room unarchive name:…` | autocompletes over archived rooms — which is also how you discover what is archived, so no separate `/room archived` listing is needed |
+| `/room archive [reason:…]` | run inside the room. The announcer posts publicly; the confirmation is private |
+| `/room unarchive` | run inside the same channel |
+
+Both operate on the channel they are run in, rather than taking a room name.
+The design sketch called for `unarchive name:…` with autocomplete over archived
+rooms, on the grounds that discovery needed solving — but the Discord channel
+does not go anywhere when the room is archived, so "go to the channel and run
+`/room unarchive`" is already the discoverable path, and a name argument would
+be a second way to say the same thing. Agents needing to name a room use the
+tool, whose `list` reports what is archived.
 
 Every existing subcommand needs a decision in an archived room: `members` and `purpose`
 (read) work; `ping`, `all`, `status`, `add`, `reset` and `rewind` refuse with the
@@ -282,7 +295,7 @@ unarchive restore the declared set.
   for loop-unsafe configuration. Errors posted into a room nobody reads is the precise
   failure `error-room` exists to prevent.
 
-## Phase 3 — optional transport-side archive
+## Phase 3 — optional transport-side archive — **not built**
 
 ```ts
 interface RoomCapabilities { /* … */ archive: boolean }

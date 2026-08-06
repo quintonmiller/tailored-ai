@@ -48,6 +48,9 @@ interface RoomRow {
   purpose: string | null;
   created_by: string | null;
   created_at: string;
+  archived_at: string | null;
+  archived_by: string | null;
+  archive_reason: string | null;
 }
 
 interface SubscriptionRow {
@@ -75,6 +78,9 @@ function toRoom(row: RoomRow): Room {
     purpose: row.purpose ?? undefined,
     createdBy: row.created_by ?? undefined,
     createdAt: row.created_at,
+    archivedAt: row.archived_at ?? undefined,
+    archivedBy: row.archived_by ?? undefined,
+    archiveReason: row.archive_reason ?? undefined,
   };
 }
 
@@ -129,9 +135,12 @@ export class RoomStore {
    */
   upsertRoom(room: Room, createdBy?: string): Room {
     const ref = formatRoomRef(room.ref);
-    const clash = this.db.prepare("SELECT ref FROM rooms WHERE name = ? AND ref != ?").get(room.name, ref) as
-      | { ref: string }
-      | undefined;
+    // Only a LIVE room can hold a name against a new one. Archiving frees the
+    // name deliberately — opening the next "trip" is the usual reason to retire
+    // the last one — so an archived namesake must not block the create.
+    const clash = this.db
+      .prepare("SELECT ref FROM rooms WHERE name = ? AND ref != ? AND archived_at IS NULL")
+      .get(room.name, ref) as { ref: string } | undefined;
     if (clash) {
       throw new Error(
         `Room name "${room.name}" is already used by ${clash.ref}. Pick another name or remove that room first.`,
@@ -157,8 +166,18 @@ export class RoomStore {
     return row ? toRoom(row) : null;
   }
 
+  /**
+   * Look a room up by name, preferring the live one.
+   *
+   * Names are unique only among live rooms, so an archived room and its
+   * successor can both answer to "trip". Without the ordering, which one you
+   * get is whatever SQLite happens to return — and a post would land in the
+   * retired room about half the time.
+   */
   getRoomByName(name: string): Room | null {
-    const row = this.db.prepare("SELECT * FROM rooms WHERE name = ?").get(name.trim()) as RoomRow | undefined;
+    const row = this.db
+      .prepare("SELECT * FROM rooms WHERE name = ? ORDER BY archived_at IS NULL DESC, archived_at DESC LIMIT 1")
+      .get(name.trim()) as RoomRow | undefined;
     return row ? toRoom(row) : null;
   }
 
@@ -171,8 +190,30 @@ export class RoomStore {
     return this.getRoomByName(nameOrRef) ?? this.getRoomByRef(nameOrRef);
   }
 
-  listRooms(): Room[] {
-    const rows = this.db.prepare("SELECT * FROM rooms ORDER BY name").all() as RoomRow[];
+  /**
+   * Every live room, by name.
+   *
+   * Archived rooms are excluded by default so callers get the right behaviour
+   * without being edited: this feeds the agent's `room list`, the "Known
+   * rooms:" hint, and the purpose-publishing pass, none of which should see a
+   * retired room. Ask for them explicitly to enumerate what can be brought
+   * back.
+   */
+  listRooms(opts?: { includeArchived?: boolean }): Room[] {
+    const rows = this.db
+      .prepare(
+        opts?.includeArchived
+          ? "SELECT * FROM rooms ORDER BY name"
+          : "SELECT * FROM rooms WHERE archived_at IS NULL ORDER BY name",
+      )
+      .all() as RoomRow[];
+    return rows.map(toRoom);
+  }
+
+  listArchivedRooms(): Room[] {
+    const rows = this.db
+      .prepare("SELECT * FROM rooms WHERE archived_at IS NOT NULL ORDER BY archived_at DESC")
+      .all() as RoomRow[];
     return rows.map(toRoom);
   }
 
@@ -207,6 +248,79 @@ export class RoomStore {
     this.db.prepare("DELETE FROM room_subscriptions WHERE room_ref = ?").run(key);
     this.db.prepare("DELETE FROM room_members WHERE room_ref = ?").run(key);
     this.db.prepare("DELETE FROM rooms WHERE ref = ?").run(key);
+  }
+
+  /**
+   * Retire a room without destroying it.
+   *
+   * Everything about the room stays: its transcript, its members, and every
+   * subscription's cursor, role and check-in cadence. What stops is attention —
+   * the watcher will not arm or wake anything pointed at an archived room. That
+   * is the whole difference from {@link removeRoom}, which drops the
+   * subscriptions and cannot be undone.
+   *
+   * Idempotent: archiving an already-archived room is a no-op rather than a
+   * re-stamp, so a config reconcile cannot keep moving the timestamp forward
+   * and make "when did we retire this?" unanswerable.
+   */
+  archiveRoom(ref: RoomRef | string, opts?: { by?: string; reason?: string }): Room | null {
+    const key = typeof ref === "string" ? ref : formatRoomRef(ref);
+    const info = this.db
+      .prepare(
+        `UPDATE rooms
+            SET archived_at = datetime('now'), archived_by = ?, archive_reason = ?
+          WHERE ref = ? AND archived_at IS NULL`,
+      )
+      .run(opts?.by ?? null, opts?.reason ?? null, key);
+    if (info.changes === 0) return null;
+    const room = this.getRoomByRef(key);
+    if (room) {
+      this.events?.emit("room.archived", {
+        roomRef: key,
+        name: room.name,
+        by: opts?.by,
+        reason: opts?.reason,
+      });
+    }
+    return room;
+  }
+
+  /**
+   * Bring an archived room back, with its seats exactly as they were.
+   *
+   * Refuses when a live room has taken the name in the meantime. Archiving
+   * releases the name on purpose, so this collision is an ordinary consequence
+   * rather than an edge case — and quietly producing two live rooms answering
+   * to one handle would break every lookup that goes through a name.
+   */
+  unarchiveRoom(ref: RoomRef | string, opts?: { by?: string }): Room | null {
+    const key = typeof ref === "string" ? ref : formatRoomRef(ref);
+    const room = this.getRoomByRef(key);
+    if (!room || !room.archivedAt) return null;
+
+    const clash = this.db
+      .prepare("SELECT ref FROM rooms WHERE name = ? AND ref != ? AND archived_at IS NULL")
+      .get(room.name, key) as { ref: string } | undefined;
+    if (clash) {
+      throw new Error(
+        `Cannot unarchive "${room.name}": that name now belongs to ${clash.ref}. ` +
+          `Rename or archive that room first.`,
+      );
+    }
+
+    this.db
+      .prepare("UPDATE rooms SET archived_at = NULL, archived_by = NULL, archive_reason = NULL WHERE ref = ?")
+      .run(key);
+    this.events?.emit("room.unarchived", { roomRef: key, name: room.name, by: opts?.by });
+    return this.getRoomByRef(key);
+  }
+
+  isArchived(ref: RoomRef | string): boolean {
+    const key = typeof ref === "string" ? ref : formatRoomRef(ref);
+    const row = this.db.prepare("SELECT archived_at FROM rooms WHERE ref = ?").get(key) as
+      | { archived_at: string | null }
+      | undefined;
+    return Boolean(row?.archived_at);
   }
 
   // --------------------------------------------------------- subscriptions
@@ -329,6 +443,31 @@ export class RoomStore {
   listSubscriptions(): RoomSubscription[] {
     const rows = this.db
       .prepare("SELECT * FROM room_subscriptions ORDER BY room_ref, agent")
+      .all() as SubscriptionRow[];
+    return rows.map(toSubscription);
+  }
+
+  /**
+   * Subscriptions whose room is live — what the watcher arms.
+   *
+   * Its own method rather than a filter at each call site because the watcher
+   * has five arming paths (push fan-out, poll timers, check-in timers, the
+   * startup drain, the roomless-agent warning) and missing one is silent: the
+   * write succeeds, nothing complains, and an agent simply never speaks again.
+   *
+   * A subscription pointing at a room with no row at all is kept, not dropped.
+   * Refs outlive their directory entry — a room can be declared in config and
+   * registered after the watcher arms — and treating "unknown" as "archived"
+   * would quietly unsubscribe agents from rooms that were about to exist.
+   */
+  listActiveSubscriptions(): RoomSubscription[] {
+    const rows = this.db
+      .prepare(
+        `SELECT s.* FROM room_subscriptions s
+           LEFT JOIN rooms r ON r.ref = s.room_ref
+          WHERE r.archived_at IS NULL
+          ORDER BY s.room_ref, s.agent`,
+      )
       .all() as SubscriptionRow[];
     return rows.map(toSubscription);
   }

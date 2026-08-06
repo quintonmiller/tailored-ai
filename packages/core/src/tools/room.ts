@@ -68,9 +68,11 @@ export class RoomTool implements Tool {
           "purpose",
           "subscribe",
           "unsubscribe",
+          "archive",
+          "unarchive",
         ],
         description:
-          "list: rooms you can see. read: new messages (all your rooms when `room` is omitted). post: say something. dm: message one agent directly, wherever it is. pass: say nothing this turn. update: replace a message you already posted. react: acknowledge with an emoji instead of a message. create: open a room. invite/remove: add or drop a participant. members: who is in it. purpose: read it, or set it by passing `purpose`. subscribe/unsubscribe: control whether it wakes you, and how often you look in unprompted.",
+          "list: rooms you can see. read: new messages (all your rooms when `room` is omitted). post: say something. dm: message one agent directly, wherever it is. pass: say nothing this turn. update: replace a message you already posted. react: acknowledge with an emoji instead of a message. create: open a room. invite/remove: add or drop a participant. members: who is in it. purpose: read it, or set it by passing `purpose`. subscribe/unsubscribe: control whether it wakes you, and how often you look in unprompted. archive: retire a finished room so it stops waking anyone (needs `reason`); unarchive: bring one back.",
       },
       room: {
         type: "string",
@@ -128,6 +130,11 @@ export class RoomTool implements Tool {
         description:
           "For subscribe: also wake you every N minutes with no new messages, so you can act on time passing. 0 turns it off.",
       },
+      reason: {
+        type: "string",
+        description:
+          "Required for archive — one short line on why the room is finished. Everyone in it is told, since archiving stops waking them too.",
+      },
       limit: { type: "number", description: "Cap for read. Default 20." },
     },
     required: ["action"],
@@ -172,6 +179,10 @@ export class RoomTool implements Tool {
           return this.subscribe(args, agentName);
         case "unsubscribe":
           return this.unsubscribe(args, agentName);
+        case "archive":
+          return this.archive(args, agentName);
+        case "unarchive":
+          return this.unarchive(args, agentName);
         default:
           return fail(
             `Unknown action "${action}". Use list, read, post, create, invite, members, subscribe or unsubscribe.`,
@@ -196,6 +207,25 @@ export class RoomTool implements Tool {
         ? `No room "${raw}". Known rooms: ${known.join(", ")}.`
         : `No room "${raw}", and no rooms have been created yet. Use action "create" first.`,
     );
+  }
+
+  /**
+   * Resolve a room that is allowed to change.
+   *
+   * Reading an archived room is fine — keeping the record is the reason not to
+   * delete it — but writing to one puts a message where nobody is watching. The
+   * refusal names the way out, because the model has no other way to learn that
+   * a room it can plainly read will not accept a post.
+   */
+  private requireLiveRoom(args: Record<string, unknown>, verb: string): Room {
+    const room = this.requireRoom(args);
+    if (room.archivedAt) {
+      throw new Error(
+        `Room "${room.name}" is archived, so it cannot ${verb}. ` +
+          `Use action "unarchive" to reopen it, or pick another room.`,
+      );
+    }
+    return room;
   }
 
   /**
@@ -227,6 +257,15 @@ export class RoomTool implements Tool {
   private list(agentName?: string): ToolResult {
     const rooms = this.opts.store.listRooms();
     if (rooms.length === 0) {
+      // "No rooms yet" would be a lie when every room is archived, and it
+      // points at `create` when `unarchive` is what is wanted.
+      const archived = this.opts.store.listArchivedRooms();
+      if (archived.length > 0) {
+        return ok(
+          `No live rooms. ${archived.length} archived: ${archived.map((r) => r.name).join(", ")}. ` +
+            `Readable by name; action "unarchive" reopens one.`,
+        );
+      }
       const backends = listRoomBackends().map((b) => b.id);
       return ok(
         backends.length > 0
@@ -244,6 +283,19 @@ export class RoomTool implements Tool {
       const status = sub ? `subscribed (${sub.deliver}/${sub.wakeOn})` : "not subscribed";
       return `${r.name} [${ref}] — ${status}${r.purpose ? ` — ${r.purpose}` : ""}`;
     });
+
+    // One trailing line rather than an `include_archived` parameter. The
+    // parameter costs a schema entry the model has to discover before it can
+    // ever learn the rooms exist; the line costs a handful of tokens and cannot
+    // be missed. Archived rooms are still readable by name, which is what the
+    // line has to convey.
+    const archived = this.opts.store.listArchivedRooms();
+    if (archived.length > 0) {
+      lines.push(
+        `(${archived.length} archived: ${archived.map((r) => r.name).join(", ")}. ` +
+          `Readable by name; action "unarchive" reopens one.)`,
+      );
+    }
     return ok(lines.join("\n"));
   }
 
@@ -296,6 +348,9 @@ export class RoomTool implements Tool {
     for (const sub of subs) {
       const room = this.opts.store.getRoomByRef(sub.roomRef);
       if (!room) continue;
+      // Seats in archived rooms survive by design, so the sweep has to skip
+      // them or every wake would re-read rooms nobody is watching.
+      if (room.archivedAt) continue;
       // One unreachable backend must not blank out every other room.
       const backend = getRoomBackend(room.ref.backend);
       if (!backend) {
@@ -332,7 +387,7 @@ export class RoomTool implements Tool {
     const body = String(args.body ?? "").trim();
     if (!body) return fail("body is required for post.");
 
-    const room = this.requireRoom(args);
+    const room = this.requireLiveRoom(args, "be posted to");
     const ref = formatRoomRef(room.ref);
     const backend = requireRoomBackend(room.ref.backend);
 
@@ -459,7 +514,7 @@ export class RoomTool implements Tool {
     const messageId = String(args.message_id ?? "").trim();
     if (!messageId) return fail("message_id is required for update — post first, then update that id.");
 
-    const room = this.requireRoom(args);
+    const room = this.requireLiveRoom(args, "have its messages edited");
     const backend = requireRoomBackend(room.ref.backend);
     if (!backend.capabilities.edit || !backend.edit) {
       return fail(`The "${room.ref.backend}" transport cannot edit messages; post a new one instead.`);
@@ -483,7 +538,7 @@ export class RoomTool implements Tool {
     if (!messageId) return fail("message_id is required for react.");
     const emoji = String(args.emoji ?? "").trim() || "✅";
 
-    const room = this.requireRoom(args);
+    const room = this.requireLiveRoom(args, "be reacted in");
     const backend = requireRoomBackend(room.ref.backend);
     if (!backend.capabilities.reactions || !backend.react) {
       return fail(`The "${room.ref.backend}" transport cannot react; say something short instead.`);
@@ -525,7 +580,11 @@ export class RoomTool implements Tool {
     // message is not a place, and creating a channel per agent to carry one was
     // 27 channels waiting to happen.
     const desk = this.opts.desks?.()?.[identity.agent] ?? this.opts.desks?.()?.[identity.label];
-    const room = desk ? this.opts.store.getRoomByName(desk) : null;
+    const deskRoom = desk ? this.opts.store.getRoomByName(desk) : null;
+    // An archived desk falls through to direct delivery rather than failing.
+    // The message is the point; the room was only ever a place to mirror it,
+    // and refusing to deliver because the mirror is retired helps nobody.
+    const room = deskRoom?.archivedAt ? null : deskRoom;
     if (room) {
       this.opts.store.subscribe({
         agent: identity.agent,
@@ -559,8 +618,16 @@ export class RoomTool implements Tool {
       return fail(`The "${backendId}" transport cannot create rooms.`);
     }
 
+    // Only a LIVE room blocks the name. Archiving frees it precisely so the
+    // next room can take it, and `getRoomByName` will still hand back the
+    // archived one when nothing live holds the name.
     const existing = this.opts.store.getRoomByName(name);
-    if (existing) return ok(`Room "${name}" already exists [${formatRoomRef(existing.ref)}].`);
+    if (existing && !existing.archivedAt) {
+      return ok(`Room "${name}" already exists [${formatRoomRef(existing.ref)}].`);
+    }
+    if (existing?.archivedAt) {
+      console.log(`[rooms] "${name}" reuses the name of an archived room [${formatRoomRef(existing.ref)}].`);
+    }
 
     const room = await backend.createRoom({
       name,
@@ -580,7 +647,7 @@ export class RoomTool implements Tool {
   }
 
   private async invite(args: Record<string, unknown>): Promise<ToolResult> {
-    const room = this.requireRoom(args);
+    const room = this.requireLiveRoom(args, "take new participants");
     const ref = formatRoomRef(room.ref);
     const memberLabel = String(args.member ?? "").trim();
     if (!memberLabel) return fail("member is required for invite.");
@@ -640,6 +707,11 @@ export class RoomTool implements Tool {
       return ok(room.purpose ? `"${room.name}": ${room.purpose}` : `"${room.name}" has no purpose set.`);
     }
     if (!agentName) return fail("This session has no agent identity, so it cannot set a purpose.");
+    // Reading an archived room's purpose is fine; rewriting it is not — the
+    // purpose is standing instructions for a room nobody is being woken for.
+    if (room.archivedAt) {
+      return fail(`Room "${room.name}" is archived, so its purpose cannot be changed. Unarchive it first.`);
+    }
 
     this.opts.store.upsertRoom({ ...room, purpose: next });
 
@@ -659,7 +731,10 @@ export class RoomTool implements Tool {
 
   /** Drop a participant. Agents stop being woken; humans lose room access. */
   private async remove(args: Record<string, unknown>): Promise<ToolResult> {
-    const room = this.requireRoom(args);
+    // Evicting someone from an archived room is refused, because keeping every
+    // seat intact is what makes unarchiving restore the room rather than an
+    // empty one. Leaving of your own accord still works — see `unsubscribe`.
+    const room = this.requireLiveRoom(args, "have participants removed");
     const ref = formatRoomRef(room.ref);
     const memberLabel = String(args.member ?? "").trim();
     if (!memberLabel) return fail("member is required for remove.");
@@ -716,7 +791,9 @@ export class RoomTool implements Tool {
 
   private subscribe(args: Record<string, unknown>, agentName?: string): ToolResult {
     if (!agentName) return fail("This session has no agent identity, so it cannot subscribe.");
-    const room = this.requireRoom(args);
+    // Taking a seat that will never be armed reports a success the agent would
+    // have no way to distinguish from silence.
+    const room = this.requireLiveRoom(args, "be subscribed to");
     const ref = formatRoomRef(room.ref);
     const wakeOn = WAKE_MODES.includes(String(args.wake_on) as WakeOn) ? (String(args.wake_on) as WakeOn) : "addressed";
 
@@ -738,9 +815,65 @@ export class RoomTool implements Tool {
 
   private unsubscribe(args: Record<string, unknown>, agentName?: string): ToolResult {
     if (!agentName) return fail("This session has no agent identity, so it cannot unsubscribe.");
+    // Deliberately allowed on an archived room, unlike `remove`. Giving up your
+    // own seat is always your call, and refusing would trap an agent in a room
+    // that no longer does anything.
     const room = this.requireRoom(args);
     const removed = this.opts.store.unsubscribe(agentName, formatRoomRef(room.ref));
     return ok(removed ? `Unsubscribed from "${room.name}".` : `You were not subscribed to "${room.name}".`);
+  }
+
+  /**
+   * Retire a room. Reversible, and announced before it goes quiet.
+   *
+   * `reason` is required from the tool path and not from the slash command,
+   * because the blast radius differs: a person typing `/room archive` in the
+   * channel has already made the decision visible to everyone reading, while an
+   * agent doing it silences every other subscriber on its own judgement. The
+   * reason is what the announcement carries, so the others learn why rather
+   * than discovering it by never being woken again.
+   */
+  private archive(args: Record<string, unknown>, agentName?: string): ToolResult {
+    const room = this.requireRoom(args);
+    if (room.archivedAt) {
+      return ok(`Room "${room.name}" is already archived.`);
+    }
+    const reason = String(args.reason ?? "").trim();
+    if (!reason) {
+      return fail(
+        "reason is required for archive — one short line on why this room is finished. " +
+          "Archiving stops it waking everyone else in it, so they are told why.",
+      );
+    }
+    const archived = this.opts.store.archiveRoom(formatRoomRef(room.ref), { by: agentName, reason });
+    if (!archived) return fail(`Could not archive "${room.name}".`);
+    return ok(
+      `Archived "${room.name}". It stops waking anyone and refuses posts; its messages and everyone's ` +
+        `place in it are kept. Reopen it with action "unarchive".`,
+    );
+  }
+
+  private unarchive(args: Record<string, unknown>, agentName?: string): ToolResult {
+    const raw = String(args.room ?? "").trim();
+    if (!raw) return fail("room is required for unarchive (a room name or ref).");
+
+    // Resolve against archived rooms explicitly. A live room may have taken the
+    // name in the meantime, and `resolve` prefers the live one — so going
+    // through it would report "already live" about a different room entirely.
+    const room =
+      this.opts.store.listArchivedRooms().find((r) => r.name === raw || formatRoomRef(r.ref) === raw) ?? null;
+    if (!room) {
+      const archived = this.opts.store.listArchivedRooms().map((r) => r.name);
+      return fail(
+        archived.length > 0
+          ? `No archived room "${raw}". Archived: ${archived.join(", ")}.`
+          : `No archived room "${raw}" — nothing is archived.`,
+      );
+    }
+
+    const restored = this.opts.store.unarchiveRoom(formatRoomRef(room.ref), { by: agentName });
+    if (!restored) return fail(`Could not unarchive "${room.name}".`);
+    return ok(`Reopened "${restored.name}". Everyone who watched it before is watching it again.`);
   }
 }
 

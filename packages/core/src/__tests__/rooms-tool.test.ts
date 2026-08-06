@@ -1098,3 +1098,159 @@ describe("room tool — updating a message instead of repeating it", () => {
     expect(res.error).toMatch(/9999/);
   });
 });
+
+// --------------------------------------------------------------------------
+// Archiving
+// --------------------------------------------------------------------------
+
+describe("room tool — archiving", () => {
+  const archive = (room: string, reason = "the trip is over", agent = "supervisor") =>
+    run({ action: "archive", room, reason }, agent);
+
+  it("requires a reason, because everyone else in the room is being silenced", async () => {
+    await createRoom("trip");
+
+    const res = await run({ action: "archive", room: "trip" }, "supervisor");
+
+    expect(res.success).toBe(false);
+    expect(res.error).toMatch(/reason is required/);
+    // And it did not archive anyway.
+    expect(store.getRoomByName("trip")?.archivedAt).toBeUndefined();
+  });
+
+  it("drops the room from list and says how many are archived", async () => {
+    await createRoom("trip");
+    await createRoom("eng");
+    await archive("trip");
+
+    const res = await run({ action: "list" }, "supervisor");
+
+    expect(res.output).toContain("eng");
+    expect(res.output).toMatch(/1 archived: trip/);
+    // The line has to say they are still readable, or the model has no way to
+    // learn that reading one is allowed.
+    expect(res.output).toMatch(/unarchive/);
+  });
+
+  it("says so plainly when every room is archived", async () => {
+    await createRoom("trip");
+    await archive("trip");
+
+    const res = await run({ action: "list" }, "supervisor");
+
+    // "No rooms yet — use create" would be a lie, and points at the wrong verb.
+    expect(res.output).toMatch(/No live rooms/);
+    expect(res.output).not.toMatch(/No rooms yet/);
+  });
+
+  it("still reads an archived room — keeping the record is the point", async () => {
+    await createRoom("trip");
+    await post("trip", "booked the hotel");
+    await archive("trip");
+
+    const res = await run({ action: "read", room: "trip" }, "coder");
+
+    expect(res.success).toBe(true);
+    expect(res.output).toContain("booked the hotel");
+  });
+
+  it("refuses every write, naming the way back", async () => {
+    await createRoom("trip");
+    await archive("trip");
+
+    for (const args of [
+      { action: "post", room: "trip", body: "anyone?" },
+      { action: "invite", room: "trip", member: "coder" },
+      { action: "subscribe", room: "trip" },
+      { action: "purpose", room: "trip", purpose: "new purpose" },
+      { action: "remove", room: "trip", member: "coder" },
+    ]) {
+      const res = await run(args, "supervisor");
+      expect(res.success, `${args.action} should be refused`).toBe(false);
+      expect(res.error, `${args.action} should name unarchive`).toMatch(/archived/i);
+    }
+    expect(messageCount()).toBe(0);
+  });
+
+  it("lets an agent give up its own seat in an archived room", async () => {
+    await createRoom("trip");
+    await run({ action: "subscribe", room: "trip" }, "coder");
+    await archive("trip");
+
+    // Unlike `remove`: leaving is always your own call, and refusing would trap
+    // an agent in a room that no longer does anything.
+    const res = await run({ action: "unsubscribe", room: "trip" }, "coder");
+
+    expect(res.success).toBe(true);
+  });
+
+  it("reads an archived room's purpose but will not rewrite it", async () => {
+    await createRoom("trip", "supervisor", { purpose: "plan the trip" });
+    await archive("trip");
+
+    const read = await run({ action: "purpose", room: "trip" }, "supervisor");
+    expect(read.success).toBe(true);
+    expect(read.output).toContain("plan the trip");
+  });
+
+  it("frees the name for a new room, and keeps them apart", async () => {
+    await createRoom("trip");
+    await post("trip", "last year's trip");
+    await archive("trip");
+
+    const created = await createRoom("trip");
+    expect(created.success).toBe(true);
+
+    // The new room is the one the name resolves to, and it is empty.
+    const res = await run({ action: "read", room: "trip" }, "coder");
+    expect(res.output).not.toContain("last year's trip");
+  });
+
+  it("round-trips through unarchive with the subscription intact", async () => {
+    await createRoom("trip");
+    await run({ action: "subscribe", room: "trip", wake_on: "all" }, "coder");
+    await archive("trip");
+
+    const res = await run({ action: "unarchive", room: "trip" }, "supervisor");
+
+    expect(res.success).toBe(true);
+    expect(store.getRoomByName("trip")?.archivedAt).toBeUndefined();
+    expect(store.getSubscription("coder", "local:trip")?.wakeOn).toBe("all");
+    // And posting works again.
+    expect((await post("trip", "back on")).success).toBe(true);
+  });
+
+  it("refuses to unarchive when a new room has taken the name", async () => {
+    await createRoom("trip");
+    await archive("trip");
+    await createRoom("trip");
+
+    const res = await run({ action: "unarchive", room: "local:trip" }, "supervisor");
+
+    expect(res.success).toBe(false);
+    expect(res.error).toMatch(/now belongs to/);
+  });
+
+  it("names what is archived when asked to unarchive something that is not", async () => {
+    await createRoom("trip");
+    await archive("trip");
+
+    const res = await run({ action: "unarchive", room: "nonesuch" }, "supervisor");
+
+    expect(res.success).toBe(false);
+    expect(res.error).toMatch(/Archived: trip/);
+  });
+
+  it("skips archived rooms when sweeping every room it watches", async () => {
+    await createRoom("trip", "coder");
+    await createRoom("eng", "coder");
+    await post("trip", "old news", "supervisor");
+    await post("eng", "live news", "supervisor");
+    await archive("trip", "over", "coder");
+
+    const res = await run({ action: "read" }, "coder");
+
+    expect(res.output).toContain("live news");
+    expect(res.output).not.toContain("old news");
+  });
+});

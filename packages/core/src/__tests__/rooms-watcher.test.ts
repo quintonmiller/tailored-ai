@@ -1014,7 +1014,8 @@ describe("RoomWatcher re-arms when subscriptions change", () => {
     const watcher = new RoomWatcher({ runtime: makeBusRuntime(bus), store: busStore });
 
     watcher.start();
-    const spy = vi.spyOn(busStore, "listSubscriptions");
+    // start() reads the ACTIVE set — the one that excludes archived rooms.
+    const spy = vi.spyOn(busStore, "listActiveSubscriptions");
 
     busStore.subscribe({ agent: "coder", roomRef: "local:eng", deliver: "poll", wakeOn: "all", source: "agent" });
     await vi.advanceTimersByTimeAsync(500);
@@ -1031,7 +1032,8 @@ describe("RoomWatcher re-arms when subscriptions change", () => {
     const watcher = new RoomWatcher({ runtime: makeBusRuntime(bus, ["a", "b", "c"]), store: busStore });
 
     watcher.start();
-    const spy = vi.spyOn(busStore, "listSubscriptions");
+    // start() reads the ACTIVE set — the one that excludes archived rooms.
+    const spy = vi.spyOn(busStore, "listActiveSubscriptions");
 
     for (const agent of ["a", "b", "c"]) {
       busStore.subscribe({ agent, roomRef: "local:eng", deliver: "poll", wakeOn: "all", source: "config" });
@@ -1051,7 +1053,8 @@ describe("RoomWatcher re-arms when subscriptions change", () => {
 
     watcher.start();
     watcher.stop();
-    const spy = vi.spyOn(busStore, "listSubscriptions");
+    // start() reads the ACTIVE set — the one that excludes archived rooms.
+    const spy = vi.spyOn(busStore, "listActiveSubscriptions");
 
     busStore.subscribe({ agent: "coder", roomRef: "local:eng", deliver: "poll", wakeOn: "all", source: "agent" });
     await vi.advanceTimersByTimeAsync(500);
@@ -1068,7 +1071,8 @@ describe("RoomWatcher re-arms when subscriptions change", () => {
     const watcher = new RoomWatcher({ runtime: makeBusRuntime(bus), store: busStore });
 
     watcher.start();
-    const spy = vi.spyOn(busStore, "listSubscriptions");
+    // start() reads the ACTIVE set — the one that excludes archived rooms.
+    const spy = vi.spyOn(busStore, "listActiveSubscriptions");
 
     busStore.unsubscribe("coder", "local:eng");
     await vi.advanceTimersByTimeAsync(500);
@@ -1256,5 +1260,172 @@ describe("RoomWatcher turn-taking: the second agent reads the first's reply", ()
     await vi.waitFor(() => expect(seen.length).toBeGreaterThan(0));
     expect(seen.some((b) => b.includes("bounded backoff"))).toBe(true);
     unregisterRoomBackend("local");
+  });
+});
+
+// --------------------------------------------------------------------------
+// Archived rooms wake nobody
+// --------------------------------------------------------------------------
+
+describe("RoomWatcher and archived rooms", () => {
+  afterEach(() => {
+    unregisterRoomBackend("local");
+  });
+
+  /** A live room with one wide-awake push subscriber, ready to be archived. */
+  async function staffedRoom(): Promise<void> {
+    await backend.createRoom({ name: "eng" });
+    registerRoomBackend(backend);
+    store.subscribe({ agent: "coder", roomRef: "local:eng", wakeOn: "all", deliver: "push" });
+  }
+
+  /**
+   * A watcher whose runtime answers `isAgentsPaused`, so the wake path runs to
+   * completion. Without it these tests would pass on a TypeError rather than on
+   * the archive guard — green for the wrong reason, which is worse than red.
+   */
+  function liveWatcher(): RoomWatcher {
+    return new RoomWatcher({
+      runtime: {
+        getConfig: () => ({ agents: { coder: {} } }),
+        getOwnerId: () => undefined,
+        isAgentsPaused: () => false,
+      } as unknown as AgentRuntime,
+      store,
+    });
+  }
+
+  it("arms nothing for an archived room", async () => {
+    await staffedRoom();
+    store.subscribe({ agent: "coder", roomRef: "local:eng", wakeOn: "all", checkInMinutes: 60, deliver: "poll" });
+    store.archiveRoom("local:eng");
+
+    const watcher = makeWatcher(["coder"]);
+    watcher.start();
+
+    const timers = watcher as unknown as {
+      pollTimers: Map<string, unknown>;
+      checkInTimers: Map<string, unknown>;
+    };
+    // No poll timer and no check-in timer: an archived room costs nothing on a
+    // clock, which is half the point of retiring one.
+    expect(timers.pollTimers.size).toBe(0);
+    expect(timers.checkInTimers.size).toBe(0);
+    watcher.stop();
+  });
+
+  it("drops a pushed message and leaves agent_turns alone", async () => {
+    await staffedRoom();
+    store.archiveRoom("local:eng");
+
+    const watcher = makeWatcher(["coder"]);
+    const dispatched: string[] = [];
+    (watcher as unknown as { dispatchWake: (s: RoomSubscription, k: string) => void }).dispatchWake = (s) => {
+      dispatched.push(s.agent);
+    };
+
+    // The Discord push listener is per BACKEND, so an archived room's traffic
+    // still arrives here and has to be dropped explicitly.
+    await watcher.onMessage({
+      id: "1",
+      room: { backend: "local", id: "eng" },
+      cursor: "0000000000000000001",
+      raw: "anyone about?",
+      body: "anyone about?",
+      to: [],
+      mentions: [],
+      authorId: "u-alex",
+      authorLabel: "alex",
+      fromSelf: false,
+      createdAt: new Date().toISOString(),
+    });
+
+    expect(dispatched).toEqual([]);
+    // Not merely "nobody woke": the depth counter must not move either, or a
+    // retired room would drift toward a cap nothing will ever reset.
+    expect(store.agentTurns("local:eng")).toBe(0);
+  });
+
+  it("refuses a check-in whose timer outlived the archive", async () => {
+    await staffedRoom();
+    store.subscribe({ agent: "coder", roomRef: "local:eng", checkInMinutes: 5 });
+    store.archiveRoom("local:eng");
+
+    const watcher = new RoomWatcher({
+      runtime: {
+        getConfig: () => ({ agents: { coder: {} } }),
+        getOwnerId: () => undefined,
+        isAgentsPaused: () => false,
+      } as unknown as AgentRuntime,
+      store,
+    });
+    const ran: string[] = [];
+    (watcher as unknown as { onRoomTurn: (r: string, k: string, f: () => unknown) => unknown }).onRoomTurn = (r) => {
+      ran.push(r);
+      return undefined;
+    };
+
+    await watcher.runCheckIn("coder", "local:eng");
+
+    expect(ran).toEqual([]);
+  });
+
+  it("charges no wake for a queue entry archived after it was enqueued", async () => {
+    await staffedRoom();
+    await backend.post("eng", { body: "@coder still there?", speaker: "alex", to: ["coder"] });
+
+    const watcher = liveWatcher();
+    const before = store.getSubscription("coder", "local:eng");
+    expect(before?.wakesThisHour).toBe(0);
+
+    // Archived between enqueue and fire — the queue holds one entry per agent
+    // and cannot know this happened.
+    store.archiveRoom("local:eng");
+    await (watcher as unknown as { runWake: (s: RoomSubscription) => Promise<void> }).runWake(
+      store.getSubscription("coder", "local:eng") as RoomSubscription,
+    );
+
+    expect(store.getSubscription("coder", "local:eng")?.wakesThisHour).toBe(0);
+  });
+
+  it("re-arms when a room is unarchived, without a restart", async () => {
+    await staffedRoom();
+    store.subscribe({ agent: "coder", roomRef: "local:eng", checkInMinutes: 30 });
+    store.archiveRoom("local:eng");
+
+    const bus = new TypedEventBus();
+    const wired = new RoomStore(db, bus);
+    const watcher = new RoomWatcher({
+      runtime: {
+        getConfig: () => ({ agents: { coder: {} } }),
+        getOwnerId: () => undefined,
+        events: bus,
+      } as unknown as AgentRuntime,
+      store: wired,
+    });
+    watcher.start();
+    const timers = watcher as unknown as { checkInTimers: Map<string, unknown> };
+    expect(timers.checkInTimers.size).toBe(0);
+
+    wired.unarchiveRoom("local:eng");
+    // The re-arm is debounced, same as a membership change.
+    await vi.waitFor(() => expect(timers.checkInTimers.size).toBe(1));
+    watcher.stop();
+  });
+
+  it("skips archived rooms when polling", async () => {
+    await staffedRoom();
+    await backend.post("eng", { body: "@coder ping", speaker: "alex", to: ["coder"] });
+    store.archiveRoom("local:eng");
+
+    const watcher = liveWatcher();
+    const dispatched: string[] = [];
+    (watcher as unknown as { dispatchWake: (s: RoomSubscription, k: string) => void }).dispatchWake = (s) => {
+      dispatched.push(s.agent);
+    };
+
+    await watcher.pollOnce("coder", "local:eng");
+
+    expect(dispatched).toEqual([]);
   });
 });

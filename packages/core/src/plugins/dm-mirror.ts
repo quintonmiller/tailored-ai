@@ -134,6 +134,11 @@ export class DmMirror {
     const room = this.runtime.getRoomStore().resolve(this.room);
     if (!room) {
       this.blockedReason = `no room named "${this.room}"`;
+    } else if (room.archivedAt) {
+      // Mirroring into a retired room writes private traffic somewhere nobody
+      // is reading. Refusing is loud and one `unarchive` from fixed; carrying
+      // on looks identical to working.
+      this.blockedReason = `"${this.room}" is archived — unarchive it, or mirror into a live room`;
     } else {
       const ref = `${room.ref.backend}:${room.ref.id}`;
       const awake = this.runtime

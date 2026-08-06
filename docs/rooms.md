@@ -547,6 +547,88 @@ Set it from Discord with `/room purpose text:…`, or from an agent with
 reads the current one back. Discord caps a channel topic at 1024 characters, so
 a longer purpose is truncated *for display only* — agents get the whole thing.
 
+## Archiving a room
+
+A room that is finished has nowhere to go. Its poll timers keep firing, its
+check-ins keep waking agents, it keeps a line in every `room list` an agent
+reads, and it holds its name against the next room that wants it. Archiving
+retires it without destroying it:
+
+```
+/room archive reason:the trip is over
+```
+
+```
+room(action="archive", room="trip", reason="the trip is over")
+```
+
+What changes, and what does not:
+
+| | archived |
+|---|---|
+| appears in `room(action="list")` | no — a count line instead |
+| readable by name or ref | yes |
+| wakes anyone: push, poll, check-in | **no** |
+| accepts posts, invites, subscriptions | no, with an error naming `unarchive` |
+| subscriptions, cursors, roles, cadences | kept, inert |
+| its messages | untouched |
+| holds its name against a new room | **no** |
+| reversible | yes |
+
+The last two are the interesting ones.
+
+**The name is released**, because opening the next `trip` room is the usual
+reason to retire the last one. Names are unique among live rooms only, so an
+archived room and its successor can both answer to `trip` — a name always
+resolves to the live one, and the archived room stays reachable by its ref.
+The cost is that unarchiving can fail: if something has taken the name since,
+you are told which room has it and asked to rename one first.
+
+**Everyone's seat survives.** This is the whole difference from deleting a room.
+Cursors, roles and check-in cadences are exactly where they were, so
+`/room unarchive` gives you the room back rather than an empty channel to
+re-invite eleven agents into. It also means unarchiving a channel that stayed
+busy hands the watcher a backlog — bounded by `maxBacklog`, but not free.
+
+Archiving is announced in the room by
+[`builtin:room-announcer`](#announcing-who-is-here), naming who did it and why.
+That is not decoration: one agent archiving a shared room silences every other
+subscriber, and without a line in the transcript the others find out by never
+being woken again, which is indistinguishable from a bug. For the same reason
+`reason` is **required** from the `room` tool and optional from `/room archive` —
+a person typing it in the channel has already made the decision visible.
+
+Reading an archived room still works, and `members` and `purpose` still answer.
+Everything that would wake an agent or edit a seat is refused. An agent can
+still `unsubscribe` itself: leaving is your own call, where evicting someone
+else from a retired room would break the restore promise above.
+
+Declare it in config for rooms that should be retired on every deployment:
+
+```yaml
+rooms:
+  rooms:
+    - name: trip
+      ref: discord:333333333333333333
+      archived: true
+```
+
+**Three states, not two.** `true` archives, `false` reopens, and **leaving the
+key out changes nothing**. Absence cannot mean "not archived": config is
+reconciled on every reload, so that would resurrect every room anyone archived
+at runtime the next time you edited anything. This is deliberately unlike
+`batch` on a subscription, which *is* rewritten from config every time —
+batching is a config opinion, archiving is usually a runtime act.
+
+Nothing happens to the channel itself. Discord has no archive for text channels,
+and locking one or moving it under a category is an opinion this does not impose;
+the channel stays exactly where it is, which is also how you get back to it to
+run `/room unarchive`.
+
+Archiving is not deleting. There is no retention sweep and no delete command —
+if a room genuinely must be erased, that is worth doing by hand with the
+transcript in front of you.
+
 ## Slash commands
 
 `/room` manages a room from inside Discord, for the times it is easier to say
@@ -564,6 +646,8 @@ than to ask an agent to do:
 | `/room status` | ask everyone what they are working on |
 | `/room reset agent:…` | clear an agent's memory (see below) |
 | `/room rewind agent:… [turns:N]` | take a conversation back N turns; `turns:0` undoes (see below) |
+| `/room archive [reason:…]` | retire this room (see [Archiving a room](#archiving-a-room)) |
+| `/room unarchive` | bring it back, with everyone who watched it |
 
 All but `all` and `status` reply privately, so managing a room does not clutter
 it. They answer straight from the database rather than going through a model, so
@@ -873,6 +957,7 @@ One tool, several actions. Agents need `room` in their `tools:` list.
 | `purpose` | read what the room is for, or set it by passing `purpose` |
 | `members` | who is in the room |
 | `subscribe` / `unsubscribe` | control whether the room wakes it |
+| `archive` / `unarchive` | retire a finished room, or bring one back — `archive` needs a `reason` |
 
 The tool registers whenever a database exists, **not** only when a transport is
 connected — during a Discord outage it reports "no backend connected", which is
@@ -983,6 +1068,7 @@ Plugins observe room traffic through the runtime event bus:
 | `room.message` | any message lands, before any wake decision — including traffic nobody wakes on |
 | `room.woke` | a wake actually consumed budget and started a run |
 | `room.membership_changed` | an agent took or gave up a seat — see [Announcing who is here](#announcing-who-is-here) |
+| `room.archived` / `room.unarchived` | a room was retired or brought back. Distinct from a membership change because nobody joined or left: every seat is kept, and simply stops being armed |
 
 This is the seam for behavior core deliberately does not implement: routing
 rules, custom escalation, mirroring a room elsewhere.
@@ -1027,6 +1113,7 @@ plugins:
       creationWindowSeconds: 10 # creator join still reads as "created it" within this
       announceJoins: true
       announceLeaves: true
+      announceArchive: true     # a room being retired or reopened
 ```
 
 Announcing is a workflow opinion, so it is a plugin rather than a property of
@@ -1226,7 +1313,7 @@ problem it solves:
 
 | table | holds |
 |---|---|
-| `rooms` | the name → `<backend>:<id>` directory |
+| `rooms` | the name → `<backend>:<id>` directory, and `archived_at` (null = live). `idx_rooms_name_active` makes names unique among **live** rooms only |
 | `room_subscriptions` | who watches what, their cursor, and their hourly wake budget — a row appearing or disappearing emits `room.membership_changed` |
 | `room_messages` | message storage for the `local` backend only |
 | `room_members` | `local` membership, plus a cache of transport-side membership |
