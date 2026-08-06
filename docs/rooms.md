@@ -714,10 +714,44 @@ at runtime the next time you edited anything. This is deliberately unlike
 `batch` on a subscription, which *is* rewritten from config every time —
 batching is a config opinion, archiving is usually a runtime act.
 
-Nothing happens to the channel itself. Discord has no archive for text channels,
-and locking one or moving it under a category is an opinion this does not impose;
-the channel stays exactly where it is, which is also how you get back to it to
-run `/room unarchive`.
+### Filing the channel away
+
+By default nothing happens to the channel itself — archiving is a statement
+about TAI's attention, not a licence to rearrange your server. Name a category
+and archived rooms get filed under it:
+
+```yaml
+channels:
+  discord:
+    archiveCategory: Archived
+```
+
+The category is created on first use, matched case-insensitively so it does not
+end up sitting next to your own `archived`. Restoring puts the channel back in
+whatever category it came from, which is remembered for exactly as long as the
+room is archived.
+
+Only the channel's **place in the list** changes. It is not locked, hidden or
+renamed: people can still read it and still talk in it, which is the point of
+keeping the record. What stopped is TAI watching. And moving it never resyncs
+permissions to the new category — Discord's own default does, and since room
+membership is derived from those permission overwrites, accepting it would erase
+the room's roster as a side effect of tidying the sidebar.
+
+The move needs Manage Channels, and is best-effort: if it fails, the room is
+still archived in TAI and you get one warning in the log. `rooms.enabled: false`
+stops the watcher, and with it this step — the archive is still recorded, just
+not reflected on Discord.
+
+The channel staying visible is also how you get back to it to run
+`/room unarchive`.
+
+This is the `RoomBackend.archiveRoom?()` seam, and it says "this room is now
+archived", not "move it to a category" — a transport that files retired rooms
+some other way, or not at all, is not forced into Discord's shape.
+`capabilities.archive` reports false both when a transport cannot do it and when
+nobody configured it to, so an unconfigured deployment is silent rather than
+logging on every archive.
 
 Archiving is not deleting. There is no retention sweep and no delete command —
 if a room genuinely must be erased, that is worth doing by hand with the
@@ -1116,6 +1150,7 @@ export interface RoomBackend {
   createRoom?(opts: CreateRoomOptions): Promise<Room>;
   listMembers?(id: string): Promise<RoomMember[]>;
   addMember?(id: string, memberId: string): Promise<void>;
+  archiveRoom?(id: string, archived: boolean): Promise<void>;
   onMessage?(handler: (message: RoomMessage) => void): () => void;
 }
 ```
@@ -1422,7 +1457,7 @@ problem it solves:
 
 | table | holds |
 |---|---|
-| `rooms` | the name → `<backend>:<id>` directory, and `archived_at` (null = live). `idx_rooms_name_active` makes names unique among **live** rooms only |
+| `rooms` | the name → `<backend>:<id>` directory, and `archived_at` (null = live). `idx_rooms_name_active` makes names unique among **live** rooms only. `backend_state` is opaque JSON a backend parks across an archive — Discord keeps the category to restore the channel to |
 | `room_subscriptions` | who watches what, their cursor, and their hourly wake budget — a row appearing or disappearing emits `room.membership_changed` |
 | `room_messages` | message storage for the `local` backend only |
 | `room_members` | `local` membership, plus a cache of transport-side membership |

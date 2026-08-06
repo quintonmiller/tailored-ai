@@ -166,6 +166,16 @@ export interface RoomCapabilities {
   /** Can mark a message without posting one. */
   reactions: boolean;
   /**
+   * Can reflect a room's archived state onto the transport itself — filing a
+   * Discord channel under an "Archived" category, say.
+   *
+   * Optional by nature: TAI's own archive is complete without it. This says
+   * only whether the transport has somewhere to put a retired room AND has
+   * been told where, so a backend that could do it but has not been configured
+   * reports false rather than being called and doing nothing.
+   */
+  archive: boolean;
+  /**
    * The transport can render each speaker as its own participant — a Discord
    * webhook posting under a per-message `username`, say. When true the backend
    * carries identity natively and does NOT need a `[speaker]` text prefix; the
@@ -214,6 +224,19 @@ export interface RoomBackend {
    * a message, waking anyone, or counting toward the conversation-depth cap.
    */
   react?(id: string, messageId: string, emoji: string): Promise<void>;
+
+  /**
+   * Reflect an archive onto the transport, and undo it on restore.
+   *
+   * Best-effort by contract: TAI has already archived the room by the time
+   * this is called, and a transport that refuses — no permission, no such
+   * concept — must not undo that. Callers log and carry on.
+   *
+   * Expressed as "this room is now archived / no longer archived" rather than
+   * "move it to a category", so a transport that files retired rooms some
+   * other way, or not at all, is not forced into Discord's shape.
+   */
+  archiveRoom?(id: string, archived: boolean): Promise<void>;
 
   createRoom?(opts: CreateRoomOptions): Promise<Room>;
   /**

@@ -11,6 +11,7 @@
  */
 
 import {
+  type CategoryChannel,
   ChannelType,
   type Client,
   type Message as DiscordMessage,
@@ -121,28 +122,41 @@ export interface DiscordRoomBackendOptions {
    * instead of inventing a speaker. Wire this to `IdentityResolver.isKnown`.
    */
   isKnownIdentity?: (label: string) => boolean;
+  /**
+   * Category name to file archived rooms under. Unset leaves archived channels
+   * where they are, which is the default.
+   */
+  archiveCategory?: string;
 }
 
 export class DiscordRoomBackend implements RoomBackend {
   readonly id = "discord";
-  readonly capabilities: RoomCapabilities = {
-    create: true,
-    members: true,
-    push: true,
-    history: true,
-    // Set once a webhook exists for the room; see ensureWebhook.
-    nativeSpeakers: true,
-    threads: true,
-    edit: true,
-    reactions: true,
-  };
+  readonly capabilities: RoomCapabilities;
 
   private readonly webhooks = new Map<string, WebhookClient>();
 
   constructor(
     private readonly client: Client,
     private readonly opts: DiscordRoomBackendOptions = {},
-  ) {}
+  ) {
+    this.capabilities = {
+      create: true,
+      members: true,
+      push: true,
+      history: true,
+      // Set once a webhook exists for the room; see ensureWebhook.
+      nativeSpeakers: true,
+      threads: true,
+      edit: true,
+      reactions: true,
+      // Discord can always move a channel; whether it SHOULD is config. Saying
+      // false when no category is named means the caller skips the call
+      // entirely rather than invoking a method that quietly does nothing —
+      // "unsupported" and "not asked for" look the same from the outside, and
+      // only one of them is worth logging about.
+      archive: Boolean(opts.archiveCategory?.trim()),
+    };
+  }
 
   async listRooms(): Promise<Room[]> {
     const rooms: Room[] = [];
@@ -222,6 +236,69 @@ export class DiscordRoomBackend implements RoomBackend {
     const channel = await this.requireTextChannel(id);
     const trimmed = purpose.trim();
     await channel.setTopic(trimmed.length > 1024 ? `${trimmed.slice(0, 1021)}...` : trimmed);
+  }
+
+  /**
+   * File a retired channel under the configured archive category, and put it
+   * back where it was when the room is reopened.
+   *
+   * Only the channel's *place in the list* changes. It is not locked, hidden or
+   * renamed: people can still read it and still talk in it, which is the point
+   * of keeping the record. What stopped is TAI watching.
+   */
+  async archiveRoom(id: string, archived: boolean): Promise<void> {
+    const categoryName = this.opts.archiveCategory?.trim();
+    if (!categoryName) return;
+
+    const channel = await this.requireTextChannel(id);
+    const ref = `discord:${id}`;
+    const store = this.opts.store;
+
+    if (archived) {
+      const category = await this.ensureCategory(channel.guild, categoryName);
+      // Already filed. Re-stamping would overwrite the remembered parent with
+      // the archive category itself, and restoring would then be a no-op that
+      // left the channel exactly where the user did not want it.
+      if (channel.parentId === category.id) return;
+
+      // Remembered BEFORE the move, and stored as null rather than omitted when
+      // the channel had no category, so restoring can tell "it was top-level"
+      // from "we never recorded anything".
+      store?.setBackendState(ref, { previousParentId: channel.parentId });
+      await this.reparent(channel, category.id);
+      return;
+    }
+
+    const state = store?.getBackendState(ref);
+    // No record means the channel was never moved by us — leave it alone rather
+    // than guessing at a parent and moving somebody's channel unbidden.
+    if (!state || !("previousParentId" in state)) return;
+    const previous = state.previousParentId;
+    await this.reparent(channel, typeof previous === "string" ? previous : null);
+    store?.setBackendState(ref, null);
+  }
+
+  /**
+   * Move a channel between categories WITHOUT touching its permissions.
+   *
+   * `lockPermissions` defaults to true in discord.js, which syncs the channel's
+   * overwrites to its new parent. Filing a private room under an archive
+   * category would then quietly rewrite who can see it — and since membership
+   * here is derived from exactly those overwrites, it would also erase the
+   * room's roster. Moving a channel must not change who is in it.
+   */
+  private async reparent(channel: TextChannel, parentId: string | null): Promise<void> {
+    await channel.setParent(parentId, { lockPermissions: false });
+  }
+
+  /** The named category, created on first use. Matched case-insensitively. */
+  private async ensureCategory(guild: Guild, name: string): Promise<CategoryChannel> {
+    const wanted = name.toLowerCase();
+    const existing = guild.channels.cache.find(
+      (c) => c.type === ChannelType.GuildCategory && c.name.toLowerCase() === wanted,
+    );
+    if (existing) return existing as CategoryChannel;
+    return await guild.channels.create({ name, type: ChannelType.GuildCategory });
   }
 
   async addMember(id: string, memberId: string): Promise<void> {

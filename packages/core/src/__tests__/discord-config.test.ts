@@ -18,6 +18,13 @@ describe("getDiscordConfig", () => {
     expect(getDiscordConfig(cfg("nonsense"))).toBeUndefined();
   });
 
+  it("parses archiveCategory, and leaves it undefined when unset", () => {
+    expect(getDiscordConfig(cfg({ archiveCategory: "Archived" }))?.archiveCategory).toBe("Archived");
+    // Unset is meaningful: it means "leave archived channels where they are".
+    expect(getDiscordConfig(cfg({ token: "t" }))?.archiveCategory).toBeUndefined();
+    expect(getDiscordConfig(cfg({ archiveCategory: 42 }))?.archiveCategory).toBeUndefined();
+  });
+
   it("parses the typed fields from the opaque bag", () => {
     const d = getDiscordConfig(
       cfg({

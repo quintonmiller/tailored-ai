@@ -432,6 +432,8 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     const backend = new DiscordRoomBackend(this.client, {
       guildId: discordConfig?.guildId,
       allowedGuilds: discordConfig?.allowedGuilds,
+      // Where retired rooms get filed. Unset leaves channels where they are.
+      archiveCategory: discordConfig?.archiveCategory,
       isKnownIdentity: (label) => this.identities().isKnown(label),
       // Gives each agent its own name and picture in the channel, instead of a
       // "[speaker]" prefix on one shared bot account.

@@ -65,6 +65,9 @@ export class LocalRoomBackend implements RoomBackend {
     edit: true,
     reactions: false,
     history: true,
+    // Nowhere to file a retired room: there is no channel list to tidy. The
+    // archive is complete in the database either way.
+    archive: false,
   };
 
   private readonly handlers = new Set<(message: RoomMessage) => void>();
