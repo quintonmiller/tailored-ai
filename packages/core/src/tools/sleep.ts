@@ -69,16 +69,19 @@ export class SleepTool implements Tool {
       kind: "noop",
       summary: reason,
     });
-    // Signal the loop to terminate. workingMemory is a per-loop scratch
-    // map the loop body checks at the top of each round — see agent/loop.ts.
-    // Without this, the model often ignores "stop" instructions in the
-    // tool result and keeps generating, burning rounds and tokens.
-    context.workingMemory?.set("tick_done", "true");
-    // Stash the reason so the loop can surface it as the tick's overall
-    // summary instead of a generic "[Tick concluded via Sleep]" string.
-    // Chat live_state reads tick_log.summary; opaque terminators make
-    // the chat agent blind to what the tick actually did.
-    context.workingMemory?.set("tick_summary", reason);
-    return { success: true, output: "Sleeping. Tick concluded. The loop will terminate now." };
+    return {
+      success: true,
+      output: "Sleeping. Tick concluded. The loop will terminate now.",
+      // Stop the loop rather than asking the model to stop — see
+      // ToolResult.endsTurn. Without it the model often ignores "stop"
+      // instructions in a tool result and keeps generating, burning rounds
+      // and tokens on a tick it already concluded.
+      endsTurn: true,
+      // The tick's own words become the loop's return value, so chat
+      // live_state and tick_log show what the tick actually did rather than a
+      // generic terminator. Formatted here, not in core: how a tool describes
+      // its own ending is the tool's business.
+      endsTurnReason: `[Sleep] ${reason}`,
+    };
   }
 }

@@ -94,6 +94,18 @@ Why it exists: one `mcp_notion_API-post-search` with `page_size: 50` returned 70
 
 Tools taking >= 100ms have `[completed in Xms]` appended to their output, giving the LLM visibility into slow operations.
 
+## Ending a turn from inside a tool (`endsTurn`)
+
+A tool can stop the loop by returning `endsTurn: true` on its `ToolResult`. The loop honours it after the round's results are written to history and before the repeated-call detector, and reports `LoopStop { kind: "tool-ended", tool, reason }`. That is **not** a stall — `isStallStop()` returns false for it.
+
+`endsTurnReason` becomes the loop's return value. Unset, the loop falls back to whatever text the model produced alongside the call, which for a tool meaning "nothing to say" is normally empty.
+
+Why it exists: telling a model to stop *in the tool result* does not work on small models. Measured on a 27B local model, `room(action="pass")` — whose entire meaning is "I am saying nothing" — was called three times per check-in, re-sending a ~56k prompt each time, and the turn exited through the repeated-call detector. Three round-trips for one decision, reported as a stall, for what was in fact the intended outcome.
+
+Set it on the result rather than declaring it on the tool, because a multi-action tool ends the turn on some actions and not others: `room` post and read continue, `room` pass does not. A tool that *failed* can still end the turn — success and intent-to-stop are separate questions. Where several calls in one round set it, the first wins.
+
+Current users: `sleep` (concludes an exploratory tick, supplying `[Sleep] <reason>`) and `room(action="pass")` (no reason). Any tool can use it, including plugin and MCP tools — it replaced a private `workingMemory["tick_done"]` convention that only core tools could discover.
+
 ## Providers
 
 One provider is built in — set `agent.defaultProvider` in config:
