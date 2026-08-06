@@ -30,7 +30,7 @@ vi.mock("../agent/loop.js", async () => {
 import { LocalRoomBackend } from "../rooms/local.js";
 import { registerRoomBackend, unregisterRoomBackend } from "../rooms/registry.js";
 import { RoomStore } from "../rooms/store.js";
-import { roomPostedKey, RoomWatcher } from "../rooms/watcher.js";
+import { RoomWatcher, roomPostedKey } from "../rooms/watcher.js";
 import type { AgentRuntime } from "../runtime.js";
 
 let db: Database.Database;
