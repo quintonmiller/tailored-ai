@@ -62,6 +62,42 @@ export interface DiscordChannelOptions {
   runtime: AgentRuntime;
 }
 
+/**
+ * Drop any command whose name an earlier one already claimed.
+ *
+ * Discord requires command names to be unique within a scope and rejects the
+ * *whole* bulk overwrite when the payload contains two of the same. The
+ * overwrite is all-or-nothing, so a rejected payload changes nothing: the guild
+ * keeps whatever set last registered successfully and every command is frozen —
+ * built-ins included, `/pause` included. On a first run the guild gets no
+ * commands at all. The only symptom was one line of `console.error`.
+ *
+ * One character of config could do it. Name normalization erases the difference
+ * between `Deploy`, `deploy` and `deploy!`, so two config entries collide as
+ * easily as a config entry named `room` collides with the built-in.
+ *
+ * First wins, and the caller pushes in precedence order: built-in, then plugin,
+ * then config. A config command must not be able to shadow the emergency stop.
+ * One skipped command beats a guild-wide outage — and unlike the outage, this
+ * says which two commands collided.
+ */
+export function dedupeCommandNames(commands: SlashCommandBuilder[]): SlashCommandBuilder[] {
+  const seen = new Set<string>();
+  const kept: SlashCommandBuilder[] = [];
+  for (const command of commands) {
+    const name = command.name;
+    if (seen.has(name)) {
+      console.warn(
+        `[discord] Two commands are named "${name}". Keeping the first and skipping the later one — Discord rejects a payload containing both, which would leave every slash command in the guild frozen at its last working version.`,
+      );
+      continue;
+    }
+    seen.add(name);
+    kept.push(command);
+  }
+  return kept;
+}
+
 export class DiscordChannel implements Channel, OutboundNotifier {
   /** Room capability, present only while the gateway is connected. */
   rooms: DiscordRoomBackend | undefined;
@@ -748,6 +784,8 @@ export class DiscordChannel implements Channel, OutboundNotifier {
   private buildSlashCommands(): SlashCommandBuilder[] {
     const config = this.runtime.getConfig();
     const commands: SlashCommandBuilder[] = [];
+    // Built-ins first, then plugins, then config — see the note above the
+    // `buildPluginCommands()` call and `dedupeCommandNames` at the end.
 
     // /new
     commands.push(
@@ -818,7 +856,6 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     // `create` subcommand is how the first one gets made, so gating on "a room
     // exists" would lock the door from the inside. The other subcommands say
     // plainly that the channel isn't a room.
-    commands.push(...buildPluginCommands());
     commands.push(buildRoomCommand());
     commands.push(buildMemoryCommand());
     // Top-level and two words long, because the moment you need them you are
@@ -828,6 +865,13 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     // Top-level rather than a subcommand of `/agent`: that one already takes a
     // required top-level option, and Discord forbids having both.
     commands.push(buildCloneAgentCommand());
+
+    // Plugin commands after every built-in, and config commands after those.
+    // Push order is precedence order — `dedupeCommandNames` keeps the first of
+    // any name — so this is what stops a plugin or a config entry named `pause`
+    // from taking the emergency stop's slot. It used to sit above /room,
+    // /memory, /pause, /resume and /clone-agent.
+    commands.push(...buildPluginCommands());
 
     // Config-driven commands
     for (const [name, cmd] of Object.entries(config.commands)) {
@@ -853,7 +897,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
       commands.push(builder as SlashCommandBuilder);
     }
 
-    return commands;
+    return dedupeCommandNames(commands);
   }
 
   /**
@@ -903,7 +947,21 @@ export class DiscordChannel implements Channel, OutboundNotifier {
         this.registeredCommandsHash = hash;
       })
       .catch((err) => {
-        console.error(`[discord] Command sync failed: ${(err as Error).message}`);
+        const status = (err as { status?: number }).status;
+        const deterministic = typeof status === "number" && status >= 400 && status < 500;
+        console.error(
+          `[discord] Command sync failed${status ? ` (${status})` : ""}: ${(err as Error).message}\n` +
+            `[discord] The overwrite is all-or-nothing, so the guild's slash commands are unchanged — they are whatever last registered successfully, and may be stale.` +
+            (deterministic
+              ? `\n[discord] Discord rejected the payload itself, so retrying it unchanged cannot work. Not attempting again until the command set changes.`
+              : ""),
+        );
+        // Record the hash on a rejection Discord will make again. The guards
+        // above compare against it, so leaving it unset meant every trigger —
+        // ClientReady, and `runtime.onReload` on every config reload — re-sent
+        // the identical rejected payload and failed identically, forever. A
+        // 5xx or a dropped connection is worth retrying and still is.
+        if (deterministic) this.registeredCommandsHash = hash;
       });
 
     await this.commandSync;
