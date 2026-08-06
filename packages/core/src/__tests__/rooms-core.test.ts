@@ -1,8 +1,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import SQLite from "better-sqlite3";
 import type Database from "better-sqlite3";
+import SQLite from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initDatabase } from "../db/schema.js";
 import { TypedEventBus } from "../events.js";
@@ -1617,12 +1617,9 @@ describe("archive migration on a database that predates it", () => {
       );
       CREATE UNIQUE INDEX idx_rooms_name ON rooms(name);
     `);
-    old.prepare("INSERT INTO rooms (ref, backend, native_id, name) VALUES (?, ?, ?, ?)").run(
-      "local:trip-1",
-      "local",
-      "trip-1",
-      "trip",
-    );
+    old
+      .prepare("INSERT INTO rooms (ref, backend, native_id, name) VALUES (?, ?, ?, ?)")
+      .run("local:trip-1", "local", "trip-1", "trip");
     old.close();
 
     const db = initDatabase(path);
