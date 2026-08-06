@@ -1,6 +1,11 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type Database from "better-sqlite3";
+import SQLite from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initDatabase } from "../db/schema.js";
+import { TypedEventBus } from "../events.js";
 import {
   addresses,
   extractLeadingAddressees,
@@ -1464,5 +1469,175 @@ describe("per-room roles and quiet posting", () => {
     store.subscribe({ agent: "coder", roomRef: "local:eng" });
 
     expect(store.getSubscription("coder", "local:eng")?.role).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------- archiving
+
+describe("RoomStore archiving", () => {
+  let db: Database.Database;
+  let store: RoomStore;
+
+  const refOf = (room: Room): string => `${room.ref.backend}:${room.ref.id}`;
+
+  beforeEach(() => {
+    db = initDatabase(":memory:");
+    store = new RoomStore(db);
+    store.upsertRoom({ ref: { backend: "local", id: "trip-1" }, name: "trip" });
+  });
+  afterEach(() => db.close());
+
+  it("hides an archived room from listRooms but keeps it readable by ref", () => {
+    store.archiveRoom("local:trip-1", { by: "alex", reason: "trip is over" });
+
+    expect(store.listRooms().map((r) => r.name)).toEqual([]);
+    expect(store.listArchivedRooms().map((r) => r.name)).toEqual(["trip"]);
+
+    const room = store.getRoomByRef("local:trip-1");
+    expect(room?.archivedAt).toBeTruthy();
+    expect(room?.archivedBy).toBe("alex");
+    expect(room?.archiveReason).toBe("trip is over");
+  });
+
+  it("keeps every subscription, cursor and cadence so unarchiving restores the room", () => {
+    store.subscribe({ agent: "coordinator", roomRef: "local:trip-1", wakeOn: "all", checkInMinutes: 60 });
+    store.advanceCursor("coordinator", "local:trip-1", "0000000000000000042");
+
+    store.archiveRoom("local:trip-1");
+
+    // The seat is untouched — this is the whole difference from removeRoom.
+    const sub = store.getSubscription("coordinator", "local:trip-1");
+    expect(sub?.wakeOn).toBe("all");
+    expect(sub?.checkInMinutes).toBe(60);
+    expect(sub?.cursor).toBe("0000000000000000042");
+
+    // ...but it is no longer something the watcher would arm.
+    expect(store.listActiveSubscriptions()).toEqual([]);
+    expect(store.listSubscriptions()).toHaveLength(1);
+
+    store.unarchiveRoom("local:trip-1");
+    expect(store.listActiveSubscriptions()).toHaveLength(1);
+  });
+
+  it("releases the name, so the next room can take it", () => {
+    store.archiveRoom("local:trip-1");
+
+    // The reason archiving exists at all: opening the next trip room.
+    expect(() => store.upsertRoom({ ref: { backend: "local", id: "trip-2" }, name: "trip" })).not.toThrow();
+    expect(store.listRooms().map(refOf)).toEqual(["local:trip-2"]);
+  });
+
+  it("still refuses two LIVE rooms under one name", () => {
+    expect(() => store.upsertRoom({ ref: { backend: "local", id: "trip-2" }, name: "trip" })).toThrow(
+      /already used by local:trip-1/,
+    );
+  });
+
+  it("resolves a name to the live room, never the archived namesake", () => {
+    store.archiveRoom("local:trip-1");
+    store.upsertRoom({ ref: { backend: "local", id: "trip-2" }, name: "trip" });
+
+    // Without the ordering this is a coin flip, and half the posts would land
+    // in the retired room.
+    expect(store.getRoomByName("trip")?.ref.id).toBe("trip-2");
+    expect(store.resolve("trip")?.ref.id).toBe("trip-2");
+    // The archived one is still reachable by its own ref.
+    expect(store.getRoomByRef("local:trip-1")?.archivedAt).toBeTruthy();
+  });
+
+  it("refuses to unarchive when the name has been taken since", () => {
+    store.archiveRoom("local:trip-1");
+    store.upsertRoom({ ref: { backend: "local", id: "trip-2" }, name: "trip" });
+
+    expect(() => store.unarchiveRoom("local:trip-1")).toThrow(/now belongs to local:trip-2/);
+    // And it stays archived rather than half-restored.
+    expect(store.getRoomByRef("local:trip-1")?.archivedAt).toBeTruthy();
+  });
+
+  it("is idempotent, so a config reconcile cannot keep re-stamping the timestamp", () => {
+    expect(store.archiveRoom("local:trip-1", { reason: "done" })).not.toBeNull();
+
+    // A second archive changes nothing and reports that it did nothing, which
+    // is what stops reconcileRooms re-announcing on every reload.
+    expect(store.archiveRoom("local:trip-1", { reason: "done again" })).toBeNull();
+    expect(store.getRoomByRef("local:trip-1")?.archiveReason).toBe("done");
+  });
+
+  it("emits room.archived and room.unarchived, not membership changes", () => {
+    const events: string[] = [];
+    const bus = new TypedEventBus();
+    for (const name of ["room.archived", "room.unarchived", "room.membership_changed"] as const) {
+      bus.on(name, () => events.push(name));
+    }
+    const wired = new RoomStore(db, bus);
+    wired.subscribe({ agent: "coordinator", roomRef: "local:trip-1" });
+    events.length = 0;
+
+    wired.archiveRoom("local:trip-1");
+    wired.unarchiveRoom("local:trip-1");
+
+    // Nobody joined and nobody left — the seats are exactly as they were.
+    expect(events).toEqual(["room.archived", "room.unarchived"]);
+  });
+
+  it("reports unarchiving a room that was not archived as a no-op", () => {
+    expect(store.unarchiveRoom("local:trip-1")).toBeNull();
+  });
+
+  it("keeps subscriptions whose room has no directory row at all", () => {
+    // A ref can be subscribed before its room is registered: config declares
+    // the subscription, the transport registers the room later. Treating
+    // "unknown" as "archived" would silently unsubscribe those agents.
+    store.subscribe({ agent: "coder", roomRef: "discord:not-registered-yet" });
+
+    expect(store.listActiveSubscriptions().map((s) => s.roomRef)).toContain("discord:not-registered-yet");
+  });
+});
+
+describe("archive migration on a database that predates it", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "tai-rooms-archive-"));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("adds the columns and replaces the unconditional unique index", () => {
+    const path = join(dir, "agent.db");
+
+    // A database as it looked before archiving existed: no archived_at, and a
+    // name index that is unique across ALL rooms.
+    const old = new SQLite(path);
+    old.exec(`
+      CREATE TABLE rooms (
+        ref TEXT PRIMARY KEY, backend TEXT NOT NULL, native_id TEXT NOT NULL,
+        name TEXT NOT NULL, purpose TEXT, created_by TEXT,
+        agent_turns INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE UNIQUE INDEX idx_rooms_name ON rooms(name);
+    `);
+    old
+      .prepare("INSERT INTO rooms (ref, backend, native_id, name) VALUES (?, ?, ?, ?)")
+      .run("local:trip-1", "local", "trip-1", "trip");
+    old.close();
+
+    const db = initDatabase(path);
+    try {
+      // The old index is a constraint, so leaving it beside the new one would
+      // go on rejecting the name reuse this whole feature exists to allow —
+      // while the partial index sat there looking like it had taken effect.
+      const indexes = (db.prepare("PRAGMA index_list(rooms)").all() as Array<{ name: string }>).map((r) => r.name);
+      expect(indexes).toContain("idx_rooms_name_active");
+      expect(indexes).not.toContain("idx_rooms_name");
+
+      const store = new RoomStore(db);
+      expect(store.getRoomByName("trip")?.archivedAt).toBeUndefined();
+
+      store.archiveRoom("local:trip-1");
+      expect(() => store.upsertRoom({ ref: { backend: "local", id: "trip-2" }, name: "trip" })).not.toThrow();
+    } finally {
+      db.close();
+    }
   });
 });

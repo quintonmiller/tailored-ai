@@ -58,6 +58,15 @@ export interface RoomAnnouncerConfig {
   announceJoins?: boolean;
   /** Announce leaves. Default true. */
   announceLeaves?: boolean;
+  /**
+   * Announce a room being retired or brought back. Default true.
+   *
+   * Louder than a join by design: archiving stops the room waking *everyone*
+   * in it, on the judgement of whoever archived it. Without a line in the
+   * transcript the others find out by never being woken again, which is
+   * indistinguishable from a bug.
+   */
+  announceArchive?: boolean;
 }
 
 /**
@@ -87,8 +96,9 @@ export class RoomAnnouncer {
   private readonly creationWindowMs: number;
   private readonly announceJoins: boolean;
   private readonly announceLeaves: boolean;
+  private readonly announceArchive: boolean;
   private readonly now: () => number;
-  private readonly subscription: Subscription;
+  private readonly subscriptions: Subscription[];
 
   constructor(opts: RoomAnnouncerOptions) {
     this.runtime = opts.runtime;
@@ -96,12 +106,19 @@ export class RoomAnnouncer {
     this.creationWindowMs = (opts.creationWindowSeconds ?? DEFAULT_CREATION_WINDOW_SECONDS) * 1000;
     this.announceJoins = opts.announceJoins ?? true;
     this.announceLeaves = opts.announceLeaves ?? true;
+    this.announceArchive = opts.announceArchive ?? true;
     this.now = opts.now ?? (() => Date.now());
-    this.subscription = this.runtime.events.on("room.membership_changed", (e) => this.announce(e));
+    this.subscriptions = [
+      this.runtime.events.on("room.membership_changed", (e) => this.announce(e)),
+      this.runtime.events.on("room.archived", (e) =>
+        this.say(e.roomRef, this.archiveLineFor(e.by, e.reason), { evenIfArchived: true }),
+      ),
+      this.runtime.events.on("room.unarchived", (e) => this.say(e.roomRef, this.unarchiveLineFor(e.by))),
+    ];
   }
 
   stop(): void {
-    this.subscription.dispose();
+    for (const sub of this.subscriptions) sub.dispose();
   }
 
   /**
@@ -146,6 +163,28 @@ export class RoomAnnouncer {
 
     const line = this.lineFor(room, e);
     if (!line) return;
+    await this.say(e.roomRef, line);
+  }
+
+  /**
+   * Put one line in a room.
+   *
+   * `evenIfArchived` exists for exactly one case: the archive announcement
+   * itself, which is emitted after the flag is set and would otherwise be the
+   * one message that never gets written. It reaches the transcript and wakes
+   * nobody — the watcher drops traffic in archived rooms — which is precisely
+   * what is wanted for a notice people read and agents do not act on.
+   */
+  private async say(roomRef: string, line: string | null, opts?: { evenIfArchived?: boolean }): Promise<void> {
+    if (!line) return;
+    const store = this.runtime.getRoomStore();
+    const room = store.resolve(roomRef);
+    if (!room) return;
+    if (room.archivedAt && !opts?.evenIfArchived) return;
+
+    const ref = parseRoomRef(`${room.ref.backend}:${room.ref.id}`);
+    const backend = ref ? getRoomBackend(ref.backend) : undefined;
+    if (!ref || !backend) return;
 
     try {
       // No `to`, so this reaches the transcript without waking anyone who was
@@ -153,9 +192,31 @@ export class RoomAnnouncer {
       // worth an interrupt.
       await backend.post(ref.id, { body: line, speaker: this.speaker });
     } catch (err) {
-      console.warn(`[room-announcer] could not announce in ${e.roomRef}: ${(err as Error).message}`);
+      console.warn(`[room-announcer] could not announce in ${roomRef}: ${(err as Error).message}`);
     }
   }
+
+  /** Exposed so the archive wording is assertable without a fake transport. */
+  archiveLineFor(by?: string, reason?: string): string | null {
+    return this.announceArchive ? archiveLine(by, reason) : null;
+  }
+
+  unarchiveLineFor(by?: string): string | null {
+    return this.announceArchive ? unarchiveLine(by) : null;
+  }
+}
+
+// The line is posted in the room it is about, so naming the room would only
+// repeat what the reader is already looking at.
+function archiveLine(by?: string, reason?: string): string {
+  const who = by ? `**${by}**` : "Someone";
+  const why = reason ? ` — ${reason}` : "";
+  return `${who} archived this room${why}. It stops waking anyone here; the messages stay readable.`;
+}
+
+function unarchiveLine(by?: string): string {
+  const who = by ? `**${by}**` : "Someone";
+  return `${who} reopened this room. Everyone who watched it before is watching it again.`;
 }
 
 /**
@@ -173,6 +234,7 @@ const plugin: Plugin = (ctx) => {
     creationWindowSeconds: typeof cfg.creationWindowSeconds === "number" ? cfg.creationWindowSeconds : undefined,
     announceJoins: bool(cfg.announceJoins),
     announceLeaves: bool(cfg.announceLeaves),
+    announceArchive: bool(cfg.announceArchive),
   });
   return () => announcer.stop();
 };

@@ -221,6 +221,58 @@ describe("RoomAnnouncer", () => {
   });
 });
 
+describe("RoomAnnouncer and archiving", () => {
+  it("says so in the room, naming who and why", async () => {
+    const announcer = new RoomAnnouncer({ runtime: makeRuntime() });
+    store.archiveRoom(REF, { by: "alex", reason: "the trip is over" });
+    await flush();
+
+    // The line has to be written even though the room is already archived —
+    // it is the one message that would otherwise never be posted, and without
+    // it the other subscribers learn they were silenced by never being woken.
+    expect(announcements()).toHaveLength(1);
+    expect(announcements()[0]).toContain("alex");
+    expect(announcements()[0]).toContain("the trip is over");
+    announcer.stop();
+  });
+
+  it("announces a reopen too", async () => {
+    const announcer = new RoomAnnouncer({ runtime: makeRuntime() });
+    store.archiveRoom(REF, { by: "alex" });
+    await flush();
+    store.unarchiveRoom(REF, { by: "alex" });
+    await flush();
+
+    expect(announcements()).toHaveLength(2);
+    expect(announcements()[1]).toMatch(/reopened/i);
+    announcer.stop();
+  });
+
+  it("stays quiet when announceArchive is off", async () => {
+    const announcer = new RoomAnnouncer({ runtime: makeRuntime(), announceArchive: false });
+    store.archiveRoom(REF, { by: "alex", reason: "done" });
+    await flush();
+
+    expect(announcements()).toEqual([]);
+    announcer.stop();
+  });
+
+  it("does not announce ordinary membership changes into an archived room", async () => {
+    const announcer = new RoomAnnouncer({ runtime: makeRuntime() });
+    store.archiveRoom(REF, { by: "alex", reason: "done" });
+    await flush();
+
+    // Seats can still be given up in an archived room; saying so in a room
+    // nobody reads is noise.
+    store.subscribe({ agent: "iris", roomRef: REF, source: "agent" });
+    store.unsubscribe("iris", REF);
+    await flush();
+
+    expect(announcements()).toHaveLength(1);
+    announcer.stop();
+  });
+});
+
 describe("parseRoomTimestamp", () => {
   it("reads SQLite's zone-less datetime as the UTC it is", () => {
     // `datetime('now')` writes "YYYY-MM-DD HH:MM:SS" with no marker, and Date

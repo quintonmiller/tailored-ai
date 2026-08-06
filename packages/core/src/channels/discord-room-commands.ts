@@ -176,6 +176,17 @@ export function buildRoomCommand(): SlashCommandBuilder {
       ),
   );
 
+  cmd.addSubcommand((s) =>
+    s
+      .setName("archive")
+      .setDescription("Retire this room: it stops waking anyone, and keeps its messages")
+      .addStringOption((o) => o.setName("reason").setDescription("Why it is finished").setRequired(false)),
+  );
+
+  cmd.addSubcommand((s) =>
+    s.setName("unarchive").setDescription("Reopen this room, with everyone who watched it before"),
+  );
+
   cmd.addSubcommand((s) => s.setName("status").setDescription("Ask every agent here what it is working on"));
 
   cmd.addSubcommand((s) =>
@@ -225,10 +236,28 @@ export async function handleRoomCommand(
     return true;
   }
 
+  // Archiving is the one thing you can do to an archived room, and reading it
+  // is the point of keeping it. Everything else either wakes an agent or edits
+  // a seat that is currently inert, so it is refused with the way out named.
+  const READABLE_WHILE_ARCHIVED = new Set(["members", "purpose", "unarchive", "archive"]);
+  if (room.archivedAt && !READABLE_WHILE_ARCHIVED.has(sub)) {
+    await interaction.reply({
+      content: `**${room.name}** is archived, so \`/room ${sub}\` does nothing here. Run \`/room unarchive\` to reopen it.`,
+      flags: MessageFlags.Ephemeral,
+    });
+    return true;
+  }
+
   try {
     switch (sub) {
       case "members":
         await interaction.reply({ content: renderMembers(deps, room), flags: MessageFlags.Ephemeral });
+        return true;
+      case "archive":
+        await interaction.reply({ content: archiveRoom(interaction, deps, room), flags: MessageFlags.Ephemeral });
+        return true;
+      case "unarchive":
+        await interaction.reply({ content: unarchiveRoom(interaction, deps, room), flags: MessageFlags.Ephemeral });
         return true;
       case "add":
         await interaction.reply({
@@ -583,12 +612,64 @@ function removeAgent(interaction: ChatInputCommandInteraction, deps: RoomCommand
   return dropped ? `**${name}** no longer watches "${room.name}".` : `**${name}** was not watching "${room.name}".`;
 }
 
+/**
+ * Retire the room this was run in.
+ *
+ * `reason` is optional here and required from the `room` tool, on purpose. A
+ * person typing this in the channel has already made the decision visible to
+ * everyone reading it; an agent doing the same silences every other subscriber
+ * on its own judgement, and owes them a sentence saying why.
+ */
+function archiveRoom(interaction: ChatInputCommandInteraction, deps: RoomCommandDeps, room: Room): string {
+  if (room.archivedAt) {
+    return `**${room.name}** is already archived. Run \`/room unarchive\` to reopen it.`;
+  }
+  const reason = (interaction.options.getString("reason") ?? "").trim();
+  const by = personLabel(interaction, deps.identities());
+  const archived = deps.store.archiveRoom(`${room.ref.backend}:${room.ref.id}`, {
+    by,
+    reason: reason || undefined,
+  });
+  if (!archived) return `Could not archive **${room.name}**.`;
+
+  const watchers = deps.store.listSubscriptionsForRoom(`${room.ref.backend}:${room.ref.id}`).length;
+  return (
+    `Archived **${room.name}**. It stops waking anyone` +
+    (watchers > 0 ? ` (${watchers} subscription${watchers === 1 ? "" : "s"} kept, inert)` : "") +
+    `, and refuses posts. Its messages stay readable, and \`/room unarchive\` puts it back exactly as it was.`
+  );
+}
+
+function unarchiveRoom(interaction: ChatInputCommandInteraction, deps: RoomCommandDeps, room: Room): string {
+  if (!room.archivedAt) return `**${room.name}** is not archived.`;
+  const by = personLabel(interaction, deps.identities());
+  try {
+    const restored = deps.store.unarchiveRoom(`${room.ref.backend}:${room.ref.id}`, { by });
+    if (!restored) return `Could not unarchive **${room.name}**.`;
+    const watchers = deps.store.listSubscriptionsForRoom(`${room.ref.backend}:${room.ref.id}`).length;
+    return (
+      `Reopened **${restored.name}**` +
+      (watchers > 0 ? `, and its ${watchers} subscription${watchers === 1 ? " is" : "s are"} live again` : "") +
+      `. Anything said here while it was archived is unread, so whoever wakes next will see it.`
+    );
+  } catch (err) {
+    // The name was taken by a new room while this one was archived — which is
+    // the point of releasing it, so this is an ordinary outcome, not a fault.
+    return (err as Error).message;
+  }
+}
+
 async function purpose(interaction: ChatInputCommandInteraction, deps: RoomCommandDeps, room: Room): Promise<string> {
   const text = (interaction.options.getString("text") ?? "").trim();
   if (!text) {
     return room.purpose
       ? `**${room.name}** — ${room.purpose}`
       : `"${room.name}" has no purpose set. Set one with \`/room purpose text:…\`.`;
+  }
+  // Reading an archived room's purpose is fine; rewriting standing instructions
+  // for a room nobody is woken in is not.
+  if (room.archivedAt) {
+    return `**${room.name}** is archived, so its purpose cannot be changed. Run \`/room unarchive\` first.`;
   }
 
   deps.store.upsertRoom({ ...room, purpose: text });

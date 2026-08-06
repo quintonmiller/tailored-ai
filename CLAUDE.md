@@ -107,7 +107,7 @@ Deep notes on each subsystem live under [`docs/`](./docs/):
 | Sandboxes (host/docker/podman) and `git worktree` helpers | [docs/sandboxes-and-worktrees.md](./docs/sandboxes-and-worktrees.md) |
 | Chat output tags (`<task/>`, `<proposal>`, `<ask>`, etc.) | [docs/chat-tags.md](./docs/chat-tags.md) |
 | Notifications: repeat suppression for unsolicited messages (`NotificationGate`) | [docs/notifications.md](./docs/notifications.md) |
-| Rooms: shared multi-agent conversations (backend seam, envelopes, subscriptions, wake policy) | [docs/rooms.md](./docs/rooms.md) |
+| Rooms: shared multi-agent conversations (backend seam, envelopes, subscriptions, wake policy) | [docs/rooms.md](./docs/rooms.md) + archiving design [docs/rooms-archive-design.md](./docs/rooms-archive-design.md) |
 | Workflow engine | [docs/workflows.md](./docs/workflows.md) |
 | Skills: SKILL.md install + enable per agent (CLI + UI) | [docs/skills.md](./docs/skills.md) |
 | Dashboard widgets: declarative Board seam (core registry + `/api/dashboard` + UI renderers) | [docs/dashboard-widgets.md](./docs/dashboard-widgets.md) |
