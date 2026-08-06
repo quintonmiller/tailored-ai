@@ -504,6 +504,13 @@ export class RoomStore {
    * itself another wake. A turn that used tools is NOT refunded: it spent real
    * time and may well have changed something.
    *
+   * "Silent" means nothing reached the room by *either* route. The caller has
+   * to check the `room:posted:` markers as well as the delivered reply, because
+   * a turn that spoke through the `room` tool has an empty delivered reply by
+   * design — and it is not silent, so both halves of the argument above fail
+   * for it. Getting that wrong is how the ceiling stopped applying to
+   * agent-to-agent traffic entirely.
+   *
    * Never goes below zero, so a stray refund cannot mint budget.
    */
   refundWake(agent: string, roomRef: string): void {
