@@ -6,6 +6,16 @@ How the loop trims history, validates tool args, retries transient errors, and w
 
 The agent loop trims conversation history before each LLM call to stay within `config.agent.maxHistoryTokens` (default 2000). Token count is estimated at ~4 chars per token. Trimming drops the oldest messages first, but always skips past orphaned `tool` messages so tool-call/response groups stay intact. See `estimateTokens()` and `trimHistory()` in `packages/core/src/agent/loop.ts`.
 
+The budget covers the whole request, not just the messages:
+
+```
+historyBudget = maxHistoryTokens - systemPromptTokens - tailTokens - toolSchemaTokens
+```
+
+Tool definitions travel in their own request field rather than as a message, which is why they went unmeasured for so long — everything that estimated size walked the message list. The model reads them either way, and they are not small: 42 tools serialise to roughly 10,857 tokens, so a budget that ignored them overshot by about 10% on every request. `estimateToolSchemaTokens()` is recomputed per round, because `getTools()` re-resolves per round and a turn can gain or lose tools mid-flight.
+
+The same subtraction applies when a fallback rung re-fits history to its own `maxContextTokens`, where it matters more: the schemas sent are identical, and the window is usually tighter.
+
 Opt-in summarization: set `summarizeOnTrim: true` in an agent to replace silent trimming with a summary. When enabled, `trimHistoryWithSummary()` calls the LLM to summarize dropped messages into a `[Earlier conversation summary: ...]` system message. The summary is cached across loop rounds to avoid re-summarization. Falls back to silent trimming if summarization fails.
 
 ## Config Validation
