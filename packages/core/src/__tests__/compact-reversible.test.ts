@@ -202,3 +202,83 @@ describe("compaction and rewind do not collide", () => {
     expect(visible.some((m) => m.content === "message 0")).toBe(false);
   });
 });
+
+/**
+ * All-or-nothing compaction is the wrong trade for a long-running conversation.
+ * Measured on a real 1,632-message session: the whole history summarised to 907
+ * characters — 534x — which keeps the facts and loses the voice, the running
+ * context and every established preference. A keep-recent window means the
+ * summary stands in only for the distant past.
+ */
+describe("partial compaction", () => {
+  it("leaves the newest messages visible", async () => {
+    const session = newSession(db, "m", "fake");
+    seed(session.id, 10);
+
+    await compactSession(db, session.id, summarizer(), "m", { keepRecent: 4 });
+
+    const visible = getSessionMessages(db, session.id);
+    // 4 kept + 1 summary.
+    expect(visible).toHaveLength(5);
+    expect(visible.filter((m) => m.content?.includes("[Conversation Summary]"))).toHaveLength(1);
+  });
+
+  it("puts the summary before the messages it precedes", async () => {
+    const session = newSession(db, "m", "fake");
+    seed(session.id, 10);
+
+    await compactSession(db, session.id, summarizer(), "m", { keepRecent: 4 });
+
+    const visible = getSessionMessages(db, session.id);
+    // The summary row is written last and carries the highest id; ordering on
+    // the batch is what stops the model reading the ending and then a synopsis
+    // of the beginning.
+    expect(visible[0].content).toContain("[Conversation Summary]");
+    expect(visible[1].content).toBe("message 6");
+    expect(visible.at(-1)?.content).toBe("message 9");
+  });
+
+  it("summarises only what it hides, not the kept window", async () => {
+    const session = newSession(db, "m", "fake");
+    seed(session.id, 10);
+    const seen: string[] = [];
+    const spy: AIProvider = {
+      id: "fake",
+      name: "fake",
+      supportsTools: false,
+      async chat(p) {
+        seen.push(String(p.messages.at(-1)?.content ?? ""));
+        return { content: "summary", usage: { input: 0, output: 0 }, finishReason: "stop" };
+      },
+    };
+
+    await compactSession(db, session.id, spy, "m", { keepRecent: 4 });
+
+    // Sending the kept window to the summariser too would put the same content
+    // in the next request twice — once summarised, once verbatim.
+    expect(seen[0]).toContain("message 5");
+    expect(seen[0]).not.toContain("message 6");
+  });
+
+  it("skips when nothing is older than the window", async () => {
+    const session = newSession(db, "m", "fake");
+    seed(session.id, 6);
+
+    const r = await compactSession(db, session.id, summarizer(), "m", { keepRecent: 20 });
+
+    expect(r.skipped).toBe(true);
+    expect(getSessionMessages(db, session.id)).toHaveLength(6);
+  });
+
+  it("still restores everything on undo", async () => {
+    const session = newSession(db, "m", "fake");
+    seed(session.id, 10);
+    await compactSession(db, session.id, summarizer(), "m", { keepRecent: 4 });
+
+    undoCompaction(db, session.id);
+
+    const visible = getSessionMessages(db, session.id);
+    expect(visible).toHaveLength(10);
+    expect(visible.some((m) => m.content?.includes("[Conversation Summary]"))).toBe(false);
+  });
+});

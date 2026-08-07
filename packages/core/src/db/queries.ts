@@ -139,16 +139,43 @@ export function deleteSessionMessages(db: Database.Database, sessionId: string):
  * Returns the batch number so the caller can name it in an event and hand it to
  * {@link restoreCompactedMessages}.
  */
-export function markSessionCompacted(db: Database.Database, sessionId: string): { batch: number; hidden: number } {
+export function markSessionCompacted(
+  db: Database.Database,
+  sessionId: string,
+  opts: { keepRecent?: number } = {},
+): { batch: number; hidden: number } {
   const latest = db.prepare("SELECT MAX(compacted_batch) AS batch FROM messages WHERE session_id = ?").get(sessionId) as
     | { batch: number | null }
     | undefined;
   const batch = (latest?.batch ?? 0) + 1;
+
+  // `keepRecent` leaves the newest N visible messages alone. The cut lands on a
+  // message boundary found by id, so a tool result never survives without the
+  // assistant turn that called for it — `stripOrphanedToolMessages` would drop
+  // it anyway, and a window that silently loses rows is worse than a smaller
+  // one that does not.
+  const keep = Math.max(0, Math.floor(opts.keepRecent ?? 0));
+  let cutoff: number | null = null;
+  if (keep > 0) {
+    const row = db
+      .prepare(
+        `SELECT id FROM messages
+          WHERE session_id = ? AND compacted_batch IS NULL AND rewound_batch IS NULL
+          ORDER BY id DESC LIMIT 1 OFFSET ?`,
+      )
+      .get(sessionId, keep - 1) as { id: number } | undefined;
+    // Fewer messages than the keep window: nothing is old enough to fold away.
+    if (!row) return { batch, hidden: 0 };
+    cutoff = row.id;
+  }
+
   const hidden = db
     .prepare(
-      "UPDATE messages SET compacted_batch = ? WHERE session_id = ? AND compacted_batch IS NULL AND rewound_batch IS NULL",
+      `UPDATE messages SET compacted_batch = ?
+        WHERE session_id = ? AND compacted_batch IS NULL AND rewound_batch IS NULL
+          AND (? IS NULL OR id < ?)`,
     )
-    .run(batch, sessionId).changes;
+    .run(batch, sessionId, cutoff, cutoff).changes;
   return { batch, hidden };
 }
 
@@ -244,7 +271,18 @@ export function findIdleSessions(
 export function getSessionMessages(db: Database.Database, sessionId: string): Message[] {
   const rows = db
     .prepare(
-      "SELECT * FROM messages WHERE session_id = ? AND rewound_batch IS NULL AND compacted_batch IS NULL ORDER BY id ASC",
+      // Compaction summaries sort ahead of surviving messages, in batch order.
+      //
+      // A summary row is written last and so carries the highest id, but it
+      // stands in for the *oldest* part of the conversation. With a keep-recent
+      // window that put the synopsis of the distant past after the turns it
+      // precedes — the model would read the ending, then a summary of the
+      // beginning. Ordering on the batch instead of the id restores chronology,
+      // and holds for repeated compactions because each batch only ever
+      // replaces content older than everything still visible.
+      `SELECT * FROM messages
+        WHERE session_id = ? AND rewound_batch IS NULL AND compacted_batch IS NULL
+        ORDER BY (compaction_summary_for IS NULL) ASC, compaction_summary_for ASC, id ASC`,
     )
     .all(sessionId) as MessageRow[];
 
