@@ -5,6 +5,7 @@ import type {
   ChatStreamEvent,
   Message,
   ThinkingLevel,
+  TokenUsage,
   ToolCall,
   ToolSchema,
 } from "@tailored-ai/core";
@@ -266,12 +267,24 @@ export function mapStopReason(reason: string | undefined): "stop" | "tool_calls"
   }
 }
 
-/** Cache reads/writes count as input — sum them so usage reflects what the API actually processed. */
-function toUsage(usage: Usage | undefined): { input: number; output: number } {
+/**
+ * Cache reads/writes count as input — sum them so usage reflects what the API
+ * actually processed.
+ *
+ * The two are also reported separately. Summed alone they are unrecoverable:
+ * a perfect cache hit and a completely cold read produce the same `input`, so
+ * no change to prompt layout could be shown to have helped. The provider was
+ * already reading these fields for a one-shot console warning; it just never
+ * recorded them.
+ */
+function toUsage(usage: Usage | undefined): TokenUsage {
+  const cacheRead = usage?.cache_read_input_tokens ?? 0;
+  const cacheWrite = usage?.cache_creation_input_tokens ?? 0;
   return {
-    input:
-      (usage?.input_tokens ?? 0) + (usage?.cache_creation_input_tokens ?? 0) + (usage?.cache_read_input_tokens ?? 0),
+    input: (usage?.input_tokens ?? 0) + cacheWrite + cacheRead,
     output: usage?.output_tokens ?? 0,
+    cacheRead,
+    cacheWrite,
   };
 }
 
@@ -585,7 +598,7 @@ export class AnthropicMessagesProvider implements AIProvider {
         content: content || null,
         toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
         reasoning: reasoning || undefined,
-        usage: { input: toUsage(startUsage).input, output: outputTokens },
+        usage: { ...toUsage(startUsage), output: outputTokens },
         finishReason: mapStopReason(stopReason),
       },
     };

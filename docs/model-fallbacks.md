@@ -235,3 +235,22 @@ node scripts/probe-models.mjs --loop     # multi-round loop with simulated tool 
 Reads `OPENAI_API_KEY`, `DEEPSEEK_API_KEY` and `OPENROUTER_API_KEY` from the
 environment and skips any route whose key is absent. A full sweep costs a few
 cents.
+
+## Prompt-cache accounting
+
+`ChatResponse.usage` carries optional `cacheRead` / `cacheWrite` alongside `input` and `output`, and `token_usage` stores them as nullable `cache_read_tokens` / `cache_write_tokens`. `/api/usage` sums both.
+
+They are **optional on purpose**. Only some vendors report caching, and requiring every provider to invent a number would be worse than an honest absence: `undefined` (stored as `NULL`) means "this provider does not say", which is a different fact from a reported zero. A reported zero is itself useful — it means the prefix missed, which is exactly what a layout change is meant to fix.
+
+They are reported *alongside* `input`, not carved out of it. Vendors disagree about whether cached tokens are already counted in the input total (Anthropic sums all three), so subtracting centrally would double-correct for some providers. `input` keeps whatever the provider called input.
+
+Who reports what today:
+
+| Provider | cacheRead | cacheWrite |
+|---|---|---|
+| `@tailored-ai/provider-anthropic` | yes | yes |
+| `@tailored-ai/provider-openai` (Responses) | yes | — API reports none |
+| built-in `openai_compatible` | when the server sends `prompt_tokens_details.cached_tokens` | — |
+| others | not reported | not reported |
+
+Why it exists: the Anthropic provider sums cache reads and writes into its input figure, so a perfect cache hit and a completely cold read recorded identical numbers. Prompt-cache behaviour is the main reason to care about request layout, and there was no way to tell whether any change to it had helped.

@@ -480,6 +480,11 @@ export class OpenAIResponsesProvider implements AIProvider {
       usage: {
         input: data.usage?.input_tokens ?? 0,
         output: data.usage?.output_tokens ?? 0,
+        // Already parsed into the response type and then dropped. OpenAI
+        // reports cached tokens as a subset of `input_tokens`, so this is
+        // detail on that number, not an addition to it. No cacheWrite: the
+        // API does not report one.
+        cacheRead: data.usage?.input_tokens_details?.cached_tokens,
       },
       finishReason: hasToolCalls ? "tool_calls" : truncated ? "length" : "stop",
     };

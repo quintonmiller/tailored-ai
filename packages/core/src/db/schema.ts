@@ -893,6 +893,24 @@ export function initDatabase(dbPath: string): Database.Database {
     // Column already exists
   }
 
+  // Safe migration: prompt-cache accounting.
+  //
+  // `token_usage` recorded prompt and completion only, and the Anthropic
+  // provider sums cache reads and writes into its input figure — so a perfect
+  // cache hit and a completely cold read were stored as identical numbers, and
+  // no change to prompt layout could be shown to have helped or hurt.
+  //
+  // Nullable rather than DEFAULT 0: most providers do not report caching at
+  // all, and "not reported" is a different fact from "nothing was cached".
+  // Rows written before this stay NULL rather than claiming a zero.
+  for (const col of ["cache_read_tokens", "cache_write_tokens"]) {
+    try {
+      db.exec(`ALTER TABLE token_usage ADD COLUMN ${col} INTEGER`);
+    } catch {
+      // Column already exists
+    }
+  }
+
   // Safe migration: drop the legacy hard-coded type CHECK on collections so the
   // `type` column is an open label (steelbook, restaurant, book, …). Earlier DBs
   // created the table with CHECK(type IN ('steelbook',…)); rebuild them in place,
