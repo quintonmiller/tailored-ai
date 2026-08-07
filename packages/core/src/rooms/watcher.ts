@@ -883,8 +883,15 @@ export class RoomWatcher {
     // re-arm, and the re-arm is debounced.
     if (room.archivedAt) return;
 
-    const limits = this.readLimits(roomRef);
-    if (!this.store.tryConsumeWake(agent, roomRef, limits.maxWakesPerHour)) return;
+    // The wake is charged once, by `runPrompted`, which is the shared gate every
+    // prompted turn goes through. There used to be a second `tryConsumeWake`
+    // here as a cheap pre-flight — but a check that spends the thing it is
+    // checking is not a pre-flight, and it made every check-in cost two.
+    //
+    // That silently halved the allowance, and the arithmetic an operator does
+    // when setting `maxWakesPerHour` was wrong by however many of the wakes
+    // were check-ins. A config comment reading "an hourly check-in needs 1"
+    // was describing something that needed 2.
     this.store.recordCheckIn(agent, roomRef);
 
     const identities = this.identities();

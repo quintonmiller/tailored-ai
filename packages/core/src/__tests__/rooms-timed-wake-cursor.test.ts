@@ -246,3 +246,25 @@ describe("a room that outran its backlog window says so", () => {
     expect(lastPrompt()).not.toContain("moved faster than");
   });
 });
+
+describe("wake accounting", () => {
+  it("charges one wake for one check-in", async () => {
+    const watcher = new RoomWatcher({ runtime: makeRuntime(), store });
+
+    await watcher.runCheckIn(AGENT, ROOM);
+
+    // `runCheckIn` used to call tryConsumeWake and then hand off to
+    // `runPrompted`, which calls it again — so an allowance of 12 bought six
+    // check-ins, not twelve.
+    expect(store.getSubscription(AGENT, ROOM)?.wakesThisHour).toBe(1);
+  });
+
+  it("charges one wake for one scheduled wake, unchanged", async () => {
+    const watcher = new RoomWatcher({ runtime: makeRuntime(), store });
+
+    await watcher.runScheduledWake(AGENT, ROOM, wakeContext());
+
+    // The path that was already correct stays correct.
+    expect(store.getSubscription(AGENT, ROOM)?.wakesThisHour).toBe(1);
+  });
+});
