@@ -933,6 +933,34 @@ describe("room tool — declining to speak", () => {
     expect(messageCount()).toBe(0);
   });
 
+  it("ends the turn, so deciding to stay quiet costs one round and not three", async () => {
+    // Measured before this was set: a check-in that passed ran the tool three
+    // times and exited through the repeated-call detector, re-sending the whole
+    // prompt each time, because "I am saying nothing" left the loop asking what
+    // to do next.
+    await createRoom("eng");
+    const wm = new Map<string, string>();
+
+    const res = await run({ action: "pass", room: "eng" }, "coder", wm);
+
+    expect(res.endsTurn).toBe(true);
+    // No reason: the loop should fall back to the model's own text, which for a
+    // pass is normally empty. A reason here would be a string the watcher had
+    // to know to suppress before it reached the room.
+    expect(res.endsTurnReason).toBeUndefined();
+  });
+
+  it("does not end the turn when there was no room to pass on", async () => {
+    // Nothing was silenced, so the agent still has a turn to finish — ending it
+    // here would swallow the correction it needs to act on.
+    const wm = new Map<string, string>();
+
+    const res = await run({ action: "pass" }, "coder", wm);
+
+    expect(res.output).toContain("not woken for a room");
+    expect(res.endsTurn).toBeUndefined();
+  });
+
   it("passes the rooms the turn was woken for when the agent omits which one", async () => {
     // A small model that drops the argument should still get silence rather
     // than an error it will ignore — but only for the rooms it was woken for.

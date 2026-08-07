@@ -220,7 +220,9 @@ export async function chatWithFallback(
  * callers branch on structure instead of parsing the loop's prose.
  *
  * - `complete` — the model stopped calling tools and answered. The normal exit.
- * - `sleep` — the agent ended its own turn deliberately (Sleep tool).
+ * - `tool-ended` — a tool returned `endsTurn`, so the turn stopped on the tool's
+ *   say-so rather than the model's. `sleep` and `room` pass do this. Not a
+ *   stall: it is the most deliberate exit there is.
  * - `aborted` — `options.signal` fired. `requestedByCaller` distinguishes an
  *   abort the caller asked for (token budget, runtime shutdown) from anything
  *   else, which is the difference between "working as configured" and "stuck".
@@ -231,7 +233,7 @@ export async function chatWithFallback(
  */
 export type LoopStop =
   | { kind: "complete" }
-  | { kind: "sleep"; reason?: string }
+  | { kind: "tool-ended"; tool: string; reason?: string }
   | { kind: "aborted"; requestedByCaller: boolean; reason?: string }
   | { kind: "max-rounds"; rounds: number }
   | { kind: "repeated-calls" }
@@ -669,6 +671,18 @@ async function requestApprovalWithTimeout(
   return result;
 }
 
+/**
+ * What one tool call produced: the string that becomes history, plus whether
+ * the tool asked to end the turn. Only a tool that actually ran can end one —
+ * every rejection path below returns output alone, so a call the loop refused
+ * cannot stop it.
+ */
+interface ToolCallOutcome {
+  output: string;
+  endsTurn?: boolean;
+  endsTurnReason?: string;
+}
+
 /** Execute a single tool call with approval gate, validation, and timing. */
 async function executeToolCall(
   call: ToolCall,
@@ -676,11 +690,11 @@ async function executeToolCall(
   currentToolNames: string[],
   context: ToolContext,
   opts: AgentLoopOptions,
-): Promise<string> {
+): Promise<ToolCallOutcome> {
   const tool = toolMap.get(call.name);
 
   if (!tool) {
-    return `Error: Unknown tool "${call.name}". Available tools: ${currentToolNames.join(", ")}`;
+    return { output: `Error: Unknown tool "${call.name}". Available tools: ${currentToolNames.join(", ")}` };
   }
 
   // --- Active-skill allowed-tools gate ---
@@ -694,12 +708,16 @@ async function executeToolCall(
     call.name !== "load_skill" &&
     !active.allowedTools.includes(call.name)
   ) {
-    return `Error: tool "${call.name}" is not in skill "${active.id}"'s allowed-tools list (${active.allowedTools.join(", ")}). Deactivate the skill with load_skill(name: "__deactivate__") to access other tools.`;
+    return {
+      output: `Error: tool "${call.name}" is not in skill "${active.id}"'s allowed-tools list (${active.allowedTools.join(", ")}). Deactivate the skill with load_skill(name: "__deactivate__") to access other tools.`,
+    };
   }
 
   const validationError = validateToolArgs(tool, call.arguments);
   if (validationError) {
-    return `Error: ${validationError}. Expected parameters: ${JSON.stringify(Object.keys((tool.parameters as { properties?: Record<string, unknown> }).properties ?? {}))}`;
+    return {
+      output: `Error: ${validationError}. Expected parameters: ${JSON.stringify(Object.keys((tool.parameters as { properties?: Record<string, unknown> }).properties ?? {}))}`,
+    };
   }
 
   // --- Approval gate ---
@@ -718,7 +736,9 @@ async function executeToolCall(
       // what it protects is the shape this codebase keeps hitting. What
       // changes is that it says so.
       if ((opts.permissions?.noHandlerAction ?? "auto") === "reject") {
-        return `Tool call rejected: "${call.name}" needs approval and no approver is available on this path. Ask the owner directly, or do the part that does not need approval.`;
+        return {
+          output: `Tool call rejected: "${call.name}" needs approval and no approver is available on this path. Ask the owner directly, or do the part that does not need approval.`,
+        };
       }
       warnNoApprover(call.name);
     } else {
@@ -736,7 +756,7 @@ async function executeToolCall(
 
       if (!response.approved) {
         const reason = response.reason ? ` Reason: ${response.reason}` : "";
-        return `Tool call rejected by user.${reason}\n[user responded in ${response.responseTimeMs}ms]`;
+        return { output: `Tool call rejected by user.${reason}\n[user responded in ${response.responseTimeMs}ms]` };
       }
       approvalTimeMs = response.responseTimeMs;
     }
@@ -763,7 +783,9 @@ async function executeToolCall(
   } else if (durationMs >= 100) {
     resultOutput += `\n[completed in ${durationMs}ms]`;
   }
-  return resultOutput;
+  // Read from the same place the output is: a tool that failed can still mean
+  // to end the turn, so this is deliberately not gated on `result.success`.
+  return { output: resultOutput, endsTurn: result.endsTurn, endsTurnReason: result.endsTurnReason };
 }
 
 function toolsToSchemas(tools: Tool[]): ToolSchema[] {
@@ -1028,18 +1050,6 @@ async function _runAgentLoopBody(
       });
       return "[Agent stopped: shutdown requested]";
     }
-    // Sleep tool sets workingMemory["tick_done"] = "true" to terminate
-    // the loop cleanly from inside a tool call. Models often ignore
-    // "stop generating" instructions in tool results — this enforces it.
-    if (context.workingMemory?.get("tick_done") === "true") {
-      // Surface Sleep's reason as the loop's return value so chat
-      // live_state and tick_log show what actually happened, not a
-      // generic terminator. Falls back to a tag if the agent forgot
-      // to provide a reason (shouldn't happen — Sleep requires one).
-      const reason = context.workingMemory.get("tick_summary");
-      opts.onStop?.({ kind: "sleep", reason });
-      return reason ? `[Sleep] ${reason}` : "[Tick concluded via Sleep]";
-    }
     rounds++;
 
     // Budget warnings: nudge the model toward committing progress before
@@ -1271,28 +1281,45 @@ async function _runAgentLoopBody(
     const results = await Promise.all(
       response.toolCalls.map(async (call) => {
         opts.onToolCall?.(call.name, call.arguments);
-        const resultOutput = await executeToolCall(call, toolMap, currentToolNames, context, opts);
-        opts.onToolResult?.(call.name, resultOutput);
-        return { call, resultOutput };
+        const outcome = await executeToolCall(call, toolMap, currentToolNames, context, opts);
+        opts.onToolResult?.(call.name, outcome.output);
+        return { call, ...outcome };
       }),
     );
 
     // Add all tool results to history in original order
-    for (const { call, resultOutput } of results) {
+    for (const { call, output } of results) {
       const toolMsg: Message = {
         role: "tool",
-        content: resultOutput,
+        content: output,
         toolCallId: call.id,
       };
       saveMessage(db, session.id, toolMsg);
       history.push(toolMsg);
     }
 
+    // A tool asked to end the turn — see ToolResult.endsTurn.
+    //
+    // After the history writes above, so the record of what the tool did is
+    // complete even though nothing will read it back. Before the repeat
+    // detector below, because a tool that ends the turn on every call looks
+    // exactly like a model stuck in a loop, and reaching the detector would
+    // report the most deliberate stop there is as a stall.
+    //
+    // First writer wins when several calls in one round end the turn. They all
+    // ran and all recorded; picking between their reasons would be inventing a
+    // rule for a case no tool set has a meaningful answer to.
+    const ender = results.find((r) => r.endsTurn);
+    if (ender) {
+      opts.onStop?.({ kind: "tool-ended", tool: ender.call.name, reason: ender.endsTurnReason });
+      return ender.endsTurnReason ?? response.content ?? "";
+    }
+
     // Detect a stuck model: same call AND same result, repeated. We use the
     // result too so legitimate polling (e.g. task_status running → running →
     // completed) doesn't trip the detector — only genuine "no progress"
     // loops do.
-    const resultSignature = results.map((r) => r.resultOutput).join("|");
+    const resultSignature = results.map((r) => r.output).join("|");
     if (callSignature === lastCallSignature && resultSignature === lastResultSignature) {
       repeatCount++;
     } else {
