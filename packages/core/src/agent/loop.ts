@@ -973,6 +973,9 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
       budgetTokens: opts.memoryInjectBudgetTokens,
       limit: opts.memoryInjectLimit,
       embedder: opts.memoryInjectEmbedder,
+      // Same source core memory uses. Undefined for an unnamed session, which
+      // then keeps the old cross-agent view rather than seeing nothing.
+      agent: agentNameForCore,
     });
     memoryBlock = meta.block;
     const total = meta.included.length + meta.pinned.length;

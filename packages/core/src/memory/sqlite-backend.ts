@@ -150,7 +150,7 @@ export class SqliteMemoryBackend implements MemoryBackend {
   }
 
   async query(context: QueryContext): Promise<MemoryFragment[]> {
-    const { projectId } = parseScope(context.scope);
+    const { projectId, agent } = parseScope(context.scope);
     const limit = context.limit ?? 5;
 
     // Exact structured lookup first — the FactsTool's "find this triplet" path.
@@ -170,7 +170,7 @@ export class SqliteMemoryBackend implements MemoryBackend {
     // metadata.pinned=true so the agent layer can render them in their
     // own block. SQLite-specific concept; other backends may omit.
     if (context.includePrelude) {
-      const pinned = listPinnedNotes(this.db, { project_id: projectId, limit });
+      const pinned = listPinnedNotes(this.db, { project_id: projectId, agent, limit });
       for (const note of pinned) fragments.push(noteFragment(note, { pinned: true }));
     }
     const pinnedIds = new Set(fragments.filter((f) => f.metadata?.pinned).map((f) => f.id ?? ""));
@@ -185,6 +185,11 @@ export class SqliteMemoryBackend implements MemoryBackend {
         const minImportance = context.minImportance;
         const notes = listNotes(this.db, {
           project_id: projectId,
+          agent,
+          // Own notes plus unowned ones. Without this an agent reads every
+          // other agent's notes and narrates them as its own recollection,
+          // which presents as a persona bug and is hard to trace to scoping.
+          includeUnowned: true,
           excludeExpired: true,
           includeGlobal: projectId !== null,
           limit: 500,

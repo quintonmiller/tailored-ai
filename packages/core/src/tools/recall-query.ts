@@ -11,6 +11,7 @@
 import type Database from "better-sqlite3";
 import { recordNoteHit } from "../agent/memory-promotion.js";
 import type { MemoryBackend, MemoryFragment } from "../memory/interface.js";
+import { memoryScope } from "../memory/scope.js";
 import type { EmbeddingProvider } from "../providers/embedding.js";
 
 export type Tier = "short" | "long";
@@ -27,6 +28,8 @@ export interface RecallQueryOptions {
   query: string;
   tier?: "any" | Tier;
   projectId?: string | null;
+  /** Restrict to one agent's notes plus unowned ones. */
+  agent?: string;
   limit?: number;
   /** When provided, the query text is embedded once and passed to
    *  `backend.query` as `vector`. Backends that own their embedding
@@ -73,7 +76,7 @@ export async function recallQueryAsync(
   const fragments = await backend.query({
     freeText: opts.query,
     vector,
-    scope: opts.projectId ? `project:${opts.projectId}` : "global",
+    scope: memoryScope(opts.projectId ?? null, opts.agent),
     limit: opts.limit ?? 5,
     minImportance: opts.semanticMinScore,
   });
