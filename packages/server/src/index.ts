@@ -2224,7 +2224,9 @@ export function createServer(opts: ServerOptions) {
         const key = sessionKey ?? `web:${Date.now()}`;
         const session = findOrCreateSession(runtime.db, key, model, config.agent.defaultProvider);
         try {
-          const compactResult = await compactSession(runtime.db, session.id, runtime.getProvider(), model, { events: runtime.events });
+          const compactResult = await compactSession(runtime.db, session.id, runtime.getProvider(), model, {
+            events: runtime.events,
+          });
           return c.json({ type: "compact", ...compactResult, message: formatCompactResult(compactResult) });
         } catch (err) {
           return c.json({ type: "error", message: (err as Error).message }, 500);
