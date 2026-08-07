@@ -52,6 +52,20 @@ const MIN_MESSAGES = 4;
  * a companion agent's history came back formatted as `Participants:` /
  * `Key Events:`. A deployment that wants that shape should ask for it in
  * `compaction.prompt`.
+ *
+ * Short and unspecific on purpose. Four variants were run against the same
+ * 1,432-message history, scored on named specifics and quoted phrasing:
+ *
+ *   "…the people, the specifics, and where things stand"   1574 chars, 32 names
+ *   "…key facts, decisions, and pending tasks"             1428 chars, 38 names
+ *   "in detail." alone                                     1420 chars, 20 names
+ *   a longer line enumerating what to preserve              707 chars,  1 name
+ *
+ * The elaborate one lost badly — twice over, since an earlier attempt at a rich
+ * "continuity" prompt also underperformed the plain line. Enumerating what to
+ * keep seems to read as a checklist to satisfy briefly rather than an invitation
+ * to write. Naming a few neutral categories beats naming none; naming many is
+ * worse than either.
  */
 /**
  * What to ask for when saving durable facts ahead of a compaction.
@@ -72,9 +86,8 @@ export const DEFAULT_MEMORY_CHECKPOINT_PROMPT =
   "Output only the lines.";
 
 export const DEFAULT_COMPACTION_PROMPT =
-  "Summarize this conversation in detail. Preserve what someone would need to continue it: " +
-  "who is involved, what was decided or promised, what is still open, and any preferences or " +
-  "specifics that were established. Output only the summary.";
+  "Summarize this conversation in detail. Preserve the people, the specifics, and where things stand. " +
+  "Output only the summary.";
 
 export interface CompactResult {
   skipped: boolean;
