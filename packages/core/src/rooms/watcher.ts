@@ -182,6 +182,30 @@ export function condenseOwnLine(body: string): string {
 }
 
 /**
+ * How a timed wake describes the room to itself.
+ *
+ * Timed wakes — check-ins and self-booked schedules — used to re-render the
+ * room's last ten messages from a null cursor on every firing, and the rendered
+ * prompt is persisted to the session. In a quiet room that stored the same
+ * block over and over: one 1,115-token check-in prompt appeared 23 times in a
+ * single session, and nothing told the agent that the 23 renderings described
+ * one moment rather than 23 events.
+ *
+ * They now read from the cursor like every other wake path, so this says what
+ * arrived since the agent last looked. When nothing did, it says that instead
+ * of repeating what the agent has already read — which is both cheaper and
+ * more informative, since "nothing changed" is exactly the fact a check-in
+ * exists to establish and was the one thing it could not previously express.
+ *
+ * Older context is not lost: prior wakes left it in the agent's own session,
+ * and a first-ever wake has a null cursor, so it still receives the backlog.
+ */
+export function describeSinceLastTurn(transcript: string[]): string[] {
+  if (transcript.length === 0) return ["Nothing new here since your last turn.", ""];
+  return ["New since your last turn:", ...transcript, ""];
+}
+
+/**
  * A reply that is nothing but an unmade `room(action="pass")` call.
  *
  * Deliberately narrow: the whole message has to be the call and nothing else,
@@ -865,12 +889,8 @@ export class RoomWatcher {
 
     const identities = this.identities();
     const label = identities.labelForAgent(agent);
-    const recent = await this.fetchBacklog({ ...sub, cursor: null });
-    const transcript = recent.slice(-10).map((m) => {
-      const speaker = m.speaker ?? m.authorLabel;
-      const body = speaksAs(m.speaker, agent, label, identities) ? condenseOwnLine(m.body) : m.body;
-      return renderTranscriptLine(speaker, m.to, body);
-    });
+    const fresh = await this.fetchBacklog(sub);
+    const transcript = this.renderTranscript(fresh, agent, label, identities);
 
     this.wakeReasons.set(`${agent} ${roomRef}`, "check-in");
     const prompt = [
@@ -879,13 +899,13 @@ export class RoomWatcher {
       ...(room.purpose ? [`Purpose: ${room.purpose}`] : []),
       ...(sub.role ? [`Your role here: ${sub.role}`] : []),
       "",
-      ...(transcript.length > 0 ? ["Recent conversation:", ...transcript, ""] : []),
+      ...describeSinceLastTurn(transcript),
       "Look at whether anything here needs attention now: a deadline approaching, something you said you would do, something waiting on someone.",
       'Speak only if there is something worth saying. If there is not, call room(action="pass") — a check-in that reports nothing is noise.',
     ].join("\n");
 
     await this.onRoomTurn(roomRef, `check-in:${agent} ${roomRef}`, async () => {
-      await this.runPrompted(sub, prompt, label, "check-in");
+      await this.runPrompted(sub, prompt, label, "check-in", fresh);
     });
   }
 
@@ -917,12 +937,8 @@ export class RoomWatcher {
 
     const identities = this.identities();
     const label = identities.labelForAgent(agent);
-    const recent = await this.fetchBacklog({ ...sub, cursor: null });
-    const transcript = recent.slice(-10).map((m) => {
-      const speaker = m.speaker ?? m.authorLabel;
-      const body = speaksAs(m.speaker, agent, label, identities) ? condenseOwnLine(m.body) : m.body;
-      return renderTranscriptLine(speaker, m.to, body);
-    });
+    const fresh = await this.fetchBacklog(sub);
+    const transcript = this.renderTranscript(fresh, agent, label, identities);
 
     this.wakeReasons.set(`${agent} ${roomRef}`, "scheduled");
     const prompt = [
@@ -934,7 +950,7 @@ export class RoomWatcher {
       ...(room.purpose ? [`Purpose: ${room.purpose}`] : []),
       ...(sub.role ? [`Your role here: ${sub.role}`] : []),
       "",
-      ...(transcript.length > 0 ? ["Recent conversation:", ...transcript, ""] : []),
+      ...describeSinceLastTurn(transcript),
       "Act on the note.",
       'If acting on it turns out to need nothing said here, call room(action="pass") — the wake still did its job.',
     ].join("\n");
@@ -942,7 +958,7 @@ export class RoomWatcher {
     console.log(`[schedules] ${ctx.scheduleId} waking ${agent} in ${roomRef}`);
     let outcome: ScheduledWakeOutcome = "ran";
     await this.onRoomTurn(roomRef, `scheduled:${agent} ${roomRef}`, async () => {
-      outcome = await this.runPrompted(sub, prompt, label, "scheduled");
+      outcome = await this.runPrompted(sub, prompt, label, "scheduled", fresh);
     });
     return outcome;
   }
@@ -1297,6 +1313,26 @@ export class RoomWatcher {
     // unaddressed message from another agent is chatter, and answering it is
     // how two agents talk forever.
     return isFromHuman(msg, identities) && msg.to.length === 0 ? "loose-question" : null;
+  }
+
+  /**
+   * The room's messages as this agent should read them — its own posts
+   * condensed, since those are already in its session as the reply it made.
+   *
+   * Shared by the check-in and scheduled-wake paths, which built the same lines
+   * twice and could drift apart.
+   */
+  private renderTranscript(
+    messages: RoomMessage[],
+    agent: string,
+    label: string,
+    identities: IdentityResolver,
+  ): string[] {
+    return messages.map((m) => {
+      const speaker = m.speaker ?? m.authorLabel;
+      const body = speaksAs(m.speaker, agent, label, identities) ? condenseOwnLine(m.body) : m.body;
+      return renderTranscriptLine(speaker, m.to, body);
+    });
   }
 
   private async fetchBacklog(sub: RoomSubscription): Promise<RoomMessage[]> {
@@ -1984,6 +2020,7 @@ export class RoomWatcher {
     prompt: string,
     label: string,
     reason: WakeReason,
+    messages?: RoomMessage[],
   ): Promise<ScheduledWakeOutcome> {
     const key = `${sub.agent} ${sub.roomRef}`;
     // Both refusals are temporary — the turn in flight will end, and the hourly
@@ -2000,7 +2037,10 @@ export class RoomWatcher {
 
     this.running.add(key);
     try {
-      await this.runTurn(sub, prompt, label, { reason });
+      // Handing the messages down is what advances the cursor. Without it a
+      // timed wake read the room and left it looking unread, so the next one
+      // re-read the same messages — for ever, into the same session.
+      await this.runTurn(sub, prompt, label, { reason, messages });
     } finally {
       this.running.delete(key);
     }
