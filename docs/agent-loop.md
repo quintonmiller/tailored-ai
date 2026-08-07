@@ -18,6 +18,22 @@ The same subtraction applies when a fallback rung re-fits history to its own `ma
 
 Opt-in summarization: set `summarizeOnTrim: true` in an agent to replace silent trimming with a summary. When enabled, `trimHistoryWithSummary()` calls the LLM to summarize dropped messages into a `[Earlier conversation summary: ...]` system message. The summary is cached across loop rounds to avoid re-summarization. Falls back to silent trimming if summarization fails.
 
+### Compaction is reversible
+
+`compactSession()` replaces a whole session with a summary of it. Trimming is per-request and touches nothing on disk; compaction is a deliberate, persisted rewrite, so it follows the same rule `rewind` does — **nothing is deleted**.
+
+Compacted rows keep their place and gain a `compacted_batch` number, `getSessionMessages()` skips them, and the summary row is stamped with `compaction_summary_for` so undoing removes it rather than leaving a summary of the conversation beside the conversation.
+
+| Function | Does |
+|---|---|
+| `compactSession(db, id, provider, model, { events })` | summarize, hide the originals, return the batch |
+| `undoCompaction(db, id, batch?)` | restore one compaction, most recent by default |
+| `listSessionCompactions(db, id)` | what is currently folded away |
+
+The order matters and is tested: **summarize first, hide second.** A provider that throws leaves the session exactly as it was rather than hidden behind a summary that never arrived.
+
+Why it changed: compaction used to `DELETE FROM messages`, keeping no archive, no tombstone and emitting no event, so a summary that dropped the one fact that mattered dropped it permanently. That also made it unsafe to trigger automatically — a destructive, lossy, model-authored rewrite is one thing to run deliberately and another to fire on a threshold. `session.compacted` is emitted on the bus so a subscriber can archive, notify or audit.
+
 ## Config Validation
 
 `validateConfig()` in `packages/core/src/config.ts` checks for common configuration errors at startup:
