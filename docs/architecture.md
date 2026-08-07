@@ -223,3 +223,59 @@ Severity differs by caller, deliberately. `validateConfig` and the write gate re
 - All configurable values go in `config.yaml` / `AgentConfig`
 - Tool descriptions: 1-2 sentences max (for local model compatibility)
 - Prefer `node:` prefixed imports for Node.js built-ins
+
+
+## Context slots — contributing a prompt block
+
+Adding a block of context should not require understanding the prompt layout. `systemPrompt.order` / `.custom` can express any layout but demands you know the whole one; a **slot** is the other half of that seam — the author says what they have and how it behaves, and core decides placement, ordering, budget and cache position.
+
+The contributor answers exactly one question: **does this change between turns?**
+
+```ts
+registerContextSlot({
+  id: "on-call",
+  refresh: "turn",        // "reload" → system prompt, part of the cacheable prefix
+                          // "turn"   → behind the history, deliberately outside it
+  budgetTokens: 200,      // core truncates and says that it truncated
+  agents: ["*"],          // same shape as a tool allowlist
+  title: "On call",
+  render(ctx) { return whoIsOnCall(); },   // null renders nothing this turn
+});
+```
+
+and from config, with no code:
+
+```yaml
+prompt:
+  slots:
+    - id: house-rules
+      refresh: reload
+      file: ~/house-rules.md      # re-read each turn, so an edit needs no restart
+    - id: standup
+      refresh: turn
+      title: Standup
+      budgetTokens: 150
+      content: "Standup is at 09:30."
+```
+
+Nobody types a tier name, names a built-in layer, or thinks about cache breakpoints.
+
+### What core owns
+
+| Concern | Decided by |
+|---|---|
+| Which group | derived from `refresh` |
+| Where in the request | core — slots render into the `slots_standing` and `slots_state` layers |
+| Ordering among slots | core (registration order; config slots after registered ones) |
+| Staying inside budget | core truncates at `budgetTokens` and **says** it truncated |
+| A slot that throws or returns nothing | skipped, warned once, turn continues |
+
+That last row matters: `buildChatLiveState` already degrades section-by-section in a `try/catch`, and that behaviour belongs to the framework rather than being re-implemented — and re-forgotten — by every contributor.
+
+### One hard constraint
+
+The per-turn group renders as **one contiguous block**. `applyHistoryCacheBreakpoint` in the Anthropic provider targets `messages.length - 2` and so assumes exactly one volatile trailing message; several separately-placed slots would move that breakpoint into the volatile region and buy a cache *write* every turn that nothing ever reads.
+
+### Adding is not rewriting
+
+There is deliberately **no** `refresh` value that appends to the conversation record. A slot is a view: rendered fresh, replacing last turn's copy. Every duplication bug in `docs/context-assembly-design.md` came from a view being written into the append-only history, so the additive path — the one a contributor reaches for without reading any of this — cannot do it. A plugin that wants to change how history itself is composed replaces a strategy instead (#183, #185).

@@ -44,6 +44,28 @@ export interface ModelEntry {
   maxTokens?: number;
 }
 
+/**
+ * A slot declared in config rather than registered by a plugin.
+ *
+ * `refresh` is the only placement question an author answers: `reload` for
+ * standing knowledge (system prompt, part of the cacheable prefix), `turn` for
+ * things that change every turn (behind the history, deliberately outside it).
+ */
+export interface PromptSlotConfig {
+  id: string;
+  refresh: "reload" | "turn";
+  /** Inline content. Takes precedence over `file`. */
+  content?: string;
+  /** Read fresh each turn, so an edit lands on the next turn without a restart. */
+  file?: string;
+  /** Heading rendered above the content. */
+  title?: string;
+  /** Core truncates past this and says that it truncated. */
+  budgetTokens?: number;
+  /** Which agents see it. `["*"]` or omitted means all. */
+  agents?: string[];
+}
+
 export interface AgentDefinition {
   description?: string;
   model?: string;
@@ -708,6 +730,14 @@ export interface AgentConfig {
     maxDeferrals: number;
   };
   agents: Record<string, AgentDefinition>;
+  /**
+   * Blocks of context contributed without writing code. The code-free half of
+   * the slot registry in `agent/context-slots.ts` — a plugin registers, an
+   * operator declares here, and core places both the same way.
+   */
+  prompt?: {
+    slots?: PromptSlotConfig[];
+  };
   context: {
     directory: string;
     kbDirectory: string;
@@ -1500,6 +1530,7 @@ export function mergeProjectOverlay(
  * `channels.<id>`, plugin config) are intentionally open and never checked.
  */
 const KNOWN_TOP_LEVEL_CONFIG_KEY_MAP: Record<keyof AgentConfig, true> = {
+  prompt: true,
   server: true,
   database: true,
   providers: true,

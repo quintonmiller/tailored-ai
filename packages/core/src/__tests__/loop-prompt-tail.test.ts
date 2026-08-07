@@ -12,6 +12,7 @@
  */
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearContextSlots, registerContextSlot } from "../agent/context-slots.js";
 import { runAgentLoop } from "../agent/loop.js";
 import { newSession } from "../agent/session.js";
 import { DEFAULT_LAYER_ORDER } from "../agent/system-prompt.js";
@@ -189,5 +190,57 @@ describe("runAgentLoop — volatile prompt tail", () => {
     const msgs = seen[0].messages;
     expect(msgs).toHaveLength(2);
     expect(msgs[1].content).toBe("go");
+  });
+});
+
+/**
+ * The point of the slot registry: a contributor names no layer, sets no order,
+ * and its content still lands in the right half of the request.
+ */
+describe("runAgentLoop — context slots", () => {
+  afterEach(() => clearContextSlots());
+
+  it("puts a reload slot in the system prompt, in front of the history", async () => {
+    registerContextSlot({ id: "rules", refresh: "reload", render: () => "HOUSE-RULES" });
+    const seen: ChatParams[] = [];
+
+    await run(seen);
+
+    expect(seen[0].messages[0].role).toBe("system");
+    expect(seen[0].messages[0].content).toContain("HOUSE-RULES");
+  });
+
+  it("puts a turn slot behind the history, where the volatile block lives", async () => {
+    registerContextSlot({ id: "oncall", refresh: "turn", render: () => "ON-CALL-NOW" });
+    const seen: ChatParams[] = [];
+
+    await run(seen);
+
+    const last = seen[0].messages[seen[0].messages.length - 1];
+    expect(last.role).toBe("user");
+    expect(last.content).toContain("ON-CALL-NOW");
+    expect(seen[0].messages[0].content).not.toContain("ON-CALL-NOW");
+  });
+
+  it("hands the slot the turn it is rendering for", async () => {
+    const seenCtx: string[] = [];
+    registerContextSlot({
+      id: "echo",
+      refresh: "turn",
+      render: (c) => {
+        seenCtx.push(c.userMessage);
+        return null;
+      },
+    });
+
+    await run([]);
+
+    expect(seenCtx).toContain("go");
+  });
+
+  it("sends nothing extra when no slot is registered", async () => {
+    const seen: ChatParams[] = [];
+    await run(seen);
+    expect(seen[0].messages.every((m) => !m.content?.includes("HOUSE-RULES"))).toBe(true);
   });
 });
