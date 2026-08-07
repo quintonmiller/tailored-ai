@@ -448,3 +448,65 @@ describe("memory checkpoint before compaction", () => {
     expect((db.prepare("SELECT COUNT(*) AS n FROM notes").get() as { n: number }).n).toBe(0);
   });
 });
+
+/**
+ * The first real run of the checkpoint produced twelve "durable facts" that
+ * were all lines like `[tool]: saved note_6c0a6ccf` copied straight out of the
+ * transcript. Tool results are the most copy-shaped text in a history and carry
+ * nothing worth remembering.
+ */
+describe("checkpoint does not save the transcript back to itself", () => {
+  it("hides tool results from the checkpoint call", async () => {
+    const session = newSession(db, "m", "fake");
+    saveMessage(db, session.id, { role: "user", content: "what is the retry policy" });
+    saveMessage(db, session.id, { role: "assistant", content: "checking" });
+    saveMessage(db, session.id, { role: "tool", content: "saved note_6c0a6ccf", toolCallId: "a" });
+    saveMessage(db, session.id, { role: "assistant", content: "bounded backoff" });
+    const seen: string[] = [];
+    let call = 0;
+    const spy: AIProvider = {
+      id: "fake",
+      name: "fake",
+      supportsTools: false,
+      async chat(p) {
+        call += 1;
+        if (call === 2) seen.push(String(p.messages[1]?.content ?? ""));
+        return {
+          content: call === 1 ? "summary" : "Retry policy is bounded backoff",
+          usage: { input: 0, output: 0 },
+          finishReason: "stop",
+        };
+      },
+    };
+
+    await compactSession(db, session.id, spy, "m", { memory: { agent: "lila" } });
+
+    expect(seen[0]).toContain("bounded backoff");
+    expect(seen[0]).not.toContain("note_6c0a6ccf");
+  });
+
+  it("drops output that is just transcript lines echoed back", async () => {
+    const session = newSession(db, "m", "fake");
+    seed(session.id, 6);
+    let call = 0;
+    const echoer: AIProvider = {
+      id: "fake",
+      name: "fake",
+      supportsTools: false,
+      async chat() {
+        call += 1;
+        return {
+          content: call === 1 ? "summary" : "[tool]: saved note_abc\n[user]: hello there\nAlex prefers bullet points",
+          usage: { input: 0, output: 0 },
+          finishReason: "stop",
+        };
+      },
+    };
+
+    const r = await compactSession(db, session.id, echoer, "m", { memory: { agent: "lila" } });
+
+    expect(r.notesWritten).toBe(1);
+    const notes = db.prepare("SELECT content FROM notes").all() as { content: string }[];
+    expect(notes[0].content).toBe("Alex prefers bullet points");
+  });
+});
