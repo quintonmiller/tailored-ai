@@ -1338,7 +1338,10 @@ export class RoomWatcher {
     return messages.map((m) => {
       const speaker = m.speaker ?? m.authorLabel;
       const body = speaksAs(m.speaker, agent, label, identities) ? condenseOwnLine(m.body) : m.body;
-      return renderTranscriptLine(speaker, m.to, body);
+      // An unresolved label is not "no information" — it is the most
+      // important case there is. Leaving the marker off there would make
+      // its absence meaningful, which is the failure this is fixing.
+      return renderTranscriptLine(speaker, m.to, body, identities.get(speaker)?.kind ?? "unknown");
     });
   }
 
@@ -2213,7 +2216,10 @@ export class RoomWatcher {
     const lines = messages.map((m) => {
       const speaker = m.speaker ?? m.authorLabel;
       const body = speaksAs(m.speaker, sub.agent, label, identities) ? condenseOwnLine(m.body) : m.body;
-      return renderTranscriptLine(speaker, m.to, body);
+      // An unresolved label is not "no information" — it is the most
+      // important case there is. Leaving the marker off there would make
+      // its absence meaningful, which is the failure this is fixing.
+      return renderTranscriptLine(speaker, m.to, body, identities.get(speaker)?.kind ?? "unknown");
     });
 
     const recipient = [...messages].reverse().find((m) => m.speaker && m.speaker !== label)?.speaker;
@@ -2288,7 +2294,10 @@ export class RoomWatcher {
     const render = (m: RoomMessage): string => {
       const speaker = m.speaker ?? m.authorLabel;
       const body = speaksAs(m.speaker, agent, label, identities) ? condenseOwnLine(m.body) : m.body;
-      return renderTranscriptLine(speaker, m.to, body);
+      // An unresolved label is not "no information" — it is the most
+      // important case there is. Leaving the marker off there would make
+      // its absence meaningful, which is the failure this is fixing.
+      return renderTranscriptLine(speaker, m.to, body, identities.get(speaker)?.kind ?? "unknown");
     };
 
     // Built before the allocation rather than after it, so the budget can be

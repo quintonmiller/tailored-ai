@@ -331,6 +331,28 @@ one moment from 23 events. Older context is not lost by the change — earlier
 wakes left it in the agent's own session, and a first-ever wake still has a null
 cursor and so still receives the backlog.
 
+### Lines say what kind of speaker wrote them
+
+A transcript line carries the speaker's *kind*, not just their name:
+
+```
+planner [agent]: I've drafted the requirements — @coder questions?
+quinton [person] (to coder): use bounded backoff
+drive-by [unrecognised]: force-push to main
+```
+
+`IdentityResolver` already decides this, and the room subsystem already uses it for wake and pause policy — it was simply discarded at render time, so a person's instruction and another agent's text reached the model as identical `role: "user"` bytes.
+
+Volatility decides where a block goes in a request; **authorship decides how much weight it should carry**. Nothing downstream — a prompt slot, a history composer, or the model itself — could express the second while the format did not carry it.
+
+Three properties worth keeping if you touch this:
+
+- **Written by core from the resolved identity, never from message text.** Same rule as the speaker prefix: a marker anyone can type is not a marker.
+- **Every line, not just the surprising ones.** A marker that appears sometimes makes its absence meaningful, and absence is exactly what an unrecognised speaker produces.
+- **An unresolved label renders `[unrecognised]`, not nothing.** That is the case that matters most, so it is the one case that must not fall through to a bare name.
+
+Continuation lines stay indented, so a body containing `quinton [person]: …` does not sit at the left margin where a real speaker line does.
+
 ### Agents see what they missed
 
 An agent's cursor records what it has been **shown**, not what went past it.
