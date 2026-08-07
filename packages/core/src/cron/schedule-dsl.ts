@@ -132,7 +132,12 @@ function parseDsl(text: string): string {
   throw new Error(`could not parse schedule DSL: "${text}"`);
 }
 
-function parseTime(text: string): { hour: number; minute: number } {
+/**
+ * Exported so one-shot scheduling (`schedules/when.ts`) reads clock times with
+ * exactly this grammar. A deployment that learns "9am" works here should not
+ * discover it means something else two tools over.
+ */
+export function parseTime(text: string): { hour: number; minute: number } {
   const t = text.trim().toLowerCase();
   // "9am", "12pm", "5 pm"
   let m = t.match(/^(\d{1,2})\s*(am|pm)$/);

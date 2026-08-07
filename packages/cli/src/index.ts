@@ -35,6 +35,7 @@ import {
   resolveProjectFromCwd,
   resolveUiProvider,
   runAgentLoop,
+  ScheduleRunner,
   TaskWatcher,
   TypedEventBus,
   validateConfig,
@@ -236,11 +237,20 @@ async function runServer(
   };
   startRooms();
 
+  // Wakes agents booked for themselves. Started after rooms because a room
+  // wake needs the watcher, and resolved lazily for the same reason
+  // AutopilotWorker resolves the task watcher lazily: a reload replaces
+  // neither object, but the ordering guarantee is not worth relying on.
+  const schedules = new ScheduleRunner({ runtime, getRoomWatcher: () => roomWatcher });
+  schedules.start();
+
   // Hot-reload: the lifecycle manager reconciles the channel set against
   // the new config. The outbound registry then re-syncs off whatever the
   // manager produced — for every channel, not just Discord.
   runtime.onReload(async () => {
     scheduler.restart();
+    // Picks up a changed tickSeconds, and the `enabled` kill-switch.
+    schedules.restart();
 
     // runtime.reload() calls events.clear(), which drops the builtin
     // plugins' subscriptions (a latent pre-#142 bug — the hardcoded

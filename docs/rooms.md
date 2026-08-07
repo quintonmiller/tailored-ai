@@ -828,6 +828,21 @@ Note what this does and does not do. It bounds how often an agent is
 *scheduled*. An entry naming ten rooms starts a turn per room unless those
 rooms opted into being read together — see below.
 
+### A fourth trigger, outside the queue
+
+An agent can also book its own wake into a room with the `schedule` tool — see
+[docs/schedules.md](./schedules.md). That path runs `runScheduledWake`, which
+shares `runCheckIn`'s tail, so it is charged the hourly ceiling, takes its place
+in the room's turn chain, and can end with `pass` exactly like any other turn.
+
+It is deliberately **not** routed through the wake queue. The queue exists to
+damp traffic: it collapses an agent's triggers into one entry and holds them
+behind `minWakeIntervalMinutes`. Both are wrong for a booked wake. Collapsing it
+into a concurrent message wake would drop the note the agent wrote, and the note
+*is* the wake. And a cooldown meant to smooth a busy room should not move a time
+the agent picked on purpose. A scheduled wake is closer to a cron job than to a
+check-in, and it is timed like one.
+
 ### Reading several rooms in one turn
 
 A subscription can ask to be read alongside the agent's other batched rooms:

@@ -685,6 +685,28 @@ export interface AgentConfig {
     enabled: boolean;
     jobs: CronJobConfig[];
   };
+  /**
+   * Wakes agents book for themselves through the `schedule` tool.
+   *
+   * Distinct from `cron`, which the operator authors here: these are written at
+   * runtime, scoped to one agent, and can name a single future moment as well
+   * as a recurrence. The limits are the only thing standing between a model
+   * that likes scheduling and a deployment full of timers, so they are config
+   * rather than constants.
+   */
+  schedules: {
+    enabled: boolean;
+    /** How often the due set is checked. Bounds how late a wake can be. */
+    tickSeconds: number;
+    /** Live schedules one agent may hold at once. */
+    maxPerAgent: number;
+    /** Floor on how often a recurrence may fire. */
+    minIntervalMinutes: number;
+    /** Furthest ahead a one-shot may be booked. */
+    maxHorizonDays: number;
+    /** Retries allowed when a room refuses the wake for being at its ceiling. */
+    maxDeferrals: number;
+  };
   agents: Record<string, AgentDefinition>;
   context: {
     directory: string;
@@ -1285,7 +1307,12 @@ export interface AgentConfig {
   };
 }
 
-const DEFAULT_CONFIG: AgentConfig = {
+/**
+ * Exported so other modules can fall back to a default without restating it.
+ * The convention is that no call site duplicates a value that lives here; that
+ * only works if here is reachable.
+ */
+export const DEFAULT_CONFIG: AgentConfig = {
   server: {
     port: 3000,
     host: "127.0.0.1",
@@ -1327,6 +1354,14 @@ const DEFAULT_CONFIG: AgentConfig = {
   cron: {
     enabled: false,
     jobs: [],
+  },
+  schedules: {
+    enabled: true,
+    tickSeconds: 30,
+    maxPerAgent: 20,
+    minIntervalMinutes: 15,
+    maxHorizonDays: 365,
+    maxDeferrals: 3,
   },
   context: {
     directory: "./data/context",
@@ -1477,6 +1512,7 @@ const KNOWN_TOP_LEVEL_CONFIG_KEY_MAP: Record<keyof AgentConfig, true> = {
   plugins: true,
   externalAgents: true,
   cron: true,
+  schedules: true,
   agents: true,
   context: true,
   tools: true,
