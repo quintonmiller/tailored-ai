@@ -503,7 +503,55 @@ export function stripOrphanedToolMessages(messages: Message[]): Message[] {
       openIds = new Set(); // user/system message closes any open tool-call group
     }
   }
-  return result;
+  return dropUnansweredToolCalls(result);
+}
+
+/**
+ * The mirror of the pass above: an assistant `tool_calls` with no `tool_result`
+ * after it.
+ *
+ * Every strict provider rejects this outright — DeepSeek "must be followed by
+ * tool messages", OpenAI "no tool output found for function call", Anthropic
+ * "`tool_use` ids were found without `tool_result` blocks" — so one such pair
+ * anywhere in the window fails the whole request, and the fallback chain then
+ * fails it again on every rung. Observed in production as three provider errors
+ * and 26 retries for a single turn.
+ *
+ * Only the *forward* direction was handled, on the reasoning that the reverse
+ * was unreachable: results are dropped from the front, where their parent goes
+ * too. That is true of trimming alone, and it stops being true the moment
+ * anything else edits the window — the pass above already resets `openIds` on a
+ * user or system message, so a user turn landing between a call and its result
+ * drops the result and leaves the call unanswered.
+ *
+ * "Unreachable, but nothing enforces it" is not a property worth relying on
+ * when the failure mode is every provider refusing the request.
+ *
+ * The unanswered *calls* are removed rather than the whole message, so the
+ * assistant's text survives; a message left with neither text nor calls is
+ * dropped, since it would carry nothing.
+ */
+export function dropUnansweredToolCalls(messages: Message[]): Message[] {
+  const answered = new Set<string>();
+  for (const msg of messages) {
+    if (msg.role === "tool" && msg.toolCallId) answered.add(msg.toolCallId);
+  }
+
+  const out: Message[] = [];
+  for (const msg of messages) {
+    if (msg.role !== "assistant" || !msg.toolCalls?.length) {
+      out.push(msg);
+      continue;
+    }
+    const kept = msg.toolCalls.filter((tc) => answered.has(tc.id));
+    if (kept.length === msg.toolCalls.length) {
+      out.push(msg);
+      continue;
+    }
+    if (kept.length === 0 && !msg.content) continue;
+    out.push({ ...msg, toolCalls: kept.length > 0 ? kept : undefined });
+  }
+  return out;
 }
 
 export function trimHistory(messages: Message[], maxTokens: number): Message[] {
