@@ -516,6 +516,39 @@ export function trimHistory(messages: Message[], maxTokens: number): Message[] {
   return stripOrphanedToolMessages(ensureUserMessagePresent(messages.slice(start), messages));
 }
 
+/** Roughly what `markDroppedHistory`'s line costs, reserved before trimming. */
+const DROP_MARKER_TOKENS = 32;
+
+/**
+ * Say that the conversation does not start where it appears to.
+ *
+ * `trimHistory` drops the oldest messages and returns the rest, so the model
+ * was handed a conversation beginning mid-thought with nothing to indicate
+ * anything preceded it. It cannot distinguish "this is where we began" from
+ * "the beginning was evicted", and it answers as though the former.
+ *
+ * The mechanism for saying so already existed — `summarizeOnTrim` inserts
+ * `[Earlier conversation summary: …]` — but it has no default, so the silent
+ * path is the one nearly every deployment runs.
+ *
+ * Deliberately a statement of fact and not an instruction. Telling the model to
+ * "ask if you need anything from earlier" is the shape of instruction that gets
+ * taken up far more often than intended, and an agent that opens every turn by
+ * asking about its own trimmed history is worse than one that does not know.
+ */
+export function markDroppedHistory(history: Message[], trimmed: Message[]): Message[] {
+  const dropped = history.length - trimmed.length;
+  if (dropped <= 0) return trimmed;
+  const noun = dropped === 1 ? "message" : "messages";
+  return [
+    {
+      role: "user",
+      content: `[System: ${dropped} earlier ${noun} in this conversation are no longer shown. It continues from here.]`,
+    },
+    ...trimmed,
+  ];
+}
+
 /**
  * Safety net: if trimming dropped every user-role message, splice the
  * first one back in. Providers (vLLM, OpenAI, Anthropic) all reject
@@ -1146,7 +1179,13 @@ async function _runAgentLoopBody(
       trimmed = result.messages;
       if (result.summary) cachedSummary = result.summary;
     } else {
-      trimmed = trimHistory(history, historyBudget);
+      // Reserve room for the marker before trimming rather than prepending it
+      // afterwards, which would push the request back over the budget it was
+      // just trimmed to fit.
+      const historyTokens = history.reduce((n, m) => n + estimateTokens(m), 0);
+      const overBudget = historyTokens > historyBudget;
+      trimmed = trimHistory(history, overBudget ? Math.max(0, historyBudget - DROP_MARKER_TOKENS) : historyBudget);
+      trimmed = markDroppedHistory(history, trimmed);
     }
     const messages: Message[] = [{ role: "system", content: fullSystemPrompt }, ...trimmed];
     if (tailMsg) messages.push(tailMsg);

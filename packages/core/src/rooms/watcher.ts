@@ -1350,8 +1350,19 @@ export class RoomWatcher {
       // "since this cursor" with the OLDEST messages first — so in a busy room
       // the very message that woke us could sit past the end of the page. Fall
       // back to the most recent page, which always contains it.
+      //
+      // The cost of that jump is real and was invisible: everything between the
+      // cursor and the newest page is skipped, the cursor then advances past
+      // it, and the agent was handed the result under the heading "New
+      // messages:" as though it were the whole story. Recorded here so the
+      // prompt can say what happened. Keyed by room, written immediately before
+      // the prompt that reads it, and per-room turns are chained — so the value
+      // cannot be another room's.
       if (raw.length >= limits.maxBacklog) {
         raw = await backend.fetchSince(ref.id, null, limits.maxBacklog);
+        this.skippedAhead.add(sub.roomRef);
+      } else {
+        this.skippedAhead.delete(sub.roomRef);
       }
 
       this.noteRoomReachable(sub.roomRef);
@@ -1382,6 +1393,17 @@ export class RoomWatcher {
    * and says so.
    */
   private roomFailures = new Map<string, { count: number; quietUntil: number }>();
+
+  /**
+   * Rooms whose last read had to jump to the newest page, skipping messages.
+   * Read by the wake prompt so the heading can be honest about it.
+   */
+  private skippedAhead = new Set<string>();
+
+  /** Whether the last read of this room skipped ahead, for the prompt builder. */
+  private didSkipAhead(roomRef: string): boolean {
+    return this.skippedAhead.has(roomRef);
+  }
 
   private isQuarantined(roomRef: string): boolean {
     const entry = this.roomFailures.get(roomRef);
@@ -2211,7 +2233,16 @@ export class RoomWatcher {
       // rooms, and only its global instructions existed before.
       ...(role ? [`Your role here: ${role}`] : []),
       "",
-      "New messages:",
+      ...(this.didSkipAhead(sub.roomRef)
+        ? [
+            // Honest about the jump rather than presenting the newest page as
+            // the whole story. No count: the number skipped is not known
+            // without another round trip, and inventing one would be worse
+            // than saying plainly that there is a gap.
+            `This room moved faster than the last ${this.readLimits(sub.roomRef).maxBacklog} messages, so some between your last turn and these were skipped.`,
+            "Most recent messages:",
+          ]
+        : ["New messages:"]),
       ...lines,
       "",
       // Don't ask for a name it would then repeat: the envelope already carries

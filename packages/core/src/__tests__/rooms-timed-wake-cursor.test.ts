@@ -218,3 +218,31 @@ describe("scheduled wake reads from the cursor", () => {
     expect(runAgentLoopMock).not.toHaveBeenCalled();
   });
 });
+
+describe("a room that outran its backlog window says so", () => {
+  it("stops calling the newest page 'New messages' when it skipped ahead", async () => {
+    // maxBacklog is 30 by default; 40 messages guarantees the cursor-based
+    // page comes back full and the fetch jumps to the newest page instead.
+    for (let i = 0; i < 40; i++) await say("quinton", `chatter ${i}`);
+    const watcher = new RoomWatcher({ runtime: makeRuntime(), store });
+
+    await watcher.pollOnce(AGENT, ROOM);
+
+    // Everything between the cursor and the newest page is skipped and the
+    // cursor then advances past it, so presenting the page as the whole story
+    // was a claim the code could not support.
+    expect(lastPrompt()).toContain("moved faster than the last 30 messages");
+    expect(lastPrompt()).toContain("Most recent messages:");
+    expect(lastPrompt()).not.toContain("New messages:");
+  });
+
+  it("keeps the plain heading when nothing was skipped", async () => {
+    await say("quinton", "just the one");
+    const watcher = new RoomWatcher({ runtime: makeRuntime(), store });
+
+    await watcher.pollOnce(AGENT, ROOM);
+
+    expect(lastPrompt()).toContain("New messages:");
+    expect(lastPrompt()).not.toContain("moved faster than");
+  });
+});
