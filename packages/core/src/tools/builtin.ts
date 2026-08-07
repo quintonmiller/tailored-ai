@@ -13,10 +13,12 @@
  */
 
 import { resolve } from "node:path";
+import { DEFAULT_CONFIG } from "../config.js";
 import { IdentityResolver } from "../rooms/identities.js";
 import { LocalRoomBackend } from "../rooms/local.js";
 import { getRoomBackend, listRoomBackends, registerRoomBackend } from "../rooms/registry.js";
 import { RoomStore } from "../rooms/store.js";
+import { ScheduleStore } from "../schedules/store.js";
 import { createEgressPolicy } from "../security/egress-policy.js";
 import { createTaskBackend } from "../tasks/factory.js";
 import { AskUserTool } from "./ask-user.js";
@@ -36,6 +38,7 @@ import { ProjectsTool } from "./projects.js";
 import { ReadTool } from "./read.js";
 import { RecallTool } from "./recall.js";
 import { RoomTool } from "./room.js";
+import { ScheduleTool } from "./schedule.js";
 import { TaskQueryTool, TasksTool } from "./tasks.js";
 import { registerToolFactory } from "./tool-factories.js";
 import { WebFetchTool } from "./web-fetch.js";
@@ -199,6 +202,29 @@ registerToolFactory("room", (config, ctx) => {
       deliverAgentMessage: ctx.deliverAgentMessage as
         | ((to: string, from: string, body: string) => Promise<string>)
         | undefined,
+    }),
+  ];
+});
+
+// Registers whenever there is a database, for the same reason `room` does: an
+// agent listing `schedule` in its `tools:` must resolve even when rooms are
+// down, and a wake booked into a private session needs no room at all.
+registerToolFactory("schedule", (config, ctx) => {
+  if (config.schedules?.enabled === false) return [];
+  if (!ctx.db) return [];
+  const db = ctx.db;
+  return [
+    new ScheduleTool({
+      store: new ScheduleStore(db),
+      rooms: new RoomStore(db, ctx.events),
+      // Read per call, not captured: config is hot-reloadable, and a limit the
+      // operator has just raised should apply to the next booking.
+      limits: () => ({
+        maxPerAgent: config.schedules?.maxPerAgent ?? DEFAULT_CONFIG.schedules.maxPerAgent,
+        minIntervalMinutes: config.schedules?.minIntervalMinutes ?? DEFAULT_CONFIG.schedules.minIntervalMinutes,
+        maxHorizonDays: config.schedules?.maxHorizonDays ?? DEFAULT_CONFIG.schedules.maxHorizonDays,
+      }),
+      events: ctx.events,
     }),
   ];
 });

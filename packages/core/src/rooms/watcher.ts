@@ -25,6 +25,7 @@ import { findOrCreateSession } from "../agent/session.js";
 import type { Subscription } from "../events.js";
 import { PASSTHROUGH_GATE } from "../notifications/dedup.js";
 import type { AgentRuntime } from "../runtime.js";
+import { describeBooking, lateLine, recurringLine, type WakeContext } from "../schedules/wake-context.js";
 import { addresses, extractLeadingAddressees, renderTranscriptLine } from "./envelope.js";
 import { enrichRoomMessage, IdentityResolver } from "./identities.js";
 import { getRoomBackend, listRoomBackends, onRoomBackendChange } from "./registry.js";
@@ -57,7 +58,16 @@ export function roomPostedKey(roomRef: string): string {
 }
 
 /** Why an agent was woken. Surfaced in the activity record. */
-export type WakeReason = "named" | "loose-question" | "all" | "check-in" | "asked";
+export type WakeReason = "named" | "loose-question" | "all" | "check-in" | "asked" | "scheduled";
+
+/**
+ * What became of a wake the agent booked for itself.
+ *
+ * `at-ceiling` is retryable and `gone` is not, which is the whole reason this
+ * is three values rather than a boolean: the scheduler defers the first and
+ * retires the schedule on the second.
+ */
+export type ScheduledWakeOutcome = "ran" | "at-ceiling" | "gone";
 
 export interface RoomWatcherLimits {
   maxWakesPerHour: number;
@@ -260,6 +270,8 @@ export function describeWakeReason(reason: WakeReason): string {
       return "scheduled check-in";
     case "asked":
       return "asked for a status update";
+    case "scheduled":
+      return "a wake it scheduled for itself";
   }
 }
 
@@ -872,9 +884,67 @@ export class RoomWatcher {
       'Speak only if there is something worth saying. If there is not, call room(action="pass") — a check-in that reports nothing is noise.',
     ].join("\n");
 
-    await this.onRoomTurn(roomRef, `check-in:${agent} ${roomRef}`, () =>
-      this.runPrompted(sub, prompt, label, "check-in"),
-    );
+    await this.onRoomTurn(roomRef, `check-in:${agent} ${roomRef}`, async () => {
+      await this.runPrompted(sub, prompt, label, "check-in");
+    });
+  }
+
+  /**
+   * A wake the agent booked for itself, delivered into a room.
+   *
+   * Shares `runCheckIn`'s tail — `onRoomTurn` → `runPrompted` — so it inherits
+   * the per-room turn chain, the in-flight guard, the hourly wake ceiling,
+   * `pass` handling and repeat suppression. What differs is the prompt: a
+   * check-in asks "is anything worth saying", and this hands back the note the
+   * agent wrote when it decided this moment mattered.
+   *
+   * Deliberately not routed through the `WakeQueue`, unlike every
+   * traffic-driven wake. The queue collapses an agent's triggers into one entry
+   * and holds them behind `minWakeIntervalMinutes`; both are wrong here.
+   * Collapsing would drop the note, and the note is the wake. A cooldown meant
+   * to damp a busy room should not move a time the agent picked on purpose.
+   */
+  async runScheduledWake(agent: string, roomRef: string, ctx: WakeContext): Promise<ScheduledWakeOutcome> {
+    if (this.runtime.isAgentsPaused("autonomous")) return "at-ceiling";
+
+    // Every reason the wake has nowhere to land: the agent left the room, the
+    // room was archived, or it never existed. All permanent, so the scheduler
+    // retires the schedule rather than retrying into the void.
+    const sub = this.store.getSubscription(agent, roomRef);
+    if (!sub) return "gone";
+    const room = this.store.getRoomByRef(roomRef);
+    if (!room || room.archivedAt) return "gone";
+
+    const identities = this.identities();
+    const label = identities.labelForAgent(agent);
+    const recent = await this.fetchBacklog({ ...sub, cursor: null });
+    const transcript = recent.slice(-10).map((m) => {
+      const speaker = m.speaker ?? m.authorLabel;
+      const body = speaksAs(m.speaker, agent, label, identities) ? condenseOwnLine(m.body) : m.body;
+      return renderTranscriptLine(speaker, m.to, body);
+    });
+
+    this.wakeReasons.set(`${agent} ${roomRef}`, "scheduled");
+    const prompt = [
+      `Room "${room.name}". You are ${label}. ${todayLine()}`,
+      `This is a wake you scheduled${describeBooking(ctx, new Date())}. Nobody has asked you anything.`,
+      `Your note to yourself: "${ctx.note}"`,
+      ...lateLine(ctx.lateBy),
+      ...recurringLine(ctx),
+      ...(room.purpose ? [`Purpose: ${room.purpose}`] : []),
+      ...(sub.role ? [`Your role here: ${sub.role}`] : []),
+      "",
+      ...(transcript.length > 0 ? ["Recent conversation:", ...transcript, ""] : []),
+      "Act on the note.",
+      'If acting on it turns out to need nothing said here, call room(action="pass") — the wake still did its job.',
+    ].join("\n");
+
+    console.log(`[schedules] ${ctx.scheduleId} waking ${agent} in ${roomRef}`);
+    let outcome: ScheduledWakeOutcome = "ran";
+    await this.onRoomTurn(roomRef, `scheduled:${agent} ${roomRef}`, async () => {
+      outcome = await this.runPrompted(sub, prompt, label, "scheduled");
+    });
+    return outcome;
   }
 
   private armPoll(sub: RoomSubscription): void {
@@ -1909,14 +1979,23 @@ export class RoomWatcher {
    * the room. Shares the reply path with a normal wake, so `pass`, the
    * duplicate-addressee lift and repeat suppression all behave the same.
    */
-  private async runPrompted(sub: RoomSubscription, prompt: string, label: string, reason: WakeReason): Promise<void> {
+  private async runPrompted(
+    sub: RoomSubscription,
+    prompt: string,
+    label: string,
+    reason: WakeReason,
+  ): Promise<ScheduledWakeOutcome> {
     const key = `${sub.agent} ${sub.roomRef}`;
-    if (this.running.has(key)) return;
+    // Both refusals are temporary — the turn in flight will end, and the hourly
+    // allowance resets — so they report `at-ceiling`, which the scheduler
+    // retries. Only the caller that can act on that distinction reads it; the
+    // status-update path ignores the return as before.
+    if (this.running.has(key)) return "at-ceiling";
 
     const limits = this.readLimits(sub.roomRef);
     if (!this.store.tryConsumeWake(sub.agent, sub.roomRef, limits.maxWakesPerHour)) {
-      console.warn(`[rooms] ${sub.agent} is at its wake ceiling; skipping its status update.`);
-      return;
+      console.warn(`[rooms] ${sub.agent} is at its wake ceiling; skipping this turn (${describeWakeReason(reason)}).`);
+      return "at-ceiling";
     }
 
     this.running.add(key);
@@ -1925,6 +2004,7 @@ export class RoomWatcher {
     } finally {
       this.running.delete(key);
     }
+    return "ran";
   }
 
   /**

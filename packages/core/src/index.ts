@@ -258,7 +258,7 @@ export type { ConfigWriteHost, ConfigWriteResult } from "./config-write.js";
 export { ConfigWriteRejected, updateRawConfig, writeRawConfigText } from "./config-write.js";
 export { ensureContextDir, loadAllContext, loadContextFiles, migrateContextDir } from "./context.js";
 export type { CompiledSchedule } from "./cron/schedule-dsl.js";
-export { compileSchedule, scheduleToCron } from "./cron/schedule-dsl.js";
+export { compileSchedule, parseTime, scheduleToCron } from "./cron/schedule-dsl.js";
 export { CronScheduler } from "./cron/scheduler.js";
 export { builtinDashboardWidgets } from "./dashboard/builtin.js";
 // Dashboard widget seam. Importing builtin.js self-registers the default
@@ -784,9 +784,39 @@ export {
   RoomWatcher,
   type RoomWatcherLimits,
   type RoomWatcherOptions,
+  type ScheduledWakeOutcome,
 } from "./rooms/watcher.js";
 export type { RuntimeOptions } from "./runtime.js";
 export { AgentRuntime } from "./runtime.js";
+export { ScheduleRunner, type ScheduleRunnerOptions } from "./schedules/runner.js";
+export {
+  fromDbTime,
+  type NewSchedule,
+  type ScheduleKind,
+  type ScheduleRow,
+  type ScheduleStatus,
+  ScheduleStore,
+  type ScheduleTargetKind,
+  toDbTime,
+} from "./schedules/store.js";
+export {
+  describeBooking,
+  lateLine,
+  recurringLine,
+  type WakeContext,
+} from "./schedules/wake-context.js";
+export {
+  formatDistance,
+  formatLocal,
+  nextOccurrence,
+  occurrenceGapSeconds,
+  type ParsedWhen,
+  parseEvery,
+  parseWhen,
+  type Recurrence,
+  WHEN_FORMS,
+  WhenParseError,
+} from "./schedules/when.js";
 export {
   createEgressPolicy,
   EgressDeniedError,
