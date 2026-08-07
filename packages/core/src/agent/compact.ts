@@ -246,11 +246,20 @@ async function saveDurableFacts(
   memory: NonNullable<CompactOptions["memory"]>,
 ): Promise<number> {
   try {
+    // Tool results are stripped before the model sees this. Left in, they are
+    // what it writes back: the first run of this produced twelve "facts" that
+    // were all lines like `[tool]: saved note_6c0a6ccf` copied out of the
+    // transcript. A tool result is a record of a call, not something worth
+    // remembering, and it is the most copy-shaped text in the history.
+    const speech = transcript
+      .split("\n")
+      .filter((l) => !l.startsWith("[tool]:"))
+      .join("\n");
     const res = await provider.chat({
       model,
       messages: [
         { role: "system", content: memory.prompt ?? DEFAULT_MEMORY_CHECKPOINT_PROMPT },
-        { role: "user", content: transcript },
+        { role: "user", content: speech },
       ],
       temperature: 0.3,
     });
@@ -258,6 +267,9 @@ async function saveDurableFacts(
       .split("\n")
       .map((l) => l.replace(/^\s*(?:[-*\u2022]|\d+[.)])\s*/, "").trim())
       .filter((l) => l.length > 8)
+      // Anything still wearing a transcript role prefix is quoted history
+      // rather than a fact the model decided was worth keeping.
+      .filter((l) => !/^\[(?:tool|user|assistant|system)\]:/i.test(l))
       .slice(0, memory.maxNotes ?? 40);
     for (const content of lines) {
       createNote(db, {
