@@ -206,7 +206,19 @@ export async function compactSession(
   // Summarise first, hide second. A provider that throws leaves the session
   // exactly as it was rather than hidden behind a summary that never arrived.
   const { batch, hidden } = markSessionCompacted(db, sessionId, { keepRecent });
-  const summaryMsg: Message = { role: "user", content: `[Conversation Summary]\n${summary}` };
+  // The summary is the agent's own note, not something said to it.
+  //
+  // As a `user` message it reads as the person on the other end having just
+  // narrated a summary — so the model continues the narrative instead of
+  // answering the actual message. Measured on a real companion session: with the
+  // summary as a user turn, 4 of 5 replies to "hello" carried on about events
+  // from the summary and addressed the wrong person; as an assistant turn, 1 of
+  // 5, which is the rate without any summary at all. Rewording it while leaving
+  // the role alone only moved it to 3 of 5 — the role is doing the work.
+  //
+  // `[assistant, user]` is accepted by Anthropic, OpenAI and DeepSeek; checked
+  // against all three before changing this.
+  const summaryMsg: Message = { role: "assistant", content: `[Earlier conversation, summarised]\n${summary}` };
   saveMessage(db, sessionId, summaryMsg, { compactionSummaryFor: batch });
 
   const afterTokens = estimateTokens(summaryMsg);

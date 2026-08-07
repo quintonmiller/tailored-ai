@@ -72,7 +72,7 @@ describe("compaction is reversible", () => {
 
     const visible = getSessionMessages(db, session.id);
     expect(visible).toHaveLength(1);
-    expect(visible[0].content).toContain("[Conversation Summary]");
+    expect(visible[0].content).toContain("[Earlier conversation, summarised]");
   });
 
   it("keeps every original row instead of deleting it", async () => {
@@ -97,7 +97,7 @@ describe("compaction is reversible", () => {
     expect(visible).toHaveLength(6);
     // A summary of the conversation sitting next to the conversation is worse
     // than either alone.
-    expect(visible.some((m) => m.content?.includes("[Conversation Summary]"))).toBe(false);
+    expect(visible.some((m) => m.content?.includes("[Earlier conversation, summarised]"))).toBe(false);
   });
 
   it("undoes one step at a time, like rewind", async () => {
@@ -220,7 +220,7 @@ describe("partial compaction", () => {
     const visible = getSessionMessages(db, session.id);
     // 4 kept + 1 summary.
     expect(visible).toHaveLength(5);
-    expect(visible.filter((m) => m.content?.includes("[Conversation Summary]"))).toHaveLength(1);
+    expect(visible.filter((m) => m.content?.includes("[Earlier conversation, summarised]"))).toHaveLength(1);
   });
 
   it("puts the summary before the messages it precedes", async () => {
@@ -233,7 +233,7 @@ describe("partial compaction", () => {
     // The summary row is written last and carries the highest id; ordering on
     // the batch is what stops the model reading the ending and then a synopsis
     // of the beginning.
-    expect(visible[0].content).toContain("[Conversation Summary]");
+    expect(visible[0].content).toContain("[Earlier conversation, summarised]");
     expect(visible[1].content).toBe("message 6");
     expect(visible.at(-1)?.content).toBe("message 9");
   });
@@ -279,7 +279,7 @@ describe("partial compaction", () => {
 
     const visible = getSessionMessages(db, session.id);
     expect(visible).toHaveLength(10);
-    expect(visible.some((m) => m.content?.includes("[Conversation Summary]"))).toBe(false);
+    expect(visible.some((m) => m.content?.includes("[Earlier conversation, summarised]"))).toBe(false);
   });
 });
 
@@ -508,5 +508,36 @@ describe("checkpoint does not save the transcript back to itself", () => {
     expect(r.notesWritten).toBe(1);
     const notes = db.prepare("SELECT content FROM notes").all() as { content: string }[];
     expect(notes[0].content).toBe("Alex prefers bullet points");
+  });
+});
+
+/**
+ * A summary written as a `user` turn reads as the person on the other end
+ * having just narrated it, so the model continues the narrative instead of
+ * answering. Measured on a real companion session: 4 of 5 replies carried on
+ * about events from the summary and addressed the wrong person. As an assistant
+ * turn: 1 of 5 — the rate with no summary at all.
+ */
+describe("the summary is the agent's own note", () => {
+  it("is written as an assistant turn, not as something the user said", async () => {
+    const session = newSession(db, "m", "fake");
+    seed(session.id, 6);
+
+    await compactSession(db, session.id, summarizer(), "m");
+
+    const visible = getSessionMessages(db, session.id);
+    expect(visible[0].role).toBe("assistant");
+    expect(visible[0].content).toContain("[Earlier conversation, summarised]");
+  });
+
+  it("still leaves a user message present for providers that require one", async () => {
+    const session = newSession(db, "m", "fake");
+    seed(session.id, 10);
+
+    await compactSession(db, session.id, summarizer(), "m", { keepRecent: 4 });
+
+    // Anthropic, OpenAI and DeepSeek all accept [assistant, user]; what they
+    // reject is a request with no user turn at all.
+    expect(getSessionMessages(db, session.id).some((m) => m.role === "user")).toBe(true);
   });
 });
