@@ -213,10 +213,39 @@ export function addresses(to: string[], identity: string): boolean {
  * every other agent's prompt. Indenting makes a forged line visibly a
  * continuation.
  */
-export function renderTranscriptLine(who: string, to: string[], body: string): string {
+/**
+ * How a speaker's *kind* is shown, when the caller knows it.
+ *
+ * `IdentityResolver` decides whether a participant is an agent, a person, or
+ * nobody it recognises, and the room subsystem already uses that to decide wake
+ * and pause policy — but it was dropped at render time, so a person's
+ * instruction and another agent's text reached the model as the same
+ * `role: "user"` bytes with nothing to tell them apart.
+ *
+ * Volatility decides where a block goes; authorship decides how much weight it
+ * should carry. Nothing downstream — a prompt slot, a history composer, or the
+ * model — could express the second, because the format did not carry it.
+ *
+ * Written by core from the resolved identity, never from message text, for the
+ * same reason the speaker prefix is: a marker anyone can type is not a marker.
+ * Continuation lines stay indented, so a body cannot open what looks like a new
+ * speaker line either.
+ */
+const KIND_LABEL: Record<string, string> = {
+  agent: "agent",
+  human: "person",
+  unknown: "unrecognised",
+};
+
+export function renderTranscriptLine(who: string, to: string[], body: string, kind?: string): string {
   const addressed = to.length > 0 ? ` (to ${to.join(", ")})` : "";
   const indented = body.split("\n").join("\n    ");
-  return `${who}${addressed}: ${indented}`;
+  // Marked on every line rather than only the surprising ones: a marker that
+  // appears sometimes makes its absence meaningful, and absence is exactly what
+  // an unrecognised speaker would produce.
+  const label = kind ? KIND_LABEL[kind] : undefined;
+  const speaker = label ? `${who} [${label}]` : who;
+  return `${speaker}${addressed}: ${indented}`;
 }
 
 /**
