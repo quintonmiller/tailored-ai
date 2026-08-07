@@ -1,4 +1,5 @@
 import type { MemoryBackend, MemoryFragment } from "../memory/interface.js";
+import { memoryScope } from "../memory/scope.js";
 import type { EmbeddingProvider } from "../providers/embedding.js";
 import { type RecallHit, recallQueryAsync } from "../tools/recall-query.js";
 
@@ -20,6 +21,16 @@ export interface MemoryInjectOptions {
    * vector to run semantic search alongside keyword recall.
    */
   embedder?: EmbeddingProvider;
+  /**
+   * Whose memory this is. Passed to the backend as an `agent:<name>` scope
+   * token, which `parseScope` already understood and nothing ever sent.
+   *
+   * Without it every agent with `injectMemory` read every other agent's
+   * notes and narrated them as its own recollection — a scoping bug that
+   * presents as a persona bug. Undefined keeps the old cross-agent view, which
+   * is what an unnamed session should get.
+   */
+  agent?: string;
 }
 
 const DEFAULT_LIMIT = 5;
@@ -81,7 +92,7 @@ export async function buildMemoryBlockWithMeta(
   // so the backend returns prelude items only.
   const pinnedFragments = await backend.query({
     includePrelude: true,
-    scope: opts.projectId ? `project:${opts.projectId}` : "global",
+    scope: memoryScope(opts.projectId, opts.agent),
     limit: pinnedLimit * 2,
   });
   const pinnedOnly = pinnedFragments.filter((f) => f.metadata?.pinned === true);
@@ -93,6 +104,7 @@ export async function buildMemoryBlockWithMeta(
   const hits = await recallQueryAsync(backend, {
     query: opts.userMessage,
     projectId: opts.projectId,
+    agent: opts.agent,
     tier: "any",
     limit: limit + pinnedIds.size,
     embedder: opts.embedder,

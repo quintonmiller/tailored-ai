@@ -21,6 +21,18 @@ Design: [memory-tiers.md](./memory-tiers.md). This doc captures the implementati
 - `ToolContext.workingMemory: Map<string,string>` — per-loop scratch shared across tool calls within a single agent run. Cleared when the loop ends. Use for "stash so the next tool call can pick it up" patterns.
 - `ToolContext.projectId` — mirrors `session.projectId`, available to tools that need project scope without poking at the db.
 
+### Whose memory gets injected
+
+Injection is scoped by **agent**, not just project. An agent recalls its own notes plus notes nobody claimed (`agent IS NULL` — written before authorship was recorded, or by an unnamed session). It does not recall another agent's.
+
+The scope travels as an open token string, `global agent:coder` or `project:x agent:coder`, built by `memoryScope()` in `packages/core/src/memory/scope.ts`. No `MemoryBackend` contract change was needed: `scope` was already `string | string[]`, and the SQLite backend's `parseScope` already understood `agent:` — the injection path simply never sent it.
+
+A session with no agent name sends no `agent:` token and so keeps the cross-agent view, which is the behaviour that predates scoping. That is deliberate: a session that cannot say whose it is should not silently recall less.
+
+**Facts are still not agent-scoped.** The `facts` table has no `agent` column at all — the authoring agent is recorded only as free-text `source` — so a fact remains visible to every agent. Fixing that needs a migration and is tracked separately.
+
+Why it matters: before this, any agent with `injectMemory` read every other agent's notes and narrated them as its own recollection. Pinned notes were the expensive case, since those inject regardless of relevance and so landed in every agent's prompt on every turn. The symptom reads as a persona bug and is very hard to trace back to scoping.
+
 ## Session summarization
 
 - `packages/core/src/agent/summarize-session.ts` — `summarizeSession(db, sessionId, provider, model, opts)` writes a note tagged `session-summary` capturing the transcript. Idempotent (skipped if a summary already exists; `force: true` overrides). Importance scales with message count + tool calls. Default TTL 30 days.
