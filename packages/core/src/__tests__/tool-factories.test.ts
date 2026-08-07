@@ -256,3 +256,35 @@ describe("validateConfig — meta-tool references", () => {
     expect(warnings.filter((w) => w.includes("not enabled"))).toHaveLength(0);
   });
 });
+
+/**
+ * `schedule` is gated by its own top-level `schedules:` block rather than by
+ * `tools:`, because the tool is one surface on a subsystem that also runs a
+ * poll tick. `validateConfig` only ever read `tools:`, so every agent listing
+ * `schedule` drew "references tool schedule which is not enabled" on every
+ * startup and every config write — while the tool was registered, resolvable,
+ * and being called successfully in production.
+ *
+ * A false warning is worse than none: it sits in the same list as the true
+ * ones and teaches an operator to skim.
+ */
+describe("validateConfig — schedule is enabled by its own block", () => {
+  it("does not warn about an agent that lists schedule", () => {
+    const cfg = baseConfig();
+    cfg.agents = { ea: { tools: ["schedule"] } } as AgentConfig["agents"];
+    expect(validateConfig(cfg).filter((w) => w.includes("schedule"))).toEqual([]);
+  });
+
+  it("warns when schedules are deliberately switched off", () => {
+    const cfg = baseConfig();
+    cfg.agents = { ea: { tools: ["schedule"] } } as AgentConfig["agents"];
+    cfg.schedules = { enabled: false } as AgentConfig["schedules"];
+    expect(validateConfig(cfg).some((w) => w.includes('"schedule" which is not enabled'))).toBe(true);
+  });
+
+  it("still warns about a tool that genuinely does not exist", () => {
+    const cfg = baseConfig();
+    cfg.agents = { ea: { tools: ["no_such_tool"] } } as AgentConfig["agents"];
+    expect(validateConfig(cfg).some((w) => w.includes("no_such_tool"))).toBe(true);
+  });
+});
