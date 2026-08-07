@@ -60,9 +60,9 @@ export function getSessionByKey(db: Database.Database, key: string): SessionRow 
   return db.prepare("SELECT * FROM sessions WHERE key = ?").get(key) as SessionRow | undefined;
 }
 
-export function saveMessage(db: Database.Database, sessionId: string, msg: Message): void {
+export function saveMessage(db: Database.Database, sessionId: string, msg: Message, opts?: SaveMessageOptions): void {
   db.prepare(
-    "INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id, reasoning) VALUES (?, ?, ?, ?, ?, ?)",
+    "INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id, reasoning, compaction_summary_for) VALUES (?, ?, ?, ?, ?, ?, ?)",
   ).run(
     sessionId,
     msg.role,
@@ -70,7 +70,16 @@ export function saveMessage(db: Database.Database, sessionId: string, msg: Messa
     msg.toolCalls ? JSON.stringify(msg.toolCalls) : null,
     msg.toolCallId ?? null,
     msg.reasoning ?? null,
+    opts?.compactionSummaryFor ?? null,
   );
+}
+
+export interface SaveMessageOptions {
+  /**
+   * Marks this row as the summary standing in for a compaction, so undoing that
+   * compaction can remove it again. Set by `compactSession` and nothing else.
+   */
+  compactionSummaryFor?: number;
 }
 
 export function updateSessionModelProvider(db: Database.Database, id: string, model: string, provider: string): void {
@@ -123,6 +132,67 @@ export function deleteSessionMessages(db: Database.Database, sessionId: string):
   return db.prepare("DELETE FROM messages WHERE session_id = ?").run(sessionId).changes;
 }
 
+/**
+ * Hide every visible message in a session under one compaction number, the way
+ * `rewindSession` hides a tail. The rows stay; `getSessionMessages` skips them.
+ *
+ * Returns the batch number so the caller can name it in an event and hand it to
+ * {@link restoreCompactedMessages}.
+ */
+export function markSessionCompacted(db: Database.Database, sessionId: string): { batch: number; hidden: number } {
+  const latest = db.prepare("SELECT MAX(compacted_batch) AS batch FROM messages WHERE session_id = ?").get(sessionId) as
+    | { batch: number | null }
+    | undefined;
+  const batch = (latest?.batch ?? 0) + 1;
+  const hidden = db
+    .prepare(
+      "UPDATE messages SET compacted_batch = ? WHERE session_id = ? AND compacted_batch IS NULL AND rewound_batch IS NULL",
+    )
+    .run(batch, sessionId).changes;
+  return { batch, hidden };
+}
+
+/**
+ * Put back one compaction. Defaults to the most recent, so undoing twice walks
+ * back two steps rather than restoring everything at once.
+ *
+ * The summary row written in the originals' place is removed too — leaving it
+ * would present a summary of the conversation alongside the conversation.
+ */
+export function restoreCompactedMessages(
+  db: Database.Database,
+  sessionId: string,
+  batch?: number,
+): { restored: number; batch: number } | null {
+  const target =
+    batch ??
+    (
+      db.prepare("SELECT MAX(compacted_batch) AS batch FROM messages WHERE session_id = ?").get(sessionId) as
+        | { batch: number | null }
+        | undefined
+    )?.batch;
+  if (!target) return null;
+
+  const restored = db
+    .prepare("UPDATE messages SET compacted_batch = NULL WHERE session_id = ? AND compacted_batch = ?")
+    .run(sessionId, target).changes;
+  if (restored === 0) return null;
+
+  db.prepare("DELETE FROM messages WHERE session_id = ? AND compaction_summary_for = ?").run(sessionId, target);
+  return { restored, batch: target };
+}
+
+/** Compactions still hidden in this session, oldest first. */
+export function listCompactions(db: Database.Database, sessionId: string): Array<{ batch: number; messages: number }> {
+  return db
+    .prepare(
+      `SELECT compacted_batch AS batch, COUNT(*) AS messages
+         FROM messages WHERE session_id = ? AND compacted_batch IS NOT NULL
+        GROUP BY compacted_batch ORDER BY compacted_batch`,
+    )
+    .all(sessionId) as Array<{ batch: number; messages: number }>;
+}
+
 /** Delete the session row + all its messages. Returns true if a row was removed. */
 export function deleteSession(db: Database.Database, sessionId: string): boolean {
   db.prepare("DELETE FROM messages WHERE session_id = ?").run(sessionId);
@@ -173,7 +243,9 @@ export function findIdleSessions(
  */
 export function getSessionMessages(db: Database.Database, sessionId: string): Message[] {
   const rows = db
-    .prepare("SELECT * FROM messages WHERE session_id = ? AND rewound_batch IS NULL ORDER BY id ASC")
+    .prepare(
+      "SELECT * FROM messages WHERE session_id = ? AND rewound_batch IS NULL AND compacted_batch IS NULL ORDER BY id ASC",
+    )
     .all(sessionId) as MessageRow[];
 
   return rows.map((row) => ({
