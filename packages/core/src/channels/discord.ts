@@ -630,6 +630,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
             const session = findOrCreateSession(this.runtime.db, userKey, model, config.agent.defaultProvider);
             const compactResult = await compactSession(this.runtime.db, session.id, this.runtime.getProvider(), model, {
               events: this.runtime.events,
+              ...this.runtime.getConfig().compaction,
             });
             await msg.reply(formatCompactResult(compactResult));
           } catch (err) {
@@ -1154,6 +1155,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
             const session = findOrCreateSession(this.runtime.db, userKey, model, config.agent.defaultProvider);
             const compactResult = await compactSession(this.runtime.db, session.id, this.runtime.getProvider(), model, {
               events: this.runtime.events,
+              ...this.runtime.getConfig().compaction,
             });
             await interaction.editReply(formatCompactResult(compactResult));
           } catch (err) {

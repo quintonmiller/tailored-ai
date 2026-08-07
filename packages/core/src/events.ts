@@ -207,6 +207,8 @@ export interface RuntimeEventMap {
     messages: number;
     beforeTokens: number;
     afterTokens: number;
+    /** Durable facts saved as notes before the history was hidden. */
+    notesWritten: number;
   };
 
   "schedule.created": {
