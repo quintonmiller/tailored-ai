@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { stripOrphanedToolMessages, trimHistory } from "../agent/loop.js";
+import { dropUnansweredToolCalls, stripOrphanedToolMessages, trimHistory } from "../agent/loop.js";
 import type { Message } from "../providers/interface.js";
 
 const user = (content: string): Message => ({ role: "user", content });
@@ -68,5 +68,69 @@ describe("stripOrphanedToolMessages", () => {
       expect(prev?.role).toBe("assistant");
       expect((prev as Message).toolCalls?.some((tc) => tc.id === trimmed[firstTool].toolCallId)).toBe(true);
     }
+  });
+});
+
+/**
+ * The mirror case: an assistant `tool_calls` with no `tool_result` after it.
+ *
+ * Every strict provider rejects the whole request for one such pair, and the
+ * fallback chain then fails on every rung — observed in production as three
+ * provider errors and 26 retries for a single turn.
+ */
+describe("dropUnansweredToolCalls", () => {
+  it("leaves a properly paired conversation alone", () => {
+    const msgs: Message[] = [
+      { role: "user", content: "go" },
+      { role: "assistant", content: null, toolCalls: [{ id: "a", name: "t", arguments: {} }] },
+      { role: "tool", content: "ok", toolCallId: "a" },
+    ];
+    expect(dropUnansweredToolCalls(msgs)).toEqual(msgs);
+  });
+
+  it("drops a call nothing answered", () => {
+    const out = dropUnansweredToolCalls([
+      { role: "assistant", content: "thinking", toolCalls: [{ id: "a", name: "t", arguments: {} }] },
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0].toolCalls).toBeUndefined();
+    // The text survives — only the unanswerable part is removed.
+    expect(out[0].content).toBe("thinking");
+  });
+
+  it("keeps the answered calls and drops only the unanswered ones", () => {
+    const out = dropUnansweredToolCalls([
+      {
+        role: "assistant",
+        content: null,
+        toolCalls: [
+          { id: "a", name: "t", arguments: {} },
+          { id: "b", name: "t", arguments: {} },
+        ],
+      },
+      { role: "tool", content: "ok", toolCallId: "a" },
+    ]);
+    expect(out[0].toolCalls).toEqual([{ id: "a", name: "t", arguments: {} }]);
+  });
+
+  it("drops a message left with neither text nor calls", () => {
+    const out = dropUnansweredToolCalls([
+      { role: "user", content: "go" },
+      { role: "assistant", content: null, toolCalls: [{ id: "a", name: "t", arguments: {} }] },
+    ]);
+    expect(out).toEqual([{ role: "user", content: "go" }]);
+  });
+
+  it("catches the case a user turn between a call and its result creates", () => {
+    // stripOrphanedToolMessages resets its open set on a user message, so it
+    // drops the result — which used to leave the call unanswered and the whole
+    // request invalid.
+    const out = stripOrphanedToolMessages([
+      { role: "assistant", content: null, toolCalls: [{ id: "a", name: "t", arguments: {} }] },
+      { role: "user", content: "actually, wait" },
+      { role: "tool", content: "ok", toolCallId: "a" },
+    ]);
+    expect(out.some((m) => m.toolCalls?.length)).toBe(false);
+    expect(out.some((m) => m.role === "tool")).toBe(false);
   });
 });
