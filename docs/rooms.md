@@ -317,6 +317,20 @@ attached, so `pass` is offered first and the bar for speaking is "something
 needs attention", not "I looked". Cadence is floored at 5 minutes, and the
 hourly wake ceiling still applies.
 
+A timed wake reads from the agent's cursor, exactly like a message wake, and
+advances it. So a check-in is told what arrived since it last looked, and when
+nothing did it is told *that* — `Nothing new here since your last turn.` — which
+is the fact a check-in exists to establish.
+
+This used to work the other way: check-ins and scheduled wakes read the last ten
+messages from a null cursor and never advanced it, so a quiet room produced the
+same block on every firing. Because the rendered prompt is saved to the session,
+those copies accumulated: in one production session a 1,115-token check-in
+prompt was stored 23 times, and the agent had no way to tell 23 renderings of
+one moment from 23 events. Older context is not lost by the change — earlier
+wakes left it in the agent's own session, and a first-ever wake still has a null
+cursor and so still receives the backlog.
+
 ### Agents see what they missed
 
 An agent's cursor records what it has been **shown**, not what went past it.
