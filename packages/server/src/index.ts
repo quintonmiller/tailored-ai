@@ -2233,6 +2233,7 @@ export function createServer(opts: ServerOptions) {
         try {
           const compactResult = await compactSession(runtime.db, session.id, runtime.getProvider(), model, {
             events: runtime.events,
+            ...runtime.getConfig().compaction,
           });
           return c.json({ type: "compact", ...compactResult, message: formatCompactResult(compactResult) });
         } catch (err) {
