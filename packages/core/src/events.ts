@@ -185,6 +185,48 @@ export interface RuntimeEventMap {
   };
 
   /**
+   * An agent booked itself a future wake through the `schedule` tool.
+   *
+   * Emitted on creation rather than only on firing so a subscriber can see what
+   * an agent intends before it happens — a schedule booked for 3am is worth
+   * knowing about at 3pm, not at 3am.
+   */
+  "schedule.created": {
+    id: string;
+    agent: string;
+    kind: "once" | "repeat";
+    /** The phrase the agent used, not the compiled form. */
+    source: string;
+    note: string;
+    /** UTC, as stored. */
+    nextRunAt: string;
+    targetKind: "room" | "session";
+    target: string;
+  };
+
+  /**
+   * A scheduled wake ran. Emitted after the turn, and only when one actually
+   * happened: a wake the room refused for being at its ceiling is deferred, not
+   * fired, and a subscriber counting these counts turns rather than attempts.
+   */
+  "schedule.fired": {
+    id: string;
+    agent: string;
+    kind: "once" | "repeat";
+    note: string;
+    targetKind: "room" | "session";
+    target: string;
+  };
+
+  "schedule.cancelled": {
+    agent: string;
+    /** Empty when `all` is set — the ids are not enumerated for a bulk cancel. */
+    ids: string[];
+    all: boolean;
+    count: number;
+  };
+
+  /**
    * One agent sent another a direct message and got an answer back.
    *
    * Everything an agent does in a room leaves a transcript somebody can read.

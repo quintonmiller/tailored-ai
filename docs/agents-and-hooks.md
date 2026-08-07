@@ -333,6 +333,22 @@ Shared module used by all entry points:
 6. Job state is tracked in the `cron_jobs` DB table
 7. Cron jobs can define their own `hooks` and also inherit hooks from their `agent` (agent hooks run first, job hooks appended)
 
+### Cron job or schedule?
+
+A cron job is the operator's. It lives in `config.yaml`, is global, can carry
+hooks, a workflow, a project binding and a delivery channel, and only expresses
+a recurrence.
+
+A [schedule](./schedules.md) is the agent's. It is written at runtime through
+the `schedule` tool, scoped to the one agent that booked it, can name a single
+future moment as well as a recurrence, and carries a note rather than a prompt
+template. It also does not touch `config.yaml`, so booking one does not reload
+the runtime or bounce anything.
+
+Reach for cron when *you* want something to happen on a clock. Reach for
+`schedule` when you want an agent to be able to come back to something on its
+own — which is the only way an agent can honour "I'll check on this later".
+
 ## Prompt Expansion
 
 `packages/core/src/prompts/expand.ts` provides `expandPrompt(text, vars, options?)` for rendering prompt templates. Three forms, applied in order:

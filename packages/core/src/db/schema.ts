@@ -567,6 +567,49 @@ export function initDatabase(dbPath: string): Database.Database {
       PRIMARY KEY (room_ref, member_id)
     );
 
+    -- agent_schedules: wakes an agent booked for itself.
+    --
+    -- Distinct from cron_jobs, which the operator authors in config.yaml. These
+    -- are written at runtime by the schedule tool, scoped to one agent, and
+    -- can express a single future moment as well as a recurrence.
+    --
+    -- next_run_at is the only column the tick reads, and it is the reason this
+    -- is a table rather than a set of timers: a due time in the database
+    -- survives a restart, a suspend and a clock jump, none of which setInterval
+    -- does.
+    CREATE TABLE IF NOT EXISTS agent_schedules (
+      id               TEXT PRIMARY KEY,
+      agent            TEXT NOT NULL,
+      -- What the agent wants to be told when it wakes. This IS the wake.
+      note             TEXT NOT NULL,
+      kind             TEXT NOT NULL CHECK(kind IN ('once','repeat')),
+      -- Exactly one of these is set when kind='repeat'. cron is wall-clock
+      -- aligned; interval_seconds is phase-anchored to starts_at.
+      cron             TEXT,
+      interval_seconds INTEGER,
+      -- What the agent typed, echoed back by list so it recognises its own work.
+      source           TEXT NOT NULL,
+      starts_at        TEXT,
+      ends_at          TEXT,
+      next_run_at      TEXT NOT NULL,
+      target_kind      TEXT NOT NULL CHECK(target_kind IN ('room','session')),
+      -- roomRef for 'room', session id for 'session'.
+      target           TEXT NOT NULL,
+      status           TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending','done','cancelled','expired')),
+      run_count        INTEGER NOT NULL DEFAULT 0,
+      -- Times this wake came due and could not run (wake ceiling). Capped so a
+      -- room that is permanently at its limit does not retry forever.
+      deferrals        INTEGER NOT NULL DEFAULT 0,
+      last_run_at      TEXT,
+      created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_agent_schedules_due
+      ON agent_schedules(status, next_run_at);
+    CREATE INDEX IF NOT EXISTS idx_agent_schedules_agent
+      ON agent_schedules(agent, status);
+
     -- audit_log: append-only, SHA-256 chained ledger for config/permission changes.
     -- Schema: id, timestamp, actor, action, before (JSON), after (JSON), context (JSON), hash, prev_hash.
     -- Triggers enforce append-only: UPDATE and DELETE are rejected.
