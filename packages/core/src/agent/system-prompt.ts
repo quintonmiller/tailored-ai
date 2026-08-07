@@ -6,9 +6,15 @@ export const DEFAULT_LAYER_ORDER = [
   "instructions",
   "context",
   "skill_catalog",
+  // Standing knowledge contributed by plugins/config, next to the other
+  // standing knowledge. See agent/context-slots.ts.
+  "slots_standing",
   "core_memory",
   "chat_live_state",
   "recall_memory",
+  // Per-turn slot content. In the tail by default, for the same reason
+  // chat_live_state is: it is rebuilt every turn.
+  "slots_state",
 ] as const;
 
 export type DefaultLayerName = (typeof DEFAULT_LAYER_ORDER)[number];
@@ -60,6 +66,10 @@ export interface BuiltInLayers {
   core_memory: string;
   chat_live_state: string;
   recall_memory: string;
+  /** Slots declared `refresh: "reload"` — see agent/context-slots.ts. */
+  slots_standing: string;
+  /** Slots declared `refresh: "turn"`. */
+  slots_state: string;
 }
 
 /**
@@ -140,7 +150,7 @@ export function resolveCustomLayers(custom: CustomLayer[] | undefined): Record<s
  * Layers that are rebuilt from scratch on every turn, and so are moved out of
  * the system prompt by default (see `SystemPromptOverride.tail`).
  */
-export const DEFAULT_TAIL_LAYERS = ["chat_live_state", "recall_memory"] as const;
+export const DEFAULT_TAIL_LAYERS = ["chat_live_state", "recall_memory", "slots_state"] as const;
 
 /**
  * Tracks which `order`-without-`tail` configurations have already been reported,
