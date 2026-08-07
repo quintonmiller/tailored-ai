@@ -47,6 +47,20 @@ export interface CompactResult {
 export interface CompactOptions {
   /** Emits `session.compacted` so subscribers can archive, notify or audit. */
   events?: EventBus;
+  /**
+   * Leave the newest N messages visible and fold away only what precedes them.
+   *
+   * All-or-nothing compaction is the wrong trade for a long-running
+   * conversation. Measured on a real 1,632-message session: the whole history
+   * summarised to 907 characters — a 534x reduction that keeps the facts and
+   * loses the voice, the running context and every established preference. What
+   * makes such a session worth keeping is exactly what a synopsis discards.
+   *
+   * A recent window is cheap to keep — it is the part already most present to
+   * the model — and it leaves the summary standing in only for the distant
+   * past, which is what a summary is actually good at.
+   */
+  keepRecent?: number;
 }
 
 export async function compactSession(
@@ -62,9 +76,19 @@ export async function compactSession(
     return { skipped: true, reason: `Only ${messages.length} messages, need at least ${MIN_MESSAGES}` };
   }
 
+  // Only what is about to be hidden gets summarised. Summarising the kept
+  // window too would put the same content in the next request twice — once as a
+  // summary and once verbatim — which is the duplication this area exists to
+  // remove.
+  const keepRecent = Math.max(0, Math.floor(opts.keepRecent ?? 0));
+  const toSummarise = keepRecent > 0 ? messages.slice(0, Math.max(0, messages.length - keepRecent)) : messages;
+  if (toSummarise.length === 0) {
+    return { skipped: true, reason: `Nothing older than the ${keepRecent}-message keep window` };
+  }
+
   // Serialize messages for summarization
   const lines: string[] = [];
-  for (const msg of messages) {
+  for (const msg of toSummarise) {
     if (msg.content) {
       lines.push(`[${msg.role}]: ${msg.content}`);
     }
@@ -72,7 +96,7 @@ export async function compactSession(
   const transcript = lines.join("\n");
 
   let beforeTokens = 0;
-  for (const msg of messages) beforeTokens += estimateTokens(msg);
+  for (const msg of toSummarise) beforeTokens += estimateTokens(msg);
 
   // Summarize via provider
   const response = await provider.chat({
@@ -92,7 +116,7 @@ export async function compactSession(
 
   // Summarise first, hide second. A provider that throws leaves the session
   // exactly as it was rather than hidden behind a summary that never arrived.
-  const { batch, hidden } = markSessionCompacted(db, sessionId);
+  const { batch, hidden } = markSessionCompacted(db, sessionId, { keepRecent });
   const summaryMsg: Message = { role: "user", content: `[Conversation Summary]\n${summary}` };
   saveMessage(db, sessionId, summaryMsg, { compactionSummaryFor: batch });
 
@@ -108,7 +132,7 @@ export async function compactSession(
 
   return {
     skipped: false,
-    beforeCount: messages.length,
+    beforeCount: toSummarise.length,
     afterCount: 1,
     beforeTokens,
     afterTokens,
