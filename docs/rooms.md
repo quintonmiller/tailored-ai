@@ -462,6 +462,15 @@ magic phrase in the reply on purpose. A sentinel like `NO_REPLY` would be
 control flow inferred from model-facing text, which local models mishandle and
 which this codebase has been bitten by before.
 
+A successful `pass` **ends the turn** (`ToolResult.endsTurn` — see
+[agent-loop.md](./agent-loop.md)), so choosing silence costs one round-trip.
+Before that, the tool returned an ordinary result and the loop went back to the
+model to ask what next; a 27B model answered by passing again, and again, until
+the repeated-call detector stopped it three full prompts later — a scheduled
+check-in that said nothing cost 3× what it should and exited as a stall. The
+`pass` that finds no room to silence is deliberately *not* terminal: nothing was
+decided, and the agent still has a correction to act on.
+
 An agent that **changed something** cannot go quiet. If a turn wrote or edited
 a file and then passed — or fumbled the sign-off by typing the call instead of
 making it — a factual line naming the changed files is posted instead of

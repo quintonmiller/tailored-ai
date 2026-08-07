@@ -64,6 +64,28 @@ export interface ToolResult {
   success: boolean;
   output: string;
   error?: string;
+  /**
+   * End the agent's turn as soon as this call returns, without another model
+   * round-trip.
+   *
+   * For a tool whose whole meaning is "I am done" — Sleep concluding a tick,
+   * `room(action="pass")` declining to speak — the alternative is asking the
+   * model to stop in the tool result, and small models routinely ignore that.
+   * They call the tool again, and again, until the repeated-call detector fires
+   * three round-trips later, having re-sent the whole prompt each time and
+   * exited as a stall rather than as the deliberate stop it was.
+   *
+   * Set by the tool rather than declared on it because a multi-action tool ends
+   * the turn on some actions and not others: `room` post and read continue,
+   * `room` pass does not.
+   */
+  endsTurn?: boolean;
+  /**
+   * What the loop returns when `endsTurn` is set. Unset falls back to whatever
+   * text the model produced alongside the call, which for a tool that means
+   * "nothing to say" is usually empty — the right answer.
+   */
+  endsTurnReason?: string;
 }
 
 export interface Tool {

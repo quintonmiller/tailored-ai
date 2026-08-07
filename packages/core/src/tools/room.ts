@@ -497,7 +497,17 @@ export class RoomTool implements Tool {
     }
     for (const ref of refs) context.workingMemory?.set(`room:passed:${ref}`, "true");
 
-    return ok("Saying nothing this turn.");
+    // Ending the turn is the whole point: "I am saying nothing" is not a step
+    // towards an answer, it is the answer. Left as an ordinary result the model
+    // would be asked what to do next, and a small one answers by passing again
+    // — three round-trips of a full prompt before the repeated-call detector
+    // ends what the first call already decided.
+    //
+    // No `endsTurnReason`: a pass has nothing to say, so the loop falls back to
+    // whatever text came alongside the call, which is normally empty. The
+    // watcher would refuse to post it anyway (`room:passed:` above), but an
+    // empty return keeps that a belt-and-braces check rather than the only one.
+    return { ...ok("Saying nothing this turn."), endsTurn: true };
   }
 
   /**
