@@ -1724,6 +1724,16 @@ export function validateConfig(config: AgentConfig): string[] {
   // agents that reference `task_query` don't draw a spurious "not enabled"
   // warning on every startup.
   if (enabledToolNames.has("tasks")) enabledToolNames.add("task_query");
+  // `schedule` is gated by its own top-level block rather than by `tools:`,
+  // because the tool is one surface on a subsystem that also runs a poll tick.
+  // Validation only ever looked at `tools:`, so every agent that listed
+  // `schedule` drew "references tool schedule which is not enabled" on each
+  // startup and each config write — while the tool was registered, resolvable
+  // and being called successfully.
+  //
+  // A false warning is worse than none: it is indistinguishable from the true
+  // ones printed beside it, and it teaches an operator to skim the list.
+  if (config.schedules?.enabled !== false) enabledToolNames.add("schedule");
   // Tools that have a hard credential gate at construction time. Listed here
   // so we can warn when a tool is "enabled" but won't actually register —
   // otherwise agents reference it, the UI silently omits it, and the user is
