@@ -191,6 +191,24 @@ export interface RuntimeEventMap {
    * an agent intends before it happens — a schedule booked for 3am is worth
    * knowing about at 3pm, not at 3am.
    */
+  /**
+   * A session's history was replaced by a summary of it.
+   *
+   * The originals are hidden rather than deleted, so `batch` is enough for a
+   * subscriber to archive them, show what was folded away, or undo it. Emitted
+   * after the summary is written, so a provider failure produces no event and
+   * leaves the session untouched.
+   */
+  "session.compacted": {
+    sessionId: string;
+    /** Which compaction this was in this session, counting from 1. */
+    batch: number;
+    /** How many messages were hidden. */
+    messages: number;
+    beforeTokens: number;
+    afterTokens: number;
+  };
+
   "schedule.created": {
     id: string;
     agent: string;

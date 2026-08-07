@@ -2,8 +2,13 @@ export type { ActiveSkillRecord, ActiveSkillState } from "./agent/active-skill.j
 export { activateSkill, createActiveSkillState, deactivateSkill } from "./agent/active-skill.js";
 export type { ResolvedAgent, ResolvedProfile, SkillCatalogEntry } from "./agent/agents.js";
 export { resolveAgent, resolveProfile } from "./agent/agents.js";
-export type { CompactResult } from "./agent/compact.js";
-export { compactSession, formatCompactResult } from "./agent/compact.js";
+export type { CompactOptions, CompactResult } from "./agent/compact.js";
+export {
+  compactSession,
+  formatCompactResult,
+  listSessionCompactions,
+  undoCompaction,
+} from "./agent/compact.js";
 export type { ResolvedHooks } from "./agent/hooks.js";
 export { applyTemplates, EMPTY_HOOKS, executeHooks, hasHooks, mergeHooks, normalizeHooks } from "./agent/hooks.js";
 export type { AgentLoopOptions, ModelCandidate } from "./agent/loop.js";

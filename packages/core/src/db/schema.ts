@@ -865,6 +865,34 @@ export function initDatabase(dbPath: string): Database.Database {
     // Column already exists
   }
 
+  // Safe migration: compaction, on the same terms as rewind above.
+  //
+  // Compaction used to DELETE every message in the session and write a
+  // model-authored summary in their place, keeping no archive of the originals,
+  // no tombstone, and emitting no event. If the summary dropped the one fact
+  // that mattered, it was gone. That is a strange asymmetry to have shipped
+  // next to a rewind that goes to some length to stay undoable, and it is the
+  // reason compaction could not responsibly be made automatic.
+  //
+  // Same counter-not-timestamp reasoning as rewind: undo restores exactly one
+  // compaction, and two in the same millisecond would share an ISO string.
+  try {
+    db.exec("ALTER TABLE messages ADD COLUMN compacted_batch INTEGER");
+  } catch {
+    // Column already exists
+  }
+
+  // Which compaction a summary row stands in for. Set only on the summary
+  // itself, so undoing a compaction can remove the summary it wrote without
+  // pattern-matching on the message text — the originals are coming back, and a
+  // summary of the conversation sitting next to the conversation is worse than
+  // either alone.
+  try {
+    db.exec("ALTER TABLE messages ADD COLUMN compaction_summary_for INTEGER");
+  } catch {
+    // Column already exists
+  }
+
   // Safe migration: drop the legacy hard-coded type CHECK on collections so the
   // `type` column is an open label (steelbook, restaurant, book, …). Earlier DBs
   // created the table with CHECK(type IN ('steelbook',…)); rebuild them in place,
