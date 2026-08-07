@@ -33,6 +33,12 @@ export interface NoteQuery {
   project_id?: string | null;
   session_id?: string | null;
   agent?: string | null;
+  /**
+   * With a named `agent`, also return notes no agent claimed. Notes predating
+   * authorship, or written by an unnamed session, have a null `agent`; a
+   * strict match would hide all of them from everyone.
+   */
+  includeUnowned?: boolean;
   tag?: string;
   search?: string;
   limit?: number;
@@ -121,6 +127,14 @@ export function listNotes(db: Database.Database, q: NoteQuery = {}): Note[] {
   if (q.agent !== undefined) {
     if (q.agent === null) {
       clauses.push("agent IS NULL");
+    } else if (q.includeUnowned) {
+      // An agent's own notes plus the ones nobody claimed — the same shape as
+      // the project filter above, and for the same reason. Notes written
+      // before authorship was recorded, or by an unnamed session, have a null
+      // `agent`; a strict `agent = ?` would make every one of them invisible
+      // to everybody, which is a worse failure than the one being fixed.
+      clauses.push("(agent = ? OR agent IS NULL)");
+      params.push(q.agent);
     } else {
       clauses.push("agent = ?");
       params.push(q.agent);
@@ -166,6 +180,8 @@ export function listNotes(db: Database.Database, q: NoteQuery = {}): Note[] {
  */
 export interface PinnedNotesQuery {
   project_id?: string | null;
+  /** Restrict to one agent's pinned notes plus unowned ones. */
+  agent?: string;
   limit?: number;
   pinnedImportance?: number;
   excludeExpired?: boolean;
@@ -183,6 +199,10 @@ export function listPinnedNotes(db: Database.Database, q: PinnedNotesQuery = {})
       clauses.push("(project_id = ? OR project_id IS NULL)");
       params.push(q.project_id);
     }
+  }
+  if (q.agent) {
+    clauses.push("(agent = ? OR agent IS NULL)");
+    params.push(q.agent);
   }
   const pinnedImportance = q.pinnedImportance ?? 0.95;
   clauses.push("(EXISTS (SELECT 1 FROM json_each(notes.tags) WHERE json_each.value = 'pinned') OR importance >= ?)");
