@@ -10,6 +10,7 @@ import {
   DEFAULT_LAYER_ORDER,
   DEFAULT_TAIL_LAYERS,
   mergeSystemPromptOverrides,
+  resetSystemPromptWarnings,
   resolveBase,
   resolveCustomLayers,
   resolveTailLayers,
@@ -29,6 +30,7 @@ describe("system-prompt composer", () => {
 
   beforeEach(() => {
     warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    resetSystemPromptWarnings();
   });
 
   afterEach(() => {
@@ -180,6 +182,91 @@ describe("system-prompt composer", () => {
       "chat_live_state",
       "recall_memory",
     ]);
+  });
+
+  /**
+   * Adding a block should not require knowing the layout. Before this, a
+   * declared custom layer was dropped unless it also appeared in `order` — so
+   * the cost of adding one block was enumerating all seven built-ins, and an
+   * enumeration with a name missing deleted that built-in without saying so.
+   */
+  describe("custom layers render without being placed", () => {
+    const custom = { house_rules: "[rules]" };
+
+    it("renders a declared custom layer that order never mentions", () => {
+      const out = composeSystemPrompt("[base]", layers, undefined, custom);
+      expect(out).toContain("[rules]");
+    });
+
+    it("appends it after the built-ins rather than displacing them", () => {
+      const out = composeSystemPrompt("[base]", layers, undefined, custom);
+      expect(out).toBe("[base][inst][ctx][cat][core][rules]");
+    });
+
+    it("still honours an explicit placement in order", () => {
+      const override = { order: ["base", "house_rules", "instructions"], tail: [] };
+      expect(composeSystemPrompt("[base]", layers, override, custom)).toBe("[base][rules][inst]");
+    });
+
+    it("does not append twice when order already placed it", () => {
+      const override = { order: ["base", "house_rules"], tail: [] };
+      expect(composeSystemPrompt("[base]", layers, override, custom).split("[rules]")).toHaveLength(2);
+    });
+
+    it("lets tail take a custom layer without order having to list it", () => {
+      // Naming a custom layer in `tail` used to do nothing: the tail was
+      // intersected with `order`, which a contributor adding one block never
+      // sets. Declaring it is now enough to make it eligible.
+      const override = { tail: ["house_rules"] };
+      expect(resolveTailLayers(override, Object.keys(custom))).toEqual(["house_rules"]);
+      expect(composeSystemPrompt("[base]", layers, override, custom)).not.toContain("[rules]");
+      expect(composeTailBlock(layers, override, custom)).toBe("[rules]");
+    });
+
+    it("renders it exactly once across prompt and tail", () => {
+      const prompt = composeSystemPrompt("[base]", layers, undefined, custom);
+      const tail = composeTailBlock(layers, undefined, custom);
+      expect(`${prompt}${tail}`.split("[rules]")).toHaveLength(2);
+    });
+  });
+
+  /**
+   * `order` without `tail` switching off the tail is deliberate and stays.
+   * Doing it in silence is the defect: the volatile layers carry the clock, so
+   * they either invalidate the cache every turn or vanish from the request.
+   */
+  describe("order-without-tail is announced", () => {
+    it("warns, and says the volatile layers moved into the system prompt", () => {
+      composeSystemPrompt("[base]", layers, { order: [...DEFAULT_LAYER_ORDER] }, {});
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("without systemPrompt.tail"));
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("defeats prompt caching"));
+    });
+
+    it("warns that they will not be sent at all when order omits them", () => {
+      composeSystemPrompt("[base]", layers, { order: ["base", "instructions"] }, {});
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("will not be sent at all"));
+    });
+
+    it("warns once per config, not once per turn", () => {
+      const override = { order: [...DEFAULT_LAYER_ORDER] };
+      for (let turn = 0; turn < 5; turn++) {
+        composeSystemPrompt("[base]", layers, override, {});
+        composeTailBlock(layers, override, {});
+      }
+      const hits = warnSpy.mock.calls.filter((c) => String(c[0]).includes("without systemPrompt.tail"));
+      expect(hits).toHaveLength(1);
+    });
+
+    it("stays quiet when tail is explicit", () => {
+      composeSystemPrompt("[base]", layers, { order: [...DEFAULT_LAYER_ORDER], tail: ["recall_memory"] }, {});
+      expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("without systemPrompt.tail"));
+    });
+
+    it("stays quiet when there is no override at all", () => {
+      composeSystemPrompt("[base]", layers, undefined, {});
+      composeTailBlock(layers, undefined, {});
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
   });
 
   describe("tail layers", () => {
