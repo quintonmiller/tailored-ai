@@ -97,13 +97,16 @@ describe("toApiTools", () => {
 });
 
 describe("parseApiResponse", () => {
-  it("sums cache reads/writes into input usage", () => {
+  it("sums cache reads/writes into input usage, and reports them separately", () => {
     const parsed = parseApiResponse({
       content: [{ type: "text", text: "OK" }],
       stop_reason: "end_turn",
       usage: { input_tokens: 10, output_tokens: 5, cache_creation_input_tokens: 100, cache_read_input_tokens: 50 },
     });
-    expect(parsed.usage).toEqual({ input: 160, output: 5 });
+    // `input` still totals what the API processed. Summed alone the parts were
+    // unrecoverable — a full cache hit and a cold read give the same number —
+    // so they are reported alongside it rather than instead of it.
+    expect(parsed.usage).toEqual({ input: 160, output: 5, cacheRead: 50, cacheWrite: 100 });
   });
 
   it("maps stop reasons", () => {
@@ -349,7 +352,11 @@ describe("AnthropicMessagesProvider", () => {
       response: {
         content: "Checking.",
         toolCalls: [{ id: "tu_1", name: "get_weather", arguments: { city: "Oslo" } }],
-        usage: { input: 100, output: 7 },
+        reasoning: undefined,
+        // The streaming path carries the cache figures too. It is the path most
+        // turns actually take, so dropping them here would have left the
+        // measurement working only in tests.
+        usage: { input: 100, output: 7, cacheRead: 90, cacheWrite: 0 },
         finishReason: "tool_calls",
       },
     });
