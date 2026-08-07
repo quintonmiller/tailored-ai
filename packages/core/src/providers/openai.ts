@@ -42,6 +42,13 @@ interface OpenAIStreamChunk {
   usage?: {
     prompt_tokens: number;
     completion_tokens: number;
+    /**
+     * OpenAI-compatible servers that implement prompt caching report it here.
+     * Absent on the many that do not, which is why `cacheRead` stays optional
+     * all the way up rather than defaulting to zero — "not reported" and
+     * "nothing cached" are different facts.
+     */
+    prompt_tokens_details?: { cached_tokens?: number } | null;
   } | null;
 }
 
@@ -63,6 +70,7 @@ interface OpenAIChatResponse {
   usage?: {
     prompt_tokens: number;
     completion_tokens: number;
+    prompt_tokens_details?: { cached_tokens?: number } | null;
   };
 }
 
@@ -215,6 +223,7 @@ export class OpenAIProvider implements AIProvider {
       usage: {
         input: data.usage?.prompt_tokens ?? 0,
         output: data.usage?.completion_tokens ?? 0,
+        cacheRead: data.usage?.prompt_tokens_details?.cached_tokens,
       },
       finishReason: hasToolCalls ? "tool_calls" : "stop",
     };

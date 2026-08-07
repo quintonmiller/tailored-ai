@@ -98,11 +98,14 @@ export interface TokenUsageInput {
   source?: TokenUsageSource;
   promptTokens: number;
   completionTokens: number;
+  /** Omitted when the provider does not report caching — stored as NULL, not 0. */
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
 }
 
 export function recordTokenUsage(db: Database.Database, input: TokenUsageInput): void {
   db.prepare(
-    "INSERT INTO token_usage (session_id, task_id, agent, source, prompt_tokens, completion_tokens) VALUES (?, ?, ?, ?, ?, ?)",
+    "INSERT INTO token_usage (session_id, task_id, agent, source, prompt_tokens, completion_tokens, cache_read_tokens, cache_write_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
   ).run(
     input.sessionId ?? null,
     input.taskId ?? null,
@@ -110,6 +113,8 @@ export function recordTokenUsage(db: Database.Database, input: TokenUsageInput):
     input.source ?? null,
     input.promptTokens,
     input.completionTokens,
+    input.cacheReadTokens ?? null,
+    input.cacheWriteTokens ?? null,
   );
 }
 
