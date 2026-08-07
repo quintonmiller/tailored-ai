@@ -12,8 +12,8 @@
  * untouched rather than hidden behind a summary that never arrived.
  */
 import type Database from "better-sqlite3";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { compactSession, listSessionCompactions, undoCompaction } from "../agent/compact.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { compactSession, DEFAULT_COMPACTION_PROMPT, listSessionCompactions, undoCompaction } from "../agent/compact.js";
 import { newSession } from "../agent/session.js";
 import { getSessionMessages, saveMessage } from "../db/queries.js";
 import { initDatabase } from "../db/schema.js";
@@ -280,5 +280,171 @@ describe("partial compaction", () => {
     const visible = getSessionMessages(db, session.id);
     expect(visible).toHaveLength(10);
     expect(visible.some((m) => m.content?.includes("[Conversation Summary]"))).toBe(false);
+  });
+});
+
+/**
+ * The wording belongs to the deployment, not to core.
+ *
+ * The built-in text asked for a summary "concisely", of "key facts, decisions,
+ * and pending tasks" — a project-status framing. Measured against a real
+ * 1,432-message companion history that produced 88 tokens; the same line with
+ * "in detail" produced 475, with six times the named specifics and quoted
+ * phrasing the short one had none of. One word was discarding most of it.
+ */
+describe("summarisation is configurable", () => {
+  const capture = (seen: { sys: string[]; max: (number | undefined)[] }): AIProvider => ({
+    id: "fake",
+    name: "fake",
+    supportsTools: false,
+    async chat(p) {
+      seen.sys.push(String(p.messages[0]?.content ?? ""));
+      seen.max.push(p.maxTokens);
+      return { content: "summary", usage: { input: 0, output: 0 }, finishReason: "stop" };
+    },
+  });
+
+  it("defaults to a prompt that does not ask for brevity", async () => {
+    const session = newSession(db, "m", "fake");
+    seed(session.id, 6);
+    const seen = { sys: [] as string[], max: [] as (number | undefined)[] };
+
+    await compactSession(db, session.id, capture(seen), "m");
+
+    expect(seen.sys[0]).toBe(DEFAULT_COMPACTION_PROMPT);
+    expect(seen.sys[0]).not.toMatch(/concise/i);
+    // The old wording carried a work opinion into core; a companion history
+    // came back formatted as a standup report because of it.
+    expect(seen.sys[0]).not.toMatch(/pending tasks/i);
+  });
+
+  it("uses a deployment's own wording when given one", async () => {
+    const session = newSession(db, "m", "fake");
+    seed(session.id, 6);
+    const seen = { sys: [] as string[], max: [] as (number | undefined)[] };
+
+    await compactSession(db, session.id, capture(seen), "m", { prompt: "Write it as a ship's log." });
+
+    expect(seen.sys[0]).toBe("Write it as a ship's log.");
+  });
+
+  it("passes a length cap through, so the size is chosen rather than accidental", async () => {
+    const session = newSession(db, "m", "fake");
+    seed(session.id, 6);
+    const seen = { sys: [] as string[], max: [] as (number | undefined)[] };
+
+    await compactSession(db, session.id, capture(seen), "m", { maxTokens: 1500 });
+
+    expect(seen.max[0]).toBe(1500);
+  });
+
+  it("leaves maxTokens unset when nobody asked for one", async () => {
+    const session = newSession(db, "m", "fake");
+    seed(session.id, 6);
+    const seen = { sys: [] as string[], max: [] as (number | undefined)[] };
+
+    await compactSession(db, session.id, capture(seen), "m");
+
+    expect(seen.max[0]).toBeUndefined();
+  });
+});
+
+/**
+ * A summary is one block every later turn pays for regardless of relevance; a
+ * note is retrieved when it matches what is being discussed. For a long
+ * conversation the second is the better shape, so the details survive without
+ * the summary having to carry them.
+ */
+describe("memory checkpoint before compaction", () => {
+  const twoStep = (facts: string): AIProvider => {
+    let call = 0;
+    return {
+      id: "fake",
+      name: "fake",
+      supportsTools: false,
+      async chat() {
+        call += 1;
+        return {
+          content: call === 1 ? "the summary" : facts,
+          usage: { input: 0, output: 0 },
+          finishReason: "stop",
+        };
+      },
+    };
+  };
+
+  it("writes one note per line, scoped to the agent losing the history", async () => {
+    const session = newSession(db, "m", "fake");
+    seed(session.id, 6);
+
+    const r = await compactSession(
+      db,
+      session.id,
+      twoStep("Alex prefers bullet points\nThe deploy is blocked on review"),
+      "m",
+      {
+        memory: { agent: "planner" },
+      },
+    );
+
+    expect(r.notesWritten).toBe(2);
+    const notes = db.prepare("SELECT content, agent FROM notes ORDER BY rowid").all() as {
+      content: string;
+      agent: string;
+    }[];
+    expect(notes.map((n) => n.agent)).toEqual(["planner", "planner"]);
+    expect(notes[0].content).toBe("Alex prefers bullet points");
+  });
+
+  it("strips list markers the model adds despite being asked not to", async () => {
+    const session = newSession(db, "m", "fake");
+    seed(session.id, 6);
+
+    await compactSession(
+      db,
+      session.id,
+      twoStep("- Alex prefers bullets\n2) The deploy is blocked\n* Dana joined"),
+      "m",
+      {
+        memory: { agent: "planner" },
+      },
+    );
+
+    const notes = db.prepare("SELECT content FROM notes ORDER BY rowid").all() as { content: string }[];
+    expect(notes.map((n) => n.content)).toEqual(["Alex prefers bullets", "The deploy is blocked", "Dana joined"]);
+  });
+
+  it("compacts anyway when the checkpoint fails", async () => {
+    const session = newSession(db, "m", "fake");
+    seed(session.id, 6);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    let call = 0;
+    const flaky: AIProvider = {
+      id: "fake",
+      name: "fake",
+      supportsTools: false,
+      async chat() {
+        call += 1;
+        if (call === 2) throw new Error("checkpoint down");
+        return { content: "the summary", usage: { input: 0, output: 0 }, finishReason: "stop" };
+      },
+    };
+
+    const r = await compactSession(db, session.id, flaky, "m", { memory: { agent: "planner" } });
+
+    // Refusing to compact because the notes call failed would leave the session
+    // growing, which is the problem being solved.
+    expect(r.skipped).toBe(false);
+    expect(r.notesWritten).toBe(0);
+  });
+
+  it("writes nothing when no checkpoint was asked for", async () => {
+    const session = newSession(db, "m", "fake");
+    seed(session.id, 6);
+
+    const r = await compactSession(db, session.id, summarizer(), "m");
+
+    expect(r.notesWritten).toBe(0);
+    expect((db.prepare("SELECT COUNT(*) AS n FROM notes").get() as { n: number }).n).toBe(0);
   });
 });

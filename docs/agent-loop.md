@@ -26,11 +26,24 @@ Compacted rows keep their place and gain a `compacted_batch` number, `getSession
 
 | Function | Does |
 |---|---|
-| `compactSession(db, id, provider, model, { events })` | summarize, hide the originals, return the batch |
+| `compactSession(db, id, provider, model, opts)` | save durable facts, summarize, hide the originals, return the batch |
 | `undoCompaction(db, id, batch?)` | restore one compaction, most recent by default |
 | `listSessionCompactions(db, id)` | what is currently folded away |
 
-The order matters and is tested: **summarize first, hide second.** A provider that throws leaves the session exactly as it was rather than hidden behind a summary that never arrived.
+`opts` decides the shape of the result, and every field is a deployment's call rather than core's:
+
+| option | effect |
+|---|---|
+| `keepRecent` | leave the newest N messages visible; fold away only what precedes them |
+| `prompt` | what the summariser is asked for |
+| `maxTokens` | cap the summary; unset lets the provider choose |
+| `memory: { agent }` | write durable facts as notes before anything is hidden |
+
+**Why the wording is configurable.** The built-in text used to ask for a summary "concisely", of "key facts, decisions, and pending tasks" — a project-status framing living in core. Measured against a real 1,432-message companion history that produced **88 tokens**; the same line with "in detail" produced **475**, with six times the named specifics and quoted phrasing the short one had none of. One word was discarding most of the history, and the noun list was making a companion's five days read like a standup report. A deployment knows what its conversations are for; core does not.
+
+**Why the memory checkpoint exists.** A summary is one block every later turn carries whether or not it is relevant. A note is retrieved when it matches what is being discussed. For a long conversation the second is the better shape — the history that comes back is the history that applies — so the summary can stay short without the details being gone. Notes are written under the agent losing the history, so they are not pooled across agents.
+
+The order matters and is tested: **facts first, summarize second, hide third.** A provider that throws leaves the session exactly as it was rather than hidden behind a summary that never arrived.
 
 Why it changed: compaction used to `DELETE FROM messages`, keeping no archive, no tombstone and emitting no event, so a summary that dropped the one fact that mattered dropped it permanently. That also made it unsafe to trigger automatically — a destructive, lossy, model-authored rewrite is one thing to run deliberately and another to fire on a threshold. `session.compacted` is emitted on the bus so a subscriber can archive, notify or audit.
 

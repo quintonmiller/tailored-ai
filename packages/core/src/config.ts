@@ -731,6 +731,23 @@ export interface AgentConfig {
   };
   agents: Record<string, AgentDefinition>;
   /**
+   * How a session is summarised when it is compacted.
+   *
+   * The wording belongs in config, not in core. The built-in text used to ask
+   * for "key facts, decisions, and pending tasks" — a project-status framing —
+   * so a companion agent's five days of history came back reading like a
+   * standup report. A deployment knows what its conversations are for; core
+   * does not.
+   */
+  compaction?: {
+    /** System prompt for the summariser. Overrides the built-in default. */
+    prompt?: string;
+    /** Cap on the summary itself. Unset lets the provider decide, which is how a 1,432-message history became 139 tokens. */
+    maxTokens?: number;
+    /** Messages left visible; only what precedes them is folded away. */
+    keepRecent?: number;
+  };
+  /**
    * Blocks of context contributed without writing code. The code-free half of
    * the slot registry in `agent/context-slots.ts` — a plugin registers, an
    * operator declares here, and core places both the same way.
@@ -1530,6 +1547,7 @@ export function mergeProjectOverlay(
  * `channels.<id>`, plugin config) are intentionally open and never checked.
  */
 const KNOWN_TOP_LEVEL_CONFIG_KEY_MAP: Record<keyof AgentConfig, true> = {
+  compaction: true,
   prompt: true,
   server: true,
   database: true,

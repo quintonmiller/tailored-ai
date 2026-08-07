@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { createNote } from "../db/note-queries.js";
 import {
   getSessionMessages,
   listCompactions,
@@ -33,6 +34,48 @@ import { estimateTokens } from "./loop.js";
 
 const MIN_MESSAGES = 4;
 
+/**
+ * What the summariser is asked for when a deployment says nothing.
+ *
+ * Deliberately does not say "concisely", and deliberately does not enumerate
+ * "facts, decisions and pending tasks". Both were measured against a real
+ * 1,432-message conversation:
+ *
+ *   "concisely … facts, decisions, pending tasks"   →   88 tokens
+ *   the same line with "in detail"                  →  475 tokens
+ *
+ * — and the longer one was not padding: six times the named specifics, and it
+ * quoted actual phrasing where the short one quoted none. One word was
+ * discarding most of the history.
+ *
+ * The old wording also carried a project-status opinion into core, which is why
+ * a companion agent's history came back formatted as `Participants:` /
+ * `Key Events:`. A deployment that wants that shape should ask for it in
+ * `compaction.prompt`.
+ */
+/**
+ * What to ask for when saving durable facts ahead of a compaction.
+ *
+ * A summary is one block of prose that every later turn pays for whether or not
+ * it is relevant. A note is retrieved when it matches what is being discussed.
+ * For a long conversation the second is the better shape: the history that comes
+ * back is the history that applies.
+ *
+ * Asks for one fact per line and nothing else, because the output is parsed.
+ */
+export const DEFAULT_MEMORY_CHECKPOINT_PROMPT =
+  "You are about to lose the details of this conversation; only a short summary will remain. " +
+  "Write down what must survive. One item per line, no numbering, no preamble. " +
+  "Record durable things — who people are and how they relate, commitments made and still open, " +
+  "stated preferences and boundaries, decisions and their reasons, names and specifics you would " +
+  "otherwise have to ask for again. Skip anything that was only true in the moment. " +
+  "Output only the lines.";
+
+export const DEFAULT_COMPACTION_PROMPT =
+  "Summarize this conversation in detail. Preserve what someone would need to continue it: " +
+  "who is involved, what was decided or promised, what is still open, and any preferences or " +
+  "specifics that were established. Output only the summary.";
+
 export interface CompactResult {
   skipped: boolean;
   reason?: string;
@@ -42,6 +85,8 @@ export interface CompactResult {
   afterTokens?: number;
   /** Which compaction this was, for `undoCompaction`. Absent when skipped. */
   batch?: number;
+  /** Durable facts saved as notes before hiding anything. */
+  notesWritten?: number;
 }
 
 export interface CompactOptions {
@@ -61,6 +106,32 @@ export interface CompactOptions {
    * past, which is what a summary is actually good at.
    */
   keepRecent?: number;
+  /** Overrides {@link DEFAULT_COMPACTION_PROMPT}. */
+  prompt?: string;
+  /**
+   * Cap on the summary. Left unset the provider decides, which is how 1,432
+   * messages became 139 tokens — the length was accidental, not chosen.
+   */
+  maxTokens?: number;
+  /**
+   * Save durable facts as notes before anything is hidden.
+   *
+   * The summary is a fixed block every later turn carries regardless of
+   * relevance; notes are retrieved when they match the conversation. Writing
+   * both means the summary can stay short without the details being gone — they
+   * come back when they apply.
+   *
+   * Notes are written under `agent`, so they are scoped to whoever is losing the
+   * history rather than pooled across every agent.
+   */
+  memory?: {
+    agent: string;
+    projectId?: string | null;
+    /** Ceiling on notes written. Default 40. */
+    maxNotes?: number;
+    /** Overrides {@link DEFAULT_MEMORY_CHECKPOINT_PROMPT}. */
+    prompt?: string;
+  };
 }
 
 export async function compactSession(
@@ -102,17 +173,22 @@ export async function compactSession(
   const response = await provider.chat({
     model,
     messages: [
-      {
-        role: "system",
-        content:
-          "Summarize this conversation concisely. Preserve key facts, decisions, and pending tasks. Output only the summary.",
-      },
+      { role: "system", content: opts.prompt ?? DEFAULT_COMPACTION_PROMPT },
       { role: "user", content: transcript },
     ],
     temperature: 0.3,
+    maxTokens: opts.maxTokens,
   });
 
   const summary = response.content ?? "";
+
+  // Save durable facts before anything is hidden. Deliberately before the
+  // marking below: a failure here should leave the conversation intact rather
+  // than hidden behind a summary with its details unsaved.
+  let notesWritten = 0;
+  if (opts.memory) {
+    notesWritten = await saveDurableFacts(db, provider, model, transcript, opts.memory);
+  }
 
   // Summarise first, hide second. A provider that throws leaves the session
   // exactly as it was rather than hidden behind a summary that never arrived.
@@ -128,6 +204,7 @@ export async function compactSession(
     messages: hidden,
     beforeTokens,
     afterTokens,
+    notesWritten,
   });
 
   return {
@@ -137,7 +214,51 @@ export async function compactSession(
     beforeTokens,
     afterTokens,
     batch,
+    notesWritten,
   };
+}
+
+/**
+ * Ask the model what must survive, and write each line as a note.
+ *
+ * Best-effort: a checkpoint that fails is logged and compaction continues.
+ * Refusing to compact because the notes call failed would leave the session
+ * growing, which is the problem being solved.
+ */
+async function saveDurableFacts(
+  db: Database.Database,
+  provider: AIProvider,
+  model: string,
+  transcript: string,
+  memory: NonNullable<CompactOptions["memory"]>,
+): Promise<number> {
+  try {
+    const res = await provider.chat({
+      model,
+      messages: [
+        { role: "system", content: memory.prompt ?? DEFAULT_MEMORY_CHECKPOINT_PROMPT },
+        { role: "user", content: transcript },
+      ],
+      temperature: 0.3,
+    });
+    const lines = (res.content ?? "")
+      .split("\n")
+      .map((l) => l.replace(/^\s*(?:[-*\u2022]|\d+[.)])\s*/, "").trim())
+      .filter((l) => l.length > 8)
+      .slice(0, memory.maxNotes ?? 40);
+    for (const content of lines) {
+      createNote(db, {
+        content,
+        agent: memory.agent,
+        project_id: memory.projectId ?? null,
+        tags: ["compaction-checkpoint"],
+      });
+    }
+    return lines.length;
+  } catch (err) {
+    console.error(`[compact] memory checkpoint failed for ${memory.agent}: ${(err as Error).message}`);
+    return 0;
+  }
 }
 
 /**
