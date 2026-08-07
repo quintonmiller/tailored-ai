@@ -625,6 +625,7 @@ export type {
   ChatStreamEvent,
   Message,
   ThinkingLevel,
+  TokenUsage,
   ToolCall,
   ToolSchema,
 } from "./providers/interface.js";

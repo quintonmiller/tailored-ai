@@ -2011,9 +2011,11 @@ export function createServer(opts: ServerOptions) {
       runtime.db
         .prepare(
           `SELECT COALESCE(${column}, '(unattributed)') AS key,
-                  SUM(prompt_tokens)     AS prompt,
-                  SUM(completion_tokens) AS completion,
-                  COUNT(*)               AS calls
+                  SUM(prompt_tokens)      AS prompt,
+                  SUM(completion_tokens)  AS completion,
+                  SUM(cache_read_tokens)  AS cacheRead,
+                  SUM(cache_write_tokens) AS cacheWrite,
+                  COUNT(*)                AS calls
              FROM token_usage
             WHERE created_at >= datetime('now', ?)
             GROUP BY 1
@@ -2023,8 +2025,13 @@ export function createServer(opts: ServerOptions) {
 
     const totals = runtime.db
       .prepare(
+        // cacheRead/cacheWrite stay nullable rather than COALESCE-ing to 0:
+        // most providers report no caching at all, and a zero would read as
+        // "the cache did nothing" instead of "nobody said".
         `SELECT COALESCE(SUM(prompt_tokens), 0)     AS prompt,
                 COALESCE(SUM(completion_tokens), 0) AS completion,
+                SUM(cache_read_tokens)              AS cacheRead,
+                SUM(cache_write_tokens)             AS cacheWrite,
                 COUNT(*)                            AS calls
            FROM token_usage
           WHERE created_at >= datetime('now', ?)`,

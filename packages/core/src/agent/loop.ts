@@ -1262,6 +1262,8 @@ async function _runAgentLoopBody(
           source: opts.usageSource ?? "loop",
           promptTokens: response.usage.input,
           completionTokens: response.usage.output,
+          cacheReadTokens: response.usage.cacheRead,
+          cacheWriteTokens: response.usage.cacheWrite,
         });
       } catch (e) {
         console.error("[agent] token usage recording failed:", (e as Error).message);

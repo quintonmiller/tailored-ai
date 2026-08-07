@@ -57,10 +57,33 @@ export interface ToolSchema {
   };
 }
 
+/**
+ * What one request cost.
+ *
+ * `cacheRead` and `cacheWrite` are **optional on purpose**. Only some vendors
+ * report them, and requiring every provider to invent a number would be worse
+ * than an honest absence — undefined means "this provider does not say", which
+ * is different from zero.
+ *
+ * They are reported *alongside* `input`, not carved out of it. Vendors differ
+ * on whether cached tokens are already counted in the input total (Anthropic
+ * sums all three), so subtracting here would silently double-correct for some
+ * providers. `input` keeps whatever the provider called input; these two add
+ * detail rather than restating it.
+ */
+export interface TokenUsage {
+  input: number;
+  output: number;
+  /** Tokens served from a prompt cache, when the provider reports it. */
+  cacheRead?: number;
+  /** Tokens written to a prompt cache, when the provider reports it. */
+  cacheWrite?: number;
+}
+
 export interface ChatResponse {
   content: string | null;
   toolCalls?: ToolCall[];
-  usage: { input: number; output: number };
+  usage: TokenUsage;
   finishReason: "stop" | "tool_calls" | "length";
   /**
    * The model's reasoning/thinking trace (#254), when the provider emits one
