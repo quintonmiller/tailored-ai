@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type Database from "better-sqlite3";
 import {
   type ApprovalHandler,
@@ -25,6 +26,8 @@ import type { Tool, ToolContext } from "../tools/interface.js";
 import { type ActiveSkillState, createActiveSkillState } from "./active-skill.js";
 import type { SkillCatalogEntry } from "./agents.js";
 import { buildChatLiveState, renderChatLiveState } from "./chat-live-state.js";
+import type { ConfigDeclaredSlot } from "./context-slots.js";
+import { listContextSlots, renderContextSlots, slotsFromConfig } from "./context-slots.js";
 import { buildMemoryBlockWithMeta } from "./memory-inject.js";
 import type { Session } from "./session.js";
 import {
@@ -431,6 +434,12 @@ export interface AgentLoopOptions {
    * chat_live_state, recall_memory) render in their default order.
    */
   systemPrompt?: SystemPromptOverride;
+  /**
+   * Slots declared in `prompt.slots`. Passed in rather than read from config
+   * here so the loop keeps knowing nothing about config shape; the runtime
+   * re-reads it per turn, so an edit lands without a restart.
+   */
+  promptSlots?: ConfigDeclaredSlot[];
 }
 
 /**
@@ -996,6 +1005,20 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
   // which can carry it out. Read from the resolved tool set rather than config,
   // so it tracks what the agent can actually do this turn — including a skill's
   // narrowing and any per-call extras.
+  // Plugin- and config-contributed blocks. Rendered here, placed by core: the
+  // contributor said only whether its content changes between turns.
+  const slotBlocks = renderContextSlots(
+    {
+      agent: agentNameForCore,
+      projectId: session.projectId ?? null,
+      sessionId: session.id,
+      userMessage,
+    },
+    // Registered slots plus whatever config declares. Config ones are rebuilt
+    // per turn so a `file:` edit lands without a restart.
+    [...listContextSlots(), ...slotsFromConfig(opts.promptSlots, (path) => readFileSync(path, "utf8"))],
+  );
+
   const resolvedBase = resolveBase(opts.systemPrompt, { selfModifying: opts.selfModifying });
   const customLayers = resolveCustomLayers(opts.systemPrompt?.custom);
   const builtInLayers = {
@@ -1005,6 +1028,8 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
     core_memory: coreMemoryBlock,
     chat_live_state: chatLiveBlock,
     recall_memory: memoryBlock,
+    slots_standing: slotBlocks.reload,
+    slots_state: slotBlocks.turn,
   };
   const fullSystemPrompt = composeSystemPrompt(resolvedBase, builtInLayers, opts.systemPrompt, customLayers);
   const systemPromptTokens = estimateTokens({ role: "system", content: fullSystemPrompt });

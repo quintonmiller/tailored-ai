@@ -1215,6 +1215,9 @@ export class AgentRuntime {
       sandbox,
       skillCatalog: resolved.skillCatalog,
       systemPrompt: resolved.systemPrompt,
+      // Read per turn, not captured: config is hot-reloadable, and a slot the
+      // operator has just added should appear on the next turn.
+      promptSlots: config.prompt?.slots,
       // Tool-context agent name (docs/agent-unification.md). Every call to
       // a tool that maintains identity (core_memory, Sleep) needs a stable
       // agent string. When the caller doesn't specify one (anonymous chat

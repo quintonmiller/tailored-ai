@@ -9,6 +9,19 @@ export {
   listSessionCompactions,
   undoCompaction,
 } from "./agent/compact.js";
+export type {
+  ConfigDeclaredSlot,
+  ContextSlot,
+  ContextSlotContext,
+  SlotRefresh,
+} from "./agent/context-slots.js";
+export {
+  clearContextSlots,
+  listContextSlots,
+  registerContextSlot,
+  renderContextSlots,
+  unregisterContextSlot,
+} from "./agent/context-slots.js";
 export type { ResolvedHooks } from "./agent/hooks.js";
 export { applyTemplates, EMPTY_HOOKS, executeHooks, hasHooks, mergeHooks, normalizeHooks } from "./agent/hooks.js";
 export type { AgentLoopOptions, ModelCandidate } from "./agent/loop.js";

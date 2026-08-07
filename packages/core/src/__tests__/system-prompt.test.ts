@@ -23,6 +23,8 @@ const layers: BuiltInLayers = {
   core_memory: "[core]",
   chat_live_state: "[live]",
   recall_memory: "[recall]",
+  slots_standing: "[slots-standing]",
+  slots_state: "[slots-state]",
 };
 
 describe("system-prompt composer", () => {
@@ -39,7 +41,7 @@ describe("system-prompt composer", () => {
 
   it("returns default order when no override given, less the tail layers", () => {
     const out = composeSystemPrompt("[base]", layers, undefined, {});
-    expect(out).toBe("[base][inst][ctx][cat][core]");
+    expect(out).toBe("[base][inst][ctx][cat][slots-standing][core]");
   });
 
   it("uses default base when override is undefined", () => {
@@ -172,15 +174,21 @@ describe("system-prompt composer", () => {
     });
   });
 
-  it("DEFAULT_LAYER_ORDER matches the seven historical layers", () => {
+  it("DEFAULT_LAYER_ORDER pins the layout, including the two slot groups", () => {
+    // The order is a contract: a deployment that names layers explicitly is
+    // reading this list, and prompt caching depends on which of them are in
+    // the tail. Slot groups sit next to the layers they resemble — standing
+    // knowledge beside the catalog, per-turn state beside recall.
     expect(DEFAULT_LAYER_ORDER).toEqual([
       "base",
       "instructions",
       "context",
       "skill_catalog",
+      "slots_standing",
       "core_memory",
       "chat_live_state",
       "recall_memory",
+      "slots_state",
     ]);
   });
 
@@ -200,7 +208,7 @@ describe("system-prompt composer", () => {
 
     it("appends it after the built-ins rather than displacing them", () => {
       const out = composeSystemPrompt("[base]", layers, undefined, custom);
-      expect(out).toBe("[base][inst][ctx][cat][core][rules]");
+      expect(out).toBe("[base][inst][ctx][cat][slots-standing][core][rules]");
     });
 
     it("still honours an explicit placement in order", () => {
@@ -272,7 +280,7 @@ describe("system-prompt composer", () => {
   describe("tail layers", () => {
     it("moves the per-turn layers out of the prompt by default", () => {
       expect(resolveTailLayers(undefined)).toEqual([...DEFAULT_TAIL_LAYERS]);
-      expect(composeTailBlock(layers, undefined, {})).toBe("[live][recall]");
+      expect(composeTailBlock(layers, undefined, {})).toBe("[live][recall][slots-state]");
     });
 
     it("keeps every layer exactly once across prompt and tail", () => {
@@ -298,7 +306,7 @@ describe("system-prompt composer", () => {
 
     it("tail: [] keeps everything in the system prompt", () => {
       const out = composeSystemPrompt("[base]", layers, { tail: [] }, {});
-      expect(out).toBe("[base][inst][ctx][cat][core][live][recall]");
+      expect(out).toBe("[base][inst][ctx][cat][slots-standing][core][live][recall][slots-state]");
       expect(composeTailBlock(layers, { tail: [] }, {})).toBe("");
     });
 
@@ -329,7 +337,7 @@ describe("system-prompt composer", () => {
     });
 
     it("returns an empty tail when the moved layers are themselves empty", () => {
-      const empty: BuiltInLayers = { ...layers, chat_live_state: "", recall_memory: "" };
+      const empty: BuiltInLayers = { ...layers, chat_live_state: "", recall_memory: "", slots_state: "" };
       expect(composeTailBlock(empty, undefined, {})).toBe("");
     });
   });
