@@ -433,6 +433,28 @@ export interface AgentLoopOptions {
   systemPrompt?: SystemPromptOverride;
 }
 
+/**
+ * What the tool definitions cost on the wire.
+ *
+ * They ride in their own request field rather than in a message, which is why
+ * they were never measured — `estimateTokens` walks messages, and nothing
+ * walked these. The model still reads every byte of them.
+ *
+ * Measured on a production deployment: 42 tools serialise to ~10,857 tokens, so
+ * a budget that ignored them overshot by about 10%. Nothing overflowed, because
+ * the primary model's window was twice the configured budget; the cost is paid
+ * on every request, and the overshoot is inherited by each fallback rung, which
+ * re-fits history against a window that is often much tighter.
+ *
+ * Same 4-chars-per-token approximation as `estimateTokens`, for the same
+ * reason: it is provider-independent and errs high on JSON, which is the safe
+ * direction for a budget.
+ */
+export function estimateToolSchemaTokens(schemas: ToolSchema[] | undefined): number {
+  if (!schemas?.length) return 0;
+  return Math.ceil(JSON.stringify(schemas).length / 4);
+}
+
 export function estimateTokens(msg: Message): number {
   // `msg.reasoning` is intentionally excluded: it's display-only and stripped
   // from every outgoing request (#254), so it costs no wire/history budget.
@@ -1102,8 +1124,15 @@ async function _runAgentLoopBody(
 
     // Reserve token budget for the system prompt so history + prompt fits in
     // context. The tail costs the same whichever side of the history it sits
-    // on, so it is reserved too.
-    const historyBudget = Math.max(0, maxHistoryTokens - systemPromptTokens - tailTokens);
+    // on, so it is reserved too, and so do the tool schemas — they are a
+    // separate request field rather than a message, which is how they went
+    // uncounted, not a sign that they are free.
+    //
+    // Recomputed per round rather than hoisted: `getTools()` re-resolves every
+    // round, so a turn that gains or loses tools mid-flight changes this. One
+    // number computed once would be wrong for the rest of the turn.
+    const toolSchemaTokens = estimateToolSchemaTokens(toolSchemas);
+    const historyBudget = Math.max(0, maxHistoryTokens - systemPromptTokens - tailTokens - toolSchemaTokens);
     let trimmed: Message[];
     if (opts.summarizeOnTrim) {
       const currentProvider = opts.getProvider ? opts.getProvider() : provider;
@@ -1153,7 +1182,10 @@ async function _runAgentLoopBody(
       const window = candidate.maxContextTokens;
       if (window === undefined || window >= maxHistoryTokens) return { ...base, messages };
 
-      const rungBudget = Math.max(0, window - systemPromptTokens - tailTokens);
+      // Same subtraction as the main budget, and it matters more here: this
+      // window is usually the tight one, and `base.tools` sends the identical
+      // schemas to a rung with far less room for them.
+      const rungBudget = Math.max(0, window - systemPromptTokens - tailTokens - toolSchemaTokens);
       const refitted = trimHistory(history, rungBudget);
       if (refitted.length < trimmed.length) {
         console.warn(
