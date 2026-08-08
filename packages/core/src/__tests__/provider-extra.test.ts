@@ -64,9 +64,9 @@ describe("providerExtra reaches the resolved agent", () => {
 
   it("lets an agent override the deployment default", () => {
     const config = configWith({ providerExtra: { repetition_penalty: 1.15 } }, {
-      lila: { providerExtra: { repetition_penalty: 1.2, top_k: 20 } },
+      planner: { providerExtra: { repetition_penalty: 1.2, top_k: 20 } },
     } as unknown as AgentConfig["agents"]);
-    expect(resolveAgent("lila", config, []).providerExtra).toEqual({ repetition_penalty: 1.2, top_k: 20 });
+    expect(resolveAgent("planner", config, []).providerExtra).toEqual({ repetition_penalty: 1.2, top_k: 20 });
   });
 
   it("replaces the deployment bag wholesale rather than merging into it", () => {

@@ -312,11 +312,11 @@ rooms:
 Renders a block like this, with the room being answered first and marked:
 
 ```
-## quinton-lila — you are here
-quinton [person] (to lila): how was your day?
+## design — you are here
+quinton [person] (to planner): how is the layout coming?
 
-## enzo-lila
-enzo [person]: are you coming over
+## backend
+dana [person]: the migration is blocked on the schema
 ```
 
 **Floors are paid first**, then the room being answered takes the remainder. A busy room cannot crowd out a quiet one,
@@ -335,7 +335,7 @@ anywhere else. That rides in the system prompt (a `reload` slot), where it is pa
 appears only for agents actually in more than one room.
 
 It is worth having. Asked in one room to tell someone in another something, a 27B model with no such paragraph invented
-`[message to enzo]` as a reply prefix and sent it to the wrong room — three times in one evening. The `room` tool could
+`[message to dana]` as a reply prefix and sent it to the wrong room — three times in one evening. The `room` tool could
 do it the whole time; nothing in the agent's context said so.
 
 **What it does not fix.** An agent talking about the wrong subject is usually not a context-assembly problem. Measured
@@ -1246,10 +1246,10 @@ subscriber counting these counts conversations rather than attempts.
 `builtin:dm-mirror` turns that into a line in a room:
 
 ```
-dm  **kiki → nova**
+dm  **planner → coder**
     are you free tonight?
 
-    **nova replied**
+    **coder replied**
     yes, after eight
 ```
 

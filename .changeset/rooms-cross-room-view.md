@@ -23,6 +23,6 @@ stored as a record is what puts one block in a session twenty times over.
 
 Enabling it also adds a short standing paragraph, in the system prompt, telling
 an agent in several rooms how to reach the others. Without it a 27B model asked
-in one room to tell someone in another something invented `[message to enzo]` as
+in one room to tell someone in another something invented `[message to dana]` as
 a reply prefix and sent it to the wrong room. The `room` tool could always do
 it; nothing said so.

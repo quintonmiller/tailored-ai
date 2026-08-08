@@ -383,7 +383,7 @@ describe("memory checkpoint before compaction", () => {
       twoStep("Alex prefers bullet points\nThe deploy is blocked on review"),
       "m",
       {
-        memory: { agent: "lila" },
+        memory: { agent: "planner" },
       },
     );
 
@@ -392,7 +392,7 @@ describe("memory checkpoint before compaction", () => {
       content: string;
       agent: string;
     }[];
-    expect(notes.map((n) => n.agent)).toEqual(["lila", "lila"]);
+    expect(notes.map((n) => n.agent)).toEqual(["planner", "planner"]);
     expect(notes[0].content).toBe("Alex prefers bullet points");
   });
 
@@ -403,15 +403,15 @@ describe("memory checkpoint before compaction", () => {
     await compactSession(
       db,
       session.id,
-      twoStep("- Alex prefers bullets\n2) The deploy is blocked\n* Enzo joined"),
+      twoStep("- Alex prefers bullets\n2) The deploy is blocked\n* Dana joined"),
       "m",
       {
-        memory: { agent: "lila" },
+        memory: { agent: "planner" },
       },
     );
 
     const notes = db.prepare("SELECT content FROM notes ORDER BY rowid").all() as { content: string }[];
-    expect(notes.map((n) => n.content)).toEqual(["Alex prefers bullets", "The deploy is blocked", "Enzo joined"]);
+    expect(notes.map((n) => n.content)).toEqual(["Alex prefers bullets", "The deploy is blocked", "Dana joined"]);
   });
 
   it("compacts anyway when the checkpoint fails", async () => {
@@ -430,7 +430,7 @@ describe("memory checkpoint before compaction", () => {
       },
     };
 
-    const r = await compactSession(db, session.id, flaky, "m", { memory: { agent: "lila" } });
+    const r = await compactSession(db, session.id, flaky, "m", { memory: { agent: "planner" } });
 
     // Refusing to compact because the notes call failed would leave the session
     // growing, which is the problem being solved.
@@ -479,7 +479,7 @@ describe("checkpoint does not save the transcript back to itself", () => {
       },
     };
 
-    await compactSession(db, session.id, spy, "m", { memory: { agent: "lila" } });
+    await compactSession(db, session.id, spy, "m", { memory: { agent: "planner" } });
 
     expect(seen[0]).toContain("bounded backoff");
     expect(seen[0]).not.toContain("note_6c0a6ccf");
@@ -503,7 +503,7 @@ describe("checkpoint does not save the transcript back to itself", () => {
       },
     };
 
-    const r = await compactSession(db, session.id, echoer, "m", { memory: { agent: "lila" } });
+    const r = await compactSession(db, session.id, echoer, "m", { memory: { agent: "planner" } });
 
     expect(r.notesWritten).toBe(1);
     const notes = db.prepare("SELECT content FROM notes").all() as { content: string }[];

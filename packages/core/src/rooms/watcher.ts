@@ -166,7 +166,7 @@ export function isFromHuman(msg: RoomMessage, identities: IdentityResolver): boo
  * An agent in six rooms had no sanctioned way to speak in any but the one that
  * woke it: the wake prompt names one room, lists only that room's participants,
  * and offers reply-or-pass. Asked in one room to tell someone in another
- * something, a 27B model invented `[message to enzo]` as a reply prefix and
+ * something, a 27B model invented `[message to dana]` as a reply prefix and
  * sent it to the wrong room — three times in one evening. The capability was
  * there the whole time; nothing said so.
  *

@@ -36,11 +36,11 @@ import type { AgentRuntime } from "../runtime.js";
 let db: Database.Database;
 let store: RoomStore;
 let backend: LocalRoomBackend;
-const AGENT = "lila";
+const AGENT = "planner";
 
 function makeRuntime(crossRoomView?: Record<string, unknown>): AgentRuntime {
   const config = {
-    agents: { lila: { description: "companion" } },
+    agents: { planner: { description: "plans work" } },
     providers: { local: { defaultModel: "m" } },
     agent: { defaultProvider: "local", temperature: 0.3, maxToolRounds: 8 },
     rooms: { maxWakesPerHour: 50, maxAgentTurns: 6, identities: { quinton: "1234" }, crossRoomView },
@@ -59,10 +59,10 @@ function makeRuntime(crossRoomView?: Record<string, unknown>): AgentRuntime {
 
 /** Two rooms, the agent subscribed to each. No traffic yet. */
 async function seedTwoRooms() {
-  await backend.createRoom({ name: "quinton-lila" });
-  await backend.createRoom({ name: "enzo-lila" });
-  store.subscribe({ agent: AGENT, roomRef: "local:quinton-lila", deliver: "poll", wakeOn: "all" });
-  store.subscribe({ agent: AGENT, roomRef: "local:enzo-lila", deliver: "poll", wakeOn: "all" });
+  await backend.createRoom({ name: "design" });
+  await backend.createRoom({ name: "backend" });
+  store.subscribe({ agent: AGENT, roomRef: "local:design", deliver: "poll", wakeOn: "all" });
+  store.subscribe({ agent: AGENT, roomRef: "local:backend", deliver: "poll", wakeOn: "all" });
 }
 
 /**
@@ -73,8 +73,8 @@ async function seedTwoRooms() {
  * happens — which looks exactly like the feature not working.
  */
 async function postTraffic() {
-  await backend.post("enzo-lila", { speaker: "enzo", to: [], body: "are you coming over" });
-  await backend.post("quinton-lila", { speaker: "quinton", to: [AGENT], body: "how was your day?" });
+  await backend.post("backend", { speaker: "dana", to: [], body: "the migration is blocked on the schema" });
+  await backend.post("design", { speaker: "quinton", to: [AGENT], body: "how is the layout coming?" });
 }
 
 beforeEach(async () => {
@@ -99,7 +99,7 @@ describe("the cross-room view", () => {
     await seedTwoRooms();
     const watcher = new RoomWatcher({ runtime: makeRuntime(), store });
     await postTraffic();
-    await watcher.pollOnce(AGENT, "local:quinton-lila");
+    await watcher.pollOnce(AGENT, "local:design");
 
     expect(renderContextSlots({ agent: AGENT, projectId: null, sessionId: "s", userMessage: "" }).turn).toBe("");
   });
@@ -115,23 +115,23 @@ describe("the cross-room view", () => {
       rendered = renderContextSlots({ agent: AGENT, projectId: null, sessionId: "s", userMessage: "" }).turn;
       return "ok";
     });
-    await watcher.pollOnce(AGENT, "local:quinton-lila");
+    await watcher.pollOnce(AGENT, "local:design");
 
-    expect(rendered).toContain("quinton-lila — you are here");
-    expect(rendered).toContain("enzo-lila");
+    expect(rendered).toContain("design — you are here");
+    expect(rendered).toContain("backend");
     // The other room's content, which the wake prompt alone would never carry.
-    expect(rendered).toContain("are you coming over");
+    expect(rendered).toContain("the migration is blocked on the schema");
   });
 
   it("never reaches the wake prompt, which is the record of what was asked", async () => {
     await seedTwoRooms();
     const watcher = new RoomWatcher({ runtime: makeRuntime({ enabled: true, messages: 24, floorPerRoom: 2 }), store });
     await postTraffic();
-    await watcher.pollOnce(AGENT, "local:quinton-lila");
+    await watcher.pollOnce(AGENT, "local:design");
 
     const prompt = runAgentLoopMock.mock.calls.at(-1)?.[0] as string;
-    expect(prompt).toContain("how was your day?");
-    expect(prompt).not.toContain("are you coming over");
+    expect(prompt).toContain("how is the layout coming?");
+    expect(prompt).not.toContain("the migration is blocked on the schema");
     expect(prompt).not.toContain("you are here");
   });
 
@@ -139,7 +139,7 @@ describe("the cross-room view", () => {
     await seedTwoRooms();
     const watcher = new RoomWatcher({ runtime: makeRuntime({ enabled: true, messages: 24, floorPerRoom: 2 }), store });
     await postTraffic();
-    await watcher.pollOnce(AGENT, "local:quinton-lila");
+    await watcher.pollOnce(AGENT, "local:design");
 
     expect(renderContextSlots({ agent: AGENT, projectId: null, sessionId: "s", userMessage: "" }).turn).toBe("");
   });
@@ -178,7 +178,7 @@ describe("the multi-room how-to", () => {
     const watcher = new RoomWatcher({ runtime: makeRuntime({ enabled: true }), store });
 
     const out = renderContextSlots({ agent: AGENT, projectId: null, sessionId: "s", userMessage: "" }).reload;
-    // The gap that produced `[message to enzo]` as a reply prefix: the
+    // The gap that produced `[message to dana]` as a reply prefix: the
     // capability existed and nothing in the agent's context mentioned it.
     expect(out).toContain('room(action="post"');
     expect(out).toContain('room(action="dm"');

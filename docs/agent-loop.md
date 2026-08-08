@@ -208,7 +208,7 @@ one opaque bag.
 
 ```yaml
 agents:
-  lila:
+  planner:
     model: omega-evolution-27b
     providerExtra:
       repetition_penalty: 1.15

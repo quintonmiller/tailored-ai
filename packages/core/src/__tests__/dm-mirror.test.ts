@@ -40,8 +40,8 @@ const posts = (): string[] =>
 const exchange = (
   over: Partial<RuntimeEventPayload<"agent.messaged">> = {},
 ): RuntimeEventPayload<"agent.messaged"> => ({
-  from: "kiki",
-  to: "nova",
+  from: "planner",
+  to: "coder",
   body: "are you free tonight?",
   reply: "yes, after eight",
   via: "dm",
@@ -70,9 +70,9 @@ describe("mirroring", () => {
     await flush();
 
     expect(posts()).toHaveLength(1);
-    expect(posts()[0]).toContain("kiki → nova");
+    expect(posts()[0]).toContain("planner → coder");
     expect(posts()[0]).toContain("are you free tonight?");
-    expect(posts()[0]).toContain("nova replied");
+    expect(posts()[0]).toContain("coder replied");
     expect(posts()[0]).toContain("yes, after eight");
     mirror.stop();
   });
@@ -133,17 +133,17 @@ describe("what it declines to mirror", () => {
   });
 
   it("honours an agent filter on either side of the exchange", async () => {
-    const mirror = new DmMirror({ runtime: makeRuntime(), room: "dm-log", agents: ["lila"] });
+    const mirror = new DmMirror({ runtime: makeRuntime(), room: "dm-log", agents: ["reviewer"] });
 
-    events.emit("agent.messaged", exchange({ from: "kiki", to: "nova" }));
+    events.emit("agent.messaged", exchange({ from: "planner", to: "coder" }));
     await flush();
     expect(posts()).toHaveLength(0);
 
-    events.emit("agent.messaged", exchange({ from: "kiki", to: "lila" }));
+    events.emit("agent.messaged", exchange({ from: "planner", to: "reviewer" }));
     await flush();
     expect(posts()).toHaveLength(1);
 
-    events.emit("agent.messaged", exchange({ from: "lila", to: "nova" }));
+    events.emit("agent.messaged", exchange({ from: "reviewer", to: "coder" }));
     await flush();
     expect(posts()).toHaveLength(2);
     mirror.stop();
@@ -166,10 +166,10 @@ describe("the loop guard", () => {
    * unaddressed line too, so the mirror would feed itself through that agent.
    */
   it("refuses to mirror into a room somebody wakes on", async () => {
-    store.subscribe({ agent: "nova", roomRef: "local:dmlog", wakeOn: "all", source: "config" });
+    store.subscribe({ agent: "coder", roomRef: "local:dmlog", wakeOn: "all", source: "config" });
     const mirror = new DmMirror({ runtime: makeRuntime(), room: "dm-log" });
 
-    expect(mirror.blocked).toContain("nova (wakeOn: all)");
+    expect(mirror.blocked).toContain("coder (wakeOn: all)");
 
     events.emit("agent.messaged", exchange());
     await flush();
@@ -178,7 +178,7 @@ describe("the loop guard", () => {
   });
 
   it("allows a room watched only by a reader", () => {
-    store.subscribe({ agent: "nova", roomRef: "local:dmlog", wakeOn: "none", source: "config" });
+    store.subscribe({ agent: "coder", roomRef: "local:dmlog", wakeOn: "none", source: "config" });
     const mirror = new DmMirror({ runtime: makeRuntime(), room: "dm-log" });
 
     expect(mirror.blocked).toBeNull();
@@ -193,10 +193,10 @@ describe("the loop guard", () => {
     const mirror = new DmMirror({ runtime: makeRuntime(), room: "dm-log" });
     expect(mirror.blocked).toBeNull();
 
-    store.subscribe({ agent: "nova", roomRef: "local:dmlog", wakeOn: "named", source: "agent" });
+    store.subscribe({ agent: "coder", roomRef: "local:dmlog", wakeOn: "named", source: "agent" });
     events.emit("runtime.reloaded", { generation: 2 });
 
-    expect(mirror.blocked).toContain("nova (wakeOn: named)");
+    expect(mirror.blocked).toContain("coder (wakeOn: named)");
     events.emit("agent.messaged", exchange());
     await flush();
     expect(posts()).toHaveLength(0);
@@ -204,11 +204,11 @@ describe("the loop guard", () => {
   });
 
   it("resumes once the offending subscription is gone", async () => {
-    store.subscribe({ agent: "nova", roomRef: "local:dmlog", wakeOn: "all", source: "agent" });
+    store.subscribe({ agent: "coder", roomRef: "local:dmlog", wakeOn: "all", source: "agent" });
     const mirror = new DmMirror({ runtime: makeRuntime(), room: "dm-log" });
     expect(mirror.blocked).not.toBeNull();
 
-    store.unsubscribe("nova", "local:dmlog");
+    store.unsubscribe("coder", "local:dmlog");
     events.emit("runtime.reloaded", { generation: 3 });
 
     expect(mirror.blocked).toBeNull();
