@@ -99,6 +99,8 @@ const ModelEntrySchema = z.object({
   thinking: z.enum(["off", "auto", "low", "medium", "high"]).optional(),
   temperature: z.number().optional(),
   maxTokens: z.number().optional(),
+  // Open on purpose: the provider owns these keys, not core.
+  providerExtra: z.record(z.unknown()).optional(),
 });
 type _ModelEntryMatches = AssertTrue<Identical<z.infer<typeof ModelEntrySchema>, ModelEntry>>;
 
@@ -192,6 +194,8 @@ const AgentSettingsSchema = z.object({
   maxContextTokens: z.number(),
   temperature: z.number(),
   maxTokens: z.number().optional(),
+  // Open on purpose: the provider owns these keys, not core.
+  providerExtra: z.record(z.unknown()).optional(),
   maxToolRounds: z.number(),
   sandbox: z.string().optional(),
   systemPrompt: SystemPromptOverrideSchema.optional(),
@@ -249,6 +253,8 @@ export const AgentDefinitionSchema = z.object({
   temperature: z.number().optional(),
   thinking: z.enum(["off", "auto", "low", "medium", "high"]).optional(),
   maxTokens: z.number().optional(),
+  // Open on purpose: the provider owns these keys, not core.
+  providerExtra: z.record(z.unknown()).optional(),
   maxToolRounds: z.number().optional(),
   fileBoundary: z.string().optional(),
   exec: CommandRulesSchema.optional(),

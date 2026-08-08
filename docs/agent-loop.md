@@ -200,6 +200,47 @@ Reasoning models emit a thinking trace and accept an effort knob. The loop handl
 
 Note the `auto` asymmetry: effort-style APIs have no explicit "auto", so it omits the field; Anthropic/Bedrock have no `auto`, so it enables thinking at a moderate budget. Anthropic/Bedrock also bump `max_tokens` past the budget and drop `temperature` (rejected with thinking on), and Bedrock gates `reasoning_config` to Anthropic-family model ids (Nova/Llama/Mistral reject it).
 
+## Sampling controls core does not model (`providerExtra`)
+
+The generation call sends `temperature` and `max_tokens`, plus the mapped `thinking` fragment. Everything else a
+provider offers — vLLM's `repetition_penalty`, `top_k`, `min_p`, whatever a plugin invents — reaches the wire through
+one opaque bag.
+
+```yaml
+agents:
+  lila:
+    model: omega-evolution-27b
+    providerExtra:
+      repetition_penalty: 1.15
+      top_k: 20
+```
+
+Resolution mirrors `maxTokens`: `models[].providerExtra` (per rung) → `agents.<name>.providerExtra` → `agent.providerExtra`.
+It lands on `ChatParams.extra`, which `OpenAIProvider.buildBody` merges onto the request body **last** — so a key here
+also overrides one core would otherwise set, which is the escape hatch when core's mapping is wrong for a given server.
+
+Two deliberate choices:
+
+- **Core never validates or interprets the keys.** A provider plugin can expose its own controls without a core change,
+  and a key the provider does not recognise is that provider's error to raise, not core's to whitelist. Same shape as
+  `tasks.options`.
+- **A more specific level replaces the bag rather than merging into it.** Every other override here means "unset
+  inherits", and merging would read the same way — but the bag is *provider-shaped*, and a chain routinely mixes
+  providers. Inheriting a vLLM `repetition_penalty` into an Anthropic fallback would send a field that provider has
+  never heard of. Set it per rung, in full, or leave it unset.
+
+**Why this exists.** It is not a convenience knob. `omega-evolution-27b` re-sends its own previous message nearly
+verbatim — measured 15/16, word-trigram overlap 0.90 against the agent's own prior reply — and nothing core could
+already send fixes it. Temperature does not (1.0 → 15/16). Prompt wording does not; an explicit "do not repeat"
+instruction measured 20/20, worse than saying nothing. The model's own `generation_config.json` ships
+`presence_penalty: 1.5` and that does not either (15/16), because presence/frequency penalties are additive on token
+counts while the failure is re-emitting a whole prior message. `repetition_penalty: 1.15` takes it to 4/16, and with
+the repo's recommended `top_k`/`top_p` to 3/16 — at parity with the model it replaced. A deployment that cannot send
+that field has no way to run the model.
+
+Prefer setting it here over baking it into a model server's launch flags: config survives a model swap, applies per
+agent, and reaches metered cloud providers too.
+
 ### Provider capabilities and utilities
 
 - **Model discovery**: providers may implement the optional `listModels?(): Promise<string[]>` (`providers/interface.ts`). Both built-ins do (`GET {baseUrl}/models` for the OpenAI family, `GET /v1/models` for Anthropic); the wizard/editor can offer real model ids instead of free text.
