@@ -20,6 +20,7 @@
  */
 
 import { resolveAgent } from "../agent/agents.js";
+import { registerContextSlot, unregisterContextSlot } from "../agent/context-slots.js";
 import { estimateTokens, runAgentLoop } from "../agent/loop.js";
 import { findOrCreateSession } from "../agent/session.js";
 import type { Subscription } from "../events.js";
@@ -158,6 +159,32 @@ export function isFromHuman(msg: RoomMessage, identities: IdentityResolver): boo
   const identity = msg.speaker ? identities.get(msg.speaker) : undefined;
   return identity ? identity.kind === "human" : !msg.speaker;
 }
+
+/**
+ * How to hold several conversations at once.
+ *
+ * An agent in six rooms had no sanctioned way to speak in any but the one that
+ * woke it: the wake prompt names one room, lists only that room's participants,
+ * and offers reply-or-pass. Asked in one room to tell someone in another
+ * something, a 27B model invented `[message to enzo]` as a reply prefix and
+ * sent it to the wrong room — three times in one evening. The capability was
+ * there the whole time; nothing said so.
+ *
+ * Phrased as positive instructions with concrete calls, not as prohibitions.
+ * The one negative is last and names the actual consequence, because "it goes
+ * to the wrong people" is the part that was not obvious.
+ */
+const MULTI_ROOM_HOWTO = [
+  "You are in more than one room. You can see them all, but only the room you are answering in hears your reply.",
+  "",
+  "- Reply where you are: write your message plainly.",
+  '- Say something in another room: room(action="post", room="<room>", body="<message>").',
+  '- Reach one person or agent wherever they are: room(action="dm", to=["<name>"], body="<message>").',
+  '- Nothing to add here: room(action="pass").',
+  "",
+  "A message meant for another room has to be sent with the tool. Writing it as your reply here delivers it to the",
+  "people in this room instead.",
+].join("\n");
 
 /** How much of its own message an agent is shown when it is quoted back to it. */
 const OWN_ECHO_CHARS = 150;
@@ -519,6 +546,20 @@ export class RoomWatcher {
   /** Agents already told that batching needs a per-agent floor. See batchingAllowed. */
   private batchWarned = new Set<string>();
   /**
+   * The cross-room view for the turn each agent is currently taking.
+   *
+   * Written immediately before the turn and cleared when it ends. One entry per
+   * agent is enough because `running` already serialises an agent's turns, so
+   * the value can never belong to a turn other than the one reading it — the
+   * same guarantee `skippedAhead` relies on.
+   */
+  private crossRoomView = new Map<string, string>();
+  /**
+   * Recent lines per room, so building the view does not cost one backend round
+   * trip per watched room per turn. Keyed by roomRef.
+   */
+  private roomSliceCache = new Map<string, { at: number; lines: string[] }>();
+  /**
    * Distinguishes one batch attempt from the next.
    *
    * The per-room queue drops a second trigger that arrives under a key already
@@ -543,6 +584,11 @@ export class RoomWatcher {
     this.runtime = opts.runtime;
     this.store = opts.store;
     this.limits = { ...ROOM_WATCHER_DEFAULTS, ...opts.limits };
+    // Registered here rather than in start(): both slots decide for themselves
+    // whether they have anything to say — config off, or fewer than two rooms,
+    // renders nothing — so an unstarted watcher contributes nothing anyway, and
+    // a caller that drives turns directly still gets them.
+    this.registerRoomSlots();
   }
 
   /** Identities are rebuilt per call so a config reload takes effect at once. */
@@ -604,6 +650,7 @@ export class RoomWatcher {
     this.stop();
     this.started = true;
     this.limits = this.readLimits();
+    this.registerRoomSlots();
 
     // Backends connect asynchronously and after this point (Discord registers
     // on ClientReady, well after login resolves), so re-arm whenever the set
@@ -775,8 +822,49 @@ export class RoomWatcher {
     this.started = wasStarted;
   }
 
+  /**
+   * Two context slots, split by what they are.
+   *
+   * The view is state: it changes every turn, so it rides behind the history
+   * where it is replaced wholesale and never cached. The how-to is standing
+   * knowledge: identical on every turn, so it rides in the system prompt, in
+   * the cacheable prefix, and is paid for once rather than per turn.
+   *
+   * Neither is written into the wake prompt. The wake prompt is persisted as
+   * the record of what the agent was asked, and a re-rendered view stored as a
+   * record is what puts the same block in a session twenty times.
+   */
+  private registerRoomSlots(): void {
+    registerContextSlot({
+      id: "rooms.view",
+      refresh: "turn",
+      title: "Your rooms right now",
+      render: (ctx) => (ctx.agent ? (this.crossRoomView.get(ctx.agent) ?? null) : null),
+    });
+
+    registerContextSlot({
+      id: "rooms.multi_room_howto",
+      refresh: "reload",
+      render: (ctx) => {
+        if (!ctx.agent) return null;
+        if (!this.crossRoomSettings().enabled) return null;
+        const live = this.store
+          .listSubscriptionsForAgent(ctx.agent)
+          .filter((s) => !this.store.getRoomByRef(s.roomRef)?.archivedAt);
+        // An agent in one room does not need to be told about the others, and
+        // the paragraph would only invite it to address a room it cannot see.
+        if (live.length < 2) return null;
+        return MULTI_ROOM_HOWTO;
+      },
+    });
+  }
+
   stop(): void {
     this.started = false;
+    unregisterContextSlot("rooms.view");
+    unregisterContextSlot("rooms.multi_room_howto");
+    this.crossRoomView.clear();
+    this.roomSliceCache.clear();
     this.offBackendChange?.();
     this.offBackendChange = undefined;
     this.membershipSubscription?.dispose();
@@ -1415,6 +1503,92 @@ export class RoomWatcher {
     return this.skippedAhead.has(roomRef);
   }
 
+  /** Resolved cross-room-view settings, read per call because config hot-reloads. */
+  private crossRoomSettings(): { enabled: boolean; messages: number; floorPerRoom: number; cacheMs: number } {
+    const cfg = this.runtime.getConfig().rooms?.crossRoomView;
+    return {
+      enabled: cfg?.enabled === true,
+      messages: Math.max(1, cfg?.messages ?? 24),
+      floorPerRoom: Math.max(1, cfg?.floorPerRoom ?? 2),
+      cacheMs: Math.max(0, cfg?.cacheSeconds ?? 60) * 1000,
+    };
+  }
+
+  /**
+   * The most recent lines in one room, cached.
+   *
+   * `fresh` skips the cache, which the room being answered always wants. The
+   * others tolerate a slice up to `cacheSeconds` old: they exist to remind the
+   * agent that a conversation is open, and a slightly stale reminder is worth
+   * far more than a round trip per room per turn.
+   */
+  private async roomSlice(roomRef: string, limit: number, fresh: boolean): Promise<string[]> {
+    const { cacheMs } = this.crossRoomSettings();
+    const hit = this.roomSliceCache.get(roomRef);
+    if (!fresh && hit && Date.now() - hit.at < cacheMs) return hit.lines.slice(-limit);
+
+    const ref = parseRoomRef(roomRef);
+    if (!ref) return [];
+    const backend = getRoomBackend(ref.backend);
+    if (!backend || this.isQuarantined(roomRef)) return hit?.lines.slice(-limit) ?? [];
+
+    try {
+      // Deliberately from a null cursor, not the subscription's: this is a
+      // view of what is there, not a claim about what is unread, and it must
+      // never advance a cursor — that is the read path's job alone.
+      const raw = await backend.fetchSince(ref.id, null, Math.max(limit, this.crossRoomSettings().floorPerRoom));
+      const identities = this.identities();
+      const lines = raw.map((m) => {
+        const e = enrichRoomMessage(m, identities);
+        const who = e.speaker ?? e.authorLabel;
+        return renderTranscriptLine(who, e.to, e.body, identities.get(who)?.kind ?? "unknown");
+      });
+      this.roomSliceCache.set(roomRef, { at: Date.now(), lines });
+      return lines.slice(-limit);
+    } catch {
+      // One unreachable room must not blank the whole view.
+      return hit?.lines.slice(-limit) ?? [];
+    }
+  }
+
+  /**
+   * Every room this agent watches, as one block, with the room it is answering
+   * in marked and placed first.
+   *
+   * Floors are paid before the remainder so a busy room cannot crowd out a
+   * quiet one, and the current room takes what is left rather than a fixed
+   * share — it is the conversation actually in progress.
+   */
+  private async buildCrossRoomView(agent: string, currentRoomRef: string): Promise<string | null> {
+    const { enabled, messages, floorPerRoom } = this.crossRoomSettings();
+    if (!enabled) return null;
+
+    const subs = this.store
+      .listSubscriptionsForAgent(agent)
+      .filter((s) => !this.store.getRoomByRef(s.roomRef)?.archivedAt);
+    if (subs.length < 2) return null; // one room is not a "cross-room" view
+
+    const others = subs.filter((s) => s.roomRef !== currentRoomRef);
+    const spentOnFloors = others.length * floorPerRoom;
+    const hereLimit = Math.max(floorPerRoom, messages - spentOnFloors);
+
+    const sections: string[] = [];
+    const hereName = this.store.getRoomByRef(currentRoomRef)?.name ?? currentRoomRef;
+    const here = await this.roomSlice(currentRoomRef, hereLimit, true);
+    if (here.length) sections.push(`## ${hereName} — you are here\n${here.join("\n")}`);
+
+    for (const sub of others) {
+      const room = this.store.getRoomByRef(sub.roomRef);
+      if (!room) continue;
+      const lines = await this.roomSlice(sub.roomRef, floorPerRoom, false);
+      if (!lines.length) continue;
+      sections.push(`## ${room.name}\n${lines.join("\n")}`);
+    }
+
+    if (sections.length < 2) return null; // nothing the wake prompt does not already say
+    return sections.join("\n\n");
+  }
+
   private isQuarantined(roomRef: string): boolean {
     const entry = this.roomFailures.get(roomRef);
     return entry !== undefined && entry.quietUntil > Date.now();
@@ -1746,6 +1920,14 @@ export class RoomWatcher {
     // Every room this turn covers. One for an ordinary wake; the whole batch
     // for a combined one, and `sub` is then only the room it was charged to.
     const rooms = batch ? batch.subs.map((s) => s.roomRef) : [sub.roomRef];
+    // Built here, the one choke point every wake path shares — the poll, push,
+    // check-in, scheduled and batched paths all end up in this method, and
+    // hooking any subset of them is how a feature ends up working for check-ins
+    // and not for messages. Built rather than rendered because a slot renders
+    // synchronously and this reads the backends; stashed for the slot to pick
+    // up, so it lands behind the history and never enters the record.
+    const view = await this.buildCrossRoomView(sub.agent, sub.roomRef);
+    if (view) this.crossRoomView.set(sub.agent, view);
     const config = this.runtime.getConfig();
     const resolved = resolveAgent(
       sub.agent,
@@ -1860,6 +2042,11 @@ export class RoomWatcher {
         console.warn(`[rooms] Correction round failed for ${sub.agent}: ${(err as Error).message}`);
       }
     }
+
+    // Both model calls are done. Dropped here rather than left to the next turn
+    // to overwrite: an agent whose next wake builds no view (config turned off,
+    // a room archived down to one) would otherwise keep rendering this one.
+    this.crossRoomView.delete(sub.agent);
 
     // A turn that did real work is progress, not chatter, so it must not
     // push the room toward the depth cap. Without this, agents collaborating

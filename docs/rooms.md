@@ -294,6 +294,55 @@ subscriptions:
 Injected under the purpose in that agent's wake prompt. Keep it short — it
 competes with the purpose for a small budget.
 
+## Seeing every room, not just the one that woke you
+
+A wake prompt names one room and carries that room's new messages. For an agent in one room that is the whole world.
+For an agent in six it is a keyhole: it can be mid-conversation in three places and only ever see whichever spoke last,
+which is not how the person on the other side experiences it.
+
+```yaml
+rooms:
+  crossRoomView:
+    enabled: true      # off by default
+    messages: 24       # total lines across all rooms
+    floorPerRoom: 2    # kept for each room the agent is NOT answering in
+    cacheSeconds: 60   # how long another room's slice may be reused
+```
+
+Renders a block like this, with the room being answered first and marked:
+
+```
+## quinton-lila — you are here
+quinton [person] (to lila): how was your day?
+
+## enzo-lila
+enzo [person]: are you coming over
+```
+
+**Floors are paid first**, then the room being answered takes the remainder. A busy room cannot crowd out a quiet one,
+and the quiet room is precisely the one whose last exchange the agent has forgotten. The current room's slice is always
+fetched fresh; the others tolerate a slice up to `cacheSeconds` old, because every watched room would otherwise be a
+backend round trip on every turn.
+
+**It is not in the wake prompt.** It renders through a `turn` context slot, so it sits behind the history and is
+replaced wholesale each turn. The wake prompt is persisted as the record of what the agent was asked; a re-rendered
+view written into that record is exactly what put one 1,115-token block into a single session twenty-three times. See
+[context-assembly-design.md](./context-assembly-design.md) for the record-vs-view split.
+
+Enabling it also turns on a short standing paragraph telling the agent how to work across rooms — that a reply reaches
+only the room it is answering in, and that `room(action="post", room=…)` and `room(action="dm", to=…)` are how to reach
+anywhere else. That rides in the system prompt (a `reload` slot), where it is paid for once rather than per turn, and
+appears only for agents actually in more than one room.
+
+It is worth having. Asked in one room to tell someone in another something, a 27B model with no such paragraph invented
+`[message to enzo]` as a reply prefix and sent it to the wrong room — three times in one evening. The `room` tool could
+do it the whole time; nothing in the agent's context said so.
+
+**What it does not fix.** An agent talking about the wrong subject is usually not a context-assembly problem. Measured
+on a real six-room session: restricting the history to the current room alone left the off-topic rate at 19/20, because
+the two people in that room had genuinely been discussing the third. Check the model's sampling settings before
+reshaping its context — see [agent-loop.md](./agent-loop.md).
+
 ## Checking in without being asked
 
 Messages are not the only reason to act — a deadline gets closer, a promised
