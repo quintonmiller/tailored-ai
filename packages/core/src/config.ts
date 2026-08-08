@@ -1268,6 +1268,44 @@ export interface AgentConfig {
      * spans rooms cannot be bounded by a per-room counter.
      */
     minWakeIntervalMinutes?: number;
+    /**
+     * Show an agent every room it watches on every turn, not just the one that
+     * woke it.
+     *
+     * A wake prompt names one room and carries that room's new messages. For an
+     * agent in one room that is the whole world. For an agent in six it is a
+     * keyhole: it can be mid-conversation in three places and only ever see the
+     * one that spoke last, which is not how the person on the other side
+     * experiences it.
+     *
+     * The view is rendered fresh each turn and placed behind the history, so it
+     * is never written into the conversation record — a re-rendered view stored
+     * as a record is what produces the same block twenty times in one session.
+     *
+     * Off by default: it costs context on every turn and buys nothing for an
+     * agent that watches one room.
+     */
+    crossRoomView?: {
+      enabled?: boolean;
+      /**
+       * Total lines across all rooms. The room being answered takes whatever
+       * the floors do not.
+       */
+      messages?: number;
+      /**
+       * Lines kept for each room the agent is NOT answering in. Paid first, so
+       * a quiet room cannot be crowded out by a busy one — the quiet room is
+       * precisely the one whose last exchange the agent has forgotten.
+       */
+      floorPerRoom?: number;
+      /**
+       * How long a room's slice may be reused before it is re-fetched, in
+       * seconds. Every room the agent watches would otherwise be a backend
+       * round trip on every turn. The room being answered is always fresh; this
+       * only ages the others, and the view says when a slice is stale.
+       */
+      cacheSeconds?: number;
+    };
   };
   /** Tiered memory settings (notes, chunks, embeddings). See docs/memory-tiers.md. */
   memory?: {
