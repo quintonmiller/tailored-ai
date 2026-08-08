@@ -61,6 +61,11 @@ export interface ModelCandidate {
   temperature?: number;
   maxTokens?: number;
   /**
+   * Provider-specific request fields for this rung. Replaces the inherited bag
+   * rather than merging with it — see {@link ModelEntry.providerExtra}.
+   */
+  providerExtra?: Record<string, unknown>;
+  /**
    * This model's context window, from `ModelEntry.maxContextTokens`. Used to
    * size the history for *this* rung: a chain that mixes window sizes would
    * otherwise hand a fallback a request built for the head.
@@ -80,6 +85,7 @@ export function applyCandidateParams(params: Omit<ChatParams, "model">, candidat
   if (candidate.thinking !== undefined) out.thinking = candidate.thinking;
   if (candidate.temperature !== undefined) out.temperature = candidate.temperature;
   if (candidate.maxTokens !== undefined) out.maxTokens = candidate.maxTokens;
+  if (candidate.providerExtra !== undefined) out.extra = candidate.providerExtra;
   return out;
 }
 
@@ -375,6 +381,17 @@ export interface AgentLoopOptions {
    * mean reserving the model's full output window per request.
    */
   maxTokens?: number;
+  /**
+   * Provider-specific request fields for the generation call, forwarded
+   * untouched as {@link ChatParams.extra}. Resolved per-agent by
+   * `buildLoopOptions`; a model chain rung may replace it wholesale.
+   *
+   * Core sends `temperature` and `max_tokens` and models nothing else, so this
+   * is how a deployment reaches sampling controls that only some providers
+   * have — vLLM's `repetition_penalty`, `top_k`, `min_p`. Deliberately opaque:
+   * core neither validates nor interprets the keys.
+   */
+  providerExtra?: Record<string, unknown>;
   /** Extra fields merged into the ToolContext passed to every tool execution. */
   toolContextExtras?: Partial<import("../tools/interface.js").ToolContext>;
   permissions?: PermissionsConfig;
@@ -1293,6 +1310,7 @@ async function _runAgentLoopBody(
         temperature,
         thinking: opts.thinking,
         maxTokens: opts.maxTokens,
+        extra: opts.providerExtra,
       };
       const window = candidate.maxContextTokens;
       if (window === undefined || window >= maxHistoryTokens) return { ...base, messages };

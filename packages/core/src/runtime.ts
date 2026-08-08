@@ -1191,6 +1191,7 @@ export class AgentRuntime {
       temperature: resolved.temperature,
       thinking: resolved.thinking,
       maxTokens: resolved.maxTokens,
+      providerExtra: resolved.providerExtra,
       contextDir: this.contextDir,
       contextWarnTokens: config.context?.warnTokens,
       agentContextDir: resolved.contextDir,
@@ -1367,6 +1368,7 @@ export class AgentRuntime {
         thinking: entry.thinking,
         temperature: entry.temperature,
         maxTokens: entry.maxTokens,
+        providerExtra: entry.providerExtra,
         maxContextTokens: entry.maxContextTokens,
       });
     }
