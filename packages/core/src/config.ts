@@ -42,6 +42,17 @@ export interface ModelEntry {
    * needs a bigger cap than the one that does not.
    */
   maxTokens?: number;
+  /**
+   * Opaque provider-specific request fields for this rung only, merged into the
+   * outgoing request body as {@link ChatParams.extra}.
+   *
+   * Unlike the other overrides here, a value REPLACES the inherited bag rather
+   * than merging into it. A chain routinely mixes providers, and a bag is
+   * provider-shaped: inheriting vLLM's `repetition_penalty` into an Anthropic
+   * fallback would send a field that provider has never heard of. Set it per
+   * rung, in full, or leave it unset to inherit.
+   */
+  providerExtra?: Record<string, unknown>;
 }
 
 /**
@@ -106,6 +117,28 @@ export interface AgentDefinition {
    * refuses every request while the account is nominally in credit.
    */
   maxTokens?: number;
+  /**
+   * Opaque provider-specific request fields for this agent's generation call,
+   * merged into the outgoing request body as {@link ChatParams.extra}. Falls
+   * back to `agent.providerExtra`.
+   *
+   * This is the seam for sampling controls core does not model. Core sends
+   * `temperature` and `max_tokens` and nothing else, which is fine until a
+   * model needs more: omega-evolution-27b re-sends its own previous message
+   * nearly verbatim (measured 15/16, trigram overlap 0.90) unless vLLM's
+   * `repetition_penalty` is raised, and no amount of `temperature` or prompt
+   * wording substitutes for it.
+   *
+   *     providerExtra:
+   *       repetition_penalty: 1.15
+   *       top_k: 20
+   *
+   * Deliberately opaque: core neither validates nor interprets the keys, so a
+   * provider plugin can expose its own controls without a core change. Keys a
+   * provider does not recognise are its problem to reject, not core's to
+   * whitelist.
+   */
+  providerExtra?: Record<string, unknown>;
   maxToolRounds?: number;
   /**
    * Hard filesystem boundary for this agent. File and exec tools reject any
@@ -619,6 +652,15 @@ export interface AgentConfig {
      * metered provider wants a value here.
      */
     maxTokens?: number;
+    /**
+     * Deployment-wide provider-specific request fields for generation calls,
+     * overridable per agent with `agents.<name>.providerExtra` and per rung
+     * with `models[].providerExtra`. See {@link AgentDefinition.providerExtra}.
+     *
+     * Only useful when every agent shares a provider — the bag is
+     * provider-shaped, and a deployment that mixes them wants it per agent.
+     */
+    providerExtra?: Record<string, unknown>;
     maxToolRounds: number;
     /**
      * Default sandbox kind for agents that don't set their own. Defaults to "host".
