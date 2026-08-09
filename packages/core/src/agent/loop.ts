@@ -974,6 +974,61 @@ function warnNoApprover(toolName: string): void {
   );
 }
 
+/**
+ * Say when the history budget has been spent before any history is counted.
+ *
+ * `historyBudget = maxHistoryTokens − systemPrompt − tail − toolSchemas`, and
+ * since tool schemas started counting (#421) they are the largest term by an
+ * order of magnitude: 24 tools measure ~5,500 tokens, the reference deployment's
+ * 41 measure ~10,900. `DEFAULT_CONFIG.maxHistoryTokens` is **2,000**. So a
+ * deployment that never tuned it has a budget of zero, drops the entire
+ * conversation on every turn, and looks — from the outside — like a model with
+ * no memory rather than a configuration that cannot hold one.
+ *
+ * Found by the scenario benchmark: with the default and a 24-tool set, a fact
+ * stated two messages earlier never reached the model at all; with the same
+ * scenario at 20,000 it did, every time.
+ *
+ * Warned rather than silently floored. Raising the budget behind the operator's
+ * back would build a request the model's context may not accept, and which
+ * number is right depends on the model — a judgement this code cannot make. Once
+ * per agent per process, because it is a property of the configuration and not
+ * of the turn.
+ */
+const _warnedNoHistoryBudget = new Set<string>();
+
+export function warnIfNoHistoryFits(
+  m: {
+    maxHistoryTokens: number;
+    systemPromptTokens: number;
+    tailTokens: number;
+    toolSchemaTokens: number;
+    historyBudget: number;
+    historyLength: number;
+  },
+  agentName?: string,
+): void {
+  // Only when there is something to lose: a first turn has no history, and
+  // warning there would fire for every fresh session in a healthy deployment.
+  if (m.historyBudget > 0 || m.historyLength <= 1) return;
+  const key = agentName ?? "(unnamed)";
+  if (_warnedNoHistoryBudget.has(key)) return;
+  _warnedNoHistoryBudget.add(key);
+  const overhead = m.systemPromptTokens + m.tailTokens + m.toolSchemaTokens;
+  console.warn(
+    `[context] ${key}: agent.maxHistoryTokens is ${m.maxHistoryTokens}, but the system prompt, tail and ` +
+      `tool schemas already cost ~${overhead} tokens (~${m.toolSchemaTokens} of that is tool schemas). ` +
+      `That leaves nothing for the conversation, so all ${m.historyLength} messages are dropped every turn and ` +
+      `the agent cannot remember what was said a moment ago. Raise agent.maxHistoryTokens above ~${overhead}, ` +
+      `or give this agent fewer tools.`,
+  );
+}
+
+/** Test seam: the warning fires once per agent per process. */
+export function resetHistoryBudgetWarnings(): void {
+  _warnedNoHistoryBudget.clear();
+}
+
 export const DEFAULT_CONTEXT_WARN_TOKENS = 4000;
 const _warnedContextAgents = new Set<string>();
 
@@ -1259,6 +1314,17 @@ async function _runAgentLoopBody(
     // number computed once would be wrong for the rest of the turn.
     const toolSchemaTokens = estimateToolSchemaTokens(toolSchemas);
     const historyBudget = Math.max(0, maxHistoryTokens - systemPromptTokens - tailTokens - toolSchemaTokens);
+    warnIfNoHistoryFits(
+      {
+        maxHistoryTokens,
+        systemPromptTokens,
+        tailTokens,
+        toolSchemaTokens,
+        historyBudget,
+        historyLength: history.length,
+      },
+      opts.toolContextExtras?.agentName as string | undefined,
+    );
     let trimmed: Message[];
     if (opts.summarizeOnTrim) {
       const currentProvider = opts.getProvider ? opts.getProvider() : provider;
