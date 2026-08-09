@@ -64,6 +64,34 @@ scores well on every positive case and is unusable in a room. Each restraint
 group also carries an explicit control (`answers-a-direct-question-control`)
 because a model that is silent everywhere would otherwise look restrained.
 
+### A scenario must be able to fail on silence
+
+The same trap one level down: **a negative assertion is satisfied by an empty
+reply.** `reply_not_matches: /4 million/` is true of a reply that never came, so
+a scenario whose only checks are "does not say X" awards a point to an agent
+that said nothing.
+
+Seven of 59 were in that state, and one of them was reporting the opposite of
+the truth. `says-when-the-front-of-the-conversation-is-gone` scored 3/3 on a
+cohort where two of the three passes were `[Agent stopped: max tool rounds
+reached]` and `""`. Once the turn actually answered ([#470]), all three runs
+confabulated the trimmed number from a prompt that provably does not contain
+it — so the scenario had been reporting 100% on a model that fails it every
+time.
+
+So a scenario with a reply-based negative check needs `replies: true` beside it,
+unless silence is genuinely the right answer — which happens, and should be said
+out loud. `does-not-write-the-pass-call-as-text` deliberately has no
+`replies: true`: its message is an acknowledgement addressed to nobody, so
+declining is correct and silence is what declining looks like. `prompt_*`
+negatives are exempt; they are properties of the assembled request, and an
+empty reply cannot satisfy them.
+
+Nothing enforces this yet — [#472] proposes a load-time check.
+
+[#470]: https://github.com/quintonmiller/tailored-ai/pull/470
+[#472]: https://github.com/quintonmiller/tailored-ai/issues/472
+
 ## The failure that shaped the harness
 
 Pointed at a server that accepts connections and never replies, the first version
