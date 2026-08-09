@@ -2454,7 +2454,39 @@ export class RoomWatcher {
       // Stated as a positive instruction with concrete cases. "Don't reply
       // unless..." is exactly the negative phrasing local models mishandle,
       // and the escape hatch is a tool call rather than a sentinel word.
-      'If you have nothing to add — you would only be acknowledging, agreeing, or thanking someone — call room(action="pass") instead of replying.',
+      //
+      // The fourth case was added after a scenario benchmark caught the
+      // enumeration being read as exhaustive. Given "coffee machine's broken
+      // again" from one person to nobody in particular, both models tested
+      // replied, because an interested follow-up is not acknowledging, agreeing
+      // or thanking — by the letter of the old wording they were right.
+      //
+      // Deliberately still a list of cases and not "reply only when relevant".
+      // The general permission is the phrasing that gets over-taken, and the
+      // benchmark's two controls — a direct question, and a loose question from
+      // a person — are there to catch it if this drifts that way.
+      //
+      // Measured at n=8 per cell, one model, same provider, wording the only
+      // variable:
+      //
+      //                                       before   after
+      //   passes on social chatter              0/8     4/8
+      //   ditto, room purpose silent            0/8     3/8
+      //   ditto, room purpose says to pass      1/8     8/8   <- the real find
+      //   answers a loose question (control)    8/8     5/8   <- the real cost
+      //   answers a direct question (control)   8/8     8/8
+      //
+      // The third row is the argument: a room whose `purpose` explicitly said to
+      // stay out of chatter was overridden seven times in eight, so this sentence
+      // was not merely under-specified, it was beating the room's own stated norm.
+      //
+      // The fourth row is the price, and it is not nothing — an unanswered
+      // question from a person costs more than one unnecessary reply about a
+      // coffee machine. A second wording that dropped "nor addressed to you" was
+      // tried to recover it and came out worse on every chatter row without
+      // moving the control, so this is the better of two known options and not a
+      // settled one.
+      'If you have nothing to add — you would only be acknowledging, agreeing, or thanking someone, or the message is chatter that is neither about your work nor addressed to you — call room(action="pass") instead of replying.',
     ].join("\n");
   }
 
