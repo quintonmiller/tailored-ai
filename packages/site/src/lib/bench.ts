@@ -164,19 +164,33 @@ export function noiseFloor(repeats: number): number {
  * The pairwise version lives in `packages/evals/src/compare.ts` and exists to
  * answer "did my change break something", so *there* a differing model is a
  * warning. Here a differing model is the entire point, and the things that
- * spoil the comparison are different scenario sets, different code, different
- * repeat counts, and different clients.
+ * spoil the comparison are different scenario coverage, different code,
+ * different repeat counts, and different clients.
+ *
+ * A differing scenario-set digest is deliberately not among them. It is an
+ * artefact-level detail that reads as alarming to a public reader without
+ * changing how the table should be read; the CLI, whose audience is whoever
+ * ran the thing, still reports it.
  */
 export function comparabilityWarnings(runs: RunSummary[]): string[] {
   if (runs.length < 2) return [];
   const warnings: string[] = [];
   const distinct = <T>(values: T[]) => [...new Set(values)];
 
-  const sets = distinct(runs.map((r) => r.meta.scenarioSetHash));
-  if (sets.length > 1) {
+  // Each report lists the scenarios it ran, so ask whether these runs sat the
+  // same exam rather than asking `scenarioSetHash`, which is a proxy for it and
+  // wrong in both directions: the digest moves when a comment or a `knownGap`
+  // annotation is edited, and it stays put for a `--filter`ed run that covered
+  // a handful of the set whose digest it records. Coverage is what decides
+  // whether two overall scores mean the same thing, and it is right here.
+  const covered = new Set(runs.flatMap((run) => run.rates.map((s) => s.id)));
+  const short = runs.filter((run) => run.rates.length < covered.size);
+  if (short.length) {
     warnings.push(
-      `These runs used ${sets.length} different scenario sets (${sets.join(", ")}). Per-scenario rows still ` +
-        "line up, but the overall scores are not comparable — they are averages over different questions.",
+      `These runs did not all cover the same scenarios — ${short
+        .map((run) => `${run.label} ran ${run.rates.length} of ${covered.size}`)
+        .join(", ")}. Per-scenario rows still line up, but the overall scores are not comparable: they are ` +
+        "averages over different questions, and the scenarios a run skipped are not the easy ones.",
     );
   }
 

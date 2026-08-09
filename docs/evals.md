@@ -82,13 +82,22 @@ that is not there.
 
 `compare` is the reason the thing exists. It:
 
-- **refuses to compare different scenario sets.** Forty scenarios against a later
-  forty-eight shows a score move that is entirely the extra eight.
+- **says when the two runs did not sit the same exam.** Forty-four scenarios
+  against a later fifty-eight shows a score move that is entirely the extra
+  fourteen — and the fourteen are never the easy ones. Each report lists the
+  scenarios it ran, so this is a comparison of those lists, not of a digest.
 - **warns** when the model, endpoint or repeat count differ — that is comparing
   deployments, not code.
 - **calls a one-run move noise.** At three repeats one flipped run is 33 points.
 
 Exit code 1 on a real regression, so it can gate something.
+
+`meta.scenarioSetHash` answers the narrower question of whether the scenarios
+were *defined* the same way, and is reported separately when the coverage
+matches but the digest does not. It is taken over what each scenario puts in
+front of the model and what it grades — not over the file bytes, so a comment,
+a reflow or a `knownGap` annotation leaves it alone, and a changed assertion
+moves it.
 
 ## Published results
 

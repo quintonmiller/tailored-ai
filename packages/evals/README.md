@@ -133,11 +133,13 @@ pnpm --filter @tailored-ai/evals run eval -- --home ~/.tailored-ai --out results
 pnpm --filter @tailored-ai/evals run eval:compare -- results/before.json results/after.json
 ```
 
-`compare` refuses to pretend two different scenario sets are comparable, warns
-when the model or repeat count differs, and calls a one-run move **noise** rather
-than a regression — at three repeats one flipped run is 33 points, and treating
-that as a finding means chasing sampling forever. Exit code is 1 if anything
-regressed beyond the noise floor, so it works in a script.
+`compare` refuses to pretend two runs that covered different scenarios are
+comparable — it reads the scenario list each report carries and names how many
+one side never ran — warns when the model or repeat count differs, and calls a
+one-run move **noise** rather than a regression, since at three repeats one
+flipped run is 33 points and treating that as a finding means chasing sampling
+forever. Exit code is 1 if anything regressed beyond the noise floor, so it
+works in a script.
 
 ## Options
 
@@ -164,6 +166,7 @@ scenarios are the first to fail.
 
 `results/<timestamp>-<model>.json`, holding the score, every check, and the
 provenance a number is worthless without: git SHA, whether the tree was dirty,
-model, endpoint, repeat count, seed, and a hash of the scenario set. Full
-request bodies are kept for failing runs only — that is where they are the
-diagnosis rather than dead weight.
+model, endpoint, repeat count, seed, and a digest of the scenario set — taken
+over what each scenario sends and grades, so annotating one does not invalidate
+every run before it. Full request bodies are kept for failing runs only — that
+is where they are the diagnosis rather than dead weight.
