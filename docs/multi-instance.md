@@ -176,6 +176,38 @@ Anything holding a single external identity needs a decision rather than a copy 
 mailbox credential given to both instances means both poll the same inbox and
 double-process it.
 
+## Standing one up
+
+The order matters in one place only — `allowedGuilds` has to be set on **both**
+instances before the second bot comes online, or two bots answer the same mention
+until it is.
+
+1. **Create a second Discord application.** A bot token supports a single gateway
+   identify, so the instances cannot share one. Give it its own guild too: channel
+   ids do not move between guilds, so rooms recreated elsewhere start with no
+   history. See [Discord](#discord).
+2. **Set `allowedGuilds` on both instances**, not just the new one. `shouldRespond`
+   filters by guild only when the list is non-empty, so with `respondToMentions:
+   true` an unset list means both bots reply to the same mention.
+3. **Create the instance:**
+
+   ```bash
+   TAI_HOME=~/.tai-<name> tai init
+   ```
+
+   That writes a fresh `config.yaml` and `.env` under the new home and touches
+   nothing belonging to the existing one.
+4. **Decide each secret rather than copying the set.** Model API keys share safely
+   — billing just mixes. A credential holding a single external identity does not;
+   see [What to share, what to duplicate](#what-to-share-what-to-duplicate).
+5. **Point both at the same inference and embedding endpoints.** They are stateless
+   and addressed purely by config, so there is nothing to duplicate.
+6. **Plugins: symlink or reinstall**, knowing that a symlink couples both instances
+   to one `tai plugin` operation.
+7. **Run it:** `tai-ctl.sh switch -i <name>` stops the others and starts this one.
+
+Then decide what, if anything, moves across — which is the rest of this page.
+
 ## Starting a second instance fresh
 
 The lower-risk path when an existing deployment is large: leave it as-is and build
