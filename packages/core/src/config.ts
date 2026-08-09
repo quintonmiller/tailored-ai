@@ -124,7 +124,7 @@ export interface AgentDefinition {
    *
    * This is the seam for sampling controls core does not model. Core sends
    * `temperature` and `max_tokens` and nothing else, which is fine until a
-   * model needs more: omega-evolution-27b re-sends its own previous message
+   * model needs more: one local 27B model re-sends its own previous message
    * nearly verbatim (measured 15/16, trigram overlap 0.90) unless vLLM's
    * `repetition_penalty` is raised, and no amount of `temperature` or prompt
    * wording substitutes for it.
