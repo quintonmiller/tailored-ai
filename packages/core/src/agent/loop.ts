@@ -927,17 +927,22 @@ async function executeToolCall(
 
   // --- Execute tool ---
   const startTime = Date.now();
-  const result = await tool.execute(call.arguments, context);
+  const limit = resolveToolOutputLimit(call.name, opts.toolOutputLimits, opts.maxToolOutputChars);
+  // Told before the call, not after: a tool that can page serves a prefix that
+  // fits and names the next offset, which is strictly better than being cut
+  // middle-out afterwards and leaving the middle unreachable.
+  const result = await tool.execute(call.arguments, { ...context, maxOutputChars: limit });
   const durationMs = Date.now() - startTime;
   const rawOutput = result.success ? result.output : `Error: ${result.error ?? "Unknown error"}`;
   // Capped here, at the one conversion from ToolResult to the string that
   // becomes history. Every tool — builtin, custom, plugin, MCP — funnels
   // through this call, and it sits upstream of onToolResult, the tool
   // Message, saveMessage and the repeat detector, so all of them see the
-  // same bounded string.
+  // same bounded string. Still runs for tools that shaped their own output:
+  // the budget is the loop's to enforce, not a tool's to honour.
   let resultOutput = await capToolOutput(rawOutput, {
     toolName: call.name,
-    limit: resolveToolOutputLimit(call.name, opts.toolOutputLimits, opts.maxToolOutputChars),
+    limit,
     sessionId: opts.session.id,
     scratchDir: opts.toolOutputDir,
   });

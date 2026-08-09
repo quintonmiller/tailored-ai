@@ -128,6 +128,17 @@ tools:
 
 Over the limit, the result becomes a head+tail summary led by a marker naming the tool, the real size, and a path to the full output (kept under `$TAI_HOME/tool-outputs/<session>/`). The marker says explicitly that repeating the call returns the same truncated string — the obvious move for a model handed a partial answer is to run it again.
 
+### Getting the omitted middle back
+
+The cut used to be a dead end. Truncation is middle-out and deterministic, so calling again returned the same string, and `read` took only a path — so reading the saved copy ran through this same function, at this same limit, on the same bytes, and came back byte-identical, elision included. Measured: `advice followed -> byte-identical result: true`, `elided middle recovered: false`. The only route was `exec` with `sed`, which needs `exec` enabled and which agents found by trial and error when they found it at all.
+
+Two changes make it reachable (#466):
+
+- **`read` takes `offset` and `limit`, in characters.** Characters because that is what the cap counts, and the two units disagree exactly where it matters. Line ranges stay `exec`'s job — two units on one tool is two ways to say the same thing.
+- **`ToolContext.maxOutputChars` tells a tool its budget before it runs.** A tool that can page serves a prefix that fits and states the offset that continues it, which beats being cut afterwards. Advisory: the cap still runs on whatever comes back, so ignoring it is safe and costs only the elided middle.
+
+So the marker now names the exact next call — `read(path="…", offset=32000)` — rather than a general suggestion, and `read` never trips the cap on its own output. A model asked to compose the offset itself is a model that re-issues the call it already made.
+
 Two properties worth preserving if you touch this:
 
 - **The output is deterministic for a given input.** The scratch file is named by content hash, not timestamp. The loop's stuck-model detector compares consecutive tool results verbatim, so a unique path in the marker would make two identical results compare unequal and silently disable the guard that catches a model re-issuing the truncated call. (`exec`'s own older truncation names its file by timestamp and *does* have this bug.)

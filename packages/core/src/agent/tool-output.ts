@@ -85,10 +85,17 @@ export async function capToolOutput(raw: string, opts: CapToolOutputOptions): Pr
   // runner) must still yield a truncated result — returning the full string
   // would reinstate the very blowup this exists to prevent.
   let reference: string;
+  let recovery: string;
   try {
-    reference = `Full output: ${await persistFullOutput(raw, opts)}`;
+    const path = await persistFullOutput(raw, opts);
+    reference = `Full output: ${path}`;
+    // True as of #466 and not before. `read` serves a window sized to this same
+    // budget and names the offset that continues it, so the saved copy is a
+    // route to the omitted middle rather than another copy of this string.
+    recovery = `To see the omitted part, read the saved file and page through it: read(path="${path}", offset=${opts.limit}).`;
   } catch (err) {
     reference = `Full output could not be saved (${(err as Error).message}), so the omitted part is gone.`;
+    recovery = "The omitted part cannot be recovered.";
   }
 
   const headChars = Math.floor(opts.limit * HEAD_SHARE);
@@ -100,20 +107,19 @@ export async function capToolOutput(raw: string, opts: CapToolOutputOptions): Pr
     // Said explicitly because the obvious move for a model that got a partial
     // answer is to run the same call again, which returns this same string.
     //
-    // This used to end "— or read the file above". That advice could never have
-    // worked: a `read` of the saved copy is capped by this same function at the
-    // same limit on the same input, so it returns a byte-identical string, and
-    // `read` has no offset to page past the cut (#466). Agents follow it anyway
-    // — measured at roughly two reads of the saved copy per run — so it is
-    // corrected rather than left standing.
+    // The history of this line is worth keeping, because it is a lesson about
+    // marker text. It once read "— or read the file above", which could never
+    // have worked: `read` had no offset, so a read of the saved copy was cut by
+    // this same function at this same limit on this same input and came back
+    // byte-identical. Agents followed it anyway, at roughly two reads of the
+    // saved copy per run. Correcting it to say so changed nothing measurable —
+    // 3/15 either way at n=15 — which is the point: it was landed for being
+    // true, not for moving a number.
     //
-    // Rewriting it does not, on its own, change what the model does: at n=15 per
-    // arm the pass rate was 3/15 either way and the saved-copy reads did not
-    // drop. It is kept because the old sentence was false, not because it moved
-    // a number, and it is the same length. A third line spelling out the
-    // consequence was tried in the same experiment, measured nothing, and was
-    // dropped — a marker earns its size like any other prompt text.
-    `Repeating this call, or reading the saved copy, returns this same truncated result. To see more, narrow the request — fewer results, a filter, a smaller page size.]`,
+    // Now it points at a route that exists. #466 gave `read` a window sized to
+    // this budget and a stated next offset, so paging the saved file reaches
+    // the omitted middle. The sentence changed because the code did.
+    `Repeating this call returns this same truncated result. ${recovery} Or narrow the request — fewer results, a filter, a smaller page size.]`,
     raw.slice(0, headChars),
     `... [${omitted.toLocaleString()} chars omitted] ...`,
     raw.slice(-tailChars),

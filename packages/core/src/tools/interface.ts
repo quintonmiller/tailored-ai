@@ -58,6 +58,22 @@ export interface ToolContext {
    * project-scoped tool reads use this. Mirrors session.projectId.
    */
   projectId?: string | null;
+  /**
+   * How many characters of this call's output will survive into the
+   * conversation — the same number `capToolOutput` would cut at, resolved for
+   * this tool. `0` means capping is off.
+   *
+   * For a tool that can serve part of its result and say how to get the rest,
+   * shaping the output to fit beats being truncated afterwards. Middle-out
+   * truncation is a dead end by construction: it is deterministic, so the
+   * obvious recovery — call again, or read the saved copy — returns a
+   * byte-identical string, and the elided middle is unreachable (#466). A tool
+   * that pages can hand back a whole prefix and name the next offset instead.
+   *
+   * Advisory. The cap still runs on whatever comes back, so ignoring this is
+   * safe; it just costs the caller the elided middle.
+   */
+  maxOutputChars?: number;
 }
 
 export interface ToolResult {
