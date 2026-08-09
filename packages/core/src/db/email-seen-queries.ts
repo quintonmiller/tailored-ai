@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 
 /**
- * Dedup ledger for email-fetcher and friends. Set membership ("have I
+ * Dedup ledger for mail-polling agents. Set membership ("have I
  * seen this email before?") is a code problem, not an LLM problem
  * (see docs/agent-unification.md RC4).
  */
@@ -71,7 +71,7 @@ export function isEmailSeen(db: Database.Database, messageId: string): boolean {
 
 /**
  * Batch helper: given a list of message ids (as fetched from Gmail),
- * return only the ones NOT in the ledger. Used by email-fetcher to
+ * return only the ones NOT in the ledger. Used by a mail poller to
  * filter at the start of every check.
  */
 export function filterUnseenIds(db: Database.Database, messageIds: string[]): string[] {

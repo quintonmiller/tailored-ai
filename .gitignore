@@ -41,7 +41,7 @@ packages/cli/ui-dist/
 # Regenerated on every `pnpm build` — checking in causes constant churn.
 packages/cli/ui-dist/
 
-# Personal task tracking (lives in tai-personal repo)
+# Local task tracking (lives outside this repo)
 .beans/
 
 # trusted-actions runtime state (generated, contains secrets)

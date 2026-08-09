@@ -39,7 +39,7 @@ describe("adoptHomeDir", () => {
   });
 
   it("lets -c win over an inherited TAI_HOME, matching resolveHomeDir's documented order", () => {
-    process.env.TAI_HOME = "/srv/tai-personal";
+    process.env.TAI_HOME = "/srv/tai-b";
 
     expect(adoptHomeDir("/srv/tai-work/config.yaml")).toBe("/srv/tai-work");
     expect(process.env.TAI_HOME).toBe("/srv/tai-work");

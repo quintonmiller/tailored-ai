@@ -33,6 +33,9 @@ const app = new Hono();
 
 const APPROVAL_TTL_MS = 60 * 60 * 1000; // 1h
 
+/** Attribution on comments and tasks the PWA files. Names the surface, not a person. */
+const PWA_AUTHOR = "trusted-actions-pwa";
+
 function approvalUrlBase(): string {
   return process.env.TA_PUBLIC_BASE_URL || `http://localhost:${process.env.TA_PORT ?? "3100"}`;
 }
@@ -819,10 +822,11 @@ function genId(): string {
  *
  * Behavior matrix (by tag + decision):
  *
- *   capability + approve → status=in_progress, assignee=quinton,
- *                          comment "Approved via PWA …".
- *     Punts back to Quinton to wire up the proposed artifact. Once #118
- *     ships, approve will auto-apply instead.
+ *   capability + approve → status=in_progress, assignee=$TA_APPROVAL_ASSIGNEE
+ *                          (left unchanged when unset), comment
+ *                          "Approved via PWA …".
+ *     Punts the task back to a human to wire up the proposed artifact. Once
+ *     #118 ships, approve will auto-apply instead.
  *
  *   capability + reject  → status=archived,
  *                          comment "Rejected via PWA …".
@@ -885,7 +889,11 @@ app.post("/pwa/tasks/:id/decide", async (c) => {
     if (isCapability) {
       newStatus = "in_progress";
       label = "Approved capability via PWA";
-      patch.assignee = "quinton";
+      // Who picks the task up is deployment-specific. Unset means "leave the
+      // assignee alone" rather than inventing a username this install may not
+      // have — an unknown assignee is silently dropped by most trackers.
+      const assignee = process.env.TA_APPROVAL_ASSIGNEE?.trim();
+      if (assignee) patch.assignee = assignee;
     } else {
       newStatus = "done";
       label = "Approved via PWA";
@@ -905,7 +913,7 @@ app.post("/pwa/tasks/:id/decide", async (c) => {
     const commentRes = await fetch(`${taiUrl}/api/project-tasks/${encodeURIComponent(taskId)}/comments`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ content: `${label} on ${today}.`, author: "quinton-pwa" }),
+      body: JSON.stringify({ content: `${label} on ${today}.`, author: PWA_AUTHOR }),
     });
     if (!commentRes.ok) {
       return c.json({ error: `Comment failed: ${commentRes.status}` }, 502);
@@ -977,7 +985,7 @@ app.post("/pwa/tasks/create", async (c) => {
         title: body.title.trim().slice(0, 200),
         description,
         tags,
-        author: "quinton-pwa",
+        author: PWA_AUTHOR,
         status: "backlog",
       }),
     });

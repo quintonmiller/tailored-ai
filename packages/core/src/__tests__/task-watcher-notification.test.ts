@@ -255,7 +255,7 @@ describe("task-watcher notifyById per-project routing", () => {
         taskWatcher: { enabled: true, delivery: { channel: "log" }, triggers: ["created"], debounceMs: 0 },
       }),
       getTaskBackendForProject: (projectId: string | undefined) => {
-        expect(projectId).toBe("tai-personal");
+        expect(projectId).toBe("side-project");
         return stubBackend;
       },
     };
@@ -265,11 +265,11 @@ describe("task-watcher notifyById per-project routing", () => {
       received.push({ action: event.action, taskId: event.task.id, projectId: event.task.project_id });
     };
 
-    watcher.notifyById("created", "gh-3", "tai-personal");
+    watcher.notifyById("created", "gh-3", "side-project");
 
     return new Promise<void>((resolve) => {
       setTimeout(() => {
-        expect(received).toEqual([{ action: "created", taskId: "gh-3", projectId: "tai-personal" }]);
+        expect(received).toEqual([{ action: "created", taskId: "gh-3", projectId: "side-project" }]);
         resolve();
       }, 30);
     });
@@ -308,7 +308,7 @@ describe("task-watcher notifyById per-project routing", () => {
       notifyCalls++;
     };
 
-    watcher.notifyById("created", "gh-9999", "tai-personal");
+    watcher.notifyById("created", "gh-9999", "side-project");
 
     return new Promise<void>((resolve) => {
       setTimeout(() => {

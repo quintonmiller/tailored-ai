@@ -56,7 +56,7 @@ function matchAddressee(text: string): RegExpExecArray | null {
  * Resolve what someone typed to an identity they meant.
  *
  * People write a qualifier they were never told to leave off —
- * `@agent:channel-manager`, `@bot:coder` — and matching only the bare label
+ * `@agent:room-keeper`, `@bot:coder` — and matching only the bare label
  * meant the whole attempt silently parsed as nothing. The message then counted
  * as unaddressed, so instead of reaching one agent it woke every one of them.
  * A failed address should not become a broadcast.

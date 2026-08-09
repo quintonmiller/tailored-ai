@@ -27,7 +27,7 @@ const MEMORY = `Learn about your user. When you discover something durable about
 /**
  * Only for agents that can actually do this.
  *
- * It used to be unconditional, so `travel-researcher` and `email-checker` were
+ * It used to be unconditional, so a `trip-researcher` and a `mail-sorter` were
  * told they could rewrite their own settings as plainly as `agent-manager` was.
  * Combined with `admin` being able to write `custom_tools.` and `permissions.`
  * (#279), this instruction is the path by which an agent authored `temp: 0.3`

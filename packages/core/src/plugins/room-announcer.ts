@@ -2,7 +2,7 @@
  * Room announcer — says out loud who is in the room.
  *
  * Membership used to be a thing you had to go and ask about. An agent called
- * `channel-manager` created a room, stayed subscribed to it because creating a
+ * A `room-keeper` agent created a room, stayed subscribed to it because creating a
  * room subscribes you, and went on receiving everything said there long after
  * it had any reason to. `/room members` would have shown it the whole time.
  * Nobody had a reason to look, because nothing had ever suggested there was

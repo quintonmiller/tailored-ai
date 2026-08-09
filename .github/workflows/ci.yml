@@ -44,6 +44,9 @@ jobs:
         # 14 MB of Playwright in an image with no browsers (#375).
         run: pnpm run guard:runtime-deps
 
+      - name: Local-reference guard (keep the repo free of one machine's paths)
+        run: pnpm run guard:local-refs
+
       - name: Lint
         run: pnpm run lint
 

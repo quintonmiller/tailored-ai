@@ -1408,18 +1408,20 @@ describe("a misspelt addressee", () => {
 
 describe("describeToolCall", () => {
   it("names the tool and what it acted on", () => {
-    expect(describeToolCall("read", { path: "/home/q/trip/itinerary.md" })).toBe("`read` /home/q/trip/itinerary.md");
+    expect(describeToolCall("read", { path: "/home/agent/trip/itinerary.md" })).toBe(
+      "`read` /home/agent/trip/itinerary.md",
+    );
     expect(describeToolCall("web_search", { query: "san diego tiki bars" })).toBe("`web_search` san diego tiki bars");
   });
 
   it("does not leak the payload — only what identifies the target", () => {
     // Full arguments would put file contents and search bodies in a channel.
     const line = describeToolCall("write", {
-      path: "/home/q/trip/notes.md",
+      path: "/home/agent/trip/notes.md",
       content: "SECRET CONTENT that must not appear",
     });
 
-    expect(line).toContain("/home/q/trip/notes.md");
+    expect(line).toContain("/home/agent/trip/notes.md");
     expect(line).not.toContain("SECRET");
   });
 

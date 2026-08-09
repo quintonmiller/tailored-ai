@@ -163,7 +163,7 @@ executionMode: graph
 steps:
   - id: classify
     type: agent
-    agent: email-classifier
+    agent: mail-sorter
     prompt: "Classify each email in: ${input.emails}"
 
   - id: urgent_note

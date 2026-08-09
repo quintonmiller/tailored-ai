@@ -8,7 +8,7 @@ The base prompt now describes the agent it is addressed to
 to every agent whether or not they were true.
 
 **"You are a self-modifying agent … creating new tools, adjusting settings"** went
-to `travel-researcher` and `email-checker` as plainly as to `agent-manager`.
+to a `trip-researcher` and a `mail-sorter` as plainly as to a `supervisor`.
 That instruction, plus `admin` being able to write `custom_tools.` and
 `permissions.`, is the path by which an agent authored `temp: 0.3` into its own
 config — a key that then parsed and did nothing.

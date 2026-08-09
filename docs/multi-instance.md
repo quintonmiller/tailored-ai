@@ -1,14 +1,14 @@
 # Running two TAI instances
 
-How to run more than one TAI deployment on one machine — the intended case being a
-personal instance and a work instance with separate Discord bots, only one running
-at a time.
+How to run more than one TAI deployment on one machine. The usual reason is to keep
+two contexts apart — separate Discord bots, separate databases, separate agents —
+with only one running at a time. The examples below use `personal` and `work` as
+instance names; they are yours to choose.
 
-Status: **supported, not yet exercised.** `TAI_HOME` is honoured everywhere
+Status: **supported, not yet widely exercised.** `TAI_HOME` is honoured everywhere
 ([#311]) so `-c <config>` selects a whole instance, and `tai-ctl.sh` takes an
-instance on every command ([#312]). A double start still fails opaquely ([#313]),
-and no second instance has actually been stood up yet. This doc records what
-holds, what leaks, and what is left.
+instance on every command ([#312]). A double start still fails opaquely ([#313]).
+This doc records what holds, what leaks, and what is left.
 
 [#311]: https://github.com/quintonmiller/tailored-ai/issues/311
 [#312]: https://github.com/quintonmiller/tailored-ai/issues/312

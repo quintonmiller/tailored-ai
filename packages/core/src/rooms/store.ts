@@ -635,7 +635,7 @@ export class RoomStore {
    * and what makes that expensive is *replying* — an agent that read the room
    * and had nothing to add has not moved the loop forward at all. Charging it
    * anyway is how a busy room went quiet for the rest of the hour: observed as
-   * `channel-manager hit its wake ceiling (6/hour)` five times over, while the
+   * `room-keeper hit its wake ceiling (6/hour)` five times over, while the
    * traffic it was silent about kept arriving.
    *
    * Safe against the runaway it guards, because a wake needs an incoming
