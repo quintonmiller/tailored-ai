@@ -83,6 +83,7 @@ const scenario = z
     id: z.string().min(1),
     category: z.string().min(1),
     intent: z.string().min(1),
+    knownGap: z.string().min(1).optional(),
     agent: z
       .object({
         name: z.string().optional(),

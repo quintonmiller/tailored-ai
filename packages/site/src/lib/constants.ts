@@ -7,6 +7,7 @@ export const NPM_ORG_URL = "https://www.npmjs.com/org/tailored-ai";
 export const NAV_LINKS = [
   { label: "Home", href: "/" },
   { label: "Docs", href: "/docs" },
+  { label: "Benchmark", href: "/bench" },
   { label: "GitHub", href: REPO_URL, external: true },
 ];
 

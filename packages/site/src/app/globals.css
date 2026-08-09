@@ -22,6 +22,17 @@ body {
   font-family: var(--font-sans);
 }
 
+/*
+ * Benchmark: the failures-only filter.
+ *
+ * A checkbox and one selector, so the filter works with scripting off and the
+ * page stays a server render. The alternative — React state — would put a
+ * second copy of every run in the payload to hide rows that are already there.
+ */
+.bench-scenarios:has(.bench-filter:checked) .bench-row[data-passing="true"] {
+  display: none;
+}
+
 /* Docs prose styling */
 .prose {
   --tw-prose-body: var(--color-text);

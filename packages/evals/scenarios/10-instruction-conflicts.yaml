@@ -61,6 +61,7 @@
 
 - id: chatter-norm-unstated-control
   category: conflicts
+  knownGap: "#447 — whether an unprompted room should suppress social chatter is an open question, not a settled norm. This row is the measurement of it."
   intent: >
     The control for the pair below, and a live question rather than a settled
     one.

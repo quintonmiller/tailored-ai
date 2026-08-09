@@ -90,6 +90,52 @@ that is not there.
 
 Exit code 1 on a real regression, so it can gate something.
 
+## Published results
+
+Committed reports are compiled into static pages on the docs site at `/bench`:
+an index with every published run and a scenario-by-model matrix, and a page per
+run with per-category scores and a drill-down into each scenario — its intent,
+every check, and for failing runs the reply, the tool calls and the assembled
+request.
+
+The pages are built by `packages/site` reading two directories at build time:
+
+| Read from | For |
+|---|---|
+| `packages/evals/results/*.json` | the runs. A record — never edited after the fact. |
+| `packages/evals/scenarios/*.yaml` | annotations only, so closing a gap updates every page without re-running anything. |
+
+**A run reaches the site by being committed.** `.gitignore` in this package
+tracks `results/baseline-work-*.json` and ignores everything else, and the
+deployed site is built by CI from a clean checkout — so a local experiment stays
+local. A local `next build` shows your own uncommitted runs, which is the point
+of running one.
+
+To publish a new baseline:
+
+```bash
+pnpm --filter @tailored-ai/evals run eval -- --target luna --out results/baseline-work-luna.json
+git add packages/evals/results/baseline-work-luna.json
+```
+
+Pushing that to `main` redeploys the site — `deploy-site.yml` watches
+`packages/evals/results/**` as well as the site itself.
+
+### Scenarios that are supposed to be red
+
+A scenario asserting the behaviour we *want* rather than the behaviour we *have*
+carries `knownGap`:
+
+```yaml
+- id: default-history-budget-keeps-the-conversation
+  knownGap: "#443 — the default `agent.maxHistoryTokens` sits below the tool-schema floor."
+```
+
+It renders as a labelled row instead of a failure. Without it the first response
+to a permanently-red row is to delete it, which is how a benchmark quietly stops
+measuring the thing it was written for. The flag is read from the scenario file,
+not the report, so removing it un-marks the row everywhere at once.
+
 ## What it cannot tell you
 
 - **Nothing about a channel.** Rooms run on the `local` SQLite backend. Discord's

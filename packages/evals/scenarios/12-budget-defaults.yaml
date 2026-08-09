@@ -16,6 +16,7 @@
 
 - id: default-history-budget-keeps-the-conversation
   category: budget
+  knownGap: "#443 — the default `agent.maxHistoryTokens` sits below the tool-schema floor, so an untuned install has no history budget at all."
   intent: >
     With `maxHistoryTokens` at its code default and a realistic tool set, does
     anything the user said two messages ago still reach the model?
