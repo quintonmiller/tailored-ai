@@ -24,7 +24,7 @@ export function Hero() {
 
         <p className="mx-auto mt-6 max-w-2xl text-lg text-[var(--color-text-muted)] sm:text-xl">
           Tailored AI runs LLM agents with cron, shell, files, calendars, and channels that meet you where you are.
-          Local-first. Bring your own model.
+          Bring your own model, local or hosted.
         </p>
 
         <div className="mt-10 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">

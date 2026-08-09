@@ -1,8 +1,9 @@
 # @tailored-ai/core
 
-Lightweight, modular AI agent framework optimized for local LLMs (vLLM,
-Ollama, LM Studio) — with hosted vendors (OpenAI, Anthropic, OpenRouter,
-Bedrock) available as `@tailored-ai/provider-*` plugins.
+Lightweight, modular AI agent framework. It talks to any OpenAI-compatible
+endpoint out of the box — a local server (vLLM, Ollama, LM Studio) or a
+hosted one — and reaches OpenAI, Anthropic, OpenRouter and Bedrock through
+`@tailored-ai/provider-*` plugins.
 
 The core library: a runtime, hot-reloadable config, a tool registry, a
 small set of built-in tools (read/write/exec, web fetch/search, memory,

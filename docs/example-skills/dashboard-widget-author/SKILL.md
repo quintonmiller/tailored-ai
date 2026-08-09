@@ -63,8 +63,8 @@ If unsure, start with a config widget using `list`/`tasks`/`metric`/`markdown`.
 
 > **A widget *spec* is personal config; a widget's *renderer* and its *endpoint* are
 > core code.** Renderers live in `packages/ui/…` and endpoints in `packages/server/…`,
-> which exist **only in the `autonomous-agent` (TAI core) repo** — not in a `tai-personal`
-> config worktree. If you are working in a personal-config repo/worktree and the request
+> which exist **only in the TAI core repo** — not in a personal-config repo or
+> worktree. If you are working in a personal-config repo/worktree and the request
 > needs a new renderer type or a new `/api/…` endpoint, you **cannot** build it there.
 > Do **not** fake it with a markdown "stub" widget. Either (a) re-scope to a config
 > widget over an existing store (Q1 — almost always possible), or (b) hand it back /

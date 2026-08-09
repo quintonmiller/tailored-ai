@@ -1,7 +1,7 @@
 {
   "name": "autonomous-agent",
   "private": true,
-  "description": "Lightweight, modular AI agent framework optimized for local LLMs",
+  "description": "Lightweight, modular AI agent framework. Bring your own model — any OpenAI-compatible endpoint, local or hosted.",
   "type": "module",
   "scripts": {
     "build": "pnpm -r run build",

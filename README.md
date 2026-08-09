@@ -1,6 +1,6 @@
 # Tailored AI (`tai`)
 
-Tailored AI is a modular framework for running personal agents. It gives you a working local-first agent system in minutes, then lets you replace the pieces as your workflow gets more specific: models, tools, agents, channels, UI surfaces, task backends, workflows, repo integrations, sandboxes, and plugins.
+Tailored AI is a modular framework for running personal agents. It gives you a working agent system in minutes, then lets you replace the pieces as your workflow gets more specific: models, tools, agents, channels, UI surfaces, task backends, workflows, repo integrations, sandboxes, and plugins.
 
 TAI is still moving quickly, but it works end-to-end today: install the `tai` CLI, run the setup wizard, start the server, chat through the bundled UI or CLI, add agents/tools/plugins, and connect channels such as Discord or Slack.
 
