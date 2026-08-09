@@ -171,7 +171,19 @@ describe("runAgentLoop — volatile prompt tail", () => {
     const trimmedAtAll = await survivors([]);
     expect(trimmedAtAll).toBeGreaterThan(0);
     expect(trimmedAtAll).toBeLessThan(40); // the budget really is binding
-    expect(await survivors(["vol"])).toBe(trimmedAtAll);
+
+    // Within one message, not exactly equal. `estimateTokens` rounds per block
+    // at ~4 chars per token, so the two arms can land either side of a message
+    // boundary whenever anything else in the prompt changes length — this
+    // asserted exact equality until the base prompt lost a sentence, and failed
+    // 35 against 36.
+    //
+    // One message is rounding. The regression this guards — the allowance being
+    // handed back to the history — is worth four messages here, measured by
+    // forcing `tailTokens = 0` in the loop and re-running: the gap goes to 4 and
+    // this fails. So the tolerance sits well inside the signal.
+    const withTail = await survivors(["vol"]);
+    expect(Math.abs(withTail - trimmedAtAll)).toBeLessThanOrEqual(1);
   });
 
   it("adds no message when nothing is in the tail", async () => {
