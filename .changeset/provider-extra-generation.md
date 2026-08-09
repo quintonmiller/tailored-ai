@@ -10,7 +10,7 @@ on the agent's path populated them, and the `providerExtra` config key reached
 only `briefing` and `suggestions` — so a deployment had no way to set, say,
 vLLM's `repetition_penalty`.
 
-That is not hypothetical: `omega-evolution-27b` re-sends its own previous
+That is not hypothetical: one local 27B model re-sends its own previous
 message nearly verbatim (15/16, word-trigram overlap 0.90 against the agent's
 own prior reply) and neither temperature nor prompt wording fixes it — an
 explicit "do not repeat" instruction measured 20/20, worse than saying nothing.

@@ -209,7 +209,7 @@ one opaque bag.
 ```yaml
 agents:
   planner:
-    model: omega-evolution-27b
+    model: local-27b
     providerExtra:
       repetition_penalty: 1.15
       top_k: 20
@@ -229,7 +229,7 @@ Two deliberate choices:
   providers. Inheriting a vLLM `repetition_penalty` into an Anthropic fallback would send a field that provider has
   never heard of. Set it per rung, in full, or leave it unset.
 
-**Why this exists.** It is not a convenience knob. `omega-evolution-27b` re-sends its own previous message nearly
+**Why this exists.** It is not a convenience knob. One local 27B model re-sends its own previous message nearly
 verbatim — measured 15/16, word-trigram overlap 0.90 against the agent's own prior reply — and nothing core could
 already send fixes it. Temperature does not (1.0 → 15/16). Prompt wording does not; an explicit "do not repeat"
 instruction measured 20/20, worse than saying nothing. The model's own `generation_config.json` ships

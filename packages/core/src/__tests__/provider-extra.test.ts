@@ -2,7 +2,7 @@
  * Sampling controls core does not model.
  *
  * Core sends `temperature` and `max_tokens` on the generation call and nothing
- * else. That is fine until a model needs more: omega-evolution-27b re-sends its
+ * else. That is fine until a model needs more: one local 27B model re-sends its
  * own previous message nearly verbatim (measured 15/16, word-trigram overlap
  * 0.90 against the agent's own prior reply) unless vLLM's `repetition_penalty`
  * is raised, and neither temperature nor prompt wording substitutes for it —
