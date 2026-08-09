@@ -13,8 +13,10 @@
  *                                        it without re-running anything.
  *
  * Which runs get published is decided by `packages/evals/.gitignore`, which
- * tracks `results/baseline-work-*.json` and ignores everything else — so a run
- * reaches this page by being committed, not by existing on somebody's disk.
+ * tracks `results/baseline-*.json` and ignores everything else — so a run
+ * reaches this page by being named and committed, not by existing on somebody's
+ * disk. The gate is intent, deliberately: the CLI writes ad-hoc runs under a
+ * timestamp, so renaming one to `baseline-` is the act of publishing it.
  * The deployed site is built by CI from a clean checkout, which is what makes
  * that true rather than merely intended. A local `next build` will happily show
  * your own uncommitted runs, and that is the point of running one.
@@ -37,7 +39,13 @@ function slugOf(filename: string): string {
   return filename.replace(/\.json$/, "");
 }
 
-/** `baseline-work-luna` → `work-luna`. The prefix is on every file and carries nothing. */
+/**
+ * `baseline-gpt-5.6-luna` → `gpt-5.6-luna`. The prefix is on every file and
+ * carries nothing; what is left names what was benchmarked, which is the only
+ * thing a reader of this page can use. It is not always the recorded model id —
+ * the file name is what somebody called this run, `meta.model` is what actually
+ * answered, and the two disagreeing is worth being able to see.
+ */
 function labelOf(slug: string): string {
   return slug.replace(/^baseline-/, "");
 }

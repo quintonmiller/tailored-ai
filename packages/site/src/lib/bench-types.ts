@@ -89,7 +89,7 @@ export interface BenchmarkReport {
 
 /** A report plus where it came from and how to link to it. */
 export interface PublishedRun {
-  /** URL segment, from the filename: `baseline-work-luna.json` → `baseline-work-luna`. */
+  /** URL segment, from the filename: `baseline-gpt-5.6-luna.json` → `baseline-gpt-5.6-luna`. */
   slug: string;
   /** Human label, from the filename with the `baseline-` prefix dropped. */
   label: string;

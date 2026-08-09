@@ -105,20 +105,26 @@ The pages are built by `packages/site` reading two directories at build time:
 | `packages/evals/results/*.json` | the runs. A record — never edited after the fact. |
 | `packages/evals/scenarios/*.yaml` | annotations only, so closing a gap updates every page without re-running anything. |
 
-**A run reaches the site by being committed.** `.gitignore` in this package
-tracks `results/baseline-work-*.json` and ignores everything else, and the
-deployed site is built by CI from a clean checkout — so a local experiment stays
-local. A local `next build` shows your own uncommitted runs, which is the point
-of running one.
+**A run reaches the site by being named and committed.** A plain `eval` writes
+`results/<timestamp>-<model>.json`, which `.gitignore` ignores. Renaming it to
+`baseline-<something>.json` is the act of publishing it: that prefix is the only
+thing the gate looks at, and the deployed site is built by CI from a clean
+checkout, so an experiment you never named stays local. A local `next build`
+shows your own uncommitted runs, which is the point of running one.
 
-To publish a new baseline:
+Name a baseline after **what was benchmarked**, since that is the only thing a
+reader of a public page can use:
 
 ```bash
-pnpm --filter @tailored-ai/evals run eval -- --target luna --out results/baseline-work-luna.json
-git add packages/evals/results/baseline-work-luna.json
+pnpm --filter @tailored-ai/evals run eval -- --target luna --out results/baseline-gpt-5.6-luna.json
+git add packages/evals/results/baseline-gpt-5.6-luna.json
 ```
 
-Pushing that to `main` redeploys the site — `deploy-site.yml` watches
+The file name is what you called the run and `meta.model` is what actually
+answered it; the page shows both, so the two disagreeing is visible rather than
+silently reconciled.
+
+Pushing to `main` redeploys the site — `deploy-site.yml` watches
 `packages/evals/results/**` as well as the site itself.
 
 ### Scenarios that are supposed to be red
@@ -163,11 +169,11 @@ vLLM control core does not model, reachable only through `agent.providerExtra`
 (see [agent-loop.md](./agent-loop.md#sampling-controls-core-does-not-model-providerextra)).
 Run without `--home` and those scenarios are the first to fail, correctly.
 
-Two instances, one command each:
+One command per deployment, wherever its `TAI_HOME` is:
 
 ```bash
-pnpm --filter @tailored-ai/evals run eval -- --home ~/.tailored-ai  --out results/work.json
-pnpm --filter @tailored-ai/evals run eval -- --home ~/.tai-personal --out results/personal.json
+pnpm --filter @tailored-ai/evals run eval -- --home ~/.tailored-ai --out results/qwen-local.json
+pnpm --filter @tailored-ai/evals run eval -- --home /srv/tai       --out results/qwen-server.json
 ```
 
 Comparing those two compares *models and sampling*, not code — `compare` says so
