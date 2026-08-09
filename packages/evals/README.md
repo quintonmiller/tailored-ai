@@ -184,6 +184,14 @@ over what each scenario sends and grades, so annotating one does not invalidate
 every run before it. Full request bodies are kept for failing runs only — that
 is where they are the diagnosis rather than dead weight.
 
+`meta.scenarioFingerprints` is that same digest **per scenario**, for the ones
+this run covered. The set hash can say a definition somewhere moved; only the
+per-scenario version can say which, and that is the difference between a
+published number a reader can trust and one quietly describing a question that
+has since changed. A committed baseline is checked against the current files on
+every test run — see
+[docs/evals.md](../../docs/evals.md#a-published-result-must-still-describe-its-scenario).
+
 `meta.usage` totals the tokens, split into `input` and `output` (and `cacheRead`
 where the provider reports one). `meta.cost` is the dollars plus the rates it
 was billed at. Input and output are never collapsed into one figure: they are
