@@ -8,15 +8,16 @@
  * own process — which also means a scenario that hangs or segfaults costs one
  * result instead of the run.
  *
- * Communication is deliberately crude: a payload file in, one marked JSON line
- * out. Tools and the runtime log freely to stdout, so the marker is what tells
- * the result apart from the noise.
+ * Communication is deliberately crude: a payload file in, a result file out.
+ * Tools and the runtime log freely to stdout, so the result never travels that
+ * way — there is no separating it from the noise, and a big one does not
+ * survive the trip (see `protocol.ts`).
  */
 
 import { readFileSync } from "node:fs";
 import { grade, type JudgeFn } from "./graders.js";
 import { type HarnessOptions, runOnce } from "./harness.js";
-import { RESULT_MARKER } from "./protocol.js";
+import { writeWorkerResult } from "./protocol.js";
 import type { RunOutcome, RunResult, Scenario, ScenarioResult } from "./types.js";
 
 interface Payload {
@@ -115,13 +116,16 @@ async function main(): Promise<void> {
     runs,
     passRate: runs.length ? runs.filter((r) => r.pass).length / runs.length : 0,
   };
-  process.stdout.write(`\n${RESULT_MARKER}${JSON.stringify(result)}\n`);
+  writeWorkerResult(payloadPath, result);
   // A timed-out model call is abandoned, not cancelled, so its socket is still
   // pending and would hold this process open long past the result being written.
   process.exit(0);
 }
 
 main().catch((err) => {
-  process.stdout.write(`\n${RESULT_MARKER}${JSON.stringify({ error: (err as Error).message })}\n`);
+  // The payload path is re-read here rather than closed over: if it was missing
+  // there is nowhere to put the result and the exit code is all the parent gets.
+  const payloadPath = process.argv[2];
+  if (payloadPath) writeWorkerResult(payloadPath, { error: (err as Error).message });
   process.exitCode = 1;
 });

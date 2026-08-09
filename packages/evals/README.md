@@ -162,6 +162,19 @@ picks up that instance's sampling controls, including the `providerExtra`
 carrying vLLM's `repetition_penalty`. Run without it and the repetition
 scenarios are the first to fail.
 
+### Exit codes
+
+`0` only when every scenario ran and, if `--min-score` was given, the score
+cleared it. `1` otherwise — including when a scenario *failed to run at all*.
+
+That last case needs its own exit code because the score cannot express it. A
+scenario whose worker died has no runs, so it contributes 0 passed of 0 total:
+it does not lower the percentage, it quietly leaves the denominator. A run that
+lost a third of the set to a crashed worker would otherwise print a healthy
+number and exit clean. The report is still written either way — the summary
+names each scenario that did not run, and the score above it covers only the
+ones that did.
+
 ## Report files
 
 `results/<timestamp>-<model>.json`, holding the score, every check, and the
