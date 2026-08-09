@@ -25,7 +25,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import YAML from "yaml";
-import type { BenchmarkReport, PublishedRun, RunSummary } from "./bench-types";
+import type { BenchmarkReport, PublishedRun, RunSummary, RunUsage } from "./bench-types";
 
 /**
  * `next build` runs with the package directory as cwd, under both
@@ -144,6 +144,41 @@ export function currentScenarioIds(): Set<string> {
   return ids;
 }
 
+/**
+ * Tokens for a report, preferring the total it recorded.
+ *
+ * The fallback sums the runs, which is what lets every report written before
+ * `meta.usage` existed show its cost without being re-run — the per-run numbers
+ * were always there, only the total was missing.
+ */
+export function usageOf(report: BenchmarkReport): RunUsage {
+  if (report.meta.usage) return report.meta.usage;
+  let total: RunUsage = { input: 0, output: 0 };
+  for (const scenario of report.scenarios) {
+    for (const run of scenario.runs) {
+      total = {
+        input: total.input + (run.outcome?.usage?.input ?? 0),
+        output: total.output + (run.outcome?.usage?.output ?? 0),
+        ...(run.outcome?.usage?.cacheRead !== undefined || total.cacheRead !== undefined
+          ? { cacheRead: (total.cacheRead ?? 0) + (run.outcome?.usage?.cacheRead ?? 0) }
+          : {}),
+      };
+    }
+  }
+  return total;
+}
+
+/**
+ * The money, read rather than recomputed.
+ *
+ * The CLI prices a run when it writes it, so this only displays. Two surfaces
+ * deriving a bill from a price table that one of them might be missing is how
+ * a page and a terminal end up disagreeing about what something cost.
+ */
+export function usdOf(report: BenchmarkReport): number | null {
+  return report.meta.cost?.usd ?? null;
+}
+
 function summarise(files: string[]): RunSummary[] {
   const runs = files.map((file) => {
     const report = readReport(file);
@@ -160,6 +195,8 @@ function summarise(files: string[]): RunSummary[] {
         runs: s.runs.length,
         passed: s.runs.filter((r) => r.pass).length,
       })),
+      usage: usageOf(report),
+      usd: usdOf(report),
     } satisfies RunSummary;
   });
   runs.sort((a, b) => (a.meta.startedAt < b.meta.startedAt ? 1 : -1));
@@ -276,6 +313,20 @@ const NUMBER_FORMAT = new Intl.NumberFormat("en-US");
 
 export function formatNumber(value: number): string {
   return NUMBER_FORMAT.format(value);
+}
+
+/**
+ * `$1.23`, `$0.0041`, `<$0.0001`.
+ *
+ * Benchmark runs land well under a dollar, so two decimal places would round
+ * most of them to `$0.00` and make the column useless for the comparison it
+ * exists to support.
+ */
+export function formatUsd(usd: number): string {
+  if (usd === 0) return "$0";
+  if (usd < 0.0001) return "<$0.0001";
+  if (usd < 1) return `$${usd.toPrecision(2)}`;
+  return `$${usd.toFixed(2)}`;
 }
 
 /** Stable across machines and timezones — a static page must not depend on where it was built. */

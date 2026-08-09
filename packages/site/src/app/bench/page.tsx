@@ -16,6 +16,8 @@ import {
   comparabilityWarnings,
   currentScenarioIds,
   formatDate,
+  formatNumber,
+  formatUsd,
   knownGaps,
   listArchivedRuns,
   listRuns,
@@ -109,7 +111,16 @@ export default function BenchIndexPage() {
                         </Link>
                       </h2>
                       <p className="mt-1 text-sm text-[var(--color-text-muted)]">
-                        {run.rates.length} scenarios · {run.score.total} runs
+                        {run.rates.length} scenarios · {run.score.total} runs ·{" "}
+                        {/* Next to the score on purpose: what a model costs is half
+                            of choosing one, and it was invisible here. */}
+                        <span className="tabular-nums">{formatNumber(run.usage.input + run.usage.output)}</span> tokens
+                        {run.usd !== null ? (
+                          <>
+                            {" "}
+                            · <span className="tabular-nums">{formatUsd(run.usd)}</span>
+                          </>
+                        ) : null}
                       </p>
                     </div>
                     <div className="flex items-center gap-3">

@@ -7,7 +7,10 @@
  * a model getting less reliable.
  */
 
+import { formatUsd, noCostReason, totalUsage, usdOf } from "./cost.js";
 import type { BenchmarkReport, ScenarioResult } from "./types.js";
+
+const num = (n: number) => n.toLocaleString("en-US");
 
 const GREEN = "[32m";
 const RED = "[31m";
@@ -117,6 +120,14 @@ export function printSummary(report: BenchmarkReport): void {
     `  scenarios  ${report.scenarios.length} × ${meta.repeats} run${meta.repeats === 1 ? "" : "s"}   ${colour(`set ${meta.scenarioSetHash}`, DIM)}`,
   );
   console.log(`  wall clock ${Math.round(meta.durationSeconds)}s`);
+
+  // Split, never summed: input and output are priced an order of magnitude
+  // apart, so one figure cannot tell a bigger prompt from a chattier model.
+  const usage = totalUsage(report);
+  const usd = usdOf(report);
+  const cache = usage.cacheRead !== undefined ? `, ${num(usage.cacheRead)} cached` : "";
+  const money = usd === null ? colour(`  (${noCostReason(meta.model)})`, DIM) : `  ${formatUsd(usd)}`;
+  console.log(`  tokens     ${num(usage.input)} in${cache} · ${num(usage.output)} out${money}`);
   console.log("");
 
   const names = Object.keys(s.byCategory).sort();

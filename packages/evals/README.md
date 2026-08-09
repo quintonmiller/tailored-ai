@@ -183,3 +183,14 @@ model, endpoint, repeat count, seed, and a digest of the scenario set — taken
 over what each scenario sends and grades, so annotating one does not invalidate
 every run before it. Full request bodies are kept for failing runs only — that
 is where they are the diagnosis rather than dead weight.
+
+`meta.usage` totals the tokens, split into `input` and `output` (and `cacheRead`
+where the provider reports one). `meta.cost` is the dollars plus the rates it
+was billed at. Input and output are never collapsed into one figure: they are
+priced an order of magnitude apart, and one number cannot tell a bigger prompt
+from a chattier model.
+
+A model with no known price gets tokens and no dollars, never a guess. Money is
+priced once at write time and read everywhere else, so an old run keeps the
+rates it was actually billed at. Tokens do backfill from the runs, which is why
+reports written before `meta.usage` existed still show their size.

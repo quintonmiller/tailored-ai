@@ -181,10 +181,47 @@ not the report, so removing it un-marks the row everywhere at once.
   a handful of messages. Compaction, trimming and the 9,000-message sessions that
   motivated the redesign are represented only by their *shape* (a seeded
   `[Earlier conversation summary: …]` block), not their size.
-- **Nothing about cost.** Token usage is recorded per run but nothing asserts on
-  it beyond `prompt_max_tokens`.
+- **No per-scenario cost assertion.** A run reports its tokens and its dollars,
+  and `compare` calls out a request that grew — but nothing fails a *scenario*
+  for being expensive. `prompt_max_tokens` is the per-scenario tripwire and is
+  the right tool for that.
 
 The first and third are the ones worth closing next.
+
+## Cost
+
+Every report carries `meta.usage` (`input`, `output`, and `cacheRead` where the
+provider reports one) and `meta.cost` — dollars, plus the per-million rates it
+was billed at and the date they were taken.
+
+**Input and output are never summed.** They are priced an order of magnitude
+apart, and a single "tokens" figure cannot separate *the prompt got bigger* from
+*the model talked more*. Those have opposite fixes, and the first is the thing
+this benchmark exists to catch.
+
+Three rules worth knowing, because each one is a way the number could lie:
+
+- **A model with no price shows tokens and no dollars.** `cost.ts` holds a small
+  table keyed by model id (longest-prefix match, so `gpt-5.6-2026-07-01` keeps
+  `gpt-5.6`'s rates). Locally-served models are deliberately absent rather than
+  priced at 0 — zero renders as "free", and the GPU-hours are real.
+- **Money is recorded, never recomputed.** The CLI prices a run when it writes
+  it, and every other surface displays that. Otherwise the site and the terminal
+  can disagree about a bill. It also means an old run keeps the rates it was
+  actually billed at: adding a price today does not retroactively price last
+  month's run, which would be inventing a measurement.
+- **A cached read replaces the uncached charge, it does not add to it.**
+  Providers report `cached_tokens` as a *subset* of `prompt_tokens`. Charging
+  both double-counts the request and gets the sign backwards, making a run that
+  cached well look dearer than one that cached nothing.
+
+Tokens *do* backfill: `totalUsage` falls back to summing the runs, so every
+report written before `meta.usage` existed reads correctly without being
+re-run. The per-run numbers were always there; only the total was missing.
+
+`compare` reports a request-size move above 5%, per run so it survives a
+differing repeat count, and stays silent across different models — where a token
+difference is tokenizers and verbosity, not code.
 
 ## Running it against a deployment
 
