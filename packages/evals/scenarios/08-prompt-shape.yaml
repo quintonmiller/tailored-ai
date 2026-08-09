@@ -1,0 +1,112 @@
+# The shape of the request itself.
+#
+# These are the checks with no model variance: given the same code and the same
+# scenario, the assembled request is byte-identical, so a failure here is always
+# a code change and never sampling. They are the part of the score that means
+# something after a single run, and the part worth reading first when a
+# comparison shows a drop.
+#
+# Each one still costs a model call — the request only exists because a turn was
+# run — but the assertion never touches the response.
+
+- id: wake-prompt-states-room-agent-and-date
+  category: prompt-shape
+  intent: The three facts every room turn needs before it reads anything else.
+  agent: &nova
+    name: nova
+    instructions: |
+      You are Nova, a calm and practical assistant. Keep replies short.
+    tools: [room]
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      incoming:
+        - { speaker: quinton, to: [nova], body: "all good?" }
+  wake: { room: ops }
+  expect:
+    - prompt_contains: 'Room "ops". You are nova.'
+    - prompt_contains: "Today is"
+    - prompt_contains: "Purpose: Deploys and incidents."
+
+- id: wake-prompt-offers-the-way-out
+  category: prompt-shape
+  intent: >
+    Declining has to be a reachable action rather than a sentinel word — the
+    escape hatch is a tool call, and it has to be named.
+  agent: *nova
+  rooms:
+    - name: ops
+      incoming:
+        - { speaker: quinton, to: [nova], body: "all good?" }
+  wake: { room: ops }
+  expect:
+    - prompt_contains: 'room(action="pass")'
+    - prompt_contains: "Reply as nova"
+
+- id: transcript-marks-who-is-a-person
+  category: prompt-shape
+  intent: >
+    Speaker kind is carried into the transcript so the agent can tell a person
+    from another agent. Marked on every line, because a marker that appears
+    sometimes makes its absence meaningful.
+  agent: *nova
+  config:
+    agents:
+      dana: { description: "Another agent in the room." }
+  rooms:
+    - name: ops
+      incoming:
+        - { speaker: quinton, body: "morning both" }
+        - { speaker: dana, body: "morning" }
+  wake: { room: ops }
+  expect:
+    - prompt_contains: "quinton [person]"
+    - prompt_contains: "dana [agent]"
+
+- id: persona-appears-once
+  category: prompt-shape
+  intent: >
+    Identity is a replace-tier block. A second copy means something is appending
+    where it should be overwriting, which is how a session grows a block per
+    turn until it crowds out the conversation.
+  agent: *nova
+  rooms:
+    - name: ops
+      incoming:
+        - { speaker: quinton, to: [nova], body: "all good?" }
+  wake: { room: ops }
+  expect:
+    - prompt_occurrences: { text: "You are Nova, a calm and practical assistant", min: 1, max: 1 }
+
+- id: a-quiet-room-turn-stays-small
+  category: prompt-shape
+  intent: >
+    One short message in one room, with the room tool only. Everything above
+    ~4k tokens here is scaffolding, and this is the tripwire for scaffolding
+    growing without anyone noticing.
+  agent: *nova
+  rooms:
+    - name: ops
+      incoming:
+        - { speaker: quinton, to: [nova], body: "all good?" }
+  wake: { room: ops }
+  expect:
+    - prompt_max_tokens: 4000
+
+- id: seen-messages-are-not-re-sent
+  category: prompt-shape
+  intent: >
+    A wake carries what arrived since the cursor. Re-sending messages the agent
+    was already shown is the bug that put one block in a session twenty-three
+    times, and it is invisible unless something asserts on it.
+  agent: *nova
+  rooms:
+    - name: ops
+      seen:
+        - { speaker: quinton, body: "aardvark-marker-one" }
+        - { speaker: quinton, body: "aardvark-marker-two" }
+      incoming:
+        - { speaker: quinton, to: [nova], body: "all good?" }
+  wake: { room: ops }
+  expect:
+    - prompt_not_contains: "aardvark-marker-one"

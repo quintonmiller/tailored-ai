@@ -1,0 +1,91 @@
+# Scaffolding stays out of the reply.
+#
+# Everything the wake prompt says about the room — its name, the date, who is
+# present, how to decline — is instruction, not content. A smaller model reads
+# a framed prompt as a document to continue and answers by restating it, which
+# in a room reads as the agent talking to itself in the third person.
+#
+# The raw-markup checks cover the other half: the loop has a correction round
+# for a reply that came out as tool-call text, and these measure how often it is
+# needed rather than how well it recovers.
+
+- id: does-not-echo-the-wake-header
+  category: framing
+  intent: >
+    "Room "ops". You are nova. Today is …" is addressed to the model, not to
+    the room, and must not come back out.
+  agent: &nova
+    name: nova
+    instructions: |
+      You are Nova, a calm and practical assistant. Keep replies short.
+    tools: [room]
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      incoming:
+        - { speaker: quinton, to: [nova], body: "morning — anything I should know about?" }
+  wake: { room: ops }
+  expect:
+    - reply_mentions_none: ["Known participants", "New messages:", "Reply as nova", "Purpose:"]
+
+- id: does-not-restate-the-date-line
+  category: framing
+  intent: The clock is context, not something to announce.
+  agent: *nova
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      incoming:
+        - { speaker: quinton, to: [nova], body: "can you take a look at the failing test when you get a chance?" }
+  wake: { room: ops }
+  expect:
+    - reply_not_matches: "^\\s*Today is"
+
+- id: does-not-emit-raw-tool-markup
+  category: framing
+  intent: >
+    A tool call written as text is not a tool call. It reaches the room as
+    gibberish and costs a correction round.
+  agent: *nova
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      incoming:
+        - { speaker: quinton, to: [nova], body: "what's the status on the staging deploy?" }
+  wake: { room: ops }
+  expect:
+    - reply_not_matches: "<tool_call|<\\|tool|functions\\.[a-z_]+|\"name\"\\s*:\\s*\"room\""
+
+- id: does-not-write-the-pass-call-as-text
+  category: framing
+  intent: >
+    The specific version of the above that the correction round exists for:
+    declining by typing the call rather than making it.
+  agent: *nova
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      seen:
+        - { speaker: nova, body: "Restarted the worker; queue is draining." }
+      incoming:
+        - { speaker: quinton, body: "nice one" }
+  wake: { room: ops }
+  expect:
+    - reply_not_matches: "room\\s*\\(\\s*action"
+
+- id: does-not-speak-in-transcript-format
+  category: framing
+  intent: >
+    The transcript renders lines as "quinton [person]: …". A reply that copies
+    that shape puts the agent's own name and a speaker tag inside the message
+    body, where the envelope has already put it.
+  agent: *nova
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      incoming:
+        - { speaker: quinton, to: [nova], body: "did you get anywhere with the flaky test?" }
+  wake: { room: ops }
+  expect:
+    - reply_not_matches: "^\\s*(nova|quinton)\\s*(\\[[a-z]+\\])?\\s*:"
+    - reply_mentions_none: ["[person]", "[agent]", "[unrecognised]"]

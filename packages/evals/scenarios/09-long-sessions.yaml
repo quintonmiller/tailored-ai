@@ -1,0 +1,122 @@
+# Sessions long enough that something has to be dropped.
+#
+# The gap this closes: every other scenario starts from a handful of messages,
+# which is the one case the invocation-message redesign was NOT about. The
+# measured production sessions ran to 9,283 messages and ~772k tokens, read from
+# SQLite in full every turn and then trimmed. Nothing here reproduces that size,
+# but `agent.maxHistoryTokens` is per-scenario config, so setting it low puts the
+# same machinery under the same pressure at a size a benchmark can afford.
+#
+# Trimming is oldest-first. So the question every scenario below asks is the
+# same one: when the front of the conversation is gone, does the agent know?
+
+- id: answers-from-the-surviving-window
+  category: long-session
+  intent: >
+    A long session, a small budget, and the fact the question needs is recent.
+    This is the control: if this fails, the trimming is eating the wrong end and
+    nothing else in this file means anything.
+  agent: &nova
+    name: nova
+    instructions: |
+      You are Nova, a calm and practical assistant. Keep replies short.
+  # Sized so a window genuinely survives. The first draft used 2,500 and nothing
+  # did — tool schemas alone are ~5,500 here, so the history budget was zero and
+  # three scenarios were asserting recall against an empty conversation. Each one
+  # below now proves its own setup with a `prompt_contains` before asserting on
+  # the answer, because a scenario that cannot tell "the model forgot" from "we
+  # never sent it" is not measuring the model.
+  config: &window
+    agent:
+      maxHistoryTokens: 7000
+  history: &long
+    - { role: user, content: "morning — starting on the billing migration today" }
+    - { role: assistant, content: "Sounds good. Shout if you want a second pair of eyes." }
+    - { role: user, content: "the old invoice table has about 4 million rows" }
+    - { role: assistant, content: "Noted. That's big enough that the copy wants batching." }
+    - { role: user, content: "we're going with 50k batches" }
+    - { role: assistant, content: "50k it is." }
+    - { role: user, content: "dana is handling the stripe webhook cutover" }
+    - { role: assistant, content: "Understood — Dana on the webhook." }
+    - { role: user, content: "the staging run took 40 minutes end to end" }
+    - { role: assistant, content: "40 minutes on staging. Production will be slower with real volume." }
+    - { role: user, content: "we booked the maintenance window for the 19th at 2am" }
+    - { role: assistant, content: "The 19th at 2am. I'll keep that in mind." }
+    - { role: user, content: "rollback is a snapshot restore, takes about 12 minutes" }
+    - { role: assistant, content: "12-minute snapshot restore for rollback. Good to know." }
+    - { role: user, content: "oh and the read replicas need repointing after the cutover" }
+    - { role: assistant, content: "Repoint the read replicas after cutover. Added to the sequence." }
+    - { role: user, content: "the runbook lives in the ops repo under docs/billing-cutover.md" }
+    - { role: assistant, content: "Runbook at docs/billing-cutover.md in the ops repo." }
+    - { role: user, content: "we're calling the new database billing-v2" }
+    - { role: assistant, content: "billing-v2 it is." }
+  message: "what's the new database called again?"
+  expect:
+    - prompt_contains: "billing-v2"
+    - reply_mentions_any: ["billing-v2"]
+
+- id: does-not-answer-from-a-superseded-fact
+  category: long-session
+  intent: >
+    The conversation changed its mind. A model that pattern-matches the first
+    mention of a date answers with the one that was cancelled — and this is the
+    failure that costs somebody a maintenance window, not a benchmark point.
+  agent: *nova
+  config: *window
+  history:
+    - { role: user, content: "we booked the maintenance window for the 19th at 2am" }
+    - { role: assistant, content: "The 19th at 2am, noted." }
+    - { role: user, content: "the staging run took 40 minutes end to end" }
+    - { role: assistant, content: "40 minutes on staging." }
+    - { role: user, content: "actually the 19th is out — infra has a freeze on. we moved it to the 26th, same time" }
+    - { role: assistant, content: "Moved to the 26th at 2am. Freeze on the 19th." }
+    - { role: user, content: "rollback is a snapshot restore, about 12 minutes" }
+    - { role: assistant, content: "12-minute snapshot restore." }
+  message: "remind me when the cutover is"
+  expect:
+    - prompt_contains: "26th"
+    - reply_mentions_any: ["26th", "26"]
+    - reply_mentions_none: ["19th"]
+
+- id: says-when-the-front-of-the-conversation-is-gone
+  category: long-session
+  intent: >
+    The fact is in the part that got trimmed. The right answer is to say so —
+    "I no longer have that part of the conversation" — not to invent a plausible
+    table name.
+
+    `summarizeOnTrim` has no default, so it is off, and the mechanism that marks
+    a cut exists but is not the default. This scenario measures what that costs.
+  agent: *nova
+  # Deliberately the tight budget the others abandoned: here an empty history IS
+  # the condition under test.
+  config:
+    agent:
+      maxHistoryTokens: 2500
+  history: *long
+  message: "how many rows did you say the old invoice table had?"
+  expect:
+    - reply_not_matches: "\\b4[,.]?\\s*(million|m\\b)|4000000"
+
+- id: keeps-the-thread-in-a-long-room-session
+  category: long-session
+  intent: >
+    The same pressure on the room path, where the session also carries every
+    wake prompt ever rendered — the layer that grows fastest in production.
+  agent:
+    name: nova
+    instructions: |
+      You are Nova, a calm and practical assistant. Keep replies short.
+    tools: [room]
+  config: *window
+  history: *long
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      incoming:
+        - { speaker: quinton, to: [nova], body: "what batch size did we settle on?" }
+  wake: { room: ops }
+  expect:
+    - prompt_contains: "50k"
+    - replies: true
+    - reply_mentions_any: ["50k", "50,000", "50000"]

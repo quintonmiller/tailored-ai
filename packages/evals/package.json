@@ -1,0 +1,30 @@
+{
+  "name": "@tailored-ai/evals",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Scenario benchmark: assembles a real invocation message through core, sends it to a live model, and scores what comes back.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "eval": "tsx src/cli.ts run",
+    "eval:compare": "tsx src/cli.ts compare"
+  },
+  "dependencies": {
+    "@tailored-ai/core": "workspace:*",
+    "yaml": "^2.6.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@tailored-ai/provider-anthropic": "workspace:*",
+    "@tailored-ai/provider-deepseek": "workspace:*",
+    "@tailored-ai/provider-openai": "workspace:*",
+    "@tailored-ai/provider-openrouter": "workspace:*",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.0",
+    "better-sqlite3": "^11.7.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.0.18"
+  }
+}

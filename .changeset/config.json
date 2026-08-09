@@ -26,6 +26,7 @@
   "ignore": [
     "@tailored-ai/ui",
     "@tailored-ai/site",
-    "@tailored-ai/integration-tests"
+    "@tailored-ai/integration-tests",
+    "@tailored-ai/evals"
   ]
 }

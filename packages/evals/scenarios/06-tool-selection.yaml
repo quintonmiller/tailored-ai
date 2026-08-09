@@ -1,0 +1,99 @@
+# Picking the right tool out of a realistic tool set.
+#
+# Selection is a property of the whole request, not of a tool description in
+# isolation: the schemas are ~11k tokens of the prompt, they compete with the
+# persona and the transcript for attention, and every block added anywhere makes
+# this harder. That is why these live in the same benchmark as the prompt-shape
+# checks rather than in a tool unit test.
+#
+# The restraint cases are not filler. A model that reaches for a tool on every
+# turn scores well on the positive cases and is unusable in a room, where the
+# symptom is breaking off mid-conversation to look something up.
+
+- id: books-a-one-off-wake
+  category: tool-selection
+  intent: "\"in ten minutes\" is a one-shot schedule, not a cron job."
+  agent: &nova
+    name: nova
+    instructions: |
+      You are Nova, a calm and practical assistant. Keep replies short.
+  message: "check back with me in 10 minutes about the deploy"
+  expect:
+    - calls_tool: schedule
+    - tool_args: { tool: schedule, where: { action: once } }
+
+- id: books-a-recurring-wake
+  category: tool-selection
+  intent: A standing pattern is `repeat`, and it has to carry the pattern.
+  agent: *nova
+  message: "every weekday at 9am, check whether anything is stuck in the queue"
+  expect:
+    - calls_tool: schedule
+    - tool_args: { tool: schedule, where: { action: repeat } }
+
+- id: lists-booked-wakes
+  category: tool-selection
+  intent: A question about existing schedules is answered by reading them.
+  agent: *nova
+  message: "what have you got scheduled?"
+  expect:
+    - tool_args: { tool: schedule, where: { action: list } }
+
+- id: reads-a-file-instead-of-guessing
+  category: tool-selection
+  intent: Asked what is in a file, look.
+  agent: *nova
+  toolResults:
+    read: "# todo\n- rotate the staging certificate\n- delete the old backup bucket\n"
+  message: "what's in ~/notes/todo.md?"
+  expect:
+    - calls_tool: read
+    - reply_mentions_any: ["certificate", "backup"]
+
+- id: runs-a-command-for-a-shell-question
+  category: tool-selection
+  intent: A question about live machine state needs the machine, not a guess.
+  agent: *nova
+  toolResults:
+    exec: "* main\n  feat/rooms-archive\n"
+  message: "which git branch is the repo on right now?"
+  expect:
+    - calls_tool: exec
+
+- id: files-a-task
+  category: tool-selection
+  intent: "\"add a task\" is the tasks tool, not a note and not a reply."
+  agent: *nova
+  message: "add a task to fix the login redirect bug, it's high priority"
+  expect:
+    - calls_tool: tasks
+
+- id: answers-general-knowledge-without-a-tool
+  category: tool-selection
+  intent: Restraint. Nothing here needs the machine, the disk or the network.
+  agent: *nova
+  message: "roughly how many kilometres is it from London to Edinburgh?"
+  expect:
+    - does_not_call: [exec, read, write, edit, schedule, tasks, web_fetch, web_search]
+    - replies: true
+
+- id: answers-a-preference-question-without-a-tool
+  category: tool-selection
+  intent: >
+    Second restraint case, conversational rather than factual — this is the one
+    that shows up in a room as an assistant that cannot just talk.
+  agent: *nova
+  message: "do you prefer tabs or spaces? one line answer"
+  expect:
+    - does_not_call: [exec, read, write, edit, schedule, tasks, web_fetch, web_search, recall, memory]
+    - replies: true
+
+- id: does-not-schedule-a-past-time
+  category: tool-selection
+  intent: >
+    "This morning" is behind us. Booking it is the failure the schedule tool
+    refuses, and asking rather than inventing a time is the good outcome.
+  agent: *nova
+  message: "remind me about the review this morning"
+  expect:
+    - reply_matches: "\\?"

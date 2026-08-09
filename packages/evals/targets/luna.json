@@ -1,0 +1,10 @@
+{
+  "_comment": "gpt-5.6-luna through the provider-openai plugin, which is what a deployment naming this model actually runs. The plugin already knows the two things the raw endpoint refuses \u2014 `max_tokens` (it wants `max_completion_tokens`) and function tools alongside reasoning (it wants reasoning_effort 'none') \u2014 and recovers from the 400 rather than needing either spelled out here. Concurrency is pinned low because the org TPM cap binds long before the model does. `seed` is off because the plugin talks the Responses API, which has no such parameter \u2014 so repeats on this target vary freely rather than being reproducible. That is a property of the provider, not of the benchmark.",
+  "plugins": "@tailored-ai/provider-openai",
+  "provider": "openai",
+  "model": "gpt-5.6-luna",
+  "api-key-env": "OPENAI_API_KEY",
+  "thinking": "off",
+  "concurrency": "3",
+  "seed": "off"
+}

@@ -1,0 +1,625 @@
+/**
+ * Run one scenario against a live model, through the real code.
+ *
+ * The whole value of this harness is that it does not hand-write an invocation
+ * message. It stands up a genuine `AgentRuntime` on a throwaway home, seeds a
+ * genuine session or a genuine set of rooms, and lets `runAgentLoop` /
+ * `RoomWatcher` assemble the request exactly the way production does. A change
+ * to prompt assembly therefore shows up here without anyone updating the
+ * benchmark — which is the only way a benchmark stays honest.
+ *
+ * Three things are deliberately not real:
+ *
+ *   the home     — a fresh temp directory per run, so nothing reads or writes a
+ *                  deployment's config, database or context files.
+ *   the tools    — side-effecting tools keep their real name, description and
+ *                  schema (the model must see what it sees in production) but
+ *                  their `execute` is replaced by a canned result. Tool
+ *                  *selection* is what is under test; tool *effects* are not.
+ *   the streaming — the recording provider exposes `chat` only, so the loop
+ *                  takes the blocking path. Same request body, no SSE.
+ */
+
+import { randomUUID } from "node:crypto";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { AIProvider, ChatParams, ChatResponse, Tool } from "@tailored-ai/core";
+import {
+  AgentRuntime,
+  createEmbedder,
+  createMetaTools,
+  createPluginContext,
+  createProvider,
+  createTools,
+  findOrCreateSession,
+  formatRoomRef,
+  initDatabase,
+  LocalRoomBackend,
+  loadConfig,
+  loadPlugins,
+  makeRoomSessionKey,
+  newSession,
+  parseEnvelope,
+  RoomWatcher,
+  runAgentLoop,
+  saveMessage,
+  TypedEventBus,
+  unregisterRoomBackend,
+} from "@tailored-ai/core";
+import YAML from "yaml";
+import type { RecordedCall, RecordedRequest, RoomLine, RunOutcome, Scenario } from "./types.js";
+
+export interface HarnessOptions {
+  baseUrl: string;
+  model: string;
+  /** Literal key, or `${VAR}` for `loadConfig` to interpolate so it never hits disk. */
+  apiKey: string;
+  temperature: number;
+  /**
+   * Cap on generated tokens, or null to send no cap at all.
+   *
+   * Null is not a nicety: some hosted models reject `max_tokens` outright and
+   * want `max_completion_tokens` instead, which reaches them through
+   * `providerExtra`. There has to be a way to stop core emitting the field it
+   * would otherwise always emit.
+   */
+  maxTokens: number | null;
+  maxToolRounds: number;
+  /** vLLM sampling controls, sent as `providerExtra`. Mirrors a deployment's own. */
+  providerExtra: Record<string, unknown>;
+  /** Per-run seed. Sent to the provider so a repeat is reproducible. */
+  seed: number | null;
+  timeoutMs: number;
+  /**
+   * Copied from the target deployment's provider block, because reasoning
+   * changes both what the model produces and what a turn costs. Benchmarking a
+   * thinking deployment with thinking off measures a model it does not run.
+   */
+  thinkingDialect?: string;
+  thinking?: string;
+  /**
+   * Provider plugins to load before the runtime is built, e.g.
+   * `@tailored-ai/provider-openai`.
+   *
+   * Without these the benchmark can only exercise core's generic
+   * `openai_compatible` client — which is the right target for a vLLM
+   * deployment and the wrong one for every fallback rung, since a plugin is
+   * where vendor recovery lives. `provider-openai` already knows that
+   * gpt-5.6 wants `max_completion_tokens` and that it refuses function tools
+   * unless `reasoning_effort` is "none"; benchmarking without it measures a
+   * client the deployment does not use.
+   */
+  plugins?: string[];
+  /** Provider id the agent runs on. Defaults to `openai_compatible`. */
+  providerId?: string;
+}
+
+const OWNER_ID = "owner-0000";
+const OWNER_LABEL = "quinton";
+
+/**
+ * Tools whose real `execute` is replaced.
+ *
+ * The rule is "anything that reaches outside this process": the filesystem, the
+ * network, another model, a real Discord account. `room`, `schedule`,
+ * `core_memory`, `recall` and `tasks` are left real — they only touch the
+ * throwaway database, and a scenario about scheduling that stubs `schedule`
+ * would be testing nothing.
+ */
+const STUBBED = new Set([
+  "exec",
+  "read",
+  "write",
+  "edit",
+  "web_fetch",
+  "web_search",
+  "browser",
+  "browser_mediator",
+  "claude_code",
+  "md_to_pdf",
+  "notify_owner",
+  "delegate",
+  "trusted_actions",
+  "extract_document",
+  "ask_user",
+]);
+
+const DEFAULT_STUB_RESULT = "(stubbed in the benchmark — assume it succeeded and continue)";
+
+function stub(tool: Tool, results: Record<string, string>): Tool {
+  if (!STUBBED.has(tool.name)) return tool;
+  return {
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.parameters,
+    async execute() {
+      return { success: true, output: results[tool.name] ?? DEFAULT_STUB_RESULT };
+    },
+  };
+}
+
+/**
+ * Every request and every response, captured on the way past — and the only
+ * thing standing between one wedged call and a benchmark that never ends.
+ *
+ * Core's OpenAI-compatible provider sets no request timeout, which is the right
+ * default for an agent a person is watching and the wrong one for a batch of a
+ * hundred and thirty turns. The race only abandons the call, it does not cancel
+ * it; the worker exits after writing its result, which is what actually frees
+ * the socket.
+ */
+class Recorder {
+  readonly requests: RecordedRequest[] = [];
+  readonly calls: RecordedCall[] = [];
+  /**
+   * Provider calls that threw.
+   *
+   * Tracked because the room path swallows them: `runTurn` catches a failed
+   * `runAgentLoop`, logs, advances the cursor and returns — deliberately, so one
+   * unprocessable message cannot burn a room's whole hourly wake budget. The
+   * harness therefore sees a turn that "completed" with no reply.
+   *
+   * Left ungraded, that made a benchmark pointed at a dead endpoint score 100%:
+   * the request was assembled and recorded before the call failed, so every
+   * `prompt_*` assertion passed and nothing noticed the model never answered.
+   * Caught by a control run against a server that accepts and never replies.
+   */
+  readonly failures: string[] = [];
+  responses = 0;
+  /** Calls that only succeeded after a retry. Counted so throttling is visible, not silent. */
+  retries = 0;
+  usage = { input: 0, output: 0 };
+
+  wrap(provider: AIProvider, timeoutMs: number, maxAttempts = 5): AIProvider {
+    const recorder = this;
+    return {
+      id: provider.id,
+      name: provider.name,
+      supportsTools: provider.supportsTools,
+      async chat(params: ChatParams): Promise<ChatResponse> {
+        // Recorded once, outside the retry loop: the request is the same each
+        // attempt, and counting it twice would make `prompt_occurrences` lie.
+        recorder.requests.push(describeRequest(params));
+        let last: Error | undefined;
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            const response = await Promise.race([
+              provider.chat(params),
+              new Promise<never>((_, reject) => {
+                timer = setTimeout(() => reject(new Error(`model call exceeded ${timeoutMs}ms`)), timeoutMs);
+              }),
+            ]);
+            recorder.responses++;
+            if (attempt > 1) recorder.retries++;
+            recorder.usage.input += response.usage.input;
+            recorder.usage.output += response.usage.output;
+            for (const call of response.toolCalls ?? []) {
+              recorder.calls.push({ name: call.name, args: call.arguments ?? {} });
+            }
+            return response;
+          } catch (err) {
+            last = err as Error;
+            const wait = retryDelayMs(last, attempt);
+            if (wait === null || attempt === maxAttempts) break;
+            await new Promise((r) => setTimeout(r, wait));
+          } finally {
+            if (timer) clearTimeout(timer);
+          }
+        }
+
+        recorder.failures.push((last as Error).message);
+        throw last;
+      },
+      listModels: provider.listModels?.bind(provider),
+    };
+  }
+}
+
+/**
+ * How long to wait before trying this call again, or null if it should not be.
+ *
+ * Throttling is an infrastructure condition, not a property of the invocation
+ * message, so a benchmark that scores it as a failure measures the wrong thing.
+ * The first hosted run hit a 200k-tokens-per-minute org cap and lost 51 of 132
+ * runs to HTTP 429 — a 58% score that said nothing about the code.
+ *
+ * Retried rather than hidden: `retries` is counted and surfaced, because a run
+ * that needed forty retries to finish is worth knowing about even when it did
+ * finish. Only throttling and transient server errors qualify — a 400 is a real
+ * defect and must fail loudly on the first attempt.
+ */
+export function retryDelayMs(err: Error, attempt: number): number | null {
+  const message = err.message ?? "";
+  const throttled = /\b429\b|rate.?limit|too many requests/i.test(message);
+  const transient = /\b(500|502|503|504)\b|overloaded/i.test(message);
+  if (!throttled && !transient) return null;
+
+  // Providers that say how long to wait are usually right; the backoff is the
+  // floor, so a "try again in 124ms" does not turn into a 124ms hot loop.
+  const suggested = /try again in (\d+(?:\.\d+)?)(ms|s)\b/i.exec(message);
+  const hinted = suggested ? Number(suggested[1]) * (suggested[2].toLowerCase() === "s" ? 1000 : 1) : 0;
+  return Math.max(hinted, 500 * 2 ** (attempt - 1));
+}
+
+/**
+ * Did this turn get an answer at all?
+ *
+ * Not "did any call fail" — the loop legitimately recovers from one, and a
+ * recovered turn is a passing turn. "Nothing came back at all" is the state
+ * where a green score would be a lie, and it is reachable without an exception
+ * escaping, because the room path catches a failed turn on purpose.
+ */
+export function turnFailed(responses: number, failures: string[]): { error: string } | undefined {
+  if (responses > 0 || failures.length === 0) return undefined;
+  return { error: `no model response: ${failures[0]}` };
+}
+
+/** ~4 chars per token. Same rough estimator core budgets with, and good enough to catch bloat. */
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+/**
+ * `system` and `messages` partition the request — they do not overlap.
+ *
+ * They did at first, and the first benchmark run reported the persona appearing
+ * twice in a request that contained it once. An occurrence count over a
+ * representation that double-counts is a benchmark measuring itself.
+ */
+export function describeRequest(params: ChatParams): RecordedRequest {
+  const system = params.messages
+    .filter((m) => m.role === "system")
+    .map((m) => m.content ?? "")
+    .join("\n");
+  const messages = params.messages
+    .filter((m) => m.role !== "system")
+    .map((m) => ({ role: m.role, content: m.content ?? "" }));
+  const toolText = JSON.stringify(params.tools ?? []);
+  const body = [system, ...messages.map((m) => m.content)].join("\n");
+  return {
+    system,
+    messages,
+    toolNames: (params.tools ?? []).map((t) => t.function.name),
+    estimatedTokens: estimateTokens(body) + estimateTokens(toolText),
+  };
+}
+
+export const DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1";
+
+function buildConfig(scenario: Scenario, opts: HarnessOptions): Record<string, unknown> {
+  const agentName = scenario.agent?.name ?? "bench";
+  const providerId = opts.providerId ?? "openai_compatible";
+  const agent: Record<string, unknown> = {
+    description: scenario.agent?.description ?? "Benchmark agent.",
+    ...(scenario.agent?.instructions ? { instructions: scenario.agent.instructions } : {}),
+    ...(scenario.agent?.tools ? { tools: scenario.agent.tools } : {}),
+    ...(scenario.agent?.extra ?? {}),
+  };
+
+  const config: Record<string, unknown> = {
+    server: { port: 3999, host: "127.0.0.1" },
+    database: { path: "./agent.db" },
+    providers: {
+      [providerId]: {
+        // A plugin provider talks to its vendor's own endpoint and rejects a
+        // baseUrl it did not expect, so only pass one when it was asked for.
+        ...(providerId === "openai_compatible" || opts.baseUrl !== DEFAULT_BASE_URL ? { baseUrl: opts.baseUrl } : {}),
+        defaultModel: opts.model,
+        apiKey: opts.apiKey,
+        ...(opts.thinkingDialect ? { thinkingDialect: opts.thinkingDialect } : {}),
+        ...(opts.thinking ? { thinking: opts.thinking } : {}),
+      },
+    },
+    agent: {
+      defaultProvider: providerId,
+      extraInstructions: "",
+      temperature: opts.temperature,
+      ...(opts.maxTokens === null ? {} : { maxTokens: opts.maxTokens }),
+      maxToolRounds: opts.maxToolRounds,
+      maxHistoryTokens: 110000,
+      providerExtra: {
+        ...opts.providerExtra,
+        ...(opts.seed !== null ? { seed: opts.seed } : {}),
+      },
+    },
+    context: { directory: "./data/context", kbDirectory: "./data/kb" },
+    channels: {},
+    // A realistic tool surface: selection pressure is part of what is being
+    // measured, so an agent that sees four tools here and forty in production
+    // proves nothing. Side effects are handled by stubbing, not by disabling.
+    tools: {
+      memory: { enabled: true },
+      exec: { enabled: true },
+      read: { enabled: true },
+      write: { enabled: true },
+      web_fetch: { enabled: true },
+      web_search: { enabled: true },
+      tasks: { enabled: true },
+      facts: { enabled: true },
+      recall: { enabled: true },
+      projects: { enabled: true },
+      documents: { enabled: true },
+      extract_document: { enabled: true },
+    },
+    custom_tools: {},
+    commands: {},
+    cron: { enabled: false, jobs: [] },
+    webhooks: { enabled: false, routes: [] },
+    schedules: { enabled: true },
+    rooms: {
+      enabled: true,
+      ownerLabel: OWNER_LABEL,
+      identities: { [OWNER_LABEL]: OWNER_ID },
+      maxWakesPerHour: 1000,
+      maxAgentTurns: 100,
+    },
+    agents: { [agentName]: agent },
+  };
+
+  return deepMerge(config, scenario.config ?? {});
+}
+
+function deepMerge(base: Record<string, unknown>, over: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(over)) {
+    const existing = out[key];
+    if (isPlainObject(existing) && isPlainObject(value)) out[key] = deepMerge(existing, value);
+    else out[key] = value;
+  }
+  return out;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** A room scenario's lines name identities; every one of them must be declared. */
+function collectSpeakers(scenario: Scenario): string[] {
+  const speakers = new Set<string>();
+  for (const room of scenario.rooms ?? []) {
+    for (const line of [...(room.seen ?? []), ...(room.incoming ?? [])]) speakers.add(line.speaker);
+  }
+  return [...speakers];
+}
+
+export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise<RunOutcome> {
+  const home = mkdtempSync(join(tmpdir(), "tai-eval-"));
+  const previousHome = process.env.TAI_HOME;
+  process.env.TAI_HOME = home;
+
+  const started = Date.now();
+  const recorder = new Recorder();
+  let db: import("better-sqlite3").Database | undefined;
+  let roomsRegistered = false;
+
+  try {
+    const agentName = scenario.agent?.name ?? "bench";
+    const configObject = buildConfig(scenario, opts);
+
+    // Every speaker a room line uses has to resolve, or the wake policy reads
+    // an unknown label as a person and the transcript loses attribution.
+    const rooms = (configObject.rooms ?? {}) as Record<string, unknown>;
+    const identities = { ...((rooms.identities ?? {}) as Record<string, unknown>) };
+    const declaredAgents = Object.keys((configObject.agents ?? {}) as Record<string, unknown>);
+    for (const speaker of collectSpeakers(scenario)) {
+      // Agents resolve through `agents:` on their own and must not be given a
+      // human id here — the wake policy branches on `kind`, so mislabelling one
+      // agent as a person changes which messages wake anybody.
+      if (identities[speaker] || declaredAgents.includes(speaker)) continue;
+      identities[speaker] = `person-${speaker}`;
+    }
+    rooms.identities = identities;
+    configObject.rooms = rooms;
+
+    // Before loadConfig: a plugin registers its provider factory on import, and
+    // `validateConfig` rejects a `providers.<id>` block whose factory is not
+    // registered yet.
+    if (opts.plugins?.length) {
+      const loaded = await loadPlugins({ plugins: opts.plugins } as never, (name) => import(name), {
+        context: createPluginContext({}),
+      });
+      const failed = loaded.filter((l) => !l.ok);
+      if (failed.length)
+        throw new Error(`plugin load failed: ${failed.map((f) => `${f.module} (${f.error})`).join(", ")}`);
+    }
+
+    const configPath = join(home, "config.yaml");
+    writeFileSync(configPath, YAML.stringify(configObject));
+    const config = loadConfig(configPath);
+
+    db = initDatabase(join(home, "agent.db"));
+    const contextDir = join(home, "data", "context");
+    const kbDir = join(home, "data", "kb");
+    for (const dir of [contextDir, join(contextDir, "global"), kbDir, join(kbDir, "global")]) {
+      mkdirSync(dir, { recursive: true });
+    }
+
+    const toolFactory = (
+      cfg: Parameters<typeof createTools>[0],
+      ctxDir: string,
+      cfgPath?: string,
+      runtimeOpts?: Record<string, unknown>,
+    ) => createTools(cfg, ctxDir, cfgPath, runtimeOpts).map((t) => stub(t, scenario.toolResults ?? {}));
+
+    const providerFactory = (cfg: Parameters<typeof createProvider>[0], providerId?: string) => {
+      const built = createProvider(cfg, providerId);
+      return { provider: recorder.wrap(built.provider, opts.timeoutMs), model: built.model };
+    };
+
+    const runtime = new AgentRuntime(
+      {
+        configPath,
+        db,
+        contextDir,
+        kbDir,
+        createTools: toolFactory,
+        createProvider: providerFactory,
+        createEmbedder,
+        events: new TypedEventBus(),
+      },
+      (path) => loadConfig(path),
+      config,
+    );
+    runtime.setMetaTools(createMetaTools(runtime, contextDir, kbDir).map((t) => stub(t, scenario.toolResults ?? {})));
+
+    const outcome = scenario.rooms?.length
+      ? await runRoomScenario(scenario, runtime, db, agentName, opts)
+      : await runChatScenario(scenario, runtime, db, agentName, opts);
+    roomsRegistered = !!scenario.rooms?.length;
+
+    return {
+      ...outcome,
+      calls: recorder.calls,
+      requests: recorder.requests,
+      usage: recorder.usage,
+      latencyMs: Date.now() - started,
+      providerErrors: recorder.failures,
+      retries: recorder.retries,
+      ...(turnFailed(recorder.responses, recorder.failures) ?? {}),
+    };
+  } catch (err) {
+    return {
+      reply: "",
+      calls: recorder.calls,
+      posts: [],
+      requests: recorder.requests,
+      usage: recorder.usage,
+      latencyMs: Date.now() - started,
+      providerErrors: recorder.failures,
+      error: (err as Error).message,
+    };
+  } finally {
+    // The room backend registry is a module singleton keyed by backend id, so a
+    // stale `local` backend would point the next run at a closed database. The
+    // runner also isolates scenarios in separate processes; this keeps a single
+    // process honest if that ever changes.
+    if (roomsRegistered) unregisterRoomBackend("local");
+    db?.close();
+    if (previousHome === undefined) delete process.env.TAI_HOME;
+    else process.env.TAI_HOME = previousHome;
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+async function runChatScenario(
+  scenario: Scenario,
+  runtime: AgentRuntime,
+  db: import("better-sqlite3").Database,
+  agentName: string,
+  opts: HarnessOptions,
+): Promise<Pick<RunOutcome, "reply" | "posts">> {
+  const session = newSession(db, opts.model, opts.providerId ?? "openai_compatible", `eval:${randomUUID()}`);
+  for (const line of scenario.history ?? []) {
+    saveMessage(db, session.id, { role: line.role, content: line.content });
+  }
+
+  const base = runtime.buildLoopOptions({ session, agentName });
+  const reply = await runAgentLoop(scenario.message ?? "", base);
+  return { reply, posts: [] };
+}
+
+async function runRoomScenario(
+  scenario: Scenario,
+  runtime: AgentRuntime,
+  db: import("better-sqlite3").Database,
+  agentName: string,
+  opts: HarnessOptions,
+): Promise<Pick<RunOutcome, "reply" | "posts">> {
+  const store = runtime.getRoomStore();
+  const backend = new LocalRoomBackend(db, store);
+
+  const refs = new Map<string, string>();
+  for (const spec of scenario.rooms ?? []) {
+    // createRoom already persists through the store, so there is nothing to
+    // upsert afterwards — doing it again would just rewrite the same row.
+    const room = await backend.createRoom({ name: spec.name, purpose: spec.purpose });
+    const ref = formatRoomRef(room.ref);
+    refs.set(spec.name, ref);
+    store.subscribe({
+      agent: agentName,
+      roomRef: ref,
+      deliver: spec.deliver ?? "poll",
+      wakeOn: spec.wakeOn ?? "all",
+      checkInMinutes: spec.checkInMinutes ?? null,
+      role: spec.role ?? null,
+    });
+  }
+
+  // Seen lines first, then the cursor jumps past them: this is a room the agent
+  // is already mid-conversation in, not one it is meeting for the first time.
+  for (const spec of scenario.rooms ?? []) {
+    const ref = refs.get(spec.name) as string;
+    let last: string | undefined;
+    for (const line of spec.seen ?? []) last = await postLine(backend, room_id(ref), line);
+    if (last) store.advanceCursor(agentName, ref, last);
+  }
+
+  for (const spec of scenario.rooms ?? []) {
+    for (const line of spec.incoming ?? []) await postLine(backend, room_id(refs.get(spec.name) as string), line);
+  }
+
+  // Taken after ALL seeding and before the turn: from here on nothing but the
+  // agent writes to this table, so a row id above the watermark is its work by
+  // construction. An earlier version watermarked before the incoming lines and
+  // filtered them back out by matching their bodies — which silently stopped
+  // matching the moment the stored form gained an `@addressee`, and reported
+  // the questions as the agent's own posts.
+  const watermark = (db.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM room_messages").get() as { id: number }).id;
+
+  const wakeRoom = scenario.wake?.room ?? [...(scenario.rooms ?? [])].reverse().find((r) => r.incoming?.length)?.name;
+  if (!wakeRoom) throw new Error("no room to wake in");
+  const wakeRef = refs.get(wakeRoom);
+  if (!wakeRef) throw new Error(`unknown wake room "${wakeRoom}"`);
+
+  // The agent's own prior turns in this room.
+  //
+  // Room lines and session history are two different things, and conflating
+  // them produced a scenario that tested nothing: `seen:` lines advance the
+  // cursor, so by design they are absent from the next wake prompt — the whole
+  // point of reading from a cursor. In production what carries the earlier
+  // conversation forward is the agent's SESSION, written by the previous turn.
+  // Seeding the room here under the key `runTurn` will compute is the only way
+  // to reproduce a room the agent is genuinely mid-conversation in.
+  if (scenario.history?.length) {
+    const session = findOrCreateSession(
+      db,
+      makeRoomSessionKey(wakeRef, agentName),
+      opts.model,
+      opts.providerId ?? "openai_compatible",
+    );
+    for (const line of scenario.history) saveMessage(db, session.id, { role: line.role, content: line.content });
+  }
+
+  const watcher = new RoomWatcher({ runtime, store });
+  try {
+    if (scenario.wake?.kind === "checkin") await watcher.runCheckIn(agentName, wakeRef);
+    else await watcher.pollOnce(agentName, wakeRef);
+  } finally {
+    watcher.stop();
+  }
+
+  const byRef = new Map([...refs].map(([name, ref]) => [ref, name]));
+  const rows = db
+    .prepare("SELECT room_ref, content FROM room_messages WHERE id > ? ORDER BY id")
+    .all(watermark) as Array<{ room_ref: string; content: string }>;
+
+  const posts = rows.map((row) => ({
+    room: byRef.get(row.room_ref) ?? row.room_ref,
+    body: parseEnvelope(row.content).body.trim(),
+  }));
+
+  return { reply: posts.map((p) => p.body).join("\n"), posts };
+}
+
+/** `local:<id>` → `<id>`, which is what the backend's own methods take. */
+function room_id(ref: string): string {
+  return ref.startsWith("local:") ? ref.slice("local:".length) : ref;
+}
+
+async function postLine(backend: LocalRoomBackend, roomId: string, line: RoomLine): Promise<string | undefined> {
+  const posted = await backend.post(roomId, { speaker: line.speaker, to: line.to ?? [], body: line.body });
+  return posted?.cursor;
+}

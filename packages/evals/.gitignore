@@ -1,0 +1,4 @@
+results/*
+!results/baseline-work-*.json
+dist/
+tsconfig.tsbuildinfo

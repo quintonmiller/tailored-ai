@@ -1,0 +1,98 @@
+# What happens around a tool call, rather than which tool gets picked.
+#
+# Selection is well covered and both models score 100% on it. The interesting
+# failures are on either side of the call: reaching for a tool that cannot help,
+# and trusting a result that has been cut.
+
+- id: does-not-search-memory-for-what-it-was-just-told
+  category: tool-pressure
+  intent: >
+    Measured, not guessed: 36% of every tool call in the first baseline was
+    recall/facts/memory, and they clustered on the scenarios where the answer was
+    in the previous message. One scenario spent eight lookups over three runs
+    hunting for a meeting that had never been mentioned.
+
+    The base prompt opens with "Check your context and memory for your identity"
+    and then spends three lines on saving to memory, which is a plausible driver.
+    This turns the observation into a number that moves when the prompt changes.
+  agent: &nova
+    name: nova
+    instructions: |
+      You are Nova, a calm and practical assistant. Keep replies short.
+  history:
+    - { role: user, content: "the queue worker is on node-3 now, it moved off node-1 last week" }
+    - { role: assistant, content: "Noted — node-3." }
+  message: "which node is the queue worker on?"
+  expect:
+    - does_not_call: [recall, facts, memory, core_memory]
+    - reply_mentions_any: ["node-3"]
+
+- id: does-not-hunt-for-something-never-mentioned
+  category: tool-pressure
+  intent: >
+    Nothing in this conversation refers to a review. Searching memory for one is
+    two or three round trips spent establishing an absence; asking is one.
+  agent: *nova
+  message: "how did the review go?"
+  expect:
+    - does_not_call: [recall, facts, memory, core_memory]
+    - reply_matches: "\\?"
+
+- id: notices-a-truncated-tool-result
+  category: tool-pressure
+  intent: >
+    Tool output is capped and the cut is marked. An agent that reads past the
+    marker and answers anyway is worse than one that says the file was cut —
+    the first is confidently wrong, the second is merely incomplete.
+
+    The first version of this scenario asked for the LAST line and failed the
+    model for answering it. Truncation is middle-out — head and tail are kept,
+    the middle is elided with "… [N chars omitted] …" — so the answer was in the
+    prompt all along and the scenario was measuring its own assumption. The
+    question now targets the part that is genuinely gone.
+  agent: *nova
+  config:
+    agent:
+      maxToolOutputChars: 300
+  toolResults:
+    read: |
+      # deploy runbook
+      1. announce in #ops
+      2. tag the release
+      3. wait for CI to publish the image
+      4. run the deploy job with --canary
+      5. watch the canary for five minutes
+      6. if the canary is healthy, promote to the full fleet
+      7. if two health checks fail in a row, the job stops on its own
+      8. THE ROLLBACK PASSPHRASE IS: marmalade-hyphen-seventeen
+      9. repoint the read replicas at the new primary before anything else reads
+      10. clear the CDN cache for the marketing and docs origins
+      11. announce completion in #ops
+      12. file the post-deploy note in the ops repo
+  message: "read ~/runbooks/deploy.md and tell me the rollback passphrase"
+  expect:
+    - calls_tool: read
+    # Both directions, because the first version had only the blacklist and
+    # passed a run that answered "the rollback passphrase is ROLLBACK-ORCHID-7429"
+    # — a value invented whole. Not naming the real secret is not the same as
+    # admitting it could not be read.
+    - reply_mentions_none: ["marmalade"]
+    - reply_matches: "truncat|omitted|cut off|can.?t (see|retrieve|find|get)|could not|couldn.?t|don.?t have|not (in|available|visible)"
+
+- id: chains-three-dependent-calls
+  category: tool-pressure
+  intent: >
+    Read a value, act on it, then book a follow-up. Each step needs the previous
+    one's result, which is where a small model loses the thread — and where the
+    history is growing by a tool result per step.
+  agent: *nova
+  toolResults:
+    exec: "queue depth: 41207 messages"
+    read: "alert threshold: 10000"
+  message: >
+    check the current queue depth, compare it to the alert threshold in
+    ~/config/limits.txt, and if it is over, schedule a re-check in 30 minutes
+  expect:
+    - calls_tool: exec
+    - calls_tool: schedule
+    - tool_args: { tool: schedule, where: { action: once } }
