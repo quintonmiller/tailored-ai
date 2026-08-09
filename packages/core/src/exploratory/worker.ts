@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { isStallStop, type LoopStop, runAgentLoop } from "../agent/loop.js";
+import { isStallStop, type LoopStop, runAgentLoop, stallReasonOf } from "../agent/loop.js";
 import { resetSession } from "../agent/session.js";
 import type { AgentDefinition, OnlineAgentConfig } from "../config.js";
 import { isInTimeWindow } from "../db/autopilot-queries.js";
@@ -381,7 +381,7 @@ export class ExploratoryWorker {
       // final permitted round is never observed by the loop's top-of-while
       // check, so it exits via max-rounds instead — and without the guard that
       // would relabel an already-correct "budget" as a stall.
-      const stallReason = stop.kind === "max-rounds" ? "max tool rounds reached" : "repeated identical tool calls";
+      const stallReason = stallReasonOf(stop) ?? "stalled";
       status = "error";
       errorMsg = `loop-stalled: ${stallReason}`;
       try {

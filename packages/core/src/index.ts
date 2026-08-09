@@ -31,6 +31,7 @@ export {
   isStallStop,
   type LoopStop,
   runAgentLoop,
+  stallReasonOf,
   stripOrphanedToolMessages,
 } from "./agent/loop.js";
 export { BASE_SYSTEM_PROMPT } from "./agent/prompt.js";

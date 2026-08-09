@@ -1,8 +1,8 @@
 /**
  * Default stall guard — Slice 3 step 3 of the platform vision
  * (`docs/platform-vision.md`). Subscribes to `agent.stalled` (which the
- * watcher emits instead of `agent.completed` when the agent loop
- * returns a `[Agent stopped: …]` terminator) and decides whether to
+ * watcher emits instead of `agent.completed` when the agent loop reports
+ * running out of rounds or looping on identical calls) and decides whether to
  * retry the dispatch or transition the task to blocked.
  *
  * - **Retry path** (under the configured cap): writes a `STALL #N`
