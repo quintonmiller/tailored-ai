@@ -38,6 +38,16 @@ function significant(delta: number, repeats: number): boolean {
   return Math.abs(delta) > 1 / repeats + 1e-9;
 }
 
+/**
+ * A report written before a provider was recorded, or by the built-in client,
+ * leaves `provider` unset — that is the generic OpenAI-compatible path
+ * (`harness.ts`), not a missing value, so the warning should say which client
+ * it means rather than printing "undefined" at the reader.
+ */
+function providerLabel(report: BenchmarkReport): string {
+  return report.meta.provider ?? "openai_compatible";
+}
+
 export function compareReports(
   before: BenchmarkReport,
   after: BenchmarkReport,
@@ -54,7 +64,7 @@ export function compareReports(
   }
   if ((before.meta.provider ?? "") !== (after.meta.provider ?? "")) {
     warnings.push(
-      `different providers (${before.meta.provider} → ${after.meta.provider}) — a plugin and the generic client ` +
+      `different providers (${providerLabel(before)} → ${providerLabel(after)}) — a plugin and the generic client ` +
         "build different requests, so this compares clients too",
     );
   }

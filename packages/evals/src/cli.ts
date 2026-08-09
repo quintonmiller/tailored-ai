@@ -14,6 +14,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import YAML from "yaml";
+import { stripSeparator } from "./args.js";
 import { printComparison } from "./compare.js";
 import type { HarnessOptions } from "./harness.js";
 import { RESULT_MARKER } from "./protocol.js";
@@ -363,7 +364,8 @@ function cmdCompare(argv: string[]): number {
 }
 
 async function main(): Promise<void> {
-  const [command, ...rest] = process.argv.slice(2);
+  const argv = stripSeparator(process.argv.slice(2));
+  const [command, ...rest] = argv;
   if (!command || command === "help" || command === "--help") {
     console.log(USAGE);
     return;
@@ -372,7 +374,7 @@ async function main(): Promise<void> {
     process.exitCode = cmdCompare(rest);
     return;
   }
-  process.exitCode = await cmdRun(command === "run" ? rest : process.argv.slice(2));
+  process.exitCode = await cmdRun(command === "run" ? rest : argv);
 }
 
 main().catch((err) => {
