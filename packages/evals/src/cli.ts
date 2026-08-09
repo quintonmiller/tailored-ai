@@ -152,15 +152,19 @@ async function runWorker(
     const budget = repeats * (options.maxToolRounds + 2) * options.timeoutMs;
     const kill = setTimeout(() => child.kill("SIGKILL"), budget);
 
+    // Identity travels with the result rather than through the worker: the
+    // worker grades runs and has no reason to know why a scenario exists.
+    const describe = { id: scenario.id, category: scenario.category, intent: scenario.intent };
+    const gap = scenario.knownGap ? { knownGap: scenario.knownGap } : {};
+
     child.on("close", (code) => {
       clearTimeout(kill);
       rmSync(dir, { recursive: true, force: true });
       const line = out.split("\n").find((l) => l.startsWith(RESULT_MARKER));
       if (!line) {
         resolvePromise({
-          id: scenario.id,
-          category: scenario.category,
-          intent: scenario.intent,
+          ...describe,
+          ...gap,
           runs: [],
           passRate: 0,
           error: `worker produced no result (exit ${code})`,
@@ -169,17 +173,10 @@ async function runWorker(
       }
       const parsed = JSON.parse(line.slice(RESULT_MARKER.length));
       if (parsed.error && !parsed.runs) {
-        resolvePromise({
-          id: scenario.id,
-          category: scenario.category,
-          intent: scenario.intent,
-          runs: [],
-          passRate: 0,
-          error: parsed.error,
-        });
+        resolvePromise({ ...describe, ...gap, runs: [], passRate: 0, error: parsed.error });
         return;
       }
-      resolvePromise(parsed as ScenarioResult);
+      resolvePromise({ ...(parsed as ScenarioResult), ...gap });
     });
   });
 }

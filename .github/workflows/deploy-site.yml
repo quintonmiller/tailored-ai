@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths:
       - "packages/site/**"
+      # The benchmark pages are compiled from these at build time, so a new
+      # baseline or a re-worded scenario has to redeploy the site too.
+      - "packages/evals/results/**"
+      - "packages/evals/scenarios/**"
       - ".github/workflows/deploy-site.yml"
   workflow_dispatch:
 

@@ -56,6 +56,16 @@ export interface Scenario {
   category: string;
   /** Why this scenario exists — printed next to a failure. */
   intent: string;
+  /**
+   * Set when the scenario asserts the behaviour we *want* rather than the
+   * behaviour we have, so a red row is the point rather than a defect. The
+   * value says which gap, ideally as an issue reference.
+   *
+   * Without this a reader's first instinct on a permanently-red row is to
+   * delete it, which is how a benchmark quietly stops measuring the thing it
+   * was written for.
+   */
+  knownGap?: string;
   agent?: AgentSpec;
   /** Config keys merged over the fixture, e.g. `rooms.crossRoomView`. */
   config?: Record<string, unknown>;
@@ -189,6 +199,8 @@ export interface ScenarioResult {
   id: string;
   category: string;
   intent: string;
+  /** Copied from the scenario so a report explains its own red rows. */
+  knownGap?: string;
   runs: RunResult[];
   /** Fraction of runs that passed every check. */
   passRate: number;

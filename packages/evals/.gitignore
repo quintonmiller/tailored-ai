@@ -1,4 +1,7 @@
+# A run is published by being named, not by which machine produced it: the CLI
+# writes ad-hoc runs as `<timestamp>-<model>.json`, so `baseline-` is the mark
+# of one somebody chose to keep.
 results/*
-!results/baseline-work-*.json
+!results/baseline-*.json
 dist/
 tsconfig.tsbuildinfo
