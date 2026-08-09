@@ -1,36 +1,37 @@
 # What a deployment gets when it does not tune anything.
 #
-# `agent.maxHistoryTokens` defaults to 2,000 in `DEFAULT_CONFIG`. Since #421 the
-# history budget is
+# Since #421 the history budget is
 #
 #     max(0, maxHistoryTokens - systemPrompt - tail - toolSchemas)
 #
-# and tool schemas are the largest term by an order of magnitude: the benchmark's
-# 24-tool fixture spends roughly 5,500 tokens on schemas alone, and the reference
-# deployment runs 41 tools at ~10,900. Both are already over the default before a
-# single message is counted.
+# and tool schemas are the largest term by an order of magnitude: this fixture's
+# 24 tools measure ~6,200 tokens of overhead before a single message is counted,
+# and a 41-tool deployment ~10,900. `agent.maxHistoryTokens` used to default to
+# 2,000, which is under both, so an untuned install dropped its whole
+# conversation on every turn and looked like a model with no memory.
 #
-# These two scenarios are a pair. The first states what a default install
-# actually does; the second states what it should do. Whichever way the default
-# moves, the pair keeps saying so.
+# These two scenarios are a pair. The first takes the code default, the second
+# names a number. If the pair ever disagrees, the default is the problem; if
+# both fail, it is not.
 
 - id: default-history-budget-keeps-the-conversation
   category: budget
-  knownGap: "#443 — the default `agent.maxHistoryTokens` sits below the tool-schema floor, so an untuned install has no history budget at all."
   intent: >
-    With `maxHistoryTokens` at its code default and a realistic tool set, does
-    anything the user said two messages ago still reach the model?
+    With `agent.maxHistoryTokens` at whatever `DEFAULT_CONFIG` currently says
+    and a realistic tool set, does anything the user said two messages ago still
+    reach the model?
 
-    Expected to fail until the default changes. It is written as the behaviour
-    we want rather than the behaviour we have, because a benchmark that asserts
-    the bug passes green forever and nobody looks again.
+    `null` removes the harness's own value so `loadConfig` supplies the default.
+    Writing the number here instead would make this scenario measure a constant
+    and go on calling it "the default" long after the code moved — which is what
+    it did until #443.
   agent: &nova
     name: nova
     instructions: |
       You are Nova, a calm and practical assistant. Keep replies short.
   config:
     agent:
-      maxHistoryTokens: 2000
+      maxHistoryTokens: null
   history:
     - { role: user, content: "the queue worker lives on node-3, remember that" }
     - { role: assistant, content: "Noted — node-3." }
@@ -42,8 +43,8 @@
 - id: a-tuned-budget-keeps-the-conversation
   category: budget
   intent: >
-    The control. Same two messages, same tools, a budget with room for the
-    schemas. If this one fails too, the problem is not the default.
+    The control. Same two messages, same tools, an explicit budget with room for
+    the schemas. If this one fails too, the problem is not the default.
   agent: *nova
   config:
     agent:

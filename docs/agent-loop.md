@@ -4,13 +4,21 @@ How the loop trims history, validates tool args, retries transient errors, and w
 
 ## History Compaction
 
-The agent loop trims conversation history before each LLM call to stay within `config.agent.maxHistoryTokens` (default 2000). Token count is estimated at ~4 chars per token. Trimming drops the oldest messages first, but always skips past orphaned `tool` messages so tool-call/response groups stay intact. See `estimateTokens()` and `trimHistory()` in `packages/core/src/agent/loop.ts`.
+The agent loop trims conversation history before each LLM call to stay within `config.agent.maxHistoryTokens` (default 20,000). Token count is estimated at ~4 chars per token. Trimming drops the oldest messages first, but always skips past orphaned `tool` messages so tool-call/response groups stay intact. See `estimateTokens()` and `trimHistory()` in `packages/core/src/agent/loop.ts`.
 
 The budget covers the whole request, not just the messages:
 
 ```
 historyBudget = maxHistoryTokens - systemPromptTokens - tailTokens - toolSchemaTokens
 ```
+
+### Why the default is 20,000
+
+It was 2,000, chosen before tool schemas counted against the budget. Once they did, 2,000 sat under the overhead of every real tool set — a 24-tool agent spends ~6,200 tokens before a single message, a 41-tool one ~10,900 — so the subtraction clamped to zero and an untuned install dropped its entire conversation on every turn. From the outside that is indistinguishable from a model with no memory, which is what made it survive so long.
+
+20,000 rather than a share of `maxContextTokens`: deriving it would make a deployment that declares a 200k window spend 200k on every turn, and the window says what the model *accepts*, not what an operator wants to pay. 20,000 clears a 41-tool floor with room for the conversation and still fits the 32,768 default window with space for the reply.
+
+A deployment on a smaller-context model must lower it. `validateConfig` warns when `maxHistoryTokens` is not smaller than `maxContextTokens`, because the failure otherwise appears as a provider rejection on a grown session, a long way from the config that caused it. The zero-budget warning in `warnIfNoHistoryFits()` is unchanged and still fires on the arithmetic, so it keeps catching a deployment that lowers the budget or adds tools until the schemas eat it.
 
 Tool definitions travel in their own request field rather than as a message, which is why they went unmeasured for so long — everything that estimated size walked the message list. The model reads them either way, and they are not small: 42 tools serialise to roughly 10,857 tokens, so a budget that ignored them overshot by about 10% on every request. `estimateToolSchemaTokens()` is recomputed per round, because `getTools()` re-resolves per round and a turn can gain or lose tools mid-flight.
 

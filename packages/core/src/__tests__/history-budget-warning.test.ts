@@ -3,11 +3,16 @@
  * is a misconfiguration that presents as amnesia.
  *
  * `historyBudget = maxHistoryTokens − systemPrompt − tail − toolSchemas`, and
- * since #421 the schemas are the dominant term: ~5,500 tokens for 24 tools,
- * ~10,900 for the reference deployment's 41. `DEFAULT_CONFIG.maxHistoryTokens`
- * is 2,000 — under the floor before a message is counted. The scenario benchmark
- * caught it: at the default, a fact stated two messages earlier never reached
- * the model; at 20,000 it always did.
+ * since #421 the schemas are the dominant term: ~6,200 tokens of overhead for a
+ * 24-tool agent, ~10,900 for a 41-tool one. `DEFAULT_CONFIG.maxHistoryTokens`
+ * was 2,000 — under the floor before a message is counted. The scenario
+ * benchmark caught it: at that default, a fact stated two messages earlier
+ * never reached the model; at 20,000 it always did, which is what the default
+ * became in #443.
+ *
+ * The warning outlives the fix. It fires on the arithmetic, not on the default,
+ * so it still catches the deployment that lowers the budget or adds tools until
+ * the schemas eat it.
  *
  * Warned rather than floored, because raising the budget unasked would build a
  * request the model's context may refuse, and the right number depends on the

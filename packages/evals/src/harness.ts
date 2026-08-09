@@ -289,7 +289,7 @@ export function describeRequest(params: ChatParams): RecordedRequest {
 
 export const DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1";
 
-function buildConfig(scenario: Scenario, opts: HarnessOptions): Record<string, unknown> {
+export function buildConfig(scenario: Scenario, opts: HarnessOptions): Record<string, unknown> {
   const agentName = scenario.agent?.name ?? "bench";
   const providerId = opts.providerId ?? "openai_compatible";
   const agent: Record<string, unknown> = {
@@ -362,9 +362,27 @@ function buildConfig(scenario: Scenario, opts: HarnessOptions): Record<string, u
   return deepMerge(config, scenario.config ?? {});
 }
 
+/**
+ * Scenario config over harness config, where `null` **removes** a key.
+ *
+ * The removal case is how a scenario tests a code default. The harness writes a
+ * value for everything it cares about — `maxHistoryTokens: 110000`, so the long
+ * session scenarios have room — which means a scenario can otherwise only ever
+ * exercise a number it wrote down itself. `default-history-budget-keeps-the-conversation`
+ * did exactly that, pinning `2000` and calling it "the default": the day the
+ * default moved, the scenario would have gone on measuring the old one and
+ * reporting it as current.
+ *
+ * `null` drops the key so `loadConfig` supplies `DEFAULT_CONFIG`'s value, which
+ * is the only way the assertion tracks the code instead of restating it.
+ */
 function deepMerge(base: Record<string, unknown>, over: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = { ...base };
   for (const [key, value] of Object.entries(over)) {
+    if (value === null) {
+      delete out[key];
+      continue;
+    }
     const existing = out[key];
     if (isPlainObject(existing) && isPlainObject(value)) out[key] = deepMerge(existing, value);
     else out[key] = value;

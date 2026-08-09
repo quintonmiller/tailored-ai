@@ -636,6 +636,22 @@ export interface AgentConfig {
      */
     models?: ModelEntry[];
     extraInstructions: string;
+    /**
+     * Ceiling on the whole request, not on the conversation alone. What is left
+     * for history is
+     *
+     *     max(0, maxHistoryTokens − systemPrompt − tail − toolSchemas)
+     *
+     * and since #421 counted them, tool schemas are the largest of those by an
+     * order of magnitude: a 24-tool agent spends ~6,200 tokens before a single
+     * message is added, a 41-tool one ~10,900. Set this below that floor and
+     * the budget clamps to zero — every message dropped on every turn, which
+     * from the outside is indistinguishable from a model with no memory.
+     *
+     * Must also fit the model's window alongside the reply it is about to
+     * generate; {@link validateConfig} warns when it exceeds
+     * `maxContextTokens`.
+     */
     maxHistoryTokens: number;
     /**
      * Chars of a single tool result that reach the conversation. `0` disables.
@@ -1458,7 +1474,20 @@ export const DEFAULT_CONFIG: AgentConfig = {
   agent: {
     defaultProvider: "openai_compatible",
     extraInstructions: "",
-    maxHistoryTokens: 2000,
+    // 2,000 until #443. That predates tool schemas counting against the budget
+    // (#421), after which it sat below the floor of every real tool set — so an
+    // install that never tuned this had no history budget at all and looked
+    // like a bad model. `tai init` had already been writing 20,000 for exactly
+    // that reason; this makes the code agree with the wizard rather than
+    // leaving the untuned path broken.
+    //
+    // 20,000 rather than a share of `maxContextTokens`: deriving it would make
+    // a deployment that declares a 200k window spend 200k on every turn, which
+    // is a bill nobody asked for. This clears a 41-tool floor with room for the
+    // conversation and still fits the 32,768 default window with space for the
+    // reply. A small-context deployment must lower it, and is warned when it
+    // has not.
+    maxHistoryTokens: 20000,
     maxToolOutputChars: DEFAULT_MAX_TOOL_OUTPUT_CHARS,
     maxContextTokens: 32768,
     temperature: 0.3,
@@ -2203,6 +2232,28 @@ export function validateConfig(config: AgentConfig): string[] {
         warnings.push(`${label}: pollSeconds ${sub.pollSeconds} is below the 30s floor and will hammer the transport`);
       }
     }
+  }
+
+  // A request budget larger than the window it has to fit in.
+  //
+  // The two numbers are easy to move independently — one is "how much may I
+  // send", the other "how much will this model take" — and the failure when
+  // they disagree is a provider-side rejection on a full conversation, long
+  // after the config was written and only once a session has grown. Cheap to
+  // say now; expensive to diagnose then.
+  //
+  // Warned rather than clamped: which number is wrong depends on whether the
+  // operator mis-stated the window or over-budgeted the request, and core
+  // cannot tell. Equal values are allowed but flagged, since a request that
+  // exactly fills the window leaves nothing for the reply.
+  const budget = config.agent.maxHistoryTokens;
+  const window = config.agent.maxContextTokens;
+  if (typeof budget === "number" && typeof window === "number" && budget >= window) {
+    warnings.push(
+      `agent.maxHistoryTokens (${budget}) is not smaller than agent.maxContextTokens (${window}), so a full ` +
+        "request cannot fit the model's window with room for its reply. Lower maxHistoryTokens, or raise " +
+        "maxContextTokens if the model really does take more.",
+    );
   }
 
   return warnings;
