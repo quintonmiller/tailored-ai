@@ -1,7 +1,15 @@
 # A run is published by being named, not by which machine produced it: the CLI
 # writes ad-hoc runs as `<timestamp>-<model>.json`, so `baseline-` is the mark
 # of one somebody chose to keep.
+#
+# `results/baseline-*.json` is the current cohort: one commit, clean tree, one
+# run per model, enforced by `pnpm run guard:benchmark-cohort`. Superseded
+# cohorts move to `results/history/` rather than being overwritten — a model
+# getting worse across commits is worth being able to see, and it is the one
+# thing overwriting destroys.
 results/*
 !results/baseline-*.json
+!results/history/
+!results/history/*.json
 dist/
 tsconfig.tsbuildinfo

@@ -111,8 +111,28 @@ The pages are built by `packages/site` reading two directories at build time:
 
 | Read from | For |
 |---|---|
-| `packages/evals/results/*.json` | the runs. A record — never edited after the fact. |
+| `packages/evals/results/*.json` | the current cohort. A record — never edited after the fact. |
+| `packages/evals/results/history/*.json` | superseded cohorts, rendered under "Earlier runs". |
 | `packages/evals/scenarios/*.yaml` | annotations only, so closing a gap updates every page without re-running anything. |
+
+### The published set is a cohort
+
+`results/baseline-*.json` is **one commit, a clean tree, one run per model**, and
+`pnpm run guard:benchmark-cohort` fails the build otherwise. A score is only a
+statement about the code if every model answered the same code — the page once
+ranked a 44-scenario run above a 58-scenario one because the smaller model had
+never sat the harder categories, and neither run's provenance made that visible.
+
+So publishing means re-running **every** model in the list on the same commit.
+That is the cost the rule buys, and it recurs: adding a model adds it to every
+publish, not once.
+
+Superseded cohorts move to `results/history/` rather than being overwritten,
+because a model getting better or worse across commits is worth being able to
+see and overwriting is the one thing that destroys it. They are deliberately
+**not** held to the cohort rule — they record what was true then, including the
+parts that were sloppy, and rewriting them to satisfy a rule invented later
+would leave no evidence of how the benchmark has changed.
 
 **A run reaches the site by being named and committed.** A plain `eval` writes
 `results/<timestamp>-<model>.json`, which `.gitignore` ignores. Renaming it to

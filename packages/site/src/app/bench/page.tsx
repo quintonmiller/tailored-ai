@@ -12,7 +12,15 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Provenance, Warnings } from "@/components/bench/Provenance";
 import { AbsentCell, KnownGapChip, RateBadge, RateBar, toneForAggregate } from "@/components/bench/Rate";
-import { comparabilityWarnings, currentScenarioIds, knownGaps, listRuns, noiseFloor } from "@/lib/bench";
+import {
+  comparabilityWarnings,
+  currentScenarioIds,
+  formatDate,
+  knownGaps,
+  listArchivedRuns,
+  listRuns,
+  noiseFloor,
+} from "@/lib/bench";
 import type { RunSummary } from "@/lib/bench-types";
 
 export const metadata: Metadata = {
@@ -50,6 +58,7 @@ function EmptyState() {
 
 export default function BenchIndexPage() {
   const runs = listRuns();
+  const archived = listArchivedRuns();
   const gaps = knownGaps();
   const current = currentScenarioIds();
   const warnings = comparabilityWarnings(runs);
@@ -202,6 +211,42 @@ export default function BenchIndexPage() {
               — open a run to read which one.
             </p>
           </section>
+
+          {archived.length > 0 && (
+            <section className="mt-14">
+              <h2 className="text-xl font-semibold tracking-tight">Earlier runs</h2>
+              <p className="mt-2 mb-5 max-w-3xl text-sm text-[var(--color-text-muted)]">
+                Superseded cohorts, kept so a model getting better or worse across commits is visible rather than
+                overwritten. They are not held to the one-commit rule above and are not comparable with it — read each
+                against the commit it names.
+              </p>
+              <ul className="divide-y divide-[var(--color-bg-tertiary)] border-y border-[var(--color-bg-tertiary)]">
+                {archived.map((run) => (
+                  <li key={run.slug} className="flex flex-wrap items-baseline gap-x-4 gap-y-1 py-3 text-sm">
+                    <Link
+                      href={`/bench/${run.slug}`}
+                      prefetch={false}
+                      className="font-medium text-[var(--color-text)] underline decoration-[var(--color-bg-tertiary)] underline-offset-4 transition-colors hover:decoration-[var(--color-text-muted)]"
+                    >
+                      {run.label}
+                    </Link>
+                    <span className="font-mono tabular-nums text-[var(--color-text-muted)]">
+                      {Math.round(run.score.overall * 100)}%
+                    </span>
+                    <span className="text-xs text-[var(--color-text-muted)]">
+                      {run.score.passed}/{run.score.total} runs · {run.rates.length} scenarios
+                    </span>
+                    <span className="ml-auto font-mono text-xs text-[var(--color-text-muted)]">
+                      {run.meta.gitSha}
+                      {run.meta.gitDirty && <span className="text-amber-500"> +uncommitted</span>}
+                      {" · "}
+                      {formatDate(run.meta.startedAt)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
         </>
       )}
     </div>
