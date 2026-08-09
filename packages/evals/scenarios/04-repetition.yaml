@@ -1,0 +1,126 @@
+# Repetition degeneration.
+#
+# The measured failure: a model that re-emits its own previous message almost
+# verbatim, then does it again, each copy landing back in history and making the
+# next one likelier. Word-trigram overlap separates the two states cleanly — a
+# reply written afresh scores ~0.1–0.2 against the agent's own last message, a
+# re-emitted one ~0.9 — so these scenarios are a threshold on that number.
+#
+# What they are really testing is sampling. `repetition_penalty` is a vLLM
+# control core does not model, reachable only through `agent.providerExtra`, so
+# a run with `--home` pointed at a deployment measures whether that deployment's
+# sampling is actually configured. Run without it, these are the scenarios that
+# fail first.
+
+- id: does-not-repeat-its-last-answer
+  category: repetition
+  intent: A new question gets a new answer, not the previous one again.
+  agent: &nova-chat
+    name: nova
+    instructions: |
+      You are Nova, a calm and practical assistant. Keep replies short.
+  history:
+    - role: user
+      content: "what's the difference between the staging and production databases?"
+    - role: assistant
+      content: >
+        Staging runs a smaller Postgres instance with anonymised data, refreshed
+        from a nightly dump. Production is the live cluster with real customer
+        records, point-in-time recovery, and read replicas. They share a schema
+        but nothing else — a migration proven on staging still has to be applied
+        separately to production.
+  message: "how do I get a shell on the staging box?"
+  expect:
+    - replies: true
+    - max_overlap: { prior_reply: true, threshold: 0.35 }
+
+- id: recovers-from-a-poisoned-history
+  category: repetition
+  intent: >
+    Four identical copies of its own reply already in history. This is the state
+    a degenerating session reaches, and the question is whether the next turn
+    breaks the pattern or adds a fifth copy.
+  agent: *nova-chat
+  history:
+    - role: user
+      content: "how's the migration going?"
+    - role: assistant
+      content: &loop >
+        The migration is progressing steadily. I've moved the user table and the
+        sessions table across, verified the row counts match, and I'm working
+        through the audit log next. Nothing has needed a rollback so far.
+    - role: user
+      content: "any update?"
+    - role: assistant
+      content: *loop
+    - role: user
+      content: "still going?"
+    - role: assistant
+      content: *loop
+    - role: user
+      content: "ok"
+    - role: assistant
+      content: *loop
+  message: "forget the migration for a second — what did you have for the audit log schema?"
+  expect:
+    - replies: true
+    - max_overlap: { prior_reply: true, threshold: 0.5 }
+
+- id: answers-an-overlapping-question-freshly
+  category: repetition
+  intent: >
+    A follow-up whose answer legitimately overlaps with the last one. Saying the
+    same things is fine; saying them in the same sentences is the failure. The
+    threshold is loose on purpose — this catches re-emission, not agreement with
+    itself.
+
+    An earlier version of this scenario asked "say that again", and then failed
+    the model for doing exactly that. Repeating on request is correct behaviour;
+    the scenario has to make repetition the wrong answer before the threshold
+    means anything.
+  agent: *nova-chat
+  history:
+    - role: user
+      content: "what's our deploy process?"
+    - role: assistant
+      content: >
+        We tag a release, CI builds the image and pushes it to the registry, and
+        then the deploy job rolls it out one node at a time with a health check
+        between each. If two checks fail in a row it stops and pages whoever is
+        on call.
+  message: "what happens if the health check fails partway through a deploy?"
+  expect:
+    - replies: true
+    - max_overlap: { prior_reply: true, threshold: 0.7 }
+
+- id: does-not-repeat-its-last-room-post
+  category: repetition
+  intent: >
+    The room path is where this was first seen, because a room transcript feeds
+    the agent its own previous message back on every wake.
+  agent:
+    name: nova
+    instructions: |
+      You are Nova, a calm and practical assistant. Keep replies short.
+    tools: [room]
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      seen:
+        - { speaker: quinton, to: [nova], body: "where are we with the index rebuild?" }
+        - speaker: nova
+          body: >
+            The index rebuild is about two thirds through. I've done the orders
+            and line_items tables, the customers table is running now, and I'll
+            pick up the archive tables after that. No errors so far.
+      incoming:
+        - { speaker: quinton, to: [nova], body: "different question — is the nightly backup still running at 2am?" }
+  wake: { room: ops }
+  expect:
+    - replies: true
+    - max_overlap:
+        threshold: 0.35
+        text: >
+          The index rebuild is about two thirds through. I've done the orders
+          and line_items tables, the customers table is running now, and I'll
+          pick up the archive tables after that. No errors so far.

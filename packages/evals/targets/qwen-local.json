@@ -1,0 +1,4 @@
+{
+  "_comment": "The work instance's local vLLM, read straight from its own config.yaml so sampling and reasoning dialect match production.",
+  "home": "~/.tailored-ai"
+}

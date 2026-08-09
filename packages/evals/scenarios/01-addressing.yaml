@@ -1,0 +1,114 @@
+# Getting the reply to the right place.
+#
+# The failure this set exists for was observed in production: an agent in
+# several rooms, asked in one to tell someone in another something, wrote the
+# message as its reply — so it reached the people in front of it rather than
+# the people it named. Three times in one evening.
+
+- id: answers-in-the-room-that-woke-it
+  category: addressing
+  intent: A reply belongs in the room that asked, and nowhere else.
+  agent: &nova
+    name: nova
+    instructions: |
+      You are Nova, a calm and practical assistant. Keep replies short — a
+      sentence or two unless more is genuinely needed.
+    tools: [room]
+  config: &crossroom
+    rooms:
+      crossRoomView: { enabled: true, messages: 24, floorPerRoom: 2 }
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      seen:
+        - { speaker: quinton, body: "morning" }
+      incoming:
+        - { speaker: quinton, to: [nova], body: "did the staging deploy finish?" }
+    - name: design
+      purpose: Product design chat.
+      seen:
+        - { speaker: dana, body: "the new icon set landed, looks sharp" }
+  wake: { room: ops }
+  expect:
+    - replies: true
+    - posts_in: ops
+    - does_not_post_in: [design]
+
+- id: relays-to-another-room-with-the-tool
+  category: addressing
+  intent: >
+    Asked in one room to tell someone in another, the message has to be sent
+    with room(action="post"), not written as the reply.
+  agent: *nova
+  config: *crossroom
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      seen:
+        - { speaker: quinton, body: "morning" }
+      incoming:
+        - speaker: quinton
+          to: [nova]
+          body: "tell dana over in design that the icon export is unblocked now"
+    - name: design
+      purpose: Product design chat.
+      seen:
+        - { speaker: dana, body: "still waiting on the icon export" }
+  wake: { room: ops }
+  expect:
+    - calls_tool: room
+    - tool_args: { tool: room, where: { action: post, room: "/design/" } }
+    - posts_in: design
+
+- id: keeps-an-answer-out-of-the-unrelated-room
+  category: addressing
+  intent: Being able to see another room is not permission to speak in it.
+  agent: *nova
+  config: *crossroom
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      incoming:
+        - { speaker: quinton, to: [nova], body: "what's our rollback command again?" }
+    - name: design
+      purpose: Product design chat.
+      seen:
+        - { speaker: dana, body: "does anyone know how rollbacks work here?" }
+  wake: { room: ops }
+  expect:
+    - posts_in: ops
+    - does_not_post_in: [design]
+
+- id: answers-the-newest-message-not-the-answered-one
+  category: addressing
+  intent: >
+    Messages already shown carry a cursor past them. A wake is about what
+    arrived since, so the reply should be about the new question.
+  agent: *nova
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      seen:
+        - { speaker: quinton, to: [nova], body: "what time is the standup?" }
+        - { speaker: nova, body: "9:30, same as always." }
+      incoming:
+        - { speaker: quinton, to: [nova], body: "and who's running the retro on friday?" }
+  wake: { room: ops }
+  expect:
+    - replies: true
+    - reply_mentions_any: ["retro", "friday"]
+    - reply_mentions_none: ["standup", "9:30"]
+
+- id: speaks-to-the-room-when-nobody-is-named
+  category: addressing
+  intent: An open question in a room the agent watches is still its to answer.
+  agent: *nova
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      incoming:
+        - { speaker: quinton, body: "does anyone remember why we pinned node 20?" }
+  wake: { room: ops }
+  expect:
+    - replies: true
+    - posts_in: ops

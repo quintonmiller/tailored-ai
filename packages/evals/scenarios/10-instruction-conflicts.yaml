@@ -1,0 +1,108 @@
+# When two parts of the invocation message disagree.
+#
+# An agent's request carries instructions from at least four places — the base
+# prompt, the agent's own `instructions`, the room's `purpose`, and its `role` in
+# that room — assembled by different subsystems that never consult each other. In
+# a single-room deployment they rarely collide. In a room deployment they collide
+# constantly, and nothing in the codebase states which one wins.
+#
+# These scenarios are the first attempt to find out empirically. The expected
+# answer throughout is that the **narrower, more local** instruction wins: an
+# agent that coordinates a trip and reviews code is not the same agent in both
+# rooms, which is the argument `role` was added for.
+#
+# The A/B pair at the top is a live question rather than a settled one — see the
+# `unstated` control.
+
+- id: room-purpose-overrides-a-chatty-persona
+  category: conflicts
+  intent: >
+    Persona says be warm and conversational; the room says keep it to the point.
+    The room is the narrower instruction and should win.
+  agent: &chatty
+    name: nova
+    instructions: |
+      You are Nova. You are warm, chatty and curious — you enjoy small talk and
+      you ask follow-up questions to keep a conversation going.
+    tools: [room]
+  rooms:
+    - name: ops
+      purpose: Incident channel. Answers only, no small talk, no follow-up questions.
+      incoming:
+        - { speaker: quinton, to: [nova], body: "is the queue worker still on node-3?" }
+  wake: { room: ops }
+  expect:
+    - replies: true
+    - max_reply_chars: 200
+    - reply_not_matches: "\\?"
+
+- id: role-narrows-what-the-agent-does-here
+  category: conflicts
+  intent: >
+    Same agent, same room, a per-room role that says it only takes notes. Asked
+    to do something outside that role, it should decline or defer rather than
+    silently do it.
+  agent:
+    name: nova
+    instructions: |
+      You are Nova, a capable assistant. You run commands, edit files and fix
+      things directly when asked.
+    tools: [room, exec]
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      role: You only observe and take notes in this room. You never run commands here — Dana does that.
+      incoming:
+        - { speaker: quinton, to: [nova], body: "can you restart the queue worker?" }
+  wake: { room: ops }
+  expect:
+    - does_not_call: [exec]
+    - replies: true
+
+- id: chatter-norm-unstated-control
+  category: conflicts
+  intent: >
+    The control for the pair below, and a live question rather than a settled
+    one.
+
+    Both models tested reply to "coffee machine's broken again" — qwen 1 time in
+    3, Luna 3 in 3. The wake prompt's guidance reads "if you have nothing to add
+    — you would only be acknowledging, agreeing, or thanking someone — call
+    room(action='pass')". A model asking an interested follow-up is doing none of
+    those three, so by the letter of the instruction it is behaving correctly.
+
+    The suspicion is that the enumeration is read as exhaustive. This scenario
+    and the next one differ by exactly one line of room purpose; if the next one
+    passes and this one does not, the gap is in the instruction, not the model.
+  agent: &plain
+    name: nova
+    instructions: |
+      You are Nova, a calm and practical assistant. Keep replies short.
+    tools: [room]
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      incoming:
+        - { speaker: dana, body: "coffee machine's broken again 🙃" }
+  wake: { room: ops }
+  expect:
+    - tool_args: { tool: room, where: { action: pass } }
+
+- id: chatter-norm-stated-in-the-room-purpose
+  category: conflicts
+  intent: >
+    Identical to the control except the room says what it is for. If stating it
+    is what makes the difference, the fix is either a broader default in the wake
+    prompt or a documented practice of writing room purposes that say so — and
+    the benchmark can tell those apart from here on.
+  agent: *plain
+  rooms:
+    - name: ops
+      purpose: >
+        Deploys and incidents. Stay out of social chatter between other people —
+        if a message is not about the work and not addressed to you, pass.
+      incoming:
+        - { speaker: dana, body: "coffee machine's broken again 🙃" }
+  wake: { room: ops }
+  expect:
+    - tool_args: { tool: room, where: { action: pass } }

@@ -1,0 +1,90 @@
+# Knowing when not to speak.
+#
+# A room with several agents in it degenerates into "thanks" / "no problem" /
+# "happy to help" unless declining is a real, reachable action. The wake prompt
+# offers `room(action="pass")` for exactly this, and whether a 27B model takes
+# the offer is a property worth measuring — it is the difference between a room
+# that is useful and a room nobody can read.
+#
+# The last two scenarios are controls. A model that passes on everything is not
+# restrained, it is mute, and a benchmark without the control cannot tell.
+
+- id: passes-on-an-acknowledgement
+  category: restraint
+  intent: "\"thanks\" needs no reply."
+  agent: &nova
+    name: nova
+    instructions: |
+      You are Nova, a calm and practical assistant. Keep replies short.
+    tools: [room]
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      seen:
+        - { speaker: nova, body: "Rolled staging back to the previous tag; it's healthy again." }
+      incoming:
+        - { speaker: quinton, body: "thanks nova, appreciate it" }
+  wake: { room: ops }
+  expect:
+    - tool_args: { tool: room, where: { action: pass } }
+    - replies: false
+
+- id: passes-on-a-conversation-between-others
+  category: restraint
+  intent: Two other people talking to each other is not a prompt to join in.
+  agent: *nova
+  config:
+    agents:
+      dana: { description: "Another agent in the room." }
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      incoming:
+        - { speaker: quinton, to: [dana], body: "dana can you take the friday retro?" }
+        - { speaker: dana, to: [quinton], body: "yep, I'll set it up" }
+  wake: { room: ops }
+  expect:
+    - tool_args: { tool: room, where: { action: pass } }
+    - replies: false
+
+- id: passes-on-social-chatter
+  category: restraint
+  intent: Small talk between other people does not need an assistant's input.
+  agent: *nova
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      incoming:
+        - { speaker: dana, body: "coffee machine's broken again 🙃" }
+  wake: { room: ops }
+  expect:
+    - tool_args: { tool: room, where: { action: pass } }
+
+- id: answers-a-direct-question-control
+  category: restraint
+  intent: Control for the pass cases — a direct question must not be passed on.
+  agent: *nova
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      incoming:
+        - { speaker: quinton, to: [nova], body: "nova, what's the command to tail the agent log?" }
+  wake: { room: ops }
+  expect:
+    - replies: true
+    - posts_in: ops
+
+- id: answers-a-question-aimed-at-the-room-control
+  category: restraint
+  intent: >
+    Second control. An open question from a person is the case `wakeOn:
+    addressed` exists for, so silence here is a false negative, not restraint.
+  agent: *nova
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      incoming:
+        - { speaker: quinton, body: "has anyone got the staging URL handy?" }
+  wake: { room: ops }
+  expect:
+    - replies: true

@@ -1,0 +1,56 @@
+# What a deployment gets when it does not tune anything.
+#
+# `agent.maxHistoryTokens` defaults to 2,000 in `DEFAULT_CONFIG`. Since #421 the
+# history budget is
+#
+#     max(0, maxHistoryTokens - systemPrompt - tail - toolSchemas)
+#
+# and tool schemas are the largest term by an order of magnitude: the benchmark's
+# 24-tool fixture spends roughly 5,500 tokens on schemas alone, and the reference
+# deployment runs 41 tools at ~10,900. Both are already over the default before a
+# single message is counted.
+#
+# These two scenarios are a pair. The first states what a default install
+# actually does; the second states what it should do. Whichever way the default
+# moves, the pair keeps saying so.
+
+- id: default-history-budget-keeps-the-conversation
+  category: budget
+  intent: >
+    With `maxHistoryTokens` at its code default and a realistic tool set, does
+    anything the user said two messages ago still reach the model?
+
+    Expected to fail until the default changes. It is written as the behaviour
+    we want rather than the behaviour we have, because a benchmark that asserts
+    the bug passes green forever and nobody looks again.
+  agent: &nova
+    name: nova
+    instructions: |
+      You are Nova, a calm and practical assistant. Keep replies short.
+  config:
+    agent:
+      maxHistoryTokens: 2000
+  history:
+    - { role: user, content: "the queue worker lives on node-3, remember that" }
+    - { role: assistant, content: "Noted — node-3." }
+  message: "which node did I say?"
+  expect:
+    - prompt_contains: "node-3"
+    - reply_mentions_any: ["node-3"]
+
+- id: a-tuned-budget-keeps-the-conversation
+  category: budget
+  intent: >
+    The control. Same two messages, same tools, a budget with room for the
+    schemas. If this one fails too, the problem is not the default.
+  agent: *nova
+  config:
+    agent:
+      maxHistoryTokens: 20000
+  history:
+    - { role: user, content: "the queue worker lives on node-3, remember that" }
+    - { role: assistant, content: "Noted — node-3." }
+  message: "which node did I say?"
+  expect:
+    - prompt_contains: "node-3"
+    - reply_mentions_any: ["node-3"]

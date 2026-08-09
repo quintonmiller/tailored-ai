@@ -17,6 +17,8 @@
     "test": "pnpm -r run test",
     "test:watch": "pnpm --filter @tailored-ai/core run test -- --watch",
     "test:e2e": "pnpm --filter @tailored-ai/integration-tests run test:e2e",
+    "eval": "pnpm --filter @tailored-ai/evals run eval",
+    "eval:compare": "pnpm --filter @tailored-ai/evals run eval:compare",
     "lint": "biome check packages/",
     "lint:fix": "biome check --write packages/",
     "format": "biome format --write packages/",

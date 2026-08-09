@@ -1,0 +1,104 @@
+# Reading the history it was given.
+#
+# History is the record — append-only, and the largest part of the request. If
+# the model does not use it, everything spent assembling it is wasted, and the
+# symptom users report is an agent that "forgets". These scenarios put a fact in
+# the history and ask a question only that fact answers.
+#
+# The compaction case matters most: a summary stands in for turns that are no
+# longer there, so an agent that ignores summaries has lost everything older
+# than the keep-recent window rather than a condensed version of it.
+
+- id: uses-a-fact-from-earlier-in-the-session
+  category: continuity
+  intent: A detail stated four turns ago is still available.
+  agent: &nova
+    name: nova
+    instructions: |
+      You are Nova, a calm and practical assistant. Keep replies short.
+  history:
+    - role: user
+      content: "we're moving the standup to 10:15 from next monday, and it's on the #ops channel now"
+    - role: assistant
+      content: "Noted — 10:15 from Monday, in #ops."
+    - role: user
+      content: "also the retro is fortnightly now"
+    - role: assistant
+      content: "Got it."
+  message: "what time is standup again?"
+  expect:
+    - reply_mentions_any: ["10:15"]
+
+- id: honours-a-compaction-summary
+  category: continuity
+  intent: >
+    A summary is what survives of a trimmed conversation. Ignoring it is the
+    same as having no memory of that part at all.
+  agent: *nova
+  history:
+    - role: user
+      content: >
+        [Earlier conversation summary: Quinton is migrating the billing service
+        off Heroku onto the new Hetzner box. The cutover is booked for the 19th.
+        The blocker is that the Stripe webhook endpoint is still pointed at the
+        old host, and Dana owns that change.]
+    - role: assistant
+      content: "Understood."
+  message: "who do I need to chase before the cutover?"
+  expect:
+    - reply_mentions_any: ["dana"]
+
+- id: does-not-claim-amnesia
+  category: continuity
+  intent: >
+    The material is in front of it. Answering "I have no record of that" is a
+    specific, recognisable failure and worth its own check.
+  agent: *nova
+  history:
+    - role: user
+      content: "the API key for the staging metrics box is stored in 1password under 'metrics-staging'"
+    - role: assistant
+      content: "Noted."
+  message: "where did I say the staging metrics key lives?"
+  expect:
+    - reply_mentions_any: ["1password", "metrics-staging"]
+    - reply_mentions_none:
+        ["I don't have access", "I have no record", "I don't recall", "I'm not able to see", "no previous"]
+
+- id: carries-context-across-a-room-wake
+  category: continuity
+  intent: >
+    A room session is history too. The agent answered "node-3" last wake; "it"
+    in the new message refers to that, and resolving it needs the session.
+
+    Asserted positively on purpose. The first version of this scenario used a
+    blacklist of ways the agent might ask which machine — and reported 2/3 when
+    all three runs had in fact failed, because two of them phrased the question
+    in words the blacklist did not contain. A negative assertion only catches
+    the failures you thought of.
+  agent:
+    name: nova
+    instructions: |
+      You are Nova, a calm and practical assistant. Keep replies short.
+    tools: [room, exec]
+  # The prior exchange as the agent's own session, which is what production has
+  # after it takes a turn. `seen:` would be wrong here: the cursor moves past
+  # those, so they are correctly absent from the next wake prompt.
+  history:
+    - role: user
+      content: |
+        Room "ops". You are nova.
+
+        New messages:
+        quinton [person] (to nova): which node is the queue worker on?
+    - role: assistant
+      content: "node-3. It moved off node-1 during the incident last week."
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      incoming:
+        - { speaker: quinton, to: [nova], body: "and can you ssh into it?" }
+  wake: { room: ops }
+  expect:
+    - replies: true
+    - reply_mentions_any: ["node-3"]
