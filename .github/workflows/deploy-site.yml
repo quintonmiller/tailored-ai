@@ -19,7 +19,16 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: false
+  # A Pages deployment GitHub silently drops — build green, deploy job queued,
+  # zero deployment statuses ever recorded — holds this group forever, and with
+  # `false` every later push queues behind it. Nothing fails and nothing alerts,
+  # so the site simply stops updating: observed on 2026-08-09, five hours and
+  # three merges before anyone noticed.
+  #
+  # `true` is also just correct for a docs site. The published artefact is a
+  # snapshot of `main`, so a superseded build has nothing to contribute — there
+  # is no partial deploy to protect, which is the case `false` exists for.
+  cancel-in-progress: true
 
 jobs:
   build:
