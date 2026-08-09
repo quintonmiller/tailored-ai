@@ -7,6 +7,7 @@
  */
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { stallReasonOf } from "../agent/loop.js";
 import { isAgentsPaused } from "../db/runtime-settings-queries.js";
 import { initDatabase } from "../db/schema.js";
 import { createProjectTask, getProjectTask, updateProjectTask } from "../db/task-queries.js";
@@ -66,6 +67,44 @@ describe("detectStall", () => {
 
   it("tolerates leading whitespace/newlines", () => {
     expect(detectStall("\n  [Agent stopped: shutdown requested]")).toBe("shutdown requested");
+  });
+});
+
+/**
+ * Why the watcher classifies a dispatch off `onStop` and not off the reply.
+ *
+ * These two ran together for a long time because a stalled turn always returned
+ * a marker. It does not any more: out of rounds, the loop makes one
+ * tools-withheld call so the person is told what happened, which means a
+ * stalled dispatch usually returns ordinary prose. Reading the reply would have
+ * quietly stopped routing anything to StallGuard.
+ */
+describe("stallReasonOf, against the reply-reading version", () => {
+  it("sees a stall the reply no longer shows", () => {
+    const reply = "I read the runbook, but the middle was cut, so I can't give you the passphrase.";
+
+    expect(detectStall(reply)).toBeNull();
+    expect(stallReasonOf({ kind: "max-rounds", rounds: 30, answered: true })).toBe("max tool rounds reached");
+  });
+
+  it("does not call a cancelled dispatch a stall, which the reply does", () => {
+    // `[Agent stopped: shutdown requested]` is an operator stopping the
+    // runtime, not an agent getting stuck. This is the same mistake the
+    // exploratory worker made from the other side — 81 byte-identical stall
+    // notes in 10 days — and it is why there is no string fallback.
+    expect(detectStall("[Agent stopped: shutdown requested]")).toBe("shutdown requested");
+    expect(stallReasonOf({ kind: "aborted", requestedByCaller: true, reason: "shutdown" })).toBeNull();
+  });
+
+  it("names the repeated-call stall", () => {
+    expect(stallReasonOf({ kind: "repeated-calls" })).toBe("repeated identical tool calls");
+  });
+
+  it("is null for every clean ending", () => {
+    expect(stallReasonOf({ kind: "complete" })).toBeNull();
+    expect(stallReasonOf({ kind: "tool-ended", tool: "room" })).toBeNull();
+    expect(stallReasonOf({ kind: "truncated", model: "m", spentOnReasoning: false })).toBeNull();
+    expect(stallReasonOf(undefined)).toBeNull();
   });
 });
 

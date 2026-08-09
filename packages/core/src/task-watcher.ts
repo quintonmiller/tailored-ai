@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { resolveAgent } from "./agent/agents.js";
 import { executeHooks } from "./agent/hooks.js";
-import { runAgentLoop } from "./agent/loop.js";
+import { type LoopStop, runAgentLoop, stallReasonOf } from "./agent/loop.js";
 import { findOrCreateSession, resetSession } from "./agent/session.js";
 import { getProject } from "./db/project-queries.js";
 import type { ProjectTask } from "./db/task-queries.js";
@@ -392,6 +392,9 @@ export class TaskWatcher {
     const extraTools = allTools.filter((t) => taskToolNames.has(t.name));
 
     let response: string;
+    // Why the loop ended, straight from the loop, rather than inferred from the
+    // string it returned. See the stall check below.
+    let loopStop: LoopStop | undefined;
     // Captured outside the finally so stall handling (below) can inspect
     // the preserved worktree without re-querying git.
     let worktreePreservedPath: string | null = null;
@@ -442,6 +445,10 @@ export class TaskWatcher {
         onToolResult: (name, result) => {
           console.log(`${logPrefix} result: ${name} → ${result.slice(0, 200)}`);
         },
+        onStop: (stop) => {
+          loopStop = stop;
+          base.onStop?.(stop);
+        },
       });
     } finally {
       // Worktree cleanup: returns { preservedPath } when the agent left
@@ -481,14 +488,27 @@ export class TaskWatcher {
     const finalAssignee = (finalTask?.assignee ?? "").trim() || null;
     const finalStatus = finalTask?.status ?? event.task.status;
 
-    // Stall vs clean completion. A loop ending with `[Agent stopped: …]`
-    // means the model burned its budget without transitioning the task.
-    // Slice 3 step 3 of the platform vision: stall handling moved to the
-    // StallGuard plugin. The watcher emits `agent.stalled` (instead of
-    // `agent.completed`) when it detects a stall so the guard can decide
-    // retry-or-block. For terminal statuses (blocked/done) we never
-    // treat the response as a stall — those are intentional terminations.
-    const stallReason = detectStall(response);
+    // Stall vs clean completion: the model burned its budget without
+    // transitioning the task. Slice 3 step 3 of the platform vision: stall
+    // handling moved to the StallGuard plugin. The watcher emits
+    // `agent.stalled` (instead of `agent.completed`) when it detects a stall so
+    // the guard can decide retry-or-block. For terminal statuses (blocked/done)
+    // we never treat the response as a stall — those are intentional
+    // terminations.
+    //
+    // Read off `onStop`, not off the reply. A turn that runs out of rounds now
+    // gets one tools-withheld call so the person is told what happened instead
+    // of receiving `[Agent stopped: …]`, which means the reply of a stalled
+    // dispatch usually looks exactly like the reply of a finished one. Matching
+    // the string would have silently stopped routing to StallGuard the day that
+    // landed — the same failure the exploratory worker already hit from the
+    // other side, where reading the reason off the string classified every
+    // budget-capped tick as a stall (81 identical notes in 10 days).
+    //
+    // No string fallback, deliberately. `detectStall` also matches
+    // `[Agent stopped: shutdown requested]`, so falling back to it would file a
+    // dispatch the operator cancelled as an agent that got stuck.
+    const stallReason = stallReasonOf(loopStop);
     const isStall = stallReason !== null && finalStatus !== "blocked" && finalStatus !== "done";
     const eventName = isStall ? "agent.stalled" : "agent.completed";
     // Both payloads are structurally identical apart from `stallReason`.
@@ -554,9 +574,15 @@ function slugify(s: string): string {
  * Returns a short stall reason when `response` matches the agent loop's
  * `[Agent stopped: …]` terminators, or null when the loop ended cleanly.
  * `[Sleep] …` is NOT a stall — that's how the default agent ends ticks
- * intentionally. Used by the watcher to route to `agent.stalled`
- * instead of `agent.completed`; also exported for plugins that want to
- * detect stalls in their own response inspection paths.
+ * intentionally.
+ *
+ * **Best-effort, and no longer what the watcher uses.** Prefer `stallReasonOf`
+ * on the loop's `onStop`, which is exact. This reads the reply, and the reply
+ * is wrong in both directions: a turn that runs out of rounds now gets a
+ * tools-withheld call and usually answers in prose (a stall this cannot see),
+ * while `[Agent stopped: shutdown requested]` is an operator cancelling a
+ * dispatch (not a stall, and this reports one). Kept for plugins inspecting a
+ * reply they did not run themselves, where a guess beats nothing.
  */
 export function detectStall(response: string): string | null {
   if (!response) return null;

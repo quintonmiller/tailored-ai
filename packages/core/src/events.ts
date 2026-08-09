@@ -352,9 +352,11 @@ export interface RuntimeEventMap {
   };
 
   /**
-   * An agent loop returned a `[Agent stopped: …]` terminator instead
-   * of a clean response — see `detectStall`. The watcher emits this
-   * INSTEAD of `agent.completed` when it spots a stall, so the
+   * An agent loop ran out of rounds or looped on identical calls — see
+   * `isStallStop`. Read off the loop's `onStop`, not off its reply: a turn
+   * that runs out of rounds gets one tools-withheld call so the person is
+   * told what happened, so a stalled dispatch usually returns ordinary prose.
+   * The watcher emits this INSTEAD of `agent.completed` when it spots a stall, so the
    * default StallGuard plugin (`packages/core/src/plugins/stall-guard.ts`)
    * can decide whether to retry or transition to blocked.
    *
@@ -372,7 +374,7 @@ export interface RuntimeEventMap {
     task: AgentCompletedTask;
     finalTask: AgentCompletedTask;
     response: string;
-    /** Short string extracted from the loop's `[Agent stopped: <reason>]` terminator. */
+    /** Short reason for the stall, from `stallReasonOf(stop)`. */
     stallReason: string;
     worktree?: AgentCompletedWorktree;
   };

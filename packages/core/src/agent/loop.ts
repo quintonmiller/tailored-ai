@@ -235,7 +235,11 @@ export async function chatWithFallback(
  * - `aborted` — `options.signal` fired. `requestedByCaller` distinguishes an
  *   abort the caller asked for (token budget, runtime shutdown) from anything
  *   else, which is the difference between "working as configured" and "stuck".
- * - `max-rounds` — hit `maxToolRounds`. A genuine stall.
+ * - `max-rounds` — hit `maxToolRounds`. A genuine stall. `answered` says whether
+ *   the tools-withheld final call got prose out of it: still a stall either way,
+ *   but the difference between a caller holding an explanation and holding a
+ *   marker. Branch on `kind`, not on the returned string — since that call
+ *   landed, a stalled turn usually *does* return an ordinary-looking reply.
  * - `repeated-calls` — the model looped on identical tool calls. A genuine stall.
  * - `truncated` — the model hit its output cap before writing anything. Not a
  *   stall: it did work, it was billed for it, and none of it survived.
@@ -244,13 +248,26 @@ export type LoopStop =
   | { kind: "complete" }
   | { kind: "tool-ended"; tool: string; reason?: string }
   | { kind: "aborted"; requestedByCaller: boolean; reason?: string }
-  | { kind: "max-rounds"; rounds: number }
+  | { kind: "max-rounds"; rounds: number; answered?: boolean }
   | { kind: "repeated-calls" }
   | { kind: "truncated"; model: string; maxTokens?: number; outputTokens?: number; spentOnReasoning: boolean };
 
 /** True when the loop ended because it got stuck, rather than finishing or being told to stop. */
 export function isStallStop(stop: LoopStop): boolean {
   return stop.kind === "max-rounds" || stop.kind === "repeated-calls";
+}
+
+/**
+ * A short reason for a stall, or null when the loop did not stall.
+ *
+ * The counterpart to {@link detectStall} for callers that have the structured
+ * stop — which is every caller that asks for one. Prefer it: the reply text of
+ * a stalled turn is no longer distinctive, because a turn that runs out of
+ * rounds gets a tools-withheld call and usually returns ordinary prose.
+ */
+export function stallReasonOf(stop: LoopStop | undefined): string | null {
+  if (!stop || !isStallStop(stop)) return null;
+  return stop.kind === "max-rounds" ? "max tool rounds reached" : "repeated identical tool calls";
 }
 
 /**
@@ -1257,6 +1274,43 @@ async function _runAgentLoopBody(
   const halfBudget = Math.max(1, Math.floor(maxToolRounds * 0.5));
   const nearEndBudget = Math.max(halfBudget + 1, Math.floor(maxToolRounds * 0.8));
 
+  /**
+   * Bill a response, whichever call produced it.
+   *
+   * Shared by the round loop and the out-of-rounds answer below, because a
+   * request that is not on the loop's happy path is still a request the
+   * deployment paid for. The one place this used to live was inside the loop,
+   * so anything added after it would have been free by construction.
+   */
+  const recordResponseUsage = (response: ChatResponse): void => {
+    if (!response.usage) return;
+    // Record before the callback: a throwing consumer must not cost us the
+    // accounting row, which is the whole point of measuring here rather than
+    // leaving it to each caller (only two of which ever did).
+    try {
+      recordTokenUsage(db, {
+        sessionId: session.id,
+        taskId: opts.usageTaskId,
+        agent: usageAgent,
+        source: opts.usageSource ?? "loop",
+        promptTokens: response.usage.input,
+        completionTokens: response.usage.output,
+        cacheReadTokens: response.usage.cacheRead,
+        cacheWriteTokens: response.usage.cacheWrite,
+      });
+    } catch (e) {
+      console.error("[agent] token usage recording failed:", (e as Error).message);
+    }
+
+    if (opts.onUsage) {
+      try {
+        opts.onUsage(response.usage);
+      } catch (e) {
+        console.error("[agent] onUsage callback error:", (e as Error).message);
+      }
+    }
+  };
+
   while (rounds < maxToolRounds) {
     if (opts.signal?.aborted) {
       // `reason` is whatever the caller passed to AbortController.abort(). It
@@ -1424,33 +1478,7 @@ async function _runAgentLoopBody(
       opts.onReasoningDelta,
     );
 
-    if (response.usage) {
-      // Record before the callback: a throwing consumer must not cost us the
-      // accounting row, which is the whole point of measuring here rather than
-      // leaving it to each caller (only two of which ever did).
-      try {
-        recordTokenUsage(db, {
-          sessionId: session.id,
-          taskId: opts.usageTaskId,
-          agent: usageAgent,
-          source: opts.usageSource ?? "loop",
-          promptTokens: response.usage.input,
-          completionTokens: response.usage.output,
-          cacheReadTokens: response.usage.cacheRead,
-          cacheWriteTokens: response.usage.cacheWrite,
-        });
-      } catch (e) {
-        console.error("[agent] token usage recording failed:", (e as Error).message);
-      }
-
-      if (opts.onUsage) {
-        try {
-          opts.onUsage(response.usage);
-        } catch (e) {
-          console.error("[agent] onUsage callback error:", (e as Error).message);
-        }
-      }
-    }
+    recordResponseUsage(response);
 
     const assistantMsg: Message = {
       role: "assistant",
@@ -1586,8 +1614,97 @@ async function _runAgentLoopBody(
     }
   }
 
-  opts.onStop?.({ kind: "max-rounds", rounds });
-  return "[Agent stopped: max tool rounds reached]";
+  const recovered = await answerWithoutTools();
+  opts.onStop?.({ kind: "max-rounds", rounds, answered: recovered !== null });
+  return recovered ?? "[Agent stopped: max tool rounds reached]";
+
+  /**
+   * Out of rounds. Take the tools away and ask once more.
+   *
+   * The loop exits straight from the tool phase, so the last thing the model
+   * was asked to do was call another tool — and what the caller got was
+   * `[Agent stopped: max tool rounds reached]`, with the turn's work discarded.
+   * Measured on the benchmark's truncation scenario, 11 of 15 runs ended that
+   * way, and in each of them the agent already knew enough to answer: it had
+   * read the file, seen where it was cut, and tried three ways round it. The
+   * sentence it never got to write was the reply.
+   *
+   * Withholding the tools rather than asking for prose is the whole mechanism.
+   * An instruction to stop calling tools is one a model can decline, and a
+   * model that has spent every round reaching for a tool is precisely the one
+   * that will. A request with no tools in it leaves prose as the only thing it
+   * can return.
+   *
+   * One extra request, only on the path that was about to return nothing.
+   *
+   * Returns null when there is still nothing to say, so the caller keeps the
+   * marker — an empty string reads as an agent that chose silence, which is a
+   * different thing and the one shape a caller cannot act on.
+   */
+  async function answerWithoutTools(): Promise<string | null> {
+    // A caller-requested stop means stop. Spending another request here would
+    // be the loop overriding the abort it is on its way to honouring.
+    if (opts.signal?.aborted) return null;
+
+    try {
+      const outOfRounds: Message = {
+        role: "user",
+        content:
+          `[System: this turn has used all ${maxToolRounds} of its tool rounds, and no tools are available ` +
+          `for this reply. Answer now from what you already have: what you found, and what you could not ` +
+          `get and why.]`,
+      };
+      saveMessage(db, session.id, outOfRounds);
+      history.push(outOfRounds);
+
+      const finalProvider = opts.getProvider ? opts.getProvider() : provider;
+      const chain = opts.getModelChain?.() ?? [];
+      const candidates: ModelCandidate[] =
+        chain.length > 0 ? chain : [{ provider: finalProvider, model: session.model, label: finalProvider.id }];
+
+      // No tool schemas in this request, so the history gets back whatever they
+      // were occupying — which on a 41-tool deployment is thousands of tokens,
+      // and is the part of the turn the model most needs to read to answer.
+      const historyBudget = Math.max(0, maxHistoryTokens - systemPromptTokens - tailTokens);
+      const historyTokens = history.reduce((n, m) => n + estimateTokens(m), 0);
+      const overBudget = historyTokens > historyBudget;
+      const trimmed = markDroppedHistory(
+        history,
+        trimHistory(history, overBudget ? Math.max(0, historyBudget - DROP_MARKER_TOKENS) : historyBudget),
+      );
+      const messages: Message[] = [{ role: "system", content: fullSystemPrompt }, ...trimmed];
+      if (tailMsg) messages.push(tailMsg);
+
+      const { response } = await chatWithFallback(
+        candidates,
+        {
+          messages,
+          temperature,
+          thinking: opts.thinking,
+          maxTokens: opts.maxTokens,
+          extra: opts.providerExtra,
+        },
+        opts.onTextDelta,
+        opts.onReasoningDelta,
+      );
+      recordResponseUsage(response);
+
+      const assistantMsg: Message = {
+        role: "assistant",
+        content: response.content,
+        reasoning: response.reasoning,
+      };
+      saveMessage(db, session.id, assistantMsg);
+      history.push(assistantMsg);
+
+      return (response.content ?? "").trim() || null;
+    } catch (err) {
+      // The turn is already over; this was the salvage attempt. Say so and let
+      // the marker stand rather than turning a stall into a thrown error.
+      console.error(`[agent] out-of-rounds answer failed: ${(err as Error).message}`);
+      return null;
+    }
+  }
 }
 
 /**

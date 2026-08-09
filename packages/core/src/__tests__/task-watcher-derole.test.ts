@@ -13,6 +13,7 @@
  */
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { LoopStop } from "../agent/loop.js";
 import { createProject } from "../db/project-queries.js";
 import { initDatabase } from "../db/schema.js";
 import { createProjectTask } from "../db/task-queries.js";
@@ -26,7 +27,11 @@ vi.mock("../worktree.js", () => ({
 }));
 
 const runAgentLoopMock = vi.fn();
-vi.mock("../agent/loop.js", () => ({
+vi.mock("../agent/loop.js", async (importOriginal) => ({
+  // Partial: `runAgentLoop` is the expensive thing worth faking. The watcher
+  // also classifies the dispatch with `stallReasonOf`, and mocking that out
+  // would be mocking the logic under test.
+  ...(await importOriginal<typeof import("../agent/loop.js")>()),
   runAgentLoop: (...args: unknown[]) => runAgentLoopMock(...args),
 }));
 
@@ -209,5 +214,63 @@ describe("task-watcher worktree opt-in (#204)", () => {
     expect(createWorktreeMock).not.toHaveBeenCalled();
     const prompt = runAgentLoopMock.mock.calls[0][0] as string;
     expect(prompt).toContain("branch=[] path=[]");
+  });
+});
+
+/**
+ * Which event a finished dispatch becomes, now that a stalled turn answers in
+ * prose.
+ *
+ * The watcher used to decide by matching `[Agent stopped: …]` in the reply.
+ * That worked only for as long as a stall was silent. Out of rounds, the loop
+ * now makes one tools-withheld call so the person is told what happened — so
+ * the reply of a stalled dispatch is an ordinary sentence, and the old check
+ * would route every one of them to `agent.completed`, silently retiring
+ * StallGuard.
+ */
+describe("stall routing reads the loop's stop, not its reply", () => {
+  /** Drive one dispatch whose loop ends the given way, and report what was emitted. */
+  async function dispatch(reply: string, stop?: LoopStop): Promise<string[]> {
+    runAgentLoopMock.mockImplementation(async (_prompt: string, opts: { onStop?: (s: LoopStop) => void }) => {
+      if (stop) opts.onStop?.(stop);
+      return reply;
+    });
+    const runtime = makeRuntime({ fixer: {} });
+    const emitted: string[] = [];
+    for (const name of ["agent.stalled", "agent.completed"] as const) {
+      runtime.events.on(name, () => emitted.push(name));
+    }
+    const watcher = new TaskWatcher({ runtime }) as any;
+    const task = createProjectTask(db, { title: "Fix it", assignee: "fixer" });
+
+    await watcher.processEvent({ action: "updated", task: { ...task, tags: [] } });
+    return emitted;
+  }
+
+  it("stalls on a turn that ran out of rounds but answered", async () => {
+    const emitted = await dispatch("I read the runbook, but the middle was cut.", {
+      kind: "max-rounds",
+      rounds: 8,
+      answered: true,
+    });
+
+    expect(emitted).toEqual(["agent.stalled"]);
+  });
+
+  it("completes a turn that finished normally", async () => {
+    expect(await dispatch("Branch pushed at abc1234.", { kind: "complete" })).toEqual(["agent.completed"]);
+  });
+
+  it("does not stall on a dispatch the operator cancelled", async () => {
+    // The reply here is `[Agent stopped: shutdown requested]`, which the
+    // string check reported as a stall. A runtime shutdown is not an agent
+    // getting stuck, and retrying it is the wrong response.
+    const emitted = await dispatch("[Agent stopped: shutdown requested]", {
+      kind: "aborted",
+      requestedByCaller: true,
+      reason: "shutdown",
+    });
+
+    expect(emitted).toEqual(["agent.completed"]);
   });
 });

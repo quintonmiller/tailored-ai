@@ -153,6 +153,16 @@ Set it on the result rather than declaring it on the tool, because a multi-actio
 
 Current users: `sleep` (concludes an exploratory tick, supplying `[Sleep] <reason>`) and `room(action="pass")` (no reason). Any tool can use it, including plugin and MCP tools — it replaced a private `workingMemory["tick_done"]` convention that only core tools could discover.
 
+## Running out of tool rounds
+
+A turn that spends `maxToolRounds` exits straight from the tool phase, so the last thing the model was asked to do was call another tool. It used to return `[Agent stopped: max tool rounds reached]` and the turn's work went in the bin. Measured on the benchmark's truncation scenario, **11 of 15 runs ended that way** — and in each one the agent had already read the file, seen where it was cut, and tried three ways round it. The sentence it never got to write was the reply.
+
+So the loop makes **one more call with the tools withheld**, and returns what the model says. Withholding is the mechanism, not a detail: "stop calling tools and answer" is an instruction a model can decline, and a model that has spent every round reaching for a tool is the one that will. A request with no tools in it leaves prose as the only thing it can produce. The history goes with it — minus the tool schemas, which is a few thousand tokens back on a large tool set.
+
+It costs one request, only on the path that was going to return nothing. If the model still says nothing, or the call fails, the marker stands: an empty string reads as an agent that chose silence, which is a different thing and the one a caller cannot act on. A caller-requested abort skips it — reachable, since an abort raised while the final round's tools are running is never seen by the top-of-round check, so the turn exits through `max-rounds` with the signal already set.
+
+**This changes how a caller must detect a stall.** It is still `LoopStop { kind: "max-rounds", rounds, answered }`, but the *reply* now usually looks like an ordinary answer. Branch on `onStop` — `isStallStop(stop)`, or `stallReasonOf(stop)` for the short reason. `detectStall(reply)` remains exported for plugins inspecting a reply they did not run themselves, and is now wrong in both directions: it cannot see a stall that answered, and it reports `[Agent stopped: shutdown requested]` — an operator cancelling a dispatch — as one. The task watcher was moved off it for exactly that; the exploratory worker had already been moved for the mirror-image bug, where reading the string classified every budget-capped tick as a stall and wrote 81 byte-identical notes in 10 days.
+
 ## Providers
 
 One provider is built in — set `agent.defaultProvider` in config:

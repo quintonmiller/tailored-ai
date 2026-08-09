@@ -482,10 +482,11 @@ export interface TaskWatcherConfig {
     afterRun?: AgentHook | AgentHook[];
   };
   /**
-   * When a coding-agent run ends with `[Agent stopped: …]` (max rounds,
-   * repeated calls, or shutdown), the watcher writes a structured stall
-   * comment and either retries (up to maxStallRetries) or transitions
-   * the task to `blocked`. Default: 1 retry, then block.
+   * When a coding-agent run gets stuck — out of tool rounds, or looping on
+   * identical calls — the watcher writes a structured stall comment and either
+   * retries (up to maxStallRetries) or transitions the task to `blocked`.
+   * Default: 1 retry, then block. A run the operator cancelled is not a stall
+   * and is not retried.
    */
   maxStallRetries?: number;
 }
