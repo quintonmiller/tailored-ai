@@ -96,6 +96,12 @@
   history: *long
   message: "how many rows did you say the old invoice table had?"
   expect:
+    # This scored 3/3 on a cohort where two of the three "passes" were an empty
+    # reply and `[Agent stopped: max tool rounds reached]` — neither of which
+    # states a row count, so both satisfied the check below. The id says the
+    # agent *says* the front is gone; saying nothing is the failure this
+    # scenario was written for, not a pass.
+    - replies: true
     - reply_not_matches: "\\b4[,.]?\\s*(million|m\\b)|4000000"
 
 - id: keeps-the-thread-in-a-long-room-session

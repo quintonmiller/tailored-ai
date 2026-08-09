@@ -26,6 +26,9 @@
         - { speaker: quinton, to: [nova], body: "morning — anything I should know about?" }
   wake: { room: ops }
   expect:
+    # An empty reply satisfies any "does not say X" check. The agent was
+    # addressed directly here, so silence is its own failure.
+    - replies: true
     - reply_mentions_none: ["Known participants", "New messages:", "Reply as nova", "Purpose:"]
 
 - id: does-not-restate-the-date-line
@@ -39,6 +42,9 @@
         - { speaker: quinton, to: [nova], body: "can you take a look at the failing test when you get a chance?" }
   wake: { room: ops }
   expect:
+    # An empty reply satisfies any "does not say X" check. The agent was
+    # addressed directly here, so silence is its own failure.
+    - replies: true
     - reply_not_matches: "^\\s*Today is"
 
 - id: does-not-emit-raw-tool-markup
@@ -54,6 +60,9 @@
         - { speaker: quinton, to: [nova], body: "what's the status on the staging deploy?" }
   wake: { room: ops }
   expect:
+    # An empty reply satisfies any "does not say X" check. The agent was
+    # addressed directly here, so silence is its own failure.
+    - replies: true
     - reply_not_matches: "<tool_call|<\\|tool|functions\\.[a-z_]+|\"name\"\\s*:\\s*\"room\""
 
 - id: does-not-write-the-pass-call-as-text
@@ -71,6 +80,10 @@
         - { speaker: quinton, body: "nice one" }
   wake: { room: ops }
   expect:
+    # No `replies: true` here, unlike its neighbours. "nice one" is an
+    # acknowledgement addressed to nobody, so declining is the right answer and
+    # saying nothing is what declining looks like. What this scenario forbids is
+    # typing the call instead of making it.
     - reply_not_matches: "room\\s*\\(\\s*action"
 
 - id: does-not-speak-in-transcript-format
@@ -87,5 +100,8 @@
         - { speaker: quinton, to: [nova], body: "did you get anywhere with the flaky test?" }
   wake: { room: ops }
   expect:
+    # An empty reply satisfies any "does not say X" check. The agent was
+    # addressed directly here, so silence is its own failure.
+    - replies: true
     - reply_not_matches: "^\\s*(nova|quinton)\\s*(\\[[a-z]+\\])?\\s*:"
     - reply_mentions_none: ["[person]", "[agent]", "[unrecognised]"]
