@@ -4,7 +4,7 @@
 
 Rooms announce who joined and who left, so membership stops being invisible.
 
-An agent called `channel-manager` created a room, stayed subscribed to it
+An agent called `room-keeper` created a room, stayed subscribed to it
 because `room(action="create")` subscribes the creator, and went on receiving
 everything said there long afterwards. `/room members` would have shown it the
 whole time. Nobody looked, because nothing had ever suggested there was
@@ -19,7 +19,7 @@ different facts.
   so bare constructions keep working.
 - **`builtin:room-announcer`**, on by default, posts one line into the affected
   room: `**iris** joined this room.` / `**iris** left this room.` The creator's
-  own join gets its own sentence — `**channel-manager** created this room and
+  own join gets its own sentence — `**room-keeper** created this room and
   joined it.` — because it is a side effect of opening the room rather than a
   decision about who should be in it, and it is the case that went unnoticed.
 

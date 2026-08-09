@@ -62,7 +62,7 @@ Before writing a feature, decide which tier it belongs to. Every change fits exa
 
 1. **Core platform** (`packages/core`, plus the platform paths of `server`/`cli`) — the most sacred code. Modify it only for platform capabilities that enable plugins/components broadly: new seams (interfaces, registries, config selection), contract fixes, loop/runtime correctness. A feature that serves one use case does not belong here, even a popular one. Core must never know a plugin's name or config shape.
 2. **Built-in plugins/packages** (`packages/google-tools`, `packages/channel-slack`, `packages/core/src/plugins/builtin:*`, etc.) — common functionality that multiple people could use. Low scrutiny to add; ships in this repo and may be bundled, but registers through the same registries as a third-party plugin and must be fully removable/replaceable without breaking core.
-3. **Personal logic** — anything specific to Quinton's setup: lives in the separate `tai-personal` repo and `~/.tailored-ai/config.yaml`, never in this repo. If a change only makes sense for one deployment, it goes here.
+3. **Deployment logic** — anything specific to one installation: lives in that deployment's own config repo and its `<TAI_HOME>/config.yaml`, never in this repo. If a change only makes sense for one deployment, it goes there.
 
 When a feature needs core changes to be buildable as a plugin (a missing seam), split the work: land the seam in core (tier 1) and the feature as a plugin (tier 2). The seam PR should make sense without the plugin.
 
@@ -85,6 +85,32 @@ TAI is a modular framework for running personal agents. Keep docs and APIs orien
 - **Simple agent loop**: No complex state machines. Loop: chat → tool calls → chat → stop.
 - **Hot-reloadable runtime**: Config, tools, and provider are mutable at runtime. The agent loop re-resolves tools each iteration so changes take effect immediately without restart.
 - **Replaceable opinions**: Default behavior should be useful, but workflow opinions should move toward plugins/event subscribers instead of hardcoded core paths.
+
+## Examples use a neutral cast
+
+This is a public repo, so every example in it is read by people who have none of
+your setup. Docs, test fixtures, benchmark scenarios, config samples and issue
+text all describe the framework, never the machine it was written on.
+
+- **Agents in examples get role names** — `assistant`, `planner`, `trip-planner`,
+  `mail-sorter`, `room-keeper`, `reviewer`. Never paste a real deployment's agent
+  roster: it reads as canonical, spreads by copy-paste, and ends up in shipped
+  code comments and published CHANGELOGs, which is exactly how it got there
+  before.
+- **Paths are relative, `~/`, or `<TAI_HOME>`.** A container or fixture account
+  (`/home/executor`, `/home/test`) is fine — that really is the user. A real
+  person's home directory or checkout path is not.
+- **Issues describe a capability, not an errand.** "Support multiple TAI
+  instances on one machine", not "Split my TAI into work and personal". The
+  deployment steps belong in the issue body as an example, not in its title.
+- **Measurements keep their numbers and lose their owner.** "A 41-tool
+  deployment spends ~10,900 tokens on schemas" is evidence; whose deployment it
+  was is not.
+
+`pnpm run guard:local-refs` enforces the structural half (home paths, checkout
+paths, a deployment's config-repo names) and runs in CI. The naming half is not
+mechanically detectable — `mail-sorter` and `email-classifier` look identical to
+a regex — so it lives here.
 
 ## Conventions
 

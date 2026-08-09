@@ -312,8 +312,8 @@ export class AgentRuntime {
   /**
    * Per-project task backend cache. Constructed lazily on first access for
    * each registered project. Lets a single agent invocation file tasks
-   * across multiple project-scoped trackers (e.g. a personal SQLite default
-   * plus distinct GitHub repos for `tai` and `tai-personal`).
+   * across multiple project-scoped trackers (e.g. a local SQLite default
+   * plus a distinct GitHub repo per project).
    *
    * Cache is cleared on `reload()` so changing a project's `.tai.yaml`
    * overlay takes effect on the next call.

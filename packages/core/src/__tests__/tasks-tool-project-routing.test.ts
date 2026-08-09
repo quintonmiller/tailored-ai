@@ -13,8 +13,8 @@ import { type TaskBackendResolver, TaskQueryTool, TasksTool } from "../tools/tas
 
 /**
  * Verifies the per-project task-backend routing introduced for multi-repo
- * setups (e.g. a personal SQLite default plus separate GitHub backends for
- * the `tai` and `tai-personal` projects). The resolver is the single
+ * setups (e.g. a local SQLite default plus separate GitHub backends for
+ * two different repos). The resolver is the single
  * extension point; this test exercises it through both TasksTool and
  * TaskQueryTool to confirm `project_id` selects the backend at call time.
  *

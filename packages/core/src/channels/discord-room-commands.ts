@@ -106,7 +106,7 @@ export function buildRoomCommand(): SlashCommandBuilder {
       .setDescription("Send a message to one agent in this room")
       .addStringOption((o) =>
         // Autocompleted from the agents actually in this room. Typing the name
-        // by hand is how "@agent:channel-manager" happened — it looked like an
+        // by hand is how "@agent:room-keeper" happened — it looked like an
         // address, resolved to nothing, and quietly went to everyone instead.
         o.setName("agent").setDescription("Which agent").setRequired(true).setAutocomplete(true),
       )

@@ -215,7 +215,7 @@ That is what the defaults do: the agent that creates a room hosts it
 with `wake_on`, or from Discord with `/room add agent:… wake:…`.
 
 A misspelt name is corrected when exactly one identity is close enough —
-`@travel-coordinaror` reaches `travel-coordinator`. Conservative on purpose:
+`@trip-plannre` reaches `trip-planner`. Conservative on purpose:
 the name must be long enough that a near-match is not coincidence, within two
 edits, and match exactly one identity. Two plausible candidates means guessing,
 and guessing an addressee hands someone's request to the wrong agent.
@@ -226,7 +226,7 @@ reaches the host rather than everyone. Qualified forms people naturally type —
 avoids the guesswork entirely: it autocompletes the agents actually in the room.
 
 A name is a call-out **anywhere** in a message, not only at the front. "Done,
-added the tool. `@generalist` you're up" pages generalist even though the
+added the tool. `@helper` you're up" pages helper even though the
 message is formally addressed to whoever was named first.
 
 Every combination is legal, and they mean different things:
@@ -255,7 +255,7 @@ in that session and reported the same two unassigned tasks as their own work.
 
 ```yaml
 agents:
-  executive-assistant:
+  assistant:
     roomSessionScope: shared    # room (default) | shared
 ```
 
@@ -351,7 +351,7 @@ nobody has said anything:
 
 ```yaml
 subscriptions:
-  - { agent: travel-coordinator, room: trip, wakeOn: named, checkInMinutes: 60 }
+  - { agent: trip-planner, room: trip, wakeOn: named, checkInMinutes: 60 }
 ```
 
 An agent can set its own rather than waiting to be configured:
@@ -1079,7 +1079,7 @@ exchange lands in the recipient's session, so it is durable and inspectable — 
 just is not a *place*.
 
 ```
-room(action="dm", to="executive-assistant", body="Trip moved to Aug 3.")
+room(action="dm", to="assistant", body="Trip moved to Aug 3.")
 ```
 
 It used to open a channel per recipient, which at 27 agents is 27 channels
@@ -1092,7 +1092,7 @@ Mirror a particular agent's direct line into a channel you want to read:
 ```yaml
 rooms:
   desks:
-    executive-assistant: executive
+    assistant: executive
 ```
 
 Two caveats. It is **synchronous** — the sender waits for the recipient's model
@@ -1194,9 +1194,9 @@ are re-applied on every reconcile.
 it:
 
 ```
-room  **channel-manager** created this room and joined it.
+room  **room-keeper** created this room and joined it.
 room  **iris** joined this room.
-room  **channel-manager** left this room.
+room  **room-keeper** left this room.
 ```
 
 It is on by default. Membership was previously something you could only find out
@@ -1297,7 +1297,7 @@ to one directory:
 
 ```yaml
 agents:
-  travel-coordinator:
+  trip-planner:
     tools: [read, write, edit, documents, recall]
     fileBoundary: ~/research/travel
 ```
@@ -1356,12 +1356,12 @@ rooms:
 ```
 
 ```
-travel-coordinator  Fixed. Replaced the 3 hallucinated bars…
+trip-planner  Fixed. Replaced the 3 hallucinated bars…
   └ details
       • woke: named directly
-      • `read` /home/q/trip/sd_bars_verified.md
-      • `read` /home/q/trip/sd_tiki_investigation.md
-      • `edit` /home/q/trip/itinerary_bar_focused.md
+      • `read` /home/agent/trip/sd_bars_verified.md
+      • `read` /home/agent/trip/sd_tiki_investigation.md
+      • `edit` /home/agent/trip/itinerary_bar_focused.md
 ```
 
 The room still reads as conversation; the record is one click away. `mutations`
@@ -1383,7 +1383,7 @@ plugins:
   - module: builtin:error-room
     config:
       room: errors
-      notify: generalist      # addressed, so a "named" subscriber wakes
+      notify: helper      # addressed, so a "named" subscriber wakes
       levels: [error]
       batchSeconds: 30
       maxPerHour: 6
@@ -1395,10 +1395,10 @@ Give the room a purpose that says what triage means for you, subscribe an
 agent, and errors get diagnosed rather than accumulated:
 
 ```
-log         @generalist • [cron] "collection-scanner" aborted — beforeRun hook
+log         @helper • [cron] "feed-scanner" aborted — beforeRun hook
                           "gmail" returned an error: oauth2: "invalid_grant"
 
-generalist  @log **Diagnosis: expired/revoked Gmail OAuth2 token.** The stored
+helper  @log **Diagnosis: expired/revoked Gmail OAuth2 token.** The stored
             credentials for the gmail tool are rejected before the query runs…
 ```
 

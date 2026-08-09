@@ -402,7 +402,7 @@ export function initDatabase(dbPath: string): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_tick_log_kind_created
       ON tick_log(kind, created_at);
 
-    -- email_seen: dedup ledger so the email-fetcher agent doesn't
+    -- email_seen: dedup ledger so a mail-polling agent doesn't
     -- have to remember which messages it already processed. The
     -- whole point: set membership belongs in SQL, not in an LLM
     -- prompt. message_id is Gmail's unique id; subject_hash is for

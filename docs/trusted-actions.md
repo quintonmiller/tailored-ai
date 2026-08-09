@@ -96,6 +96,9 @@ APPROVAL_HMAC_KEY=<openssl rand -hex 32>
 TA_PORT=3100
 TA_DB_PATH=/data/executor.db
 TA_PUBLIC_BASE_URL=http://localhost:3100     # change to hosted-proxy URL
+TA_APPROVAL_ASSIGNEE=                        # optional; who an approved
+                                             # capability task is assigned to.
+                                             # Unset leaves the assignee alone.
 
 # Spending caps — number or "unlimited"
 TA_CAP_PER_REQUEST=100
