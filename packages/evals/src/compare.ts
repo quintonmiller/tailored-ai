@@ -5,9 +5,9 @@
  * break something", which is the question anyone actually has. Two guards keep
  * it from lying:
  *
- *   Different scenario sets are refused outright. Comparing 40 scenarios against
- *   a later 48 shows a score move that is entirely an artefact of the extra
- *   eight, and nothing about the change.
+ *   Two runs that did not cover the same scenarios are called out before any
+ *   number is read. Comparing 44 scenarios against a later 58 shows a score
+ *   move that is entirely the extra fourteen, and nothing about the change.
  *
  *   Small moves are labelled as noise rather than reported as findings. At three
  *   repeats one flipped run is 33 points, and treating that as a regression
@@ -53,10 +53,30 @@ export function compareReports(
   after: BenchmarkReport,
 ): { rows: ComparisonRow[]; added: string[]; removed: string[]; warnings: string[] } {
   const warnings: string[] = [];
-  if (before.meta.scenarioSetHash !== after.meta.scenarioSetHash) {
+  const beforeIds = new Set(before.scenarios.map((s) => s.id));
+  const afterIds = new Set(after.scenarios.map((s) => s.id));
+  const added = [...afterIds].filter((id) => !beforeIds.has(id));
+  const removed = [...beforeIds].filter((id) => !afterIds.has(id));
+
+  // The question is whether the two runs sat the same exam, and each report
+  // lists the scenarios it ran — so ask that directly instead of asking the
+  // hash, which answers a narrower question and gets this one wrong twice: a
+  // `--filter`ed run records the whole set's digest while running a handful of
+  // it, and any edit to the files moves the digest even when both runs covered
+  // the same scenarios.
+  if (added.length || removed.length) {
+    const parts = [
+      removed.length ? `${removed.length} not run in the later report` : "",
+      added.length ? `${added.length} not in the earlier one` : "",
+    ].filter(Boolean);
     warnings.push(
-      `scenario sets differ (${before.meta.scenarioSetHash} → ${after.meta.scenarioSetHash}) — ` +
-        "per-scenario rows are still valid, the overall score is not comparable",
+      `the two runs cover different scenarios (${parts.join(", ")}) — per-scenario rows are still valid, ` +
+        "the overall score is not comparable",
+    );
+  } else if (before.meta.scenarioSetHash !== after.meta.scenarioSetHash) {
+    warnings.push(
+      `same ${afterIds.size} scenarios, but their definitions changed between the runs ` +
+        `(${before.meta.scenarioSetHash} → ${after.meta.scenarioSetHash}) — a moved row may be a changed assertion`,
     );
   }
   if (before.meta.model !== after.meta.model) {
@@ -87,12 +107,7 @@ export function compareReports(
   }
 
   rows.sort((x, y) => x.delta - y.delta);
-  return {
-    rows,
-    added: [...afterById.keys()].filter((id) => !beforeById.has(id)),
-    removed: [...beforeById.keys()].filter((id) => !afterById.has(id)),
-    warnings,
-  };
+  return { rows, added, removed, warnings };
 }
 
 export function printComparison(before: BenchmarkReport, after: BenchmarkReport): boolean {

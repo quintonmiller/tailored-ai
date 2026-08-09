@@ -311,13 +311,29 @@ describe("comparison", () => {
     expect(rows.find((r) => r.id === "b")?.verdict).toBe("regressed");
   });
 
-  it("warns when the two runs are not comparable", () => {
-    const { warnings } = compareReports(
-      report({}, { a: 1 }),
-      report({ scenarioSetHash: "other", model: "n" }, { a: 1 }),
-    );
-    expect(warnings.join(" ")).toMatch(/scenario sets differ/);
+  it("warns on the scenarios a run actually skipped, not on the digest", () => {
+    // The failure this exists for: a 44-scenario run scoring higher than a
+    // 58-scenario one because it never sat the four hardest categories.
+    const { warnings } = compareReports(report({}, { a: 1, b: 1, c: 1 }), report({ model: "n" }, { a: 1 }));
+    expect(warnings.join(" ")).toMatch(/cover different scenarios/);
+    expect(warnings.join(" ")).toMatch(/2 not run in the later report/);
     expect(warnings.join(" ")).toMatch(/different models/);
+  });
+
+  it("does not call two runs over the same scenarios incomparable", () => {
+    // Both baselines on the site hit this: identical scenario ids, digests
+    // apart only because a `knownGap` annotation was added between the runs.
+    const { warnings } = compareReports(
+      report({}, { a: 1, b: 1 }),
+      report({ scenarioSetHash: "other" }, { a: 1, b: 1 }),
+    );
+    expect(warnings.join(" ")).not.toMatch(/cover different scenarios/);
+    expect(warnings.join(" ")).toMatch(/same 2 scenarios, but their definitions changed/);
+  });
+
+  it("says nothing about the set when the runs match on both counts", () => {
+    const { warnings } = compareReports(report({}, { a: 1, b: 1 }), report({}, { a: 1, b: 1 }));
+    expect(warnings).toEqual([]);
   });
 
   it("reports scenarios that only exist on one side rather than scoring them", () => {

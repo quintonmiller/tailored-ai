@@ -132,6 +132,46 @@ const scenario = z
     }
   });
 
+/**
+ * Fields that say why a scenario exists without changing what it measures.
+ *
+ * `intent` is prose for a reader and `knownGap` marks a row as deliberately
+ * red; neither reaches the model or the graders. They are excluded from the
+ * digest so annotating a scenario does not invalidate every run that came
+ * before — which is the whole point of reading them from the scenario file
+ * instead of baking them into each report.
+ */
+const ANNOTATION_FIELDS = new Set(["intent", "knownGap"]);
+
+/** Key-sorted, so the digest tracks meaning rather than authoring order. */
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === "object") {
+    const source = value as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.keys(source)
+        .sort()
+        .map((key) => [key, canonical(source[key])]),
+    );
+  }
+  return value;
+}
+
+/**
+ * What a scenario actually puts in front of the model, and what it grades.
+ *
+ * Digesting this rather than the file bytes means a comment, a reflow or an
+ * annotation leaves the identity of the set alone, and a changed assertion
+ * moves it. The bytes version got both backwards.
+ */
+function measuredShape(parsed: Scenario): unknown {
+  return canonical(
+    Object.fromEntries(
+      Object.entries(parsed).filter(([key, value]) => !ANNOTATION_FIELDS.has(key) && value !== undefined),
+    ),
+  );
+}
+
 export function loadScenarios(dir: string, filter?: string): { scenarios: Scenario[]; hash: string } {
   const files = readdirSync(dir)
     .filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"))
@@ -142,7 +182,6 @@ export function loadScenarios(dir: string, filter?: string): { scenarios: Scenar
 
   for (const file of files) {
     const raw = readFileSync(join(dir, file), "utf8");
-    hash.update(raw);
     const parsed = YAML.parse(raw);
     if (!Array.isArray(parsed)) throw new Error(`${file}: expected a list of scenarios at the top level`);
     for (const entry of parsed) {
@@ -155,6 +194,7 @@ export function loadScenarios(dir: string, filter?: string): { scenarios: Scenar
       if (seen.has(result.data.id)) throw new Error(`${file}: duplicate scenario id "${result.data.id}"`);
       seen.add(result.data.id);
       scenarios.push(result.data as Scenario);
+      hash.update(JSON.stringify(measuredShape(result.data as Scenario)));
     }
   }
 
