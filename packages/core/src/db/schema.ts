@@ -488,6 +488,13 @@ export function initDatabase(dbPath: string): Database.Database {
       archived_at    TEXT,
       archived_by    TEXT,
       archive_reason TEXT,
+      -- Opaque JSON a room backend can park across an archive, so restoring a
+      -- room can put it back exactly where it was. Discord keeps the category
+      -- the channel was filed under before it moved to the archive one.
+      -- Core never reads inside this: what a transport needs to remember is
+      -- the transport's business, and a column per backend concept would put
+      -- Discord's vocabulary in core's schema.
+      backend_state  TEXT,
       created_at  TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -746,6 +753,7 @@ export function initDatabase(dbPath: string): Database.Database {
     "ALTER TABLE rooms ADD COLUMN archived_at TEXT",
     "ALTER TABLE rooms ADD COLUMN archived_by TEXT",
     "ALTER TABLE rooms ADD COLUMN archive_reason TEXT",
+    "ALTER TABLE rooms ADD COLUMN backend_state TEXT",
   ]) {
     try {
       db.exec(sql);

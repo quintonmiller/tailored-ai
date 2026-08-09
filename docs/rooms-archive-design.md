@@ -3,10 +3,9 @@
 Why retiring a room works the way it does. Companion to
 [rooms.md](./rooms.md#archiving-a-room), which is the user-facing description.
 
-**Status: Phases 1 and 2 are built.** Phase 3 (reflecting the archive onto the
-transport) and everything under "Deliberately deferred" are not. This document
-is kept because the decisions below are the ones a reviewer would want to argue
-with, and they are not visible from the code.
+**Status: Phases 1, 2 and 3 are built.** Everything under "Deliberately
+deferred" is not. This document is kept because the decisions below are the ones
+a reviewer would want to argue with, and they are not visible from the code.
 
 ## The gap
 
@@ -295,7 +294,7 @@ unarchive restore the declared set.
   for loop-unsafe configuration. Errors posted into a room nobody reads is the precise
   failure `error-room` exists to prevent.
 
-## Phase 3 — optional transport-side archive — **not built**
+## Phase 3 — transport-side archive — **built**
 
 ```ts
 interface RoomCapabilities { /* … */ archive: boolean }
@@ -305,18 +304,42 @@ interface RoomBackend {
 }
 ```
 
-Discord implements it as lock-and-move: deny `SendMessages` for `@everyone`, and move the
-channel under a category named by config. Opt-in per deployment:
+Discord files the channel under a category, created on first use and matched
+case-insensitively. Best-effort and logged, never load-bearing: a bot without Manage
+Channels must not turn a successful archive into a failed one.
 
-```yaml
-rooms:
-  archiveOnTransport: false      # default
-  archiveCategory: Archive
-```
+Three things came out differently from the sketch above.
 
-Off by default because it needs `Manage Channels`, because it is visible to everyone in
-the guild, and because a failure here must not stop TAI's own archive from succeeding —
-the transport step is best-effort and logged, never load-bearing.
+**Move only — no lock.** The sketch said lock-and-move: deny `SendMessages` for
+`@everyone` as well. Dropped, because it is a much stronger act than it looks. Archiving
+says TAI stopped watching; it does not say people may no longer talk. Locking would take a
+reversible bookkeeping change and turn it into a visible restriction on everyone in the
+guild, and the room is meant to stay readable — and postable-in — as a record. Move is
+what was asked for and is the honest scope.
+
+**Config lives in the transport's block, not core's.** The sketch put
+`rooms.archiveOnTransport` and `rooms.archiveCategory` in core config. But "category" is
+Discord's word, and core must not know a backend's config shape. So the single key is
+`channels.discord.archiveCategory`, parsed by `getDiscordConfig` like every other Discord
+option — and **core gains no config at all**. Its presence is the enable switch; there is
+no separate boolean to disagree with it.
+
+**`capabilities.archive` is dynamic.** It reports false both when a transport cannot file
+rooms and when nobody told it where, so callers skip the call rather than invoking a method
+that quietly does nothing. "Unsupported" and "not asked for" look identical from outside,
+and only one of them is worth a log line.
+
+The one piece of new core surface is `rooms.backend_state`: opaque JSON a backend can park
+across an archive, so restoring puts the channel back in the category it came from instead
+of stranding it at the top of the list. Core never looks inside it — a column named
+`previous_category_id` would be Discord's vocabulary in core's schema, and the next
+transport's word for it will be different.
+
+The failure mode designed against, which is not obvious: **`setParent` resyncs permissions
+by default** in discord.js. Room membership is derived from channel permission overwrites
+([see above](#backends)), so accepting that default would not merely change who can see a
+private room — it would erase the room's roster as a side effect of tidying the sidebar.
+Every move passes `lockPermissions: false`, and the test for it fails when that is removed.
 
 ## Deliberately deferred
 

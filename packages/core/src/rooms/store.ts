@@ -315,6 +315,40 @@ export class RoomStore {
     return this.getRoomByRef(key);
   }
 
+  /**
+   * Read and write a room backend's own scratch state.
+   *
+   * Opaque on purpose. Discord parks the category a channel was filed under
+   * before it moved to the archive one, so restoring puts it back rather than
+   * stranding it at the top of the list — but core never looks inside, because
+   * a column named `previous_category_id` would be Discord's vocabulary in
+   * core's schema, and the next transport's word for it will be different.
+   *
+   * Malformed JSON reads as absent rather than throwing: this is a
+   * convenience for a best-effort transport step, and it must never be able to
+   * break reading a room.
+   */
+  getBackendState(ref: RoomRef | string): Record<string, unknown> | null {
+    const key = typeof ref === "string" ? ref : formatRoomRef(ref);
+    const row = this.db.prepare("SELECT backend_state FROM rooms WHERE ref = ?").get(key) as
+      | { backend_state: string | null }
+      | undefined;
+    if (!row?.backend_state) return null;
+    try {
+      const parsed = JSON.parse(row.backend_state);
+      return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  setBackendState(ref: RoomRef | string, state: Record<string, unknown> | null): void {
+    const key = typeof ref === "string" ? ref : formatRoomRef(ref);
+    this.db
+      .prepare("UPDATE rooms SET backend_state = ? WHERE ref = ?")
+      .run(state === null ? null : JSON.stringify(state), key);
+  }
+
   isArchived(ref: RoomRef | string): boolean {
     const key = typeof ref === "string" ? ref : formatRoomRef(ref);
     const row = this.db.prepare("SELECT archived_at FROM rooms WHERE ref = ?").get(key) as

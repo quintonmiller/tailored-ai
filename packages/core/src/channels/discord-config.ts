@@ -20,6 +20,15 @@ export interface DiscordConfig {
   allowedGuilds?: string[];
   /** Guild new rooms are created in. Only needed when the bot is in several. */
   guildId?: string;
+  /**
+   * Category to file archived rooms under, by name — created on first use.
+   *
+   * Unset means archived channels are left exactly where they are, which is
+   * the default: archiving is a statement about TAI's attention, and moving
+   * someone's channels around the server is a further step they should have to
+   * ask for. Needs Manage Channels.
+   */
+  archiveCategory?: string;
   respondToDMs?: boolean;
   respondToMentions?: boolean;
   projectMappings?: DiscordProjectMapping[];
@@ -40,6 +49,7 @@ export function getDiscordConfig(config: AgentConfig): DiscordConfig | undefined
     owner: asString(r.owner),
     allowedGuilds: asStringArray(r.allowedGuilds),
     guildId: asString(r.guildId),
+    archiveCategory: asString(r.archiveCategory),
     respondToDMs: asBoolean(r.respondToDMs),
     respondToMentions: asBoolean(r.respondToMentions),
     projectMappings: asProjectMappings(r.projectMappings),

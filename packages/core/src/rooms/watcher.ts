@@ -676,9 +676,17 @@ export class RoomWatcher {
     // Archiving is a re-arm for the same reason a membership change is: timers
     // are created here and nowhere else, so a room retired at runtime would go
     // on polling and checking in until the next restart.
+    //
+    // It is also where the transport is told, alongside publishPurposes below:
+    // both are "make the channel match what TAI thinks", both are best-effort,
+    // and both belong to whoever already talks to backends. The consequence
+    // worth knowing is that `rooms.enabled: false` stops the watcher, so an
+    // archive made with rooms off is recorded but not reflected on Discord.
     for (const event of ["room.archived", "room.unarchived"] as const) {
-      const sub = this.runtime.events?.on(event, () => {
-        if (this.started) this.scheduleRearm();
+      const sub = this.runtime.events?.on(event, (e) => {
+        if (!this.started) return;
+        this.scheduleRearm();
+        void this.reflectArchiveOnTransport(e.roomRef, event === "room.archived");
       });
       if (sub) this.archiveSubscriptions.push(sub);
     }
@@ -727,6 +735,32 @@ export class RoomWatcher {
     // happened to land. Drain once on arming.
     void this.drain(subs);
     void this.publishPurposes();
+  }
+
+  /**
+   * Tell the transport a room was retired, or brought back.
+   *
+   * Strictly best-effort. The archive is already recorded and already in force
+   * by the time this runs, so a transport that cannot oblige — no Manage
+   * Channels, no such concept, gateway down — costs a log line and nothing
+   * else. Letting this throw would surface a cosmetic failure as if the archive
+   * itself had failed.
+   */
+  private async reflectArchiveOnTransport(roomRef: string, archived: boolean): Promise<void> {
+    const ref = parseRoomRef(roomRef);
+    if (!ref) return;
+    const backend = getRoomBackend(ref.backend);
+    // `archive: false` covers both "cannot" and "not configured to", so an
+    // unconfigured deployment is silent rather than logging on every archive.
+    if (!backend?.capabilities.archive || !backend.archiveRoom) return;
+    try {
+      await backend.archiveRoom(ref.id, archived);
+    } catch (err) {
+      console.warn(
+        `[rooms] Could not ${archived ? "file" : "restore"} "${roomRef}" on its transport: ${(err as Error).message}. ` +
+          `The room is still ${archived ? "archived" : "live"} in TAI.`,
+      );
+    }
   }
 
   /**
