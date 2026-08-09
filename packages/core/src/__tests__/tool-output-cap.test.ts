@@ -67,39 +67,43 @@ describe("capToolOutput", () => {
   });
 
   /**
-   * The marker used to end "— or read the file above", and agents took it.
+   * Why the marker names an *offset* rather than just the file.
+   *
+   * The marker once ended "— or read the file above", and agents took it.
    * Measured over 15 runs of `notices-a-truncated-tool-result`: the model read
    * the saved copy, then spent its remaining rounds on `cat` and `grep`, and
-   * the turn ended with no reply at all.
+   * the turn ended with no reply at all. Re-reading the whole file lands right
+   * back here, and this test pins that: capping is deterministic, so the same
+   * bytes at the same limit produce the same string, elision included.
    *
-   * The advice could never have worked, and that is a property rather than a
-   * matter of wording: a `read` of the saved file is capped by this same
-   * function at this same limit, so it returns the same bytes. The test asserts
-   * the property, because a marker rewritten around a still-impossible recovery
-   * would pass a string check.
+   * That property has not changed and must not — the loop's stuck-model
+   * detector compares consecutive tool results verbatim. What changed is that
+   * `read` now serves a window and states the offset that continues it, so the
+   * recovery is a *different* read rather than the same one. That half is
+   * measured in `read-paging.test.ts`, through the cap, because the cap is what
+   * made it a dead end.
    */
-  it("cannot recover the omitted middle by reading the saved copy", async () => {
+  it("returns the same string for a re-read with no offset", async () => {
     const raw = `${"A".repeat(2000)}SECRET_IN_THE_MIDDLE${"B".repeat(2000)}`;
 
     const capped = await capToolOutput(raw, opts());
     const savedPath = capped.match(/Full output: (\S+)/)?.[1];
     expect(savedPath).toBeDefined();
 
-    // Do exactly what the agent does: read the file, and cap it as the loop does.
     const reread = await capToolOutput(readFileSync(savedPath as string, "utf8"), opts());
 
     expect(reread).toBe(capped);
     expect(reread).not.toContain("SECRET_IN_THE_MIDDLE");
   });
 
-  it("does not send the agent to the saved copy to see more", async () => {
+  it("names the saved copy and the offset that resumes it", async () => {
     const capped = await capToolOutput("x".repeat(50_000), opts());
 
-    // The saved path is still named — it is how a *person* retrieves the full
-    // output — but it is not offered as the agent's way to see more.
     expect(capped).toMatch(/Full output: /);
+    // The exact next call. A model asked to compose the offset itself is a
+    // model that re-issues the call it already made.
+    expect(capped).toMatch(/read\(path="\S+", offset=\d+\)/);
     expect(capped).not.toMatch(/read the file above/i);
-    expect(capped).toMatch(/reading the saved copy, returns this same truncated result/i);
   });
 
   it("writes the full output to disk and points at it", async () => {
