@@ -48,7 +48,7 @@ import {
   unregisterRoomBackend,
 } from "@tailored-ai/core";
 import YAML from "yaml";
-import type { RecordedCall, RecordedRequest, RoomLine, RunOutcome, Scenario } from "./types.js";
+import type { RecordedCall, RecordedRequest, RoomLine, RunOutcome, RunUsage, Scenario } from "./types.js";
 
 export interface HarnessOptions {
   baseUrl: string;
@@ -169,7 +169,7 @@ class Recorder {
   responses = 0;
   /** Calls that only succeeded after a retry. Counted so throttling is visible, not silent. */
   retries = 0;
-  usage = { input: 0, output: 0 };
+  usage: RunUsage = { input: 0, output: 0 };
 
   wrap(provider: AIProvider, timeoutMs: number, maxAttempts = 5): AIProvider {
     const recorder = this;
@@ -196,6 +196,15 @@ class Recorder {
             if (attempt > 1) recorder.retries++;
             recorder.usage.input += response.usage.input;
             recorder.usage.output += response.usage.output;
+            // Only recorded when the provider reports it. vLLM returns
+            // `prompt_tokens_details: null`, and a 0 there would read as "the
+            // cache is not working" rather than "nobody said".
+            if (response.usage.cacheRead !== undefined) {
+              recorder.usage.cacheRead = (recorder.usage.cacheRead ?? 0) + response.usage.cacheRead;
+            }
+            if (response.usage.cacheWrite !== undefined) {
+              recorder.usage.cacheWrite = (recorder.usage.cacheWrite ?? 0) + response.usage.cacheWrite;
+            }
             for (const call of response.toolCalls ?? []) {
               recorder.calls.push({ name: call.name, args: call.arguments ?? {} });
             }

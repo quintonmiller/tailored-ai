@@ -31,6 +31,18 @@ export interface RecordedRequest {
   estimatedTokens: number;
 }
 
+/**
+ * `cacheRead` / `cacheWrite` are optional because most endpoints never report
+ * them — a cached read is priced in a third tier, so where it *is* reported it
+ * dominates the bill. Absent is not zero.
+ */
+export interface RunUsage {
+  input: number;
+  output: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+}
+
 export interface RunOutcome {
   reply: string;
   providerErrors?: string[];
@@ -39,7 +51,7 @@ export interface RunOutcome {
   posts: Array<{ room: string; body: string }>;
   requests: RecordedRequest[];
   latencyMs: number;
-  usage: { input: number; output: number };
+  usage: RunUsage;
   error?: string;
 }
 
@@ -74,6 +86,14 @@ export interface ReportMeta {
   judge: boolean;
   scenarioSetHash: string;
   durationSeconds: number;
+  /** Absent on reports written before it was recorded — derive from the runs. */
+  usage?: RunUsage;
+  /**
+   * What it cost at the rates in force when it ran, or null for an unpriced
+   * model. Recorded by the CLI, displayed here — never recomputed, so the page
+   * and the terminal cannot disagree about a bill.
+   */
+  cost?: { usd: number; rates: { input: number; output: number; cachedInput?: number; asOf: string } } | null;
 }
 
 export interface BenchmarkReport {
@@ -104,4 +124,8 @@ export interface RunSummary {
   score: BenchmarkReport["score"];
   /** Per-scenario pass rates, for the cross-model matrix. */
   rates: Array<{ id: string; category: string; passRate: number; runs: number; passed: number }>;
+  /** Totalled from meta, or from the runs on an older report. */
+  usage: RunUsage;
+  /** USD, or null when no price is known for the model. Never a guess. */
+  usd: number | null;
 }

@@ -13,7 +13,7 @@ import { notFound } from "next/navigation";
 import { Provenance } from "@/components/bench/Provenance";
 import { RateBar, toneForAggregate } from "@/components/bench/Rate";
 import { ScenarioList, type ScenarioView } from "@/components/bench/ScenarioList";
-import { formatNumber, knownGaps, readRun, runSlugs } from "@/lib/bench";
+import { formatNumber, formatUsd, knownGaps, readRun, runSlugs, usageOf, usdOf } from "@/lib/bench";
 import type { BenchmarkReport } from "@/lib/bench-types";
 
 export function generateStaticParams() {
@@ -72,12 +72,11 @@ export default async function BenchRunPage({ params }: { params: Promise<{ run: 
   const gaps = knownGaps();
   const scenarios = toView(report, gaps);
   const categories = Object.entries(report.score.byCategory).sort(([a], [b]) => a.localeCompare(b));
-  const totalTokens = report.scenarios.reduce(
-    (sum, scenario) =>
-      sum +
-      scenario.runs.reduce((runSum, r) => runSum + (r.outcome.usage?.input ?? 0) + (r.outcome.usage?.output ?? 0), 0),
-    0,
-  );
+  // Split, never summed. Input and output are priced an order of magnitude
+  // apart, so one combined figure cannot tell "the prompt got bigger" from
+  // "the model talked more" — and the first is what this benchmark is for.
+  const usage = usageOf(report);
+  const usd = usdOf(report);
   const retries = report.scenarios.reduce(
     (sum, scenario) => sum + scenario.runs.reduce((runSum, r) => runSum + (r.outcome.retries ?? 0), 0),
     0,
@@ -106,8 +105,20 @@ export default async function BenchRunPage({ params }: { params: Promise<{ run: 
       <section className="mb-10 rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-6">
         <Provenance meta={report.meta} />
         <div className="mt-5 border-t border-[var(--color-bg-tertiary)] pt-4 text-xs text-[var(--color-text-muted)]">
-          {formatNumber(totalTokens)} tokens · {retries} retr{retries === 1 ? "y" : "ies"} ·{" "}
-          {report.meta.judge ? "judge checks on" : "judge checks off"}
+          <span className="tabular-nums">{formatNumber(usage.input)}</span> tokens in
+          {usage.cacheRead !== undefined ? <> ({formatNumber(usage.cacheRead)} cached)</> : null} ·{" "}
+          <span className="tabular-nums">{formatNumber(usage.output)}</span> out ·{" "}
+          {usd === null ? (
+            <span title={`No price recorded for ${report.meta.model}`}>cost not priced</span>
+          ) : (
+            <span
+              className="tabular-nums"
+              title={`at $${report.meta.cost?.rates.input}/M in, $${report.meta.cost?.rates.output}/M out, as of ${report.meta.cost?.rates.asOf}`}
+            >
+              {formatUsd(usd)}
+            </span>
+          )}{" "}
+          · {retries} retr{retries === 1 ? "y" : "ies"} · {report.meta.judge ? "judge checks on" : "judge checks off"}
         </div>
       </section>
 

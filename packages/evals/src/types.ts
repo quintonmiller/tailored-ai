@@ -161,6 +161,26 @@ export interface RecordedRequest {
   estimatedTokens: number;
 }
 
+/**
+ * Tokens for one run, or totalled for a whole report.
+ *
+ * `cacheRead` / `cacheWrite` are optional because most endpoints do not report
+ * them. The local vLLM returns `prompt_tokens_details: null`; OpenAI-compatible
+ * hosted providers populate `prompt_tokens_details.cached_tokens`, which
+ * `providers/openai.ts` surfaces as `cacheRead`. A cached read is priced in a
+ * third tier — on some providers around 50× cheaper than an uncached one — so
+ * where it is reported it dominates the bill rather than decorating it.
+ *
+ * Absent is not zero, and the difference matters: reporting 0 cached tokens for
+ * a provider that never said would read as "the cache is not working".
+ */
+export interface RunUsage {
+  input: number;
+  output: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+}
+
 export interface RunOutcome {
   reply: string;
   /**
@@ -175,7 +195,7 @@ export interface RunOutcome {
   posts: Array<{ room: string; body: string }>;
   requests: RecordedRequest[];
   latencyMs: number;
-  usage: { input: number; output: number };
+  usage: RunUsage;
   error?: string;
 }
 
@@ -223,6 +243,24 @@ export interface BenchmarkReport {
     judge: boolean;
     scenarioSetHash: string;
     durationSeconds: number;
+    /**
+     * What the run cost, totalled from every recorded call.
+     *
+     * Split rather than summed, because input and output are priced an order of
+     * magnitude apart and a single "tokens" figure cannot separate *the prompt
+     * got bigger* from *the model talked more* — which have opposite fixes, and
+     * the first is the thing this benchmark exists to catch.
+     *
+     * Absent on reports written before this existed; derive it from the runs
+     * (`totalUsage`) rather than treating a missing field as zero.
+     */
+    usage?: RunUsage;
+    /**
+     * What it cost, at the rates in force when it ran, or `null` for a model
+     * with no known price. Recorded rather than derived so every surface shows
+     * the same bill and an old run keeps the rates it was actually billed at.
+     */
+    cost?: { usd: number; rates: { input: number; output: number; cachedInput?: number; asOf: string } } | null;
   };
   score: {
     overall: number;

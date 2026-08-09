@@ -14,6 +14,7 @@
  *   means chasing sampling every time.
  */
 
+import { formatUsd, totalUsage, usdOf } from "./cost.js";
 import type { BenchmarkReport } from "./types.js";
 
 export interface ComparisonRow {
@@ -110,6 +111,72 @@ export function compareReports(
   return { rows, added, removed, warnings };
 }
 
+/**
+ * How much the request has to move before it is worth saying.
+ *
+ * Sampling changes output length run to run, and a scenario that takes one
+ * extra tool round carries a whole extra request with it, so small moves are
+ * not evidence of anything. 5% is above that and well below the doubling this
+ * is meant to catch.
+ */
+const COST_THRESHOLD = 0.05;
+
+/**
+ * Report what the change did to the size of the request.
+ *
+ * This is the half of cost reporting that earns its keep: a prompt edit that
+ * doubles the input and leaves every pass rate alone is currently invisible,
+ * and it is exactly the failure this benchmark was built for — the invocation
+ * message growing without anyone deciding it should.
+ *
+ * Per-run, not per-total, so it survives a differing repeat count or a
+ * `--filter`ed run. Silent when the two are not comparable, since a token move
+ * between different models or different scenario sets says nothing about code.
+ */
+function printCostMove(before: BenchmarkReport, after: BenchmarkReport): void {
+  const runsOf = (r: BenchmarkReport) => r.scenarios.reduce((n, s) => n + s.runs.length, 0);
+  const beforeRuns = runsOf(before);
+  const afterRuns = runsOf(after);
+  if (!beforeRuns || !afterRuns) return;
+  if (before.meta.model !== after.meta.model) return;
+
+  const b = totalUsage(before);
+  const a = totalUsage(after);
+  const perRun = (u: { input: number; output: number }, runs: number) => ({
+    input: u.input / runs,
+    output: u.output / runs,
+  });
+  const bp = perRun(b, beforeRuns);
+  const ap = perRun(a, afterRuns);
+
+  const moves: string[] = [];
+  for (const [label, from, to] of [
+    ["input", bp.input, ap.input],
+    ["output", bp.output, ap.output],
+  ] as const) {
+    if (from === 0) continue;
+    const ratio = (to - from) / from;
+    if (Math.abs(ratio) <= COST_THRESHOLD) continue;
+    const sign = ratio > 0 ? "+" : "";
+    moves.push(
+      `${label} ${Math.round(from).toLocaleString()} → ${Math.round(to).toLocaleString()} per run (${sign}${Math.round(ratio * 100)}%)`,
+    );
+  }
+  if (!moves.length) return;
+
+  console.log("  request size:");
+  for (const move of moves) console.log(`    ${move}`);
+
+  // Read, never recomputed: a run is billed at the rates in force when it ran,
+  // and re-pricing an old one with today's table would invent a comparison.
+  const costBefore = usdOf(before);
+  const costAfter = usdOf(after);
+  if (costBefore !== null && costAfter !== null && beforeRuns === afterRuns) {
+    console.log(`    ${formatUsd(costBefore)} → ${formatUsd(costAfter)} for the run`);
+  }
+  console.log("");
+}
+
 export function printComparison(before: BenchmarkReport, after: BenchmarkReport): boolean {
   const { rows, added, removed, warnings } = compareReports(before, after);
   const pct = (n: number) => `${Math.round(n * 100)}%`.padStart(4);
@@ -137,6 +204,8 @@ export function printComparison(before: BenchmarkReport, after: BenchmarkReport)
     }
     console.log("");
   }
+
+  printCostMove(before, after);
 
   if (noise.length) console.log(`  ${noise.length} scenario(s) moved by one run — within noise at this repeat count.`);
   if (added.length) console.log(`  ${added.length} new scenario(s): ${added.join(", ")}`);

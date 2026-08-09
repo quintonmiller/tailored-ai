@@ -16,6 +16,7 @@ import { parseArgs } from "node:util";
 import YAML from "yaml";
 import { stripSeparator } from "./args.js";
 import { printComparison } from "./compare.js";
+import { costRecord, usageOfScenarios } from "./cost.js";
 import type { HarnessOptions } from "./harness.js";
 import { PAYLOAD_FILENAME, readWorkerResult } from "./protocol.js";
 import { printScenario, printSummary, score, verdict } from "./report.js";
@@ -309,6 +310,7 @@ async function cmdRun(argv: string[]): Promise<number> {
   });
 
   const finishedAt = new Date();
+  const runUsage = usageOfScenarios(results);
   const report: BenchmarkReport = {
     meta: {
       startedAt: startedAt.toISOString(),
@@ -324,6 +326,8 @@ async function cmdRun(argv: string[]): Promise<number> {
       judge: !!values.judge,
       scenarioSetHash: hash,
       durationSeconds: (finishedAt.getTime() - startedAt.getTime()) / 1000,
+      usage: runUsage,
+      cost: costRecord(runUsage, options.model),
     },
     score: score(results),
     scenarios: results,
