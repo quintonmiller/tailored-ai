@@ -47,6 +47,9 @@ jobs:
       - name: Local-reference guard (keep the repo free of one machine's paths)
         run: pnpm run guard:local-refs
 
+      - name: Benchmark cohort guard (published runs share one clean commit)
+        run: pnpm run guard:benchmark-cohort
+
       - name: Lint
         run: pnpm run lint
 

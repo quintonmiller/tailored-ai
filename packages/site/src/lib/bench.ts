@@ -23,7 +23,7 @@
  */
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import YAML from "yaml";
 import type { BenchmarkReport, PublishedRun, RunSummary } from "./bench-types";
 
@@ -34,9 +34,11 @@ import type { BenchmarkReport, PublishedRun, RunSummary } from "./bench-types";
 const EVALS_DIR = resolve(process.cwd(), "../evals");
 const RESULTS_DIR = join(EVALS_DIR, "results");
 const SCENARIOS_DIR = join(EVALS_DIR, "scenarios");
+const HISTORY_DIR = join(RESULTS_DIR, "history");
 
+/** Basename without extension, so an archived run routes the same as a current one. */
 function slugOf(filename: string): string {
-  return filename.replace(/\.json$/, "");
+  return basename(filename).replace(/\.json$/, "");
 }
 
 /**
@@ -47,7 +49,9 @@ function slugOf(filename: string): string {
  * answered, and the two disagreeing is worth being able to see.
  */
 function labelOf(slug: string): string {
-  return slug.replace(/^baseline-/, "");
+  // An archived run is named `<date>-<sha>-<model>`, so the same rule applies:
+  // strip the bookkeeping, keep what was benchmarked.
+  return slug.replace(/^baseline-/, "").replace(/^\d{4}-\d{2}-\d{2}-[0-9a-f]{7,}-/, "");
 }
 
 /**
@@ -71,6 +75,13 @@ function readReport(file: string): BenchmarkReport {
   return report;
 }
 
+/**
+ * The current cohort: one commit, clean tree, one run per model.
+ *
+ * `scripts/guard-benchmark-cohort.mjs` enforces that in CI, so the page can
+ * present these side by side as a statement about one version of the code
+ * rather than hedging about whether they are comparable.
+ */
 function reportFiles(): string[] {
   if (!existsSync(RESULTS_DIR)) {
     throw new Error(
@@ -81,6 +92,24 @@ function reportFiles(): string[] {
   return readdirSync(RESULTS_DIR)
     .filter((f) => f.endsWith(".json"))
     .sort();
+}
+
+/**
+ * Superseded cohorts, kept rather than overwritten.
+ *
+ * Re-baselining used to replace the file, which left the previous numbers only
+ * in git history where nothing reads them — so "is this model getting better or
+ * worse across commits" was unanswerable despite the data having existed. These
+ * are deliberately not held to the cohort rule: they are the record of what was
+ * true then, including the parts that were sloppy.
+ */
+function archivedFiles(): string[] {
+  if (!existsSync(HISTORY_DIR)) return [];
+  return readdirSync(HISTORY_DIR)
+    .filter((f) => f.endsWith(".json"))
+    .map((f) => join("history", f))
+    .sort()
+    .reverse();
 }
 
 /**
@@ -115,9 +144,8 @@ export function currentScenarioIds(): Set<string> {
   return ids;
 }
 
-/** Newest first. Summaries only — the full reports are hundreds of kilobytes each. */
-export function listRuns(): RunSummary[] {
-  const runs = reportFiles().map((file) => {
+function summarise(files: string[]): RunSummary[] {
+  const runs = files.map((file) => {
     const report = readReport(file);
     const slug = slugOf(file);
     return {
@@ -138,12 +166,29 @@ export function listRuns(): RunSummary[] {
   return runs;
 }
 
+/** The current cohort. Newest first. Summaries only — full reports are hundreds of kilobytes. */
+export function listRuns(): RunSummary[] {
+  return summarise(reportFiles());
+}
+
+/** Superseded cohorts, newest first. Same shape, so the same components render them. */
+export function listArchivedRuns(): RunSummary[] {
+  return summarise(archivedFiles());
+}
+
 export function runSlugs(): string[] {
-  return reportFiles().map(slugOf);
+  return [...reportFiles(), ...archivedFiles()].map(slugOf);
+}
+
+/** A slug routes to one file whichever directory it lives in. */
+function fileForSlug(slug: string): string {
+  const match = [...reportFiles(), ...archivedFiles()].find((file) => slugOf(file) === slug);
+  if (!match) throw new Error(`no benchmark report for "${slug}"`);
+  return match;
 }
 
 export function readRun(slug: string): PublishedRun {
-  const report = readReport(`${slug}.json`);
+  const report = readReport(fileForSlug(slug));
   return { slug, label: labelOf(slug), report };
 }
 

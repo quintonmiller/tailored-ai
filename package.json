@@ -9,6 +9,7 @@
     "guard:pre-v1": "node scripts/guard-pre-v1.mjs",
     "guard:runtime-deps": "node scripts/guard-runtime-deps.mjs",
     "guard:local-refs": "node scripts/guard-no-local-refs.mjs",
+    "guard:benchmark-cohort": "node scripts/guard-benchmark-cohort.mjs",
     "dev": "pnpm --filter @tailored-ai/core run build && pnpm --filter @tailored-ai/server run build && pnpm --filter @tailored-ai/cli run dev",
     "dev:msg": "pnpm --filter @tailored-ai/core run build && pnpm --filter @tailored-ai/server run build && pnpm --filter @tailored-ai/cli run dev -- --message",
     "dev:ui": "pnpm --filter @tailored-ai/ui run dev",
