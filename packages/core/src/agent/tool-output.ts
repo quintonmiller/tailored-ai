@@ -99,7 +99,21 @@ export async function capToolOutput(raw: string, opts: CapToolOutputOptions): Pr
     `[${opts.toolName} returned ${raw.length.toLocaleString()} chars — truncated to ${opts.limit.toLocaleString()}. ${reference}`,
     // Said explicitly because the obvious move for a model that got a partial
     // answer is to run the same call again, which returns this same string.
-    `Repeating this call returns the same truncated result. To see more, narrow the request — fewer results, a filter, a smaller page size — or read the file above.]`,
+    //
+    // This used to end "— or read the file above". That advice could never have
+    // worked: a `read` of the saved copy is capped by this same function at the
+    // same limit on the same input, so it returns a byte-identical string, and
+    // `read` has no offset to page past the cut (#466). Agents follow it anyway
+    // — measured at roughly two reads of the saved copy per run — so it is
+    // corrected rather than left standing.
+    //
+    // Rewriting it does not, on its own, change what the model does: at n=15 per
+    // arm the pass rate was 3/15 either way and the saved-copy reads did not
+    // drop. It is kept because the old sentence was false, not because it moved
+    // a number, and it is the same length. A third line spelling out the
+    // consequence was tried in the same experiment, measured nothing, and was
+    // dropped — a marker earns its size like any other prompt text.
+    `Repeating this call, or reading the saved copy, returns this same truncated result. To see more, narrow the request — fewer results, a filter, a smaller page size.]`,
     raw.slice(0, headChars),
     `... [${omitted.toLocaleString()} chars omitted] ...`,
     raw.slice(-tailChars),
