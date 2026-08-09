@@ -1,6 +1,6 @@
 export const SITE_NAME = "Tailored AI";
 export const SITE_DESCRIPTION =
-  "Agents that run on your schedule, with your tools. Local-first LLM agents with cron, shell, files, and channels that meet you where you are.";
+  "Agents that run on your schedule, with your tools. LLM agents with cron, shell, files, and channels that meet you where you are, on whichever model you point them at.";
 export const REPO_URL = "https://github.com/quintonmiller/tailored-ai";
 export const NPM_ORG_URL = "https://www.npmjs.com/org/tailored-ai";
 

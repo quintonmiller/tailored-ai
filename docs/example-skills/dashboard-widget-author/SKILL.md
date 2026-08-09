@@ -30,7 +30,7 @@ live dashboard. Both come from skipping these questions. Answer them first.
 |---|---|---|
 | is **already** at a `/api/…` endpoint (tasks, sessions, briefing, health, facts, collections, …) | config widget pointing at it | none |
 | is **user records you maintain** (a reading list, a watchlist, a collection, a habit log) | **persist it in an existing agent-writable store, then point a widget at that store's read API** | none |
-| needs **computation/integration no endpoint provides** (calls an external service, joins data) | a **new `/api/…` endpoint** — this is **core-repo (`autonomous-agent`) work**, not a config change | server |
+| needs **computation/integration no endpoint provides** (calls an external service, joins data) | a **new `/api/…` endpoint** — server code, not a config change | server |
 
 The middle row is the one people get wrong. You do **not** invent `/api/reading` or a
 "reading-tracker" renderer for a reading list. TAI already ships agent-writable stores
@@ -54,22 +54,27 @@ its read API.** That is the whole job — no new endpoint, no new renderer, no s
 - **Yes** (`status`/`metric`/`tasks`/`activity`/`list`/`markdown`/`links`/`iframe`) →
   config widget. **~90% of requests are this.** Done.
 - **No** — it needs a custom layout or interactivity no built-in type can express →
-  a **new renderer type**, which is a React component in the **UI bundle = core-repo
-  (`autonomous-agent`) work** (see "Repo boundary" below).
+  a **new renderer type**, which is a React component in the **UI bundle — code,
+  not config** (see "Config or code" below).
 
 If unsure, start with a config widget using `list`/`tasks`/`metric`/`markdown`.
 
-## Repo boundary — config is personal, code is core
+## Config or code — and whether you can change code here
 
-> **A widget *spec* is personal config; a widget's *renderer* and its *endpoint* are
-> core code.** Renderers live in `packages/ui/…` and endpoints in `packages/server/…`,
-> which exist **only in the `autonomous-agent` (TAI core) repo** — not in a `tai-personal`
-> config worktree. If you are working in a personal-config repo/worktree and the request
-> needs a new renderer type or a new `/api/…` endpoint, you **cannot** build it there.
-> Do **not** fake it with a markdown "stub" widget. Either (a) re-scope to a config
-> widget over an existing store (Q1 — almost always possible), or (b) hand it back /
-> file it as an `autonomous-agent` core task. Never leave a placeholder widget on the
-> live dashboard.
+> A widget **spec** is config: write it and the runtime reloads, nothing is built.
+> A widget's **renderer** and its **endpoint** are code — `packages/ui/…` and
+> `packages/server/…` — which means editing a source checkout and rebuilding it.
+>
+> **Check you can do that before you promise it.** You cannot when TAI was
+> installed as a package (`npm install -g @tailored-ai/cli`), because there is no
+> source tree to edit; nor when you are working somewhere that holds only config;
+> nor when you have no write access to the checkout. In any of those cases Step 2b
+> is closed to you, and no amount of trying will open it.
+>
+> When it is closed, do **not** fake it with a markdown "stub" widget. Either
+> (a) re-scope to a config widget over an existing store (Q1 — almost always
+> possible), or (b) hand it back as a change someone makes in a TAI checkout.
+> Never leave a placeholder widget on the live dashboard.
 
 ## Built-in renderer types
 
@@ -174,7 +179,7 @@ of your new `type` → check the Board.
 - **Never ship a stub.** If you can't build the real widget, do not leave a markdown
   placeholder ("This is a stub — the full version needs…") on the live dashboard. A
   stub is a silent failure: it looks done but isn't. Re-scope to a config widget over
-  an existing store (Q1), or escalate it as core-repo work. Nothing on the Board should
+  an existing store (Q1), or escalate it as a code change. Nothing on the Board should
   be fake.
 - **Reuse a store before inventing an endpoint.** For user records, `facts` or
   `collections` (Q1) almost always removes the need for any new `/api/…` route or
