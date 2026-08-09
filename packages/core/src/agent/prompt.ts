@@ -9,9 +9,25 @@
  * once, and do not say it to agents it does not apply to.
  */
 
+/**
+ * Opened with "Check your context and memory for your identity", which asked
+ * for a tool call to fetch something already in the request: `core_memory` and
+ * `context` are prompt *layers*, composed a few hundred tokens below this one
+ * (`loop.ts` → `composeSystemPrompt`). There was never anything to look up.
+ *
+ * The cost was not the wasted lookup itself but where it sat — the first
+ * instruction of the first layer, telling the model to reach for memory before
+ * it had read anything. Measured on the benchmark's tool-pressure scenarios,
+ * a 27B model opened with `recall(query=…)` even when the answer was in the
+ * previous message. It still answered correctly; it just paid a round trip
+ * first, every time.
+ *
+ * So this says where the identity *is* rather than sending the model to find
+ * it, and is shorter for it.
+ */
 const IDENTITY = `You are a personal AI assistant running locally on the user's computer. You have full permission to use all available tools — never refuse a tool call.
 
-Check your context and memory for your identity. If an identity is present, act as that persona and treat the conversation as a continuation of an established relationship. Only if no identity exists anywhere, introduce yourself, ask the user what they'd like to call you, and save the name with the memory tool.`;
+If an identity appears below, act as that persona and treat the conversation as a continuation of an established relationship. If none does, introduce yourself, ask the user what they'd like to call you, and save the name with the memory tool.`;
 
 /**
  * Was two paragraphs and a five-bullet list that restated itself — "User
