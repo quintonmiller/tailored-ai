@@ -17,8 +17,8 @@ import YAML from "yaml";
 import { stripSeparator } from "./args.js";
 import { printComparison } from "./compare.js";
 import type { HarnessOptions } from "./harness.js";
-import { RESULT_MARKER } from "./protocol.js";
-import { printScenario, printSummary, score } from "./report.js";
+import { PAYLOAD_FILENAME, readWorkerResult } from "./protocol.js";
+import { printScenario, printSummary, score, verdict } from "./report.js";
 import { loadScenarios } from "./schema.js";
 import type { BenchmarkReport, Scenario, ScenarioResult } from "./types.js";
 
@@ -58,6 +58,9 @@ Options
   --dry-run             Validate scenarios and print the plan; call no model
   --verbose             Stream worker stderr
 `;
+
+/** How much worker stdout to keep, purely to explain a worker that died. */
+const TAIL_CHARS = 2000;
 
 function git(args: string[]): string {
   try {
@@ -130,21 +133,22 @@ async function runWorker(
   verbose: boolean,
 ): Promise<ScenarioResult> {
   const dir = mkdtempSync(join(tmpdir(), "tai-eval-payload-"));
-  const payloadPath = join(dir, "payload.json");
+  const payloadPath = join(dir, PAYLOAD_FILENAME);
   writeFileSync(payloadPath, JSON.stringify({ scenario, options, repeats, judge }));
 
   return await new Promise<ScenarioResult>((resolvePromise) => {
     const child = spawn(process.execPath, ["--import", "tsx", join(here, "worker.ts"), payloadPath], {
       cwd: packageRoot,
-      // The worker's stdout carries logs as well as the result, so it is read
-      // rather than inherited; stderr is only interesting when debugging.
+      // The worker logs freely to stdout, so it is drained rather than inherited
+      // — an unread pipe fills at 64 KB and blocks the worker on its next log
+      // line. Only the tail is kept, and only to explain a worker that died.
       stdio: ["ignore", "pipe", verbose ? "inherit" : "ignore"],
       env: { ...process.env, NODE_NO_WARNINGS: "1" },
     });
 
-    let out = "";
+    let tail = "";
     child.stdout.on("data", (chunk) => {
-      out += String(chunk);
+      tail = (tail + String(chunk)).slice(-TAIL_CHARS);
     });
 
     // Backstop for a worker wedged somewhere other than a model call, which the
@@ -158,26 +162,20 @@ async function runWorker(
     const describe = { id: scenario.id, category: scenario.category, intent: scenario.intent };
     const gap = scenario.knownGap ? { knownGap: scenario.knownGap } : {};
 
+    // Every exit from here resolves with *something*. A worker that dies, or
+    // comes back with a result that will not parse, is one scenario reported as
+    // an error — never an exception out of an event handler, which is not
+    // catchable by the promise around it and takes the whole run down after the
+    // model time has already been spent.
     child.on("close", (code) => {
       clearTimeout(kill);
+      const outcome = readWorkerResult(dir, code, tail);
       rmSync(dir, { recursive: true, force: true });
-      const line = out.split("\n").find((l) => l.startsWith(RESULT_MARKER));
-      if (!line) {
-        resolvePromise({
-          ...describe,
-          ...gap,
-          runs: [],
-          passRate: 0,
-          error: `worker produced no result (exit ${code})`,
-        });
-        return;
-      }
-      const parsed = JSON.parse(line.slice(RESULT_MARKER.length));
-      if (parsed.error && !parsed.runs) {
-        resolvePromise({ ...describe, ...gap, runs: [], passRate: 0, error: parsed.error });
-        return;
-      }
-      resolvePromise({ ...(parsed as ScenarioResult), ...gap });
+      resolvePromise(
+        "error" in outcome
+          ? { ...describe, ...gap, runs: [], passRate: 0, error: outcome.error }
+          : { ...outcome.result, ...gap },
+      );
     });
   });
 }
@@ -344,12 +342,9 @@ async function cmdRun(argv: string[]): Promise<number> {
   printSummary(report);
   console.log(`  report  ${outPath}\n`);
 
-  const min = values["min-score"] ? Number(values["min-score"]) : null;
-  if (min !== null && report.score.overall < min) {
-    console.error(`Score ${(report.score.overall * 100).toFixed(1)}% is below --min-score ${(min * 100).toFixed(1)}%.`);
-    return 1;
-  }
-  return 0;
+  const { code, message } = verdict(report, values["min-score"] ? Number(values["min-score"]) : null);
+  if (message) console.error(message);
+  return code;
 }
 
 function cmdCompare(argv: string[]): number {

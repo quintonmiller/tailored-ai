@@ -38,6 +38,34 @@ export function score(scenarios: ScenarioResult[]): BenchmarkReport["score"] {
   return { overall: total ? passed / total : 0, passed, total, byCategory };
 }
 
+/**
+ * What the process should exit with, and why.
+ *
+ * Separate from `cmdRun` so it can be tested: `cli.ts` runs `main()` at import,
+ * so importing it from a test runs the benchmark.
+ *
+ * A scenario that errored is not a low score — it is a measurement that did not
+ * happen, and `score()` cannot express it (no runs means 0/0, which leaves the
+ * denominator rather than lowering the rate). Exiting non-zero is what stops a
+ * partial run being published as though it covered the set.
+ */
+export function verdict(report: BenchmarkReport, minScore: number | null): { code: number; message?: string } {
+  if (minScore !== null && report.score.overall < minScore) {
+    return {
+      code: 1,
+      message: `Score ${(report.score.overall * 100).toFixed(1)}% is below --min-score ${(minScore * 100).toFixed(1)}%.`,
+    };
+  }
+  const errored = report.scenarios.filter((s) => s.error).length;
+  if (errored) {
+    return {
+      code: 1,
+      message: `${errored} scenario(s) failed to run. The report was written, but it does not cover the whole set.`,
+    };
+  }
+  return { code: 0 };
+}
+
 function bar(rate: number, width = 20): string {
   const filled = Math.round(rate * width);
   return `${"█".repeat(filled)}${"░".repeat(width - filled)}`;
@@ -106,5 +134,21 @@ export function printSummary(report: BenchmarkReport): void {
   console.log(
     `  ${"SCORE".padEnd(width)}  ${colour(bar(s.overall), rateColour(s.overall))} ${colour(`${pct}%`, rateColour(s.overall))}  ${colour(`${s.passed}/${s.total} runs`, DIM)}`,
   );
+
+  // A scenario that errored has no runs, so it is 0/0 to `score()` — it does not
+  // lower the percentage, it silently leaves the denominator. Saying so next to
+  // the number is the difference between "the model scored 91%" and "the model
+  // scored 91% of the two thirds of the set that ran".
+  const errored = report.scenarios.filter((sc) => sc.error);
+  if (errored.length) {
+    console.log("");
+    console.log(
+      colour(
+        `  ${errored.length} of ${report.scenarios.length} scenario(s) did not run, and are not in that score:`,
+        RED,
+      ),
+    );
+    for (const sc of errored) console.log(`      ${colour("×", RED)} ${sc.id}: ${sc.error}`);
+  }
   console.log("");
 }
