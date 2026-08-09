@@ -336,7 +336,9 @@ agent:
   extraInstructions: ""
   temperature: 0.7
   maxToolRounds: 100
-  maxHistoryTokens: 20000${systemPromptLine}
+  # maxHistoryTokens caps the whole request. The default clears a normal tool
+  # set with room for the conversation; set it here if this model's window is
+  # smaller than the 32k default, or if you want to spend less per turn.${systemPromptLine}
 
 ${toolsBlock}
 

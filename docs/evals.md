@@ -142,8 +142,8 @@ A scenario asserting the behaviour we *want* rather than the behaviour we *have*
 carries `knownGap`:
 
 ```yaml
-- id: default-history-budget-keeps-the-conversation
-  knownGap: "#443 — the default `agent.maxHistoryTokens` sits below the tool-schema floor."
+- id: passes-on-social-chatter
+  knownGap: "#447 — whether an unprompted room should suppress chatter is an open question."
 ```
 
 It renders as a labelled row instead of a failure. Without it the first response

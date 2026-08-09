@@ -23,7 +23,7 @@ contain, in what order, or at what cost.
 | Worst room session | 152 user messages, **48 distinct**, 150,689 tokens |
 | Worst single block | one 1,115-token check-in prompt stored **23 times** |
 | Largest session overall | 9,283 messages / ~772k tokens, read from SQLite in full every turn, then trimmed to 110k |
-| `agent.maxHistoryTokens` | 110,000 in that deployment (code default: **2,000**) |
+| `agent.maxHistoryTokens` | 110,000 in that deployment (code default at the time: **2,000**, raised to 20,000 in #443) |
 
 Split every room session by author:
 
