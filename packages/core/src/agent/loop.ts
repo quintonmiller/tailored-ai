@@ -624,21 +624,38 @@ export function markDroppedHistory(history: Message[], trimmed: Message[]): Mess
 }
 
 /**
- * Safety net: if trimming dropped every user-role message, splice the
- * first one back in. Providers (vLLM, OpenAI, Anthropic) all reject
- * requests with no user message — we'd rather show a stale task prompt
- * than crash with "No user query found in messages." See Phase 7
- * (docs/agent-unification.md).
+ * Safety net: if trimming dropped every user-role message, splice one back in.
+ * Providers (vLLM, OpenAI, Anthropic) all reject requests with no user message
+ * — we'd rather show a stale prompt than crash with "No user query found in
+ * messages." See Phase 7 (docs/agent-unification.md).
+ *
+ * The one spliced back is the **most recent**, because what the model needs is
+ * the turn it is answering. This used to take the first, which is the same
+ * message in the case the net was written for — a task prompt followed by tool
+ * churn has exactly one user message — and the wrong one in any conversation.
+ *
+ * The scenario benchmark caught it on a session whose owner had changed their
+ * mind: the trim dropped every user message, the first one was spliced in as
+ * the current turn, and the model answered a maintenance date that had been
+ * retracted two turns later. It is reachable on any second round under history
+ * pressure, because round two ends on an assistant or tool message and the trim
+ * keeps only the last.
+ *
+ * The trade is real and small: a heavily-trimmed task session now shows the
+ * latest instruction rather than the original task. That is the newer of two
+ * bad options, and it is the one that matches what "the current turn" means.
  */
 function ensureUserMessagePresent(trimmed: Message[], original: Message[]): Message[] {
   if (trimmed.some((m) => m.role === "user")) return trimmed;
-  const firstUser = original.find((m) => m.role === "user");
-  if (!firstUser) return trimmed;
+  // findLast is ES2023; this file targets ES2022.
+  let latestUser: Message | undefined;
+  for (const msg of original) if (msg.role === "user") latestUser = msg;
+  if (!latestUser) return trimmed;
   // Insert after any leading system summary block so the chronology is
   // [system summary?, original task, ...kept turns].
   const insertAt = trimmed.findIndex((m) => m.role !== "system");
-  if (insertAt === -1) return [...trimmed, firstUser];
-  return [...trimmed.slice(0, insertAt), firstUser, ...trimmed.slice(insertAt)];
+  if (insertAt === -1) return [...trimmed, latestUser];
+  return [...trimmed.slice(0, insertAt), latestUser, ...trimmed.slice(insertAt)];
 }
 
 /** Validate tool arguments against the tool's parameter schema. Returns an error string or null if valid. */

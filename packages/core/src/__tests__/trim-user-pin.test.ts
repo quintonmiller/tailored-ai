@@ -27,6 +27,31 @@ describe("trim history — user-message pinning (vLLM-400 safety net)", () => {
     expect(trimmed.find((m) => m.role === "user")?.content).toBe("ORIGINAL TASK: do the thing");
   });
 
+  it("pins the message being answered, not the first thing ever said", () => {
+    // Found by the scenario benchmark, on a session whose owner had changed
+    // their mind. Trimming dropped every user message; the safety net spliced
+    // the FIRST one back in as the current turn, so the model was handed a
+    // statement that had since been retracted and answered it — confidently,
+    // with the cancelled date.
+    //
+    // The case the safety net was written for is a task prompt followed by
+    // tool churn, where there is exactly one user message and first and last
+    // are the same. They only differ in a conversation, which is where taking
+    // the first is wrong.
+    const messages: Message[] = [
+      userMsg("we booked the maintenance window for the 19th at 2am"),
+      asstMsg("The 19th at 2am, noted."),
+      userMsg("actually the 19th is out — we moved it to the 26th"),
+      asstMsg("Moved to the 26th."),
+      userMsg("remind me when the cutover is"),
+      asstMsg(""),
+    ];
+    const trimmed = trimHistory(messages, 1);
+    const pinned = trimmed.find((m) => m.role === "user");
+    expect(pinned?.content).toBe("remind me when the cutover is");
+    expect(trimmed.some((m) => m.content?.includes("the 19th at 2am"))).toBe(false);
+  });
+
   it("preserves all user messages when over budget by a bit", () => {
     const messages: Message[] = [
       userMsg("first task"),
