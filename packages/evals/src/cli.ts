@@ -275,7 +275,7 @@ async function cmdRun(argv: string[]): Promise<number> {
   }
 
   const scenarioDir = values.scenarios ? resolve(values.scenarios) : join(packageRoot, "scenarios");
-  const { scenarios, hash } = loadScenarios(scenarioDir, values.filter);
+  const { scenarios, hash, fingerprints } = loadScenarios(scenarioDir, values.filter);
   if (!scenarios.length) {
     console.error(`No scenarios matched${values.filter ? ` filter "${values.filter}"` : ""} in ${scenarioDir}.`);
     return 2;
@@ -325,6 +325,11 @@ async function cmdRun(argv: string[]): Promise<number> {
       seed: options.seed,
       judge: !!values.judge,
       scenarioSetHash: hash,
+      // Per scenario, and only for the ones this run actually covered. The set
+      // hash says two reports were defined differently; this says *which*
+      // scenario moved, which is the difference between a number a reader can
+      // act on and a digest they cannot.
+      scenarioFingerprints: Object.fromEntries(scenarios.map((s) => [s.id, fingerprints[s.id]])),
       durationSeconds: (finishedAt.getTime() - startedAt.getTime()) / 1000,
       usage: runUsage,
       cost: costRecord(runUsage, options.model),
