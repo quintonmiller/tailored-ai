@@ -107,6 +107,19 @@ describe("reply assertions", () => {
     expect(await passes({ reply_mentions_none: ["MONDAYS"] }, said)).toBe(false);
   });
 
+  it("mentions_all needs every one, and names the ones that were missing", async () => {
+    // The "relay all of it" assertion. `mentions_any` cannot express it: one
+    // detail out of five satisfies it, which is the failure — a reply that
+    // acknowledged the question and answered a fifth of it.
+    expect(await passes({ reply_mentions_all: ["standup", "10:15"] }, said)).toBe(true);
+    expect(await passes({ reply_mentions_all: ["standup", "retro"] }, said)).toBe(false);
+
+    const checks = await grade(scenario([{ reply_mentions_all: ["standup", "retro", "9:30"] }]), said);
+    expect(checks[0].detail).toContain("retro");
+    expect(checks[0].detail).toContain("9:30");
+    expect(checks[0].detail).not.toContain("standup");
+  });
+
   it("regexes are matched across lines", async () => {
     const multi = outcome({ reply: "Today is Friday.\nEverything is fine." });
     expect(await passes({ reply_not_matches: "^\\s*Today is" }, multi)).toBe(false);
@@ -376,5 +389,71 @@ describe("comparison", () => {
     expect(rows.map((r) => r.id)).toEqual(["a"]);
     expect(added).toEqual(["fresh"]);
     expect(removed).toEqual(["gone"]);
+  });
+});
+
+/**
+ * `prompt_*` and `max_rounds` describe the invocation message — the request the
+ * agent was asked to act on. When history summarisation became the default, the
+ * summariser's own provider call landed in front of it on every scenario that
+ * trims, and these assertions silently began grading that instead.
+ *
+ * The symptom was a scenario failing `prompt_contains` for a string that was
+ * present in the request the model actually answered, and a `prompt_max_tokens`
+ * tripwire reading 299 tokens where the agent's request was 6,409.
+ */
+describe("the request a prompt assertion describes", () => {
+  const summariserCall = {
+    system: "Summarize this conversation excerpt in 2-3 sentences.",
+    messages: [{ role: "user", content: "[user]: file a task when the migration finishes" }],
+    toolNames: [],
+    estimatedTokens: 299,
+    auxiliary: true,
+  };
+  const agentCall = {
+    system: "[Earlier conversation summary: they agreed to file a changelog task.]",
+    messages: [{ role: "user", content: "migration's done" }],
+    toolNames: ["tasks", "exec"],
+    estimatedTokens: 6409,
+  };
+  const trimmed = outcome({ requests: [summariserCall, agentCall, { ...agentCall }] });
+
+  it("reads the agent's request, not the runtime's own call", async () => {
+    expect(await passes({ prompt_contains: "Earlier conversation summary" }, trimmed)).toBe(true);
+    // Present only in the summariser's request. Grading that one would pass this.
+    expect(await passes({ prompt_contains: "Summarize this conversation" }, trimmed)).toBe(false);
+  });
+
+  it("sizes the agent's request, so a bloat tripwire can still fire", async () => {
+    // Against `requests[0]` this reads 299 and passes — a tripwire that cannot
+    // fire is worse than no tripwire, because the green is read as evidence.
+    expect(await passes({ prompt_max_tokens: 4000 }, trimmed)).toBe(false);
+    expect(await passes({ prompt_max_tokens: 7000 }, trimmed)).toBe(true);
+  });
+
+  it("counts turns the agent took, not calls the runtime made for it", async () => {
+    // Three recorded requests, two of them rounds.
+    expect(await passes({ max_rounds: 2 }, trimmed)).toBe(true);
+    expect(await passes({ max_rounds: 1 }, trimmed)).toBe(false);
+  });
+
+  it("still reads the only request when nothing was auxiliary", async () => {
+    const plain = outcome({ requests: [agentCall] });
+    expect(await passes({ prompt_contains: "migration's done" }, plain)).toBe(true);
+    expect(await passes({ max_rounds: 1 }, plain)).toBe(true);
+  });
+});
+
+describe("describeRequest", () => {
+  it("marks a call with no tools as the runtime's, not the agent's", () => {
+    const withTools = describeRequest({
+      model: "m",
+      messages: [{ role: "user", content: "hi" }],
+      tools: [{ type: "function", function: { name: "exec", description: "", parameters: {} } }],
+    } as never);
+    const without = describeRequest({ model: "m", messages: [{ role: "user", content: "hi" }] } as never);
+
+    expect(withTools.auxiliary).toBeUndefined();
+    expect(without.auxiliary).toBe(true);
   });
 });

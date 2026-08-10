@@ -7,6 +7,7 @@
  * `judge`, and it is opt-out for exactly that reason.
  */
 
+import { agentRounds, invocationRequest } from "./harness.js";
 import type { Assertion, CheckResult, RunOutcome, Scenario } from "./types.js";
 
 /**
@@ -41,7 +42,7 @@ function no(kind: string, detail: string): CheckResult {
 }
 
 function promptText(outcome: RunOutcome): string {
-  const first = outcome.requests[0];
+  const first = invocationRequest(outcome.requests);
   if (!first) return "";
   return [first.system, ...first.messages.map((m) => m.content)].join("\n");
 }
@@ -209,6 +210,14 @@ async function gradeOne(
       : no("reply_mentions_any", `none of [${assertion.reply_mentions_any.join(", ")}] in "${trim(reply)}"`);
   }
 
+  if (assertion.reply_mentions_all !== undefined) {
+    const lower = reply.toLowerCase();
+    const missing = assertion.reply_mentions_all.filter((s) => !lower.includes(s.toLowerCase()));
+    return missing.length === 0
+      ? ok("reply_mentions_all")
+      : no("reply_mentions_all", `missing [${missing.join(", ")}] from "${trim(reply)}"`);
+  }
+
   if (assertion.reply_mentions_none !== undefined) {
     const lower = reply.toLowerCase();
     const found = assertion.reply_mentions_none.filter((s) => lower.includes(s.toLowerCase()));
@@ -263,7 +272,7 @@ async function gradeOne(
   }
 
   if (assertion.prompt_max_tokens !== undefined) {
-    const tokens = outcome.requests[0]?.estimatedTokens ?? 0;
+    const tokens = invocationRequest(outcome.requests)?.estimatedTokens ?? 0;
     return tokens <= assertion.prompt_max_tokens
       ? ok("prompt_max_tokens")
       : no("prompt_max_tokens", `~${tokens} tokens > ${assertion.prompt_max_tokens}`);
@@ -274,7 +283,7 @@ async function gradeOne(
   // is done — the way a turn gets expensive without getting wrong, which no
   // pass rate can express.
   if (assertion.max_rounds !== undefined) {
-    const rounds = outcome.requests.length;
+    const rounds = agentRounds(outcome.requests);
     return rounds <= assertion.max_rounds
       ? ok("max_rounds")
       : no("max_rounds", `${rounds} model rounds > ${assertion.max_rounds}`);

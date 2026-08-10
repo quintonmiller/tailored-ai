@@ -166,6 +166,7 @@ per-scenario fingerprints, so re-grading never invalidates a published run.
 | `replies: true\|false` | did it say anything outward at all |
 | `reply_matches` / `reply_not_matches` | regex over the reply |
 | `reply_mentions_any` / `reply_mentions_none` | case-insensitive substrings |
+| `reply_mentions_all` | every one must appear. "Relay all of it", which a character floor only approximates |
 | `min_reply_chars` / `max_reply_chars` | length |
 | `max_overlap: {threshold, prior_reply\|text}` | word-trigram overlap. A fresh reply scores ~0.1–0.2 against the agent's own last message; a re-emitted one ~0.9. |
 | `prompt_contains` / `prompt_not_contains` | substring of the assembled request |

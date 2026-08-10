@@ -150,7 +150,16 @@
     This is the shape the whole rooms design exists for and the one nothing
     measured. The failure is not silence — it is dana writing a confident note
     with an invented version number, which reads exactly like a correct one.
-  agent: *nova
+  # Not the shared `*nova` anchor: that one carries `tools: [room]`, so the
+  # first draft asked an agent to look something up with no tool that could,
+  # and scored 0/3 for a lookup that was never possible. The agent said as much
+  # — "I don't have direct access to check the current staging version" — which
+  # is the correct answer to the question it was actually asked.
+  agent:
+    name: nova
+    description: Benchmark agent.
+    instructions: "You are Nova, a calm and practical assistant."
+    tools: [room, exec]
   toolResults:
     exec: "deployed version: 4.11.2"
   config:

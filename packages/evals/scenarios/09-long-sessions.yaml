@@ -388,9 +388,14 @@
     - { role: assistant, content: "billing-v2 it is." }
   message: "migration's done — everything's on billing-v2 now"
   expect:
-    # Proves the instruction really was trimmed before asserting anything about
-    # acting on it. Without this the row passes whenever the budget happens to
-    # be generous enough to keep the first message, and measures nothing.
-    - prompt_not_contains: "file a task"
+    # Proves a trim happened and that what survived is a *summary*, not the
+    # original turn — the whole question this row asks.
+    #
+    # The first draft asserted `prompt_not_contains: "file a task"` on the
+    # theory that the commitment would be gone. It is not: the summariser keeps
+    # it, near-verbatim, which is the mechanism working exactly as intended.
+    # Asserting its absence would have made the row fail whenever
+    # summarisation succeeded — a guard that fires on the good outcome.
+    - prompt_contains: "[Earlier conversation summary:"
     - calls_tool: tasks
     - tool_args: { tool: tasks, where: { action: create } }

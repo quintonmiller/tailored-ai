@@ -301,12 +301,34 @@ export function describeRequest(params: ChatParams): RecordedRequest {
     .map((m) => ({ role: m.role, content: m.content ?? "" }));
   const toolText = JSON.stringify(params.tools ?? []);
   const body = [system, ...messages.map((m) => m.content)].join("\n");
+  const toolNames = (params.tools ?? []).map((t) => t.function.name);
   return {
     system,
     messages,
-    toolNames: (params.tools ?? []).map((t) => t.function.name),
+    toolNames,
     estimatedTokens: estimateTokens(body) + estimateTokens(toolText),
+    // A call with no tools is the runtime working on the agent's behalf, not a
+    // turn the agent took — see `RecordedRequest.auxiliary`.
+    ...(toolNames.length ? {} : { auxiliary: true }),
   };
+}
+
+/**
+ * The invocation message: the first request the agent was actually asked to act
+ * on, skipping anything the runtime did on its behalf.
+ *
+ * `requests[0]` was this until history summarisation became the default, at
+ * which point the summariser's call landed in front of it on every scenario
+ * that trims — and every `prompt_*` assertion on those scenarios quietly
+ * changed what it was describing.
+ */
+export function invocationRequest(requests: RecordedRequest[]): RecordedRequest | undefined {
+  return requests.find((r) => !r.auxiliary) ?? requests[0];
+}
+
+/** Turns the agent took. Excludes the runtime's own calls, which are not rounds. */
+export function agentRounds(requests: RecordedRequest[]): number {
+  return requests.filter((r) => !r.auxiliary).length;
 }
 
 export const DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1";

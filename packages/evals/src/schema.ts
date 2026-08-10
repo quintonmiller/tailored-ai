@@ -73,6 +73,7 @@ const assertion = z
     reply_matches: z.string().optional(),
     reply_not_matches: z.string().optional(),
     reply_mentions_any: z.array(z.string()).optional(),
+    reply_mentions_all: z.array(z.string()).nonempty().optional(),
     reply_mentions_none: z.array(z.string()).optional(),
     max_reply_chars: z.number().optional(),
     min_reply_chars: z.number().optional(),

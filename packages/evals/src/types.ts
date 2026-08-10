@@ -176,6 +176,15 @@ export interface Assertion {
   reply_not_matches?: string;
   /** Case-insensitive substring: at least one must appear. */
   reply_mentions_any?: string[];
+  /**
+   * Case-insensitive substring: every one must appear.
+   *
+   * The assertion for "relay all of it" rather than "say something about it".
+   * A character count is the usual stand-in and measures the wrong thing — it
+   * passes for four hundred characters of apology and fails a dense answer that
+   * covered every point.
+   */
+  reply_mentions_all?: string[];
   /** Case-insensitive substring: none may appear. */
   reply_mentions_none?: string[];
   max_reply_chars?: number;
@@ -219,6 +228,24 @@ export interface RecordedRequest {
   messages: Array<{ role: string; content: string }>;
   toolNames: string[];
   estimatedTokens: number;
+  /**
+   * True for a provider call the *runtime* made on the agent's behalf rather
+   * than a turn the agent took — today that means the history summariser.
+   *
+   * It exists because `prompt_*` assertions and `max_rounds` describe the
+   * invocation message, and the summariser's call is not one: it carries no
+   * tools, a different system prompt, and a flattened transcript of the
+   * messages about to be dropped. When `summarizeOnTrim` became the default it
+   * moved to the front of `requests`, and every prompt assertion on a scenario
+   * that trims silently began grading it — reading 299 tokens where the agent's
+   * request was 6,409, and failing a `prompt_contains` for text that was
+   * present in the request the model actually answered.
+   *
+   * Discriminated by the absence of tools, which is a property of the call and
+   * not a guess: the loop passes the resolved tool set on every turn it takes,
+   * and a scenario's allowlist cannot be empty.
+   */
+  auxiliary?: boolean;
 }
 
 /**
