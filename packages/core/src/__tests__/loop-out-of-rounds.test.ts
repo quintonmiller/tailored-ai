@@ -182,6 +182,22 @@ describe("when the last ask cannot produce an answer", () => {
     expect(stop).toEqual({ kind: "max-rounds", rounds: 3, answered: false });
   });
 
+  it("turns thinking off for the final ask, whatever the turn was running", async () => {
+    // The failure this prevents, measured on the benchmark's
+    // `notices-a-truncated-tool-result`: with the turn's setting inherited, the
+    // final call spent the whole 8192-token budget on a reasoning trace and
+    // returned empty `content` in 3 of 5 runs — so the recovery handed back the
+    // very marker it exists to replace. Nothing is left to reason about here;
+    // everything the answer reports is already in the messages above it, and
+    // reasoning is charged against the budget the answer needs.
+    const provider = toolHungry();
+
+    await run(provider, [counter("look")], { thinking: "high" });
+
+    for (const req of provider.requests.slice(0, 3)) expect(req.thinking).toBe("high");
+    expect(provider.requests.at(-1)?.thinking).toBe("off");
+  });
+
   it("keeps the marker when the final call fails, rather than throwing", async () => {
     // The turn is already over; this was the salvage attempt. Turning a stall
     // into a rejected promise would break every caller to fix a reply.

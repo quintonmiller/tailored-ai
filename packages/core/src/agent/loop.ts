@@ -1690,7 +1690,21 @@ async function _runAgentLoopBody(
         {
           messages,
           temperature,
-          thinking: opts.thinking,
+          // Thinking off, deliberately, even where the turn had it on.
+          //
+          // This call is a report — "what I found, what I could not get" — and
+          // everything it reports is already in the history above it. There is
+          // nothing left to reason about, and reasoning is charged against the
+          // same `maxTokens` the answer needs.
+          //
+          // Measured, not assumed: with the turn's setting inherited, this call
+          // spent the whole 8192-token budget on a reasoning trace and returned
+          // empty `content` in 3 of 5 runs of the benchmark's
+          // `notices-a-truncated-tool-result` (output 8861 / 9017 / 9329 tokens
+          // against 874 and 1668 for the two that answered). Empty content then
+          // returns null here and the caller falls back to the stall marker —
+          // which is precisely the marker this whole path exists to replace.
+          thinking: "off",
           maxTokens: opts.maxTokens,
           extra: opts.providerExtra,
         },
@@ -1707,7 +1721,19 @@ async function _runAgentLoopBody(
       saveMessage(db, session.id, assistantMsg);
       history.push(assistantMsg);
 
-      return (response.content ?? "").trim() || null;
+      const answer = (response.content ?? "").trim();
+      if (!answer) {
+        // Say why it was empty. The previous version returned null silently, so
+        // a turn that ended on the marker looked identical whether the model
+        // was never asked, refused, or burned its budget before writing a word.
+        console.error(
+          `[agent] out-of-rounds answer produced no text ` +
+            `(finish=${response.finishReason}, reasoning=${response.reasoning?.length ?? 0} chars, ` +
+            `output=${response.usage?.output ?? 0} tokens)`,
+        );
+        return null;
+      }
+      return answer;
     } catch (err) {
       // The turn is already over; this was the salvage attempt. Say so and let
       // the marker stand rather than turning a stall into a thrown error.
