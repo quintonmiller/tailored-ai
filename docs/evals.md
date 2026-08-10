@@ -288,6 +288,44 @@ re-run. The per-run numbers were always there; only the total was missing.
 differing repeat count, and stays silent across different models — where a token
 difference is tokenizers and verbosity, not code.
 
+## Effort — the axis that keeps moving after the score stops
+
+A pass rate saturates. Once everything passes it has nothing left to say, and
+this set is already at 92.7%. So every run also reports what being right cost:
+
+```
+per run    1 rounds, max 7 · 1 tool calls, max 11 · 16.7s latency, max 3m 03s   (median)
+```
+
+**Median and max, never a mean.** The current cohort has 78 runs that make no
+tool call and two that make eleven; a mean says 1.4 and describes no run that
+happened. The gap between median and max *is* the tail, which is the part worth
+looking at.
+
+Nothing new is measured — every field was already in every report. `latencyMs`
+and `usage` are per run, `calls[]` is per run, and there is one `requests[]`
+entry per model round: `worker.ts` blanks the prompt text of a passing run but
+keeps the entry. So old reports read correctly without being re-run.
+
+`compare` diffs **rounds and tool calls** per run, with the same guards as the
+token move — silent across different models, and per run so a differing repeat
+count is not a finding — plus an absolute floor of half a unit, because 0.02 →
+0.04 tool calls per run is a 100% move and half a call across the whole set.
+
+**Latency is deliberately not compared.** It is dominated by what else was on
+the GPU: the same 59 scenarios took 20 minutes on a quiet box and over two hours
+beside a competing job. A diff of it would report the machine, not the change.
+It is printed, where a reader has the context to judge it; it is not a
+regression signal.
+
+Two per-scenario tripwires make effort *fail* a scenario rather than only
+appear next to it, the way `prompt_max_tokens` already does for request size:
+
+| | |
+|---|---|
+| `max_rounds` | model round-trips this turn may take |
+| `max_tool_calls` | tool calls it may make — calls, not distinct tools, since a turn that retries the same lookup twice cost what it cost |
+
 ## Running it against a deployment
 
 `--home <dir>` reads that instance's endpoint, model, temperature, `maxTokens`,
