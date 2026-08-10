@@ -1,6 +1,6 @@
 {
   "name": "@tailored-ai/provider-bedrock",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "AWS Bedrock model provider for Tailored AI agents. Ships as a register(ctx) plugin — install with `tai plugin install @tailored-ai/provider-bedrock`, list under `plugins:`, and select with `agent.defaultProvider: bedrock`.",
   "license": "MIT",
   "author": "Quinton Miller",

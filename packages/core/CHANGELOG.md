@@ -1,5 +1,2628 @@
 # @tailored-ai/core
 
+## 0.1.10
+
+### Patch Changes
+
+- b559646: Add `agents.<name>.fileBoundary` and room check-ins.
+
+  **`fileBoundary`** confines one agent's file and exec tools to a directory,
+  reusing the enforcement the task watcher already applies to coder/reviewer
+  worktrees. Needed because `tools.write.allowedPaths` is deployment-wide:
+  granting an agent `write` otherwise grants the whole filesystem, which is a poor
+  trade for an agent that reads untrusted web content. A leading `~` is expanded,
+  since the check is a path-prefix comparison and an unexpanded tilde would
+  confine the agent to a directory that does not exist.
+
+  **`checkInMinutes`** on a room subscription wakes an agent on a timer even with
+  no new messages, so it can act on time passing rather than only on being spoken
+  to. Agents set their own through `room(action="subscribe", check_in_minutes=N)`.
+  The check-in prompt offers `pass` first and asks for speech only when something
+  needs attention — a scheduled "nothing to report" is the politeness loop with a
+  clock attached. Floored at 5 minutes; the hourly wake ceiling still applies.
+
+- ef9e809: Agents can cap generated tokens per call with `maxTokens`.
+
+  `ChatParams.maxTokens` and the providers' `max_tokens` mapping both existed
+  already, but nothing populated them, so every agent request went out with the
+  field absent. Locally that costs nothing. On a metered provider it can make the
+  account unusable: OpenRouter reserves the model's full output window — 65536
+  tokens — against the balance for the duration of each call when `max_tokens` is
+  missing, and returns 402 as soon as the balance no longer covers the
+  reservation, however small the actual reply would have been. The symptom is a
+  provider refusing every request while the account is nominally in credit.
+
+  Resolution is `agents.<name>.maxTokens` → `agent.maxTokens` → omitted. Omitted
+  stays the default, so no existing deployment changes behaviour: picking a
+  number here would cap generation for everyone who never asked for one, and
+  providers already carry sensible defaults of their own.
+
+- a2f8016: Injected memory is scoped to the agent recalling it.
+
+  Auto-injection was scoped by project and global only, so any agent with
+  `injectMemory` read every other agent's notes and reported them as its own
+  recollection. Pinned notes were the expensive case: those inject regardless of
+  relevance, so one agent's pinned preference landed in every agent's prompt on
+  every turn. The symptom reads as a persona bug and is very hard to trace back to
+  scoping.
+
+  Nothing needed inventing. `scope` on the `MemoryBackend` contract was already
+  `string | string[]`, the SQLite backend's `parseScope` already understood an
+  `agent:<name>` token, and `notes` already had an `agent` column with a filter
+  behind it. The injection path simply never sent one.
+
+  An agent now recalls its own notes plus notes nobody claimed. That second half
+  matters: notes predating authorship, or written by an unnamed session, have a
+  null `agent`, and a strict match would have hidden every one of them from
+  everybody — a worse failure than the one being fixed.
+
+  A session with no agent name sends no token and keeps the cross-agent view it
+  had before, so nothing that cannot identify itself silently starts recalling
+  less.
+
+  Facts remain unscoped: the `facts` table has no `agent` column, only a free-text
+  `source`. That needs a migration and is tracked separately.
+
+- ed98f4a: Core: let an agent wake itself (`schedule` tool + `ScheduleRunner`)
+
+  Everything that could start a turn was authored by somebody else — cron jobs and
+  room check-ins by the operator in `config.yaml`, message and poll wakes by
+  traffic. So an agent that said "I'll check back after the deploy" was describing
+  something no part of the system would do. The nearest workaround,
+  `admin(action=update_config, path='cron.jobs')`, is a global operator config
+  write with no per-agent scope, no limits, no one-shot support, and it bounces the
+  cron scheduler on reload. `cron/schedule-dsl.ts` has said since it was written
+  that one-shot timestamps are out of scope there and tracked separately; this is
+  that.
+
+  **The tool.** One tool, four actions, following the `room` / `tasks` convention:
+
+  ```
+  schedule(action="once",   when="10 minutes" | "2026-08-08 10:00" | "tomorrow 9am", note="…")
+  schedule(action="repeat", every="weekdays at 9am" | "every 2 hours", note="…", starts=…, until=…)
+  schedule(action="list")
+  schedule(action="cancel", id="a3f1" | "a3f1,b7c2" | all=true)
+  ```
+
+  Every accepted booking echoes back the absolute time it resolved to, which is
+  worth more than any amount of parser cleverness: a model that meant tomorrow and
+  got today finds out in the same turn, while it can still fix it. A rejected call
+  answers with the grammar it wanted, because error text is the only documentation
+  a model reliably reads. A bare number is refused rather than guessed — "10" reads
+  equally as ten minutes and ten o'clock.
+
+  Recurrences reuse `compileSchedule` verbatim, so the phrases an operator learns
+  in `config.yaml` work at runtime too. Plain intervals ("every 2 hours", "every 3
+  days") are stored as elapsed time anchored to the start instead, because cron
+  cannot express phase: `every 2 hours` compiled to cron fires on even hours and
+  silently discards the start minute, which is not what an agent asking at 10:15
+  meant. Cron also cannot say "every 3 days" at all.
+
+  **Firing.** One poll tick over an indexed `next_run_at`, not a timer per
+  schedule. `setInterval` drifts and survives neither a restart nor a suspend nor a
+  clock jump; a due time in the database survives all three, and a wake missed
+  while the service was down fires on the next tick rather than evaporating. The
+  row is claimed — advanced out of the due set — _before_ the turn starts, so a
+  turn that outlasts several ticks cannot be re-fired underneath itself. Delivery
+  is at-most-once, which is the right side to fail on. A recurrence advances
+  strictly past now, so three hours of downtime costs one wake rather than three.
+
+  **Where a wake lands.** The room the turn was woken for, read from the working
+  memory the `room` tool already uses to scope `pass`; several rooms is a question
+  rather than a guess; no room falls back to the session. A room wake runs through
+  the new `RoomWatcher.runScheduledWake`, which shares `runCheckIn`'s tail, so it
+  inherits the per-room turn chain, `maxWakesPerHour`, the silence refund, `pass`
+  and repeat suppression — a self-booked wake is not a way around the deployment's
+  brakes. It is deliberately not routed through the `WakeQueue`: collapsing it into
+  a concurrent message wake would drop the note, and the note is the wake.
+
+  **Limits**, under a new top-level `schedules` block: `maxPerAgent` (20),
+  `minIntervalMinutes` (15), `maxHorizonDays` (365), `maxDeferrals` (3),
+  `tickSeconds` (30). The brake on a recurrence the agent has forgotten about is
+  not an expiry timer it never sees — every occurrence names its own id and run
+  count and says how to cancel itself. A pause skips recurring occurrences but
+  leaves one-shots due, so a commitment survives a pause and a heartbeat does not
+  need to.
+
+  Also here: `ScheduleStore.listDue` takes the time from its caller rather than
+  using `datetime('now')`, so the runner's injected clock is the only clock and the
+  timing rules are testable without waiting; `parseTime` and `DEFAULT_CONFIG` are
+  now exported; `RoomWatcher`'s private `runPrompted` returns whether it ran rather
+  than swallowing a ceiling refusal.
+
+  **Breaking (type-level):** `WakeReason` gains `"scheduled"`. Anything switching
+  exhaustively over it needs the new case.
+
+- b559646: Tolerate an agent's `tools` / `skills` written as a JSON string.
+
+  An agent that creates another agent writes JSON, because that is what models
+  emit — `tools: '["read", "memory"]'`. A string is iterable, so nothing rejected
+  it and `resolveAgent` walked it character by character, failing with
+  `unknown tool "["`. The agent looked created, passed every check, and only broke
+  the first time something tried to invoke it.
+
+  `loadConfig` now parses a JSON-array string into a real list (and says so), and
+  `validateConfig` reports any `agents.<name>.tools` that still isn't a list, by
+  name, at startup rather than at first use.
+
+- 920a799: agents: a bad tool name no longer takes the agent offline, and meta tools resolve
+
+  `resolveAgent` threw on any unrecognised name in an agent's `tools:` list. Two
+  consequences, both found in a log nobody was reading:
+
+  - `runtime.getTools()` returns the tool registry, but `buildLoopOptions` appends
+    meta tools (`admin`, `delegate`, `memory`, …) _after_ resolving — so naming one
+    in `tools:` was fatal even though the agent holds it at run time. Every
+    `resolveAgent` call site now resolves against `getResolvableTools()`: registry
+    plus meta, which is what the agent will actually have.
+  - A genuine typo (`trello`, or a stray `[`) is now skipped with a warning, once
+    per process, the way skill and `mcp_*` refs already were. In a room, throwing
+    meant the agent simply stopped answering, indistinguishable from having nothing
+    to say. `admin.update_config` refuses the write instead, which is the moment
+    someone is looking.
+
+- fecc3d8: ask_user: write the inbox outside the directory that is injected into every prompt
+
+  `ask_user` appended questions to `<contextDir>/global/inbox.md`. Everything in
+  `global/` is read verbatim into every agent's system prompt on every turn, so a
+  queue meant for one person doubled as a broadcast to all of them — and nothing
+  ever removed a question once answered.
+
+  Observed: five questions accumulated over three weeks, about a task archived in
+  May and a hotel booking already made, read by 27 agents on every turn for two
+  months. One eventually reported the hotel question as its own outstanding work.
+  At 2.4 KB the file was half the entire global context budget, and none of it was
+  true any more.
+
+  The inbox now lives one level up, at `<contextDir>/inbox.md`, where
+  `loadAllContext` does not look. Nothing else read it — the file is a write-only
+  queue plus a `question.asked` event — so delivery and the configured
+  `tools.ask_user.inboxFile` name are unchanged.
+
+- 2632f51: The base prompt now describes the agent it is addressed to
+
+  `BASE_SYSTEM_PROMPT` was a flat string constant, so two of its claims were told
+  to every agent whether or not they were true.
+
+  **"You are a self-modifying agent … creating new tools, adjusting settings"** went
+  to a `trip-researcher` and a `mail-sorter` as plainly as to a `supervisor`.
+  That instruction, plus `admin` being able to write `custom_tools.` and
+  `permissions.`, is the path by which an agent authored `temp: 0.3` into its own
+  config — a key that then parsed and did nothing.
+
+  It is now gated on `canSelfModify(resolved.tools)`, read from the agent's
+  **declared** `tools:` list. Reading the final tool set would not have worked:
+  `admin` and `resource_admin` are meta tools appended to every agent, so the flag
+  would be true for all of them and the paragraph would drop for nobody. There is
+  a test pinning that distinction. On the reference deployment this removes the
+  paragraph for 25 of 29 agents; the 3 that name `admin`, and any that declare no
+  `tools:` at all, keep it.
+
+  Nothing is revoked — the tool is still there and still callable when a task
+  needs it. It stops _encouraging_ agents whose job is something else.
+
+  **"When context files are loaded below, use them as ground truth"** is now:
+  context files are notes written earlier, not a live feed; prefer what a tool
+  reports now; check the date on anything time-sensitive. They are snapshots that
+  nothing invalidates, and that sentence is why a two-month-old question in
+  `inbox.md` was reported as live outstanding work by three separate agents.
+
+  The memory section restated itself across two paragraphs and five bullets and is
+  now three. Net: the base prompt is ~26% smaller for agents without `admin` and
+  slightly smaller for those with it. The history budget is
+  `maxHistoryTokens - systemPromptTokens`, so this buys back conversation.
+
+  New: `buildBaseSystemPrompt(opts)`, `canSelfModify(declaredTools)`,
+  `AgentLoopOptions.selfModifying`, and an optional second argument to
+  `resolveBase`. An explicit `systemPrompt.base` / `baseFile` override is still
+  returned verbatim — a deployment that wrote its own base owns every sentence in
+  it. `BASE_SYSTEM_PROMPT` remains exported and is now the no-self-modification
+  shape.
+
+- 9af06b7: Stop the base prompt sending agents to look up an identity that is already in the request
+
+  It opened with "Check your context and memory for your identity". But `context`
+  and `core_memory` are prompt _layers_, composed a few hundred tokens below the
+  base one — the identity is already in the request by the time the model reads
+  that sentence. There was never anything to look up.
+
+  The cost was not the wasted call so much as where the instruction sat: the first
+  line of the first layer, telling the model to reach for memory before it had
+  read anything. On the scenario benchmark, over 15 runs per arm against a 27B
+  model, the agent went from answering **0 times out of 15** with no tool call at
+  all to **5 out of 15**, and from opening with a memory lookup 5/15 to 2/15. The
+  full 58-scenario set moved no row beyond the noise floor.
+
+  The paragraph now says where the identity is instead of sending the model to
+  find it, and is shorter for it — which matters for text every agent pays for on
+  every turn.
+
+  Partial progress on the behaviour tracked in #446, not a fix for it: the
+  remaining calls are the agent _saving_ what it was told, which is the memory
+  paragraph working as written.
+
+- b8f5d16: Record prompt-cache tokens, so a change to request layout can be measured.
+
+  `ChatResponse.usage` carried `{ input, output }` only, and the Anthropic provider
+  sums cache reads and writes _into_ its input figure — so a perfect cache hit and
+  a completely cold read stored identical numbers. Prompt-cache behaviour is the
+  main reason to care about how a request is ordered, and nothing anywhere could
+  tell whether a change to it had helped or hurt.
+
+  `usage` now carries optional `cacheRead` / `cacheWrite`, `token_usage` stores
+  them as nullable columns, and `/api/usage` sums them.
+
+  Optional on purpose. Only some vendors report caching, and making every provider
+  invent a number would be worse than an honest absence: `undefined`, stored as
+  `NULL`, means "this provider does not say", which is a different fact from a
+  reported zero. A reported zero is itself a useful signal — it means the prefix
+  missed.
+
+  Reported alongside `input` rather than carved out of it, because vendors
+  disagree about whether cached tokens are already counted in the input total, and
+  subtracting centrally would double-correct for some of them.
+
+  Wired up: Anthropic (both), OpenAI Responses (read — the API reports no write,
+  and the field was already parsed and then dropped), and the built-in
+  `openai_compatible` provider when the server sends
+  `prompt_tokens_details.cached_tokens`. Every other provider reports nothing and
+  stores NULL, exactly as before.
+
+  Existing rows keep their values and stay NULL. Verified against a production
+  database of 12,471 usage rows.
+
+- aee6802: Bound how much of a tool result reaches the conversation.
+
+  Nothing capped tool results. Tool _descriptions_ were truncated at 300 chars
+  for local-model compatibility; results — the part that actually grows, and the
+  part that arrives from third-party servers whose response size is not ours to
+  choose — were unbounded.
+
+  Measured cost: one `mcp_notion_API-post-search` with `page_size: 50` returned
+  70,485 chars / 27,187 real tokens against an 18,800-token history budget.
+  `trimHistory` then evicted from the front until it fit, which meant evicting
+  the user's question, and `ensureUserMessagePresent` spliced the _first_ user
+  message back in — so the agent answered a welcome message from an hour earlier
+  and introduced itself. Three times in forty minutes. The symptom reads as an
+  agent with amnesia, never as an agent with a large tool result.
+
+  `loop.ts` already says exactly this about the `<context>` block — "the symptom
+  is an agent that forgets rather than an agent with a big prompt" — and guards
+  the system-prompt side of the budget. This is the same hole on the history
+  side, where it is worse: per-turn, unbounded, and remote.
+
+  Adds `agent.maxToolOutputChars` (default 32000, `0` disables) with a per-tool
+  override at `tools.<id>.maxOutputChars`. Because the lookup is by resolved tool
+  name and `tools:` is an open map, MCP tools can be named there as
+  `mcp_<server>_<tool>` even though discovery never keys them.
+
+  The cap runs at the single `ToolResult`-to-string conversion in
+  `executeToolCall`, so builtin, custom, plugin and MCP tools are covered by one
+  check, upstream of `onToolResult`, the tool Message, `saveMessage()` and the
+  repeat detector. Over the limit, the result becomes a head+tail summary led by
+  a marker naming the tool, its real size, and a path to the full output — and
+  saying that repeating the call returns the same truncated string, since running
+  it again is the obvious move for a model handed a partial answer.
+
+  Two properties the tests pin. The result is byte-identical for identical input
+  (the scratch file is content-addressed, not timestamped) because the loop's
+  stuck-model detector compares consecutive results verbatim and a unique path
+  would silently disable it — the guard that catches a model re-issuing the call
+  that got truncated. And a scratch-write failure still truncates, rather than
+  falling back to the full string and reinstating the blowup.
+
+- 9d32c15: Rooms: charge a turn that spoke through the `room` tool for its wake
+
+  `maxWakesPerHour` is the brake on two agents talking each other into the
+  ground, and a turn whose only tool call was `room(action="post")` was handed its
+  wake straight back. It spoke, it armed the next agent's wake, and it paid
+  nothing — so the ceiling was disengaged for exactly the traffic it exists to
+  bound.
+
+  Each piece was individually right. `usedTools` excludes the whole `room` tool so
+  that `pass` reads as the silence it is. `deliverReply` stands down when the tool
+  already posted, because otherwise "I called `room(post)` and then summarised
+  what I did" appears in the channel twice. The refund reads both and concluded
+  the turn had been silent. It had not.
+
+  The incentive was backwards too: an agent that returned plain text and let the
+  watcher post it was charged, while an agent using the tool as documented — the
+  only way to address someone, set `notify`, or post to a room it did not wake in
+  — was not.
+
+  Now a turn counts as having spoken if the watcher delivered a reply _or_ any
+  `room:posted:` marker is set. `usedTools` is deliberately untouched: making
+  `post` set it would charge the wake but also reset `agent_turns` on every tool
+  post, holding the conversation-depth cap open forever and removing the other
+  brake while fixing this one. A post the notification gate suppressed still reads
+  as silence, since the marker is written only once the backend accepts the
+  message.
+
+- 8b0c45a: A check-in charges one wake against `maxWakesPerHour`, not two.
+
+  `runCheckIn` called `tryConsumeWake` as a cheap pre-flight and then handed off to
+  `runPrompted`, which calls it again — so every check-in spent two of the hourly
+  allowance. A check that spends the thing it is checking is not a pre-flight.
+
+  The effect was invisible and the arithmetic misleading: a room budgeted for one
+  hourly check-in plus eleven turns of real conversation actually got one check-in
+  plus ten, and an operator setting the number was wrong by however many of the
+  wakes were check-ins.
+
+  `runPrompted` is the shared gate every prompted turn passes through and is now
+  the only place the charge happens, which is what `runScheduledWake` already
+  relied on.
+
+- f67b15a: Stop the compaction checkpoint saving the transcript back to itself.
+
+  The first real run of the memory checkpoint reported twelve durable facts saved.
+  Ten of them were lines like `[tool]: saved note_6c0a6ccf`, copied straight out
+  of the transcript it had just been shown.
+
+  Tool results are the most copy-shaped text in a conversation and carry nothing
+  worth remembering — they record that a call happened, not anything about the
+  people in it. They are now stripped before the checkpoint call, and any output
+  line still wearing a `[tool]:` / `[user]:` / `[assistant]:` prefix is rejected as
+  quoted history rather than a fact the model chose to keep.
+
+  Worth noting how this was found: the return value said `notesWritten: 12` and
+  every test passed. Only reading the twelve rows showed they were garbage.
+
+- 7447619: Add `/clone-agent` — copy an agent's configuration to a new name, and nothing else.
+
+  ```
+  /clone-agent from:iris to:juno
+  ```
+
+  Done by hand this is one copy and three checks: duplicate the block under
+  `agents:`, then confirm the copy has no core memory, no sessions, no notes and
+  no room subscriptions. The checks are the point — the interesting failure is
+  the silent one, a "fresh" clone that inherited the original's persona or woke up
+  in the original's rooms and answered as if it had been there all along. Only
+  configuration travels; everything an agent has lived is keyed by its name and
+  stays behind. The reply reports both halves: the fields carried over, one line
+  each, and what was deliberately left, so nobody has to trust that the clone is
+  actually blank.
+
+  The source definition is read registry-first, the same precedence `resolveAgent`
+  uses. An agent already migrated to
+  `data/authored-resources/agent/<id>/manifest.yaml` still has its old block
+  sitting in `config.yaml`, and cloning that block would copy what the agent used
+  to be — wrong in fields that still parse, so nothing would complain. The reply
+  says which one it read.
+
+  The write goes through `updateRawConfig`, so a clone that would introduce config
+  that parses but is never read is refused with the file untouched and the reasons
+  returned. Every other refusal — unknown source, a target name outside
+  `[A-Za-z0-9_-]+`, a target that already exists in the registry or in
+  `config.yaml` — also happens before anything is written.
+
+  No restart is needed: `updateRawConfig` reloads the runtime and `resolveAgent`
+  falls back to `config.agents`, so the clone answers immediately. It is a
+  top-level command rather than a subcommand of `/agent`, because `/agent` already
+  carries a required top-level option and Discord forbids a command having both
+  options and subcommands.
+
+- fd84749: security: close the config-to-host-shell path (#279, #280)
+
+  `admin` is a meta tool appended to every agent, so whatever its config allowlist
+  permits, every agent can do. That allowlist included `custom_tools.`, and
+  `CustomTool.execute` discarded its `ToolContext` — the parameter was literally
+  named `_context` — ending at `bash -c` on the host with no boundary check and no
+  sandbox routing.
+
+  So an agent could write itself a shell-backed tool and call it in the same run
+  (tools re-resolve every round). For an agent with `sandbox: docker` that was a
+  complete container escape, and it was also a write path into the context
+  directory injected into every agent's prompt. No adversarial intent required:
+  one agent asked, in a room, whether it should point a tool at the host's binary
+  because its container lacked one. That would have worked, and nothing would have
+  reported it.
+
+  Three changes:
+
+  - **`custom_tools.`, `permissions.` and `context.` are no longer agent-writable
+    config paths.** `permissions.` was the approval gate governing the write
+    itself; `context.` redirects where prompt-injected files are read from. A
+    human editing config.yaml can still set all three.
+  - **`CustomTool` honours its context**, applying the same parent-repo boundary
+    check as `exec` and routing through the sandbox when one is attached. The
+    load-bearing half is the sandbox: a sandboxed agent's custom-tool commands now
+    run inside the container.
+  - **`create_tool` no longer adds the new tool to the calling agent's `tools:`
+    list.** Creating a tool and being allowed to run it are separate decisions;
+    self-granting collapsed them, so an agent without `exec` could obtain shell it
+    was never granted. The tool is still created, and the result says plainly that
+    the grant is a human's to make.
+
+- b559646: collections: add an agent-writable `collections` tool and open the `type` to a free,
+  normalized label (was a hard-coded enum). An agent can now `add`/`list`/`stats`/`remove`
+  collection items (restaurants, books, board games, …) and surface them on the Board with
+  a config-only `list`/`collections` widget — no new endpoint or renderer. `getCollectionStats`
+  now returns a generic `{ byType, total }` shape, and a guarded migration rebuilds older
+  DBs that still carry the legacy `CHECK(type IN …)` constraint, preserving rows.
+- d9e294f: Use the summariser prompt that actually measured best.
+
+  The default shipped in the previous change was the worst of four variants when
+  run against the 1,432-message history it was written for. Scored on named
+  specifics and quoted phrasing:
+
+  | prompt                                                | chars   | names | quoted |
+  | ----------------------------------------------------- | ------- | ----- | ------ |
+  | "…the people, the specifics, and where things stand"  | 1574    | 32    | 3      |
+  | "…key facts, decisions, and pending tasks"            | 1428    | 38    | 3      |
+  | "in detail." alone                                    | 1420    | 20    | 0      |
+  | **the shipped default, enumerating what to preserve** | **707** | **1** | 1      |
+
+  Enumerating what to keep appears to read as a checklist to satisfy briefly
+  rather than an invitation to write — the third time a more prescriptive version
+  of this prompt lost to a plainer one. The new default names a few neutral
+  categories, which beat naming none, and avoids the work-flavoured nouns that
+  made a companion's history read like a standup report.
+
+- b1ec29a: config: stop agent settings from parsing, persisting, and doing nothing
+
+  Three fixes for the same disease — config that looks installed and is never read.
+
+  - **`validateConfig` now checks keys inside an agent block**, with a "did you
+    mean" for near misses. Only top-level keys were checked (#252), on the grounds
+    that nested bags are open — but an agent block is a typed record, not a bag.
+    Four agents in one deployment carried their entire persona under
+    `system_prompt:` instead of `instructions:`. It parsed, it round-tripped into
+    their manifests, and it reached nothing: they ran with an empty instructions
+    layer for weeks, and the only symptom was vague answers.
+  - **`parseAgentData` no longer drops fields it forgot to list.** It copied an
+    allowlist while its own docstring promised that unknown fields pass through.
+    `fileBoundary`, `roomSessionScope`, `injectMemory`, `budgetWarnings`,
+    `thinking` and the memory-injection budgets were all discarded between the
+    manifest and the loop. Concretely: three agents holding `write` and `edit` ran
+    with a declared filesystem boundary that did nothing, and thirteen agents that
+    set `injectMemory: true` never received an injected memory. Known fields now
+    pass through; unknown ones warn.
+  - **The `<context>` layer warns when it gets large.** It is the only uncapped
+    part of the system prompt, and nothing truncates it — it comes out of the
+    history budget instead, so the symptom is an agent that forgets rather than an
+    agent with a big prompt. Warned once per agent per process rather than
+    truncated: cutting a context file mid-sentence is a silent loss, and which
+    file to drop is not a judgement this code can make.
+
+- fd19549: Config values are checked against the type their field is declared as, at load and at every runtime write.
+
+  `AgentConfig` is a TypeScript interface, so it is erased at runtime and there was
+  nothing left to compare a parsed value against. `validateConfig` is a _semantic_
+  checker — this tool needs an api key, that agent references a tool nobody
+  enabled — and none of that goes away; what was missing is the layer in front of
+  it. The failure mode it left open is the worst kind: the file parses, it reads
+  correctly to a human, and the setting does nothing.
+
+  ```yaml
+  cron:
+    jobs:
+      - name: nightly-sweep
+        enabled: "false" # quoted
+  ```
+
+  `scheduler.ts` asks `job.enabled !== false`, and `"false" !== false`, so the job
+  stayed scheduled. An agent had been asked to disable it, wrote exactly that, and
+  reported "Done". It ran four more times over the next six hours while the log
+  said "Skipping disabled job" for the four jobs whose flags were real booleans.
+  The finding now names the inversion: _"`enabled` must be a boolean, got the
+  string "false". The quotes make it text. A non-empty string is truthy, so this
+  currently reads as `true`. Write `false` without them."_
+
+  Reported at startup alongside the existing warnings, and — through
+  `findInertConfig` (renamed from `findUnknownKeys`, which stays as a deprecated
+  alias) — enough to **refuse a runtime write** that would introduce one. Refusing
+  is the half that matters: a startup warning is a warning nobody reads six hours
+  later, while a rejected write answers the agent that got it wrong, still holding
+  the pen. As before, findings are diffed against a pre-write snapshot, so a
+  pre-existing one never blocks an unrelated write.
+
+  The stronger driver was drift. `AgentDefinition`'s field list existed in three
+  hand-maintained copies — the interface, `KNOWN_AGENT_KEYS`, and
+  `AGENT_DEFINITION_FIELDS` — kept in step by a docstring asking you to. When they
+  were not: `fileBoundary` never reached `toolContextExtras`, so three agents
+  holding `write` and `edit` ran with a declared filesystem confinement that did
+  nothing, and thirteen agents set `injectMemory: true` and never got a single
+  injected memory. All three now derive from one zod schema, and a
+  `Identical<z.infer<typeof Schema>, AgentDefinition>` assertion fails the build if
+  the schema and the interface disagree by so much as an optional field. The
+  interface is kept rather than inferred, because inferring it would delete every
+  doc comment on it — the only place the _why_ of a field is recorded.
+
+  Scope: `AgentDefinition` and `CronJobConfig` are checked field by field.
+  `tools.*`, `channels.*` and `mcp.servers.*` are open bags holding plugin config
+  that core must never know the shape of, so only `enabled` is judged there — the
+  one field they all share, and one that enables what it claims to disable when
+  it arrives quoted.
+
+  Also fixes a privileged built-in that fell out of the old hand-written checks:
+  `parseAgentData` rejected any `sandbox` other than `host`/`docker`/`podman`, so
+  an agent naming a plugin-registered kind failed to load at all. Sandbox kinds
+  come from an open registry and `createSandbox` already validates against the
+  live one, with a "Known: …" message, at the point of use.
+
+  Adds `zod` as a dependency of `@tailored-ai/core`.
+
+- a38b5fc: Refuse a config write that would land keys nothing reads.
+
+  There were twelve runtime paths writing `config.yaml` — three in the admin
+  tool, seven HTTP routes, a plugin tool, and the setup TUI — each hand-rolling
+  read → mutate → stringify → write → reload with its own idea of what to check
+  first. The strongest checked a YAML round-trip and the agent's tool references.
+  The weakest, `PUT /api/config`, wrote the request body to disk without parsing
+  it; since `runtime.reload()` swallows its own failures, that route answered
+  `200 {"ok":true}` on unparseable YAML while the process kept serving the
+  previous config, and the damage only surfaced at the next restart.
+
+  The gap they shared: none of them ran `validateConfig`. So an agent could
+  create another agent with `name:` and `temp:` instead of `temperature:`, and
+  every layer accepted it — the write, the round-trip, the manifest export. The
+  agent ran at the default temperature for a day. `validateConfig` had detected
+  exactly this since #252; it just ran at startup, into a log, after the fact.
+
+  Adds `config-write.ts` with `updateRawConfig` and `writeRawConfigText` as the
+  single door, and routes the admin tool and every server route through it. A
+  write that would introduce config which parses but is never read is refused
+  with the offending key named and a suggestion ("Did you mean `temperature`?"),
+  and the file is left untouched.
+
+  Two decisions that keep the gate from becoming a lockout. Writes are judged on
+  the findings they _introduce_, compared against a pre-write snapshot, so a
+  deployment's unrelated pre-existing warnings can't make its config permanently
+  unwritable. And only unknown keys refuse — they are never transient and the
+  author is right there; everything else `validateConfig` reports comes back as
+  `warnings` for the caller to surface.
+
+  Also fixes `updateRawConfig` refusing to patch a config it could not parse
+  rather than overwriting it, and makes `create_agent` accept the `value`
+  parameter its own schema advertises.
+
+- 1206560: Compaction's wording, length and memory checkpoint are the deployment's call.
+
+  The built-in summariser asked for a summary "concisely", of "key facts,
+  decisions, and pending tasks", with no length cap at all. Measured against a real
+  1,432-message companion history that produced **88 tokens**. The identical line
+  with "in detail" produced **475** — and not by padding: six times the named
+  specifics, and quoted phrasing where the short one quoted none. One word was
+  discarding most of the history.
+
+  The noun list was the second half of the problem. "Facts, decisions and pending
+  tasks" is a project-status framing sitting in core, which is why five days of a
+  companion's history came back formatted as `Participants:` / `Key Events:`. A
+  deployment knows what its conversations are for.
+
+  New in `compaction` config and `CompactOptions`:
+
+  - `prompt` — what the summariser is asked for. The built-in default no longer
+    says "concisely" and no longer enumerates work nouns.
+  - `maxTokens` — passed through to the provider. Previously nothing was, so the
+    length of every summary was accidental rather than chosen.
+  - `memory: { agent }` — before anything is hidden, ask the model what must
+    survive and write each line as a note scoped to that agent.
+
+  The checkpoint is the more durable half. A summary is one block every later turn
+  carries regardless of relevance; a note is retrieved when it matches the
+  conversation, so the history that comes back is the history that applies. It runs
+  before the originals are hidden, and a checkpoint that fails is logged while
+  compaction continues — refusing to compact would leave the session growing, which
+  is the problem being solved.
+
+  `session.compacted` gains `notesWritten`.
+
+- 0a3b591: Contribute a block of context without knowing the prompt layout.
+
+  `systemPrompt.order` / `.custom` can express any layout but demands you
+  understand the whole one — and until recently, adding one block meant
+  enumerating all seven built-in layers and silently switching off the tail while
+  you were at it.
+
+  A slot is the other half of that seam. The author answers one question — does
+  this change between turns? — and core decides everything else:
+
+  ```ts
+  registerContextSlot({
+    id: "on-call",
+    refresh: "turn", // "reload" → system prompt; "turn" → behind the history
+    budgetTokens: 200,
+    agents: ["*"],
+    render: (ctx) => whoIsOnCall(),
+  });
+  ```
+
+  or in config, with no code, via `prompt.slots` — where a `file:` slot is re-read
+  each turn, so an edit lands without a restart.
+
+  Core owns placement, ordering, budget enforcement (it truncates and says that it
+  truncated), agent scoping, and failure isolation: a slot that throws is skipped,
+  warned about once, and the turn continues.
+
+  The per-turn group renders as one contiguous block, which is a requirement
+  rather than a preference — the Anthropic history cache breakpoint targets
+  `messages.length - 2` and assumes exactly one volatile trailing message.
+
+  There is deliberately no `refresh` value that appends to the conversation
+  record. A slot is a view, rendered fresh and replacing last turn's copy; adding
+  one and rewriting history are different acts, and the second belongs to a
+  composer.
+
+  `DEFAULT_LAYER_ORDER` gains `slots_standing` and `slots_state`, and
+  `DEFAULT_TAIL_LAYERS` gains `slots_state`. A deployment that pins `order`
+  explicitly keeps working and simply renders no slots until it names them.
+
+- dc312f1: context: make the oversized-context warning configurable, and stop it crying wolf
+
+  The size warning was hardcoded at 750 tokens and quoted CLAUDE.md's "~500 tokens
+  for local models" guideline. That guideline assumes a small window; a deployment
+  running a 200K-token model and deliberately preferring specific, detailed context
+  over letting agents guess is making a choice, not a mistake — and a warning that
+  fires on a correct configuration is one people learn to ignore.
+
+  `context.warnTokens` now sets the threshold (default 4000, 0 disables), and the
+  message says what the number actually costs — context is never truncated, so it
+  comes out of the history budget instead and shows up as an agent that forgets.
+
+- 5a01ceb: Add a built-in `edit` tool for surgical, exact-match file edits. Agents previously
+  had only whole-file `write`, so changing a large existing file meant regenerating
+  it — impractical, and coding agents would stall on it. `edit` replaces an exact
+  `old_string` with `new_string` (unique unless `replace_all`), mirroring the
+  read/write tools' path resolution, sandbox boundary, allowlist, and sandbox-aware
+  IO. Enabled by default (`tools.edit`), opt-out with `enabled: false`; inherits
+  `tools.write.allowedPaths` when its own allowlist is unset.
+- b1cdad9: Tool schemas count against the history budget.
+
+  `historyBudget` subtracted the system prompt and the volatile tail from
+  `maxHistoryTokens`, then the request went out with the tool definitions on top,
+  unmeasured. They travel in their own request field rather than as a message, and
+  everything that estimated size walked the message list — so nothing ever looked
+  at them. The model reads every byte regardless.
+
+  Measured on a production deployment: 42 tools serialise to about 10,857 tokens,
+  roughly a 10% overshoot on a 110,000-token budget, paid on every request. A
+  13-tool agent pays about 3,852.
+
+  Nothing overflowed, because the primary model's window was well above the
+  configured budget — this shows up as cost rather than as failure. It matters
+  most on fallback, where each rung re-fits history against its own
+  `maxContextTokens` using the same arithmetic and is handed the identical
+  schemas, against a window that is usually much tighter.
+
+  The estimate is recomputed per round rather than once per turn, because
+  `getTools()` re-resolves per round and a turn can gain or lose tools mid-flight.
+
+  Deployments running close to their budget will see slightly more history trimmed
+  than before. That is the correction: the request was already this large.
+
+- 0fb08f4: Board layout editing. `DashboardWidget` gains a `rowSpan` (height, 1–6 grid rows;
+  `span` stays width 1–4), both validated by `validateDashboardWidget`. New
+  `POST /api/dashboard/layout` persists a drag-reordered / resized layout: the body
+  is the widgets in display order with their `span` + `rowSpan`, and the route
+  rewrites `dashboard.widgets` (order = position, span/rowSpan clamped) and reloads.
+  Config widgets keep their full spec; built-in/provider widgets get a minimal
+  `{id, type, order, span, rowSpan}` override so the resolver merge preserves their
+  core-owned title/options.
+- 0fb08f4: Add a dashboard widget seam so custom dashboards slot into the bundled UI
+  without forking it.
+
+  - Core: `DashboardWidget` contract, a widget-provider registry
+    (`registerDashboardWidgetProvider`), `resolveDashboardWidgets(config)`, a
+    `dashboard.widgets` / `dashboard.defaults` config block, and built-in default
+    widgets (system status, needs-you, recent activity) registered like a plugin.
+  - Server: `GET /api/dashboard` returns the resolved widget specs.
+  - UI (bundled): a `Board` page (`#/board`) + a widget renderer registry with
+    built-in `status`, `tasks`, `activity`, `metric`, `list`, `markdown`,
+    `links`, and `iframe` renderers. Widgets are declarative specs (data, not
+    React), so config or plugins can add widgets with no UI changes.
+  - Agent/author enablement: `validateDashboardWidget()` + `BUILTIN_WIDGET_TYPES`
+    exports, `validateConfig` now warns on malformed `dashboard.widgets` (bad
+    type/span, non-`/api/` endpoint, duplicate id), and a `dashboard-widget-author`
+    example skill teaches an agent the whole authoring flow.
+
+  See docs/dashboard-widgets.md.
+
+- 0fb08f4: Let the `admin` tool author dashboard widgets. `dashboard.` is now in the
+  `update_config` write allowlist, so an agent can add or edit a config widget with
+  `admin` `update_config` path `dashboard.widgets` (the hot-reload authoring path the
+  dashboard seam was built for) instead of being blocked or forced to rewrite
+  `config.yaml` by hand. Other config sections stay locked down as before.
+- 54ce46f: delegate: sub-agents inherit the confinement their agent declares
+
+  `delegate` hand-built its `AgentLoopOptions` instead of going through
+  `runtime.buildLoopOptions`, carrying 13 of the ~25 fields the real one sets —
+  and none of the confinement ones. A delegated sub-agent inherited no sandbox,
+  no `workingDirectoryBoundary`, and no agent name.
+
+  `delegate` is a meta tool appended to every agent regardless of its `tools:`
+  list, so this was reachable from anywhere: `delegate(agent="coder", …)` ran
+  coder's `write`/`exec` on the host with its `sandbox: docker` silently inert.
+  Same hole as the `CustomTool` one, by a different route.
+
+  It now takes the runtime and uses the same path every other dispatch does, so a
+  sub-agent gets the sandbox, boundary, attribution, cwd and shutdown signal a
+  top-level turn for that agent would get.
+
+  `buildLoopOptions` gains `includeMetaTools` (default true). `delegate` passes
+  false, keeping the sub-agent's tool set exactly its own `tools:` list as
+  before — a containment fix should not hand a sub-agent `admin` or a second
+  `delegate` on the way past. A meta tool the agent names in its own `tools:` is
+  unaffected.
+
+  **Behaviour change worth knowing:** delegating to an agent that declares a
+  sandbox now actually starts it. Where that previously ran on the host and
+  "worked", it will now fail if the container cannot start — which is the point,
+  but it is a failure where there was none.
+
+- 7017c2d: delegate: know that a sub-agent failed, and hear when it finished
+
+  Both from one incident. An executive assistant delegated a lookup, was asked for
+  an update 52 minutes later, and had the answer available the whole time.
+
+  **A stalled sub-agent was reported as a success.** `delegate` returned
+  `{success: true, output: response}` no matter how the loop ended, so a sub-agent
+  that ran out of tool rounds came back as a successful call whose output happened
+  to be `[Agent stopped: max tool rounds reached]`. The caller could not tell
+  "answered" from "gave up" and silently retried. It now branches on `onStop` —
+  which exists for exactly this, and whose docblock says _"Branch on this, not on
+  the returned string"_ — and returns `success: false` with the reason, the partial
+  output, and what to do about it.
+
+  **Async delegation had no completion path at all.** `startTask` was a `Map` and a
+  `.then()` that mutated a record: no callback, no event, no notifier. The only way
+  to learn an outcome was to ask. So the agent promised a person a follow-up it had
+  no mechanism to make, and the result sat unread — **9 minutes from being evicted
+  by the registry's one-hour TTL**, which is lazy and sweeps when the next task
+  starts rather than on a timer.
+
+  `delegate(async: true, notify: true)` now delivers the outcome — success or
+  failure — into the delegating agent's own session, through the same
+  `deliverAgentMessage` path `room(action="dm")` uses, attributed to the agent that
+  did the work. `notify: false` remains the default: a clean hand-off, now an
+  explicit choice rather than an accident.
+
+  **The tool result says what will actually happen.** It used to read `Background
+task started: <id>`, which reads like a promise. Without `notify` it now states
+  that nobody will tell you, names the `task_status` call that collects it, warns
+  against promising a follow-up you have not collected, and mentions the one-hour
+  expiry. `notify` requested where there is nobody to notify — an un-named CLI or
+  API session, or delegating to yourself — says so instead of accepting the flag
+  and dropping it.
+
+  `startTask` gains an optional `onFinish` callback. A notifier that throws or
+  rejects is contained and logged: the task's result is the only thing recoverable
+  afterwards and must not be lost with it.
+
+- 7d273b5: Add the `tai deploy` seam so cloud providers ship as plugins.
+
+  `tai deploy list | plan | up | down | status | help` drives a `DeployTarget`.
+  TAI ships `docker` (container on this machine, via `docker/tai/`); AWS, GCP,
+  Fly and anything else register the same way from a plugin package, so adding a
+  provider does not mean forking TAI.
+
+  The contract is types-only in `@tailored-ai/core` — the package plugin authors
+  already depend on, and the import erases at compile time. The registry,
+  discovery, and the command live in `@tailored-ai/cli`, because nothing in the
+  agent runtime needs to know how the instance was deployed.
+
+  Discovery is by _installation_, not configuration: the CLI imports packages
+  under `<TAI_HOME>/plugins/` and reads a `deployTargets` named export, the same
+  shape the plugin loader already uses for `meta` and `validateConfig`. It has to
+  work this way — `tai deploy` is often the command that creates the instance a
+  `config.yaml` would describe, so it cannot require one to exist first.
+
+  `up` always runs `plan` first and refuses when the target reports unmet
+  preconditions, rather than starting work already known to fail. A plugin that
+  fails to import is reported by `tai deploy list` and skipped. See
+  `docs/deploy-targets.md`.
+
+- b559646: Fix Discord slash-command registration: guild-scoped, and no longer duplicated.
+
+  Commands were published globally, which Discord can take up to an hour to show
+  to clients — indistinguishable from "the commands don't work". When
+  `channels.discord.guildId` is set (or the bot is in exactly one guild) they are
+  now written to that guild instead, where they appear immediately. Global
+  registration remains the fallback and logs the propagation delay.
+
+  Also removes the clear-then-write pattern in `syncCommands`. A bulk overwrite
+  already replaces the whole set, so clearing first only widened the window for a
+  concurrent sync — `ClientReady` and `onReload` landing together left every
+  command registered twice. Syncs are now serialized, and the guild path clears
+  the global copies so the two sets cannot appear side by side.
+
+- e6cb5fb: Discord: one duplicate command name no longer freezes every slash command in the guild
+
+  Discord rejects the _whole_ bulk overwrite when a payload names one command
+  twice, and the overwrite is all-or-nothing — so a rejected payload changed
+  nothing and the guild kept whatever set last registered successfully. Every
+  command was frozen, built-ins included, `/pause` included. On a first run the
+  guild got no commands at all. The only symptom was one line of `console.error`;
+  the bot was otherwise healthy and the stale commands still worked.
+
+  Nothing checked config command names against each other or against the
+  built-ins, and normalization erases the difference between `Deploy`, `deploy`
+  and `deploy!`.
+
+  `dedupeCommandNames` now drops the later of any colliding pair and warns naming
+  both sides, so one bad config entry costs one command instead of all of them.
+  Push order is precedence order — built-in, then plugin, then config — so a
+  config entry can never take `/pause`'s slot. (Plugin commands moved below the
+  built-ins as part of this. `SlashCommandRegistry` already refuses
+  `RESERVED_COMMAND_NAMES`, so this is drift-safety rather than a live hole: if
+  that hand-kept list ever falls behind the set actually built, the dedupe now
+  fails toward the built-in.)
+
+  `registeredCommandsHash` is also recorded on a 4xx. It was assigned only after
+  the request resolved, so a payload Discord deterministically rejects was re-sent
+  identically on every `ClientReady` and every config reload, forever. A 5xx or a
+  dropped connection still retries. The log line now says the guild's commands are
+  unchanged and may be stale, rather than only quoting the error.
+
+- e66f07b: Agent-to-agent direct messages can now be observed.
+
+  `deliverAgentMessage` emits a new `agent.messaged` runtime event once per
+  exchange, after the recipient's loop returns, so one event carries the message
+  and its reply together. `via` distinguishes `dm` (an agent chose to speak) from
+  `delegate` (task handoff), because a subscriber that cannot tell them apart
+  either drowns in delegation traffic or misses it. A delivery that throws emits
+  nothing.
+
+  Adds `builtin:dm-mirror`, disabled by default, which turns that event into a
+  line in a room. It posts with no `to` so nobody is addressed, and it refuses to
+  run at all when the target room has any subscriber whose `wakeOn` is not
+  `"none"` — re-checked on every reload, since an agent can subscribe itself at
+  runtime and turn a safe room into a feedback loop with no config edit.
+
+  Previously a direct message left only a session row, so a pair of agents could
+  talk all night with no event to subscribe to and no way to mirror, audit or
+  count one without patching core.
+
+- 0187e0c: Drop an assistant `tool_calls` that nothing answered, instead of sending it.
+
+  `stripOrphanedToolMessages` handled one direction — a `tool` result whose parent
+  was trimmed away — on the reasoning that the reverse was unreachable, since
+  results are dropped from the front where their parent goes too. That holds for
+  trimming alone and stops holding the moment anything else edits the window: the
+  same function resets its open-call set on a user or system message, so a user
+  turn landing between a call and its result drops the result and leaves the call
+  unanswered.
+
+  Every strict provider then rejects the entire request — DeepSeek "must be
+  followed by tool messages", OpenAI "no tool output found for function call",
+  Anthropic "`tool_use` ids were found without `tool_result` blocks" — and the
+  fallback chain fails again on every rung. Seen in production as three provider
+  errors and 26 retries for a single turn, absorbed by the fallback chain but paid
+  for four times over.
+
+  Unanswered calls are now removed from the message rather than the message being
+  dropped, so the assistant's text survives; a message left with neither text nor
+  calls is dropped, having nothing left to carry.
+
+- b559646: Add `builtin:error-room` — forward runtime errors to a room so an agent can triage them.
+
+  Errors that only reach the log get found by accident, days later, usually
+  because something else looked wrong. This posts them into a room instead, where
+  a subscribed agent can read the error, look at what it names, and say what it
+  thinks is wrong.
+
+  Three things are designed in rather than bolted on, because each would
+  otherwise be worse than the problem:
+
+  - **Reporting an error cannot cause an error.** A re-entrancy flag means
+    nothing logged while reporting is itself reported. Verified against a backend
+    that fails _and_ logs on every post: one attempt, no recursion.
+  - **A flood cannot reach Discord.** Identical errors collapse to one entry with
+    a count, batches post on an interval, and a per-hour ceiling replaces the
+    overflow with a count of what was withheld. Repeats route through the
+    existing NotificationGate.
+  - **Credentials are redacted** before anything leaves the process — `key=value`
+    secrets, bearer tokens and JWT-shaped strings.
+
+  Config: `{ module: "builtin:error-room", config: { room, notify, levels,
+batchSeconds, maxPerHour, maxPerReport, ignore } }`.
+
+- daa6302: `exec` closes the command's stdin instead of leaving an open pipe.
+
+  `execFile` hands the child a stdin pipe that is never written to and never
+  closed, so any CLI that reads stdin when it is not a TTY blocks until the tool's
+  timeout kills it. The kill discards the buffers, so what reaches the agent is
+  empty stdout, empty stderr and a bare `Command failed` — which reads as "that
+  binary isn't installed" rather than "it is waiting for input".
+
+  Found with the Notion CLI: `ntn api v1/users/me` returned fine, while
+  `ntn api v1/users/me | jq -r .name` hung for the full 30 seconds, and the model
+  concluded — reasonably, and wrongly — that `ntn` was missing.
+
+  `stdio` is not honoured by `execFile`, which owns the pipes in order to buffer
+  them, so the stream is closed on the returned child instead.
+
+- a970a8b: First-class reasoning support (#254). Providers now capture their reasoning
+  trace into `ChatResponse.reasoning` (and a streamed `reasoning` event), and a
+  provider-agnostic `thinking` level (`off`/`auto`/`low`/`medium`/`high`) on
+  `ChatParams` maps to each provider's wire format — `reasoning_effort` (OpenAI),
+  `thinking:{type}` (DeepSeek), `thinking` budgets (Anthropic / Bedrock
+  `reasoning_config`), `chat_template_kwargs.enable_thinking` (vLLM via the
+  `openai_compatible` `thinkingDialect`). Set it per provider
+  (`providers.<id>.thinking`) or per agent (`agents.<name>.thinking`). Reasoning
+  is persisted on the assistant message and rendered as a collapsible "Thinking"
+  disclosure in the chat UI, and is stripped from every outgoing request so it
+  never re-enters the model. Retires the per-plugin `thinking` hack in
+  provider-deepseek (its boolean config still works).
+- 57a5d48: Add a global pause switch: `/pause` and `/resume` in Discord.
+
+  Two agents on a metered API answered each other unattended and spent real money
+  in twenty minutes, and there was no way to stop it from a phone. Killing the
+  process loses in-flight work, editing config calls `runtime.reload()` and
+  bounces the very Discord gateway you are typing into, and `autopilot pause`
+  covers one of six things that can start a run.
+
+  **`/pause` blocks autonomous runs only.** Cron timers, webhooks, all eight
+  workflow trigger pollers, autopilot, exploratory ticks, task auto-dispatch and
+  stall retries, room check-ins, agent-to-agent wakes and DMs. Your own messages
+  keep working on purpose: a pause that also kills your DMs is indistinguishable
+  from an outage, and it removes the instruments you would use to inspect what
+  went wrong. `/pause scope:all` adds human-initiated runs.
+
+  **In-flight runs finish.** The gate refuses new runs; aborting a half-finished
+  tool call turns an expensive mistake into an expensive mistake plus an
+  inconsistent worktree. Child workflows started by a running parent are treated
+  as continuations for the same reason.
+
+  State lives in a new `runtime_settings` singleton table, read live on every
+  check — the same shape as `autopilot_settings`, and in SQLite rather than
+  config for the reload reason above. `AgentRuntime` gains
+  `isAgentsPaused(kind)`, `getPauseState()` and `setAgentsPaused()`, and a real
+  change emits `agents.pause_changed` on the runtime bus.
+
+  Server, CLI and Slack are touched only to refuse politely under `scope: all`,
+  plus one gate in core's own webhook `action: agent` route, which reaches the
+  agent loop without passing through the workflow engine.
+
+- 39445bb: Raise the default `agent.maxHistoryTokens` above the tool-schema floor
+
+  It was 2,000, set before tool schemas counted against the history budget. Once
+  they did, the budget became
+
+      max(0, maxHistoryTokens - systemPrompt - tail - toolSchemas)
+
+  and the schemas are the largest term by an order of magnitude — a 24-tool agent
+  costs ~6,200 tokens before a single message, a 41-tool one ~10,900. Both are
+  over 2,000, so the budget clamped to zero: an install that never tuned this
+  dropped its whole conversation on every turn and looked like a model with no
+  memory rather than a configuration that could not hold one.
+
+  The default is now 20,000, which is what `tai init` had been writing all along —
+  so this fixes the untuned path rather than changing the tuned one. Nothing
+  changes for an existing config, which already carries an explicit value.
+
+  20,000 rather than a share of `maxContextTokens`: deriving it would make a
+  deployment that declares a 200k window spend 200k per turn, and the window says
+  what a model accepts, not what an operator wants to pay.
+
+  `validateConfig` now warns when `maxHistoryTokens` is not smaller than
+  `maxContextTokens` — a request budget larger than the window it must fit in,
+  which otherwise surfaces as a provider rejection on a grown session, a long way
+  from the config that caused it. A small-context deployment should lower the
+  budget, and is told so at load rather than at failure.
+
+- 4c48ad8: Say when context was removed, in the two places it silently was.
+
+  **Trimmed history.** `trimHistory` drops the oldest messages and returns the
+  rest, so the model received a conversation that began mid-thought with nothing
+  indicating anything preceded it. It cannot tell "this is where we began" from
+  "the beginning was evicted", and answers as though the former. A one-line marker
+  now leads the trimmed history: `[System: N earlier messages in this conversation
+are no longer shown. It continues from here.]`
+
+  The mechanism already existed — `summarizeOnTrim` inserts an
+  `[Earlier conversation summary: …]` marker — but it has no default, so the
+  silent path is the one nearly every deployment runs. The marker's cost is
+  reserved _before_ trimming rather than prepended afterwards, which would push
+  the request back over the budget it was just cut to fit.
+
+  Deliberately a statement of fact with no instruction attached. "Ask if you need
+  anything from earlier" is the shape of instruction that gets taken up far more
+  often than intended, and an agent opening every turn by asking about its own
+  trimmed history is worse than one that does not know.
+
+  **Rooms that outran their backlog window.** When a cursor-based read comes back
+  full, the watcher jumps to the newest page so the message that woke the agent is
+  certainly included. Everything between the cursor and that page is skipped, and
+  the cursor then advances past it — and the result was handed over under the
+  heading `New messages:`, as though it were the whole story. That heading now
+  becomes `Most recent messages:`, preceded by a line saying the room moved faster
+  than the backlog window and messages were skipped. No count: the number is not
+  knowable without another round trip, and inventing one would be worse than
+  saying plainly that there is a gap.
+
+- ba7bad5: Fixes surfaced by reviewing real autonomous-run logs:
+
+  - **exec**: allow safe compound commands under an allowlist. Chaining (`&&`,
+    `||`, `;`), pipes (`|`), and redirections now pass when every command-position
+    head is allowlisted, instead of the whole command being rejected for
+    containing a shell operator. Command substitution, backticks, process
+    substitution, subshells, background `&`, and newlines are still rejected.
+  - **memory/embeddings**: clamp each embedding input to
+    `memory.embeddings.maxInputChars` (default 8000) and, on a context-overflow
+    400, retry with the cap halved — so an oversized recall query no longer
+    silently drops semantic search to keyword-only.
+  - **retry**: `withRetry` now stops immediately when `shouldRetry` returns false
+    (previously it kept re-running `fn`, only skipping the backoff delay).
+  - **config**: `validateConfig` treats `task_query` as enabled whenever `tasks`
+    is enabled (they register together), removing a spurious per-agent warning.
+  - **read tool**: friendly errors for reading a directory (EISDIR) or a missing
+    file (ENOENT) instead of the raw errno message.
+  - **tasks/github**: pin `x-github-api-version: 2022-11-28` on the Octokit
+    client to stop endpoint-deprecation warnings.
+
+- 571adba: Stop shipping build tooling in the self-host image.
+
+  `pnpm deploy --prod` drops `devDependencies` but keeps `peerDependencies`
+  marked `optional`, so vitest, `md-to-pdf` and Playwright reached the runtime
+  image along with `typescript`, `vite`, `rollup`, two `esbuild` binaries, two
+  `lightningcss` binaries and `puppeteer-core` — about 150 MB nothing could
+  import. `@tailored-ai/browser-mediator` also declared `playwright` as a hard
+  runtime dependency while only ever importing it lazily, contradicting its own
+  README.
+
+  `playwright` and `md-to-pdf` are no longer peer dependencies of
+  `@tailored-ai/core`, and `playwright` is now an optional peer dependency of
+  `@tailored-ai/browser-mediator` rather than a dependency. Both were already
+  lazily imported behind an actionable "not installed" message, so no feature
+  changes: the `browser` and `md_to_pdf` tools return that message instead of
+  Playwright's "Executable doesn't exist" path error.
+
+  The image drops from 880 MB to 669 MB. MCP, PDF extraction and OCR are
+  untouched.
+
+- de1ce69: MCP observability (#249). Connected MCP servers were silent — "no log lines" was indistinguishable from "never ran", and the #248 drop-on-reload bug surfaced nothing. Now `McpManager` logs the happy path: one line per server on connect (`[mcp:github] connected (3 tools: ...)`), on tool-list change, and on teardown/restart. The CLI startup banner gains an `MCP: github (3), ...` line (only when servers are configured), and `McpManager.list()` now reports `connectedAt`. New `GET /api/mcp` route (wired via the server's `mcpStatus` option) exposes per-server id, tool names, tool count, and ISO connected-at for the UI / `tai doctor`.
+- 87fc6fd: mcp: reconnect a dropped server, and name a rejected credential as one
+
+  Nothing registered an `onclose`. When a stdio child exited or an HTTP endpoint
+  stopped answering, the connection stayed in the manager's active set with an
+  unchanged config signature — and reconcile skips anything whose signature
+  matches, so it was **never restarted**. The server stayed dead until a config
+  change or a process restart, its tools stayed registered, and every call
+  returned `MCP call failed` to the agent, which cannot tell that from a bad
+  request.
+
+  A dropped connection now unregisters its tools and schedules a reconnect, with
+  an escalating delay so a flapping server does not spin. The delay resets only
+  after a connection has proved stable for a minute — resetting on "it connected"
+  would let a connect-then-drop server retry every second forever.
+
+  Connect failures are classified. A rejected credential is logged as
+  `AUTH FAILED`, names the config key to look at, and says plainly that retrying
+  will not fix it — because the fix is a person minting a new token, and Notion
+  PATs expire within a year. Everything else is reported as retryable. `401`,
+  `403`, `invalid_token`, `invalid api key`, `authentication failed` and
+  `expired token` are recognised; `ECONNREFUSED`, `socket hang up`, timeouts and
+  `500` are deliberately not.
+
+  Backoff applies **only to self-driven retries**. An explicit `reconcile()` —
+  startup, config reload — always attempts every failed server, because the human
+  triggering it may have just fixed the credential, and "fix the token, reload,
+  nothing happens" is worse than the hammering the backoff prevents.
+
+  Adds `McpManager.status()` reporting per-server connected state, tool count,
+  retry window and whether the last failure was an auth failure — the data an
+  integration-health surface needs (#207).
+
+- 611f94d: fix: memory scoping, manifest hashing, and task-dispatch context (#281–#284)
+
+  Four fixes from the 2026-07-28 audit, all in the same family — something that
+  looked like a guard and was not.
+
+  - **`hashManifest` covered almost nothing.** `JSON.stringify(rest, Object.keys(rest).sort())`
+    passes a _replacer array_, not a sort order, and it applies at every depth —
+    so every manifest canonicalized to `{"data":{},…}`. Two skills differing in
+    both instructions and `allowed-tools` hashed identically, which made the trust
+    store's cached-approval check and `--frozen` ineffective for skills, prompts,
+    kb and agents. Now canonicalized properly. **Expect one re-approval per
+    installed resource** — stored hashes were computed under the old scheme.
+  - **`memory` no longer falls back to the global context directory.** A "profile"
+    write from a session with no agent directory — un-named CLI, Slack, API — went
+    to `global/`, which is injected into every agent's prompt. It now goes to a
+    sibling `unscoped/` directory that nothing injects, and the result says so
+    rather than calling it "profile". A redirect, not a gate: hard-failing an
+    omitted optional parameter turns a quiet correctness bug into a loud stall.
+  - **A global-scope memory write is now logged**, naming the agent. It is still
+    allowed — whether an agent may curate shared knowledge is a permissions
+    question, not something to hardcode — but it changes every agent's prompt and
+    used to happen silently.
+  - **`task-watcher` merges `toolContextExtras` instead of replacing it.** Both
+    branches discarded the object `buildLoopOptions` builds, so every task
+    dispatch lost `agentName`, and non-worktree dispatches lost the agent's
+    declared `fileBoundary` too.
+
+  Adds the first unit coverage for `MemoryTool`, which had none despite having the
+  widest blast radius in the prompt path.
+
+- 8aa5720: Show all of an agent's core memory, not the first third of it.
+
+  `/memory show` clipped each section to 900 chars and the whole reply to 1700.
+  That made it useless for exactly the memories worth reading: a 2,328-char
+  persona came back as a third of itself, and asking for that one section did not
+  help, because the per-section clip applied either way.
+
+  Core memory is the text that shapes every one of an agent's turns. Two thirds
+  of it is worse than none, because it reads as complete.
+
+  Replies now split across as many messages as they need, using the same
+  `splitMessage` helper the chat path already used — extracted to
+  `channels/split-message.ts`, since importing it from `discord.ts`, which
+  imports the command modules, would have been a cycle. When a memory is large
+  enough to exceed even that, the reply says how many messages were withheld
+  rather than stopping silently.
+
+  `set` and `clear` also return the full prior text now. It was clipped at 1200,
+  which defeated the point of returning it — it is what you paste back to undo
+  the change.
+
+- d2b5939: Add `/memory` — read and edit what an agent remembers about itself.
+
+  Core memory is per-agent, survives every session, and goes into the system
+  prompt on every turn. Until now the only writer was the agent itself through
+  the `core_memory` tool, and there was no reader outside the database. An agent
+  could write itself a persona that shaped every later answer and nobody could
+  see it, let alone correct it. Sessions could already be reset and rewound; core
+  memory could only be changed by asking the agent nicely.
+
+  ```
+  /memory show   agent:iris [section:persona]
+  /memory set    agent:iris section:persona content:…
+  /memory append agent:iris section:persona content:…
+  /memory clear  agent:iris section:persona
+  ```
+
+  `set` and `clear` return the text they destroyed. Core memory has no history
+  table, so without that an overwrite is unrecoverable — the same reason
+  `/room rewind` hides rather than deletes. Replies are ephemeral, since a
+  persona is usually written in the first person and a channel is the wrong place
+  to print it. `updated_by` records the person rather than the agent, because
+  almost every existing row is self-authored and "who wrote this" is the first
+  thing you want when a persona looks wrong.
+
+  An unknown agent or section is refused before any write: a typo would otherwise
+  create core memory nothing ever reads. Agent names autocomplete from the agent
+  registry and config together, so authored-resource agents appear too.
+
+- 7e9a130: Make `models[]` the fallback chain its docstring always claimed it was.
+
+  `AgentDefinition.models[]` and `agent.models[]` were documented as an "ordered
+  priority list of provider+model combinations, first available is used" and read
+  by nothing except the `/context` window display. An operator could configure a
+  local-then-cloud chain, watch it validate and round-trip through the UI, and get
+  no failover at all — with no request-time failover anywhere else in core either,
+  a provider outage simply failed the turn.
+
+  The chain is now resolved (`resolveAgent` returns `models`, always non-empty) and
+  walked at call time (`chatWithFallback`). Each rung gets one attempt and any
+  throw advances to the next; the last rung keeps the transient retry, so a
+  deployment that declares no `models[]` gets a one-entry chain and behaves exactly
+  as before. Rungs whose provider cannot be built — the plugin is not installed —
+  are dropped with a one-time warning rather than taking the agent down, and the
+  chain is rebuilt every loop iteration so a reload takes effect mid-run.
+
+  Precedence is most-specific-first: an agent's own `models[]`, then its
+  `model`/`provider` pin, then `agent.models[]`, then the deployment default. A pin
+  does _not_ opt an agent into the deployment chain, and a per-call model override
+  never falls back — both exist to send one call somewhere specific, and silently
+  answering from elsewhere would undo them.
+
+  Also: `runtime.tryBuildProvider` splits provider construction from the
+  degrade-to-default policy, so a chain rung can be skipped where a declared
+  provider still falls back.
+
+- b559646: Stop the agent repeating itself, and stop misreading a budget cap as a stall.
+
+  **Repeat suppression for unsolicited messages.** New `NotificationGate` (core seam,
+  `notifications.dedup` config) gates every proactive send — cron deliveries,
+  owner-notifier events, and `notify_owner` fired from a background tick — against a
+  `notification_log` table. A message is suppressed when it matches something already
+  sent to the same recipient inside the window, either byte-for-byte, by a
+  caller-supplied key (`task:<id>:blocked`, which survives rewording), or by word-set
+  similarity for restatements of unchanged state. Because word-set overlap is
+  length-relative, three vetoes protect real news from the similarity tier: differing
+  numbers ("$312" → "$412"), differing polarity ("completed successfully" →
+  "unsuccessfully"), and any message adding more than `maxNewWords` new words (an
+  unchanged digest with one new line appended scores ~0.95, and that line is the point).
+
+  Anything the user asked for is never suppressed: chat replies bypass the gate
+  entirely, and a user-triggered run ("Run now", `POST /api/cron/:name/run`) delivers
+  unconditionally. Fails open — if the gate is unavailable, or its database is locked or
+  mid-migration, the message still goes out.
+
+  Replayed against a real deployment's 10 days of cron output, this delivers 13 messages
+  where 306 went out before.
+
+  **beforeRun hooks now fail closed.** `executeHooks` returns `failed`, and a hook that
+  throws, is missing, or returns `success: false` stops the remaining hooks instead of
+  being logged and swallowed. Cron then aborts the run; chat, delegate, and task-watcher
+  still run the agent, so a hook failure can never leave the user talking to a silent
+  assistant. Previously a dead Gmail token made the hook error every 30 minutes while the
+  prompt still said "Below are my recent emails" — so the model invented an inbox and
+  DM'd it. Opt out per hook with `onError: "continue"`.
+
+  **Structural loop-stop reporting.** `AgentLoopOptions.onStop` reports why a run ended
+  (`complete` / `sleep` / `aborted` / `max-rounds` / `repeated-calls`) instead of making
+  callers string-match `"[Agent stopped: ...]"`. The loop _returns_ that string on abort
+  rather than throwing, so the exploratory worker's catch never ran and every
+  budget-capped tick was recorded as a stall — and wrote an identical self-feedback note
+  each time. Aborts are now classified as `budget` (or a no-op on shutdown), and stall
+  notes dedup into one counted note with a TTL and an importance below the sweep
+  keep-threshold, so self-feedback can expire instead of outliving real memory.
+
+  **Cron `NO_ACTION` is matched anchored**, not as a substring — a response merely
+  mentioning the token no longer silently suppresses a real summary.
+
+- d3a4cf1: Stop `rooms/store.ts` being invisible to grep.
+
+  Two composite map keys embedded a raw NUL byte as their separator instead of the `\0` escape. That is legal TypeScript and behaves identically, but it makes the file _binary_ as far as `grep`, `ripgrep`, and anything built on them is concerned — `grep -c agent packages/core/src/rooms/store.ts` silently returns nothing, and a repo-wide search skips the file without saying so.
+
+  That is a bad property for any file and a worse one for this file: it is the room subscription and wake-budget store, so "find every caller of tryConsumeWake" quietly under-reports. It also means any security or privacy sweep that greps the tree has a blind spot it will never be told about.
+
+  `\0` in a template literal produces the same U+0000, so the keys and everything derived from them are byte-identical.
+
+- 36a50b7: Make the omitted middle of a truncated tool result reachable
+
+  `capToolOutput` cuts middle-out and saves the full output, and the saved copy
+  was a dead end: truncation is deterministic and `read` took only a path, so
+  reading it ran through the same function, at the same limit, on the same bytes,
+  and came back byte-identical. The elided middle had no route back at all short
+  of `exec` with `sed`.
+
+  `read` now takes `offset` and `limit` in characters, serves a window that fits
+  the budget, and names the exact call that continues it. Characters rather than
+  lines because that is the unit the cap counts in; line ranges stay `exec`'s job.
+
+  `ToolContext.maxOutputChars` carries the resolved per-tool budget into
+  `execute`, so any tool that can page may serve a prefix that fits instead of
+  being cut afterwards. Advisory — the cap still runs on whatever comes back.
+
+  The truncation marker now points at the saved file with the offset that resumes
+  it. That sentence was removed a release ago for being false; it is back because
+  the code that would make it true has landed.
+
+- 4656518: Support multiple OpenAI-compatible providers under arbitrary ids. Any `providers.<id>` that sets `type: openai_compatible` (or carries a bare `baseUrl`) is now served by the built-in `OpenAIProvider` under that id — so a local vLLM gateway, DeepSeek, Groq, Together, and any other OpenAI-wire endpoint can coexist without a per-vendor plugin, and `agent.defaultProvider` can select among them. A registered factory id still wins over an inline `type`. New exports: `buildOpenAICompatibleProvider`, `isInlineOpenAICompatible`. Closes #253.
+- d3e79e3: Compaction can keep a recent window instead of replacing everything.
+
+  `compactSession` was all-or-nothing: the whole session became one summary. For a
+  long-running conversation that is the wrong trade. Measured on a real
+  1,632-message session, the full history summarised to **907 characters — a 534x
+  reduction**. The summary was accurate about participants, events and current
+  state, and it discarded the voice, the running context and every established
+  preference. What makes such a session worth keeping is exactly what a synopsis
+  loses.
+
+  `compactSession(db, id, provider, model, { keepRecent: 200 })` folds away only
+  what precedes the newest 200 messages. On that same session it takes the request
+  from ~142,000 real tokens to ~33,000, and takes the share of the request
+  occupied by the user's actual new message from 0.019% to 0.073% — which is the
+  number that decides whether the model answers you or answers its own history.
+
+  Two details that make it correct rather than merely smaller:
+
+  - **Only the hidden part is summarised.** Sending the kept window to the
+    summariser as well would put the same content in the next request twice, once
+    summarised and once verbatim.
+  - **Summaries sort ahead of surviving messages.** A summary row is written last
+    and carries the highest id, but stands in for the _oldest_ content; ordering on
+    id put a synopsis of the beginning after the turns it precedes. Ordering on the
+    compaction batch restores chronology, and holds across repeated compactions
+    because each batch only ever replaces content older than everything visible.
+
+  `keepRecent` defaults to 0, so existing callers are unchanged. Undo restores the
+  whole batch either way.
+
+- 128c561: `exec` command rules can be set per agent, and support deny lists and patterns.
+
+  The allowlist was one list on one shared `ExecTool` instance, so granting an
+  agent `exec` granted it everything on that list. In a real deployment that meant
+  34 commands including `rm`, `curl`, `node` and `python3` — so `exec` could not
+  be handed out for one narrow purpose, and every integration that needed to shell
+  out became a bespoke `custom_tools` entry instead.
+
+  `agents.<name>.exec` now takes the same `allow` / `deny` shape as `tools.exec`:
+
+  ```yaml
+  tools:
+    exec:
+      allow: [git, ls, ntn]
+      deny: [rm]
+      mode: intersect # default; `override` lets an agent replace these
+  agents:
+    researcher:
+      tools: [exec, web_search]
+      exec:
+        allow: [ntn] # this agent gets ntn and nothing else
+  ```
+
+  Both lists accept glob patterns (`*`, `?`) matched against the command name in
+  every command position, so a compound command cannot smuggle a second binary
+  past them. `deny` always wins over `allow`, at both levels.
+
+  `mode` is deployment-level on purpose: an agent that could choose `override` for
+  itself would make `intersect` guarantee nothing. Under `intersect` an agent can
+  only narrow — and an allow list that intersects to nothing denies everything
+  rather than falling back to unrestricted, which is the direction that fails open.
+
+  `tools.exec.allowedCommands` still works and is equivalent to `allow`. Note this
+  scopes the `exec` tool only; `custom_tools` run a fixed command and never
+  consulted these rules.
+
+- 30a0c14: Make an agent's `provider:` actually select a provider.
+
+  `AgentDefinition.provider` parsed, `validateConfig` checked it against
+  `config.providers`, and `findOrCreateSession` wrote it into the session row —
+  but `buildLoopOptions` passed `this._provider` unconditionally, so every agent
+  ran on `agent.defaultProvider` regardless of what it declared. Another config
+  key that parses and reaches nothing.
+
+  The symptom is indirect, which is why it survived: the agent's model name goes
+  to the default provider's endpoint and comes back as a 404 for a model that
+  does exist, just not there.
+
+  `createProvider` now takes an optional provider id, and the runtime builds and
+  caches one per declared provider, clearing the cache on reload so an edited
+  key or baseUrl takes effect. A declared provider that cannot be built falls
+  back to the default and says so once, naming both the agent and the provider —
+  the plugin that would register it may simply not be installed, and taking the
+  agent offline is a worse answer than a named fallback. Silence there is what
+  made the original bug present as a bare 404.
+
+  Also fixes model defaulting: an agent that names a provider and no model now
+  gets that provider's `defaultModel` rather than the global one, which was the
+  other half of sending one vendor's model name to another's endpoint.
+
+- df2d055: Size the history to the fallback rung that gets it, not to the chain head.
+
+  `historyBudget` was computed once, from `maxHistoryTokens`, before any
+  request was made — and every rung was then tried against that same
+  budget. A chain whose later rungs have smaller context windows could
+  build a request the head accepts and the fallback cannot. The failure was
+  not silent, but it wasted the rung, and if every remaining rung is
+  smaller than the head the turn fails looking like an outage rather than a
+  budget mistake.
+
+  `ModelEntry.maxContextTokens` already existed and was only read by the
+  `/context` display. It now reaches the chain: a rung declaring a window
+  smaller than `maxHistoryTokens` gets its history re-trimmed to fit, with
+  a log line naming what was dropped and for whom. The window covers the
+  whole request, so the system prompt comes out of it too.
+
+  Re-trimmed only when the rung is actually smaller, so the common case — a
+  chain of one, or every rung roomy — reuses the assembled array and pays
+  nothing.
+
+  The re-trim is the plain one even under `summarizeOnTrim`. Summarising is
+  an async model call, and spending one on the degraded path to produce a
+  prettier request the rung might still reject is the wrong trade.
+
+  `chatWithFallback`'s `params` argument now also accepts a function of the
+  candidate, which is how the loop supplies a per-rung request. A plain
+  object behaves exactly as before.
+
+- 9ccec1f: Let each rung of a fallback chain carry its own reasoning effort.
+
+  `ModelEntry` held `provider`, `model` and `maxContextTokens`. Reasoning
+  effort was resolved per call (global `agent.thinking`, or a per-agent
+  value) or per provider (`defaultThinking`) — never per rung. So a chain
+  that heads at a small local model and falls back to a strong cloud
+  reasoner had one `thinking` value to serve both: set it for the head and
+  the fallback is wasted, set it for the fallback and the head is burdened.
+  `defaultThinking` got close but is keyed by provider, so a cheap and an
+  expensive model on the same vendor still could not differ.
+
+  `thinking`, `temperature` and `maxTokens` are now per-rung. Absent means
+  inherit whatever the call resolved, so an existing chain behaves exactly
+  as it did.
+
+  `maxTokens` is included deliberately rather than only `thinking`: it caps
+  reasoning _plus_ visible output, so a rung that reasons harder generally
+  needs a bigger cap than the one it falls back from.
+
+  This became worth asking for with the Responses API work — reasoning and
+  tool calls can now coexist, so "reason harder on the cloud rung" is a
+  real request.
+
+- e698f39: permissions: rules can reach an absent argument, and headless approval says so (#7, #8)
+
+  Two gaps that made the permission system quieter than it looked.
+
+  - **`matchesRule` returned false for any missing argument**, so a rule could only
+    describe what the model _did_ pass. The dangerous call is often the one that
+    passes nothing and takes a default — an unscoped write, an unfiltered query —
+    and no rule could reach it. A `null` pattern now means "this argument must be
+    absent". An empty string counts as absent, because models emit `scope: ""` for
+    "unset" and the tools here already read it that way; a rule that disagreed with
+    the tool it governs would be worse than no rule.
+
+  - **A call needing approval with no approval handler ran anyway, silently.**
+    Cron, rooms, the task watcher and webhooks all take that branch, which was an
+    empty block with a comment — so `approve` became `auto` exactly where nobody
+    was watching. `permissions.noHandlerAction` now selects `auto` (default,
+    unchanged) or `reject`. The default stays permissive deliberately: flipping it
+    would stop autonomous runs that have worked for months. What changed is that
+    the permissive branch logs once per tool per process rather than passing in
+    silence, and a deployment that wants its `approve` rules to mean something on
+    headless paths can now say so.
+
+  Together these are the generic seam that per-tool policy knobs were standing in
+  for — every tool gets it, including plugin-authored ones.
+
+- b8fe10c: Stop a heavily trimmed conversation answering a question the user retracted
+
+  When trimming dropped every user message, the safety net that keeps a request valid spliced the **first** user message back in as the current turn. On a session where the user had changed their mind, the model was handed a statement that had since been retracted and answered it — confidently, with the cancelled date.
+
+  It is reachable on any second round under history pressure: round two ends on an assistant or tool message, and the trim keeps only the last message, so no user message survives to be kept.
+
+  The message spliced back is now the most recent one, which is the turn the model is actually answering. The case the net was written for — a task prompt followed by tool churn — has exactly one user message, so first and last are the same there and nothing about it changes.
+
+- 0d4f4b6: Plugins can register slash commands.
+
+  Every chat command was hardcoded in `discord.ts` — a plugin had no way to add one, so anything wanting a command had to be a core change. This adds the seam, shaped like the HTTP route seam next door: core owns a transport-neutral `SlashCommandRegistry` of descriptors, and each channel adapts them onto its own command surface. Core never imports discord.js from the registry, so the dependency direction stays channel → core and a Slack or Telegram channel can serve the same descriptors.
+
+  ```ts
+  ctx.commands.register({
+    name: "instance",
+    description: "Show or switch the running TAI instance",
+    options: [
+      {
+        name: "name",
+        description: "Instance",
+        type: "string",
+        autocomplete: suggest,
+      },
+    ],
+    handler: async (inv) => ({ content: `switching to ${inv.options.name}` }),
+  });
+  ```
+
+  Unlike HTTP routes these cannot be namespaced — chat platforms use a flat command namespace with no separator to hide a prefix behind — so `register` throws on a name that is built-in (`RESERVED_COMMAND_NAMES`) or already taken by another plugin. Refusing is the honest failure; the alternative is a plugin silently shadowing `/room` or `/memory` for everyone in the guild.
+
+  The Discord adapter defers the reply before invoking a handler. Plugin handlers do arbitrary work, and Discord kills an interaction that goes three seconds without a response; deferring buys fifteen minutes. A handler that throws is caught and reported into the interaction rather than leaving it hanging as "the application did not respond".
+
+- 6460c00: Stop the per-turn prompt layers from invalidating the whole prompt cache.
+
+  Prompt caching matches an exact token prefix. `chat_live_state` and
+  `recall_memory` are rebuilt on every turn and both sat inside the system
+  prompt, which sits in front of the entire conversation — so each run
+  re-paid for its system prompt _and_ its whole history. Measured on a busy
+  48h of the reference deployment, input was 99.5% of everything billed and
+  cross-run reuse was approximately zero.
+
+  Both layers now render after the history instead, as a single labelled
+  turn. The system prompt and the history become a stable prefix; only the
+  tail is fresh. The model still sees both blocks, exactly once, and they
+  are still charged against the same history budget they used to occupy.
+
+  `SystemPromptOverride.tail` controls this. `tail: []` restores the old
+  layout. Setting `order` yourself disables the default — an explicit order
+  is a statement about placement, so nothing moves unless you also name
+  `tail`. A layer omitted from `order` stays omitted; `tail` never
+  reintroduces one.
+
+  Rounding the timestamp in `chat_live_state` would not have worked: the
+  block also renders relative ages ("5m ago") and a live task list, so it
+  varies every turn regardless of the header.
+
+- 0039c3a: Declaring a custom system-prompt layer is now enough to render it, and turning
+  the tail off says so.
+
+  Two defects made `systemPrompt` unsafe to use for the thing it exists for.
+
+  A custom layer only rendered if it was also named in `order`, and `order` means
+  "names not listed are omitted". So adding one block cost you enumerating all
+  seven built-in layer names in the right sequence, and an enumeration with a name
+  missing deleted that built-in silently. A `custom:` entry on its own — the shape
+  someone reaches for first — parsed fine and did nothing.
+
+  Worse, `order` set without `tail` switches the tail off. That behaviour is
+  deliberate (an explicit order is a statement about placement) but it was
+  unannounced, and the tail is where the volatile layers live. Adding a block
+  therefore either moved `chat_live_state` into the system prompt — which carries
+  a clock, so it changed the prompt every turn and defeated prompt caching — or,
+  if `order` did not list them, dropped the clock and recalled memory out of the
+  request altogether. Nothing in the config hinted at either outcome.
+
+  Now: an unplaced custom layer is appended after the built-ins, naming it in
+  `order` or `tail` still decides where it goes, and `tail` accepts a custom layer
+  without `order` having to list it too. Setting `order` without `tail` warns once
+  per config, naming which layers moved and what it costs.
+
+  No behaviour change for a deployment that already sets `order` and `tail`
+  explicitly, or for one that sets neither.
+
+- 8d0f50e: Describe TAI as model-agnostic rather than local-first
+
+  The package descriptions and the core README said "optimized for local LLMs",
+  which is the positioning npm shows on the package page and which stopped being
+  true a while ago: core ships an OpenAI-compatible client that talks to a local
+  server or a hosted one with equal footing, and OpenAI, Anthropic, OpenRouter,
+  Bedrock and DeepSeek are all first-class provider plugins. The reference
+  deployment runs a hosted model by choice.
+
+  Local support is unchanged and still first-class — it is no longer stated as
+  the framework's identity. The `local-llm`, `ollama` and `vllm` keywords stay,
+  because those are discovery tags for a capability TAI really has.
+
+- 9b13c86: Let config reach sampling controls core does not model, via `providerExtra`
+
+  The generation call sent `temperature` and `max_tokens` and nothing else.
+  `ChatParams.extra` and the provider-side merge both already existed, but nothing
+  on the agent's path populated them, and the `providerExtra` config key reached
+  only `briefing` and `suggestions` — so a deployment had no way to set, say,
+  vLLM's `repetition_penalty`.
+
+  That is not hypothetical: one local 27B model re-sends its own previous
+  message nearly verbatim (15/16, word-trigram overlap 0.90 against the agent's
+  own prior reply) and neither temperature nor prompt wording fixes it — an
+  explicit "do not repeat" instruction measured 20/20, worse than saying nothing.
+  `repetition_penalty: 1.15` takes it to 4/16.
+
+  `providerExtra` is now readable on `models[]` (per rung), `agents.<name>`, and
+  `agent`, and lands on `ChatParams.extra`. Core neither validates nor interprets
+  the keys, so provider plugins can expose their own controls without a core
+  change. A more specific level replaces the bag rather than merging into it,
+  because a chain mixes providers and the bag is provider-shaped.
+
+  Also fixes a stray NUL byte in `agent/agents.ts` — a dedup-key separator written
+  as the literal byte instead of a unicode escape, which made the file read as
+  binary to grep and every other text tool.
+
+- c120f51: Make `server.proxyAuth` actually authenticate, so the dashboard works remotely.
+
+  The middleware and the login page both already existed. Nothing mounted the
+  middleware, and `/api/auth/login` was never implemented, so enabling proxyAuth
+  authenticated nothing while suppressing the warning that the API was open.
+
+  The server now gates `/api/*` on proxyAuth when enabled, accepting either the
+  password as a bearer or an HMAC-signed session cookie, and serves
+  `/api/auth/login` and `/api/auth/logout`. The cookie is what matters: a bearer
+  token cannot ride on an `EventSource` connection, so SSE (chat, the event feed)
+  was unreachable to a token-authenticated dashboard. That is why the bundled UI
+  could not be used with `authToken` alone.
+
+  Auth is one gate rather than two stacked middlewares, so "which credential
+  decides" is answerable by reading one function. `authToken` keeps working
+  alongside proxyAuth, letting scripts hold a separate secret from browsers.
+
+  Hardening:
+
+  - Session cookies are HttpOnly, SameSite=Lax, and only `Secure` when the
+    request actually arrived over TLS (`x-forwarded-proto`, else the request
+    URL). Setting `Secure` unconditionally makes login silently fail on a
+    plain-HTTP LAN, since the browser accepts the 200 and drops the cookie.
+  - Failed logins are throttled per client IP, 10 per 15 minutes, keyed on
+    `x-forwarded-for` so one attacker cannot lock out everyone behind a proxy.
+    A correct password clears the record.
+  - The session HMAC is keyed by the password, so rotating it invalidates every
+    issued session.
+  - `proxyAuth.enabled` with an empty password fails every request closed with a
+    500 instead of falling open, and `validateConfig` warns about it.
+
+  Also fixes the UI's 401 interceptor swallowing `/api/auth/login`'s own 401,
+  which made every wrong password report "Network error" instead of the reason,
+  and parses the server's JSON error rather than printing it raw.
+
+- 7c6217a: Subscribing an agent to a room at runtime now actually starts it watching.
+
+  The watcher armed its timers and listeners once, from whatever subscriptions existed when `start()` ran. Anything added afterwards — `/room add`, the room tool's `invite`, a config reconcile — was written to the database and then never armed. A new `deliver: poll` subscription had no poll timer, a `checkInMinutes` had no interval, and the first push subscription for a backend had no message listener.
+
+  Nothing reported an error. The write succeeded, the subscription was really there, `/room members` listed it, and the agent simply never spoke. From the outside that reads as a model too weak to answer, which is the wrong diagnosis and leads to the wrong fix.
+
+  `RoomStore` already emitted `room.membership_changed` on subscribe and unsubscribe — the announcer plugin has been consuming it all along. The watcher only ever emitted events and never listened to any. It now subscribes to that one and re-arms.
+
+  Re-arms are debounced, because a config reconcile emits one event per subscription it adds or prunes and an agent can invite several peers in one turn; without coalescing, twenty subscriptions would tear down and rebuild every timer in the deployment twenty times.
+
+  The tradeoff that leaves: `rearm()` rebuilds _all_ timers, so any poll or check-in clock in flight restarts. A subscription changing every few minutes could keep starving a long poll interval. Arming incrementally — touching only what changed — avoids that and is the better end state; this is the version that makes the documented feature work at all, and never firing is worse than firing late.
+
+  Also fixes a contradiction: `/room add` reported "Takes effect immediately" while the `room` tool reported "Takes effect on the next reload" for the same write. The first was false and is now true; both say the same thing.
+
+- 449e827: Say when a turn hit the output cap instead of returning an empty reply.
+
+  `agent.maxTokens` goes out as `max_completion_tokens`, which on a
+  reasoning model caps reasoning _plus_ visible output rather than output
+  alone. A hard turn can spend the entire budget thinking and come back
+  with an empty message and `finish_reason: "length"`, billed in full.
+
+  The loop now recognises that case and reports it: which model answered,
+  what the cap was, how many output tokens were billed, and whether
+  reasoning is what consumed them — through `onStop` as
+  `{ kind: "truncated", … }`, and as the turn's returned text. An empty
+  assistant message is otherwise indistinguishable from a model that had
+  nothing to say, and that ambiguity is how this class of bug survives.
+
+  Checked before the nudge path, because nudging a model that ran out of
+  budget spends another round arriving at the same place. A reply that was
+  merely cut off mid-sentence is kept, with a warning rather than a
+  replacement — the partial answer is still worth more than the notice.
+
+  The cap itself is unchanged: it exists because OpenRouter reserves the
+  routed provider's full output window against the balance when the field
+  is absent and 402s at low balance. Per-rung `maxTokens` (`ModelEntry`)
+  is the knob for raising it where reasoning is on.
+
+- 58dd367: Compaction hides a conversation instead of deleting it.
+
+  `compactSession` ran `DELETE FROM messages` and wrote a model-authored summary
+  in the originals' place: no archive, no tombstone, no event. A summary that
+  dropped the one fact that mattered dropped it permanently, and there was nothing
+  to go back to. That shipped alongside `agent/rewind.ts`, which stamps
+  `rewound_batch` and filters on read specifically so a conversation survives
+  being wrong about it.
+
+  Compaction now uses the same mechanism. Rows keep their place and gain a
+  `compacted_batch` number, `getSessionMessages` skips them, and the summary row is
+  stamped with `compaction_summary_for` so undoing a compaction removes the summary
+  too rather than leaving one beside the conversation it summarised.
+
+  New: `undoCompaction(db, sessionId, batch?)` restores one compaction — the most
+  recent by default, so undoing twice walks back two steps — and
+  `listSessionCompactions(db, sessionId)` reports what is folded away. A
+  `session.compacted` event carries the session, the batch, and how many messages
+  were hidden, so a subscriber can archive, notify or audit.
+
+  Ordering is part of the contract and is tested: summarise first, hide second. A
+  provider that throws now leaves the session exactly as it was, rather than
+  hidden behind a summary that never arrived.
+
+  Two nullable columns are added to `messages` by a safe migration; existing rows
+  are untouched and nothing is retroactively hidden. Verified against a 262 MB
+  production database.
+
+  This is also the precondition for compacting automatically, which was not a
+  responsible thing to trigger on a threshold while it was irreversible.
+
+- bbcde3b: Add `/room rewind` — take a conversation back a few turns.
+
+  `/room reset` was the only way to undo anything, and it throws the whole
+  conversation away. That is right when a conversation is a total loss and wrong
+  every other time. Most conversations that go bad go bad at a point you can
+  name: one misread instruction compounded over six turns, one tool result that
+  poisons every later answer, two agents being polite at each other until the
+  turn cap stops them. What you want then is to drop the tail, not the history.
+
+  ```
+  /room rewind agent:iris             # take back the last turn
+  /room rewind agent:iris turns:5     # take back five
+  /room rewind agent:iris turns:0     # put the last rewind back
+  ```
+
+  Nothing is deleted. A rewound message keeps its row and gains a `rewound_at`
+  stamp; `getSessionMessages` skips stamped rows, so the model stops seeing them
+  while the transcript stays whole and the operation stays auditable. Deleting
+  would make "one turn too many" — the obvious mistake with a command like this
+  — unrecoverable.
+
+  Repeated rewinds compose, and each undo restores exactly one of them: rewinding
+  twice and undoing once lands one step back, not where you started. Because
+  history is re-read from the database every round, a rewind takes effect on the
+  agent's next turn with no restart.
+
+  The reply quotes the opening of the first message taken back. A rewind is
+  counted in turns and nobody remembers how many turns ago something was said, so
+  the count alone gives no way to tell a correct cut from an off-by-one. It also
+  reports session scope, for the reason `reset` learned to: an agent on a
+  `shared` scope has one conversation covering every room it is in, so "this
+  room" would be a quiet lie about the reach of the change.
+
+  The rewind number is a counter derived from the rows, not a timestamp. Undo has
+  to restore exactly one rewind, and two rewinds in the same millisecond share an
+  ISO string — which is not hypothetical: the timestamp version failed on the
+  first full test run, where two rewinds land in the same millisecond routinely.
+  Ordering that decides correctness should not depend on clock resolution.
+
+- 2c0fde1: Fix two things `/room rewind` got wrong on first real use.
+
+  **The rewind was handed straight back.** A room's wake prompt is built from the
+  backend's messages — `fetchSince(roomId, sub.cursor)` — not from the session.
+  Rewinding only the session hid the exchange from the agent's memory and then
+  re-fed it as "New messages:" on the very next wake, the agent's own last post
+  included. Observed in production: an agent quoted the message it had just been
+  made to forget. The rewind now moves that room's cursor to the newest message,
+  so nothing taken back comes back.
+
+  Only the cursor for the room the command was run in moves. A shared-scope agent
+  has one memory across several rooms, but advancing every cursor would silently
+  drop genuinely unread messages from rooms nobody asked about.
+
+  **The excerpt quoted boilerplate.** A room turn's `user` message is a whole
+  constructed prompt — identity preamble, room purpose, new messages, reply
+  instructions — and the preamble is byte-identical on every turn in a room. So
+  the quote came back as
+
+      > Room "eng". You are planner. Today is …
+
+  which told you nothing about where the cut landed, the only thing the excerpt
+  is for. It now quotes the messages block and falls back to the raw text for
+  turns that are not room prompts.
+
+- 0b7a0f7: Raise `/room rewind`'s turn cap from 50 to 1000.
+
+  50 was arbitrary and too low. An agent on `roomSessionScope: shared` keeps one
+  conversation across every room it is in, so its turn count is the sum of all of
+  them — the first real use needed 77 and the option rejected it. The cap only
+  guards against a fat-fingered 9999, and a rewind is reversible with `turns:0`,
+  so it can afford to be generous.
+
+- 19188db: `/room all <message>` — say something to every agent in a room
+
+  There were two ways to reach agents from Discord and neither did this. `/room
+ping` sends your words to one agent. `/room status` reaches everyone but asks a
+  fixed question and deliberately leaves nothing in the transcript. Saying an
+  arbitrary thing to the whole room meant pinging them one at a time.
+
+  `/room all message:…` posts your message into the room addressed to every
+  subscriber whose `wakeOn` is not `none`.
+
+  **Addressing them by name is the point.** An agent on `wakeOn: named` or
+  `addressed` does not stir for a message that names nobody, so typing in the
+  channel reaches only the `wakeOn: all` subscribers. Naming everyone is what
+  makes it a broadcast.
+
+  Because it goes through the room as an ordinary post rather than waking agents
+  directly, everything else applies unchanged: `room(action="pass")` still lets an
+  agent stay quiet, repeat suppression still holds, and the conversation-depth
+  counter resets because a person really did speak — no special-casing needed.
+
+  Unlike `status`, the message appears in the transcript under your name. That is
+  not the line `status` avoids crossing: these are genuinely your words, so
+  attributing them to you is accurate rather than putting words in your mouth.
+
+  Agents on `wakeOn: none` are excluded from both the addressee list and the "sent
+  to N" count — they would not hear it, and counting them would make the
+  confirmation a claim the command cannot back. When _every_ subscriber is
+  `wakeOn: none` it says so instead of posting, because "nobody is here" and
+  "everybody is deaf" need different fixes.
+
+  Two defects found by adversarial review of this change and fixed here. Both
+  predate it — `ping` and `status` had the first one too:
+
+  - **A failed `/room` subcommand said nothing and logged nothing.** The error
+    handler called `interaction.reply()` unconditionally, which discord.js rejects
+    once an interaction is deferred or replied, and that rejection was swallowed
+    by an empty `.catch()`. A failing `ping`, `all` or `status` left the user on a
+    "thinking…" spinner forever with no error text anywhere — and the comment
+    saying it was "logged upstream" was wrong. It now branches on the interaction
+    state and always logs the original error first.
+  - **`/room all` could report "Sent to N agent(s)" while waking nobody.** A room
+    message is parsed back out of Discord as an envelope, and a name is only
+    accepted as the speaker when the identity layer knows it. Run from an account
+    with no `rooms.identities` entry, the message can return with no speaker and
+    `fromSelf: true`, which the wake logic drops for every subscriber before it
+    looks at who was addressed. The command now warns when it cannot resolve the
+    caller and prints the exact config line to add. Same condition means the
+    conversation-depth reset only holds for a recognised speaker — the docs said
+    otherwise and have been corrected.
+
+- 20f9fe1: Rooms announce who joined and who left, so membership stops being invisible.
+
+  An agent called `room-keeper` created a room, stayed subscribed to it
+  because `room(action="create")` subscribes the creator, and went on receiving
+  everything said there long afterwards. `/room members` would have shown it the
+  whole time. Nobody looked, because nothing had ever suggested there was
+  anything to see. Being in a room and looking like you are in a room were
+  different facts.
+
+  - **`room.membership_changed`** on the runtime event bus — `{ roomRef, agent,
+change: "joined" | "left", source: "config" | "agent" }`. Emitted by
+    `RoomStore` only for changes that actually happened: a re-subscribe that
+    changed nothing is not a join, and unsubscribing an agent that was not there
+    is not a leave. The store takes the bus as an optional constructor argument,
+    so bare constructions keep working.
+  - **`builtin:room-announcer`**, on by default, posts one line into the affected
+    room: `**iris** joined this room.` / `**iris** left this room.` The creator's
+    own join gets its own sentence — `**room-keeper** created this room and
+joined it.` — because it is a side effect of opening the room rather than a
+    decision about who should be in it, and it is the case that went unnoticed.
+
+  `source: "config"` changes are suppressed outright. `rooms.subscriptions` is
+  re-applied on every reconcile and re-created wholesale on a fresh database, so
+  announcing those would post a wall of joins on every boot — the way a signal
+  meant to make membership visible becomes noise everyone learns to skip.
+
+  Announcing is a workflow opinion, so it is a removable plugin rather than a
+  property of rooms: core emits the event, and a deployment that wants different
+  wording or none of it sets `enabled: false`. Config: `{ module:
+"builtin:room-announcer", config: { speaker, creationWindowSeconds,
+announceJoins, announceLeaves } }`.
+
+- 7f620a0: Let an agent pass on chatter that is not about its work
+
+  The wake prompt offered `room(action="pass")` for three named cases — acknowledging, agreeing, thanking. A model reads the enumeration as exhaustive, so anything outside it gets a reply: given a passing remark from one person to nobody in particular, both models tested answered, and by the letter of the wording they were right.
+
+  The measured cost was larger than "one unnecessary reply". A room whose `purpose` explicitly said to stay out of social chatter was overridden seven times in eight — the sentence was beating the room's own stated norm, not merely under-specifying.
+
+  Adds a fourth case. Still a list of concrete cases rather than a general "reply only when relevant", because the general permission is the phrasing that gets over-taken.
+
+  Not free: on the benchmark's control for the opposite failure — a loose question from a person, which must still be answered — the pass rate went from 8/8 to 5/8. The measurements are recorded next to the wording.
+
+- b559646: Rooms: parent messages, visible tool activity, and correction rounds.
+
+  - `OutboundRoomMessage.parentId` says a message belongs underneath another;
+    `capabilities.threads` says whether a transport can render that. Discord opens
+    a thread on the parent. The seam does not know what a thread is, so a
+    transport that nests differently is not forced into Discord's shape.
+  - `rooms.toolActivity` (`none` | `mutations` | `all`) attaches an agent's tool
+    calls under its reply. Each line names the tool and the argument identifying
+    its target, never the full arguments — those carry file contents and search
+    bodies. Reads are included under `all` because a wrong answer usually traces
+    to what was read.
+  - A written-out `room(action="pass")`, and a pass after changing files, each get
+    one correction round instead of being silently suppressed or overridden. The
+    agent is told what looked wrong and decides; asking beats overriding, and a
+    single attempt keeps a weaker model from spending its budget being corrected.
+
+- 9883913: Agents woken by the same message take turns.
+
+  A message naming two agents woke both, and both were dispatched without being awaited — the in-flight guard is keyed per (agent, room), so nothing serialized them. They answered the same question in parallel, and each prompt was built from the backlog as it stood when the message landed, so neither knew the other had been asked. Two overlapping answers to one question is the most common way a room becomes unreadable, and the conversation-depth cap cannot help because both replies are legitimately addressed.
+
+  Wakes now queue on a FIFO chain per room. The payoff comes from something that was already true: `runWake` fetches the backlog when it _starts_, not when the trigger was queued. So chaining alone is enough to put the first agent's reply into the second agent's prompt — the prompt builder is untouched.
+
+  Serialization is per room, not global: two rooms still run in parallel, and an agent slow in one room does not hold up another. Within a room the second agent does wait for the first, so a hung model turn delays the others until the loop's own timeout fires. That is the cost, and it is why the behaviour is selectable — `rooms.turnTaking: "serial" | "concurrent"`, with a per-room override, defaulting to `serial`.
+
+  A repeat trigger for an agent already waiting its turn is now dropped rather than queued twice. The queued run re-reads the backlog when it starts, so it sees the newer message anyway — which also stops `wakeOn: "all"` waking an agent a second time for a reply that arrived while it was still in the queue.
+
+  Every path that starts a turn for a room goes through the queue — the push debounce, a poll tick, and a scheduled check-in. Turn-taking that covered only the push path would have left the other two racing exactly as before, since both reached their runners directly.
+
+  `/room status` is deliberately left off the chain. It is a person asking every agent at once and answers immediately, which is the reason it was written not to await in the first place.
+
+- 77781ef: Archived rooms can be filed under a Discord category. Set
+  `channels.discord.archiveCategory: Archived` and archiving a room moves its
+  channel there; restoring puts it back in whatever category it came from.
+
+  The channel is moved, not locked or hidden — people can still read it and still
+  talk in it, which is the point of keeping the record. Moving never resyncs
+  permissions to the new category: discord.js does that by default, and since room
+  membership is derived from channel permission overwrites, accepting it would
+  erase the room's roster as a side effect of tidying the sidebar.
+
+  Unset by default, so archiving leaves channels exactly where they are. The move
+  needs Manage Channels and is best-effort — if it fails the room is still
+  archived, with one warning in the log.
+
+  Adds the `RoomBackend.archiveRoom?()` seam and `RoomCapabilities.archive`, which
+  reports false both when a transport cannot file rooms and when nobody configured
+  it to. Backends can park opaque state across an archive via
+  `RoomStore.getBackendState` / `setBackendState`.
+
+- b7788ad: Rooms can be archived. A room could be opened three ways and closed none, so a
+  finished one kept its poll and check-in timers, kept a line in every `room list`
+  an agent reads, and held its name against the next room that wanted it.
+
+  `room(action="archive")` and `/room archive` retire a room without destroying
+  it: it stops waking anyone, refuses posts, and releases its name — while keeping
+  its messages and every subscription's cursor, role and cadence, so `unarchive`
+  gives the room back rather than an empty channel. Announced in the room by
+  `builtin:room-announcer`, since archiving silences everyone else in it.
+
+  Room names are now unique among live rooms only, so archiving `trip` frees the
+  name for the next one. Config gains `rooms.rooms[].archived` as a tri-state:
+  `true` archives, `false` reopens, and omitting it leaves the stored state alone.
+
+- 7e05a94: One wake can now read several rooms in a single turn, when the subscriptions ask for it.
+
+  The queue has produced one entry per agent since #348, but each room named in that entry still started a turn of its own: an agent watching nine rooms ran nine model turns, each blind to the other eight and each costing a wake. A person with nine channels open does not get interrupted nine times.
+
+  Opt in per subscription, and set the per-agent floor it requires:
+
+  ```yaml
+  rooms:
+    minWakeIntervalMinutes: 5 # required — batching is refused without it
+    subscriptions:
+      - agent: coder
+        room: eng
+        batch: true
+      - agent: coder
+        room: ops
+        batch: true
+  ```
+
+  `rooms.minWakeIntervalMinutes` is a requirement, not a recommendation. While it is 0, an agent's `batch: true` rooms keep their own turns and a warning says why, once per agent. A combined turn is charged to whichever room holds the newest message, so the charged room _rotates_: nine batched rooms with round-robin traffic buy 12 × 9 = 108 combined turns an hour before any counter refuses. A feature meant to lower wake volume would instead be multiplying the runaway ceiling by the batch size, and the per-agent floor is the only brake that counts an agent rather than a room. Refusing is the honest failure; silently raising the ceiling is not.
+
+  Two is the floor for rooms as well. One room with `batch: true` and nothing to batch with keeps today's per-room turn exactly, so a deployment that sets the flag in one place sees no change at all, and a deployment that sets it nowhere sees none either. The existing suite is the proof: it passes unedited.
+
+  What a combined turn does differently:
+
+  - **One prompt**, a `## room` section per room that has something new, rooms with nothing new omitted entirely. At most five messages per room, under one hard budget that charges each section's heading, purpose and role as well as its transcript. Every room the wake policy said yes to is guaranteed its newest message before the remainder is allocated newest-traffic-first, so nine idle rooms cannot crowd out the one that asked a question ten seconds ago — and the room that _caused_ the wake cannot be starved by a chattier neighbour either.
+  - **One wake charged**, against the room whose newest message is most recent, rather than one per room. The hourly ceiling is an UPDATE on an `(agent, room)` row and cannot express "this agent ran once", which is exactly why `minWakeIntervalMinutes` is required; the hourly one stays as a backstop.
+  - **The pause switch applied room by room.** Under `scope: autonomous` a person waiting in one room licenses a turn about that room, and the rooms carrying nothing but agent-to-agent traffic are dropped before the prompt is built. Asked over the whole batch, one human anywhere would un-pause every room the agent watches and invite it to post in all of them — the runaway the switch exists for, arriving through the feature meant to reduce wakes.
+  - **Room queues acquired in one agreed order.** Each per-room chain from #332 is a lock, and a turn spanning N rooms holds all N — two agents with overlapping batches taking them in different orders is a deadlock. One comparator, in one place, with a test that deadlocks without it.
+  - **Every shown room's cursor advances**, keeping the existing rule that a cursor records what was shown rather than what was acted on. A room the budget squeezed out was never shown, so it keeps its cursor, emits no `room.woke`, and is read next time.
+  - **`agent_turns` cleared only where the agent posted.** The anti-chatter counter belongs to one room's conversation, so a tool call in one room is no reason to release the brake in another where two agents are looping.
+  - **A shared session**, because a per-room session key would file a cross-room conversation under whichever room happened to be primary.
+
+  Two triggers deliberately stay outside a batch. A scheduled check-in keeps its own turn — it is a different kind of prompt, and a digest that only runs when something is new would swallow it in the quiet rooms it exists for. And a poll tick over a batch where nothing deserves a wake runs nothing: poll timers fire regardless of traffic, so without that check batching would raise wake volume rather than lower it.
+
+  Reply routing is the honest part. A combined turn has no single destination, so bare text is not posted anywhere: the agent gets one correction round naming the rooms in play and asking which, and text that still names no room is dropped with a log line. Every correction a batched turn can give says the same thing — name a room or pass — including the ones for malformed output, which a single-room turn answers by asking for plain text. A plausible message in the wrong channel is worse than a visible failure. Single-room wakes keep today's forgiving behaviour untouched.
+
+  Step 3 of 3 toward #344.
+
+- e3b1bc5: Let an agent see every room it watches, not just the one that woke it
+
+  A wake prompt names one room and carries that room's new messages. For an agent
+  in one room that is everything; for an agent in six it is a keyhole, and the
+  conversations it has open elsewhere are invisible unless they happen to have
+  spoken last.
+
+  `rooms.crossRoomView` (off by default) adds a per-turn block: N lines across all
+  rooms, a floor of M for each room the agent is not answering in, the current
+  room marked and taking the remainder. Floors are paid first, so a busy room
+  cannot crowd out a quiet one. Other rooms' slices are cached for
+  `cacheSeconds` — otherwise every watched room is a backend round trip on every
+  turn — while the current room is always fresh.
+
+  It renders through a `turn` context slot rather than the wake prompt, so it sits
+  behind the history and never enters the conversation record. The wake prompt is
+  persisted as the record of what the agent was asked, and a re-rendered view
+  stored as a record is what puts one block in a session twenty times over.
+
+  Enabling it also adds a short standing paragraph, in the system prompt, telling
+  an agent in several rooms how to reach the others. Without it a 27B model asked
+  in one room to tell someone in another something invented `[message to dana]` as
+  a reply prefix and sent it to the wrong room. The `room` tool could always do
+  it; nothing said so.
+
+- 920a799: rooms: `dm` delivers straight to an agent instead of opening a channel for it
+
+  Shared sessions took the room's second job away — `room:all:<agent>` does not
+  reference a room — so materialising a Discord channel to carry one message was
+  pure overhead, and at 27 agents it was 27 channels waiting to happen. `dm` now
+  hands the message to the recipient and returns its reply; the exchange lands in
+  the recipient's session, so it stays durable and inspectable without being a
+  place. `rooms.desks` becomes an opt-in mirror for a direct line you want to read.
+
+- 920a799: rooms: one name per person, honest `/room reset`, and brakes that fit the room
+
+  Found by reading what the agents actually did rather than the code:
+
+  - **One person, one name.** A declared human identity now replaces the implicit
+    `owner` instead of sitting beside it, matched on transport account id, and
+    slash commands stamp that label rather than the raw Discord username. Agents
+    were shown `owner` and `alex` for one human, read `@discorduser` in the
+    transcript, and got `Unknown participant(s): discorduser` from a validator that
+    had never heard of it.
+  - **`/room reset` clears the session the agent is using.** It built the key
+    without asking for the agent's session scope, so with `roomSessionScope:
+shared` it wiped an abandoned per-room session, reported that session's message
+    count, and left the live one untouched. The reply now says which memory went.
+  - **An agent's own posts are condensed in its wake transcript.** They are already
+    in its session as the reply it just made; one observed prompt was 6.4 KB, two
+    thirds of it the agent quoting itself.
+  - **Per-room `maxWakesPerHour` / `maxAgentTurns`**, because a coordination room
+    and a weekly ideas channel cannot share one number. A wake that produced no
+    post and no tool call is refunded — what makes a runaway expensive is replying.
+  - **A room that fails three times in a row is left alone for thirty minutes.** A
+    ref pointing at a deleted channel retried forever. Nobody is unsubscribed.
+  - **One reply path.** Status updates and check-ins ran a copy that lacked the
+    malformed-`pass` correction and the tool-activity record.
+
+- b559646: Add rooms: shared multi-party conversations for agents and humans.
+
+  A room is a named destination within a transport (a Discord channel) that
+  several agents and people share, distinct from a `channel` (the transport
+  itself) and a `session` (one participant's private history).
+
+  - `RoomBackend` seam with a `local` (SQLite) and a `discord` implementation;
+    backends register when a transport connects and unregister when it drops.
+  - Addressing is `@name`; a participant with a Discord account is written as a
+    real `<@id>` mention so they are actually notified, with `allowedMentions`
+    allowlisting only the accounts a message addressed. Agents, having no
+    account, stay plain text.
+  - On Discord each agent posts through a channel webhook, so it appears as its
+    own participant with its own name and avatar. Speaker envelopes
+    (`[supervisor] @coder …`) remain the fallback where a transport has no such
+    concept, so one bot account can still carry several identities. The speaker is stamped by core from the calling
+    agent, never from model output, and is only trusted on messages from TAI's
+    own account — a prefix typed by anyone else cannot impersonate an agent.
+  - Exactly one agent hosts a room: the creator gets `addressed`, invitees get
+    `named`, so a loose message gets one answer instead of one per agent.
+  - Subscriptions with two independent axes: `deliver` (push/poll) decides when
+    an agent looks, `wakeOn` (named/addressed/all/none) decides what makes it run.
+    `named` keeps a room of several agents from all answering one loose question.
+  - Runaway protection: an agent never wakes on its own message, an atomically
+    consumed per-(agent, room) hourly wake ceiling, and burst debouncing. Wakes
+    refused mid-run or by the ceiling are re-armed rather than dropped, and the
+    watcher drains each backlog once on startup. A `maxAgentTurns` depth cap
+    stops two agents being politely stuck at each other, which no single-message
+    rule can detect. Reset by a human speaking, and by any turn that used a tool
+    — collaboration looks identical to politeness, and tool use is what tells
+    them apart, so agents working on a task are not silenced mid-task. A turn is
+    a contiguous run from one speaker, so a long reply split across transport
+    messages counts once rather than three times.
+  - Posts reuse the NotificationGate with a window scaled by `urgency`
+    (high ~15min, medium ~daily, low ~weekly). Replies to a direct address are
+    exempt.
+  - Each room has a `purpose` — standing instructions injected into every wake
+    prompt and mirrored to the Discord channel topic so people see them too.
+  - `/room` slash commands (create, ping, members, add, remove, purpose, status);
+    `ping` autocompletes the agents in the room, so addressing never has to be
+    guessed, and a misspelt `@name` is corrected when exactly one identity is
+    close enough — otherwise a typo silently routes the message to the room host. A name is a call-out anywhere in a message, not just at the front. to manage a
+    room from inside Discord. `/room status` asks every agent what it is working
+    on by waking each directly, rather than faking a message from the person.
+  - `room` tool (list/read/post/pass/create/invite/remove/members/purpose/subscribe/unsubscribe),
+    where `pass` lets an agent decline to speak — without it, being woken
+    guarantees a message and rooms fill with "Acknowledged." — and
+    `room.message` / `room.woke` events for plugin-side behavior.
+
+  Also adds `NotificationCandidate.windowHours` so any caller can scale repeat
+  suppression per message rather than only per config.
+
+- 682e304: Rooms: posting stops being pinging, plus reactions and per-room roles.
+
+  - `OutboundRoomMessage.notify` (default false) separates writing to the record
+    from interrupting a person. Addressing someone renders as plain `@name` —
+    visible in the transcript, silent on their phone — and a real mention takes
+    `notify: true`. Automatic replies never notify: an agent woken by a message is
+    continuing a conversation, not raising something. (#276)
+  - `RoomBackend.react` + `capabilities.reactions`, surfaced as
+    `room(action="react")`. "Got it" costs a turn, wakes watchers and pushes the
+    room toward its depth cap for no information; a reaction carries the same
+    meaning at none of that cost. It removes the reason to speak, where
+    `maxAgentTurns` only caps how often agents may. (#269)
+  - A per-subscription `role` says what an agent is for in one room, under the
+    room's `purpose`. The same agent coordinating a trip and reviewing code is not
+    the same agent in both, and only its global instructions existed. (#270)
+
+- d492806: Rooms: choose whether an agent remembers each room separately or all together, and make task ownership legible.
+
+  `agents.<name>.roomSessionScope` is `room` (default, a session per room) or
+  `shared` (one session across every room). Per-room isolation means an agent
+  moved into a new room starts blank; `shared` lets an assistant carry a thread
+  between places, at the cost of mixing unrelated context and growing history with
+  the number of rooms rather than the conversation.
+
+  `task_query` gains `mine`, which scopes to the calling agent, and every result
+  now states ownership — `yours`, `assigned to X`, or `unassigned (not yours)`. An
+  unassigned task previously rendered as bare text, so "no assignee" read as "no
+  information": eleven agents freshly added to a channel each reported the same two
+  unassigned personal tasks as their own in-flight work. Session history cannot
+  answer "what am I working on" because it is per-room; durable state has to.
+
+- dd3951c: rooms: stop `invite` undoing a wake mode, and stop posting raw tool-call markup
+
+  Three fixes found by auditing what agents actually said:
+
+  - **`invite` and `/room add` no longer reset an existing subscription's wake
+    mode.** Neither takes a wake mode, so both wrote their own default over
+    whatever the agent had chosen: an agent set itself to `all`, someone invited it
+    to the room it was already in, and it dropped back to `named` — while the
+    `subscribe` call that set `all` had truthfully reported success. Re-inviting is
+    now a no-op on wake policy; only a call that names a mode changes one.
+  - **Raw tool-call markup is corrected rather than posted.** A local model emitted
+    `<tool_call> function=room> <parameter=action> post …` as prose and it went
+    into the channel verbatim. It now gets the same one-round correction as a
+    written-out `pass`, and is suppressed with a log line if it survives that. The
+    message it meant to send is visible in the markup, but digging it out means
+    parsing one model family's dialect and guessing — a wrong guess posts words the
+    agent did not choose, under its name.
+  - **Agents subscribed to a room without the `room` tool are named at startup.**
+    Every wake prompt ends with "call `room(action="pass")` if you have nothing to
+    add", which an agent whose `tools:` list omits `room` cannot do — so it types
+    the instruction as prose, and from outside that looks like a model too weak to
+    make a tool call. Four agents in one deployment were in this state, including
+    the busiest. Warned, not auto-granted: withholding a tool is a config decision.
+
+- 544aac2: Rooms: tell agents what day it is.
+
+  Rooms are time-situated — check-ins fire on a clock, purposes carry dates,
+  agents are asked how long until something — but an agent only knows the date if
+  it happens to carry a clock tool, and most do not. It infers instead, and gets
+  it wrong: a coordinator running a trip on an hourly check-in said "two days out"
+  when it was one, and had the departure date wrong until corrected by hand.
+
+  Every room prompt now opens with the current date. Ten tokens, no tool call,
+  every agent. (#277)
+
+- 87d2af3: Rooms: `/room reset`, visible wake reasons, and editable messages.
+
+  - `/room reset agent:<name>` clears one agent's conversation for one room. A
+    tool that was broken and then fixed does not help an agent whose history says
+    it is broken — it stops trying, which is reasonable on bad evidence and
+    impossible to argue it out of. Its read cursor is left alone, so it resumes
+    from now rather than replaying what it just forgot. (#273)
+  - `RoomWatcher.wakeReason` reports why an agent woke — named, a loose question
+    from a person, watching everything, or a scheduled check-in — and the activity
+    record leads with it. The reason was always computed and thrown away, which
+    made wake policy guesswork to debug. (#267)
+  - `RoomBackend.edit` + `capabilities.edit`, surfaced as `room(action="update")`.
+    `post` now returns a message id. Rooms were append-only, so an agent checking
+    in hourly posted an hourly notification whether or not anything had changed;
+    one message that updates is quiet. Discord edits through the webhook that
+    posted, since the bot cannot edit a webhook's message otherwise. (#268)
+
+- c308241: The host and container sandboxes close a command's stdin too.
+
+  The previous fix closed stdin in `ExecTool`'s own `execFile` call, which is not
+  the path a running agent takes: `buildLoopOptions` gives every agent a sandbox —
+  defaulting to `host` — so `ExecTool.execute` returns at its `context.sandbox`
+  branch before reaching that code. The fix verified green in isolation while the
+  live deployment went on hanging for the full timeout on every affected command.
+
+  `HostSandbox.exec` and the container runner had the identical unclosed-pipe
+  problem. Both now end the stream, so a CLI that reads stdin when it is not a TTY
+  returns immediately instead of blocking until it is killed with empty output.
+
+  Measured on the Notion CLI through a real agent: `ntn api v1/users/me` went from
+  a 27-second failure to 235ms.
+
+- cc792f2: Stop warning that the `schedule` tool is not enabled when it is.
+
+  `validateConfig` builds its set of enabled tools from `config.tools` alone.
+  `schedule` is gated by its own top-level `schedules:` block, because the tool is
+  one surface on a subsystem that also runs a poll tick — so it never appeared in
+  that set, and every agent listing it drew
+
+      Agent "X" references tool "schedule" which is not enabled
+
+  on every startup and every config write, while the tool was registered,
+  resolvable, and being called successfully.
+
+  A false warning is worse than none. It sits in the same list as the true ones —
+  in the deployment where this surfaced, beside eleven real "room is not declared"
+  warnings — and teaches an operator to skim the list rather than read it.
+
+  Same shape as the `tasks`/`task_query` coupling handled directly above it, and
+  fixed the same way.
+
+- 7d273b5: Make TAI self-hostable: headless setup plus a Docker image.
+
+  `tai init --non-interactive` writes config.yaml from flags and environment
+  variables, so setup no longer requires a terminal. The Ink wizard was the only
+  path to a config and it throws `TTYError` without a TTY, which made every
+  unattended first run — container, cloud-init, CI — impossible. Running `tai`
+  with no config and no TTY now prints that command instead of a React stack
+  trace.
+
+  Adds `docker/tai/` (Dockerfile, compose unit, `.env.example`): one container,
+  one volume at `TAI_HOME`, first boot generates config and an API token, later
+  boots leave the file alone. A root `.dockerignore` keeps `config.yaml`, `.env`,
+  and `agent.db` out of every image build context. See `docs/self-hosting.md`.
+
+  Two correctness fixes found on the way:
+
+  - `server.proxyAuth` no longer counts as authentication in `validateConfig`.
+    Its middleware is never mounted and the `/api/auth/login` endpoint its login
+    page posts to does not exist, so enabling it authenticated nothing while
+    silencing the warning that a non-loopback bind was wide open. It now warns
+    that the setting is inert.
+  - A fresh `tai init` no longer produces a config that warns at startup: the
+    sample `researcher` agent claimed `web_search`, which defaults to disabled.
+
+- 42a1e90: Send the agent's model, not the one stamped on its session.
+
+  The loop sends `session.model`. Every server route creates the session before
+  it knows which agent will handle the turn —
+  `findOrCreateSession(db, key, runtime.getModel(), config.agent.defaultProvider)`
+  — so the row carries the deployment defaults. The runtime's own paths resolve
+  the agent first and were unaffected, which is why this only ever showed up
+  through the HTTP API.
+
+  Harmless while every agent shared one provider. The moment an agent could
+  select its own, it became a mismatch in the worst direction: the request went
+  to the agent's provider carrying the _global_ model name, so a correctly
+  configured agent failed with `qwen3.6-27b-vllm is not a valid model ID` from
+  OpenRouter.
+
+  `buildLoopOptions` now reconciles the session against the resolved agent — the
+  single place that knows both — and updates the row so the transcript records
+  the model that actually answered.
+
+- 2963457: One shared ladder for providers that learn a model's quirks from its 400s.
+
+  Three providers had grown the same pattern independently — a bounded
+  attempt ladder, a per-model memo of what the API refused, and warn-once
+  plumbing — because the underlying problem is general: a per-model
+  request-shape constraint that no static rule predicts, discoverable only
+  by being told no.
+
+  `runQuirkLadder`, `QuirkMemo` and `WarnOnce` now live in core next to the
+  provider interface. `provider-openai` (both endpoints) and
+  `provider-anthropic` use them.
+
+  Recognition stays per-provider, deliberately. Which 400s are recoverable
+  and what the corrected shape is, is vendor knowledge that does not
+  generalise — every vendor words the same refusal differently, and OpenAI
+  words it differently between its own two endpoints. A shared table of
+  error patterns would be wrong within a release.
+
+  Termination stays structural: a shape whose key has already been tried is
+  never tried again, so the loop is bounded by the number of distinct
+  shapes rather than a retry counter. The error text is the _input_ to
+  recovery, so a reworded message must cost a missed recovery, never a
+  hang.
+
+  `ProviderHttpError` comes along, carrying status and body to the
+  recognition step. Without it the only thing reaching `recover` is a
+  message the provider formatted two lines earlier, and deciding "was that
+  a 400?" by matching that string is the same mistake as inferring control
+  flow from a model's prose. The message is unchanged, so anything catching
+  or asserting on it is unaffected.
+
+  No behaviour change: all 137 existing provider tests pass untouched.
+
+- 9ec3100: The progressive-skill catalog tells agents that skills are not loaded, and when to load one.
+
+  The block read "Activate one with `load_skill(name: <id>)`", which is an offer.
+  An agent that believes it already knows the task has no reason to accept one, and
+  that is exactly what happened: an agent woken for Notion work, with the notion
+  skill in its catalog, made **zero** `load_skill` calls and worked from its own
+  session history instead — repeating a broken pipeline the skill explicitly warns
+  against, twice, in a warning it never read.
+
+  The failure is silent. Nothing logs "the agent skipped its skill", and the answer
+  often looks fine because the agent recovers by trial and error, several rounds
+  later than it needed to.
+
+  The block now states plainly that the instructions are **not** in the prompt, that
+  each line is a label rather than the content, and that a skill should be loaded
+  before starting a task it covers _including when the agent already believes it
+  knows how_ — because a skill is the current shared instructions and gets corrected,
+  while an agent's recollection is whatever happened to work last time.
+
+  Costs about 100 extra tokens in the system prompt of agents that have progressive
+  skills, and nothing for agents that do not.
+
+- 248931d: Slash commands check who is asking.
+
+  `shouldRespond` gates the MessageCreate path — self, other bots, the DM policy, `allowedGuilds`. Interactions arrive on a different listener and passed through none of it, so every slash command was reachable by anyone who could see the bot: `/pause` stops the deployment, `/memory set` rewrites an agent's core memory, `/room reset` clears history, `/clone-agent` writes a new agent into `config.yaml`.
+
+  Two checks now run before any handler, in a new `discord-authorization.ts` that owns the policy and knows nothing about discord.js beyond the shape of an interaction.
+
+  `allowedGuilds` was never a missing policy — it is declared config the interaction path simply never read. Honouring it is a bug fix.
+
+  The owner check is new, and applies to commands that change state rather than report them. Which ones is a list (`OWNER_ONLY_COMMANDS`, `OWNER_ONLY_SUBCOMMANDS`), not an inference: a command's blast radius is not derivable from its name, and guessing wrong in either direction is worse than a list somebody maintains deliberately. `/memory show` and `/room members` stay open; `/memory set` and `/room reset` do not.
+
+  When `channels.discord.owner` is unset, an owner-only command is refused with a message naming the key to set. Allowing it would mean the guard does nothing on exactly the deployments that never configured an owner.
+
+  Autocomplete is gated the same way. It answers from config and the database — agent names, memory sections, room names — so suggesting them to someone who cannot run the command leaks what the command would have.
+
+  The policy also accepts per-command restrictions declared by plugins, so a plugin can ship a privileged command without core knowing its name. Built-ins are checked first and cannot be relaxed by a plugin registering the same name.
+
+- 4b54275: Strip orphaned `tool` messages from trimmed history so strict providers don't 400. Front-trimming (and the summarize-on-trim path) could leave a `role: "tool"`
+  result whose `assistant` + `tool_calls` parent was dropped. Lenient providers
+  (vLLM/qwen) ignore it, but OpenAI / Anthropic / Bedrock / DeepSeek reject it with
+  "Messages with role 'tool' must be a response to a preceding message with
+  'tool_calls'". `trimHistory`/`trimHistoryWithSummary` now run a
+  `stripOrphanedToolMessages` pass (exported) that keeps a tool message only when a
+  preceding assistant turn opened a matching `tool_call` id.
+- 22f9b9e: Write the compaction summary as the agent's own note, not as something the user said.
+
+  `compactSession` stored its summary as a `role: "user"` message. From the model's
+  side that is the person on the other end having just narrated a third-person
+  account of the conversation — so it continues the narrative instead of answering
+  the message that actually arrived.
+
+  Measured on a real companion session after compaction, replying to an ordinary
+  greeting:
+
+  | summary in history            | replies that carried on about events from the summary |
+  | ----------------------------- | ----------------------------------------------------- |
+  | as a `user` turn (before)     | **4 of 5**                                            |
+  | reworded, still a `user` turn | 3 of 5                                                |
+  | as an `assistant` turn        | **1 of 5**                                            |
+  | no summary at all             | 1 of 5                                                |
+
+  The role is doing the work; rewording it barely moved. As an assistant turn the
+  summary reads as the agent's own note about earlier — context it already has,
+  rather than a prompt to respond to.
+
+  Symptom this fixes: an agent replying to one person with a message addressed to
+  someone else, copied from the summarised history. `[assistant, user]` was checked
+  against Anthropic, OpenAI and DeepSeek before changing this; all three accept it.
+
+- d7656d8: Honour `TAI_HOME` everywhere, so `-c <config>` selects a whole instance rather than just a config file.
+
+  `resolveHomeDir` read `TAI_HOME`, but nothing in the repo ever assigned it. Core is a library and never sees the CLI's flags, so every module that isolates per-instance state by reading the variable — the vault master key, the workflow secrets key, `exec-outputs`, `tool-outputs`, and the sandbox scratch allowlist — took its fallback branch on every run. Four more paths ignored the variable outright and resolved against `homedir()`: the resource trust store, the resource cache, and the registry index.
+
+  The result was a home directory holding the config and database while its keys and cached output went somewhere else. The visible symptom on a real install is hundreds of session directories under `~/.tai/exec-outputs`, a path no config mentions.
+
+  - New `taiHome()` / `taiHomePath()` in core is the single answer to "where does this instance keep its state", read from the environment on every call. Anything that caches it at module load captures the value from before the CLI publishes it.
+  - The CLI now calls `adoptHomeDir()` at each entry point, which resolves the home and publishes it as `TAI_HOME`.
+  - Scratch output moves from `~/.tai/{exec,tool}-outputs` to `<home>/{exec,tool}-outputs`. The old location stays on the sandbox read allowlist: truncated results hand the model an absolute path, and those pointers live in session history indefinitely.
+  - `TrustStore` and `ResourceLoader` expose `storePath` / `cachePath`.
+
+- afc05a2: Answer instead of returning a marker when a turn runs out of tool rounds
+
+  A turn that spent `maxToolRounds` exited straight from the tool phase and
+  returned `[Agent stopped: max tool rounds reached]`, discarding the work it had
+  done. Measured on the benchmark's truncation scenario, 11 of 15 runs ended that
+  way — and in each one the agent had already read the file, seen where it was
+  cut, and tried three ways round it.
+
+  The loop now makes one more call with the tools withheld and returns what the
+  model says. Withholding is the mechanism: "stop calling tools and answer" is an
+  instruction a model can decline, and a model that has spent every round reaching
+  for a tool is the one that will. One extra request, only on the path that was
+  going to return nothing; the marker still stands when the model says nothing,
+  when the call fails, or when the caller has already aborted.
+
+  Callers that detected a stall by matching the reply must move to `onStop` —
+  `isStallStop(stop)`, or the new `stallReasonOf(stop)`. A stalled turn now
+  usually returns ordinary prose. `detectStall(reply)` stays exported but is wrong
+  in both directions: blind to a stall that answered, and it reports an operator
+  cancelling a dispatch as one. The task watcher now reads the structured stop,
+  which also stops it retrying cancelled dispatches.
+
+- dd3951c: tasks: `task_query` requires `assignee`, and "unassigned" becomes a real answer
+
+  The old default was everyone. That reads as harmless until an agent is asked
+  what it is working on: it runs the widest query available and reports whatever
+  comes back. In one deployment the only two `in_progress` rows were the owner's
+  reading list — a novel and an audiobook, both unassigned — and three agents
+  claimed them as work in flight. The claim then lived in each agent's own
+  session, so later status updates repeated it with no tool call at all, and
+  `REAMDE` drifted into "generating a README in Neal Stephenson's style".
+
+  `assignee` now takes `"me"`, `"all"`, `"unassigned"`, an agent name, or a list.
+  Omitting it is an error that names the options. No default is right — "everyone"
+  is wrong for an agent reporting on itself and "me" is wrong for a planner
+  surveying the board — so the caller says which it means. `mine: true` still
+  works; it is the old spelling of `assignee: "me"`.
+
+  `TaskFilter.assignee` gains `null` for "assigned to nobody", distinct from
+  `undefined` for "no opinion". Conflating them is what made an unowned task look
+  available, and therefore look like yours. Backends that cannot express the wider
+  filter natively push down what they can and narrow the result in memory.
+
+- 1ad506a: Preserve the host timezone through the clean launcher environment, add explicit
+  `time.timezone` configuration, and expose a plugin-registerable time provider
+  for runtime clocks and timezone-aware schedules.
+- a1231c6: Timed wakes read from the cursor instead of re-sending the same messages for ever.
+
+  Check-ins and self-booked scheduled wakes fetched a room with `cursor: null`,
+  took the last ten messages, rendered them into a prompt, and never advanced the
+  cursor. The rendered prompt is persisted to the session, so in a quiet room every
+  firing stored another copy of the same block.
+
+  Measured on a production deployment: 124 check-in prompts in one session
+  collapsing to 23 distinct bodies, a single 1,115-token block stored 23 times, and
+  roughly 89% of all duplicated prompt content in the database traceable to these
+  two call sites. The message-wake path, which already read from the cursor and
+  advanced it, produced almost no repeats — so this was cursor discipline rather
+  than anything structural.
+
+  Both paths now read from the cursor and advance it, like every other wake. A
+  check-in is told what arrived since it last looked, and when nothing did it is
+  told exactly that, which is both cheaper and more useful than being handed
+  messages it has already acted on with nothing marking them as old.
+
+  No context is lost. Earlier wakes leave the room's history in the agent's own
+  session, and a first-ever wake still has a null cursor and still receives the
+  backlog.
+
+- 1d9e6a6: Token usage is recorded for every provider call, not just autopilot and exploratory.
+
+  Recording lived in two callers, so `token_usage` was a ledger of those two
+  subsystems and nothing else. Everything the loop actually runs day to day —
+  chat, room wakes, cron, delegation — recorded nothing. On a live deployment that
+  left the majority of traffic invisible: one agent ran 799 room messages in a
+  fortnight and contributed not a single row, which makes "what is this costing
+  me" unanswerable exactly where the answer matters.
+
+  The loop now writes one row per provider call, before invoking the caller's
+  `onUsage` so a throwing consumer cannot cost the accounting. Rows carry `agent`
+  and `source` (`loop` | `autopilot` | `exploratory`), and the two workers pass
+  their own label instead of recording themselves.
+
+  Widening the table must not widen the autopilot budget, or a busy hour in the
+  rooms would pause autopilot for reasons unrelated to autopilot. `checkBudget`
+  and `/api/autopilot/usage` are therefore scoped to `BUDGETED_TOKEN_SOURCES`
+  (autopilot + exploratory), which preserves what the caps meant before. Rows
+  predating the column have a NULL source and still count, since that is what they
+  were; a direct `recordTokenUsage` call that omits the source also stores NULL,
+  so an external caller does not silently drop out of the budget.
+
+  New `GET /api/usage?hours=` returns deployment-wide totals grouped by source and
+  by agent.
+
+- f0bb132: Core: let a tool end the agent's turn (`ToolResult.endsTurn`)
+
+  Telling a model to stop _in a tool result_ does not work on small models. A tool
+  whose entire meaning is "I am done" was still followed by another round-trip
+  asking what to do next, and a 27B model answered by calling it again.
+
+  Measured on a live deployment, over three scheduled room check-ins:
+  `room(action="pass")` was called **3 times each**, 9 provider calls for 3
+  decisions, 505,209 prompt tokens to say nothing — and every one of them exited
+  through the repeated-call detector, so the most deliberate stop the loop has was
+  reported as a stall.
+
+  `ToolResult` gains `endsTurn` and `endsTurnReason`. The loop honours them after
+  the round's results reach history and before the repeated-call detector, and
+  reports `LoopStop { kind: "tool-ended", tool, reason }`, which `isStallStop()`
+  correctly treats as a clean exit. `endsTurnReason` becomes the loop's return
+  value; unset, it falls back to the model's own text, which for a tool meaning
+  "nothing to say" is normally empty.
+
+  The flag lives on the result rather than on the tool because a multi-action tool
+  ends the turn on some actions and not others: `room` post and read continue,
+  `room` pass does not. It is deliberately not gated on `success` — whether a tool
+  worked and whether it meant to stop are separate questions. Where two calls in
+  one round both set it, the first wins. The `pass` that finds no room to silence
+  stays non-terminal: nothing was decided, and the agent still has a correction to
+  act on.
+
+  This replaces a private convention rather than adding a second one. `sleep` used
+  to signal through `workingMemory["tick_done"]`, which the loop special-cased —
+  a real platform capability that only core tools could discover, in a codebase
+  whose rule is that built-ins register the way third parties do. `sleep` now
+  returns `endsTurn`, and any tool can, including plugin and MCP tools.
+
+  **Breaking (type-level):** `LoopStop`'s `{ kind: "sleep" }` variant is replaced
+  by `{ kind: "tool-ended"; tool: string; reason?: string }`. Nothing branched on
+  it in-tree — the exploratory worker tests only `isStallStop` and `max-rounds` —
+  so runtime behaviour for ticks is unchanged, including the `[Sleep] <reason>`
+  string that chat `live_state` reads.
+
+- 19996ac: Transcript lines say what kind of speaker wrote them.
+
+  `IdentityResolver` decides whether a room participant is an agent, a person, or
+  nobody it recognises, and the room subsystem already uses that to decide wake
+  and pause policy. It was discarded at render time, so a person's instruction and
+  another agent's text reached the model as identical `role: "user"` bytes.
+
+  Lines now read `planner [agent]:`, `sam [person]:`, `drive-by
+[unrecognised]:`. Volatility decides where a block goes in a request;
+  authorship decides how much weight it should carry, and nothing downstream — a
+  prompt slot, a history composer, or the model — could express the second while
+  the format did not carry it.
+
+  Three properties this relies on: the marker is written by core from the resolved
+  identity and never from message text; it appears on every line, because a marker
+  that appears sometimes makes its absence meaningful; and an unresolved label
+  renders `[unrecognised]` rather than falling through to a bare name, since that
+  is the case that matters most.
+
+- 28bb474: Stop the truncation marker telling agents to read a copy that returns the same cut.
+
+  When a tool result is capped, the marker ended "To see more, narrow the request —
+  fewer results, a filter, a smaller page size, or read the file above." Agents take
+  that advice, at roughly two reads of the saved copy per run, and it could never
+  have worked: `capToolOutput` is applied to every tool result, so reading the saved
+  file is capped by the same function at the same limit on the same input and comes
+  back byte-identical, elision included. `read` has no offset to page past the cut.
+
+  The sentence is now accurate — repeating the call _or_ reading the saved copy
+  returns the same result — at the same length. The saved path is still named,
+  because that is how a person retrieves the full output.
+
+  Measured rather than assumed: at 15 runs per arm the pass rate on
+  `notices-a-truncated-tool-result` was 3/15 either way, and the reads of the saved
+  copy did not drop. This lands because the old sentence was false, not because it
+  moved a number; a longer version spelling out the consequence was tried in the
+  same experiment, measured nothing, and was dropped.
+
+- 244cdcf: Stop telling agents things that are not true
+
+  Three places where a comment, a doc, or a string shown to the model described
+  behaviour the code does not have. Each one had already cost something.
+
+  - **`load_skill` no longer says `— scoped to: <path>`.** `activeSkill.rootPath`
+    is set and read by nothing; `read`/`exec` confine against
+    `workingDirectoryBoundary`, which is unrelated. The header told the model it
+    was confined when it was not, and disclosed the install path to do it. The
+    field stays, honestly documented — it is what a real enforcement would need
+    (#287).
+
+  - **`docs/skills.md` no longer claims `progressive` is the default.** The
+    resolver falls back to `eager`, which then emits a deprecation warning: follow
+    the doc, omit the key, get the path the doc says you are avoiding. The doc now
+    says to write the key explicitly and notes that the CLI and UI already do.
+    Fixed in the doc rather than the code — flipping a runtime default would
+    silently change how live agents resolve skills.
+
+  - **`config.ts` no longer says the `ask_user` inbox is relative to the global
+    context dir.** It is one level above, deliberately: `global/` is injected into
+    every agent's prompt, and an inbox there broadcast a queue of questions to all
+    of them, which reported months-old entries as live work. The comment invited
+    someone to put it back.
+
+  Also adds a **Tool access** section to `docs/skills.md`, because `allowed-tools`
+  means opposite things in the two modes — it grants under `eager` and restricts
+  under `progressive` — and nothing said so.
+
+- a00b73a: Type-check the global `agent:` block, which the shape walk skipped.
+
+  `findShapeIssues` covered `agents.<name>.*`, `cron.jobs[]`, `tools.exec`
+  and the `enabled` flag across the open bags. It never walked the global
+  `agent:` block — where the deployment-wide defaults live. Reproduced
+  against a live config: a bad `temperature` on a named agent was flagged,
+  the identical mistake on `agent.temperature` was not.
+
+  The case that bites is `agent.maxTokens: "8192"`, quoted the way YAML
+  users write things. It reaches `if (params.maxTokens)`, and a non-empty
+  string is truthy, so the guard does not catch it and the quoted value
+  goes out on the wire. That is exactly what `quotingHint()` was written
+  for; it just never got a chance to fire.
+
+  Checked `.partial()`: this is a type checker, not a required-fields
+  checker, and `DEFAULT_CONFIG` supplies anything the file omits.
+
+  `tasks`, `memory.embeddings` and `memory.chunks` are now walked too —
+  closed, all-scalar blocks where a quoted number hides best.
+  `tasks.options` is deliberately left alone: it is the selected backend's
+  own bag, and core does not know its shape. `rooms` remains unchecked; it
+  is nested enough to want its own pass.
+
+  Each schema carries the same `Identical<>` drift assertion the agent
+  schema has, so a field added to one side and not the other is a compile
+  error rather than a silent hole.
+
+- b559646: Add a verification gate to the autonomous task loop. New built-in
+  `builtin:verify-gate` plugin (off by default) subscribes to `task.transitioned`
+  and bounces any task that reaches `done` without a recorded `VERIFY: PASS`
+  verdict back to the review stage, escalating to a human after `maxBounces`
+  rounds. Scope it to tagged work via `requireTags` (e.g. `["kind:code",
+"kind:config"]`) so plain assistant tasks still self-close. Route the bounce
+  per task kind with `reviewerByTag` (e.g. `{ "kind:config": "verifier",
+"kind:code": "reviewer" }`) so a config / live-surface task can go to a
+  non-worktree verifier (which curls the running instance) while code goes to the
+  worktree reviewer — the verifier isn't blocked by the project-path guard. The autopilot worker
+  now emits `task.transitioned` when it force-finalizes a task so the gate sees
+  the autopilot path the same as an agent-driven close. This closes the
+  "marked done without proof" hole — an implementer or the finalizer can no
+  longer assert completion without the reviewer actually running the change's
+  acceptance check.
+- c50e55a: An agent is one entry in the wake queue, however many of its rooms are busy.
+
+  The queue was keyed per (agent, room, trigger) — which is what every wake path did independently before the queue existed. So an agent watching ten rooms was scheduled ten times over, each scheduling knowing nothing about the other nine, and wake volume scaled with traffic rather than with the number of agents.
+
+  Entry identity is now the agent. Enqueueing one that is already waiting merges the new room and trigger into its existing entry, so ten rooms and a thousand messages produce one entry naming ten rooms. The queue's length is bounded by agent count and never by how much arrives.
+
+  Two merge rules worth knowing:
+
+  - An entry fires at the earliest time any of its triggers asks for, so a poll tick that is already due is not held back by a message still inside its batching window.
+  - More traffic can only make a turn **sooner**, never later. This is deliberately not a debounce reset: an agent in a room that never goes quiet would have its turn postponed indefinitely, which is starvation the old per-room debounce could produce.
+
+  New `rooms.minWakeIntervalMinutes`, unset by default. It is the shortest gap between one agent's wakes, counted across every room it watches; triggers arriving inside the gap accumulate on the pending entry rather than starting another turn. Per agent and therefore no per-room override — a room does not get to decide how often an agent runs everywhere else.
+
+  Be clear about the scope: this bounds how often an agent is _scheduled_. An entry naming ten rooms still starts a turn per room. Turning one due entry into one turn that reads every room at once is a change to the caller, with its own prompt, cursor and reply-routing decisions, and lands separately.
+
+  Step 2 of 3 toward #344.
+
+- bcc2159: One place decides when an agent is due to run.
+
+  Three things start a room turn — a message arrives, a poll tick fires, a scheduled check-in comes due — and each owned its own timing and its own idea of "already handled". The message path debounced on `${agent} ${roomRef}`; the other two had no coalescing at all and leaned on the in-flight guard further down to sort out overlaps. Nothing could answer "is this agent already due, and why", which is the question everything about wake volume turns on.
+
+  `WakeQueue` owns that and nothing else. It decides whether an agent is due and when; what runs when an entry comes due stays with the caller, so the poll path still filters its backlog and the check-in path still builds its own prompt.
+
+  Behaviour is unchanged. The message path keeps its `batchSeconds` debounce, poll and check-in are still due the moment their interval fires, and the existing suite pins it.
+
+  This is the first of three steps toward #344. Entry identity lives in one function, `queueKey`, and is per (agent, room, trigger) — exactly what the code did before. Making a wake per-agent, so an agent with ten busy rooms is due once rather than ten times, is a change to that function and to how entries merge, not a change to any caller. That is the whole point of doing this separately and first.
+
+- 42d98c6: `validateConfig` now warns on unrecognized **top-level** `config.yaml` keys. A feature configured under a typo'd key, or one a newer doc describes but the installed version predates, was silently ignored before — the warning names the key, lists the supported keys, and hints at version skew. Top-level only: nested bags (`tools.<id>`, `providers.<id>`, `channels.<id>`, plugin config) stay open and are never checked. The recognized-key set is typed `Record<keyof AgentConfig, true>`, so it can't drift from the interface. New export: `KNOWN_TOP_LEVEL_CONFIG_KEYS`. Closes #252.
+- b8a8da4: Say when `maxHistoryTokens` leaves no room for the conversation at all
+
+  The history budget is `maxHistoryTokens - systemPrompt - tail - toolSchemas`, and since tool schemas started counting against it the schemas are the dominant term: 24 tools measure ~5,500 tokens, a 41-tool deployment ~10,900. `maxHistoryTokens` defaults to 2,000.
+
+  A deployment that never tuned it therefore has a budget of zero: every message is dropped on every turn, and the symptom is an agent that cannot remember what was said a moment ago — indistinguishable, from the outside, from a bad model.
+
+  Warns once per agent, naming the three numbers and the floor to clear. Warned rather than silently raised: building a bigger request than the model's context accepts would trade one quiet failure for another, and the right number depends on the model.
+
+- cf2cd34: Give `listWorkflowRuns` a deterministic order for runs that tie.
+
+  `started_at` is `datetime('now')` — second resolution — and the query
+  ordered by it alone, so runs started in the same second tied and SQLite
+  returned them in whatever order it liked. Anything asking for "the N
+  newest" got an arbitrary N: `pruneOldRuns` deleted the log directory of a
+  run it should have kept, and a fanned-out workflow listed its runs
+  scrambled.
+
+  Ordering now falls back to `rowid`, which is monotonic with insert order
+  — the only meaning "newest" can have inside one second.
+
+  This is also the likely cause of the intermittent `pruneOldRuns` test
+  failure. That test had been avoiding the tie by sleeping 1.1s between
+  runs, which spent 2.2s of wall clock on a correctness argument that
+  depended on the suite not being under load; it now sets the timestamps
+  explicitly instead. A second test pins the tie case directly: it fails
+  against the old ordering and passes against the new one.
+
+- Updated dependencies [571adba]
+  - @tailored-ai/browser-mediator@0.1.10
+
 ## 0.1.9
 
 ### Patch Changes

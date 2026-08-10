@@ -1,5 +1,146 @@
 # @tailored-ai/google-tools
 
+## 0.1.10
+
+### Patch Changes
+
+- 4c6b194: A missing `gog` binary is reported as a missing binary, not as a Gmail failure.
+
+  Every tool in this package shells out to the `gog` CLI and reports failures as
+  `stderr || "gog <verb> failed"`. A spawn failure produces **no stderr**, so the
+  fallback fires and an agent is told `gog gmail search failed` — which names the
+  wrong subsystem and reads as an API or credential problem.
+
+  What that cost in one deployment: six days of a monitoring room diagnosing an
+  OAuth token. The first failures genuinely were `oauth2: "invalid_grant"`, with
+  gog installed and its credentials expired. Later the binary went missing, stderr
+  went empty, the message silently changed to the generic one, and five successive
+  diagnoses kept chasing the token because nothing ever said the command did not
+  exist.
+
+  ENOENT and EACCES now surface as their own messages, the ENOENT one stating
+  outright that this is not an authentication problem, and pointing at install plus
+  `gog auth login`. Ordinary non-zero exits are untouched — gog's own stderr is
+  still the better message when gog actually ran.
+
+- Updated dependencies [b559646]
+- Updated dependencies [ef9e809]
+- Updated dependencies [a2f8016]
+- Updated dependencies [ed98f4a]
+- Updated dependencies [b559646]
+- Updated dependencies [920a799]
+- Updated dependencies [fecc3d8]
+- Updated dependencies [2632f51]
+- Updated dependencies [9af06b7]
+- Updated dependencies [b8f5d16]
+- Updated dependencies [aee6802]
+- Updated dependencies [9d32c15]
+- Updated dependencies [8b0c45a]
+- Updated dependencies [f67b15a]
+- Updated dependencies [7447619]
+- Updated dependencies [fd84749]
+- Updated dependencies [b559646]
+- Updated dependencies [d9e294f]
+- Updated dependencies [b1ec29a]
+- Updated dependencies [fd19549]
+- Updated dependencies [a38b5fc]
+- Updated dependencies [1206560]
+- Updated dependencies [0a3b591]
+- Updated dependencies [dc312f1]
+- Updated dependencies [5a01ceb]
+- Updated dependencies [b1cdad9]
+- Updated dependencies [0fb08f4]
+- Updated dependencies [0fb08f4]
+- Updated dependencies [0fb08f4]
+- Updated dependencies [54ce46f]
+- Updated dependencies [7017c2d]
+- Updated dependencies [7d273b5]
+- Updated dependencies [b559646]
+- Updated dependencies [e6cb5fb]
+- Updated dependencies [e66f07b]
+- Updated dependencies [0187e0c]
+- Updated dependencies [b559646]
+- Updated dependencies [daa6302]
+- Updated dependencies [a970a8b]
+- Updated dependencies [57a5d48]
+- Updated dependencies [39445bb]
+- Updated dependencies [4c48ad8]
+- Updated dependencies [ba7bad5]
+- Updated dependencies [571adba]
+- Updated dependencies [de1ce69]
+- Updated dependencies [87fc6fd]
+- Updated dependencies [611f94d]
+- Updated dependencies [8aa5720]
+- Updated dependencies [d2b5939]
+- Updated dependencies [7e9a130]
+- Updated dependencies [b559646]
+- Updated dependencies [d3a4cf1]
+- Updated dependencies [36a50b7]
+- Updated dependencies [4656518]
+- Updated dependencies [d3e79e3]
+- Updated dependencies [128c561]
+- Updated dependencies [30a0c14]
+- Updated dependencies [df2d055]
+- Updated dependencies [9ccec1f]
+- Updated dependencies [e698f39]
+- Updated dependencies [b8fe10c]
+- Updated dependencies [0d4f4b6]
+- Updated dependencies [6460c00]
+- Updated dependencies [0039c3a]
+- Updated dependencies [8d0f50e]
+- Updated dependencies [9b13c86]
+- Updated dependencies [c120f51]
+- Updated dependencies [7c6217a]
+- Updated dependencies [449e827]
+- Updated dependencies [58dd367]
+- Updated dependencies [bbcde3b]
+- Updated dependencies [2c0fde1]
+- Updated dependencies [0b7a0f7]
+- Updated dependencies [19188db]
+- Updated dependencies [20f9fe1]
+- Updated dependencies [7f620a0]
+- Updated dependencies [b559646]
+- Updated dependencies [9883913]
+- Updated dependencies [77781ef]
+- Updated dependencies [b7788ad]
+- Updated dependencies [7e05a94]
+- Updated dependencies [e3b1bc5]
+- Updated dependencies [920a799]
+- Updated dependencies [920a799]
+- Updated dependencies [b559646]
+- Updated dependencies [682e304]
+- Updated dependencies [d492806]
+- Updated dependencies [dd3951c]
+- Updated dependencies [544aac2]
+- Updated dependencies [87d2af3]
+- Updated dependencies [c308241]
+- Updated dependencies [cc792f2]
+- Updated dependencies [7d273b5]
+- Updated dependencies [42a1e90]
+- Updated dependencies [2963457]
+- Updated dependencies [9ec3100]
+- Updated dependencies [248931d]
+- Updated dependencies [4b54275]
+- Updated dependencies [22f9b9e]
+- Updated dependencies [d7656d8]
+- Updated dependencies [afc05a2]
+- Updated dependencies [dd3951c]
+- Updated dependencies [1ad506a]
+- Updated dependencies [a1231c6]
+- Updated dependencies [1d9e6a6]
+- Updated dependencies [f0bb132]
+- Updated dependencies [19996ac]
+- Updated dependencies [28bb474]
+- Updated dependencies [244cdcf]
+- Updated dependencies [a00b73a]
+- Updated dependencies [b559646]
+- Updated dependencies [c50e55a]
+- Updated dependencies [bcc2159]
+- Updated dependencies [42d98c6]
+- Updated dependencies [b8a8da4]
+- Updated dependencies [cf2cd34]
+  - @tailored-ai/core@0.1.10
+
 ## 0.1.9
 
 ### Patch Changes

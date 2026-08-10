@@ -1,6 +1,6 @@
 {
   "name": "@tailored-ai/deploy-aws",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "AWS deploy target for Tailored AI — runs TAI on a single EC2 instance with a persistent EBS volume. Install with `tai plugin install @tailored-ai/deploy-aws`, then `tai deploy up aws-ec2`.",
   "license": "MIT",
   "author": "Quinton Miller",
