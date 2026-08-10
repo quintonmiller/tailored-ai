@@ -236,6 +236,42 @@ to a permanently-red row is to delete it, which is how a benchmark quietly stops
 measuring the thing it was written for. The flag is read from the scenario file,
 not the report, so removing it un-marks the row everywhere at once.
 
+## Two agents taking turns
+
+Until #475 every scenario tested **one turn of one agent**: 57 of 59 declared no
+second agent, and the two that did used it as scenery. That left the machinery
+rooms exist for entirely unmeasured — the wake queue, `minWakeIntervalMinutes`,
+`maxWakesPerHour`, pass handling, the per-room FIFO chain. Every one of those
+was built in response to a multi-agent failure, and none had a scenario, because
+one agent answering once structurally cannot produce a cascade, a silence where
+everybody deferred, or a handoff.
+
+`wake:` now takes a list, and each entry may name an agent:
+
+```yaml
+  wake:
+    - { room: ops, agent: nova }
+    - { room: ops, agent: dana }
+```
+
+The turns run in order against the same rooms, so a later agent wakes on what an
+earlier one posted. Three decisions worth knowing:
+
+- **Subscription follows participation, not declaration.** Only agents that take
+  a turn are subscribed. An agent named in `config.agents` and never woken stays
+  scenery — subscribing it would put it in the roster of a room it never speaks
+  in and change the prompt of every existing scenario that has one.
+- **Posts are attributed.** The envelope already carries the speaker, so
+  `posts_by` can ask who spoke and how often. `posts_in` cannot: with two agents
+  in a room, "somebody posted in ops" is true whether the handoff worked or the
+  second agent echoed the first.
+- **`reply` is still every body joined**, so a single-agent scenario and every
+  reply assertion behave exactly as before.
+
+These scenarios are slower and noisier by construction — more turns, more
+sampling per scenario — so they are their own `coordination` category rather
+than averaged into a score whose other entries take a single turn.
+
 ## What it cannot tell you
 
 - **Nothing about a channel.** Rooms run on the `local` SQLite backend. Discord's

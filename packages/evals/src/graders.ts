@@ -128,6 +128,31 @@ async function gradeOne(
       : no("posts_in", `nothing posted in ${want}; posted in ${describeRooms(outcome)}`);
   }
 
+  /**
+   * Who spoke, and how often — the vocabulary a multi-agent scenario needs.
+   *
+   * `posts_in` asks whether anything landed in a room. With two agents taking
+   * turns the interesting questions are different: did *this* agent speak
+   * (a handoff arrived), did *nobody* (everyone deferred and the room went
+   * silent), did everybody (one message woke the whole room).
+   */
+  if (assertion.posts_by !== undefined) {
+    const want = assertion.posts_by;
+    const spoke = outcome.posts.filter((p) => p.agent === want.agent);
+    // `min` defaults to 1 — "did this agent speak" is the common question — but
+    // only when no `max` was given. `posts_by: {agent, max: 0}` means "must not
+    // speak", and a min of 1 would make it unsatisfiable by construction.
+    const min = want.min ?? (want.max === undefined ? 1 : 0);
+    const max = want.max;
+    if (spoke.length < min) {
+      return no("posts_by", `${want.agent} posted ${spoke.length}×, wanted ≥${min} (${describeSpeakers(outcome)})`);
+    }
+    if (max !== undefined && spoke.length > max) {
+      return no("posts_by", `${want.agent} posted ${spoke.length}×, wanted ≤${max} (${describeSpeakers(outcome)})`);
+    }
+    return ok("posts_by");
+  }
+
   if (assertion.does_not_post_in !== undefined) {
     const banned = outcome.posts.filter((p) => assertion.does_not_post_in?.includes(p.room));
     return banned.length === 0
@@ -274,6 +299,14 @@ function lastAssistant(scenario: Scenario): string | undefined {
 function describeRooms(outcome: RunOutcome): string {
   const rooms = [...new Set(outcome.posts.map((p) => p.room))];
   return rooms.length ? rooms.join(", ") : "nowhere";
+}
+
+/** Who actually spoke, with counts — the useful half of a `posts_by` failure. */
+function describeSpeakers(outcome: RunOutcome): string {
+  const counts = new Map<string, number>();
+  for (const post of outcome.posts) counts.set(post.agent ?? "?", (counts.get(post.agent ?? "?") ?? 0) + 1);
+  if (!counts.size) return "nobody posted";
+  return [...counts].map(([agent, n]) => `${agent}×${n}`).join(", ");
 }
 
 function trim(text: string, limit = 120): string {

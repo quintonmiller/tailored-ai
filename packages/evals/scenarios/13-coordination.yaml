@@ -1,0 +1,103 @@
+# Two agents taking turns in a room.
+#
+# Everything before this file tests one turn of one agent — 57 of 59 scenarios
+# declare no second agent, and the two that do use it as scenery. That leaves
+# the machinery rooms exist for completely unmeasured: the wake queue, pass
+# handling, `maxWakesPerHour`, the per-room FIFO chain. Every one of those was
+# built in response to a multi-agent failure, and none of them had a scenario.
+#
+# `wake:` takes a list here, so the turns run in order against the same rooms:
+# the second agent wakes on what the first one posted. That is what makes a
+# cascade, a silence, or a handoff expressible at all.
+#
+# These are slower and noisier than a single-turn scenario by construction —
+# more sampling per scenario, more ways to be unlucky — which is why they are
+# their own category rather than averaged into one whose other entries take a
+# single turn.
+
+- id: a-second-agent-does-not-answer-what-was-answered
+  category: coordination
+  intent: >
+    Asked one agent by name, in a room two agents can see. The second wakes on
+    the answer and has nothing to add, so it should stay out — otherwise every
+    question in a shared room costs two replies, and the second is an echo.
+  agent: &nova
+    name: nova
+    description: Benchmark agent.
+    instructions: "You are Nova, a calm and practical assistant."
+    tools: [room]
+  config:
+    agents:
+      dana:
+        description: Design lead.
+        instructions: "You are Dana, the design lead. You speak up about design, and stay quiet otherwise."
+        tools: [room]
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      incoming:
+        - { speaker: quinton, to: [nova], body: "did the staging deploy finish?" }
+  wake:
+    - { room: ops, agent: nova }
+    - { room: ops, agent: dana }
+  expect:
+    # Nova was asked, so nova answers.
+    - posts_by: { agent: nova, min: 1 }
+    # Dana was not, and an echo is the failure. This is the assertion `posts_in`
+    # cannot make: "somebody posted in ops" is true either way.
+    - posts_by: { agent: dana, max: 0 }
+
+- id: answers-when-it-is-the-one-addressed-control
+  category: coordination
+  intent: >
+    The control for the scenario above. An agent that never speaks scores well
+    on every restraint case, so the same pair is run with the question aimed at
+    the other agent — if dana is silent here too, the restraint above was
+    silence rather than judgement.
+  agent: *nova
+  config:
+    agents:
+      dana:
+        description: Design lead.
+        instructions: "You are Dana, the design lead. You speak up about design, and stay quiet otherwise."
+        tools: [room]
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      incoming:
+        - { speaker: quinton, to: [dana], body: "dana, is the new icon set ready to ship?" }
+  wake:
+    - { room: ops, agent: nova }
+    - { room: ops, agent: dana }
+  expect:
+    - posts_by: { agent: dana, min: 1 }
+
+- id: one-question-does-not-wake-a-chorus
+  category: coordination
+  intent: >
+    A question to the room, not to a name, with two agents subscribed. Both
+    answering is the failure everyone recognises from a group chat, and it is
+    also how a room burns its hourly wake budget on one message. At most one
+    should take it; nobody taking it is the opposite failure and is caught by
+    the total.
+  agent: *nova
+  config:
+    agents:
+      dana:
+        description: Design lead.
+        instructions: "You are Dana, the design lead. You speak up about design, and stay quiet otherwise."
+        tools: [room]
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      incoming:
+        - { speaker: quinton, body: "morning all — anything blocking the release?" }
+  wake:
+    - { room: ops, agent: nova }
+    - { room: ops, agent: dana }
+  expect:
+    # Somebody has to answer: silence here is a room that ignored its owner.
+    - replies: true
+    # And not everybody. Two replies to one open question is the chorus.
+    - posts_by: { agent: dana, max: 1 }
+    - posts_by: { agent: nova, max: 1 }

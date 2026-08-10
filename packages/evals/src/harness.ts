@@ -548,6 +548,28 @@ async function runChatScenario(
   return { reply, posts: [] };
 }
 
+/**
+ * The turns a scenario runs, normalised.
+ *
+ * A bare object and a one-entry list mean the same thing; `agent` defaults to
+ * the agent under test so a single-agent scenario never names it. With no
+ * `wake:` at all, the last room carrying `incoming:` lines is the one that woke
+ * somebody — the rule the schema already enforces.
+ */
+function wakeSteps(scenario: Scenario, agentName: string): Array<{ room: string; agent: string; kind?: string }> {
+  const declared = scenario.wake ? (Array.isArray(scenario.wake) ? scenario.wake : [scenario.wake]) : [];
+  if (declared.length) {
+    return declared.map((step) => ({ room: step.room, agent: step.agent ?? agentName, kind: step.kind }));
+  }
+  const fallback = [...(scenario.rooms ?? [])].reverse().find((r) => r.incoming?.length)?.name;
+  return fallback ? [{ room: fallback, agent: agentName }] : [];
+}
+
+/** Every agent that takes a turn, in order, without duplicates. */
+function wakeAgents(scenario: Scenario, agentName: string): string[] {
+  return [...new Set(wakeSteps(scenario, agentName).map((s) => s.agent))];
+}
+
 async function runRoomScenario(
   scenario: Scenario,
   runtime: AgentRuntime,
@@ -565,14 +587,21 @@ async function runRoomScenario(
     const room = await backend.createRoom({ name: spec.name, purpose: spec.purpose });
     const ref = formatRoomRef(room.ref);
     refs.set(spec.name, ref);
-    store.subscribe({
-      agent: agentName,
-      roomRef: ref,
-      deliver: spec.deliver ?? "poll",
-      wakeOn: spec.wakeOn ?? "all",
-      checkInMinutes: spec.checkInMinutes ?? null,
-      role: spec.role ?? null,
-    });
+    // Every agent that takes a turn is subscribed to every room. Subscription
+    // follows participation rather than declaration: an agent named only in
+    // `config.agents` is scenery — it exists so the transcript can show a third
+    // party — and subscribing it would put it in the roster of a room it never
+    // speaks in, changing the prompt of every scenario that has one.
+    for (const agent of wakeAgents(scenario, agentName)) {
+      store.subscribe({
+        agent,
+        roomRef: ref,
+        deliver: spec.deliver ?? "poll",
+        wakeOn: spec.wakeOn ?? "all",
+        checkInMinutes: spec.checkInMinutes ?? null,
+        role: spec.role ?? null,
+      });
+    }
   }
 
   // Seen lines first, then the cursor jumps past them: this is a room the agent
@@ -596,10 +625,12 @@ async function runRoomScenario(
   // the questions as the agent's own posts.
   const watermark = (db.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM room_messages").get() as { id: number }).id;
 
-  const wakeRoom = scenario.wake?.room ?? [...(scenario.rooms ?? [])].reverse().find((r) => r.incoming?.length)?.name;
-  if (!wakeRoom) throw new Error("no room to wake in");
-  const wakeRef = refs.get(wakeRoom);
-  if (!wakeRef) throw new Error(`unknown wake room "${wakeRoom}"`);
+  const steps = wakeSteps(scenario, agentName);
+  if (!steps.length) throw new Error("no room to wake in");
+  // The first step owns the session seeding below: `history:` is the agent
+  // under test's own prior turns, and there is one session per (room, agent).
+  const wakeRef = refs.get(steps[0].room);
+  if (!wakeRef) throw new Error(`unknown wake room "${steps[0].room}"`);
 
   // The agent's own prior turns in this room.
   //
@@ -620,10 +651,19 @@ async function runRoomScenario(
     for (const line of scenario.history) saveMessage(db, session.id, { role: line.role, content: line.content });
   }
 
+  // Turns run in order, against the same rooms, so a later agent wakes on what
+  // an earlier one posted. That is the whole point: one agent answering once
+  // cannot produce a cascade, a silence where everybody deferred, or a handoff.
   const watcher = new RoomWatcher({ runtime, store });
+  const replies: Array<{ agent: string; reply: string }> = [];
   try {
-    if (scenario.wake?.kind === "checkin") await watcher.runCheckIn(agentName, wakeRef);
-    else await watcher.pollOnce(agentName, wakeRef);
+    for (const step of steps) {
+      const ref = refs.get(step.room);
+      if (!ref) throw new Error(`unknown wake room "${step.room}"`);
+      const reply =
+        step.kind === "checkin" ? await watcher.runCheckIn(step.agent, ref) : await watcher.pollOnce(step.agent, ref);
+      replies.push({ agent: step.agent, reply: typeof reply === "string" ? reply : "" });
+    }
   } finally {
     watcher.stop();
   }
@@ -633,11 +673,20 @@ async function runRoomScenario(
     .prepare("SELECT room_ref, content FROM room_messages WHERE id > ? ORDER BY id")
     .all(watermark) as Array<{ room_ref: string; content: string }>;
 
-  const posts = rows.map((row) => ({
-    room: byRef.get(row.room_ref) ?? row.room_ref,
-    body: parseEnvelope(row.content).body.trim(),
-  }));
+  // Attributed, because with more than one agent taking a turn "who posted this"
+  // is the question. The envelope already carries the speaker, so this is free.
+  const posts = rows.map((row) => {
+    const envelope = parseEnvelope(row.content);
+    return {
+      room: byRef.get(row.room_ref) ?? row.room_ref,
+      body: envelope.body.trim(),
+      agent: envelope.speaker,
+    };
+  });
 
+  // `reply` stays every body joined, so single-agent scenarios and every reply
+  // assertion behave exactly as before. A multi-agent scenario that needs to
+  // separate them asks about `posts`.
   return { reply: posts.map((p) => p.body).join("\n"), posts };
 }
 

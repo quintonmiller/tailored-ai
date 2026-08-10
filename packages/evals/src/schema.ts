@@ -23,6 +23,18 @@ const roomLine = z
   })
   .strict();
 
+/**
+ * One turn: whose, and where. `agent` defaults to the agent under test, so a
+ * single-agent scenario never names it and a multi-agent one always does.
+ */
+const wakeStep = z
+  .object({
+    room: z.string(),
+    agent: z.string().optional(),
+    kind: z.enum(["poll", "checkin"]).optional(),
+  })
+  .strict();
+
 const roomSpec = z
   .object({
     name: z.string().min(1),
@@ -47,6 +59,14 @@ const assertion = z
       .optional(),
     posts_in: z.string().optional(),
     does_not_post_in: z.array(z.string()).optional(),
+    posts_by: z
+      .object({
+        agent: z.string(),
+        min: z.number().int().nonnegative().optional(),
+        max: z.number().int().nonnegative().optional(),
+      })
+      .strict()
+      .optional(),
     replies: z.boolean().optional(),
     reply_matches: z.string().optional(),
     reply_not_matches: z.string().optional(),
@@ -99,10 +119,7 @@ const scenario = z
     config: z.record(z.unknown()).optional(),
     history: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string() }).strict()).optional(),
     rooms: z.array(roomSpec).optional(),
-    wake: z
-      .object({ room: z.string(), kind: z.enum(["poll", "checkin"]).optional() })
-      .strict()
-      .optional(),
+    wake: z.union([wakeStep, z.array(wakeStep).nonempty()]).optional(),
     message: z.string().optional(),
     toolResults: z.record(z.string()).optional(),
     repeats: z.number().int().positive().optional(),
@@ -119,11 +136,13 @@ const scenario = z
     }
     if (isRoom) {
       const names = new Set(value.rooms?.map((r) => r.name));
-      if (value.wake && !names.has(value.wake.room)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: `wake.room "${value.wake.room}" is not one of the rooms`,
-        });
+      for (const step of value.wake ? (Array.isArray(value.wake) ? value.wake : [value.wake]) : []) {
+        if (!names.has(step.room)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `wake.room "${step.room}" is not one of the rooms`,
+          });
+        }
       }
       if (!value.wake && !value.rooms?.some((r) => r.incoming?.length)) {
         ctx.addIssue({
