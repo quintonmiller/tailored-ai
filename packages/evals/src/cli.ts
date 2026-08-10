@@ -20,6 +20,7 @@ import { costRecord, usageOfScenarios } from "./cost.js";
 import type { HarnessOptions } from "./harness.js";
 import { PAYLOAD_FILENAME, readWorkerResult } from "./protocol.js";
 import { printScenario, printSummary, score, verdict } from "./report.js";
+import { DEFAULT_PINNED_AT, DEFAULT_TIMEZONE } from "./clock.js";
 import { loadScenarios } from "./schema.js";
 import type { BenchmarkReport, Scenario, ScenarioResult } from "./types.js";
 
@@ -41,6 +42,9 @@ Options
   --concurrency <n>     Scenarios in flight (default 4)
   --filter <s>          Only scenarios whose id contains <s>, or whose category is <s>
   --seed <n>            Base seed; repeat i uses seed+i (default 1000). --seed off to disable.
+  --pinned-at <iso>     Instant every scenario resolves civil time against
+                        (default a fixed Wednesday). --pinned-at off uses the host clock.
+  --time-zone <iana>    Zone the pinned clock reports (default America/Los_Angeles).
   --temperature <n>     Default 0.3
   --max-tokens <n>      Default 2048; 'off' sends no cap (some hosted models reject it)
   --max-tool-rounds <n> Default 6
@@ -208,6 +212,8 @@ async function cmdRun(argv: string[]): Promise<number> {
       concurrency: { type: "string" },
       filter: { type: "string" },
       seed: { type: "string" },
+      "pinned-at": { type: "string" },
+      "time-zone": { type: "string" },
       temperature: { type: "string" },
       "max-tokens": { type: "string" },
       "max-tool-rounds": { type: "string" },
@@ -257,6 +263,8 @@ async function cmdRun(argv: string[]): Promise<number> {
     maxToolRounds: values["max-tool-rounds"] ? Number(values["max-tool-rounds"]) : 6,
     providerExtra: { ...(fromHome.providerExtra ?? {}), ...parseProviderExtra(values["provider-extra"]) },
     seed: values.seed === "off" ? null : Number(values.seed ?? 1000),
+    pinnedAt: values["pinned-at"] === "off" ? null : (values["pinned-at"] ?? DEFAULT_PINNED_AT),
+    timeZone: values["time-zone"] ?? DEFAULT_TIMEZONE,
     timeoutMs: values.timeout ? Number(values.timeout) : 300_000,
     plugins: values.plugins
       ? String(values.plugins)
@@ -323,6 +331,16 @@ async function cmdRun(argv: string[]): Promise<number> {
       plugins: options.plugins ?? [],
       repeats,
       seed: options.seed,
+      // Settings that change what the model does and what a turn costs, and
+      // were previously unrecorded — so a published result could not be read
+      // back to see what produced it. `maxTokens` and `thinking` between them
+      // caused #490, where a turn spent its whole budget reasoning and answered
+      // nothing; the clock decides whether a wall-clock scenario reproduces at
+      // all (#492 was the same bug in a unit test).
+      maxTokens: options.maxTokens,
+      thinking: options.thinking ?? null,
+      pinnedAt: options.pinnedAt ?? null,
+      timeZone: options.pinnedAt === null ? null : (options.timeZone ?? DEFAULT_TIMEZONE),
       judge: !!values.judge,
       scenarioSetHash: hash,
       // Per scenario, and only for the ones this run actually covered. The set

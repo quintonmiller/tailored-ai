@@ -277,6 +277,24 @@ export interface BenchmarkReport {
     plugins: string[];
     repeats: number;
     seed: number | null;
+    /**
+     * The settings that decide what the model does, recorded so a published
+     * result can be read back to see what produced it.
+     *
+     * All optional: reports written before this existed have none of them, and
+     * a reader has to be able to tell "ran without a cap" from "ran before we
+     * wrote the cap down".
+     *
+     * `maxTokens` and `thinking` between them caused #490 — a turn spent its
+     * whole budget on a reasoning trace and answered nothing — and neither was
+     * visible in the report that showed the failure. `pinnedAt`/`timeZone` say
+     * whether a wall-clock scenario reproduces at all; null means it ran on the
+     * host clock, so a re-run on a different day may legitimately differ.
+     */
+    maxTokens?: number | null;
+    thinking?: string | null;
+    pinnedAt?: string | null;
+    timeZone?: string | null;
     judge: boolean;
     scenarioSetHash: string;
     /**

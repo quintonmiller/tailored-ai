@@ -48,6 +48,7 @@ import {
   unregisterRoomBackend,
 } from "@tailored-ai/core";
 import YAML from "yaml";
+import { registerPinnedClock, timeConfigBlock } from "./clock.js";
 import type { RecordedCall, RecordedRequest, RoomLine, RunOutcome, RunUsage, Scenario } from "./types.js";
 
 export interface HarnessOptions {
@@ -93,6 +94,18 @@ export interface HarnessOptions {
   plugins?: string[];
   /** Provider id the agent runs on. Defaults to `openai_compatible`. */
   providerId?: string;
+  /**
+   * Instant every scenario's civil-time reasoning resolves against, as an ISO
+   * string. `null` runs on the host clock the way this used to.
+   *
+   * Pinned by default. Several scenarios book wakes against wall-clock phrases,
+   * and on the host clock they only reproduce on a similar day — a published
+   * baseline re-run on a Monday morning could differ for reasons the report
+   * cannot show. See `clock.ts`.
+   */
+  pinnedAt?: string | null;
+  /** IANA zone the pinned clock reports. Ignored when `pinnedAt` is null. */
+  timeZone?: string;
 }
 
 const OWNER_ID = "owner-0000";
@@ -440,6 +453,16 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
     }
     rooms.identities = identities;
     configObject.rooms = rooms;
+
+    // A clock the run controls, so "tomorrow 9am" and "every monday at 8:30"
+    // mean the same thing on every run rather than depending on the calendar.
+    // Registered before `loadConfig`, for the same reason plugin providers are:
+    // `time.provider` names a factory that has to already exist.
+    const timeBlock = timeConfigBlock({ pinnedAt: opts.pinnedAt, timeZone: opts.timeZone });
+    if (timeBlock) {
+      registerPinnedClock();
+      configObject.time = timeBlock;
+    }
 
     // Before loadConfig: a plugin registers its provider factory on import, and
     // `validateConfig` rejects a `providers.<id>` block whose factory is not
