@@ -9,7 +9,7 @@ nobody it recognises, and the room subsystem already uses that to decide wake
 and pause policy. It was discarded at render time, so a person's instruction and
 another agent's text reached the model as identical `role: "user"` bytes.
 
-Lines now read `planner [agent]:`, `quinton [person]:`, `drive-by
+Lines now read `planner [agent]:`, `sam [person]:`, `drive-by
 [unrecognised]:`. Volatility decides where a block goes in a request;
 authorship decides how much weight it should carry, and nothing downstream — a
 prompt slot, a history composer, or the model — could express the second while
