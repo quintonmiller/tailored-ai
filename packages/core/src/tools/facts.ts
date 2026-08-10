@@ -20,7 +20,7 @@ import type { Tool, ToolContext, ToolResult } from "./interface.js";
 export class FactsTool implements Tool {
   name = "facts";
   description =
-    "Store and recall structured personal facts (people, subscriptions, things). Use for atoms like birthdays, sizes, IDs, deadlines — not prose.";
+    "Store and recall structured personal facts (people, subscriptions, things) saved in past sessions, not what is in the conversation in front of you. Use for atoms like birthdays, sizes, IDs, deadlines — not prose.";
   parameters = {
     type: "object",
     properties: {
