@@ -24,7 +24,14 @@ let rooms: RoomStore;
 const AGENT = "ea";
 const ROOM = "local:exec";
 
-function tool(overrides: Partial<{ maxPerAgent: number; minIntervalMinutes: number; maxHorizonDays: number }> = {}) {
+function tool(
+  overrides: Partial<{
+    maxPerAgent: number;
+    minIntervalMinutes: number;
+    maxHorizonDays: number;
+    now: () => Date;
+  }> = {},
+) {
   return new ScheduleTool({
     store,
     rooms,
@@ -33,6 +40,7 @@ function tool(overrides: Partial<{ maxPerAgent: number; minIntervalMinutes: numb
       minIntervalMinutes: overrides.minIntervalMinutes ?? 15,
       maxHorizonDays: overrides.maxHorizonDays ?? 365,
     }),
+    ...(overrides.now ? { now: overrides.now } : {}),
   });
 }
 
@@ -190,7 +198,12 @@ describe("schedule — repeat", () => {
   });
 
   it("refuses a pattern with no occurrence before its end", async () => {
-    const res = await tool().execute(
+    // Pinned to a Wednesday. On the real clock this test asserts "no Monday
+    // 08:30 in the next two hours", which is false for two hours every Monday
+    // morning — it failed CI on 2026-08-10 at 07:23 UTC, and would have passed
+    // again by 08:30 without anyone learning why. The tool takes an injectable
+    // clock precisely so a schedule assertion never depends on the day it runs.
+    const res = await tool({ now: () => new Date("2026-08-12T12:00:00Z") }).execute(
       { action: "repeat", every: "every monday at 8:30", until: "2 hours", note: "n" },
       ctx([ROOM]),
     );
