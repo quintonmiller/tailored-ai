@@ -15,12 +15,12 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import YAML from "yaml";
 import { stripSeparator } from "./args.js";
+import { DEFAULT_PINNED_AT, DEFAULT_TIMEZONE } from "./clock.js";
 import { printComparison } from "./compare.js";
 import { costRecord, usageOfScenarios } from "./cost.js";
 import type { HarnessOptions } from "./harness.js";
 import { PAYLOAD_FILENAME, readWorkerResult } from "./protocol.js";
 import { printScenario, printSummary, score, verdict } from "./report.js";
-import { DEFAULT_PINNED_AT, DEFAULT_TIMEZONE } from "./clock.js";
 import { loadScenarios } from "./schema.js";
 import type { BenchmarkReport, Scenario, ScenarioResult } from "./types.js";
 

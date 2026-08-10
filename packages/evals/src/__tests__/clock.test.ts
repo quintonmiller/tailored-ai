@@ -9,8 +9,8 @@
  * 8:30 within the next two hours" is a false assertion for two hours a week.
  */
 
-import { describe, expect, it } from "vitest";
 import { type AgentConfig, DEFAULT_CONFIG, resolveTimeProvider } from "@tailored-ai/core";
+import { describe, expect, it } from "vitest";
 import { DEFAULT_PINNED_AT, DEFAULT_TIMEZONE, registerPinnedClock, timeConfigBlock } from "../clock.js";
 
 registerPinnedClock();
