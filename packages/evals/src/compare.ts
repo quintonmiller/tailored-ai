@@ -15,6 +15,7 @@
  */
 
 import { formatUsd, totalUsage, usdOf } from "./cost.js";
+import { EFFORT_LABELS, perRun, summariseScenarios } from "./efficiency.js";
 import type { BenchmarkReport } from "./types.js";
 
 export interface ComparisonRow {
@@ -177,6 +178,57 @@ function printCostMove(before: BenchmarkReport, after: BenchmarkReport): void {
   console.log("");
 }
 
+/**
+ * Report what the change did to the *work*, as opposed to the request.
+ *
+ * Tokens caught a prompt that grew. This catches the other half: a change that
+ * holds every pass rate and adds a round to each turn, or doubles the tool
+ * calls, costs real time and real money and moves no number the comparison
+ * used to print. It is the same failure one step out — work growing without
+ * anyone deciding it should.
+ *
+ * Same guards as the token move, for the same reasons: per run so a differing
+ * repeat count is not a finding, and silent across models, where a latency or
+ * round-count difference is the deployment rather than the code.
+ *
+ * Latency is deliberately *not* compared. It is dominated by what else was on
+ * the GPU — the same 59 scenarios took 20 minutes on a quiet box and over two
+ * hours beside a competing job — so a diff of it would report the machine, not
+ * the change. It is printed in the report, where a reader can see the context;
+ * it is not a regression signal.
+ */
+function printEffortMove(before: BenchmarkReport, after: BenchmarkReport): void {
+  if (before.meta.model !== after.meta.model) return;
+
+  const b = summariseScenarios(before.scenarios);
+  const a = summariseScenarios(after.scenarios);
+  if (!b.runs || !a.runs) return;
+
+  const bp = perRun(b);
+  const ap = perRun(a);
+
+  const moves: string[] = [];
+  for (const key of ["rounds", "toolCalls"] as const) {
+    const from = bp[key];
+    const to = ap[key];
+    // An absolute floor as well as a ratio: going from 0.02 to 0.04 tool calls
+    // per run is a 100% move and half a call across the whole set.
+    if (Math.abs(to - from) < EFFORT_FLOOR) continue;
+    if (from > 0 && Math.abs((to - from) / from) <= COST_THRESHOLD) continue;
+    const { label, format } = EFFORT_LABELS[key];
+    const delta = from > 0 ? ` (${to > from ? "+" : ""}${Math.round(((to - from) / from) * 100)}%)` : "";
+    moves.push(`${label} ${format(from)} → ${format(to)} per run${delta}`);
+  }
+  if (!moves.length) return;
+
+  console.log("  work per run:");
+  for (const move of moves) console.log(`    ${move}`);
+  console.log("");
+}
+
+/** Half a round, or half a tool call, across the whole set. Below this it is rounding. */
+const EFFORT_FLOOR = 0.5;
+
 export function printComparison(before: BenchmarkReport, after: BenchmarkReport): boolean {
   const { rows, added, removed, warnings } = compareReports(before, after);
   const pct = (n: number) => `${Math.round(n * 100)}%`.padStart(4);
@@ -206,6 +258,7 @@ export function printComparison(before: BenchmarkReport, after: BenchmarkReport)
   }
 
   printCostMove(before, after);
+  printEffortMove(before, after);
 
   if (noise.length) console.log(`  ${noise.length} scenario(s) moved by one run — within noise at this repeat count.`);
   if (added.length) console.log(`  ${added.length} new scenario(s): ${added.join(", ")}`);

@@ -227,6 +227,24 @@ async function gradeOne(
       : no("prompt_max_tokens", `~${tokens} tokens > ${assertion.prompt_max_tokens}`);
   }
 
+  // Tripwires on effort rather than correctness. `prompt_max_tokens` above
+  // guards the size of one request; these guard how many are sent and how much
+  // is done — the way a turn gets expensive without getting wrong, which no
+  // pass rate can express.
+  if (assertion.max_rounds !== undefined) {
+    const rounds = outcome.requests.length;
+    return rounds <= assertion.max_rounds
+      ? ok("max_rounds")
+      : no("max_rounds", `${rounds} model rounds > ${assertion.max_rounds}`);
+  }
+
+  if (assertion.max_tool_calls !== undefined) {
+    const calls = outcome.calls.length;
+    return calls <= assertion.max_tool_calls
+      ? ok("max_tool_calls")
+      : no("max_tool_calls", `${calls} tool calls > ${assertion.max_tool_calls}`);
+  }
+
   if (assertion.judge !== undefined) {
     if (!opts.judge) return { kind: "judge", pass: true, skipped: true };
     const verdict = await opts.judge(assertion.judge.rubric, reply);

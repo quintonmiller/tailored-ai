@@ -143,6 +143,14 @@ export interface Assertion {
   prompt_occurrences?: { text: string; min?: number; max?: number };
   /** Estimated tokens of the first request. Guards against prompt bloat. */
   prompt_max_tokens?: number;
+  /**
+   * Model round-trips this turn is allowed. The effort tripwire: a scenario
+   * that starts taking four rounds to do what it did in one is more expensive
+   * and no less correct, so no pass rate can express it.
+   */
+  max_rounds?: number;
+  /** Tool calls this turn is allowed, for the same reason. */
+  max_tool_calls?: number;
   /** Ask the model whether the reply satisfies a rubric. Off under `--no-judge`. */
   judge?: { rubric: string };
 }

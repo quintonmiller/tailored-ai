@@ -8,6 +8,7 @@
  */
 
 import { formatUsd, noCostReason, totalUsage, usdOf } from "./cost.js";
+import { EFFORT_LABELS, formatMs, summariseScenarios } from "./efficiency.js";
 import type { BenchmarkReport, ScenarioResult } from "./types.js";
 
 const num = (n: number) => n.toLocaleString("en-US");
@@ -128,6 +129,25 @@ export function printSummary(report: BenchmarkReport): void {
   const cache = usage.cacheRead !== undefined ? `, ${num(usage.cacheRead)} cached` : "";
   const money = usd === null ? colour(`  (${noCostReason(meta.model)})`, DIM) : `  ${formatUsd(usd)}`;
   console.log(`  tokens     ${num(usage.input)} in${cache} · ${num(usage.output)} out${money}`);
+
+  // The other axis. The score says whether the model was right; this says what
+  // being right cost, and it keeps moving after the score stops. Median plus
+  // max rather than a mean: the gap between them is the tail, and the tail is
+  // where a turn that went round eleven times lives.
+  const effort = summariseScenarios(report.scenarios);
+  if (effort.runs) {
+    const pair = (key: "rounds" | "toolCalls" | "latencyMs") => {
+      const { label } = EFFORT_LABELS[key];
+      // Counts render as integers here, unlike in `compare`, because a median
+      // is a run that actually happened — "1.0 rounds" describes nothing.
+      const render = key === "latencyMs" ? formatMs : (n: number) => String(n);
+      const worst = effort.max[key] > effort.median[key] ? `, max ${render(effort.max[key])}` : "";
+      return `${render(effort.median[key])} ${label}${worst}`;
+    };
+    console.log(
+      `  per run    ${pair("rounds")} · ${pair("toolCalls")} · ${pair("latencyMs")}   ${colour("(median)", DIM)}`,
+    );
+  }
   console.log("");
 
   const names = Object.keys(s.byCategory).sort();

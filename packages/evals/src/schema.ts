@@ -65,6 +65,8 @@ const assertion = z
       .strict()
       .optional(),
     prompt_max_tokens: z.number().optional(),
+    max_rounds: z.number().optional(),
+    max_tool_calls: z.number().optional(),
     judge: z.object({ rubric: z.string() }).strict().optional(),
   })
   .strict()

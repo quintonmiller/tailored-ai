@@ -122,6 +122,7 @@ nothing would report a higher score for having checked less.
 | `prompt_contains` / `prompt_not_contains` | substring of the assembled request |
 | `prompt_occurrences: {text, min, max}` | how many copies of a block reach the model |
 | `prompt_max_tokens` | bloat tripwire |
+| `max_rounds` / `max_tool_calls` | effort tripwires — a turn that gets more expensive without getting wrong |
 | `judge: {rubric}` | LLM-graded, `--judge` only |
 
 ## Comparing two runs

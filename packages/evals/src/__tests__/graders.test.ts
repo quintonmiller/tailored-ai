@@ -173,6 +173,41 @@ describe("prompt assertions", () => {
     expect(await passes({ prompt_max_tokens: 1000 }, request)).toBe(false);
   });
 
+  /**
+   * Tripwires on effort, not correctness. `prompt_max_tokens` bounds one
+   * request; these bound how many are sent and how much is done — the way a
+   * turn gets expensive without getting wrong, which no pass rate can express.
+   */
+  it("max_rounds counts model round-trips", async () => {
+    const blank = { system: "", messages: [], toolNames: [], estimatedTokens: 0 };
+    const threeRounds = outcome({ requests: [blank, blank, blank] });
+
+    expect(await passes({ max_rounds: 3 }, threeRounds)).toBe(true);
+    expect(await passes({ max_rounds: 2 }, threeRounds)).toBe(false);
+  });
+
+  it("max_tool_calls counts calls, not distinct tools", async () => {
+    // Three calls to one tool is three calls. A turn that retries the same
+    // lookup twice cost what it cost.
+    const repeated = outcome({
+      calls: [
+        { name: "read", args: {} },
+        { name: "read", args: {} },
+        { name: "read", args: {} },
+      ],
+    });
+
+    expect(await passes({ max_tool_calls: 3 }, repeated)).toBe(true);
+    expect(await passes({ max_tool_calls: 2 }, repeated)).toBe(false);
+  });
+
+  it("passes both when the turn did nothing", async () => {
+    const idle = outcome({ requests: [], calls: [] });
+
+    expect(await passes({ max_rounds: 1 }, idle)).toBe(true);
+    expect(await passes({ max_tool_calls: 0 }, idle)).toBe(true);
+  });
+
   it("counts a system prompt once — the recorded request must not double it", async () => {
     // The first real benchmark run reported the persona appearing twice in a
     // request that contained it once, because `system` and `messages` both
