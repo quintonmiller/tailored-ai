@@ -24,7 +24,9 @@ Tool definitions travel in their own request field rather than as a message, whi
 
 The same subtraction applies when a fallback rung re-fits history to its own `maxContextTokens`, where it matters more: the schemas sent are identical, and the window is usually tighter.
 
-Opt-in summarization: set `summarizeOnTrim: true` in an agent to replace silent trimming with a summary. When enabled, `trimHistoryWithSummary()` calls the LLM to summarize dropped messages into a `[Earlier conversation summary: ...]` system message. The summary is cached across loop rounds to avoid re-summarization. Falls back to silent trimming if summarization fails.
+Summarization on trim, **on by default**: `summarizeOnTrim` replaces the drop marker with a summary of what was cut. Set it to `false` per agent to opt out. When enabled, `trimHistoryWithSummary()` calls the LLM to summarize dropped messages into a `[Earlier conversation summary: ...]` system message. The summary is cached across loop rounds to avoid re-summarization. Falls back to the drop marker if summarization fails.
+
+The default flipped to `true` on 2026-08-10 on benchmark evidence: across three trim pairs — the fact under discussion, a peripheral fact, and the room path — correctness with the flag on was never worse and the turn cost three to six times fewer input tokens. The marker path is not cheaper for being one call shorter; it spends rounds hunting for what it was not given. The summarising call is bounded (300 characters per message, 3,000-character transcript), so it cannot grow with the history it replaces.
 
 ### Compaction is reversible
 

@@ -42,6 +42,17 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
 describe("resolveAgent", () => {
   const tools = [makeTool("exec"), makeTool("read"), makeTool("write")];
 
+  it("summarises dropped history by default, and lets an agent opt out", () => {
+    // Pinned in both directions because nothing pinned it in either. Every test
+    // that mentioned `summarizeOnTrim` set it to true explicitly, so the default
+    // flipped from false to true with 3,008 tests passing and no signal at all —
+    // a behaviour change on every turn that trims, invisible to the suite.
+    expect(resolveAgent(undefined, makeConfig(), tools).summarizeOnTrim).toBe(true);
+
+    const optedOut = makeConfig({ agents: { frugal: { summarizeOnTrim: false } } });
+    expect(resolveAgent("frugal", optedOut, tools).summarizeOnTrim).toBe(false);
+  });
+
   it("returns defaults when no agent specified", () => {
     const config = makeConfig();
     const resolved = resolveAgent(undefined, config, tools);
