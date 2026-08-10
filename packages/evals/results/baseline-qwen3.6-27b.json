@@ -1,8 +1,8 @@
 {
   "meta": {
-    "startedAt": "2026-08-10T00:41:09.221Z",
-    "finishedAt": "2026-08-10T01:00:00.282Z",
-    "gitSha": "04409d0",
+    "startedAt": "2026-08-10T02:41:22.299Z",
+    "finishedAt": "2026-08-10T03:04:48.907Z",
+    "gitSha": "eef9ed7",
     "gitDirty": false,
     "model": "qwen3.6-27b-vllm",
     "baseUrl": "http://127.0.0.1:8000/v1",
@@ -11,7 +11,7 @@
     "repeats": 3,
     "seed": 1000,
     "judge": false,
-    "scenarioSetHash": "012ceab159b6",
+    "scenarioSetHash": "21e48203ddc0",
     "scenarioFingerprints": {
       "answers-in-the-room-that-woke-it": "1acb37d6d6da",
       "relays-to-another-room-with-the-tool": "64bc7ac4eb9e",
@@ -71,19 +71,22 @@
       "answers-from-a-truncated-result-control": "54c5b9347a7c",
       "chains-three-dependent-calls": "1ca1d9c959ac",
       "default-history-budget-keeps-the-conversation": "aff557e89e09",
-      "a-tuned-budget-keeps-the-conversation": "782f136cb68b"
+      "a-tuned-budget-keeps-the-conversation": "782f136cb68b",
+      "a-second-agent-does-not-answer-what-was-answered": "0f2f2fe5b285",
+      "answers-when-it-is-the-one-addressed-control": "e22702e83dc0",
+      "one-question-does-not-wake-a-chorus": "9432c119e684"
     },
-    "durationSeconds": 1131.061,
+    "durationSeconds": 1406.608,
     "usage": {
-      "input": 1478147,
-      "output": 52952
+      "input": 1522879,
+      "output": 64252
     },
     "cost": null
   },
   "score": {
-    "overall": 0.9265536723163842,
-    "passed": 164,
-    "total": 177,
+    "overall": 0.9247311827956989,
+    "passed": 172,
+    "total": 186,
     "byCategory": {
       "addressing": {
         "passed": 14,
@@ -136,13 +139,18 @@
         "rate": 0.8333333333333334
       },
       "tool-pressure": {
-        "passed": 10,
+        "passed": 9,
         "total": 15,
-        "rate": 0.6666666666666666
+        "rate": 0.6
       },
       "budget": {
         "passed": 6,
         "total": 6,
+        "rate": 1
+      },
+      "coordination": {
+        "passed": 9,
+        "total": 9,
         "rate": 1
       }
     }
@@ -174,7 +182,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I don't have visibility into the staging deploy status right now — can you check the CI pipeline or deployment logs? If it's stuck, I can help troubleshoot once we know where it's at."
+                "body": "I don't have visibility into the staging deploy status right now — can you check the CI pipeline or deployment logs? If it's stuck, I can help troubleshoot once we know where it's at.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -199,7 +208,7 @@
               "input": 3096,
               "output": 170
             },
-            "latencyMs": 19027,
+            "latencyMs": 15771,
             "providerErrors": [],
             "retries": 0
           }
@@ -225,7 +234,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I don't have visibility into the staging deploy status — you'll want to check the CI/CD dashboard or the deployment logs directly."
+                "body": "I don't have visibility into the staging deploy status — you'll want to check the CI/CD dashboard or the deployment logs directly.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -250,7 +260,7 @@
               "input": 3096,
               "output": 120
             },
-            "latencyMs": 11785,
+            "latencyMs": 12259,
             "providerErrors": [],
             "retries": 0
           }
@@ -276,7 +286,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I don't have visibility into the staging deploy status right now. Can you share the deploy ID or where I can check on it?"
+                "body": "I don't have visibility into the staging deploy status right now. Can you share the deploy ID or where I can check on it?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -301,7 +312,7 @@
               "input": 3096,
               "output": 218
             },
-            "latencyMs": 18919,
+            "latencyMs": 19281,
             "providerErrors": [],
             "retries": 0
           }
@@ -335,11 +346,13 @@
             "posts": [
               {
                 "room": "design",
-                "body": "The icon export is unblocked now."
+                "body": "The icon export is unblocked now.",
+                "agent": "nova"
               },
               {
                 "room": "ops",
-                "body": "Done — let Dana know in design that the icon export is unblocked."
+                "body": "Done — let Dana know in design that the icon export is unblocked.",
+                "agent": "nova"
               }
             ],
             "calls": [
@@ -388,7 +401,7 @@
               "input": 6302,
               "output": 210
             },
-            "latencyMs": 21450,
+            "latencyMs": 18391,
             "providerErrors": [],
             "retries": 0
           }
@@ -414,11 +427,13 @@
             "posts": [
               {
                 "room": "design",
-                "body": "The icon export is unblocked now."
+                "body": "The icon export is unblocked now.",
+                "agent": "nova"
               },
               {
                 "room": "ops",
-                "body": "Done — I just messaged Dana in design."
+                "body": "Done — I just messaged Dana in design.",
+                "agent": "nova"
               }
             ],
             "calls": [
@@ -467,7 +482,7 @@
               "input": 6302,
               "output": 192
             },
-            "latencyMs": 30411,
+            "latencyMs": 31071,
             "providerErrors": [],
             "retries": 0
           }
@@ -493,11 +508,13 @@
             "posts": [
               {
                 "room": "design",
-                "body": "The icon export is unblocked now."
+                "body": "The icon export is unblocked now.",
+                "agent": "nova"
               },
               {
                 "room": "ops",
-                "body": "Done, let dana know in design that the icon export is unblocked now."
+                "body": "Done, let dana know in design that the icon export is unblocked now.",
+                "agent": "nova"
               }
             ],
             "calls": [
@@ -546,7 +563,7 @@
               "input": 6302,
               "output": 192
             },
-            "latencyMs": 33488,
+            "latencyMs": 33605,
             "providerErrors": [],
             "retries": 0
           }
@@ -576,7 +593,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I don't have a specific rollback command saved — depends on which service. For most of our deployments it's `kubectl rollout undo deployment/<name> -n <namespace>` or `deploy rollback <service> <version>`. Want me to look up the exact one for a particular service?"
+                "body": "I don't have a specific rollback command saved — depends on which service. For most of our deployments it's `kubectl rollout undo deployment/<name> -n <namespace>` or `deploy rollback <service> <version>`. Want me to look up the exact one for a particular service?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -601,7 +619,7 @@
               "input": 3092,
               "output": 209
             },
-            "latencyMs": 10597,
+            "latencyMs": 7266,
             "providerErrors": [],
             "retries": 0
           }
@@ -623,7 +641,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "It depends on which service — are we talking about the main app, the API, or something else? Generally it's `deploy rollback <service> <version>` but let me know the specific service and I can give you the exact command."
+                "body": "It depends on which service — are we talking about the main app, the API, or something else? Generally it's `deploy rollback <service> <version>` but let me know the specific service and I can give you the exact command.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -648,7 +667,7 @@
               "input": 3092,
               "output": 197
             },
-            "latencyMs": 15067,
+            "latencyMs": 15420,
             "providerErrors": [],
             "retries": 0
           }
@@ -670,7 +689,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I don't have our rollback procedures saved — can you remind me which service this is for, or should I check the runbook with you?"
+                "body": "I don't have our rollback procedures saved — can you remind me which service this is for, or should I check the runbook with you?",
+                "agent": "nova"
               }
             ],
             "calls": [
@@ -717,7 +737,7 @@
               "input": 6229,
               "output": 403
             },
-            "latencyMs": 29022,
+            "latencyMs": 29767,
             "providerErrors": [],
             "retries": 0
           }
@@ -752,7 +772,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I don't have that info — want me to check the calendar or ask someone who'd know?"
+                "body": "I don't have that info — want me to check the calendar or ask someone who'd know?",
+                "agent": "nova"
               }
             ],
             "calls": [
@@ -829,7 +850,7 @@
               "input": 5911,
               "output": 337
             },
-            "latencyMs": 28177,
+            "latencyMs": 25356,
             "providerErrors": [],
             "retries": 0
           }
@@ -855,7 +876,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I don't have visibility into who's scheduled to run the retro. You might want to check with the team lead or check the calendar invites — or if you need me to help organize it, just say the word."
+                "body": "I don't have visibility into who's scheduled to run the retro. You might want to check with the team lead or check the calendar invites — or if you need me to help organize it, just say the word.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -880,7 +902,7 @@
               "input": 2901,
               "output": 306
             },
-            "latencyMs": 16905,
+            "latencyMs": 17281,
             "providerErrors": [],
             "retries": 0
           }
@@ -906,7 +928,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I don't have visibility into who's scheduled to run the retro this Friday. You might need to check with your team lead or the meeting organizer — or if you're supposed to volunteer, I can help you draft a message offering to run it."
+                "body": "I don't have visibility into who's scheduled to run the retro this Friday. You might need to check with your team lead or the meeting organizer — or if you're supposed to volunteer, I can help you draft a message offering to run it.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -931,7 +954,7 @@
               "input": 2901,
               "output": 243
             },
-            "latencyMs": 14749,
+            "latencyMs": 14902,
             "providerErrors": [],
             "retries": 0
           }
@@ -961,7 +984,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I don't have that context, but you could check the git history on package.json or the deployment config where it was pinned — there might be a commit message explaining the reason. Or ask whoever made that change if you can find their name in the logs."
+                "body": "I don't have that context, but you could check the git history on package.json or the deployment config where it was pinned — there might be a commit message explaining the reason. Or ask whoever made that change if you can find their name in the logs.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -986,7 +1010,7 @@
               "input": 2899,
               "output": 187
             },
-            "latencyMs": 13672,
+            "latencyMs": 13874,
             "providerErrors": [],
             "retries": 0
           }
@@ -1008,7 +1032,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I don't have that context on hand. Want me to check the git history for the commit that pinned it, or look at any old issue/PR discussions about the Node version?"
+                "body": "I don't have that context on hand. Want me to check the git history for the commit that pinned it, or look at any old issue/PR discussions about the Node version?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -1033,7 +1058,7 @@
               "input": 2899,
               "output": 363
             },
-            "latencyMs": 19654,
+            "latencyMs": 19572,
             "providerErrors": [],
             "retries": 0
           }
@@ -1055,7 +1080,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I don't have that context on hand. Best bet is checking git blame on the lockfile or package.json, or looking at deployment logs from when the pin happened — might show the reason in a commit message or incident note."
+                "body": "I don't have that context on hand. Best bet is checking git blame on the lockfile or package.json, or looking at deployment logs from when the pin happened — might show the reason in a commit message or incident note.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -1080,7 +1106,7 @@
               "input": 2899,
               "output": 171
             },
-            "latencyMs": 13852,
+            "latencyMs": 14116,
             "providerErrors": [],
             "retries": 0
           }
@@ -1106,7 +1132,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Yep, all quiet on this end."
+                "body": "Yep, all quiet on this end.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -1131,7 +1158,7 @@
               "input": 3062,
               "output": 224
             },
-            "latencyMs": 15990,
+            "latencyMs": 15900,
             "providerErrors": [],
             "retries": 0
           }
@@ -1149,7 +1176,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Yeah, all quiet on my end. Just saw Dana's note about the mango palette getting signed off in design — nothing urgent there either."
+                "body": "Yeah, all quiet on my end. Just saw Dana's note about the mango palette getting signed off in design — nothing urgent there either.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -1174,7 +1202,7 @@
               "input": 3062,
               "output": 200
             },
-            "latencyMs": 18463,
+            "latencyMs": 18514,
             "providerErrors": [],
             "retries": 0
           }
@@ -1192,7 +1220,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Yeah, all quiet on my end. Just monitoring things over here."
+                "body": "Yeah, all quiet on my end. Just monitoring things over here.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -1217,7 +1246,7 @@
               "input": 3062,
               "output": 264
             },
-            "latencyMs": 15303,
+            "latencyMs": 15622,
             "providerErrors": [],
             "retries": 0
           }
@@ -1243,7 +1272,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Yep, all quiet on this end."
+                "body": "Yep, all quiet on this end.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -1268,7 +1298,7 @@
               "input": 3062,
               "output": 224
             },
-            "latencyMs": 15517,
+            "latencyMs": 15567,
             "providerErrors": [],
             "retries": 0
           }
@@ -1286,7 +1316,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Yeah, all quiet on my end. Just saw Dana's note about the mango palette getting signed off in design — nothing urgent there either."
+                "body": "Yeah, all quiet on my end. Just saw Dana's note about the mango palette getting signed off in design — nothing urgent there either.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -1311,7 +1342,7 @@
               "input": 3062,
               "output": 200
             },
-            "latencyMs": 17991,
+            "latencyMs": 18125,
             "providerErrors": [],
             "retries": 0
           }
@@ -1329,7 +1360,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Yeah, all quiet on my end. Just monitoring things over here."
+                "body": "Yeah, all quiet on my end. Just monitoring things over here.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -1354,7 +1386,7 @@
               "input": 3062,
               "output": 264
             },
-            "latencyMs": 16572,
+            "latencyMs": 17117,
             "providerErrors": [],
             "retries": 0
           }
@@ -1380,7 +1412,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Yeah, all quiet on my end. You?"
+                "body": "Yeah, all quiet on my end. You?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -1405,7 +1438,7 @@
               "input": 2876,
               "output": 88
             },
-            "latencyMs": 13604,
+            "latencyMs": 13807,
             "providerErrors": [],
             "retries": 0
           }
@@ -1423,7 +1456,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Yeah, all quiet here. Everything running smooth."
+                "body": "Yeah, all quiet here. Everything running smooth.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -1448,7 +1482,7 @@
               "input": 2876,
               "output": 58
             },
-            "latencyMs": 14145,
+            "latencyMs": 15077,
             "providerErrors": [],
             "retries": 0
           }
@@ -1466,7 +1500,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Yep, all quiet. Nothing urgent on my end."
+                "body": "Yep, all quiet. Nothing urgent on my end.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -1491,7 +1526,7 @@
               "input": 2876,
               "output": 84
             },
-            "latencyMs": 7311,
+            "latencyMs": 7535,
             "providerErrors": [],
             "retries": 0
           }
@@ -1517,7 +1552,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Yeah, all quiet on my end. Everything running smooth?"
+                "body": "Yeah, all quiet on my end. Everything running smooth?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -1542,7 +1578,7 @@
               "input": 2878,
               "output": 84
             },
-            "latencyMs": 14391,
+            "latencyMs": 15005,
             "providerErrors": [],
             "retries": 0
           }
@@ -1560,7 +1596,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Yeah, all quiet on my end. Just keeping watch."
+                "body": "Yeah, all quiet on my end. Just keeping watch.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -1585,7 +1622,7 @@
               "input": 2878,
               "output": 82
             },
-            "latencyMs": 6776,
+            "latencyMs": 7048,
             "providerErrors": [],
             "retries": 0
           }
@@ -1603,7 +1640,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Yep, all quiet on my end."
+                "body": "Yep, all quiet on my end.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -1628,7 +1666,7 @@
               "input": 2878,
               "output": 68
             },
-            "latencyMs": 5927,
+            "latencyMs": 6657,
             "providerErrors": [],
             "retries": 0
           }
@@ -1658,7 +1696,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Yeah, Dana just confirmed the mango palette is signed off and shipping Friday."
+                "body": "Yeah, Dana just confirmed the mango palette is signed off and shipping Friday.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -1683,7 +1722,7 @@
               "input": 3074,
               "output": 67
             },
-            "latencyMs": 9722,
+            "latencyMs": 10552,
             "providerErrors": [],
             "retries": 0
           }
@@ -1705,7 +1744,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Just saw Dana post in design — the mango palette is signed off and shipping Friday."
+                "body": "Just saw Dana post in design — the mango palette is signed off and shipping Friday.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -1730,7 +1770,7 @@
               "input": 3074,
               "output": 63
             },
-            "latencyMs": 7209,
+            "latencyMs": 7675,
             "providerErrors": [],
             "retries": 0
           }
@@ -1752,7 +1792,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Yeah, Dana just posted that the mango palette is signed off and shipping Friday."
+                "body": "Yeah, Dana just posted that the mango palette is signed off and shipping Friday.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -1777,7 +1818,7 @@
               "input": 3074,
               "output": 60
             },
-            "latencyMs": 7199,
+            "latencyMs": 7529,
             "providerErrors": [],
             "retries": 0
           }
@@ -1807,7 +1848,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Nothing new in the design room — it's quiet."
+                "body": "Nothing new in the design room — it's quiet.",
+                "agent": "nova"
               }
             ],
             "calls": [
@@ -1855,7 +1897,7 @@
               "input": 5822,
               "output": 159
             },
-            "latencyMs": 12673,
+            "latencyMs": 13608,
             "providerErrors": [],
             "retries": 0
           }
@@ -1877,7 +1919,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Nothing new in the design room — it's quiet."
+                "body": "Nothing new in the design room — it's quiet.",
+                "agent": "nova"
               }
             ],
             "calls": [
@@ -1925,7 +1968,7 @@
               "input": 5822,
               "output": 172
             },
-            "latencyMs": 18873,
+            "latencyMs": 19969,
             "providerErrors": [],
             "retries": 0
           }
@@ -1947,7 +1990,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Nothing new in the design room yet. I'll keep an eye on it."
+                "body": "Nothing new in the design room yet. I'll keep an eye on it.",
+                "agent": "nova"
               }
             ],
             "calls": [
@@ -1995,7 +2039,7 @@
               "input": 5822,
               "output": 161
             },
-            "latencyMs": 24733,
+            "latencyMs": 27138,
             "providerErrors": [],
             "retries": 0
           }
@@ -2052,7 +2096,7 @@
               "input": 2882,
               "output": 146
             },
-            "latencyMs": 6847,
+            "latencyMs": 7305,
             "providerErrors": [],
             "retries": 0
           }
@@ -2101,7 +2145,7 @@
               "input": 2882,
               "output": 161
             },
-            "latencyMs": 10769,
+            "latencyMs": 11433,
             "providerErrors": [],
             "retries": 0
           }
@@ -2150,7 +2194,7 @@
               "input": 2882,
               "output": 133
             },
-            "latencyMs": 10401,
+            "latencyMs": 11421,
             "providerErrors": [],
             "retries": 0
           }
@@ -2207,7 +2251,7 @@
               "input": 2906,
               "output": 182
             },
-            "latencyMs": 10109,
+            "latencyMs": 10604,
             "providerErrors": [],
             "retries": 0
           }
@@ -2257,7 +2301,7 @@
               "input": 2906,
               "output": 192
             },
-            "latencyMs": 10972,
+            "latencyMs": 11734,
             "providerErrors": [],
             "retries": 0
           }
@@ -2307,7 +2351,7 @@
               "input": 2906,
               "output": 202
             },
-            "latencyMs": 13695,
+            "latencyMs": 15233,
             "providerErrors": [],
             "retries": 0
           }
@@ -2361,7 +2405,7 @@
               "input": 2885,
               "output": 88
             },
-            "latencyMs": 10936,
+            "latencyMs": 11605,
             "providerErrors": [],
             "retries": 0
           }
@@ -2406,7 +2450,7 @@
               "input": 2885,
               "output": 225
             },
-            "latencyMs": 13208,
+            "latencyMs": 14593,
             "providerErrors": [],
             "retries": 0
           }
@@ -2451,7 +2495,7 @@
               "input": 2885,
               "output": 83
             },
-            "latencyMs": 11508,
+            "latencyMs": 12284,
             "providerErrors": [],
             "retries": 0
           }
@@ -2481,7 +2525,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "`tail -f /var/log/agent.log` or if it's in the project directory: `tail -f logs/agent.log`\n\nWant me to check where the logs are actually stored?"
+                "body": "`tail -f /var/log/agent.log` or if it's in the project directory: `tail -f logs/agent.log`\n\nWant me to check where the logs are actually stored?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -2506,7 +2551,7 @@
               "input": 2893,
               "output": 167
             },
-            "latencyMs": 14022,
+            "latencyMs": 15126,
             "providerErrors": [],
             "retries": 0
           }
@@ -2528,7 +2573,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Depends on where the agent runs:\n\n- **Docker**: `docker logs -f <container_name>`\n- **Kubernetes**: `kubectl logs -f <pod_name>`\n- **Systemd**: `journalctl -u <service_name> -f`\n- **Direct file**: `tail -f /path/to/agent.log`\n\nWhich setup are you using?"
+                "body": "Depends on where the agent runs:\n\n- **Docker**: `docker logs -f <container_name>`\n- **Kubernetes**: `kubectl logs -f <pod_name>`\n- **Systemd**: `journalctl -u <service_name> -f`\n- **Direct file**: `tail -f /path/to/agent.log`\n\nWhich setup are you using?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -2553,7 +2599,7 @@
               "input": 2893,
               "output": 243
             },
-            "latencyMs": 12460,
+            "latencyMs": 16700,
             "providerErrors": [],
             "retries": 0
           }
@@ -2575,7 +2621,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "`tail -f /path/to/agent.log` — or if you want to follow it in real-time, `tail -F` will handle log rotation too. What's the path to the agent log on your system?"
+                "body": "`tail -f /path/to/agent.log` — or if you want to follow it in real-time, `tail -F` will handle log rotation too. What's the path to the agent log on your system?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -2600,7 +2647,7 @@
               "input": 2893,
               "output": 239
             },
-            "latencyMs": 16121,
+            "latencyMs": 22142,
             "providerErrors": [],
             "retries": 0
           }
@@ -2626,7 +2673,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I don't have the staging URL on hand. Is there a docs page or config file where we usually keep it?"
+                "body": "I don't have the staging URL on hand. Is there a docs page or config file where we usually keep it?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -2651,7 +2699,7 @@
               "input": 2885,
               "output": 186
             },
-            "latencyMs": 10487,
+            "latencyMs": 12576,
             "providerErrors": [],
             "retries": 0
           }
@@ -2669,7 +2717,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I don't have the staging URL handy — it's not in my notes. Is this for a specific service? I can help track it down if you tell me which one."
+                "body": "I don't have the staging URL handy — it's not in my notes. Is this for a specific service? I can help track it down if you tell me which one.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -2694,7 +2743,7 @@
               "input": 2885,
               "output": 200
             },
-            "latencyMs": 16190,
+            "latencyMs": 22822,
             "providerErrors": [],
             "retries": 0
           }
@@ -2746,7 +2795,7 @@
               "input": 2885,
               "output": 341
             },
-            "latencyMs": 16571,
+            "latencyMs": 19023,
             "providerErrors": [],
             "retries": 0
           }
@@ -2858,7 +2907,7 @@
               "input": 14242,
               "output": 249
             },
-            "latencyMs": 27937,
+            "latencyMs": 38147,
             "providerErrors": [],
             "retries": 0
           }
@@ -2916,7 +2965,7 @@
               "input": 7066,
               "output": 123
             },
-            "latencyMs": 16099,
+            "latencyMs": 16390,
             "providerErrors": [],
             "retries": 0
           }
@@ -3050,7 +3099,7 @@
               "input": 21370,
               "output": 332
             },
-            "latencyMs": 47986,
+            "latencyMs": 48914,
             "providerErrors": [],
             "retries": 0
           }
@@ -3116,7 +3165,7 @@
               "input": 7212,
               "output": 124
             },
-            "latencyMs": 15518,
+            "latencyMs": 22245,
             "providerErrors": [],
             "retries": 0
           }
@@ -3174,7 +3223,7 @@
               "input": 7212,
               "output": 137
             },
-            "latencyMs": 13695,
+            "latencyMs": 17164,
             "providerErrors": [],
             "retries": 0
           }
@@ -3278,7 +3327,7 @@
               "input": 14531,
               "output": 338
             },
-            "latencyMs": 30322,
+            "latencyMs": 30798,
             "providerErrors": [],
             "retries": 0
           }
@@ -3429,7 +3478,7 @@
               "input": 21465,
               "output": 411
             },
-            "latencyMs": 44717,
+            "latencyMs": 45964,
             "providerErrors": [],
             "retries": 0
           }
@@ -3571,7 +3620,7 @@
               "input": 21512,
               "output": 713
             },
-            "latencyMs": 49595,
+            "latencyMs": 49901,
             "providerErrors": [],
             "retries": 0
           }
@@ -3682,7 +3731,7 @@
               "input": 14276,
               "output": 369
             },
-            "latencyMs": 33740,
+            "latencyMs": 34196,
             "providerErrors": [],
             "retries": 0
           }
@@ -3712,7 +3761,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I don't have direct visibility into your backup jobs. Can you point me to the logs or cron config so I can check? Or if you have a monitoring dashboard, I can look there."
+                "body": "I don't have direct visibility into your backup jobs. Can you point me to the logs or cron config so I can check? Or if you have a monitoring dashboard, I can look there.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -3737,7 +3787,7 @@
               "input": 2895,
               "output": 246
             },
-            "latencyMs": 14118,
+            "latencyMs": 13994,
             "providerErrors": [],
             "retries": 0
           }
@@ -3759,7 +3809,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I don't have direct access to check the backup logs or cron schedule right now. To verify if it's still running at 2am, we'd need to:\n\n1. Check the cron job config (`crontab -l` or `/etc/cron.d/`)\n2. Look at recent backup logs (usually in `/var/log/` or wherever your backup tool writes)\n3. Check if the backup destination has recent files\n\nWant me to look into any of those, or do you have access to check the logs yourself?"
+                "body": "I don't have direct access to check the backup logs or cron schedule right now. To verify if it's still running at 2am, we'd need to:\n\n1. Check the cron job config (`crontab -l` or `/etc/cron.d/`)\n2. Look at recent backup logs (usually in `/var/log/` or wherever your backup tool writes)\n3. Check if the backup destination has recent files\n\nWant me to look into any of those, or do you have access to check the logs yourself?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -3784,7 +3835,7 @@
               "input": 2895,
               "output": 362
             },
-            "latencyMs": 16245,
+            "latencyMs": 16639,
             "providerErrors": [],
             "retries": 0
           }
@@ -3806,7 +3857,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I don't have direct visibility into the backup schedule right now. To confirm if it's still running at 2am, you'd want to check:\n\n1. The cron job: `crontab -l | grep backup` (or wherever it's scheduled)\n2. Recent logs: `/var/log/backup.log` or whatever your backup system writes to\n3. The last successful run timestamp\n\nWant me to look into anything specific about the backup setup, or are you seeing signs it might have stopped?"
+                "body": "I don't have direct visibility into the backup schedule right now. To confirm if it's still running at 2am, you'd want to check:\n\n1. The cron job: `crontab -l | grep backup` (or wherever it's scheduled)\n2. Recent logs: `/var/log/backup.log` or whatever your backup system writes to\n3. The last successful run timestamp\n\nWant me to look into anything specific about the backup setup, or are you seeing signs it might have stopped?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -3831,7 +3883,7 @@
               "input": 2895,
               "output": 337
             },
-            "latencyMs": 14691,
+            "latencyMs": 14795,
             "providerErrors": [],
             "retries": 0
           }
@@ -3861,7 +3913,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Morning, Quinton. Nothing urgent on my end — no active incidents or pending deploys that I'm tracking. If anything comes up, I'll flag it right away."
+                "body": "Morning, Quinton. Nothing urgent on my end — no active incidents or pending deploys that I'm tracking. If anything comes up, I'll flag it right away.",
+                "agent": "nova"
               }
             ],
             "calls": [
@@ -3910,7 +3963,7 @@
               "input": 5856,
               "output": 250
             },
-            "latencyMs": 33118,
+            "latencyMs": 33434,
             "providerErrors": [],
             "retries": 0
           }
@@ -3932,7 +3985,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Morning Quinton. Nothing active right now — no incidents or pending deploys on my radar. Everything's quiet. Let me know if you're planning anything today and I'll keep an eye out."
+                "body": "Morning Quinton. Nothing active right now — no incidents or pending deploys on my radar. Everything's quiet. Let me know if you're planning anything today and I'll keep an eye out.",
+                "agent": "nova"
               }
             ],
             "calls": [
@@ -3980,7 +4034,7 @@
               "input": 5843,
               "output": 246
             },
-            "latencyMs": 33239,
+            "latencyMs": 33513,
             "providerErrors": [],
             "retries": 0
           }
@@ -4002,7 +4056,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Morning. Nothing active on my end — no incidents or deploys in progress. All quiet."
+                "body": "Morning. Nothing active on my end — no incidents or deploys in progress. All quiet.",
+                "agent": "nova"
               }
             ],
             "calls": [
@@ -4051,7 +4106,7 @@
               "input": 5856,
               "output": 233
             },
-            "latencyMs": 35641,
+            "latencyMs": 36284,
             "providerErrors": [],
             "retries": 0
           }
@@ -4081,7 +4136,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Sure, I'll take a look. Which test is failing — and do you have the error output or a link to the CI run?"
+                "body": "Sure, I'll take a look. Which test is failing — and do you have the error output or a link to the CI run?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -4106,7 +4162,7 @@
               "input": 2896,
               "output": 211
             },
-            "latencyMs": 15299,
+            "latencyMs": 15526,
             "providerErrors": [],
             "retries": 0
           }
@@ -4128,7 +4184,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I'll check it out. Which test is failing — can you share the name or a link to the logs?"
+                "body": "I'll check it out. Which test is failing — can you share the name or a link to the logs?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -4153,7 +4210,7 @@
               "input": 2896,
               "output": 178
             },
-            "latencyMs": 18448,
+            "latencyMs": 18480,
             "providerErrors": [],
             "retries": 0
           }
@@ -4175,7 +4232,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I'll check the failing test. Can you point me to which test suite or share the error output?"
+                "body": "I'll check the failing test. Can you point me to which test suite or share the error output?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -4200,7 +4258,7 @@
               "input": 2896,
               "output": 180
             },
-            "latencyMs": 14162,
+            "latencyMs": 14368,
             "providerErrors": [],
             "retries": 0
           }
@@ -4230,7 +4288,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I don't have visibility into the staging deploy status right now. Can you share which service or repo this is for, or point me to the deployment logs? I'll check what I can."
+                "body": "I don't have visibility into the staging deploy status right now. Can you share which service or repo this is for, or point me to the deployment logs? I'll check what I can.",
+                "agent": "nova"
               }
             ],
             "calls": [
@@ -4284,7 +4343,7 @@
               "input": 5875,
               "output": 514
             },
-            "latencyMs": 32262,
+            "latencyMs": 32547,
             "providerErrors": [],
             "retries": 0
           }
@@ -4306,7 +4365,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I don't have visibility into the current staging deploy status. Can you share the deploy ID or timestamp so I can check the logs? Or if you're seeing a specific issue, let me know what you're observing and I'll dig in."
+                "body": "I don't have visibility into the current staging deploy status. Can you share the deploy ID or timestamp so I can check the logs? Or if you're seeing a specific issue, let me know what you're observing and I'll dig in.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -4331,7 +4391,7 @@
               "input": 2890,
               "output": 469
             },
-            "latencyMs": 21130,
+            "latencyMs": 21318,
             "providerErrors": [],
             "retries": 0
           }
@@ -4353,7 +4413,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I don't have visibility into the current staging deploy status. Can you share which service or commit you're asking about? I can check the logs or deployment pipeline once I know what to look for."
+                "body": "I don't have visibility into the current staging deploy status. Can you share which service or commit you're asking about? I can check the logs or deployment pipeline once I know what to look for.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -4378,7 +4439,7 @@
               "input": 2890,
               "output": 300
             },
-            "latencyMs": 15161,
+            "latencyMs": 15602,
             "providerErrors": [],
             "retries": 0
           }
@@ -4432,7 +4493,7 @@
               "input": 2879,
               "output": 144
             },
-            "latencyMs": 19303,
+            "latencyMs": 19489,
             "providerErrors": [],
             "retries": 0
           }
@@ -4477,7 +4538,7 @@
               "input": 2879,
               "output": 207
             },
-            "latencyMs": 16492,
+            "latencyMs": 16945,
             "providerErrors": [],
             "retries": 0
           }
@@ -4523,7 +4584,7 @@
               "input": 2879,
               "output": 182
             },
-            "latencyMs": 12294,
+            "latencyMs": 12427,
             "providerErrors": [],
             "retries": 0
           }
@@ -4557,7 +4618,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I don't have any notes on that yet — can you point me to the test or the failing CI run? I'll dig in."
+                "body": "I don't have any notes on that yet — can you point me to the test or the failing CI run? I'll dig in.",
+                "agent": "nova"
               }
             ],
             "calls": [
@@ -4612,7 +4674,7 @@
               "input": 5891,
               "output": 208
             },
-            "latencyMs": 26669,
+            "latencyMs": 27213,
             "providerErrors": [],
             "retries": 0
           }
@@ -4638,7 +4700,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Hey Quinton, I don't have any notes on that flaky test from previous sessions. Can you remind me which test it is and what the error looks like? I'll dig into it right away."
+                "body": "Hey Quinton, I don't have any notes on that flaky test from previous sessions. Can you remind me which test it is and what the error looks like? I'll dig into it right away.",
+                "agent": "nova"
               }
             ],
             "calls": [
@@ -4733,7 +4796,7 @@
               "input": 11962,
               "output": 441
             },
-            "latencyMs": 34349,
+            "latencyMs": 30849,
             "providerErrors": [],
             "retries": 0
           }
@@ -4759,7 +4822,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I don't have any notes on that from our last conversation - my memory is clean. Can you remind me which test is flaky and what you'd like me to look into? I'll pick it up right away."
+                "body": "I don't have any notes on that from our last conversation - my memory is clean. Can you remind me which test is flaky and what you'd like me to look into? I'll pick it up right away.",
+                "agent": "nova"
               }
             ],
             "calls": [
@@ -4807,7 +4871,7 @@
               "input": 5840,
               "output": 347
             },
-            "latencyMs": 17990,
+            "latencyMs": 19347,
             "providerErrors": [],
             "retries": 0
           }
@@ -4833,7 +4897,7 @@
             }
           ],
           "outcome": {
-            "reply": "\n\nGot it. I'll check back in 10 minutes about the deploy.",
+            "reply": "\n\nGot it — I'll check back in 10 minutes on the deploy.",
             "posts": [],
             "calls": [
               {
@@ -4910,10 +4974,108 @@
               }
             ],
             "usage": {
-              "input": 14093,
-              "output": 157
+              "input": 14094,
+              "output": 149
             },
-            "latencyMs": 21707,
+            "latencyMs": 21830,
+            "providerErrors": [],
+            "retries": 0
+          }
+        },
+        {
+          "pass": true,
+          "checks": [
+            {
+              "kind": "calls_tool",
+              "pass": true
+            },
+            {
+              "kind": "tool_args",
+              "pass": true
+            }
+          ],
+          "outcome": {
+            "reply": "\n\nWill do. I'll check back in 10 minutes.",
+            "posts": [],
+            "calls": [
+              {
+                "name": "schedule",
+                "args": {
+                  "action": "once",
+                  "note": "Check back with the user about the deploy status",
+                  "when": "10 minutes"
+                }
+              }
+            ],
+            "requests": [
+              {
+                "system": "",
+                "messages": [],
+                "toolNames": [
+                  "memory",
+                  "exec",
+                  "read",
+                  "write",
+                  "edit",
+                  "web_fetch",
+                  "facts",
+                  "recall",
+                  "tasks",
+                  "task_query",
+                  "room",
+                  "schedule",
+                  "projects",
+                  "collections",
+                  "documents",
+                  "extract_document",
+                  "ask_user",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 6264
+              },
+              {
+                "system": "",
+                "messages": [],
+                "toolNames": [
+                  "memory",
+                  "exec",
+                  "read",
+                  "write",
+                  "edit",
+                  "web_fetch",
+                  "facts",
+                  "recall",
+                  "tasks",
+                  "task_query",
+                  "room",
+                  "schedule",
+                  "projects",
+                  "collections",
+                  "documents",
+                  "extract_document",
+                  "ask_user",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 6304
+              }
+            ],
+            "usage": {
+              "input": 14094,
+              "output": 146
+            },
+            "latencyMs": 14717,
             "providerErrors": [],
             "retries": 0
           }
@@ -4932,104 +5094,6 @@
           ],
           "outcome": {
             "reply": "\n\nDone. I'll check back in 10 minutes about the deploy.",
-            "posts": [],
-            "calls": [
-              {
-                "name": "schedule",
-                "args": {
-                  "action": "once",
-                  "note": "Check back with the user about the deploy status",
-                  "when": "10 minutes"
-                }
-              }
-            ],
-            "requests": [
-              {
-                "system": "",
-                "messages": [],
-                "toolNames": [
-                  "memory",
-                  "exec",
-                  "read",
-                  "write",
-                  "edit",
-                  "web_fetch",
-                  "facts",
-                  "recall",
-                  "tasks",
-                  "task_query",
-                  "room",
-                  "schedule",
-                  "projects",
-                  "collections",
-                  "documents",
-                  "extract_document",
-                  "ask_user",
-                  "delegate",
-                  "task_status",
-                  "admin",
-                  "run_workflow",
-                  "resource_admin",
-                  "load_skill",
-                  "core_memory"
-                ],
-                "estimatedTokens": 6264
-              },
-              {
-                "system": "",
-                "messages": [],
-                "toolNames": [
-                  "memory",
-                  "exec",
-                  "read",
-                  "write",
-                  "edit",
-                  "web_fetch",
-                  "facts",
-                  "recall",
-                  "tasks",
-                  "task_query",
-                  "room",
-                  "schedule",
-                  "projects",
-                  "collections",
-                  "documents",
-                  "extract_document",
-                  "ask_user",
-                  "delegate",
-                  "task_status",
-                  "admin",
-                  "run_workflow",
-                  "resource_admin",
-                  "load_skill",
-                  "core_memory"
-                ],
-                "estimatedTokens": 6304
-              }
-            ],
-            "usage": {
-              "input": 14095,
-              "output": 153
-            },
-            "latencyMs": 16742,
-            "providerErrors": [],
-            "retries": 0
-          }
-        },
-        {
-          "pass": true,
-          "checks": [
-            {
-              "kind": "calls_tool",
-              "pass": true
-            },
-            {
-              "kind": "tool_args",
-              "pass": true
-            }
-          ],
-          "outcome": {
-            "reply": "\n\nGot it. I'll check back in 10 minutes about the deploy.",
             "posts": [],
             "calls": [
               {
@@ -5109,7 +5173,7 @@
               "input": 14095,
               "output": 151
             },
-            "latencyMs": 17466,
+            "latencyMs": 16348,
             "providerErrors": [],
             "retries": 0
           }
@@ -5135,7 +5199,7 @@
             }
           ],
           "outcome": {
-            "reply": "\n\nSet up. Every weekday at 9am I'll check for stuck tasks. Right now the queue is completely empty — nothing blocked or in progress.",
+            "reply": "\n\nSet up. I'll check every weekday at 9am for stuck tasks.\n\nQuick look right now — nothing blocked or in progress. Queue is clear.",
             "posts": [],
             "calls": [
               {
@@ -5151,154 +5215,6 @@
                 "args": {
                   "assignee": "all",
                   "status": "blocked,in_progress",
-                  "limit": 50
-                }
-              },
-              {
-                "name": "recall",
-                "args": {
-                  "action": "note",
-                  "content": "User wants weekly weekday 9am queue checks for stuck tasks (blocked, long in-progress, overdue).",
-                  "tags": [
-                    "preferences",
-                    "schedule"
-                  ]
-                }
-              }
-            ],
-            "requests": [
-              {
-                "system": "",
-                "messages": [],
-                "toolNames": [
-                  "memory",
-                  "exec",
-                  "read",
-                  "write",
-                  "edit",
-                  "web_fetch",
-                  "facts",
-                  "recall",
-                  "tasks",
-                  "task_query",
-                  "room",
-                  "schedule",
-                  "projects",
-                  "collections",
-                  "documents",
-                  "extract_document",
-                  "ask_user",
-                  "delegate",
-                  "task_status",
-                  "admin",
-                  "run_workflow",
-                  "resource_admin",
-                  "load_skill",
-                  "core_memory"
-                ],
-                "estimatedTokens": 6268
-              },
-              {
-                "system": "",
-                "messages": [],
-                "toolNames": [
-                  "memory",
-                  "exec",
-                  "read",
-                  "write",
-                  "edit",
-                  "web_fetch",
-                  "facts",
-                  "recall",
-                  "tasks",
-                  "task_query",
-                  "room",
-                  "schedule",
-                  "projects",
-                  "collections",
-                  "documents",
-                  "extract_document",
-                  "ask_user",
-                  "delegate",
-                  "task_status",
-                  "admin",
-                  "run_workflow",
-                  "resource_admin",
-                  "load_skill",
-                  "core_memory"
-                ],
-                "estimatedTokens": 6318
-              },
-              {
-                "system": "",
-                "messages": [],
-                "toolNames": [
-                  "memory",
-                  "exec",
-                  "read",
-                  "write",
-                  "edit",
-                  "web_fetch",
-                  "facts",
-                  "recall",
-                  "tasks",
-                  "task_query",
-                  "room",
-                  "schedule",
-                  "projects",
-                  "collections",
-                  "documents",
-                  "extract_document",
-                  "ask_user",
-                  "delegate",
-                  "task_status",
-                  "admin",
-                  "run_workflow",
-                  "resource_admin",
-                  "load_skill",
-                  "core_memory"
-                ],
-                "estimatedTokens": 6328
-              }
-            ],
-            "usage": {
-              "input": 21455,
-              "output": 509
-            },
-            "latencyMs": 31620,
-            "providerErrors": [],
-            "retries": 0
-          }
-        },
-        {
-          "pass": true,
-          "checks": [
-            {
-              "kind": "calls_tool",
-              "pass": true
-            },
-            {
-              "kind": "tool_args",
-              "pass": true
-            }
-          ],
-          "outcome": {
-            "reply": "\n\nDone — I'll check weekdays at 9am starting Monday.\n\nQuick look right now: nothing's stuck. No tasks in progress or blocked. Queue's clean.",
-            "posts": [],
-            "calls": [
-              {
-                "name": "schedule",
-                "args": {
-                  "action": "repeat",
-                  "every": "weekdays at 9am",
-                  "note": "Check the task queue for anything stuck or blocked. Look for tasks that have been in progress too long, blocked tasks, or anything that needs attention."
-                }
-              },
-              {
-                "name": "task_query",
-                "args": {
-                  "assignee": "all",
-                  "status": "in_progress,blocked",
                   "limit": 20
                 }
               }
@@ -5399,10 +5315,10 @@
               }
             ],
             "usage": {
-              "input": 21361,
-              "output": 405
+              "input": 21364,
+              "output": 401
             },
-            "latencyMs": 24316,
+            "latencyMs": 29659,
             "providerErrors": [],
             "retries": 0
           }
@@ -5420,7 +5336,7 @@
             }
           ],
           "outcome": {
-            "reply": "\n\nDone. Every weekday at 9am I'll check the task queue for anything stuck.",
+            "reply": "\n\nDone. I'll check the queue every weekday at 9am, starting Monday.",
             "posts": [],
             "calls": [
               {
@@ -5498,9 +5414,107 @@
             ],
             "usage": {
               "input": 14139,
-              "output": 210
+              "output": 220
             },
-            "latencyMs": 16477,
+            "latencyMs": 16081,
+            "providerErrors": [],
+            "retries": 0
+          }
+        },
+        {
+          "pass": true,
+          "checks": [
+            {
+              "kind": "calls_tool",
+              "pass": true
+            },
+            {
+              "kind": "tool_args",
+              "pass": true
+            }
+          ],
+          "outcome": {
+            "reply": "\n\nSet up. Every weekday at 9am I'll check for stuck tasks — blocked items, anything sitting in progress too long, or overdue work.\n\nFirst check is tomorrow (Monday) at 9am.",
+            "posts": [],
+            "calls": [
+              {
+                "name": "schedule",
+                "args": {
+                  "action": "repeat",
+                  "every": "weekdays at 9am",
+                  "note": "Check the task queue for anything stuck or blocked. Look for tasks that have been in progress too long, blocked tasks, or anything that needs attention."
+                }
+              }
+            ],
+            "requests": [
+              {
+                "system": "",
+                "messages": [],
+                "toolNames": [
+                  "memory",
+                  "exec",
+                  "read",
+                  "write",
+                  "edit",
+                  "web_fetch",
+                  "facts",
+                  "recall",
+                  "tasks",
+                  "task_query",
+                  "room",
+                  "schedule",
+                  "projects",
+                  "collections",
+                  "documents",
+                  "extract_document",
+                  "ask_user",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 6268
+              },
+              {
+                "system": "",
+                "messages": [],
+                "toolNames": [
+                  "memory",
+                  "exec",
+                  "read",
+                  "write",
+                  "edit",
+                  "web_fetch",
+                  "facts",
+                  "recall",
+                  "tasks",
+                  "task_query",
+                  "room",
+                  "schedule",
+                  "projects",
+                  "collections",
+                  "documents",
+                  "extract_document",
+                  "ask_user",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 6318
+              }
+            ],
+            "usage": {
+              "input": 14140,
+              "output": 351
+            },
+            "latencyMs": 16234,
             "providerErrors": [],
             "retries": 0
           }
@@ -5600,7 +5614,7 @@
               "input": 14005,
               "output": 108
             },
-            "latencyMs": 16239,
+            "latencyMs": 14017,
             "providerErrors": [],
             "retries": 0
           }
@@ -5692,7 +5706,7 @@
               "input": 14005,
               "output": 108
             },
-            "latencyMs": 17371,
+            "latencyMs": 16072,
             "providerErrors": [],
             "retries": 0
           }
@@ -5784,7 +5798,7 @@
               "input": 14005,
               "output": 102
             },
-            "latencyMs": 14643,
+            "latencyMs": 15962,
             "providerErrors": [],
             "retries": 0
           }
@@ -5888,7 +5902,7 @@
               "input": 14019,
               "output": 109
             },
-            "latencyMs": 17759,
+            "latencyMs": 18803,
             "providerErrors": [],
             "retries": 0
           }
@@ -5984,7 +5998,7 @@
               "input": 14019,
               "output": 116
             },
-            "latencyMs": 13074,
+            "latencyMs": 14726,
             "providerErrors": [],
             "retries": 0
           }
@@ -6080,7 +6094,7 @@
               "input": 14019,
               "output": 118
             },
-            "latencyMs": 15258,
+            "latencyMs": 16694,
             "providerErrors": [],
             "retries": 0
           }
@@ -6180,7 +6194,7 @@
               "input": 14032,
               "output": 120
             },
-            "latencyMs": 16794,
+            "latencyMs": 16923,
             "providerErrors": [],
             "retries": 0
           }
@@ -6272,7 +6286,7 @@
               "input": 14032,
               "output": 120
             },
-            "latencyMs": 15263,
+            "latencyMs": 16895,
             "providerErrors": [],
             "retries": 0
           }
@@ -6364,7 +6378,7 @@
               "input": 14019,
               "output": 110
             },
-            "latencyMs": 14554,
+            "latencyMs": 15095,
             "providerErrors": [],
             "retries": 0
           }
@@ -6386,7 +6400,7 @@
             }
           ],
           "outcome": {
-            "reply": "\n\nDone. Task created with highest priority (rank 1).",
+            "reply": "\n\nDone. Added \"Fix login redirect bug\" as a high-priority task (rank 1).",
             "posts": [],
             "calls": [
               {
@@ -6466,10 +6480,10 @@
               }
             ],
             "usage": {
-              "input": 14132,
-              "output": 250
+              "input": 14130,
+              "output": 268
             },
-            "latencyMs": 12776,
+            "latencyMs": 17614,
             "providerErrors": [],
             "retries": 0
           }
@@ -6483,7 +6497,7 @@
             }
           ],
           "outcome": {
-            "reply": "\n\nDone. Task created and marked as high priority (rank 1). Let me know if you want me to start working on it or add more details.",
+            "reply": "\n\nDone. Added \"Fix login redirect bug\" as a high-priority task (rank 1). Let me know if you want me to start working on it or add more details.",
             "posts": [],
             "calls": [
               {
@@ -6565,9 +6579,9 @@
             ],
             "usage": {
               "input": 14164,
-              "output": 235
+              "output": 250
             },
-            "latencyMs": 15062,
+            "latencyMs": 16858,
             "providerErrors": [],
             "retries": 0
           }
@@ -6581,7 +6595,7 @@
             }
           ],
           "outcome": {
-            "reply": "\n\nDone. Task \"Fix login redirect bug\" created with high priority (rank 1).",
+            "reply": "\n\nDone. Task \"Fix login redirect bug\" created with highest priority (rank 1).",
             "posts": [],
             "calls": [
               {
@@ -6660,10 +6674,10 @@
               }
             ],
             "usage": {
-              "input": 14117,
-              "output": 237
+              "input": 14118,
+              "output": 241
             },
-            "latencyMs": 15283,
+            "latencyMs": 15400,
             "providerErrors": [],
             "retries": 0
           }
@@ -6729,7 +6743,7 @@
               "input": 6986,
               "output": 81
             },
-            "latencyMs": 8150,
+            "latencyMs": 7925,
             "providerErrors": [],
             "retries": 0
           }
@@ -6787,7 +6801,7 @@
               "input": 6986,
               "output": 81
             },
-            "latencyMs": 5390,
+            "latencyMs": 6190,
             "providerErrors": [],
             "retries": 0
           }
@@ -6845,7 +6859,7 @@
               "input": 6986,
               "output": 155
             },
-            "latencyMs": 9882,
+            "latencyMs": 10508,
             "providerErrors": [],
             "retries": 0
           }
@@ -6911,7 +6925,7 @@
               "input": 6984,
               "output": 78
             },
-            "latencyMs": 4890,
+            "latencyMs": 5724,
             "providerErrors": [],
             "retries": 0
           }
@@ -6969,7 +6983,7 @@
               "input": 6984,
               "output": 102
             },
-            "latencyMs": 9191,
+            "latencyMs": 8095,
             "providerErrors": [],
             "retries": 0
           }
@@ -7027,7 +7041,7 @@
               "input": 6984,
               "output": 66
             },
-            "latencyMs": 6564,
+            "latencyMs": 7000,
             "providerErrors": [],
             "retries": 0
           }
@@ -7135,7 +7149,7 @@
               "input": 14067,
               "output": 219
             },
-            "latencyMs": 15605,
+            "latencyMs": 15460,
             "providerErrors": [],
             "retries": 0
           }
@@ -7235,7 +7249,7 @@
               "input": 14067,
               "output": 234
             },
-            "latencyMs": 30839,
+            "latencyMs": 55061,
             "providerErrors": [],
             "retries": 0
           }
@@ -7335,7 +7349,7 @@
               "input": 14067,
               "output": 222
             },
-            "latencyMs": 38437,
+            "latencyMs": 46616,
             "providerErrors": [],
             "retries": 0
           }
@@ -7365,6 +7379,17 @@
                 "args": {
                   "action": "note",
                   "content": "Standup is at 10:15 on the #ops channel. Retro is fortnightly.",
+                  "tags": [
+                    "schedule",
+                    "meetings"
+                  ]
+                }
+              },
+              {
+                "name": "recall",
+                "args": {
+                  "action": "note",
+                  "content": "Standup is at 10:15 on #ops. Retro is fortnightly.",
                   "tags": [
                     "schedule",
                     "meetings"
@@ -7434,13 +7459,44 @@
                   "core_memory"
                 ],
                 "estimatedTokens": 6307
+              },
+              {
+                "system": "",
+                "messages": [],
+                "toolNames": [
+                  "memory",
+                  "exec",
+                  "read",
+                  "write",
+                  "edit",
+                  "web_fetch",
+                  "facts",
+                  "recall",
+                  "tasks",
+                  "task_query",
+                  "room",
+                  "schedule",
+                  "projects",
+                  "collections",
+                  "documents",
+                  "extract_document",
+                  "ask_user",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 6314
               }
             ],
             "usage": {
-              "input": 14213,
-              "output": 686
+              "input": 21476,
+              "output": 2114
             },
-            "latencyMs": 28141,
+            "latencyMs": 66407,
             "providerErrors": [],
             "retries": 0
           }
@@ -7566,7 +7622,7 @@
               "input": 14521,
               "output": 1121
             },
-            "latencyMs": 40217,
+            "latencyMs": 42221,
             "providerErrors": [],
             "retries": 0
           }
@@ -7682,7 +7738,7 @@
               "input": 14414,
               "output": 565
             },
-            "latencyMs": 34240,
+            "latencyMs": 45514,
             "providerErrors": [],
             "retries": 0
           }
@@ -7744,7 +7800,7 @@
               "input": 7057,
               "output": 93
             },
-            "latencyMs": 16484,
+            "latencyMs": 16734,
             "providerErrors": [],
             "retries": 0
           }
@@ -7837,7 +7893,7 @@
               "input": 14179,
               "output": 265
             },
-            "latencyMs": 41325,
+            "latencyMs": 49578,
             "providerErrors": [],
             "retries": 0
           }
@@ -7891,7 +7947,7 @@
               "input": 7057,
               "output": 104
             },
-            "latencyMs": 10954,
+            "latencyMs": 30995,
             "providerErrors": [],
             "retries": 0
           }
@@ -7999,7 +8055,7 @@
               "input": 14180,
               "output": 284
             },
-            "latencyMs": 30715,
+            "latencyMs": 54408,
             "providerErrors": [],
             "retries": 0
           }
@@ -8099,7 +8155,7 @@
               "input": 14180,
               "output": 454
             },
-            "latencyMs": 41723,
+            "latencyMs": 46754,
             "providerErrors": [],
             "retries": 0
           }
@@ -8199,7 +8255,7 @@
               "input": 14180,
               "output": 287
             },
-            "latencyMs": 44538,
+            "latencyMs": 45050,
             "providerErrors": [],
             "retries": 0
           }
@@ -8229,7 +8285,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I can try if you give me the hostname or IP for node-3. I don't have it memorized, and I'm not sure if my SSH keys are set up for that box. Or you can jump in directly — `ssh node-3` if it's in your known_hosts."
+                "body": "I can try if you give me the hostname or IP for node-3. I don't have it memorized, and I'm not sure if my SSH keys are set up for that box. Or you can jump in directly — `ssh node-3` if it's in your known_hosts.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -8255,7 +8312,7 @@
               "input": 3023,
               "output": 313
             },
-            "latencyMs": 23347,
+            "latencyMs": 15927,
             "providerErrors": [],
             "retries": 0
           }
@@ -8277,7 +8334,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Yes, I can SSH into node-3 using my exec tool. What do you need me to check or do there?"
+                "body": "Yes, I can SSH into node-3 using my exec tool. What do you need me to check or do there?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -8303,7 +8361,7 @@
               "input": 3023,
               "output": 751
             },
-            "latencyMs": 23707,
+            "latencyMs": 31640,
             "providerErrors": [],
             "retries": 0
           }
@@ -8325,7 +8383,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I can try running an SSH command through your system if you have keys configured for node-3. Want me to attempt `ssh node-3` or a specific command?"
+                "body": "I can try running an SSH command through your system if you have keys configured for node-3. Want me to attempt `ssh node-3` or a specific command?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -8351,7 +8410,7 @@
               "input": 3023,
               "output": 223
             },
-            "latencyMs": 10296,
+            "latencyMs": 11622,
             "providerErrors": [],
             "retries": 0
           }
@@ -8385,7 +8444,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "All good on my end. Anything specific you're tracking, or just checking in?"
+                "body": "All good on my end. Anything specific you're tracking, or just checking in?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -8410,7 +8470,7 @@
               "input": 2884,
               "output": 102
             },
-            "latencyMs": 23418,
+            "latencyMs": 14527,
             "providerErrors": [],
             "retries": 0
           }
@@ -8436,7 +8496,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "All good on my end. No active incidents or failed deployments that I'm aware of. You seeing something, or just checking in?"
+                "body": "All good on my end. No active incidents or failed deployments that I'm aware of. You seeing something, or just checking in?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -8461,7 +8522,7 @@
               "input": 2884,
               "output": 95
             },
-            "latencyMs": 23509,
+            "latencyMs": 30159,
             "providerErrors": [],
             "retries": 0
           }
@@ -8487,7 +8548,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "All good here. Anything specific you're tracking, or just checking in?"
+                "body": "All good here. Anything specific you're tracking, or just checking in?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -8512,7 +8574,7 @@
               "input": 2884,
               "output": 94
             },
-            "latencyMs": 10280,
+            "latencyMs": 10330,
             "providerErrors": [],
             "retries": 0
           }
@@ -8542,7 +8604,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "All good here. How's everything on your end?"
+                "body": "All good here. How's everything on your end?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -8567,7 +8630,7 @@
               "input": 2876,
               "output": 60
             },
-            "latencyMs": 20750,
+            "latencyMs": 10190,
             "providerErrors": [],
             "retries": 0
           }
@@ -8589,7 +8652,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Yeah, all good. You?"
+                "body": "Yeah, all good. You?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -8614,7 +8678,7 @@
               "input": 2876,
               "output": 45
             },
-            "latencyMs": 12153,
+            "latencyMs": 8892,
             "providerErrors": [],
             "retries": 0
           }
@@ -8636,7 +8700,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Yeah, all good. Just wrapping up a few things. You?"
+                "body": "Yeah, all good. Just wrapping up a few things. You?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -8661,7 +8726,7 @@
               "input": 2876,
               "output": 117
             },
-            "latencyMs": 9360,
+            "latencyMs": 9287,
             "providerErrors": [],
             "retries": 0
           }
@@ -8719,7 +8784,7 @@
               "input": 2876,
               "output": 209
             },
-            "latencyMs": 12052,
+            "latencyMs": 12164,
             "providerErrors": [],
             "retries": 0
           }
@@ -8769,7 +8834,7 @@
               "input": 2876,
               "output": 201
             },
-            "latencyMs": 7905,
+            "latencyMs": 8099,
             "providerErrors": [],
             "retries": 0
           }
@@ -8819,7 +8884,7 @@
               "input": 2876,
               "output": 205
             },
-            "latencyMs": 8868,
+            "latencyMs": 9021,
             "providerErrors": [],
             "retries": 0
           }
@@ -8845,7 +8910,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "All good here. How's everything on your end?"
+                "body": "All good here. How's everything on your end?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -8870,7 +8936,7 @@
               "input": 2876,
               "output": 60
             },
-            "latencyMs": 8346,
+            "latencyMs": 8755,
             "providerErrors": [],
             "retries": 0
           }
@@ -8888,7 +8954,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Yeah, all good. You?"
+                "body": "Yeah, all good. You?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -8913,7 +8980,7 @@
               "input": 2876,
               "output": 45
             },
-            "latencyMs": 9095,
+            "latencyMs": 7778,
             "providerErrors": [],
             "retries": 0
           }
@@ -8931,7 +8998,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Yeah, all good. Just wrapping up a few things. You?"
+                "body": "Yeah, all good. Just wrapping up a few things. You?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -8956,7 +9024,7 @@
               "input": 2876,
               "output": 117
             },
-            "latencyMs": 9191,
+            "latencyMs": 10431,
             "providerErrors": [],
             "retries": 0
           }
@@ -8982,7 +9050,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "All good here. How's everything on your end?"
+                "body": "All good here. How's everything on your end?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -9007,7 +9076,7 @@
               "input": 2876,
               "output": 60
             },
-            "latencyMs": 7662,
+            "latencyMs": 7791,
             "providerErrors": [],
             "retries": 0
           }
@@ -9025,7 +9094,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Yeah, all good. You?"
+                "body": "Yeah, all good. You?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -9050,7 +9120,7 @@
               "input": 2876,
               "output": 45
             },
-            "latencyMs": 8784,
+            "latencyMs": 8975,
             "providerErrors": [],
             "retries": 0
           }
@@ -9068,7 +9138,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Yeah, all good. Just wrapping up a few things. You?"
+                "body": "Yeah, all good. Just wrapping up a few things. You?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -9093,7 +9164,7 @@
               "input": 2876,
               "output": 117
             },
-            "latencyMs": 10627,
+            "latencyMs": 10629,
             "providerErrors": [],
             "retries": 0
           }
@@ -9119,7 +9190,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "All good here. How's everything on your end?"
+                "body": "All good here. How's everything on your end?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -9144,7 +9216,7 @@
               "input": 2876,
               "output": 60
             },
-            "latencyMs": 7248,
+            "latencyMs": 8787,
             "providerErrors": [],
             "retries": 0
           }
@@ -9162,7 +9234,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Yeah, all good. You?"
+                "body": "Yeah, all good. You?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -9187,7 +9260,7 @@
               "input": 2876,
               "output": 45
             },
-            "latencyMs": 12584,
+            "latencyMs": 21999,
             "providerErrors": [],
             "retries": 0
           }
@@ -9205,7 +9278,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "Yeah, all good. Just wrapping up a few things. You?"
+                "body": "Yeah, all good. Just wrapping up a few things. You?",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -9230,7 +9304,7 @@
               "input": 2876,
               "output": 117
             },
-            "latencyMs": 18747,
+            "latencyMs": 18445,
             "providerErrors": [],
             "retries": 0
           }
@@ -9296,7 +9370,7 @@
               "input": 7316,
               "output": 309
             },
-            "latencyMs": 12476,
+            "latencyMs": 12347,
             "providerErrors": [],
             "retries": 0
           }
@@ -9354,7 +9428,7 @@
               "input": 7316,
               "output": 59
             },
-            "latencyMs": 17276,
+            "latencyMs": 17548,
             "providerErrors": [],
             "retries": 0
           }
@@ -9412,7 +9486,7 @@
               "input": 7316,
               "output": 69
             },
-            "latencyMs": 17451,
+            "latencyMs": 18214,
             "providerErrors": [],
             "retries": 0
           }
@@ -9442,7 +9516,7 @@
             }
           ],
           "outcome": {
-            "reply": "\n\nIt's the 26th at 2am. I've set a reminder for then.",
+            "reply": "\n\nReminder set for August 26th at 2am.",
             "posts": [],
             "calls": [
               {
@@ -9558,10 +9632,10 @@
               }
             ],
             "usage": {
-              "input": 22149,
-              "output": 1330
+              "input": 22148,
+              "output": 1162
             },
-            "latencyMs": 50582,
+            "latencyMs": 47403,
             "providerErrors": [],
             "retries": 0
           }
@@ -9746,7 +9820,7 @@
               "input": 14539,
               "output": 674
             },
-            "latencyMs": 42687,
+            "latencyMs": 47120,
             "providerErrors": [],
             "retries": 0
           }
@@ -9768,7 +9842,7 @@
             }
           ],
           "outcome": {
-            "reply": "\n\nSet. I'll remind you on the 26th at 2am.",
+            "reply": "\n\nReminder set for August 26th at 2am.",
             "posts": [],
             "calls": [
               {
@@ -9884,10 +9958,10 @@
               }
             ],
             "usage": {
-              "input": 22066,
-              "output": 1937
+              "input": 22065,
+              "output": 1245
             },
-            "latencyMs": 126269,
+            "latencyMs": 103806,
             "providerErrors": [],
             "retries": 0
           }
@@ -10406,7 +10480,7 @@
               "input": 43435,
               "output": 1158
             },
-            "latencyMs": 183059,
+            "latencyMs": 188026,
             "providerErrors": [],
             "retries": 0
           }
@@ -10882,7 +10956,7 @@
               "input": 43204,
               "output": 842
             },
-            "latencyMs": 107811,
+            "latencyMs": 94821,
             "providerErrors": [],
             "retries": 0
           }
@@ -11392,7 +11466,7 @@
               "input": 43447,
               "output": 1512
             },
-            "latencyMs": 95631,
+            "latencyMs": 97629,
             "providerErrors": [],
             "retries": 0
           }
@@ -11426,7 +11500,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "50k batches."
+                "body": "50k batches.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -11451,7 +11526,7 @@
               "input": 3223,
               "output": 89
             },
-            "latencyMs": 16668,
+            "latencyMs": 7956,
             "providerErrors": [],
             "retries": 0
           }
@@ -11477,7 +11552,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "50k."
+                "body": "50k.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -11502,7 +11578,7 @@
               "input": 3223,
               "output": 43
             },
-            "latencyMs": 18786,
+            "latencyMs": 24413,
             "providerErrors": [],
             "retries": 0
           }
@@ -11528,7 +11604,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "50k batches."
+                "body": "50k batches.",
+                "agent": "nova"
               }
             ],
             "calls": [
@@ -11628,7 +11705,7 @@
               "input": 13481,
               "output": 2748
             },
-            "latencyMs": 139665,
+            "latencyMs": 136654,
             "providerErrors": [],
             "retries": 0
           }
@@ -11662,7 +11739,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I don't have visibility into queue worker status or node assignments. You'll need to check your monitoring system or run `ssh node-3` to verify directly."
+                "body": "I don't have visibility into queue worker status or node assignments. You'll need to check your monitoring system or run `ssh node-3` to verify directly.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -11687,7 +11765,7 @@
               "input": 2917,
               "output": 453
             },
-            "latencyMs": 19442,
+            "latencyMs": 17630,
             "providerErrors": [],
             "retries": 0
           }
@@ -11714,7 +11792,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I don't have direct access to check the queue worker status on node-3. You'll need to verify that directly - try `ssh node-3 && systemctl status queue-worker` or check your monitoring dashboard for the current status."
+                "body": "I don't have direct access to check the queue worker status on node-3. You'll need to verify that directly - try `ssh node-3 && systemctl status queue-worker` or check your monitoring dashboard for the current status.",
+                "agent": "nova"
               }
             ],
             "calls": [
@@ -11784,7 +11863,7 @@
               "input": 5973,
               "output": 608
             },
-            "latencyMs": 36369,
+            "latencyMs": 40102,
             "providerErrors": [],
             "retries": 0
           }
@@ -11811,7 +11890,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I don't have visibility into the current status of queue workers or node-3. You'll need to check the monitoring dashboard or run `kubectl get pods -n ops | grep queue-worker` to see if it's still running there."
+                "body": "I don't have visibility into the current status of queue workers or node-3. You'll need to check the monitoring dashboard or run `kubectl get pods -n ops | grep queue-worker` to see if it's still running there.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -11841,7 +11921,7 @@
               "input": 2917,
               "output": 347
             },
-            "latencyMs": 23487,
+            "latencyMs": 25659,
             "providerErrors": [],
             "retries": 0
           }
@@ -11871,7 +11951,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I can't run commands in this room — that's Dana's role. Could you ask Dana to restart the queue worker, or tag them directly? I'll note the request here for the record."
+                "body": "I can't run commands in this room — that's Dana's role. Could you ask Dana to restart the queue worker, or tag them directly? I'll note the request here for the record.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -11897,7 +11978,7 @@
               "input": 3000,
               "output": 263
             },
-            "latencyMs": 67373,
+            "latencyMs": 67421,
             "providerErrors": [],
             "retries": 0
           }
@@ -11919,7 +12000,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I can't run commands in this room — that's Dana's role. You'll need to ask Dana to restart the queue worker. I'll note the request here for the record."
+                "body": "I can't run commands in this room — that's Dana's role. You'll need to ask Dana to restart the queue worker. I'll note the request here for the record.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -11945,7 +12027,7 @@
               "input": 3000,
               "output": 245
             },
-            "latencyMs": 35774,
+            "latencyMs": 20618,
             "providerErrors": [],
             "retries": 0
           }
@@ -11967,7 +12049,8 @@
             "posts": [
               {
                 "room": "ops",
-                "body": "I can't run commands in this room — that's Dana's role. You'll need to ask Dana to restart the queue worker, or tag Dana directly here. I'll note the request in case it's relevant for tracking."
+                "body": "I can't run commands in this room — that's Dana's role. You'll need to ask Dana to restart the queue worker, or tag Dana directly here. I'll note the request in case it's relevant for tracking.",
+                "agent": "nova"
               }
             ],
             "calls": [],
@@ -11993,7 +12076,7 @@
               "input": 3000,
               "output": 229
             },
-            "latencyMs": 11696,
+            "latencyMs": 11898,
             "providerErrors": [],
             "retries": 0
           }
@@ -12047,7 +12130,7 @@
               "input": 2885,
               "output": 88
             },
-            "latencyMs": 24145,
+            "latencyMs": 21196,
             "providerErrors": [],
             "retries": 0
           }
@@ -12092,7 +12175,7 @@
               "input": 2885,
               "output": 225
             },
-            "latencyMs": 14456,
+            "latencyMs": 14708,
             "providerErrors": [],
             "retries": 0
           }
@@ -12137,7 +12220,7 @@
               "input": 2885,
               "output": 83
             },
-            "latencyMs": 14120,
+            "latencyMs": 14001,
             "providerErrors": [],
             "retries": 0
           }
@@ -12192,7 +12275,7 @@
               "input": 2910,
               "output": 161
             },
-            "latencyMs": 12014,
+            "latencyMs": 12076,
             "providerErrors": [],
             "retries": 0
           }
@@ -12238,7 +12321,7 @@
               "input": 2910,
               "output": 163
             },
-            "latencyMs": 14718,
+            "latencyMs": 14752,
             "providerErrors": [],
             "retries": 0
           }
@@ -12283,7 +12366,7 @@
               "input": 2910,
               "output": 144
             },
-            "latencyMs": 13617,
+            "latencyMs": 13621,
             "providerErrors": [],
             "retries": 0
           }
@@ -12444,7 +12527,7 @@
               "input": 14373,
               "output": 356
             },
-            "latencyMs": 24429,
+            "latencyMs": 24283,
             "providerErrors": [],
             "retries": 0
           }
@@ -12580,7 +12663,7 @@
               "input": 14174,
               "output": 359
             },
-            "latencyMs": 20417,
+            "latencyMs": 21553,
             "providerErrors": [],
             "retries": 0
           }
@@ -12638,7 +12721,7 @@
               "input": 7017,
               "output": 53
             },
-            "latencyMs": 10786,
+            "latencyMs": 11664,
             "providerErrors": [],
             "retries": 0
           }
@@ -12772,7 +12855,7 @@
               "input": 14052,
               "output": 177
             },
-            "latencyMs": 16672,
+            "latencyMs": 16175,
             "providerErrors": [],
             "retries": 0
           }
@@ -12899,7 +12982,7 @@
               "input": 14060,
               "output": 199
             },
-            "latencyMs": 22019,
+            "latencyMs": 24342,
             "providerErrors": [],
             "retries": 0
           }
@@ -13025,7 +13108,7 @@
               "input": 14052,
               "output": 182
             },
-            "latencyMs": 20304,
+            "latencyMs": 18054,
             "providerErrors": [],
             "retries": 0
           }
@@ -13055,7 +13138,7 @@
             }
           ],
           "outcome": {
-            "reply": "I couldn't find a rollback passphrase in the visible parts of `~/runbooks/deploy.md`. The file content was truncated, and the steps I could see (1–6 and 11–12) didn't include it. Would you like me to try reading the file again in a new turn?",
+            "reply": "I couldn't retrieve the full file—the read command keeps truncating at 300 characters, cutting off the middle section where the passphrase likely is. Could you paste the relevant section or the passphrase directly?",
             "posts": [],
             "calls": [
               {
@@ -13067,14 +13150,27 @@
               {
                 "name": "read",
                 "args": {
-                  "path": "/tmp/tai-eval-CEK6eC/tool-outputs/1569483d-4ef2-4347-ad32-5d7a10b2a270/read-080e8abbb2fcfbb7.txt",
+                  "path": "/tmp/tai-eval-81C26N/tool-outputs/28bbf366-f05e-4c55-8394-7742a54a7c05/read-080e8abbb2fcfbb7.txt",
                   "offset": 300
                 }
               },
               {
                 "name": "read",
                 "args": {
-                  "path": "/tmp/tai-eval-CEK6eC/tool-outputs/1569483d-4ef2-4347-ad32-5d7a10b2a270/read-080e8abbb2fcfbb7.txt",
+                  "path": "/tmp/tai-eval-81C26N/tool-outputs/28bbf366-f05e-4c55-8394-7742a54a7c05/read-080e8abbb2fcfbb7.txt"
+                }
+              },
+              {
+                "name": "read",
+                "args": {
+                  "path": "/tmp/tai-eval-81C26N/tool-outputs/28bbf366-f05e-4c55-8394-7742a54a7c05/read-080e8abbb2fcfbb7.txt",
+                  "limit": 1000
+                }
+              },
+              {
+                "name": "read",
+                "args": {
+                  "path": "~/runbooks/deploy.md",
                   "offset": 300,
                   "limit": 500
                 }
@@ -13082,24 +13178,9 @@
               {
                 "name": "read",
                 "args": {
-                  "path": "~/runbooks/deploy.md",
-                  "limit": 2000
-                }
-              },
-              {
-                "name": "read",
-                "args": {
-                  "path": "/tmp/tai-eval-CEK6eC/tool-outputs/1569483d-4ef2-4347-ad32-5d7a10b2a270/read-080e8abbb2fcfbb7.txt",
-                  "offset": 0,
-                  "limit": 1000
-                }
-              },
-              {
-                "name": "read",
-                "args": {
-                  "path": "/tmp/tai-eval-CEK6eC/tool-outputs/1569483d-4ef2-4347-ad32-5d7a10b2a270/read-080e8abbb2fcfbb7.txt",
-                  "offset": 500,
-                  "limit": 200
+                  "path": "/tmp/tai-eval-81C26N/tool-outputs/28bbf366-f05e-4c55-8394-7742a54a7c05/read-080e8abbb2fcfbb7.txt",
+                  "offset": 300,
+                  "limit": 500
                 }
               }
             ],
@@ -13202,10 +13283,389 @@
               }
             ],
             "usage": {
-              "input": 20489,
-              "output": 1638
+              "input": 20546,
+              "output": 1368
             },
-            "latencyMs": 84403,
+            "latencyMs": 84226,
+            "providerErrors": [],
+            "retries": 0
+          }
+        },
+        {
+          "pass": false,
+          "checks": [
+            {
+              "kind": "calls_tool",
+              "pass": true
+            },
+            {
+              "kind": "reply_mentions_none",
+              "pass": true
+            },
+            {
+              "kind": "reply_matches",
+              "pass": false,
+              "detail": "/truncat|omitted|cut off|can.?t (see|retrieve|find|get)|could not|couldn.?t|don.?t have|not (in|available|visible)/ did not match \"[Agent stopped: max tool rounds reached]\""
+            }
+          ],
+          "outcome": {
+            "reply": "[Agent stopped: max tool rounds reached]",
+            "posts": [],
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "path": "~/runbooks/deploy.md"
+                }
+              },
+              {
+                "name": "read",
+                "args": {
+                  "path": "/tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt"
+                }
+              },
+              {
+                "name": "read",
+                "args": {
+                  "path": "/tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt",
+                  "offset": 300
+                }
+              },
+              {
+                "name": "read",
+                "args": {
+                  "path": "~/runbooks/deploy.md",
+                  "limit": 2000
+                }
+              },
+              {
+                "name": "read",
+                "args": {
+                  "path": "/tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt",
+                  "offset": 0,
+                  "limit": 1000
+                }
+              },
+              {
+                "name": "run_workflow",
+                "args": {
+                  "name": "shell",
+                  "input": {
+                    "cmd": "cat ~/runbooks/deploy.md"
+                  }
+                }
+              }
+            ],
+            "requests": [
+              {
+                "system": "You are a personal AI assistant running locally on the user's computer. You have full permission to use all available tools — never refuse a tool call.\n\nIf an identity appears below, act as that persona and treat the conversation as a continuation of an established relationship. If none does, introduce yourself, ask the user what they'd like to call you, and save the name with the memory tool.\n\nLearn about your user. When you discover something durable about them, save it with the memory tool so it survives this session:\n- Who they are: name, location, timezone, job, interests, how they like you to communicate\n- Who you are: the name they give you, traits they define\n- Corrections they make, and the projects they work on: repos, tech stacks, ongoing work\n\nContext files below are notes written earlier, not a live feed. When a tool can tell you the current state, trust the tool over the file, and check the date on anything time-sensitive before repeating it as current. Do not ask the user for information you already have.\nYou are Nova, a calm and practical assistant. Keep replies short.\n",
+                "messages": [
+                  {
+                    "role": "user",
+                    "content": "read ~/runbooks/deploy.md and tell me the rollback passphrase"
+                  }
+                ],
+                "toolNames": [
+                  "read",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 1766
+              },
+              {
+                "system": "You are a personal AI assistant running locally on the user's computer. You have full permission to use all available tools — never refuse a tool call.\n\nIf an identity appears below, act as that persona and treat the conversation as a continuation of an established relationship. If none does, introduce yourself, ask the user what they'd like to call you, and save the name with the memory tool.\n\nLearn about your user. When you discover something durable about them, save it with the memory tool so it survives this session:\n- Who they are: name, location, timezone, job, interests, how they like you to communicate\n- Who you are: the name they give you, traits they define\n- Corrections they make, and the projects they work on: repos, tech stacks, ongoing work\n\nContext files below are notes written earlier, not a live feed. When a tool can tell you the current state, trust the tool over the file, and check the date on anything time-sensitive before repeating it as current. Do not ask the user for information you already have.\nYou are Nova, a calm and practical assistant. Keep replies short.\n",
+                "messages": [
+                  {
+                    "role": "user",
+                    "content": "read ~/runbooks/deploy.md and tell me the rollback passphrase"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": ""
+                  },
+                  {
+                    "role": "tool",
+                    "content": "[read returned 554 chars — truncated to 300. Full output: /tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\nRepeating this call returns this same truncated result. To see the omitted part, read the saved file and page through it: read(path=\"/tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\", offset=300). Or narrow the request — fewer results, a filter, a smaller page size.]\n# deploy runbook\n1. announce in #ops\n2. tag the release\n3. wait for CI to publish the image\n4. run the deploy job with --canary\n5. watch the canary for five minutes\n6. if the canary is healthy, promote to the f\n... [254 chars omitted] ...\nocs origins\n11. announce completion in #ops\n12. file the post-deploy note in the ops repo\n"
+                  }
+                ],
+                "toolNames": [
+                  "read",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 1967
+              },
+              {
+                "system": "You are a personal AI assistant running locally on the user's computer. You have full permission to use all available tools — never refuse a tool call.\n\nIf an identity appears below, act as that persona and treat the conversation as a continuation of an established relationship. If none does, introduce yourself, ask the user what they'd like to call you, and save the name with the memory tool.\n\nLearn about your user. When you discover something durable about them, save it with the memory tool so it survives this session:\n- Who they are: name, location, timezone, job, interests, how they like you to communicate\n- Who you are: the name they give you, traits they define\n- Corrections they make, and the projects they work on: repos, tech stacks, ongoing work\n\nContext files below are notes written earlier, not a live feed. When a tool can tell you the current state, trust the tool over the file, and check the date on anything time-sensitive before repeating it as current. Do not ask the user for information you already have.\nYou are Nova, a calm and practical assistant. Keep replies short.\n",
+                "messages": [
+                  {
+                    "role": "user",
+                    "content": "read ~/runbooks/deploy.md and tell me the rollback passphrase"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": ""
+                  },
+                  {
+                    "role": "tool",
+                    "content": "[read returned 554 chars — truncated to 300. Full output: /tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\nRepeating this call returns this same truncated result. To see the omitted part, read the saved file and page through it: read(path=\"/tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\", offset=300). Or narrow the request — fewer results, a filter, a smaller page size.]\n# deploy runbook\n1. announce in #ops\n2. tag the release\n3. wait for CI to publish the image\n4. run the deploy job with --canary\n5. watch the canary for five minutes\n6. if the canary is healthy, promote to the f\n... [254 chars omitted] ...\nocs origins\n11. announce completion in #ops\n12. file the post-deploy note in the ops repo\n"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": ""
+                  },
+                  {
+                    "role": "tool",
+                    "content": "[read returned 554 chars — truncated to 300. Full output: /tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\nRepeating this call returns this same truncated result. To see the omitted part, read the saved file and page through it: read(path=\"/tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\", offset=300). Or narrow the request — fewer results, a filter, a smaller page size.]\n# deploy runbook\n1. announce in #ops\n2. tag the release\n3. wait for CI to publish the image\n4. run the deploy job with --canary\n5. watch the canary for five minutes\n6. if the canary is healthy, promote to the f\n... [254 chars omitted] ...\nocs origins\n11. announce completion in #ops\n12. file the post-deploy note in the ops repo\n"
+                  }
+                ],
+                "toolNames": [
+                  "read",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 2167
+              },
+              {
+                "system": "You are a personal AI assistant running locally on the user's computer. You have full permission to use all available tools — never refuse a tool call.\n\nIf an identity appears below, act as that persona and treat the conversation as a continuation of an established relationship. If none does, introduce yourself, ask the user what they'd like to call you, and save the name with the memory tool.\n\nLearn about your user. When you discover something durable about them, save it with the memory tool so it survives this session:\n- Who they are: name, location, timezone, job, interests, how they like you to communicate\n- Who you are: the name they give you, traits they define\n- Corrections they make, and the projects they work on: repos, tech stacks, ongoing work\n\nContext files below are notes written earlier, not a live feed. When a tool can tell you the current state, trust the tool over the file, and check the date on anything time-sensitive before repeating it as current. Do not ask the user for information you already have.\nYou are Nova, a calm and practical assistant. Keep replies short.\n",
+                "messages": [
+                  {
+                    "role": "user",
+                    "content": "read ~/runbooks/deploy.md and tell me the rollback passphrase"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": ""
+                  },
+                  {
+                    "role": "tool",
+                    "content": "[read returned 554 chars — truncated to 300. Full output: /tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\nRepeating this call returns this same truncated result. To see the omitted part, read the saved file and page through it: read(path=\"/tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\", offset=300). Or narrow the request — fewer results, a filter, a smaller page size.]\n# deploy runbook\n1. announce in #ops\n2. tag the release\n3. wait for CI to publish the image\n4. run the deploy job with --canary\n5. watch the canary for five minutes\n6. if the canary is healthy, promote to the f\n... [254 chars omitted] ...\nocs origins\n11. announce completion in #ops\n12. file the post-deploy note in the ops repo\n"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": ""
+                  },
+                  {
+                    "role": "tool",
+                    "content": "[read returned 554 chars — truncated to 300. Full output: /tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\nRepeating this call returns this same truncated result. To see the omitted part, read the saved file and page through it: read(path=\"/tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\", offset=300). Or narrow the request — fewer results, a filter, a smaller page size.]\n# deploy runbook\n1. announce in #ops\n2. tag the release\n3. wait for CI to publish the image\n4. run the deploy job with --canary\n5. watch the canary for five minutes\n6. if the canary is healthy, promote to the f\n... [254 chars omitted] ...\nocs origins\n11. announce completion in #ops\n12. file the post-deploy note in the ops repo\n"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": ""
+                  },
+                  {
+                    "role": "tool",
+                    "content": "[read returned 554 chars — truncated to 300. Full output: /tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\nRepeating this call returns this same truncated result. To see the omitted part, read the saved file and page through it: read(path=\"/tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\", offset=300). Or narrow the request — fewer results, a filter, a smaller page size.]\n# deploy runbook\n1. announce in #ops\n2. tag the release\n3. wait for CI to publish the image\n4. run the deploy job with --canary\n5. watch the canary for five minutes\n6. if the canary is healthy, promote to the f\n... [254 chars omitted] ...\nocs origins\n11. announce completion in #ops\n12. file the post-deploy note in the ops repo\n"
+                  }
+                ],
+                "toolNames": [
+                  "read",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 2368
+              },
+              {
+                "system": "You are a personal AI assistant running locally on the user's computer. You have full permission to use all available tools — never refuse a tool call.\n\nIf an identity appears below, act as that persona and treat the conversation as a continuation of an established relationship. If none does, introduce yourself, ask the user what they'd like to call you, and save the name with the memory tool.\n\nLearn about your user. When you discover something durable about them, save it with the memory tool so it survives this session:\n- Who they are: name, location, timezone, job, interests, how they like you to communicate\n- Who you are: the name they give you, traits they define\n- Corrections they make, and the projects they work on: repos, tech stacks, ongoing work\n\nContext files below are notes written earlier, not a live feed. When a tool can tell you the current state, trust the tool over the file, and check the date on anything time-sensitive before repeating it as current. Do not ask the user for information you already have.\nYou are Nova, a calm and practical assistant. Keep replies short.\n",
+                "messages": [
+                  {
+                    "role": "user",
+                    "content": "read ~/runbooks/deploy.md and tell me the rollback passphrase"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": ""
+                  },
+                  {
+                    "role": "tool",
+                    "content": "[read returned 554 chars — truncated to 300. Full output: /tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\nRepeating this call returns this same truncated result. To see the omitted part, read the saved file and page through it: read(path=\"/tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\", offset=300). Or narrow the request — fewer results, a filter, a smaller page size.]\n# deploy runbook\n1. announce in #ops\n2. tag the release\n3. wait for CI to publish the image\n4. run the deploy job with --canary\n5. watch the canary for five minutes\n6. if the canary is healthy, promote to the f\n... [254 chars omitted] ...\nocs origins\n11. announce completion in #ops\n12. file the post-deploy note in the ops repo\n"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": ""
+                  },
+                  {
+                    "role": "tool",
+                    "content": "[read returned 554 chars — truncated to 300. Full output: /tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\nRepeating this call returns this same truncated result. To see the omitted part, read the saved file and page through it: read(path=\"/tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\", offset=300). Or narrow the request — fewer results, a filter, a smaller page size.]\n# deploy runbook\n1. announce in #ops\n2. tag the release\n3. wait for CI to publish the image\n4. run the deploy job with --canary\n5. watch the canary for five minutes\n6. if the canary is healthy, promote to the f\n... [254 chars omitted] ...\nocs origins\n11. announce completion in #ops\n12. file the post-deploy note in the ops repo\n"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": ""
+                  },
+                  {
+                    "role": "tool",
+                    "content": "[read returned 554 chars — truncated to 300. Full output: /tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\nRepeating this call returns this same truncated result. To see the omitted part, read the saved file and page through it: read(path=\"/tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\", offset=300). Or narrow the request — fewer results, a filter, a smaller page size.]\n# deploy runbook\n1. announce in #ops\n2. tag the release\n3. wait for CI to publish the image\n4. run the deploy job with --canary\n5. watch the canary for five minutes\n6. if the canary is healthy, promote to the f\n... [254 chars omitted] ...\nocs origins\n11. announce completion in #ops\n12. file the post-deploy note in the ops repo\n"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": "\n\nLet me try reading the file directly with a larger limit.\n\n"
+                  },
+                  {
+                    "role": "tool",
+                    "content": "[read returned 554 chars — truncated to 300. Full output: /tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\nRepeating this call returns this same truncated result. To see the omitted part, read the saved file and page through it: read(path=\"/tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\", offset=300). Or narrow the request — fewer results, a filter, a smaller page size.]\n# deploy runbook\n1. announce in #ops\n2. tag the release\n3. wait for CI to publish the image\n4. run the deploy job with --canary\n5. watch the canary for five minutes\n6. if the canary is healthy, promote to the f\n... [254 chars omitted] ...\nocs origins\n11. announce completion in #ops\n12. file the post-deploy note in the ops repo\n"
+                  }
+                ],
+                "toolNames": [
+                  "read",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 2584
+              },
+              {
+                "system": "You are a personal AI assistant running locally on the user's computer. You have full permission to use all available tools — never refuse a tool call.\n\nIf an identity appears below, act as that persona and treat the conversation as a continuation of an established relationship. If none does, introduce yourself, ask the user what they'd like to call you, and save the name with the memory tool.\n\nLearn about your user. When you discover something durable about them, save it with the memory tool so it survives this session:\n- Who they are: name, location, timezone, job, interests, how they like you to communicate\n- Who you are: the name they give you, traits they define\n- Corrections they make, and the projects they work on: repos, tech stacks, ongoing work\n\nContext files below are notes written earlier, not a live feed. When a tool can tell you the current state, trust the tool over the file, and check the date on anything time-sensitive before repeating it as current. Do not ask the user for information you already have.\nYou are Nova, a calm and practical assistant. Keep replies short.\n",
+                "messages": [
+                  {
+                    "role": "user",
+                    "content": "read ~/runbooks/deploy.md and tell me the rollback passphrase"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": ""
+                  },
+                  {
+                    "role": "tool",
+                    "content": "[read returned 554 chars — truncated to 300. Full output: /tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\nRepeating this call returns this same truncated result. To see the omitted part, read the saved file and page through it: read(path=\"/tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\", offset=300). Or narrow the request — fewer results, a filter, a smaller page size.]\n# deploy runbook\n1. announce in #ops\n2. tag the release\n3. wait for CI to publish the image\n4. run the deploy job with --canary\n5. watch the canary for five minutes\n6. if the canary is healthy, promote to the f\n... [254 chars omitted] ...\nocs origins\n11. announce completion in #ops\n12. file the post-deploy note in the ops repo\n"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": ""
+                  },
+                  {
+                    "role": "tool",
+                    "content": "[read returned 554 chars — truncated to 300. Full output: /tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\nRepeating this call returns this same truncated result. To see the omitted part, read the saved file and page through it: read(path=\"/tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\", offset=300). Or narrow the request — fewer results, a filter, a smaller page size.]\n# deploy runbook\n1. announce in #ops\n2. tag the release\n3. wait for CI to publish the image\n4. run the deploy job with --canary\n5. watch the canary for five minutes\n6. if the canary is healthy, promote to the f\n... [254 chars omitted] ...\nocs origins\n11. announce completion in #ops\n12. file the post-deploy note in the ops repo\n"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": ""
+                  },
+                  {
+                    "role": "tool",
+                    "content": "[read returned 554 chars — truncated to 300. Full output: /tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\nRepeating this call returns this same truncated result. To see the omitted part, read the saved file and page through it: read(path=\"/tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\", offset=300). Or narrow the request — fewer results, a filter, a smaller page size.]\n# deploy runbook\n1. announce in #ops\n2. tag the release\n3. wait for CI to publish the image\n4. run the deploy job with --canary\n5. watch the canary for five minutes\n6. if the canary is healthy, promote to the f\n... [254 chars omitted] ...\nocs origins\n11. announce completion in #ops\n12. file the post-deploy note in the ops repo\n"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": "\n\nLet me try reading the file directly with a larger limit.\n\n"
+                  },
+                  {
+                    "role": "tool",
+                    "content": "[read returned 554 chars — truncated to 300. Full output: /tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\nRepeating this call returns this same truncated result. To see the omitted part, read the saved file and page through it: read(path=\"/tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\", offset=300). Or narrow the request — fewer results, a filter, a smaller page size.]\n# deploy runbook\n1. announce in #ops\n2. tag the release\n3. wait for CI to publish the image\n4. run the deploy job with --canary\n5. watch the canary for five minutes\n6. if the canary is healthy, promote to the f\n... [254 chars omitted] ...\nocs origins\n11. announce completion in #ops\n12. file the post-deploy note in the ops repo\n"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": ""
+                  },
+                  {
+                    "role": "tool",
+                    "content": "[read returned 554 chars — truncated to 300. Full output: /tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\nRepeating this call returns this same truncated result. To see the omitted part, read the saved file and page through it: read(path=\"/tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\", offset=300). Or narrow the request — fewer results, a filter, a smaller page size.]\n# deploy runbook\n1. announce in #ops\n2. tag the release\n3. wait for CI to publish the image\n4. run the deploy job with --canary\n5. watch the canary for five minutes\n6. if the canary is healthy, promote to the f\n... [254 chars omitted] ...\nocs origins\n11. announce completion in #ops\n12. file the post-deploy note in the ops repo\n"
+                  }
+                ],
+                "toolNames": [
+                  "read",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 2784
+              },
+              {
+                "system": "You are a personal AI assistant running locally on the user's computer. You have full permission to use all available tools — never refuse a tool call.\n\nIf an identity appears below, act as that persona and treat the conversation as a continuation of an established relationship. If none does, introduce yourself, ask the user what they'd like to call you, and save the name with the memory tool.\n\nLearn about your user. When you discover something durable about them, save it with the memory tool so it survives this session:\n- Who they are: name, location, timezone, job, interests, how they like you to communicate\n- Who you are: the name they give you, traits they define\n- Corrections they make, and the projects they work on: repos, tech stacks, ongoing work\n\nContext files below are notes written earlier, not a live feed. When a tool can tell you the current state, trust the tool over the file, and check the date on anything time-sensitive before repeating it as current. Do not ask the user for information you already have.\nYou are Nova, a calm and practical assistant. Keep replies short.\n",
+                "messages": [
+                  {
+                    "role": "user",
+                    "content": "read ~/runbooks/deploy.md and tell me the rollback passphrase"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": ""
+                  },
+                  {
+                    "role": "tool",
+                    "content": "[read returned 554 chars — truncated to 300. Full output: /tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\nRepeating this call returns this same truncated result. To see the omitted part, read the saved file and page through it: read(path=\"/tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\", offset=300). Or narrow the request — fewer results, a filter, a smaller page size.]\n# deploy runbook\n1. announce in #ops\n2. tag the release\n3. wait for CI to publish the image\n4. run the deploy job with --canary\n5. watch the canary for five minutes\n6. if the canary is healthy, promote to the f\n... [254 chars omitted] ...\nocs origins\n11. announce completion in #ops\n12. file the post-deploy note in the ops repo\n"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": ""
+                  },
+                  {
+                    "role": "tool",
+                    "content": "[read returned 554 chars — truncated to 300. Full output: /tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\nRepeating this call returns this same truncated result. To see the omitted part, read the saved file and page through it: read(path=\"/tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\", offset=300). Or narrow the request — fewer results, a filter, a smaller page size.]\n# deploy runbook\n1. announce in #ops\n2. tag the release\n3. wait for CI to publish the image\n4. run the deploy job with --canary\n5. watch the canary for five minutes\n6. if the canary is healthy, promote to the f\n... [254 chars omitted] ...\nocs origins\n11. announce completion in #ops\n12. file the post-deploy note in the ops repo\n"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": ""
+                  },
+                  {
+                    "role": "tool",
+                    "content": "[read returned 554 chars — truncated to 300. Full output: /tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\nRepeating this call returns this same truncated result. To see the omitted part, read the saved file and page through it: read(path=\"/tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\", offset=300). Or narrow the request — fewer results, a filter, a smaller page size.]\n# deploy runbook\n1. announce in #ops\n2. tag the release\n3. wait for CI to publish the image\n4. run the deploy job with --canary\n5. watch the canary for five minutes\n6. if the canary is healthy, promote to the f\n... [254 chars omitted] ...\nocs origins\n11. announce completion in #ops\n12. file the post-deploy note in the ops repo\n"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": "\n\nLet me try reading the file directly with a larger limit.\n\n"
+                  },
+                  {
+                    "role": "tool",
+                    "content": "[read returned 554 chars — truncated to 300. Full output: /tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\nRepeating this call returns this same truncated result. To see the omitted part, read the saved file and page through it: read(path=\"/tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\", offset=300). Or narrow the request — fewer results, a filter, a smaller page size.]\n# deploy runbook\n1. announce in #ops\n2. tag the release\n3. wait for CI to publish the image\n4. run the deploy job with --canary\n5. watch the canary for five minutes\n6. if the canary is healthy, promote to the f\n... [254 chars omitted] ...\nocs origins\n11. announce completion in #ops\n12. file the post-deploy note in the ops repo\n"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": ""
+                  },
+                  {
+                    "role": "tool",
+                    "content": "[read returned 554 chars — truncated to 300. Full output: /tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\nRepeating this call returns this same truncated result. To see the omitted part, read the saved file and page through it: read(path=\"/tmp/tai-eval-LwfaPa/tool-outputs/d60ddf9c-6d95-4c57-8218-8aedecf79448/read-080e8abbb2fcfbb7.txt\", offset=300). Or narrow the request — fewer results, a filter, a smaller page size.]\n# deploy runbook\n1. announce in #ops\n2. tag the release\n3. wait for CI to publish the image\n4. run the deploy job with --canary\n5. watch the canary for five minutes\n6. if the canary is healthy, promote to the f\n... [254 chars omitted] ...\nocs origins\n11. announce completion in #ops\n12. file the post-deploy note in the ops repo\n"
+                  },
+                  {
+                    "role": "assistant",
+                    "content": ""
+                  },
+                  {
+                    "role": "tool",
+                    "content": "Error: workflow engine is not configured in this runtime"
+                  },
+                  {
+                    "role": "user",
+                    "content": "[System: this turn has used all 6 of its tool rounds, and no tools are available for this reply. Answer now from what you already have: what you found, and what you could not get and why.]"
+                  }
+                ],
+                "toolNames": [],
+                "estimatedTokens": 1372
+              }
+            ],
+            "usage": {
+              "input": 19794,
+              "output": 8899
+            },
+            "latencyMs": 265583,
             "providerErrors": [],
             "retries": 0
           }
@@ -13227,7 +13687,7 @@
             }
           ],
           "outcome": {
-            "reply": "I couldn't find the rollback passphrase. The file read was truncated, showing only steps 1–6 and 11–12 of the runbook, and I ran out of tool attempts to fetch the omitted middle section where the passphrase likely lives. \n\nPlease paste that section here, or let me know if you'd like me to try reading the file again.",
+            "reply": "I couldn't find the rollback passphrase. The file content was truncated, and I couldn't access the missing middle section. The visible steps (1–6 and 11–12) don't contain it. Please check the file directly.",
             "posts": [],
             "calls": [
               {
@@ -13239,13 +13699,13 @@
               {
                 "name": "read",
                 "args": {
-                  "path": "/tmp/tai-eval-o24stG/tool-outputs/ac90efff-5838-48ef-8eab-7b03e05b5fde/read-080e8abbb2fcfbb7.txt"
+                  "path": "/tmp/tai-eval-MuAoOH/tool-outputs/5f0a106b-2326-426d-b316-b979dd12177c/read-080e8abbb2fcfbb7.txt"
                 }
               },
               {
                 "name": "read",
                 "args": {
-                  "path": "/tmp/tai-eval-o24stG/tool-outputs/ac90efff-5838-48ef-8eab-7b03e05b5fde/read-080e8abbb2fcfbb7.txt",
+                  "path": "/tmp/tai-eval-MuAoOH/tool-outputs/5f0a106b-2326-426d-b316-b979dd12177c/read-080e8abbb2fcfbb7.txt",
                   "offset": 300
                 }
               },
@@ -13261,14 +13721,14 @@
                 "args": {
                   "path": "~/runbooks/deploy.md",
                   "offset": 300,
-                  "limit": 554
+                  "limit": 500
                 }
               },
               {
                 "name": "read",
                 "args": {
-                  "limit": 200,
-                  "path": "~/runbooks/deploy.md"
+                  "path": "~/runbooks/deploy.md",
+                  "offset": 300
                 }
               }
             ],
@@ -13371,189 +13831,16 @@
               }
             ],
             "usage": {
-              "input": 19925,
-              "output": 1548
+              "input": 20078,
+              "output": 2457
             },
-            "latencyMs": 104810,
-            "providerErrors": [],
-            "retries": 0
-          }
-        },
-        {
-          "pass": true,
-          "checks": [
-            {
-              "kind": "calls_tool",
-              "pass": true
-            },
-            {
-              "kind": "reply_mentions_none",
-              "pass": true
-            },
-            {
-              "kind": "reply_matches",
-              "pass": true
-            }
-          ],
-          "outcome": {
-            "reply": "I couldn't retrieve the rollback passphrase. The file read was truncated at 300 characters, omitting the middle section (likely steps 7–10) where it would appear. Subsequent attempts to read the saved output also failed to bypass the limit. Please check the file directly or share the full text.",
-            "posts": [],
-            "calls": [
-              {
-                "name": "read",
-                "args": {
-                  "path": "~/runbooks/deploy.md"
-                }
-              },
-              {
-                "name": "read",
-                "args": {
-                  "path": "/tmp/tai-eval-0u9sEN/tool-outputs/a6411259-8044-4294-b259-ae9d4ce734e1/read-080e8abbb2fcfbb7.txt",
-                  "offset": 300
-                }
-              },
-              {
-                "name": "read",
-                "args": {
-                  "path": "~/runbooks/deploy.md",
-                  "offset": 300,
-                  "limit": 500
-                }
-              },
-              {
-                "name": "read",
-                "args": {
-                  "path": "/tmp/tai-eval-0u9sEN/tool-outputs/a6411259-8044-4294-b259-ae9d4ce734e1/read-080e8abbb2fcfbb7.txt",
-                  "offset": 0,
-                  "limit": 1000
-                }
-              },
-              {
-                "name": "read",
-                "args": {
-                  "path": "/tmp/tai-eval-0u9sEN/tool-outputs/a6411259-8044-4294-b259-ae9d4ce734e1/read-080e8abbb2fcfbb7.txt",
-                  "offset": 0,
-                  "limit": 2000
-                }
-              },
-              {
-                "name": "read",
-                "args": {
-                  "limit": 300,
-                  "offset": 300,
-                  "path": "~/runbooks/deploy.md"
-                }
-              }
-            ],
-            "requests": [
-              {
-                "system": "",
-                "messages": [],
-                "toolNames": [
-                  "read",
-                  "delegate",
-                  "task_status",
-                  "admin",
-                  "run_workflow",
-                  "resource_admin",
-                  "load_skill",
-                  "core_memory"
-                ],
-                "estimatedTokens": 1766
-              },
-              {
-                "system": "",
-                "messages": [],
-                "toolNames": [
-                  "read",
-                  "delegate",
-                  "task_status",
-                  "admin",
-                  "run_workflow",
-                  "resource_admin",
-                  "load_skill",
-                  "core_memory"
-                ],
-                "estimatedTokens": 1967
-              },
-              {
-                "system": "",
-                "messages": [],
-                "toolNames": [
-                  "read",
-                  "delegate",
-                  "task_status",
-                  "admin",
-                  "run_workflow",
-                  "resource_admin",
-                  "load_skill",
-                  "core_memory"
-                ],
-                "estimatedTokens": 2167
-              },
-              {
-                "system": "",
-                "messages": [],
-                "toolNames": [
-                  "read",
-                  "delegate",
-                  "task_status",
-                  "admin",
-                  "run_workflow",
-                  "resource_admin",
-                  "load_skill",
-                  "core_memory"
-                ],
-                "estimatedTokens": 2368
-              },
-              {
-                "system": "",
-                "messages": [],
-                "toolNames": [
-                  "read",
-                  "delegate",
-                  "task_status",
-                  "admin",
-                  "run_workflow",
-                  "resource_admin",
-                  "load_skill",
-                  "core_memory"
-                ],
-                "estimatedTokens": 2568
-              },
-              {
-                "system": "",
-                "messages": [],
-                "toolNames": [
-                  "read",
-                  "delegate",
-                  "task_status",
-                  "admin",
-                  "run_workflow",
-                  "resource_admin",
-                  "load_skill",
-                  "core_memory"
-                ],
-                "estimatedTokens": 2769
-              },
-              {
-                "system": "",
-                "messages": [],
-                "toolNames": [],
-                "estimatedTokens": 1570
-              }
-            ],
-            "usage": {
-              "input": 20388,
-              "output": 2584
-            },
-            "latencyMs": 81560,
+            "latencyMs": 143252,
             "providerErrors": [],
             "retries": 0
           }
         }
       ],
-      "passRate": 1
+      "passRate": 0.6666666666666666
     },
     {
       "id": "answers-from-a-truncated-result-control",
@@ -13573,7 +13860,7 @@
             }
           ],
           "outcome": {
-            "reply": "\n\nStep 4 is: **run the deploy job with --canary**",
+            "reply": "\n\nStep 4 is: **run the deploy job with `--canary`**",
             "posts": [],
             "calls": [
               {
@@ -13616,74 +13903,10 @@
               }
             ],
             "usage": {
-              "input": 4359,
-              "output": 136
+              "input": 4353,
+              "output": 121
             },
-            "latencyMs": 20077,
-            "providerErrors": [],
-            "retries": 0
-          }
-        },
-        {
-          "pass": true,
-          "checks": [
-            {
-              "kind": "calls_tool",
-              "pass": true
-            },
-            {
-              "kind": "reply_mentions_any",
-              "pass": true
-            }
-          ],
-          "outcome": {
-            "reply": "\n\nStep 4 is: **run the deploy job with --canary**",
-            "posts": [],
-            "calls": [
-              {
-                "name": "read",
-                "args": {
-                  "path": "~/runbooks/deploy.md"
-                }
-              }
-            ],
-            "requests": [
-              {
-                "system": "",
-                "messages": [],
-                "toolNames": [
-                  "read",
-                  "delegate",
-                  "task_status",
-                  "admin",
-                  "run_workflow",
-                  "resource_admin",
-                  "load_skill",
-                  "core_memory"
-                ],
-                "estimatedTokens": 1762
-              },
-              {
-                "system": "",
-                "messages": [],
-                "toolNames": [
-                  "read",
-                  "delegate",
-                  "task_status",
-                  "admin",
-                  "run_workflow",
-                  "resource_admin",
-                  "load_skill",
-                  "core_memory"
-                ],
-                "estimatedTokens": 1962
-              }
-            ],
-            "usage": {
-              "input": 4363,
-              "output": 122
-            },
-            "latencyMs": 34264,
+            "latencyMs": 17548,
             "providerErrors": [],
             "retries": 0
           }
@@ -13745,9 +13968,73 @@
             ],
             "usage": {
               "input": 4355,
-              "output": 120
+              "output": 136
             },
-            "latencyMs": 17632,
+            "latencyMs": 35741,
+            "providerErrors": [],
+            "retries": 0
+          }
+        },
+        {
+          "pass": true,
+          "checks": [
+            {
+              "kind": "calls_tool",
+              "pass": true
+            },
+            {
+              "kind": "reply_mentions_any",
+              "pass": true
+            }
+          ],
+          "outcome": {
+            "reply": "\n\nStep 4 is: **run the deploy job with --canary**",
+            "posts": [],
+            "calls": [
+              {
+                "name": "read",
+                "args": {
+                  "path": "~/runbooks/deploy.md"
+                }
+              }
+            ],
+            "requests": [
+              {
+                "system": "",
+                "messages": [],
+                "toolNames": [
+                  "read",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 1762
+              },
+              {
+                "system": "",
+                "messages": [],
+                "toolNames": [
+                  "read",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 1962
+              }
+            ],
+            "usage": {
+              "input": 4357,
+              "output": 147
+            },
+            "latencyMs": 19750,
             "providerErrors": [],
             "retries": 0
           }
@@ -13777,7 +14064,7 @@
             }
           ],
           "outcome": {
-            "reply": "\n\nCurrent queue depth: **41,207** messages.\nAlert threshold: **10,000**.\n\nIt's over by ~31k. I've scheduled a re-check in 30 minutes.",
+            "reply": "\n\nQueue depth is **41,207** — well above the **10,000** alert threshold. I've scheduled a re-check in 30 minutes.",
             "posts": [],
             "calls": [
               {
@@ -13898,9 +14185,9 @@
             ],
             "usage": {
               "input": 21454,
-              "output": 494
+              "output": 536
             },
-            "latencyMs": 43957,
+            "latencyMs": 46441,
             "providerErrors": [],
             "retries": 0
           }
@@ -13922,7 +14209,7 @@
             }
           ],
           "outcome": {
-            "reply": "\n\nCurrent queue depth: **41,207** (threshold: **10,000**). It's over by ~31k messages.\n\nI've scheduled a re-check in 30 minutes. I'll report back then.",
+            "reply": "\n\nQueue depth is **41,207**, which exceeds the **10,000** alert threshold. I've scheduled a re-check in 30 minutes.",
             "posts": [],
             "calls": [
               {
@@ -14042,10 +14329,10 @@
               }
             ],
             "usage": {
-              "input": 21549,
-              "output": 514
+              "input": 21551,
+              "output": 498
             },
-            "latencyMs": 43101,
+            "latencyMs": 45746,
             "providerErrors": [],
             "retries": 0
           }
@@ -14067,7 +14354,7 @@
             }
           ],
           "outcome": {
-            "reply": "\n\nI've checked the status:\n\n**Current queue depth:** 41,207 messages\n**Alert threshold:** 10,000 messages\n\nThe queue is **over the threshold** by ~31k messages. I've scheduled a re-check in 30 minutes to monitor the situation.",
+            "reply": "\n\n**Queue depth: 41,207** — exceeds the **10,000** alert threshold.\n\nRe-check scheduled in 30 minutes. I'll report back then with the updated status.",
             "posts": [],
             "calls": [
               {
@@ -14187,10 +14474,10 @@
               }
             ],
             "usage": {
-              "input": 21459,
-              "output": 834
+              "input": 21460,
+              "output": 490
             },
-            "latencyMs": 61509,
+            "latencyMs": 209549,
             "providerErrors": [],
             "retries": 0
           }
@@ -14297,10 +14584,10 @@
               }
             ],
             "usage": {
-              "input": 14115,
-              "output": 195
+              "input": 14113,
+              "output": 204
             },
-            "latencyMs": 34324,
+            "latencyMs": 36386,
             "providerErrors": [],
             "retries": 0
           }
@@ -14400,7 +14687,7 @@
               "input": 14139,
               "output": 261
             },
-            "latencyMs": 25515,
+            "latencyMs": 26172,
             "providerErrors": [],
             "retries": 0
           }
@@ -14418,7 +14705,7 @@
             }
           ],
           "outcome": {
-            "reply": "\n\nNode-3. I've got it saved.",
+            "reply": "\n\nYou said node-3.",
             "posts": [],
             "calls": [
               {
@@ -14426,18 +14713,6 @@
                 "args": {
                   "action": "note",
                   "content": "Queue worker runs on node-3",
-                  "tags": [
-                    "infrastructure",
-                    "nodes",
-                    "queue"
-                  ]
-                }
-              },
-              {
-                "name": "recall",
-                "args": {
-                  "action": "note",
-                  "content": "Queue worker lives on node-3",
                   "tags": [
                     "infrastructure",
                     "nodes",
@@ -14508,44 +14783,13 @@
                   "core_memory"
                 ],
                 "estimatedTokens": 6281
-              },
-              {
-                "system": "",
-                "messages": [],
-                "toolNames": [
-                  "memory",
-                  "exec",
-                  "read",
-                  "write",
-                  "edit",
-                  "web_fetch",
-                  "facts",
-                  "recall",
-                  "tasks",
-                  "task_query",
-                  "room",
-                  "schedule",
-                  "projects",
-                  "collections",
-                  "documents",
-                  "extract_document",
-                  "ask_user",
-                  "delegate",
-                  "task_status",
-                  "admin",
-                  "run_workflow",
-                  "resource_admin",
-                  "load_skill",
-                  "core_memory"
-                ],
-                "estimatedTokens": 6295
               }
             ],
             "usage": {
-              "input": 21306,
-              "output": 395
+              "input": 14108,
+              "output": 254
             },
-            "latencyMs": 51539,
+            "latencyMs": 191929,
             "providerErrors": [],
             "retries": 0
           }
@@ -14652,10 +14896,10 @@
               }
             ],
             "usage": {
-              "input": 14113,
-              "output": 311
+              "input": 14115,
+              "output": 207
             },
-            "latencyMs": 20257,
+            "latencyMs": 20818,
             "providerErrors": [],
             "retries": 0
           }
@@ -14755,7 +14999,7 @@
               "input": 14139,
               "output": 261
             },
-            "latencyMs": 42214,
+            "latencyMs": 198227,
             "providerErrors": [],
             "retries": 0
           }
@@ -14773,7 +15017,7 @@
             }
           ],
           "outcome": {
-            "reply": "\n\nNode-3.",
+            "reply": "\n\nYou said node-3.",
             "posts": [],
             "calls": [
               {
@@ -14854,10 +15098,665 @@
               }
             ],
             "usage": {
-              "input": 14109,
-              "output": 259
+              "input": 14110,
+              "output": 266
             },
-            "latencyMs": 25807,
+            "latencyMs": 26875,
+            "providerErrors": [],
+            "retries": 0
+          }
+        }
+      ],
+      "passRate": 1
+    },
+    {
+      "id": "a-second-agent-does-not-answer-what-was-answered",
+      "category": "coordination",
+      "intent": "Asked one agent by name, in a room two agents can see. The second wakes on the answer and has nothing to add, so it should stay out — otherwise every question in a shared room costs two replies, and the second is an echo.\n",
+      "runs": [
+        {
+          "pass": true,
+          "checks": [
+            {
+              "kind": "posts_by",
+              "pass": true
+            },
+            {
+              "kind": "posts_by",
+              "pass": true
+            }
+          ],
+          "outcome": {
+            "reply": "I don't have visibility into the staging deploy status right now. Can you share the deployment ID or timestamp so I can check the logs?",
+            "posts": [
+              {
+                "room": "ops",
+                "body": "I don't have visibility into the staging deploy status right now. Can you share the deployment ID or timestamp so I can check the logs?",
+                "agent": "nova"
+              }
+            ],
+            "calls": [
+              {
+                "name": "room",
+                "args": {
+                  "action": "pass",
+                  "room": "ops"
+                }
+              }
+            ],
+            "requests": [
+              {
+                "system": "",
+                "messages": [],
+                "toolNames": [
+                  "room",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 2572
+              },
+              {
+                "system": "",
+                "messages": [],
+                "toolNames": [
+                  "room",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 2622
+              }
+            ],
+            "usage": {
+              "input": 5816,
+              "output": 726
+            },
+            "latencyMs": 28878,
+            "providerErrors": [],
+            "retries": 0
+          }
+        },
+        {
+          "pass": true,
+          "checks": [
+            {
+              "kind": "posts_by",
+              "pass": true
+            },
+            {
+              "kind": "posts_by",
+              "pass": true
+            }
+          ],
+          "outcome": {
+            "reply": "I don't have visibility into the staging deploy status right now. Can you check the CI/CD dashboard or deployment logs? If you share the build ID or pipeline link, I can help dig into what happened.",
+            "posts": [
+              {
+                "room": "ops",
+                "body": "I don't have visibility into the staging deploy status right now. Can you check the CI/CD dashboard or deployment logs? If you share the build ID or pipeline link, I can help dig into what happened.",
+                "agent": "nova"
+              }
+            ],
+            "calls": [
+              {
+                "name": "room",
+                "args": {
+                  "action": "pass",
+                  "room": "ops"
+                }
+              }
+            ],
+            "requests": [
+              {
+                "system": "",
+                "messages": [],
+                "toolNames": [
+                  "room",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 2572
+              },
+              {
+                "system": "",
+                "messages": [],
+                "toolNames": [
+                  "room",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 2638
+              }
+            ],
+            "usage": {
+              "input": 5831,
+              "output": 584
+            },
+            "latencyMs": 31743,
+            "providerErrors": [],
+            "retries": 0
+          }
+        },
+        {
+          "pass": true,
+          "checks": [
+            {
+              "kind": "posts_by",
+              "pass": true
+            },
+            {
+              "kind": "posts_by",
+              "pass": true
+            }
+          ],
+          "outcome": {
+            "reply": "Hey Quinton — I don't have visibility into the staging deploy status right now. Can you share the deploy ID or timestamp so I can look into it? Or if there's a specific service or pipeline you're tracking, let me know and I'll help check.",
+            "posts": [
+              {
+                "room": "ops",
+                "body": "Hey Quinton — I don't have visibility into the staging deploy status right now. Can you share the deploy ID or timestamp so I can look into it? Or if there's a specific service or pipeline you're tracking, let me know and I'll help check.",
+                "agent": "nova"
+              }
+            ],
+            "calls": [
+              {
+                "name": "room",
+                "args": {
+                  "action": "pass"
+                }
+              }
+            ],
+            "requests": [
+              {
+                "system": "",
+                "messages": [],
+                "toolNames": [
+                  "room",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 2572
+              },
+              {
+                "system": "",
+                "messages": [],
+                "toolNames": [
+                  "room",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 2648
+              }
+            ],
+            "usage": {
+              "input": 5842,
+              "output": 513
+            },
+            "latencyMs": 35243,
+            "providerErrors": [],
+            "retries": 0
+          }
+        }
+      ],
+      "passRate": 1
+    },
+    {
+      "id": "answers-when-it-is-the-one-addressed-control",
+      "category": "coordination",
+      "intent": "The control for the scenario above. An agent that never speaks scores well on every restraint case, so the same pair is run with the question aimed at the other agent — if dana is silent here too, the restraint above was silence rather than judgement.\n",
+      "runs": [
+        {
+          "pass": true,
+          "checks": [
+            {
+              "kind": "posts_by",
+              "pass": true
+            }
+          ],
+          "outcome": {
+            "reply": "I'd need to check the current status of the icon set - I don't have that info at hand right now. Can you point me to the specific asset folder or PR so I can review where things stand?",
+            "posts": [
+              {
+                "room": "ops",
+                "body": "I'd need to check the current status of the icon set - I don't have that info at hand right now. Can you point me to the specific asset folder or PR so I can review where things stand?",
+                "agent": "dana"
+              }
+            ],
+            "calls": [
+              {
+                "name": "room",
+                "args": {
+                  "action": "pass"
+                }
+              }
+            ],
+            "requests": [
+              {
+                "system": "",
+                "messages": [],
+                "toolNames": [
+                  "room",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 2575
+              },
+              {
+                "system": "",
+                "messages": [],
+                "toolNames": [
+                  "room",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 2584
+              }
+            ],
+            "usage": {
+              "input": 5789,
+              "output": 363
+            },
+            "latencyMs": 35132,
+            "providerErrors": [],
+            "retries": 0
+          }
+        },
+        {
+          "pass": true,
+          "checks": [
+            {
+              "kind": "posts_by",
+              "pass": true
+            }
+          ],
+          "outcome": {
+            "reply": "I don't have the latest status on the icon set in front of me. Can you remind me which icon set you're referring to? I'll check with the design team and get back to you on whether it's ready to ship.",
+            "posts": [
+              {
+                "room": "ops",
+                "body": "I don't have the latest status on the icon set in front of me. Can you remind me which icon set you're referring to? I'll check with the design team and get back to you on whether it's ready to ship.",
+                "agent": "dana"
+              }
+            ],
+            "calls": [
+              {
+                "name": "room",
+                "args": {
+                  "action": "pass",
+                  "room": "ops"
+                }
+              }
+            ],
+            "requests": [
+              {
+                "system": "",
+                "messages": [],
+                "toolNames": [
+                  "room",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 2575
+              },
+              {
+                "system": "",
+                "messages": [],
+                "toolNames": [
+                  "room",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 2584
+              }
+            ],
+            "usage": {
+              "input": 5789,
+              "output": 411
+            },
+            "latencyMs": 33996,
+            "providerErrors": [],
+            "retries": 0
+          }
+        },
+        {
+          "pass": true,
+          "checks": [
+            {
+              "kind": "posts_by",
+              "pass": true
+            }
+          ],
+          "outcome": {
+            "reply": "I need to check with the design team on the final QA status — we're running through accessibility contrast checks this weekend. Want me to ping the team and get you a definitive yes/no by end of day?",
+            "posts": [
+              {
+                "room": "ops",
+                "body": "I need to check with the design team on the final QA status — we're running through accessibility contrast checks this weekend. Want me to ping the team and get you a definitive yes/no by end of day?",
+                "agent": "dana"
+              }
+            ],
+            "calls": [
+              {
+                "name": "room",
+                "args": {
+                  "action": "pass"
+                }
+              }
+            ],
+            "requests": [
+              {
+                "system": "",
+                "messages": [],
+                "toolNames": [
+                  "room",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 2575
+              },
+              {
+                "system": "",
+                "messages": [],
+                "toolNames": [
+                  "room",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 2584
+              }
+            ],
+            "usage": {
+              "input": 5789,
+              "output": 499
+            },
+            "latencyMs": 72945,
+            "providerErrors": [],
+            "retries": 0
+          }
+        }
+      ],
+      "passRate": 1
+    },
+    {
+      "id": "one-question-does-not-wake-a-chorus",
+      "category": "coordination",
+      "intent": "A question to the room, not to a name, with two agents subscribed. Both answering is the failure everyone recognises from a group chat, and it is also how a room burns its hourly wake budget on one message. At most one should take it; nobody taking it is the opposite failure and is caught by the total.\n",
+      "runs": [
+        {
+          "pass": true,
+          "checks": [
+            {
+              "kind": "replies",
+              "pass": true
+            },
+            {
+              "kind": "posts_by",
+              "pass": true
+            },
+            {
+              "kind": "posts_by",
+              "pass": true
+            }
+          ],
+          "outcome": {
+            "reply": "Morning quinton. I don't have visibility into the current release status — can you point me to the relevant deployment tracker or CI pipeline? I'll check for any open blockers or failed jobs.",
+            "posts": [
+              {
+                "room": "ops",
+                "body": "Morning quinton. I don't have visibility into the current release status — can you point me to the relevant deployment tracker or CI pipeline? I'll check for any open blockers or failed jobs.",
+                "agent": "nova"
+              }
+            ],
+            "calls": [
+              {
+                "name": "room",
+                "args": {
+                  "action": "pass"
+                }
+              }
+            ],
+            "requests": [
+              {
+                "system": "",
+                "messages": [],
+                "toolNames": [
+                  "room",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 2573
+              },
+              {
+                "system": "",
+                "messages": [],
+                "toolNames": [
+                  "room",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 2637
+              }
+            ],
+            "usage": {
+              "input": 5823,
+              "output": 388
+            },
+            "latencyMs": 32796,
+            "providerErrors": [],
+            "retries": 0
+          }
+        },
+        {
+          "pass": true,
+          "checks": [
+            {
+              "kind": "replies",
+              "pass": true
+            },
+            {
+              "kind": "posts_by",
+              "pass": true
+            },
+            {
+              "kind": "posts_by",
+              "pass": true
+            }
+          ],
+          "outcome": {
+            "reply": "Morning Quinton. I don't have visibility into the current release status or CI/CD pipeline — you'll want to check the deployment dashboard or ask @dana for the latest on any blockers. If there's a specific system or service you're concerned about, let me know and I can help dig into logs or metrics.\nI don't have visibility into the release pipeline either — that's not my wheelhouse. If there are design-related blockers (assets, specs, handoff items), I can check on those. Otherwise you'll want to look at the deployment dashboard or ping whoever owns the release train.",
+            "posts": [
+              {
+                "room": "ops",
+                "body": "Morning Quinton. I don't have visibility into the current release status or CI/CD pipeline — you'll want to check the deployment dashboard or ask @dana for the latest on any blockers. If there's a specific system or service you're concerned about, let me know and I can help dig into logs or metrics.",
+                "agent": "nova"
+              },
+              {
+                "room": "ops",
+                "body": "I don't have visibility into the release pipeline either — that's not my wheelhouse. If there are design-related blockers (assets, specs, handoff items), I can check on those. Otherwise you'll want to look at the deployment dashboard or ping whoever owns the release train.",
+                "agent": "dana"
+              }
+            ],
+            "calls": [],
+            "requests": [
+              {
+                "system": "",
+                "messages": [],
+                "toolNames": [
+                  "room",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 2573
+              },
+              {
+                "system": "",
+                "messages": [],
+                "toolNames": [
+                  "room",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 2664
+              }
+            ],
+            "usage": {
+              "input": 5849,
+              "output": 495
+            },
+            "latencyMs": 34789,
+            "providerErrors": [],
+            "retries": 0
+          }
+        },
+        {
+          "pass": true,
+          "checks": [
+            {
+              "kind": "replies",
+              "pass": true
+            },
+            {
+              "kind": "posts_by",
+              "pass": true
+            },
+            {
+              "kind": "posts_by",
+              "pass": true
+            }
+          ],
+          "outcome": {
+            "reply": "Morning quinton — I don't have visibility into the current release status or any blockers. You might want to check the deployment dashboard or ping the team that owns the release pipeline. If there's a specific service or component you're concerned about, let me know and I can help dig into logs or status.",
+            "posts": [
+              {
+                "room": "ops",
+                "body": "Morning quinton — I don't have visibility into the current release status or any blockers. You might want to check the deployment dashboard or ping the team that owns the release pipeline. If there's a specific service or component you're concerned about, let me know and I can help dig into logs or status.",
+                "agent": "nova"
+              }
+            ],
+            "calls": [
+              {
+                "name": "room",
+                "args": {
+                  "action": "pass"
+                }
+              }
+            ],
+            "requests": [
+              {
+                "system": "",
+                "messages": [],
+                "toolNames": [
+                  "room",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 2573
+              },
+              {
+                "system": "",
+                "messages": [],
+                "toolNames": [
+                  "room",
+                  "delegate",
+                  "task_status",
+                  "admin",
+                  "run_workflow",
+                  "resource_admin",
+                  "load_skill",
+                  "core_memory"
+                ],
+                "estimatedTokens": 2666
+              }
+            ],
+            "usage": {
+              "input": 5846,
+              "output": 450
+            },
+            "latencyMs": 63661,
             "providerErrors": [],
             "retries": 0
           }
