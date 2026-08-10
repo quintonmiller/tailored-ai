@@ -188,6 +188,30 @@ button:focus-visible {
   text-decoration: none;
 }
 
+.docs-menu-button {
+  border: 1px solid var(--color-border);
+  background: #0d1210;
+  padding: 0.75rem 0.85rem;
+  color: #c8cfca;
+  font-size: 0.78rem;
+  font-weight: 620;
+  text-align: left;
+}
+
+.docs-menu-button svg {
+  color: var(--color-accent);
+}
+
+.docs-menu-state {
+  margin-left: auto;
+  color: #77827b;
+  font-family: var(--font-mono);
+  font-size: 0.56rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .hero-section {
   position: relative;
   overflow: hidden;
@@ -1211,4 +1235,101 @@ button:focus-visible {
 .prose :where(a):hover {
   color: var(--color-accent-hover);
   text-decoration: underline;
+}
+
+.prose :where(h1) {
+  letter-spacing: -0.035em;
+}
+
+.prose :where(h2) {
+  letter-spacing: -0.025em;
+}
+
+.prose :where(pre) {
+  max-width: 100%;
+  margin: 0;
+  overscroll-behavior-x: contain;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  scrollbar-color: #455149 transparent;
+}
+
+.prose :where(table) {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: nowrap;
+  scrollbar-color: #455149 transparent;
+}
+
+.docs-pager {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-top: 5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.docs-pager-link {
+  display: grid;
+  min-width: 0;
+  gap: 0.45rem;
+  border: 1px solid var(--color-border);
+  background: #0d1210;
+  padding: 1rem;
+  color: var(--color-text);
+  text-decoration: none;
+  transition: border-color 160ms ease, background 160ms ease;
+}
+
+.docs-pager-link:hover {
+  border-color: #536159;
+  background: var(--color-bg-secondary);
+}
+
+.docs-pager-next {
+  text-align: right;
+}
+
+.docs-pager-direction {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: #78837c;
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.docs-pager-next .docs-pager-direction {
+  justify-content: flex-end;
+}
+
+.docs-pager-direction svg {
+  width: 0.9rem;
+  height: 0.9rem;
+  stroke: var(--color-accent);
+  stroke-width: 1.5;
+}
+
+.docs-pager-link strong {
+  overflow: hidden;
+  font-size: 0.82rem;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 767px) {
+  .prose :where(pre) {
+    padding: 1rem;
+    font-size: 0.76rem;
+  }
+
+  .docs-pager {
+    margin-top: 3.5rem;
+  }
 }

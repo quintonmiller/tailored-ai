@@ -32,17 +32,15 @@ export function Features() {
         <div className="site-shell editorial-grid">
           <div className="section-kicker">Why TAI</div>
           <div>
-            <h2 className="section-title">A runtime, not another chat tab.</h2>
+            <h2 className="section-title">A runtime for work that outlasts a chat.</h2>
             <div className="editorial-copy">
               <p>
-                Most AI products begin and end with a conversation. TAI is for the work around it: the scheduled check,
-                the task that spans several sessions, the workflow that waits on an event, the agent that needs a real
-                filesystem.
+                TAI runs the work around a conversation: scheduled checks, tasks that span several sessions, workflows
+                that wait on events, and agents that need a real filesystem.
               </p>
               <p>
-                It is deliberately modular. Start with the CLI, bundled UI, SQLite, and an OpenAI-compatible local
-                endpoint. Replace pieces as your requirements become specific. The runtime should adapt to your
-                operation—not quietly become it.
+                Start with the CLI, bundled UI, SQLite, and an OpenAI-compatible endpoint. Keep that stack or replace
+                the provider, storage, tools, channels, and UI one part at a time.
               </p>
             </div>
           </div>
@@ -88,7 +86,7 @@ export function Features() {
 
           <div className="architecture-note">
             <span>Durable core</span>
-            <p>SQLite persistence · hot-reloadable config · typed event bus · HTTP + SSE API</p>
+            <p>SQLite persistence · validated config · typed event bus · HTTP + SSE API</p>
           </div>
         </div>
       </section>
@@ -98,11 +96,11 @@ export function Features() {
           <div className="section-heading-row capabilities-heading">
             <div>
               <div className="section-kicker">What ships today</div>
-              <h2 className="section-title">Built for work with consequences.</h2>
+              <h2 className="section-title">The runtime around the model.</h2>
             </div>
             <p>
-              The useful parts of an agent system are not a dramatic demo. They are the quiet mechanics that let it
-              resume, recover, and stay inside the lines.
+              Long-running agents need more than a prompt and a tool schema. They need durable state, scheduling,
+              recovery paths, and clear operating boundaries.
             </p>
           </div>
 

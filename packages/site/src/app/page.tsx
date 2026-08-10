@@ -12,7 +12,7 @@ export default function Home() {
         <div className="site-shell closing-grid">
           <div>
             <div className="section-kicker">Get started</div>
-            <h2>Make the first agent yours.</h2>
+            <h2>Run your first agent.</h2>
           </div>
           <div className="closing-copy">
             <p>
