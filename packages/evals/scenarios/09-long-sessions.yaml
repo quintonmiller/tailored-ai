@@ -102,6 +102,18 @@
     # agent *says* the front is gone; saying nothing is the failure this
     # scenario was written for, not a pass.
     - replies: true
+    # `replies: true` only asks for a non-empty string, so it closed the empty
+    # case and left the marker case open: a 12-run baseline scored two
+    # `[Agent stopped: repeated identical tool calls detected]` as passes. Both
+    # blacklist assertions are satisfied by any reply that omits the number,
+    # including one that says nothing at all.
+    #
+    # So the scenario now asserts what its id claims — that the agent *says* the
+    # front is gone — and names the markers explicitly. A blacklist alone cannot
+    # tell "correctly reported the gap" from "produced no answer", which is the
+    # distinction this scenario exists for. See #472.
+    - reply_matches: "don.?t have|do not have|no longer|not (in|available|visible)|earlier (part|message)|trimmed|dropped|can.?t (see|find|recall|retrieve)"
+    - reply_not_matches: "\\[Agent stopped"
     - reply_not_matches: "\\b4[,.]?\\s*(million|m\\b)|4000000"
 
 - id: keeps-the-thread-in-a-long-room-session
