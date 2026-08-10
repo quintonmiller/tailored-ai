@@ -103,6 +103,27 @@ A chat scenario uses `message:` and optional `history:` instead of `rooms:`.
 Speakers not declared as agents become people automatically; declare another
 agent by adding it under `config.agents`.
 
+### More than one agent
+
+`wake:` also takes a **list**, and each entry may name an agent. The turns run
+in order against the same rooms, so a later agent wakes on what an earlier one
+posted:
+
+```yaml
+  wake:
+    - { room: ops, agent: nova }
+    - { room: ops, agent: dana }
+```
+
+Only agents that take a turn are subscribed to the rooms. An agent declared in
+`config.agents` and never woken is scenery — it exists so the transcript can
+show a third party — and subscribing it would put it in the roster of a room it
+never speaks in, changing the prompt of every scenario that has one.
+
+`posts_by` is the assertion this needs. `posts_in` asks whether anything landed
+in a room, which with two agents is true whether the handoff worked or the
+second one echoed the first.
+
 Every `expect` entry carries **exactly one** assertion, so a failure names
 itself. Unknown keys are an error, not a silent skip — a typo that grades
 nothing would report a higher score for having checked less.
@@ -114,6 +135,7 @@ nothing would report a higher score for having checked less.
 | `calls_tool` / `calls_tool_any` / `does_not_call` | which tools were called |
 | `tool_args: {tool, where}` | one call to `tool` matched every key in `where`. Values are case-insensitive strings, or `/regex/`. |
 | `posts_in` / `does_not_post_in` | which rooms the agent posted in |
+| `posts_by: {agent, min, max}` | how often a named agent spoke. `min` is 1 unless `max` is given, so `{agent, max: 0}` means "stayed out" |
 | `replies: true\|false` | did it say anything outward at all |
 | `reply_matches` / `reply_not_matches` | regex over the reply |
 | `reply_mentions_any` / `reply_mentions_none` | case-insensitive substrings |

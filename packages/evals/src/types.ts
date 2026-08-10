@@ -51,6 +51,13 @@ export interface AgentSpec {
   extra?: Record<string, unknown>;
 }
 
+export interface WakeStep {
+  room: string;
+  /** Defaults to the agent under test. Any agent named here is subscribed to every room. */
+  agent?: string;
+  kind?: "poll" | "checkin";
+}
+
 export interface Scenario {
   id: string;
   category: string;
@@ -79,8 +86,18 @@ export interface Scenario {
   history?: HistoryLine[];
   /** Room scenario: rooms to create, and which one wakes the agent. */
   rooms?: RoomSpec[];
-  /** Which room to poll. Defaults to the last room with `incoming` lines. */
-  wake?: { room: string; kind?: "poll" | "checkin" };
+  /**
+   * Whose turn to run, and where.
+   *
+   * One entry is the ordinary case and may be written as a bare object. A
+   * **list** runs the turns in order against the same rooms, which is how a
+   * scenario tests two agents rather than one agent twice: A answers, B wakes
+   * on what A posted, and the assertions see both. `agent` defaults to the
+   * agent under test, so a single-agent scenario never names it.
+   *
+   * Defaults to the last room with `incoming` lines.
+   */
+  wake?: WakeStep | WakeStep[];
   /** Chat scenario: the message the owner sends. Mutually exclusive with `rooms`. */
   message?: string;
   /** Canned results for stubbed tools, keyed by tool name. */
@@ -117,6 +134,17 @@ export interface Assertion {
   posts_in?: string;
   /** It posted in none of these. */
   does_not_post_in?: string[];
+  /**
+   * How many times a named agent spoke. `min` defaults to 1 when no `max` is
+   * given, so `posts_by: {agent: dana}` asserts dana said something at all —
+   * and `posts_by: {agent: dana, max: 0}` asserts it stayed out, which a
+   * fixed default of 1 would make unsatisfiable.
+   *
+   * The multi-agent question `posts_in` cannot ask: with two agents taking
+   * turns, "somebody posted in ops" is true whether the handoff worked or one
+   * agent answered twice.
+   */
+  posts_by?: { agent: string; min?: number; max?: number };
   /** Whether the turn produced any outward message at all. */
   replies?: boolean;
   /** Regex over the reply text. */
@@ -200,7 +228,8 @@ export interface RunOutcome {
   /** Calls that needed a retry (throttling, transient 5xx). Surfaced so pacing problems are visible. */
   retries?: number;
   calls: RecordedCall[];
-  posts: Array<{ room: string; body: string }>;
+  /** Every post the turn(s) produced, attributed — `agent` is the speaker on the envelope. */
+  posts: Array<{ room: string; body: string; agent?: string }>;
   requests: RecordedRequest[];
   latencyMs: number;
   usage: RunUsage;

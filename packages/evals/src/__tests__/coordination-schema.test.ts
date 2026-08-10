@@ -1,0 +1,166 @@
+/**
+ * The scenario surface that makes a multi-agent turn expressible.
+ *
+ * Before this, `wake:` named one room and the runner took one turn for one
+ * agent — so 57 of 59 scenarios declared no second agent, and the two that did
+ * used it as scenery. None of the machinery rooms exist for (the wake queue,
+ * pass handling, `maxWakesPerHour`, per-room chaining) had a scenario, because
+ * one agent answering once structurally cannot produce a cascade, a silence
+ * where everybody deferred, or a handoff.
+ */
+
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { grade } from "../graders.js";
+import { loadScenarios } from "../schema.js";
+import type { RunOutcome, Scenario } from "../types.js";
+
+let dir: string;
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), "coord-schema-"));
+});
+
+afterEach(() => {
+  rmSync(dir, { recursive: true, force: true });
+});
+
+/** Write one scenario file and load it, so the zod schema is what is under test. */
+function load(body: string): Scenario[] {
+  writeFileSync(join(dir, "s.yaml"), body);
+  return loadScenarios(dir).scenarios;
+}
+
+const ROOMS = `
+  rooms:
+    - name: ops
+      incoming:
+        - { speaker: quinton, to: [nova], body: "ping" }`;
+
+describe("wake as a sequence", () => {
+  it("takes a list of turns", () => {
+    const [scenario] = load(`
+- id: two-turns
+  category: coordination
+  intent: two agents
+${ROOMS}
+  wake:
+    - { room: ops, agent: nova }
+    - { room: ops, agent: dana }
+  expect:
+    - replies: true
+`);
+
+    expect(scenario.wake).toEqual([
+      { room: "ops", agent: "nova" },
+      { room: "ops", agent: "dana" },
+    ]);
+  });
+
+  it("still takes a bare object, so every existing scenario is untouched", () => {
+    const [scenario] = load(`
+- id: one-turn
+  category: addressing
+  intent: one agent
+${ROOMS}
+  wake: { room: ops }
+  expect:
+    - replies: true
+`);
+
+    expect(scenario.wake).toEqual({ room: "ops" });
+  });
+
+  it("rejects a step naming a room that does not exist — in any position", () => {
+    // The single-wake version checked this. A list that only validated its
+    // first entry would let a typo in the second silently wake nobody.
+    expect(() =>
+      load(`
+- id: bad-second-step
+  category: coordination
+  intent: typo in the second step
+${ROOMS}
+  wake:
+    - { room: ops, agent: nova }
+    - { room: opss, agent: dana }
+  expect:
+    - replies: true
+`),
+    ).toThrow(/wake\.room "opss" is not one of the rooms/);
+  });
+
+  it("rejects an empty list rather than silently waking nobody", () => {
+    expect(() =>
+      load(`
+- id: empty-wake
+  category: coordination
+  intent: nothing runs
+${ROOMS}
+  wake: []
+  expect:
+    - replies: true
+`),
+    ).toThrow();
+  });
+});
+
+function outcome(posts: Array<{ room: string; body: string; agent?: string }>): RunOutcome {
+  return {
+    reply: posts.map((p) => p.body).join("\n"),
+    posts,
+    calls: [],
+    requests: [],
+    usage: { input: 0, output: 0 },
+    latencyMs: 0,
+  } as unknown as RunOutcome;
+}
+
+function scenario(expect_: Scenario["expect"]): Scenario {
+  return { id: "s", category: "coordination", intent: "i", expect: expect_ } as Scenario;
+}
+
+async function passes(assertion: Scenario["expect"][number], out: RunOutcome): Promise<boolean> {
+  const checks = await grade(scenario([assertion]), out);
+  return checks.every((c) => c.pass);
+}
+
+describe("posts_by", () => {
+  const conversation = outcome([
+    { room: "ops", body: "deploy finished", agent: "nova" },
+    { room: "ops", body: "and the icons shipped", agent: "dana" },
+    { room: "ops", body: "one more thing", agent: "dana" },
+  ]);
+
+  it("asks whether a named agent spoke at all, defaulting to at least once", async () => {
+    expect(await passes({ posts_by: { agent: "nova" } }, conversation)).toBe(true);
+    expect(await passes({ posts_by: { agent: "ravi" } }, conversation)).toBe(false);
+  });
+
+  it("catches the echo — an agent that should have stayed out", async () => {
+    // The question `posts_in` cannot ask: "somebody posted in ops" is true
+    // whether the handoff worked or the second agent parroted the first.
+    expect(await passes({ posts_by: { agent: "dana", max: 0 } }, conversation)).toBe(false);
+    expect(await passes({ posts_by: { agent: "ravi", max: 0 } }, conversation)).toBe(true);
+  });
+
+  it("counts posts, not agents, so one agent speaking twice is two", async () => {
+    expect(await passes({ posts_by: { agent: "dana", max: 1 } }, conversation)).toBe(false);
+    expect(await passes({ posts_by: { agent: "dana", max: 2 } }, conversation)).toBe(true);
+  });
+
+  it("names who did speak when it fails, so the failure is diagnosable", async () => {
+    const checks = await grade(scenario([{ posts_by: { agent: "ravi" } }]), conversation);
+
+    expect(checks[0].detail).toContain("nova×1");
+    expect(checks[0].detail).toContain("dana×2");
+  });
+
+  it("reports nobody rather than an empty list on a silent room", async () => {
+    const checks = await grade(scenario([{ posts_by: { agent: "nova" } }]), outcome([]));
+
+    expect(checks[0].pass).toBe(false);
+    expect(checks[0].detail).toContain("nobody posted");
+  });
+});
