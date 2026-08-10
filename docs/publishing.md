@@ -1,8 +1,9 @@
 # Publishing to npm
 
 The release pipeline is automated. After the one-time setup below, shipping a
-release is just merging two PRs: the feature PR (with a changeset) and the
-auto-generated "Version Packages" PR.
+release is merging two PRs — the feature PR (with a changeset) and the
+auto-generated "Version Packages" PR — and then dispatching the publish by
+hand. Nothing publishes on a push.
 
 ## One-time setup
 
@@ -86,8 +87,8 @@ immediately on every push to the version PR, which defeats the safety net.
 
 ## Per-release flow
 
-Publishing is a **deliberate, approved act** — it never happens automatically
-on a push to `main`. The flow:
+Publishing is a **deliberate act** — it never happens automatically on a push
+to `main`. The flow:
 
 1. **Open a feature PR** with a changeset file under `.changeset/`. Generate
    with `pnpm changeset`. **Mark every bump `patch`** while pre-1.0 (see the
@@ -100,16 +101,26 @@ on a push to `main`. The flow:
    (confirm they're `0.1.x → 0.1.(x+1)`, **not** an unintended `1.0.0`). To
    restore the old auto-merge-on-green behaviour for a routine 0.x bump, add
    the `release:auto-merge` label to the PR.
-4. **Publish manually, with approval.** Go to **Actions ▸ Release ▸ Run
-   workflow** (from `main`). The `publish` job is gated on the `npm-publish`
-   environment, so it pauses for a maintainer's **approval** before
-   `pnpm publish -r` runs. It tags a GitHub Release per package and verifies
-   each tarball reached the registry.
+4. **Publish manually.** Go to **Actions ▸ Release ▸ Run workflow** (from
+   `main`), or run `gh workflow run Release --ref main`. Publishing then
+   verifies every publishable package reached the registry, and tags a commit
+   and a GitHub Release per package.
 
-The two gates (manual version-PR merge + approved manual publish) exist so a
-stray `major`/`minor` changeset — including one authored by an unattended
-agent — cannot ship a release on its own. See the 2026-06-09 incident note
-under "Pre-1.0 versioning rule."
+   > **The `npm-publish` environment does not currently add a second gate.**
+   > It is configured with the maintainer as a required reviewer, but
+   > `prevent_self_review` is off and there is one reviewer — so when the
+   > person who dispatches is also the reviewer, the job starts immediately
+   > with no pause. Observed on the 0.1.10 publish. Dispatching *is* the gate
+   > today; treat it as the moment of decision. See #487.
+
+The gates exist so a stray `major`/`minor` changeset — including one authored
+by an unattended agent — cannot ship a release on its own. See the 2026-06-09
+incident note under "Pre-1.0 versioning rule."
+
+Two were intended: merging the version PR, and approving the publish. Only the
+first holds today, plus `guard:pre-v1` refusing a non-`patch` changeset in
+three places. Nothing here runs on a push, so an agent still cannot ship a
+release without a human act — but that act is now one, not two.
 
 ## Pre-1.0 versioning rule
 
@@ -138,7 +149,8 @@ package; pick `patch` for all of them.
 > bumped everything to `1.0.0`, and the old auto-publish-on-push path shipped
 > `1.0.0` to npm before anyone reviewed it. Fixes: every changeset is `patch`
 > again, the Version Packages PR is no longer auto-merged by default, and npm
-> publishing is now a manual, approval-gated job (above). If a Version
+> publishing is now a manual `workflow_dispatch` job (above) rather than
+> anything that fires on a push. If a Version
 > Packages PR ever proposes `1.0.0`, a non-`patch` changeset slipped in —
 > find it (`grep -rL '"@tailored-ai/.*": patch' .changeset/*.md`) and fix it
 > before merging.
@@ -157,7 +169,23 @@ not modify any files.
 To see the actual `package.json` diffs the version PR will produce, look at
 the open PR titled "chore: version packages" in the GitHub UI. Reviewing the
 generated `CHANGELOG.md` snippets there is the cheap last-look before a
-release ships.
+release ships — and the only place the naming half of the neutral-cast rule
+(`CLAUDE.md`) can still be caught, since those snippets become the published
+CHANGELOG of every package and npm publishes cannot be withdrawn.
+
+## Checking a release actually shipped
+
+```bash
+pnpm run verify:release
+```
+
+Reads every non-private `packages/*` package and asserts the registry has it at
+the version this checkout claims, naming any that are missing. It reads the
+workspace rather than a publish log, so it answers the same question from any
+checkout, at any time — including "did last month's release really go out."
+
+The publish job runs this too, unconditionally. A green publish job means the
+registry was checked, not that a step decided to skip.
 
 ## Pausing or vetoing a release
 
@@ -167,9 +195,10 @@ There are two independent checkpoints, both manual by default:
   drop everything queued, close it (the next push regenerates it from the
   `.changeset/*.md` files; delete those to drop for good).
 - **The npm publish** only runs when you manually trigger the `publish` job
-  (Actions ▸ Release ▸ Run workflow) AND approve the `npm-publish`
-  environment. Not triggering it, or rejecting the approval, vetoes the
-  release. Nothing ships from a push to `main`.
+  (Actions ▸ Release ▸ Run workflow). Not triggering it vetoes the release.
+  Nothing ships from a push to `main`. Note that the dispatch is the last
+  reversible moment — the `npm-publish` environment does not stop to ask
+  (#487), and a published version cannot be withdrawn.
 
 ## Manual / emergency publish
 
