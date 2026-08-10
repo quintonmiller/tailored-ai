@@ -88,8 +88,9 @@
     "I no longer have that part of the conversation" — not to invent a plausible
     table name.
 
-    `summarizeOnTrim` has no default, so it is off, and the mechanism that marks
-    a cut exists but is not the default. This scenario measures what that costs.
+    `summarizeOnTrim` now defaults to true (#498), so this row pins it off: it is
+    the marker path, and it measures what that path costs against its summarised
+    sibling below.
   # Pinned off, not inherited. This row *is* the marker path; once
   # `summarizeOnTrim` defaults to true an inherited value would quietly turn it
   # into a second copy of its summarised sibling, and the pair would go on
@@ -347,6 +348,7 @@
 - id: acts-on-a-commitment-made-before-the-trim
   category: long-session
   difficulty: 5
+  knownGap: "#500 — a create instruction routes to task_query, or to tasks(action=get) with an invented id. #499 — the two-call cycle that gets there runs to the round limit."
   intent: >
     Every other row in this file asks the agent to *recall* something from
     before the trim. This one asks it to act on something: an instruction given
