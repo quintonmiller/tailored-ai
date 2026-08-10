@@ -13,8 +13,7 @@ npm install -g @tailored-ai/cli
 
 ## What ships
 
-- **REPL**: an interactive chat with session sidebar, agent switcher,
-  expandable tool results.
+- **REPL**: an interactive terminal conversation with the selected agent.
 - **One-shot mode** (`tai -m "…"`): runs a single message and exits.
   Useful for shell scripts and quick prototyping.
 - **Project mode** (`tai project init`): register a directory as a
@@ -22,11 +21,11 @@ npm install -g @tailored-ai/cli
   it.
 - **Bundled web UI**: served at `http://localhost:3000` when you run
   `tai`. Chat, sessions, agents, workflows, memory, tasks.
-- **Setup wizard** (`tai --init`): probes your provider, discovers
+- **Setup wizard** (`tai init`): probes your provider, discovers
   models, writes `config.yaml` and `.env`.
 - **HTTP service**: same Hono API from
-  [`@tailored-ai/server`](/docs/packages/server), with cron, Discord,
-  and webhook intake running in-process.
+  [`@tailored-ai/server`](/docs/packages/server), with channels, cron,
+  schedules, workers, rooms, and webhook intake running in-process.
 
 ## Commands
 
@@ -39,23 +38,24 @@ npm install -g @tailored-ai/cli
 | `tai --json -m "…"` | Output structured JSON. Designed for scripting. |
 | `tai --list-agents` | Print all agents your config defines. |
 | `tai --list-sessions` | Print recent sessions. |
-| `tai --init` | Re-run the setup wizard. |
+| `tai init` | Create or replace the instance config with the setup wizard. |
+| `tai edit` | Edit the current instance in the terminal settings UI. |
 | `tai project init --name "…"` | Register cwd as a project. |
 | `tai project list` | Show all registered projects. |
 | `tai vault set <ns> <key>` | Store a secret in the encrypted vault (browser-mediator `$ref` expansion). |
 | `tai vault list` | List vault keys (no values). |
-| `tai resources ls` | List installed skills and resources. |
+| `tai resources list` | List installed skills and resources. |
 
 Full reference: `tai --help`.
 
-> Subcommands for cron and workflow inspection (`tai cron list`,
-> `tai workflow run`, etc.) are on the v0.2 roadmap. For now the web UI
-> exposes both.
+> The CLI does not currently expose cron and workflow inspection subcommands.
+> Use the web UI or HTTP API for those surfaces.
 
 ## Configuration
 
-The CLI reads `config.yaml` from the cwd by default, or from
-`$TAI_HOME` if set. Override with `--config <path>` for one-off runs.
+The CLI reads `~/.tailored-ai/config.yaml` by default, or the config under
+`$TAI_HOME` when set. Override with `--config <path>`; its parent becomes the
+home directory for that run.
 
 Everything else lives in [Configuration](/docs/configuration). The CLI
 adds no required config beyond what the core runtime requires.
@@ -69,7 +69,7 @@ tai  →  loads config.yaml
      →  creates AgentRuntime (from @tailored-ai/core)
      →  wires up channels (Discord, file-drop, pollers)
      →  either: REPL loop  (interactive)
-        or:     startServer() (from @tailored-ai/server)
+        or:     createServer() (from @tailored-ai/server)
 ```
 
 Most of the logic — tool registry, agent loop, session compaction,
@@ -82,14 +82,15 @@ deployment), skip the CLI and embed `@tailored-ai/core` directly.
 `ui-dist/` inside the published tarball is the built React SPA. To
 customize:
 
-1. Fork the monorepo, edit `packages/ui/src/`, run
+1. Build your own UI against the [HTTP API](/docs/packages/server) and serve it
+   separately.
+2. Package a UI provider plugin, register it with
+   `ctx.uiProviders.register(id, factory)`, and select it with
+   `server.ui.provider`.
+3. To change the bundled UI itself, edit `packages/ui/src/` and run
    `pnpm --filter @tailored-ai/ui run build`.
-2. Or build your own UI against the [HTTP API](/docs/packages/server)
-   and point your `tai` invocation at it via `--ui-dist /path/to/your/build`
-   (planned flag).
 
-The CLI has no opinion about which UI it serves. It static-mounts a
-directory.
+Set `server.ui.enabled: false` for a headless deployment.
 
 ## Source
 

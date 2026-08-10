@@ -1,57 +1,122 @@
 import Link from "next/link";
 import { REPO_URL } from "@/lib/constants";
 
+function Arrow() {
+  return (
+    <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <path d="M3.75 9h10.5M10 4.75 14.25 9 10 13.25" />
+    </svg>
+  );
+}
+
 export function Hero() {
   return (
-    <section className="relative overflow-hidden py-24 sm:py-32">
-      {/* Gradient background glow */}
-      <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-        <div className="h-[500px] w-[800px] rounded-full bg-[var(--color-accent)] opacity-[0.07] blur-[120px]" />
-      </div>
+    <section className="hero-section">
+      <div className="hero-grid site-shell">
+        <div className="hero-copy">
+          <div className="eyebrow">
+            <span className="status-dot" />
+            Open source · Active development
+          </div>
 
-      <div className="relative mx-auto max-w-4xl px-6 text-center">
-        <h1 className="text-4xl font-bold tracking-tight sm:text-5xl lg:text-6xl leading-[1.15]">
-          An agent that runs on{" "}
-          <span className="bg-gradient-to-r from-[var(--color-accent)] via-purple-400 to-pink-400 bg-clip-text text-transparent">
-            your schedule
-          </span>
-          , with{" "}
-          <span className="bg-gradient-to-r from-[var(--color-accent)] via-purple-400 to-pink-400 bg-clip-text text-transparent">
-            your tools
-          </span>
-          .
-        </h1>
+          <h1>Build agents that keep working.</h1>
 
-        <p className="mx-auto mt-6 max-w-2xl text-lg text-[var(--color-text-muted)] sm:text-xl">
-          Tailored AI runs LLM agents with cron, shell, files, calendars, and channels that meet you where you are.
-          Bring your own model, local or hosted.
-        </p>
+          <p className="hero-lede">
+            Tailored AI is a self-hosted runtime for personal agents. Give them tools, memory, schedules, and safe
+            places to work—then run them on the model and infrastructure you choose.
+          </p>
 
-        <div className="mt-10 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
-          <Link
-            href="/docs/quick-start"
-            className="rounded-lg bg-[var(--color-accent)] px-6 py-3 text-sm font-medium text-white transition-colors hover:bg-[var(--color-accent-hover)]"
-          >
-            Get Started
-          </Link>
-          <a
-            href={REPO_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="rounded-lg border border-[var(--color-border)] px-6 py-3 text-sm font-medium text-[var(--color-text)] transition-colors hover:border-[var(--color-text-muted)]"
-          >
-            View on GitHub
-          </a>
-        </div>
+          <div className="hero-actions">
+            <Link href="/docs/quick-start" className="button button-primary">
+              Start building <Arrow />
+            </Link>
+            <a href={REPO_URL} target="_blank" rel="noopener noreferrer" className="button button-secondary">
+              View the source
+            </a>
+          </div>
 
-        <div className="mt-12">
-          <div className="mx-auto max-w-lg rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4 text-left font-mono text-sm text-[var(--color-text-muted)]">
-            <span className="text-[var(--color-accent)]">$</span> npm install -g @tailored-ai/cli
-            <br />
-            <span className="text-[var(--color-accent)]">$</span> tai -m &quot;What changed in this repo today?&quot;
+          <div className="install-line">
+            <span className="prompt">$</span>
+            <code>npm install -g @tailored-ai/cli</code>
           </div>
         </div>
+
+        <section className="runtime-card" aria-label="Example of a scheduled Tailored AI agent run">
+          <div className="runtime-card-header">
+            <div className="window-controls" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </div>
+            <span>tai / morning-brief</span>
+            <span className="live-state">
+              <i /> running
+            </span>
+          </div>
+
+          <div className="runtime-card-body">
+            <div className="trace-row trace-emphasis">
+              <span className="trace-time">07:30</span>
+              <div className="trace-node trace-node-trigger">
+                <span className="trace-icon">↗</span>
+                <div>
+                  <strong>Schedule fired</strong>
+                  <small>weekday · America/Los_Angeles</small>
+                </div>
+              </div>
+            </div>
+            <div className="trace-line" aria-hidden="true" />
+            <div className="trace-row">
+              <span className="trace-time">07:30</span>
+              <div className="trace-node">
+                <span className="trace-icon trace-icon-agent">A</span>
+                <div>
+                  <strong>briefing agent</strong>
+                  <small>context restored · sandbox: docker</small>
+                </div>
+                <span className="trace-ok">active</span>
+              </div>
+            </div>
+            <ul className="tool-rail" aria-label="Tools used by the agent">
+              <li>calendar</li>
+              <li>tasks</li>
+              <li>memory</li>
+            </ul>
+            <div className="trace-line" aria-hidden="true" />
+            <div className="trace-row">
+              <span className="trace-time">07:31</span>
+              <div className="trace-node">
+                <span className="trace-icon trace-icon-delivery">✓</span>
+                <div>
+                  <strong>Brief delivered</strong>
+                  <small>via configured outbound channel</small>
+                </div>
+                <span className="trace-done">done</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="runtime-card-footer">
+            <span>Next run</span>
+            <strong>Tomorrow · 07:30</strong>
+          </div>
+        </section>
       </div>
+
+      <ul className="proof-bar site-shell" aria-label="Project attributes">
+        <li>
+          <i>01</i> MIT licensed
+        </li>
+        <li>
+          <i>02</i> Node 20+
+        </li>
+        <li>
+          <i>03</i> Local or hosted models
+        </li>
+        <li>
+          <i>04</i> Self-host on your hardware
+        </li>
+      </ul>
     </section>
   );
 }

@@ -17,8 +17,10 @@ The most common shape. Installs the `tai` command globally.
 npm install -g @tailored-ai/cli
 ```
 
-You can then run `tai` from any folder that has a `config.yaml`. Works
-with any package manager:
+Run `tai init` once to create `~/.tailored-ai/config.yaml`, then use `tai`
+from any working directory. The `-c` flag selects a different config and
+uses its parent directory as that instance's home. Installation works with
+any package manager:
 
 ```bash
 pnpm add -g @tailored-ai/cli
@@ -35,8 +37,8 @@ npm install --save-dev @tailored-ai/cli
 ```
 
 Run via your package manager's script runner: `npx tai`, `pnpm tai`,
-`yarn tai`, `bunx tai`. Your project's `config.yaml` sits next to your
-`package.json`.
+`yarn tai`, `bunx tai`. TAI still reads `~/.tailored-ai/config.yaml` unless
+you pass `-c ./config.yaml` or set `TAI_HOME`.
 
 ### As a library you embed
 
@@ -139,20 +141,22 @@ if the peer is missing.
 
 ## Where things live on disk
 
-By default TAI uses the directory you run `tai` from. Nothing global is
-created beyond the CLI itself.
+By default TAI keeps one instance under `~/.tailored-ai/`, independent of the
+directory where you run the command.
 
 ```
-your-folder/
+~/.tailored-ai/
 ├── config.yaml          # required
 ├── .env                 # optional, for ${VAR} interpolation
 ├── agent.db             # SQLite; created on first run
 ├── data/                # embeddings, knowledge base; created on first run
+├── plugins/             # packages installed with tai plugin install
 └── workflows/           # optional; YAML workflow files
 ```
 
-To centralize state somewhere else, set `TAI_HOME=/path/to/dir`. TAI will
-look for `config.yaml` there and put `agent.db` and `data/` there too.
+To keep another isolated instance, set `TAI_HOME=/path/to/dir` or pass
+`tai -c /path/to/dir/config.yaml`. TAI keeps that instance's config, database,
+plugins, keys, and generated data under the selected home.
 
 ## Verifying the install
 
@@ -172,5 +176,5 @@ your API key is set.
 npm uninstall -g @tailored-ai/cli
 ```
 
-The folder you ran in still has its `agent.db` and `data/`. Delete them
-if you don't want them.
+`~/.tailored-ai/` still contains your config, database, plugins, and generated
+data. Remove that directory separately if you do not want to keep the state.

@@ -1,11 +1,11 @@
 export const metadata = {
   title: "Quick start",
-  description: "From npm install to a working standup-generator agent in five minutes.",
+  description: "Install TAI and build a standup agent that reads a repository and writes a real file.",
 };
 
 # Quick start
 
-Five minutes to a working agent. We'll build a daily-standup generator: it
+We'll build a daily-standup generator: it
 reads your git log, pulls your in-progress tasks, and writes a three-line
 summary to a file. Everything stays local. No Discord setup, no OAuth, no
 external integrations.
@@ -17,11 +17,12 @@ If you already have an LLM provider you use, you can skip ahead to
 
 ```bash
 npm install -g @tailored-ai/cli
+tai init
 ```
 
-The `tai` command is what you'll use. If you'd rather install as a project
-dependency or embed the runtime in your own service, see
-[Installation](/docs/installation).
+The setup wizard creates `~/.tailored-ai/config.yaml`, probes the provider you
+choose, and writes a starter `.env`. If you'd rather install as a project
+dependency or embed the runtime in your own service, see [Installation](/docs/installation).
 
 ## 2. Pick a provider
 
@@ -30,7 +31,8 @@ TAI doesn't ship a model. Bring whichever you already use.
 ### Local (Ollama, vLLM, LM Studio)
 
 The built-in `openai_compatible` provider works with anything that speaks
-the OpenAI chat API. Install Ollama, run `ollama pull llama3.2`, then:
+the OpenAI chat API. The setup wizard can configure it for you. To edit the
+generated config by hand after installing Ollama and pulling a model:
 
 ```yaml
 providers:
@@ -61,12 +63,12 @@ agent:
 ```
 
 Swap `anthropic` for `openai`, `openrouter`, or `bedrock`; the shape stays
-the same. Pick one, drop it in a fresh folder as `config.yaml`, and put any
-API key in a `.env` next to it.
+the same. Put the provider block in `~/.tailored-ai/config.yaml` and its API
+key in the `.env` beside it.
 
 ## 3. Configure the agent
 
-Add this below the `providers` block:
+Add this below the `providers` block in `~/.tailored-ai/config.yaml`:
 
 ```yaml
 agents:
@@ -88,7 +90,7 @@ in-progress work).
 
 ## 4. First run
 
-From the directory that has your `config.yaml`, in a git repo:
+From any git repository:
 
 ```bash
 tai -a reporter -m "Generate today's standup. Use git log to see what changed yesterday, pull in-progress tasks, then write the standup to standup.md."
@@ -129,16 +131,16 @@ appear.
 
 ## 6. Pick a place for it to land
 
-By default the result goes to a log file. You almost certainly want
-something more useful. Three options ship in v0.1:
+By default the response goes to the process log. To send it through a connected
+channel, set the channel id, delivery mode, and destination:
 
 - `delivery.channel: log` — stdout/log file. Good for cron jobs whose
   side effect is the point (the standup file already exists; the
   delivery is just confirmation).
-- `delivery.channel: discord-dm` — DMs the configured Discord owner.
-  Requires the Discord channel set up.
-- `delivery.channel: email` — sends through the gmail tool. Requires
-  Gmail wired up.
+- `delivery: { channel: discord, mode: dm }` — DMs the configured Discord
+  owner. Add `target` to choose another user.
+- `delivery: { channel: slack, mode: channel, target: C01234567 }` — posts to
+  a Slack channel when the Slack plugin is installed and connected.
 
 ### Add Discord
 
@@ -152,22 +154,21 @@ channels:
     respondToMentions: true
 ```
 
-Now the standup arrives as a DM every weekday morning, and you can chat
-with the same agent from the same Discord. The session persists across
-terminal, browser, and Discord because they share one SQLite database.
+Now the standup arrives as a DM every weekday morning, and you can chat with
+the same named agent from Discord. Each channel keeps its own conversation
+session while tasks, projects, and memory remain available through shared
+persistent state.
 
-Slack, Telegram, SMS, iMessage aren't built-in. They're plugin-shaped
-(see [Plugins](/docs/plugins)) and the registry that makes them
-declaratively installable lands in v0.2. For now you can wire them in by
-embedding the runtime in your own Node script. See
+Slack ships as the `@tailored-ai/channel-slack` plugin. Other transports can
+register the same channel interface; see [Plugins](/docs/plugins) and
 [Extending in code](/docs/extending).
 
 ## 7. Pick a place to view it
 
 `tai` ships a web UI at `http://localhost:3000`. It gives you a chat
 sidebar, an agent picker, a session list, and views for tasks, memory,
-and workflows. To turn it off, set `server.host` to a unix socket or
-bind only to a path your reverse proxy fronts.
+workflows, resources, and runtime activity. To run headless, set
+`server.ui.enabled: false`.
 
 If you'd rather build your own UI, the runtime's full surface is
 available over HTTP (see [@tailored-ai/server](/docs/packages/server)).
@@ -175,22 +176,19 @@ The bundled UI is one consumer of that API, not the only one.
 
 ## What you have now
 
-A folder with one config file. An agent that runs every morning, looks
-at your work, and writes a useful artifact. A way to chat with it on any
-of the channels you've enabled.
+One home directory with your config and persistent state. An agent that runs
+every morning, looks at the current repository, and writes a useful artifact.
+A way to chat with it on any of the channels you've enabled.
 
 ## Where to go from here
 
 - **More agents.** Define a `researcher` for web search, a `coder` for
   worktree-based code work, a `planner` for calendar review. See
   [Agents](/docs/agents).
-- **More tools.** Twenty or so ship built-in. Wrap a shell command as a
+- **More tools.** Wrap a shell command as a
   custom tool in YAML: [Custom tools](/docs/custom-tools). Write a
   TypeScript tool: [Extending in code](/docs/extending).
 - **More workflows.** Multi-step pipelines with conditions and parallel
   fan-out: [Workflows](/docs/workflows).
 - **Memory.** Persistent recall across sessions, with embeddings and
   promotion: [Memory](/docs/memory).
-- **A real example to crib from.** The repo ships with example
-  workflows for a morning briefing, email triage, bill detection, and a
-  weekly summary. They live in `workflows/` if you cloned the repo.

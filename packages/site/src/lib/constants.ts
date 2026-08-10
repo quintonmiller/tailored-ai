@@ -1,14 +1,16 @@
 export const SITE_NAME = "Tailored AI";
+export const SITE_ORIGIN = "https://quinton.dev";
+export const SITE_URL = "https://quinton.dev/tailored-ai";
 export const SITE_DESCRIPTION =
-  "Agents that run on your schedule, with your tools. LLM agents with cron, shell, files, and channels that meet you where you are, on whichever model you point them at.";
+  "An open-source runtime for personal AI agents with tools, memory, schedules, workflows, and your choice of model.";
 export const REPO_URL = "https://github.com/quintonmiller/tailored-ai";
 export const NPM_ORG_URL = "https://www.npmjs.com/org/tailored-ai";
 
 export const NAV_LINKS = [
-  { label: "Home", href: "/" },
+  { label: "Product", href: "/#product" },
+  { label: "Architecture", href: "/#architecture" },
   { label: "Docs", href: "/docs" },
   { label: "Benchmark", href: "/bench" },
-  { label: "GitHub", href: REPO_URL, external: true },
 ];
 
 export interface DocsNavItem {
@@ -35,6 +37,8 @@ export const DOCS_NAV: DocsNavSection[] = [
     items: [
       { label: "Architecture", href: "/docs/architecture" },
       { label: "Agents", href: "/docs/agents" },
+      { label: "Online agents", href: "/docs/online-agents" },
+      { label: "Rooms", href: "/docs/rooms" },
       { label: "Memory", href: "/docs/memory" },
       { label: "Tools", href: "/docs/tools" },
       { label: "Channels", href: "/docs/channels" },
@@ -42,6 +46,7 @@ export const DOCS_NAV: DocsNavSection[] = [
       { label: "Tasks & projects", href: "/docs/tasks" },
       { label: "Hooks", href: "/docs/hooks" },
       { label: "Cron jobs", href: "/docs/cron" },
+      { label: "Agent schedules", href: "/docs/schedules" },
     ],
   },
   {
@@ -81,35 +86,41 @@ export const DOCS_NAV: DocsNavSection[] = [
   },
 ];
 
-export const FEATURES = [
+export const CAPABILITIES = [
   {
-    title: "Runs on a schedule",
+    index: "01",
+    title: "Work that starts without a prompt",
     description:
-      "Cron jobs invoke agents at any cadence. Sweep your inbox every four hours. Generate a standup at 8am. Run a workflow when a file lands in a folder.",
+      "Run fixed cron jobs, respond to workflow triggers, or let an agent book its own future wake. TAI keeps the clock and restores the right context when work resumes.",
   },
   {
-    title: "Named agents",
+    index: "02",
+    title: "State that survives the turn",
     description:
-      "Define a researcher, a coder, and a planner, each with its own model, tools, and instructions. The agent loop picks based on which one you call.",
+      "Sessions, tasks, project context, and tiered memory persist in SQLite. Named agents can pick up work without rebuilding the world from one enormous prompt.",
   },
   {
-    title: "20+ built-in tools",
+    index: "03",
+    title: "A stack you can actually change",
     description:
-      "Shell, file I/O, web fetch and search, browser automation, Gmail, Calendar, Drive, project tasks, memory, delegation. Add more from YAML.",
+      "Swap providers, tools, channels, task backends, sandboxes, memory, and even the web UI through registries and plugins. Keep the defaults only while they fit.",
   },
   {
-    title: "One agent, many surfaces",
+    index: "04",
+    title: "Boundaries for real work",
     description:
-      "Talk to it in a terminal. DM it on Discord. POST to its HTTP API. Sessions live in SQLite, so what you start in one place picks up in another.",
+      "Limit shell commands, choose host, Docker, or Podman isolation per agent, and place approval gates in front of browser actions that should never run unattended.",
   },
   {
-    title: "Bring your own model",
+    index: "05",
+    title: "One runtime, several surfaces",
     description:
-      "Ollama, vLLM, LM Studio, OpenAI, Anthropic, anything OpenAI-compatible. Switch per agent. Local for prototyping, cloud for production.",
+      "Use the terminal and bundled web UI, connect Discord, or install the Slack channel. The HTTP API and webhooks are there when your own service is the front door.",
   },
   {
-    title: "Extend without forking",
+    index: "06",
+    title: "Evidence, not model folklore",
     description:
-      "Wrap any shell command as a tool in YAML. Write TypeScript tools when you need state. Plugins ship as npm packages (v0.2).",
+      "TAI's benchmark sends the real assembled invocation to live models, scores behavior, records cost and provenance, and publishes comparable runs on this site.",
   },
 ];

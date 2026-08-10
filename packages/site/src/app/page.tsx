@@ -1,6 +1,21 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { Features } from "@/components/Features";
 import { Hero } from "@/components/Hero";
+import { SITE_DESCRIPTION, SITE_NAME, SITE_URL } from "@/lib/constants";
+
+export const metadata: Metadata = {
+  alternates: {
+    canonical: `${SITE_URL}/`,
+  },
+  openGraph: {
+    title: SITE_NAME,
+    description: SITE_DESCRIPTION,
+    url: `${SITE_URL}/`,
+    siteName: SITE_NAME,
+    type: "website",
+  },
+};
 
 export default function Home() {
   return (
@@ -8,20 +23,29 @@ export default function Home() {
       <Hero />
       <Features />
 
-      {/* CTA */}
-      <section className="py-20">
-        <div className="mx-auto max-w-4xl px-6 text-center">
-          <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">Five minutes to a working agent.</h2>
-          <p className="mx-auto mt-4 max-w-xl text-[var(--color-text-muted)]">
-            One <code className="text-sm">npm install</code>. A 20-line config. The quick start walks the rest.
-          </p>
-          <div className="mt-8">
-            <Link
-              href="/docs"
-              className="rounded-lg bg-[var(--color-accent)] px-8 py-3 text-sm font-medium text-white transition-colors hover:bg-[var(--color-accent-hover)]"
-            >
-              Read the Docs
-            </Link>
+      <section className="closing-section section-rule">
+        <div className="site-shell closing-grid">
+          <div>
+            <div className="section-kicker">Get started</div>
+            <h2>Run your first agent.</h2>
+          </div>
+          <div className="closing-copy">
+            <p>
+              Install the CLI, run the setup wizard, and point TAI at a local or hosted model. The quick start gets from
+              an empty directory to an agent that can use real tools.
+            </p>
+            <div className="closing-actions">
+              <Link href="/docs/quick-start" className="button button-primary">
+                Follow the quick start
+              </Link>
+              <Link href="/docs" className="button button-secondary">
+                Read the docs
+              </Link>
+            </div>
+            <p className="status-note">
+              TAI is pre-1.0 and under active development. It works end to end today; APIs may change as the project
+              matures.
+            </p>
           </div>
         </div>
       </section>

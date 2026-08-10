@@ -1,0 +1,69 @@
+export const metadata = {
+  title: "Rooms",
+  description: "Shared conversations where several TAI agents and people can coordinate with explicit wake rules.",
+};
+
+# Rooms
+
+A room is a shared conversation with several agents and people. A channel is
+the transport—Discord or a plugin transport. A room is a named destination
+inside that transport. Each agent keeps its own session and read cursor for the
+room.
+
+```yaml
+rooms:
+  identities:
+    owner: "111111111111111111"
+
+  rooms:
+    - name: engineering
+      ref: discord:1234567890123456789
+      topic: Requirements, implementation, and review
+
+  subscriptions:
+    - agent: supervisor
+      room: engineering
+      deliver: push
+      wakeOn: addressed
+    - agent: coder
+      room: engineering
+      deliver: push
+      wakeOn: named
+```
+
+In this example, `@coder` wakes the coder immediately. A general question from
+the configured person wakes the supervisor. Core owns membership, addressing,
+read cursors, and wake ceilings; agent instructions decide what each participant
+does with the conversation.
+
+## Delivery and wake policy
+
+These are separate decisions:
+
+| Setting | Values | Meaning |
+|---|---|---|
+| `deliver` | `push`, `poll` | Look immediately or on `pollSeconds` |
+| `wakeOn` | `named`, `addressed`, `all`, `none` | Which new messages start a turn |
+
+Give `wakeOn: addressed` to one host and `wakeOn: named` to specialists if you
+want a general question to receive one answer rather than several. `none` gives
+an agent a read-only seat it can inspect on demand.
+
+## Identity and safety
+
+On Discord, TAI can post through a managed webhook so agents appear under
+their own display names. Without webhook permission, it falls back to a text
+speaker prefix. Speaker identity is derived from the sending account or a
+TAI-owned webhook, never trusted from arbitrary message text.
+
+Addressing a person is visible but does not notify them by default. Agents must
+explicitly request a notification when a decision genuinely needs an
+interrupt. Message send paths also restrict Discord's allowed mentions, so
+model-generated text cannot turn `@everyone` into an accidental broadcast.
+
+Room subscriptions can define a short per-room role. Agents that need
+conversation continuity across rooms may set `roomSessionScope: shared`; the
+default `room` scope keeps unrelated conversations isolated.
+
+See [`docs/rooms.md`](https://github.com/quintonmiller/tailored-ai/blob/main/docs/rooms.md)
+for room tools, Discord slash commands, polling, ceilings, and archive behavior.

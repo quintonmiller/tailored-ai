@@ -1,0 +1,67 @@
+export const metadata = {
+  title: "Online agents",
+  description: "Run selected agents on a bounded background cadence with goals, budgets, and idle backoff.",
+};
+
+# Online agents
+
+Online mode lets an agent wake on a cadence even when no person, task, or
+webhook has asked it to run. It is useful for observation-shaped work: checking
+for drift, watching a feed, reviewing a project goal, or filing a note when
+something deserves attention.
+
+This is opt-in. The global exploratory worker and the individual agent must
+both be enabled.
+
+```yaml
+exploratory:
+  enabled: true
+  baseIntervalMs: 60000
+
+agents:
+  watcher:
+    instructions: "Watch the project for stale documentation and risky drift."
+    tools: [read, web_search, recall, tasks]
+    online:
+      enabled: true
+      cadence:
+        interval_minutes: 30
+        idle_backoff_multiplier: 2
+        max_interval_minutes: 240
+        window: { start: "09:00", end: "18:00" }
+      budgets:
+        tokens_per_tick: 8000
+        tokens_per_day: 80000
+        tool_calls_per_tick: 8
+        stop_after_runs_per_day: 12
+      tools: [read, web_search, recall, tasks]
+      output:
+        notes: true
+        tasks: true
+        notify_owner: false
+```
+
+## What happens on a tick
+
+The worker reads the agent's `goals.md` and recent notes, builds a bounded tick
+prompt, and runs the normal agent loop with the online tool subset. A useful
+finding can become a note, fact, or task. A no-op backs the cadence off up to
+the configured maximum instead of spending the same tokens again immediately.
+
+Each attempt is recorded in `exploratory_runs` with its status and usage. The
+web UI exposes the current state and run history.
+
+## Online mode, cron, and autopilot
+
+| Mechanism | Starts from | Best for |
+|---|---|---|
+| Online mode | An agent's goal and cadence | Open-ended observation and research |
+| [Cron](/docs/cron) | A fixed operator-authored prompt | Predictable recurring jobs |
+| Autopilot | A task waiting in the backlog | Driving assigned work toward a status |
+
+Online mode is deliberately allowed to decide *what* to inspect, but config
+still decides when it may run, which tools it can use, and how much it may
+spend. Keep `notify_owner` off unless the role has a clear escalation policy.
+
+The implementation and operational notes live in
+[`packages/core/src/exploratory/`](https://github.com/quintonmiller/tailored-ai/tree/main/packages/core/src/exploratory).

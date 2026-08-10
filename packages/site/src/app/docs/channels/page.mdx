@@ -5,13 +5,14 @@ export const metadata = {
 
 # Channels
 
-A channel is whatever lets a user send a message in and get a reply
-back. Sessions live in SQLite, so the same conversation can move between
-channels: start in the terminal, continue on Discord, finish in the web
-UI.
+A channel is whatever lets a user send a message in and get a reply back.
+Sessions persist in SQLite and are keyed to their channel identity. Tasks,
+projects, memory, schedules, and rooms provide the intentional shared state
+between surfaces.
 
-Four channel families ship in v0.1: CLI, HTTP, the web UI, and Discord.
-The HTTP API is the foundation; everything else is a consumer of it.
+CLI, HTTP, the bundled web UI, and Discord ship with the main install. Slack
+ships as a first-party plugin. The HTTP API is the foundation; everything else
+is either a consumer of it or a channel registered with the runtime.
 
 For *workflow triggers* (file-drop, email polling, RSS, calendar) see
 [Workflows → Triggers](/docs/workflows#triggers). Triggers are
@@ -34,10 +35,11 @@ reference. Every other channel here is a consumer of this surface; if
 you're building a custom UI or integrating into your own stack, this is
 your interface.
 
-> **No built-in auth in v0.1.** Bind to `127.0.0.1` for local-only use,
-> or put the server behind a reverse proxy (`nginx`, `caddy`,
-> `oauth2-proxy`) with auth in front. Built-in bearer-token auth is
-> v0.2 work.
+By default the server binds to `127.0.0.1`. For programmatic access on another
+interface, set `server.authToken`; it gates every `/api/*` route. For the
+bundled browser UI, use `server.proxyAuth`, which exchanges a password for the
+session cookie needed by SSE connections. See [Self-hosting](/docs/self-hosting)
+before exposing the server.
 
 ## Web UI
 
@@ -49,13 +51,10 @@ your own:
 
 - Build a separate Next.js / SvelteKit / Vite app against
   `/api/sessions`, `/api/agents`, etc.
-- Point `tai` at it via the (planned) `--ui-dist` flag. For now you can
-  serve your own UI from a different host and hit the TAI API by
-  baseUrl.
+- Serve it separately against the HTTP API, or register a UI provider plugin
+  and select it with `server.ui.provider`.
 
-To disable the bundled UI: there's no toggle in v0.1; bind the HTTP
-server to a host you don't expose, or front it with a reverse proxy
-that intercepts `/`.
+To disable the bundled UI, set `server.ui.enabled: false`.
 
 ## Discord
 
@@ -95,13 +94,35 @@ The right channel for online-mode escalations. Preferred over `gmail
 send` for FYI-style pings, since the chat thread is more conversational
 than email.
 
-## Slack, Telegram, iMessage, SMS
+## Slack
 
-None ship in v0.1. Three paths:
+Install the first-party Socket Mode channel:
 
-1. **Register a channel factory.** Call `registerChannelFactory("slack",
-   factory)` from your package. The CLI's startup loop calls every
-   registered factory whose config block has `enabled: true`. See
+```bash
+tai plugin install @tailored-ai/channel-slack
+```
+
+```yaml
+channels:
+  slack:
+    enabled: true
+    token: ${SLACK_BOT_TOKEN}
+    appToken: ${SLACK_APP_TOKEN}
+    respondToDMs: true
+    respondToMentions: true
+```
+
+It handles DMs and channel mentions, replies in threads, and can map Slack
+channels to registered projects. See the
+[`@tailored-ai/channel-slack` README](https://github.com/quintonmiller/tailored-ai/tree/main/packages/channel-slack#readme)
+for app scopes and Socket Mode setup.
+
+## Other channels
+
+For Telegram, iMessage, SMS, or another transport, three paths are available:
+
+1. **Register a channel factory** from a plugin. The CLI starts every
+   registered channel whose config block has `enabled: true`. See
    [Custom channels](#custom-channels) below.
 2. **Embed the runtime** in your own Node script. Construct an
    `AgentRuntime`, write a small channel class that wires your transport
@@ -110,53 +131,50 @@ None ship in v0.1. Three paths:
    bridge already, point it at `POST /api/sessions/:id/messages` and the
    agent works without code changes.
 
-The Discord channel
+The Slack plugin is the compact reference implementation. The Discord channel
 ([`packages/core/src/channels/discord.ts`](https://github.com/quintonmiller/tailored-ai/blob/main/packages/core/src/channels/discord.ts))
-is the reference implementation, about 250 lines. The same shape works
-for Slack, Telegram, iMessage.
+shows the more complete surface, including slash commands and rooms.
 
 ## Custom channels
 
 Implement the `Channel` interface, then register a factory:
 
 ```ts
-import {
-  registerChannelFactory,
-  type Channel,
-  type AgentRuntime,
-} from "@tailored-ai/core";
+import type { AgentRuntime, Channel, Plugin } from "@tailored-ai/core";
 
-class SlackChannel implements Channel {
-  id = "slack";
-  type = "slack";
+class ExampleChannel implements Channel {
+  id = "example";
+  type = "example";
   // ...connect(), disconnect(), send()
 }
 
-registerChannelFactory("slack", async (runtime: AgentRuntime, cfg) => {
-  const slack = new SlackChannel({ runtime, botToken: cfg.botToken as string });
-  await slack.connect();
-  return { channel: slack, disconnect: () => slack.disconnect() };
-});
+const plugin: Plugin = (ctx) => {
+  ctx.channels.register("example", async (runtime: AgentRuntime, cfg) => {
+    const channel = new ExampleChannel(runtime, cfg);
+    await channel.connect();
+    return { channel, disconnect: () => channel.disconnect() };
+  });
+};
+
+export default plugin;
 ```
 
 Enable it in `config.yaml`:
 
 ```yaml
 channels:
-  slack:
+  example:
     enabled: true
-    botToken: ${SLACK_BOT_TOKEN}
+    token: ${EXAMPLE_TOKEN}
 ```
 
 The CLI starts every registered factory whose config has `enabled:
 true`. Failures are logged and skipped so one bad channel can't keep the
 others from starting.
 
-> **Note on Discord.** Discord is still wired directly into the CLI
-> rather than through the registry. The cron scheduler, task watcher,
-> and autopilot worker take Discord-typed references for owner DM
-> routing. Migrating those callers to a generic `OutboundChannel`
-> interface is on the roadmap.
+Discord now uses the same channel factory and outbound registry as plugins.
+Cron, tasks, workflows, and notifications resolve delivery by channel id rather
+than depending on Discord directly.
 
 ## Writing your own channel
 

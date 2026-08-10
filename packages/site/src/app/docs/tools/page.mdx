@@ -10,13 +10,10 @@ to act in the world. `{ name, description, parameters, execute }`. The
 model picks a tool based on its instructions, the user's message, and the
 tools available to that agent.
 
-> **TAI tools vs MCP.** If you've used Model Context Protocol, the
-> mental model is the same: structured JSON-Schema parameters, structured
-> results. TAI doesn't speak MCP over JSON-RPC; tools are in-process
-> TypeScript objects. The simplification is intentional: no separate
-> server process, no transport, no version negotiation. The cost is that
-> sharing tools across stacks is a copy-paste job until the
-> [plugin loader](/docs/plugins) ships in v0.2.
+> **TAI tools and MCP.** Native tools are in-process TypeScript objects with
+> JSON-Schema parameters. TAI can also connect to configured MCP servers,
+> discover their tools, and register them into the same per-agent tool catalog.
+> See [MCP servers](/docs/mcp).
 
 ## How to enable
 
@@ -144,8 +141,9 @@ agents:
     # exec, write, browser, etc. are unavailable to this agent
 ```
 
-For a 30B local model: keep the list under five tools per agent. Past
-that, accuracy of tool selection drops noticeably.
+Give each agent the tools its role needs. Tool schemas consume context and
+selection accuracy varies by model, but there is no universal useful cutoff;
+measure with the model and prompts you deploy.
 
 ## Custom tools
 
@@ -155,8 +153,8 @@ description, and a parameter schema. See [Custom tools](/docs/custom-tools).
 
 ## Plugin tools
 
-Tools shipped as npm packages plug in via the `plugins:` config block
-(v0.2, see [Plugins](/docs/plugins)).
+Tools shipped as npm packages plug in through the `plugins:` config block.
+See [Plugins](/docs/plugins).
 
 ## Writing tools in code
 

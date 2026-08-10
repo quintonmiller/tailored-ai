@@ -1,68 +1,54 @@
 export const metadata = {
   title: "Plugins",
-  description: "Third-party packages that register tools, channels, providers, task backends, and triggers via @tailored-ai/core's registries.",
+  description: "Installable packages that extend TAI through a typed PluginContext without forking the runtime.",
 };
 
 # Plugins
 
-A plugin is an npm package that extends TAI without forking the
-monorepo. Eight registries cover the extension surface today:
+A plugin is an installable package whose default export receives a typed
+`PluginContext`. It extends TAI without forking the monorepo or sharing a
+runtime copy of `@tailored-ai/core`.
 
-| Registry | Adds | Register with |
+| Surface | Adds | Register with |
 |---|---|---|
-| Tool | A new tool the agent can call | `registerToolFactory(id, factory)` |
-| Channel | A new transport (Slack, Telegram, …) | `registerChannelFactory(id, factory)` |
-| Provider | A new LLM backend (Bedrock, Cohere, …) | `registerProviderFactory(id, factory)` |
-| Embedding | A new embedding backend (Qdrant, Voyage, …) | `registerEmbeddingFactory(id, factory)` |
-| Task backend | A new task store (Linear, Jira, …) | `registerTaskBackendFactory(id, factory)` |
-| Step executor | A new workflow step type | `runtime.getWorkflowEngine()?.registerExecutor(executor)` |
-| Trigger | A new workflow trigger kind | trigger-registry (see [Workflows](/docs/workflows)) |
-| Skill | A SKILL.md the agent can load on demand | skill-registry (see [Skills](/docs/skills)) |
+| Tools | Tools an agent can call | `ctx.tools.register(id, factory)` |
+| Channels | Discord-like inbound and outbound transports | `ctx.channels.register(id, factory)` |
+| Providers | Model and embedding backends | `ctx.providers.register(...)`, `ctx.embeddings.register(...)` |
+| Storage | Memory, task, and repository backends | `ctx.memoryBackends.register(...)`, `ctx.taskBackends.register(...)`, `ctx.repoBackends.register(...)` |
+| Execution | Sandboxes, workflow steps, and time providers | `ctx.sandboxBackends.register(...)`, `ctx.stepExecutors.register(...)`, `ctx.timeProviders.register(...)` |
+| Product surface | UI providers, HTTP routes, and chat commands | `ctx.uiProviders.register(...)`, `ctx.http.register(...)`, `ctx.commands.register(...)` |
+| Behavior | Runtime event subscribers | `ctx.events.on(name, handler)` |
 
-Each registry is exported from `@tailored-ai/core`. Built-ins register
-on module load.
+Skills, prompts, and knowledge bases use the resource system rather than the
+plugin factory registries. A plugin can still install or expose those resources.
 
 ## Shape of a plugin
 
 ```ts
 // my-tai-plugin/src/index.ts
-import {
-  registerChannelFactory,
-  registerTaskBackendFactory,
-  registerToolFactory,
-  type Channel,
-  type TaskBackend,
-  type Tool,
-  type ToolFactoryContext,
-} from "@tailored-ai/core";
+import type { Plugin, PluginMeta } from "@tailored-ai/core";
+import { WeatherTool } from "./weather.js";
 
-class SlackChannel implements Channel { /* ... */ }
-class LinearTaskBackend implements TaskBackend { /* ... */ }
-class WeatherTool implements Tool { /* ... */ }
-
-registerChannelFactory("slack", async (runtime, cfg) => {
-  const slack = new SlackChannel(runtime, cfg);
-  await slack.connect();
-  return { channel: slack, disconnect: () => slack.disconnect() };
-});
-
-registerTaskBackendFactory("linear", (config) => {
-  return new LinearTaskBackend({
-    apiKey: config.tasks?.linear?.apiKey as string,
-    teamId: config.tasks?.linear?.teamId as string,
+const plugin: Plugin = (ctx) => {
+  ctx.tools.register("weather", (config) => {
+    const cfg = config.tools.weather;
+    if (!cfg?.enabled) return [];
+    return [new WeatherTool(cfg)];
   });
-});
+};
 
-registerToolFactory("weather", (config, _ctx: ToolFactoryContext) => {
-  const cfg = config.tools?.weather;
-  if (!cfg?.enabled) return [];
-  return [new WeatherTool({ apiKey: cfg.apiKey as string })];
-});
+export const meta: PluginMeta = {
+  name: "Weather tools",
+  description: "Current conditions and forecasts.",
+  registers: [{ kind: "tool", id: "weather", configKey: "tools.weather" }],
+};
+
+export default plugin;
 ```
 
-A plugin doesn't need a wrapper class or lifecycle hook. Registering on
-import is the contract. The user `import`s your package once at startup
-and the registrations land.
+The `Plugin` import is type-only, so it disappears from the compiled package.
+The host imports the package, calls its default export with the current
+`PluginContext`, and retains an optional disposer returned by the plugin.
 
 ## Installing
 
@@ -82,38 +68,23 @@ plugins:
       api_token: ${LINEAR_TOKEN}
 ```
 
-The CLI dynamic-imports each module at startup. The module's import
-side-effects (`registerToolFactory`, `registerChannelFactory`, etc.)
-register everything before the runtime asks. Failures are logged and the
-next plugin is attempted — one broken plugin doesn't take down the
-others.
+The CLI imports each module at startup and invokes its default register
+function. Failures are logged and the next plugin is attempted—one broken
+plugin does not take down the others. Legacy import-side-effect plugins remain
+supported, but `register(ctx)` is the current contract.
 
-The optional per-entry `config` field is reserved for future routing.
-Today, plugins read their configuration from the normal `tools.*`,
-`channels.*`, `providers.*` blocks in the same config file.
+The optional per-entry `config` bag is available to that plugin as
+`ctx.config`. Factories can also read the shared runtime config under normal
+`tools.*`, `channels.*`, and `providers.*` blocks.
 
-For embedders (anyone constructing `AgentRuntime` directly rather than
-running `tai`), call `loadPlugins(config, importer)` before runtime
-construction. The `importer` callback is required so dynamic `import()`
-resolves against your package's `node_modules`, not core's:
-
-```ts
-import {
-  AgentRuntime,
-  createProvider,
-  loadConfig,
-  loadPlugins,
-  startRegisteredChannels,
-} from "@tailored-ai/core";
-
-const config = await loadConfig("./config.yaml");
-await loadPlugins(config, (name) => import(name));
-
-const db = new Database("./agent.db");
-const { provider, model } = createProvider(config);
-const runtime = new AgentRuntime({ config, db, provider, model });
-const channels = await startRegisteredChannels(runtime);
-```
+For embedders (anyone constructing `AgentRuntime` directly rather than running
+`tai`), call `loadPlugins(config, importer, { context })` before runtime
+construction so provider, tool, and channel factories are present when the
+runtime resolves them. The importer must resolve from the host application.
+Create the event bus before both the plugin context and runtime so subscribers
+receive the runtime's events. The CLI startup in
+[`packages/cli/src/index.ts`](https://github.com/quintonmiller/tailored-ai/blob/main/packages/cli/src/index.ts)
+is the canonical wiring sequence.
 
 ## Metadata and config validation
 
@@ -162,8 +133,8 @@ These ship from the monorepo as separate npm packages:
 | `@tailored-ai/trusted-actions` | HITL approval gateway plus the `request_action` tool. | Install separately. Configure under `tools.request_action`. |
 | `@tailored-ai/provider-bedrock` | The `bedrock` model provider (AWS Bedrock Converse API). | Install, configure `providers.bedrock`, select with `agent.defaultProvider: bedrock`. |
 | `@tailored-ai/provider-openrouter` | The `openrouter` model provider (OpenAI-compatible). | Install, configure `providers.openrouter`, select with `agent.defaultProvider: openrouter`. |
-| `@tailored-ai/provider-anthropic` | The `anthropic` model provider (Messages API; supersedes the built-in). | Install, configure `providers.anthropic`, select with `agent.defaultProvider: anthropic`. |
-| `@tailored-ai/provider-openai` | The `openai` model provider (chat completions; supersedes the built-in). | Install, configure `providers.openai`, select with `agent.defaultProvider: openai`. |
+| `@tailored-ai/provider-anthropic` | The `anthropic` model provider (Messages API and prompt caching). | Install, configure `providers.anthropic`, select with `agent.defaultProvider: anthropic`. |
+| `@tailored-ai/provider-openai` | The `openai` model provider (chat completions and reasoning-model request shaping). | Install, configure `providers.openai`, select with `agent.defaultProvider: openai`. |
 | `@tailored-ai/channel-slack` | The `slack` channel (Bolt, Socket Mode). | Install, configure `channels.slack`. |
 | `@tailored-ai/google-tools` | `gmail`, `google_calendar`, `google_drive` tools (via the `gog` CLI). | Install, enable under `tools.gmail` etc. |
 

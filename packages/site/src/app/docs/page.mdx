@@ -5,19 +5,22 @@ export const metadata = {
 
 # Tailored AI
 
-Tailored AI is a runtime for LLM agents that do work on a schedule. It runs
-on a laptop, on a Raspberry Pi, or on a server. The agents have access to
-your shell, your files, your inbox, and your calendar. They reach you in
-the terminal, in a browser, on Discord, or through your own service.
+Tailored AI is a self-hosted runtime for personal agents. It runs on a laptop,
+on a Raspberry Pi, or on a server. Agents can work with your shell, files,
+projects, inbox, and calendar, then reach you in the terminal, in a browser,
+on Discord or Slack, or through your own service.
 
 ## What a minute with TAI looks like
 
 ```yaml
-# config.yaml
-provider:
-  type: openai
-  model: gpt-4o-mini
-  apiKey: ${OPENAI_API_KEY}
+# ~/.tailored-ai/config.yaml
+providers:
+  openai_compatible:
+    baseUrl: http://localhost:11434/v1
+    defaultModel: qwen3
+
+agent:
+  defaultProvider: openai_compatible
 
 agents:
   reporter:
@@ -35,10 +38,11 @@ tools:
 tai -a reporter -m "Run git log for the past day and write today's standup to standup.md"
 ```
 
-Twenty seconds later, `standup.md` exists and reads like a person wrote it.
-Switch `provider.type` to `ollama` and the same config runs offline. Add a
-`cron` block and it runs every morning at eight without you. Add a Discord
-section and it DMs you the result.
+After the run, `standup.md` exists as a real file. Point the built-in
+`openai_compatible` provider at Ollama, vLLM, LM Studio, or another compatible
+endpoint; hosted vendors install as provider plugins. Add a `cron` block and
+the same agent runs every morning without you. Configure an outbound channel
+and it can deliver the result.
 
 ## What this is good for
 
@@ -63,12 +67,11 @@ TAI shines when the agent needs to do something while you're not watching.
 
 ## Status
 
-This is v0.1. The runtime, tools, agents, channels, memory, workflows,
-cron, HTTP API, and the eight extension registries (tool, channel,
-provider, embedding, task backend, step executor, trigger, skill) ship
-and are tested. So do the declarative `plugins: [...]` loader,
-`tai plugin install`, and bearer-token auth on the HTTP API
-(`server.authToken`).
+TAI is pre-1.0 and moving quickly. The runtime, CLI, bundled UI, tools,
+named agents, memory, tasks, rooms, workflows, cron, self-schedules, HTTP API,
+plugin loader, and extension registries all ship today. So do
+`tai plugin install` and bearer-token auth on the HTTP API
+(`server.authToken`). APIs may still change before 1.0.
 
 For browser access, `server.proxyAuth` issues a session cookie the dashboard
 can carry (a bearer token cannot ride on SSE).
@@ -89,9 +92,8 @@ the Docker image, unattended setup, and how to expose it without handing your
 chat history to the internet.
 
 If you're picking a package to install: [Packages overview](/docs/packages)
-maps the five `@tailored-ai/*` packages and when to install which.
+maps the first-party packages and when to install which.
 
 If you're extending: [Custom tools](/docs/custom-tools) is the YAML path;
 [Extending in code](/docs/extending) is the TypeScript path;
-[Plugins](/docs/plugins) is the npm-distribution path (live today via
-registries; declarative loader v0.2).
+[Plugins](/docs/plugins) is the npm-distribution path.

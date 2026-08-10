@@ -2,49 +2,51 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { NAV_LINKS, SITE_NAME } from "@/lib/constants";
+import { NAV_LINKS, REPO_URL, SITE_NAME } from "@/lib/constants";
+
+function Mark() {
+  return (
+    <span className="brand-mark" aria-hidden="true">
+      <span />
+      <span />
+      <span />
+    </span>
+  );
+}
 
 export function Header() {
   const [menuOpen, setMenuOpen] = useState(false);
 
   return (
-    <header className="sticky top-0 z-50 border-b border-[var(--color-border)] bg-[var(--color-bg)]/80 backdrop-blur-md">
-      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
-        <Link href="/" className="text-lg font-bold tracking-tight">
-          {SITE_NAME}
+    <header className="site-header">
+      <div className="site-shell flex h-[72px] items-center justify-between">
+        <Link href="/" className="brand" aria-label={`${SITE_NAME} home`}>
+          <Mark />
+          <span>{SITE_NAME}</span>
         </Link>
 
-        {/* Desktop nav */}
-        <nav className="hidden items-center gap-6 md:flex">
-          {NAV_LINKS.map((link) =>
-            link.external ? (
-              <a
-                key={link.href}
-                href={link.href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text)]"
-              >
-                {link.label}
-              </a>
-            ) : (
-              <Link
-                key={link.href}
-                href={link.href}
-                className="text-sm text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text)]"
-              >
-                {link.label}
-              </Link>
-            ),
-          )}
+        <nav className="hidden items-center gap-7 md:flex" aria-label="Main navigation">
+          {NAV_LINKS.map((link) => (
+            <Link key={link.href} href={link.href} className="nav-link">
+              {link.label}
+            </Link>
+          ))}
+          <span className="h-4 w-px bg-[var(--color-border)]" aria-hidden="true" />
+          <a className="github-link" href={REPO_URL} target="_blank" rel="noopener noreferrer">
+            GitHub
+            <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M5 11 11 5M6 5h5v5" />
+            </svg>
+          </a>
         </nav>
 
-        {/* Mobile menu button */}
         <button
           type="button"
-          className="md:hidden text-[var(--color-text-muted)]"
+          className="menu-button md:hidden"
           onClick={() => setMenuOpen(!menuOpen)}
-          aria-label="Toggle menu"
+          aria-label={menuOpen ? "Close menu" : "Open menu"}
+          aria-expanded={menuOpen}
+          aria-controls="mobile-navigation"
         >
           <svg
             width="24"
@@ -60,32 +62,16 @@ export function Header() {
         </button>
       </div>
 
-      {/* Mobile nav */}
       {menuOpen && (
-        <nav className="border-t border-[var(--color-border)] px-6 py-4 md:hidden">
-          {NAV_LINKS.map((link) =>
-            link.external ? (
-              <a
-                key={link.href}
-                href={link.href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="block py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-                onClick={() => setMenuOpen(false)}
-              >
-                {link.label}
-              </a>
-            ) : (
-              <Link
-                key={link.href}
-                href={link.href}
-                className="block py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-                onClick={() => setMenuOpen(false)}
-              >
-                {link.label}
-              </Link>
-            ),
-          )}
+        <nav id="mobile-navigation" className="mobile-nav md:hidden" aria-label="Mobile navigation">
+          {NAV_LINKS.map((link) => (
+            <Link key={link.href} href={link.href} onClick={() => setMenuOpen(false)}>
+              {link.label}
+            </Link>
+          ))}
+          <a href={REPO_URL} target="_blank" rel="noopener noreferrer" onClick={() => setMenuOpen(false)}>
+            GitHub <span aria-hidden="true">↗</span>
+          </a>
         </nav>
       )}
     </header>
