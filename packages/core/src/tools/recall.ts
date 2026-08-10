@@ -19,7 +19,7 @@ import { formatHits, recallQueryAsync, type Tier } from "./recall-query.js";
 export class RecallTool implements Tool {
   name = "recall";
   description =
-    "Search and write short-term memory. Use query to find relevant notes + facts; note to save an observation; forget/list to manage notes.";
+    "Search and write short-term memory — what was saved in past sessions, not what is in the conversation in front of you. Use query to find relevant notes + facts; note to save an observation; forget/list to manage notes.";
   parameters = {
     type: "object",
     properties: {
