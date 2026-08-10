@@ -212,6 +212,59 @@ button:focus-visible {
   text-transform: uppercase;
 }
 
+.docs-filter {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+
+.docs-filter svg {
+  position: absolute;
+  left: 0.75rem;
+  width: 0.95rem;
+  height: 0.95rem;
+  stroke: #707b74;
+  stroke-width: 1.5;
+  pointer-events: none;
+}
+
+.docs-filter input {
+  width: 100%;
+  min-height: 2.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0;
+  background: #0d1210;
+  padding: 0.55rem 0.75rem 0.55rem 2.25rem;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.75rem;
+  outline: none;
+}
+
+.docs-filter input::placeholder {
+  color: #6f7a73;
+}
+
+.docs-filter input:focus {
+  border-color: #657169;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 30%, transparent);
+}
+
+.docs-filter input::-webkit-search-cancel-button {
+  filter: invert(0.75);
+}
+
+.docs-filter-empty {
+  margin: 0;
+  border: 1px dashed var(--color-border);
+  padding: 1rem;
+  color: #78837c;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  text-align: center;
+}
+
 .hero-section {
   position: relative;
   overflow: hidden;

@@ -1,4 +1,6 @@
 export const SITE_NAME = "Tailored AI";
+export const SITE_ORIGIN = "https://quinton.dev";
+export const SITE_URL = "https://quinton.dev/tailored-ai";
 export const SITE_DESCRIPTION =
   "An open-source runtime for personal AI agents with tools, memory, schedules, workflows, and your choice of model.";
 export const REPO_URL = "https://github.com/quintonmiller/tailored-ai";

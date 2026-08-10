@@ -1,6 +1,21 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { Features } from "@/components/Features";
 import { Hero } from "@/components/Hero";
+import { SITE_DESCRIPTION, SITE_NAME, SITE_URL } from "@/lib/constants";
+
+export const metadata: Metadata = {
+  alternates: {
+    canonical: `${SITE_URL}/`,
+  },
+  openGraph: {
+    title: SITE_NAME,
+    description: SITE_DESCRIPTION,
+    url: `${SITE_URL}/`,
+    siteName: SITE_NAME,
+    type: "website",
+  },
+};
 
 export default function Home() {
   return (

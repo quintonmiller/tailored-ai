@@ -8,6 +8,14 @@ import { DOCS_NAV } from "@/lib/constants";
 export function DocsSidebar() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredNavigation = DOCS_NAV.map((section) => ({
+    ...section,
+    items: section.label.toLowerCase().includes(normalizedQuery)
+      ? section.items
+      : section.items.filter((item) => item.label.toLowerCase().includes(normalizedQuery)),
+  })).filter((section) => section.items.length > 0);
 
   return (
     <>
@@ -39,8 +47,22 @@ export function DocsSidebar() {
         aria-label="Documentation"
         className={`${open ? "mt-4 block" : "hidden"} lg:mt-0 lg:block`}
       >
+        <div className="docs-filter">
+          <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
+            <circle cx="7.75" cy="7.75" r="4.75" />
+            <path d="m11.25 11.25 3.5 3.5" />
+          </svg>
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Filter pages"
+            aria-label="Filter documentation pages"
+          />
+        </div>
+
         <div className="space-y-6">
-          {DOCS_NAV.map((section) => (
+          {filteredNavigation.map((section) => (
             <div key={section.label}>
               <div className="px-3 mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
                 {section.label}
@@ -52,7 +74,10 @@ export function DocsSidebar() {
                     <li key={item.href}>
                       <Link
                         href={item.href}
-                        onClick={() => setOpen(false)}
+                        onClick={() => {
+                          setOpen(false);
+                          setQuery("");
+                        }}
                         aria-current={active ? "page" : undefined}
                         className={`block rounded-md px-3 py-2 text-sm transition-colors ${
                           active
@@ -68,6 +93,7 @@ export function DocsSidebar() {
               </ul>
             </div>
           ))}
+          {filteredNavigation.length === 0 ? <p className="docs-filter-empty">No matching pages.</p> : null}
         </div>
       </nav>
     </>
