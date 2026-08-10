@@ -3,6 +3,11 @@ server:
   host: 127.0.0.1
 database:
   path: ./agent.db
+time:
+  provider: system
+  # Omit to use the host timezone. Set an IANA name when the host/container
+  # timezone differs from the person using TAI.
+  # timezone: America/Los_Angeles
 providers:
   openai_compatible:
     baseUrl: http://localhost:11434/v1   # Ollama; vLLM: http://127.0.0.1:8000/v1

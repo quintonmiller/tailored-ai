@@ -4,15 +4,29 @@ Deep notes on the runtime, factories, and how to add new tools/channels/provider
 
 ## AgentRuntime
 
-`packages/core/src/runtime.ts` holds all mutable state (config, tools, provider) and provides getters that return the current values. Key behaviors:
+`packages/core/src/runtime.ts` holds all mutable state (config, tools, model provider, time provider) and provides getters that return the current values. Key behaviors:
 
-- **`reload()`** — re-reads `config.yaml`, rebuilds tools and provider. All-or-nothing: keeps previous state on failure.
+- **`reload()`** — re-reads `config.yaml`, rebuilds tools, model provider, and time provider. All-or-nothing: keeps previous state on failure.
 - **`startWatching()`** — uses `fs.watch` with 500ms debounce to auto-reload on config file changes.
 - **`resolveHooks({ agentName?, overrideHooks? })`** — resolves merged hooks for an agent + optional overrides (e.g. cron job hooks).
 - **`generation`** — monotonic counter that increments on each successful reload.
 - Factory functions (`createTools`, `createProvider`) are defined in `packages/core/src/factories.ts` and injected into the runtime.
 - The agent loop accepts optional `getTools`/`getProvider` closures to re-resolve per iteration. Tool-change detection injects a transient system message when the tool set changes mid-loop.
 - All subsystems (server, discord, cron, delegate) hold a runtime reference and read state at request time.
+
+### Time provider
+
+`runtime.getTimeProvider()` owns the current instant and the IANA timezone used
+for civil-time calculations. Resolution order is `time.timezone`, the selected
+provider's `timeZone()`, then the host timezone. The built-in `system` provider
+returns the real clock. Plugins register alternative clocks through
+`ctx.timeProviders.register(id, factory)` and users select one with
+`time.provider`; the provider can read its opaque `time.options` config.
+
+Absolute instants remain UTC in SQLite and comparisons. The provider boundary
+is for current-time injection, timezone-aware calendar math, timers, quiet-hour
+windows, and rendered prompt timestamps. It is resolved before tools on startup
+and reload so every consumer sees one coherent clock generation.
 
 ## The global pause switch
 

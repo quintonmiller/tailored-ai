@@ -1,4 +1,6 @@
 import type Database from "better-sqlite3";
+import { systemTimeZone } from "../time/provider.js";
+import { zonedParts } from "../time/zoned.js";
 
 export interface AutopilotSettings {
   token_cap_1h: number | null;
@@ -183,12 +185,18 @@ export function checkBudget(db: Database.Database, settings?: AutopilotSettings)
  * Windows are HH:MM strings. Supports ranges that cross midnight (e.g. 22:00–07:00).
  * If either bound is null, returns false.
  */
-export function isInTimeWindow(start: string | null, end: string | null, now: Date = new Date()): boolean {
+export function isInTimeWindow(
+  start: string | null,
+  end: string | null,
+  now: Date = new Date(),
+  timeZone: string = systemTimeZone(),
+): boolean {
   if (!start || !end) return false;
   const startMin = parseHm(start);
   const endMin = parseHm(end);
   if (startMin === null || endMin === null) return false;
-  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const local = zonedParts(now, timeZone);
+  const nowMin = local.hour * 60 + local.minute;
 
   if (startMin === endMin) return false;
   if (startMin < endMin) {
@@ -207,10 +215,18 @@ function parseHm(s: string): number | null {
   return h * 60 + mm;
 }
 
-export function isInDisabledHours(settings: AutopilotSettings, now: Date = new Date()): boolean {
-  return isInTimeWindow(settings.disabled_start, settings.disabled_end, now);
+export function isInDisabledHours(
+  settings: AutopilotSettings,
+  now: Date = new Date(),
+  timeZone: string = systemTimeZone(),
+): boolean {
+  return isInTimeWindow(settings.disabled_start, settings.disabled_end, now, timeZone);
 }
 
-export function isInQuietHours(settings: AutopilotSettings, now: Date = new Date()): boolean {
-  return isInTimeWindow(settings.quiet_start, settings.quiet_end, now);
+export function isInQuietHours(
+  settings: AutopilotSettings,
+  now: Date = new Date(),
+  timeZone: string = systemTimeZone(),
+): boolean {
+  return isInTimeWindow(settings.quiet_start, settings.quiet_end, now, timeZone);
 }

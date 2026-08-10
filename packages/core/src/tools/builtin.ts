@@ -224,6 +224,7 @@ registerToolFactory("schedule", (config, ctx) => {
         minIntervalMinutes: config.schedules?.minIntervalMinutes ?? DEFAULT_CONFIG.schedules.minIntervalMinutes,
         maxHorizonDays: config.schedules?.maxHorizonDays ?? DEFAULT_CONFIG.schedules.maxHorizonDays,
       }),
+      timeProvider: ctx.timeProvider,
       events: ctx.events,
     }),
   ];

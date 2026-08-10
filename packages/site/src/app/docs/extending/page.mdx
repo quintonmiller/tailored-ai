@@ -23,6 +23,37 @@ register new pieces.
 
 The APIs below are the same in both cases.
 
+## Adding a time provider
+
+Time providers can supply the instant TAI treats as "now", a default IANA
+timezone, or both. Register one from the normal plugin context:
+
+```ts
+import type { Plugin } from "@tailored-ai/core";
+
+export default ((ctx) => {
+  ctx.timeProviders.register("fixed", (config) => ({
+    now: () => new Date(String(config.time?.options?.now)),
+    timeZone: () => String(config.time?.options?.timezone ?? "UTC"),
+  }));
+}) satisfies Plugin;
+```
+
+Select it in config:
+
+```yaml
+time:
+  provider: fixed
+  # An explicit time.timezone overrides the provider's timeZone().
+  options:
+    now: 2030-01-02T03:04:05Z
+    timezone: Pacific/Honolulu
+```
+
+The runtime resolves the provider before tools at startup and hot reload.
+Schedule calculations, due-time polling, quiet-hour windows, and rendered time
+anchors consume it; absolute timestamps remain UTC in storage.
+
 ## Adding a tool
 
 A tool implements the `Tool` interface from `@tailored-ai/core`:

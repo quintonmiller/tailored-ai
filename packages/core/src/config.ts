@@ -596,6 +596,19 @@ export interface AgentConfig {
     path: string;
   };
   /**
+   * Runtime clock and civil-time interpretation.
+   *
+   * `provider` selects the built-in system clock or a plugin-registered time
+   * provider. `timezone`, when set, is an IANA name and overrides both the
+   * provider and host timezone. `options` is an opaque bag for the selected
+   * provider.
+   */
+  time?: {
+    provider: string;
+    timezone?: string;
+    options?: Record<string, unknown>;
+  };
+  /**
    * Configured providers keyed by id. The key is a registered provider
    * factory id — the built-in "openai_compatible" (vLLM / Ollama's /v1 /
    * LM Studio / llama.cpp / any OpenAI-wire gateway) or any
@@ -1464,6 +1477,9 @@ export const DEFAULT_CONFIG: AgentConfig = {
   database: {
     path: "./agent.db",
   },
+  time: {
+    provider: "system",
+  },
   providers: {
     openai_compatible: {
       baseUrl: "http://localhost:11434/v1",
@@ -1661,6 +1677,7 @@ const KNOWN_TOP_LEVEL_CONFIG_KEY_MAP: Record<keyof AgentConfig, true> = {
   prompt: true,
   server: true,
   database: true,
+  time: true,
   providers: true,
   agent: true,
   notifications: true,

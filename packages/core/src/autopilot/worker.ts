@@ -7,6 +7,7 @@ import { findStuckCodingTasks } from "../db/task-queries.js";
 import type { ProjectRef } from "../projects/resolve.js";
 import type { AgentRuntime } from "../runtime.js";
 import type { Task, TaskBackend } from "../tasks/interface.js";
+import { runtimeTimeProvider } from "../time/provider.js";
 import { buildMorningDigest, recordDigestRun } from "./digest.js";
 import { buildTaskPrompt } from "./task-prompt.js";
 
@@ -179,7 +180,7 @@ export class AutopilotWorker {
       return;
     }
     try {
-      this.memorySweepCron = new Cron(schedule, () => {
+      this.memorySweepCron = new Cron(schedule, { timezone: runtimeTimeProvider(this.runtime).timeZone() }, () => {
         try {
           const report = runMemorySweep(this.runtime.db);
           console.log(
@@ -244,7 +245,7 @@ export class AutopilotWorker {
     const m = Number.parseInt(match[2], 10);
     const schedule = `${m} ${h} * * *`;
 
-    this.digestCron = new Cron(schedule, () => {
+    this.digestCron = new Cron(schedule, { timezone: runtimeTimeProvider(this.runtime).timeZone() }, () => {
       this.runDigest().catch((err) => {
         console.error("[autopilot] Digest error:", (err as Error).message);
       });
@@ -294,7 +295,8 @@ export class AutopilotWorker {
     // deployment, so the owner does not have to remember which of six things
     // is running in order to stop the spending.
     if (this.runtime.isAgentsPaused("autonomous")) return;
-    if (isInDisabledHours(settings)) return;
+    const time = runtimeTimeProvider(this.runtime);
+    if (isInDisabledHours(settings, time.now(), time.timeZone())) return;
 
     const budget = checkBudget(db, settings);
     if (budget.exceeded) return;

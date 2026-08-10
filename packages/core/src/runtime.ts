@@ -52,6 +52,7 @@ import { createSandbox } from "./sandboxes/factory.js";
 import { globalSandboxRegistry } from "./sandboxes/registry.js";
 import { createTaskBackend } from "./tasks/factory.js";
 import type { TaskBackend } from "./tasks/interface.js";
+import { type ResolvedTimeProvider, resolveTimeProvider } from "./time/provider.js";
 import type { Tool } from "./tools/interface.js";
 import { resolveWorkflowsDir } from "./workflows/loader.js";
 import { WorkflowRegistry } from "./workflows/registry.js";
@@ -85,6 +86,8 @@ export interface RuntimeOptions {
       taskBackendResolver?: import("./tools/tasks.js").TaskBackendResolver;
       getEmbedder?: () => import("./providers/embedding.js").EmbeddingProvider | undefined;
       getMemoryBackend?: () => Promise<MemoryBackend>;
+      /** Runtime-owned clock and timezone used by civil-time tools. */
+      timeProvider?: ResolvedTimeProvider;
       /** Runtime event bus, threaded through so the tasks tool (and any
        *  future event-emitting tool) reaches the runtime's bus without the
        *  CLI/server having to wire it explicitly. Slice 2 of the platform
@@ -112,6 +115,7 @@ export class AgentRuntime {
   private _provider: AIProvider;
   private _model: string;
   private _taskBackend: TaskBackend;
+  private _timeProvider: ResolvedTimeProvider;
   /**
    * Lazy memory backend. Constructed on first `getMemoryBackend()` and
    * rebuilt on `reload()` so a config flip swaps the active backend the
@@ -205,6 +209,8 @@ export class AgentRuntime {
 
     const merged = mergeProjectOverlay(initialConfig, this._activeProject?.overlay);
     this._config = merged;
+    this._timeProvider = resolveTimeProvider(merged);
+    this._logTimeProvider(this._timeProvider);
     this._taskBackend = createTaskBackend(merged, opts.db);
     this._embedder = opts.createEmbedder?.(merged);
     const builtinTools =
@@ -214,6 +220,7 @@ export class AgentRuntime {
         taskBackendResolver: (projectId?: string | null) => this.getTaskBackendForProject(projectId),
         getEmbedder: () => this._embedder,
         getMemoryBackend: () => this.getMemoryBackend(),
+        timeProvider: this._timeProvider,
         resolveOutbound: (id?: string) => this.resolveOutbound(id),
         getOwnerId: (id?: string) => this.getOwnerId(id),
         getNotificationGate: () => this.getNotificationGate(),
@@ -273,6 +280,10 @@ export class AgentRuntime {
 
   getConfig(): AgentConfig {
     return this._config;
+  }
+
+  getTimeProvider(): ResolvedTimeProvider {
+    return this._timeProvider;
   }
   getTools(): Tool[] {
     // Source of truth is the tool registry. Built-ins register through
@@ -600,6 +611,7 @@ export class AgentRuntime {
       }
 
       const taskBackend = createTaskBackend(config, this.db);
+      const timeProvider = resolveTimeProvider(config);
       const embedder = this._createEmbedder?.(config);
       const tools =
         this._createTools(config, this.contextDir, this.configPath, {
@@ -608,6 +620,7 @@ export class AgentRuntime {
           taskBackendResolver: (projectId?: string | null) => this.getTaskBackendForProject(projectId),
           getEmbedder: () => embedder,
           getMemoryBackend: () => this.getMemoryBackend(),
+          timeProvider,
           resolveOutbound: (id?: string) => this.resolveOutbound(id),
           getOwnerId: (id?: string) => this.getOwnerId(id),
           getNotificationGate: () => this.getNotificationGate(),
@@ -631,6 +644,8 @@ export class AgentRuntime {
         defaultModel: model,
       });
       this._config = config;
+      this._timeProvider = timeProvider;
+      this._logTimeProvider(timeProvider);
       this._toolRegistry = newToolRegistry;
       this._providerRegistry = newProviderRegistry;
       this._taskBackend = taskBackend;
@@ -677,6 +692,10 @@ export class AgentRuntime {
 
   onReload(cb: () => void): void {
     this._reloadListeners.push(cb);
+  }
+
+  private _logTimeProvider(provider: ResolvedTimeProvider): void {
+    console.log(`[time] provider=${provider.id} timezone=${provider.timeZone()} source=${provider.timeZoneSource}`);
   }
 
   private _pollTimer: ReturnType<typeof setInterval> | undefined;
@@ -1183,6 +1202,7 @@ export class AgentRuntime {
       db: this.db,
       cwd: callProject?.path,
       tools: dedup([...resolved.tools, ...extraTools]),
+      timeProvider: this._timeProvider,
       extraInstructions: resolved.instructions,
       maxToolRounds: resolved.maxToolRounds,
       maxHistoryTokens: config.agent.maxHistoryTokens,

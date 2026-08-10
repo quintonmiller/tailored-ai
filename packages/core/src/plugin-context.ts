@@ -41,6 +41,8 @@ import type { SandboxFactory } from "./sandboxes/factory.js";
 import { registerSandboxFactory } from "./sandboxes/factory.js";
 import type { TaskBackendFactory } from "./tasks/factory.js";
 import { registerTaskBackendFactory } from "./tasks/factory.js";
+import type { TimeProviderFactory } from "./time/provider.js";
+import { registerTimeProviderFactory } from "./time/provider.js";
 import type { ToolFactory } from "./tools/tool-factories.js";
 import { registerToolFactory } from "./tools/tool-factories.js";
 import type { UiProviderFactory } from "./ui/registry.js";
@@ -82,6 +84,10 @@ export interface UiProviderRegistryView {
   register(id: string, factory: UiProviderFactory): void;
 }
 
+export interface TimeProviderRegistryView {
+  register(id: string, factory: TimeProviderFactory): void;
+}
+
 /**
  * Plugin view of the step-executor registry. Plugins call
  * `ctx.stepExecutors.register(type, factory)` to inject a custom executor.
@@ -109,6 +115,8 @@ export interface PluginContext {
   repoBackends: RepoBackendRegistryView;
   sandboxBackends: SandboxBackendRegistryView;
   uiProviders: UiProviderRegistryView;
+  /** Register a clock and/or timezone source selected by `time.provider`. */
+  timeProviders: TimeProviderRegistryView;
   /**
    * Register a custom workflow step executor. Call this before the workflow
    * engine is created (i.e. in your plugin's top-level function body) so the
@@ -240,6 +248,7 @@ export interface PluginRegistration {
     | "repoBackend"
     | "sandboxBackend"
     | "uiProvider"
+    | "timeProvider"
     | "stepExecutor"
     | "eventSubscriber"
     | "httpRoutes"
@@ -350,6 +359,7 @@ export function createPluginContext(opts: CreatePluginContextOptions = {}): Plug
     repoBackends: { register: registerRepoBackendFactory },
     sandboxBackends: { register: registerSandboxFactory },
     uiProviders: { register: registerUiProviderFactory },
+    timeProviders: { register: registerTimeProviderFactory },
     http: createHttpRegistryView(httpRegistry, opts.httpPrefix),
     // Step executors are registered into the runtime's per-instance registry
     // so factories reach the same registry that createWorkflowEngine reads.

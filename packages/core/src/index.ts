@@ -562,6 +562,7 @@ export {
   type SandboxBackendRegistryView,
   type StepExecutorRegistryView,
   type TaskBackendRegistryView,
+  type TimeProviderRegistryView,
   type ToolRegistryView,
   type UiProviderRegistryView,
 } from "./plugin-context.js";
@@ -856,6 +857,17 @@ export {
 } from "./suggestions.js";
 export type { TaskEvent } from "./task-watcher.js";
 export { detectScopeCreep, detectStall, STALL_COMMENT_PREFIX, TaskWatcher } from "./task-watcher.js";
+export {
+  assertValidTimeZone,
+  type ResolvedTimeProvider,
+  registerTimeProviderFactory,
+  resolveTimeProvider,
+  runtimeTimeProvider,
+  systemTimeZone,
+  type TimeProvider,
+  type TimeProviderFactory,
+  timeProviderFactoryRegistry,
+} from "./time/provider.js";
 export { AdminTool, readRawConfig, writeRawConfigPath } from "./tools/admin.js";
 export { AskUserTool } from "./tools/ask-user.js";
 export type { BrowserToolConfig } from "./tools/browser.js";

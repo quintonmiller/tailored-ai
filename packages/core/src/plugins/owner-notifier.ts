@@ -36,6 +36,7 @@ import type { RuntimeEventPayload, Subscription } from "../events.js";
 import { normalizeForDedup, resolveGate } from "../notifications/dedup.js";
 import type { Plugin, PluginMeta } from "../plugin-context.js";
 import type { AgentRuntime } from "../runtime.js";
+import { runtimeTimeProvider } from "../time/provider.js";
 
 export interface OwnerNotifierOptions {
   runtime: AgentRuntime;
@@ -144,7 +145,8 @@ export class OwnerNotifier {
 
   private isQuietHours(): boolean {
     const settings = getAutopilotSettings(this.runtime.db);
-    return isInQuietHours(settings);
+    const time = runtimeTimeProvider(this.runtime);
+    return isInQuietHours(settings, time.now(), time.timeZone());
   }
 
   /**

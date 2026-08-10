@@ -44,8 +44,10 @@ text is the only documentation a model reliably reads.
 
 ### `when` — one-shots
 
-All host-local. Core has no timezone setting; a deployment running somewhere
-other than its user needs one before any of this reads correctly.
+Civil-time forms use the runtime's effective IANA timezone. By default that is
+the host timezone; set `time.timezone` when a container, VM, or WSL environment
+does not match the person using TAI. Relative durations are elapsed time and do
+not depend on a timezone.
 
 | Form | Example |
 |---|---|
@@ -141,6 +143,10 @@ at its ceiling retrying for ever.
 ## Configuration
 
 ```yaml
+time:
+  provider: system
+  timezone: America/Los_Angeles  # optional; host timezone when omitted
+
 schedules:
   enabled: true            # kill-switch; also removes the tool
   tickSeconds: 30          # how often the due set is checked
@@ -149,6 +155,18 @@ schedules:
   maxHorizonDays: 365      # furthest a one-shot may be booked
   maxDeferrals: 3          # retries when a room is at its ceiling
 ```
+
+Timezone precedence is explicit config, then a plugin provider's timezone,
+then the host timezone. TAI logs the effective provider, timezone, and source at
+startup and on reload. Invalid timezone names fail clearly instead of silently
+falling back to UTC. Absolute instants continue to be stored and compared in
+UTC; only calendar interpretation and rendering use the configured zone.
+
+`time.provider` defaults to `system`. A plugin can register another provider
+through `ctx.timeProviders.register(id, factory)` and supply `now()`, an
+optional `timeZone()`, or both. Provider-specific settings belong under the
+opaque `time.options` bag. Changing `time.provider` or `time.timezone` is
+hot-reloadable.
 
 An agent only gets the tool if its `tools:` list includes `schedule` — or if it
 has no list at all, in which case it gets every tool and this one arrives with
@@ -178,9 +196,10 @@ actually ran), `schedule.cancelled`.
 
 ## Known limits
 
-- **Timezone.** Everything is host-local. There is no `timezone` setting in core.
-- **DST.** Cron patterns inherit croner's handling. Interval mode is elapsed
-  time and will drift an hour across a DST boundary.
+- **DST.** Cron and civil-time one-shots honor the configured zone across DST.
+  A nonexistent spring-forward wall time is rejected rather than silently
+  shifted. Interval mode is elapsed time, so its wall-clock display moves by an
+  hour across a transition by design.
 - **No operator surface yet.** `list` and `cancel` are agent-facing only; there
   is no HTTP route, CLI command or dashboard widget. Inspect the table directly
   until there is.

@@ -18,6 +18,7 @@ import {
 import { createNote, listNotes } from "../db/note-queries.js";
 import { appendTickLog } from "../db/tick-log-queries.js";
 import type { AgentRuntime } from "../runtime.js";
+import { runtimeTimeProvider } from "../time/provider.js";
 import { SleepTool } from "../tools/sleep.js";
 import { buildTickContext, renderTickSituation } from "./tick-context.js";
 
@@ -141,7 +142,7 @@ export class ExploratoryWorker {
   constructor(opts: ExploratoryWorkerOptions) {
     this.runtime = opts.runtime;
     this.intervalMs = opts.intervalMs ?? this.runtime.getConfig().exploratory?.baseIntervalMs ?? DEFAULT_INTERVAL_MS;
-    this.now = opts.now ?? (() => new Date());
+    this.now = opts.now ?? (() => runtimeTimeProvider(this.runtime).now());
     this.onWouldRun = opts.onWouldRun;
     this.onSkip = opts.onSkip;
     this.onRunFinished = opts.onRunFinished;
@@ -258,7 +259,11 @@ export class ExploratoryWorker {
       // outcomes-window, exploration candidates from core_memory). The
       // agent picks from a typed candidate menu instead of free-styling
       // "what should I do" (docs/agent-unification.md, Phase 3).
-      const tickCtx = buildTickContext(db, agentName, projectId);
+      const time = runtimeTimeProvider(this.runtime);
+      const tickCtx = buildTickContext(db, agentName, projectId, {
+        now: this.now,
+        timeZone: time.timeZone(),
+      });
       const situation = renderTickSituation(tickCtx);
       const prompt = `${basePrompt}\n\n${situation}`;
 
@@ -513,7 +518,10 @@ export class ExploratoryWorker {
       // effectively goes silent for hours after a single quiet stretch.
       // Cap in-window backoff at 4x the base interval; out-of-window can
       // still stretch all the way to max_interval_minutes.
-      const inWindow = cadence?.window ? isInTimeWindow(cadence.window.start, cadence.window.end, this.now()) : true;
+      const time = runtimeTimeProvider(this.runtime);
+      const inWindow = cadence?.window
+        ? isInTimeWindow(cadence.window.start, cadence.window.end, this.now(), time.timeZone())
+        : true;
       const effectiveMax = inWindow ? Math.min(maxMs, baseMs * 4) : maxMs;
       const next = Math.min(Math.round(current * multiplier), effectiveMax);
       return next;
@@ -595,7 +603,7 @@ export class ExploratoryWorker {
 
     if (online.cadence?.window) {
       const { start, end } = online.cadence.window;
-      if (!isInTimeWindow(start, end, now)) {
+      if (!isInTimeWindow(start, end, now, runtimeTimeProvider(this.runtime).timeZone())) {
         return { kind: "skip", reason: "outside-window" };
       }
     }

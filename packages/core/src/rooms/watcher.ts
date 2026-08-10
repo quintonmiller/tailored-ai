@@ -27,6 +27,7 @@ import type { Subscription } from "../events.js";
 import { PASSTHROUGH_GATE } from "../notifications/dedup.js";
 import type { AgentRuntime } from "../runtime.js";
 import { describeBooking, lateLine, recurringLine, type WakeContext } from "../schedules/wake-context.js";
+import { runtimeTimeProvider, systemTimeZone } from "../time/provider.js";
 import { addresses, extractLeadingAddressees, renderTranscriptLine } from "./envelope.js";
 import { enrichRoomMessage, IdentityResolver } from "./identities.js";
 import { getRoomBackend, listRoomBackends, onRoomBackendChange } from "./registry.js";
@@ -299,8 +300,9 @@ export function describeToolCall(name: string, args: Record<string, unknown>): s
  * knows the date if it happens to carry a clock tool, and most do not — so it
  * infers, and gets it wrong. Ten tokens spent here beats a wrong deadline.
  */
-export function todayLine(now = new Date()): string {
+export function todayLine(now = new Date(), timeZone: string = systemTimeZone()): string {
   return `Today is ${now.toLocaleDateString("en-US", {
+    timeZone,
     weekday: "long",
     year: "numeric",
     month: "long",
@@ -607,6 +609,15 @@ export class RoomWatcher {
       ownerLabel: rooms?.ownerLabel,
       defaultBackend: config.defaultChannel,
     });
+  }
+
+  private now(): Date {
+    return runtimeTimeProvider(this.runtime).now();
+  }
+
+  private today(): string {
+    const time = runtimeTimeProvider(this.runtime);
+    return todayLine(time.now(), time.timeZone());
   }
 
   /**
@@ -1023,7 +1034,7 @@ export class RoomWatcher {
 
     this.wakeReasons.set(`${agent} ${roomRef}`, "check-in");
     const prompt = [
-      `Room "${room.name}". You are ${label}. ${todayLine()}`,
+      `Room "${room.name}". You are ${label}. ${this.today()}`,
       "This is a scheduled check-in — nobody has asked you anything.",
       ...(room.purpose ? [`Purpose: ${room.purpose}`] : []),
       ...(sub.role ? [`Your role here: ${sub.role}`] : []),
@@ -1071,8 +1082,8 @@ export class RoomWatcher {
 
     this.wakeReasons.set(`${agent} ${roomRef}`, "scheduled");
     const prompt = [
-      `Room "${room.name}". You are ${label}. ${todayLine()}`,
-      `This is a wake you scheduled${describeBooking(ctx, new Date())}. Nobody has asked you anything.`,
+      `Room "${room.name}". You are ${label}. ${this.today()}`,
+      `This is a wake you scheduled${describeBooking(ctx, this.now())}. Nobody has asked you anything.`,
       `Your note to yourself: "${ctx.note}"`,
       ...lateLine(ctx.lateBy),
       ...recurringLine(ctx),
@@ -2246,7 +2257,7 @@ export class RoomWatcher {
         `Room "${room.name}". You are ${label}.`,
         ...(room.purpose ? [`Purpose: ${room.purpose}`] : []),
         "",
-        todayLine(),
+        this.today(),
         `${askedBy} asked everyone here for a status update.`,
         "",
         "Reply with what you are working on right now, in one or two sentences.",
@@ -2458,7 +2469,7 @@ export class RoomWatcher {
       .join(", ");
 
     return [
-      `Room "${roomName}". You are ${label}. ${todayLine()}`,
+      `Room "${roomName}". You are ${label}. ${this.today()}`,
       // The room's standing instructions. First line, before the transcript,
       // because it frames everything below it.
       ...(purpose ? [`Purpose: ${purpose}`] : []),
@@ -2599,7 +2610,7 @@ export class RoomWatcher {
     }
 
     const prompt = [
-      `You are ${label}. ${todayLine()}`,
+      `You are ${label}. ${this.today()}`,
       `New messages in ${names.length} of the rooms you watch: ${names.join(", ")}.`,
       "",
       blocks.join("\n\n"),

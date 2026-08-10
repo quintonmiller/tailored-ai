@@ -30,6 +30,7 @@ import {
   WHEN_FORMS,
   WhenParseError,
 } from "../schedules/when.js";
+import { type ResolvedTimeProvider, systemTimeZone } from "../time/provider.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
 
 export interface ScheduleLimits {
@@ -45,6 +46,8 @@ export interface ScheduleToolOptions {
   events?: EventBus;
   /** Injectable clock, so booking maths is testable without waiting. */
   now?: () => Date;
+  /** Runtime-owned clock and timezone. `now` remains as a focused test hook. */
+  timeProvider?: ResolvedTimeProvider;
 }
 
 const ok = (output: string): ToolResult => ({ success: true, output });
@@ -106,7 +109,11 @@ export class ScheduleTool implements Tool {
   constructor(private opts: ScheduleToolOptions) {}
 
   private now(): Date {
-    return this.opts.now?.() ?? new Date();
+    return this.opts.now?.() ?? this.opts.timeProvider?.now() ?? new Date();
+  }
+
+  private timeZone(): string {
+    return this.opts.timeProvider?.timeZone() ?? systemTimeZone();
   }
 
   async execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
@@ -143,7 +150,7 @@ export class ScheduleTool implements Tool {
     let at: Date;
     let defaultedTime: boolean;
     try {
-      const parsed = parseWhen(raw, this.now());
+      const parsed = parseWhen(raw, this.now(), this.timeZone());
       at = parsed.at;
       defaultedTime = parsed.defaultedTime;
     } catch (err) {
@@ -152,13 +159,13 @@ export class ScheduleTool implements Tool {
 
     const now = this.now();
     if (at.getTime() < now.getTime() - PAST_SLACK_MS) {
-      return fail(`${formatLocal(at)} has already passed. Give a time in the future.`);
+      return fail(`${formatLocal(at, this.timeZone())} has already passed. Give a time in the future.`);
     }
     const limits = this.opts.limits();
     const horizon = now.getTime() + limits.maxHorizonDays * 86_400_000;
     if (at.getTime() > horizon) {
       return fail(
-        `${formatLocal(at)} is more than ${limits.maxHorizonDays} days out, which is further than I can book.`,
+        `${formatLocal(at, this.timeZone())} is more than ${limits.maxHorizonDays} days out, which is further than I can book.`,
       );
     }
 
@@ -173,12 +180,13 @@ export class ScheduleTool implements Tool {
       nextRunAt: at,
       targetKind: target.kind,
       target: target.ref,
+      createdAt: now,
     });
     this.emitCreated(row);
 
     return ok(
       [
-        `Scheduled ${row.id} for ${formatLocal(at)} (in ${formatDistance(at.getTime() - now.getTime())}), ${this.describeTarget(target)}.`,
+        `Scheduled ${row.id} for ${formatLocal(at, this.timeZone())} (in ${formatDistance(at.getTime() - now.getTime())}), ${this.describeTarget(target)}.`,
         // Said out loud rather than assumed: a date with no time is the single
         // most likely place for the agent's intent and the booking to diverge.
         ...(defaultedTime ? [`You gave a date with no time, so 09:00 was used.`] : []),
@@ -210,17 +218,21 @@ export class ScheduleTool implements Tool {
     let startsAt: Date | null = null;
     let endsAt: Date | null = null;
     try {
-      if (typeof args.starts === "string" && args.starts.trim()) startsAt = parseWhen(args.starts, now).at;
-      if (typeof args.until === "string" && args.until.trim()) endsAt = parseWhen(args.until, now).at;
+      if (typeof args.starts === "string" && args.starts.trim()) {
+        startsAt = parseWhen(args.starts, now, this.timeZone()).at;
+      }
+      if (typeof args.until === "string" && args.until.trim()) {
+        endsAt = parseWhen(args.until, now, this.timeZone()).at;
+      }
     } catch (err) {
       return fail(err instanceof WhenParseError ? err.message : (err as Error).message);
     }
     if (endsAt && endsAt.getTime() < now.getTime()) {
-      return fail(`until (${formatLocal(endsAt)}) has already passed.`);
+      return fail(`until (${formatLocal(endsAt, this.timeZone())}) has already passed.`);
     }
 
     const limits = this.opts.limits();
-    const gap = occurrenceGapSeconds(rec, startsAt && startsAt > now ? startsAt : now);
+    const gap = occurrenceGapSeconds(rec, startsAt && startsAt > now ? startsAt : now, this.timeZone());
     if (gap !== null && gap < limits.minIntervalMinutes * 60) {
       return fail(
         `"${raw}" fires every ${formatDistance(gap * 1000)}, which is more often than the ${limits.minIntervalMinutes}-minute floor for repeating wakes.`,
@@ -230,10 +242,10 @@ export class ScheduleTool implements Tool {
     // A future start has to gate the first occurrence for both modes: interval
     // anchors on it, and cron is asked from just before it rather than from now.
     const from = startsAt && startsAt.getTime() > now.getTime() ? new Date(startsAt.getTime() - 1) : now;
-    const first = nextOccurrence(rec, from, startsAt);
+    const first = nextOccurrence(rec, from, startsAt, this.timeZone());
     if (!first) return fail(`"${raw}" has no upcoming occurrence.`);
     if (endsAt && first.getTime() > endsAt.getTime()) {
-      return fail(`"${raw}" has no occurrence before ${formatLocal(endsAt)}.`);
+      return fail(`"${raw}" has no occurrence before ${formatLocal(endsAt, this.timeZone())}.`);
     }
 
     const target = this.resolveTarget(args, context, agent);
@@ -251,14 +263,15 @@ export class ScheduleTool implements Tool {
       nextRunAt: first,
       targetKind: target.kind,
       target: target.ref,
+      createdAt: now,
     });
     this.emitCreated(row);
 
     return ok(
       [
         `Scheduled ${row.id} to repeat "${raw.trim()}", ${this.describeTarget(target)}.`,
-        `First wake ${formatLocal(first)} (in ${formatDistance(first.getTime() - now.getTime())}).`,
-        ...(endsAt ? [`Stops after ${formatLocal(endsAt)}.`] : []),
+        `First wake ${formatLocal(first, this.timeZone())} (in ${formatDistance(first.getTime() - now.getTime())}).`,
+        ...(endsAt ? [`Stops after ${formatLocal(endsAt, this.timeZone())}.`] : []),
       ].join(" "),
     );
   }
@@ -273,7 +286,7 @@ export class ScheduleTool implements Tool {
       const at = fromDbTime(r.next_run_at);
       const pattern = r.kind === "repeat" ? `repeats "${r.source}"` : "once";
       const where = r.target_kind === "room" ? this.roomName(r.target) : "this session";
-      return `${r.id}  ${formatLocal(at)} (in ${formatDistance(at.getTime() - now.getTime())})  ${pattern}  ${where}\n      "${r.note}"`;
+      return `${r.id}  ${formatLocal(at, this.timeZone())} (in ${formatDistance(at.getTime() - now.getTime())})  ${pattern}  ${where}\n      "${r.note}"`;
     });
     return ok([`${rows.length} wake${rows.length === 1 ? "" : "s"} booked:`, ...lines].join("\n"));
   }
