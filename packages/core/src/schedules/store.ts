@@ -2,8 +2,8 @@
  * Persistence for agent-authored wakes.
  *
  * Times are stored the way the rest of the schema stores them: SQLite
- * `datetime()` text in UTC, no zone marker, so `next_run_at <= datetime('now')`
- * is a plain indexed comparison and the tick needs no clock of its own.
+ * `datetime()`-shaped text in UTC, no zone marker, so indexed comparisons stay
+ * lexical while the caller remains the source of "now".
  */
 
 import { randomUUID } from "node:crypto";
@@ -43,6 +43,8 @@ export interface NewSchedule {
   startsAt?: Date | null;
   endsAt?: Date | null;
   nextRunAt: Date;
+  /** Creation instant from the runtime clock. Defaults to the system clock. */
+  createdAt?: Date;
   targetKind: ScheduleTargetKind;
   target: string;
 }
@@ -80,8 +82,8 @@ export class ScheduleStore {
       .prepare(
         `INSERT INTO agent_schedules
            (id, agent, note, kind, cron, interval_seconds, source, starts_at, ends_at,
-            next_run_at, target_kind, target)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            next_run_at, target_kind, target, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -96,6 +98,7 @@ export class ScheduleStore {
         toDbTime(input.nextRunAt),
         input.targetKind,
         input.target,
+        toDbTime(input.createdAt ?? new Date()),
       );
     return this.get(id)!;
   }
@@ -164,12 +167,10 @@ export class ScheduleStore {
   }
 
   /** A turn actually ran. Clears the deferral streak. */
-  markRan(id: string): void {
+  markRan(id: string, at: Date = new Date()): void {
     this.db
-      .prepare(
-        "UPDATE agent_schedules SET run_count = run_count + 1, deferrals = 0, last_run_at = datetime('now') WHERE id = ?",
-      )
-      .run(id);
+      .prepare("UPDATE agent_schedules SET run_count = run_count + 1, deferrals = 0, last_run_at = ? WHERE id = ?")
+      .run(toDbTime(at), id);
   }
 
   /** Push a due row back without counting it as a run. Used when a wake is refused. */

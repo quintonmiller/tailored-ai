@@ -98,6 +98,25 @@ describe("parseWhen — clock and day words", () => {
     // The error text is the model's only documentation.
     expect(() => parseWhen("sometime next quarter", NOW)).toThrow(/relative[\s\S]*absolute/);
   });
+
+  it("resolves civil time in an explicit zone, independent of the process zone", () => {
+    const now = new Date("2026-08-09T19:00:00.000Z"); // Sun noon in Los Angeles
+    expect(parseWhen("tomorrow 9am", now, "America/Los_Angeles").at.toISOString()).toBe("2026-08-10T16:00:00.000Z");
+  });
+
+  it("uses the post-transition offset when tomorrow crosses spring DST", () => {
+    const now = new Date("2026-03-08T07:30:00.000Z"); // Sat 23:30 PST
+    expect(parseWhen("tomorrow 9am", now, "America/Los_Angeles").at.toISOString()).toBe("2026-03-08T16:00:00.000Z");
+  });
+
+  it("uses the post-transition offset when tomorrow crosses fall DST", () => {
+    const now = new Date("2026-11-01T06:30:00.000Z"); // Sat 23:30 PDT
+    expect(parseWhen("tomorrow 9am", now, "America/Los_Angeles").at.toISOString()).toBe("2026-11-01T17:00:00.000Z");
+  });
+
+  it("rejects a wall time that does not exist during the spring transition", () => {
+    expect(() => parseWhen("2026-03-08 02:30", NOW, "America/Los_Angeles")).toThrow(/does not exist/);
+  });
 });
 
 describe("parseEvery", () => {
@@ -155,6 +174,12 @@ describe("nextOccurrence", () => {
     const rec = parseEvery("weekdays at 9am");
     const next = nextOccurrence(rec, NOW); // Thu 14:30 -> Fri 09:00
     expect(next).toEqual(new Date(2026, 7, 7, 9, 0, 0));
+  });
+
+  it("advances cron in the configured timezone", () => {
+    const rec = parseEvery("weekdays at 9am");
+    const next = nextOccurrence(rec, new Date("2026-08-06T21:30:00.000Z"), null, "America/Los_Angeles");
+    expect(next?.toISOString()).toBe("2026-08-07T16:00:00.000Z");
   });
 });
 

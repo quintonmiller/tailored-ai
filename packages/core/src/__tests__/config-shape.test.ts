@@ -59,6 +59,15 @@ describe("findShapeIssues — the quoted flag", () => {
   });
 });
 
+describe("findShapeIssues — time provider", () => {
+  it("catches a non-string timezone before runtime resolution", () => {
+    const issues = findShapeIssues(config({ time: { provider: "system", timezone: 123 } }));
+    expect(
+      issues.some((issue) => issue.includes("time") && issue.includes("`timezone`") && issue.includes("string")),
+    ).toBe(true);
+  });
+});
+
 describe("findShapeIssues — the exec allowlist", () => {
   it("catches list entries that YAML turned into booleans", () => {
     const issues = findShapeIssues(config({ tools: { exec: { enabled: true, allowedCommands: [true, false] } } }));

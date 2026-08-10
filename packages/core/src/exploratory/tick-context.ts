@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 import { type CoreMemoryRow, getCoreMemory } from "../db/core-memory-queries.js";
 import { queryProjectTasks } from "../db/task-queries.js";
 import { getTickOutcomesWindow, type TickOutcomesWindow } from "../db/tick-log-queries.js";
+import { systemTimeZone } from "../time/provider.js";
 
 /**
  * Structured situation report assembled by code at the start of every
@@ -46,6 +47,7 @@ export interface TickContext {
   agent: string;
   projectId: string | null;
   generatedAt: string;
+  timeZone?: string;
   backlog: TickBacklogSnapshot;
   exploration: ExplorationCandidates;
   outcomes: TickOutcomesWindow;
@@ -62,6 +64,8 @@ export interface BuildTickContextOptions {
   staleReviewDays?: number;
   /** Override for "now" — testing only. */
   now?: () => Date;
+  /** IANA timezone used to render the civil-time anchor. */
+  timeZone?: string;
 }
 
 export function buildTickContext(
@@ -125,6 +129,7 @@ export function buildTickContext(
     agent,
     projectId,
     generatedAt: now.toISOString(),
+    timeZone: opts.timeZone ?? systemTimeZone(),
     backlog: { untouched, staleInReview },
     exploration: { openQuestions, staleThreads },
     outcomes,
@@ -171,6 +176,7 @@ export function renderTickSituation(ctx: TickContext): string {
   // the agent can answer "is the user likely awake?" without guessing.
   const now = new Date(ctx.generatedAt);
   const local = now.toLocaleString("en-US", {
+    timeZone: ctx.timeZone ?? systemTimeZone(),
     weekday: "short",
     year: "numeric",
     month: "short",

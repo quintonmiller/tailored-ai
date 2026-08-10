@@ -34,6 +34,8 @@ export interface ToolFactoryContext {
   getEmbedder?: () => EmbeddingProvider | undefined;
   /** Memory backend accessor for RecallTool / FactsTool. */
   getMemoryBackend?: () => Promise<import("../memory/interface.js").MemoryBackend>;
+  /** Runtime-owned clock and timezone used by civil-time tools. */
+  timeProvider?: import("../time/provider.js").ResolvedTimeProvider;
   /** Notify hook fired after a successful task mutation. */
   notifyTaskEvent?: TasksToolNotify;
   /** Runtime event bus. Tools emit typed events for plugin subscribers. */

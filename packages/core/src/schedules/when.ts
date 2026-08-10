@@ -12,13 +12,14 @@
  * reimplemented, so the phrases an operator learns in `config.yaml` are the
  * same ones an agent can use at runtime.
  *
- * Everything resolves in the host's local timezone. Core has no timezone
- * setting today; a deployment running somewhere other than its user needs one
- * before any of this reads correctly.
+ * Civil-time forms resolve in the supplied IANA timezone. Relative durations
+ * are absolute elapsed time and therefore timezone-independent.
  */
 
 import { Cron } from "croner";
 import { compileSchedule, parseTime } from "../cron/schedule-dsl.js";
+import { systemTimeZone } from "../time/provider.js";
+import { addCivilDays, fromZonedParts, zonedParts } from "../time/zoned.js";
 
 /** Hour applied when the agent gives a date with no time. Echoed back, never silent. */
 export const DEFAULT_HOUR = 9;
@@ -88,17 +89,17 @@ export class WhenParseError extends Error {
  * as ten minutes and as ten o'clock, and a wake that fires nine hours off is
  * worse than one the model has to phrase again.
  */
-export function parseWhen(input: string, now: Date = new Date()): ParsedWhen {
+export function parseWhen(input: string, now: Date = new Date(), timeZone: string = systemTimeZone()): ParsedWhen {
   const text = input.trim().toLowerCase();
   if (!text) throw new WhenParseError(input);
 
   const relative = parseRelative(text, now);
   if (relative) return { at: relative, defaultedTime: false };
 
-  const dated = parseAbsolute(text);
+  const dated = parseAbsolute(text, timeZone);
   if (dated) return dated;
 
-  const dayWord = parseDayWord(text, now);
+  const dayWord = parseDayWord(text, now, timeZone);
   if (dayWord) return dayWord;
 
   // Bare number with no unit and no colon — ambiguous, see the doc comment.
@@ -106,7 +107,7 @@ export function parseWhen(input: string, now: Date = new Date()): ParsedWhen {
 
   try {
     const { hour, minute } = parseTime(text);
-    return { at: nextClockTime(hour, minute, now), defaultedTime: false };
+    return { at: nextClockTime(hour, minute, now, timeZone), defaultedTime: false };
   } catch {
     throw new WhenParseError(input);
   }
@@ -136,7 +137,7 @@ function parseRelative(text: string, now: Date): Date | null {
 }
 
 /** "2026-08-08", "2026-08-08 10:00", "2026-08-08T10:00:00", "2026-08-08 9am". */
-function parseAbsolute(text: string): ParsedWhen | null {
+function parseAbsolute(text: string, timeZone: string): ParsedWhen | null {
   const m = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:[t\s]+(.+))?$/);
   if (!m) return null;
   const [, y, mo, d, rest] = m;
@@ -146,42 +147,44 @@ function parseAbsolute(text: string): ParsedWhen | null {
   if (month < 1 || month > 12 || day < 1 || day > 31) throw new WhenParseError(text);
 
   if (!rest || !rest.trim()) {
-    return { at: localDate(year, month, day, DEFAULT_HOUR, 0), defaultedTime: true };
+    return { at: localDate(year, month, day, DEFAULT_HOUR, 0, timeZone), defaultedTime: true };
   }
   // Seconds are accepted and dropped: a wake is scheduled to the minute.
   const clock = rest.trim().replace(/^(\d{1,2}:\d{2}):\d{2}$/, "$1");
   const { hour, minute } = parseTime(clock);
-  return { at: localDate(year, month, day, hour, minute), defaultedTime: false };
+  return { at: localDate(year, month, day, hour, minute, timeZone), defaultedTime: false };
 }
 
 /** "tomorrow", "tomorrow 9am", "tomorrow at 9am", "today 5pm". */
-function parseDayWord(text: string, now: Date): ParsedWhen | null {
+function parseDayWord(text: string, now: Date, timeZone: string): ParsedWhen | null {
   const m = text.match(/^(today|tomorrow)(?:\s+(?:at\s+)?(.+))?$/);
   if (!m) return null;
-  const base = new Date(now);
-  if (m[1] === "tomorrow") base.setDate(base.getDate() + 1);
+  const base = addCivilDays(zonedParts(now, timeZone), m[1] === "tomorrow" ? 1 : 0);
   if (!m[2]) {
     return {
-      at: localDate(base.getFullYear(), base.getMonth() + 1, base.getDate(), DEFAULT_HOUR, 0),
+      at: localDate(base.year, base.month, base.day, DEFAULT_HOUR, 0, timeZone),
       defaultedTime: true,
     };
   }
   const { hour, minute } = parseTime(m[2]);
   return {
-    at: localDate(base.getFullYear(), base.getMonth() + 1, base.getDate(), hour, minute),
+    at: localDate(base.year, base.month, base.day, hour, minute, timeZone),
     defaultedTime: false,
   };
 }
 
-function localDate(year: number, month: number, day: number, hour: number, minute: number): Date {
-  return new Date(year, month - 1, day, hour, minute, 0, 0);
+function localDate(year: number, month: number, day: number, hour: number, minute: number, timeZone: string): Date {
+  return fromZonedParts({ year, month, day, hour, minute, second: 0 }, timeZone);
 }
 
 /** The next time it is `hour:minute` — today if that is still ahead, else tomorrow. */
-function nextClockTime(hour: number, minute: number, now: Date): Date {
-  const at = new Date(now);
-  at.setHours(hour, minute, 0, 0);
-  if (at.getTime() <= now.getTime()) at.setDate(at.getDate() + 1);
+function nextClockTime(hour: number, minute: number, now: Date, timeZone: string): Date {
+  let day = zonedParts(now, timeZone);
+  let at = localDate(day.year, day.month, day.day, hour, minute, timeZone);
+  if (at.getTime() <= now.getTime()) {
+    day = addCivilDays(day, 1);
+    at = localDate(day.year, day.month, day.day, hour, minute, timeZone);
+  }
   return at;
 }
 
@@ -235,7 +238,12 @@ export function parseEvery(input: string): Recurrence {
  * Returns null when the recurrence has no further occurrence (cron patterns
  * can, e.g. a fixed date that has passed).
  */
-export function nextOccurrence(rec: Recurrence, after: Date, anchor?: Date | null): Date | null {
+export function nextOccurrence(
+  rec: Recurrence,
+  after: Date,
+  anchor?: Date | null,
+  timeZone: string = systemTimeZone(),
+): Date | null {
   if (rec.mode === "interval") {
     const base = anchor ?? after;
     if (base.getTime() > after.getTime()) return base;
@@ -244,7 +252,7 @@ export function nextOccurrence(rec: Recurrence, after: Date, anchor?: Date | nul
     const periods = Math.floor(elapsed / step) + 1;
     return new Date(base.getTime() + periods * step);
   }
-  return new Cron(rec.cron).nextRun(after) ?? null;
+  return new Cron(rec.cron, { timezone: timeZone }).nextRun(after) ?? null;
 }
 
 /**
@@ -254,11 +262,11 @@ export function nextOccurrence(rec: Recurrence, after: Date, anchor?: Date | nul
  * often "0 9 * * 1-5" fires is to ask it twice.
  * Returns null when the pattern has fewer than two occurrences left.
  */
-export function occurrenceGapSeconds(rec: Recurrence, from: Date): number | null {
+export function occurrenceGapSeconds(rec: Recurrence, from: Date, timeZone: string = systemTimeZone()): number | null {
   if (rec.mode === "interval") return rec.seconds;
-  const first = nextOccurrence(rec, from);
+  const first = nextOccurrence(rec, from, null, timeZone);
   if (!first) return null;
-  const second = nextOccurrence(rec, first);
+  const second = nextOccurrence(rec, first, null, timeZone);
   if (!second) return null;
   return Math.round((second.getTime() - first.getTime()) / 1000);
 }
@@ -266,8 +274,9 @@ export function occurrenceGapSeconds(rec: Recurrence, from: Date): number | null
 // ------------------------------------------------------------------ formatting
 
 /** "Thu Aug 7 at 10:00" — local, for echoing a booking back to the agent. */
-export function formatLocal(at: Date): string {
+export function formatLocal(at: Date, timeZone: string = systemTimeZone()): string {
   return at.toLocaleString("en-US", {
+    timeZone,
     weekday: "short",
     month: "short",
     day: "numeric",

@@ -33,6 +33,15 @@ cron:
 
 Run `tai` and the scheduler picks it up.
 
+Cron expressions use TAI's effective timezone: `time.timezone` when configured,
+otherwise a selected time provider's zone, otherwise the host timezone. For a
+host/container mismatch, pin it explicitly:
+
+```yaml
+time:
+  timezone: America/Los_Angeles
+```
+
 ## Schedule syntax
 
 Standard 5-field cron (`min hour day-of-month month day-of-week`).

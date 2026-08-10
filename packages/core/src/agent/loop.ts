@@ -296,6 +296,8 @@ export interface AgentLoopOptions {
   session: Session;
   db: Database.Database;
   tools: Tool[];
+  /** Runtime-owned clock and timezone for rendered live context. */
+  timeProvider?: import("../time/provider.js").ResolvedTimeProvider;
   extraInstructions: string;
   maxToolRounds: number;
   maxHistoryTokens: number;
@@ -1126,7 +1128,10 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
     // built and prepended by the exploratory worker; not delegates —
     // they see the parent task only). Heuristic: no exploratoryRunId.
     if (!isExploratoryTick) {
-      const state = buildChatLiveState(db, agentNameForCore, session.projectId ?? null);
+      const state = buildChatLiveState(db, agentNameForCore, session.projectId ?? null, {
+        now: opts.timeProvider ? () => opts.timeProvider!.now() : undefined,
+        timeZone: opts.timeProvider?.timeZone(),
+      });
       const rendered = renderChatLiveState(state);
       if (rendered) chatLiveBlock = `\n\n${rendered}`;
     }

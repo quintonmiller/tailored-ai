@@ -40,6 +40,7 @@ tools: { ... }          # tool enable/disable + per-tool config
 custom_tools: { ... }   # YAML-defined shell-command tools
 commands: { ... }       # slash commands
 cron: { ... }           # scheduled jobs
+time: { ... }           # clock provider + optional IANA timezone
 webhooks: { ... }       # incoming webhook config
 workflows: { ... }      # workflow directory + caps
 exploratory: { ... }    # global toggle for online-mode worker
@@ -51,6 +52,25 @@ database: { ... }       # SQLite location
 ```
 
 Validation warnings print at startup.
+
+## Timezone and clock
+
+TAI uses the host timezone by default. Pin an IANA timezone when the runtime
+host (for example a container, VM, or WSL instance) does not match you:
+
+```yaml
+time:
+  provider: system
+  timezone: America/Los_Angeles
+```
+
+The effective provider and timezone are logged at startup and hot reload.
+Configured timezone wins over a provider-supplied zone, which wins over the
+host. Schedules, cron, quiet hours, and prompt timestamps use this zone while
+database timestamps remain UTC.
+
+Plugins can register a clock with `ctx.timeProviders.register`. Select it with
+`time.provider`; put provider-owned settings under `time.options`.
 
 ## Provider
 

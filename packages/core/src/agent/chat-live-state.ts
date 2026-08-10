@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 import { queryProjectTasks } from "../db/task-queries.js";
 import { listTickLogs, type TickLogRow } from "../db/tick-log-queries.js";
+import { systemTimeZone } from "../time/provider.js";
 
 /**
  * Real-time snapshot built at the start of every user chat turn
@@ -35,6 +36,7 @@ export interface ChatLiveState {
   agent: string;
   projectId: string | null;
   generatedAt: string;
+  timeZone?: string;
   recentTicks: RecentTickEntry[];
   inFlight: InFlightSnapshot;
   pending: PendingSnapshot;
@@ -49,6 +51,8 @@ export interface BuildChatLiveStateOptions {
   backlogLimit?: number;
   /** Override for "now" — testing only. */
   now?: () => Date;
+  /** IANA timezone used to render the civil-time anchor. */
+  timeZone?: string;
 }
 
 export function buildChatLiveState(
@@ -118,6 +122,7 @@ export function buildChatLiveState(
     agent,
     projectId,
     generatedAt: now.toISOString(),
+    timeZone: opts.timeZone ?? systemTimeZone(),
     recentTicks,
     inFlight: { inProgressTasks: inProgress },
     pending: { topBacklog },
@@ -166,6 +171,7 @@ export function renderChatLiveState(state: ChatLiveState): string {
   // own unconditional Now line.
   const now = new Date(state.generatedAt);
   const local = now.toLocaleString("en-US", {
+    timeZone: state.timeZone ?? systemTimeZone(),
     weekday: "short",
     year: "numeric",
     month: "short",

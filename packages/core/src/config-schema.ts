@@ -202,6 +202,14 @@ const AgentSettingsSchema = z.object({
 });
 type _AgentSettingsMatches = AssertTrue<Identical<z.infer<typeof AgentSettingsSchema>, AgentConfig["agent"]>>;
 
+const TimeConfigSchema = z.object({
+  provider: z.string(),
+  timezone: z.string().optional(),
+  // Open on purpose: the selected time provider owns these keys.
+  options: z.record(z.unknown()).optional(),
+});
+type _TimeConfigMatches = AssertTrue<Identical<z.infer<typeof TimeConfigSchema>, NonNullable<AgentConfig["time"]>>>;
+
 /** `tasks.backend` selects a registered backend; `options` is the backend's own opaque bag. */
 const TasksConfigSchema = z.object({
   backend: z.string().optional(),
@@ -463,6 +471,10 @@ export function findShapeIssues(config: AgentConfig): string[] {
   // does not catch it and the quoted value goes out on the wire.
   if (config.agent != null) {
     found.push(...shapeIssues("agent", AgentSettingsSchema.partial(), config.agent));
+  }
+
+  if (config.time != null) {
+    found.push(...shapeIssues("time", TimeConfigSchema, config.time));
   }
 
   if (config.tasks != null) {

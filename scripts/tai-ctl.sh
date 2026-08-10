@@ -226,11 +226,21 @@ spawn() {
 # `.env` — and the wrong bot logs in with no error anywhere.
 spawn_in_home() {
   local name="$1" cmd="$2"
-  spawn "$name" env -i \
-    PATH="$PATH" HOME="$HOME" USER="${USER:-}" LOGNAME="${LOGNAME:-}" \
-    SHELL="${SHELL:-/bin/bash}" LANG="${LANG:-}" TZ="${TZ:-}" TERM="${TERM:-dumb}" \
-    TAI_HOME="$INSTANCE_HOME" \
+  local -a clean_env=(
+    env -i
+    "PATH=$PATH" "HOME=$HOME" "USER=${USER:-}" "LOGNAME=${LOGNAME:-}"
+    "SHELL=${SHELL:-/bin/bash}" "LANG=${LANG:-}" "TERM=${TERM:-dumb}"
+  )
+  # An absent TZ tells libc/Node to use /etc/localtime. TZ="" does NOT mean
+  # the same thing: Node treats the explicitly empty value as GMT, which made
+  # a Pacific host's schedule tool resolve wall-clock times in UTC. Preserve a
+  # real operator override, but leave absence absent.
+  [[ -n "${TZ:-}" ]] && clean_env+=("TZ=$TZ")
+  clean_env+=(
+    "TAI_HOME=$INSTANCE_HOME"
     bash -c "cd '$REPO_DIR' && exec $cmd"
+  )
+  spawn "$name" "${clean_env[@]}"
 }
 
 await_vllm_ready() {

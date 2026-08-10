@@ -19,6 +19,8 @@ import type {
   ProviderFactory,
   ProviderFactoryResult,
   TaskBackendFactory,
+  TimeProvider,
+  TimeProviderFactory,
   Tool,
   ToolContext,
   ToolFactory,
@@ -110,6 +112,16 @@ describe("plugin contract — public register* helpers", () => {
 
   it("registerUiProviderFactory is exported", () => {
     expect(typeof core.registerUiProviderFactory).toBe("function");
+  });
+
+  it("time provider registration and contract are reachable from the barrel", () => {
+    const factory: TimeProviderFactory = () => {
+      const provider: TimeProvider = { now: () => new Date(0), timeZone: () => "UTC" };
+      return provider;
+    };
+    expect(typeof factory).toBe("function");
+    expect(typeof core.registerTimeProviderFactory).toBe("function");
+    expect(typeof core.resolveTimeProvider).toBe("function");
   });
 
   it("resolveUiProvider is exported", () => {

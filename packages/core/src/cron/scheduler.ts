@@ -12,6 +12,7 @@ import { PASSTHROUGH_GATE, resolveGate } from "../notifications/dedup.js";
 import type { ProjectRef } from "../projects/resolve.js";
 import { expandPrompt } from "../prompts/expand.js";
 import type { AgentRuntime } from "../runtime.js";
+import { runtimeTimeProvider } from "../time/provider.js";
 import type { WorkflowEngine } from "../workflows/engine.js";
 import { compileSchedule } from "./schedule-dsl.js";
 
@@ -57,7 +58,9 @@ export class CronScheduler {
         continue;
       }
 
-      const timer = new Cron(compiledCron, () => this.runScheduled(job));
+      const timer = new Cron(compiledCron, { timezone: runtimeTimeProvider(this.runtime).timeZone() }, () =>
+        this.runScheduled(job),
+      );
 
       this.timers.push(timer);
       const friendly = compiledCron === job.schedule ? job.schedule : `${job.schedule} → ${compiledCron}`;
@@ -120,7 +123,7 @@ export class CronScheduler {
 
     const lastRunStr = row?.last_run;
     const lastRunDate = lastRunStr ? new Date(`${lastRunStr}Z`) : null;
-    const effectiveDate = lastRunDate ?? new Date(Date.now() - 3600_000);
+    const effectiveDate = lastRunDate ?? new Date(runtimeTimeProvider(this.runtime).now().getTime() - 3600_000);
 
     vars.last_run = effectiveDate.toISOString();
     vars.last_run_epoch = String(Math.floor(effectiveDate.getTime() / 1000));

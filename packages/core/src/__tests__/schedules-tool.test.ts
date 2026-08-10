@@ -117,6 +117,28 @@ describe("schedule — once", () => {
     expect(res.error).toMatch(/relative/);
     expect(res.error).toMatch(/tomorrow/);
   });
+
+  it("uses the runtime provider's instant and timezone", async () => {
+    const fixed = new ScheduleTool({
+      store,
+      rooms,
+      limits: () => ({ maxPerAgent: 20, minIntervalMinutes: 15, maxHorizonDays: 365 }),
+      timeProvider: {
+        id: "fixed-test",
+        timeZoneSource: "provider",
+        now: () => new Date("2026-08-09T19:00:00.000Z"),
+        timeZone: () => "America/Los_Angeles",
+      },
+    });
+
+    const res = await fixed.execute({ action: "once", when: "tomorrow 9am", note: "n" }, ctx([ROOM]));
+
+    expect(res.success).toBe(true);
+    const row = store.listForAgent(AGENT)[0];
+    expect(fromDbTime(row.next_run_at).toISOString()).toBe("2026-08-10T16:00:00.000Z");
+    expect(fromDbTime(row.created_at).toISOString()).toBe("2026-08-09T19:00:00.000Z");
+    expect(res.output).toContain("09:00");
+  });
 });
 
 describe("schedule — repeat", () => {

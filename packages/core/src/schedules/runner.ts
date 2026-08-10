@@ -20,6 +20,7 @@ import { runAgentLoop } from "../agent/loop.js";
 import { loadSession } from "../agent/session.js";
 import type { RoomWatcher, ScheduledWakeOutcome } from "../rooms/watcher.js";
 import type { AgentRuntime } from "../runtime.js";
+import { runtimeTimeProvider } from "../time/provider.js";
 import { fromDbTime, type ScheduleRow, ScheduleStore } from "./store.js";
 import { describeBooking, lateLine, recurringLine, type WakeContext } from "./wake-context.js";
 import { nextOccurrence, type Recurrence } from "./when.js";
@@ -54,11 +55,15 @@ export class ScheduleRunner {
     this.runtime = opts.runtime;
     this.store = new ScheduleStore(opts.runtime.db);
     this.getRoomWatcher = opts.getRoomWatcher;
-    this.now = opts.now ?? (() => new Date());
+    this.now = opts.now ?? (() => runtimeTimeProvider(opts.runtime).now());
   }
 
   private settings() {
     return this.runtime.getConfig().schedules;
+  }
+
+  private timeZone(): string {
+    return runtimeTimeProvider(this.runtime).timeZone();
   }
 
   start(): void {
@@ -121,7 +126,9 @@ export class ScheduleRunner {
     if (this.runtime.isAgentsPaused("autonomous")) {
       if (row.kind === "once") return;
       const rec = this.recurrenceOf(row);
-      const next = rec ? nextOccurrence(rec, now, row.starts_at ? fromDbTime(row.starts_at) : null) : null;
+      const next = rec
+        ? nextOccurrence(rec, now, row.starts_at ? fromDbTime(row.starts_at) : null, this.timeZone())
+        : null;
       if (!next) {
         this.store.setStatus(row.id, "expired");
         return;
@@ -133,7 +140,9 @@ export class ScheduleRunner {
 
     // Claim before dispatch. See the file header.
     const rec = this.recurrenceOf(row);
-    const next = rec ? nextOccurrence(rec, now, row.starts_at ? fromDbTime(row.starts_at) : null) : null;
+    const next = rec
+      ? nextOccurrence(rec, now, row.starts_at ? fromDbTime(row.starts_at) : null, this.timeZone())
+      : null;
     const claimed = this.store.claim(row.id, {
       nextRunAt: next,
       status: row.kind === "once" ? "done" : this.statusAfter(row, next),
@@ -152,7 +161,7 @@ export class ScheduleRunner {
         );
       }
       if (outcome === "ran") {
-        this.store.markRan(row.id);
+        this.store.markRan(row.id, now);
         this.runtime.events?.emit("schedule.fired", {
           id: row.id,
           agent: row.agent,
