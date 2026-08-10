@@ -106,21 +106,30 @@ to `main`. The flow:
    verifies every publishable package reached the registry, and tags a commit
    and a GitHub Release per package.
 
-   > **The `npm-publish` environment does not currently add a second gate.**
-   > It is configured with the maintainer as a required reviewer, but
-   > `prevent_self_review` is off and there is one reviewer — so when the
-   > person who dispatches is also the reviewer, the job starts immediately
-   > with no pause. Observed on the 0.1.10 publish. Dispatching *is* the gate
-   > today; treat it as the moment of decision. See #487.
+   > **The dispatch is the gate. There is no approval pause after it.**
+   > The `npm-publish` environment names the maintainer as a required
+   > reviewer, but `prevent_self_review` is off — so when the person
+   > dispatching is also the reviewer, GitHub has nobody left to ask and the
+   > job starts immediately. Observed on the 0.1.10 publish, and accepted on
+   > 2026-08-09 as how this repo works (#487): with one maintainer, the
+   > alternative is a gate that can never be passed. Treat running the
+   > workflow as the moment of decision — the next thing that happens is an
+   > irreversible publish.
+   >
+   > The reviewer rule is not decorative. It still holds whenever the
+   > dispatcher is *not* the named reviewer, which is the case that would
+   > matter if this repo ever gains a second contributor with write access.
 
 The gates exist so a stray `major`/`minor` changeset — including one authored
 by an unattended agent — cannot ship a release on its own. See the 2026-06-09
 incident note under "Pre-1.0 versioning rule."
 
-Two were intended: merging the version PR, and approving the publish. Only the
-first holds today, plus `guard:pre-v1` refusing a non-`patch` changeset in
-three places. Nothing here runs on a push, so an agent still cannot ship a
-release without a human act — but that act is now one, not two.
+What actually holds today: nothing publishes on a push, the version PR is a
+separate deliberate merge, `guard:pre-v1` refuses a non-`patch` changeset in
+three places, and the publish needs a hand-run `workflow_dispatch`. That is one
+human act at the end rather than the two originally designed — enough that an
+unattended agent cannot ship a release, and worth knowing exactly, because the
+difference used to be documented the other way round.
 
 ## Pre-1.0 versioning rule
 
@@ -196,9 +205,9 @@ There are two independent checkpoints, both manual by default:
   `.changeset/*.md` files; delete those to drop for good).
 - **The npm publish** only runs when you manually trigger the `publish` job
   (Actions ▸ Release ▸ Run workflow). Not triggering it vetoes the release.
-  Nothing ships from a push to `main`. Note that the dispatch is the last
-  reversible moment — the `npm-publish` environment does not stop to ask
-  (#487), and a published version cannot be withdrawn.
+  Nothing ships from a push to `main`. The dispatch is the last reversible
+  moment: the `npm-publish` environment does not stop to ask (#487, accepted),
+  and a published version cannot be withdrawn.
 
 ## Manual / emergency publish
 
