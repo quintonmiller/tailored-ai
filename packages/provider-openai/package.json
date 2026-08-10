@@ -1,6 +1,6 @@
 {
   "name": "@tailored-ai/provider-openai",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "OpenAI model provider for Tailored AI agents. Ships as a register(ctx) plugin — install with `tai plugin install @tailored-ai/provider-openai`; supersedes the minimal built-in `openai` provider with reasoning-model handling, org/project headers, and extra-field passthrough.",
   "license": "MIT",
   "author": "Quinton Miller",

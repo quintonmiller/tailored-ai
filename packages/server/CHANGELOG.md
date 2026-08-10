@@ -1,5 +1,301 @@
 # @tailored-ai/server
 
+## 0.1.10
+
+### Patch Changes
+
+- a38b5fc: Refuse a config write that would land keys nothing reads.
+
+  There were twelve runtime paths writing `config.yaml` — three in the admin
+  tool, seven HTTP routes, a plugin tool, and the setup TUI — each hand-rolling
+  read → mutate → stringify → write → reload with its own idea of what to check
+  first. The strongest checked a YAML round-trip and the agent's tool references.
+  The weakest, `PUT /api/config`, wrote the request body to disk without parsing
+  it; since `runtime.reload()` swallows its own failures, that route answered
+  `200 {"ok":true}` on unparseable YAML while the process kept serving the
+  previous config, and the damage only surfaced at the next restart.
+
+  The gap they shared: none of them ran `validateConfig`. So an agent could
+  create another agent with `name:` and `temp:` instead of `temperature:`, and
+  every layer accepted it — the write, the round-trip, the manifest export. The
+  agent ran at the default temperature for a day. `validateConfig` had detected
+  exactly this since #252; it just ran at startup, into a log, after the fact.
+
+  Adds `config-write.ts` with `updateRawConfig` and `writeRawConfigText` as the
+  single door, and routes the admin tool and every server route through it. A
+  write that would introduce config which parses but is never read is refused
+  with the offending key named and a suggestion ("Did you mean `temperature`?"),
+  and the file is left untouched.
+
+  Two decisions that keep the gate from becoming a lockout. Writes are judged on
+  the findings they _introduce_, compared against a pre-write snapshot, so a
+  deployment's unrelated pre-existing warnings can't make its config permanently
+  unwritable. And only unknown keys refuse — they are never transient and the
+  author is right there; everything else `validateConfig` reports comes back as
+  `warnings` for the caller to surface.
+
+  Also fixes `updateRawConfig` refusing to patch a config it could not parse
+  rather than overwriting it, and makes `create_agent` accept the `value`
+  parameter its own schema advertises.
+
+- 0fb08f4: Board layout editing. `DashboardWidget` gains a `rowSpan` (height, 1–6 grid rows;
+  `span` stays width 1–4), both validated by `validateDashboardWidget`. New
+  `POST /api/dashboard/layout` persists a drag-reordered / resized layout: the body
+  is the widgets in display order with their `span` + `rowSpan`, and the route
+  rewrites `dashboard.widgets` (order = position, span/rowSpan clamped) and reloads.
+  Config widgets keep their full spec; built-in/provider widgets get a minimal
+  `{id, type, order, span, rowSpan}` override so the resolver merge preserves their
+  core-owned title/options.
+- 0fb08f4: Add a dashboard widget seam so custom dashboards slot into the bundled UI
+  without forking it.
+
+  - Core: `DashboardWidget` contract, a widget-provider registry
+    (`registerDashboardWidgetProvider`), `resolveDashboardWidgets(config)`, a
+    `dashboard.widgets` / `dashboard.defaults` config block, and built-in default
+    widgets (system status, needs-you, recent activity) registered like a plugin.
+  - Server: `GET /api/dashboard` returns the resolved widget specs.
+  - UI (bundled): a `Board` page (`#/board`) + a widget renderer registry with
+    built-in `status`, `tasks`, `activity`, `metric`, `list`, `markdown`,
+    `links`, and `iframe` renderers. Widgets are declarative specs (data, not
+    React), so config or plugins can add widgets with no UI changes.
+  - Agent/author enablement: `validateDashboardWidget()` + `BUILTIN_WIDGET_TYPES`
+    exports, `validateConfig` now warns on malformed `dashboard.widgets` (bad
+    type/span, non-`/api/` endpoint, duplicate id), and a `dashboard-widget-author`
+    example skill teaches an agent the whole authoring flow.
+
+  See docs/dashboard-widgets.md.
+
+- e7e3768: Fail loudly, and early, when the HTTP port is already taken.
+
+  `serve()` registered no `error` listener, so `EADDRINUSE` surfaced as an unhandled event: the process died on a raw stack trace that never named the port or the likely cause. And the Discord gateway login, cron, autopilot and the room watcher all start _before_ the HTTP bind, so a second instance started by mistake logged a second bot into the guild and fired cron for several seconds before the collision killed it.
+
+  - New `checkPortAvailable()` runs before anything with side effects, so a doomed start exits with a message instead of briefly standing up a duplicate bot.
+  - `start()` now handles the bind error itself, as a backstop for the case where something takes the port between the check and the real bind.
+  - `portInUseMessage()` names the port, says another instance is the likely holder, and points at `tai-ctl.sh status` / `switch`.
+
+  Two TAI instances share one port deliberately — it is the lock that keeps only one running — so a collision is an expected event that has to read as one.
+
+- a970a8b: First-class reasoning support (#254). Providers now capture their reasoning
+  trace into `ChatResponse.reasoning` (and a streamed `reasoning` event), and a
+  provider-agnostic `thinking` level (`off`/`auto`/`low`/`medium`/`high`) on
+  `ChatParams` maps to each provider's wire format — `reasoning_effort` (OpenAI),
+  `thinking:{type}` (DeepSeek), `thinking` budgets (Anthropic / Bedrock
+  `reasoning_config`), `chat_template_kwargs.enable_thinking` (vLLM via the
+  `openai_compatible` `thinkingDialect`). Set it per provider
+  (`providers.<id>.thinking`) or per agent (`agents.<name>.thinking`). Reasoning
+  is persisted on the assistant message and rendered as a collapsible "Thinking"
+  disclosure in the chat UI, and is stripped from every outgoing request so it
+  never re-enters the model. Retires the per-plugin `thinking` hack in
+  provider-deepseek (its boolean config still works).
+- 57a5d48: Add a global pause switch: `/pause` and `/resume` in Discord.
+
+  Two agents on a metered API answered each other unattended and spent real money
+  in twenty minutes, and there was no way to stop it from a phone. Killing the
+  process loses in-flight work, editing config calls `runtime.reload()` and
+  bounces the very Discord gateway you are typing into, and `autopilot pause`
+  covers one of six things that can start a run.
+
+  **`/pause` blocks autonomous runs only.** Cron timers, webhooks, all eight
+  workflow trigger pollers, autopilot, exploratory ticks, task auto-dispatch and
+  stall retries, room check-ins, agent-to-agent wakes and DMs. Your own messages
+  keep working on purpose: a pause that also kills your DMs is indistinguishable
+  from an outage, and it removes the instruments you would use to inspect what
+  went wrong. `/pause scope:all` adds human-initiated runs.
+
+  **In-flight runs finish.** The gate refuses new runs; aborting a half-finished
+  tool call turns an expensive mistake into an expensive mistake plus an
+  inconsistent worktree. Child workflows started by a running parent are treated
+  as continuations for the same reason.
+
+  State lives in a new `runtime_settings` singleton table, read live on every
+  check — the same shape as `autopilot_settings`, and in SQLite rather than
+  config for the reload reason above. `AgentRuntime` gains
+  `isAgentsPaused(kind)`, `getPauseState()` and `setAgentsPaused()`, and a real
+  change emits `agents.pause_changed` on the runtime bus.
+
+  Server, CLI and Slack are touched only to refuse politely under `scope: all`,
+  plus one gate in core's own webhook `action: agent` route, which reaches the
+  agent loop without passing through the workflow engine.
+
+- de1ce69: MCP observability (#249). Connected MCP servers were silent — "no log lines" was indistinguishable from "never ran", and the #248 drop-on-reload bug surfaced nothing. Now `McpManager` logs the happy path: one line per server on connect (`[mcp:github] connected (3 tools: ...)`), on tool-list change, and on teardown/restart. The CLI startup banner gains an `MCP: github (3), ...` line (only when servers are configured), and `McpManager.list()` now reports `connectedAt`. New `GET /api/mcp` route (wired via the server's `mcpStatus` option) exposes per-server id, tool names, tool count, and ISO connected-at for the UI / `tai doctor`.
+- c120f51: Make `server.proxyAuth` actually authenticate, so the dashboard works remotely.
+
+  The middleware and the login page both already existed. Nothing mounted the
+  middleware, and `/api/auth/login` was never implemented, so enabling proxyAuth
+  authenticated nothing while suppressing the warning that the API was open.
+
+  The server now gates `/api/*` on proxyAuth when enabled, accepting either the
+  password as a bearer or an HMAC-signed session cookie, and serves
+  `/api/auth/login` and `/api/auth/logout`. The cookie is what matters: a bearer
+  token cannot ride on an `EventSource` connection, so SSE (chat, the event feed)
+  was unreachable to a token-authenticated dashboard. That is why the bundled UI
+  could not be used with `authToken` alone.
+
+  Auth is one gate rather than two stacked middlewares, so "which credential
+  decides" is answerable by reading one function. `authToken` keeps working
+  alongside proxyAuth, letting scripts hold a separate secret from browsers.
+
+  Hardening:
+
+  - Session cookies are HttpOnly, SameSite=Lax, and only `Secure` when the
+    request actually arrived over TLS (`x-forwarded-proto`, else the request
+    URL). Setting `Secure` unconditionally makes login silently fail on a
+    plain-HTTP LAN, since the browser accepts the 200 and drops the cookie.
+  - Failed logins are throttled per client IP, 10 per 15 minutes, keyed on
+    `x-forwarded-for` so one attacker cannot lock out everyone behind a proxy.
+    A correct password clears the record.
+  - The session HMAC is keyed by the password, so rotating it invalidates every
+    issued session.
+  - `proxyAuth.enabled` with an empty password fails every request closed with a
+    500 instead of falling open, and `validateConfig` warns about it.
+
+  Also fixes the UI's 401 interceptor swallowing `/api/auth/login`'s own 401,
+  which made every wrong password report "Network error" instead of the reason,
+  and parses the server's JSON error rather than printing it raw.
+
+- 1d9e6a6: Token usage is recorded for every provider call, not just autopilot and exploratory.
+
+  Recording lived in two callers, so `token_usage` was a ledger of those two
+  subsystems and nothing else. Everything the loop actually runs day to day —
+  chat, room wakes, cron, delegation — recorded nothing. On a live deployment that
+  left the majority of traffic invisible: one agent ran 799 room messages in a
+  fortnight and contributed not a single row, which makes "what is this costing
+  me" unanswerable exactly where the answer matters.
+
+  The loop now writes one row per provider call, before invoking the caller's
+  `onUsage` so a throwing consumer cannot cost the accounting. Rows carry `agent`
+  and `source` (`loop` | `autopilot` | `exploratory`), and the two workers pass
+  their own label instead of recording themselves.
+
+  Widening the table must not widen the autopilot budget, or a busy hour in the
+  rooms would pause autopilot for reasons unrelated to autopilot. `checkBudget`
+  and `/api/autopilot/usage` are therefore scoped to `BUDGETED_TOKEN_SOURCES`
+  (autopilot + exploratory), which preserves what the caps meant before. Rows
+  predating the column have a NULL source and still count, since that is what they
+  were; a direct `recordTokenUsage` call that omits the source also stores NULL,
+  so an external caller does not silently drop out of the budget.
+
+  New `GET /api/usage?hours=` returns deployment-wide totals grouped by source and
+  by agent.
+
+- Updated dependencies [b559646]
+- Updated dependencies [ef9e809]
+- Updated dependencies [a2f8016]
+- Updated dependencies [ed98f4a]
+- Updated dependencies [b559646]
+- Updated dependencies [920a799]
+- Updated dependencies [fecc3d8]
+- Updated dependencies [2632f51]
+- Updated dependencies [9af06b7]
+- Updated dependencies [b8f5d16]
+- Updated dependencies [aee6802]
+- Updated dependencies [9d32c15]
+- Updated dependencies [8b0c45a]
+- Updated dependencies [f67b15a]
+- Updated dependencies [7447619]
+- Updated dependencies [fd84749]
+- Updated dependencies [b559646]
+- Updated dependencies [d9e294f]
+- Updated dependencies [b1ec29a]
+- Updated dependencies [fd19549]
+- Updated dependencies [a38b5fc]
+- Updated dependencies [1206560]
+- Updated dependencies [0a3b591]
+- Updated dependencies [dc312f1]
+- Updated dependencies [5a01ceb]
+- Updated dependencies [b1cdad9]
+- Updated dependencies [0fb08f4]
+- Updated dependencies [0fb08f4]
+- Updated dependencies [0fb08f4]
+- Updated dependencies [54ce46f]
+- Updated dependencies [7017c2d]
+- Updated dependencies [7d273b5]
+- Updated dependencies [b559646]
+- Updated dependencies [e6cb5fb]
+- Updated dependencies [e66f07b]
+- Updated dependencies [0187e0c]
+- Updated dependencies [b559646]
+- Updated dependencies [daa6302]
+- Updated dependencies [a970a8b]
+- Updated dependencies [57a5d48]
+- Updated dependencies [39445bb]
+- Updated dependencies [4c48ad8]
+- Updated dependencies [ba7bad5]
+- Updated dependencies [571adba]
+- Updated dependencies [de1ce69]
+- Updated dependencies [87fc6fd]
+- Updated dependencies [611f94d]
+- Updated dependencies [8aa5720]
+- Updated dependencies [d2b5939]
+- Updated dependencies [7e9a130]
+- Updated dependencies [b559646]
+- Updated dependencies [d3a4cf1]
+- Updated dependencies [36a50b7]
+- Updated dependencies [4656518]
+- Updated dependencies [d3e79e3]
+- Updated dependencies [128c561]
+- Updated dependencies [30a0c14]
+- Updated dependencies [df2d055]
+- Updated dependencies [9ccec1f]
+- Updated dependencies [e698f39]
+- Updated dependencies [b8fe10c]
+- Updated dependencies [0d4f4b6]
+- Updated dependencies [6460c00]
+- Updated dependencies [0039c3a]
+- Updated dependencies [8d0f50e]
+- Updated dependencies [9b13c86]
+- Updated dependencies [c120f51]
+- Updated dependencies [7c6217a]
+- Updated dependencies [449e827]
+- Updated dependencies [58dd367]
+- Updated dependencies [bbcde3b]
+- Updated dependencies [2c0fde1]
+- Updated dependencies [0b7a0f7]
+- Updated dependencies [19188db]
+- Updated dependencies [20f9fe1]
+- Updated dependencies [7f620a0]
+- Updated dependencies [b559646]
+- Updated dependencies [9883913]
+- Updated dependencies [77781ef]
+- Updated dependencies [b7788ad]
+- Updated dependencies [7e05a94]
+- Updated dependencies [e3b1bc5]
+- Updated dependencies [920a799]
+- Updated dependencies [920a799]
+- Updated dependencies [b559646]
+- Updated dependencies [682e304]
+- Updated dependencies [d492806]
+- Updated dependencies [dd3951c]
+- Updated dependencies [544aac2]
+- Updated dependencies [87d2af3]
+- Updated dependencies [c308241]
+- Updated dependencies [cc792f2]
+- Updated dependencies [7d273b5]
+- Updated dependencies [42a1e90]
+- Updated dependencies [2963457]
+- Updated dependencies [9ec3100]
+- Updated dependencies [248931d]
+- Updated dependencies [4b54275]
+- Updated dependencies [22f9b9e]
+- Updated dependencies [d7656d8]
+- Updated dependencies [afc05a2]
+- Updated dependencies [dd3951c]
+- Updated dependencies [1ad506a]
+- Updated dependencies [a1231c6]
+- Updated dependencies [1d9e6a6]
+- Updated dependencies [f0bb132]
+- Updated dependencies [19996ac]
+- Updated dependencies [28bb474]
+- Updated dependencies [244cdcf]
+- Updated dependencies [a00b73a]
+- Updated dependencies [b559646]
+- Updated dependencies [c50e55a]
+- Updated dependencies [bcc2159]
+- Updated dependencies [42d98c6]
+- Updated dependencies [b8a8da4]
+- Updated dependencies [cf2cd34]
+  - @tailored-ai/core@0.1.10
+
 ## 0.1.9
 
 ### Patch Changes

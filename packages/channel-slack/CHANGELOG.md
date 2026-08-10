@@ -1,5 +1,157 @@
 # @tailored-ai/channel-slack
 
+## 0.1.10
+
+### Patch Changes
+
+- 57a5d48: Add a global pause switch: `/pause` and `/resume` in Discord.
+
+  Two agents on a metered API answered each other unattended and spent real money
+  in twenty minutes, and there was no way to stop it from a phone. Killing the
+  process loses in-flight work, editing config calls `runtime.reload()` and
+  bounces the very Discord gateway you are typing into, and `autopilot pause`
+  covers one of six things that can start a run.
+
+  **`/pause` blocks autonomous runs only.** Cron timers, webhooks, all eight
+  workflow trigger pollers, autopilot, exploratory ticks, task auto-dispatch and
+  stall retries, room check-ins, agent-to-agent wakes and DMs. Your own messages
+  keep working on purpose: a pause that also kills your DMs is indistinguishable
+  from an outage, and it removes the instruments you would use to inspect what
+  went wrong. `/pause scope:all` adds human-initiated runs.
+
+  **In-flight runs finish.** The gate refuses new runs; aborting a half-finished
+  tool call turns an expensive mistake into an expensive mistake plus an
+  inconsistent worktree. Child workflows started by a running parent are treated
+  as continuations for the same reason.
+
+  State lives in a new `runtime_settings` singleton table, read live on every
+  check — the same shape as `autopilot_settings`, and in SQLite rather than
+  config for the reload reason above. `AgentRuntime` gains
+  `isAgentsPaused(kind)`, `getPauseState()` and `setAgentsPaused()`, and a real
+  change emits `agents.pause_changed` on the runtime bus.
+
+  Server, CLI and Slack are touched only to refuse politely under `scope: all`,
+  plus one gate in core's own webhook `action: agent` route, which reaches the
+  agent loop without passing through the workflow engine.
+
+- Updated dependencies [b559646]
+- Updated dependencies [ef9e809]
+- Updated dependencies [a2f8016]
+- Updated dependencies [ed98f4a]
+- Updated dependencies [b559646]
+- Updated dependencies [920a799]
+- Updated dependencies [fecc3d8]
+- Updated dependencies [2632f51]
+- Updated dependencies [9af06b7]
+- Updated dependencies [b8f5d16]
+- Updated dependencies [aee6802]
+- Updated dependencies [9d32c15]
+- Updated dependencies [8b0c45a]
+- Updated dependencies [f67b15a]
+- Updated dependencies [7447619]
+- Updated dependencies [fd84749]
+- Updated dependencies [b559646]
+- Updated dependencies [d9e294f]
+- Updated dependencies [b1ec29a]
+- Updated dependencies [fd19549]
+- Updated dependencies [a38b5fc]
+- Updated dependencies [1206560]
+- Updated dependencies [0a3b591]
+- Updated dependencies [dc312f1]
+- Updated dependencies [5a01ceb]
+- Updated dependencies [b1cdad9]
+- Updated dependencies [0fb08f4]
+- Updated dependencies [0fb08f4]
+- Updated dependencies [0fb08f4]
+- Updated dependencies [54ce46f]
+- Updated dependencies [7017c2d]
+- Updated dependencies [7d273b5]
+- Updated dependencies [b559646]
+- Updated dependencies [e6cb5fb]
+- Updated dependencies [e66f07b]
+- Updated dependencies [0187e0c]
+- Updated dependencies [b559646]
+- Updated dependencies [daa6302]
+- Updated dependencies [a970a8b]
+- Updated dependencies [57a5d48]
+- Updated dependencies [39445bb]
+- Updated dependencies [4c48ad8]
+- Updated dependencies [ba7bad5]
+- Updated dependencies [571adba]
+- Updated dependencies [de1ce69]
+- Updated dependencies [87fc6fd]
+- Updated dependencies [611f94d]
+- Updated dependencies [8aa5720]
+- Updated dependencies [d2b5939]
+- Updated dependencies [7e9a130]
+- Updated dependencies [b559646]
+- Updated dependencies [d3a4cf1]
+- Updated dependencies [36a50b7]
+- Updated dependencies [4656518]
+- Updated dependencies [d3e79e3]
+- Updated dependencies [128c561]
+- Updated dependencies [30a0c14]
+- Updated dependencies [df2d055]
+- Updated dependencies [9ccec1f]
+- Updated dependencies [e698f39]
+- Updated dependencies [b8fe10c]
+- Updated dependencies [0d4f4b6]
+- Updated dependencies [6460c00]
+- Updated dependencies [0039c3a]
+- Updated dependencies [8d0f50e]
+- Updated dependencies [9b13c86]
+- Updated dependencies [c120f51]
+- Updated dependencies [7c6217a]
+- Updated dependencies [449e827]
+- Updated dependencies [58dd367]
+- Updated dependencies [bbcde3b]
+- Updated dependencies [2c0fde1]
+- Updated dependencies [0b7a0f7]
+- Updated dependencies [19188db]
+- Updated dependencies [20f9fe1]
+- Updated dependencies [7f620a0]
+- Updated dependencies [b559646]
+- Updated dependencies [9883913]
+- Updated dependencies [77781ef]
+- Updated dependencies [b7788ad]
+- Updated dependencies [7e05a94]
+- Updated dependencies [e3b1bc5]
+- Updated dependencies [920a799]
+- Updated dependencies [920a799]
+- Updated dependencies [b559646]
+- Updated dependencies [682e304]
+- Updated dependencies [d492806]
+- Updated dependencies [dd3951c]
+- Updated dependencies [544aac2]
+- Updated dependencies [87d2af3]
+- Updated dependencies [c308241]
+- Updated dependencies [cc792f2]
+- Updated dependencies [7d273b5]
+- Updated dependencies [42a1e90]
+- Updated dependencies [2963457]
+- Updated dependencies [9ec3100]
+- Updated dependencies [248931d]
+- Updated dependencies [4b54275]
+- Updated dependencies [22f9b9e]
+- Updated dependencies [d7656d8]
+- Updated dependencies [afc05a2]
+- Updated dependencies [dd3951c]
+- Updated dependencies [1ad506a]
+- Updated dependencies [a1231c6]
+- Updated dependencies [1d9e6a6]
+- Updated dependencies [f0bb132]
+- Updated dependencies [19996ac]
+- Updated dependencies [28bb474]
+- Updated dependencies [244cdcf]
+- Updated dependencies [a00b73a]
+- Updated dependencies [b559646]
+- Updated dependencies [c50e55a]
+- Updated dependencies [bcc2159]
+- Updated dependencies [42d98c6]
+- Updated dependencies [b8a8da4]
+- Updated dependencies [cf2cd34]
+  - @tailored-ai/core@0.1.10
+
 ## 0.1.9
 
 ### Patch Changes
