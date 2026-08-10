@@ -1,0 +1,136 @@
+export const metadata = {
+  title: "Configure a model provider",
+  description: "Connect Tailored AI to a local model server, hosted model API, or AWS Bedrock.",
+};
+
+# Configure a model provider
+
+A provider is the adapter between TAI and a model API. You need one provider
+and one model id before an agent can run. Start with the route that matches
+where your model lives; provider-specific tuning can wait.
+
+## Choose the shortest path
+
+| Your model | Start here |
+|---|---|
+| Ollama, vLLM, LM Studio, llama.cpp, or a compatible gateway | Built-in `openai_compatible` — no install |
+| Claude through Anthropic's API | [`@tailored-ai/provider-anthropic`](/docs/packages/provider-anthropic) |
+| GPT or o-series through OpenAI's API | [`@tailored-ai/provider-openai`](/docs/packages/provider-openai) |
+| Models routed through OpenRouter | [`@tailored-ai/provider-openrouter`](/docs/packages/provider-openrouter) |
+| Models available through your AWS account | [`@tailored-ai/provider-bedrock`](/docs/packages/provider-bedrock) |
+| A current DeepSeek model | [`@tailored-ai/provider-deepseek`](/docs/packages/provider-deepseek) |
+
+The dedicated plugins own vendor-specific behavior such as credentials,
+reasoning controls, prompt caching, and model discovery. If an API simply
+speaks the OpenAI wire format, the built-in adapter is usually enough.
+
+## Local and OpenAI-compatible models
+
+Give the endpoint a meaningful id and declare its type. For Ollama:
+
+```yaml
+# ~/.tailored-ai/config.yaml
+providers:
+  local:
+    type: openai_compatible
+    name: Ollama
+    baseUrl: http://localhost:11434/v1
+    defaultModel: qwen3
+
+agent:
+  defaultProvider: local
+```
+
+TAI does not start the model server or download the model. Make sure the
+server is already running and that `baseUrl` points to its `/v1` API. An
+`apiKey` is optional and is only sent when configured.
+
+The same shape works for a hosted OpenAI-compatible gateway:
+
+```yaml
+providers:
+  company_gateway:
+    type: openai_compatible
+    baseUrl: https://models.example.com/v1
+    apiKey: ${MODEL_GATEWAY_API_KEY}
+    defaultModel: team-default
+
+agent:
+  defaultProvider: company_gateway
+```
+
+You can define several endpoints under different ids. This is useful when a
+local model handles routine work and a hosted model handles harder requests.
+
+## Hosted providers
+
+Install the adapter first. The installer downloads it into TAI's plugin
+directory and adds it to the `plugins:` list in your config:
+
+```bash
+tai plugin install @tailored-ai/provider-anthropic
+```
+
+Then add the provider's config and select it:
+
+```yaml
+providers:
+  anthropic:
+    apiKey: ${ANTHROPIC_API_KEY}
+    defaultModel: claude-haiku-4-5
+
+agent:
+  defaultProvider: anthropic
+```
+
+Keep secrets in environment variables or a `.env` file beside
+`config.yaml`; do not commit resolved keys. Each provider reference above
+lists its supported fields, credential behavior, and model-id rules.
+
+## Check the connection
+
+Run one small request before configuring tools or automation:
+
+```bash
+tai -m "Reply with exactly: provider connected"
+```
+
+A completed response confirms that TAI could resolve the provider, authenticate,
+and invoke the selected model. If it fails, read the first error before changing
+anything: unknown provider ids usually mean the plugin is not installed; 401 or
+403 responses point to credentials; connection errors point to `baseUrl` or the
+model server.
+
+## Use more than one provider
+
+Set a provider and model for a specific agent when it should differ from the
+deployment default:
+
+```yaml
+agents:
+  researcher:
+    provider: openrouter
+    model: anthropic/claude-haiku-4.5
+```
+
+For automatic failover, give the default agent or a named agent an ordered
+`models` list. TAI tries the first entry, then moves down the list when a
+provider cannot be built or its request fails:
+
+```yaml
+agents:
+  default:
+    models:
+      - { provider: local, model: qwen3 }
+      - { provider: anthropic, model: claude-haiku-4-5 }
+```
+
+See [Configuration → Resilient model selection](/docs/configuration#resilient-model-selection)
+for the full precedence rules.
+
+## Your provider is not listed
+
+First check whether its API is OpenAI-compatible. If it is, configure it inline
+with `type: openai_compatible`; you do not need a package for each vendor. If
+the protocol is genuinely different, [build a provider plugin](/docs/providers/custom)
+that implements TAI's small provider contract and registers a new id.

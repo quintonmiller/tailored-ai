@@ -1,11 +1,18 @@
 export const metadata = {
-  title: "@tailored-ai/provider-bedrock",
+  title: "AWS Bedrock provider reference",
   description: "AWS Bedrock model provider plugin. One provider id for every model your AWS account can invoke, with tool calling via the Converse API.",
 };
 
-# @tailored-ai/provider-bedrock
+# AWS Bedrock provider reference
 
-AWS Bedrock as a model provider. One provider id, `bedrock`, covers every model your AWS account can invoke: Anthropic Claude, Amazon Nova, Meta Llama, Mistral, and the rest of the Bedrock catalog. The plugin speaks Bedrock's [Converse API](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html), which normalizes message and tool-calling shapes across model families, so agents and their tools work the same regardless of which model you pick.
+`@tailored-ai/provider-bedrock` exposes AWS Bedrock as one provider id,
+`bedrock`, covering every model your account can invoke: Anthropic Claude,
+Amazon Nova, Meta Llama, Mistral, and the rest of the Bedrock catalog. The
+plugin speaks Bedrock's [Converse API](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html),
+which normalizes message and tool-call shapes across model families.
+
+> Still choosing a model API? Start with [Configure a model provider](/docs/providers),
+> then return here for Bedrock credentials, model ids, and request behavior.
 
 This is also the reference implementation for a provider plugin: a single `register(ctx)` package that adds a new entry to the provider registry. If you want to write your own provider, start from this package's source.
 

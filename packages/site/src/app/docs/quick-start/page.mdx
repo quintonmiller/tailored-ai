@@ -44,7 +44,7 @@ agent:
   defaultProvider: openai_compatible
 ```
 
-### Hosted (Anthropic, OpenAI, OpenRouter, Bedrock)
+### Hosted
 
 Hosted vendors ship as plugins:
 
@@ -62,9 +62,10 @@ agent:
   defaultProvider: anthropic
 ```
 
-Swap `anthropic` for `openai`, `openrouter`, or `bedrock`; the shape stays
-the same. Put the provider block in `~/.tailored-ai/config.yaml` and its API
-key in the `.env` beside it.
+Put the provider block in `~/.tailored-ai/config.yaml` and its API key in the
+`.env` beside it. Other providers have different fields—Bedrock, for example,
+uses the AWS credential chain. [Configure a model provider](/docs/providers)
+has the shortest working path for each supported option.
 
 ## 3. Configure the agent
 

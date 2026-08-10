@@ -90,7 +90,7 @@ agent:
 For vLLM swap the `baseUrl` for `http://127.0.0.1:8000/v1`. An `apiKey` is
 optional and only sent when set.
 
-### Hosted vendors (Anthropic, OpenAI, OpenRouter, Bedrock)
+### Hosted vendors
 
 Hosted providers ship as plugins. Install the one you want, configure its
 `providers` block, and select it:
@@ -115,9 +115,10 @@ agent:
 ANTHROPIC_API_KEY=sk-ant-…
 ```
 
-The same shape works for `@tailored-ai/provider-openai`,
-`@tailored-ai/provider-openrouter`, and `@tailored-ai/provider-bedrock`.
-Each plugin's page under [Packages](/docs/packages) lists its options.
+The exact credentials vary by provider. OpenAI, OpenRouter, and DeepSeek use
+API keys; Bedrock uses the standard AWS credential chain. [Configure a model
+provider](/docs/providers) compares the available adapters and links to each
+provider's field-level reference.
 
 ### Multi-provider
 
