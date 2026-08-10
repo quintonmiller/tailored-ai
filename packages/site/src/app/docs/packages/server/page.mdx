@@ -20,21 +20,38 @@ embedding the HTTP routes inside your own service.
 ## Minimal embed
 
 ```ts
-import Database from "better-sqlite3";
-import { AgentRuntime, createProvider, loadConfig } from "@tailored-ai/core";
-import { startServer } from "@tailored-ai/server";
+import {
+  AgentRuntime,
+  createProvider,
+  createTools,
+  initDatabase,
+  loadConfig,
+} from "@tailored-ai/core";
+import { createServer } from "@tailored-ai/server";
 
-const config = await loadConfig("./config.yaml");
-const db = new Database("./agent.db");
-const provider = createProvider(config);
-const runtime = new AgentRuntime({ config, db, provider });
+const configPath = "./config.yaml";
+const config = loadConfig(configPath);
+const db = initDatabase("./agent.db");
+const runtime = new AgentRuntime(
+  {
+    configPath,
+    db,
+    contextDir: "./data/context",
+    kbDir: "./data/kb",
+    createTools,
+    createProvider,
+  },
+  loadConfig,
+  config,
+);
 
-await startServer({
-  runtime,
-  port: 3000,
-  uiDist: "./my-built-ui",   // optional; serves a static SPA at /
-});
+const { start } = createServer({ runtime });
+start();
 ```
+
+The CLI wires the scheduler, task watcher, workflows, exploratory worker, MCP
+status, channels, and selected UI provider into the same server. Embedders can
+pass only the services they use.
 
 ## Routes
 
@@ -75,15 +92,18 @@ event: error       data: {"message": "…"}
 
 ## Authentication
 
-The routes ship **without built-in auth in v0.1**. Three options:
+Three deployment shapes are supported:
 
-1. **Bind to `127.0.0.1`** for local-only use.
-2. **Reverse-proxy in front** (`nginx`, `caddy`, `oauth2-proxy`).
-3. **Use the `proxyAuth` middleware** if you've wired up an external
-   auth proxy. See
-   [`packages/server/src/auth/proxy-auth.ts`](https://github.com/quintonmiller/tailored-ai/blob/main/packages/server/src/auth/proxy-auth.ts).
+1. **Local only:** keep the default `127.0.0.1` bind.
+2. **Programmatic clients:** set `server.authToken`; clients send it as a
+   bearer token on every request.
+3. **Bundled browser UI:** enable `server.proxyAuth` with a strong password.
+   The login route mints a signed session cookie so browser SSE connections can
+   authenticate. A TLS-terminating reverse proxy should sit in front.
 
-Built-in bearer-token auth is v0.2 work.
+The legacy `server.apiKey` gates mutating requests only and is kept for backward
+compatibility. Prefer `authToken` for new API deployments. See
+[Self-hosting](/docs/self-hosting) before binding beyond loopback.
 
 ## Webhooks
 

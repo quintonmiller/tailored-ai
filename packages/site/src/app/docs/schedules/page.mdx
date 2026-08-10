@@ -1,0 +1,62 @@
+export const metadata = {
+  title: "Agent schedules",
+  description: "Let an agent book, list, and cancel its own persistent future wakes.",
+};
+
+# Agent schedules
+
+The `schedule` tool lets an agent decide when it should run again. This differs
+from [cron](/docs/cron): an operator writes cron jobs in `config.yaml`, while an
+agent creates a schedule during a turn and gives its future self the note it
+will need when the wake arrives.
+
+```text
+schedule(action="once", when="10 minutes", note="check whether the deploy finished")
+schedule(action="repeat", every="weekdays at 9am", note="review overnight alerts")
+schedule(action="list")
+schedule(action="cancel", id="a3f1")
+```
+
+Every accepted booking returns the absolute time TAI resolved. That echo lets
+the agent catch a mistaken date or timezone while it can still correct the
+schedule.
+
+## One-shots and recurrence
+
+One-shot `when` values accept elapsed durations, ISO-like date and time values,
+clock times, and day words such as `tomorrow 9am`. Recurring `every` values can
+be elapsed intervals (`every 30 minutes`) or wall-clock schedules (`weekdays at
+9am`). TAI preserves that distinction across daylight-saving changes.
+
+Schedules persist in SQLite. The runner claims a due row before dispatch, so a
+slow agent cannot start the same wake twice underneath itself. When the service
+was offline, an overdue schedule is still present on restart; a recurring
+schedule advances to the next future occurrence rather than replaying every
+missed interval.
+
+```yaml
+time:
+  provider: system
+  timezone: America/Los_Angeles
+
+schedules:
+  enabled: true
+  tickSeconds: 30
+  maxPerAgent: 20
+  minIntervalMinutes: 15
+  maxHorizonDays: 365
+  maxDeferrals: 3
+
+agents:
+  operator:
+    tools: [schedule, tasks, recall]
+```
+
+`schedules.enabled: false` also removes the tool. The normal autonomous pause
+stops scheduled wakes. One-shots remain due until the pause lifts; a skipped
+recurring occurrence advances normally.
+
+There is no operator-facing schedule screen or CLI command yet. Agents can
+list and cancel their own entries; operators can inspect the `agent_schedules`
+table. The full behavior is documented in
+[`docs/schedules.md`](https://github.com/quintonmiller/tailored-ai/blob/main/docs/schedules.md).

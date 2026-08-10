@@ -5,8 +5,9 @@ export const metadata = {
 
 # Architecture
 
-You're holding a pnpm monorepo with five published packages, two private
-ones, and a few defining ideas.
+TAI is a pnpm monorepo with a small runtime core, a host CLI, a web surface,
+and first-party plugins that use the same extension contracts available to
+third parties.
 
 ## The defining ideas
 
@@ -14,19 +15,19 @@ ones, and a few defining ideas.
    the LLM provider, and the SQLite handle. Everything else borrows from
    it. The CLI, the HTTP server, the Discord channel, cron, and the
    workflow engine all read and write through the same instance.
-2. **Sessions are SQLite rows.** What you start in the terminal can
-   continue from Discord or the web UI because they all key off the same
-   `sessions` and `messages` tables.
+2. **Durable state lives in SQLite.** Sessions are scoped to their channel;
+   tasks, projects, rooms, schedules, and memory are shared deliberately
+   through their own records instead of leaking one chat history everywhere.
 3. **The agent loop is one function.** `chat → tool calls → chat → stop`.
    No state machine. No DAG. Compaction, retries, and hooks wrap around it.
 4. **Hot reload by default.** Config, tools, and provider are *references*
    the runtime re-resolves every iteration. Edit `config.yaml`, save, and
    the next message uses the new config.
-5. **Channels are subscribers.** Discord, HTTP, file-drop. They turn an
-   external message into `runAgentLoop(content, opts)` and send the
-   response back. They don't own state.
+5. **Channels are registered transports.** Discord is built in and Slack is a
+   first-party plugin. Each turns an external message into an agent run and
+   routes output back through a transport-neutral outbound registry.
 
-## The packages
+## Primary packages
 
 | Package | Path | What's in it |
 |---|---|---|
@@ -34,7 +35,7 @@ ones, and a few defining ideas.
 | `@tailored-ai/server` | `packages/server/` | HTTP API (Hono), SSE streaming, webhook intake, optional static-UI mount. |
 | `@tailored-ai/cli` | `packages/cli/` | The `tai` command. REPL, one-shot, project mode, bundled web UI. |
 | `@tailored-ai/browser-mediator` | `packages/browser-mediator/` | Bounded browser tool. Framework-agnostic; OpenAI / Anthropic / TAI adapters. |
-| `@tailored-ai/trusted-actions` | `packages/trusted-actions/` | HITL approval gateway. Runs in its own Docker container. |
+| `@tailored-ai/trusted-actions` | `packages/trusted-actions/` | HITL approval gateway and executor. |
 | `@tailored-ai/ui` (private) | `packages/ui/` | React + Vite SPA. Bundled inside `@tailored-ai/cli`. |
 | `@tailored-ai/site` (private) | `packages/site/` | This documentation site. |
 
@@ -89,7 +90,8 @@ Source: [`packages/core/src/agent/loop.ts`](https://github.com/quintonmiller/tai
 
 ## Persistence
 
-One SQLite file. Default `./agent.db` in the cwd, or `$TAI_HOME/agent.db`.
+One SQLite file. Its configured path is relative to the instance home, which is
+`~/.tailored-ai/` by default or the directory selected by `$TAI_HOME` / `-c`.
 
 | Table | What's in it |
 |---|---|
@@ -102,6 +104,8 @@ One SQLite file. Default `./agent.db` in the cwd, or `$TAI_HOME/agent.db`.
 | `chunks` | Promoted longer-form content with embeddings. |
 | `email_seen` | Dedup ledger for the gmail tool. |
 | `cron_runs` | History of cron job executions. |
+| `agent_schedules` | Persistent one-shot and recurring wakes agents booked for themselves. |
+| `rooms`, `room_subscriptions`, `room_messages` | Shared-room definitions, membership, cursors, and transcripts. |
 | `workflow_runs`, `workflow_steps` | Workflow telemetry. |
 | `digest_runs` | Autopilot morning-digest archive. |
 | `exploratory_runs` | Online tick history (one row per tick). |
@@ -115,28 +119,29 @@ One SQLite file. Default `./agent.db` in the cwd, or `$TAI_HOME/agent.db`.
 `packages/core/src/factories.ts` is the composition layer. Three pure
 builders:
 
-- `createTools(config, opts)` returns the registered tool list based on
-  `config.tools.*` flags.
-- `createProvider(config)` returns the `Provider` for
-  `config.provider.type`.
+- `createTools(config, contextDir, configPath, opts)` builds enabled tools from
+  the registered factories and `config.tools.*` blocks.
+- `createProvider(config, providerId?)` resolves a registered provider id and
+  returns its provider plus default model.
 - `createMetaTools(opts)` returns tools that depend on a runtime
   reference: `delegate`, `task_status`, `admin`, `claude_code`,
   `discord_dm`.
 
-The CLI and any embedding host call these once at startup, build the
-`AgentRuntime`, then start subscribers (Discord, HTTP, cron, workflow
-watcher, file-drop poller).
+The CLI loads registry plugins, builds the `AgentRuntime`, then starts channels,
+HTTP, cron, schedules, rooms, workflows, MCP, and background workers against
+that shared runtime.
 
 ## Online mode
 
-An agent with `online: { enabled: true }` runs a background tick on a
-cadence. Each tick reads the agent's `goals.md`, runs the loop with a
-tightened tool allowlist, and either acts or backs off (idle multiplier
-stretches the next tick from 15 to 30 to 60 to 120 minutes).
+An agent with `online: { enabled: true }` runs a background tick on a cadence
+when the global `exploratory.enabled` switch is also on. Each tick reads the
+agent's `goals.md`, runs the loop with a narrowed tool allowlist and budgets,
+and either acts or backs off. The default cadence starts at 30 minutes and
+doubles after no-op ticks up to four hours.
 
-The runtime calls this **online mode** externally. The internal module
-is `packages/core/src/exploratory/`; the rows in `exploratory_runs` are
-the audit trail. They're the same thing.
+The runtime calls this **online mode** externally. The internal module is
+`packages/core/src/exploratory/`; the rows in `exploratory_runs` are the audit
+trail. See [Online agents](/docs/online-agents) for configuration and limits.
 
 There's a separate **autopilot** worker (`packages/core/src/autopilot/`)
 for cron-like jobs that aren't tied to a user message: the morning

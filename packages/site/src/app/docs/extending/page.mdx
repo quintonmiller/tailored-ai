@@ -11,10 +11,11 @@ to distribute extensions.
 
 ## Two routes
 
-**Plugin (preferred).** Write the extension as a standalone npm package
-that calls TAI's registration APIs at module load. Users install from
-npm and add one line to `plugins:` in `config.yaml`. You carry no fork.
-See [Plugins](/docs/plugins) for the contract.
+**Plugin (preferred).** Write the extension as a standalone package whose
+default export receives a `PluginContext`. Register against `ctx`, return an
+optional disposer, and import core types with `import type`. Users install the
+package and add one line to `plugins:` in `config.yaml`. See
+[Plugins](/docs/plugins) for the contract.
 
 **Fork.** Clone the monorepo, add files to `packages/core/`, ship from
 your fork. Use this when you're prototyping something that may merge
@@ -101,31 +102,26 @@ Conventions that keep tools local-model-friendly:
 - **Use `context.workingDirectory`** if the tool touches the
   filesystem.
 
-Plugging? Register a factory at module load:
+In a plugin, register the factory through the supplied context:
 
 ```ts
-import { registerToolFactory, type ToolFactoryContext } from "@tailored-ai/core";
+import type { Plugin } from "@tailored-ai/core";
 
-registerToolFactory("my_tool", (config, _ctx: ToolFactoryContext) => {
-  const cfg = config.tools?.my_tool;
-  if (!cfg?.enabled) return [];
-  return [new MyTool(cfg)];
-});
+export default ((ctx) => {
+  ctx.tools.register("my_tool", (config) => {
+    const cfg = config.tools.my_tool;
+    if (!cfg?.enabled) return [];
+    return [new MyTool(cfg)];
+  });
+}) satisfies Plugin;
 ```
 
 The factory runs every time `createTools` is called (startup + hot
 reload). Return `[]` when the user hasn't enabled your tool.
 
-Forking? Wire in `packages/core/src/factories.ts`:
-
-```ts
-if (config.tools.my_tool?.enabled) {
-  tools.push(new MyTool(config.tools.my_tool));
-}
-```
-
-Add a config type in `packages/core/src/config.ts` under the `tools:`
-block.
+A built-in tool uses the same factory registry. Add a config type in
+`packages/core/src/config.ts` only when the tool belongs in core; plugin config
+remains an opaque `tools.<id>` bag owned and validated by the plugin.
 
 ## Adding a channel
 
@@ -133,11 +129,11 @@ Implement the `Channel` interface, then register a factory:
 
 ```ts
 import {
-  registerChannelFactory,
   findOrCreateSession,
   runAgentLoop,
   type Channel,
   type AgentRuntime,
+  type Plugin,
 } from "@tailored-ai/core";
 
 class SlackChannel implements Channel {
@@ -162,11 +158,13 @@ class SlackChannel implements Channel {
   async send() { /* … */ }
 }
 
-registerChannelFactory("slack", async (runtime, cfg) => {
-  const slack = new SlackChannel(runtime, { botToken: cfg.botToken as string });
-  await slack.connect();
-  return { channel: slack, disconnect: () => slack.disconnect() };
-});
+export default ((ctx) => {
+  ctx.channels.register("slack", async (runtime, cfg) => {
+    const slack = new SlackChannel(runtime, { botToken: cfg.botToken as string });
+    await slack.connect();
+    return { channel: slack, disconnect: () => slack.disconnect() };
+  });
+}) satisfies Plugin;
 ```
 
 Enable in `config.yaml`:
@@ -188,10 +186,10 @@ Implement `AIProvider`, then register a factory:
 
 ```ts
 import {
-  registerProviderFactory,
   type AIProvider,
   type ChatParams,
   type ChatResponse,
+  type Plugin,
 } from "@tailored-ai/core";
 
 class BedrockProvider implements AIProvider {
@@ -204,10 +202,12 @@ class BedrockProvider implements AIProvider {
   }
 }
 
-registerProviderFactory("bedrock", (config) => {
-  const cfg = config.providers.bedrock as { region: string; model: string };
-  return { provider: new BedrockProvider(cfg), model: cfg.model };
-});
+export default ((ctx) => {
+  ctx.providers.register("bedrock", (config) => {
+    const cfg = config.providers.bedrock as { region: string; model: string };
+    return { provider: new BedrockProvider(cfg), model: cfg.model };
+  });
+}) satisfies Plugin;
 ```
 
 Then `agent.defaultProvider: bedrock` picks it. `openai.ts` in
@@ -220,15 +220,15 @@ no new provider needed. Use `agent.defaultProvider: openai_compatible`
 and set `providers.openai_compatible.baseUrl`.
 
 For custom embedding providers (Qdrant FastEmbed, Voyage, Cohere), the
-same shape applies via `registerEmbeddingFactory(id, factory)` from
-`@tailored-ai/core`. Pick it with `memory.embeddings.type: <id>`.
+same shape applies via `ctx.embeddings.register(id, factory)`. Pick it with
+`memory.embeddings.type: <id>`.
 
 ## Adding a task backend
 
 Implement `TaskBackend`, then register a factory:
 
 ```ts
-import { registerTaskBackendFactory, type TaskBackend } from "@tailored-ai/core";
+import type { Plugin, TaskBackend } from "@tailored-ai/core";
 
 class LinearTaskBackend implements TaskBackend {
   async list(filter) { /* … */ }
@@ -239,10 +239,12 @@ class LinearTaskBackend implements TaskBackend {
   async delete(id) { /* … */ }
 }
 
-registerTaskBackendFactory("linear", (config, _db) => {
-  const cfg = config.tasks?.linear as { apiKey: string; teamId: string };
-  return new LinearTaskBackend(cfg);
-});
+export default ((ctx) => {
+  ctx.taskBackends.register("linear", (config, _db) => {
+    const cfg = config.tasks?.linear as { apiKey: string; teamId: string };
+    return new LinearTaskBackend(cfg);
+  });
+}) satisfies Plugin;
 ```
 
 Then `tasks.backend: linear` in config selects it. References:

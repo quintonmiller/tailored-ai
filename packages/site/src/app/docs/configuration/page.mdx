@@ -17,7 +17,7 @@ in the repo.
 
 1. `--config <path>` if passed to the CLI.
 2. `$TAI_HOME/config.yaml` if `TAI_HOME` is set.
-3. `./config.yaml` in the cwd.
+3. `~/.tailored-ai/config.yaml`.
 
 `.env` in the same directory is loaded automatically. Its vars are
 available for `${VAR}` interpolation.
@@ -31,22 +31,23 @@ the next message. No restart.
 ## Top-level keys
 
 ```yaml
-provider: { ... }       # active LLM provider (single)
-providers: { ... }      # named providers (multi-provider setups)
+providers: { ... }      # model provider configs, keyed by registered id
 agent: { ... }          # global agent defaults
 agents: { ... }         # named agent definitions
 channels: { ... }       # discord, etc.
+rooms: { ... }          # shared multi-agent conversations
 tools: { ... }          # tool enable/disable + per-tool config
 custom_tools: { ... }   # YAML-defined shell-command tools
 commands: { ... }       # slash commands
 cron: { ... }           # scheduled jobs
+schedules: { ... }      # agent-authored future wakes
 time: { ... }           # clock provider + optional IANA timezone
 webhooks: { ... }       # incoming webhook config
 workflows: { ... }      # workflow directory + caps
 exploratory: { ... }    # global toggle for online-mode worker
 memory: { ... }         # embeddings + recall settings
+mcp: { ... }            # MCP server connections
 plugins: [ ... ]        # declarative third-party extension loader
-resources: [ ... ]      # skills, knowledge files
 server: { ... }         # HTTP API binding
 database: { ... }       # SQLite location
 ```
@@ -115,9 +116,8 @@ itself; core carries no per-provider schema. See each plugin's page under
 
 ### Custom providers
 
-Provider ids resolve through a registry, so a plugin (or your own code via
-`registerProviderFactory` from `@tailored-ai/core`) can register any id and
-config selects it the same way. See [Extending →
+Provider ids resolve through a registry, so a plugin can register any id with
+`ctx.providers.register(id, factory)` and config selects it the same way. See [Extending →
 Adding a provider](/docs/extending#adding-a-provider).
 
 ## Multi-provider
@@ -170,7 +170,7 @@ agents:
 
 ```yaml
 agent:
-  defaultProvider: ollama
+  defaultProvider: openai_compatible
   extraInstructions: ""             # appended to every agent's system prompt
   maxHistoryTokens: 16000           # context window budget
   temperature: 0.3                  # default LLM temperature
@@ -347,9 +347,9 @@ substitutes from `.env` or the host environment. If the variable is
 unset, the substitution is left literal and a startup warning prints.
 
 ```yaml
-provider:
-  type: openai
-  apiKey: ${OPENAI_API_KEY}    # reads from .env or $OPENAI_API_KEY
+providers:
+  openai:
+    apiKey: ${OPENAI_API_KEY}  # reads from .env or $OPENAI_API_KEY
 ```
 
 ## Per-project overlays

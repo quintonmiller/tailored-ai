@@ -5,10 +5,11 @@ export const metadata = {
 
 # Agents
 
-A 30B local model handed twenty tools picks badly. A 30B local model
-handed three picks well. Named agents are the mechanism: define a
-`researcher` with only web tools, a `coder` with only filesystem tools,
-a `planner` with only calendar tools, and each one sees a clean menu.
+Tool schemas and instructions compete with conversation history for the model's
+attention. Named agents let you shape that tradeoff by role: define a
+`researcher` with web tools, a `coder` with filesystem tools, and a `planner`
+with calendar tools. There is no universal correct tool count; measure the
+model and prompts you actually deploy.
 
 This is the operational reason TAI has agents instead of one big system
 prompt. The configuration reason is that you can swap models per agent,
