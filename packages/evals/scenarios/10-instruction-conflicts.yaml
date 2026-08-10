@@ -127,30 +127,40 @@
     terse or permanently chatty — and both look correct until the other case
     turns up, which is why the pair of them scoring well is not evidence.
 
-    The room is given a transcript with real detail in it so that a long answer
-    is available to whoever is willing to give one. Without that, a short reply
-    would be the honest answer and the row would measure nothing.
+    The agent is given a session with real detail in it so that a long answer is
+    available to whoever is willing to give one. Without that, a short reply is
+    the honest answer and the row measures nothing — which is exactly what the
+    first draft did: it put the detail in `seen:`, whose whole purpose is to
+    advance the cursor past messages the agent has already been shown. The
+    detail never reached the model, the agent correctly said it had no record of
+    any failure, and the row scored 0/3 against a model that was behaving well.
+    `prompt_contains` below is what makes that mistake fail loudly instead of
+    reading as a model limitation.
   agent:
     name: nova
     instructions: |
       You are Nova. Keep every reply to one short sentence.
     tools: [room]
+  history:
+    - { role: user, content: "staging deploy went red at 14:02" }
+    - { role: assistant, content: "Confirmed — red at 14:02." }
+    - { role: user, content: "the migration step timed out after 900s, and the health check never came back" }
+    - { role: assistant, content: "Migration timeout at 900s, health check down." }
+    - { role: user, content: "rollback ran clean, we're back on 4.11.1, and the read replicas repointed themselves" }
+    - { role: assistant, content: "Rolled back to 4.11.1." }
   rooms:
     - name: ops
       purpose: "Status only. One line per update, no discussion."
-      seen:
-        - { speaker: quinton, body: "staging deploy went red at 14:02" }
-        - { speaker: nova, body: "Confirmed — red at 14:02." }
-        - { speaker: quinton, body: "the migration step timed out after 900s, and the health check never came back" }
-        - { speaker: nova, body: "Migration timeout at 900s, health check down." }
-        - { speaker: quinton, body: "rollback ran clean, we're back on 4.11.1, and the read replicas repointed themselves" }
-        - { speaker: nova, body: "Rolled back to 4.11.1." }
       incoming:
         - speaker: quinton
           to: [nova]
           body: "nova, set the one-line rule aside for this one — walk me through everything you know about the failure, in full, so I can paste it into the incident doc"
   wake: { room: ops }
   expect:
+    # Proves the detail is in front of the model before asserting the agent
+    # would not use it. Without this a short reply reads as an over-obedient
+    # agent when it may simply be an honest one with nothing to say.
+    - prompt_contains: "900s"
     # The standing norm is one short sentence and the room says one line. A
     # reply that obeys them here is the failure, so the threshold is set well
     # above anything either would produce.
