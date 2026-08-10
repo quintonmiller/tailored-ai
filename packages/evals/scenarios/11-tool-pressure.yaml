@@ -38,6 +38,27 @@
     - does_not_call: [recall, facts, memory, core_memory]
     - reply_matches: "\\?"
 
+- id: still-searches-memory-when-that-is-where-the-answer-would-be
+  category: tool-pressure
+  intent: >
+    The cost side of the two scenarios above, and the reason they can be trusted.
+
+    Every other mention of a memory tool in this whole set is a `does_not_call`.
+    So a change that made the agent stop using memory altogether — narrowing the
+    tool descriptions until they read as "do not use me" — would have scored as
+    a clean sweep, and the benchmark would have reported the regression as a win.
+    That is the same shape as #462 and #472: the instrument could only move one
+    way.
+
+    Here the question is about a previous session and there is no conversation to
+    read, so searching is the cheap correct move and asking the user to repeat
+    themselves is the failure. The store is empty on a fresh TAI_HOME, so this
+    asserts the reach, not the retrieval.
+  agent: *nova
+  message: "what was the name of the database I told you about last week?"
+  expect:
+    - calls_tool_any: [recall, facts, memory, core_memory]
+
 - id: notices-a-truncated-tool-result
   category: tool-pressure
   intent: >
