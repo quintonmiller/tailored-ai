@@ -91,6 +91,7 @@ Nothing enforces this yet — [#472] proposes a load-time check.
 
 [#470]: https://github.com/quintonmiller/tailored-ai/pull/470
 [#472]: https://github.com/quintonmiller/tailored-ai/issues/472
+[#478]: https://github.com/quintonmiller/tailored-ai/issues/478
 
 ## The failure that shaped the harness
 
@@ -205,6 +206,20 @@ would leave no evidence of how the benchmark has changed.
 thing the gate looks at, and the deployed site is built by CI from a clean
 checkout, so an experiment you never named stays local. A local `next build`
 shows your own uncommitted runs, which is the point of running one.
+
+**Merge first, then run.** This repo squash-merges, so a baseline produced on a
+PR branch records a `gitSha` that stops existing the moment the PR lands — the
+branch commit is squashed away and the branch deleted, and a reader can no
+longer check out the code that produced the score. It has already happened once:
+the cohort committed in #473 recorded `04409d0`, which is not reachable from
+`main`. The number was honest; its provenance was not reproducible, which is the
+only reason the field is there.
+
+So when a change touches the scenarios or the runtime: land it, pull `main`, run
+the cohort from that clean checkout, and commit the result in a follow-up. The
+guard's reachability check is deliberately advisory — a baseline committed
+alongside the run that produced it is not yet on `main` — and nothing re-checks
+after the merge. [#478] proposes closing that window.
 
 Name a baseline after **what was benchmarked**, since that is the only thing a
 reader of a public page can use:
