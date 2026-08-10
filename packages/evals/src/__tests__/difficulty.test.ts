@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DIFFICULTY_LEVELS, MAX_DIFFICULTY, describeDifficulty, parseDifficultyFilter } from "../difficulty.js";
+import { DIFFICULTY_LEVELS, describeDifficulty, MAX_DIFFICULTY, parseDifficultyFilter } from "../difficulty.js";
 
 /**
  * The filter is the whole point of the field: the loop this exists for is "run

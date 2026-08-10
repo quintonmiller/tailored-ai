@@ -192,7 +192,8 @@ export function printSummary(report: BenchmarkReport): void {
   if (levels.length > 1) {
     console.log("");
     for (const level of levels) {
-      const bucket = (s.byDifficulty ?? {})[level];
+      const bucket = s.byDifficulty?.[level];
+      if (!bucket) continue;
       const pct = `${Math.round(bucket.rate * 100)}%`.padStart(4);
       console.log(
         `  ${describeDifficulty(Number(level)).padEnd(width)}  ${colour(bar(bucket.rate), rateColour(bucket.rate))} ${pct}  ${colour(`${bucket.passed}/${bucket.total}`, DIM)}`,
