@@ -105,32 +105,50 @@ jobs:
 
       # Publishes any package whose package.json version isn't on npm yet; a
       # clean no-op when everything is already published.
+      #
+      # `pnpm publish -r`, not `changeset publish`: pnpm rewrites `workspace:`
+      # ranges into real versions at pack time and changesets does not, so a
+      # manifest published the other way installs with `workspace:*` intact.
+      # The cost is that changesets/action cannot parse this command's output,
+      # so its `published` / `publishedPackages` outputs stay empty — which is
+      # why the two steps below do their own work rather than reading them, and
+      # why `createGithubReleases` is not set here.
       - name: Publish to npm
-        id: changesets
         uses: changesets/action@v1
         with:
           publish: pnpm publish -r --access public --no-git-checks
-          createGithubReleases: true
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      # Registry indexes lag a publish by a few seconds.
+      - name: Wait for the registry to index
+        run: sleep 20
+
       # Catches the silent-failure case where `pnpm publish` exits 0 but the
       # registry never received a tarball (network blip, auth race, etc.).
-      - name: Verify publish reached the registry
-        if: steps.changesets.outputs.published == 'true'
+      #
+      # Runs unconditionally, which is the point. It used to be gated on
+      # `steps.changesets.outputs.published == 'true'` — an output that is only
+      # ever set when a publish definitely succeeded, and never set at all with
+      # this publish command. So the check written to catch "published nothing,
+      # exited 0" could not run in the case it existed for. 0.1.10 shipped all
+      # 13 packages with it skipped, and a release that shipped nothing would
+      # have gone green identically.
+      - name: Verify every publishable package reached the registry
+        run: node scripts/verify-release.mjs
+
+      # Records what shipped. `createGithubReleases` needed the same empty
+      # output, so nothing tagged any release: before 0.1.10 the newest tag in
+      # the repo was 0.1.1, from two months earlier, and no commit was marked
+      # as the one a release was cut from. Idempotent — existing tags are left
+      # alone, so a re-run converges instead of failing.
+      - name: Tag and release what shipped
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # Registry indexes have a short propagation delay after publish.
-          sleep 20
-          echo '${{ steps.changesets.outputs.publishedPackages }}' \
-            | jq -r '.[] | "\(.name)@\(.version)"' \
-            | while read -r spec; do
-                echo "[verify] $spec"
-                if ! npm view "$spec" version --silent >/dev/null; then
-                  echo "::error::Published package $spec is not visible on npm." >&2
-                  exit 1
-                fi
-              done
-          echo "[verify] All published packages are visible on npm."
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          node scripts/verify-release.mjs --tag

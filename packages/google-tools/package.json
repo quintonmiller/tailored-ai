@@ -1,6 +1,6 @@
 {
   "name": "@tailored-ai/google-tools",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "Gmail, Google Calendar, and Google Drive tools for Tailored AI agents. Ships as a register(ctx) plugin — install with `tai plugin install @tailored-ai/google-tools` and list under `plugins:` in config.yaml.",
   "license": "MIT",
   "author": "Quinton Miller",

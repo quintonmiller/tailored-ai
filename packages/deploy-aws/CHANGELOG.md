@@ -1,21 +1,69 @@
-# @tailored-ai/provider-bedrock
+# @tailored-ai/deploy-aws
 
 ## 0.1.10
 
 ### Patch Changes
 
-- a970a8b: First-class reasoning support (#254). Providers now capture their reasoning
-  trace into `ChatResponse.reasoning` (and a streamed `reasoning` event), and a
-  provider-agnostic `thinking` level (`off`/`auto`/`low`/`medium`/`high`) on
-  `ChatParams` maps to each provider's wire format — `reasoning_effort` (OpenAI),
-  `thinking:{type}` (DeepSeek), `thinking` budgets (Anthropic / Bedrock
-  `reasoning_config`), `chat_template_kwargs.enable_thinking` (vLLM via the
-  `openai_compatible` `thinkingDialect`). Set it per provider
-  (`providers.<id>.thinking`) or per agent (`agents.<name>.thinking`). Reasoning
-  is persisted on the assistant message and rendered as a collapsible "Thinking"
-  disclosure in the chat UI, and is stripped from every outgoing request so it
-  never re-enters the model. Retires the per-plugin `thinking` hack in
-  provider-deepseek (its boolean config still works).
+- 1c7cae1: New package: AWS deploy target. `tai deploy up aws-ec2` runs TAI on a single
+  EC2 instance with an encrypted EBS root volume.
+
+  One instance, deliberately — TAI's state is SQLite and takes a single writer,
+  which also rules out Fargate/App Runner (SQLite on EFS breaks WAL locking, and
+  scale-to-zero stops cron and autopilot).
+
+  Talks to AWS through the `aws` CLI rather than the SDK, matching how the repo
+  already shells out to `gh` and `docker`, and so credentials work however they
+  already work for the user — env, `~/.aws`, `AWS_PROFILE`, SSO — with no second
+  credential path to get wrong.
+
+  `plan` sends the real launch request with `--dry-run`, so AWS validates the
+  AMI, instance type, volume, tags, user-data and IAM permissions server-side
+  before anything is created; `up` refuses when that comes back with a problem.
+
+  Secure by default: port 3000 is closed (the bundled dashboard cannot send an
+  API token, so the supported path in is an SSH tunnel), `--allow-http-from
+0.0.0.0/0` additionally requires `--force-public`, the root volume is
+  encrypted, IMDSv2 is required, and the provider API key is written to a
+  root-owned 0600 file rather than passed through instance user-data.
+
+  Deployment identity lives in EC2 tags, so `status` and `down` work from any
+  machine with credentials and there is no local state file to desync.
+
+- c120f51: Make `server.proxyAuth` actually authenticate, so the dashboard works remotely.
+
+  The middleware and the login page both already existed. Nothing mounted the
+  middleware, and `/api/auth/login` was never implemented, so enabling proxyAuth
+  authenticated nothing while suppressing the warning that the API was open.
+
+  The server now gates `/api/*` on proxyAuth when enabled, accepting either the
+  password as a bearer or an HMAC-signed session cookie, and serves
+  `/api/auth/login` and `/api/auth/logout`. The cookie is what matters: a bearer
+  token cannot ride on an `EventSource` connection, so SSE (chat, the event feed)
+  was unreachable to a token-authenticated dashboard. That is why the bundled UI
+  could not be used with `authToken` alone.
+
+  Auth is one gate rather than two stacked middlewares, so "which credential
+  decides" is answerable by reading one function. `authToken` keeps working
+  alongside proxyAuth, letting scripts hold a separate secret from browsers.
+
+  Hardening:
+
+  - Session cookies are HttpOnly, SameSite=Lax, and only `Secure` when the
+    request actually arrived over TLS (`x-forwarded-proto`, else the request
+    URL). Setting `Secure` unconditionally makes login silently fail on a
+    plain-HTTP LAN, since the browser accepts the 200 and drops the cookie.
+  - Failed logins are throttled per client IP, 10 per 15 minutes, keyed on
+    `x-forwarded-for` so one attacker cannot lock out everyone behind a proxy.
+    A correct password clears the record.
+  - The session HMAC is keyed by the password, so rotating it invalidates every
+    issued session.
+  - `proxyAuth.enabled` with an empty password fails every request closed with a
+    500 instead of falling open, and `validateConfig` warns about it.
+
+  Also fixes the UI's 401 interceptor swallowing `/api/auth/login`'s own 401,
+  which made every wrong password report "Network error" instead of the reason,
+  and parses the server's JSON error rather than printing it raw.
+
 - Updated dependencies [b559646]
 - Updated dependencies [ef9e809]
 - Updated dependencies [a2f8016]
@@ -133,47 +181,3 @@
 - Updated dependencies [b8a8da4]
 - Updated dependencies [cf2cd34]
   - @tailored-ai/core@0.1.10
-
-## 0.1.9
-
-### Patch Changes
-
-- Updated dependencies [4f992c9]
-  - @tailored-ai/core@0.1.9
-
-## 0.1.8
-
-### Patch Changes
-
-- 2b9db74: Streaming support via ConverseStream (`chatStream` — text deltas + complete tool calls on done), plus `meta` and `validateConfig` plugin exports.
-- 04c5c6d: New plugin: AWS Bedrock model provider. Registers the `bedrock` provider factory (Converse API, tool calling, AWS credential chain auth, optional `region`/`profile` config).
-- Updated dependencies [c67120e]
-- Updated dependencies [ecb0d69]
-- Updated dependencies [a6e26a4]
-- Updated dependencies [e0b9bbe]
-- Updated dependencies [c83c58c]
-- Updated dependencies [e4e239f]
-- Updated dependencies [d398c93]
-- Updated dependencies [c71e7de]
-- Updated dependencies [08ac997]
-- Updated dependencies [ef7fe84]
-- Updated dependencies [ff81e89]
-- Updated dependencies [290f96d]
-- Updated dependencies [04181f5]
-- Updated dependencies [330a6c5]
-- Updated dependencies [d927a26]
-- Updated dependencies [02c0a5a]
-- Updated dependencies [98160f3]
-- Updated dependencies [14fdab3]
-- Updated dependencies [ba79819]
-- Updated dependencies [04181f5]
-- Updated dependencies [f240f5e]
-- Updated dependencies [10bfad3]
-- Updated dependencies [c759128]
-- Updated dependencies [a655023]
-- Updated dependencies [877795c]
-- Updated dependencies [773e16c]
-- Updated dependencies [1747dbe]
-- Updated dependencies [ef1e01c]
-- Updated dependencies [cdc0034]
-  - @tailored-ai/core@0.1.8

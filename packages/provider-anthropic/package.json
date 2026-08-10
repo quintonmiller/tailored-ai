@@ -1,6 +1,6 @@
 {
   "name": "@tailored-ai/provider-anthropic",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "Anthropic Messages API provider for Tailored AI agents. Ships as a register(ctx) plugin — install with `tai plugin install @tailored-ai/provider-anthropic`; supersedes the minimal built-in `anthropic` provider with prompt caching, beta headers, and extra-field passthrough.",
   "license": "MIT",
   "author": "Quinton Miller",
