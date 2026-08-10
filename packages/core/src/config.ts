@@ -197,7 +197,19 @@ export interface AgentDefinition {
   nudgeMessage?: string;
   /** When true, only load agent-specific context files (skip global context). */
   skipGlobalContext?: boolean;
-  /** When true, summarize dropped history instead of silently discarding it. */
+  /**
+   * Summarize dropped history instead of leaving a marker saying it is gone.
+   * Defaults to **true**.
+   *
+   * It costs one extra provider call per trim, bounded to a 3,000-character
+   * transcript, and measurement says it pays for itself several times over: on
+   * every one of the benchmark's three trim pairs — the fact under discussion,
+   * a peripheral fact, and the room path — correctness was never worse and the
+   * turn cost three to six times fewer input tokens, because the marker path
+   * spends rounds hunting for what it was not given.
+   *
+   * Set false for an agent that must not spend a call on trimming.
+   */
   summarizeOnTrim?: boolean;
   /**
    * When true, task-watcher dispatches to this agent run in an isolated git

@@ -87,7 +87,16 @@
 
     `summarizeOnTrim` has no default, so it is off, and the mechanism that marks
     a cut exists but is not the default. This scenario measures what that costs.
-  agent: *nova
+  # Pinned off, not inherited. This row *is* the marker path; once
+  # `summarizeOnTrim` defaults to true an inherited value would quietly turn it
+  # into a second copy of its summarised sibling, and the pair would go on
+  # reporting a difference it no longer measures.
+  agent:
+    name: nova
+    instructions: |
+      You are Nova, a calm and practical assistant. Keep replies short.
+    extra:
+      summarizeOnTrim: false
   # Deliberately the tight budget the others abandoned: here an empty history IS
   # the condition under test.
   config:
@@ -183,7 +192,13 @@
     surviving window rather than the loss. `prompt_not_contains` below is what
     makes that mistake impossible to repeat: if the fact is still being sent,
     this row fails rather than quietly passing.
-  agent: *nova
+  # Pinned off for the same reason as the row above: this is the marker path.
+  agent:
+    name: nova
+    instructions: |
+      You are Nova, a calm and practical assistant. Keep replies short.
+    extra:
+      summarizeOnTrim: false
   config:
     agent:
       maxHistoryTokens: 2500
@@ -302,6 +317,8 @@
     instructions: |
       You are Nova, a calm and practical assistant. Keep replies short.
     tools: [room]
+    extra:
+      summarizeOnTrim: false
   config:
     agent:
       maxHistoryTokens: 2500

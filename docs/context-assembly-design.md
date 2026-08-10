@@ -69,7 +69,7 @@ permanently. Plus:
 | Corrections | retry framing | a second `user` message | two persisted prompts for one turn |
 
 And the mirror-image mistake: history is **trimmed oldest-first**, and unless
-`summarizeOnTrim` is set (no default, so off) nothing marks the cut. The
+`summarizeOnTrim` is set (on by default since 2026-08-10) nothing marks the cut. The
 mechanism to say so exists — `[Earlier conversation summary: …]` — it just isn't
 the default.
 
