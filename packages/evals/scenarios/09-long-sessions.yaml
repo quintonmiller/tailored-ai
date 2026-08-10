@@ -116,6 +116,121 @@
     - reply_not_matches: "\\[Agent stopped"
     - reply_not_matches: "\\b4[,.]?\\s*(million|m\\b)|4000000"
 
+- id: recovers-a-trimmed-fact-when-the-trim-is-summarised
+  category: long-session
+  intent: >
+    What `summarizeOnTrim` actually buys, measured rather than assumed.
+
+    The scenario above is the default path: the trim leaves a marker saying N
+    messages are gone, and the model confabulates a row count anyway in roughly
+    four runs in ten. Rewording that marker was tried and did nothing — 5/12 to
+    7/12, p=0.68 — so the wording is not the lever, and the question is whether
+    the *mechanism* is.
+
+    `summarizeOnTrim` replaces the marker with a summary of what was dropped, at
+    the cost of one extra provider call per trim. It defaults to false
+    (`agents.ts:223`), so nearly every deployment runs the marker path. This is
+    the row that says whether that default is the right one, and it re-answers
+    the question for every future model rather than settling it once.
+
+    Same history, same budget, same question. The only difference is the flag —
+    which is why the pair can be read as a difference at all.
+
+    The assertion is deliberately weaker than its sibling's: a summary may carry
+    the figure across, in which case answering it is correct rather than
+    confabulated. What is still forbidden is the failure both rows share —
+    saying nothing, or saying it through a stall marker.
+  agent:
+    name: nova
+    instructions: |
+      You are Nova, a calm and practical assistant. Keep replies short.
+    extra:
+      summarizeOnTrim: true
+  config:
+    agent:
+      maxHistoryTokens: 2500
+  history: *long
+  message: "how many rows did you say the old invoice table had?"
+  expect:
+    - replies: true
+    - reply_not_matches: "\\[Agent stopped"
+    # Either a real answer from the summary, or an honest report of the gap.
+    # Inventing a number is only wrong when nothing carried it forward, and this
+    # path is exactly the one where something might have.
+    - reply_matches: "4[,.]?\\s*(million|m\\b)|4000000|don.?t have|do not have|no longer|not (in|available|visible)|earlier (part|message)|trimmed|dropped|can.?t (see|find|recall|retrieve)"
+
+- id: early-detail-survives-a-marker-trim
+  category: long-session
+  intent: >
+    The control for the summarisation pair, and the reason that pair can argue
+    for a default at all.
+
+    The row-count pair asks for the first fact stated and the thing the whole
+    conversation is about — precisely what any summary keeps. So summarisation
+    could only look good there.
+
+    This asks for an early, peripheral fact instead: who owns one sub-task,
+    mentioned once, fourth of ten. Oldest-first trimming removes it, and a
+    summary has every reason to compress "dana is handling the stripe webhook
+    cutover" into "the team discussed the webhook cutover" — losing the name
+    while keeping the topic. That is where summarising costs something, and the
+    failure it invites is worse than silence: an invented owner reads exactly
+    like a remembered one.
+
+    A first draft of this row asked where the runbook lived. That fact is ninth
+    of ten, so it survives the trim outright — the marker path scored 11/12
+    because the answer was still in the window, and the scenario measured the
+    surviving window rather than the loss. `prompt_not_contains` below is what
+    makes that mistake impossible to repeat: if the fact is still being sent,
+    this row fails rather than quietly passing.
+  agent: *nova
+  config:
+    agent:
+      maxHistoryTokens: 2500
+  history: *long
+  message: "who is handling the stripe webhook cutover?"
+  expect:
+    # Proves the setup before asserting on the answer, the way every other row
+    # in this file does. On the marker path the name is gone from the request
+    # entirely, so a pass here means the model recovered nothing — correctly.
+    # Both cases, deliberately. `prompt_not_contains` is a case-sensitive
+    # `.includes()`, and the history carries the name twice — "dana" from the
+    # user, "Dana" from the assistant's acknowledgement. A single lowercase
+    # guard passed while "Dana" sat in the request, so the proof that made this
+    # scenario trustworthy was itself unable to fail.
+    - prompt_not_contains: "dana"
+    - prompt_not_contains: "Dana"
+    - replies: true
+    - reply_not_matches: "\\[Agent stopped"
+    # The right name, or an honest gap. Any other name matches neither.
+    - reply_matches: "dana|don.?t have|do not have|no longer|not (in|available|visible)|earlier (part|message)|trimmed|dropped|can.?t (see|find|recall|retrieve)"
+
+- id: early-detail-survives-a-summarised-trim
+  category: long-session
+  intent: >
+    The same question through `summarizeOnTrim`. Read as a pair with the row
+    above: whether summarising carries a peripheral name across, or replaces
+    "I do not have that" with a confident wrong one.
+
+    Deliberately no `prompt_not_contains` here. A summary that kept the name
+    puts it back in the request, which is the mechanism working — asserting its
+    absence would fail the scenario for succeeding.
+  agent:
+    name: nova
+    instructions: |
+      You are Nova, a calm and practical assistant. Keep replies short.
+    extra:
+      summarizeOnTrim: true
+  config:
+    agent:
+      maxHistoryTokens: 2500
+  history: *long
+  message: "who is handling the stripe webhook cutover?"
+  expect:
+    - replies: true
+    - reply_not_matches: "\\[Agent stopped"
+    - reply_matches: "dana|don.?t have|do not have|no longer|not (in|available|visible)|earlier (part|message)|trimmed|dropped|can.?t (see|find|recall|retrieve)"
+
 - id: keeps-the-thread-in-a-long-room-session
   category: long-session
   intent: >
