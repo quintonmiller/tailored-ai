@@ -5,7 +5,15 @@ export const metadata = {
 
 # Packages overview
 
-Eight packages publish to npm under `@tailored-ai/*`.
+Most users only need `@tailored-ai/cli`. The other packages exist for a
+specific integration, deployment, or embedding use case; install one when a
+guide sends you here.
+
+If you are trying to connect a model, use [Configure a model provider](/docs/providers)
+first. It distinguishes the built-in adapter from provider packages and helps
+you choose one before you reach the field-level reference.
+
+Thirteen packages currently publish to npm under `@tailored-ai/*`.
 
 | Package | One-line | Install when |
 |---|---|---|
@@ -16,17 +24,21 @@ Eight packages publish to npm under `@tailored-ai/*`.
 | [`@tailored-ai/trusted-actions`](/docs/packages/trusted-actions) | HITL approval gateway for risky actions. Mobile PWA, web-push, sandboxed Docker executor. | You want an agent to *do* things (place orders, submit forms) with human sign-off. |
 | [`@tailored-ai/provider-bedrock`](/docs/packages/provider-bedrock) | AWS Bedrock model provider. Converse API, tool calling, AWS credential chain. | You want agents on Bedrock-hosted models (Claude, Nova, Llama, Mistral). |
 | [`@tailored-ai/provider-openrouter`](/docs/packages/provider-openrouter) | OpenRouter model provider. One key, hundreds of models, streaming + model discovery. | You want to switch between hosted models without juggling vendor keys. |
-| [`@tailored-ai/provider-anthropic`](/docs/packages/provider-anthropic) | Anthropic Messages API provider. Prompt caching, beta headers, streaming. | You want Claude with caching + the knobs the minimal built-in lacks. |
-| [`@tailored-ai/provider-openai`](/docs/packages/provider-openai) | OpenAI provider. Reasoning-model handling, org/project headers, streaming. | You want GPT/o-series models without the built-in's parameter pitfalls. |
+| [`@tailored-ai/provider-anthropic`](/docs/packages/provider-anthropic) | Anthropic Messages API provider. Prompt caching, beta headers, streaming. | You want Claude through its native API with prompt caching and reasoning controls. |
+| [`@tailored-ai/provider-openai`](/docs/packages/provider-openai) | OpenAI provider. Reasoning-model handling, org/project headers, streaming. | You want current request shaping for GPT and o-series models. |
+| [`@tailored-ai/provider-deepseek`](/docs/packages/provider-deepseek) | DeepSeek provider. V4 hybrid models and per-request thinking controls. | You want DeepSeek's vendor-specific thinking behavior. |
+| [`@tailored-ai/deploy-aws`](/docs/packages/deploy-aws) | AWS deploy target. Provisions and updates a repeatable TAI deployment. | You want deployment through TAI's target registry rather than a hand-built server. |
 | [`@tailored-ai/channel-slack`](https://github.com/quintonmiller/tailored-ai/tree/main/packages/channel-slack#readme) | Slack channel plugin (Bolt, Socket Mode). | You want to talk to your agent from Slack. |
 | [`@tailored-ai/google-tools`](https://github.com/quintonmiller/tailored-ai/tree/main/packages/google-tools#readme) | Gmail, Google Calendar, Google Drive tools. | You want agents reading and acting on your Google account. |
 
-Two more packages live in the monorepo but stay private:
+Four more packages live in the monorepo but stay private:
 
 - `@tailored-ai/ui`: the React + Vite SPA. Built and bundled inside
   `@tailored-ai/cli`. Not published standalone.
 - `@tailored-ai/site`: this documentation site. Built and deployed to
   GitHub Pages from `main`.
+- `@tailored-ai/evals`: benchmark and evaluation infrastructure.
+- `@tailored-ai/integration-tests`: cross-package test fixtures and suites.
 
 ## Dependency graph
 
@@ -44,10 +56,9 @@ Two more packages live in the monorepo but stay private:
                              (for the request-action tool wiring)
 ```
 
-Read that as: **install `@tailored-ai/cli` and you transitively get
-everything except trusted-actions**. Trusted-actions is intentionally
-separate because it runs in its own Docker container; installing it
-alongside the agent is opt-in.
+Read that as: **install `@tailored-ai/cli` and you get the runtime, HTTP
+server, bundled UI, and browser mediator**. Providers, Slack, Google tools,
+AWS deployment, and trusted actions are intentionally opt-in.
 
 ## Pick the smallest thing that works
 
@@ -64,7 +75,7 @@ The temptation is to install the catch-all. Don't.
 
 ## Versioning
 
-All five public packages release together. They share one version line
+All thirteen public packages release together. They share one version line
 because they evolve together; a breaking change in `@tailored-ai/core`
 rolls all of them. See
 [`RELEASING.md`](https://github.com/quintonmiller/tailored-ai/blob/main/RELEASING.md)

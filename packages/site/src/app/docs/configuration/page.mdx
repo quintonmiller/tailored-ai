@@ -80,6 +80,10 @@ Providers are keyed by registered factory id under `providers:`, and
 `openai_compatible`, which covers Ollama, vLLM, LM Studio, llama.cpp's
 server, and any other OpenAI-wire endpoint:
 
+If you are choosing or connecting a model for the first time, start with
+[Configure a model provider](/docs/providers). This section is the field-level
+reference.
+
 ```yaml
 providers:
   openai_compatible:
@@ -117,8 +121,9 @@ itself; core carries no per-provider schema. See each plugin's page under
 ### Custom providers
 
 Provider ids resolve through a registry, so a plugin can register any id with
-`ctx.providers.register(id, factory)` and config selects it the same way. See [Extending →
-Adding a provider](/docs/extending#adding-a-provider).
+`ctx.providers.register(id, factory)` and config selects it the same way. See
+[Build a model provider](/docs/providers/custom) for the decision guide,
+contract, packaging, and validation flow.
 
 ## Multi-provider
 

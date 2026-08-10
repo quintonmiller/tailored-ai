@@ -1,0 +1,171 @@
+export const metadata = {
+  title: "Build a model provider",
+  description: "Connect an unsupported model API to Tailored AI with a provider plugin.",
+};
+
+# Build a model provider
+
+Write a provider plugin only when the model API uses a protocol TAI cannot
+already speak. The plugin owns the wire-format translation; the rest of the
+runtime continues to work with provider-neutral messages, tool calls, usage,
+and finish reasons.
+
+## Before you write code
+
+If the service accepts OpenAI-style `/v1/chat/completions` requests, configure
+the built-in adapter under any id:
+
+```yaml
+providers:
+  acme:
+    type: openai_compatible
+    baseUrl: https://api.acme.example/v1
+    apiKey: ${ACME_API_KEY}
+    defaultModel: acme-large
+```
+
+That path already supports chat, streaming, tool calls, model discovery, and
+multiple differently named endpoints. A plugin is warranted when authentication,
+request bodies, response events, or tool-call semantics are materially different.
+
+## The contract
+
+An `AIProvider` has three required properties and one required method:
+
+```ts
+import type {
+  AIProvider,
+  ChatParams,
+  ChatResponse,
+} from "@tailored-ai/core";
+
+class AcmeProvider implements AIProvider {
+  id = "acme";
+  name = "Acme Models";
+  supportsTools = true;
+
+  constructor(private apiKey: string) {}
+
+  async chat(params: ChatParams): Promise<ChatResponse> {
+    // 1. Map params.messages and params.tools to Acme's request shape.
+    // 2. Send the request with params.model and this.apiKey.
+    // 3. Map Acme's reply back to TAI's provider-neutral response.
+    return {
+      content: "mapped response",
+      toolCalls: [],
+      usage: { input: 0, output: 0 },
+      finishReason: "stop",
+    };
+  }
+}
+```
+
+The response must always include `usage` and one of the three portable finish
+reasons: `stop`, `tool_calls`, or `length`. If `supportsTools` is `true`, map
+both directions: TAI's function schemas into the request and the model's calls
+back into `{ id, name, arguments }` objects.
+
+Two optional methods improve the experience:
+
+- `chatStream(params)` yields text or reasoning deltas and ends with one
+  `done` event containing the complete response.
+- `listModels()` returns model ids for `tai init` and the configuration editor.
+
+## Register the provider
+
+Export a default plugin function and register a factory. The factory reads the
+provider's config, constructs the adapter, and returns the selected model:
+
+```ts
+import type {
+  AgentConfig,
+  Plugin,
+  PluginMeta,
+} from "@tailored-ai/core";
+
+interface AcmeConfig {
+  apiKey?: string;
+  defaultModel?: string;
+}
+
+export const meta: PluginMeta = {
+  name: "Acme provider",
+  description: "Acme models through the native Acme API.",
+  registers: [
+    { kind: "provider", id: "acme", configKey: "providers.acme" },
+  ],
+};
+
+export function validateConfig(config: AgentConfig): string[] {
+  const cfg = config.providers.acme as AcmeConfig | undefined;
+  if (!cfg) return [];
+
+  const warnings: string[] = [];
+  if (!cfg.apiKey) warnings.push("providers.acme.apiKey is required");
+  if (!cfg.defaultModel) {
+    warnings.push("providers.acme.defaultModel is required");
+  }
+  return warnings;
+}
+
+const plugin: Plugin = (ctx) => {
+  ctx.providers.register("acme", (config) => {
+    const cfg = config.providers.acme as AcmeConfig | undefined;
+    if (!cfg?.apiKey) throw new Error("providers.acme requires apiKey");
+    if (!cfg.defaultModel) {
+      throw new Error("providers.acme requires defaultModel");
+    }
+
+    return {
+      provider: new AcmeProvider(cfg.apiKey),
+      model: cfg.defaultModel,
+    };
+  });
+};
+
+export default plugin;
+```
+
+`meta` makes the extension understandable in `tai plugin list` and the API.
+`validateConfig` reports actionable startup warnings; the factory should still
+fail clearly when it cannot construct a usable provider.
+
+## Package it
+
+Keep `@tailored-ai/core` as a peer dependency so the plugin uses the runtime's
+types and registries instead of bundling another copy:
+
+```json
+{
+  "name": "@your-org/tai-provider-acme",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "peerDependencies": {
+    "@tailored-ai/core": "^0.1.0"
+  },
+  "keywords": ["tailored-ai", "tai-plugin", "provider"]
+}
+```
+
+Publish the compiled ESM package, then install and select it exactly like a
+first-party provider:
+
+```bash
+tai plugin install @your-org/tai-provider-acme
+```
+
+```yaml
+providers:
+  acme:
+    apiKey: ${ACME_API_KEY}
+    defaultModel: acme-large
+
+agent:
+  defaultProvider: acme
+```
+
+Finish with a plain chat request, a tool-calling request, and—if implemented—a
+streaming request. [`@tailored-ai/provider-bedrock`](/docs/packages/provider-bedrock)
+is the most complete reference for a non-OpenAI protocol; the smaller provider
+packages are useful examples of configuration, metadata, and validation.

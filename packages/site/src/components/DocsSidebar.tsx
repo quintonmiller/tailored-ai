@@ -2,24 +2,62 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
-import { DOCS_NAV } from "@/lib/constants";
+import { useEffect, useState } from "react";
+import { DOCS_NAV, DOCS_SEARCH_ITEMS } from "@/lib/constants";
+
+function Chevron({ expanded }: { expanded: boolean }) {
+  return (
+    <svg
+      className={`docs-section-chevron${expanded ? " is-expanded" : ""}`}
+      viewBox="0 0 16 16"
+      fill="none"
+      aria-hidden="true"
+    >
+      <path d="m5.5 3.5 4.5 4.5-4.5 4.5" />
+    </svg>
+  );
+}
 
 export function DocsSidebar() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const activeSectionId = DOCS_SEARCH_ITEMS.find((item) => item.href === pathname)?.sectionId ?? "start";
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(() => new Set([activeSectionId]));
   const normalizedQuery = query.trim().toLowerCase();
-  const filteredNavigation = DOCS_NAV.map((section) => ({
-    ...section,
-    items: section.label.toLowerCase().includes(normalizedQuery)
-      ? section.items
-      : section.items.filter((item) => item.label.toLowerCase().includes(normalizedQuery)),
-  })).filter((section) => section.items.length > 0);
+
+  useEffect(() => {
+    setExpandedSections((current) => {
+      if (current.has(activeSectionId)) return current;
+      return new Set([...current, activeSectionId]);
+    });
+  }, [activeSectionId]);
+
+  const searchResults = normalizedQuery
+    ? DOCS_SEARCH_ITEMS.filter((item) =>
+        [item.label, item.description, item.sectionLabel, ...(item.keywords ?? [])]
+          .join(" ")
+          .toLowerCase()
+          .includes(normalizedQuery),
+      )
+    : [];
+
+  function toggleSection(sectionId: string) {
+    setExpandedSections((current) => {
+      const next = new Set(current);
+      if (next.has(sectionId)) next.delete(sectionId);
+      else next.add(sectionId);
+      return next;
+    });
+  }
+
+  function closeAfterNavigation() {
+    setOpen(false);
+    setQuery("");
+  }
 
   return (
     <>
-      {/* Mobile toggle */}
       <button
         type="button"
         className="docs-menu-button flex w-full items-center gap-2 lg:hidden"
@@ -56,45 +94,83 @@ export function DocsSidebar() {
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Filter pages"
-            aria-label="Filter documentation pages"
+            placeholder="Find a page"
+            aria-label="Search documentation pages"
           />
         </div>
 
-        <div className="space-y-6">
-          {filteredNavigation.map((section) => (
-            <div key={section.label}>
-              <div className="px-3 mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
-                {section.label}
-              </div>
-              <ul className="space-y-1">
-                {section.items.map((item) => {
+        {normalizedQuery ? (
+          <div className="docs-search-results" aria-live="polite">
+            <div className="docs-search-summary">
+              {searchResults.length} {searchResults.length === 1 ? "result" : "results"}
+            </div>
+            {searchResults.length > 0 ? (
+              <ul>
+                {searchResults.map((item) => {
                   const active = pathname === item.href;
                   return (
                     <li key={item.href}>
                       <Link
                         href={item.href}
-                        onClick={() => {
-                          setOpen(false);
-                          setQuery("");
-                        }}
+                        onClick={closeAfterNavigation}
                         aria-current={active ? "page" : undefined}
-                        className={`block rounded-md px-3 py-2 text-sm transition-colors ${
-                          active
-                            ? "bg-[var(--color-accent)]/10 text-[var(--color-accent)] font-medium"
-                            : "text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-tertiary)]"
-                        }`}
+                        className={active ? "is-active" : undefined}
                       >
-                        {item.label}
+                        <span>{item.label}</span>
+                        <small>{item.sectionLabel}</small>
                       </Link>
                     </li>
                   );
                 })}
               </ul>
-            </div>
-          ))}
-          {filteredNavigation.length === 0 ? <p className="docs-filter-empty">No matching pages.</p> : null}
-        </div>
+            ) : (
+              <p className="docs-filter-empty">No page matches “{query.trim()}”.</p>
+            )}
+          </div>
+        ) : (
+          <div className="docs-sections">
+            {DOCS_NAV.map((section) => {
+              const expanded = expandedSections.has(section.id);
+              const controlsId = `docs-section-${section.id}`;
+              return (
+                <section key={section.id} className="docs-section">
+                  <button
+                    type="button"
+                    className="docs-section-button"
+                    onClick={() => toggleSection(section.id)}
+                    aria-expanded={expanded}
+                    aria-controls={controlsId}
+                  >
+                    <span>
+                      <strong>{section.label}</strong>
+                      <small>{section.description}</small>
+                    </span>
+                    <Chevron expanded={expanded} />
+                  </button>
+                  {expanded ? (
+                    <ul id={controlsId} className="docs-section-links">
+                      {section.items.map((item) => {
+                        const active = pathname === item.href;
+                        return (
+                          <li key={item.href}>
+                            <Link
+                              href={item.href}
+                              onClick={closeAfterNavigation}
+                              aria-current={active ? "page" : undefined}
+                              className={active ? "is-active" : undefined}
+                            >
+                              {item.label}
+                            </Link>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : null}
+                </section>
+              );
+            })}
+          </div>
+        )}
       </nav>
     </>
   );
