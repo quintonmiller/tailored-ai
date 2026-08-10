@@ -172,12 +172,33 @@ function measuredShape(parsed: Scenario): unknown {
   );
 }
 
-export function loadScenarios(dir: string, filter?: string): { scenarios: Scenario[]; hash: string } {
+/**
+ * A digest of one scenario's measured shape.
+ *
+ * The set hash answers "were these runs defined the same way" for two reports.
+ * It cannot answer the question a *published* run raises: the site pairs an old
+ * result with today's scenario file for the intent and annotations, so a
+ * scenario that kept its id and changed its assertions renders an old number
+ * under a new description, and nothing sees it. Per-scenario digests make that
+ * specific rather than a moved hash nobody can act on.
+ */
+export function fingerprintScenario(scenario: Scenario): string {
+  return createHash("sha256")
+    .update(JSON.stringify(measuredShape(scenario)))
+    .digest("hex")
+    .slice(0, 12);
+}
+
+export function loadScenarios(
+  dir: string,
+  filter?: string,
+): { scenarios: Scenario[]; hash: string; fingerprints: Record<string, string> } {
   const files = readdirSync(dir)
     .filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"))
     .sort();
   const scenarios: Scenario[] = [];
   const hash = createHash("sha256");
+  const fingerprints: Record<string, string> = {};
   const seen = new Set<string>();
 
   for (const file of files) {
@@ -195,9 +216,10 @@ export function loadScenarios(dir: string, filter?: string): { scenarios: Scenar
       seen.add(result.data.id);
       scenarios.push(result.data as Scenario);
       hash.update(JSON.stringify(measuredShape(result.data as Scenario)));
+      fingerprints[result.data.id] = fingerprintScenario(result.data as Scenario);
     }
   }
 
   const selected = filter ? scenarios.filter((s) => s.id.includes(filter) || s.category === filter) : scenarios;
-  return { scenarios: selected, hash: hash.digest("hex").slice(0, 12) };
+  return { scenarios: selected, hash: hash.digest("hex").slice(0, 12), fingerprints };
 }

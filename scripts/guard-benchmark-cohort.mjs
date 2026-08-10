@@ -20,6 +20,13 @@
  * checked. They are the record of what was true then, including the parts that
  * were sloppy; rewriting them to satisfy a rule invented later would destroy the
  * only evidence of how the benchmark has changed.
+ *
+ * The other half of the rule — that a published run still describes the
+ * scenarios it is rendered beside — is
+ * `packages/evals/src/__tests__/published-cohort.test.ts`, because it needs the
+ * scenario loader and this runs before the build. This file used to read
+ * `meta.scenarioSetHash` into a variable and never compare it, which is exactly
+ * the gap that let a stale 0% sit on a public page under a corrected intent.
  */
 
 import { execFileSync } from "node:child_process";
@@ -56,7 +63,7 @@ if (files.length === 0) {
 
 const runs = files.map((file) => {
   const meta = JSON.parse(readFileSync(join(resultsDir, file), "utf8")).meta ?? {};
-  return { file, sha: meta.gitSha, dirty: !!meta.gitDirty, model: meta.model, scenarios: meta.scenarioSetHash };
+  return { file, sha: meta.gitSha, dirty: !!meta.gitDirty, model: meta.model };
 });
 
 const problems = [];

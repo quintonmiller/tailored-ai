@@ -64,6 +64,34 @@ scores well on every positive case and is unusable in a room. Each restraint
 group also carries an explicit control (`answers-a-direct-question-control`)
 because a model that is silent everywhere would otherwise look restrained.
 
+### A scenario must be able to fail on silence
+
+The same trap one level down: **a negative assertion is satisfied by an empty
+reply.** `reply_not_matches: /4 million/` is true of a reply that never came, so
+a scenario whose only checks are "does not say X" awards a point to an agent
+that said nothing.
+
+Seven of 59 were in that state, and one of them was reporting the opposite of
+the truth. `says-when-the-front-of-the-conversation-is-gone` scored 3/3 on a
+cohort where two of the three passes were `[Agent stopped: max tool rounds
+reached]` and `""`. Once the turn actually answered ([#470]), all three runs
+confabulated the trimmed number from a prompt that provably does not contain
+it — so the scenario had been reporting 100% on a model that fails it every
+time.
+
+So a scenario with a reply-based negative check needs `replies: true` beside it,
+unless silence is genuinely the right answer — which happens, and should be said
+out loud. `does-not-write-the-pass-call-as-text` deliberately has no
+`replies: true`: its message is an acknowledgement addressed to nobody, so
+declining is correct and silence is what declining looks like. `prompt_*`
+negatives are exempt; they are properties of the assembled request, and an
+empty reply cannot satisfy them.
+
+Nothing enforces this yet — [#472] proposes a load-time check.
+
+[#470]: https://github.com/quintonmiller/tailored-ai/pull/470
+[#472]: https://github.com/quintonmiller/tailored-ai/issues/472
+
 ## The failure that shaped the harness
 
 Pointed at a server that accepts connections and never replies, the first version
@@ -97,7 +125,9 @@ were *defined* the same way, and is reported separately when the coverage
 matches but the digest does not. It is taken over what each scenario puts in
 front of the model and what it grades — not over the file bytes, so a comment,
 a reflow or a `knownGap` annotation leaves it alone, and a changed assertion
-moves it.
+moves it. `meta.scenarioFingerprints` is the same digest per scenario, which is
+what turns "something in the set moved" into a list of names — see
+[A published result must still describe its scenario](#a-published-result-must-still-describe-its-scenario).
 
 ## Published results
 
@@ -126,6 +156,41 @@ never sat the harder categories, and neither run's provenance made that visible.
 So publishing means re-running **every** model in the list on the same commit.
 That is the cost the rule buys, and it recurs: adding a model adds it to every
 publish, not once.
+
+### A published result must still describe its scenario
+
+The pages read each scenario's intent and `knownGap` from *today's* files and
+pair them with the committed report — deliberately, so closing a gap updates
+every page without re-running anything. The cost is that a scenario which keeps
+its id and changes what it sends or grades renders an old number under a new
+description, and coverage cannot see it, because the id never moved.
+
+That is not hypothetical. `notices-a-truncated-tool-result` was changed to run
+`tools: [read]` once its 0% turned out to be the harness measuring its own stub,
+and the published 0% stayed on a public page underneath the corrected intent.
+The digest had moved — `a971de16862c` → `653357093d26` — and the guard read it
+into a variable and never compared it.
+
+Each report now records `meta.scenarioFingerprints`: a digest per scenario it
+covered, over the same measured shape as the set hash, so annotating still costs
+nothing. A test in the evals package compares them against the current files and
+fails with the scenarios named. It lives there rather than in
+`scripts/guard-benchmark-cohort.mjs` because it needs the scenario loader and
+that guard runs before the build; the two are halves of one rule — the guard
+says the published runs share one clean commit, the test says they still
+describe the current questions.
+
+Two things it deliberately does **not** flag. A scenario that has since been
+*deleted*: the question was withdrawn, the page renders it as absent, and
+failing on it would make removing a scenario require a re-run. And a run that
+covered only part of the set, which is what makes per-scenario digests better
+than the set hash — a `--filter`ed run records the digest of everything it
+loaded, so judging it on scenarios it never ran is wrong.
+
+When it fails there are two honest fixes, and the message names both: re-run the
+cohort on this commit, or move it to `results/history/`. Re-running says "this
+is what the current questions score"; archiving says "we are not publishing a
+number for these questions right now". Publishing the stale one says neither.
 
 Superseded cohorts move to `results/history/` rather than being overwritten,
 because a model getting better or worse across commits is worth being able to

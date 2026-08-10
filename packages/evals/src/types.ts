@@ -242,6 +242,17 @@ export interface BenchmarkReport {
     seed: number | null;
     judge: boolean;
     scenarioSetHash: string;
+    /**
+     * Digest per scenario this run covered, so a published result can be told
+     * apart from the scenario it is rendered beside.
+     *
+     * The set hash cannot do it. The site reads intent and `knownGap` from
+     * today's scenario files and pairs them with an old report, so a scenario
+     * that keeps its id and changes its assertions shows an old number under a
+     * new description — and coverage matches perfectly, because the id did not
+     * move. Absent on reports written before this existed.
+     */
+    scenarioFingerprints?: Record<string, string>;
     durationSeconds: number;
     /**
      * What the run cost, totalled from every recorded call.

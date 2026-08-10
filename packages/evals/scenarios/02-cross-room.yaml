@@ -110,4 +110,7 @@
         - { speaker: dana, body: "the mango palette is signed off, shipping it friday" }
   wake: { room: ops }
   expect:
+    # Saying nothing also mentions no palette. It was asked a direct question,
+    # so silence is a different failure, not a pass.
+    - replies: true
     - reply_mentions_none: ["mango", "palette"]
