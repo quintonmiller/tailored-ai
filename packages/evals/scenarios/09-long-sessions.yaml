@@ -253,3 +253,66 @@
     - prompt_contains: "50k"
     - replies: true
     - reply_mentions_any: ["50k", "50,000", "50000"]
+
+- id: keeps-the-thread-in-a-summarised-room-session
+  category: long-session
+  intent: >
+    The third axis for `summarizeOnTrim`, and the one that decides a default.
+
+    The chat pairs above measure it on a session. Rooms are where history grows
+    fastest — the session carries every wake prompt ever rendered on top of the
+    conversation — so a flag that helps in chat and hurts in a room is not a
+    default, it is a per-agent setting.
+
+    Deliberately the tight budget rather than the shared one: at 7000 the fact
+    survives and neither path has to recover anything, which is the mistake the
+    first cost-side draft made. Here the batch size is genuinely gone, and the
+    only difference between this row and the marker path is the flag.
+  agent:
+    name: nova
+    instructions: |
+      You are Nova, a calm and practical assistant. Keep replies short.
+    tools: [room]
+    extra:
+      summarizeOnTrim: true
+  config:
+    agent:
+      maxHistoryTokens: 2500
+  history: *long
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      incoming:
+        - { speaker: quinton, to: [nova], body: "what batch size did we settle on?" }
+  wake: { room: ops }
+  expect:
+    - replies: true
+    - reply_not_matches: "\\[Agent stopped"
+    # The figure if the summary carried it, or an honest gap. A different number
+    # matches neither, which is the failure worth catching on this path.
+    - reply_matches: "50k|50,000|50000|don.?t have|do not have|no longer|not (in|available|visible)|earlier (part|message)|trimmed|dropped|can.?t (see|find|recall|retrieve)"
+
+- id: keeps-the-thread-in-a-marker-room-session
+  category: long-session
+  intent: >
+    The marker-path control for the row above: same room, same question, same
+    tight budget, `summarizeOnTrim` off. Read as a pair.
+  agent:
+    name: nova
+    instructions: |
+      You are Nova, a calm and practical assistant. Keep replies short.
+    tools: [room]
+  config:
+    agent:
+      maxHistoryTokens: 2500
+  history: *long
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      incoming:
+        - { speaker: quinton, to: [nova], body: "what batch size did we settle on?" }
+  wake: { room: ops }
+  expect:
+    - replies: true
+    - reply_not_matches: "\\[Agent stopped"
+    - reply_matches: "50k|50,000|50000|don.?t have|do not have|no longer|not (in|available|visible)|earlier (part|message)|trimmed|dropped|can.?t (see|find|recall|retrieve)"
