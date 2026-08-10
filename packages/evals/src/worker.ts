@@ -113,6 +113,7 @@ async function main(): Promise<void> {
     id: scenario.id,
     category: scenario.category,
     intent: scenario.intent,
+    difficulty: scenario.difficulty,
     runs,
     passRate: runs.length ? runs.filter((r) => r.pass).length / runs.length : 0,
   };

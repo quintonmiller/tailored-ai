@@ -13,6 +13,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
+import { MAX_DIFFICULTY, MIN_DIFFICULTY, parseDifficultyFilter } from "./difficulty.js";
 import type { Scenario } from "./types.js";
 
 const roomLine = z
@@ -64,6 +65,7 @@ const assertion = z
         agent: z.string(),
         min: z.number().int().nonnegative().optional(),
         max: z.number().int().nonnegative().optional(),
+        matches: z.string().min(1).optional(),
       })
       .strict()
       .optional(),
@@ -105,6 +107,7 @@ const scenario = z
     id: z.string().min(1),
     category: z.string().min(1),
     intent: z.string().min(1),
+    difficulty: z.number().int().min(MIN_DIFFICULTY).max(MAX_DIFFICULTY),
     knownGap: z.string().min(1).optional(),
     agent: z
       .object({
@@ -156,13 +159,19 @@ const scenario = z
 /**
  * Fields that say why a scenario exists without changing what it measures.
  *
- * `intent` is prose for a reader and `knownGap` marks a row as deliberately
- * red; neither reaches the model or the graders. They are excluded from the
- * digest so annotating a scenario does not invalidate every run that came
- * before — which is the whole point of reading them from the scenario file
- * instead of baking them into each report.
+ * `intent` is prose for a reader, `knownGap` marks a row as deliberately red,
+ * and `difficulty` says how hard the turn is; none of the three reaches the
+ * model or the graders. They are excluded from the digest so annotating a
+ * scenario does not invalidate every run that came before — which is the whole
+ * point of reading them from the scenario file instead of baking them into each
+ * report.
+ *
+ * `difficulty` in particular has to be here: the scale was applied to a set
+ * that already existed, and grading it is a judgement that will be revised.
+ * Counting it would mean every re-grade costs a full re-baseline, and the
+ * predictable result is that nobody re-grades anything.
  */
-const ANNOTATION_FIELDS = new Set(["intent", "knownGap"]);
+const ANNOTATION_FIELDS = new Set(["intent", "knownGap", "difficulty"]);
 
 /** Key-sorted, so the digest tracks meaning rather than authoring order. */
 function canonical(value: unknown): unknown {
@@ -213,6 +222,7 @@ export function fingerprintScenario(scenario: Scenario): string {
 export function loadScenarios(
   dir: string,
   filter?: string,
+  difficulty?: string,
 ): { scenarios: Scenario[]; hash: string; fingerprints: Record<string, string> } {
   const files = readdirSync(dir)
     .filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"))
@@ -241,6 +251,14 @@ export function loadScenarios(
     }
   }
 
-  const selected = filter ? scenarios.filter((s) => s.id.includes(filter) || s.category === filter) : scenarios;
+  // Both filters narrow, and they compose: `--filter long-session --difficulty
+  // 4+` is the hard half of one category. The digest and the fingerprints are
+  // taken over the *whole* set above, before either applies, so a filtered run
+  // still records which version of the questions it was answering.
+  let selected = filter ? scenarios.filter((s) => s.id.includes(filter) || s.category === filter) : scenarios;
+  if (difficulty) {
+    const wanted = parseDifficultyFilter(difficulty);
+    selected = selected.filter((s) => wanted(s.difficulty));
+  }
   return { scenarios: selected, hash: hash.digest("hex").slice(0, 12), fingerprints };
 }

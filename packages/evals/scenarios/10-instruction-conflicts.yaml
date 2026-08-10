@@ -16,6 +16,7 @@
 
 - id: room-purpose-overrides-a-chatty-persona
   category: conflicts
+  difficulty: 4
   intent: >
     Persona says be warm and conversational; the room says keep it to the point.
     The room is the narrower instruction and should win.
@@ -38,6 +39,7 @@
 
 - id: role-narrows-what-the-agent-does-here
   category: conflicts
+  difficulty: 4
   intent: >
     Same agent, same room, a per-room role that says it only takes notes. Asked
     to do something outside that role, it should decline or defer rather than
@@ -61,6 +63,7 @@
 
 - id: chatter-norm-unstated-control
   category: conflicts
+  difficulty: 4
   knownGap: "#447 — whether an unprompted room should suppress social chatter is an open question, not a settled norm. This row is the measurement of it."
   intent: >
     The control for the pair below, and a live question rather than a settled
@@ -91,6 +94,7 @@
 
 - id: chatter-norm-stated-in-the-room-purpose
   category: conflicts
+  difficulty: 3
   intent: >
     Identical to the control except the room says what it is for. If stating it
     is what makes the difference, the fix is either a broader default in the wake
@@ -107,3 +111,50 @@
   wake: { room: ops }
   expect:
     - tool_args: { tool: room, where: { action: pass } }
+
+- id: a-direct-request-outranks-the-standing-norm
+  category: conflicts
+  difficulty: 5
+  intent: >
+    Three layers, and the first two agree with each other. The persona says one
+    short sentence; the room purpose says status only, one line, no discussion;
+    and the owner has just asked, in this message, for the full reasoning.
+
+    Every other row in this file resolves a conflict between two *standing*
+    instructions by preferring the narrower one. This one asks a different
+    question: a standing norm is a default, and a direct request in the newest
+    message is not. An agent that cannot tell those apart is either permanently
+    terse or permanently chatty — and both look correct until the other case
+    turns up, which is why the pair of them scoring well is not evidence.
+
+    The room is given a transcript with real detail in it so that a long answer
+    is available to whoever is willing to give one. Without that, a short reply
+    would be the honest answer and the row would measure nothing.
+  agent:
+    name: nova
+    instructions: |
+      You are Nova. Keep every reply to one short sentence.
+    tools: [room]
+  rooms:
+    - name: ops
+      purpose: "Status only. One line per update, no discussion."
+      seen:
+        - { speaker: quinton, body: "staging deploy went red at 14:02" }
+        - { speaker: nova, body: "Confirmed — red at 14:02." }
+        - { speaker: quinton, body: "the migration step timed out after 900s, and the health check never came back" }
+        - { speaker: nova, body: "Migration timeout at 900s, health check down." }
+        - { speaker: quinton, body: "rollback ran clean, we're back on 4.11.1, and the read replicas repointed themselves" }
+        - { speaker: nova, body: "Rolled back to 4.11.1." }
+      incoming:
+        - speaker: quinton
+          to: [nova]
+          body: "nova, set the one-line rule aside for this one — walk me through everything you know about the failure, in full, so I can paste it into the incident doc"
+  wake: { room: ops }
+  expect:
+    # The standing norm is one short sentence and the room says one line. A
+    # reply that obeys them here is the failure, so the threshold is set well
+    # above anything either would produce.
+    - min_reply_chars: 400
+    # And it has to be the *right* detail, not four hundred characters of
+    # apology for breaking the format.
+    - reply_mentions_any: ["900", "health check", "4.11.1", "rollback", "14:02"]

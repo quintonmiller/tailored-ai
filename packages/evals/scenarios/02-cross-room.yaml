@@ -7,6 +7,7 @@
 
 - id: view-appears-exactly-once
   category: cross-room
+  difficulty: 1
   intent: The view is rendered once per turn. Twice means it is accumulating.
   agent: &nova
     name: nova
@@ -29,6 +30,7 @@
 
 - id: howto-appears-exactly-once
   category: cross-room
+  difficulty: 1
   intent: >
     The multi-room instructions are standing knowledge, so they ride in the
     system prompt and are paid for once. A second copy means they leaked into
@@ -48,6 +50,7 @@
 
 - id: no-multi-room-instructions-in-one-room
   category: cross-room
+  difficulty: 1
   intent: An agent in a single room should not be paying for advice about several.
   agent: *nova
   config: *crossroom
@@ -61,6 +64,7 @@
 
 - id: view-is-off-unless-configured
   category: cross-room
+  difficulty: 1
   intent: No deployment pays for the view by accident.
   agent: *nova
   rooms:
@@ -76,6 +80,7 @@
 
 - id: answers-about-another-room-from-the-view
   category: cross-room
+  difficulty: 3
   intent: >
     Asked what is happening elsewhere, an agent that can see the other room
     should answer from it rather than say it cannot see.
@@ -96,6 +101,7 @@
 
 - id: does-not-invent-another-room
   category: cross-room
+  difficulty: 3
   intent: >
     With the view off, the honest answer is that it cannot see the other room —
     not a plausible summary of a room it was never shown.

@@ -64,6 +64,16 @@ export interface Scenario {
   /** Why this scenario exists — printed next to a failure. */
   intent: string;
   /**
+   * How hard the turn is, 1-5. Required, because the alternative is a scenario
+   * that no `--difficulty` run ever selects and nobody notices — the same
+   * silent-gap failure the strict schema exists to prevent.
+   *
+   * The scale is in `difficulty.ts`. It grades what the turn *demands*, never
+   * what it currently scores: relabelling a scenario when it starts passing
+   * would make "we handle the hard ones now" true by construction.
+   */
+  difficulty: number;
+  /**
    * Set when the scenario asserts the behaviour we *want* rather than the
    * behaviour we have, so a red row is the point rather than a defect. The
    * value says which gap, ideally as an issue reference.
@@ -144,7 +154,21 @@ export interface Assertion {
    * turns, "somebody posted in ops" is true whether the handoff worked or one
    * agent answered twice.
    */
-  posts_by?: { agent: string; min?: number; max?: number };
+  posts_by?: {
+    agent: string;
+    min?: number;
+    max?: number;
+    /**
+     * Regex one of that agent's own posts must match.
+     *
+     * `reply_matches` cannot stand in for this on a room scenario: `reply` is
+     * every post joined, so it passes when *either* agent produced the text. In
+     * a handoff — one agent looks something up, the next acts on it — that makes
+     * the assertion true the moment the first agent speaks, which is the half
+     * that was never in doubt.
+     */
+    matches?: string;
+  };
   /** Whether the turn produced any outward message at all. */
   replies?: boolean;
   /** Regex over the reply text. */
@@ -256,6 +280,12 @@ export interface ScenarioResult {
   id: string;
   category: string;
   intent: string;
+  /**
+   * Copied from the scenario, so a report can be scored by difficulty without
+   * re-reading the YAML — which by then may have been relabelled. Optional
+   * because reports written before the scale existed have none.
+   */
+  difficulty?: number;
   /** Copied from the scenario so a report explains its own red rows. */
   knownGap?: string;
   runs: RunResult[];
@@ -333,6 +363,16 @@ export interface BenchmarkReport {
     passed: number;
     total: number;
     byCategory: Record<string, { passed: number; total: number; rate: number }>;
+    /**
+     * The same runs, cut by how hard the question was rather than what it was
+     * about. Keyed by level as a string, because JSON has no integer keys.
+     *
+     * This is the cut that says where the ceiling is. Category tells you which
+     * subsystem is weak; difficulty tells you whether the model is failing the
+     * hard half of every subsystem, which is a different problem with a
+     * different fix. Absent on reports written before the scale existed.
+     */
+    byDifficulty?: Record<string, { passed: number; total: number; rate: number }>;
   };
   scenarios: ScenarioResult[];
 }

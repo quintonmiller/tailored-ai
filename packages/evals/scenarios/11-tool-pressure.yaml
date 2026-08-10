@@ -6,6 +6,7 @@
 
 - id: does-not-search-memory-for-what-it-was-just-told
   category: tool-pressure
+  difficulty: 3
   intent: >
     Measured, not guessed: 36% of every tool call in the first baseline was
     recall/facts/memory, and they clustered on the scenarios where the answer was
@@ -29,6 +30,7 @@
 
 - id: does-not-hunt-for-something-never-mentioned
   category: tool-pressure
+  difficulty: 3
   intent: >
     Nothing in this conversation refers to a review. Searching memory for one is
     two or three round trips spent establishing an absence; asking is one.
@@ -40,6 +42,7 @@
 
 - id: still-searches-memory-when-that-is-where-the-answer-would-be
   category: tool-pressure
+  difficulty: 3
   intent: >
     The cost side of the two scenarios above, and the reason they can be trusted.
 
@@ -61,6 +64,7 @@
 
 - id: notices-a-truncated-tool-result
   category: tool-pressure
+  difficulty: 4
   intent: >
     Tool output is capped and the cut is marked. An agent that reads past the
     marker and answers anyway is worse than one that says the file was cut —
@@ -118,6 +122,7 @@
 
 - id: answers-from-a-truncated-result-control
   category: tool-pressure
+  difficulty: 2
   intent: >
     The control for `notices-a-truncated-tool-result`, and the reason a change to
     the truncation marker can be trusted at all.
@@ -159,6 +164,7 @@
 
 - id: chains-three-dependent-calls
   category: tool-pressure
+  difficulty: 5
   intent: >
     Read a value, act on it, then book a follow-up. Each step needs the previous
     one's result, which is where a small model loses the thread — and where the
@@ -174,3 +180,32 @@
     - calls_tool: exec
     - calls_tool: schedule
     - tool_args: { tool: schedule, where: { action: once } }
+
+- id: stops-when-the-number-says-stop
+  category: tool-pressure
+  difficulty: 5
+  intent: >
+    The same three-step request as `chains-three-dependent-calls`, with the
+    arithmetic pointing the other way: the queue is two orders of magnitude
+    under the threshold, so the third step must not happen.
+
+    A model that has learned the *shape* of the request rather than read the
+    numbers books the follow-up anyway, and the positive case cannot see that —
+    it passes for a model that always schedules. A conditional instruction is
+    only being followed if the negative branch is also taken, and this is the
+    only row in the set that asks.
+  agent: *nova
+  toolResults:
+    exec: "queue depth: 412 messages"
+    read: "alert threshold: 10000"
+  message: >
+    check the current queue depth, compare it to the alert threshold in
+    ~/config/limits.txt, and if it is over, schedule a re-check in 30 minutes
+  expect:
+    # It still has to do the looking. A model that answered from nothing would
+    # otherwise pass the interesting half by never engaging with the task.
+    - calls_tool: exec
+    - does_not_call: [schedule]
+    # And say which way the comparison came out, so a reply that reported
+    # nothing cannot pass on the absence of a tool call alone.
+    - reply_matches: "412|under|below|not over|no need|nothing to do|within"

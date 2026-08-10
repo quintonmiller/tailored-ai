@@ -150,6 +150,23 @@ async function gradeOne(
     if (max !== undefined && spoke.length > max) {
       return no("posts_by", `${want.agent} posted ${spoke.length}×, wanted ≤${max} (${describeSpeakers(outcome)})`);
     }
+    // Whether the right agent said the right thing, which counting cannot ask.
+    // `reply` on a room scenario is every post joined, so `reply_matches` passes
+    // when *either* agent produced the text — and in a handoff the whole
+    // question is whether the second one used what the first posted. That check
+    // is true by construction the moment the first agent says the number.
+    if (want.matches !== undefined) {
+      const re = new RegExp(want.matches, "is");
+      const hit = spoke.find((p) => re.test(p.body));
+      if (!hit) {
+        return no(
+          "posts_by",
+          spoke.length
+            ? `${want.agent} said nothing matching /${want.matches}/: ${spoke.map((p) => `"${trim(p.body)}"`).join(" | ")}`
+            : `${want.agent} never posted, so nothing could match /${want.matches}/ (${describeSpeakers(outcome)})`,
+        );
+      }
+    }
     return ok("posts_by");
   }
 

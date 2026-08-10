@@ -7,6 +7,7 @@
 
 - id: answers-in-the-room-that-woke-it
   category: addressing
+  difficulty: 2
   intent: A reply belongs in the room that asked, and nowhere else.
   agent: &nova
     name: nova
@@ -36,6 +37,7 @@
 
 - id: relays-to-another-room-with-the-tool
   category: addressing
+  difficulty: 3
   intent: >
     Asked in one room to tell someone in another, the message has to be sent
     with room(action="post"), not written as the reply.
@@ -62,6 +64,7 @@
 
 - id: keeps-an-answer-out-of-the-unrelated-room
   category: addressing
+  difficulty: 3
   intent: Being able to see another room is not permission to speak in it.
   agent: *nova
   config: *crossroom
@@ -81,6 +84,7 @@
 
 - id: answers-the-newest-message-not-the-answered-one
   category: addressing
+  difficulty: 3
   intent: >
     Messages already shown carry a cursor past them. A wake is about what
     arrived since, so the reply should be about the new question.
@@ -101,6 +105,7 @@
 
 - id: speaks-to-the-room-when-nobody-is-named
   category: addressing
+  difficulty: 2
   intent: An open question in a room the agent watches is still its to answer.
   agent: *nova
   rooms:

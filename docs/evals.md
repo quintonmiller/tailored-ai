@@ -52,6 +52,57 @@ pass rate over repeats** rather than a pass/fail per scenario. Two-of-three is
 not three-of-three, and a benchmark that rounds it away stops noticing a model
 becoming less reliable — which is the failure mode that started this.
 
+## Difficulty, and why the overall score cannot answer "where does this stop working"
+
+Every scenario carries a required `difficulty`, 1-5. It is a claim about what
+the turn **demands**, never about what it currently scores — grading by observed
+pass rate would make the scale circular, because every fix would relabel the
+scenario and "we handle the hard ones now" would be true by construction.
+
+| | | |
+|---|---|---|
+| 1 | reflex | One step, one plausible answer. Failing it means something is broken, not that the question was hard. |
+| 2 | routine | A single judgement among near neighbours — which of these tools, whether to speak at all. |
+| 3 | composed | Two or more constraints have to hold at once, or a fact has to survive a step to be used in the next. |
+| 4 | conflicting | The signals disagree and one has to win, or the right answer is partly a refusal. |
+| 5 | frontier | Written at or past the expected ceiling: multi-hop over a long history, a real dependency between agents. |
+
+The benchmark grew by addition, and the overall score averages a regression
+tripwire against a scenario written to find the model's ceiling. That average
+moves for the wrong reasons — adding six easy rows raises it — and it cannot say
+where the wall is. The difficulty rollup can:
+
+```
+  1 reflex       ████████████████████ 100%  36/36
+  2 routine      ████████████████████ 100%  63/63
+  3 composed     ███████████████████░  96%  50/52
+  4 conflicting  ███████████████░░░░░  76%  32/42
+  5 frontier     ████████░░░░░░░░░░░░  42%  10/24
+```
+
+Category tells you which subsystem is weak; difficulty tells you whether the
+model is failing the hard half of *every* subsystem, which is a different
+finding with a different fix.
+
+`--difficulty` takes `4`, `4+`, `2-3` or `3,5`, and composes with `--filter`:
+
+```bash
+pnpm run eval -- --target qwen-local --difficulty 5          # the frontier only
+pnpm run eval -- --target qwen-local --difficulty 4+ --filter long-session
+```
+
+That is the loop this exists for: run the hard slice, read the failures, write
+harder scenarios or file the gaps, repeat until nothing new fails. Running only
+the slice is the point — a full cohort is ~23 minutes of GPU and most of it is
+re-confirming rows that have passed every time for a month.
+
+**The level is an annotation, not part of what a scenario measures.** It is
+excluded from the scenario digest and the per-scenario fingerprints, like
+`intent` and `knownGap`, so re-grading a scenario costs nothing. It has to be:
+the scale was applied to a set that already existed, the grades are a judgement
+that will be revised, and if a re-grade invalidated every published run then
+nobody would ever re-grade anything.
+
 ## Restraint cases are not filler
 
 Roughly a quarter of the scenarios assert that the agent does **nothing**: passes
