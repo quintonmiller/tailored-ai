@@ -249,8 +249,49 @@ export type LoopStop =
   | { kind: "tool-ended"; tool: string; reason?: string }
   | { kind: "aborted"; requestedByCaller: boolean; reason?: string }
   | { kind: "max-rounds"; rounds: number; answered?: boolean }
-  | { kind: "repeated-calls" }
+  | { kind: "repeated-calls"; period?: number }
   | { kind: "truncated"; model: string; maxTokens?: number; outputTokens?: number; spentOnReasoning: boolean };
+
+/** Longest cycle treated as a stall. Beyond this, a repeating pattern is plausibly real work. */
+export const MAX_CYCLE_PERIOD = 3;
+
+/**
+ * How many times a cycle of this length must repeat before it counts as a stall.
+ *
+ * Period 1 keeps its historical threshold of three identical rounds. Longer
+ * cycles need two full repetitions rather than three, because a period-3 cycle
+ * repeated three times is nine rounds and most deployments cap below that — a
+ * detector that cannot fire before the round limit is not a detector.
+ */
+function repeatsNeeded(period: number): number {
+  return period === 1 ? 3 : 2;
+}
+
+/**
+ * The length of the cycle the model is stuck in, or null if it is making progress.
+ *
+ * `signatures` is one entry per round, each combining the round's tool calls
+ * *and* their results — the results matter because legitimate polling
+ * (running → running → done) repeats its calls while changing its answer, and
+ * treating that as a stall would break every wait-for-something tool.
+ *
+ * Only the tail is examined, which is what makes this cheap to run every round.
+ *
+ * Written because comparing each round to the one before it — the previous
+ * implementation — sees period 1 and nothing else. An `A → B → A → B` cycle
+ * resets the counter on every round and runs to the round limit, and that is
+ * the more common shape: one scenario in the benchmark produced both, looping
+ * on a single call in one run (caught) and alternating two in another (missed).
+ */
+export function detectCycle(signatures: string[], maxPeriod = MAX_CYCLE_PERIOD): number | null {
+  for (let period = 1; period <= maxPeriod; period++) {
+    const span = period * repeatsNeeded(period);
+    if (signatures.length < span) continue;
+    const window = signatures.slice(-span);
+    if (window.every((entry, i) => entry === window[i % period])) return period;
+  }
+  return null;
+}
 
 /** True when the loop ended because it got stuck, rather than finishing or being told to stop. */
 export function isStallStop(stop: LoopStop): boolean {
@@ -1272,11 +1313,11 @@ async function _runAgentLoopBody(
   let rounds = 0;
   let prevToolNames: string[] | undefined;
   let nudgesRemaining = opts.nudgeOnText ?? 0;
-  let lastCallSignature = "";
-  let lastResultSignature = "";
-  let repeatCount = 0;
+  // One entry per round: what was called, and what came back. Bounded to the
+  // longest tail `detectCycle` can look at, so a long turn does not accumulate.
+  const roundSignatures: string[] = [];
+  const SIGNATURE_WINDOW = MAX_CYCLE_PERIOD * 3;
   let cachedSummary: string | undefined;
-  const MAX_REPEATED_CALLS = 3;
   // Tracks which budget warnings have already fired so we inject each at
   // most once per loop. Without this the warning would replay every round
   // past the threshold.
@@ -1603,23 +1644,19 @@ async function _runAgentLoopBody(
       return ender.endsTurnReason ?? response.content ?? "";
     }
 
-    // Detect a stuck model: same call AND same result, repeated. We use the
-    // result too so legitimate polling (e.g. task_status running → running →
-    // completed) doesn't trip the detector — only genuine "no progress"
-    // loops do.
+    // Detect a stuck model: the same calls AND the same results, cycling. The
+    // results are part of the signature so legitimate polling (task_status
+    // running → running → completed) does not trip it — only genuine
+    // "no progress" loops do.
     const resultSignature = results.map((r) => r.output).join("|");
-    if (callSignature === lastCallSignature && resultSignature === lastResultSignature) {
-      repeatCount++;
-    } else {
-      repeatCount = 1;
-    }
-    lastCallSignature = callSignature;
-    lastResultSignature = resultSignature;
+    roundSignatures.push(`${callSignature}→${resultSignature}`);
+    if (roundSignatures.length > SIGNATURE_WINDOW) roundSignatures.shift();
 
-    if (repeatCount >= MAX_REPEATED_CALLS) {
+    const period = detectCycle(roundSignatures);
+    if (period !== null) {
       // Fires even when the model produced prose alongside the loop — that is
       // precisely the case a string-matching caller cannot see.
-      opts.onStop?.({ kind: "repeated-calls" });
+      opts.onStop?.({ kind: "repeated-calls", period });
       return response.content || "[Agent stopped: repeated identical tool calls detected]";
     }
   }

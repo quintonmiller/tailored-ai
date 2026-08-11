@@ -174,6 +174,29 @@ So the loop makes **one more call with the tools withheld**, and returns what th
 
 It costs one request, only on the path that was going to return nothing. If the model still says nothing, or the call fails, the marker stands: an empty string reads as an agent that chose silence, which is a different thing and the one a caller cannot act on. A caller-requested abort skips it — reachable, since an abort raised while the final round's tools are running is never seen by the top-of-round check, so the turn exits through `max-rounds` with the signal already set.
 
+### The stall detector sees cycles, not just repeats
+
+The loop ends a turn that is going in circles. Until #499 it compared each round
+to the one before it, so it saw a cycle of period 1 — the same call, three times
+running — and nothing else. `A → B → A → B` reset the counter on every round and
+ran to `maxToolRounds` instead.
+
+That is the more common shape. One benchmark scenario produced both in a single
+batch: one run looped on `tasks(action=get, id=…)` with an invented id and was
+caught; another alternated `task_query` and `recall` six times and was not.
+
+`detectCycle(signatures)` now examines the tail of the round history for a
+repeating block of period 1-3. A period-1 cycle still needs three repetitions;
+longer ones need two, because a period-3 cycle repeated three times is nine
+rounds and most deployments cap below that — a detector that cannot fire before
+the round limit is not a detector. `LoopStop { kind: "repeated-calls", period }`
+carries which it found.
+
+Each signature combines the round's calls **and** their results, unchanged from
+before and for the same reason: legitimate polling (`running → running → done`)
+repeats its calls while its answers move, and treating that as a stall would
+break every wait-for-something tool.
+
 **This changes how a caller must detect a stall.** It is still `LoopStop { kind: "max-rounds", rounds, answered }`, but the *reply* now usually looks like an ordinary answer. Branch on `onStop` — `isStallStop(stop)`, or `stallReasonOf(stop)` for the short reason. `detectStall(reply)` remains exported for plugins inspecting a reply they did not run themselves, and is now wrong in both directions: it cannot see a stall that answered, and it reports `[Agent stopped: shutdown requested]` — an operator cancelling a dispatch — as one. The task watcher was moved off it for exactly that; the exploratory worker had already been moved for the mirror-image bug, where reading the string classified every budget-capped tick as a stall and wrote 81 byte-identical notes in 10 days.
 
 ## Providers
