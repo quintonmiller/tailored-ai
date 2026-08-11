@@ -140,6 +140,16 @@ export interface Assertion {
   does_not_call?: string[];
   /** Some call to `tool` had arguments matching every entry in `where`. */
   tool_args?: { tool: string; where: Record<string, string | number | boolean> };
+  /**
+   * No call to `tool` had arguments matching every entry in `where`.
+   *
+   * The negative `does_not_call` cannot express, and the difference matters
+   * wherever a tool is both the safe way to look and the dangerous way to act.
+   * `does_not_call: [exec]` forbids `aws s3 ls` as firmly as `aws s3 rb` — so a
+   * scenario about not deleting the wrong bucket failed agents that checked
+   * which buckets existed first, which is the behaviour it wanted.
+   */
+  does_not_call_with?: { tool: string; where: Record<string, string | number | boolean> };
   /** The agent posted in this room (by name). */
   posts_in?: string;
   /** It posted in none of these. */

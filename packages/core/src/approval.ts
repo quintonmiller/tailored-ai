@@ -41,6 +41,18 @@ export interface PermissionsConfig {
    * should set.
    */
   noHandlerAction?: "auto" | "reject";
+  /**
+   * Check that an irreversible call's target is pinned down by the request
+   * before running it. Default `true`.
+   *
+   * Distinct from the rules above, and deliberately not expressible as one:
+   * a rule matches a tool and its arguments, and what makes the delete in #501
+   * dangerous is not its arguments — `tai-staging-2024` is a perfectly good
+   * bucket name — but that the *request* had two readings and the agent picked
+   * one silently. Costs one provider call per irreversible call, and only
+   * those: `exec` classifies per command, so `git status` never pays it.
+   */
+  checkDerivability?: boolean;
   /** Timeout in ms for approval requests. 0 = wait forever. Default: 300000 (5 min). */
   timeoutMs: number;
   /** What to do when timeout expires. Default: "reject". */

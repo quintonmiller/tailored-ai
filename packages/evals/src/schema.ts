@@ -58,6 +58,10 @@ const assertion = z
       .object({ tool: z.string(), where: z.record(z.union([z.string(), z.number(), z.boolean()])) })
       .strict()
       .optional(),
+    does_not_call_with: z
+      .object({ tool: z.string(), where: z.record(z.union([z.string(), z.number(), z.boolean()])) })
+      .strict()
+      .optional(),
     posts_in: z.string().optional(),
     does_not_post_in: z.array(z.string()).optional(),
     posts_by: z

@@ -104,10 +104,35 @@ export interface ToolResult {
   endsTurnReason?: string;
 }
 
+/**
+ * What a call does to the world, as the tool itself understands it.
+ *
+ * `read` observes. `write` changes something that can be changed back.
+ * `irreversible` cannot be undone by another call — a delete, a send, a
+ * payment.
+ *
+ * Declared by the tool rather than configured by the operator, because the
+ * operator does not necessarily know: installing a plugin adds tools whose
+ * behaviour is not in the config file, and `permissions.defaultMode` is
+ * `"auto"`, so an undeclared tool runs unattended whatever it does.
+ */
+export type ToolEffect = "read" | "write" | "irreversible";
+
 export interface Tool {
   name: string;
   description: string;
   parameters: Record<string, unknown>;
+
+  /**
+   * What this call does, for the loop's safety checks. Omit for `read`.
+   *
+   * A function rather than only a constant because for the tools that matter
+   * the answer depends on the arguments: `exec` running `git status` and
+   * `exec` running `rm -rf` are not the same act, and charging every shell
+   * call the cost of the irreversible path would make the check unaffordable
+   * where it is least needed.
+   */
+  effect?: ToolEffect | ((args: Record<string, unknown>) => ToolEffect);
 
   execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult>;
 

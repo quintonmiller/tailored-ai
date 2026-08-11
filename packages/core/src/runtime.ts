@@ -1229,6 +1229,7 @@ export class AgentRuntime {
       memoryInjectEmbedder: this._embedder,
       budgetWarnings: resolved.budgetWarnings,
       permissions: config.permissions,
+      checkDerivability: config.permissions?.checkDerivability,
       // From `resolved.tools` — the agent's own `tools:` list — deliberately
       // NOT the deduped set below, which has the meta tools appended and would
       // therefore be true for every agent, dropping the paragraph for nobody.
