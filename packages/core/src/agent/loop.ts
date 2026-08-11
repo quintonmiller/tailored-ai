@@ -9,8 +9,6 @@ import {
   formatApprovalDescription,
   type PermissionsConfig,
 } from "../approval.js";
-import { refuseIfAmbiguous } from "./derivability.js";
-import { effectOf } from "../tools/effect.js";
 import { loadAllContext, loadContextFiles } from "../context.js";
 import { recordTokenUsage } from "../db/autopilot-queries.js";
 import { getCoreMemory, renderCoreMemory } from "../db/core-memory-queries.js";
@@ -24,12 +22,14 @@ import type {
   ToolCall,
   ToolSchema,
 } from "../providers/interface.js";
+import { effectOf } from "../tools/effect.js";
 import type { Tool, ToolContext } from "../tools/interface.js";
 import { type ActiveSkillState, createActiveSkillState } from "./active-skill.js";
 import type { SkillCatalogEntry } from "./agents.js";
 import { buildChatLiveState, renderChatLiveState } from "./chat-live-state.js";
 import type { ConfigDeclaredSlot } from "./context-slots.js";
 import { listContextSlots, renderContextSlots, slotsFromConfig } from "./context-slots.js";
+import { refuseIfAmbiguous } from "./derivability.js";
 import { buildMemoryBlockWithMeta } from "./memory-inject.js";
 import type { Session } from "./session.js";
 import {

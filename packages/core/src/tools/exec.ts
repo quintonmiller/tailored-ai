@@ -99,8 +99,7 @@ export class ExecTool implements Tool {
    * act, and charging every shell call the cost of the irreversible path would
    * make the check unaffordable exactly where it is least needed.
    */
-  effect = (args: Record<string, unknown>) =>
-    classifyCommand(typeof args.command === "string" ? args.command : "");
+  effect = (args: Record<string, unknown>) => classifyCommand(typeof args.command === "string" ? args.command : "");
   parameters = {
     type: "object",
     properties: {
