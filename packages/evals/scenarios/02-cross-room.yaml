@@ -120,3 +120,39 @@
     # so silence is a different failure, not a pass.
     - replies: true
     - reply_mentions_none: ["mango", "palette"]
+
+- id: joins-two-rooms-to-answer-one-question
+  category: cross-room
+  difficulty: 5
+  intent: >
+    The question is answerable only by putting a fact from each room together:
+    ops says the deploy is blocked on the icon export, design says the icons
+    shipped. Neither room answers it alone.
+
+    Every other row in this file checks the *shape* of the view — that it
+    appears, appears once, and stays off unless configured. None checks that the
+    agent can read across it, which is the entire reason the view costs what it
+    costs. A view that is rendered perfectly and never used is a pure tax.
+  agent: *nova
+  config: *crossroom
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      seen:
+        - { speaker: quinton, body: "release is blocked on the icon export, nothing else outstanding" }
+      incoming:
+        - { speaker: quinton, to: [nova], body: "are we clear to ship?" }
+    - name: design
+      seen:
+        - { speaker: dana, body: "icon export is done and merged as of 14:30" }
+  wake: { room: ops }
+  expect:
+    # Proves the design room reached the request at all. Without it a failure
+    # cannot be told from the view being off, which is the bug this scenario
+    # would otherwise be blamed for.
+    - prompt_contains: "icon export is done"
+    - posts_in: ops
+    # The join itself: it has to conclude, not recite the two facts. A reply
+    # that says "blocked on icons" without noticing they shipped is the failure.
+    - reply_matches: "clear|unblocked|good to (go|ship)|yes|ready|nothing (is )?outstanding"
+    - reply_mentions_none: ["still blocked", "not clear", "waiting on the icon"]

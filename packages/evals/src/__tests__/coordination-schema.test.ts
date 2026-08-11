@@ -184,3 +184,63 @@ describe("posts_by", () => {
     expect(checks[0].detail).toContain("nobody posted");
   });
 });
+
+describe("a stub the agent cannot reach", () => {
+  it("rejects toolResults for a tool outside the agent's allowlist", () => {
+    // Four scenarios were written this way in one afternoon, usually by reusing
+    // an `&anchor` whose `tools:` is narrower than the new row needs. Each
+    // failed looking exactly like a model limitation — the agent correctly said
+    // it had no way to check — and each cost a benchmark run to diagnose.
+    expect(() =>
+      load(`
+- id: unreachable-stub
+  category: tool-pressure
+  difficulty: 3
+  intent: asks for a lookup it cannot do
+  agent:
+    name: nova
+    tools: [room]
+  toolResults:
+    exec: "queue depth: 41207"
+  message: how deep is the queue?
+  expect:
+    - replies: true
+`),
+    ).toThrow(/not in this agent's tools/);
+  });
+
+  it("allows a stub when the agent lists the tool", () => {
+    const [scenario] = load(`
+- id: reachable-stub
+  category: tool-pressure
+  difficulty: 3
+  intent: asks for a lookup it can do
+  agent:
+    name: nova
+    tools: [room, exec]
+  toolResults:
+    exec: "queue depth: 41207"
+  message: how deep is the queue?
+  expect:
+    - replies: true
+`);
+    expect(scenario.toolResults?.exec).toContain("41207");
+  });
+
+  it("allows a stub when the agent has no allowlist, because then it has everything", () => {
+    const [scenario] = load(`
+- id: no-allowlist
+  category: tool-pressure
+  difficulty: 3
+  intent: the fixture's whole tool set
+  agent:
+    name: nova
+  toolResults:
+    exec: "queue depth: 41207"
+  message: how deep is the queue?
+  expect:
+    - replies: true
+`);
+    expect(scenario.agent?.tools).toBeUndefined();
+  });
+});

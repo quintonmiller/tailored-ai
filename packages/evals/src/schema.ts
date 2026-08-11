@@ -138,6 +138,25 @@ const scenario = z
         message: "a scenario is either a room scenario (`rooms:`) or a chat scenario (`message:`), not both or neither",
       });
     }
+    // A canned result for a tool the agent cannot reach is a scenario that
+    // asks for something impossible, and it fails looking exactly like a model
+    // limitation: the agent says it has no way to check, which is true. Four
+    // scenarios were written this way in one afternoon — usually by reusing an
+    // `&anchor` whose `tools:` list is narrower than the new row needs — and
+    // each one cost a benchmark run to diagnose. Cheap to make impossible.
+    if (value.agent?.tools && value.toolResults) {
+      const allowed = new Set(value.agent.tools);
+      for (const tool of Object.keys(value.toolResults)) {
+        if (!allowed.has(tool)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              `toolResults stubs "${tool}", which is not in this agent's tools: [${value.agent.tools.join(", ")}] — ` +
+              "the agent cannot call it, so the stub is unreachable and the scenario asks for something impossible",
+          });
+        }
+      }
+    }
     if (isRoom) {
       const names = new Set(value.rooms?.map((r) => r.name));
       for (const step of value.wake ? (Array.isArray(value.wake) ? value.wake : [value.wake]) : []) {
