@@ -1654,10 +1654,14 @@ async function _runAgentLoopBody(
 
     const period = detectCycle(roundSignatures);
     if (period !== null) {
-      // Fires even when the model produced prose alongside the loop — that is
-      // precisely the case a string-matching caller cannot see.
+      // Ask once more with the tools withheld, exactly as the round limit does.
+      // Stopping a cycle early is worth doing, but it must not cost the turn its
+      // answer: a looping agent has usually already read what it needed and is
+      // circling over how to act on it. Widening the detector in #499 without
+      // this turned two runs that had been answering into stall markers.
+      const recovered = await answerWithoutTools();
       opts.onStop?.({ kind: "repeated-calls", period });
-      return response.content || "[Agent stopped: repeated identical tool calls detected]";
+      return recovered ?? response.content ?? "[Agent stopped: repeated identical tool calls detected]";
     }
   }
 

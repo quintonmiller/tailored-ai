@@ -192,6 +192,11 @@ rounds and most deployments cap below that — a detector that cannot fire befor
 the round limit is not a detector. `LoopStop { kind: "repeated-calls", period }`
 carries which it found.
 
+A turn stopped this way is asked once more with the tools withheld, exactly as
+the round limit does. Widening the detector without that turned two benchmark
+runs that had been answering into stall markers — stopping a cycle early is
+worth doing, but a looping agent has usually already read what it needed.
+
 Each signature combines the round's calls **and** their results, unchanged from
 before and for the same reason: legitimate polling (`running → running → done`)
 repeats its calls while its answers move, and treating that as a stall would

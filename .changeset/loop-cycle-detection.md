@@ -21,3 +21,8 @@ deployments cap below that.
 
 Round signatures still combine the calls with their results, so polling that
 repeats its calls while its answers move is not a stall.
+
+A turn stopped for cycling is now asked once more with the tools withheld, the
+way a turn stopped by the round limit has been since #470. Stopping a cycle
+early is worth doing, but it must not cost the turn its answer: a looping agent
+has usually already read what it needed and is circling over how to act on it.

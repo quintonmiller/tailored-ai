@@ -134,3 +134,77 @@ describe("the loop stops on a cycle the old detector could not see", () => {
     expect(await run(["task_query"], 10)).toEqual({ kind: "repeated-calls", period: 1 });
   });
 });
+
+/**
+ * Stopping a cycle early must not cost the turn its answer.
+ *
+ * The round limit has asked once more with the tools withheld since #470,
+ * because a stalled agent has usually already read what it needed. Widening the
+ * detector in #499 gave more turns the cycle exit — and that exit returned a
+ * marker, so two benchmark runs that had been answering became stall markers.
+ */
+describe("a turn stopped for cycling still gets asked for an answer", () => {
+  let db: Database.Database;
+
+  beforeEach(() => {
+    db = initDatabase(":memory:");
+  });
+  afterEach(() => {
+    db.close();
+  });
+
+  it("returns the prose from the tools-withheld call, not a marker", async () => {
+    let withheldCalls = 0;
+    const provider = {
+      id: "fake",
+      name: "fake",
+      supportsTools: true,
+      async chat(params: ChatParams): Promise<ChatResponse> {
+        if (!params.tools?.length) {
+          withheldCalls++;
+          return {
+            content: "The retry limit is 5.",
+            usage: { input: 1, output: 1 },
+            finishReason: "stop",
+            toolCalls: [],
+          };
+        }
+        return {
+          content: "",
+          usage: { input: 1, output: 1 },
+          finishReason: "tool_calls",
+          toolCalls: [{ id: "c", name: "look", arguments: {} }],
+        };
+      },
+    } as unknown as AIProvider;
+
+    const session = newSession(db, "fake-model", "fake");
+    let stop: LoopStop | undefined;
+    const reply = await runAgentLoop("what is the retry limit?", {
+      db,
+      session,
+      provider,
+      tools: [
+        {
+          name: "look",
+          description: "look",
+          parameters: { type: "object", properties: {} },
+          async execute(): Promise<ToolResult> {
+            return { success: true, output: "nothing found" };
+          },
+        },
+      ],
+      systemPrompt: "test",
+      maxToolRounds: 10,
+      maxHistoryTokens: 4000,
+      onStop: (s) => {
+        stop = s;
+      },
+    });
+
+    expect(stop).toEqual({ kind: "repeated-calls", period: 1 });
+    expect(reply).toBe("The retry limit is 5.");
+    expect(reply).not.toContain("[Agent stopped");
+    expect(withheldCalls).toBe(1);
+  });
+});
