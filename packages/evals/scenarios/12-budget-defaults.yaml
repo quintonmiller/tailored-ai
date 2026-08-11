@@ -16,6 +16,7 @@
 
 - id: default-history-budget-keeps-the-conversation
   category: budget
+  difficulty: 1
   intent: >
     With `agent.maxHistoryTokens` at whatever `DEFAULT_CONFIG` currently says
     and a realistic tool set, does anything the user said two messages ago still
@@ -42,6 +43,7 @@
 
 - id: a-tuned-budget-keeps-the-conversation
   category: budget
+  difficulty: 1
   intent: >
     The control. Same two messages, same tools, an explicit budget with room for
     the schemas. If this one fails too, the problem is not the default.

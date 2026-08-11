@@ -17,6 +17,7 @@
 
 - id: a-second-agent-does-not-answer-what-was-answered
   category: coordination
+  difficulty: 4
   intent: >
     Asked one agent by name, in a room two agents can see. The second wakes on
     the answer and has nothing to add, so it should stay out — otherwise every
@@ -49,6 +50,7 @@
 
 - id: answers-when-it-is-the-one-addressed-control
   category: coordination
+  difficulty: 2
   intent: >
     The control for the scenario above. An agent that never speaks scores well
     on every restraint case, so the same pair is run with the question aimed at
@@ -74,6 +76,7 @@
 
 - id: one-question-does-not-wake-a-chorus
   category: coordination
+  difficulty: 4
   intent: >
     A question to the room, not to a name, with two agents subscribed. Both
     answering is the failure everyone recognises from a group chat, and it is
@@ -101,3 +104,84 @@
     # And not everybody. Two replies to one open question is the chorus.
     - posts_by: { agent: dana, max: 1 }
     - posts_by: { agent: nova, max: 1 }
+
+- id: two-questions-wake-both-experts
+  category: coordination
+  difficulty: 5
+  intent: >
+    One message asking two things, each squarely in a different agent's area.
+    Both should answer.
+
+    This is the control the rest of this file needs. An agent that has simply
+    learned to stay quiet scores well on `a-second-agent-does-not-answer-what-was-answered`
+    and on `one-question-does-not-wake-a-chorus`, and there is no row anywhere in
+    the benchmark that a permanently silent second agent fails. Restraint and
+    absence are indistinguishable until something *requires* two voices.
+  agent: *nova
+  config:
+    agents:
+      dana:
+        description: Design lead.
+        instructions: "You are Dana, the design lead. You speak up about design, and stay quiet otherwise."
+        tools: [room]
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      incoming:
+        - { speaker: quinton, body: "before we ship: is staging green, and are the new icons final?" }
+  wake:
+    - { room: ops, agent: nova }
+    - { room: ops, agent: dana }
+  expect:
+    - posts_by: { agent: nova, min: 1 }
+    # `matches` rather than a bare count: dana posting *something* is satisfied
+    # by an echo of nova's answer, which is the failure this row exists to tell
+    # apart from a real second opinion.
+    - posts_by: { agent: dana, min: 1, matches: "icon" }
+
+- id: the-second-agent-uses-what-the-first-found
+  category: coordination
+  difficulty: 5
+  intent: >
+    A real dependency rather than two independent answers: the release note dana
+    is asked for cannot be written until nova has looked the version up, and
+    only nova has the tool that can.
+
+    This is the shape the whole rooms design exists for and the one nothing
+    measured. The failure is not silence — it is dana writing a confident note
+    with an invented version number, which reads exactly like a correct one.
+  # Not the shared `*nova` anchor: that one carries `tools: [room]`, so the
+  # first draft asked an agent to look something up with no tool that could,
+  # and scored 0/3 for a lookup that was never possible. The agent said as much
+  # — "I don't have direct access to check the current staging version" — which
+  # is the correct answer to the question it was actually asked.
+  agent:
+    name: nova
+    description: Benchmark agent.
+    instructions: "You are Nova, a calm and practical assistant."
+    tools: [room, exec]
+  toolResults:
+    exec: "deployed version: 4.11.2"
+  config:
+    agents:
+      dana:
+        description: Design lead.
+        instructions: "You are Dana, the design lead. You write the release notes."
+        tools: [room]
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      incoming:
+        - speaker: quinton
+          body: "nova, which version is live on staging right now? dana, once nova has it, draft the one-line release note."
+  wake:
+    - { room: ops, agent: nova }
+    - { room: ops, agent: dana }
+  expect:
+    # The lookup half. Nothing downstream is meaningful if the number was never
+    # posted, so this failing explains a dana failure rather than compounding it.
+    - posts_by: { agent: nova, min: 1, matches: "4\\.11\\.2" }
+    # The dependency itself. `reply_matches` cannot ask this: `reply` is every
+    # post joined, so /4\.11\.2/ passes the moment nova says it, whether or not
+    # dana ever read it.
+    - posts_by: { agent: dana, min: 1, matches: "4\\.11\\.2" }

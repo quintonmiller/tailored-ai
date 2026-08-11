@@ -75,6 +75,7 @@ and `--timeout` bounds each call so one wedged request cannot stall the batch.
 ```yaml
 - id: relays-to-another-room-with-the-tool
   category: addressing
+  difficulty: 3                 # 1 reflex … 5 frontier. Required. See below.
   intent: Asked in one room to tell someone in another, it has to use the tool.
   agent:
     name: nova
@@ -128,6 +129,31 @@ Every `expect` entry carries **exactly one** assertion, so a failure names
 itself. Unknown keys are an error, not a silent skip — a typo that grades
 nothing would report a higher score for having checked less.
 
+### Difficulty
+
+Every scenario declares `difficulty`, 1-5. It grades what the turn **demands**,
+not what it currently scores — grading by pass rate would be circular, since
+every fix would relabel the scenario.
+
+| | | |
+|---|---|---|
+| 1 | reflex | One step, one plausible answer. Failing it means something is broken. |
+| 2 | routine | A single judgement among near neighbours — which tool, whether to speak. |
+| 3 | composed | Two constraints at once, or a fact surviving a step to be used in the next. |
+| 4 | conflicting | The signals disagree and one has to win, or the answer is partly a refusal. |
+| 5 | frontier | At or past the expected ceiling: multi-hop over a long history, a real dependency between agents. |
+
+```bash
+pnpm --filter @tailored-ai/evals run eval -- --home ~/.tailored-ai --difficulty 5
+```
+
+The report gains a rollup by level next to the one by category. Category says
+which subsystem is weak; difficulty says whether the hard half of *everything*
+is failing, which is a different finding.
+
+The level is an annotation: it is excluded from the scenario digest and the
+per-scenario fingerprints, so re-grading never invalidates a published run.
+
 ### Assertions
 
 | | |
@@ -136,9 +162,11 @@ nothing would report a higher score for having checked less.
 | `tool_args: {tool, where}` | one call to `tool` matched every key in `where`. Values are case-insensitive strings, or `/regex/`. |
 | `posts_in` / `does_not_post_in` | which rooms the agent posted in |
 | `posts_by: {agent, min, max}` | how often a named agent spoke. `min` is 1 unless `max` is given, so `{agent, max: 0}` means "stayed out" |
+| `posts_by: {agent, matches}` | regex over that agent's *own* posts. `reply_matches` cannot ask this — `reply` is every post joined, so it passes when either agent said it |
 | `replies: true\|false` | did it say anything outward at all |
 | `reply_matches` / `reply_not_matches` | regex over the reply |
 | `reply_mentions_any` / `reply_mentions_none` | case-insensitive substrings |
+| `reply_mentions_all` | every one must appear. "Relay all of it", which a character floor only approximates |
 | `min_reply_chars` / `max_reply_chars` | length |
 | `max_overlap: {threshold, prior_reply\|text}` | word-trigram overlap. A fresh reply scores ~0.1–0.2 against the agent's own last message; a re-emitted one ~0.9. |
 | `prompt_contains` / `prompt_not_contains` | substring of the assembled request |
@@ -174,6 +202,7 @@ works in a script.
 --repeats <n>         runs per scenario (default 3)
 --concurrency <n>     scenarios in flight (default 4)
 --filter <s>          scenarios whose id contains <s>, or whose category is <s>
+--difficulty <spec>   levels to run: 4, 4+, 2-3, 3,5. Composes with --filter
 --seed <n>            base seed, `off` to disable (default 1000)
 --min-score <0..1>    exit non-zero below this
 --dry-run             validate scenarios and print the plan, call no model

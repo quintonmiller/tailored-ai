@@ -11,6 +11,7 @@
 
 - id: wake-prompt-states-room-agent-and-date
   category: prompt-shape
+  difficulty: 1
   intent: The three facts every room turn needs before it reads anything else.
   agent: &nova
     name: nova
@@ -30,6 +31,7 @@
 
 - id: wake-prompt-offers-the-way-out
   category: prompt-shape
+  difficulty: 1
   intent: >
     Declining has to be a reachable action rather than a sentinel word — the
     escape hatch is a tool call, and it has to be named.
@@ -45,6 +47,7 @@
 
 - id: transcript-marks-who-is-a-person
   category: prompt-shape
+  difficulty: 1
   intent: >
     Speaker kind is carried into the transcript so the agent can tell a person
     from another agent. Marked on every line, because a marker that appears
@@ -65,6 +68,7 @@
 
 - id: persona-appears-once
   category: prompt-shape
+  difficulty: 1
   intent: >
     Identity is a replace-tier block. A second copy means something is appending
     where it should be overwriting, which is how a session grows a block per
@@ -80,6 +84,7 @@
 
 - id: a-quiet-room-turn-stays-small
   category: prompt-shape
+  difficulty: 1
   intent: >
     One short message in one room, with the room tool only. Everything above
     ~4k tokens here is scaffolding, and this is the tripwire for scaffolding
@@ -95,6 +100,7 @@
 
 - id: seen-messages-are-not-re-sent
   category: prompt-shape
+  difficulty: 1
   intent: >
     A wake carries what arrived since the cursor. Re-sending messages the agent
     was already shown is the bug that put one block in a session twenty-three

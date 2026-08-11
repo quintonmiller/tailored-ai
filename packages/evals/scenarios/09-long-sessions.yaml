@@ -12,6 +12,7 @@
 
 - id: answers-from-the-surviving-window
   category: long-session
+  difficulty: 3
   intent: >
     A long session, a small budget, and the fact the question needs is recent.
     This is the control: if this fails, the trimming is eating the wrong end and
@@ -57,6 +58,7 @@
 
 - id: does-not-answer-from-a-superseded-fact
   category: long-session
+  difficulty: 4
   intent: >
     The conversation changed its mind. A model that pattern-matches the first
     mention of a date answers with the one that was cancelled — and this is the
@@ -80,13 +82,15 @@
 
 - id: says-when-the-front-of-the-conversation-is-gone
   category: long-session
+  difficulty: 4
   intent: >
     The fact is in the part that got trimmed. The right answer is to say so —
     "I no longer have that part of the conversation" — not to invent a plausible
     table name.
 
-    `summarizeOnTrim` has no default, so it is off, and the mechanism that marks
-    a cut exists but is not the default. This scenario measures what that costs.
+    `summarizeOnTrim` now defaults to true (#498), so this row pins it off: it is
+    the marker path, and it measures what that path costs against its summarised
+    sibling below.
   # Pinned off, not inherited. This row *is* the marker path; once
   # `summarizeOnTrim` defaults to true an inherited value would quietly turn it
   # into a second copy of its summarised sibling, and the pair would go on
@@ -127,6 +131,7 @@
 
 - id: recovers-a-trimmed-fact-when-the-trim-is-summarised
   category: long-session
+  difficulty: 4
   intent: >
     What `summarizeOnTrim` actually buys, measured rather than assumed.
 
@@ -137,10 +142,11 @@
     the *mechanism* is.
 
     `summarizeOnTrim` replaces the marker with a summary of what was dropped, at
-    the cost of one extra provider call per trim. It defaults to false
-    (`agents.ts:223`), so nearly every deployment runs the marker path. This is
-    the row that says whether that default is the right one, and it re-answers
-    the question for every future model rather than settling it once.
+    the cost of one extra provider call per trim. This pair is what argued it
+    from off to on by default (#498, measured at 6/12 against 12/12), and it
+    stays here to re-answer the question for every future model rather than
+    settling it once — the flag is pinned on both sides so the row keeps
+    measuring the mechanism rather than whatever the default currently is.
 
     Same history, same budget, same question. The only difference is the flag —
     which is why the pair can be read as a difference at all.
@@ -170,6 +176,7 @@
 
 - id: early-detail-survives-a-marker-trim
   category: long-session
+  difficulty: 4
   intent: >
     The control for the summarisation pair, and the reason that pair can argue
     for a default at all.
@@ -222,6 +229,7 @@
 
 - id: early-detail-survives-a-summarised-trim
   category: long-session
+  difficulty: 3
   intent: >
     The same question through `summarizeOnTrim`. Read as a pair with the row
     above: whether summarising carries a peripheral name across, or replaces
@@ -248,6 +256,7 @@
 
 - id: keeps-the-thread-in-a-long-room-session
   category: long-session
+  difficulty: 3
   intent: >
     The same pressure on the room path, where the session also carries every
     wake prompt ever rendered — the layer that grows fastest in production.
@@ -271,6 +280,7 @@
 
 - id: keeps-the-thread-in-a-summarised-room-session
   category: long-session
+  difficulty: 3
   intent: >
     The third axis for `summarizeOnTrim`, and the one that decides a default.
 
@@ -309,6 +319,7 @@
 
 - id: keeps-the-thread-in-a-marker-room-session
   category: long-session
+  difficulty: 4
   intent: >
     The marker-path control for the row above: same room, same question, same
     tight budget, `summarizeOnTrim` off. Read as a pair.
@@ -333,3 +344,60 @@
     - replies: true
     - reply_not_matches: "\\[Agent stopped"
     - reply_matches: "50k|50,000|50000|don.?t have|do not have|no longer|not (in|available|visible)|earlier (part|message)|trimmed|dropped|can.?t (see|find|recall|retrieve)"
+
+- id: acts-on-a-commitment-made-before-the-trim
+  category: long-session
+  difficulty: 5
+  knownGap: "#500 — a create instruction routes to task_query, or to tasks(action=get) with an invented id. #499 — the two-call cycle that gets there runs to the round limit."
+  intent: >
+    Every other row in this file asks the agent to *recall* something from
+    before the trim. This one asks it to act on something: an instruction given
+    at the top of the conversation, whose trigger arrives at the bottom, after
+    the instruction itself has been dropped from the window.
+
+    That is the shape of most real standing instructions — "when X happens, do
+    Y" is said once and fires much later — and it is strictly harder than
+    recall. Recall only needs the fact to survive; this needs the fact to
+    survive *and* to be recognised as still binding *and* to be converted into a
+    tool call, with nothing in the final message naming the tool.
+
+    It is also the row that says what `summarizeOnTrim` is worth beyond
+    question-answering. A summary that keeps the topic and drops the obligation
+    is useless here and indistinguishable from a good one everywhere else in
+    this file.
+  agent: *nova
+  config:
+    agent:
+      maxHistoryTokens: 2500
+  history: &commitment
+    - { role: user, content: "when the billing migration finishes, file a task to update the public changelog" }
+    - { role: assistant, content: "Will do — a changelog task once the migration is done." }
+    - { role: user, content: "the old invoice table has about 4 million rows" }
+    - { role: assistant, content: "Noted. That's big enough that the copy wants batching." }
+    - { role: user, content: "we're going with 50k batches" }
+    - { role: assistant, content: "50k it is." }
+    - { role: user, content: "the staging run took 40 minutes end to end" }
+    - { role: assistant, content: "40 minutes on staging. Production will be slower with real volume." }
+    - { role: user, content: "we booked the maintenance window for the 19th at 2am" }
+    - { role: assistant, content: "The 19th at 2am. I'll keep that in mind." }
+    - { role: user, content: "rollback is a snapshot restore, takes about 12 minutes" }
+    - { role: assistant, content: "12-minute snapshot restore for rollback. Good to know." }
+    - { role: user, content: "the read replicas need repointing after the cutover" }
+    - { role: assistant, content: "Repoint the read replicas after cutover. Added to the sequence." }
+    - { role: user, content: "the runbook lives in the ops repo under docs/billing-cutover.md" }
+    - { role: assistant, content: "Runbook at docs/billing-cutover.md in the ops repo." }
+    - { role: user, content: "we're calling the new database billing-v2" }
+    - { role: assistant, content: "billing-v2 it is." }
+  message: "migration's done — everything's on billing-v2 now"
+  expect:
+    # Proves a trim happened and that what survived is a *summary*, not the
+    # original turn — the whole question this row asks.
+    #
+    # The first draft asserted `prompt_not_contains: "file a task"` on the
+    # theory that the commitment would be gone. It is not: the summariser keeps
+    # it, near-verbatim, which is the mechanism working exactly as intended.
+    # Asserting its absence would have made the row fail whenever
+    # summarisation succeeded — a guard that fires on the good outcome.
+    - prompt_contains: "[Earlier conversation summary:"
+    - calls_tool: tasks
+    - tool_args: { tool: tasks, where: { action: create } }

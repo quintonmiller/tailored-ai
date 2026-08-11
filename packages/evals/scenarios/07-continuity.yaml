@@ -11,6 +11,7 @@
 
 - id: uses-a-fact-from-earlier-in-the-session
   category: continuity
+  difficulty: 2
   intent: A detail stated four turns ago is still available.
   agent: &nova
     name: nova
@@ -31,6 +32,7 @@
 
 - id: honours-a-compaction-summary
   category: continuity
+  difficulty: 3
   intent: >
     A summary is what survives of a trimmed conversation. Ignoring it is the
     same as having no memory of that part at all.
@@ -50,6 +52,7 @@
 
 - id: does-not-claim-amnesia
   category: continuity
+  difficulty: 3
   intent: >
     The material is in front of it. Answering "I have no record of that" is a
     specific, recognisable failure and worth its own check.
@@ -67,6 +70,7 @@
 
 - id: carries-context-across-a-room-wake
   category: continuity
+  difficulty: 3
   intent: >
     A room session is history too. The agent answered "node-3" last wake; "it"
     in the new message refers to that, and resolving it needs the session.

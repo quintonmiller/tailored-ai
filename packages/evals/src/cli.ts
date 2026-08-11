@@ -18,6 +18,7 @@ import { stripSeparator } from "./args.js";
 import { DEFAULT_PINNED_AT, DEFAULT_TIMEZONE } from "./clock.js";
 import { printComparison } from "./compare.js";
 import { costRecord, usageOfScenarios } from "./cost.js";
+import { describeDifficulty } from "./difficulty.js";
 import type { HarnessOptions } from "./harness.js";
 import { PAYLOAD_FILENAME, readWorkerResult } from "./protocol.js";
 import { printScenario, printSummary, score, verdict } from "./report.js";
@@ -41,6 +42,7 @@ Options
   --repeats <n>         Runs per scenario (default 3). The score is a pass rate over these.
   --concurrency <n>     Scenarios in flight (default 4)
   --filter <s>          Only scenarios whose id contains <s>, or whose category is <s>
+  --difficulty <spec>   Only scenarios at these levels: 4, 4+, 2-3, 3,5. Composes with --filter.
   --seed <n>            Base seed; repeat i uses seed+i (default 1000). --seed off to disable.
   --pinned-at <iso>     Instant every scenario resolves civil time against
                         (default a fixed Wednesday). --pinned-at off uses the host clock.
@@ -164,7 +166,12 @@ async function runWorker(
 
     // Identity travels with the result rather than through the worker: the
     // worker grades runs and has no reason to know why a scenario exists.
-    const describe = { id: scenario.id, category: scenario.category, intent: scenario.intent };
+    const describe = {
+      id: scenario.id,
+      category: scenario.category,
+      intent: scenario.intent,
+      difficulty: scenario.difficulty,
+    };
     const gap = scenario.knownGap ? { knownGap: scenario.knownGap } : {};
 
     // Every exit from here resolves with *something*. A worker that dies, or
@@ -211,6 +218,7 @@ async function cmdRun(argv: string[]): Promise<number> {
       repeats: { type: "string" },
       concurrency: { type: "string" },
       filter: { type: "string" },
+      difficulty: { type: "string" },
       seed: { type: "string" },
       "pinned-at": { type: "string" },
       "time-zone": { type: "string" },
@@ -283,9 +291,13 @@ async function cmdRun(argv: string[]): Promise<number> {
   }
 
   const scenarioDir = values.scenarios ? resolve(values.scenarios) : join(packageRoot, "scenarios");
-  const { scenarios, hash, fingerprints } = loadScenarios(scenarioDir, values.filter);
+  const { scenarios, hash, fingerprints } = loadScenarios(scenarioDir, values.filter, values.difficulty);
   if (!scenarios.length) {
-    console.error(`No scenarios matched${values.filter ? ` filter "${values.filter}"` : ""} in ${scenarioDir}.`);
+    const narrowed = [
+      values.filter ? `filter "${values.filter}"` : "",
+      values.difficulty ? `difficulty "${values.difficulty}"` : "",
+    ].filter(Boolean);
+    console.error(`No scenarios matched${narrowed.length ? ` ${narrowed.join(" + ")}` : ""} in ${scenarioDir}.`);
     return 2;
   }
 
@@ -296,7 +308,11 @@ async function cmdRun(argv: string[]): Promise<number> {
     console.log(
       `${scenarios.length} scenario(s), set ${hash}, ${repeats} repeat(s) → ${scenarios.length * repeats} model turns`,
     );
-    for (const s of scenarios) console.log(`  ${s.category.padEnd(16)} ${s.id.padEnd(44)} ${s.expect.length} check(s)`);
+    for (const s of scenarios) {
+      console.log(
+        `  ${describeDifficulty(s.difficulty).padEnd(14)} ${s.category.padEnd(16)} ${s.id.padEnd(44)} ${s.expect.length} check(s)`,
+      );
+    }
     return 0;
   }
 

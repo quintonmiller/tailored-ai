@@ -8,6 +8,7 @@
  */
 
 import { formatUsd, noCostReason, totalUsage, usdOf } from "./cost.js";
+import { describeDifficulty } from "./difficulty.js";
 import { EFFORT_LABELS, formatMs, summariseScenarios } from "./efficiency.js";
 import type { BenchmarkReport, ScenarioResult } from "./types.js";
 
@@ -25,6 +26,7 @@ function colour(text: string, code: string): string {
 
 export function score(scenarios: ScenarioResult[]): BenchmarkReport["score"] {
   const byCategory: Record<string, { passed: number; total: number; rate: number }> = {};
+  const byDifficulty: Record<string, { passed: number; total: number; rate: number }> = {};
   let passed = 0;
   let total = 0;
 
@@ -36,10 +38,27 @@ export function score(scenarios: ScenarioResult[]): BenchmarkReport["score"] {
     const bucket = (byCategory[scenario.category] ??= { passed: 0, total: 0, rate: 0 });
     bucket.passed += runsPassed;
     bucket.total += runsTotal;
+    // Skipped rather than bucketed under "unknown": a scenario with no level is
+    // one this build could not have loaded, so the only way to see one here is
+    // re-scoring an old report. Inventing a bucket for it would put runs from a
+    // different scale next to the current one.
+    if (scenario.difficulty !== undefined) {
+      const level = (byDifficulty[String(scenario.difficulty)] ??= { passed: 0, total: 0, rate: 0 });
+      level.passed += runsPassed;
+      level.total += runsTotal;
+    }
   }
 
-  for (const bucket of Object.values(byCategory)) bucket.rate = bucket.total ? bucket.passed / bucket.total : 0;
-  return { overall: total ? passed / total : 0, passed, total, byCategory };
+  for (const bucket of [...Object.values(byCategory), ...Object.values(byDifficulty)]) {
+    bucket.rate = bucket.total ? bucket.passed / bucket.total : 0;
+  }
+  return {
+    overall: total ? passed / total : 0,
+    passed,
+    total,
+    byCategory,
+    ...(Object.keys(byDifficulty).length ? { byDifficulty } : {}),
+  };
 }
 
 /**
@@ -93,7 +112,11 @@ export function printScenario(scenario: ScenarioResult): void {
   console.log(`${verdict} ${label.padEnd(5)} ${scenario.category.padEnd(16)} ${scenario.id}`);
 
   if (scenario.passRate === 1) return;
-  console.log(colour(`      ${scenario.intent}`, DIM));
+  // The level rides along with the intent rather than the headline, because it
+  // only changes how you read a *failure*: a red level-2 row is a defect, a red
+  // level-5 row is the scenario doing its job.
+  const level = scenario.difficulty === undefined ? "" : `[${describeDifficulty(scenario.difficulty)}] `;
+  console.log(colour(`      ${level}${scenario.intent}`, DIM));
 
   // One line per distinct failure, with how often it happened — the same check
   // failing three times is one problem, not three.
@@ -158,6 +181,24 @@ export function printSummary(report: BenchmarkReport): void {
     console.log(
       `  ${name.padEnd(width)}  ${colour(bar(bucket.rate), rateColour(bucket.rate))} ${pct}  ${colour(`${bucket.passed}/${bucket.total}`, DIM)}`,
     );
+  }
+
+  // The second cut. Category says which subsystem is weak; this says whether the
+  // model is failing the hard half of everything, which is a different finding
+  // with a different fix — and it is the one that says where the ceiling is.
+  // Only printed when the run spanned more than one level: a `--difficulty 5`
+  // run would otherwise render a single bar identical to the overall score.
+  const levels = Object.keys(s.byDifficulty ?? {}).sort();
+  if (levels.length > 1) {
+    console.log("");
+    for (const level of levels) {
+      const bucket = s.byDifficulty?.[level];
+      if (!bucket) continue;
+      const pct = `${Math.round(bucket.rate * 100)}%`.padStart(4);
+      console.log(
+        `  ${describeDifficulty(Number(level)).padEnd(width)}  ${colour(bar(bucket.rate), rateColour(bucket.rate))} ${pct}  ${colour(`${bucket.passed}/${bucket.total}`, DIM)}`,
+      );
+    }
   }
 
   console.log("");

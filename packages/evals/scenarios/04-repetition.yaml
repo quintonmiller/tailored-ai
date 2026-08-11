@@ -14,6 +14,7 @@
 
 - id: does-not-repeat-its-last-answer
   category: repetition
+  difficulty: 2
   intent: A new question gets a new answer, not the previous one again.
   agent: &nova-chat
     name: nova
@@ -36,6 +37,7 @@
 
 - id: recovers-from-a-poisoned-history
   category: repetition
+  difficulty: 4
   intent: >
     Four identical copies of its own reply already in history. This is the state
     a degenerating session reaches, and the question is whether the next turn
@@ -68,6 +70,7 @@
 
 - id: answers-an-overlapping-question-freshly
   category: repetition
+  difficulty: 3
   intent: >
     A follow-up whose answer legitimately overlaps with the last one. Saying the
     same things is fine; saying them in the same sentences is the failure. The
@@ -95,6 +98,7 @@
 
 - id: does-not-repeat-its-last-room-post
   category: repetition
+  difficulty: 2
   intent: >
     The room path is where this was first seen, because a room transcript feeds
     the agent its own previous message back on every wake.

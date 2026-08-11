@@ -44,6 +44,7 @@ describe("wake as a sequence", () => {
     const [scenario] = load(`
 - id: two-turns
   category: coordination
+  difficulty: 3
   intent: two agents
 ${ROOMS}
   wake:
@@ -63,6 +64,7 @@ ${ROOMS}
     const [scenario] = load(`
 - id: one-turn
   category: addressing
+  difficulty: 3
   intent: one agent
 ${ROOMS}
   wake: { room: ops }
@@ -80,6 +82,7 @@ ${ROOMS}
       load(`
 - id: bad-second-step
   category: coordination
+  difficulty: 3
   intent: typo in the second step
 ${ROOMS}
   wake:
@@ -96,6 +99,7 @@ ${ROOMS}
       load(`
 - id: empty-wake
   category: coordination
+  difficulty: 3
   intent: nothing runs
 ${ROOMS}
   wake: []
@@ -118,7 +122,7 @@ function outcome(posts: Array<{ room: string; body: string; agent?: string }>): 
 }
 
 function scenario(expect_: Scenario["expect"]): Scenario {
-  return { id: "s", category: "coordination", intent: "i", expect: expect_ } as Scenario;
+  return { id: "s", category: "coordination", difficulty: 3, intent: "i", expect: expect_ } as Scenario;
 }
 
 async function passes(assertion: Scenario["expect"][number], out: RunOutcome): Promise<boolean> {
@@ -155,6 +159,22 @@ describe("posts_by", () => {
 
     expect(checks[0].detail).toContain("nova×1");
     expect(checks[0].detail).toContain("dana×2");
+  });
+
+  it("asks what a named agent said, which counting cannot", async () => {
+    // The handoff question. `reply_matches` is useless here: `reply` is every
+    // post joined, so /41207/ passes the moment nova says it — whether or not
+    // dana, the agent whose turn is under test, ever used it.
+    expect(await passes({ posts_by: { agent: "dana", matches: "icons" } }, conversation)).toBe(true);
+    expect(await passes({ posts_by: { agent: "dana", matches: "deploy" } }, conversation)).toBe(false);
+    expect(await passes({ posts_by: { agent: "nova", matches: "deploy" } }, conversation)).toBe(true);
+  });
+
+  it("says what the agent did say when nothing matched, so a near miss is legible", async () => {
+    const checks = await grade(scenario([{ posts_by: { agent: "nova", matches: "rollback" } }]), conversation);
+
+    expect(checks[0].pass).toBe(false);
+    expect(checks[0].detail).toContain("deploy finished");
   });
 
   it("reports nobody rather than an empty list on a silent room", async () => {

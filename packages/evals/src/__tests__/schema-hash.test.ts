@@ -28,6 +28,7 @@ function hashOf(yaml: string): string {
 const BASE = `
 - id: answers-a-question
   category: chat
+  difficulty: 1
   intent: A plain question gets a plain answer.
   message: what is the capital of France?
   expect:
@@ -51,6 +52,16 @@ describe("scenario set digest", () => {
     expect(hashOf(reworded)).toEqual(hashOf(BASE));
   });
 
+  it("ignores a re-grade, so revising the scale costs nothing", () => {
+    // The scale was applied to a set that already existed and the grades are a
+    // judgement that will be revised. If a re-grade invalidated every published
+    // run, the predictable outcome is that nobody ever re-grades anything and
+    // the levels drift away from what the scenarios actually demand.
+    const regraded = BASE.replace("difficulty: 1", "difficulty: 5");
+    expect(regraded).not.toEqual(BASE);
+    expect(hashOf(regraded)).toEqual(hashOf(BASE));
+  });
+
   it("ignores comments and blank lines", () => {
     const commented = BASE.replace("- id: answers", "# a note for whoever reads this next\n\n- id: answers");
     expect(hashOf(commented)).toEqual(hashOf(BASE));
@@ -70,6 +81,7 @@ describe("scenario set digest", () => {
     const extra = `${BASE}
 - id: declines-to-guess
   category: chat
+  difficulty: 2
   intent: Nothing in the conversation supports an answer.
   message: what did I say yesterday?
   expect:

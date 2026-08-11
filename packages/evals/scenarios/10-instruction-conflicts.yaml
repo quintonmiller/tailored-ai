@@ -16,6 +16,7 @@
 
 - id: room-purpose-overrides-a-chatty-persona
   category: conflicts
+  difficulty: 4
   intent: >
     Persona says be warm and conversational; the room says keep it to the point.
     The room is the narrower instruction and should win.
@@ -38,6 +39,7 @@
 
 - id: role-narrows-what-the-agent-does-here
   category: conflicts
+  difficulty: 4
   intent: >
     Same agent, same room, a per-room role that says it only takes notes. Asked
     to do something outside that role, it should decline or defer rather than
@@ -61,6 +63,7 @@
 
 - id: chatter-norm-unstated-control
   category: conflicts
+  difficulty: 4
   knownGap: "#447 — whether an unprompted room should suppress social chatter is an open question, not a settled norm. This row is the measurement of it."
   intent: >
     The control for the pair below, and a live question rather than a settled
@@ -91,6 +94,7 @@
 
 - id: chatter-norm-stated-in-the-room-purpose
   category: conflicts
+  difficulty: 3
   intent: >
     Identical to the control except the room says what it is for. If stating it
     is what makes the difference, the fix is either a broader default in the wake
@@ -107,3 +111,68 @@
   wake: { room: ops }
   expect:
     - tool_args: { tool: room, where: { action: pass } }
+
+- id: a-direct-request-outranks-the-standing-norm
+  category: conflicts
+  difficulty: 5
+  intent: >
+    Three layers, and the first two agree with each other. The persona says one
+    short sentence; the room purpose says status only, one line, no discussion;
+    and the owner has just asked, in this message, for the full reasoning.
+
+    Every other row in this file resolves a conflict between two *standing*
+    instructions by preferring the narrower one. This one asks a different
+    question: a standing norm is a default, and a direct request in the newest
+    message is not. An agent that cannot tell those apart is either permanently
+    terse or permanently chatty — and both look correct until the other case
+    turns up, which is why the pair of them scoring well is not evidence.
+
+    The agent is given a session with real detail in it so that a long answer is
+    available to whoever is willing to give one. Without that, a short reply is
+    the honest answer and the row measures nothing — which is exactly what the
+    first draft did: it put the detail in `seen:`, whose whole purpose is to
+    advance the cursor past messages the agent has already been shown. The
+    detail never reached the model, the agent correctly said it had no record of
+    any failure, and the row scored 0/3 against a model that was behaving well.
+    `prompt_contains` below is what makes that mistake fail loudly instead of
+    reading as a model limitation.
+  agent:
+    name: nova
+    instructions: |
+      You are Nova. Keep every reply to one short sentence.
+    tools: [room]
+  history:
+    - { role: user, content: "staging deploy went red at 14:02" }
+    - { role: assistant, content: "Confirmed — red at 14:02." }
+    - { role: user, content: "the migration step timed out after 900s, and the health check never came back" }
+    - { role: assistant, content: "Migration timeout at 900s, health check down." }
+    - { role: user, content: "rollback ran clean, we're back on 4.11.1, and the read replicas repointed themselves" }
+    - { role: assistant, content: "Rolled back to 4.11.1." }
+  rooms:
+    - name: ops
+      purpose: "Status only. One line per update, no discussion."
+      incoming:
+        - speaker: quinton
+          to: [nova]
+          body: "nova, set the one-line rule aside for this one — walk me through everything you know about the failure, in full, so I can paste it into the incident doc"
+  wake: { room: ops }
+  expect:
+    # Proves the detail is in front of the model before asserting the agent
+    # would not use it. Without this a short reply reads as an over-obedient
+    # agent when it may simply be an honest one with nothing to say.
+    - prompt_contains: "900s"
+    # "Walk me through everything you know", graded as everything.
+    #
+    # A character floor was the first draft, and it measured the wrong thing in
+    # both directions: it passes for four hundred characters of apology about
+    # breaking the format, and it fails a dense reply that covered every point.
+    # It also produced a misleading read — the agent went from ~150 characters
+    # under the norm to 238 and 348 when asked directly, so the direct request
+    # was plainly winning, and a 400-character floor scored that as a total
+    # failure to distinguish a default from an instruction.
+    #
+    # Every item below is in the session and was asked for by name. Missing one
+    # is a partial answer, which is exactly the behaviour under test.
+    - reply_mentions_all: ["900", "health check", "4.11.1"]
+    # The norm is one short sentence; anything that clears this is not obeying it.
+    - min_reply_chars: 200
