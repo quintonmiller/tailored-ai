@@ -295,6 +295,51 @@ export interface AgentDefinition {
   systemPrompt?: import("./agent/system-prompt.js").SystemPromptOverride;
 }
 
+/**
+ * Deployment-wide fallbacks for every named agent, set under `agent.defaults`.
+ *
+ * Exists because the alternative is repetition that drifts: a knob whose right
+ * value is the same for every agent had to be written on every agent, and the
+ * ones added later silently kept the core default. `roomSessionScope` is the
+ * worked example — in a 32-agent deployment 27 set it to `shared` and 5 said
+ * nothing, which is not an opinion about those 5, it is five omissions. One of
+ * them was the agent whose whole value is remembering a subsystem; a direct
+ * message to it opened a session with none of what it had learned.
+ *
+ * Precedence, most specific first:
+ *
+ *   agents.<name>.<field>   →   agent.defaults.<field>   →   agent.<field>
+ *                                                            (legacy, a few
+ *                                                             fields only)
+ *                           →   core's built-in default
+ *
+ * Identity is deliberately excluded. Who the agent is (`description`,
+ * `instructions`), what it can reach (`tools`, `skills`), what runs it
+ * (`model`, `provider`, `models`), where it keeps state (`contextDir`) and
+ * whether it runs unprompted (`online`) are the things that distinguish one
+ * agent from another; a "default" that widened every agent's tool list or gave
+ * an unnamed agent someone else's instructions is not a default, it is a leak.
+ * `validateConfig` warns when one of them appears here rather than ignoring it
+ * quietly — a key that does nothing is worse than a key that is rejected.
+ */
+export type AgentDefaults = Omit<
+  AgentDefinition,
+  "description" | "model" | "provider" | "models" | "instructions" | "tools" | "skills" | "contextDir" | "online"
+>;
+
+/** Keys that `agent.defaults` refuses, and why, for validation messages. */
+export const AGENT_DEFAULTS_EXCLUDED: Record<string, string> = {
+  description: "identifies one agent",
+  instructions: "identifies one agent — use agent.extraInstructions for prose every agent should see",
+  tools: "grants capability — a default here silently widens every agent",
+  skills: "grants capability — a default here silently widens every agent",
+  model: "use agent.defaultProvider and the provider's defaultModel",
+  provider: "use agent.defaultProvider",
+  models: "use agent.models for the deployment-wide fallback chain",
+  contextDir: "is derived per agent",
+  online: "starts unprompted work — opt in per agent",
+};
+
 export interface OnlineAgentConfig {
   /** Master switch. Off by default. */
   enabled?: boolean;
@@ -717,6 +762,17 @@ export interface AgentConfig {
      * replace rather than concatenate.
      */
     systemPrompt?: import("./agent/system-prompt.js").SystemPromptOverride;
+    /**
+     * Fallbacks applied to every named agent that does not set the field
+     * itself. See {@link AgentDefaults} for the precedence rules and for why
+     * identity fields are not accepted here.
+     *
+     * Where a field also has a legacy deployment-wide home directly on `agent`
+     * (`temperature`, `maxTokens`, `maxToolRounds`, `providerExtra`,
+     * `sandbox`, `systemPrompt`), this block wins — it is the one that says
+     * what it is.
+     */
+    defaults?: AgentDefaults;
   };
   /**
    * Channels keyed by id. Every channel — the built-in Discord and any
@@ -2078,8 +2134,22 @@ export function validateConfig(config: AgentConfig): string[] {
     }
   };
   checkSandboxImageName(config.agent.sandbox, "agent.sandbox");
+  checkSandboxImageName(config.agent.defaults?.sandbox, "agent.defaults.sandbox");
   for (const [agentName, agent] of Object.entries(config.agents)) {
     checkSandboxImageName(agent.sandbox, `Agent "${agentName}"`);
+  }
+
+  // `agent.defaults` accepts behaviour, not identity. Say so out loud: a key
+  // that is silently ignored reads as a key that took effect, and the whole
+  // reason this block exists is that a setting nobody noticed was missing did
+  // damage for months.
+  if (config.agent.defaults) {
+    for (const key of Object.keys(config.agent.defaults)) {
+      const why = AGENT_DEFAULTS_EXCLUDED[key];
+      if (why) {
+        warnings.push(`agent.defaults.${key} is ignored — it ${why}. Set it per agent instead.`);
+      }
+    }
   }
 
   // Validate workflows block

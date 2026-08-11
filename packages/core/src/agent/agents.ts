@@ -201,34 +201,40 @@ export function resolveAgent(
   const providerCfg = config.providers[config.agent.defaultProvider];
   const defaultModel = typeof providerCfg?.defaultModel === "string" ? providerCfg.defaultModel : "";
 
+  // Deployment-wide fallbacks. Layered *into* `defaults` rather than checked
+  // at each use site, so every `agent?.x ?? defaults.x` below picks them up
+  // without repeating the precedence rule thirty times — and so a field added
+  // later inherits the behaviour by construction instead of by remembering.
+  const dep = config.agent.defaults ?? {};
+
   const defaults: ResolvedAgent = {
     model: defaultModel,
     provider: config.agent.defaultProvider,
     models: [{ provider: config.agent.defaultProvider, model: defaultModel }],
     instructions: config.agent.extraInstructions,
     tools: allTools,
-    temperature: config.agent.temperature,
-    thinking: undefined,
-    maxTokens: config.agent.maxTokens,
-    providerExtra: config.agent.providerExtra,
-    maxToolRounds: config.agent.maxToolRounds,
-    fileBoundary: undefined,
-    execRules: undefined,
-    roomSessionScope: "room" as const,
+    temperature: dep.temperature ?? config.agent.temperature,
+    thinking: dep.thinking,
+    maxTokens: dep.maxTokens ?? config.agent.maxTokens,
+    providerExtra: dep.providerExtra ?? config.agent.providerExtra,
+    maxToolRounds: dep.maxToolRounds ?? config.agent.maxToolRounds,
+    fileBoundary: dep.fileBoundary,
+    execRules: dep.exec,
+    roomSessionScope: dep.roomSessionScope === "shared" ? "shared" : ("room" as const),
     contextDir: undefined,
     kbDir: undefined,
-    nudgeOnText: 0,
-    nudgeMessage: "",
-    skipGlobalContext: false,
-    summarizeOnTrim: true,
-    worktree: false,
-    taskPreamble: "",
-    injectMemory: false,
-    memoryInjectBudgetTokens: undefined,
-    memoryInjectLimit: undefined,
-    budgetWarnings: false,
-    hooks: EMPTY_HOOKS,
-    skillLoading: "eager",
+    nudgeOnText: dep.nudgeOnText ?? 0,
+    nudgeMessage: dep.nudgeMessage ?? "",
+    skipGlobalContext: dep.skipGlobalContext ?? false,
+    summarizeOnTrim: dep.summarizeOnTrim ?? true,
+    worktree: dep.worktree ?? false,
+    taskPreamble: dep.taskPreamble ?? "",
+    injectMemory: dep.injectMemory ?? false,
+    memoryInjectBudgetTokens: dep.memoryInjectBudgetTokens,
+    memoryInjectLimit: dep.memoryInjectLimit,
+    budgetWarnings: dep.budgetWarnings ?? false,
+    hooks: dep.hooks ? mergeHooks(dep.hooks) : EMPTY_HOOKS,
+    skillLoading: dep.skillLoading ?? "eager",
     skillCatalog: [],
     systemPrompt: undefined,
   };
@@ -295,25 +301,31 @@ export function resolveAgent(
     // default would send that provider fields meant for a different one.
     providerExtra: agent?.providerExtra ?? defaults.providerExtra,
     maxToolRounds: agent?.maxToolRounds ?? defaults.maxToolRounds,
-    fileBoundary: expandBoundary(agent?.fileBoundary),
-    execRules: agent?.exec,
-    roomSessionScope: agent?.roomSessionScope === "shared" ? "shared" : "room",
+    fileBoundary: expandBoundary(agent?.fileBoundary ?? defaults.fileBoundary),
+    execRules: agent?.exec ?? defaults.execRules,
+    roomSessionScope: (agent?.roomSessionScope ?? defaults.roomSessionScope) === "shared" ? "shared" : "room",
     contextDir: undefined,
     kbDir: undefined,
-    nudgeOnText: agent?.nudgeOnText ?? 0,
-    nudgeMessage: agent?.nudgeMessage ?? "",
-    skipGlobalContext: agent?.skipGlobalContext ?? false,
-    summarizeOnTrim: agent?.summarizeOnTrim ?? true,
-    worktree: agent?.worktree ?? false,
-    taskPreamble: agent?.taskPreamble ?? "",
-    injectMemory: agent?.injectMemory ?? false,
-    memoryInjectBudgetTokens: agent?.memoryInjectBudgetTokens,
-    memoryInjectLimit: agent?.memoryInjectLimit,
-    budgetWarnings: agent?.budgetWarnings ?? false,
-    hooks: agent?.hooks ? mergeHooks(agent.hooks) : EMPTY_HOOKS,
-    skillLoading: agent?.skillLoading ?? "eager",
+    nudgeOnText: agent?.nudgeOnText ?? defaults.nudgeOnText,
+    nudgeMessage: agent?.nudgeMessage ?? defaults.nudgeMessage,
+    skipGlobalContext: agent?.skipGlobalContext ?? defaults.skipGlobalContext,
+    summarizeOnTrim: agent?.summarizeOnTrim ?? defaults.summarizeOnTrim,
+    worktree: agent?.worktree ?? defaults.worktree,
+    taskPreamble: agent?.taskPreamble ?? defaults.taskPreamble,
+    injectMemory: agent?.injectMemory ?? defaults.injectMemory,
+    memoryInjectBudgetTokens: agent?.memoryInjectBudgetTokens ?? defaults.memoryInjectBudgetTokens,
+    memoryInjectLimit: agent?.memoryInjectLimit ?? defaults.memoryInjectLimit,
+    budgetWarnings: agent?.budgetWarnings ?? defaults.budgetWarnings,
+    hooks: agent?.hooks ? mergeHooks(agent.hooks) : defaults.hooks,
+    skillLoading: agent?.skillLoading ?? defaults.skillLoading,
     skillCatalog: [],
-    systemPrompt: mergeSystemPromptOverrides(config.agent.systemPrompt, agent?.systemPrompt),
+    // Three layers, least specific first: the legacy deployment field, then
+    // `agent.defaults`, then the agent's own. Field-by-field, so an agent that
+    // overrides `order` keeps the deployment's `base`.
+    systemPrompt: mergeSystemPromptOverrides(
+      mergeSystemPromptOverrides(config.agent.systemPrompt, dep.systemPrompt),
+      agent?.systemPrompt,
+    ),
   };
 
   // Derive contextDir when an agent is active
