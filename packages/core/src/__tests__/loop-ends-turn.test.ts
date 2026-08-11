@@ -181,6 +181,10 @@ describe("ToolResult.endsTurn", () => {
     // Unchanged behaviour: the repeat detector is not weakened by this change,
     // only reached less often.
     expect(stop?.kind).toBe("repeated-calls");
-    expect(provider.calls).toBe(3);
+    // Three rounds to trip the detector, then one more with the tools withheld
+    // — a turn stopped for cycling is still asked for an answer, the same way a
+    // turn stopped by the round limit has been since #470. `endsTurn` is what
+    // this file is about, and it saves all four.
+    expect(provider.calls).toBe(4);
   });
 });

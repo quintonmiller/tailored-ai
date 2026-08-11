@@ -93,3 +93,47 @@
   wake: { room: ops }
   expect:
     - replies: true
+
+- id: stays-out-of-the-chatter-but-answers-the-one-real-question
+  category: restraint
+  difficulty: 5
+  intent: >
+    Four lines between two people, one of which is a factual question in the
+    agent's domain that neither of them can answer. Restraint here is not
+    silence and it is not speaking — it is speaking about exactly one of the
+    four things.
+
+    Every other row in this file is all-or-nothing: the agent should stay out,
+    or it should answer. Both are satisfiable by a fixed policy, which is why a
+    permanently quiet agent scores well on this category and a permanently
+    chatty one scores well on the controls. Selective engagement is the property
+    that neither policy fakes, and nothing measured it.
+  # Not the shared `*nova` anchor: that one is `tools: [room]`, so the first
+  # draft stubbed an `exec` the agent could not call and scored 0/6 for a
+  # lookup that was never possible. `loadScenarios` now rejects that
+  # combination outright rather than letting it read as a model limitation.
+  agent:
+    name: nova
+    instructions: |
+      You are Nova, a calm and practical assistant. Keep replies short.
+    tools: [room, exec]
+  toolResults:
+    exec: "worker.retry_limit = 5"
+  rooms:
+    - name: ops
+      purpose: Deploys and incidents.
+      incoming:
+        - { speaker: quinton, to: [dana], body: "did you get lunch yet? the place on 4th is doing the thing again" }
+        - { speaker: dana, to: [quinton], body: "not yet, saving myself for the weekend" }
+        - { speaker: quinton, body: "anyway — does anyone know what the retry limit is on the queue worker? it's not in the runbook" }
+        - { speaker: dana, to: [quinton], body: "no idea, that's not my end" }
+  wake: { room: ops }
+  expect:
+    # It has to speak: an agent that passed on this would be leaving an open
+    # question in its own domain unanswered, which is the failure the controls
+    # in this file exist to catch.
+    - replies: true
+    - reply_mentions_any: ["5", "five"]
+    # And only about that. Joining in on lunch is the other failure, and it is
+    # the one a pass rate on the positive half would never show.
+    - reply_mentions_none: ["lunch", "weekend", "4th"]
