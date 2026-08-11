@@ -269,6 +269,29 @@ what this setting buys. Continuity of **work** is better served by durable
 state — `task_query(mine=true)`, notes, facts — which is already cross-room and
 does not grow the prompt.
 
+It also decides where a **direct message** lands, which is easy to miss because
+the setting is named after rooms and a DM has no room. `deliverAgentMessage`
+keys the exchange `room:all:<agent>` under `shared` and `dm:<from>:<to>`
+otherwise — so under the default an agent gets one cold session per correspondent,
+holding none of what it learned anywhere else. That is the right call for an
+agent whose value is isolation, and the wrong one for a subject-matter expert:
+DM'd about the subsystem it owns, it starts from nothing and rediscovers what it
+already worked out. Set it deployment-wide if that describes most of your roster:
+
+```yaml
+agent:
+  defaults:
+    roomSessionScope: shared
+```
+
+`agent.defaults` supplies any per-agent field the agent does not set itself, for
+agents from `config.yaml` and from `data/authored-resources/` alike. Precedence
+is `agents.<name>.<field>` → `agent.defaults.<field>` → the legacy deployment
+field where one exists (`agent.temperature` and friends) → core's default.
+Identity — `tools`, `skills`, `instructions`, `model`, `provider` — is rejected
+with a warning rather than accepted, since a default that widened every agent's
+tool list is a leak, not a default.
+
 ### Agents can see the date
 
 A room is a place where time passes: check-ins fire on a clock, purposes carry

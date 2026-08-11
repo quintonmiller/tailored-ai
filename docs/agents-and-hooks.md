@@ -6,6 +6,47 @@ How named agents, delegation, hook pipelines, cron jobs, and prompt templating a
 
 Agents are named configurations defined in `config.yaml` under `agents:`. They can override model, description, instructions, tools (allowlist), temperature, maxTokens, maxToolRounds, and hooks.
 
+### `agent.defaults` — one place for a value every agent shares
+
+A setting whose right value is the same for every agent used to be written on
+every agent, which works until someone adds the thirty-third and forgets. The
+omission is invisible: the agent resolves fine and quietly takes core's default,
+which is usually the conservative one and occasionally the wrong one.
+
+```yaml
+agent:
+  defaults:
+    roomSessionScope: shared
+    summarizeOnTrim: true
+```
+
+Applies to every agent that does not set the field itself, whether it is defined
+in `config.yaml` or authored under `data/authored-resources/`. Precedence, most
+specific first:
+
+```
+agents.<name>.<field>  →  agent.defaults.<field>  →  agent.<field>  →  core default
+                                                     (legacy: temperature,
+                                                      maxTokens, maxToolRounds,
+                                                      providerExtra, sandbox,
+                                                      systemPrompt)
+```
+
+`agent.defaults` beats the legacy spellings so a deployment can migrate onto it
+without editing every agent first.
+
+**Identity is not accepted here.** `description`, `instructions`, `tools`,
+`skills`, `model`, `provider`, `models`, `contextDir` and `online` name or
+empower one specific agent; a "default" that widened every agent's tool list, or
+handed one agent's instructions to all of them, is a leak. `validateConfig`
+warns and names the reason rather than ignoring the key, because a key that
+silently does nothing reads exactly like one that worked.
+
+**Ordering matters when migrating.** Add `agent.defaults`, deploy, confirm the
+new build is live, *then* strip the per-agent copies. Doing it in the other order
+means the running service does not understand `agent.defaults` yet and every
+agent falls back to core's default the moment the explicit values disappear.
+
 ### `maxTokens`
 
 Caps what the model may generate per call. Resolution is

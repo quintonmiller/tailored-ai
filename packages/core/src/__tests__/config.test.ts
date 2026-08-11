@@ -1013,3 +1013,30 @@ describe("agent tools written as a JSON string", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("validateConfig — agent.defaults", () => {
+  it("accepts a behavioural default", () => {
+    const c = baseConfig();
+    c.agent.defaults = { roomSessionScope: "shared" };
+    expect(validateConfig(c).some((w) => w.includes("agent.defaults"))).toBe(false);
+  });
+
+  it("warns on an identity field, naming the reason", () => {
+    // Silently ignoring these is the failure mode this whole block exists to
+    // fix: a key that looks set and does nothing.
+    const c = baseConfig();
+    (c.agent.defaults as Record<string, unknown>) = { tools: ["exec"] };
+    const warning = validateConfig(c).find((w) => w.includes("agent.defaults.tools"));
+
+    expect(warning).toBeDefined();
+    expect(warning).toContain("widens every agent");
+  });
+
+  it("warns on instructions and points at the field that does work", () => {
+    const c = baseConfig();
+    (c.agent.defaults as Record<string, unknown>) = { instructions: "Be brief." };
+    expect(validateConfig(c).find((w) => w.includes("agent.defaults.instructions"))).toContain(
+      "agent.extraInstructions",
+    );
+  });
+});

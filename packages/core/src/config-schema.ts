@@ -71,6 +71,7 @@ import { z } from "zod";
 import type { CustomLayer, SystemPromptOverride } from "./agent/system-prompt.js";
 import type {
   AgentConfig,
+  AgentDefaults,
   AgentDefinition,
   AgentHook,
   CronJobConfig,
@@ -175,33 +176,6 @@ type _SystemPromptOverrideMatches = AssertTrue<
   Identical<z.infer<typeof SystemPromptOverrideSchema>, SystemPromptOverride>
 >;
 
-/**
- * The global `agent:` block — the deployment-wide defaults every agent
- * inherits. Anchored to `AgentConfig["agent"]` rather than a named interface
- * because that block is declared inline; the drift assertion works the same.
- *
- * Validated `.partial()` at the call site. Presence is not this checker's
- * business — `DEFAULT_CONFIG` supplies anything missing, and reporting
- * "required" for a field the loader fills in would be noise. What matters is
- * that a value which *is* written is the type it is declared to be.
- */
-const AgentSettingsSchema = z.object({
-  defaultProvider: z.string(),
-  models: z.array(ModelEntrySchema).optional(),
-  extraInstructions: z.string(),
-  maxHistoryTokens: z.number(),
-  maxToolOutputChars: z.number(),
-  maxContextTokens: z.number(),
-  temperature: z.number(),
-  maxTokens: z.number().optional(),
-  // Open on purpose: the provider owns these keys, not core.
-  providerExtra: z.record(z.unknown()).optional(),
-  maxToolRounds: z.number(),
-  sandbox: z.string().optional(),
-  systemPrompt: SystemPromptOverrideSchema.optional(),
-});
-type _AgentSettingsMatches = AssertTrue<Identical<z.infer<typeof AgentSettingsSchema>, AgentConfig["agent"]>>;
-
 const TimeConfigSchema = z.object({
   provider: z.string(),
   timezone: z.string().optional(),
@@ -287,6 +261,60 @@ export const AgentDefinitionSchema = z.object({
   systemPrompt: SystemPromptOverrideSchema.optional(),
 });
 type _AgentDefinitionMatches = AssertTrue<Identical<z.infer<typeof AgentDefinitionSchema>, AgentDefinition>>;
+
+/**
+ * `agent.defaults` — the same shape as one agent, minus the fields that name
+ * or empower a specific agent. Derived by omission rather than retyped, so a
+ * field added to {@link AgentDefinitionSchema} becomes settable deployment-wide
+ * without anyone remembering to come here; keeping it out is the decision that
+ * has to be written down.
+ *
+ * The omission list is mirrored in `AGENT_DEFAULTS_EXCLUDED` (config.ts), which
+ * turns each one into a validation warning naming the reason.
+ */
+export const AgentDefaultsSchema = AgentDefinitionSchema.omit({
+  description: true,
+  model: true,
+  provider: true,
+  models: true,
+  instructions: true,
+  tools: true,
+  skills: true,
+  contextDir: true,
+  online: true,
+});
+type _AgentDefaultsMatches = AssertTrue<Identical<z.infer<typeof AgentDefaultsSchema>, AgentDefaults>>;
+
+/**
+ * The global `agent:` block — the deployment-wide defaults every agent
+ * inherits. Anchored to `AgentConfig["agent"]` rather than a named interface
+ * because that block is declared inline; the drift assertion works the same.
+ *
+ * Declared after {@link AgentDefinitionSchema} because `defaults` is derived
+ * from it.
+ *
+ * Validated `.partial()` at the call site. Presence is not this checker's
+ * business — `DEFAULT_CONFIG` supplies anything missing, and reporting
+ * "required" for a field the loader fills in would be noise. What matters is
+ * that a value which *is* written is the type it is declared to be.
+ */
+const AgentSettingsSchema = z.object({
+  defaultProvider: z.string(),
+  models: z.array(ModelEntrySchema).optional(),
+  extraInstructions: z.string(),
+  maxHistoryTokens: z.number(),
+  maxToolOutputChars: z.number(),
+  maxContextTokens: z.number(),
+  temperature: z.number(),
+  maxTokens: z.number().optional(),
+  // Open on purpose: the provider owns these keys, not core.
+  providerExtra: z.record(z.unknown()).optional(),
+  maxToolRounds: z.number(),
+  sandbox: z.string().optional(),
+  systemPrompt: SystemPromptOverrideSchema.optional(),
+  defaults: AgentDefaultsSchema.optional(),
+});
+type _AgentSettingsMatches = AssertTrue<Identical<z.infer<typeof AgentSettingsSchema>, AgentConfig["agent"]>>;
 
 /**
  * Every key an agent block may carry, derived rather than retyped.

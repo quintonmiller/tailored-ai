@@ -24,13 +24,14 @@ export function registerSandboxFactory(id: string, factory: SandboxFactory): voi
 
 /**
  * Resolve the sandbox an agent should run in. Looks at the agent's `sandbox`
- * field first, then falls back to `config.agent.sandbox`, then `"host"`.
+ * field first, then `agent.defaults.sandbox`, then the legacy
+ * `config.agent.sandbox`, then `"host"`.
  *
  * Throws with a clear "Known: …" message when the resolved kind has no
  * registered factory, mirroring the task/repo-backend pattern.
  */
 export function createSandbox(config: AgentConfig, agent?: AgentDefinition): Sandbox {
-  const kind = agent?.sandbox ?? config.agent.sandbox ?? "host";
+  const kind = agent?.sandbox ?? config.agent.defaults?.sandbox ?? config.agent.sandbox ?? "host";
   const factory = sandboxFactoryRegistry.get(kind);
   if (!factory) {
     const known = sandboxFactoryRegistry.list().join(", ") || "(none)";

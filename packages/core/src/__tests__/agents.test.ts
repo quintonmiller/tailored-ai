@@ -233,3 +233,103 @@ describe("per-agent file boundary", () => {
     expect(resolveAgent("planner", config, [], undefined, "/ctx").fileBoundary).toBeUndefined();
   });
 });
+
+describe("agent.defaults", () => {
+  const tools = [makeTool("exec")];
+
+  it("supplies a field the agent does not set", () => {
+    // The case this block was built for: an agent that never mentions
+    // roomSessionScope silently got "room", and a DM to it opened a session
+    // with none of its accumulated context.
+    const config = makeConfig({
+      agent: { ...makeConfig().agent, defaults: { roomSessionScope: "shared" } },
+      agents: { helper: {} },
+    });
+
+    expect(resolveAgent("helper", config, tools).roomSessionScope).toBe("shared");
+  });
+
+  it("loses to the agent's own value", () => {
+    const config = makeConfig({
+      agent: { ...makeConfig().agent, defaults: { roomSessionScope: "shared" } },
+      agents: { isolated: { roomSessionScope: "room" } },
+    });
+
+    expect(resolveAgent("isolated", config, tools).roomSessionScope).toBe("room");
+  });
+
+  it("beats the legacy deployment-wide field of the same name", () => {
+    // `agent.temperature` and `agent.defaults.temperature` both mean "every
+    // agent". The one that says so wins, or there is no way to migrate off
+    // the old spelling without editing every agent first.
+    const base = makeConfig().agent;
+    const config = makeConfig({
+      agent: { ...base, temperature: 0.3, defaults: { temperature: 0.9 } },
+      agents: { helper: {} },
+    });
+
+    expect(resolveAgent("helper", config, tools).temperature).toBe(0.9);
+  });
+
+  it("still falls back to the legacy field for anything defaults omits", () => {
+    const base = makeConfig().agent;
+    const config = makeConfig({
+      agent: { ...base, temperature: 0.3, maxToolRounds: 10, defaults: { roomSessionScope: "shared" } },
+      agents: { helper: {} },
+    });
+    const resolved = resolveAgent("helper", config, tools);
+
+    expect(resolved.temperature).toBe(0.3);
+    expect(resolved.maxToolRounds).toBe(10);
+  });
+
+  it("covers the fields that previously had only a hardcoded fallback", () => {
+    const config = makeConfig({
+      agent: {
+        ...makeConfig().agent,
+        defaults: {
+          injectMemory: true,
+          summarizeOnTrim: false,
+          skillLoading: "progressive",
+          maxToolRounds: 42,
+          budgetWarnings: true,
+          fileBoundary: "~/work",
+        },
+      },
+      agents: { helper: {} },
+    });
+    const resolved = resolveAgent("helper", config, tools, undefined, "/ctx");
+
+    expect(resolved.injectMemory).toBe(true);
+    expect(resolved.summarizeOnTrim).toBe(false);
+    expect(resolved.skillLoading).toBe("progressive");
+    expect(resolved.maxToolRounds).toBe(42);
+    expect(resolved.budgetWarnings).toBe(true);
+    // Expanded through the same path as a per-agent boundary, not stored raw.
+    expect(resolved.fileBoundary).toBe(`${homedir()}/work`);
+  });
+
+  it("reaches an agent that came from the registry, not config.yaml", () => {
+    // The deployment case: agents are exported to authored-resources and the
+    // registry wins over `config.agents`. A default that only covered the
+    // config-yaml half would miss exactly the agents that had been migrated.
+    const config = makeConfig({
+      agent: { ...makeConfig().agent, defaults: { roomSessionScope: "shared" } },
+    });
+    const resolved = resolveAgent("from-registry", config, tools, undefined, undefined, undefined, {
+      resolveAgentDef: (id) => (id === "from-registry" ? { description: "authored elsewhere" } : undefined),
+    });
+
+    expect(resolved.roomSessionScope).toBe("shared");
+  });
+
+  it("changes nothing when absent", () => {
+    const config = makeConfig({ agents: { helper: {} } });
+    const resolved = resolveAgent("helper", config, tools);
+
+    expect(resolved.roomSessionScope).toBe("room");
+    expect(resolved.injectMemory).toBe(false);
+    expect(resolved.summarizeOnTrim).toBe(true);
+    expect(resolved.skillLoading).toBe("eager");
+  });
+});
