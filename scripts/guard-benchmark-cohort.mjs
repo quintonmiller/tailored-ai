@@ -86,9 +86,38 @@ if (dirty.length) {
   );
 }
 
-// Advisory rather than fatal: a fresh clone in CI may not have the ref, and a
-// baseline committed in the same PR that produced it is not yet on main.
+/**
+ * Whether this checkout is on `main` rather than on a branch proposing changes.
+ *
+ * `HEAD` being an ancestor of `origin/main` is true on main and false on any
+ * branch with commits of its own, which is exactly the distinction needed and
+ * needs no CI environment variables to make.
+ */
+function onMain() {
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", "HEAD", "origin/main"], { cwd: repoRoot, stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// A baseline committed in the same PR that produced it is not yet on main, so
+// this is advisory *there*. On main it is fatal: the run has landed, and if its
+// commit is not reachable then nobody can ever check out the code the numbers
+// describe. Squash-merge is what makes this happen silently — the branch commit
+// a cohort was run on stops existing the moment the PR lands, and until this
+// was enforced the note scrolled past and the published run kept pointing at a
+// commit that was not there. That is the whole failure #481 was filed for,
+// recurring one layer up: the rule was computed and then not applied.
 const unreachable = shas.filter((sha) => sha && !reachableFromMain(sha));
+if (unreachable.length && onMain()) {
+  problems.push(
+    `recorded a commit that is not reachable from main (${unreachable.join(", ")}), so the code these numbers ` +
+      "describe cannot be checked out.\n    A cohort must be run from main itself, not from the branch that " +
+      "publishes it — squash-merge deletes the branch commit.",
+  );
+}
 
 const models = runs.map((r) => r.model);
 const duplicated = models.filter((m, i) => models.indexOf(m) !== i);
