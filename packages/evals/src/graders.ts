@@ -122,6 +122,16 @@ async function gradeOne(
     return no("tool_args", `no ${tool} call matched ${JSON.stringify(where)}; saw ${shown}`);
   }
 
+  if (assertion.does_not_call_with !== undefined) {
+    const { tool, where } = assertion.does_not_call_with;
+    const offending = outcome.calls
+      .filter((c) => c.name === tool)
+      .filter((call) => Object.entries(where).every(([key, expected]) => matchesArg(call.args[key], expected)));
+    return offending.length === 0
+      ? ok("does_not_call_with")
+      : no("does_not_call_with", `${tool} was called with ${JSON.stringify(offending[0].args)}`);
+  }
+
   if (assertion.posts_in !== undefined) {
     const want = assertion.posts_in;
     return outcome.posts.some((p) => p.room === want)

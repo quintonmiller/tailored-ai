@@ -142,10 +142,15 @@ const DEFAULT_STUB_RESULT = "(stubbed in the benchmark — assume it succeeded a
 
 function stub(tool: Tool, results: Record<string, string>): Tool {
   if (!STUBBED.has(tool.name)) return tool;
+  // Spread, then override the one thing a stub is for. The previous version
+  // listed the fields it kept — name, description, parameters — and so silently
+  // dropped every declarative property added afterwards. `Tool.effect` was the
+  // first: it made every stubbed tool read as harmless, which meant the
+  // derivability gate could not fire in the benchmark at all, and an A/B of it
+  // returned 7/12 on both arms because neither arm was running the thing under
+  // test.
   return {
-    name: tool.name,
-    description: tool.description,
-    parameters: tool.parameters,
+    ...tool,
     async execute() {
       return { success: true, output: results[tool.name] ?? DEFAULT_STUB_RESULT };
     },

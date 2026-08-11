@@ -174,6 +174,32 @@ So the loop makes **one more call with the tools withheld**, and returns what th
 
 It costs one request, only on the path that was going to return nothing. If the model still says nothing, or the call fails, the marker stands: an empty string reads as an agent that chose silence, which is a different thing and the one a caller cannot act on. A caller-requested abort skips it — reachable, since an abort raised while the final round's tools are running is never seen by the top-of-round check, so the turn exits through `max-rounds` with the signal already set.
 
+### Irreversible calls must name one target
+
+`Tool.effect` lets a tool say what a call does — `read`, `write`, or
+`irreversible` — as a constant or a function of the arguments. `exec`
+classifies per command, so `git status` is `read` and `aws s3 rb` is not.
+Undeclared means `read`, so nothing changes until a tool opts in.
+
+Before an irreversible call runs, the loop asks the model to list what the
+request could be referring to. Two or more candidates and it is not run: the
+agent gets a tool result naming them and can ask in the same turn. Skipped when
+a human just approved the call, and disabled with
+`permissions.checkDerivability: false`.
+
+Why not a cheaper grounding check — "every argument must appear in the
+conversation"? It passes the case this exists for. The bucket name *is* in the
+conversation; what is ambiguous is the referring expression, and deciding that
+needs comprehension. See `agent/derivability.ts`.
+
+Three things it got wrong on the way in, all found by measuring rather than by
+reasoning: a 200-token cap with reasoning enabled meant `content` came back
+empty and the gate allowed everything; the shell classifier knew `aws s3 rb` and
+not `aws s3api delete-bucket`; and the benchmark records calls from the model's
+response, so a refused call looks identical to one that ran — the mechanical
+half is asserted in `derivability.test.ts`, and the scenario asserts only what
+the owner experiences.
+
 ### The stall detector sees cycles, not just repeats
 
 The loop ends a turn that is going in circles. Until #499 it compared each round

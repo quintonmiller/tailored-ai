@@ -22,12 +22,14 @@ import type {
   ToolCall,
   ToolSchema,
 } from "../providers/interface.js";
+import { effectOf } from "../tools/effect.js";
 import type { Tool, ToolContext } from "../tools/interface.js";
 import { type ActiveSkillState, createActiveSkillState } from "./active-skill.js";
 import type { SkillCatalogEntry } from "./agents.js";
 import { buildChatLiveState, renderChatLiveState } from "./chat-live-state.js";
 import type { ConfigDeclaredSlot } from "./context-slots.js";
 import { listContextSlots, renderContextSlots, slotsFromConfig } from "./context-slots.js";
+import { refuseIfAmbiguous } from "./derivability.js";
 import { buildMemoryBlockWithMeta } from "./memory-inject.js";
 import type { Session } from "./session.js";
 import {
@@ -456,6 +458,21 @@ export interface AgentLoopOptions {
   toolContextExtras?: Partial<import("../tools/interface.js").ToolContext>;
   permissions?: PermissionsConfig;
   approvalHandler?: ApprovalHandler;
+  /**
+   * Check that an irreversible call's target is pinned down by the request
+   * before running it. Default on; set false to opt a deployment out.
+   *
+   * Costs one provider call per irreversible call, and only those — `exec`
+   * classifies per command, so `git status` never pays it. See
+   * `agent/derivability.ts` for why a cheaper grounding check does not work.
+   */
+  checkDerivability?: boolean;
+  /** The owner's request, verbatim, for the derivability check to reason about. */
+  userRequest?: string;
+  /** Prior turns the request's referring expressions could point into, oldest first. */
+  derivabilityContext?: string[];
+  /** Fired when an irreversible call was refused as ambiguous. */
+  onDerivabilityRefusal?: (tool: string, refusal: string) => void;
   onApprovalRequest?: (request: ApprovalRequest) => void;
   onApprovalResponse?: (request: ApprovalRequest, response: ApprovalResponse) => void;
   /** Sandbox to route shell/file tool ops through. Prepared on loop entry, cleaned up on exit. */
@@ -968,6 +985,32 @@ async function executeToolCall(
     }
   }
 
+  // --- Derivability gate ---
+  // Only for calls the tool itself declares irreversible, and only when a human
+  // did not just approve this one: they saw the command, and second-guessing a
+  // decision that was already made is friction with no information in it.
+  //
+  // Reached on every unattended path — cron, rooms, the task watcher — which is
+  // where the choice used to be between running everything and refusing
+  // everything, and where an agent that resolves "the old one" by guessing does
+  // its damage.
+  if (approvalTimeMs === undefined && opts.checkDerivability !== false) {
+    if (effectOf(tool, call.arguments) === "irreversible") {
+      const refusal = await refuseIfAmbiguous({
+        provider: opts.provider,
+        model: opts.session.model,
+        request: opts.userRequest ?? "",
+        context: opts.derivabilityContext ?? [],
+        toolName: call.name,
+        args: call.arguments,
+      });
+      if (refusal) {
+        opts.onDerivabilityRefusal?.(call.name, refusal);
+        return { output: refusal };
+      }
+    }
+  }
+
   // --- Execute tool ---
   const startTime = Date.now();
   const limit = resolveToolOutputLimit(call.name, opts.toolOutputLimits, opts.maxToolOutputChars);
@@ -1296,7 +1339,7 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
 }
 
 async function _runAgentLoopBody(
-  _userMessage: string,
+  userMessage: string,
   opts: AgentLoopOptions,
   context: ToolContext,
   fullSystemPrompt: string,
@@ -1610,7 +1653,21 @@ async function _runAgentLoopBody(
     const results = await Promise.all(
       response.toolCalls.map(async (call) => {
         opts.onToolCall?.(call.name, call.arguments);
-        const outcome = await executeToolCall(call, toolMap, currentToolNames, context, opts);
+        // The request and the recent transcript ride along for the
+        // derivability gate, which needs to know what "the old one" could have
+        // meant. Assembled here rather than asked of the caller: every caller
+        // would have to remember, and the one that forgot would silently lose
+        // the check.
+        const outcome = await executeToolCall(call, toolMap, currentToolNames, context, {
+          ...opts,
+          userRequest: opts.userRequest ?? userMessage,
+          derivabilityContext:
+            opts.derivabilityContext ??
+            messages
+              .filter((m) => m.role === "user" || m.role === "assistant")
+              .map((m) => `${m.role}: ${m.content ?? ""}`)
+              .filter((line) => line.length > 6),
+        });
         opts.onToolResult?.(call.name, outcome.output);
         return { call, ...outcome };
       }),

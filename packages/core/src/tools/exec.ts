@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { taiHomePath } from "../home.js";
 import { type CommandRules, type CommandRulesMode, checkCommandRules, mergeCommandRules } from "./command-allowlist.js";
+import { classifyCommand } from "./effect.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
 import { checkExecBoundary } from "./sandbox-boundary.js";
 
@@ -93,6 +94,12 @@ async function saveFullOutput(
 export class ExecTool implements Tool {
   name = "exec";
   description = "Run a shell command and return its output. Chain steps with && or || and pipe with |.";
+  /**
+   * Per call, not per tool. `git status` and `rm -rf build` are not the same
+   * act, and charging every shell call the cost of the irreversible path would
+   * make the check unaffordable exactly where it is least needed.
+   */
+  effect = (args: Record<string, unknown>) => classifyCommand(typeof args.command === "string" ? args.command : "");
   parameters = {
     type: "object",
     properties: {
