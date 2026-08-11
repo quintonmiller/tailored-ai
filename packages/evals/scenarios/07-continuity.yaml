@@ -72,14 +72,22 @@
   category: continuity
   difficulty: 3
   intent: >
-    A room session is history too. The agent answered "node-3" last wake; "it"
-    in the new message refers to that, and resolving it needs the session.
+    A room session is history too. The agent said "node-3, moved off node-1"
+    last wake; "it" in the new message refers to the queue worker, and answering
+    at all needs both the pronoun and the session.
 
-    Asserted positively on purpose. The first version of this scenario used a
-    blacklist of ways the agent might ask which machine — and reported 2/3 when
-    all three runs had in fact failed, because two of them phrased the question
-    in words the blacklist did not contain. A negative assertion only catches
-    the failures you thought of.
+    Asserted positively on purpose. The first version used a blacklist of ways
+    the agent might ask which machine — and reported 2/3 when all three runs had
+    in fact failed, because two phrased the question in words the blacklist did
+    not contain. A negative assertion only catches the failures you thought of.
+
+    The positive version then overshot in the other direction. It asked "can you
+    ssh into it?" and required the reply to contain "node-3" — but a correct
+    answer to that question does not need to name the host. Two runs resolved
+    the pronoun perfectly ("I can run commands on it") and scored as failures,
+    which read as a continuity defect for two cohorts running. The question now
+    asks for the earlier fact directly, so naming it is the answer rather than
+    an optional flourish.
   agent:
     name: nova
     instructions: |
@@ -101,8 +109,10 @@
     - name: ops
       purpose: Deploys and incidents.
       incoming:
-        - { speaker: quinton, to: [nova], body: "and can you ssh into it?" }
+        - { speaker: quinton, to: [nova], body: "and what was it running on before the incident?" }
   wake: { room: ops }
   expect:
     - replies: true
-    - reply_mentions_any: ["node-3"]
+    # node-1 appears only in the agent's own previous turn, so this cannot be
+    # answered from the wake prompt alone — which is the property under test.
+    - reply_mentions_any: ["node-1"]
