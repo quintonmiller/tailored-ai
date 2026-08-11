@@ -102,6 +102,27 @@ function onMain() {
   }
 }
 
+/**
+ * Whether this clone can even answer the reachability question for a SHA.
+ *
+ * `actions/checkout` fetches depth 1 by default, so on main the recorded commit
+ * is usually *absent from the repository altogether* — and `merge-base
+ * --is-ancestor` fails for a missing object exactly as it does for a commit
+ * that was rewritten away. Treating the two alike turned this guard into a
+ * build failure on every push to main the moment it became fatal.
+ *
+ * "Not here" is not "not reachable". Only a SHA this clone actually has can be
+ * judged.
+ */
+function present(sha) {
+  try {
+    execFileSync("git", ["cat-file", "-e", `${sha}^{commit}`], { cwd: repoRoot, stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // A baseline committed in the same PR that produced it is not yet on main, so
 // this is advisory *there*. On main it is fatal: the run has landed, and if its
 // commit is not reachable then nobody can ever check out the code the numbers
@@ -111,9 +132,10 @@ function onMain() {
 // commit that was not there. That is the whole failure #481 was filed for,
 // recurring one layer up: the rule was computed and then not applied.
 const unreachable = shas.filter((sha) => sha && !reachableFromMain(sha));
-if (unreachable.length && onMain()) {
+const judgeable = unreachable.filter(present);
+if (judgeable.length && onMain()) {
   problems.push(
-    `recorded a commit that is not reachable from main (${unreachable.join(", ")}), so the code these numbers ` +
+    `recorded a commit that is not reachable from main (${judgeable.join(", ")}), so the code these numbers ` +
       "describe cannot be checked out.\n    A cohort must be run from main itself, not from the branch that " +
       "publishes it — squash-merge deletes the branch commit.",
   );
