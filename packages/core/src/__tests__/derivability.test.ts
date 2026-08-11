@@ -1,11 +1,11 @@
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { parseCandidates, refuseIfAmbiguous } from "../agent/derivability.js";
 import { runAgentLoop } from "../agent/loop.js";
 import { newSession } from "../agent/session.js";
 import { initDatabase } from "../db/schema.js";
-import { parseCandidates, refuseIfAmbiguous } from "../agent/derivability.js";
-import { classifyCommand, effectOf } from "../tools/effect.js";
 import type { AIProvider, ChatParams, ChatResponse } from "../providers/interface.js";
+import { classifyCommand, effectOf } from "../tools/effect.js";
 import type { Tool, ToolResult } from "../tools/interface.js";
 
 /**
@@ -89,7 +89,7 @@ describe("classifyCommand", () => {
     for (const command of [
       "rm -rf build",
       "cd /tmp && rm -rf build",
-      "find . -name '*.tmp' -exec rm {} \;",
+      "find . -name '*.tmp' -exec rm {} ;",
       "ls | xargs rm",
       "aws s3 rb s3://bucket --force",
       "git push --force origin main",
@@ -115,9 +115,15 @@ describe("classifyCommand", () => {
 
 describe("effectOf", () => {
   const tool = (effect?: Tool["effect"]): Tool =>
-    ({ name: "t", description: "t", parameters: {}, effect, async execute() {
-      return { success: true, output: "" };
-    } }) as Tool;
+    ({
+      name: "t",
+      description: "t",
+      parameters: {},
+      effect,
+      async execute() {
+        return { success: true, output: "" };
+      },
+    }) as Tool;
 
   it("treats an undeclared tool as read, so nothing changes until a tool opts in", () => {
     expect(effectOf(tool(), {})).toBe("read");
@@ -125,8 +131,18 @@ describe("effectOf", () => {
 
   it("reads a constant and a per-call classifier alike", () => {
     expect(effectOf(tool("write"), {})).toBe("write");
-    expect(effectOf(tool((a) => (a.x === 1 ? "irreversible" : "read")), { x: 1 })).toBe("irreversible");
-    expect(effectOf(tool((a) => (a.x === 1 ? "irreversible" : "read")), { x: 2 })).toBe("read");
+    expect(
+      effectOf(
+        tool((a) => (a.x === 1 ? "irreversible" : "read")),
+        { x: 1 },
+      ),
+    ).toBe("irreversible");
+    expect(
+      effectOf(
+        tool((a) => (a.x === 1 ? "irreversible" : "read")),
+        { x: 2 },
+      ),
+    ).toBe("read");
   });
 
   it("treats a classifier that throws as irreversible, not as safe", () => {
