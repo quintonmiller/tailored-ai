@@ -110,8 +110,18 @@ export interface Scenario {
   wake?: WakeStep | WakeStep[];
   /** Chat scenario: the message the owner sends. Mutually exclusive with `rooms`. */
   message?: string;
+  /**
+   * Witness names. Each gets a fresh unguessable value per run, substituted
+   * wherever `{{token:<name>}}` appears — in history, the message, rooms, tool
+   * results and the assertions alike.
+   *
+   * This is how a scenario stops asserting a proxy. A value the agent can only
+   * have obtained by doing the task cannot be guessed, confabulated, or
+   * produced by a turn that stalled.
+   */
+  tokens?: string[] | Record<string, import("./tokens.js").TokenFormat>;
   /** Canned results for stubbed tools, keyed by tool name. */
-  toolResults?: Record<string, string>;
+  toolResults?: ToolResults;
   /** Overrides the run-wide default. */
   repeats?: number;
   expect: Assertion[];
@@ -157,6 +167,22 @@ export interface Assertion {
   does_not_call_with?: {
     tool: string | string[];
     where: Record<string, string | number | boolean | Array<string | number | boolean>>;
+  };
+  /**
+   * How many times a named agent *ran* a tool — reading executions, not the
+   * model's requests.
+   *
+   * The multi-agent question `calls_tool` cannot ask. In a delegation chain,
+   * "somebody called facts" is true whether the work was shared correctly or
+   * one agent did all of it, and that difference is usually the whole scenario.
+   * `min` defaults to 1 unless a `max` is given, matching `posts_by`.
+   */
+  calls_by?: {
+    agent: string;
+    tool: string;
+    where?: Record<string, string | number | boolean>;
+    min?: number;
+    max?: number;
   };
   /** The agent posted in this room (by name). */
   posts_in?: string;
@@ -240,6 +266,33 @@ export interface RecordedCall {
   args: Record<string, unknown>;
 }
 
+/**
+ * A tool call that actually executed, and who ran it.
+ *
+ * Distinct from {@link RecordedCall}, which is what the model *asked* for.
+ * The two differ whenever the loop declines a call — the derivability gate
+ * refusing an ambiguous delete is a request with no execution — and a scenario
+ * that wants "the delete did not happen" has to read this one. `agent` is unset
+ * only where a tool ran outside a named agent's turn.
+ */
+export interface RecordedExecution {
+  name: string;
+  args: Record<string, unknown>;
+  agent?: string;
+}
+
+/** One rule for a stubbed tool: answer `then` when the call matches `when`. */
+export interface ToolResultRule {
+  when?: Record<string, string | number | boolean>;
+  then: string;
+}
+
+/**
+ * Canned results per tool. A string answers every call the same way; a list
+ * answers this call, which is what lets a stub act as a witness.
+ */
+export type ToolResults = Record<string, string | ToolResultRule[]>;
+
 /** One request as it went over the wire. */
 export interface RecordedRequest {
   system: string;
@@ -297,9 +350,28 @@ export interface RunOutcome {
   /** Calls that needed a retry (throttling, transient 5xx). Surfaced so pacing problems are visible. */
   retries?: number;
   calls: RecordedCall[];
+  /**
+   * Calls that ran, with the agent that ran them. See {@link RecordedExecution}.
+   *
+   * Optional because reports written before it existed do not carry it, and
+   * `undefined` there means "not recorded", never "nothing ran". `regrade`
+   * skips `calls_by` on such a report rather than reading an absence as a
+   * result — the same rule `prompt_*` follows on a report with no prompt text.
+   */
+  executions?: RecordedExecution[];
   /** Every post the turn(s) produced, attributed — `agent` is the speaker on the envelope. */
   posts: Array<{ room: string; body: string; agent?: string }>;
   requests: RecordedRequest[];
+  /**
+   * Why the loop ended, when the runner could capture it.
+   *
+   * Read structurally rather than off the reply text: a turn that runs out of
+   * rounds gets a tools-withheld retry and usually returns ordinary prose, so
+   * there is no marker to match. Undefined on paths that do not report a stop
+   * (room turns go through the watcher), which graders must treat as "unknown",
+   * never as "did not stall".
+   */
+  stop?: import("@tailored-ai/core").LoopStop;
   latencyMs: number;
   usage: RunUsage;
   error?: string;
@@ -316,6 +388,15 @@ export interface CheckResult {
 }
 
 export interface RunResult {
+  /**
+   * The witness values this run was given, so it can be re-graded later.
+   *
+   * Without them a replay grades today's `{{token:secret}}` against a reply
+   * containing the value that run actually saw, and every witness scenario
+   * scores 0 — which is what happened the first time `regrade` was pointed at
+   * one. The values are random per run and mean nothing outside it.
+   */
+  tokens?: Record<string, string>;
   pass: boolean;
   checks: CheckResult[];
   outcome: RunOutcome;
@@ -371,6 +452,23 @@ export interface BenchmarkReport {
     pinnedAt?: string | null;
     timeZone?: string | null;
     judge: boolean;
+    /**
+     * Whether this run kept the prompt text of every run.
+     *
+     * Recorded because it decides what `regrade` can score: without it the
+     * `prompt_*` checks on passing runs have nothing to read, and a re-score
+     * has to skip them rather than fail them.
+     */
+    keepPrompts?: boolean;
+    /**
+     * Set when this report was produced by `regrade` rather than by running the
+     * model: today's assertions scored against an older run's behaviour.
+     *
+     * Named on the report because such a file is *not* a baseline — its score
+     * belongs to one commit's questions and another commit's answers, and
+     * publishing it would pair the two silently.
+     */
+    regradedFrom?: { report: string; gitSha: string };
     scenarioSetHash: string;
     /**
      * Digest per scenario this run covered, so a published result can be told

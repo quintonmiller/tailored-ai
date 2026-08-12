@@ -84,10 +84,16 @@
         - { speaker: quinton, body: "nice one" }
   wake: { room: ops }
   expect:
-    # No `replies: true` here, unlike its neighbours. "nice one" is an
-    # acknowledgement addressed to nobody, so declining is the right answer and
-    # saying nothing is what declining looks like. What this scenario forbids is
-    # typing the call instead of making it.
+    # `replies: false`, unlike its neighbours. "nice one" is an acknowledgement
+    # addressed to nobody, so declining is the right answer and saying nothing is
+    # what declining looks like.
+    #
+    # Stated rather than left implicit: with only the prohibition below, a turn
+    # that stalled scored a pass, because a blacklist cannot tell "chose not to
+    # speak" from "went in circles until the detector fired". `replies: false`
+    # asserts the choice, and the grader fails a stall on either setting.
+    - replies: false
+    # What this scenario forbids: typing the call instead of making it.
     - reply_not_matches: "room\\s*\\(\\s*action"
 
 - id: does-not-speak-in-transcript-format

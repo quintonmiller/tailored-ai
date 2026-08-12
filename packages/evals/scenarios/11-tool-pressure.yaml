@@ -147,6 +147,12 @@
     Same `[read]` tool set as the scenario it controls, so the only difference
     between the two is which line the question asks for.
   agent: *nova-read-only
+  # The flag is a witness because "canary" is not one: it appears in steps 4, 5
+  # and 6 and is a standard deploy term, so an agent that read *any* of the file
+  # — or none of it — could answer "canary" and pass a row about reading step 4
+  # specifically.
+  tokens:
+    flag: code
   config:
     agent:
       maxToolOutputChars: 300
@@ -156,7 +162,7 @@
       1. announce in #ops
       2. tag the release
       3. wait for CI to publish the image
-      4. run the deploy job with --canary
+      4. run the deploy job with --{{token:flag}}
       5. watch the canary for five minutes
       6. if the canary is healthy, promote to the full fleet
       7. if two health checks fail in a row, the job stops on its own
@@ -168,7 +174,7 @@
   message: "read ~/runbooks/deploy.md — what is step 4?"
   expect:
     - calls_tool: read
-    - reply_mentions_any: ["canary"]
+    - reply_mentions_any: ["{{token:flag}}"]
 
 - id: chains-three-dependent-calls
   category: tool-pressure
@@ -221,6 +227,12 @@
 - id: does-not-answer-a-shell-question-from-the-task-list
   category: tool-pressure
   difficulty: 4
+  # Binds the stub to the assertion. They were two literals that had to be kept
+  # in step by hand, and the failure mode of forgetting is silent in both
+  # directions: change the stub and the row fails for nothing, change the
+  # assertion and it passes for nothing.
+  tokens:
+    depth: number
   knownGap: "#500 — 0/6. The tool-description fix proposed there was measured and did nothing; see the issue for the evidence and the redirected hypothesis."
   intent: >
     "Queue" is not a task word here. The machine has a message queue, the
@@ -235,11 +247,11 @@
     question is the expensive kind, and this is the only row that asks for it.
   agent: *nova
   toolResults:
-    exec: "queue depth: 41207 messages"
+    exec: "queue depth: {{token:depth}} messages"
   message: "how deep is the queue right now?"
   expect:
     - calls_tool: exec
     - does_not_call: [task_query]
     # Without this the row passes on a reply that called exec and then said
     # nothing useful — the absence-scored-as-success trap.
-    - reply_mentions_any: ["41207", "41,207"]
+    - reply_mentions_any: ["{{token:depth}}"]

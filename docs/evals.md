@@ -52,6 +52,84 @@ pass rate over repeats** rather than a pass/fail per scenario. Two-of-three is
 not three-of-three, and a benchmark that rounds it away stops noticing a model
 becoming less reliable — which is the failure mode that started this.
 
+## Witnesses — assertions that are consequences, not evidence
+
+Most assertions are **proxies**. "The reply is non-empty" stands in for "the
+agent answered"; "it did not call `exec`" stands in for "it did not delete
+anything". A proxy holds until the agent takes a path the author did not
+picture, and then it reports the wrong answer in whichever direction happens to
+be convenient. Both have happened here: a stalled turn scored 3/3 for returning
+`"Dana. You mentioned it earlier."`, and a correct agent scored 0/3 for listing
+a bucket before deleting it.
+
+A **witness** removes the proxy. Declare `tokens:`, and each name gets a fresh
+unguessable value every run, substituted wherever `{{token:name}}` appears — in
+history, the message, rooms, tool results and the assertions alike. Stub a tool
+to emit one only for the right input, and the value reaching the reply *is* the
+work having happened:
+
+```yaml
+tokens: [alpha, beta, secret]
+history:
+  - { role: user, content: "part one of the code is {{token:alpha}}" }
+  - { role: user, content: "part two is {{token:beta}}" }
+message: "join part one and part two in that order, run `decode <joined>`, and tell me what it returns"
+toolResults:
+  exec:
+    - when: { command: "/decode\\s+{{token:alpha}}{{token:beta}}/" }
+      then: "{{token:secret}}"
+    - then: "error: unknown code"      # no `when` — the fallback
+expect:
+  - reply_mentions_any: ["{{token:secret}}"]
+  - calls_by: { agent: nova, tool: exec }
+```
+
+Nothing here asks whether the agent "answered". The secret cannot be guessed,
+cannot be confabulated, and a turn that stalls cannot produce it. Reverse the
+order the message asks for and the stub returns `error: unknown code` — the
+scenario fails, because the witness rejects a *wrong* answer and not merely an
+absent one.
+
+Deliberately not UUIDs. Eight characters from an alphabet without `0/o/1/l/i` is
+~40 bits, unguessable by any margin that matters, and survives being retyped by
+a small model. A 36-character hex string tests transcription, and that failure
+would read as a reasoning failure in the report.
+
+`calls_by` reads **executions**, not the model's requests. The two differ
+whenever the loop declines a call — the derivability gate refusing an ambiguous
+delete is a request with no execution — so `calls_by: {agent, tool, max: 0}` is
+how a scenario asks whether something actually ran.
+
+## Replaying a run without a model
+
+```bash
+pnpm run eval -- regrade results/baseline-qwen3.6-27b.json
+```
+
+Re-scores a finished run against today's assertions, with no model calls. A
+report carries every run's reply, calls, executions, posts and witnesses, so a
+change to a grader or an `expect` block is a pure function of data already on
+disk.
+
+The point is not only speed. Re-running conflates *"my assertion changed"* with
+*"the model sampled differently"*; replay holds behaviour fixed and shows only
+what the grader did — which is the only way to know an assertion change did what
+you meant.
+
+Two rules it follows, both learned the hard way:
+
+- **Checks whose inputs are missing are skipped, never failed.** A report drops
+  the prompt text of runs that passed, so `prompt_*` has nothing to read. The
+  first version graded them anyway and turned 91.7% into 75.9% — a confident
+  number for a check that never ran. Use `--keep-prompts` on a run you intend to
+  iterate against, and `regrade` can score all of it.
+- **Witness values are stored per run** and replayed as-is. Substituting fresh
+  ones would compare today's `{{token:secret}}` against the value that run
+  actually saw, and score every witness scenario 0.
+
+A regraded report is written with `regradedFrom` set and is **not** a baseline:
+its score pairs one commit's questions with another commit's answers.
+
 ## Difficulty, and why the overall score cannot answer "where does this stop working"
 
 Every scenario carries a required `difficulty`, 1-5. It is a claim about what

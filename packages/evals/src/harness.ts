@@ -36,6 +36,7 @@ import {
   formatRoomRef,
   initDatabase,
   LocalRoomBackend,
+  type LoopStop,
   loadConfig,
   loadPlugins,
   makeRoomSessionKey,
@@ -49,7 +50,16 @@ import {
 } from "@tailored-ai/core";
 import YAML from "yaml";
 import { registerPinnedClock, timeConfigBlock } from "./clock.js";
-import type { RecordedCall, RecordedRequest, RoomLine, RunOutcome, RunUsage, Scenario } from "./types.js";
+import type {
+  RecordedCall,
+  RecordedExecution,
+  RecordedRequest,
+  RoomLine,
+  RunOutcome,
+  RunUsage,
+  Scenario,
+  ToolResults,
+} from "./types.js";
 
 export interface HarnessOptions {
   baseUrl: string;
@@ -140,19 +150,74 @@ const STUBBED = new Set([
 
 const DEFAULT_STUB_RESULT = "(stubbed in the benchmark — assume it succeeded and continue)";
 
-function stub(tool: Tool, results: Record<string, string>): Tool {
-  if (!STUBBED.has(tool.name)) return tool;
-  // Spread, then override the one thing a stub is for. The previous version
-  // listed the fields it kept — name, description, parameters — and so silently
-  // dropped every declarative property added afterwards. `Tool.effect` was the
-  // first: it made every stubbed tool read as harmless, which meant the
-  // derivability gate could not fire in the benchmark at all, and an A/B of it
-  // returned 7/12 on both arms because neither arm was running the thing under
-  // test.
+/**
+ * What a stubbed tool returns for a given call.
+ *
+ * A bare string answers every call the same way, which is all a scenario needs
+ * when the tool is scenery. A list of rules answers *this* call — and that is
+ * what makes a witness test possible: a tool that emits the secret only when
+ * handed the right input turns "did the agent combine the two keys correctly"
+ * from a judgement into an observation.
+ *
+ *     toolResults:
+ *       decode:
+ *         - when: { code: "{{token:alpha}}{{token:beta}}" }
+ *           then: "{{token:secret}}"
+ *         - then: "no such code"          # no `when` — the fallback
+ *
+ * First matching rule wins, so order is the priority. A list with no matching
+ * rule and no fallback returns the default stub text.
+ */
+function stubResult(tool: string, args: Record<string, unknown>, results: ToolResults): string {
+  const rule = results[tool];
+  if (rule === undefined) return DEFAULT_STUB_RESULT;
+  if (typeof rule === "string") return rule;
+  for (const candidate of rule) {
+    if (!candidate.when) return candidate.then;
+    if (Object.entries(candidate.when).every(([key, want]) => matchesStubArg(args[key], want))) return candidate.then;
+  }
+  return DEFAULT_STUB_RESULT;
+}
+
+/** Same matching a `tool_args` assertion uses, so a rule and a check agree on what "matches" means. */
+function matchesStubArg(actual: unknown, expected: string | number | boolean): boolean {
+  if (typeof expected === "string" && expected.startsWith("/") && expected.lastIndexOf("/") > 0) {
+    const end = expected.lastIndexOf("/");
+    return new RegExp(expected.slice(1, end), expected.slice(end + 1) || "i").test(String(actual ?? ""));
+  }
+  if (typeof actual === "string" && typeof expected === "string")
+    return actual.toLowerCase() === expected.toLowerCase();
+  return actual === expected;
+}
+
+/**
+ * Wrap every tool so the run records what actually ran, and stub the ones that
+ * reach outside this process.
+ *
+ * Two things the provider-level record cannot say, both of which have already
+ * cost a wrong conclusion:
+ *
+ *   - **Who called it.** The recorder is shared across a room's agents, so a
+ *     multi-agent scenario could assert that *somebody* called a tool and never
+ *     that the right agent did.
+ *   - **Whether it ran.** Provider records are what the model *asked* for. A
+ *     call the loop refuses — the derivability gate declining an ambiguous
+ *     delete — looks identical to one that executed, and a scenario asserting
+ *     the delete did not happen failed a run where it was correctly blocked.
+ *
+ * Spread, then override: the previous version listed the fields it kept and so
+ * silently dropped every declarative property added afterwards. `Tool.effect`
+ * was the first, which made every stubbed tool read as harmless and meant the
+ * derivability gate could not fire in the benchmark at all.
+ */
+function instrument(tool: Tool, recorder: Recorder, results: ToolResults): Tool {
+  const stubbed = STUBBED.has(tool.name);
   return {
     ...tool,
-    async execute() {
-      return { success: true, output: results[tool.name] ?? DEFAULT_STUB_RESULT };
+    async execute(args, context) {
+      recorder.executions.push({ name: tool.name, args, agent: context.agentName });
+      if (!stubbed) return tool.execute(args, context);
+      return { success: true, output: stubResult(tool.name, args, results) };
     },
   };
 }
@@ -170,6 +235,8 @@ function stub(tool: Tool, results: Record<string, string>): Tool {
 class Recorder {
   readonly requests: RecordedRequest[] = [];
   readonly calls: RecordedCall[] = [];
+  /** Calls that ran, attributed to the agent whose turn ran them. */
+  readonly executions: RecordedExecution[] = [];
   /**
    * Provider calls that threw.
    *
@@ -519,7 +586,7 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
       ctxDir: string,
       cfgPath?: string,
       runtimeOpts?: Record<string, unknown>,
-    ) => createTools(cfg, ctxDir, cfgPath, runtimeOpts).map((t) => stub(t, scenario.toolResults ?? {}));
+    ) => createTools(cfg, ctxDir, cfgPath, runtimeOpts).map((t) => instrument(t, recorder, scenario.toolResults ?? {}));
 
     const providerFactory = (cfg: Parameters<typeof createProvider>[0], providerId?: string) => {
       const built = createProvider(cfg, providerId);
@@ -540,7 +607,9 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
       (path) => loadConfig(path),
       config,
     );
-    runtime.setMetaTools(createMetaTools(runtime, contextDir, kbDir).map((t) => stub(t, scenario.toolResults ?? {})));
+    runtime.setMetaTools(
+      createMetaTools(runtime, contextDir, kbDir).map((t) => instrument(t, recorder, scenario.toolResults ?? {})),
+    );
 
     const outcome = scenario.rooms?.length
       ? await runRoomScenario(scenario, runtime, db, agentName, opts)
@@ -550,6 +619,7 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
     return {
       ...outcome,
       calls: recorder.calls,
+      executions: recorder.executions,
       requests: recorder.requests,
       usage: recorder.usage,
       latencyMs: Date.now() - started,
@@ -561,6 +631,7 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
     return {
       reply: "",
       calls: recorder.calls,
+      executions: recorder.executions,
       posts: [],
       requests: recorder.requests,
       usage: recorder.usage,
@@ -587,15 +658,29 @@ async function runChatScenario(
   db: import("better-sqlite3").Database,
   agentName: string,
   opts: HarnessOptions,
-): Promise<Pick<RunOutcome, "reply" | "posts">> {
+): Promise<Pick<RunOutcome, "reply" | "posts" | "stop">> {
   const session = newSession(db, opts.model, opts.providerId ?? "openai_compatible", `eval:${randomUUID()}`);
   for (const line of scenario.history ?? []) {
     saveMessage(db, session.id, { role: line.role, content: line.content });
   }
 
   const base = runtime.buildLoopOptions({ session, agentName });
-  const reply = await runAgentLoop(scenario.message ?? "", base);
-  return { reply, posts: [] };
+  // Why the turn ended, taken structurally rather than read off the reply.
+  //
+  // A stalled turn used to be identifiable by its `[Agent stopped: …]` text, and
+  // graders that looked for it are now wrong twice over: the marker is still
+  // non-empty (so `replies: true` accepted it) and, since a turn that runs out
+  // of rounds gets a tools-withheld retry, most stalls come back as ordinary
+  // prose with no marker at all. `loop.ts` says as much and points callers at
+  // the structured stop.
+  let stop: LoopStop | undefined;
+  const reply = await runAgentLoop(scenario.message ?? "", {
+    ...base,
+    onStop: (s) => {
+      stop = s;
+    },
+  });
+  return { reply, posts: [], stop };
 }
 
 /**

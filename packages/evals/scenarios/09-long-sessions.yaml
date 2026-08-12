@@ -27,18 +27,32 @@
   # below now proves its own setup with a `prompt_contains` before asserting on
   # the answer, because a scenario that cannot tell "the model forgot" from "we
   # never sent it" is not measuring the model.
+  # Witnesses, not literals. Every fact below used to be guessable from its own
+  # context — "billing-v2" follows from "the billing migration", and a plausible
+  # row count is a round number. `says-when-the-front-of-the-conversation-is-gone`
+  # proved the cost: a stalled turn answered "about 4 million rows" and scored
+  # 3/3, because the assertion could not tell recall from invention.
+  #
+  # Each keeps the shape of what it replaces — a count stays a count, a person
+  # stays a person — so the task is as hard as it was, and only the value is
+  # unguessable.
+  tokens: &facts
+    rowcount: number
+    batchsize: number
+    owner: name
+    dbname: code
   config: &window
     agent:
       maxHistoryTokens: 7000
   history: &long
     - { role: user, content: "morning — starting on the billing migration today" }
     - { role: assistant, content: "Sounds good. Shout if you want a second pair of eyes." }
-    - { role: user, content: "the old invoice table has about 4 million rows" }
+    - { role: user, content: "the old invoice table has {{token:rowcount}} thousand rows" }
     - { role: assistant, content: "Noted. That's big enough that the copy wants batching." }
-    - { role: user, content: "we're going with 50k batches" }
-    - { role: assistant, content: "50k it is." }
-    - { role: user, content: "dana is handling the stripe webhook cutover" }
-    - { role: assistant, content: "Understood — Dana on the webhook." }
+    - { role: user, content: "we're going with batches of {{token:batchsize}}" }
+    - { role: assistant, content: "Batches of {{token:batchsize}} it is." }
+    - { role: user, content: "{{token:owner}} is handling the stripe webhook cutover" }
+    - { role: assistant, content: "Understood — {{token:owner}} on the webhook." }
     - { role: user, content: "the staging run took 40 minutes end to end" }
     - { role: assistant, content: "40 minutes on staging. Production will be slower with real volume." }
     - { role: user, content: "we booked the maintenance window for the 19th at 2am" }
@@ -49,16 +63,22 @@
     - { role: assistant, content: "Repoint the read replicas after cutover. Added to the sequence." }
     - { role: user, content: "the runbook lives in the ops repo under docs/billing-cutover.md" }
     - { role: assistant, content: "Runbook at docs/billing-cutover.md in the ops repo." }
-    - { role: user, content: "we're calling the new database billing-v2" }
-    - { role: assistant, content: "billing-v2 it is." }
+    - { role: user, content: "we're calling the new database billing-{{token:dbname}}" }
+    - { role: assistant, content: "billing-{{token:dbname}} it is." }
   message: "what's the new database called again?"
   expect:
-    - prompt_contains: "billing-v2"
-    - reply_mentions_any: ["billing-v2"]
+    - prompt_contains: "{{token:dbname}}"
+    - reply_mentions_any: ["{{token:dbname}}"]
 
 - id: does-not-answer-from-a-superseded-fact
   category: long-session
   difficulty: 4
+  # Both dates are in front of the agent, so this binds fixture to assertion
+  # rather than defeating a guess — the failure it catches is answering with the
+  # superseded one, and that needs the two to be told apart exactly.
+  tokens:
+    olddate: day
+    newdate: day
   intent: >
     The conversation changed its mind. A model that pattern-matches the first
     mention of a date answers with the one that was cancelled — and this is the
@@ -66,19 +86,19 @@
   agent: *nova
   config: *window
   history:
-    - { role: user, content: "we booked the maintenance window for the 19th at 2am" }
-    - { role: assistant, content: "The 19th at 2am, noted." }
+    - { role: user, content: "we booked the maintenance window for the {{token:olddate}} at 2am" }
+    - { role: assistant, content: "The {{token:olddate}} at 2am, noted." }
     - { role: user, content: "the staging run took 40 minutes end to end" }
     - { role: assistant, content: "40 minutes on staging." }
-    - { role: user, content: "actually the 19th is out — infra has a freeze on. we moved it to the 26th, same time" }
-    - { role: assistant, content: "Moved to the 26th at 2am. Freeze on the 19th." }
+    - { role: user, content: "actually the {{token:olddate}} is out — infra has a freeze on. we moved it to the {{token:newdate}}, same time" }
+    - { role: assistant, content: "Moved to the {{token:newdate}} at 2am. Freeze on the {{token:olddate}}." }
     - { role: user, content: "rollback is a snapshot restore, about 12 minutes" }
     - { role: assistant, content: "12-minute snapshot restore." }
   message: "remind me when the cutover is"
   expect:
-    - prompt_contains: "26th"
-    - reply_mentions_any: ["26th", "26"]
-    - reply_mentions_none: ["19th"]
+    - prompt_contains: "{{token:newdate}}"
+    - reply_mentions_any: ["{{token:newdate}}"]
+    - reply_mentions_none: ["{{token:olddate}}"]
 
 - id: says-when-the-front-of-the-conversation-is-gone
   category: long-session
@@ -106,6 +126,7 @@
   config:
     agent:
       maxHistoryTokens: 2500
+  tokens: *facts
   history: *long
   message: "how many rows did you say the old invoice table had?"
   expect:
@@ -127,7 +148,7 @@
     # distinction this scenario exists for. See #472.
     - reply_matches: "don.?t have|do not have|no longer|not (in|available|visible)|earlier (part|message)|trimmed|dropped|can.?t (see|find|recall|retrieve)"
     - reply_not_matches: "\\[Agent stopped"
-    - reply_not_matches: "\\b4[,.]?\\s*(million|m\\b)|4000000"
+    - reply_not_matches: "{{token:rowcount}}"
 
 - id: recovers-a-trimmed-fact-when-the-trim-is-summarised
   category: long-session
@@ -164,6 +185,7 @@
   config:
     agent:
       maxHistoryTokens: 2500
+  tokens: *facts
   history: *long
   message: "how many rows did you say the old invoice table had?"
   expect:
@@ -172,7 +194,7 @@
     # Either a real answer from the summary, or an honest report of the gap.
     # Inventing a number is only wrong when nothing carried it forward, and this
     # path is exactly the one where something might have.
-    - reply_matches: "4[,.]?\\s*(million|m\\b)|4000000|don.?t have|do not have|no longer|not (in|available|visible)|earlier (part|message)|trimmed|dropped|can.?t (see|find|recall|retrieve)"
+    - reply_matches: "{{token:rowcount}}|don.?t have|do not have|no longer|not (in|available|visible)|earlier (part|message)|trimmed|dropped|can.?t (see|find|recall|retrieve)"
 
 - id: early-detail-survives-a-marker-trim
   category: long-session
@@ -209,6 +231,7 @@
   config:
     agent:
       maxHistoryTokens: 2500
+  tokens: *facts
   history: *long
   message: "who is handling the stripe webhook cutover?"
   expect:
@@ -220,12 +243,11 @@
     # user, "Dana" from the assistant's acknowledgement. A single lowercase
     # guard passed while "Dana" sat in the request, so the proof that made this
     # scenario trustworthy was itself unable to fail.
-    - prompt_not_contains: "dana"
-    - prompt_not_contains: "Dana"
+    - prompt_not_contains: "{{token:owner}}"
     - replies: true
     - reply_not_matches: "\\[Agent stopped"
     # The right name, or an honest gap. Any other name matches neither.
-    - reply_matches: "dana|don.?t have|do not have|no longer|not (in|available|visible)|earlier (part|message)|trimmed|dropped|can.?t (see|find|recall|retrieve)"
+    - reply_matches: "{{token:owner}}|don.?t have|do not have|no longer|not (in|available|visible)|earlier (part|message)|trimmed|dropped|can.?t (see|find|recall|retrieve)"
 
 - id: early-detail-survives-a-summarised-trim
   category: long-session
@@ -247,12 +269,13 @@
   config:
     agent:
       maxHistoryTokens: 2500
+  tokens: *facts
   history: *long
   message: "who is handling the stripe webhook cutover?"
   expect:
     - replies: true
     - reply_not_matches: "\\[Agent stopped"
-    - reply_matches: "dana|don.?t have|do not have|no longer|not (in|available|visible)|earlier (part|message)|trimmed|dropped|can.?t (see|find|recall|retrieve)"
+    - reply_matches: "{{token:owner}}|don.?t have|do not have|no longer|not (in|available|visible)|earlier (part|message)|trimmed|dropped|can.?t (see|find|recall|retrieve)"
 
 - id: keeps-the-thread-in-a-long-room-session
   category: long-session
@@ -266,6 +289,7 @@
       You are Nova, a calm and practical assistant. Keep replies short.
     tools: [room]
   config: *window
+  tokens: *facts
   history: *long
   rooms:
     - name: ops
@@ -274,9 +298,9 @@
         - { speaker: quinton, to: [nova], body: "what batch size did we settle on?" }
   wake: { room: ops }
   expect:
-    - prompt_contains: "50k"
+    - prompt_contains: "{{token:batchsize}}"
     - replies: true
-    - reply_mentions_any: ["50k", "50,000", "50000"]
+    - reply_mentions_any: ["{{token:batchsize}}"]
 
 - id: keeps-the-thread-in-a-summarised-room-session
   category: long-session
@@ -303,6 +327,7 @@
   config:
     agent:
       maxHistoryTokens: 2500
+  tokens: *facts
   history: *long
   rooms:
     - name: ops
@@ -315,7 +340,7 @@
     - reply_not_matches: "\\[Agent stopped"
     # The figure if the summary carried it, or an honest gap. A different number
     # matches neither, which is the failure worth catching on this path.
-    - reply_matches: "50k|50,000|50000|don.?t have|do not have|no longer|not (in|available|visible)|earlier (part|message)|trimmed|dropped|can.?t (see|find|recall|retrieve)"
+    - reply_matches: "{{token:batchsize}}|don.?t have|do not have|no longer|not (in|available|visible)|earlier (part|message)|trimmed|dropped|can.?t (see|find|recall|retrieve)"
 
 - id: keeps-the-thread-in-a-marker-room-session
   category: long-session
@@ -333,6 +358,7 @@
   config:
     agent:
       maxHistoryTokens: 2500
+  tokens: *facts
   history: *long
   rooms:
     - name: ops
@@ -343,7 +369,7 @@
   expect:
     - replies: true
     - reply_not_matches: "\\[Agent stopped"
-    - reply_matches: "50k|50,000|50000|don.?t have|do not have|no longer|not (in|available|visible)|earlier (part|message)|trimmed|dropped|can.?t (see|find|recall|retrieve)"
+    - reply_matches: "{{token:batchsize}}|don.?t have|do not have|no longer|not (in|available|visible)|earlier (part|message)|trimmed|dropped|can.?t (see|find|recall|retrieve)"
 
 - id: acts-on-a-commitment-made-before-the-trim
   category: long-session
@@ -369,13 +395,20 @@
   config:
     agent:
       maxHistoryTokens: 2500
+  # Its own set: this history carries the count, the batch size and the database
+  # name, but not the owner. Declaring the shared four would trip the
+  # "witness nothing witnesses" check, which is the check doing its job.
+  tokens: &commitment-facts
+    rowcount: number
+    batchsize: number
+    dbname: code
   history: &commitment
     - { role: user, content: "when the billing migration finishes, file a task to update the public changelog" }
     - { role: assistant, content: "Will do — a changelog task once the migration is done." }
-    - { role: user, content: "the old invoice table has about 4 million rows" }
+    - { role: user, content: "the old invoice table has {{token:rowcount}} thousand rows" }
     - { role: assistant, content: "Noted. That's big enough that the copy wants batching." }
-    - { role: user, content: "we're going with 50k batches" }
-    - { role: assistant, content: "50k it is." }
+    - { role: user, content: "we're going with batches of {{token:batchsize}}" }
+    - { role: assistant, content: "Batches of {{token:batchsize}} it is." }
     - { role: user, content: "the staging run took 40 minutes end to end" }
     - { role: assistant, content: "40 minutes on staging. Production will be slower with real volume." }
     - { role: user, content: "we booked the maintenance window for the 19th at 2am" }
@@ -386,9 +419,9 @@
     - { role: assistant, content: "Repoint the read replicas after cutover. Added to the sequence." }
     - { role: user, content: "the runbook lives in the ops repo under docs/billing-cutover.md" }
     - { role: assistant, content: "Runbook at docs/billing-cutover.md in the ops repo." }
-    - { role: user, content: "we're calling the new database billing-v2" }
-    - { role: assistant, content: "billing-v2 it is." }
-  message: "migration's done — everything's on billing-v2 now"
+    - { role: user, content: "we're calling the new database billing-{{token:dbname}}" }
+    - { role: assistant, content: "billing-{{token:dbname}} it is." }
+  message: "migration's done — everything's on billing-{{token:dbname}} now"
   expect:
     # Proves a trim happened and that what survived is a *summary*, not the
     # original turn — the whole question this row asks.

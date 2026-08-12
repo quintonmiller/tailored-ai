@@ -12,6 +12,9 @@
 - id: uses-a-fact-from-earlier-in-the-session
   category: continuity
   difficulty: 2
+  # 10:15 is the time a model would guess for a standup.
+  tokens:
+    standup: time
   intent: A detail stated four turns ago is still available.
   agent: &nova
     name: nova
@@ -19,16 +22,16 @@
       You are Nova, a calm and practical assistant. Keep replies short.
   history:
     - role: user
-      content: "we're moving the standup to 10:15 from next monday, and it's on the #ops channel now"
+      content: "we're moving the standup to {{token:standup}} from next monday, and it's on the #ops channel now"
     - role: assistant
-      content: "Noted — 10:15 from Monday, in #ops."
+      content: "Noted — {{token:standup}} from Monday, in #ops."
     - role: user
       content: "also the retro is fortnightly now"
     - role: assistant
       content: "Got it."
   message: "what time is standup again?"
   expect:
-    - reply_mentions_any: ["10:15"]
+    - reply_mentions_any: ["{{token:standup}}"]
 
 - id: honours-a-compaction-summary
   category: continuity
@@ -37,18 +40,23 @@
     A summary is what survives of a trimmed conversation. Ignoring it is the
     same as having no memory of that part at all.
   agent: *nova
+  # A witness, because "Dana" is a name the model can produce without having read
+  # the summary at all — and a scenario about *reading the summary* cannot tell
+  # the two apart.
+  tokens:
+    owner: name
   history:
     - role: user
       content: >
         [Earlier conversation summary: Quinton is migrating the billing service
         off Heroku onto the new Hetzner box. The cutover is booked for the 19th.
         The blocker is that the Stripe webhook endpoint is still pointed at the
-        old host, and Dana owns that change.]
+        old host, and {{token:owner}} owns that change.]
     - role: assistant
       content: "Understood."
   message: "who do I need to chase before the cutover?"
   expect:
-    - reply_mentions_any: ["dana"]
+    - reply_mentions_any: ["{{token:owner}}"]
 
 - id: does-not-claim-amnesia
   category: continuity
@@ -57,20 +65,31 @@
     The material is in front of it. Answering "I have no record of that" is a
     specific, recognisable failure and worth its own check.
   agent: *nova
+  # The entry name is the witness; the vault brand is not. `reply_mentions_any:
+  # ["1password", "metrics-staging"]` passed an agent that answered "in 1Password"
+  # — the one half of the answer it could have guessed without reading anything,
+  # since a password manager is the obvious place a key would live.
+  tokens:
+    entry: code
   history:
     - role: user
-      content: "the API key for the staging metrics box is stored in 1password under 'metrics-staging'"
+      content: "the API key for the staging metrics box is stored in 1password under 'metrics-{{token:entry}}'"
     - role: assistant
       content: "Noted."
   message: "where did I say the staging metrics key lives?"
   expect:
-    - reply_mentions_any: ["1password", "metrics-staging"]
+    - reply_mentions_any: ["{{token:entry}}"]
     - reply_mentions_none:
         ["I don't have access", "I have no record", "I don't recall", "I'm not able to see", "no previous"]
 
 - id: carries-context-across-a-room-wake
   category: continuity
   difficulty: 3
+  # Both nodes are witnesses: the question asks which one it ran on *before*,
+  # and with real hostnames a reply naming either reads as plausible.
+  tokens:
+    now: code
+    before: code
   intent: >
     A room session is history too. The agent said "node-3, moved off node-1"
     last wake; "it" in the new message refers to the queue worker, and answering
@@ -104,7 +123,7 @@
         New messages:
         quinton [person] (to nova): which node is the queue worker on?
     - role: assistant
-      content: "node-3. It moved off node-1 during the incident last week."
+      content: "node-{{token:now}}. It moved off node-{{token:before}} during the incident last week."
   rooms:
     - name: ops
       purpose: Deploys and incidents.
@@ -115,4 +134,4 @@
     - replies: true
     # node-1 appears only in the agent's own previous turn, so this cannot be
     # answered from the wake prompt alone — which is the property under test.
-    - reply_mentions_any: ["node-1"]
+    - reply_mentions_any: ["{{token:before}}"]

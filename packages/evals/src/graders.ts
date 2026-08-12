@@ -7,6 +7,7 @@
  * `judge`, and it is opt-out for exactly that reason.
  */
 
+import { isStallStop } from "@tailored-ai/core";
 import { agentRounds, invocationRequest } from "./harness.js";
 import type { Assertion, CheckResult, RunOutcome, Scenario } from "./types.js";
 
@@ -146,6 +147,29 @@ async function gradeOne(
       : no("does_not_call_with", `${offending[0].name} was called with ${JSON.stringify(offending[0].args)}`);
   }
 
+  if (assertion.calls_by !== undefined) {
+    const want = assertion.calls_by;
+    const ran = (outcome.executions ?? []).filter(
+      (e) =>
+        e.name === want.tool &&
+        e.agent === want.agent &&
+        (!want.where || Object.entries(want.where).every(([k, v]) => matchesArg(e.args[k], v))),
+    );
+    // Same default as `posts_by`: `min` is 1 unless a `max` says the point is
+    // an upper bound, which a fixed 1 would make unsatisfiable.
+    const min = want.min ?? (want.max === undefined ? 1 : 0);
+    const describe = () => {
+      const byAgent = (outcome.executions ?? []).map((e) => `${e.agent ?? "?"}:${e.name}`).join(", ");
+      return byAgent || "nothing ran";
+    };
+    if (ran.length < min)
+      return no("calls_by", `${want.agent} ran ${want.tool} ${ran.length}×, wanted ≥${min} (${describe()})`);
+    if (want.max !== undefined && ran.length > want.max) {
+      return no("calls_by", `${want.agent} ran ${want.tool} ${ran.length}×, wanted ≤${want.max} (${describe()})`);
+    }
+    return ok("calls_by");
+  }
+
   if (assertion.posts_in !== undefined) {
     const want = assertion.posts_in;
     return outcome.posts.some((p) => p.room === want)
@@ -206,10 +230,20 @@ async function gradeOne(
   }
 
   if (assertion.replies !== undefined) {
+    // A stall is not an answer. `length > 0` accepted `[Agent stopped: …]` —
+    // two of them scored as passes on a 12-run baseline — and accepts the more
+    // common case too, where a turn that ran out of rounds returns ordinary
+    // prose. The structured stop catches both; the marker text catches only the
+    // first, and only on paths that still emit it.
+    const stalled = outcome.stop ? isStallStop(outcome.stop) : /^\[Agent stopped: /.test(reply.trim());
+    // Checked before the true/false split, so a stall fails either way. Silence
+    // and a stall look identical downstream and are opposites: `replies: false`
+    // asserts the agent *chose* not to speak, and a turn that went in circles
+    // until the detector fired made no such choice.
+    if (stalled) return no("replies", `the turn stalled (${outcome.stop?.kind ?? "stop marker"})`);
     const replied = reply.trim().length > 0;
-    return replied === assertion.replies
-      ? ok("replies")
-      : no("replies", assertion.replies ? "said nothing" : `expected silence, said "${trim(reply)}"`);
+    if (replied === assertion.replies) return ok("replies");
+    return no("replies", assertion.replies ? "said nothing" : `expected silence, said "${trim(reply)}"`);
   }
 
   if (assertion.reply_matches !== undefined) {

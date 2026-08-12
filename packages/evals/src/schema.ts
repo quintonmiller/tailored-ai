@@ -14,6 +14,7 @@ import { join } from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
 import { MAX_DIFFICULTY, MIN_DIFFICULTY, parseDifficultyFilter } from "./difficulty.js";
+import { declaredTokenNames, referencedTokens } from "./tokens.js";
 import type { Scenario } from "./types.js";
 
 const roomLine = z
@@ -70,6 +71,16 @@ const assertion = z
             z.array(z.union([z.string(), z.number(), z.boolean()])).nonempty(),
           ]),
         ),
+      })
+      .strict()
+      .optional(),
+    calls_by: z
+      .object({
+        agent: z.string(),
+        tool: z.string(),
+        where: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
+        min: z.number().int().nonnegative().optional(),
+        max: z.number().int().nonnegative().optional(),
       })
       .strict()
       .optional(),
@@ -140,7 +151,31 @@ const scenario = z
     rooms: z.array(roomSpec).optional(),
     wake: z.union([wakeStep, z.array(wakeStep).nonempty()]).optional(),
     message: z.string().optional(),
-    toolResults: z.record(z.string()).optional(),
+    // A list means every witness is a `code`; a map names each one's shape, so
+    // a row count stays a number and a person stays a person.
+    tokens: z
+      .union([
+        z.array(z.string().regex(/^[A-Za-z0-9_-]+$/)).nonempty(),
+        z.record(z.string().regex(/^[A-Za-z0-9_-]+$/), z.enum(["code", "number", "name", "time", "day"])),
+      ])
+      .optional(),
+    toolResults: z
+      .record(
+        z.union([
+          z.string(),
+          z
+            .array(
+              z
+                .object({
+                  when: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
+                  then: z.string(),
+                })
+                .strict(),
+            )
+            .nonempty(),
+        ]),
+      )
+      .optional(),
     repeats: z.number().int().positive().optional(),
     expect: z.array(assertion).nonempty(),
   })
@@ -159,6 +194,32 @@ const scenario = z
     // scenarios were written this way in one afternoon — usually by reusing an
     // `&anchor` whose `tools:` list is narrower than the new row needs — and
     // each one cost a benchmark run to diagnose. Cheap to make impossible.
+    // A `{{token:x}}` nobody declared is a typo, and a typo that survives is a
+    // witness that never matches — which fails a correct agent and reads as a
+    // capability gap. The substituter leaves unknown names alone rather than
+    // blanking them, so this is what turns that into an error anyone can see.
+    const declared = new Set(declaredTokenNames(value.tokens));
+    for (const name of referencedTokens({ ...value, tokens: undefined })) {
+      if (!declared.has(name)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            `references {{token:${name}}}, which is not in this scenario's tokens: [${declaredTokenNames(value.tokens).join(", ")}] — ` +
+            "it would be left as literal text and the assertion could never match",
+        });
+      }
+    }
+    if (value.tokens) {
+      const used = new Set(referencedTokens({ ...value, tokens: undefined }));
+      for (const name of declaredTokenNames(value.tokens)) {
+        if (!used.has(name)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `declares token "${name}" but never uses {{token:${name}}} — a witness nothing witnesses`,
+          });
+        }
+      }
+    }
     if (value.agent?.tools && value.toolResults) {
       const allowed = new Set(value.agent.tools);
       for (const tool of Object.keys(value.toolResults)) {
