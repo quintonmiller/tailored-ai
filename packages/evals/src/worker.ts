@@ -113,7 +113,7 @@ async function main(): Promise<void> {
     // the assertion was still looking for the literal `{{token:secret}}`.
     // Fresh per repeat, so a value cannot survive from one run into the next.
     const tokens = mintTokens(scenario.tokens ?? []);
-    const scoped = scenario.tokens?.length ? substituteTokens(scenario, tokens) : scenario;
+    const scoped = Object.keys(tokens).length ? substituteTokens(scenario, tokens) : scenario;
 
     const outcome = await runOnce(scoped, options);
     const checks = await grade(scoped, outcome, { judge });
@@ -127,7 +127,7 @@ async function main(): Promise<void> {
       : pass
         ? withoutRequests(outcome)
         : trimRequests(outcome);
-    runs.push({ pass, checks, outcome: stored, ...(scenario.tokens?.length ? { tokens } : {}) });
+    runs.push({ pass, checks, outcome: stored, ...(Object.keys(tokens).length ? { tokens } : {}) });
   }
 
   const result: ScenarioResult = {

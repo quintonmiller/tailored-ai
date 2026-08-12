@@ -14,7 +14,7 @@ import { join } from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
 import { MAX_DIFFICULTY, MIN_DIFFICULTY, parseDifficultyFilter } from "./difficulty.js";
-import { referencedTokens } from "./tokens.js";
+import { declaredTokenNames, referencedTokens } from "./tokens.js";
 import type { Scenario } from "./types.js";
 
 const roomLine = z
@@ -151,9 +151,13 @@ const scenario = z
     rooms: z.array(roomSpec).optional(),
     wake: z.union([wakeStep, z.array(wakeStep).nonempty()]).optional(),
     message: z.string().optional(),
+    // A list means every witness is a `code`; a map names each one's shape, so
+    // a row count stays a number and a person stays a person.
     tokens: z
-      .array(z.string().regex(/^[A-Za-z0-9_-]+$/))
-      .nonempty()
+      .union([
+        z.array(z.string().regex(/^[A-Za-z0-9_-]+$/)).nonempty(),
+        z.record(z.string().regex(/^[A-Za-z0-9_-]+$/), z.enum(["code", "number", "name"])),
+      ])
       .optional(),
     toolResults: z
       .record(
@@ -194,20 +198,20 @@ const scenario = z
     // witness that never matches — which fails a correct agent and reads as a
     // capability gap. The substituter leaves unknown names alone rather than
     // blanking them, so this is what turns that into an error anyone can see.
-    const declared = new Set(value.tokens ?? []);
+    const declared = new Set(declaredTokenNames(value.tokens));
     for (const name of referencedTokens({ ...value, tokens: undefined })) {
       if (!declared.has(name)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message:
-            `references {{token:${name}}}, which is not in this scenario's tokens: [${(value.tokens ?? []).join(", ")}] — ` +
+            `references {{token:${name}}}, which is not in this scenario's tokens: [${declaredTokenNames(value.tokens).join(", ")}] — ` +
             "it would be left as literal text and the assertion could never match",
         });
       }
     }
     if (value.tokens) {
       const used = new Set(referencedTokens({ ...value, tokens: undefined }));
-      for (const name of value.tokens) {
+      for (const name of declaredTokenNames(value.tokens)) {
         if (!used.has(name)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,

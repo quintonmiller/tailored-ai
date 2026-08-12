@@ -28,6 +28,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { grade } from "../graders.js";
 import { loadScenarios } from "../schema.js";
+import { declaredTokenNames, mintTokens, substituteTokens } from "../tokens.js";
 import type { Assertion, RunOutcome, Scenario } from "../types.js";
 
 const scenarioDir = join(dirname(fileURLToPath(import.meta.url)), "../../scenarios");
@@ -81,6 +82,34 @@ describe("every scenario rejects a degenerate outcome", () => {
   it("covers most of the set (prompt-shape rows are legitimately exempt)", () => {
     expect(graded.length).toBeGreaterThan(scenarios.length * 0.6);
   });
+
+  // A witness scenario has a property the others cannot: there is a specific
+  // string the reply must carry, and it was minted for this run. So a reply that
+  // is *plausible but carries no witness* has to fail — that is the whole reason
+  // for minting one. Checked offline, against a value from a different mint,
+  // which is exactly what a confabulating agent would produce.
+  //
+  // This is the only part of a witness conversion that can be verified without a
+  // model: it proves the assertion is bound to the witness. Whether the model
+  // can satisfy it is a separate question, and needs a run.
+  for (const scenario of scenarios.filter((s) => declaredTokenNames(s.tokens).length > 0)) {
+    it(`${scenario.id} — its assertions are bound to the witness, not to a guessable value`, async () => {
+      const mine = mintTokens(scenario.tokens ?? []);
+      const scoped = substituteTokens(scenario, mine);
+      const foreign = Object.values(mintTokens(scenario.tokens ?? [])).join(" ");
+
+      const checks = await grade({ ...scoped, expect: behaviourAssertions(scoped) } as Scenario, outcome(foreign), {
+        judge: rejectingJudge,
+      });
+
+      expect(
+        checks.every((c) => c.pass),
+        `"${scenario.id}" accepts a reply carrying witness values from a different run. ` +
+          "Its assertions still match something guessable, so the witness is decoration — " +
+          "check that every reply assertion references {{token:...}}.",
+      ).toBe(false);
+    });
+  }
 
   for (const scenario of graded) {
     // A scenario may declare that silence is the right answer — an

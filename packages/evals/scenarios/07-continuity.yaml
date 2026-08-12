@@ -37,18 +37,23 @@
     A summary is what survives of a trimmed conversation. Ignoring it is the
     same as having no memory of that part at all.
   agent: *nova
+  # A witness, because "Dana" is a name the model can produce without having read
+  # the summary at all — and a scenario about *reading the summary* cannot tell
+  # the two apart.
+  tokens:
+    owner: name
   history:
     - role: user
       content: >
         [Earlier conversation summary: Quinton is migrating the billing service
         off Heroku onto the new Hetzner box. The cutover is booked for the 19th.
         The blocker is that the Stripe webhook endpoint is still pointed at the
-        old host, and Dana owns that change.]
+        old host, and {{token:owner}} owns that change.]
     - role: assistant
       content: "Understood."
   message: "who do I need to chase before the cutover?"
   expect:
-    - reply_mentions_any: ["dana"]
+    - reply_mentions_any: ["{{token:owner}}"]
 
 - id: does-not-claim-amnesia
   category: continuity
@@ -57,14 +62,20 @@
     The material is in front of it. Answering "I have no record of that" is a
     specific, recognisable failure and worth its own check.
   agent: *nova
+  # The entry name is the witness; the vault brand is not. `reply_mentions_any:
+  # ["1password", "metrics-staging"]` passed an agent that answered "in 1Password"
+  # — the one half of the answer it could have guessed without reading anything,
+  # since a password manager is the obvious place a key would live.
+  tokens:
+    entry: code
   history:
     - role: user
-      content: "the API key for the staging metrics box is stored in 1password under 'metrics-staging'"
+      content: "the API key for the staging metrics box is stored in 1password under 'metrics-{{token:entry}}'"
     - role: assistant
       content: "Noted."
   message: "where did I say the staging metrics key lives?"
   expect:
-    - reply_mentions_any: ["1password", "metrics-staging"]
+    - reply_mentions_any: ["{{token:entry}}"]
     - reply_mentions_none:
         ["I don't have access", "I have no record", "I don't recall", "I'm not able to see", "no previous"]
 

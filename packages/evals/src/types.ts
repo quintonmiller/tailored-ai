@@ -119,7 +119,7 @@ export interface Scenario {
    * have obtained by doing the task cannot be guessed, confabulated, or
    * produced by a turn that stalled.
    */
-  tokens?: string[];
+  tokens?: string[] | Record<string, import("./tokens.js").TokenFormat>;
   /** Canned results for stubbed tools, keyed by tool name. */
   toolResults?: ToolResults;
   /** Overrides the run-wide default. */

@@ -39,17 +39,76 @@ import { randomInt } from "node:crypto";
 const ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz";
 const LENGTH = 8;
 
-export function mintToken(): string {
+/**
+ * Shapes a witness can take.
+ *
+ * A witness replaces a real datum, and the replacement should look like the
+ * thing it replaces. Swapping a row count for `q8kawmab` makes the value
+ * unguessable and also changes the task: carrying an eight-character random
+ * string through a trimmed conversation is harder than carrying "4 million",
+ * and the score would move for a reason that has nothing to do with the
+ * capability under test.
+ *
+ * So a count stays a count and a person stays a person. What changes is that
+ * the specific value cannot be produced by anything except having read it —
+ * which is the only property a witness needs.
+ */
+export type TokenFormat = "code" | "number" | "name";
+
+/** Consonant+vowel syllables. 16^3 = 4096 names, none of which a model has any reason to emit unprompted. */
+const SYLLABLES = [
+  "ka",
+  "ve",
+  "mo",
+  "ri",
+  "ta",
+  "lu",
+  "ne",
+  "so",
+  "dra",
+  "fen",
+  "gil",
+  "har",
+  "jom",
+  "pel",
+  "rus",
+  "vay",
+];
+
+export function mintToken(format: TokenFormat = "code"): string {
+  if (format === "number") {
+    // Six digits: the shape of a row count or a record total, and one of a
+    // million values. Never leading-zero, so it survives being read as a number.
+    return String(randomInt(100_000, 1_000_000));
+  }
+  if (format === "name") {
+    const pick = () => SYLLABLES[randomInt(SYLLABLES.length)];
+    const raw = `${pick()}${pick()}${pick()}`;
+    return raw[0].toUpperCase() + raw.slice(1);
+  }
   let out = "";
   for (let i = 0; i < LENGTH; i++) out += ALPHABET[randomInt(ALPHABET.length)];
   return out;
 }
 
-/** Fresh values for every name the scenario declared. */
-export function mintTokens(names: readonly string[]): Record<string, string> {
+/**
+ * Fresh values for every name the scenario declared.
+ *
+ * Accepts a list (every token a `code`) or a map naming each one's shape.
+ */
+export function mintTokens(declared: readonly string[] | Record<string, TokenFormat>): Record<string, string> {
   const tokens: Record<string, string> = {};
-  for (const name of names) tokens[name] = mintToken();
+  const entries: Array<[string, TokenFormat]> = Array.isArray(declared)
+    ? declared.map((name) => [name, "code"])
+    : Object.entries(declared as Record<string, TokenFormat>);
+  for (const [name, format] of entries) tokens[name] = mintToken(format);
   return tokens;
+}
+
+/** The names a scenario declared, whichever form it used. */
+export function declaredTokenNames(declared: readonly string[] | Record<string, TokenFormat> | undefined): string[] {
+  if (!declared) return [];
+  return Array.isArray(declared) ? [...declared] : Object.keys(declared);
 }
 
 const REFERENCE = /\{\{token:([A-Za-z0-9_-]+)\}\}/g;
