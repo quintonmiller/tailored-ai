@@ -132,7 +132,7 @@ its score pairs one commit's questions with another commit's answers.
 
 ## Difficulty, and why the overall score cannot answer "where does this stop working"
 
-Every scenario carries a required `difficulty`, 1-5. It is a claim about what
+Every scenario carries a required `difficulty`, 1-7. It is a claim about what
 the turn **demands**, never about what it currently scores — grading by observed
 pass rate would make the scale circular, because every fix would relabel the
 scenario and "we handle the hard ones now" would be true by construction.
@@ -143,7 +143,28 @@ scenario and "we handle the hard ones now" would be true by construction.
 | 2 | routine | A single judgement among near neighbours — which of these tools, whether to speak at all. |
 | 3 | composed | Two or more constraints have to hold at once, or a fact has to survive a step to be used in the next. |
 | 4 | conflicting | The signals disagree and one has to win, or the right answer is partly a refusal. |
-| 5 | frontier | Written at or past the expected ceiling: multi-hop over a long history, a real dependency between agents. |
+| 5 | frontier | Multi-hop over a long history, or a real dependency between agents: B's turn needs what A found. |
+| 6 | compound | Several independent demands in one turn, each enough to fail it alone — a chain that must end in a refusal, a handoff carrying a fact that was withdrawn. |
+| 7 | misleading | The most authoritative thing present is wrong, and being right means going against it — or saying it cannot be known, while a plausible answer sits in reach. |
+
+### A tier nobody fails is a tier written too close in
+
+The scale ran to five until the top of it stopped being the top. On the
+2026-08-12 cohort level 5 scored **83%** and level 4 scored **69%** — the
+hardest tier was easier than the one below it, and seven of the ten level-5
+scenarios passed every run.
+
+The correct reading is not that the model cleared the frontier. It is that a
+scale whose last rung is cleared has no ceiling in view, so it can report that
+things are fine and cannot report where they stop. **90% at the top is the same
+message as 100%, said more quietly.** What a healthy set looks like is a slope
+that reaches zero: the tier you always fail is the one that tells you what to
+build.
+
+So the fix was never to relabel the rows that pass — that is the circularity
+above. It was that the scale was missing kinds of demand, and levels 6 and 7
+name two of them. New scenarios written against those levels live in
+`scenarios/16-ceiling.yaml`, whose header records what they are for.
 
 The benchmark grew by addition, and the overall score averages a regression
 tripwire against a scenario written to find the model's ceiling. That average
@@ -156,6 +177,8 @@ where the wall is. The difficulty rollup can:
   3 composed     ███████████████████░  96%  50/52
   4 conflicting  ███████████████░░░░░  76%  32/42
   5 frontier     ████████░░░░░░░░░░░░  42%  10/24
+  6 compound     █████░░░░░░░░░░░░░░░  25%   3/12
+  7 misleading   ░░░░░░░░░░░░░░░░░░░░   0%   0/12
 ```
 
 Category tells you which subsystem is weak; difficulty tells you whether the
@@ -165,7 +188,7 @@ finding with a different fix.
 `--difficulty` takes `4`, `4+`, `2-3` or `3,5`, and composes with `--filter`:
 
 ```bash
-pnpm run eval -- --target qwen-local --difficulty 5          # the frontier only
+pnpm run eval -- --target qwen-local --difficulty 6+         # the ceiling only
 pnpm run eval -- --target qwen-local --difficulty 4+ --filter long-session
 ```
 

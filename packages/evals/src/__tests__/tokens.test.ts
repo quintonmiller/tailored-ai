@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mintToken, mintTokens, referencedTokens, substituteTokens } from "../tokens.js";
+import { mintToken, mintTokens, referencedTokens, substituteTokens, witnessCollides } from "../tokens.js";
 
 describe("witness tokens", () => {
   it("mints values a model cannot plausibly emit by chance", () => {
@@ -70,5 +70,31 @@ describe("witness formats survive being reported back", () => {
       const t = mintTokens({ a: "day", b: "day" });
       expect(t.a).not.toBe(t.b);
     }
+  });
+
+  it("mints values neither of which contains the other", () => {
+    // Distinct is not enough, because every reply assertion is a substring
+    // match. `3rd` and `23rd` are two different days that one assertion cannot
+    // tell apart: an agent answering `23rd` correctly also "mentions" `3rd`, and
+    // the scenario that forbids the withdrawn date fails it. Fourteen of the 756
+    // ordered day-pairs are containments, so this fired on roughly 2% of runs of
+    // any scenario carrying two of them — always in the direction that invents a
+    // capability gap.
+    for (let i = 0; i < 400; i++) {
+      const t = mintTokens({ a: "day", b: "day" });
+      expect(t.a.includes(t.b), `${t.a} contains ${t.b}`).toBe(false);
+      expect(t.b.includes(t.a), `${t.b} contains ${t.a}`).toBe(false);
+    }
+  });
+
+  it("knows a containment is a collision, not just an equality", () => {
+    expect(witnessCollides("3rd", ["23rd"])).toBe(true);
+    expect(witnessCollides("23rd", ["3rd"])).toBe(true);
+    expect(witnessCollides("1st", ["21st"])).toBe(true);
+    expect(witnessCollides("4th", ["24th", "14th"])).toBe(true);
+    // Case-insensitive, because the assertions are.
+    expect(witnessCollides("Kavemo", ["kavemori"])).toBe(true);
+    expect(witnessCollides("11th", ["1st", "23rd"])).toBe(false);
+    expect(witnessCollides("abcdefgh", [])).toBe(false);
   });
 });

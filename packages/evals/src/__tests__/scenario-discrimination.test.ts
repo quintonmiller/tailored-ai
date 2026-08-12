@@ -28,7 +28,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { grade } from "../graders.js";
 import { loadScenarios } from "../schema.js";
-import { declaredTokenNames, mintTokens, substituteTokens } from "../tokens.js";
+import { declaredTokenNames, mintToken, mintTokens, substituteTokens, witnessCollides } from "../tokens.js";
 import type { Assertion, RunOutcome, Scenario } from "../types.js";
 
 const scenarioDir = join(dirname(fileURLToPath(import.meta.url)), "../../scenarios");
@@ -113,7 +113,33 @@ describe("every scenario rejects a degenerate outcome", () => {
     it(`${scenario.id} — its assertions are bound to the witness, not to a guessable value`, async () => {
       const mine = mintTokens(scenario.tokens ?? []);
       const scoped = substituteTokens(scenario, mine);
-      const foreign = Object.values(mintTokens(scenario.tokens ?? [])).join(" ");
+      // Values from a different run — which is what a confabulating agent
+      // produces, and what must not satisfy the assertions.
+      //
+      // Re-minted until no foreign value could be mistaken for any of `mine` —
+      // by the same non-containment rule a single run mints under, and against
+      // the whole set rather than each token's counterpart.
+      //
+      // Both halves of that were learned here. `does-not-answer-from-a-
+      // superseded-fact` carries two `day` witnesses and asserts "mentions the
+      // new date" and "does not mention the withdrawn one", so the foreign reply
+      // only has to contain `mine.newdate` *anywhere* to satisfy the first: a
+      // cross-token collision, twice as likely as the same-token one. And `3rd`
+      // is a substring of `23rd`, so even distinct values collide under a
+      // substring assertion. Together they failed this suite on a healthy
+      // scenario about one run in eight — the shape of flake that teaches
+      // everyone to re-run instead of read.
+      const ours = new Set(Object.values(mine));
+      const theirs = Object.keys(mine).map((name) => {
+        const format = Array.isArray(scenario.tokens) ? "code" : (scenario.tokens?.[name] ?? "code");
+        let value = mintToken(format);
+        // Bounded, and giving up is safe: a format with fewer usable values than
+        // the scenario has tokens degrades this check to matching nothing rather
+        // than hanging.
+        for (let attempt = 0; attempt < 50 && witnessCollides(value, ours); attempt++) value = mintToken(format);
+        return value;
+      });
+      const foreign = theirs.join(" ");
 
       const checks = await grade({ ...scoped, expect: behaviourAssertions(scoped) } as Scenario, outcome(foreign), {
         judge: rejectingJudge,

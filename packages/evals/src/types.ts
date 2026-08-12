@@ -64,7 +64,7 @@ export interface Scenario {
   /** Why this scenario exists — printed next to a failure. */
   intent: string;
   /**
-   * How hard the turn is, 1-5. Required, because the alternative is a scenario
+   * How hard the turn is, 1-7. Required, because the alternative is a scenario
    * that no `--difficulty` run ever selects and nobody notices — the same
    * silent-gap failure the strict schema exists to prevent.
    *

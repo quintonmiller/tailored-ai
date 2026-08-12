@@ -15,8 +15,20 @@
  */
 
 /**
- * The scale. Five levels, each defined by the kind of work the turn requires,
+ * The scale. Seven levels, each defined by the kind of work the turn requires,
  * so two people grading the same scenario land in the same place.
+ *
+ * It ran to five until the top of it stopped being the top. On the 2026-08-12
+ * cohort level 5 scored **83%** and level 4 scored **69%** — the hardest tier
+ * was easier than the one below it, and seven of the ten level-5 scenarios
+ * passed every run. A scale whose last rung is cleared is not measuring a
+ * ceiling; it is measuring a floor and calling it a ceiling, and it cannot
+ * answer the one question it exists for.
+ *
+ * The fix is not to relabel the rows that pass — that is the circularity this
+ * file was written to avoid. It is that the scale was missing kinds of demand.
+ * Levels 6 and 7 name two the first five never described: several independent
+ * demands in one turn, and a turn whose loudest signal is wrong.
  */
 export const DIFFICULTY_LEVELS: Record<number, { name: string; blurb: string }> = {
   1: {
@@ -37,12 +49,22 @@ export const DIFFICULTY_LEVELS: Record<number, { name: string; blurb: string }> 
   },
   5: {
     name: "frontier",
-    blurb: "Written at or past the expected ceiling: multi-hop over a long history, a real dependency between agents.",
+    blurb: "Multi-hop over a long history, or a real dependency between agents: B's turn needs what A found.",
+  },
+  6: {
+    name: "compound",
+    blurb:
+      "Several independent demands in one turn, each enough to fail it alone — a chain that must end in a refusal, a handoff carrying a fact that was withdrawn.",
+  },
+  7: {
+    name: "misleading",
+    blurb:
+      "The most authoritative thing present is wrong, and being right means going against it — or saying it cannot be known, while a plausible answer sits in reach.",
   },
 };
 
 export const MIN_DIFFICULTY = 1;
-export const MAX_DIFFICULTY = 5;
+export const MAX_DIFFICULTY = 7;
 
 /** `3 composed` — the number is what filters, the name is what a reader uses. */
 export function describeDifficulty(level: number): string {
