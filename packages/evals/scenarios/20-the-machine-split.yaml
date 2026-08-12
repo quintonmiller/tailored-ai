@@ -52,10 +52,14 @@
     the transcript doubles in size for no benefit; or the south half invents
     the frequency, which the machinery refuses and the routing trace shows as
     a fact that never left the north room.
-  knownGap: >
-    Unmeasured at the time of writing. Kept alongside `the-machine` rather than
-    replacing it: the pair is the measurement, because the only difference
-    between them is the shape of the communication graph.
+
+    Solved on the first clean run, and the route is worth recording because it
+    was not the one anticipated. Delta did not passively carry what it happened
+    to hear: on turn 31 it ran `room(action=list)`, saw it was subscribed to
+    both channels, ran `room(action=read, room=north)` to fetch the transcript
+    of the one it was not in, and relayed both crossing facts into the south
+    channel addressed to the agents who needed them. The bridge was built out
+    of the real room tool, not out of anything the scenario provided.
   tokens:
     alignkey: code
     sequence: code

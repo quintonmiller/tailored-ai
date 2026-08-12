@@ -64,10 +64,6 @@
     reads as "could not activate the machine". Graded on `facts:` it reads as
     "the harmonic key was found on turn 2 and never left the archive", which is
     a different defect with a different fix.
-  knownGap: >
-    Never solved. Kept red on purpose: this is the wall, and the milestone
-    ladder is the measurement. A green row here would mean the scenario had been
-    made easier, not that the framework had improved.
   tokens:
     alignkey: code
     sequence: code
