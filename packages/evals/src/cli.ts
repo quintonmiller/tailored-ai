@@ -22,7 +22,7 @@ import { describeDifficulty } from "./difficulty.js";
 import { grade } from "./graders.js";
 import type { HarnessOptions } from "./harness.js";
 import { PAYLOAD_FILENAME, readWorkerResult } from "./protocol.js";
-import { printScenario, printSummary, score, verdict } from "./report.js";
+import { printScenario, printStalls, printSummary, score, verdict } from "./report.js";
 import { loadScenarios } from "./schema.js";
 import { substituteTokens } from "./tokens.js";
 import type { BenchmarkReport, CheckResult, RunOutcome, Scenario, ScenarioResult } from "./types.js";
@@ -521,6 +521,10 @@ async function cmdRegrade(argv: string[]): Promise<number> {
     );
   }
   console.log(moved.length ? `\n  moved:\n${moved.join("\n")}` : "\n  nothing moved");
+  console.log("");
+  // "Were those failures stalls or wrong answers?" is a question about a report
+  // that already exists, and it should not cost a model run to answer.
+  printStalls(out);
   console.log(`\n  ${(report.score.overall * 100).toFixed(1)}% → ${(out.score.overall * 100).toFixed(1)}%  overall\n`);
 
   if (outFlag !== -1 && argv[outFlag + 1]) {

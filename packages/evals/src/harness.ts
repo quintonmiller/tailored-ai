@@ -35,6 +35,7 @@ import {
   findOrCreateSession,
   formatRoomRef,
   initDatabase,
+  isStallStop,
   LocalRoomBackend,
   type LoopStop,
   loadConfig,
@@ -684,6 +685,22 @@ async function runChatScenario(
 }
 
 /**
+ * One stop for a run that may have taken several turns.
+ *
+ * The first stall if there was one, otherwise the last turn's ending. A
+ * coordination scenario where the first agent gets stuck and the second answers
+ * cleanly is a run that went wrong, and reporting the second agent's tidy
+ * ending would say the opposite — which is the direction that hides things, so
+ * it is the direction to rule out.
+ *
+ * Exported for the test rather than inlined: this is the only judgement call in
+ * the room path's stop reporting, and everything around it is plumbing.
+ */
+export function stopForRun(stops: readonly LoopStop[]): LoopStop | undefined {
+  return stops.find(isStallStop) ?? stops[stops.length - 1];
+}
+
+/**
  * The turns a scenario runs, normalised.
  *
  * A bare object and a one-entry list mean the same thing; `agent` defaults to
@@ -711,7 +728,7 @@ async function runRoomScenario(
   db: import("better-sqlite3").Database,
   agentName: string,
   opts: HarnessOptions,
-): Promise<Pick<RunOutcome, "reply" | "posts">> {
+): Promise<Pick<RunOutcome, "reply" | "posts" | "stop">> {
   const store = runtime.getRoomStore();
   const backend = new LocalRoomBackend(db, store);
 
@@ -791,6 +808,24 @@ async function runRoomScenario(
   // cannot produce a cascade, a silence where everybody deferred, or a handoff.
   const watcher = new RoomWatcher({ runtime, store });
   const replies: Array<{ agent: string; reply: string }> = [];
+
+  // Why each turn ended.
+  //
+  // A room turn's return value cannot carry this: `pollOnce` and `runCheckIn`
+  // return void, and the FIFO chain they run through (`onRoomTurn`) has no
+  // channel to thread a value back along. So the watcher reports it on the bus
+  // and we listen — which is also how a production subscriber would learn it,
+  // rather than a hook that exists only for the benchmark.
+  //
+  // Until this landed, every room run recorded `stop: undefined` — 56% of a
+  // 237-run cohort — and the grader fell back to matching `[Agent stopped: …]`
+  // in the reply, which matched none of the 12 stalls in that cohort. The room
+  // path had no stall detection at all; it had a regex that had never fired.
+  const stops: LoopStop[] = [];
+  const listening = runtime.events?.on("room.turn_ended", (e) => {
+    if (e.stop) stops.push(e.stop);
+  });
+
   try {
     for (const step of steps) {
       const ref = refs.get(step.room);
@@ -800,6 +835,7 @@ async function runRoomScenario(
       replies.push({ agent: step.agent, reply: typeof reply === "string" ? reply : "" });
     }
   } finally {
+    listening?.dispose();
     watcher.stop();
   }
 
@@ -822,7 +858,7 @@ async function runRoomScenario(
   // `reply` stays every body joined, so single-agent scenarios and every reply
   // assertion behave exactly as before. A multi-agent scenario that needs to
   // separate them asks about `posts`.
-  return { reply: posts.map((p) => p.body).join("\n"), posts };
+  return { reply: posts.map((p) => p.body).join("\n"), posts, stop: stopForRun(stops) };
 }
 
 /** `local:<id>` → `<id>`, which is what the backend's own methods take. */

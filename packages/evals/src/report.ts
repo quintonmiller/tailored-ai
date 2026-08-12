@@ -7,6 +7,7 @@
  * a model getting less reliable.
  */
 
+import { isStallStop } from "@tailored-ai/core";
 import { formatUsd, noCostReason, totalUsage, usdOf } from "./cost.js";
 import { describeDifficulty } from "./difficulty.js";
 import { EFFORT_LABELS, formatMs, summariseScenarios } from "./efficiency.js";
@@ -134,6 +135,69 @@ export function printScenario(scenario: ScenarioResult): void {
   }
 }
 
+/**
+ * Runs that ended because the agent got stuck, and runs that never said.
+ *
+ * A stall and a wrong answer score the same and mean opposite things — one is
+ * the model not knowing, the other is the loop giving up — and the report could
+ * not tell them apart, so every stalled run was read as a capability gap. That
+ * is the whole reason the structured stop exists; not printing it wastes it.
+ *
+ * `unrecorded` is the regression signal. It was 56% of runs when the room path
+ * reported nothing, and should now be zero: anything above it means a path
+ * ended a turn without saying how.
+ */
+function stallsOf(report: BenchmarkReport): {
+  stalled: Array<{ id: string; kind: string }>;
+  unrecorded: number;
+  runs: number;
+} {
+  const stalled: Array<{ id: string; kind: string }> = [];
+  let unrecorded = 0;
+  let runs = 0;
+  for (const scenario of report.scenarios) {
+    for (const run of scenario.runs) {
+      runs++;
+      const stop = run.outcome?.stop;
+      // A run that threw never reached a loop, so it has nothing to report and
+      // is not evidence of a path that stays quiet.
+      if (!stop) {
+        if (!run.outcome?.error) unrecorded++;
+        continue;
+      }
+      if (isStallStop(stop)) stalled.push({ id: scenario.id, kind: stop.kind });
+    }
+  }
+  return { stalled, unrecorded, runs };
+}
+
+/**
+ * How many runs got stuck, and where.
+ *
+ * Printed by `regrade` as well as by a live run, because "were those failures
+ * stalls or wrong answers?" is a question about a report you already have, and
+ * answering it should not cost a model. Silent when there is nothing to say, so
+ * a clean run stays clean.
+ */
+export function printStalls(report: BenchmarkReport): void {
+  const { stalled, unrecorded, runs } = stallsOf(report);
+  if (stalled.length) {
+    // Named, because "3 runs stalled" sends you looking and "3 runs stalled, in
+    // these scenarios" is the answer. Capped, then counted: a run where half the
+    // set gets stuck should not push the score off the screen.
+    const shown = [...new Set(stalled.map((s) => `${s.id} (${s.kind})`))];
+    const rest = shown.length > 3 ? `, +${shown.length - 3} more` : "";
+    console.log(
+      `  ${colour("stalled", YELLOW)}    ${stalled.length} of ${runs} runs   ${colour(`${shown.slice(0, 3).join(", ")}${rest}`, DIM)}`,
+    );
+  }
+  if (unrecorded) {
+    console.log(
+      `  ${colour("no stop", YELLOW)}    ${unrecorded} of ${runs} runs did not report why the turn ended   ${colour("(a stall there is invisible)", DIM)}`,
+    );
+  }
+}
+
 export function printSummary(report: BenchmarkReport): void {
   const { score: s, meta } = report;
   console.log("");
@@ -171,6 +235,8 @@ export function printSummary(report: BenchmarkReport): void {
       `  per run    ${pair("rounds")} · ${pair("toolCalls")} · ${pair("latencyMs")}   ${colour("(median)", DIM)}`,
     );
   }
+
+  printStalls(report);
   console.log("");
 
   const names = Object.keys(s.byCategory).sort();

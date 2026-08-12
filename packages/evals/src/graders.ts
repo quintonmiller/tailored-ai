@@ -233,14 +233,21 @@ async function gradeOne(
     // A stall is not an answer. `length > 0` accepted `[Agent stopped: …]` —
     // two of them scored as passes on a 12-run baseline — and accepts the more
     // common case too, where a turn that ran out of rounds returns ordinary
-    // prose. The structured stop catches both; the marker text catches only the
-    // first, and only on paths that still emit it.
-    const stalled = outcome.stop ? isStallStop(outcome.stop) : /^\[Agent stopped: /.test(reply.trim());
+    // prose.
+    //
+    // Structural only. There used to be a fallback here that matched the marker
+    // text when no stop was recorded, and it looked like coverage for the 56%
+    // of runs that had none: measured on the 237-run cohort, all 12 stalls came
+    // back as prose and not one carried a marker. A check that has never fired
+    // is not a safety net, it is a reason not to go looking for the real one.
+    // Room turns now report their stop, so the absent case is an old report —
+    // and an absent input is graded as unknown, never as "did not stall".
+    const stalled = outcome.stop !== undefined && isStallStop(outcome.stop);
     // Checked before the true/false split, so a stall fails either way. Silence
     // and a stall look identical downstream and are opposites: `replies: false`
     // asserts the agent *chose* not to speak, and a turn that went in circles
     // until the detector fired made no such choice.
-    if (stalled) return no("replies", `the turn stalled (${outcome.stop?.kind ?? "stop marker"})`);
+    if (stalled) return no("replies", `the turn stalled (${outcome.stop?.kind})`);
     const replied = reply.trim().length > 0;
     if (replied === assertion.replies) return ok("replies");
     return no("replies", assertion.replies ? "said nothing" : `expected silence, said "${trim(reply)}"`);

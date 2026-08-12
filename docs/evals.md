@@ -216,11 +216,42 @@ declining is correct and silence is what declining looks like. `prompt_*`
 negatives are exempt; they are properties of the assembled request, and an
 empty reply cannot satisfy them.
 
-Nothing enforces this yet — [#472] proposes a load-time check.
+`scenario-discrimination.test.ts` enforces it by construction rather than by
+review: it replays every scenario's assertions against outcomes that are known
+bad, and fails the build if any of them accepts one. Reading assertions and
+concluding they look right is the step that kept failing, so it is the step that
+was removed.
+
+### A stall is not an answer either
+
+The degenerate outcome that reading cannot catch. A turn that runs out of rounds
+gets one tools-withheld call so it can say what happened, so **a stalled turn
+comes back as ordinary prose.** On the 2026-08-12 cohort, all 12 stalls returned
+prose and not one carried an `[Agent stopped: …]` marker. Any check matching
+that string is matching nothing.
+
+So the stall is read off the loop's structured `LoopStop`, never off the text.
+The chat path takes it from `onStop`. The room path listens for
+`room.turn_ended` ([rooms](./rooms.md#seeing-when-a-turn-got-stuck)), because
+`pollOnce` returns void and the FIFO chain behind it has nowhere to thread a
+value back. Before [#521] the room path recorded nothing at all — 132 of 240
+runs — and the marker regex standing in for it had never once fired.
+
+The summary says so directly, on a live run and on a `regrade`:
+
+```
+  stalled    10 of 240 runs   says-when-the-front-of-the-conversation-is-gone (repeated-calls), …
+  no stop    132 of 240 runs did not report why the turn ended   (a stall there is invisible)
+```
+
+The second line is the regression signal, and it should read zero. Anything
+above that is a path ending turns without saying how, which is where the last
+one hid for months.
 
 [#470]: https://github.com/quintonmiller/tailored-ai/pull/470
 [#472]: https://github.com/quintonmiller/tailored-ai/issues/472
 [#478]: https://github.com/quintonmiller/tailored-ai/issues/478
+[#521]: https://github.com/quintonmiller/tailored-ai/issues/521
 
 ## The failure that shaped the harness
 
