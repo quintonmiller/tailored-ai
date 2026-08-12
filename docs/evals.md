@@ -369,6 +369,136 @@ number would be measuring an agent nobody runs.
 [#528]: https://github.com/quintonmiller/tailored-ai/issues/528
 [#529]: https://github.com/quintonmiller/tailored-ai/issues/529
 
+## Grading a system rather than an agent
+
+Everything above measures one agent taking one turn. `19-the-machine.yaml` is the
+other end: six specialists, a fifteen-step dependency graph, and five facts that
+have to travel between five different pairs of them. Four seams exist for it, and
+each replaces something a scenario previously had to fake.
+
+### Instruments, not `exec` with a magic string
+
+A scenario can declare tools that exist only inside it:
+
+```yaml
+tools:
+  - name: rotate_ring
+    description: Turn the observatory rings to a configuration and try to lock them.
+    params: { key: The harmonic key., sequence: The ring sequence to set. }
+```
+
+They look exactly like real tools to the model — same name shape, same one-line
+description, same JSON schema — and there is nothing behind them: the `world:`
+or `toolResults` answers every call. An agent's `tools:` allowlist decides who
+holds which, which is what makes a specialist a specialist. Before this, a
+specialist's instrument had to be `exec` with a command string the world matched
+on a regex, and the scenario ended up measuring whether the model could reproduce
+an invented CLI.
+
+### A roster instead of a list of turns
+
+```yaml
+wake: { room: expedition, rounds: 8, agents: [atlas, boron, cipher, delta, echo, flux] }
+```
+
+The length of a hand-written `wake:` list turned out to be a hidden parameter of
+the measurement. The first lead-and-specialists scenario gave four turns and
+every run died the same way — the lead worked out who had to unlock the hatch and
+the scenario ended before anyone could. It was measuring the wake list.
+
+`rounds` is a **ceiling**. The run stops after a pass in which nobody spoke and
+nothing in the machinery moved, not even a refusal, so a scenario can be generous
+without paying for it on a team that finishes or jams. A team hammering a locked
+door counts as activity, which is the state most worth watching.
+
+### Milestones — a curve instead of a bit
+
+A fifteen-step graph reports one bit, and that bit is `false` for a team that
+gets thirteen steps in. Which cannot distinguish that team from one that sat
+still, and cannot show a change that moved the team from step four to step
+eleven.
+
+```yaml
+milestones:
+  - { id: alignment_locked, points: 10, when: { world_state: { alignment: locked } } }
+  - { id: frequency_routed, points: 6, when: { fact_reaches: { fact: reactor_frequency, stage: used } } }
+expect:
+  - score_at_least: 0.5
+```
+
+A milestone's `when` is an **ordinary assertion**, so every grader is available
+without a second predicate language. Points are relative weights and
+`score_at_least` is a fraction of their total, so a scenario is free to sum to
+whatever it likes. The report prints the ladder under a failing row.
+
+**Use `world_reached`, not `world_state`, for any step but the last.**
+`world_state` is a claim about the *final* world, so a team that fabricates a
+part and then installs it leaves `part: installed` and scores the fabrication
+step as skipped. That is not hypothetical — it is what the first live run of
+`the-machine` reported, and it reads as a step the team missed rather than one it
+completed. `world_reached` is read off the transitions, so it is still a claim
+about the machinery and never about the transcript.
+
+A skipped check — the absent-input rule the rest of the graders follow — counts
+as **not reached**, never as reached. Otherwise an old report with a field
+stripped would score full marks on every world milestone and render the
+regression as an improvement.
+
+### Facts — where the information stopped
+
+The measurement this package was missing, and the one that stops being optional
+the moment individual tool use is reliable. A team can discover every fact it
+needs and still fail, and every instrument above reports that as "the team could
+not activate the machine".
+
+```yaml
+facts:
+  align_key: { value: "{{token:alignkey}}", discoverableBy: [cipher], requiredBy: [atlas] }
+```
+
+Four stages, each strictly harder than the last, all of them substring matches on
+a value minted for the run:
+
+| stage | means |
+|---|---|
+| `discovered` | a tool result contained it |
+| `shared` | a post contained it |
+| `received` | an agent that needed it took a turn after it was posted |
+| `used` | that agent passed it to a tool |
+
+`received` deliberately claims only that the value was in front of the agent, not
+that the agent read it — the honest ceiling of what a transcript shows. The gap
+either side of it is the useful part: **shared but not received is a delivery
+problem; received but not used is an attention problem**, and those want opposite
+fixes. Nothing else here can tell them apart.
+
+`used` ignores the discoverer feeding its own result back into its own next call.
+Transport is the measurement, and counting that would make every single-agent
+scenario report perfect routing.
+
+### Membership — the difference between routing and broadcasting
+
+`rooms[].members` names who is subscribed; without it a room holds everyone who
+takes a turn. That default is what `the-machine` runs on today, and it is the
+single biggest thing making it easier than it looks: with one shared room, "get
+this fact to the agent who needs it" is satisfied by saying it out loud, and a
+team can score full marks on routing without ever having decided where anything
+should go.
+
+Two rooms with different membership force a **relay** — a fact has to be carried
+by whoever sits in both, and choosing that agent is the decision the measurement
+is after. The caveat is mechanical and easy to trip over: a poll delivers what is
+unread, so a room whose occupants have nothing new never wakes anybody at all.
+
+### What is not modelled
+
+Two things the design behind this scenario wanted and the seams cannot express.
+A **synchronisation window** — three agents acting inside three ticks — needs a
+clock the world does not have, so no state can decay. A **channel-choice
+protocol** — an authorisation code invalidated by being posted publicly rather
+than sent direct — needs `room` to be world-driven, and it is a real tool rather
+than a stub. Both are worth a seam; neither is pretended.
+
 ## Restraint cases are not filler
 
 Roughly a quarter of the scenarios assert that the agent does **nothing**: passes

@@ -19,6 +19,17 @@ export interface RoomSpec {
   /** Room name, without the `local:` prefix. Refs are `local:<slug>`. */
   name: string;
   purpose?: string;
+  /**
+   * Who is subscribed here. Defaults to every agent that takes a turn.
+   *
+   * The seam that makes routing a problem rather than a broadcast. With one
+   * room holding everybody, "get this fact to the agent who needs it" collapses
+   * into "say it out loud", and a team can look like it is routing while doing
+   * nothing of the kind. Give two rooms different membership and a fact has to
+   * be *relayed* by whoever sits in both — which is the thing worth measuring,
+   * and the thing a real deployment gets wrong.
+   */
+  members?: string[];
   deliver?: "push" | "poll";
   wakeOn?: "named" | "addressed" | "all" | "none";
   checkInMinutes?: number | null;
@@ -56,6 +67,145 @@ export interface WakeStep {
   /** Defaults to the agent under test. Any agent named here is subscribed to every room. */
   agent?: string;
   kind?: "poll" | "checkin";
+}
+
+/**
+ * A roster taking turns, repeatedly, instead of a hand-written list of turns.
+ *
+ * Every multi-agent scenario before this enumerated its turns, and the length
+ * of that list turned out to be a hidden parameter of the measurement: the
+ * first lead-and-specialists scenario gave four turns, and every run died the
+ * same way — the lead worked out who had to unlock the hatch, and the scenario
+ * ended before anyone could. It was measuring the wake list.
+ *
+ * Six agents needing a dozen exchanges is 72 hand-written entries, which nobody
+ * writes correctly and nobody re-reads. So: name the roster once and say how
+ * many passes it gets.
+ *
+ * The run also stops early when a whole pass changes nothing — no post, no
+ * transition, no refusal. A team that has finished, or has jammed, should not
+ * cost thirty more model calls to confirm it.
+ */
+export interface WakeRounds {
+  room: string;
+  /** Passes over `agents`. The ceiling, not the expectation. */
+  rounds: number;
+  /** Who takes a turn, in order, each pass. */
+  agents: string[];
+  /**
+   * Keep going through a pass that changed nothing. Off by default, because a
+   * quiet pass is the cheapest possible evidence that the team is done.
+   */
+  noQuiescence?: boolean;
+}
+
+/**
+ * A tool that exists only inside one scenario.
+ *
+ * Until this, a scenario's machinery had to be driven through the real tool
+ * surface — `exec` with a command string the world matched on a regex. That
+ * works, and it puts every specialist's instrument behind one verb: an agent
+ * asked to inspect a reactor has to be told, in prose, to type
+ * `exec("inspect reactor")`, and the scenario ends up measuring whether the
+ * model reproduces an invented CLI.
+ *
+ * Declaring the instruments as tools puts the discovery where it belongs — in
+ * the tool list the model is handed — and lets an agent's `tools:` allowlist do
+ * the thing it does in production: decide who can operate what. The world's
+ * `by:` still guards the transitions, so the two agree.
+ *
+ * These are stubbed by construction. There is no real implementation behind
+ * them, which is the point: the world or `toolResults` answers every call.
+ */
+export interface ScenarioTool {
+  name: string;
+  /** One or two sentences, exactly as a real tool's would be. */
+  description: string;
+  /** Parameter name → what it is. Everything is a string; the world matches on it. */
+  params?: Record<string, string>;
+  /** Defaults to every declared parameter. */
+  required?: string[];
+  /** `read`, `write` or `irreversible`. Defaults to `write`; only `irreversible` is gated. */
+  effect?: "read" | "write" | "irreversible";
+}
+
+/**
+ * One graded step of progress, worth `points`.
+ *
+ * The reason this exists: a scenario with a fifteen-step dependency graph
+ * reports one bit, and that bit is `false` for every run that gets thirteen
+ * steps in. Which is useless twice over — it cannot tell a team that decoded
+ * the language and never restored power from one that did nothing at all, and
+ * it cannot show a change that moved the team from step 4 to step 11.
+ *
+ * `when` is an ordinary {@link Assertion}, so a milestone can be a world state,
+ * a specific agent's tool call, something somebody said, or a fact having
+ * reached the agent that needed it. No second predicate language, and every
+ * grader written since is available here for free.
+ */
+export interface Milestone {
+  id: string;
+  /** Weight. Relative — the total is whatever they sum to. */
+  points: number;
+  when: Assertion;
+}
+
+export interface MilestoneResult {
+  id: string;
+  points: number;
+  reached: boolean;
+  /** Why not, from the underlying grader. */
+  detail?: string;
+}
+
+/**
+ * A fact that has to travel from whoever can find it to whoever needs it.
+ *
+ * The measurement this package was missing. Once each agent can call its own
+ * tools competently, the interesting failure stops being "did an agent learn
+ * the answer" and becomes "did the answer reach the agent it was useless
+ * without" — which is a property of the system, not of any model in it, and is
+ * invisible to every per-agent check.
+ *
+ * A run can discover every fact it needs and still fail, and the report will
+ * say the team failed to activate the machine. With this it says instead: the
+ * glyph map was found on turn 6 and never left the archive.
+ */
+export interface FactSpec {
+  /**
+   * The literal string that has to travel. Almost always a `{{token:…}}`, so
+   * it cannot be guessed and its appearance anywhere is evidence of transport.
+   */
+  value: string;
+  /** Agents whose tools can surface it. Unset means anyone's. */
+  discoverableBy?: string[];
+  /** Agents that need it to act. Unset means nobody in particular. */
+  requiredBy?: string[];
+}
+
+/**
+ * Where a fact got to. Each stage is strictly harder than the one before it,
+ * and the first missing one is the diagnosis.
+ *
+ *   discovered  a tool told somebody
+ *   shared      somebody said it out loud
+ *   received    an agent that needed it took a turn after it was said
+ *   used        that agent passed it to a tool
+ *
+ * `received` is deliberately weak — it says the value was in the room before
+ * the agent's turn, not that the agent read it. That is the honest limit of
+ * what the transcript can show, and the gap between `received` and `used` is
+ * where "it was told and did nothing with it" lives.
+ */
+export interface FactTrace {
+  name: string;
+  value: string;
+  discovered?: { agent: string; turn: number };
+  shared?: { agent: string; turn: number; room: string };
+  received?: { agent: string; turn: number };
+  used?: { agent: string; turn: number; tool: string };
+  /** Turns from first discovery to first use, or null if it never got there. */
+  latency: number | null;
 }
 
 export interface Scenario {
@@ -106,8 +256,11 @@ export interface Scenario {
    * agent under test, so a single-agent scenario never names it.
    *
    * Defaults to the last room with `incoming` lines.
+   *
+   * A {@link WakeRounds} object says "this roster, this many passes" instead,
+   * for scenarios where the number of exchanges is not knowable in advance.
    */
-  wake?: WakeStep | WakeStep[];
+  wake?: WakeStep | WakeStep[] | WakeRounds;
   /** Chat scenario: the message the owner sends. Mutually exclusive with `rooms`. */
   message?: string;
   /**
@@ -138,6 +291,15 @@ export interface Scenario {
    * a scenario using this has to satisfy or the attempts become a search.
    */
   oracle?: OracleSpec;
+  /** Instruments that exist only here. See {@link ScenarioTool}. */
+  tools?: ScenarioTool[];
+  /**
+   * Partial credit, so a long scenario reports where it stopped rather than
+   * that it stopped. See {@link Milestone}.
+   */
+  milestones?: Milestone[];
+  /** Facts that have to reach somebody, keyed by name. See {@link FactSpec}. */
+  facts?: Record<string, FactSpec>;
   /** Overrides the run-wide default. */
   repeats?: number;
   expect: Assertion[];
@@ -291,9 +453,39 @@ export interface Assertion {
    * solution, and a reply that merely *claims* to have done it reaches nothing.
    */
   world_state?: Record<string, string> | "goal";
+  /**
+   * The world *passed through* this state, whether or not it ended there.
+   *
+   * `world_state` is the win condition and asks about the end. Any step in the
+   * middle of a chain needs this one instead: a scenario where the part is
+   * fabricated and then installed leaves `part: installed`, so a `world_state:
+   * {part: made}` milestone scores a team that did the work as having skipped
+   * it. Read off the transitions, so it is still a claim about the machinery and
+   * never about the transcript.
+   */
+  world_reached?: Record<string, string>;
+  /**
+   * A declared fact got at least this far. See {@link FactTrace} for the ladder.
+   *
+   * The assertion no per-agent check can make. `calls_by` says an agent used a
+   * value; it cannot say the value was one somebody else had to hand it, which
+   * is the only interesting question once each agent works on its own.
+   */
+  fact_reaches?: { fact: string; stage: import("./types.js").FactStage };
+  /**
+   * Fraction of the scenario's milestone points earned, 0–1.
+   *
+   * A fraction rather than a raw total because points are relative weights: a
+   * scenario is free to sum to 37, and `score_at_least: 0.6` means the same
+   * thing there as on one that sums to 100.
+   */
+  score_at_least?: number;
   /** Ask the model whether the reply satisfies a rubric. Off under `--no-judge`. */
   judge?: { rubric: string };
 }
+
+/** Stages a {@link FactSpec} passes through, hardest last. */
+export type FactStage = "discovered" | "shared" | "received" | "used";
 
 /** What one tool call looked like. */
 export interface RecordedCall {
@@ -314,6 +506,24 @@ export interface RecordedExecution {
   name: string;
   args: Record<string, unknown>;
   agent?: string;
+  /**
+   * What the tool handed back, truncated.
+   *
+   * Kept because it is the only place a fact enters the system. Fact routing
+   * asks "who was told this", and the answer is exactly "whose tool result
+   * contained it" — unrecoverable from the request trace, which shows the value
+   * only after the model has already repeated it.
+   */
+  result?: string;
+  /**
+   * Which turn ran it, indexed from 0 over the scenario's wake steps.
+   *
+   * Executions and posts live in separate lists with no shared clock, so
+   * "did Boron act on this after Atlas said it" was not answerable at all.
+   * Stamping both with the turn index gives a total order for the price of a
+   * counter.
+   */
+  turn?: number;
 }
 
 /** One rule for a stubbed tool: answer `then` when the call matches `when`. */
@@ -420,11 +630,25 @@ export interface Submission {
 export interface WorldEvent {
   /** Who ran the call, when a named agent's turn ran it. */
   agent?: string;
+  /** Which wake step ran it. See {@link RecordedExecution.turn}. */
+  turn?: number;
   tool: string;
   /** Short form of the call, enough to recognise it in a trace. */
   call: string;
   /** `power: off → on`, or the requirement that was not met. */
   effect: string;
+  /**
+   * The changes this call actually applied, structured.
+   *
+   * `effect` is a display string and parsing it back was the obvious cheap
+   * option; this exists because a milestone on a *transient* state cannot be
+   * graded any other way. `world_state: {part: made}` is a claim about the final
+   * state, so a team that fabricated the part and then installed it scores as
+   * never having fabricated it — which is what happened on the first run of
+   * `the-machine`, and reads as a step the team skipped rather than one it
+   * completed.
+   */
+  sets?: Record<string, string>;
   /** Whether the call landed or was refused by `requires`. */
   applied: boolean;
 }
@@ -495,9 +719,23 @@ export interface RunOutcome {
    * result — the same rule `prompt_*` follows on a report with no prompt text.
    */
   executions?: RecordedExecution[];
-  /** Every post the turn(s) produced, attributed — `agent` is the speaker on the envelope. */
-  posts: Array<{ room: string; body: string; agent?: string }>;
+  /**
+   * Every post the turn(s) produced, attributed — `agent` is the speaker on the
+   * envelope, `turn` the wake step that produced it (see
+   * {@link RecordedExecution.turn}).
+   */
+  posts: Array<{ room: string; body: string; agent?: string; turn?: number }>;
   requests: RecordedRequest[];
+  /**
+   * The turns that actually ran, in order — the index is the `turn` stamped on
+   * executions and posts.
+   *
+   * Recorded rather than derived from the scenario because a `rounds:` wake
+   * stops early when a pass changes nothing, so the declared roster and the
+   * turns taken are different lists. It is also the only way to know an agent
+   * woke and said nothing, which is a distinct failure from never being woken.
+   */
+  turns?: Array<{ agent: string; room: string }>;
   /**
    * Why the loop ended, when the runner could capture it.
    *
@@ -550,6 +788,13 @@ export interface CheckResult {
 }
 
 export interface RunResult {
+  /**
+   * Partial credit, and where it stopped. Absent on a scenario with no
+   * `milestones:` and on reports written before they existed.
+   */
+  milestones?: MilestoneResult[];
+  /** Where each declared fact got to. Absent on a scenario with no `facts:`. */
+  facts?: FactTrace[];
   /**
    * The witness values this run was given, so it can be re-graded later.
    *

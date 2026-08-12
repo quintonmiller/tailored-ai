@@ -12,7 +12,7 @@
  * as useless as one that always does.
  */
 
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -21,8 +21,15 @@ import { loadScenarios } from "../schema.js";
 /** Write a one-file scenario dir and return its digest. */
 function hashOf(yaml: string): string {
   const dir = mkdtempSync(join(tmpdir(), "tai-eval-hash-"));
-  writeFileSync(join(dir, "01-cases.yaml"), yaml);
-  return loadScenarios(dir).hash;
+  try {
+    writeFileSync(join(dir, "01-cases.yaml"), yaml);
+    return loadScenarios(dir).hash;
+  } finally {
+    // Removed, because it was not: every run of this file left a directory in
+    // /tmp and the box had accumulated 368 of them. Harmless individually, and
+    // the reason a `ls /tmp` is useless for finding a real leak.
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 const BASE = `

@@ -154,6 +154,69 @@ describe("the goal is the state, not the transcript", () => {
     expect(checks[0].pass).toBe(true);
     expect(checks[0].skipped).toBe(true);
   });
+
+  describe("world_reached — a state the chain moved past", () => {
+    // The first live run of `the-machine` fabricated the part and then installed
+    // it, so `part` ended at `installed` and a `world_state: {part: made}`
+    // milestone scored a completed step as skipped. Every intermediate state in
+    // a multi-step scenario has that shape; only the last one can be asked about
+    // the final world.
+    //
+    // A spec of its own, because nothing in SPEC ever leaves a state — every
+    // variable there moves once and stops, so `world_reached` and `world_state`
+    // agree on all of it and a test written against it would pass without the
+    // feature existing. That is the exact shape of vacuous test this package has
+    // been bitten by, so the control is built in below: each case asserts what
+    // `world_state` says as well.
+    const TWO_STEP: WorldSpec = {
+      state: { part: "none" },
+      rules: [
+        { tool: "exec", when: { command: "/fabricate/" }, then: "built", sets: { part: "made" } },
+        {
+          tool: "exec",
+          when: { command: "/install/" },
+          requires: { part: "made" },
+          then: "fitted",
+          else: "nothing to install",
+          sets: { part: "installed" },
+        },
+      ],
+    };
+    const twoStep = (expect_: Scenario["expect"]): Scenario =>
+      ({ id: "s", category: "c", intent: "i", difficulty: 8, world: TWO_STEP, expect: expect_ }) as Scenario;
+
+    const chain = (): RunOutcome => {
+      const w = new World(TWO_STEP);
+      w.resolve("exec", { command: "fabricate rfeucm5x" }, "echo", 0);
+      w.resolve("exec", { command: "install rfeucm5x" }, "flux", 1);
+      return outcome(w.snapshot(), w.log);
+    };
+
+    it("passes for a value the world held and then left, where world_state fails", async () => {
+      const passedThrough = chain();
+      expect(passedThrough.world).toEqual({ part: "installed" });
+
+      expect((await grade(twoStep([{ world_reached: { part: "made" } }]), passedThrough))[0].pass).toBe(true);
+      // The control, in the same test: without it this could pass for the wrong
+      // reason and nobody would look again.
+      expect((await grade(twoStep([{ world_state: { part: "made" } }]), passedThrough))[0].pass).toBe(false);
+    });
+
+    it("counts the starting state, which no transition records", async () => {
+      expect((await grade(twoStep([{ world_reached: { part: "none" } }]), chain()))[0].pass).toBe(true);
+    });
+
+    it("fails a value the world never held, and says which", async () => {
+      const checks = await grade(twoStep([{ world_reached: { part: "scrapped" } }]), chain());
+      expect(checks[0].pass).toBe(false);
+      expect(checks[0].detail).toContain("part was never scrapped");
+    });
+
+    it("skips when the run recorded no world at all", async () => {
+      const checks = await grade(twoStep([{ world_reached: { part: "made" } }]), outcome(undefined));
+      expect(checks[0].skipped).toBe(true);
+    });
+  });
 });
 
 describe("unmetGoal", () => {

@@ -206,7 +206,38 @@ describe("a stub the agent cannot reach", () => {
   expect:
     - replies: true
 `),
-    ).toThrow(/not in this agent's tools/);
+    ).toThrow(/no agent in this scenario can call/);
+  });
+
+  it("looks at every agent's allowlist, not just the one under test", () => {
+    // A lead that can only talk directs specialists who can act, so the stub a
+    // multi-agent scenario needs is almost never on the agent under test.
+    // Reading its allowlist alone rejected exactly the scenarios worth writing.
+    const [scenario] = load(`
+- id: peer-holds-the-stub
+  category: orchestration
+  difficulty: 8
+  intent: the lead cannot act, the specialist can
+  agent:
+    name: lead
+    tools: [room]
+  config:
+    agents:
+      rus:
+        tools: [room, exec]
+  toolResults:
+    exec: "queue depth: 41207"
+  rooms:
+    - name: ops
+      incoming:
+        - { speaker: quinton, body: "how deep is the queue?" }
+  wake:
+    - { room: ops, agent: lead }
+    - { room: ops, agent: rus }
+  expect:
+    - replies: true
+`);
+    expect(scenario.id).toBe("peer-holds-the-stub");
   });
 
   it("allows a stub when the agent lists the tool", () => {

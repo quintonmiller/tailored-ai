@@ -15,9 +15,10 @@
  */
 
 import { readFileSync } from "node:fs";
-import { grade, type JudgeFn } from "./graders.js";
+import { grade, type JudgeFn, scoreMilestones } from "./graders.js";
 import { type HarnessOptions, runOnce } from "./harness.js";
 import { writeWorkerResult } from "./protocol.js";
+import { traceFacts } from "./routing.js";
 import { mintTokens, substituteTokens } from "./tokens.js";
 import type { RunOutcome, RunResult, Scenario, ScenarioResult } from "./types.js";
 
@@ -117,6 +118,11 @@ async function main(): Promise<void> {
 
     const outcome = await runOnce(scoped, options);
     const checks = await grade(scoped, outcome, { judge });
+    // Graded whether or not anything asserts on them: a milestone ladder and a
+    // fact trace are diagnosis, and the run you most want them for is the one
+    // whose author had not yet worked out what to assert.
+    const milestones = scoped.milestones?.length ? await scoreMilestones(scoped, outcome, { judge }) : undefined;
+    const facts = scoped.facts ? traceFacts(scoped.facts, outcome) : undefined;
     const pass = checks.every((c) => c.pass);
     // Prompt text is the bulk of a report, so a passing run normally keeps only
     // the shape of its requests. `--keep-prompts` trades size for a report that
@@ -127,7 +133,14 @@ async function main(): Promise<void> {
       : pass
         ? withoutRequests(outcome)
         : trimRequests(outcome);
-    runs.push({ pass, checks, outcome: stored, ...(Object.keys(tokens).length ? { tokens } : {}) });
+    runs.push({
+      pass,
+      checks,
+      outcome: stored,
+      ...(milestones ? { milestones } : {}),
+      ...(facts ? { facts } : {}),
+      ...(Object.keys(tokens).length ? { tokens } : {}),
+    });
   }
 
   const result: ScenarioResult = {

@@ -1,0 +1,463 @@
+# The Machine — one scenario, six agents, and a dependency graph none of them
+# can walk alone.
+#
+# Everything before this file measures an agent. This measures a *system*: six
+# specialists wake inside a machine nobody has explained, each holding
+# instruments the others cannot reach, and the only route to the goal runs
+# through five facts that have to travel from whoever can find one to whoever
+# needs it. Every individual step is easy. The graph is not.
+#
+#     cipher  reads the archive          → the harmonic key      → atlas
+#     delta   analyses the signal        → the ring sequence     → atlas
+#     atlas   locks the rings with both  → the reactor frequency → boron
+#     boron   sets it, raises three buses
+#     flux    reads the console          → the part spec         → echo
+#     echo    fabricates the part
+#     flux    installs it, releases the interlock, activates
+#
+# ## Why the whole thing is one row and the row is graded on a curve
+#
+# A fifteen-step graph reports one bit, and that bit is `false` for a team that
+# gets thirteen steps in. Which is useless twice over: it cannot tell that team
+# from one that sat still, and it cannot show a change that moved the team from
+# step four to step eleven. So the row carries `milestones:` — partial credit,
+# printed as a ladder — and the pass/fail line is drawn separately.
+#
+# ## The trap
+#
+# The archive contains a document giving the synchronisation frequency as 42.0,
+# and another saying that since the retrofit the frequency is derived from
+# the observatory alignment. The reactor's own plate reads `post-retrofit unit, series B`.
+# A team that reads the first document and acts is wrong; a team that reads both
+# and notices which one is stale is right. Deliberately not scored — a point for
+# "did not fall for it" is a point you collect by never trying anything, which
+# is the opposite of what this measures. It is in the world so the refusal shows
+# up in the trace, where a reader can see whether the team recovered.
+#
+# ## What is not modelled
+#
+# The design this came from also wanted a synchronisation *window* — three
+# agents acting inside three ticks — and a security protocol that invalidates
+# the interlock code if it is posted publicly rather than sent direct. Neither
+# is expressible yet: the world has no clock, so a state cannot decay, and the
+# `room` tool is not world-driven, so a post cannot be a transition. Both are
+# real gaps and both are worth a seam later. Saying so here rather than
+# pretending the scenario covers them.
+
+- id: the-machine
+  category: orchestration
+  difficulty: 10
+  intent: >
+    Six agents inside a machine none of them has been told anything about, whose
+    activation requires five facts to move between five different pairs of them.
+
+    This is the ceiling case, and the point of it is not the pass rate. Every
+    step is individually trivial — call the tool you were given, read what it
+    says. What the scenario asks is whether a group can route: find a value,
+    notice it is useless to you, work out who it is useful to, and say it in a
+    form that agent can act on. That is a property of the system rather than of
+    any model in it, and nothing else in this set can see it.
+
+    The failure it exists to catch, observed on every smaller orchestration row
+    and never measurable before: the team discovers everything it needs and
+    delivers none of it, then reports success. Graded on the world alone that
+    reads as "could not activate the machine". Graded on `facts:` it reads as
+    "the harmonic key was found on turn 2 and never left the archive", which is
+    a different defect with a different fix.
+  knownGap: >
+    Never solved. Kept red on purpose: this is the wall, and the milestone
+    ladder is the measurement. A green row here would mean the scenario had been
+    made easier, not that the framework had improved.
+  tokens:
+    alignkey: code
+    sequence: code
+    frequency: number
+    spec: code
+    interlock: code
+
+  # The instruments. Each one exists only here, and each is in exactly one
+  # agent's allowlist — which is what makes a specialist a specialist. Nothing
+  # else in the scenario stops Atlas from raising a power bus; the allowlist
+  # does, the same way it does in a deployment.
+  tools:
+    - name: inspect_star_map
+      description: Read the observatory star map and the ring positions.
+    - name: rotate_ring
+      description: Turn the observatory rings to a configuration and try to lock them.
+      params:
+        key: The harmonic key to align to.
+        sequence: The ring sequence to set.
+    - name: observe_signal
+      description: Point the observatory at the incoming signal source.
+    - name: inspect_reactor
+      description: Read the reactor panel — buses, frequency, and serial.
+    - name: set_frequency
+      description: Set the reactor synchronisation frequency.
+      params:
+        frequency: The frequency to set.
+    - name: enable_bus
+      description: Bring one reactor power bus online.
+      params:
+        bus: Which bus — A, B or C.
+    - name: search_archive
+      description: List what the archive holds.
+      params:
+        query: What to look for.
+    - name: read_document
+      description: Read one archive document by id.
+      params:
+        id: The document id.
+    - name: inspect_relays
+      description: Read the communications relay configuration.
+    - name: analyze_signal
+      description: Decode the incoming signal.
+    - name: inspect_components
+      description: Look over the workshop bench and the diagnostic equipment.
+    - name: fabricate
+      description: Manufacture a replacement part to a specification.
+      params:
+        specification: The part specification to build to.
+    - name: inspect_console
+      description: Read the control console and any fault it reports.
+    - name: install_component
+      description: Fit a fabricated part into the machine.
+      params:
+        part: Which part to install.
+    - name: release_interlock
+      description: Release the safety interlock with an authorisation code.
+      params:
+        code: The authorisation code.
+    - name: activate_machine
+      description: Activate the machine.
+
+  agent:
+    name: atlas
+    description: In the observatory — a star map, six rotating rings, an unknown signal source.
+    instructions: >
+      You are Atlas. You woke inside an enormous machine you have never seen
+      before. You do not know what it does. Others woke elsewhere inside it;
+      talk to them with `room`. You only know what you observe yourself or are
+      told. Keep messages short and say what a tool actually returned.
+    tools: [room, inspect_star_map, rotate_ring, observe_signal]
+
+  config:
+    agents:
+      boron:
+        description: In the reactor room — three inactive power buses, A, B and C.
+        instructions: >
+          You are Boron. You woke inside an enormous machine you have never seen
+          before. You do not know what it does. Others woke elsewhere inside it;
+          talk to them with `room`. You only know what you observe yourself or
+          are told. Keep messages short and say what a tool actually returned.
+        tools: [room, inspect_reactor, set_frequency, enable_bus]
+      cipher:
+        description: In the archive — damaged documents and an unfamiliar symbolic alphabet.
+        instructions: >
+          You are Cipher. You woke inside an enormous machine you have never seen
+          before. You do not know what it does. Others woke elsewhere inside it;
+          talk to them with `room`. You only know what you observe yourself or
+          are told. Keep messages short and say what a tool actually returned.
+        tools: [room, search_archive, read_document]
+      delta:
+        description: In the relay room — routing switches and a signal analyser.
+        instructions: >
+          You are Delta. You woke inside an enormous machine you have never seen
+          before. You do not know what it does. Others woke elsewhere inside it;
+          talk to them with `room`. You only know what you observe yourself or
+          are told. Keep messages short and say what a tool actually returned.
+        tools: [room, inspect_relays, analyze_signal]
+      echo:
+        description: In the workshop — mechanical components, diagnostics, a fabricator.
+        instructions: >
+          You are Echo. You woke inside an enormous machine you have never seen
+          before. You do not know what it does. Others woke elsewhere inside it;
+          talk to them with `room`. You only know what you observe yourself or
+          are told. Keep messages short and say what a tool actually returned.
+        tools: [room, inspect_components, fabricate]
+      flux:
+        description: In the control chamber — a central console, most controls disabled.
+        instructions: >
+          You are Flux. You woke inside an enormous machine you have never seen
+          before. You do not know what it does. Others woke elsewhere inside it;
+          talk to them with `room`. You only know what you observe yourself or
+          are told. Keep messages short and say what a tool actually returned.
+        tools: [room, inspect_console, install_component, release_interlock, activate_machine]
+
+  # Scenery: the calls that report rather than change. The machinery is in
+  # `world:`, and the two compose — which is what lets a puzzle have furniture.
+  toolResults:
+    inspect_star_map: >
+      Six rings, four of them carrying glyphs: ⟟ ⋔ ○ ⌁. The glyphs look
+      positional rather than numeric. A terminal reads UNKNOWN SIGNAL SOURCE.
+      The ring housing has two keyways: one takes a harmonic key, one takes a
+      sequence.
+    observe_signal: >
+      A periodic signal from outside the hull. The observatory cannot decode it;
+      the relay room has the analyser.
+    inspect_relays: >
+      Six routing switches, all closed. The analyser is warm and holds a capture
+      of the incoming signal.
+    analyze_signal: >
+      Capture decoded. The signal repeats one value: {{token:sequence}}.
+      The observatory is the only station that can use a sequence.
+    # No three consecutive digits anywhere in the scenery, deliberately. The
+    # frequency witness is a three-digit number and every routing stage is a
+    # substring match, so a `2187` on the reactor plate would credit Boron with
+    # discovering a frequency it had not been told, about one run in 450 —
+    # silently, and in the direction that invents a capability.
+    inspect_reactor: >
+      Buses A, B and C: all offline. Display: FREQUENCY REQUIRED (range 0.0
+      to 99.9). Plate: synchroniser, post-retrofit unit, series B.
+    search_archive: >
+      Four documents survive: DOC-GLYPH (symbol tables), DOC-SYNC (reactor
+      operating notes), DOC-RETRO (retrofit record), DOC-SAFE (safety protocol).
+    inspect_components: >
+      A bench of oscillators, couplings and blanks, a diagnostic rig, and a
+      fabricator that will build to a specification. Nothing here says which
+      part has failed — the control console reports faults.
+    read_document:
+      - when: { id: "/glyph/" }
+        then: >
+          DOC-GLYPH. The four ring glyphs resolve against a harmonic key. The
+          key for this installation is {{token:alignkey}}. The rings take the
+          key together with the sequence the signal carries.
+      # The trap, and its antidote, in two separate documents. A team that reads
+      # the first and acts is confidently wrong; the reactor plate says 2187-B.
+      - when: { id: "/sync/" }
+        then: "DOC-SYNC. Reactor synchronisation uses frequency 42.0."
+      - when: { id: "/retro/" }
+        then: >
+          DOC-RETRO. Following the retrofit, synchronisation frequencies are
+          no longer fixed. They are derived from the observatory alignment and
+          reported by the observatory when the rings lock.
+      - when: { id: "/safe/" }
+        then: >
+          DOC-SAFE. The safety interlock guarding the oscillator bay is released
+          from the control chamber with authorisation code {{token:interlock}}.
+      - then: "No document by that id. The archive index lists what survives."
+
+  world:
+    state:
+      alignment: "free"
+      frequency: "unset"
+      bus_a: "off"
+      bus_b: "off"
+      bus_c: "off"
+      fault: "unknown"
+      part: "none"
+      interlock: "engaged"
+      machine: "dormant"
+    rules:
+      # The join. Two agents hold one input each, and neither of them is Atlas.
+      # This is the whole scenario in one rule: no amount of competence at the
+      # observatory substitutes for the archive and the relay having said
+      # something.
+      - tool: rotate_ring
+        when: { key: "/{{token:alignkey}}/", sequence: "/{{token:sequence}}/" }
+        then: >
+          HARMONIC LOCK ESTABLISHED. The terminal resolves the signal and prints
+          a single figure: reactor frequency {{token:frequency}}.
+        sets: { alignment: "locked" }
+      - tool: rotate_ring
+        then: >
+          The rings turn freely and nothing engages. The housing needs the
+          harmonic key and the signal sequence together; one alone does nothing.
+
+      - tool: set_frequency
+        when: { frequency: "/{{token:frequency}}/" }
+        requires: { alignment: "locked" }
+        then: "Frequency accepted. The synchroniser holds."
+        else: >
+          The synchroniser will not take a frequency until the observatory
+          reports a harmonic lock.
+        sets: { frequency: "set" }
+      - tool: set_frequency
+        then: >
+          Rejected — outside tolerance for this unit. The pre-retrofit figures in the
+          operating notes do not apply to a series B synchroniser.
+
+      - tool: enable_bus
+        when: { bus: "/a/" }
+        requires: { frequency: "set" }
+        then: "Bus A online."
+        else: "Bus A trips instantly. The synchroniser has no frequency."
+        sets: { bus_a: "on" }
+      - tool: enable_bus
+        when: { bus: "/b/" }
+        requires: { frequency: "set" }
+        then: "Bus B online."
+        else: "Bus B trips instantly. The synchroniser has no frequency."
+        sets: { bus_b: "on" }
+      - tool: enable_bus
+        when: { bus: "/c/" }
+        requires: { frequency: "set" }
+        then: "Bus C online."
+        else: "Bus C trips instantly. The synchroniser has no frequency."
+        sets: { bus_c: "on" }
+
+      - tool: inspect_console
+        requires: { bus_a: "on", bus_b: "on", bus_c: "on" }
+        then: >
+          Console live. FAULT: primary oscillator failed. Replacement
+          specification {{token:spec}}. The workshop can build to a
+          specification; this chamber cannot.
+        else: "The console is dark. Nothing here reads until all three buses carry power."
+        sets: { fault: "known" }
+
+      - tool: fabricate
+        when: { specification: "/{{token:spec}}/" }
+        requires: { fault: "known" }
+        then: "Fabricated. One oscillator to specification, ready to fit."
+        else: "Nothing to build — no fault has been diagnosed and no specification issued."
+        sets: { part: "made" }
+      - tool: fabricate
+        then: "The fabricator rejects that specification: no such part number."
+
+      - tool: install_component
+        requires: { part: "made" }
+        then: "Oscillator fitted. The bay is closed."
+        else: "Nothing to install. No replacement has been fabricated."
+        sets: { part: "installed" }
+
+      - tool: release_interlock
+        when: { code: "/{{token:interlock}}/" }
+        requires: { part: "installed" }
+        then: "Interlock released."
+        else: "The interlock will not release while the oscillator bay is open."
+        sets: { interlock: "released" }
+      - tool: release_interlock
+        then: "Authorisation code rejected."
+
+      # No `else`: the generated refusal names every unmet state, which is the
+      # most informative thing any door in this machine says.
+      - tool: activate_machine
+        requires:
+          alignment: "locked"
+          bus_a: "on"
+          bus_b: "on"
+          bus_c: "on"
+          part: "installed"
+          interlock: "released"
+        then: "THE MACHINE IS RUNNING."
+        sets: { machine: "activated" }
+    goal: { machine: "activated" }
+
+  # The five hops. Each one is a value one agent can obtain and another agent
+  # cannot act without — which is the only kind of fact worth tracking.
+  facts:
+    align_key:
+      value: "{{token:alignkey}}"
+      discoverableBy: [cipher]
+      requiredBy: [atlas]
+    ring_sequence:
+      value: "{{token:sequence}}"
+      discoverableBy: [delta]
+      requiredBy: [atlas]
+    reactor_frequency:
+      value: "{{token:frequency}}"
+      discoverableBy: [atlas]
+      requiredBy: [boron]
+    part_spec:
+      value: "{{token:spec}}"
+      discoverableBy: [flux]
+      requiredBy: [echo]
+    interlock_code:
+      value: "{{token:interlock}}"
+      discoverableBy: [cipher]
+      requiredBy: [flux]
+
+  # The ladder. Weighted by how much of the graph each step unlocks, and mixing
+  # world state with routing on purpose: reaching a state says the team acted,
+  # and a fact reaching its consumer says the team communicated. A run can do
+  # well at one and badly at the other, and those want different fixes.
+  milestones:
+    - id: explored
+      points: 3
+      when: { calls_tool_any: [inspect_star_map, inspect_reactor, search_archive, inspect_relays, inspect_components, inspect_console] }
+    - id: archive_opened
+      points: 4
+      when: { calls_by: { agent: cipher, tool: read_document } }
+    - id: key_found
+      points: 5
+      when: { fact_reaches: { fact: align_key, stage: discovered } }
+    - id: signal_decoded
+      points: 5
+      when: { fact_reaches: { fact: ring_sequence, stage: discovered } }
+    - id: key_shared
+      points: 5
+      when: { fact_reaches: { fact: align_key, stage: shared } }
+    - id: key_reached_observatory
+      points: 5
+      when: { fact_reaches: { fact: align_key, stage: used } }
+    - id: alignment_locked
+      points: 10
+      when: { world_state: { alignment: "locked" } }
+    - id: frequency_routed
+      points: 6
+      when: { fact_reaches: { fact: reactor_frequency, stage: used } }
+    - id: reactor_synchronised
+      points: 8
+      when: { world_state: { frequency: "set" } }
+    - id: power_restored
+      points: 8
+      when: { world_state: { bus_a: "on", bus_b: "on", bus_c: "on" } }
+    - id: fault_diagnosed
+      points: 4
+      when: { world_state: { fault: "known" } }
+    - id: spec_routed
+      points: 5
+      when: { fact_reaches: { fact: part_spec, stage: used } }
+    # `world_reached`, not `world_state`: the chain moves past this. A team that
+    # fabricates the part and then installs it leaves `part: installed`, and the
+    # first run of this scenario scored a completed step as skipped for exactly
+    # that reason. Every intermediate state in a multi-step scenario has this
+    # shape; only the last one can be asked about the final world.
+    - id: part_fabricated
+      points: 6
+      when: { world_reached: { part: "made" } }
+    - id: part_installed
+      points: 5
+      when: { world_state: { part: "installed" } }
+    - id: interlock_released
+      points: 7
+      when: { world_state: { interlock: "released" } }
+    - id: machine_activated
+      points: 12
+      when: { world_state: "goal" }
+
+  rooms:
+    - name: expedition
+      purpose: The only channel between the chambers of the machine.
+      incoming:
+        - speaker: quinton
+          body: >
+            You wake inside an enormous unknown machine. You do not know what it
+            does or how it works. Your objective is to ACTIVATE THE MACHINE.
+            Work out how it works and cooperate with the others inside it.
+
+  # Eight passes at six agents. A ceiling rather than a plan: the run stops after
+  # a pass in which nobody speaks and nothing in the machinery moves, so a team
+  # that finishes early — or jams — does not cost forty more model calls to
+  # confirm it. Eight because the shortest possible solution is five: two
+  # discoveries, a join, a reactor, a fault, a part, an activation, and no pair
+  # of those lands in one pass unless the order happens to be lucky.
+  wake:
+    room: expedition
+    rounds: 8
+    agents: [atlas, boron, cipher, delta, echo, flux]
+
+  # One run, pinned, because forty-eight turns against a local 27B is most of an
+  # hour and the default of three would put two more onto every full-set run for
+  # a row that is expected to be red. A scenario's `repeats` overrides the flag,
+  # so raising this means editing it — which is the right friction for a
+  # measurement that costs three hours.
+  repeats: 1
+
+  expect:
+    # The real thing, and the reason the row is red.
+    - world_state: goal
+    # And the curve. Drawn at half the points: a team that routes the first two
+    # facts, locks the alignment and restores power is most of the way through
+    # the interesting part, and a change that takes a run from 20% to 45% is the
+    # kind this scenario exists to make visible.
+    - score_at_least: 0.5
