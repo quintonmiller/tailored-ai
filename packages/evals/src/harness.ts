@@ -36,6 +36,7 @@ import {
   formatRoomRef,
   initDatabase,
   LocalRoomBackend,
+  type LoopStop,
   loadConfig,
   loadPlugins,
   makeRoomSessionKey,
@@ -587,15 +588,29 @@ async function runChatScenario(
   db: import("better-sqlite3").Database,
   agentName: string,
   opts: HarnessOptions,
-): Promise<Pick<RunOutcome, "reply" | "posts">> {
+): Promise<Pick<RunOutcome, "reply" | "posts" | "stop">> {
   const session = newSession(db, opts.model, opts.providerId ?? "openai_compatible", `eval:${randomUUID()}`);
   for (const line of scenario.history ?? []) {
     saveMessage(db, session.id, { role: line.role, content: line.content });
   }
 
   const base = runtime.buildLoopOptions({ session, agentName });
-  const reply = await runAgentLoop(scenario.message ?? "", base);
-  return { reply, posts: [] };
+  // Why the turn ended, taken structurally rather than read off the reply.
+  //
+  // A stalled turn used to be identifiable by its `[Agent stopped: …]` text, and
+  // graders that looked for it are now wrong twice over: the marker is still
+  // non-empty (so `replies: true` accepted it) and, since a turn that runs out
+  // of rounds gets a tools-withheld retry, most stalls come back as ordinary
+  // prose with no marker at all. `loop.ts` says as much and points callers at
+  // the structured stop.
+  let stop: LoopStop | undefined;
+  const reply = await runAgentLoop(scenario.message ?? "", {
+    ...base,
+    onStop: (s) => {
+      stop = s;
+    },
+  });
+  return { reply, posts: [], stop };
 }
 
 /**

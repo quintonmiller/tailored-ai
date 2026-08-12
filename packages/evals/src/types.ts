@@ -300,6 +300,16 @@ export interface RunOutcome {
   /** Every post the turn(s) produced, attributed — `agent` is the speaker on the envelope. */
   posts: Array<{ room: string; body: string; agent?: string }>;
   requests: RecordedRequest[];
+  /**
+   * Why the loop ended, when the runner could capture it.
+   *
+   * Read structurally rather than off the reply text: a turn that runs out of
+   * rounds gets a tools-withheld retry and usually returns ordinary prose, so
+   * there is no marker to match. Undefined on paths that do not report a stop
+   * (room turns go through the watcher), which graders must treat as "unknown",
+   * never as "did not stall".
+   */
+  stop?: import("@tailored-ai/core").LoopStop;
   latencyMs: number;
   usage: RunUsage;
   error?: string;
