@@ -2512,14 +2512,48 @@ export class RoomWatcher {
     // Only who is actually IN this room. Listing every agent in config put 18
     // names in front of the model, most of them not present — wasted tokens
     // and an invitation to address someone who will never see it.
-    const subscribed = this.store.listSubscriptionsForRoom(sub.roomRef).map((s) => identities.labelForAgent(s.agent));
+    //
+    // With each agent's own `description`, because a name alone cannot be routed
+    // to. Measured: a lead told to get a manifest filed correctly worked out
+    // that the hatch was shut, and then asked the *owner* to unlock it — while
+    // sitting in a room with an agent whose description reads "Power and access.
+    // Runs `breaker` and `unlock` on the vault". It could not have known. The
+    // roster said `Known participants: rus, vay, quinton.` and the word "unlock"
+    // appeared nowhere in the prompt.
+    //
+    // This is the whole difference between a room of agents and a team. TAI has
+    // the descriptions — they are what `delegate` already routes on — and simply
+    // never showed them to the agents who share a room with each other.
+    const config = this.runtime.getConfig();
+    const describe = (agent: string): string | undefined => {
+      const description = config.agents?.[agent]?.description?.trim();
+      if (!description) return undefined;
+      // One line, and a short one. A roster is scaffolding; an agent that writes
+      // three paragraphs about itself should not be able to push the transcript
+      // out of the window.
+      const first = description.split("\n")[0].trim();
+      return first.length > 120 ? `${first.slice(0, 117)}…` : first;
+    };
+    const subscribed = this.store.listSubscriptionsForRoom(sub.roomRef).map((s) => ({
+      label: identities.labelForAgent(s.agent),
+      description: describe(s.agent),
+    }));
     const humans = identities
       .all()
       .filter((i) => i.kind === "human")
-      .map((i) => i.label);
-    const others = [...new Set([...subscribed, ...humans])]
-      .filter((l) => l.toLowerCase() !== label.toLowerCase())
-      .join(", ");
+      .map((i) => ({ label: i.label, description: undefined as string | undefined }));
+
+    const seen = new Set<string>();
+    const others = [...subscribed, ...humans]
+      .filter((p) => p.label.toLowerCase() !== label.toLowerCase())
+      .filter((p) => {
+        const key = p.label.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .map((p) => (p.description ? `${p.label} — ${p.description}` : p.label))
+      .join("; ");
 
     return [
       `Room "${roomName}". You are ${label}. ${this.today()}`,
@@ -2549,6 +2583,21 @@ export class RoomWatcher {
         ? `Reply as ${label}. Your reply goes to ${recipient} — write only your message. To reach someone else instead, start with @name.`
         : `Reply as ${label}. To address someone, start with @name.`,
       `Known participants: ${others || "none"}.`,
+      // Say only what a tool actually returned.
+      //
+      // In a room a fabrication does not stay with the agent that made it. It
+      // becomes the next agent's input and then the report to the owner, and
+      // nothing downstream marks where the fiction entered. Measured on a
+      // three-agent scenario: asked to read a file and file its id, the team
+      // produced a complete, confident transcript — "the ID is VAULT-001" /
+      // "Filed." / "Done." — having made zero tool calls, with the file
+      // untouched. Every text-shaped check passes that; only the machinery knew.
+      //
+      // A prohibition rather than an escape hatch, deliberately. "Say you cannot
+      // if you cannot" is the shape a small model over-applies into declining
+      // work it could do; "do not state what you did not get" has no such
+      // reading.
+      "Only state values, results or outcomes you actually got back from a tool. If you could not run something, say so instead of guessing.",
       // Stated as a positive instruction with concrete cases. "Don't reply
       // unless..." is exactly the negative phrasing local models mishandle,
       // and the escape hatch is a tool call rather than a sentinel word.
