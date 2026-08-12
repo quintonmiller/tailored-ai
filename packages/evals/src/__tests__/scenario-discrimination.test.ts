@@ -92,7 +92,24 @@ describe("every scenario rejects a degenerate outcome", () => {
   // This is the only part of a witness conversion that can be verified without a
   // model: it proves the assertion is bound to the witness. Whether the model
   // can satisfy it is a separate question, and needs a run.
-  for (const scenario of scenarios.filter((s) => declaredTokenNames(s.tokens).length > 0)) {
+  // Only scenarios that require a witness to be *present*. Where the witness is
+  // used negatively — `reply_mentions_none`, asserting the agent did not leak
+  // another room's content — a reply that carries no witness is the *correct*
+  // outcome, and demanding it fail would be backwards.
+  const POSITIVE_WITNESS = new Set([
+    "reply_mentions_any",
+    "reply_mentions_all",
+    "reply_matches",
+    "tool_args",
+    "calls_by",
+  ]);
+  const witnessed = scenarios.filter(
+    (s) =>
+      declaredTokenNames(s.tokens).length > 0 &&
+      s.expect.some((a) => POSITIVE_WITNESS.has(kindOf(a)) && JSON.stringify(a).includes("{{token:")),
+  );
+
+  for (const scenario of witnessed) {
     it(`${scenario.id} — its assertions are bound to the witness, not to a guessable value`, async () => {
       const mine = mintTokens(scenario.tokens ?? []);
       const scoped = substituteTokens(scenario, mine);

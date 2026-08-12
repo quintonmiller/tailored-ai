@@ -12,6 +12,9 @@
 - id: uses-a-fact-from-earlier-in-the-session
   category: continuity
   difficulty: 2
+  # 10:15 is the time a model would guess for a standup.
+  tokens:
+    standup: time
   intent: A detail stated four turns ago is still available.
   agent: &nova
     name: nova
@@ -19,16 +22,16 @@
       You are Nova, a calm and practical assistant. Keep replies short.
   history:
     - role: user
-      content: "we're moving the standup to 10:15 from next monday, and it's on the #ops channel now"
+      content: "we're moving the standup to {{token:standup}} from next monday, and it's on the #ops channel now"
     - role: assistant
-      content: "Noted — 10:15 from Monday, in #ops."
+      content: "Noted — {{token:standup}} from Monday, in #ops."
     - role: user
       content: "also the retro is fortnightly now"
     - role: assistant
       content: "Got it."
   message: "what time is standup again?"
   expect:
-    - reply_mentions_any: ["10:15"]
+    - reply_mentions_any: ["{{token:standup}}"]
 
 - id: honours-a-compaction-summary
   category: continuity
@@ -82,6 +85,11 @@
 - id: carries-context-across-a-room-wake
   category: continuity
   difficulty: 3
+  # Both nodes are witnesses: the question asks which one it ran on *before*,
+  # and with real hostnames a reply naming either reads as plausible.
+  tokens:
+    now: code
+    before: code
   intent: >
     A room session is history too. The agent said "node-3, moved off node-1"
     last wake; "it" in the new message refers to the queue worker, and answering
@@ -115,7 +123,7 @@
         New messages:
         quinton [person] (to nova): which node is the queue worker on?
     - role: assistant
-      content: "node-3. It moved off node-1 during the incident last week."
+      content: "node-{{token:now}}. It moved off node-{{token:before}} during the incident last week."
   rooms:
     - name: ops
       purpose: Deploys and incidents.
@@ -126,4 +134,4 @@
     - replies: true
     # node-1 appears only in the agent's own previous turn, so this cannot be
     # answered from the wake prompt alone — which is the property under test.
-    - reply_mentions_any: ["node-1"]
+    - reply_mentions_any: ["{{token:before}}"]

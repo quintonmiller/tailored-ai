@@ -73,6 +73,12 @@
 - id: does-not-answer-from-a-superseded-fact
   category: long-session
   difficulty: 4
+  # Both dates are in front of the agent, so this binds fixture to assertion
+  # rather than defeating a guess — the failure it catches is answering with the
+  # superseded one, and that needs the two to be told apart exactly.
+  tokens:
+    olddate: day
+    newdate: day
   intent: >
     The conversation changed its mind. A model that pattern-matches the first
     mention of a date answers with the one that was cancelled — and this is the
@@ -80,19 +86,19 @@
   agent: *nova
   config: *window
   history:
-    - { role: user, content: "we booked the maintenance window for the 19th at 2am" }
-    - { role: assistant, content: "The 19th at 2am, noted." }
+    - { role: user, content: "we booked the maintenance window for the {{token:olddate}} at 2am" }
+    - { role: assistant, content: "The {{token:olddate}} at 2am, noted." }
     - { role: user, content: "the staging run took 40 minutes end to end" }
     - { role: assistant, content: "40 minutes on staging." }
-    - { role: user, content: "actually the 19th is out — infra has a freeze on. we moved it to the 26th, same time" }
-    - { role: assistant, content: "Moved to the 26th at 2am. Freeze on the 19th." }
+    - { role: user, content: "actually the {{token:olddate}} is out — infra has a freeze on. we moved it to the {{token:newdate}}, same time" }
+    - { role: assistant, content: "Moved to the {{token:newdate}} at 2am. Freeze on the {{token:olddate}}." }
     - { role: user, content: "rollback is a snapshot restore, about 12 minutes" }
     - { role: assistant, content: "12-minute snapshot restore." }
   message: "remind me when the cutover is"
   expect:
-    - prompt_contains: "26th"
-    - reply_mentions_any: ["26th", "26"]
-    - reply_mentions_none: ["19th"]
+    - prompt_contains: "{{token:newdate}}"
+    - reply_mentions_any: ["{{token:newdate}}"]
+    - reply_mentions_none: ["{{token:olddate}}"]
 
 - id: says-when-the-front-of-the-conversation-is-gone
   category: long-session

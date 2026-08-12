@@ -53,7 +53,7 @@ const LENGTH = 8;
  * the specific value cannot be produced by anything except having read it —
  * which is the only property a witness needs.
  */
-export type TokenFormat = "code" | "number" | "name";
+export type TokenFormat = "code" | "number" | "name" | "time" | "day";
 
 /** Consonant+vowel syllables. 16^3 = 4096 names, none of which a model has any reason to emit unprompted. */
 const SYLLABLES = [
@@ -87,6 +87,21 @@ export function mintToken(format: TokenFormat = "code"): string {
     // digits are written plainly, and one in nine thousand is unguessable by
     // any margin that matters when the model has no reason to guess at all.
     return String(randomInt(1000, 10_000));
+  }
+  if (format === "time") {
+    // A 24-hour clock time, business hours. 600 values — far less entropy than a
+    // code, and enough: the point here is that "10:15" is the time a model would
+    // guess for a standup, not that a witness must be cryptographic.
+    return `${String(randomInt(8, 18)).padStart(2, "0")}:${String(randomInt(0, 60)).padStart(2, "0")}`;
+  }
+  if (format === "day") {
+    // An ordinal day. Only 28 values, and deliberately so: where this is used the
+    // scenario already puts both candidates in front of the agent, so the job is
+    // binding the fixture to the assertion rather than defeating a guess.
+    const n = randomInt(1, 29);
+    const suffix =
+      n % 10 === 1 && n !== 11 ? "st" : n % 10 === 2 && n !== 12 ? "nd" : n % 10 === 3 && n !== 13 ? "rd" : "th";
+    return `${n}${suffix}`;
   }
   if (format === "name") {
     const pick = () => SYLLABLES[randomInt(SYLLABLES.length)];

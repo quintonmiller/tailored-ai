@@ -156,7 +156,7 @@ const scenario = z
     tokens: z
       .union([
         z.array(z.string().regex(/^[A-Za-z0-9_-]+$/)).nonempty(),
-        z.record(z.string().regex(/^[A-Za-z0-9_-]+$/), z.enum(["code", "number", "name"])),
+        z.record(z.string().regex(/^[A-Za-z0-9_-]+$/), z.enum(["code", "number", "name", "time", "day"])),
       ])
       .optional(),
     toolResults: z

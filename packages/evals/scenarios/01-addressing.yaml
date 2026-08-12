@@ -85,6 +85,12 @@
 - id: answers-the-newest-message-not-the-answered-one
   category: addressing
   difficulty: 3
+  # Codenames, so "answered the new question" cannot be satisfied by echoing a
+  # word from the old one. "retro" and "friday" both appear in the incoming
+  # line, so the old assertion passed on a reply that merely quoted it back.
+  tokens:
+    oldtopic: name
+    newtopic: name
   intent: >
     Messages already shown carry a cursor past them. A wake is about what
     arrived since, so the reply should be about the new question.
@@ -93,15 +99,15 @@
     - name: ops
       purpose: Deploys and incidents.
       seen:
-        - { speaker: quinton, to: [nova], body: "what time is the standup?" }
+        - { speaker: quinton, to: [nova], body: "what time is the {{token:oldtopic}} standup?" }
         - { speaker: nova, body: "9:30, same as always." }
       incoming:
-        - { speaker: quinton, to: [nova], body: "and who's running the retro on friday?" }
+        - { speaker: quinton, to: [nova], body: "and who's running the {{token:newtopic}} retro on friday?" }
   wake: { room: ops }
   expect:
     - replies: true
-    - reply_mentions_any: ["retro", "friday"]
-    - reply_mentions_none: ["standup", "9:30"]
+    - reply_mentions_any: ["{{token:newtopic}}"]
+    - reply_mentions_none: ["{{token:oldtopic}}"]
 
 - id: speaks-to-the-room-when-nobody-is-named
   category: addressing

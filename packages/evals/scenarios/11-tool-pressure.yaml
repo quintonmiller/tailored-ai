@@ -227,6 +227,12 @@
 - id: does-not-answer-a-shell-question-from-the-task-list
   category: tool-pressure
   difficulty: 4
+  # Binds the stub to the assertion. They were two literals that had to be kept
+  # in step by hand, and the failure mode of forgetting is silent in both
+  # directions: change the stub and the row fails for nothing, change the
+  # assertion and it passes for nothing.
+  tokens:
+    depth: number
   knownGap: "#500 — 0/6. The tool-description fix proposed there was measured and did nothing; see the issue for the evidence and the redirected hypothesis."
   intent: >
     "Queue" is not a task word here. The machine has a message queue, the
@@ -241,11 +247,11 @@
     question is the expensive kind, and this is the only row that asks for it.
   agent: *nova
   toolResults:
-    exec: "queue depth: 41207 messages"
+    exec: "queue depth: {{token:depth}} messages"
   message: "how deep is the queue right now?"
   expect:
     - calls_tool: exec
     - does_not_call: [task_query]
     # Without this the row passes on a reply that called exec and then said
     # nothing useful — the absence-scored-as-success trap.
-    - reply_mentions_any: ["41207", "41,207"]
+    - reply_mentions_any: ["{{token:depth}}"]

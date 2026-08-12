@@ -111,6 +111,10 @@
 - id: does-not-invent-another-room
   category: cross-room
   difficulty: 3
+  # Witnessed so "did not leak the other room" is exact. `["mango", "palette"]`
+  # would fail a reply that said "palette" for an unrelated reason.
+  tokens:
+    palette: name
   intent: >
     With the view off, the honest answer is that it cannot see the other room —
     not a plausible summary of a room it was never shown.
@@ -122,17 +126,21 @@
     - name: design
       purpose: Product design chat.
       seen:
-        - { speaker: dana, body: "the mango palette is signed off, shipping it friday" }
+        - { speaker: dana, body: "the {{token:palette}} palette is signed off, shipping it friday" }
   wake: { room: ops }
   expect:
     # Saying nothing also mentions no palette. It was asked a direct question,
     # so silence is a different failure, not a pass.
     - replies: true
-    - reply_mentions_none: ["mango", "palette"]
+    - reply_mentions_none: ["{{token:palette}}"]
 
 - id: joins-two-rooms-to-answer-one-question
   category: cross-room
   difficulty: 5
+  # Binds the fixture to the assertion: the blocker named in ops and the item
+  # cleared in design have to be the same thing, or the row measures nothing.
+  tokens:
+    artifact: name
   intent: >
     The question is answerable only by putting a fact from each room together:
     ops says the deploy is blocked on the icon export, design says the icons
@@ -148,20 +156,20 @@
     - name: ops
       purpose: Deploys and incidents.
       seen:
-        - { speaker: quinton, body: "release is blocked on the icon export, nothing else outstanding" }
+        - { speaker: quinton, body: "release is blocked on the {{token:artifact}} export, nothing else outstanding" }
       incoming:
         - { speaker: quinton, to: [nova], body: "are we clear to ship?" }
     - name: design
       seen:
-        - { speaker: dana, body: "icon export is done and merged as of 14:30" }
+        - { speaker: dana, body: "{{token:artifact}} export is done and merged as of 14:30" }
   wake: { room: ops }
   expect:
     # Proves the design room reached the request at all. Without it a failure
     # cannot be told from the view being off, which is the bug this scenario
     # would otherwise be blamed for.
-    - prompt_contains: "icon export is done"
+    - prompt_contains: "{{token:artifact}} export is done"
     - posts_in: ops
     # The join itself: it has to conclude, not recite the two facts. A reply
     # that says "blocked on icons" without noticing they shipped is the failure.
     - reply_matches: "clear|unblocked|good to (go|ship)|yes|ready|nothing (is )?outstanding"
-    - reply_mentions_none: ["still blocked", "not clear", "waiting on the icon"]
+    - reply_mentions_none: ["still blocked", "not clear", "waiting on the {{token:artifact}}"]

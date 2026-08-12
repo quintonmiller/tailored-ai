@@ -17,6 +17,8 @@
 - id: default-history-budget-keeps-the-conversation
   category: budget
   difficulty: 1
+  tokens:
+    host: code
   intent: >
     With `agent.maxHistoryTokens` at whatever `DEFAULT_CONFIG` currently says
     and a realistic tool set, does anything the user said two messages ago still
@@ -34,16 +36,18 @@
     agent:
       maxHistoryTokens: null
   history:
-    - { role: user, content: "the queue worker lives on node-3, remember that" }
-    - { role: assistant, content: "Noted — node-3." }
+    - { role: user, content: "the queue worker lives on node-{{token:host}}, remember that" }
+    - { role: assistant, content: "Noted — node-{{token:host}}." }
   message: "which node did I say?"
   expect:
-    - prompt_contains: "node-3"
-    - reply_mentions_any: ["node-3"]
+    - prompt_contains: "{{token:host}}"
+    - reply_mentions_any: ["{{token:host}}"]
 
 - id: a-tuned-budget-keeps-the-conversation
   category: budget
   difficulty: 1
+  tokens:
+    host: code
   intent: >
     The control. Same two messages, same tools, an explicit budget with room for
     the schemas. If this one fails too, the problem is not the default.
@@ -52,9 +56,9 @@
     agent:
       maxHistoryTokens: 20000
   history:
-    - { role: user, content: "the queue worker lives on node-3, remember that" }
-    - { role: assistant, content: "Noted — node-3." }
+    - { role: user, content: "the queue worker lives on node-{{token:host}}, remember that" }
+    - { role: assistant, content: "Noted — node-{{token:host}}." }
   message: "which node did I say?"
   expect:
-    - prompt_contains: "node-3"
-    - reply_mentions_any: ["node-3"]
+    - prompt_contains: "{{token:host}}"
+    - reply_mentions_any: ["{{token:host}}"]

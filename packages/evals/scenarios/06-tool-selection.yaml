@@ -45,14 +45,19 @@
 - id: reads-a-file-instead-of-guessing
   category: tool-selection
   difficulty: 2
+  # The row is named "instead of guessing" and then accepted "certificate" —
+  # which is exactly what a model guesses is in a staging todo file. The item is
+  # now a witness, so reading is the only way to name it.
+  tokens:
+    item: name
   intent: Asked what is in a file, look.
   agent: *nova
   toolResults:
-    read: "# todo\n- rotate the staging certificate\n- delete the old backup bucket\n"
+    read: "# todo\n- rotate the staging {{token:item}}\n- delete the old backup bucket\n"
   message: "what's in ~/notes/todo.md?"
   expect:
     - calls_tool: read
-    - reply_mentions_any: ["certificate", "backup"]
+    - reply_mentions_any: ["{{token:item}}"]
 
 - id: runs-a-command-for-a-shell-question
   category: tool-selection

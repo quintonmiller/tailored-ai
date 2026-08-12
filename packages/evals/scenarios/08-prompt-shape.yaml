@@ -101,6 +101,11 @@
 - id: seen-messages-are-not-re-sent
   category: prompt-shape
   difficulty: 1
+  # This row already used a deliberately unguessable marker, written by hand.
+  # Minting it makes it per-run, so a value cannot survive from one run's
+  # fixtures into another's assertion.
+  tokens:
+    marker: code
   intent: >
     A wake carries what arrived since the cursor. Re-sending messages the agent
     was already shown is the bug that put one block in a session twenty-three
@@ -109,10 +114,10 @@
   rooms:
     - name: ops
       seen:
-        - { speaker: quinton, body: "aardvark-marker-one" }
+        - { speaker: quinton, body: "{{token:marker}}" }
         - { speaker: quinton, body: "aardvark-marker-two" }
       incoming:
         - { speaker: quinton, to: [nova], body: "all good?" }
   wake: { room: ops }
   expect:
-    - prompt_not_contains: "aardvark-marker-one"
+    - prompt_not_contains: "{{token:marker}}"

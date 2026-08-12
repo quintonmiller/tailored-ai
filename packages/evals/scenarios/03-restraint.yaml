@@ -97,6 +97,11 @@
 - id: stays-out-of-the-chatter-but-answers-the-one-real-question
   category: restraint
   difficulty: 5
+  # A witness because 5 is the retry limit a model guesses when it has not
+  # looked. The row is about answering the one real question in a noisy room;
+  # it should not also be satisfiable by a plausible default.
+  tokens:
+    limit: number
   intent: >
     Four lines between two people, one of which is a factual question in the
     agent's domain that neither of them can answer. Restraint here is not
@@ -118,7 +123,7 @@
       You are Nova, a calm and practical assistant. Keep replies short.
     tools: [room, exec]
   toolResults:
-    exec: "worker.retry_limit = 5"
+    exec: "worker.retry_limit = {{token:limit}}"
   rooms:
     - name: ops
       purpose: Deploys and incidents.
@@ -133,7 +138,7 @@
     # question in its own domain unanswered, which is the failure the controls
     # in this file exist to catch.
     - replies: true
-    - reply_mentions_any: ["5", "five"]
+    - reply_mentions_any: ["{{token:limit}}"]
     # And only about that. Joining in on lunch is the other failure, and it is
     # the one a pass rate on the positive half would never show.
     - reply_mentions_none: ["lunch", "weekend", "4th"]
