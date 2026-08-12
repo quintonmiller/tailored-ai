@@ -132,7 +132,7 @@ its score pairs one commit's questions with another commit's answers.
 
 ## Difficulty, and why the overall score cannot answer "where does this stop working"
 
-Every scenario carries a required `difficulty`, 1-7. It is a claim about what
+Every scenario carries a required `difficulty`, 1-10. It is a claim about what
 the turn **demands**, never about what it currently scores — grading by observed
 pass rate would make the scale circular, because every fix would relabel the
 scenario and "we handle the hard ones now" would be true by construction.
