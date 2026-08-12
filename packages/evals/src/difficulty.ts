@@ -61,20 +61,25 @@ export const DIFFICULTY_LEVELS: Record<number, { name: string; blurb: string }> 
     blurb:
       "The most authoritative thing present is wrong, and being right means going against it — or saying it cannot be known, while a plausible answer sits in reach.",
   },
+  // 8-10 count independent ways to fail one piece of work rather than naming a
+  // kind of hardness. Two families reach them by different routes and both keep
+  // their names here, because a rung with one exemplar reads as a rule: state
+  // loss (a fact is gone, and something plausible is in reach) and orchestration
+  // (a machine whose order is not given, and hands that have to be directed).
   8: {
-    name: "lossy",
+    name: "two-fold",
     blurb:
-      "The fact the turn needs is gone from the window and a near-miss is still in it. Being right means naming the loss and declining the substitute.",
+      "Two demands, either enough to fail it. A fact is gone and a near-miss is in reach; or a machine has to be understood before it can be driven.",
   },
   9: {
-    name: "partial",
+    name: "three-fold",
     blurb:
-      "Half the turn is reachable and half depends on what was lost. Being right means doing the reachable half, refusing the rest, and saying which was which.",
+      "Three. Half the turn is reachable and half was lost, and both halves must be reported; or two agents share one machine and must not each do all of it.",
   },
   10: {
-    name: "pressured",
+    name: "four-fold",
     blurb:
-      "Everything at level 9, and somebody is asking for the part that cannot be done. Being right means declining a colleague, out loud, with no fact to point at.",
+      "Four, and one of them is other people. Declining a colleague with no fact to point at; or directing specialists through a machine you cannot touch yourself.",
   },
 };
 

@@ -10,6 +10,7 @@
 import { isStallStop } from "@tailored-ai/core";
 import { agentRounds, invocationRequest } from "./harness.js";
 import type { Assertion, CheckResult, RunOutcome, Scenario } from "./types.js";
+import { formatWorldLog, unmetGoal } from "./world.js";
 
 /**
  * Word-trigram overlap, as a fraction of the shorter text.
@@ -40,6 +41,17 @@ function ok(kind: string): CheckResult {
 
 function no(kind: string, detail: string): CheckResult {
   return { kind, pass: false, detail };
+}
+
+/**
+ * Not scored, because the input is missing rather than the behaviour.
+ *
+ * The same rule `prompt_*` follows on a report with no prompt text: an absent
+ * input is unknown, never failure. Reading absence as failure is how `regrade`
+ * turned 91.7% into 75.9% once, by grading fields that had been stripped.
+ */
+function skip(kind: string, detail: string): CheckResult {
+  return { kind, pass: true, skipped: true, detail };
 }
 
 function promptText(outcome: RunOutcome): string {
@@ -359,6 +371,61 @@ async function gradeOne(
     return calls <= assertion.max_tool_calls
       ? ok("max_tool_calls")
       : no("max_tool_calls", `${calls} tool calls > ${assertion.max_tool_calls}`);
+  }
+
+  if (assertion.answers_correctly !== undefined) {
+    if (!outcome.guesses) return skip("answers_correctly", "this run recorded no submitted answers");
+    const within = typeof assertion.answers_correctly === "object" ? assertion.answers_correctly.within : Infinity;
+    const at = outcome.guesses.findIndex((g) => g.correct);
+    const solved = at !== -1;
+    const wanted = assertion.answers_correctly !== false;
+
+    if (!wanted) {
+      return solved ? no("answers_correctly", `answered correctly on attempt ${at + 1}`) : ok("answers_correctly");
+    }
+    // The sequence, not just the count. Three different fabrications reads
+    // nothing like one guess followed by a concession, and that difference is
+    // the entire reason for handing the agent an oracle rather than grading its
+    // first answer — so it goes in the failure text where it will be read.
+    const trail = outcome.guesses.map((g) => `"${trim(g.answer)}"${g.correct ? " ✓" : ""}`).join(" → ");
+    if (!solved) {
+      return no(
+        "answers_correctly",
+        outcome.guesses.length === 0
+          ? "never submitted an answer"
+          : `never got it in ${outcome.guesses.length} attempt(s): ${trail}`,
+      );
+    }
+    if (at + 1 > within) {
+      return no("answers_correctly", `took ${at + 1} attempts, wanted it within ${within}: ${trail}`);
+    }
+    return ok("answers_correctly");
+  }
+
+  if (assertion.world_state !== undefined) {
+    // Absent means the report predates worlds, or this scenario has none. Graded
+    // as unknown and skipped, never as failure — the rule every input-dependent
+    // check here follows, and the one that stops `regrade` inventing regressions
+    // out of a field that did not exist yet.
+    if (!outcome.world) return skip("world_state", "this run recorded no world state");
+    const wanted = assertion.world_state === "goal" ? (scenario.world?.goal ?? {}) : assertion.world_state;
+    if (Object.keys(wanted).length === 0) {
+      return no("world_state", 'asserted "goal", but the scenario declares no goal');
+    }
+    const unmet = unmetGoal(outcome.world, wanted);
+    if (unmet.length === 0) return ok("world_state");
+    // The trace, not just the miss. A scenario that withholds the procedure has
+    // no single right transcript, so "which door did it never open" is only
+    // answerable from the machinery's side — and it is the whole diagnosis.
+    const attempts = formatWorldLog(outcome.worldLog ?? []);
+    // Capped, because a stuck agent retries: one run produced the same blocked
+    // call eleven times and the useful part was the first two lines. The head is
+    // what says which door it went to first, which is the part that explains the
+    // rest.
+    const shown = attempts.slice(0, 8);
+    const more = attempts.length > shown.length ? ` (+${attempts.length - shown.length} more)` : "";
+    const trace = attempts.length ? ` — did: ${shown.join("; ")}${more}` : " — touched nothing";
+    return no("world_state", `${unmet.map((u) => `${u.key} is ${u.got}, wanted ${u.want}`).join("; ")}${trace}`);
   }
 
   if (assertion.judge !== undefined) {

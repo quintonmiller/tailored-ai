@@ -173,6 +173,22 @@ describe("every scenario rejects a degenerate outcome", () => {
   }
 
   for (const scenario of graded) {
+    // An agent that did nothing leaves the machinery untouched, so a scenario
+    // with a `world` has to be handed its *initial* state rather than no state
+    // at all. Without this the `world_state` check skips — absent input is
+    // graded as unknown — and a scenario whose only assertion is the goal looks
+    // like it accepts an agent that never moved. Which is the exact failure
+    // this file exists to catch, arriving through the door it just opened.
+    const untouched = {
+      ...(scenario.world ? { world: { ...scenario.world.state }, worldLog: [] } : {}),
+      // Same rule for the oracle: an agent that did nothing submitted nothing,
+      // which is an empty list and not an absent one. Absent means "this run
+      // predates the field" and is graded as unknown, so without this a scenario
+      // whose only assertion is `answers_correctly` would appear to accept an
+      // agent that never opened its mouth.
+      ...(scenario.oracle ? { guesses: [] } : {}),
+    };
+
     // A scenario may declare that silence is the right answer — an
     // acknowledgement addressed to nobody deserves no reply. Then "said
     // nothing" is the *expected* outcome, not a degenerate one, and only the
@@ -186,7 +202,7 @@ describe("every scenario rejects a degenerate outcome", () => {
       it(`${scenario.id} — rejects an agent that ${degenerate.name}`, async () => {
         const checks = await grade(
           { ...scenario, expect: behaviourAssertions(scenario) } as Scenario,
-          degenerate.outcome,
+          { ...degenerate.outcome, ...untouched },
           {
             judge: rejectingJudge,
           },

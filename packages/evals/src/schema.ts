@@ -116,6 +116,8 @@ const assertion = z
     prompt_max_tokens: z.number().optional(),
     max_rounds: z.number().optional(),
     max_tool_calls: z.number().optional(),
+    answers_correctly: z.union([z.boolean(), z.object({ within: z.number().int().positive() }).strict()]).optional(),
+    world_state: z.union([z.record(z.string()), z.literal("goal")]).optional(),
     judge: z.object({ rubric: z.string() }).strict().optional(),
   })
   .strict()
@@ -176,6 +178,36 @@ const scenario = z
         ]),
       )
       .optional(),
+    world: z
+      .object({
+        state: z.record(z.string()).refine((v) => Object.keys(v).length > 0, "a world needs at least one variable"),
+        rules: z
+          .array(
+            z
+              .object({
+                tool: z.string(),
+                by: z.union([z.string(), z.array(z.string()).nonempty()]).optional(),
+                when: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
+                requires: z.record(z.string()).optional(),
+                then: z.string(),
+                else: z.string().optional(),
+                sets: z.record(z.string()).optional(),
+              })
+              .strict(),
+          )
+          .nonempty(),
+        goal: z.record(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
+    oracle: z
+      .object({
+        answer: z.union([z.string(), z.array(z.string()).nonempty()]),
+        attempts: z.number().int().positive().max(10).optional(),
+        acceptsUnknown: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     repeats: z.number().int().positive().optional(),
     expect: z.array(assertion).nonempty(),
   })
@@ -229,6 +261,73 @@ const scenario = z
             message:
               `toolResults stubs "${tool}", which is not in this agent's tools: [${value.agent.tools.join(", ")}] — ` +
               "the agent cannot call it, so the stub is unreachable and the scenario asks for something impossible",
+          });
+        }
+      }
+    }
+    // A world can only be solved if its rules are reachable and its variables
+    // are real. Every one of these has a silent failure mode: a rule on a tool
+    // the agent does not have is a door with no handle, a `requires` on a name
+    // that does not exist is a condition that can never be true, and a `goal`
+    // no rule can set is a scenario that fails every run for a reason nobody
+    // can see from the transcript. All three look exactly like a model limit.
+    if (value.expect.some((a) => a.answers_correctly !== undefined) && !value.oracle) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "asserts answers_correctly but declares no `oracle:` — the agent has no answer tool, " +
+          "so the check can never pass and every run fails for a reason the transcript does not show",
+      });
+    }
+    if (value.oracle && value.agent?.tools && !value.agent.tools.includes("answer")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `declares an oracle, but "answer" is not in this agent's tools: [${value.agent.tools.join(", ")}]`,
+      });
+    }
+    if (value.world) {
+      const known = new Set(Object.keys(value.world.state));
+      // Every agent's tools, not just the one under test. In an orchestration
+      // scenario the agent under test often holds no instruments at all — a lead
+      // that can only talk has to direct the specialists who can act, which is
+      // the whole point — so checking its allowlist alone would reject exactly
+      // the scenarios this seam exists for. An agent that declares no `tools`
+      // gets everything, so the check cannot say anything and stands down.
+      const peers = (value.config?.agents ?? {}) as Record<string, { tools?: unknown }>;
+      const declared = [value.agent?.tools, ...Object.values(peers).map((a) => a?.tools)];
+      const allowed = declared.every((t) => Array.isArray(t)) ? new Set(declared.flat() as string[]) : null;
+      const settable = new Set<string>();
+      for (const rule of value.world.rules) {
+        if (allowed && !allowed.has(rule.tool)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              `world rule drives "${rule.tool}", which no agent in this scenario can call ` +
+              `[${[...allowed].join(", ")}] — nobody can reach it, so the world cannot be solved`,
+          });
+        }
+        for (const key of [...Object.keys(rule.requires ?? {}), ...Object.keys(rule.sets ?? {})]) {
+          if (!known.has(key)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `world rule names "${key}", which is not in state: [${[...known].join(", ")}]`,
+            });
+          }
+        }
+        for (const key of Object.keys(rule.sets ?? {})) settable.add(key);
+      }
+      for (const [key, want] of Object.entries(value.world.goal ?? {})) {
+        if (!known.has(key)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `world goal names "${key}", which is not in state: [${[...known].join(", ")}]`,
+          });
+        } else if (value.world.state[key] !== want && !settable.has(key)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              `world goal wants ${key}=${want}, but no rule sets "${key}" and it starts at ` +
+              `"${value.world.state[key]}" — unreachable, so every run fails and none of them say why`,
           });
         }
       }

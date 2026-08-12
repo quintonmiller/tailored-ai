@@ -51,6 +51,7 @@ import {
 } from "@tailored-ai/core";
 import YAML from "yaml";
 import { registerPinnedClock, timeConfigBlock } from "./clock.js";
+import { answerTool, Oracle } from "./oracle.js";
 import type {
   RecordedCall,
   RecordedExecution,
@@ -61,6 +62,7 @@ import type {
   Scenario,
   ToolResults,
 } from "./types.js";
+import { World } from "./world.js";
 
 export interface HarnessOptions {
   baseUrl: string;
@@ -211,13 +213,20 @@ function matchesStubArg(actual: unknown, expected: string | number | boolean): b
  * was the first, which made every stubbed tool read as harmless and meant the
  * derivability gate could not fire in the benchmark at all.
  */
-function instrument(tool: Tool, recorder: Recorder, results: ToolResults): Tool {
+function instrument(tool: Tool, recorder: Recorder, results: ToolResults, world?: World): Tool {
   const stubbed = STUBBED.has(tool.name);
   return {
     ...tool,
     async execute(args, context) {
       recorder.executions.push({ name: tool.name, args, agent: context.agentName });
       if (!stubbed) return tool.execute(args, context);
+      // The world first, static stubs second. A scenario usually has a handful
+      // of calls that move the machinery and a larger number that only report
+      // things, and making them compose means a puzzle can still have ordinary
+      // furniture in it. `null` is "no rule claimed this call", which is why the
+      // world returns that rather than a default of its own.
+      const moved = world?.resolve(tool.name, args, context.agentName);
+      if (moved !== null && moved !== undefined) return { success: true, output: moved };
       return { success: true, output: stubResult(tool.name, args, results) };
     },
   };
@@ -527,6 +536,15 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
 
   const started = Date.now();
   const recorder = new Recorder();
+  // Built once per run, so every agent in a multi-agent scenario drives the same
+  // machinery. That is the whole point of a shared world: what one agent unlocks
+  // is unlocked for the next one, and two agents doing the same step is visible
+  // as a repeat rather than as two independent successes.
+  const world = scenario.world ? new World(scenario.world) : undefined;
+  // Same lifetime as the world, and for the same reason: in a multi-agent
+  // scenario the attempts are the team's, not each agent's. Three guesses each
+  // would make a room of five agents a search rather than a test.
+  const oracle = scenario.oracle ? new Oracle(scenario.oracle) : undefined;
   let db: import("better-sqlite3").Database | undefined;
   let roomsRegistered = false;
 
@@ -587,7 +605,15 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
       ctxDir: string,
       cfgPath?: string,
       runtimeOpts?: Record<string, unknown>,
-    ) => createTools(cfg, ctxDir, cfgPath, runtimeOpts).map((t) => instrument(t, recorder, scenario.toolResults ?? {}));
+    ) => [
+      ...createTools(cfg, ctxDir, cfgPath, runtimeOpts).map((t) =>
+        instrument(t, recorder, scenario.toolResults ?? {}, world),
+      ),
+      // Not instrumented: it is not a stub standing in for something real, it
+      // *is* the thing. Appended here rather than in the meta-tool list so an
+      // agent's `tools:` allowlist still governs whether it can reach it.
+      ...(oracle ? [answerTool(oracle, recorder)] : []),
+    ];
 
     const providerFactory = (cfg: Parameters<typeof createProvider>[0], providerId?: string) => {
       const built = createProvider(cfg, providerId);
@@ -609,7 +635,9 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
       config,
     );
     runtime.setMetaTools(
-      createMetaTools(runtime, contextDir, kbDir).map((t) => instrument(t, recorder, scenario.toolResults ?? {})),
+      createMetaTools(runtime, contextDir, kbDir).map((t) =>
+        instrument(t, recorder, scenario.toolResults ?? {}, world),
+      ),
     );
 
     const outcome = scenario.rooms?.length
@@ -623,6 +651,8 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
       executions: recorder.executions,
       requests: recorder.requests,
       usage: recorder.usage,
+      ...(world ? { world: world.snapshot(), worldLog: world.log } : {}),
+      ...(oracle ? { guesses: oracle.submissions } : {}),
       latencyMs: Date.now() - started,
       providerErrors: recorder.failures,
       retries: recorder.retries,
@@ -636,6 +666,10 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
       posts: [],
       requests: recorder.requests,
       usage: recorder.usage,
+      // Recorded even when the turn threw: how far the world got before it fell
+      // over is the most useful thing about a crashed run.
+      ...(world ? { world: world.snapshot(), worldLog: world.log } : {}),
+      ...(oracle ? { guesses: oracle.submissions } : {}),
       latencyMs: Date.now() - started,
       providerErrors: recorder.failures,
       error: (err as Error).message,
