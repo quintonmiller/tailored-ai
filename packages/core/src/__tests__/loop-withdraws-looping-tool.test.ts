@@ -52,7 +52,7 @@ interface Recorder {
  * The shape of the real failure: the agent is not broken, it is fixated. Given
  * anything else to do it does it.
  */
-function fixatedProvider(stuck: string, escape: string): AIProvider & Recorder {
+function fixatedProvider(stuck: string, alternate: string): AIProvider & Recorder {
   return {
     id: "fake",
     name: "fake",
@@ -75,13 +75,13 @@ function fixatedProvider(stuck: string, escape: string): AIProvider & Recorder {
       // Once, then answer. A fixture that keeps calling the escape tool would
       // simply cycle on that instead and re-enter the path under test, which is
       // realistic but tests nothing about the first withdrawal.
-      if (names.includes(escape) && !this.used) {
+      if (names.includes(alternate) && !this.used) {
         this.used = true;
         return {
           content: null,
           usage: { input: 0, output: 0 },
           finishReason: "tool_calls",
-          toolCalls: [{ id: `call-${this.calls}`, name: escape, arguments: {} }],
+          toolCalls: [{ id: `call-${this.calls}`, name: alternate, arguments: {} }],
         };
       }
       return { content: "done, using what was left", usage: { input: 0, output: 0 }, finishReason: "stop" };
