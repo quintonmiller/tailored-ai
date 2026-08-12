@@ -11,11 +11,15 @@
     Measured, not guessed: 36% of every tool call in the first baseline was
     recall/facts/memory, and they clustered on the scenarios where the answer was
     in the previous message. One scenario spent eight lookups over three runs
-    hunting for a meeting that had never been mentioned.
+    hunting for a meeting that had never been mentioned. (The share is 27% on the
+    2026-08-11 cohort; the prompt opener that drove it has since been removed.)
 
-    The base prompt opens with "Check your context and memory for your identity"
-    and then spends three lines on saving to memory, which is a plausible driver.
-    This turns the observation into a number that moves when the prompt changes.
+    The id says *search*, and for a while the assertion said `does_not_call:
+    [recall, facts, memory, core_memory]` — which also forbids *saving*. The base
+    prompt tells every agent to save durable facts, so an agent that answered
+    "node-3" from the conversation and then filed it scored as a failure for
+    obeying its instructions. That read as a bimodal capability gap (6/12 at
+    n=12) when it was one assertion counting two different acts.
   agent: &nova
     name: nova
     instructions: |
@@ -25,7 +29,11 @@
     - { role: assistant, content: "Noted — node-3." }
   message: "which node is the queue worker on?"
   expect:
-    - does_not_call: [recall, facts, memory, core_memory]
+    # Lookups only. Writing what it just learned is what the base prompt asks
+    # for; going to storage for a fact two messages up is the failure.
+    - does_not_call_with:
+        tool: [recall, facts, memory, core_memory]
+        where: { action: [query, search, get, read, list] }
     - reply_mentions_any: ["node-3"]
 
 - id: does-not-hunt-for-something-never-mentioned

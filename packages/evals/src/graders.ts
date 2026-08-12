@@ -124,12 +124,26 @@ async function gradeOne(
 
   if (assertion.does_not_call_with !== undefined) {
     const { tool, where } = assertion.does_not_call_with;
+    // Both sides accept a list, meaning "any of these". A scenario that forbids
+    // *looking things up* has to name four memory tools and their five read
+    // actions; spelled one pair at a time that is twenty entries, and the
+    // twentieth is the one nobody writes. The alternative people actually
+    // reached for was `does_not_call: [recall, facts, …]`, which also forbids
+    // *writing* — and scored an agent that answered correctly and saved a
+    // durable fact as a failure.
+    const tools = Array.isArray(tool) ? tool : [tool];
     const offending = outcome.calls
-      .filter((c) => c.name === tool)
-      .filter((call) => Object.entries(where).every(([key, expected]) => matchesArg(call.args[key], expected)));
+      .filter((c) => tools.includes(c.name))
+      .filter((call) =>
+        Object.entries(where).every(([key, expected]) =>
+          Array.isArray(expected)
+            ? expected.some((option) => matchesArg(call.args[key], option))
+            : matchesArg(call.args[key], expected),
+        ),
+      );
     return offending.length === 0
       ? ok("does_not_call_with")
-      : no("does_not_call_with", `${tool} was called with ${JSON.stringify(offending[0].args)}`);
+      : no("does_not_call_with", `${offending[0].name} was called with ${JSON.stringify(offending[0].args)}`);
   }
 
   if (assertion.posts_in !== undefined) {
