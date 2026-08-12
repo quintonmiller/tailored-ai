@@ -74,6 +74,20 @@ export interface Simulation {
   advance(): SimEvent[];
   /** Everything that has happened, in order. */
   readonly events: SimEvent[];
+  /**
+   * What acting on an event looks like: event kind → the tools whose use counts
+   * as a response. Feeds the organisational-latency metric in `latency.ts`.
+   *
+   * Declared by the simulation rather than inferred, because the alternative is
+   * to treat any later tool call as a response — which reports a latency of zero
+   * for everything and reads as a perfect score. An event with no entry here is
+   * simply not traced.
+   *
+   * The entries worth writing are the ones a *different* function answers than
+   * the one that can see the event. Those are what make the number about the
+   * organisation instead of about an individual.
+   */
+  readonly responses?: Record<string, string[]>;
   /** The numbers the benchmark reports. Called once, at the end. */
   metrics(): SimMetrics;
   /** The headline figure, so a report can rank runs without knowing the domain. */

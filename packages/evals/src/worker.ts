@@ -15,6 +15,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { grade, type JudgeFn, scoreMilestones } from "./graders.js";
 import { type HarnessOptions, runOnce } from "./harness.js";
 import { writeWorkerResult } from "./protocol.js";
@@ -29,6 +30,14 @@ interface Payload {
   judge: boolean;
   /** Keep the full prompt text on every run, so the report can be fully re-graded later. */
   keepPrompts?: boolean;
+  /**
+   * The file the scenario was loaded from, imported here for its side effects.
+   *
+   * A YAML scenario has none and this is inert. A TypeScript one may register a
+   * simulation, and nothing else in this process would have done it — the
+   * scenario arrives as JSON, and JSON does not carry a module's imports.
+   */
+  source?: string;
 }
 
 /**
@@ -96,6 +105,9 @@ async function main(): Promise<void> {
   if (!payloadPath) throw new Error("worker needs a payload file path");
   const payload = JSON.parse(readFileSync(payloadPath, "utf8")) as Payload;
   const { scenario, repeats } = payload;
+  if (payload.source && /\.(ts|mts|js|mjs)$/.test(payload.source)) {
+    await import(pathToFileURL(payload.source).href);
+  }
   const judge = payload.judge ? makeJudge(payload.options) : undefined;
 
   const runs: RunResult[] = [];

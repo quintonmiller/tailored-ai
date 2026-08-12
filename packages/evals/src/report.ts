@@ -13,6 +13,9 @@ import { describeDifficulty } from "./difficulty.js";
 import { EFFORT_LABELS, formatMs, summariseScenarios } from "./efficiency.js";
 import { milestoneScore } from "./graders.js";
 import { FACT_STAGES } from "./routing.js";
+import { simulationPolicies } from "./sim/index.js";
+import { summariseResponses, traceResponses } from "./sim/latency.js";
+import { runPolicy } from "./sim/sweep.js";
 import type { BenchmarkReport, FactTrace, MilestoneResult, ScenarioResult } from "./types.js";
 
 const num = (n: number) => n.toLocaleString("en-US");
@@ -197,6 +200,7 @@ export function printScenario(scenario: ScenarioResult): void {
     // visible by reading the report JSON — where it turned out to be a defect in
     // the milestone rather than in the run.
     if (scenario.runs.some((r) => r.milestones?.some((m) => !m.reached))) printMilestones(scenario);
+    printSimulation(scenario);
     return;
   }
   // The level rides along with the intent rather than the headline, because it
@@ -224,6 +228,84 @@ export function printScenario(scenario: ScenarioResult): void {
   // far it got* — which is only worth reading once you know it went wrong.
   printMilestones(scenario);
   printFactRouting(scenario);
+  printSimulation(scenario);
+}
+
+/**
+ * Where the company ended up, and how long it took to notice things.
+ *
+ * Printed whether the row passed or failed, unlike everything else here, because
+ * a simulation row has no interesting pass/fail: the assertions are a floor and
+ * the *number* is the result. A green row that says nothing else would be the
+ * least informative possible rendering of the most informative scenario.
+ */
+function printSimulation(scenario: ScenarioResult): void {
+  const runs = scenario.runs.filter((r) => r.outcome.simulation);
+  if (!runs.length) return;
+
+  for (const [index, run] of runs.entries()) {
+    const sim = run.outcome.simulation as NonNullable<typeof run.outcome.simulation>;
+    const label = runs.length > 1 ? `run ${index + 1}: ` : "";
+    const value = sim.metrics.enterpriseValue ?? sim.objective;
+    const created = sim.metrics.valueCreated;
+    const managed = sim.daysManaged < sim.days ? colour(` — managed ${sim.daysManaged} of ${sim.days} days`, DIM) : "";
+    console.log(
+      `      ${label}${money(value)}` +
+        (created === undefined ? "" : ` (${created >= 0 ? "+" : ""}${money(created)})`) +
+        `  service ${((sim.metrics.serviceLevel ?? 0) * 100).toFixed(0)}%` +
+        (sim.metrics.bankrupt ? colour("  BANKRUPT", RED) : "") +
+        managed,
+    );
+
+    // Where it sits on the ladder, which is the only thing that makes the figure
+    // above mean anything. Re-run here rather than stored: it costs milliseconds
+    // and no model, and a number remembered from another build of the economy
+    // would be worse than none.
+    const ladder = Object.entries(simulationPolicies(sim.name))
+      .map(([name, make]) => ({
+        name,
+        value: runPolicy(sim.name, make(), sim.seed, sim.days, sim.daysPerRound ?? 1).enterpriseValue ?? 0,
+      }))
+      .sort((a, b) => a.value - b.value);
+    const beaten = ladder.filter((b) => value > b.value).map((b) => b.name);
+    const above = ladder.find((b) => b.value >= value);
+    console.log(
+      colour(
+        `      ${beaten.length ? `beat ${beaten.join(", ")}` : "beat no baseline"}` +
+          `${above ? `; behind ${above.name} at ${money(above.value)}` : "; ahead of every baseline"} (same seed)`,
+        DIM,
+      ),
+    );
+
+    const rows = traceResponses({
+      events: sim.events,
+      responses: sim.responses ?? {},
+      executions: run.outcome.executions ?? [],
+      dayOfTurn: sim.dayOfTurn,
+      roles: sim.roles,
+    });
+    if (rows.length) {
+      const summary = summariseResponses(rows);
+      console.log(
+        colour(
+          `      reacted to ${summary.answered}/${summary.events} events` +
+            `${summary.meanDays === null ? "" : `, ${summary.meanDays}d on average, worst ${summary.worstDays}d`}` +
+            `; ${summary.crossRole} routed to another function`,
+          DIM,
+        ),
+      );
+      for (const row of rows.filter((r) => r.latencyDays === null)) {
+        console.log(colour(`      ${colour("×", RED)} ${row.kind} on day ${row.day} was never acted on`, DIM));
+      }
+    }
+  }
+}
+
+function money(n: number): string {
+  const abs = Math.abs(n);
+  if (abs >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
+  if (abs >= 1_000) return `$${Math.round(n / 1_000)}K`;
+  return `$${Math.round(n)}`;
 }
 
 /**

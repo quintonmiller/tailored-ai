@@ -22,8 +22,17 @@ import { gradient, runPolicy, summarise, sweep } from "../sim/sweep.js";
 /** Enough seeds to rank policies, few enough to stay a unit test. */
 const SEEDS = Array.from({ length: 24 }, (_, i) => 5000 + i);
 
-/** Weakest first. The order the ladder has to come out in. */
-const LADDER = ["random", "static", "fill-the-line", "reorder-point", "operator"] as const;
+/**
+ * Weakest first: the four policies that differ only in how much attention they
+ * pay, and therefore have to come out in order.
+ *
+ * `fill-the-line` and `growth` are deliberately not here. Both are *better* run
+ * companies than `static` by every operational measure and both earn less than
+ * the policy they are built on, which is the whole reason they exist — folding
+ * them into one line and demanding it be monotonic would either hide that or
+ * fail forever. They get their own checks below.
+ */
+const SPINE = ["random", "static", "reorder-point", "operator"] as const;
 
 describe("the seeded generator", () => {
   it("gives the same run twice for the same seed", () => {
@@ -84,11 +93,14 @@ describe("the economics", () => {
 });
 
 describe("the baseline ladder", () => {
-  const summaries = LADDER.map((name) => summarise(sweep("factory", FACTORY_POLICIES[name](), SEEDS)));
-  const by = (name: string) => summaries.find((s) => s.policy === name) as (typeof summaries)[number];
+  const all = [...SPINE, "fill-the-line", "growth"].map((name) =>
+    summarise(sweep("factory", FACTORY_POLICIES[name as keyof typeof FACTORY_POLICIES](), SEEDS)),
+  );
+  const by = (name: string) => all.find((s) => s.policy === name) as (typeof all)[number];
+  const spine = SPINE.map(by);
 
-  it("is monotonic — a better policy earns more", () => {
-    const means = summaries.map((s) => s.mean);
+  it("is monotonic — a policy that pays more attention earns more", () => {
+    const means = spine.map((s) => s.mean);
     expect(means).toEqual([...means].sort((a, b) => a - b));
   });
 
@@ -96,7 +108,7 @@ describe("the baseline ladder", () => {
     // The check that would have caught the first broken build. A spread this
     // size means there is roughly a million dollars of decision quality between
     // playing badly and playing well, so a framework has somewhere to land.
-    const { spread } = gradient(summaries);
+    const { spread } = gradient(spine);
     expect(spread).toBeGreaterThan(500_000);
   });
 
@@ -113,13 +125,28 @@ describe("the baseline ladder", () => {
     expect(by("operator").worst).toBeGreaterThan(by("static").worst);
   });
 
-  it("punishes chasing utilisation, which is the trap it exists to show", () => {
-    // `fill-the-line` is reorder-point plus a sales manager moving price until
-    // the line is full. It is a plausible local optimisation and it destroys
-    // real money, because filling the line by discounting only pays when
-    // capacity is what binds.
-    expect(by("fill-the-line").mean).toBeLessThan(by("reorder-point").mean);
-    expect(by("fill-the-line").serviceLevel).toBeGreaterThan(by("reorder-point").serviceLevel);
+  it("can actually ruin a company, so the risk columns describe something real", () => {
+    // For a long time the answer was no: every policy finished solvent on every
+    // seed, which made the bankruptcy rate, P10 and worst case a column of
+    // decoration. A benchmark that cannot show a downside cannot mark anything
+    // down for running into one.
+    expect(by("random").bankruptcyRate).toBeGreaterThan(0);
+    expect(by("random").p10).toBeLessThan(by("random").mean * 0.6);
+    expect(by("operator").bankruptcyRate).toBe(0);
+  });
+
+  it("punishes the two policies that serve customers best", () => {
+    // The finding worth the whole simulation. `fill-the-line` moves price until
+    // the line is full; `growth` builds and staffs 20% ahead of demand and never
+    // lets anyone go. Both are recognisable management, both post the highest
+    // service levels in the set, and both earn less than the plain reorder-point
+    // rule they are built on — because filling a line and serving every order
+    // are not the objective, and a benchmark that scores subsystems separately
+    // would have called each of them an improvement.
+    for (const trap of ["fill-the-line", "growth"]) {
+      expect(by(trap).serviceLevel).toBeGreaterThan(by("reorder-point").serviceLevel);
+      expect(by(trap).mean).toBeLessThan(by("reorder-point").mean);
+    }
   });
 
   it("varies enough between seeds that one run cannot rank two policies", () => {

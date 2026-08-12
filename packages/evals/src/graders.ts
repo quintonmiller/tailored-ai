@@ -10,6 +10,9 @@
 import { isStallStop } from "@tailored-ai/core";
 import { agentRounds, invocationRequest } from "./harness.js";
 import { formatFactTrace, reached, traceFacts } from "./routing.js";
+import { simulationPolicies } from "./sim/index.js";
+import { formatResponses, traceResponses } from "./sim/latency.js";
+import { runPolicy } from "./sim/sweep.js";
 import type { Assertion, CheckResult, MilestoneResult, RunOutcome, Scenario } from "./types.js";
 import { everReached, formatWorldLog, unmetGoal } from "./world.js";
 
@@ -34,6 +37,14 @@ export function trigramOverlap(a: string, b: string): number {
   let shared = 0;
   for (const gram of left) if (right.has(gram)) shared++;
   return shared / Math.min(left.size, right.size);
+}
+
+/** Money-sized numbers stay readable; small ones keep their digits. */
+function formatNumber(value: number): string {
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
+  if (abs >= 10_000) return `${Math.round(value / 1_000)}K`;
+  return String(Math.round(value * 1000) / 1000);
 }
 
 function ok(kind: string): CheckResult {
@@ -525,6 +536,80 @@ async function gradeOne(
     return no(
       "score_at_least",
       `scored ${earned}/${possible} = ${(fraction * 100).toFixed(0)}%, wanted ≥${(assertion.score_at_least * 100).toFixed(0)}% — ${where}`,
+    );
+  }
+
+  if (assertion.sim_metric !== undefined) {
+    const { metric, at_least, at_most } = assertion.sim_metric;
+    if (!outcome.simulation) return skip("sim_metric", "this run recorded no simulation");
+    const value = outcome.simulation.metrics[metric];
+    if (value === undefined) {
+      return no(
+        "sim_metric",
+        `no metric "${metric}" — the simulation reports [${Object.keys(outcome.simulation.metrics).join(", ")}]`,
+      );
+    }
+    const context = `${metric} was ${formatNumber(value)} after ${outcome.simulation.daysManaged} managed of ${outcome.simulation.days} days`;
+    if (at_least !== undefined && value < at_least)
+      return no("sim_metric", `${context}, wanted ≥${formatNumber(at_least)}`);
+    if (at_most !== undefined && value > at_most)
+      return no("sim_metric", `${context}, wanted ≤${formatNumber(at_most)}`);
+    return ok("sim_metric");
+  }
+
+  if (assertion.beats_baseline !== undefined) {
+    const { policy, metric = "enterpriseValue", by = 0 } = assertion.beats_baseline;
+    if (!outcome.simulation) return skip("beats_baseline", "this run recorded no simulation");
+    const sim = outcome.simulation;
+    const factory = simulationPolicies(sim.name)[policy];
+    if (!factory) {
+      return no(
+        "beats_baseline",
+        `no baseline policy "${policy}" for simulation "${sim.name}" — known: [${Object.keys(simulationPolicies(sim.name)).join(", ")}]`,
+      );
+    }
+    // Re-run on the run's own seed and horizon, so the comparison is against
+    // identical weather rather than against a number remembered from a sweep on
+    // a different build of the economy. Costs a few milliseconds and no model.
+    const baseline = runPolicy(sim.name, factory(), sim.seed, sim.days, sim.daysPerRound ?? 1)[metric] ?? 0;
+    const mine = sim.metrics[metric] ?? 0;
+    if (mine >= baseline + by) return ok("beats_baseline");
+    return no(
+      "beats_baseline",
+      `${metric} ${formatNumber(mine)} against the ${policy} policy's ${formatNumber(baseline)} on the same seed` +
+        `${by ? ` (needed to beat it by ${formatNumber(by)})` : ""}`,
+    );
+  }
+
+  if (assertion.responds_within !== undefined) {
+    const { event, days, crossingRoles } = assertion.responds_within;
+    if (!outcome.simulation) return skip("responds_within", "this run recorded no simulation");
+    if (!outcome.executions) return skip("responds_within", "this run recorded no executions");
+    const sim = outcome.simulation;
+    const rows = traceResponses({
+      events: sim.events,
+      responses: sim.responses ?? {},
+      executions: outcome.executions,
+      dayOfTurn: sim.dayOfTurn,
+      roles: sim.roles,
+    }).filter((r) => r.kind === event);
+    // An event that never happened on this seed cannot be answered late. Skipped
+    // rather than passed, because a green check for "the disruption we did not
+    // have was handled promptly" is exactly the kind of free pass that makes a
+    // benchmark drift upward without anything improving.
+    if (!rows.length) return skip("responds_within", `no "${event}" happened on this seed`);
+    const late = rows.filter((r) => r.latencyDays === null || r.latencyDays > days);
+    const wrongHands = crossingRoles ? rows.filter((r) => r.crossedRoles !== true) : [];
+    if (!late.length && !wrongHands.length) return ok("responds_within");
+    return no(
+      "responds_within",
+      [
+        late.length ? `${late.length}/${rows.length} not answered within ${days} days` : "",
+        wrongHands.length ? `${wrongHands.length}/${rows.length} answered only inside the function that saw it` : "",
+        formatResponses(rows).trim(),
+      ]
+        .filter(Boolean)
+        .join(" — "),
     );
   }
 

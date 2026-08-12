@@ -23,8 +23,10 @@ import {
   type SimulationOptions,
 } from "../types.js";
 import {
+  availableCredit,
   BASE_MATERIAL_PRICE,
   BILL_OF_MATERIALS,
+  borrowingBase,
   CAPEX_CATALOGUE,
   DEFAULTS,
   enterpriseValue,
@@ -40,6 +42,7 @@ import {
   tick,
   totalInventory,
   unitMaterialCost,
+  unitProductionCost,
 } from "./model.js";
 import { FACTORY_POLICIES } from "./policies.js";
 
@@ -98,7 +101,7 @@ export class FactorySimulation implements Simulation {
     };
     this.horizon = cfg.days;
     this.rng = makeRng(options.seed);
-    this.state = initialState(cfg);
+    this.state = initialState(cfg, this.rng);
     this.openingValue = enterpriseValue(this.state);
   }
 
@@ -115,6 +118,31 @@ export class FactorySimulation implements Simulation {
     if (this.state.day >= this.horizon) return "horizon reached";
     return undefined;
   }
+
+  /**
+   * What answering each event looks like, for the latency metric.
+   *
+   * Every entry here is deliberately answerable by somebody other than the
+   * function that can see the event, which is the whole point of measuring it:
+   *
+   *   demand_shock        seen in the sales history; answered by the production
+   *                       plan (operations), the headcount (the CEO) and the
+   *                       price (sales). Two of the three are somebody else's.
+   *   supplier_disruption seen by supply chain; answered by re-sourcing, which
+   *                       supply chain does hold — the routing question here is
+   *                       whether operations hears about it before the line stops.
+   *   machine_failure     seen by maintenance; the plan that has to shrink
+   *                       around it belongs to operations.
+   *   covenant_warning    seen by finance; nothing finance holds can fix it. The
+   *                       levers are price, plan and headcount, all elsewhere.
+   */
+  readonly responses: Record<string, string[]> = {
+    demand_shock: ["set_production_plan", "set_workforce", "set_price"],
+    supplier_disruption: ["place_purchase_order", "set_production_plan"],
+    supplier_failure: ["place_purchase_order"],
+    machine_failure: ["set_production_plan", "schedule_maintenance"],
+    covenant_warning: ["set_price", "set_production_plan", "set_workforce"],
+  };
 
   advance(): SimEvent[] {
     if (this.done) return [];
@@ -134,7 +162,11 @@ export class FactorySimulation implements Simulation {
     const spec = SUPPLIERS[supplier];
     const unitPrice = BASE_MATERIAL_PRICE[material] * spec.multiplier;
     const cost = unitPrice * quantity;
-    if (cost > s.cash + 400_000) throw new Error(`that order costs ${money(cost)} and the company cannot fund it`);
+    const credit = availableCredit(s);
+    if (cost > s.cash + credit)
+      throw new Error(
+        `that order costs ${money(cost)}; cash is ${money(s.cash)} and the lender will advance ${money(credit)} more`,
+      );
     const disrupted = s.disruptedUntil[supplier];
     const delay = disrupted && disrupted > s.day ? disrupted - s.day : 0;
     const lead = this.rng.fork(`lead:${supplier}:${s.day}:${this.orderSeq}`).int(spec.lead[0], spec.lead[1]) + delay;
@@ -175,12 +207,37 @@ export class FactorySimulation implements Simulation {
     const spec = CAPEX_CATALOGUE.find((c) => c.id === id);
     if (!spec) throw new Error(`no capital project "${id}"`);
     if (this.state.capex.some((c) => c.id === id)) throw new Error(`${id} is already under way`);
-    if (this.state.cash < spec.cost)
-      throw new Error(`${id} costs ${money(spec.cost)}; cash on hand is ${money(this.state.cash)}`);
+    // Fundable on credit, not only out of cash. Capital spending is where a
+    // company takes on real risk, and a rule that only lets it spend money it
+    // already has removes the decision — the interesting question is whether
+    // buying capacity on the line is worth it, and it cannot be asked if the
+    // line is not reachable.
+    if (spec.cost > this.state.cash + availableCredit(this.state))
+      throw new Error(
+        `${id} costs ${money(spec.cost)}; cash on hand is ${money(this.state.cash)} and the lender will advance ${money(availableCredit(this.state))} more`,
+      );
     this.state.cash -= spec.cost;
     this.state.ledger.capexSpend += spec.cost;
     this.state.capex.push({ ...spec, startedDay: this.state.day });
     return `${id} started: ${money(spec.cost)}, ready in ${spec.days} days.`;
+  }
+
+  /**
+   * What this function has heard lately.
+   *
+   * Appended to each role's own status tool rather than broadcast, which is the
+   * whole design: an event reaches the organisation through the one function
+   * that can see it, and travels further only if that function says something.
+   * A shared notice board would hand every agent every event and quietly delete
+   * the coordination problem the benchmark exists to measure.
+   *
+   * Nothing pushes these. They are here for whoever looks.
+   */
+  private notices(role: string, lookback = 10): string {
+    const since = this.state.day - lookback;
+    const seen = this.events.filter((e) => e.day >= since && (!e.visibleTo?.length || e.visibleTo.includes(role)));
+    if (!seen.length) return "";
+    return ["", "Recent notices:", ...seen.map((e) => `• day ${e.day}: ${e.message}`)].join("\n");
   }
 
   // ------------------------------------------------------------------ tools
@@ -247,13 +304,15 @@ export class FactorySimulation implements Simulation {
           "Competitor pricing, reputation, and unfilled orders.",
           {},
           () => {
-            return [
-              `Our price: alpha ${money(s.products.alpha.price)}, beta ${money(s.products.beta.price)}.`,
-              `Competitors average: alpha ${money(s.competitorPrice.alpha)}, beta ${money(s.competitorPrice.beta)}.`,
-              `Customer reputation: ${(s.reputation * 100).toFixed(0)}%.`,
-              `Unfilled orders carried: alpha ${s.products.alpha.backlog}, beta ${s.products.beta.backlog}.`,
-              "Demand responds to price, to the season, and to whether customers got their last order on time.",
-            ].join("\n");
+            return (
+              [
+                `Our price: alpha ${money(s.products.alpha.price)}, beta ${money(s.products.beta.price)}.`,
+                `Competitors average: alpha ${money(s.competitorPrice.alpha)}, beta ${money(s.competitorPrice.beta)}.`,
+                `Customer reputation: ${(s.reputation * 100).toFixed(0)}%.`,
+                `Unfilled orders carried: alpha ${s.products.alpha.backlog}, beta ${s.products.beta.backlog}.`,
+                "Demand responds to price, to the season, and to whether customers got their last order on time.",
+              ].join("\n") + this.notices("sales")
+            );
           },
           "read",
         ),
@@ -266,9 +325,9 @@ export class FactorySimulation implements Simulation {
             if (product !== "alpha" && product !== "beta") throw new Error("product must be alpha or beta");
             const price = num(a.price);
             if (!Number.isFinite(price) || price <= 0) throw new Error("price must be a positive number");
-            const cost = unitMaterialCost(product);
+            const cost = unitProductionCost(product);
             s.products[product].price = Math.round(price);
-            return `${product} now sells at ${money(price)} (materials ${money(cost)}/unit, competitors ${money(s.competitorPrice[product])}).`;
+            return `${product} now sells at ${money(price)} (it costs ${money(cost)} to make, competitors ${money(s.competitorPrice[product])}).`;
           },
         ),
       ],
@@ -285,18 +344,20 @@ export class FactorySimulation implements Simulation {
             const limit = Math.min(press, assembly, packaging, labour);
             const bottleneck =
               limit === labour ? "labour" : limit === assembly ? "assembly" : limit === press ? "press" : "packaging";
-            return [
-              `Capacity/day — press ${press.toFixed(0)}, assembly ${assembly.toFixed(0)}, packaging ${packaging.toFixed(0)}, labour ${labour}.`,
-              `Effective throughput ${limit.toFixed(0)} units/day; the bottleneck is ${bottleneck}.`,
-              `Plan today: alpha ${s.plan.alpha}, beta ${s.plan.beta}.`,
-              `Finished stock: alpha ${s.products.alpha.finished}, beta ${s.products.beta.finished}.`,
-              `Machines out of service: ${
-                s.machines
-                  .filter((m) => m.downDays > 0)
-                  .map((m) => m.id)
-                  .join(", ") || "none"
-              }.`,
-            ].join("\n");
+            return (
+              [
+                `Capacity/day — press ${press.toFixed(0)}, assembly ${assembly.toFixed(0)}, packaging ${packaging.toFixed(0)}, labour ${labour}.`,
+                `Effective throughput ${limit.toFixed(0)} units/day; the bottleneck is ${bottleneck}.`,
+                `Plan today: alpha ${s.plan.alpha}, beta ${s.plan.beta}.`,
+                `Finished stock: alpha ${s.products.alpha.finished}, beta ${s.products.beta.finished}.`,
+                `Machines out of service: ${
+                  s.machines
+                    .filter((m) => m.downDays > 0)
+                    .map((m) => m.id)
+                    .join(", ") || "none"
+                }.`,
+              ].join("\n") + this.notices("operations")
+            );
           },
           "read",
         ),
@@ -333,17 +394,19 @@ export class FactorySimulation implements Simulation {
           "Raw materials, finished goods and warehouse usage.",
           {},
           () => {
-            return [
-              `Raw: aluminum ${s.materials.aluminum}, electronics ${s.materials.electronics}, packaging ${s.materials.packaging}.`,
-              `Finished: alpha ${s.products.alpha.finished}, beta ${s.products.beta.finished}.`,
-              `Warehouse ${totalInventory(s)} / ${s.warehouseCapacity} units. Anything over capacity is written off.`,
-              `Open orders: ${
-                s.orders
-                  .filter((o) => !o.received && !o.failed)
-                  .map((o) => `${o.id} ${o.quantity} ${o.material} (${o.supplier}, day ${o.arrivesDay})`)
-                  .join("; ") || "none"
-              }`,
-            ].join("\n");
+            return (
+              [
+                `Raw: aluminum ${s.materials.aluminum}, electronics ${s.materials.electronics}, packaging ${s.materials.packaging}.`,
+                `Finished: alpha ${s.products.alpha.finished}, beta ${s.products.beta.finished}.`,
+                `Warehouse ${totalInventory(s)} / ${s.warehouseCapacity} units. Anything over capacity is written off.`,
+                `Open orders: ${
+                  s.orders
+                    .filter((o) => !o.received && !o.failed)
+                    .map((o) => `${o.id} ${o.quantity} ${o.material} (${o.supplier}, day ${o.arrivesDay})`)
+                    .join("; ") || "none"
+                }`,
+              ].join("\n") + this.notices("supply-chain")
+            );
           },
           "read",
         ),
@@ -391,13 +454,15 @@ export class FactorySimulation implements Simulation {
           {},
           () => {
             const predictive = s.capex.some((c) => c.id === "predictive-maintenance" && c.completedDay !== undefined);
-            return s.machines
-              .map((m) => {
-                const risk = 0.055 * (1 - m.condition) ** 2.2;
-                const forecast = predictive ? `, ~${(risk * 30 * 100).toFixed(0)}% chance of failure in 30 days` : "";
-                return `${m.id} (${m.stage}): condition ${(m.condition * 100).toFixed(0)}%${m.downDays > 0 ? `, OUT for ${m.downDays}d` : ""}${forecast}`;
-              })
-              .join("\n");
+            return (
+              s.machines
+                .map((m) => {
+                  const risk = 0.055 * (1 - m.condition) ** 2.2;
+                  const forecast = predictive ? `, ~${(risk * 30 * 100).toFixed(0)}% chance of failure in 30 days` : "";
+                  return `${m.id} (${m.stage}): condition ${(m.condition * 100).toFixed(0)}%${m.downDays > 0 ? `, OUT for ${m.downDays}d` : ""}${forecast}`;
+                })
+                .join("\n") + this.notices("maintenance")
+            );
           },
           "read",
         ),
@@ -415,12 +480,16 @@ export class FactorySimulation implements Simulation {
           {},
           () => {
             const l = s.ledger;
-            return [
-              `Cash ${money(s.cash)}, debt ${money(s.debt)}. Enterprise value ${money(enterpriseValue(s))}.`,
-              `Revenue ${money(l.revenue)}.`,
-              `Costs — materials ${money(l.materialCost)}, labour ${money(l.labourCost)}, maintenance ${money(l.maintenanceCost)}, holding ${money(l.holdingCost)}, interest ${money(l.interestCost)}, capex ${money(l.capexSpend)}.`,
-              `Sales lost to stock-outs so far: ${money(l.lostSales)}.`,
-            ].join("\n");
+            return (
+              [
+                `Cash ${money(s.cash)}, debt ${money(s.debt)}. Enterprise value ${money(enterpriseValue(s))}.`,
+                `Borrowing base ${money(borrowingBase(s))} (55% of machines and stock); ${money(availableCredit(s))} still available. ` +
+                  "If debt passes the base the lender withdraws the line and the company is finished.",
+                `Revenue ${money(l.revenue)}.`,
+                `Costs — materials ${money(l.materialCost)}, conversion ${money(l.conversionCost)}, labour ${money(l.labourCost)}, maintenance ${money(l.maintenanceCost)}, holding ${money(l.holdingCost)}, interest ${money(l.interestCost)}, capex ${money(l.capexSpend)}.`,
+                `Sales lost to stock-outs so far: ${money(l.lostSales)}.`,
+              ].join("\n") + this.notices("finance")
+            );
           },
           "read",
         ),
@@ -431,9 +500,10 @@ export class FactorySimulation implements Simulation {
           (a) => {
             const product = String(a.product ?? "").toLowerCase() as ProductId;
             if (product !== "alpha" && product !== "beta") throw new Error("product must be alpha or beta");
-            const cost = unitMaterialCost(product);
+            const materials = unitMaterialCost(product);
+            const cost = unitProductionCost(product);
             const price = s.products[product].price;
-            return `${product}: price ${money(price)}, materials ${money(cost)}, contribution ${money(price - cost)} (${(((price - cost) / price) * 100).toFixed(0)}%).`;
+            return `${product}: price ${money(price)}, materials ${money(materials)}, conversion ${money(cost - materials)}, total cost ${money(cost)}, contribution ${money(price - cost)} (${(((price - cost) / price) * 100).toFixed(0)}%).`;
           },
           "read",
         ),
@@ -468,15 +538,17 @@ export class FactorySimulation implements Simulation {
               stageCapacity(s, "packaging"),
               labourCapacity(s),
             );
-            return [
-              `Day ${s.day} of ${this.horizon}. Enterprise value ${money(enterpriseValue(s))} (opened at ${money(this.openingValue)}).`,
-              `Cash ${money(s.cash)}, debt ${money(s.debt)}, reputation ${(s.reputation * 100).toFixed(0)}%.`,
-              last
-                ? `Yesterday: alpha ${last.sold.alpha}/${last.demand.alpha}, beta ${last.sold.beta}/${last.demand.beta}.`
-                : "No trading yet.",
-              `Throughput ceiling ${limit.toFixed(0)} units/day; plan asks for ${s.plan.alpha + s.plan.beta}.`,
-              `Backlog: alpha ${s.products.alpha.backlog}, beta ${s.products.beta.backlog}.`,
-            ].join("\n");
+            return (
+              [
+                `Day ${s.day} of ${this.horizon}. Enterprise value ${money(enterpriseValue(s))} (opened at ${money(this.openingValue)}).`,
+                `Cash ${money(s.cash)}, debt ${money(s.debt)}, reputation ${(s.reputation * 100).toFixed(0)}%.`,
+                last
+                  ? `Yesterday: alpha ${last.sold.alpha}/${last.demand.alpha}, beta ${last.sold.beta}/${last.demand.beta}.`
+                  : "No trading yet.",
+                `Throughput ceiling ${limit.toFixed(0)} units/day; plan asks for ${s.plan.alpha + s.plan.beta}.`,
+                `Backlog: alpha ${s.products.alpha.backlog}, beta ${s.products.beta.backlog}.`,
+              ].join("\n") + this.notices("ceo")
+            );
           },
           "read",
         ),
@@ -516,7 +588,13 @@ export class FactorySimulation implements Simulation {
       valueCreated: enterpriseValue(s) - this.openingValue,
       revenue: Math.round(l.revenue),
       operatingProfit: Math.round(
-        l.revenue - l.materialCost - l.labourCost - l.maintenanceCost - l.holdingCost - l.interestCost,
+        l.revenue -
+          l.materialCost -
+          l.conversionCost -
+          l.labourCost -
+          l.maintenanceCost -
+          l.holdingCost -
+          l.interestCost,
       ),
       serviceLevel: demand > 0 ? Math.round((sold / demand) * 1000) / 1000 : 1,
       lostSales: Math.round(l.lostSales),

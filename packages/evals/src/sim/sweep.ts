@@ -21,20 +21,36 @@ export interface SweepResult {
   runs: SimMetrics[];
 }
 
-export function runPolicy(simulation: string, policy: Policy, seed: number, days?: number): SimMetrics {
+/**
+ * How many days pass between one decision and the next.
+ *
+ * A baseline acting every day against a management team that meets once a week
+ * is not a comparison, it is a handicap — and it is the handicap that matters
+ * most, because reacting sooner is precisely what the benchmark rewards. So the
+ * cadence is a parameter, and `beats_baseline` runs the baseline at whatever
+ * cadence the team was given.
+ *
+ * Why a team cannot simply meet daily: a horizon short enough to afford one turn
+ * per day is short enough to invert the ladder. Below about thirty days the
+ * random policy *wins*, because every competent action — buying stock,
+ * maintaining a machine, hiring — costs money now and repays later, and the
+ * horizon ends before the repayment. Cadence is what buys a horizon long enough
+ * to be honest at a number of turns a model run can afford.
+ */
+export function runPolicy(simulation: string, policy: Policy, seed: number, days?: number, stride = 1): SimMetrics {
   const sim = createSimulation(simulation, { seed, ...(days === undefined ? {} : { days }) });
   // Act, then close the day, exactly as a team would. A policy that acts after
   // the day has advanced would be deciding on tomorrow's information.
   let guard = 0;
   while (!sim.done && guard++ < 10_000) {
     policy.act(sim);
-    sim.advance();
+    for (let i = 0; i < Math.max(1, stride) && !sim.done; i++) sim.advance();
   }
   return sim.metrics();
 }
 
-export function sweep(simulation: string, policy: Policy, seeds: number[], days?: number): SweepResult {
-  return { policy: policy.name, seeds, runs: seeds.map((seed) => runPolicy(simulation, policy, seed, days)) };
+export function sweep(simulation: string, policy: Policy, seeds: number[], days?: number, stride = 1): SweepResult {
+  return { policy: policy.name, seeds, runs: seeds.map((seed) => runPolicy(simulation, policy, seed, days, stride)) };
 }
 
 function quantile(values: number[], q: number): number {

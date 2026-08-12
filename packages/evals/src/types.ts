@@ -208,6 +208,105 @@ export interface FactTrace {
   latency: number | null;
 }
 
+/**
+ * A scenario whose grade is a number the world produced, not a check it passed.
+ *
+ * Every other scenario in this package asks a yes/no question, and that is the
+ * right question exactly while the answer is sometimes no. On the orchestration
+ * rows it is now reliably yes, and a benchmark at its own ceiling measures the
+ * ceiling. A simulation replaces the question with an objective: run this
+ * company for a while, and the balance sheet says how it went. Better and worse
+ * stay continuous long after "can it do this at all" has been answered.
+ *
+ * The simulation itself is a TypeScript module in a registry — an economy needs
+ * arithmetic, a clock and stochastic draws, and expressing that in YAML means
+ * inventing a programming language inside YAML, badly. This block only says
+ * which one to run.
+ */
+export interface SimulationSpec {
+  /** Registered name, e.g. `factory`. */
+  name: string;
+  /**
+   * Seed for the world. Defaults to the run's own seed, so repeats of a scenario
+   * see different weather — which is the point of repeating a stochastic run.
+   * Pin it to compare two frameworks on identical luck.
+   */
+  seed?: number;
+  /**
+   * Simulated days. Defaults to one day per round of the wake roster, so the
+   * team manages every day of its own run and the score is comparable with a
+   * baseline swept over the same horizon.
+   *
+   * Setting it *longer* than the roster is allowed and means something specific:
+   * the team manages the first N days and the company then runs on to the
+   * horizon under its last set of decisions. That is a real result rather than a
+   * truncation — it is what "the management team stopped paying attention" costs.
+   */
+  days?: number;
+  /**
+   * Simulated days between one round of decisions and the next. Default 1.
+   *
+   * The knob that makes an affordable run an honest one. A horizon short enough
+   * to give every day its own round is short enough to invert the ladder —
+   * below about thirty days the random policy wins this economy outright,
+   * because buying stock, maintaining a machine and hiring all cost money now
+   * and repay later, and the run ends before the repayment. Cadence buys a
+   * sixty-day horizon for eight rounds of turns: management meets fortnightly
+   * rather than every morning, which is also what a real one does.
+   *
+   * `beats_baseline` runs its baseline at the same cadence, so the comparison is
+   * against a policy with the same number of chances to act rather than sixty.
+   */
+  daysPerRound?: number;
+  /**
+   * Which agent holds which set of instruments, as `role: agent`.
+   *
+   * This is what gives the scenario its partial information. The simulation
+   * decides that sales can see demand and cannot see a machine; this says who
+   * sales *is*. The harness grants each named agent exactly its role's tools, so
+   * the split cannot drift out of sync with a hand-written allowlist — which is
+   * the failure that would quietly turn six specialists into six generalists and
+   * leave the scenario measuring nothing.
+   */
+  roles: Record<string, string>;
+  /** Anything else the simulation understands, passed through untouched. */
+  options?: Record<string, unknown>;
+}
+
+/** What a simulation run produced. Absent on every scenario without one. */
+export interface SimulationOutcome {
+  name: string;
+  seed: number;
+  /** The horizon, and how much of it the team was awake for. */
+  days: number;
+  daysManaged: number;
+  daysPerRound: number;
+  endedBecause?: string;
+  metrics: Record<string, number>;
+  objective: number;
+  /** Everything that happened to the world unasked, with the day it happened. */
+  events: import("./sim/types.js").SimEvent[];
+  /**
+   * Turn index → the simulated day that turn ran on.
+   *
+   * The only clock that connects the transcript to the economy, and the reason
+   * organisational latency can be reported in days rather than in turns. Stored
+   * rather than derived so a re-grade of an old report gets the same answer.
+   */
+  dayOfTurn: number[];
+  /** Role → agent, carried through so a re-grade can still say who could see what. */
+  roles: Record<string, string>;
+  /**
+   * What answering each event kind looks like, copied off the simulation.
+   *
+   * Stored on the report rather than looked up at grade time, so a re-grade of
+   * an old run measures the latency the run was actually judged on. Reading it
+   * live would score yesterday's transcript against today's idea of what
+   * counts as a response, and silently move a number nobody changed.
+   */
+  responses: Record<string, string[]>;
+}
+
 export interface Scenario {
   id: string;
   category: string;
@@ -293,6 +392,8 @@ export interface Scenario {
   oracle?: OracleSpec;
   /** Instruments that exist only here. See {@link ScenarioTool}. */
   tools?: ScenarioTool[];
+  /** An economy to run rather than a puzzle to solve. See {@link SimulationSpec}. */
+  simulation?: SimulationSpec;
   /**
    * Partial credit, so a long scenario reports where it stopped rather than
    * that it stopped. See {@link Milestone}.
@@ -472,6 +573,36 @@ export interface Assertion {
    * is the only interesting question once each agent works on its own.
    */
   fact_reaches?: { fact: string; stage: import("./types.js").FactStage };
+  /**
+   * A number the simulation produced landed in range.
+   *
+   * The assertion for a scenario with an objective instead of an answer. It says
+   * nothing about how the team got there, which is the only fair way to grade a
+   * problem with no correct solution.
+   */
+  sim_metric?: { metric: string; at_least?: number; at_most?: number };
+  /**
+   * The team beat a named baseline policy on the same seed and the same horizon.
+   *
+   * The assertion that makes a dollar figure mean something. "$1.4M" is not a
+   * result; "$1.4M against the reorder-point rule's $1.2M on identical weather"
+   * is. The baseline is re-run in-process at grade time — no model, a few
+   * milliseconds — so the comparison is exact rather than a remembered number
+   * from a different build of the economy.
+   *
+   * It is also the only check here that cannot be satisfied by a lucky seed:
+   * both sides got the same one.
+   */
+  beats_baseline?: { policy: string; metric?: string; by?: number };
+  /**
+   * The organisation acted on an event within `days` of it happening.
+   *
+   * See `sim/latency.ts`. `crossingRoles` additionally demands that the agent
+   * who acted is not one that could see the event — the difference between
+   * somebody noticing and the organisation responding, which is the whole thing
+   * a multi-agent framework is supposed to add.
+   */
+  responds_within?: { event: string; days: number; crossingRoles?: boolean };
   /**
    * Fraction of the scenario's milestone points earned, 0–1.
    *
@@ -736,6 +867,8 @@ export interface RunOutcome {
    * woke and said nothing, which is a distinct failure from never being woken.
    */
   turns?: Array<{ agent: string; room: string }>;
+  /** Simulation runs only: which simulated day each turn ran on, indexed by turn. */
+  dayOfTurn?: number[];
   /**
    * Why the loop ended, when the runner could capture it.
    *
@@ -764,6 +897,8 @@ export interface RunOutcome {
    */
   world?: Record<string, string>;
   worldLog?: WorldEvent[];
+  /** The economy this run drove, and what it was worth at the end. */
+  simulation?: SimulationOutcome;
   /**
    * Every answer submitted, in order.
    *

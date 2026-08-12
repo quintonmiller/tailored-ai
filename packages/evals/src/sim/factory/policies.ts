@@ -20,6 +20,7 @@
 import type { Policy } from "../types.js";
 import type { FactorySimulation } from "./index.js";
 import {
+  availableCredit,
   BASE_MATERIAL_PRICE,
   BILL_OF_MATERIALS,
   type FactoryState,
@@ -27,8 +28,9 @@ import {
   type MaterialId,
   type ProductId,
   SUPPLIERS,
+  type SupplierId,
   stageCapacity,
-  unitMaterialCost,
+  unitProductionCost,
 } from "./model.js";
 
 const MATERIALS: MaterialId[] = ["aluminum", "electronics", "packaging"];
@@ -36,6 +38,28 @@ const PRODUCTS: ProductId[] = ["alpha", "beta"];
 
 function state(sim: FactorySimulation): FactoryState {
   return sim.state;
+}
+
+/**
+ * Order what the company can actually fund, rather than what the rule asked for.
+ *
+ * Every policy here used to call `order` with whatever its arithmetic produced,
+ * which was fine while the funding guard was a flat $400K allowance nobody
+ * reached. Against a borrowing base that shrinks as stock is consumed, the same
+ * call throws — and a baseline that crashes when money is tight is not a
+ * baseline, it is a missing branch.
+ *
+ * Trimming rather than skipping is the honest behaviour: a business short of
+ * credit buys less, takes the stock-out that follows, and lives with the
+ * reputation cost. That consequence is the thing being measured, so it must be
+ * reachable rather than thrown.
+ */
+function order(factory: FactorySimulation, supplier: SupplierId, material: MaterialId, quantity: number): void {
+  const s = state(factory);
+  const unit = BASE_MATERIAL_PRICE[material] * SUPPLIERS[supplier].multiplier;
+  const affordable = Math.floor((s.cash + availableCredit(s)) / unit);
+  const qty = Math.min(Math.round(quantity), affordable);
+  if (qty > 0) factory.order(supplier, material, qty);
 }
 
 /**
@@ -58,7 +82,7 @@ export function randomPolicy(): Policy {
       if (r.chance(0.3)) {
         const material = MATERIALS[r.int(0, MATERIALS.length - 1)];
         const supplier = (["domestic", "overseas", "spot"] as const)[r.int(0, 2)];
-        (sim as FactorySimulation).order(supplier, material, r.int(200, 3000));
+        order(sim as FactorySimulation, supplier, material, r.int(200, 3000));
       }
     },
   };
@@ -81,9 +105,9 @@ export function staticPolicy(): Policy {
       s.plan.alpha = 180;
       s.plan.beta = 70;
       if (s.day % 7 === 0) {
-        (sim as FactorySimulation).order("overseas", "aluminum", 2600);
-        (sim as FactorySimulation).order("overseas", "electronics", 2100);
-        (sim as FactorySimulation).order("overseas", "packaging", 1800);
+        order(sim as FactorySimulation, "overseas", "aluminum", 2600);
+        order(sim as FactorySimulation, "overseas", "electronics", 2100);
+        order(sim as FactorySimulation, "overseas", "packaging", 1800);
       }
     },
   };
@@ -135,7 +159,7 @@ export function reorderPointPolicy(): Policy {
           // slow supplier takes to arrive guarantees the stock-out you were
           // ordering to prevent — which is what the opening position does to a
           // naive rule, and it cost every policy the first two weeks of the run.
-          if (need > 0) factory.order(cover < SUPPLIERS.overseas.lead[1] ? "domestic" : "overseas", material, need);
+          if (need > 0) order(factory, cover < SUPPLIERS.overseas.lead[1] ? "domestic" : "overseas", material, need);
         }
       }
 
@@ -197,7 +221,7 @@ export function fillTheLinePolicy(): Policy {
       const move = ratio ** (-1 / 1.6);
       const damped = 1 + (move - 1) * 0.4;
       for (const p of PRODUCTS) {
-        const floor = unitMaterialCost(p) * 2.0;
+        const floor = unitProductionCost(p) * 1.15;
         const next = s.products[p].price * Math.max(0.9, Math.min(1.1, damped));
         s.products[p].price = Math.max(floor, Math.round(next));
       }
@@ -269,6 +293,81 @@ export function operatorPolicy(): Policy {
 }
 
 /**
+ * Growth on borrowed money: buy every scrap of capacity, price to fill it, and
+ * assume demand holds.
+ *
+ * The row that makes the risk columns mean something. Every other baseline is
+ * safe, so the report's P10, worst case and bankruptcy rate all described a
+ * downside nothing could reach — and a framework that bet the company could not
+ * have been marked down for it, because there was no example of what that costs.
+ *
+ * Nothing here is stupid in isolation. Buying capacity when the line is full,
+ * financing it on an asset-backed facility, and pricing to keep the new capacity
+ * busy are all things a real management team does, and on the seeds where demand
+ * holds it is the best policy in the set. It is ruinous on exactly the seeds
+ * where the distributor leaves early, because the borrowing base falls with the
+ * stock and the machines while the debt does not.
+ *
+ * That is the whole argument for reading P10 next to the mean. This policy's
+ * average is respectable and its tenth percentile is a smoking hole.
+ */
+export function growthPolicy(): Policy {
+  const base = reorderPointPolicy();
+  return {
+    name: "growth",
+    act(sim) {
+      base.act(sim);
+      const factory = sim as FactorySimulation;
+      const s = state(factory);
+      const recent = s.history.slice(-7);
+      const avg = (p: ProductId) =>
+        recent.length ? recent.reduce((sum, h) => sum + h.demand[p], 0) / recent.length : s.products[p].demandBaseline;
+
+      // Build for the demand it expects to have, not the demand it has. A 20%
+      // growth assumption is ordinary in a plan and ruinous in a contraction.
+      const wanted = { alpha: avg("alpha") * 1.2, beta: avg("beta") * 1.2 };
+      s.plan.alpha = Math.round(wanted.alpha);
+      s.plan.beta = Math.round(wanted.beta);
+
+      // Staff ahead of the plan, and never let anybody go. Keeping a trained
+      // crew together through a soft patch is a defensible call and the reason
+      // the wage bill does not follow demand down.
+      const need = Math.ceil((wanted.alpha + wanted.beta) / 16);
+      if (need > s.workers.production) factory.hire(need - s.workers.production);
+
+      // Prices are left alone deliberately. A standing discount off the
+      // competitor's price is not a risk, it is a spiral: competitors drift
+      // toward whatever we charge, so pegging to them at 92% re-prices 92% of a
+      // number we just moved, every day, all the way down to the margin floor.
+      // That made this policy fail on every seed for a reason that had nothing
+      // to do with the bet it is here to represent.
+
+      // Buy capacity while the line is busy, on the facility rather than out of
+      // cash. `startCapex` refuses what it cannot fund, so this leans on the
+      // lender instead of checking — and the lender's patience is the risk.
+      const ceiling = Math.floor(
+        Math.min(
+          stageCapacity(s, "press"),
+          stageCapacity(s, "assembler"),
+          stageCapacity(s, "packaging"),
+          labourCapacity(s),
+        ),
+      );
+      if (wanted.alpha + wanted.beta > ceiling * 0.85) {
+        for (const project of ["assembler-3", "warehouse-expansion"]) {
+          if (s.capex.some((c) => c.id === project)) continue;
+          try {
+            factory.startCapex(project);
+          } catch {
+            // Refused for want of funding. Nothing to do but carry on.
+          }
+        }
+      }
+    },
+  };
+}
+
+/**
  * What the material *should* cost per unit produced, at each supplier. Used by
  * the report to explain a policy's procurement mix rather than by any policy.
  */
@@ -280,6 +379,7 @@ export const FACTORY_POLICIES = {
   random: randomPolicy,
   static: staticPolicy,
   "fill-the-line": fillTheLinePolicy,
+  growth: growthPolicy,
   "reorder-point": reorderPointPolicy,
   operator: operatorPolicy,
 };

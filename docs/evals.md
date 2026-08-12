@@ -500,6 +500,168 @@ protocol** — an authorisation code invalidated by being posted publicly rather
 than sent direct — needs `room` to be world-driven, and it is a real tool rather
 than a stub. Both are worth a seam; neither is pretended.
 
+## Simulations — an objective instead of an answer
+
+Every scenario above asks a yes/no question. That is the right question exactly
+while the answer is sometimes no, and on the orchestration rows it is now
+reliably yes. A benchmark sitting at its own ceiling measures the ceiling.
+
+A **simulation** replaces the question with an objective. There is no puzzle, no
+hidden solution, and no transcript a grader has to judge: the team runs a company
+for a fixed horizon and the balance sheet says how it went. Better and worse stay
+continuous long after "can it do this at all" has been answered.
+
+```yaml
+simulation:
+  name: factory        # a registered TypeScript module, not YAML
+  days: 60
+  daysPerRound: 8      # simulated days between one round of turns and the next
+  roles:               # role → the agent that holds that role's instruments
+    sales: sales
+    operations: operations
+    supply-chain: supply-chain
+```
+
+The simulation itself is code, in `src/sim/`, registered by name. An economy needs
+arithmetic, a clock and stochastic draws; expressing that declaratively means
+inventing a programming language inside YAML, badly. The scenario says only which
+one to run.
+
+### Roles are what make it a multi-agent problem
+
+`roles:` grants each named agent exactly its role's tools, plus the shared ones,
+plus `room`. The simulation owns the split — sales can see demand history and set
+a price and cannot look at a machine; maintenance can see a press wearing out and
+cannot stop the plan that is wearing it out. Nothing is restated in the scenario,
+because a hand-written allowlist works exactly once: the day a role gains a tool,
+every scenario keeps the old list, six specialists quietly become six generalists,
+and the split the whole benchmark rests on is gone with nothing red to show for it.
+
+### One round is one meeting, not one day
+
+The clock advances `daysPerRound` days between rounds of the roster, so every
+manager in a round decides on the same numbers and the day closes once.
+
+The cadence exists because the obvious alternative measures the wrong thing. A
+horizon short enough to give every simulated day its own round is short enough to
+**invert the ladder**: under about thirty days the random policy beats every
+competent one in this economy, because buying stock, maintaining a machine and
+hiring all cost money now and repay later, and the run ends before the repayment.
+Sixty days at an eight-day cadence costs eight rounds of turns and is honest.
+
+When the roster runs out before the horizon, the company runs on under
+management's last decisions and the report says `managed 24 of 60 days`. That is
+a result, not a truncation — a company that is abandoned keeps paying wages — and
+it is what makes an eight-round agent run comparable with a baseline swept over
+the same sixty days.
+
+### Baselines are the most important part
+
+```
+$ pnpm run eval -- bench --seeds 60 --days 60 --days-per-round 8
+
+  policy              mean     median        P10      worst  service  bankrupt
+  random             $816K      $824K      $738K      $671K    19.8%        0%
+  static             $821K      $823K      $707K      $697K    28.2%        0%
+  fill-the-line     $1.21M     $1.22M     $1.08M      $935K    97.3%        0%
+  growth             $989K      $997K      $923K      $792K    98.9%        0%
+  reorder-point     $1.24M     $1.26M     $1.12M     $1.01M    96.3%        0%
+  operator          $1.25M     $1.27M     $1.14M     $1.04M    97.0%        0%
+```
+
+Five non-model policies play the same economy through the same actions. They cost
+milliseconds, and they do two things nothing else can.
+
+They **make a number mean something**. "$1.31M" is not a result; "$1.31M, above
+the set-and-forget baseline at $821K and below textbook operations at $1.24M" is.
+`beats_baseline` re-runs the named policy on the run's own seed and cadence at
+grade time, so the comparison is against identical weather rather than a figure
+remembered from another build of the economy.
+
+They **catch a simulation with no gradient** before a single model call. If random
+and competent score the same, there are no decisions in the world and every agent
+figure is noise wearing a dollar sign. Run `bench` before trusting any agent
+score; three separate builds of this economy were caught by it — a machine ceiling
+below baseline demand, a warehouse too small to hold the cheap supplier's lead
+time, and the short-horizon inversion above.
+
+Two of the baselines are **deliberate traps**, and the ladder is not monotonic
+because of them. `fill-the-line` is textbook operations plus a sales manager who
+moves price until the factory is full. `growth` builds and staffs 20% ahead of
+demand and never lets anyone go. Both post the highest service levels in the set
+and both earn less than the plain reorder-point rule they are built on. That is
+the finding worth the whole simulation: **the two policies that serve customers
+best destroy the most value**, and a benchmark scoring subsystems separately would
+have called each of them an improvement.
+
+### Organisational latency
+
+The balance sheet is a lagging measure. By the time enterprise value has moved,
+whatever caused it happened weeks ago, and two teams can finish within a few
+percent of each other having run completely different companies.
+
+`responds_within` measures the other thing: **the delay in simulated days between
+something happening and the right function acting on it**. It is the `facts:`
+ladder applied to an economy, with two differences. The clock is in days, so the
+number means something without knowing how the harness schedules turns; and
+nobody is told the event happened — it has to be noticed.
+
+```yaml
+- responds_within: { event: demand_shock, days: 16, crossingRoles: true }
+```
+
+`crossingRoles` is the column that matters. Partway through a factory run a
+distributor takes its business elsewhere and demand falls by nearly half, for
+good. Sales gets the call, because in a real company sales takes the call. The
+three responses that matter — cut the plan, cut the headcount, move the price —
+belong to operations, the CEO and sales. Two of the three are somebody else's, so
+a team that notices quickly and acts only within the noticing function has done
+the half a single agent with six tools would have got for free.
+
+What it cannot see is *causation*: an agent that checks the plan every morning
+looks responsive to everything. That is the same honest limit `received` has in
+the fact ladder, and the same mitigation applies — the events are rare, the
+response sets are narrow, and doing everything constantly is expensive in the
+objective the run is actually scored on.
+
+### Risk is a separate axis from return
+
+The report leads with more than a mean, because a policy that earns more by
+risking ruin is a different thing from one that earns more and is also safer.
+
+Ruin has to be *reachable* for that to be true, and for a long time it was not:
+every baseline finished solvent on every seed, so P10, worst case and bankruptcy
+rate were a column of decoration. Two mechanisms fixed it, and neither is a
+threshold lowered until somebody fails. Production costs money beyond its
+materials — energy, consumables, scrap — which is what a manufacturer's margins
+actually look like and what makes building stock nobody wants immediately
+destructive. And the credit line is **asset-backed**: the lender advances against
+machines and stock, so the limit falls as the collateral does, and a covenant a
+company was comfortably inside a fortnight ago breaks without anyone borrowing
+another dollar.
+
+### Writing one
+
+Simulation scenarios are TypeScript, in `scenarios/*.ts` alongside the YAML:
+
+```ts
+import { defineScenario } from "../src/define.js";
+
+export default defineScenario({ id: "the-factory", /* … */ });
+```
+
+`defineScenario` runs the same zod schema the YAML loader does, so a TypeScript
+scenario is checked at import rather than at run time and is held to identical
+rules. `seedVariants(base, [1, 2, 3])` generates the same scenario over several
+seeds — the shape a stochastic benchmark wants and the one YAML cannot express.
+
+A scenario is still **data**, deliberately: `regrade` re-scores a finished run
+with no model, and a closure cannot be recovered from a report;
+`fingerprintScenario` digests what a scenario measures, and `JSON.stringify`
+drops functions without complaint, so logic hidden in a closure would keep its
+fingerprint while changing its meaning. Logic that genuinely needs to be code
+goes in a registered simulation, which the scenario names.
+
 ## Restraint cases are not filler
 
 Roughly a quarter of the scenarios assert that the agent does **nothing**: passes
