@@ -218,6 +218,29 @@ describe("organisational latency", () => {
     expect(summariseResponses(rows).crossRole).toBe(0);
   });
 
+  it("sees a routed response that arrives after an in-function one", () => {
+    // The case the first version of this got wrong, found on the first live run
+    // rather than here: a distributor left on day 24, sales cut prices the same
+    // day, and nine days later operations cut the plan. Reading only the first
+    // response called that organisation "never routed" — scoring it identically
+    // to one where sales reacted and nobody else ever heard.
+    const rows = traceResponses({
+      events,
+      responses: { demand_shock: ["set_price", "set_production_plan"] },
+      executions: [
+        { name: "set_price", args: {}, agent: "sales", turn: 1 },
+        { name: "set_production_plan", args: {}, agent: "operations", turn: 2 },
+      ],
+      dayOfTurn: [0, 4, 13],
+      roles,
+    });
+    expect(rows[0].latencyDays).toBe(0); // sales reacted at once
+    expect(rows[0].crossedRoles).toBe(true); // and it did reach somebody else
+    expect(rows[0].routedBy).toBe("operations");
+    expect(rows[0].routedLatencyDays).toBe(9);
+    expect(summariseResponses(rows).routedMeanDays).toBe(9);
+  });
+
   it("traces nothing for an event the simulation says nothing about", () => {
     // Rather than treating any later call as a response, which would report a
     // latency of zero for everything and read as a perfect score.

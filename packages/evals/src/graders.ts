@@ -598,7 +598,13 @@ async function gradeOne(
     // have was handled promptly" is exactly the kind of free pass that makes a
     // benchmark drift upward without anything improving.
     if (!rows.length) return skip("responds_within", `no "${event}" happened on this seed`);
-    const late = rows.filter((r) => r.latencyDays === null || r.latencyDays > days);
+    // With `crossingRoles`, the clock runs to the first response from *outside*
+    // the function that could see the event. Timing the in-function reaction and
+    // separately demanding that somebody else also acted would let a team pass
+    // by reacting instantly itself and telling the rest of the company a month
+    // later.
+    const lateness = (r: (typeof rows)[number]) => (crossingRoles ? r.routedLatencyDays : (r.latencyDays ?? undefined));
+    const late = rows.filter((r) => lateness(r) === undefined || (lateness(r) as number) > days);
     const wrongHands = crossingRoles ? rows.filter((r) => r.crossedRoles !== true) : [];
     if (!late.length && !wrongHands.length) return ok("responds_within");
     return no(

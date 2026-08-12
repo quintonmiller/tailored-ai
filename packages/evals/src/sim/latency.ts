@@ -52,13 +52,22 @@ export interface EventResponse {
   respondedBy?: string;
   respondedWith?: string;
   /**
-   * Whether the agent that acted is one that could see the event.
+   * Whether *any* qualifying response came from outside the function that could
+   * see the event — that is, whether the news was routed at all.
    *
-   * False is not a failure — it is the *good* case for an event whose answer
-   * belongs elsewhere, and the evidence that something was routed rather than
-   * merely noticed.
+   * Read across every response rather than off the first one. A team where sales
+   * spots a demand collapse and reacts immediately, and operations cuts the plan
+   * a week later, is a functioning organisation; one where sales reacts and
+   * nobody else ever hears is not. Judging the first response alone scores them
+   * the same, which is the one distinction this whole file exists to draw.
    */
   crossedRoles?: boolean;
+  /** The first response from outside the seeing function, when there was one. */
+  routedDay?: number;
+  routedBy?: string;
+  routedWith?: string;
+  /** Days from the event to that response — the organisation's real reaction time. */
+  routedLatencyDays?: number;
   latencyDays: number | null;
 }
 
@@ -71,6 +80,8 @@ export interface LatencySummary {
   worstDays: number | null;
   /** Answered by somebody who could not see the event — i.e. it was routed. */
   crossRole: number;
+  /** Mean days to the first *routed* response, over the events that got one. */
+  routedMeanDays: number | null;
 }
 
 export interface TraceOptions {
@@ -104,13 +115,26 @@ export function traceResponses(opts: TraceOptions): EventResponse[] {
       const visibleTo = event.visibleTo ?? [];
       const watchers = new Set(visibleTo.map(agentOfRole).filter((a): a is string => Boolean(a)));
 
-      const hit = executions.find((call) => {
+      const answers = executions.filter((call) => {
         if (!answering.has(call.name)) return false;
         const day = dayOfTurn[call.turn ?? -1];
         // Strictly on or after the event's day. An action taken before it
         // happened is not a response to it, however well it worked out.
         return day !== undefined && day >= event.day;
       });
+      const hit = answers[0];
+
+      // The first response that came from *outside* the function that could see
+      // the event, which is a different question from whether the first response
+      // did — and the difference is not hypothetical. On the first live run of
+      // `the-factory` a distributor left on day 24, sales cut prices the same
+      // day, and nine days later operations cut the plan and the CEO cut the
+      // headcount. Reading only the first response, that organisation scored
+      // identically to one where sales reacted and nobody else ever heard about
+      // it. Taking the first *routed* response separately is the only way the
+      // metric can tell those two teams apart, which is the entire reason it
+      // exists.
+      const routed = watchers.size ? answers.find((call) => call.agent && !watchers.has(call.agent)) : undefined;
 
       if (!hit) {
         return {
@@ -123,6 +147,7 @@ export function traceResponses(opts: TraceOptions): EventResponse[] {
         };
       }
       const day = dayOfTurn[hit.turn ?? 0];
+      const routedDay = routed ? dayOfTurn[routed.turn ?? 0] : undefined;
       return {
         day: event.day,
         kind: event.kind,
@@ -134,7 +159,15 @@ export function traceResponses(opts: TraceOptions): EventResponse[] {
         // Unknowable without a role map, and an unknown is not a claim: the
         // flag is left off rather than reported as false, so a report cannot
         // show "nothing was routed" for a scenario that never said who was who.
-        ...(watchers.size && hit.agent ? { crossedRoles: !watchers.has(hit.agent) } : {}),
+        ...(watchers.size && hit.agent ? { crossedRoles: Boolean(routed) } : {}),
+        ...(routed
+          ? {
+              routedDay,
+              routedBy: routed.agent,
+              routedWith: routed.name,
+              routedLatencyDays: (routedDay ?? 0) - event.day,
+            }
+          : {}),
         latencyDays: day - event.day,
       };
     });
@@ -149,6 +182,10 @@ export function summariseResponses(rows: readonly EventResponse[]): LatencySumma
     meanDays: days.length ? Math.round((days.reduce((a, b) => a + b, 0) / days.length) * 10) / 10 : null,
     worstDays: days.length ? Math.max(...days) : null,
     crossRole: rows.filter((r) => r.crossedRoles).length,
+    routedMeanDays: (() => {
+      const routed = rows.map((r) => r.routedLatencyDays).filter((d): d is number => d !== undefined);
+      return routed.length ? Math.round((routed.reduce((a, b) => a + b, 0) / routed.length) * 10) / 10 : null;
+    })(),
   };
 }
 
@@ -159,7 +196,12 @@ export function formatResponses(rows: readonly EventResponse[]): string {
     .map((r) => {
       const who = r.respondedBy ? ` by ${r.respondedBy}` : "";
       const how = r.respondedWith ? ` (${r.respondedWith})` : "";
-      const routed = r.crossedRoles === true ? " [routed]" : r.crossedRoles === false ? " [in-function]" : "";
+      const routed =
+        r.crossedRoles === true
+          ? ` [routed to ${r.routedBy} on day ${r.routedDay}, +${r.routedLatencyDays}d]`
+          : r.crossedRoles === false
+            ? " [never left the function that saw it]"
+            : "";
       const outcome =
         r.latencyDays === null
           ? "never answered"
