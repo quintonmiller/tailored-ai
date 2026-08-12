@@ -708,7 +708,9 @@ function cmdDemo(argv: string[]): number {
     const path = resolve(values.out as string);
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, `${json}\n`);
-    console.log(`  ${demo.scenario}: ${demo.turns.length} turns, ${demo.calls.length} calls → ${values.out} (${Math.round(json.length / 1024)} kB)`);
+    console.log(
+      `  ${demo.scenario}: ${demo.turns.length} turns, ${demo.calls.length} calls → ${values.out} (${Math.round(json.length / 1024)} kB)`,
+    );
   } else {
     console.log(json);
   }

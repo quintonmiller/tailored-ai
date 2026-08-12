@@ -21,8 +21,8 @@
 import { readFileSync } from "node:fs";
 import { simulationPolicies } from "./sim/index.js";
 import { runPolicy } from "./sim/sweep.js";
-import type { BenchmarkReport, FactTrace, MilestoneResult, WorldEvent } from "./types.js";
 import type { SimEvent } from "./sim/types.js";
+import type { BenchmarkReport, FactTrace, MilestoneResult, WorldEvent } from "./types.js";
 
 /** Long enough to show an agent actually reasoning, short enough to render. */
 const POST_CHARS = 1400;
@@ -139,7 +139,11 @@ export function extractDemo(reportPath: string, scenarioId: string, runIndex = 0
     startedAt: report.meta.startedAt,
     passRate: scenario.passRate,
     passed: run.pass,
-    checks: run.checks.map((c) => ({ kind: c.kind, pass: c.pass, ...(c.detail ? { detail: cut(c.detail, 300) } : {}) })),
+    checks: run.checks.map((c) => ({
+      kind: c.kind,
+      pass: c.pass,
+      ...(c.detail ? { detail: cut(c.detail, 300) } : {}),
+    })),
     agents: [...new Set((outcome.turns ?? []).map((t) => t.agent))],
     turns: outcome.turns ?? [],
     rooms: [...new Set(outcome.posts.map((p) => p.room))],
