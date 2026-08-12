@@ -15,8 +15,20 @@
  */
 
 /**
- * The scale. Five levels, each defined by the kind of work the turn requires,
+ * The scale. Seven levels, each defined by the kind of work the turn requires,
  * so two people grading the same scenario land in the same place.
+ *
+ * It ran to five until the top of it stopped being the top. On the 2026-08-12
+ * cohort level 5 scored **83%** and level 4 scored **69%** — the hardest tier
+ * was easier than the one below it, and seven of the ten level-5 scenarios
+ * passed every run. A scale whose last rung is cleared is not measuring a
+ * ceiling; it is measuring a floor and calling it a ceiling, and it cannot
+ * answer the one question it exists for.
+ *
+ * The fix is not to relabel the rows that pass — that is the circularity this
+ * file was written to avoid. It is that the scale was missing kinds of demand.
+ * Levels 6 and 7 name two the first five never described: several independent
+ * demands in one turn, and a turn whose loudest signal is wrong.
  */
 export const DIFFICULTY_LEVELS: Record<number, { name: string; blurb: string }> = {
   1: {
@@ -37,12 +49,54 @@ export const DIFFICULTY_LEVELS: Record<number, { name: string; blurb: string }> 
   },
   5: {
     name: "frontier",
-    blurb: "Written at or past the expected ceiling: multi-hop over a long history, a real dependency between agents.",
+    blurb: "Multi-hop over a long history, or a real dependency between agents: B's turn needs what A found.",
+  },
+  6: {
+    name: "compound",
+    blurb:
+      "Several independent demands in one turn, each enough to fail it alone — a chain that must end in a refusal, a handoff carrying a fact that was withdrawn.",
+  },
+  7: {
+    name: "misleading",
+    blurb:
+      "The most authoritative thing present is wrong, and being right means going against it — or saying it cannot be known, while a plausible answer sits in reach.",
+  },
+  8: {
+    name: "lossy",
+    blurb:
+      "The fact the turn needs is gone from the window and a near-miss is still in it. Being right means naming the loss and declining the substitute.",
+  },
+  9: {
+    name: "partial",
+    blurb:
+      "Half the turn is reachable and half depends on what was lost. Being right means doing the reachable half, refusing the rest, and saying which was which.",
+  },
+  10: {
+    name: "pressured",
+    blurb:
+      "Everything at level 9, and somebody is asking for the part that cannot be done. Being right means declining a colleague, out loud, with no fact to point at.",
   },
 };
 
 export const MIN_DIFFICULTY = 1;
-export const MAX_DIFFICULTY = 5;
+/**
+ * Ten, and the number is not the point — where the set stops failing is.
+ *
+ * 8-10 are one ladder rather than three kinds, built on the demand this model
+ * measurably cannot meet: a fact evicted from the window comes back invented,
+ * with total confidence, every time. `will-not-name-a-number-it-can-no-longer-
+ * see` is 0/3 and the two long-standing 0% rows in `long-session` are the same
+ * failure. So the top of the scale stacks that one, adding a single independent
+ * thing per rung: a near-miss to resist (8), a reachable half to get right
+ * anyway (9), and a colleague asking for the impossible half (10).
+ *
+ * Composing rather than inventing is deliberate. Every level above 5 that named
+ * a *new* kind of hardness turned out to guess wrong about what is hard —
+ * `misleading` was written as the ceiling and scores 89%. A rung that adds one
+ * more independent way to fail a turn the model already fails is harder by
+ * construction, and says so without anyone having to predict anything.
+ */
+export const MAX_DIFFICULTY = 10;
 
 /** `3 composed` — the number is what filters, the name is what a reader uses. */
 export function describeDifficulty(level: number): string {

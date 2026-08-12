@@ -8,14 +8,19 @@ import { DIFFICULTY_LEVELS, describeDifficulty, MAX_DIFFICULTY, parseDifficultyF
  * that quietly included the reflex rows.
  */
 describe("parseDifficultyFilter", () => {
-  const matching = (spec: string) => [1, 2, 3, 4, 5].filter(parseDifficultyFilter(spec));
+  const levels = Array.from({ length: MAX_DIFFICULTY }, (_, i) => i + 1);
+  // Derived from the scale rather than written out, so extending it does not
+  // leave these quietly testing the old top. `4+` meant "4 and 5" until the
+  // scale grew two rungs, and a literal list would still say so.
+  const matching = (spec: string) => levels.filter(parseDifficultyFilter(spec));
 
   it("reads a single level", () => {
     expect(matching("4")).toEqual([4]);
   });
 
   it("reads N+ as everything from there up", () => {
-    expect(matching("4+")).toEqual([4, 5]);
+    expect(matching("4+")).toEqual(levels.filter((n) => n >= 4));
+    expect(matching(`${MAX_DIFFICULTY}+`)).toEqual([MAX_DIFFICULTY]);
   });
 
   it("reads a range, inclusive at both ends", () => {
@@ -23,7 +28,8 @@ describe("parseDifficultyFilter", () => {
   });
 
   it("reads a comma-separated list, and mixed forms", () => {
-    expect(matching("1,5")).toEqual([1, 5]);
+    expect(matching("1,7")).toEqual([1, 7]);
+    expect(matching(`1,${MAX_DIFFICULTY}`)).toEqual([1, MAX_DIFFICULTY]);
     expect(matching("1,3-4")).toEqual([1, 3, 4]);
   });
 
@@ -38,7 +44,9 @@ describe("parseDifficultyFilter", () => {
     expect(() => parseDifficultyFilter("hard")).toThrow(/not a level/);
     expect(() => parseDifficultyFilter("4-2")).toThrow(/backwards/);
     expect(() => parseDifficultyFilter("")).toThrow(/selected no levels/);
-    expect(() => parseDifficultyFilter("9")).toThrow(/outside the 1-5 scale/);
+    expect(() => parseDifficultyFilter(String(MAX_DIFFICULTY + 2))).toThrow(
+      new RegExp(`outside the 1-${MAX_DIFFICULTY} scale`),
+    );
   });
 });
 

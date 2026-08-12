@@ -115,6 +115,32 @@ export function mintToken(format: TokenFormat = "code"): string {
 }
 
 /**
+ * Whether `value` would be confused with any of `others` by a substring check.
+ *
+ * Every reply assertion is a substring or regex match, so two witnesses only
+ * stay distinguishable if neither *contains* the other. Equality is not enough,
+ * and the gap is not theoretical: ordinal days collide constantly, because
+ * `3rd` is a substring of `23rd`, `1st` of `21st`, `4th` of both `14th` and
+ * `24th`. Fourteen of the 756 ordered pairs are containments.
+ *
+ * What that costs when it happens is a correct agent marked wrong.
+ * `does-not-answer-from-a-superseded-fact` asserts "mentions the new date" and
+ * "does not mention the withdrawn one"; mint `3rd` and `23rd` and an agent that
+ * answers `23rd` — exactly right — trips the second assertion, and the report
+ * calls it a model that cannot track a correction. Roughly 2% of runs of any
+ * scenario with two `day` witnesses, silently, in the direction that invents a
+ * capability gap.
+ */
+export function witnessCollides(value: string, others: Iterable<string>): boolean {
+  const needle = value.toLowerCase();
+  for (const other of others) {
+    const hay = other.toLowerCase();
+    if (needle.includes(hay) || hay.includes(needle)) return true;
+  }
+  return false;
+}
+
+/**
  * Fresh values for every name the scenario declared.
  *
  * Accepts a list (every token a `code`) or a map naming each one's shape.
@@ -125,18 +151,22 @@ export function mintTokens(declared: readonly string[] | Record<string, TokenFor
     ? declared.map((name) => [name, "code"])
     : Object.entries(declared as Record<string, TokenFormat>);
 
-  // Distinct within a run, or a scenario can become unsatisfiable by chance.
-  // `does-not-answer-from-a-superseded-fact` minted the same `day` for the
-  // withdrawn date and the replacement — 1 run in 28 — and then asserted that
-  // the reply both mentions it and does not. The agent cannot win, and the
-  // report calls it a capability gap.
+  // Mutually distinguishable within a run, or a scenario can become
+  // unsatisfiable by chance. `does-not-answer-from-a-superseded-fact` minted the
+  // same `day` for the withdrawn date and the replacement — 1 run in 28 — and
+  // then asserted that the reply both mentions it and does not. The agent
+  // cannot win, and the report calls it a capability gap.
+  //
+  // Non-containment rather than inequality, because the assertions are
+  // substring matches: `3rd` and `23rd` are two different values and one
+  // assertion cannot tell them apart. See `witnessCollides`.
   const used = new Set<string>();
   for (const [name, format] of entries) {
     let value = mintToken(format);
-    // Bounded: a format with fewer values than the scenario has tokens would
-    // otherwise spin. Giving up and allowing a duplicate is still better than
-    // hanging, and the schema keeps token counts small.
-    for (let attempt = 0; attempt < 50 && used.has(value); attempt++) value = mintToken(format);
+    // Bounded: a format with fewer usable values than the scenario has tokens
+    // would otherwise spin. Giving up and allowing a collision is still better
+    // than hanging, and the schema keeps token counts small.
+    for (let attempt = 0; attempt < 50 && witnessCollides(value, used); attempt++) value = mintToken(format);
     used.add(value);
     tokens[name] = value;
   }
