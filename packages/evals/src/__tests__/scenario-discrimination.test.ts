@@ -179,7 +179,15 @@ describe("every scenario rejects a degenerate outcome", () => {
     // graded as unknown — and a scenario whose only assertion is the goal looks
     // like it accepts an agent that never moved. Which is the exact failure
     // this file exists to catch, arriving through the door it just opened.
-    const untouched = scenario.world ? { world: { ...scenario.world.state }, worldLog: [] } : {};
+    const untouched = {
+      ...(scenario.world ? { world: { ...scenario.world.state }, worldLog: [] } : {}),
+      // Same rule for the oracle: an agent that did nothing submitted nothing,
+      // which is an empty list and not an absent one. Absent means "this run
+      // predates the field" and is graded as unknown, so without this a scenario
+      // whose only assertion is `answers_correctly` would appear to accept an
+      // agent that never opened its mouth.
+      ...(scenario.oracle ? { guesses: [] } : {}),
+    };
 
     // A scenario may declare that silence is the right answer — an
     // acknowledgement addressed to nobody deserves no reply. Then "said

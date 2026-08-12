@@ -496,6 +496,7 @@ async function cmdRegrade(argv: string[]): Promise<number> {
       // whose scenario has no machinery, carries no final state — which is not
       // the same as a goal that went unreached.
       if (run.outcome.world === undefined) unreadable.add("world_state");
+      if (run.outcome.guesses === undefined) unreadable.add("answers_correctly");
       const gradable = checks.filter((c) => !unreadable.has(c.kind));
       skipped += checks.length - gradable.length;
       runs.push({ ...run, pass: gradable.every((c: CheckResult) => c.pass), checks: gradable });

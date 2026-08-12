@@ -129,6 +129,15 @@ export interface Scenario {
    * world answers the calls that move it, and static stubs answer the rest.
    */
   world?: WorldSpec;
+  /**
+   * Give the agent an `answer` tool that says whether it is right.
+   *
+   * Turns a scenario from "was your first answer correct" into "did you
+   * converge", which is a different capability and the one most real work
+   * consists of. See `oracle.ts` — including the rule about answer spaces, which
+   * a scenario using this has to satisfy or the attempts become a search.
+   */
+  oracle?: OracleSpec;
   /** Overrides the run-wide default. */
   repeats?: number;
   expect: Assertion[];
@@ -264,6 +273,15 @@ export interface Assertion {
   /** Tool calls this turn is allowed, for the same reason. */
   max_tool_calls?: number;
   /**
+   * The agent submitted the right answer, within `within` attempts.
+   *
+   * `within` defaults to the oracle's own limit, so writing `answers_correctly:
+   * true` asks only "did it get there". Setting it lower is how a scenario says
+   * the answer should not have taken three tries — which is the difference
+   * between knowing and searching, and the whole reason attempts are counted.
+   */
+  answers_correctly?: boolean | { within: number };
+  /**
    * The world ended in this state — or in the scenario's `goal`, when written
    * as `world_state: goal`.
    *
@@ -372,6 +390,30 @@ export interface WorldSpec {
    * `world_state`, which defaults to this when written bare.
    */
   goal?: Record<string, string>;
+}
+
+export interface OracleSpec {
+  /** The accepted answer, or several. Compared loosely: trailing punctuation and case do not matter. */
+  answer: string | string[];
+  /** Attempts before the tool stops accepting. Default 3. */
+  attempts?: number;
+  /**
+   * Accept "I don't know" as correct.
+   *
+   * For a scenario whose fact has become unreachable, where conceding is the
+   * right answer and a specific value is by definition invented. Makes
+   * "how many fabrications before it concedes" a measurable quantity.
+   */
+  acceptsUnknown?: boolean;
+}
+
+/** One submitted answer. */
+export interface Submission {
+  agent?: string;
+  answer: string;
+  correct: boolean;
+  /** Correct because it conceded, rather than because it knew. */
+  conceded: boolean;
 }
 
 /** One thing that happened to the world, for reading a solution back. */
@@ -484,6 +526,14 @@ export interface RunOutcome {
    */
   world?: Record<string, string>;
   worldLog?: WorldEvent[];
+  /**
+   * Every answer submitted, in order.
+   *
+   * The count is a score and the sequence is the finding: three different
+   * fabrications reads nothing like one guess followed by a concession, and no
+   * pass rate can tell them apart.
+   */
+  guesses?: Submission[];
   latencyMs: number;
   usage: RunUsage;
   error?: string;

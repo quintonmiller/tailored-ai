@@ -51,6 +51,7 @@ import {
 } from "@tailored-ai/core";
 import YAML from "yaml";
 import { registerPinnedClock, timeConfigBlock } from "./clock.js";
+import { answerTool, Oracle } from "./oracle.js";
 import type {
   RecordedCall,
   RecordedExecution,
@@ -540,6 +541,10 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
   // is unlocked for the next one, and two agents doing the same step is visible
   // as a repeat rather than as two independent successes.
   const world = scenario.world ? new World(scenario.world) : undefined;
+  // Same lifetime as the world, and for the same reason: in a multi-agent
+  // scenario the attempts are the team's, not each agent's. Three guesses each
+  // would make a room of five agents a search rather than a test.
+  const oracle = scenario.oracle ? new Oracle(scenario.oracle) : undefined;
   let db: import("better-sqlite3").Database | undefined;
   let roomsRegistered = false;
 
@@ -600,10 +605,15 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
       ctxDir: string,
       cfgPath?: string,
       runtimeOpts?: Record<string, unknown>,
-    ) =>
-      createTools(cfg, ctxDir, cfgPath, runtimeOpts).map((t) =>
+    ) => [
+      ...createTools(cfg, ctxDir, cfgPath, runtimeOpts).map((t) =>
         instrument(t, recorder, scenario.toolResults ?? {}, world),
-      );
+      ),
+      // Not instrumented: it is not a stub standing in for something real, it
+      // *is* the thing. Appended here rather than in the meta-tool list so an
+      // agent's `tools:` allowlist still governs whether it can reach it.
+      ...(oracle ? [answerTool(oracle, recorder)] : []),
+    ];
 
     const providerFactory = (cfg: Parameters<typeof createProvider>[0], providerId?: string) => {
       const built = createProvider(cfg, providerId);
@@ -642,6 +652,7 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
       requests: recorder.requests,
       usage: recorder.usage,
       ...(world ? { world: world.snapshot(), worldLog: world.log } : {}),
+      ...(oracle ? { guesses: oracle.submissions } : {}),
       latencyMs: Date.now() - started,
       providerErrors: recorder.failures,
       retries: recorder.retries,
@@ -658,6 +669,7 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
       // Recorded even when the turn threw: how far the world got before it fell
       // over is the most useful thing about a crashed run.
       ...(world ? { world: world.snapshot(), worldLog: world.log } : {}),
+      ...(oracle ? { guesses: oracle.submissions } : {}),
       latencyMs: Date.now() - started,
       providerErrors: recorder.failures,
       error: (err as Error).message,

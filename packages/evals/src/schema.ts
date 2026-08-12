@@ -116,6 +116,7 @@ const assertion = z
     prompt_max_tokens: z.number().optional(),
     max_rounds: z.number().optional(),
     max_tool_calls: z.number().optional(),
+    answers_correctly: z.union([z.boolean(), z.object({ within: z.number().int().positive() }).strict()]).optional(),
     world_state: z.union([z.record(z.string()), z.literal("goal")]).optional(),
     judge: z.object({ rubric: z.string() }).strict().optional(),
   })
@@ -199,6 +200,14 @@ const scenario = z
       })
       .strict()
       .optional(),
+    oracle: z
+      .object({
+        answer: z.union([z.string(), z.array(z.string()).nonempty()]),
+        attempts: z.number().int().positive().max(10).optional(),
+        acceptsUnknown: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     repeats: z.number().int().positive().optional(),
     expect: z.array(assertion).nonempty(),
   })
@@ -262,6 +271,20 @@ const scenario = z
     // that does not exist is a condition that can never be true, and a `goal`
     // no rule can set is a scenario that fails every run for a reason nobody
     // can see from the transcript. All three look exactly like a model limit.
+    if (value.expect.some((a) => a.answers_correctly !== undefined) && !value.oracle) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "asserts answers_correctly but declares no `oracle:` — the agent has no answer tool, " +
+          "so the check can never pass and every run fails for a reason the transcript does not show",
+      });
+    }
+    if (value.oracle && value.agent?.tools && !value.agent.tools.includes("answer")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `declares an oracle, but "answer" is not in this agent's tools: [${value.agent.tools.join(", ")}]`,
+      });
+    }
     if (value.world) {
       const known = new Set(Object.keys(value.world.state));
       // Every agent's tools, not just the one under test. In an orchestration

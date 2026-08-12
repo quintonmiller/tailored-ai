@@ -373,6 +373,35 @@ async function gradeOne(
       : no("max_tool_calls", `${calls} tool calls > ${assertion.max_tool_calls}`);
   }
 
+  if (assertion.answers_correctly !== undefined) {
+    if (!outcome.guesses) return skip("answers_correctly", "this run recorded no submitted answers");
+    const within = typeof assertion.answers_correctly === "object" ? assertion.answers_correctly.within : Infinity;
+    const at = outcome.guesses.findIndex((g) => g.correct);
+    const solved = at !== -1;
+    const wanted = assertion.answers_correctly !== false;
+
+    if (!wanted) {
+      return solved ? no("answers_correctly", `answered correctly on attempt ${at + 1}`) : ok("answers_correctly");
+    }
+    // The sequence, not just the count. Three different fabrications reads
+    // nothing like one guess followed by a concession, and that difference is
+    // the entire reason for handing the agent an oracle rather than grading its
+    // first answer — so it goes in the failure text where it will be read.
+    const trail = outcome.guesses.map((g) => `"${trim(g.answer)}"${g.correct ? " ✓" : ""}`).join(" → ");
+    if (!solved) {
+      return no(
+        "answers_correctly",
+        outcome.guesses.length === 0
+          ? "never submitted an answer"
+          : `never got it in ${outcome.guesses.length} attempt(s): ${trail}`,
+      );
+    }
+    if (at + 1 > within) {
+      return no("answers_correctly", `took ${at + 1} attempts, wanted it within ${within}: ${trail}`);
+    }
+    return ok("answers_correctly");
+  }
+
   if (assertion.world_state !== undefined) {
     // Absent means the report predates worlds, or this scenario has none. Graded
     // as unknown and skipped, never as failure — the rule every input-dependent
