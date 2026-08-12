@@ -47,7 +47,7 @@
   history: &long
     - { role: user, content: "morning — starting on the billing migration today" }
     - { role: assistant, content: "Sounds good. Shout if you want a second pair of eyes." }
-    - { role: user, content: "the old invoice table has exactly {{token:rowcount}} rows in the archive partition" }
+    - { role: user, content: "the old invoice table has {{token:rowcount}} thousand rows" }
     - { role: assistant, content: "Noted. That's big enough that the copy wants batching." }
     - { role: user, content: "we're going with batches of {{token:batchsize}}" }
     - { role: assistant, content: "Batches of {{token:batchsize}} it is." }
@@ -405,7 +405,7 @@
   history: &commitment
     - { role: user, content: "when the billing migration finishes, file a task to update the public changelog" }
     - { role: assistant, content: "Will do — a changelog task once the migration is done." }
-    - { role: user, content: "the old invoice table has exactly {{token:rowcount}} rows in the archive partition" }
+    - { role: user, content: "the old invoice table has {{token:rowcount}} thousand rows" }
     - { role: assistant, content: "Noted. That's big enough that the copy wants batching." }
     - { role: user, content: "we're going with batches of {{token:batchsize}}" }
     - { role: assistant, content: "Batches of {{token:batchsize}} it is." }

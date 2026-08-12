@@ -77,16 +77,17 @@ const SYLLABLES = [
 
 export function mintToken(format: TokenFormat = "code"): string {
   if (format === "number") {
-    // Four digits, deliberately — not six.
+    // Three digits, and the reason is not entropy.
     //
-    // A six-digit witness is one of a million values and also the length at
-    // which models start writing thousands separators. `418273` reported back
-    // as `418,273` fails a literal check, and that failure would read in the
-    // report as the agent not recalling the value, which is the exact
-    // transcription-for-reasoning confusion witnesses exist to avoid. Four
-    // digits are written plainly, and one in nine thousand is unguessable by
-    // any margin that matters when the model has no reason to guess at all.
-    return String(randomInt(1000, 10_000));
+    // A separator lands after every third digit from the right, so `8763` comes
+    // back as `8,763` and a literal check fails an agent that answered
+    // correctly — observed, on two scenarios, after four digits were chosen for
+    // exactly this reason and were not short enough. Three digits are never
+    // split, and they survive elaboration: `876` is still a substring of
+    // `876,000` and of `876 thousand`.
+    //
+    // 900 values is ample when the model has no reason to guess at all.
+    return String(randomInt(100, 1000));
   }
   if (format === "time") {
     // A 24-hour clock time, business hours. 600 values — far less entropy than a
@@ -123,7 +124,22 @@ export function mintTokens(declared: readonly string[] | Record<string, TokenFor
   const entries: Array<[string, TokenFormat]> = Array.isArray(declared)
     ? declared.map((name) => [name, "code"])
     : Object.entries(declared as Record<string, TokenFormat>);
-  for (const [name, format] of entries) tokens[name] = mintToken(format);
+
+  // Distinct within a run, or a scenario can become unsatisfiable by chance.
+  // `does-not-answer-from-a-superseded-fact` minted the same `day` for the
+  // withdrawn date and the replacement — 1 run in 28 — and then asserted that
+  // the reply both mentions it and does not. The agent cannot win, and the
+  // report calls it a capability gap.
+  const used = new Set<string>();
+  for (const [name, format] of entries) {
+    let value = mintToken(format);
+    // Bounded: a format with fewer values than the scenario has tokens would
+    // otherwise spin. Giving up and allowing a duplicate is still better than
+    // hanging, and the schema keeps token counts small.
+    for (let attempt = 0; attempt < 50 && used.has(value); attempt++) value = mintToken(format);
+    used.add(value);
+    tokens[name] = value;
+  }
   return tokens;
 }
 

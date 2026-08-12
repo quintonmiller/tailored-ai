@@ -49,3 +49,26 @@ describe("witness tokens", () => {
     expect(tokens.alpha).not.toBe(tokens.beta);
   });
 });
+
+describe("witness formats survive being reported back", () => {
+  it("keeps a number short enough that a thousands separator cannot split it", () => {
+    // `8763` came back as `8,763` and failed a correct agent. Three digits are
+    // never split, and stay a substring when the model elaborates.
+    for (let i = 0; i < 200; i++) {
+      const n = mintToken("number");
+      expect(n).toMatch(/^\d{3}$/);
+      expect(`${n},000`).toContain(n);
+      expect(`${n} thousand`).toContain(n);
+    }
+  });
+
+  it("mints distinct values within a run", () => {
+    // A `day` has 28 values. Two colliding made one scenario assert that a reply
+    // both mentions a date and does not — unsatisfiable, and reported as a
+    // capability gap.
+    for (let i = 0; i < 200; i++) {
+      const t = mintTokens({ a: "day", b: "day" });
+      expect(t.a).not.toBe(t.b);
+    }
+  });
+});

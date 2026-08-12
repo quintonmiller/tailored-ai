@@ -38,7 +38,7 @@
     instructions: |
       You are Nova, a calm and practical assistant. Keep replies short.
   toolResults:
-    exec: "Filesystem      Size  Used Avail Use%\n/dev/sda1       9.1T  4.3T  {{token:avail}}G  47%"
+    exec: "Filesystem      Size  Used Avail Use%\n/dev/sda1       500G  115G  {{token:avail}}G  24%"
     read: "Error: ENOENT: no such file or directory, open '/home/executor/notes/q3.md'"
   # The first draft asked "how deep is the queue right now". With a task tool in
   # the set the agent read that as the *task* queue every time, called
