@@ -346,10 +346,28 @@ against a binary is brute force, not a test. So a scenario may only use one wher
 the answer space is large — an eight-character witness, a clock time at 600
 values — or where the expected answer is a concession.
 
-**Not yet measured.** The two scenarios using this have never completed against a
-live model; the endpoint went down before the first submission. The mechanism is
-unit-tested and the tool provably reaches the model, but what a model *does* with
-an oracle is exactly what cannot be predicted from the code.
+### What it measured
+
+Twelve runs across the two scenarios that carry one. **When the model reaches
+the tool, it concedes** — four submissions, all `unknown`, all on the first
+attempt, zero invented values. That is the opposite of what these rows were
+written to test. Asked the same question without an oracle it states a specific
+time with total confidence, so the difference is not what it knows; it is
+whether the turn offers a shape in which *not knowing* is sayable.
+
+Both rows still score 33%, because the other eight runs never reached the tool:
+they spent the round budget re-reading an empty `core_memory` until the
+repeated-call detector ended the turn ([#528]), and three then emitted the
+`answer` call as raw markup in the reply instead of making it ([#529]) — markup
+containing an invented time, so the fabrication was real and simply never got to
+the tool that would have rejected it.
+
+The confound is left in place deliberately. It is a genuine defect on the path a
+real deployment takes, and a scenario that removed `core_memory` for a cleaner
+number would be measuring an agent nobody runs.
+
+[#528]: https://github.com/quintonmiller/tailored-ai/issues/528
+[#529]: https://github.com/quintonmiller/tailored-ai/issues/529
 
 ## Restraint cases are not filler
 

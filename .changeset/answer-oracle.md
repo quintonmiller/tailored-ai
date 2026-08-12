@@ -26,5 +26,16 @@ An oracle leaks information, so a scenario may only use one where the answer
 space is large — a witness code, a clock time — or where the expected answer is
 a concession. Three attempts against a binary is brute force, not a test.
 
-Not yet measured against a live model: the endpoint went down before the first
-run produced a submission.
+Measured over 12 runs. When the model reaches the tool it concedes: four
+submissions, all "unknown", all on the first attempt, zero invented values — the
+opposite of the hypothesis these rows were written to test. Asked the same
+question without an oracle it states a specific time with total confidence, so
+the difference is not what it knows but whether the turn offers a shape in which
+not knowing is sayable.
+
+The rows still score 33%, because the other eight runs never reached the tool.
+They spent the round budget re-reading an empty `core_memory` until the
+repeated-call detector ended the turn (#528), and three then emitted the
+`answer` call as raw markup in the reply rather than making it (#529) — markup
+containing an invented time, so the fabrication was real and never got to the
+tool that would have rejected it.
