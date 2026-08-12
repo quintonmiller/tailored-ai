@@ -640,6 +640,21 @@ machines and stock, so the limit falls as the collateral does, and a covenant a
 company was comfortably inside a fortnight ago breaks without anyone borrowing
 another dollar.
 
+### Showing one
+
+`pnpm run eval -- demo <report.json> --scenario <id> --out <file>` cuts a run
+down to what a page can render — the turns, the calls, the transitions, the
+ladders, and (for a simulation) the baselines re-run on that run's own seed. The
+two worked examples on the site read those extracts:
+
+- [`/bench/scenarios/the-machine`](https://quinton.dev/tailored-ai/bench/scenarios/the-machine)
+- [`/bench/scenarios/the-factory`](https://quinton.dev/tailored-ai/bench/scenarios/the-factory)
+
+The extract is committed under `packages/site/src/data/`, which is the point: a
+page built from hand-copied figures stops meaning anything the day the scenario
+changes, and nobody can tell because there is nothing to check it against.
+Regenerate the file and the page renders whatever the run actually did.
+
 ### Writing one
 
 Simulation scenarios are TypeScript, in `scenarios/*.ts` alongside the YAML:
