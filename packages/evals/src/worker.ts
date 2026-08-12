@@ -127,7 +127,7 @@ async function main(): Promise<void> {
       : pass
         ? withoutRequests(outcome)
         : trimRequests(outcome);
-    runs.push({ pass, checks, outcome: stored });
+    runs.push({ pass, checks, outcome: stored, ...(scenario.tokens?.length ? { tokens } : {}) });
   }
 
   const result: ScenarioResult = {

@@ -24,6 +24,7 @@ import type { HarnessOptions } from "./harness.js";
 import { PAYLOAD_FILENAME, readWorkerResult } from "./protocol.js";
 import { printScenario, printSummary, score, verdict } from "./report.js";
 import { loadScenarios } from "./schema.js";
+import { substituteTokens } from "./tokens.js";
 import type { BenchmarkReport, CheckResult, RunOutcome, Scenario, ScenarioResult } from "./types.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -475,7 +476,11 @@ async function cmdRegrade(argv: string[]): Promise<number> {
     const runs = [];
     for (const run of result.runs) {
       // No judge: an LLM grader would defeat the point, and no scenario uses one.
-      const checks = await grade(scenario, run.outcome);
+      // Substituted with the values *this run* was given, not fresh ones: the
+      // reply contains the witness the agent actually saw, and grading it
+      // against a newly minted one would fail every witness scenario.
+      const scoped = run.tokens ? substituteTokens(scenario, run.tokens) : scenario;
+      const checks = await grade(scoped, run.outcome);
       // A report keeps the reply, the calls and the posts for every run, but
       // discards the prompt text of runs that passed — the baseline would be
       // hundreds of megabytes otherwise. So `prompt_*` assertions have nothing

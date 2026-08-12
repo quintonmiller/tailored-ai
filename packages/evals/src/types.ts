@@ -388,6 +388,15 @@ export interface CheckResult {
 }
 
 export interface RunResult {
+  /**
+   * The witness values this run was given, so it can be re-graded later.
+   *
+   * Without them a replay grades today's `{{token:secret}}` against a reply
+   * containing the value that run actually saw, and every witness scenario
+   * scores 0 — which is what happened the first time `regrade` was pointed at
+   * one. The values are random per run and mean nothing outside it.
+   */
+  tokens?: Record<string, string>;
   pass: boolean;
   checks: CheckResult[];
   outcome: RunOutcome;
