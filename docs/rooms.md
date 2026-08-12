@@ -1431,6 +1431,46 @@ Each line names the tool and the argument identifying its target. Never the full
 arguments: those carry file contents and search bodies, and a channel is the
 wrong place for them.
 
+## Seeing when a turn got stuck
+
+Every turn ends by emitting `room.turn_ended`, whatever became of it:
+
+```ts
+runtime.events.on("room.turn_ended", (e) => {
+  if (e.stallReason) console.log(`${e.agent} got stuck in ${e.rooms.join(", ")}: ${e.stallReason}`);
+});
+```
+
+| field | |
+|---|---|
+| `rooms` | every room the turn covered — more than one for a batched turn |
+| `agent` | who took the turn |
+| `reason` | why it woke, when the path that woke it recorded one |
+| `stop` | the loop's `LoopStop`, absent only when the turn threw |
+| `stallReason` | short text when the turn got stuck, `null` otherwise |
+| `posted` | whether anything reached a room, by either route |
+| `error` | set when the turn ended by throwing |
+
+**Read `stop`, never the reply text.** A turn that runs out of rounds gets one
+tools-withheld call so it can say what happened, so it comes back as ordinary
+prose. Measured on a 237-run benchmark cohort: 12 turns stalled, and **none** of
+them carried an `[Agent stopped: …]` marker. Anything grepping for that string
+is matching nothing.
+
+Rooms are where this matters most and shows least. Nobody reads a room turn's
+raw output — it is posted, or suppressed — so a recovered stall arrives looking
+exactly like an answer, and the room carries on as if it were one. The watcher
+logs a warning when it happens:
+
+```
+[rooms] nova stalled on local:ops: repeated identical tool calls. It posted anyway — the message may look like an answer.
+```
+
+What to *do* about it stays a plugin's call. Core reports; retrying the turn,
+marking the message, or saying so in the room are opinions, and they live where
+opinions live. This mirrors `agent.stalled` on the task path, which exists so
+`StallGuard` can decide retry-or-block without the watcher holding a policy.
+
 ## Errors as a room
 
 `builtin:error-room` forwards runtime errors into a room, so failures land in

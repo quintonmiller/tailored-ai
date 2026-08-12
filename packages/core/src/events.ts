@@ -40,6 +40,9 @@
  *   subscriptions across reloads are out of scope for the first cut.
  */
 
+import type { LoopStop } from "./agent/loop.js";
+import type { WakeReason } from "./rooms/watcher.js";
+
 /**
  * The catalog of events the runtime emits and their payload shapes.
  * Extend this interface (here or via module augmentation in a plugin) to
@@ -128,6 +131,43 @@ export interface RuntimeEventMap {
     agent: string;
     /** How many messages the agent was handed. */
     messageCount: number;
+  };
+
+  /**
+   * A room turn finished, and why. The counterpart to `room.woke`: that one
+   * says a turn started, this one says how it ended.
+   *
+   * `stop` comes from the loop rather than from the reply, which is the only
+   * way to tell a stall from an answer. A turn that runs out of rounds gets one
+   * tools-withheld call so it can say what happened, so a stalled turn usually
+   * returns ordinary prose — measured on a 237-run benchmark cohort, all 12
+   * stalls came back as prose and none carried an `[Agent stopped: …]` marker.
+   * Anything matching that string is matching nothing.
+   *
+   * Rooms are where this matters most and shows least: nobody reads a room
+   * turn's raw output, it is posted or suppressed, and a recovered stall reads
+   * in the room as an ordinary message. This is the seam for noticing — core
+   * emits, and what to *do* about a stalled agent (retry it, mark it, say so in
+   * the room) stays a plugin's opinion, the way `agent.stalled` leaves it to
+   * StallGuard.
+   *
+   * Emitted for every turn, including one that ended by throwing, so a
+   * subscriber counting turns is not quietly missing the ones that went wrong.
+   */
+  "room.turn_ended": {
+    /** Every room the turn covered. More than one for a batched turn. */
+    rooms: string[];
+    agent: string;
+    /** Why the agent was woken, when the path that woke it recorded a reason. */
+    reason?: WakeReason;
+    /** Why the loop ended. Absent only when the turn threw before it returned. */
+    stop?: LoopStop;
+    /** Short reason when the turn stalled, null otherwise — `stallReasonOf(stop)`. */
+    stallReason: string | null;
+    /** Whether anything reached a room, by either route: a reply, or a `room` tool post. */
+    posted: boolean;
+    /** Set when the turn ended by throwing, in which case nothing was posted. */
+    error?: string;
   };
 
   /**

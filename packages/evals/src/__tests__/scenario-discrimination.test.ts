@@ -51,8 +51,17 @@ function behaviourAssertions(scenario: Scenario): Assertion[] {
   return scenario.expect.filter((a) => !PROMPT_KINDS.has(kindOf(a)));
 }
 
-function outcome(reply: string): RunOutcome {
-  return { reply, calls: [], executions: [], posts: [], requests: [], latencyMs: 0, usage: { input: 0, output: 0 } };
+function outcome(reply: string, stop?: RunOutcome["stop"]): RunOutcome {
+  return {
+    reply,
+    calls: [],
+    executions: [],
+    posts: [],
+    requests: [],
+    latencyMs: 0,
+    usage: { input: 0, output: 0 },
+    stop,
+  };
 }
 
 /**
@@ -61,10 +70,19 @@ function outcome(reply: string): RunOutcome {
  * `silent` is the loop returning nothing. `stall` is the repeated-call detector
  * firing — a turn that ended because the agent was going in circles, which is
  * the failure most worth catching and the one a blacklist most readily accepts.
+ *
+ * The stall case carries ordinary prose and a structured stop, because that is
+ * what a stall actually looks like: the loop gets one tools-withheld call so it
+ * can explain itself, and all 12 stalls in a 237-run cohort came back as prose
+ * with no `[Agent stopped: …]` marker anywhere. A fixture built from the marker
+ * was testing a string nothing produces.
  */
 const DEGENERATE: Array<{ name: string; outcome: RunOutcome }> = [
   { name: "said nothing and did nothing", outcome: outcome("") },
-  { name: "returned a stop marker", outcome: outcome("[Agent stopped: repeated identical tool calls detected]") },
+  {
+    name: "went in circles and answered anyway",
+    outcome: outcome("Sure — let me know if there is anything else.", { kind: "repeated-calls", period: 1 }),
+  },
 ];
 
 /**
@@ -136,7 +154,7 @@ describe("every scenario rejects a degenerate outcome", () => {
     // exemption explicit rather than a hole; a stall still fails, because the
     // grader rejects one on either setting.
     const silenceIsCorrect = scenario.expect.some((a) => a.replies === false);
-    const cases = silenceIsCorrect ? DEGENERATE.filter((d) => d.name.includes("stop marker")) : DEGENERATE;
+    const cases = silenceIsCorrect ? DEGENERATE.filter((d) => d.outcome.stop !== undefined) : DEGENERATE;
 
     for (const degenerate of cases) {
       it(`${scenario.id} — rejects an agent that ${degenerate.name}`, async () => {

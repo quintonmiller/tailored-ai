@@ -21,7 +21,7 @@
 
 import { resolveAgent } from "../agent/agents.js";
 import { registerContextSlot, unregisterContextSlot } from "../agent/context-slots.js";
-import { estimateTokens, runAgentLoop } from "../agent/loop.js";
+import { estimateTokens, isStallStop, type LoopStop, runAgentLoop, stallReasonOf } from "../agent/loop.js";
 import { findOrCreateSession } from "../agent/session.js";
 import type { Subscription } from "../events.js";
 import { PASSTHROUGH_GATE } from "../notifications/dedup.js";
@@ -2001,6 +2001,13 @@ export class RoomWatcher {
     // woken for rather than every room in the deployment.
     workingMemory.set(WAKE_ROOMS_KEY, rooms.join(","));
     let reply = "";
+    // Why the loop ended, taken from the loop rather than read off the reply.
+    //
+    // The reply cannot answer this any more. A turn that runs out of rounds
+    // gets one tools-withheld call so it can explain itself, so a stalled turn
+    // comes back as ordinary prose — which in a room is indistinguishable from
+    // a normal message, and is posted as one. Carried to `room.turn_ended`.
+    let stop: LoopStop | undefined;
     // Whether this turn did anything, as opposed to only talking. Decides
     // whether it counts toward the conversation-depth cap.
     let usedTools = false;
@@ -2013,6 +2020,9 @@ export class RoomWatcher {
       reply = await runAgentLoop(prompt, {
         ...base,
         toolContextExtras: { ...base.toolContextExtras, workingMemory },
+        onStop: (s) => {
+          stop = s;
+        },
         onToolCall: (name, args) => {
           // `pass` is how an agent declines to speak — using it is not work.
           if (name !== "room") usedTools = true;
@@ -2037,6 +2047,11 @@ export class RoomWatcher {
           (skipped ? ` — skipping past ${skipped} message(s).` : "."),
       );
       this.advanceShownCursors(sub, messages, batch);
+      // A turn that threw is still a turn that ended. Reported here as well as
+      // on the normal path so a subscriber counting turns is not silently
+      // missing the ones that failed — an event that only fires when things go
+      // well is worse than no event, because the gap looks like good news.
+      this.reportTurnEnded(rooms, sub.agent, reason, undefined, false, (err as Error).message);
       return;
     }
 
@@ -2082,6 +2097,14 @@ export class RoomWatcher {
         reply = await runAgentLoop(correction, {
           ...base,
           toolContextExtras: { ...base.toolContextExtras, workingMemory },
+          onStop: (s) => {
+            // A stall anywhere in the turn is the turn's stall. Overwriting
+            // unconditionally would let a tidy correction round bury the stall
+            // that made the correction necessary, and a turn reported clean
+            // because its second half went fine is the wrong answer to the only
+            // question this field is asked.
+            if (!stop || !isStallStop(stop)) stop = s;
+          },
         });
       } catch (err) {
         console.warn(`[rooms] Correction round failed for ${sub.agent}: ${(err as Error).message}`);
@@ -2155,6 +2178,36 @@ export class RoomWatcher {
       posted !== null ||
       [...workingMemory].some(([key, value]) => key.startsWith(ROOM_POSTED_PREFIX) && value === "true");
     if (!said && !usedTools) this.store.refundWake(sub.agent, sub.roomRef);
+
+    this.reportTurnEnded(rooms, sub.agent, reason, stop, said);
+  }
+
+  /**
+   * Say how a turn ended, on the bus and — for a stall — in the log.
+   *
+   * The log line is here because a stalled room turn is otherwise completely
+   * silent: it posts prose that reads like an answer, the room moves on, and
+   * nothing anywhere records that the agent got stuck. On the task path the
+   * same fact reaches StallGuard and gets written onto the task; a room has no
+   * equivalent, so until a plugin subscribes to this event, the log is the only
+   * place the fact exists.
+   */
+  private reportTurnEnded(
+    rooms: string[],
+    agent: string,
+    reason: WakeReason | undefined,
+    stop: LoopStop | undefined,
+    posted: boolean,
+    error?: string,
+  ): void {
+    const stallReason = stallReasonOf(stop);
+    if (stallReason) {
+      console.warn(
+        `[rooms] ${agent} stalled on ${rooms.join(", ")}: ${stallReason}. ` +
+          `It ${posted ? "posted anyway — the message may look like an answer" : "posted nothing"}.`,
+      );
+    }
+    this.runtime.events?.emit("room.turn_ended", { rooms, agent, reason, stop, stallReason, posted, error });
   }
 
   /**
