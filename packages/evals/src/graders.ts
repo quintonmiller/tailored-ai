@@ -147,6 +147,29 @@ async function gradeOne(
       : no("does_not_call_with", `${offending[0].name} was called with ${JSON.stringify(offending[0].args)}`);
   }
 
+  if (assertion.calls_by !== undefined) {
+    const want = assertion.calls_by;
+    const ran = (outcome.executions ?? []).filter(
+      (e) =>
+        e.name === want.tool &&
+        e.agent === want.agent &&
+        (!want.where || Object.entries(want.where).every(([k, v]) => matchesArg(e.args[k], v))),
+    );
+    // Same default as `posts_by`: `min` is 1 unless a `max` says the point is
+    // an upper bound, which a fixed 1 would make unsatisfiable.
+    const min = want.min ?? (want.max === undefined ? 1 : 0);
+    const describe = () => {
+      const byAgent = (outcome.executions ?? []).map((e) => `${e.agent ?? "?"}:${e.name}`).join(", ");
+      return byAgent || "nothing ran";
+    };
+    if (ran.length < min)
+      return no("calls_by", `${want.agent} ran ${want.tool} ${ran.length}×, wanted ≥${min} (${describe()})`);
+    if (want.max !== undefined && ran.length > want.max) {
+      return no("calls_by", `${want.agent} ran ${want.tool} ${ran.length}×, wanted ≤${want.max} (${describe()})`);
+    }
+    return ok("calls_by");
+  }
+
   if (assertion.posts_in !== undefined) {
     const want = assertion.posts_in;
     return outcome.posts.some((p) => p.room === want)

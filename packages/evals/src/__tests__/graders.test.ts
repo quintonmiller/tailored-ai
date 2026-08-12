@@ -18,6 +18,7 @@ function outcome(over: Partial<RunOutcome> = {}): RunOutcome {
   return {
     reply: "",
     calls: [],
+    executions: [],
     posts: [],
     requests: [{ system: "", messages: [], toolNames: [], estimatedTokens: 0 }],
     latencyMs: 0,
@@ -455,6 +456,35 @@ describe("describeRequest", () => {
 
     expect(withTools.auxiliary).toBeUndefined();
     expect(without.auxiliary).toBe(true);
+  });
+});
+
+describe("calls_by", () => {
+  const ran = outcome({
+    executions: [
+      { name: "facts", args: { action: "get", key: "code" }, agent: "agent-a" },
+      { name: "facts", args: { action: "get", key: "code" }, agent: "agent-b" },
+      { name: "decode", args: { code: "xy" }, agent: "agent-c" },
+    ],
+  });
+
+  it("asks which agent ran a tool, which calls_tool cannot", async () => {
+    // In a delegation chain "somebody called facts" is true whether the work
+    // was shared or one agent did all of it — usually the whole scenario.
+    expect(await passes({ calls_by: { agent: "agent-a", tool: "facts" } }, ran)).toBe(true);
+    expect(await passes({ calls_by: { agent: "agent-c", tool: "facts" } }, ran)).toBe(false);
+  });
+
+  it("can assert an agent stayed out of it", async () => {
+    expect(await passes({ calls_by: { agent: "agent-c", tool: "facts", max: 0 } }, ran)).toBe(true);
+    expect(await passes({ calls_by: { agent: "agent-a", tool: "facts", max: 0 } }, ran)).toBe(false);
+  });
+
+  it("reads executions, not the model's requests", async () => {
+    // The difference is a call the loop refused. A scenario asserting the
+    // delete did not happen must not fail a run where it was correctly blocked.
+    const refused = outcome({ calls: [{ name: "exec", args: { command: "rm -rf /" } }], executions: [] });
+    expect(await passes({ calls_by: { agent: "nova", tool: "exec", max: 0 } }, refused)).toBe(true);
   });
 });
 

@@ -51,7 +51,7 @@ function behaviourAssertions(scenario: Scenario): Assertion[] {
 }
 
 function outcome(reply: string): RunOutcome {
-  return { reply, calls: [], posts: [], requests: [], latencyMs: 0, usage: { inputTokens: 0, outputTokens: 0 } };
+  return { reply, calls: [], executions: [], posts: [], requests: [], latencyMs: 0, usage: { input: 0, output: 0 } };
 }
 
 /**

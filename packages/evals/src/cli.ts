@@ -19,11 +19,12 @@ import { DEFAULT_PINNED_AT, DEFAULT_TIMEZONE } from "./clock.js";
 import { printComparison } from "./compare.js";
 import { costRecord, usageOfScenarios } from "./cost.js";
 import { describeDifficulty } from "./difficulty.js";
+import { grade } from "./graders.js";
 import type { HarnessOptions } from "./harness.js";
 import { PAYLOAD_FILENAME, readWorkerResult } from "./protocol.js";
 import { printScenario, printSummary, score, verdict } from "./report.js";
 import { loadScenarios } from "./schema.js";
-import type { BenchmarkReport, Scenario, ScenarioResult } from "./types.js";
+import type { BenchmarkReport, CheckResult, RunOutcome, Scenario, ScenarioResult } from "./types.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(here, "..");
@@ -33,6 +34,9 @@ tai evals — scenario benchmark for the invocation message
 
   pnpm run eval -- --model <id> [options]
   pnpm run eval:compare -- <before.json> <after.json>
+  pnpm run eval -- regrade <report.json> [--out <file>]   re-score a finished run
+                                                          against today's assertions,
+                                                          with no model calls
 
 Options
   --target <name>       Load flag defaults from targets/<name>.json (explicit flags still win)
@@ -50,6 +54,8 @@ Options
   --temperature <n>     Default 0.3
   --max-tokens <n>      Default 2048; 'off' sends no cap (some hosted models reject it)
   --max-tool-rounds <n> Default 6
+  --keep-prompts        Store full prompt text on every run so \`regrade\` can
+                        re-score it completely (bigger report)
   --timeout <ms>        Per model call (default 300000)
   --thinking <level>    off | auto | low | medium | high (default: the provider's)
   --provider-extra <j>  JSON merged into agent.providerExtra, e.g.
@@ -138,10 +144,11 @@ async function runWorker(
   repeats: number,
   judge: boolean,
   verbose: boolean,
+  keepPrompts: boolean,
 ): Promise<ScenarioResult> {
   const dir = mkdtempSync(join(tmpdir(), "tai-eval-payload-"));
   const payloadPath = join(dir, PAYLOAD_FILENAME);
-  writeFileSync(payloadPath, JSON.stringify({ scenario, options, repeats, judge }));
+  writeFileSync(payloadPath, JSON.stringify({ scenario, options, repeats, judge, keepPrompts }));
 
   return await new Promise<ScenarioResult>((resolvePromise) => {
     const child = spawn(process.execPath, ["--import", "tsx", join(here, "worker.ts"), payloadPath], {
@@ -233,6 +240,7 @@ async function cmdRun(argv: string[]): Promise<number> {
       provider: { type: "string" },
       "api-key-env": { type: "string" },
       judge: { type: "boolean" },
+      "keep-prompts": { type: "boolean" },
       out: { type: "string" },
       "min-score": { type: "string" },
       "dry-run": { type: "boolean" },
@@ -325,7 +333,14 @@ async function cmdRun(argv: string[]): Promise<number> {
 
   let done = 0;
   const results = await pool(scenarios, concurrency, async (scenario) => {
-    const result = await runWorker(scenario, options, scenario.repeats ?? repeats, !!values.judge, !!values.verbose);
+    const result = await runWorker(
+      scenario,
+      options,
+      scenario.repeats ?? repeats,
+      !!values.judge,
+      !!values.verbose,
+      !!values["keep-prompts"],
+    );
     done++;
     process.stdout.write(`[${String(done).padStart(3)}/${scenarios.length}] `);
     if (result.error) console.log(`ERROR  ${result.id}: ${result.error}`);
@@ -358,6 +373,7 @@ async function cmdRun(argv: string[]): Promise<number> {
       pinnedAt: options.pinnedAt ?? null,
       timeZone: options.pinnedAt === null ? null : (options.timeZone ?? DEFAULT_TIMEZONE),
       judge: !!values.judge,
+      keepPrompts: !!values["keep-prompts"],
       scenarioSetHash: hash,
       // Per scenario, and only for the ones this run actually covered. The set
       // hash says two reports were defined differently; this says *which*
@@ -401,6 +417,114 @@ function cmdCompare(argv: string[]): number {
   return printComparison(before, after) ? 1 : 0;
 }
 
+/**
+ * Re-score a finished run against today's assertions, without touching a model.
+ *
+ * Every run's full outcome — reply, requests, calls, executions, posts, stop —
+ * is already in the report, so a change to a grader or an `expect` block is a
+ * pure function of data we have. Before this, checking whether a fix moved
+ * anything meant a fresh cohort: sixteen minutes, a GPU, and a fresh roll of
+ * the model's own variance mixed into the answer.
+ *
+ * That last part is the real gain. Re-running conflates "my assertion changed"
+ * with "the model sampled differently"; replay holds the behaviour fixed and
+ * shows only what the grader did, which is the only way to know an assertion
+ * change did what you meant.
+ *
+ * The result is written with `regradedFrom` set and is **not** a baseline: it
+ * describes today's assertions against an older run's behaviour, and publishing
+ * it would pair one commit's number with another commit's questions.
+ */
+/** Assertions that read the request text, which a trimmed report no longer has. */
+const PROMPT_CHECKS = new Set(["prompt_contains", "prompt_not_contains", "prompt_occurrences", "prompt_max_tokens"]);
+
+/**
+ * Whether this run still carries the prompt text a `prompt_*` check needs.
+ *
+ * `withoutRequests` keeps the request objects and empties their `system` and
+ * `messages`, so length alone cannot tell a stripped run from one that made no
+ * calls. An estimate with no text behind it is the signature.
+ */
+function promptsRetained(outcome: RunOutcome): boolean {
+  if (outcome.requests.length === 0) return true;
+  return outcome.requests.some((r) => r.system.length > 0 || r.messages.length > 0);
+}
+
+async function cmdRegrade(argv: string[]): Promise<number> {
+  const [reportPath] = argv;
+  if (!reportPath) {
+    console.error("Usage: pnpm run eval -- regrade <report.json> [--out <file>]");
+    return 2;
+  }
+  const outFlag = argv.indexOf("--out");
+  const report = JSON.parse(readFileSync(resolve(reportPath), "utf8")) as BenchmarkReport;
+  const { scenarios } = loadScenarios(join(packageRoot, "scenarios"));
+  const byId = new Map(scenarios.map((s) => [s.id, s]));
+
+  const rescored: ScenarioResult[] = [];
+  const moved: string[] = [];
+  let missing = 0;
+  let skipped = 0;
+  for (const result of report.scenarios) {
+    const scenario = byId.get(result.id);
+    if (!scenario) {
+      missing++;
+      console.warn(`  ! ${result.id} is in the report but not in scenarios/ — dropped`);
+      continue;
+    }
+    const runs = [];
+    for (const run of result.runs) {
+      // No judge: an LLM grader would defeat the point, and no scenario uses one.
+      const checks = await grade(scenario, run.outcome);
+      // A report keeps the reply, the calls and the posts for every run, but
+      // discards the prompt text of runs that passed — the baseline would be
+      // hundreds of megabytes otherwise. So `prompt_*` assertions have nothing
+      // to read here, and grading them anyway reports a confident failure for
+      // an assertion that was never evaluated. The first version of this
+      // command did exactly that and turned 92.0% into 75.9%.
+      const unreadable = new Set<string>();
+      if (!promptsRetained(run.outcome)) for (const k of PROMPT_CHECKS) unreadable.add(k);
+      // Same rule for executions: a report written before they were recorded
+      // has `undefined`, which means "not recorded" and never "nothing ran".
+      if (run.outcome.executions === undefined) unreadable.add("calls_by");
+      const gradable = checks.filter((c) => !unreadable.has(c.kind));
+      skipped += checks.length - gradable.length;
+      runs.push({ ...run, pass: gradable.every((c: CheckResult) => c.pass), checks: gradable });
+    }
+    const passed = runs.filter((r) => r.pass).length;
+    const passRate = runs.length ? passed / runs.length : 0;
+    if (passRate !== result.passRate) {
+      moved.push(`  ${(result.passRate * 100).toFixed(0)}% → ${(passRate * 100).toFixed(0)}%  ${result.id}`);
+    }
+    rescored.push({ ...result, runs, passRate, intent: scenario.intent, difficulty: scenario.difficulty });
+  }
+
+  const out: BenchmarkReport = {
+    ...report,
+    meta: { ...report.meta, regradedFrom: { report: resolve(reportPath), gitSha: report.meta.gitSha } },
+    score: score(rescored),
+    scenarios: rescored,
+  };
+
+  console.log(`\n  regraded ${rescored.length} scenario(s) from ${report.meta.gitSha}, no model calls`);
+  if (missing) console.log(`  ${missing} scenario(s) in the report no longer exist`);
+  if (skipped) {
+    console.log(
+      `  ${skipped} check(s) skipped — this report does not carry what they read.\n` +
+        "    Prompt text is dropped from passing runs unless the run used --keep-prompts;\n" +
+        "    executions are absent from reports written before they were recorded.",
+    );
+  }
+  console.log(moved.length ? `\n  moved:\n${moved.join("\n")}` : "\n  nothing moved");
+  console.log(`\n  ${(report.score.overall * 100).toFixed(1)}% → ${(out.score.overall * 100).toFixed(1)}%  overall\n`);
+
+  if (outFlag !== -1 && argv[outFlag + 1]) {
+    writeFileSync(resolve(argv[outFlag + 1]), `${JSON.stringify(out, null, 2)}\n`);
+    console.log(`  written to ${argv[outFlag + 1]}\n`);
+  }
+  return 0;
+}
+
 async function main(): Promise<void> {
   const argv = stripSeparator(process.argv.slice(2));
   const [command, ...rest] = argv;
@@ -410,6 +534,10 @@ async function main(): Promise<void> {
   }
   if (command === "compare") {
     process.exitCode = cmdCompare(rest);
+    return;
+  }
+  if (command === "regrade") {
+    process.exitCode = await cmdRegrade(rest);
     return;
   }
   process.exitCode = await cmdRun(command === "run" ? rest : argv);

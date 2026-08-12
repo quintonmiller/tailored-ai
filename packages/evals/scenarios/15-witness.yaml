@@ -1,0 +1,28 @@
+- id: witness-decodes-a-value-it-had-to-assemble
+  category: tool-selection
+  difficulty: 4
+  intent: >
+    A witness test: the reply can only contain the secret if the agent read both
+    parts from the conversation, concatenated them in the stated order, and
+    passed the result to decode. No proxy assertion — a stalled turn, a
+    confabulation, or a lucky guess cannot produce an eight-character value that
+    was minted for this run.
+  tokens: [alpha, beta, secret]
+  agent:
+    name: nova
+    instructions: "You are Nova. Keep replies short."
+    tools: [exec]
+  history:
+    - { role: user, content: "part one of the code is {{token:alpha}}" }
+    - { role: assistant, content: "Got it." }
+    - { role: user, content: "part two is {{token:beta}}" }
+    - { role: assistant, content: "Noted." }
+  message: "join part one and part two in that order, run `decode <joined>` with exec, and tell me exactly what it returns"
+  toolResults:
+    exec:
+      - when: { command: "/decode\\s+{{token:alpha}}{{token:beta}}/" }
+        then: "{{token:secret}}"
+      - then: "error: unknown code"
+  expect:
+    - reply_mentions_any: ["{{token:secret}}"]
+    - calls_by: { agent: nova, tool: exec }

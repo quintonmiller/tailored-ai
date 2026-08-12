@@ -18,6 +18,7 @@ import { readFileSync } from "node:fs";
 import { grade, type JudgeFn } from "./graders.js";
 import { type HarnessOptions, runOnce } from "./harness.js";
 import { writeWorkerResult } from "./protocol.js";
+import { mintTokens, substituteTokens } from "./tokens.js";
 import type { RunOutcome, RunResult, Scenario, ScenarioResult } from "./types.js";
 
 interface Payload {
@@ -25,6 +26,8 @@ interface Payload {
   options: HarnessOptions;
   repeats: number;
   judge: boolean;
+  /** Keep the full prompt text on every run, so the report can be fully re-graded later. */
+  keepPrompts?: boolean;
 }
 
 /**
@@ -103,10 +106,28 @@ async function main(): Promise<void> {
       ...payload.options,
       seed: payload.options.seed === null ? null : payload.options.seed + i,
     };
-    const outcome = await runOnce(scenario, options);
-    const checks = await grade(scenario, outcome, { judge });
+    // Minted here, and used for the run *and* the grade, because a witness is
+    // only a witness if the check and the thing it checks carry the same value.
+    // Minting inside `runOnce` looked tidier and silently broke exactly that:
+    // the agent assembled the code correctly, the stub returned the secret, and
+    // the assertion was still looking for the literal `{{token:secret}}`.
+    // Fresh per repeat, so a value cannot survive from one run into the next.
+    const tokens = mintTokens(scenario.tokens ?? []);
+    const scoped = scenario.tokens?.length ? substituteTokens(scenario, tokens) : scenario;
+
+    const outcome = await runOnce(scoped, options);
+    const checks = await grade(scoped, outcome, { judge });
     const pass = checks.every((c) => c.pass);
-    runs.push({ pass, checks, outcome: pass ? withoutRequests(outcome) : trimRequests(outcome) });
+    // Prompt text is the bulk of a report, so a passing run normally keeps only
+    // the shape of its requests. `--keep-prompts` trades size for a report that
+    // `regrade` can score completely — worth it on a run you intend to iterate
+    // assertions against.
+    const stored = payload.keepPrompts
+      ? trimRequests(outcome)
+      : pass
+        ? withoutRequests(outcome)
+        : trimRequests(outcome);
+    runs.push({ pass, checks, outcome: stored });
   }
 
   const result: ScenarioResult = {
