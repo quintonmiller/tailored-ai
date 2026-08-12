@@ -19,7 +19,7 @@
  *
  *   discovered  a tool result contained the value
  *   shared      a post contained it
- *   received    an agent that needed it took a turn after it was posted
+ *   received    an agent that needed it took a turn in a room it was posted in
  *   used        that agent passed it to a tool
  *
  * `received` claims the value was in front of the agent, not that the agent read
@@ -63,20 +63,30 @@ export function traceFact(name: string, spec: FactSpec, outcome: RunOutcome): Fa
       ? { agent: "?", turn: discovery.turn ?? 0 }
       : undefined;
 
-  const post = byTurn(outcome.posts).find((p) => contains(p.body, value));
+  // Every post carrying the value, not just the first: with more than one room
+  // a fact can be said in one channel and repeated in another, and the second
+  // saying is the relay — the whole thing a split graph exists to measure.
+  const said = byTurn(outcome.posts).filter((p) => contains(p.body, value));
+  const post = said[0];
   const shared = post ? { agent: post.agent ?? "?", turn: post.turn ?? 0, room: post.room } : undefined;
 
-  // An agent that took a turn after the value was posted saw it: every turn here
-  // is a poll, and a poll delivers what is unread. Read off the turn roster
-  // rather than off the agent's own output, because an agent can be told
-  // something and say nothing — which is one of the failures worth catching, and
-  // inferring receipt from its posts would score it as never having been told.
-  const receiver =
-    shared === undefined
-      ? undefined
-      : (outcome.turns ?? [])
-          .map((t, index) => ({ ...t, index }))
-          .find((t) => t.index > shared.turn && required.includes(t.agent));
+  // An agent that took a turn **in a room where the value had been posted** saw
+  // it: every turn here is a poll, and a poll delivers what is unread in that
+  // room. Read off the turn roster rather than off the agent's own output,
+  // because an agent can be told something and say nothing — which is one of the
+  // failures worth catching, and inferring receipt from its posts would score it
+  // as never having been told.
+  //
+  // The room check is not a refinement, it is the correctness of the stage. It
+  // used to be "took any turn after the value was posted", which is sound with
+  // one shared room and false the moment there are two: the first split-room run
+  // reported `received boron@18` for a frequency posted only in the north
+  // channel, which Boron is not in and never saw. That is a false positive on
+  // the one stage the scenario exists to measure, and it points the diagnosis at
+  // the wrong agent — Boron looks like it ignored a number nobody ever sent it.
+  const receiver = (outcome.turns ?? [])
+    .map((t, index) => ({ ...t, index }))
+    .find((t) => required.includes(t.agent) && said.some((p) => p.room === t.room && (p.turn ?? 0) < t.index));
   const received = receiver ? { agent: receiver.agent, turn: receiver.index } : undefined;
 
   // Passed to a tool by an agent that needed it. With no `requiredBy`, anyone

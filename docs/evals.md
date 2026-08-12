@@ -480,10 +480,11 @@ scenario report perfect routing.
 
 `rooms[].members` names who is subscribed; without it a room holds everyone who
 takes a turn. That default is what `the-machine` runs on today, and it is the
-single biggest thing making it easier than it looks: with one shared room, "get
-this fact to the agent who needs it" is satisfied by saying it out loud, and a
-team can score full marks on routing without ever having decided where anything
-should go.
+best candidate for why the scenario turned out easier than it looks: with one
+shared room, "get this fact to the agent who needs it" is satisfied by saying it
+out loud, and a team can score full marks on routing without ever having decided
+where anything should go. Untested as a claim — the seam exists, no scenario uses
+it yet.
 
 Two rooms with different membership force a **relay** — a fact has to be carried
 by whoever sits in both, and choosing that agent is the decision the measurement

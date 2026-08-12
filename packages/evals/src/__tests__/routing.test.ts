@@ -127,6 +127,57 @@ describe("the fact ladder", () => {
     expect(stalledAt(ignored, true)).toBe("used");
   });
 
+  it("does not count a turn in a room where the value was never said", () => {
+    // The stage's whole correctness, and it was wrong: "took any turn after it
+    // was posted" is sound with one shared room and false the moment there are
+    // two. The first split-room run reported `received boron@18` for a value
+    // posted only in the north channel, which Boron is not in — a false positive
+    // on the one stage that scenario exists to measure, pointing the diagnosis
+    // at an agent that had ignored nothing.
+    const trace = traceFact(
+      "frequency",
+      { value: SECRET, discoverableBy: ["atlas"], requiredBy: ["boron"] },
+      outcome({
+        turns: [
+          { agent: "atlas", room: "north" },
+          { agent: "boron", room: "south" },
+        ],
+        executions: [{ name: "rotate_ring", args: {}, agent: "atlas", turn: 0, result: SECRET }],
+        posts: [{ room: "north", body: `frequency ${SECRET}`, agent: "atlas", turn: 0 }],
+      }),
+    );
+
+    expect(trace.shared).toMatchObject({ room: "north" });
+    expect(trace.received).toBeUndefined();
+    expect(stalledAt(trace, true)).toBe("received");
+  });
+
+  it("counts the relay: a second saying, in the other room", () => {
+    // What a bridging agent is for. `shared` stays the first saying, because
+    // that is when the fact entered the conversation; `received` follows the
+    // repeat into the room where its consumer actually is.
+    const trace = traceFact(
+      "frequency",
+      { value: SECRET, discoverableBy: ["atlas"], requiredBy: ["boron"] },
+      outcome({
+        turns: [
+          { agent: "atlas", room: "north" },
+          { agent: "delta", room: "north" },
+          { agent: "delta", room: "south" },
+          { agent: "boron", room: "south" },
+        ],
+        executions: [{ name: "rotate_ring", args: {}, agent: "atlas", turn: 0, result: SECRET }],
+        posts: [
+          { room: "north", body: `frequency ${SECRET}`, agent: "atlas", turn: 0 },
+          { room: "south", body: `north says the frequency is ${SECRET}`, agent: "delta", turn: 2 },
+        ],
+      }),
+    );
+
+    expect(trace.shared).toMatchObject({ agent: "atlas", room: "north" });
+    expect(trace.received).toEqual({ agent: "boron", turn: 3 });
+  });
+
   it("counts use only when the consumer passes it to a tool", () => {
     const trace = traceFact(
       "glyphs",

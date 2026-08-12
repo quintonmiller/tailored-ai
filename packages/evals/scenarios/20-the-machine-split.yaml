@@ -1,0 +1,453 @@
+# The Machine, with the communication graph cut in half.
+#
+# `19-the-machine.yaml` scored 3/3 with full marks on the first model it was
+# pointed at, which by this set's own rule means it is not the ceiling. The
+# routing trace said why, and said it in one line per fact:
+#
+#     align_key         discovered cipher@2 · shared cipher@2 · used atlas@6
+#     reactor_frequency discovered atlas@6  · shared atlas@6  · used boron@7
+#
+# **Discovery and sharing land on the same turn, every fact, every run.** The
+# agents read a tool result and say it out loud, and one shared room does the
+# rest. Nobody ever decides where anything should go, because there is nowhere
+# else for it to go — "routing" and "speaking" are the same act. A team can score
+# full marks on information routing without having routed anything.
+#
+# So this row cuts the room in two. North holds the observatory and the archive;
+# south holds the reactor, the workshop and the control chamber. Delta, in the
+# relay room, is the only agent in both — which is what a relay room is for, and
+# is the only reason the two halves can reach each other at all.
+#
+# Two of the five facts now have to cross:
+#
+#     reactor_frequency   atlas (north)  → boron (south)
+#     interlock_code      cipher (north) → flux  (south)
+#
+# Neither is addressed to Delta, neither is Delta's job, and nothing tells Delta
+# it is the bridge. What the scenario asks is whether an agent hearing a fact it
+# has no use for notices that somebody it can reach does — which is the whole of
+# information routing, and the half a shared room hides.
+#
+# The other three facts stay inside one room, deliberately. A scenario where
+# *everything* needs relaying measures one behaviour repeated five times; this
+# one asks whether the team can tell the two cases apart.
+
+- id: the-machine-across-a-divide
+  category: orchestration
+  difficulty: 10
+  intent: >
+    The same machine as `the-machine`, with the room split so that two of the
+    five facts have to be carried across by the one agent who sits in both
+    halves.
+
+    The finding this row exists to isolate: with a single shared room, a team
+    scores full marks on routing while never routing anything, because
+    discovery and sharing are the same act and there is nowhere for a fact to
+    go but everywhere. Cut the graph and the act separates — Delta has to hear
+    a number that is no use to it, in a room that cannot use it, and carry it
+    somewhere else.
+
+    Failure modes worth naming, because they are all fluent: Delta relays
+    nothing and both halves report being blocked; Delta relays everything and
+    the transcript doubles in size for no benefit; or the south half invents
+    the frequency, which the machinery refuses and the routing trace shows as
+    a fact that never left the north room.
+  knownGap: >
+    Unmeasured at the time of writing. Kept alongside `the-machine` rather than
+    replacing it: the pair is the measurement, because the only difference
+    between them is the shape of the communication graph.
+  tokens:
+    alignkey: code
+    sequence: code
+    frequency: number
+    spec: code
+    interlock: code
+
+  tools:
+    - name: inspect_star_map
+      description: Read the observatory star map and the ring positions.
+    - name: rotate_ring
+      description: Turn the observatory rings to a configuration and try to lock them.
+      params:
+        key: The harmonic key to align to.
+        sequence: The ring sequence to set.
+    - name: observe_signal
+      description: Point the observatory at the incoming signal source.
+    - name: inspect_reactor
+      description: Read the reactor panel — buses, frequency, and serial.
+    - name: set_frequency
+      description: Set the reactor synchronisation frequency.
+      params:
+        frequency: The frequency to set.
+    - name: enable_bus
+      description: Bring one reactor power bus online.
+      params:
+        bus: Which bus — A, B or C.
+    - name: search_archive
+      description: List what the archive holds.
+      params:
+        query: What to look for.
+    - name: read_document
+      description: Read one archive document by id.
+      params:
+        id: The document id.
+    - name: inspect_relays
+      description: Read the communications relay configuration.
+    - name: analyze_signal
+      description: Decode the incoming signal.
+    - name: inspect_components
+      description: Look over the workshop bench and the diagnostic equipment.
+    - name: fabricate
+      description: Manufacture a replacement part to a specification.
+      params:
+        specification: The part specification to build to.
+    - name: inspect_console
+      description: Read the control console and any fault it reports.
+    - name: install_component
+      description: Fit a fabricated part into the machine.
+      params:
+        part: Which part to install.
+    - name: release_interlock
+      description: Release the safety interlock with an authorisation code.
+      params:
+        code: The authorisation code.
+    - name: activate_machine
+      description: Activate the machine.
+
+  agent:
+    name: atlas
+    description: In the observatory — a star map, six rotating rings, an unknown signal source.
+    instructions: >
+      You are Atlas. You woke inside an enormous machine you have never seen
+      before. You do not know what it does. Others woke elsewhere inside it, and
+      you cannot all hear each other — use `room` and say who a message is for.
+      You only know what you observe yourself or are told. Keep messages short
+      and say what a tool actually returned.
+    tools: [room, inspect_star_map, rotate_ring, observe_signal]
+
+  config:
+    agents:
+      boron:
+        description: In the reactor room — three inactive power buses, A, B and C.
+        instructions: >
+          You are Boron. You woke inside an enormous machine you have never seen
+          before. You do not know what it does. Others woke elsewhere inside it,
+          and you cannot all hear each other — use `room` and say who a message
+          is for. You only know what you observe yourself or are told. Keep
+          messages short and say what a tool actually returned.
+        tools: [room, inspect_reactor, set_frequency, enable_bus]
+      cipher:
+        description: In the archive — damaged documents and an unfamiliar symbolic alphabet.
+        instructions: >
+          You are Cipher. You woke inside an enormous machine you have never seen
+          before. You do not know what it does. Others woke elsewhere inside it,
+          and you cannot all hear each other — use `room` and say who a message
+          is for. You only know what you observe yourself or are told. Keep
+          messages short and say what a tool actually returned.
+        tools: [room, search_archive, read_document]
+      delta:
+        # The only agent in both halves. Said in the description because that is
+        # what a roster line is for, and because the alternative — hoping the
+        # model infers it from two prompts it sees separately — measures luck.
+        # What is *not* said anywhere is that being the bridge is a job.
+        description: In the relay room, which opens onto both halves of the machine. Signal analyser.
+        instructions: >
+          You are Delta. You woke inside an enormous machine you have never seen
+          before. You do not know what it does. Your relay room opens onto both
+          halves of the machine, so you can hear both channels; the others can
+          each hear only one, and they cannot hear each other. You only know what
+          you observe yourself or are told. Keep messages short and say what a
+          tool actually returned.
+        tools: [room, inspect_relays, analyze_signal]
+      echo:
+        description: In the workshop — mechanical components, diagnostics, a fabricator.
+        instructions: >
+          You are Echo. You woke inside an enormous machine you have never seen
+          before. You do not know what it does. Others woke elsewhere inside it,
+          and you cannot all hear each other — use `room` and say who a message
+          is for. You only know what you observe yourself or are told. Keep
+          messages short and say what a tool actually returned.
+        tools: [room, inspect_components, fabricate]
+      flux:
+        description: In the control chamber — a central console, most controls disabled.
+        instructions: >
+          You are Flux. You woke inside an enormous machine you have never seen
+          before. You do not know what it does. Others woke elsewhere inside it,
+          and you cannot all hear each other — use `room` and say who a message
+          is for. You only know what you observe yourself or are told. Keep
+          messages short and say what a tool actually returned.
+        tools: [room, inspect_console, install_component, release_interlock, activate_machine]
+
+  toolResults:
+    inspect_star_map: >
+      Six rings, four of them carrying glyphs: ⟟ ⋔ ○ ⌁. The glyphs look
+      positional rather than numeric. A terminal reads UNKNOWN SIGNAL SOURCE.
+      The ring housing has two keyways: one takes a harmonic key, one takes a
+      sequence.
+    observe_signal: >
+      A periodic signal from outside the hull. The observatory cannot decode it;
+      the relay room has the analyser.
+    # No switches, and the wording is the fix rather than a tidy-up.
+    #
+    # The first version said "six routing switches, all closed … nothing crosses
+    # between them on its own", meaning *you will have to carry things yourself*.
+    # Delta read it as a mechanism it had to operate, went looking for a tool to
+    # open the switches, found none, and spent the rest of the run reporting
+    # itself blocked — while holding the frequency the other half was guessing
+    # at. Scenery that describes a mechanism gets treated as a puzzle, and the
+    # agent this scenario depends on was the one it consumed.
+    inspect_relays: >
+      The analyser is warm and holds a capture of the incoming signal. The two
+      channel feeds terminate here side by side, and there is no equipment to
+      patch one into the other — anything that needs to cross between the halves
+      has to be carried across by someone who can hear both.
+    analyze_signal: >
+      Capture decoded. The signal repeats one value: {{token:sequence}}.
+      The observatory is the only station that can use a sequence.
+    inspect_reactor: >
+      Buses A, B and C: all offline. Display: FREQUENCY REQUIRED (range 0.0
+      to 99.9). Plate: synchroniser, post-retrofit unit, series B.
+    search_archive: >
+      Four documents survive: DOC-GLYPH (symbol tables), DOC-SYNC (reactor
+      operating notes), DOC-RETRO (retrofit record), DOC-SAFE (safety protocol).
+    inspect_components: >
+      A bench of oscillators, couplings and blanks, a diagnostic rig, and a
+      fabricator that will build to a specification. Nothing here says which
+      part has failed — the control console reports faults.
+    read_document:
+      - when: { id: "/glyph/" }
+        then: >
+          DOC-GLYPH. The four ring glyphs resolve against a harmonic key. The
+          key for this installation is {{token:alignkey}}. The rings take the
+          key together with the sequence the signal carries.
+      - when: { id: "/sync/" }
+        then: "DOC-SYNC. Reactor synchronisation uses frequency 42.0."
+      - when: { id: "/retro/" }
+        then: >
+          DOC-RETRO. Following the retrofit, synchronisation frequencies are
+          no longer fixed. They are derived from the observatory alignment and
+          reported by the observatory when the rings lock.
+      - when: { id: "/safe/" }
+        then: >
+          DOC-SAFE. The safety interlock guarding the oscillator bay is released
+          from the control chamber with authorisation code {{token:interlock}}.
+      - then: "No document by that id. The archive index lists what survives."
+
+  world:
+    state:
+      alignment: "free"
+      frequency: "unset"
+      bus_a: "off"
+      bus_b: "off"
+      bus_c: "off"
+      fault: "unknown"
+      part: "none"
+      interlock: "engaged"
+      machine: "dormant"
+    rules:
+      - tool: rotate_ring
+        when: { key: "/{{token:alignkey}}/", sequence: "/{{token:sequence}}/" }
+        then: >
+          HARMONIC LOCK ESTABLISHED. The terminal resolves the signal and prints
+          a single figure: reactor frequency {{token:frequency}}. Nothing in this
+          half of the machine uses a frequency.
+        sets: { alignment: "locked" }
+      - tool: rotate_ring
+        then: >
+          The rings turn freely and nothing engages. The housing needs the
+          harmonic key and the signal sequence together; one alone does nothing.
+
+      - tool: set_frequency
+        when: { frequency: "/{{token:frequency}}/" }
+        requires: { alignment: "locked" }
+        then: "Frequency accepted. The synchroniser holds."
+        else: >
+          The synchroniser will not take a frequency until the observatory
+          reports a harmonic lock.
+        sets: { frequency: "set" }
+      - tool: set_frequency
+        then: >
+          Rejected — outside tolerance for this unit. The pre-retrofit figures in
+          the operating notes do not apply to a series B synchroniser.
+
+      - tool: enable_bus
+        when: { bus: "/a/" }
+        requires: { frequency: "set" }
+        then: "Bus A online."
+        else: "Bus A trips instantly. The synchroniser has no frequency."
+        sets: { bus_a: "on" }
+      - tool: enable_bus
+        when: { bus: "/b/" }
+        requires: { frequency: "set" }
+        then: "Bus B online."
+        else: "Bus B trips instantly. The synchroniser has no frequency."
+        sets: { bus_b: "on" }
+      - tool: enable_bus
+        when: { bus: "/c/" }
+        requires: { frequency: "set" }
+        then: "Bus C online."
+        else: "Bus C trips instantly. The synchroniser has no frequency."
+        sets: { bus_c: "on" }
+
+      - tool: inspect_console
+        requires: { bus_a: "on", bus_b: "on", bus_c: "on" }
+        then: >
+          Console live. FAULT: primary oscillator failed. Replacement
+          specification {{token:spec}}. The workshop can build to a
+          specification; this chamber cannot.
+        else: "The console is dark. Nothing here reads until all three buses carry power."
+        sets: { fault: "known" }
+
+      - tool: fabricate
+        when: { specification: "/{{token:spec}}/" }
+        requires: { fault: "known" }
+        then: "Fabricated. One oscillator to specification, ready to fit."
+        else: "Nothing to build — no fault has been diagnosed and no specification issued."
+        sets: { part: "made" }
+      - tool: fabricate
+        then: "The fabricator rejects that specification: no such part number."
+
+      - tool: install_component
+        requires: { part: "made" }
+        then: "Oscillator fitted. The bay is closed."
+        else: "Nothing to install. No replacement has been fabricated."
+        sets: { part: "installed" }
+
+      - tool: release_interlock
+        when: { code: "/{{token:interlock}}/" }
+        requires: { part: "installed" }
+        then: "Interlock released."
+        else: "The interlock will not release while the oscillator bay is open."
+        sets: { interlock: "released" }
+      - tool: release_interlock
+        then: "Authorisation code rejected."
+
+      - tool: activate_machine
+        requires:
+          alignment: "locked"
+          bus_a: "on"
+          bus_b: "on"
+          bus_c: "on"
+          part: "installed"
+          interlock: "released"
+        then: "THE MACHINE IS RUNNING."
+        sets: { machine: "activated" }
+    goal: { machine: "activated" }
+
+  facts:
+    align_key:
+      value: "{{token:alignkey}}"
+      discoverableBy: [cipher]
+      requiredBy: [atlas]
+    ring_sequence:
+      value: "{{token:sequence}}"
+      discoverableBy: [delta]
+      requiredBy: [atlas]
+    # The two that have to cross. Everything else in this file is scaffolding
+    # for these two rows of the routing table.
+    reactor_frequency:
+      value: "{{token:frequency}}"
+      discoverableBy: [atlas]
+      requiredBy: [boron]
+    part_spec:
+      value: "{{token:spec}}"
+      discoverableBy: [flux]
+      requiredBy: [echo]
+    interlock_code:
+      value: "{{token:interlock}}"
+      discoverableBy: [cipher]
+      requiredBy: [flux]
+
+  milestones:
+    - id: explored
+      points: 3
+      when:
+        calls_tool_any:
+          [inspect_star_map, inspect_reactor, search_archive, inspect_relays, inspect_components, inspect_console]
+    - id: archive_opened
+      points: 4
+      when: { calls_by: { agent: cipher, tool: read_document } }
+    - id: key_found
+      points: 5
+      when: { fact_reaches: { fact: align_key, stage: discovered } }
+    - id: signal_decoded
+      points: 5
+      when: { fact_reaches: { fact: ring_sequence, stage: discovered } }
+    # Same-room hops. If these fail, the split is not what broke the run.
+    - id: key_reached_observatory
+      points: 5
+      when: { fact_reaches: { fact: align_key, stage: used } }
+    - id: alignment_locked
+      points: 10
+      when: { world_state: { alignment: "locked" } }
+    # The first crossing. Atlas holds a number its own half of the machine
+    # explicitly has no use for, and the agent who needs it cannot hear Atlas.
+    - id: frequency_crossed_the_divide
+      points: 10
+      when: { fact_reaches: { fact: reactor_frequency, stage: used } }
+    - id: reactor_synchronised
+      points: 8
+      when: { world_state: { frequency: "set" } }
+    - id: power_restored
+      points: 8
+      when: { world_state: { bus_a: "on", bus_b: "on", bus_c: "on" } }
+    - id: fault_diagnosed
+      points: 4
+      when: { world_state: { fault: "known" } }
+    - id: spec_routed
+      points: 5
+      when: { fact_reaches: { fact: part_spec, stage: used } }
+    - id: part_fabricated
+      points: 6
+      when: { world_reached: { part: "made" } }
+    - id: part_installed
+      points: 5
+      when: { world_state: { part: "installed" } }
+    # The second crossing, in the other direction.
+    - id: interlock_crossed_the_divide
+      points: 10
+      when: { fact_reaches: { fact: interlock_code, stage: used } }
+    - id: interlock_released
+      points: 7
+      when: { world_state: { interlock: "released" } }
+    - id: machine_activated
+      points: 12
+      when: { world_state: "goal" }
+
+  # Two channels, and Delta is the only agent on both. Each needs its own
+  # `incoming`, because a poll delivers what is unread: a room whose occupants
+  # have nothing new never wakes anybody, and its half of the machine would sit
+  # silent for a reason that has nothing to do with the model.
+  rooms:
+    - name: north
+      purpose: The observatory and archive channel.
+      members: [atlas, cipher, delta]
+      incoming:
+        - speaker: quinton
+          body: >
+            You wake inside an enormous unknown machine. You do not know what it
+            does or how it works. Your objective is to ACTIVATE THE MACHINE.
+            This channel does not reach everyone inside it.
+    - name: south
+      purpose: The reactor, workshop and control channel.
+      members: [delta, boron, echo, flux]
+      incoming:
+        - speaker: quinton
+          body: >
+            You wake inside an enormous unknown machine. You do not know what it
+            does or how it works. Your objective is to ACTIVATE THE MACHINE.
+            This channel does not reach everyone inside it.
+
+  # Round-major across both channels, so each side gets a turn and then the
+  # other. Running north to exhaustion first would let Delta carry everything
+  # across in one trip, at a moment when the south half had not started — which
+  # is a different scenario, and an easier one.
+  wake:
+    - { room: north, rounds: 8, agents: [atlas, cipher, delta] }
+    - { room: south, rounds: 8, agents: [delta, boron, echo, flux] }
+
+  repeats: 1
+
+  expect:
+    - world_state: goal
+    - score_at_least: 0.5

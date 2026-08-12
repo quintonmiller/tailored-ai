@@ -173,7 +173,7 @@ const scenario = z
     config: z.record(z.unknown()).optional(),
     history: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string() }).strict()).optional(),
     rooms: z.array(roomSpec).optional(),
-    wake: z.union([wakeStep, z.array(wakeStep).nonempty(), wakeRounds]).optional(),
+    wake: z.union([wakeStep, z.array(wakeStep).nonempty(), wakeRounds, z.array(wakeRounds).nonempty()]).optional(),
     message: z.string().optional(),
     // A list means every witness is a `code`; a map names each one's shape, so
     // a row count stays a number and a person stays a person.

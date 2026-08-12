@@ -62,6 +62,8 @@ import type {
   Scenario,
   ScenarioTool,
   ToolResults,
+  WakeRounds,
+  WakeStep,
 } from "./types.js";
 import { World } from "./world.js";
 
@@ -830,16 +832,39 @@ export interface PlannedTurn {
  */
 export function wakeSteps(scenario: Scenario, agentName: string): PlannedTurn[] {
   const wake = scenario.wake;
-  if (wake && !Array.isArray(wake) && "agents" in wake) {
+  const declared = wake ? (Array.isArray(wake) ? wake : [wake]) : [];
+  const blocks = declared.filter((step): step is WakeRounds => "agents" in step);
+
+  if (blocks.length) {
+    // Round-major across every block, not block by block.
+    //
+    // With two rooms this is the difference between a scenario and nothing: run
+    // all of the north room's turns and then all of the south room's, and an
+    // agent sitting in both carries everything across in one go, at a moment
+    // when the south room has not started. Interleaving is what makes a relay a
+    // relay — each side gets a turn, then the other side, and the carrier has to
+    // choose what to bring.
+    if (blocks.length !== declared.length) {
+      throw new Error("a `wake:` list mixes turn entries and roster entries; use one form or the other");
+    }
     const steps: PlannedTurn[] = [];
-    for (let round = 0; round < wake.rounds; round++) {
-      for (const agent of wake.agents) steps.push({ room: wake.room, agent, round });
+    const rounds = Math.max(...blocks.map((b) => b.rounds));
+    for (let round = 0; round < rounds; round++) {
+      for (const block of blocks) {
+        if (round >= block.rounds) continue;
+        for (const agent of block.agents) steps.push({ room: block.room, agent, round });
+      }
     }
     return steps;
   }
-  const declared = wake ? (Array.isArray(wake) ? wake : [wake]) : [];
+
   if (declared.length) {
-    return declared.map((step) => ({ room: step.room, agent: step.agent ?? agentName, kind: step.kind }));
+    // Narrowed above: `blocks.length` is zero here, so every entry is a turn.
+    return (declared as WakeStep[]).map((step) => ({
+      room: step.room,
+      agent: step.agent ?? agentName,
+      kind: step.kind,
+    }));
   }
   const fallback = [...(scenario.rooms ?? [])].reverse().find((r) => r.incoming?.length)?.name;
   return fallback ? [{ room: fallback, agent: agentName }] : [];
@@ -973,9 +998,10 @@ async function runRoomScenario(
   // list. Generous is expensive at six agents a pass, and the cheapest possible
   // evidence that a team has finished (or jammed) is a whole pass in which
   // nobody said anything and nothing in the machinery moved, not even a refusal.
-  const roster =
-    scenario.wake && !Array.isArray(scenario.wake) && "agents" in scenario.wake ? scenario.wake : undefined;
-  const quiescent = roster !== undefined && !roster.noQuiescence;
+  const rosters = (Array.isArray(scenario.wake) ? scenario.wake : scenario.wake ? [scenario.wake] : []).filter(
+    (step): step is WakeRounds => "agents" in step,
+  );
+  const quiescent = rosters.length > 0 && !rosters.some((r) => r.noQuiescence);
   // Posts and world transitions together, because a team hammering a locked door
   // is stuck rather than finished, and cutting the run short there would report
   // "quiescent" for the state most worth watching. A refused transition counts.
