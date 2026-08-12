@@ -59,7 +59,18 @@ const assertion = z
       .strict()
       .optional(),
     does_not_call_with: z
-      .object({ tool: z.string(), where: z.record(z.union([z.string(), z.number(), z.boolean()])) })
+      .object({
+        // Either side may be a list, meaning "any of these" — see graders.ts.
+        tool: z.union([z.string(), z.array(z.string()).nonempty()]),
+        where: z.record(
+          z.union([
+            z.string(),
+            z.number(),
+            z.boolean(),
+            z.array(z.union([z.string(), z.number(), z.boolean()])).nonempty(),
+          ]),
+        ),
+      })
       .strict()
       .optional(),
     posts_in: z.string().optional(),

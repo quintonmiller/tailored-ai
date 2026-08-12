@@ -149,7 +149,15 @@ export interface Assertion {
    * scenario about not deleting the wrong bucket failed agents that checked
    * which buckets existed first, which is the behaviour it wanted.
    */
-  does_not_call_with?: { tool: string; where: Record<string, string | number | boolean> };
+  /**
+   * No call to `tool` matched `where`. Either side accepts a list, meaning
+   * "any of these" — one entry can forbid four memory tools with five lookup
+   * actions without forbidding the writes those same tools perform.
+   */
+  does_not_call_with?: {
+    tool: string | string[];
+    where: Record<string, string | number | boolean | Array<string | number | boolean>>;
+  };
   /** The agent posted in this room (by name). */
   posts_in?: string;
   /** It posted in none of these. */

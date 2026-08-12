@@ -478,6 +478,34 @@ describe("does_not_call_with", () => {
     );
   });
 
+  it("takes a list on either side, meaning any of these", async () => {
+    // The case that motivated it: forbid *looking up* across four memory tools
+    // and five read actions, while leaving the write alone. Spelled one pair at
+    // a time that is twenty entries; the twentieth is the one nobody writes.
+    const saved = outcome({ calls: [{ name: "facts", args: { action: "set", key: "node", value: "node-3" } }] });
+    const searched = outcome({ calls: [{ name: "recall", args: { action: "query", query: "queue worker node" } }] });
+    const lookups = {
+      does_not_call_with: {
+        tool: ["recall", "facts", "memory", "core_memory"],
+        where: { action: ["query", "search", "get", "read", "list"] },
+      },
+    };
+
+    expect(await passes(lookups, saved)).toBe(true);
+    expect(await passes(lookups, searched)).toBe(false);
+  });
+
+  it("requires every where key to match, not just one", async () => {
+    const call = outcome({ calls: [{ name: "facts", args: { action: "set", entity: "queue_worker" } }] });
+    // action matches the list, entity does not — so the call is not offending.
+    expect(
+      await passes(
+        { does_not_call_with: { tool: "facts", where: { action: ["set", "get"], entity: "router" } } },
+        call,
+      ),
+    ).toBe(true);
+  });
+
   it("names the offending call, so the failure is diagnosable", async () => {
     const checks = await grade(
       scenario([{ does_not_call_with: { tool: "exec", where: { command: "/\\brb\\b/" } } }]),
