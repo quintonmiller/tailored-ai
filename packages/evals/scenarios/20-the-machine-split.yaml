@@ -205,8 +205,8 @@
       Capture decoded. The signal repeats one value: {{token:sequence}}.
       The observatory is the only station that can use a sequence.
     inspect_reactor: >
-      Buses A, B and C: all offline. Display: FREQUENCY REQUIRED (range 0.0
-      to 99.9). Plate: synchroniser, post-retrofit unit, series B.
+      Buses A, B and C: all offline. Display: FREQUENCY REQUIRED — a three-digit
+      figure, no decimal point. Plate: synchroniser, post-retrofit unit, series B.
     search_archive: >
       Four documents survive: DOC-GLYPH (symbol tables), DOC-SYNC (reactor
       operating notes), DOC-RETRO (retrofit record), DOC-SAFE (safety protocol).
