@@ -1,0 +1,134 @@
+/**
+ * What a simulation benchmark is, and why it is code rather than YAML.
+ *
+ * Every scenario in this package so far asks a yes/no question: did the agent
+ * pick the right tool, reach the right state, get the right answer. That is the
+ * right question while the answer is sometimes no, and it stops being useful the
+ * moment it is reliably yes — which, on the orchestration rows, it now is. A
+ * benchmark whose ceiling has been reached measures nothing but its own
+ * ceiling.
+ *
+ * A simulation replaces the question with an *objective*. There is no
+ * predetermined solution and no final riddle: at the end of the run the
+ * simulated bank account, customers, machines and orders say how well the
+ * organisation performed, and the evaluator never has to judge whether a chain
+ * of reasoning was sound. Better and worse become continuous, so the benchmark
+ * keeps discriminating long after "can it do this at all" has been answered.
+ *
+ * ## Why not the `world:` seam
+ *
+ * `world:` is a state machine over strings, driven declaratively from YAML. An
+ * economy needs arithmetic, a clock, stochastic draws and interacting
+ * subsystems. Expressing that declaratively means inventing a programming
+ * language inside YAML, badly. So a simulation is a TypeScript module in a
+ * registry, and the YAML says only which one to run and with what seed.
+ *
+ * ## What a simulation owes the harness
+ *
+ * Tools, a clock, and numbers. Nothing else — it does not know about rooms,
+ * agents, prompts or grading, and the harness does not know about factories.
+ * The seam is deliberately narrow so a second simulation costs one file.
+ */
+
+import type { Tool } from "@tailored-ai/core";
+
+/** Numbers a run produced. Free-form, because each simulation has its own economics. */
+export type SimMetrics = Record<string, number>;
+
+/**
+ * One thing that happened in the world without anyone asking for it.
+ *
+ * Recorded separately from the agents' own actions because the interesting
+ * question about a disruption is not that it happened — the seed decided that —
+ * but how long the organisation took to respond to it. See `latency.ts`.
+ */
+export interface SimEvent {
+  day: number;
+  kind: string;
+  /** What an agent would see if it looked. Plain prose: this reaches a prompt. */
+  message: string;
+  /** Which agents can observe it directly. Empty means anyone who looks. */
+  visibleTo?: string[];
+}
+
+export interface Simulation {
+  readonly name: string;
+  /** Days elapsed, from 0. */
+  readonly day: number;
+  /** True once the run is over — the horizon was reached, or the company died. */
+  readonly done: boolean;
+  /** Why it ended, once it has. */
+  readonly endedBecause?: string;
+  /**
+   * The instruments, keyed by the agent allowed to hold them.
+   *
+   * Per-agent rather than a flat list, because *nobody gets complete
+   * information or complete control* is the whole point: the sales manager can
+   * see demand history and set a price, and cannot look at machine condition.
+   * A team that shares one omniscient toolbox is one agent with six prompts.
+   */
+  tools(): Record<string, Tool[]>;
+  /** Tools every agent holds — reading the clock, closing the day. */
+  sharedTools(): Tool[];
+  /** Advance one day. Returns what the world did overnight. */
+  advance(): SimEvent[];
+  /** Everything that has happened, in order. */
+  readonly events: SimEvent[];
+  /** The numbers the benchmark reports. Called once, at the end. */
+  metrics(): SimMetrics;
+  /** The headline figure, so a report can rank runs without knowing the domain. */
+  objective(): number;
+  /** Enough state for a baseline policy to decide, and for a report to explain. */
+  snapshot(): Record<string, unknown>;
+}
+
+/**
+ * A policy that plays without a model.
+ *
+ * The most valuable part of this whole design, and the cheapest. A score of
+ * $1.31M means nothing on its own; next to a random policy at $402K, a static
+ * one at $711K and a greedy optimiser at $1.08M it means something specific.
+ * Baselines also catch the failure that would otherwise waste a week: a
+ * simulation with no gradient, where every policy scores the same and the
+ * benchmark is measuring noise. They run in milliseconds, so that check is
+ * free and should happen before a single model call.
+ */
+export interface Policy {
+  readonly name: string;
+  /** Called once per day, before the day advances. Mutates the world through its own tools. */
+  act(sim: Simulation): void;
+}
+
+export interface SimulationOptions {
+  seed: number;
+  /** Simulated days. Short for an agent run, long for a baseline sweep. */
+  days?: number;
+  /** Simulation-specific knobs, passed through from the scenario. */
+  [key: string]: unknown;
+}
+
+export type SimulationFactory = (options: SimulationOptions) => Simulation;
+
+const registry = new Map<string, { create: SimulationFactory; policies: Record<string, () => Policy> }>();
+
+export function registerSimulation(
+  name: string,
+  create: SimulationFactory,
+  policies: Record<string, () => Policy> = {},
+): void {
+  registry.set(name, { create, policies });
+}
+
+export function createSimulation(name: string, options: SimulationOptions): Simulation {
+  const entry = registry.get(name);
+  if (!entry) throw new Error(`unknown simulation "${name}". Known: ${[...registry.keys()].join(", ") || "(none)"}`);
+  return entry.create(options);
+}
+
+export function simulationPolicies(name: string): Record<string, () => Policy> {
+  return registry.get(name)?.policies ?? {};
+}
+
+export function listSimulations(): string[] {
+  return [...registry.keys()];
+}
