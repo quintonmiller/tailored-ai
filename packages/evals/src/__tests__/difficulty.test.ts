@@ -19,7 +19,7 @@ describe("parseDifficultyFilter", () => {
   });
 
   it("reads N+ as everything from there up", () => {
-    expect(matching("4+")).toEqual([4, 5, 6, 7]);
+    expect(matching("4+")).toEqual(levels.filter((n) => n >= 4));
     expect(matching(`${MAX_DIFFICULTY}+`)).toEqual([MAX_DIFFICULTY]);
   });
 
@@ -29,6 +29,7 @@ describe("parseDifficultyFilter", () => {
 
   it("reads a comma-separated list, and mixed forms", () => {
     expect(matching("1,7")).toEqual([1, 7]);
+    expect(matching(`1,${MAX_DIFFICULTY}`)).toEqual([1, MAX_DIFFICULTY]);
     expect(matching("1,3-4")).toEqual([1, 3, 4]);
   });
 
@@ -43,7 +44,9 @@ describe("parseDifficultyFilter", () => {
     expect(() => parseDifficultyFilter("hard")).toThrow(/not a level/);
     expect(() => parseDifficultyFilter("4-2")).toThrow(/backwards/);
     expect(() => parseDifficultyFilter("")).toThrow(/selected no levels/);
-    expect(() => parseDifficultyFilter("9")).toThrow(/outside the 1-7 scale/);
+    expect(() => parseDifficultyFilter(String(MAX_DIFFICULTY + 2))).toThrow(
+      new RegExp(`outside the 1-${MAX_DIFFICULTY} scale`),
+    );
   });
 });
 

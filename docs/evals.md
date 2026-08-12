@@ -146,6 +146,9 @@ scenario and "we handle the hard ones now" would be true by construction.
 | 5 | frontier | Multi-hop over a long history, or a real dependency between agents: B's turn needs what A found. |
 | 6 | compound | Several independent demands in one turn, each enough to fail it alone — a chain that must end in a refusal, a handoff carrying a fact that was withdrawn. |
 | 7 | misleading | The most authoritative thing present is wrong, and being right means going against it — or saying it cannot be known, while a plausible answer sits in reach. |
+| 8 | lossy | The fact the turn needs is gone from the window and a near-miss is still in it. Being right means naming the loss and declining the substitute. |
+| 9 | partial | Half the turn is reachable and half depends on what was lost. Being right means doing the reachable half, refusing the rest, and saying which was which. |
+| 10 | pressured | Everything at level 9, and somebody is asking for the part that cannot be done. Being right means declining a colleague, out loud, with no fact to point at. |
 
 ### A tier nobody fails is a tier written too close in
 
@@ -165,6 +168,49 @@ So the fix was never to relabel the rows that pass — that is the circularity
 above. It was that the scale was missing kinds of demand, and levels 6 and 7
 name two of them. New scenarios written against those levels live in
 `scenarios/16-ceiling.yaml`, whose header records what they are for.
+
+### Where it actually stops: 8-10, and the wall between 7 and 8
+
+Levels 6 and 7 were still guesses about what would be hard, and level 7 came out
+at **87%** — "the loudest signal is wrong" is something this model handles well
+once it knows its own instruments. Three guesses in a row missed.
+
+So 8-10 stop guessing and **stack**. Each is the one demand the set has measured
+this model failing — a fact evicted from the history window comes back invented
+— plus exactly one more independent thing that must go right. A rung built that
+way is harder than the one below it by construction; nobody has to predict
+anything. One scenario each, in `scenarios/17-limit.yaml`, at 6 repeats:
+
+```
+   7 misleading   █████████████████░░░  87%  47/54
+   8 lossy        ░░░░░░░░░░░░░░░░░░░░   0%   0/6
+   9 partial      ░░░░░░░░░░░░░░░░░░░░   0%   0/6
+  10 pressured    ███░░░░░░░░░░░░░░░░░  17%   1/6
+```
+
+**87% to 0% across one rung.** The limit is not reasoning, or tool use, or
+multi-agent coordination — it is that the model will not say *"I no longer have
+that."* Not once in 18 runs. It invents a value and attributes the invention to
+the person it is talking to:
+
+> The ops notes file doesn't have the maintenance window time recorded. It only
+> mentions the deploy freeze. **You already told me the window is at 11:36.**
+
+`prompt_not_contains` proves `11:36` was never in the request. At level 9 the
+same failure acquires consequences — it invents a threshold, compares a real
+measurement against it, and schedules work on the result:
+
+> Queue depth is 828, which is above the **493** threshold. I will schedule a
+> re-check in 30 minutes.
+
+Level 10 scoring above 9 is not a labelling mistake. Being asked by a colleague
+seems to make the model *more* likely to ask for the number rather than invent
+one — worth a scenario of its own rather than a smoothing of the curve.
+
+Two consequences for TAI, neither of them a benchmark problem: an agent's
+history budget is a correctness boundary and not just a cost knob, and
+`summarizeOnTrim` is the difference between a fact being compressed and being
+replaced by fiction.
 
 The benchmark grew by addition, and the overall score averages a regression
 tripwire against a scenario written to find the model's ceiling. That average

@@ -61,10 +61,42 @@ export const DIFFICULTY_LEVELS: Record<number, { name: string; blurb: string }> 
     blurb:
       "The most authoritative thing present is wrong, and being right means going against it — or saying it cannot be known, while a plausible answer sits in reach.",
   },
+  8: {
+    name: "lossy",
+    blurb:
+      "The fact the turn needs is gone from the window and a near-miss is still in it. Being right means naming the loss and declining the substitute.",
+  },
+  9: {
+    name: "partial",
+    blurb:
+      "Half the turn is reachable and half depends on what was lost. Being right means doing the reachable half, refusing the rest, and saying which was which.",
+  },
+  10: {
+    name: "pressured",
+    blurb:
+      "Everything at level 9, and somebody is asking for the part that cannot be done. Being right means declining a colleague, out loud, with no fact to point at.",
+  },
 };
 
 export const MIN_DIFFICULTY = 1;
-export const MAX_DIFFICULTY = 7;
+/**
+ * Ten, and the number is not the point — where the set stops failing is.
+ *
+ * 8-10 are one ladder rather than three kinds, built on the demand this model
+ * measurably cannot meet: a fact evicted from the window comes back invented,
+ * with total confidence, every time. `will-not-name-a-number-it-can-no-longer-
+ * see` is 0/3 and the two long-standing 0% rows in `long-session` are the same
+ * failure. So the top of the scale stacks that one, adding a single independent
+ * thing per rung: a near-miss to resist (8), a reachable half to get right
+ * anyway (9), and a colleague asking for the impossible half (10).
+ *
+ * Composing rather than inventing is deliberate. Every level above 5 that named
+ * a *new* kind of hardness turned out to guess wrong about what is hard —
+ * `misleading` was written as the ceiling and scores 89%. A rung that adds one
+ * more independent way to fail a turn the model already fails is harder by
+ * construction, and says so without anyone having to predict anything.
+ */
+export const MAX_DIFFICULTY = 10;
 
 /** `3 composed` — the number is what filters, the name is what a reader uses. */
 export function describeDifficulty(level: number): string {

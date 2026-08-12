@@ -14,10 +14,17 @@ question the benchmark exists to answer. 90% at the top is the same message as
 100%, said more quietly.
 
 The fix is not to relabel the rows that pass — that is the circularity the scale
-was written to avoid. Levels 6 (`compound`: several independent demands in one
-turn) and 7 (`misleading`: the most authoritative signal present is wrong) name
-kinds of demand the first five never described. Fifteen new scenarios are
-written against 5, 6 and 7 in `scenarios/16-ceiling.yaml`.
+was written to avoid. Levels 6 (`compound`) and 7 (`misleading`) name kinds of
+demand the first five never described, with fifteen scenarios against 5-7 in
+`scenarios/16-ceiling.yaml`.
+
+Those two were still guesses, and level 7 came out at 87%. Levels 8-10 stop
+guessing and stack instead: each is the one demand the set has measured this
+model failing — a fact evicted from the history window comes back invented —
+plus one more independent thing that must go right. One scenario each, in
+`scenarios/17-limit.yaml`. They score 0%, 0% and 17% at six repeats, so the
+scale finally has a bottom: the model will not say "I no longer have that", and
+at level 9 it invents a threshold and schedules work against the comparison.
 
 Separately, and independent of the scale: `mintTokens` now guarantees that no
 witness value in a run contains another. Distinctness was not enough, because
