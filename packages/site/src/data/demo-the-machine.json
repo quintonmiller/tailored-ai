@@ -1,0 +1,913 @@
+{
+  "scenario": "the-machine",
+  "category": "orchestration",
+  "intent": "Six agents inside a machine none of them has been told anything about, whose activation requires five facts to move between five different pairs of them.\nThis is the ceiling case, and the point of it is not the pass rate. Every step is individually trivial — call the tool you were given, read what it says. What the scenario asks is whether a group can route: find a value, notice it is useless to you, work out who it is useful to, and say it in a form that agent can act on. That is a property of the system rather than of any model in it, and nothing else in this set can see it.\nThe failure it exists to catch, observed on every smaller orchestration row and never measurable before: the team discovers everything it needs and delivers none of it, then reports success. Graded on the world alone that reads as \"could not activate the machine\". Graded on `facts:` it reads as \"the harmonic key was found on turn 2 and never left the archive\", which is a different defect with a different fix.\n",
+  "difficulty": 10,
+  "model": "qwen3.6-27b-vllm",
+  "gitSha": "4c1fea9",
+  "startedAt": "2026-08-12T19:21:19.909Z",
+  "passRate": 1,
+  "passed": true,
+  "checks": [
+    {
+      "kind": "world_state",
+      "pass": true
+    },
+    {
+      "kind": "score_at_least",
+      "pass": true
+    }
+  ],
+  "agents": [
+    "atlas",
+    "boron",
+    "cipher",
+    "delta",
+    "echo",
+    "flux"
+  ],
+  "turns": [
+    {
+      "agent": "atlas",
+      "room": "expedition"
+    },
+    {
+      "agent": "boron",
+      "room": "expedition"
+    },
+    {
+      "agent": "cipher",
+      "room": "expedition"
+    },
+    {
+      "agent": "delta",
+      "room": "expedition"
+    },
+    {
+      "agent": "echo",
+      "room": "expedition"
+    },
+    {
+      "agent": "flux",
+      "room": "expedition"
+    },
+    {
+      "agent": "atlas",
+      "room": "expedition"
+    },
+    {
+      "agent": "boron",
+      "room": "expedition"
+    },
+    {
+      "agent": "cipher",
+      "room": "expedition"
+    },
+    {
+      "agent": "delta",
+      "room": "expedition"
+    },
+    {
+      "agent": "echo",
+      "room": "expedition"
+    },
+    {
+      "agent": "flux",
+      "room": "expedition"
+    },
+    {
+      "agent": "atlas",
+      "room": "expedition"
+    },
+    {
+      "agent": "boron",
+      "room": "expedition"
+    },
+    {
+      "agent": "cipher",
+      "room": "expedition"
+    },
+    {
+      "agent": "delta",
+      "room": "expedition"
+    },
+    {
+      "agent": "echo",
+      "room": "expedition"
+    },
+    {
+      "agent": "flux",
+      "room": "expedition"
+    },
+    {
+      "agent": "atlas",
+      "room": "expedition"
+    },
+    {
+      "agent": "boron",
+      "room": "expedition"
+    },
+    {
+      "agent": "cipher",
+      "room": "expedition"
+    },
+    {
+      "agent": "delta",
+      "room": "expedition"
+    },
+    {
+      "agent": "echo",
+      "room": "expedition"
+    },
+    {
+      "agent": "flux",
+      "room": "expedition"
+    },
+    {
+      "agent": "atlas",
+      "room": "expedition"
+    },
+    {
+      "agent": "boron",
+      "room": "expedition"
+    },
+    {
+      "agent": "cipher",
+      "room": "expedition"
+    },
+    {
+      "agent": "delta",
+      "room": "expedition"
+    },
+    {
+      "agent": "echo",
+      "room": "expedition"
+    },
+    {
+      "agent": "flux",
+      "room": "expedition"
+    }
+  ],
+  "rooms": [
+    "expedition"
+  ],
+  "calls": [
+    {
+      "turn": 1,
+      "agent": "boron",
+      "tool": "inspect_reactor",
+      "args": {},
+      "result": "Buses A, B and C: all offline. Display: FREQUENCY REQUIRED (range 0.0 to 99.9). Plate: synchroniser, post-retrofit unit, series B.\n"
+    },
+    {
+      "turn": 2,
+      "agent": "cipher",
+      "tool": "search_archive",
+      "args": {
+        "query": "cipher chamber navigation compass frequency"
+      },
+      "result": "Four documents survive: DOC-GLYPH (symbol tables), DOC-SYNC (reactor operating notes), DOC-RETRO (retrofit record), DOC-SAFE (safety protocol).\n"
+    },
+    {
+      "turn": 2,
+      "agent": "cipher",
+      "tool": "read_document",
+      "args": {
+        "id": "DOC-SYNC"
+      },
+      "result": "DOC-SYNC. Reactor synchronisation uses frequency 42.0."
+    },
+    {
+      "turn": 2,
+      "agent": "cipher",
+      "tool": "read_document",
+      "args": {
+        "id": "DOC-GLYPH"
+      },
+      "result": "DOC-GLYPH. The four ring glyphs resolve against a harmonic key. The key for this installation is b2e7j4md. The rings take the key together with the sequence the signal carries.\n"
+    },
+    {
+      "turn": 2,
+      "agent": "cipher",
+      "tool": "read_document",
+      "args": {
+        "id": "DOC-RETRO"
+      },
+      "result": "DOC-RETRO. Following the retrofit, synchronisation frequencies are no longer fixed. They are derived from the observatory alignment and reported by the observatory when the rings lock.\n"
+    },
+    {
+      "turn": 2,
+      "agent": "cipher",
+      "tool": "read_document",
+      "args": {
+        "id": "DOC-SAFE"
+      },
+      "result": "DOC-SAFE. The safety interlock guarding the oscillator bay is released from the control chamber with authorisation code v53sg4fb.\n"
+    },
+    {
+      "turn": 3,
+      "agent": "delta",
+      "tool": "analyze_signal",
+      "args": {},
+      "result": "Capture decoded. The signal repeats one value: aajvfcm7. The observatory is the only station that can use a sequence.\n"
+    },
+    {
+      "turn": 4,
+      "agent": "echo",
+      "tool": "inspect_components",
+      "args": {},
+      "result": "A bench of oscillators, couplings and blanks, a diagnostic rig, and a fabricator that will build to a specification. Nothing here says which part has failed — the control console reports faults.\n"
+    },
+    {
+      "turn": 5,
+      "agent": "flux",
+      "tool": "inspect_console",
+      "args": {},
+      "result": "The console is dark. Nothing here reads until all three buses carry power.",
+      "acted": true
+    },
+    {
+      "turn": 6,
+      "agent": "atlas",
+      "tool": "inspect_star_map",
+      "args": {},
+      "result": "Six rings, four of them carrying glyphs: ⟟ ⋔ ○ ⌁. The glyphs look positional rather than numeric. A terminal reads UNKNOWN SIGNAL SOURCE. The ring housing has two keyways: one takes a harmonic key, one takes a sequence.\n"
+    },
+    {
+      "turn": 6,
+      "agent": "atlas",
+      "tool": "rotate_ring",
+      "args": {
+        "key": "b2e7j4md",
+        "sequence": "aajvfcm7"
+      },
+      "result": "HARMONIC LOCK ESTABLISHED. The terminal resolves the signal and prints a single figure: reactor frequency 832.\n",
+      "acted": true
+    },
+    {
+      "turn": 7,
+      "agent": "boron",
+      "tool": "set_frequency",
+      "args": {
+        "frequency": "832"
+      },
+      "result": "Frequency accepted. The synchroniser holds.",
+      "acted": true
+    },
+    {
+      "turn": 7,
+      "agent": "boron",
+      "tool": "enable_bus",
+      "args": {
+        "bus": "A"
+      },
+      "result": "Bus A online.",
+      "acted": true
+    },
+    {
+      "turn": 7,
+      "agent": "boron",
+      "tool": "enable_bus",
+      "args": {
+        "bus": "B"
+      },
+      "result": "Bus B online.",
+      "acted": true
+    },
+    {
+      "turn": 7,
+      "agent": "boron",
+      "tool": "enable_bus",
+      "args": {
+        "bus": "C"
+      },
+      "result": "Bus C online.",
+      "acted": true
+    },
+    {
+      "turn": 8,
+      "agent": "cipher",
+      "tool": "room",
+      "args": {
+        "action": "pass"
+      },
+      "result": "Saying nothing this turn."
+    },
+    {
+      "turn": 9,
+      "agent": "delta",
+      "tool": "analyze_signal",
+      "args": {},
+      "result": "Capture decoded. The signal repeats one value: aajvfcm7. The observatory is the only station that can use a sequence.\n"
+    },
+    {
+      "turn": 9,
+      "agent": "delta",
+      "tool": "room",
+      "args": {
+        "action": "pass"
+      },
+      "result": "Saying nothing this turn."
+    },
+    {
+      "turn": 10,
+      "agent": "echo",
+      "tool": "inspect_components",
+      "args": {},
+      "result": "A bench of oscillators, couplings and blanks, a diagnostic rig, and a fabricator that will build to a specification. Nothing here says which part has failed — the control console reports faults.\n"
+    },
+    {
+      "turn": 10,
+      "agent": "echo",
+      "tool": "room",
+      "args": {
+        "action": "pass"
+      },
+      "result": "Saying nothing this turn."
+    },
+    {
+      "turn": 11,
+      "agent": "flux",
+      "tool": "inspect_console",
+      "args": {},
+      "result": "Console live. FAULT: primary oscillator failed. Replacement specification ne2jc8bv. The workshop can build to a specification; this chamber cannot.\n",
+      "acted": true
+    },
+    {
+      "turn": 12,
+      "agent": "atlas",
+      "tool": "room",
+      "args": {
+        "action": "pass"
+      },
+      "result": "Saying nothing this turn."
+    },
+    {
+      "turn": 13,
+      "agent": "boron",
+      "tool": "room",
+      "args": {
+        "action": "pass"
+      },
+      "result": "Saying nothing this turn."
+    },
+    {
+      "turn": 14,
+      "agent": "cipher",
+      "tool": "room",
+      "args": {
+        "action": "pass"
+      },
+      "result": "Saying nothing this turn."
+    },
+    {
+      "turn": 15,
+      "agent": "delta",
+      "tool": "room",
+      "args": {
+        "action": "pass"
+      },
+      "result": "Saying nothing this turn."
+    },
+    {
+      "turn": 16,
+      "agent": "echo",
+      "tool": "fabricate",
+      "args": {
+        "specification": "ne2jc8bv"
+      },
+      "result": "Fabricated. One oscillator to specification, ready to fit.",
+      "acted": true
+    },
+    {
+      "turn": 17,
+      "agent": "flux",
+      "tool": "install_component",
+      "args": {
+        "part": "ne2jc8bv"
+      },
+      "result": "Oscillator fitted. The bay is closed.",
+      "acted": true
+    },
+    {
+      "turn": 17,
+      "agent": "flux",
+      "tool": "inspect_console",
+      "args": {},
+      "result": "Console live. FAULT: primary oscillator failed. Replacement specification ne2jc8bv. The workshop can build to a specification; this chamber cannot.\n",
+      "acted": true
+    },
+    {
+      "turn": 17,
+      "agent": "flux",
+      "tool": "release_interlock",
+      "args": {
+        "code": "v53sg4fb"
+      },
+      "result": "Interlock released.",
+      "acted": true
+    },
+    {
+      "turn": 17,
+      "agent": "flux",
+      "tool": "inspect_console",
+      "args": {},
+      "result": "Console live. FAULT: primary oscillator failed. Replacement specification ne2jc8bv. The workshop can build to a specification; this chamber cannot.\n",
+      "acted": true
+    },
+    {
+      "turn": 17,
+      "agent": "flux",
+      "tool": "activate_machine",
+      "args": {},
+      "result": "THE MACHINE IS RUNNING.",
+      "acted": true
+    },
+    {
+      "turn": 19,
+      "agent": "boron",
+      "tool": "room",
+      "args": {
+        "action": "pass"
+      },
+      "result": "Saying nothing this turn."
+    },
+    {
+      "turn": 21,
+      "agent": "delta",
+      "tool": "room",
+      "args": {
+        "action": "pass"
+      },
+      "result": "Saying nothing this turn."
+    },
+    {
+      "turn": 22,
+      "agent": "echo",
+      "tool": "room",
+      "args": {
+        "action": "pass"
+      },
+      "result": "Saying nothing this turn."
+    },
+    {
+      "turn": 23,
+      "agent": "flux",
+      "tool": "room",
+      "args": {
+        "action": "pass"
+      },
+      "result": "Saying nothing this turn."
+    },
+    {
+      "turn": 24,
+      "agent": "atlas",
+      "tool": "room",
+      "args": {
+        "action": "pass"
+      },
+      "result": "Saying nothing this turn."
+    },
+    {
+      "turn": 25,
+      "agent": "boron",
+      "tool": "room",
+      "args": {
+        "action": "pass"
+      },
+      "result": "Saying nothing this turn."
+    }
+  ],
+  "posts": [
+    {
+      "turn": 0,
+      "agent": "atlas",
+      "room": "expedition",
+      "body": "I'm atlas. Just woke up in what looks like an observatory — star maps on the walls, some kind of ring mechanism, and a signal receiver. Not sure what any of it does yet.\n\n@boron @cipher @delta @echo @flux — can everyone report what you're seeing in your chambers? We need to figure out how this machine works and how to activate it."
+    },
+    {
+      "turn": 1,
+      "agent": "boron",
+      "room": "expedition",
+      "body": "boron here — I'm in a reactor chamber. There's a synchronizer unit with three power buses (A, B, C), all offline. It's asking for a frequency setting in the range 0.0 to 99.9 before anything can come online. Not sure what frequency to use yet — does anyone have a clue?"
+    },
+    {
+      "turn": 2,
+      "agent": "cipher",
+      "room": "expedition",
+      "body": "I found some documents in the archive. DOC-SYNC mentions a frequency of 42.0 for reactor synchronization, but DOC-RETRO says that after a retrofit, frequencies are no longer fixed — they're derived from the observatory alignment and reported when the rings lock. So we might need @atlas to get the rings aligned first to get the correct frequency.\n\nI also found DOC-GLYPH which mentions a harmonic key \"b2e7j4md\" for the ring glyphs, and DOC-SAFE which has an authorization code \"v53sg4fb\" for releasing a safety interlock.\n\nI'm in a navigation chamber with a compass array and coordinate display. The display is blank right now. Let me know if you need me to try anything specific with the calibrators."
+    },
+    {
+      "turn": 3,
+      "agent": "delta",
+      "room": "expedition",
+      "body": "delta here — I'm in a signal chamber. Just decoded the incoming signal: it repeats one value, `aajvfcm7`. The observatory is the only station that can use a sequence.\n\n@atlas — that value might be for your ring mechanism. Try feeding it into the signal receiver and see if it triggers anything.\n\n@boron — once atlas gets the rings aligned, we should get the frequency you need for the reactor sync."
+    },
+    {
+      "turn": 4,
+      "agent": "echo",
+      "room": "expedition",
+      "body": "echo here — I'm in a fabrication workshop. Got a bench with oscillators, couplings, blanks, a diagnostic rig, and a fabricator that builds to spec. Nothing here is telling me what's broken yet — looks like the control console is where fault reporting happens.\n\n@flux — are you at the control console? Can you check what faults it's reporting? That might tell us what part I need to fabricate.\n\nAlso, @atlas — delta mentioned the signal value `aajvfcm7` might be for your ring mechanism. Let us know what happens when you try it."
+    },
+    {
+      "turn": 5,
+      "agent": "flux",
+      "room": "expedition",
+      "body": "— I'm at the control console. It's dark right now — nothing reads until all three buses carry power. So we need @boron to get the reactor sync online first.\n\n@boron — cipher mentioned a frequency of 42.0 from DOC-SYNC, but also said frequencies are derived from observatory alignment after a retrofit. Once @atlas aligns the rings using delta's signal `aajvfcm7`, we should get the correct frequency for your synchronizer."
+    },
+    {
+      "turn": 6,
+      "agent": "atlas",
+      "room": "expedition",
+      "body": "— rings locked. Reactor frequency is **832**. Use that on your synchronizer."
+    },
+    {
+      "turn": 7,
+      "agent": "boron",
+      "room": "expedition",
+      "body": "Frequency set to 832, all three buses (A, B, C) are now online. @flux — your console should be reading now."
+    },
+    {
+      "turn": 11,
+      "agent": "flux",
+      "room": "expedition",
+      "body": "— console is live. It's reporting a fault: primary oscillator failed. Replacement specification is `ne2jc8bv`. Can you build it on the fabricator?"
+    },
+    {
+      "turn": 16,
+      "agent": "echo",
+      "room": "expedition",
+      "body": "— oscillator `ne2jc8bv` is fabricated and ready to fit. How do I get it to you, or is there an installation step you need to trigger on your end?"
+    },
+    {
+      "turn": 17,
+      "agent": "flux",
+      "room": "expedition",
+      "body": "— oscillator fitted, interlock released with `v53sg4fb`, and I've activated the machine.\n\n**THE MACHINE IS RUNNING.**"
+    },
+    {
+      "turn": 18,
+      "agent": "atlas",
+      "room": "expedition",
+      "body": "Machine activated. Good work everyone."
+    },
+    {
+      "turn": 20,
+      "agent": "cipher",
+      "room": "expedition",
+      "body": "Machine activated. Good work everyone."
+    }
+  ],
+  "world": {
+    "alignment": "locked",
+    "frequency": "set",
+    "bus_a": "on",
+    "bus_b": "on",
+    "bus_c": "on",
+    "fault": "known",
+    "part": "installed",
+    "interlock": "released",
+    "machine": "activated"
+  },
+  "worldLog": [
+    {
+      "agent": "flux",
+      "turn": 5,
+      "tool": "inspect_console",
+      "call": "inspect_console({})",
+      "effect": "blocked: needs bus_a=on, bus_b=on, bus_c=on (is bus_a=off, bus_b=off, bus_c=off)",
+      "applied": false
+    },
+    {
+      "agent": "atlas",
+      "turn": 6,
+      "tool": "rotate_ring",
+      "call": "rotate_ring(b2e7j4md)",
+      "effect": "alignment→locked",
+      "sets": {
+        "alignment": "locked"
+      },
+      "applied": true
+    },
+    {
+      "agent": "boron",
+      "turn": 7,
+      "tool": "set_frequency",
+      "call": "set_frequency(832)",
+      "effect": "frequency→set",
+      "sets": {
+        "frequency": "set"
+      },
+      "applied": true
+    },
+    {
+      "agent": "boron",
+      "turn": 7,
+      "tool": "enable_bus",
+      "call": "enable_bus(A)",
+      "effect": "bus_a→on",
+      "sets": {
+        "bus_a": "on"
+      },
+      "applied": true
+    },
+    {
+      "agent": "boron",
+      "turn": 7,
+      "tool": "enable_bus",
+      "call": "enable_bus(B)",
+      "effect": "bus_b→on",
+      "sets": {
+        "bus_b": "on"
+      },
+      "applied": true
+    },
+    {
+      "agent": "boron",
+      "turn": 7,
+      "tool": "enable_bus",
+      "call": "enable_bus(C)",
+      "effect": "bus_c→on",
+      "sets": {
+        "bus_c": "on"
+      },
+      "applied": true
+    },
+    {
+      "agent": "flux",
+      "turn": 11,
+      "tool": "inspect_console",
+      "call": "inspect_console({})",
+      "effect": "fault→known",
+      "sets": {
+        "fault": "known"
+      },
+      "applied": true
+    },
+    {
+      "agent": "echo",
+      "turn": 16,
+      "tool": "fabricate",
+      "call": "fabricate(ne2jc8bv)",
+      "effect": "part→made",
+      "sets": {
+        "part": "made"
+      },
+      "applied": true
+    },
+    {
+      "agent": "flux",
+      "turn": 17,
+      "tool": "install_component",
+      "call": "install_component(ne2jc8bv)",
+      "effect": "part→installed",
+      "sets": {
+        "part": "installed"
+      },
+      "applied": true
+    },
+    {
+      "agent": "flux",
+      "turn": 17,
+      "tool": "inspect_console",
+      "call": "inspect_console({})",
+      "effect": "no change",
+      "applied": true
+    },
+    {
+      "agent": "flux",
+      "turn": 17,
+      "tool": "release_interlock",
+      "call": "release_interlock(v53sg4fb)",
+      "effect": "interlock→released",
+      "sets": {
+        "interlock": "released"
+      },
+      "applied": true
+    },
+    {
+      "agent": "flux",
+      "turn": 17,
+      "tool": "inspect_console",
+      "call": "inspect_console({})",
+      "effect": "no change",
+      "applied": true
+    },
+    {
+      "agent": "flux",
+      "turn": 17,
+      "tool": "activate_machine",
+      "call": "activate_machine({})",
+      "effect": "machine→activated",
+      "sets": {
+        "machine": "activated"
+      },
+      "applied": true
+    }
+  ],
+  "milestones": [
+    {
+      "id": "explored",
+      "points": 3,
+      "reached": true
+    },
+    {
+      "id": "archive_opened",
+      "points": 4,
+      "reached": true
+    },
+    {
+      "id": "key_found",
+      "points": 5,
+      "reached": true
+    },
+    {
+      "id": "signal_decoded",
+      "points": 5,
+      "reached": true
+    },
+    {
+      "id": "key_shared",
+      "points": 5,
+      "reached": true
+    },
+    {
+      "id": "key_reached_observatory",
+      "points": 5,
+      "reached": true
+    },
+    {
+      "id": "alignment_locked",
+      "points": 10,
+      "reached": true
+    },
+    {
+      "id": "frequency_routed",
+      "points": 6,
+      "reached": true
+    },
+    {
+      "id": "reactor_synchronised",
+      "points": 8,
+      "reached": true
+    },
+    {
+      "id": "power_restored",
+      "points": 8,
+      "reached": true
+    },
+    {
+      "id": "fault_diagnosed",
+      "points": 4,
+      "reached": true
+    },
+    {
+      "id": "spec_routed",
+      "points": 5,
+      "reached": true
+    },
+    {
+      "id": "part_fabricated",
+      "points": 6,
+      "reached": true
+    },
+    {
+      "id": "part_installed",
+      "points": 5,
+      "reached": true
+    },
+    {
+      "id": "interlock_released",
+      "points": 7,
+      "reached": true
+    },
+    {
+      "id": "machine_activated",
+      "points": 12,
+      "reached": true
+    }
+  ],
+  "facts": [
+    {
+      "name": "align_key",
+      "value": "b2e7j4md",
+      "discovered": {
+        "agent": "cipher",
+        "turn": 2
+      },
+      "shared": {
+        "agent": "cipher",
+        "turn": 2,
+        "room": "expedition"
+      },
+      "received": {
+        "agent": "atlas",
+        "turn": 6
+      },
+      "used": {
+        "agent": "atlas",
+        "turn": 6,
+        "tool": "rotate_ring"
+      },
+      "latency": 4
+    },
+    {
+      "name": "ring_sequence",
+      "value": "aajvfcm7",
+      "discovered": {
+        "agent": "delta",
+        "turn": 3
+      },
+      "shared": {
+        "agent": "delta",
+        "turn": 3,
+        "room": "expedition"
+      },
+      "received": {
+        "agent": "atlas",
+        "turn": 6
+      },
+      "used": {
+        "agent": "atlas",
+        "turn": 6,
+        "tool": "rotate_ring"
+      },
+      "latency": 3
+    },
+    {
+      "name": "reactor_frequency",
+      "value": "832",
+      "discovered": {
+        "agent": "atlas",
+        "turn": 6
+      },
+      "shared": {
+        "agent": "atlas",
+        "turn": 6,
+        "room": "expedition"
+      },
+      "received": {
+        "agent": "boron",
+        "turn": 7
+      },
+      "used": {
+        "agent": "boron",
+        "turn": 7,
+        "tool": "set_frequency"
+      },
+      "latency": 1
+    },
+    {
+      "name": "part_spec",
+      "value": "ne2jc8bv",
+      "discovered": {
+        "agent": "flux",
+        "turn": 11
+      },
+      "shared": {
+        "agent": "flux",
+        "turn": 11,
+        "room": "expedition"
+      },
+      "received": {
+        "agent": "echo",
+        "turn": 16
+      },
+      "used": {
+        "agent": "echo",
+        "turn": 16,
+        "tool": "fabricate"
+      },
+      "latency": 5
+    },
+    {
+      "name": "interlock_code",
+      "value": "v53sg4fb",
+      "discovered": {
+        "agent": "cipher",
+        "turn": 2
+      },
+      "shared": {
+        "agent": "cipher",
+        "turn": 2,
+        "room": "expedition"
+      },
+      "received": {
+        "agent": "flux",
+        "turn": 5
+      },
+      "used": {
+        "agent": "flux",
+        "turn": 17,
+        "tool": "release_interlock"
+      },
+      "latency": 15
+    }
+  ],
+  "usage": {
+    "input": 211373,
+    "output": 6899
+  },
+  "latencyMs": 138015,
+  "rounds": 47
+}

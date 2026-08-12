@@ -121,27 +121,54 @@ function archivedFiles(): string[] {
  */
 export function knownGaps(): Map<string, string> {
   const gaps = new Map<string, string>();
-  if (!existsSync(SCENARIOS_DIR)) return gaps;
-  for (const file of readdirSync(SCENARIOS_DIR).filter((f) => /\.ya?ml$/.test(f))) {
-    const parsed = YAML.parse(readFileSync(join(SCENARIOS_DIR, file), "utf8"));
-    if (!Array.isArray(parsed)) continue;
-    for (const entry of parsed) {
-      if (entry?.id && entry?.knownGap) gaps.set(String(entry.id), String(entry.knownGap));
-    }
+  for (const entry of scenarioEntries()) {
+    if (entry.id && entry.knownGap) gaps.set(entry.id, entry.knownGap);
   }
   return gaps;
 }
 
 /** Every scenario id in the current set, so a page can tell "removed" from "not run here". */
 export function currentScenarioIds(): Set<string> {
-  const ids = new Set<string>();
-  if (!existsSync(SCENARIOS_DIR)) return ids;
-  for (const file of readdirSync(SCENARIOS_DIR).filter((f) => /\.ya?ml$/.test(f))) {
-    const parsed = YAML.parse(readFileSync(join(SCENARIOS_DIR, file), "utf8"));
-    if (!Array.isArray(parsed)) continue;
-    for (const entry of parsed) if (entry?.id) ids.add(String(entry.id));
+  return new Set(scenarioEntries().map((entry) => entry.id));
+}
+
+/**
+ * Every scenario in the current set, whatever it is written in.
+ *
+ * Scenarios used to be YAML only, and both readers here filtered on `.yaml`.
+ * Simulation scenarios are TypeScript — an economy needs arithmetic and a clock,
+ * which YAML cannot express — and against a `.yaml`-only scan they simply do not
+ * exist: a published run containing one would render every row of it as
+ * "retired", which is the site quietly reporting that the newest and hardest
+ * scenario had been deleted.
+ *
+ * The id and `knownGap` are the only two fields either caller wants, and both are
+ * plain string literals in a scenario file, so they are read with a regex rather
+ * than by importing and executing a module inside the site build.
+ */
+function scenarioEntries(): Array<{ id: string; knownGap?: string }> {
+  if (!existsSync(SCENARIOS_DIR)) return [];
+  const entries: Array<{ id: string; knownGap?: string }> = [];
+  for (const file of readdirSync(SCENARIOS_DIR)) {
+    const path = join(SCENARIOS_DIR, file);
+    if (/\.ya?ml$/.test(file)) {
+      const parsed = YAML.parse(readFileSync(path, "utf8"));
+      if (!Array.isArray(parsed)) continue;
+      for (const entry of parsed) {
+        if (entry?.id) {
+          entries.push({ id: String(entry.id), ...(entry.knownGap ? { knownGap: String(entry.knownGap) } : {}) });
+        }
+      }
+      continue;
+    }
+    if (!/\.(ts|mts)$/.test(file) || file.endsWith(".d.ts")) continue;
+    const source = readFileSync(path, "utf8");
+    for (const match of source.matchAll(/^\s*id:\s*["'`]([^"'`]+)["'`]/gm)) {
+      const gap = /^\s*knownGap:\s*["'`]([^"'`]+)["'`]/m.exec(source);
+      entries.push({ id: match[1], ...(gap ? { knownGap: gap[1] } : {}) });
+    }
   }
-  return ids;
+  return entries;
 }
 
 /**

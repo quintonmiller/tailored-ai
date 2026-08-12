@@ -79,6 +79,52 @@ export default function BenchIndexPage() {
         </p>
       </header>
 
+      {/*
+        The table below answers "which model behaves better". It cannot answer
+        "is this test worth anything", and a green 3/3 on the hardest row gives a
+        reader no way to judge whether the scenario is difficult or merely long.
+        These two do: a run, shown.
+      */}
+      <section className="mb-12 grid gap-4 sm:grid-cols-2">
+        {[
+          {
+            href: "/bench/scenarios/the-machine",
+            eyebrow: "Orchestration",
+            title: "The Machine",
+            blurb:
+              "Six agents wake in six rooms of a machine nobody has explained. Five facts each have to travel between a different pair of them, and no agent can finish alone.",
+          },
+          {
+            href: "/bench/scenarios/the-factory",
+            eyebrow: "Simulation",
+            title: "The Factory",
+            blurb:
+              "Six managers run a manufacturer for sixty simulated days against policies that play the same economy without a model. Scored on what the company is worth, not on whether a check passed.",
+          },
+        ].map((card) => (
+          <Link
+            key={card.href}
+            href={card.href}
+            prefetch={false}
+            className="group rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-6 transition-colors hover:border-[var(--color-accent)]"
+          >
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--color-accent)]">
+              {card.eyebrow}
+            </p>
+            <h2 className="mt-2 text-lg font-semibold">
+              {card.title}
+              <span
+                aria-hidden="true"
+                className="ml-2 text-[var(--color-text-muted)] transition-transform group-hover:translate-x-0.5 inline-block"
+              >
+                →
+              </span>
+            </h2>
+            <p className="mt-2 text-sm leading-relaxed text-[var(--color-text-muted)]">{card.blurb}</p>
+          </Link>
+        ))}
+      </section>
+
       {runs.length === 0 ? (
         <EmptyState />
       ) : (

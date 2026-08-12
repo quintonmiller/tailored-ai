@@ -18,6 +18,7 @@ import { stripSeparator } from "./args.js";
 import { DEFAULT_PINNED_AT, DEFAULT_TIMEZONE } from "./clock.js";
 import { printComparison } from "./compare.js";
 import { costRecord, usageOfScenarios } from "./cost.js";
+import { extractDemo } from "./demo.js";
 import { describeDifficulty } from "./difficulty.js";
 import { grade, scoreMilestones } from "./graders.js";
 import { type HarnessOptions, wakeSteps } from "./harness.js";
@@ -682,6 +683,38 @@ function cmdBench(argv: string[]): number {
   return 0;
 }
 
+/**
+ * `eval demo` — cut one run down to what a page can render.
+ *
+ * The demonstration pages on the site show what a team actually did, and the
+ * only way that stays true is for the page to read a build artifact taken from a
+ * real report rather than figures somebody typed in. Regenerate, commit, and the
+ * page renders whatever the run did.
+ */
+function cmdDemo(argv: string[]): number {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    options: { scenario: { type: "string" }, run: { type: "string" }, out: { type: "string" } },
+    allowPositionals: true,
+  });
+  const report = positionals[0];
+  if (!report || !values.scenario) {
+    console.error("usage: eval demo <report.json> --scenario <id> [--run <index>] [--out <file>]");
+    return 2;
+  }
+  const demo = extractDemo(resolve(report), values.scenario as string, Number(values.run ?? 0));
+  const json = JSON.stringify(demo, null, 2);
+  if (values.out) {
+    const path = resolve(values.out as string);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `${json}\n`);
+    console.log(`  ${demo.scenario}: ${demo.turns.length} turns, ${demo.calls.length} calls → ${values.out} (${Math.round(json.length / 1024)} kB)`);
+  } else {
+    console.log(json);
+  }
+  return 0;
+}
+
 async function main(): Promise<void> {
   const argv = stripSeparator(process.argv.slice(2));
   const [command, ...rest] = argv;
@@ -699,6 +732,10 @@ async function main(): Promise<void> {
   }
   if (command === "bench") {
     process.exitCode = cmdBench(rest);
+    return;
+  }
+  if (command === "demo") {
+    process.exitCode = cmdDemo(rest);
     return;
   }
   process.exitCode = await cmdRun(command === "run" ? rest : argv);
