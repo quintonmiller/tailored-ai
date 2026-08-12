@@ -19,6 +19,22 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
+        with:
+          # Full history, so `guard:benchmark-cohort` can actually answer its
+          # own question.
+          #
+          # The guard asks whether a published baseline names a commit reachable
+          # from main — the property that lets a reader check out the code the
+          # numbers describe. In a depth-1 clone the commit is simply absent, and
+          # #509 made the guard skip a commit it cannot see rather than fail on
+          # one (a PR's own baseline is legitimately unreachable until merge).
+          #
+          # The two together were silent in the case that matters: a baseline run
+          # on a feature branch records a commit squash-merge then deletes, and
+          # the guard passed on main because CI could not see it. Caught locally,
+          # where the squashed commit survives as a dangling object, which is
+          # accidental protection rather than a check.
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
 
