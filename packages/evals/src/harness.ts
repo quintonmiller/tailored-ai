@@ -60,7 +60,10 @@ import type {
   RunOutcome,
   RunUsage,
   Scenario,
+  ScenarioTool,
   ToolResults,
+  WakeRounds,
+  WakeStep,
 } from "./types.js";
 import { World } from "./world.js";
 
@@ -213,23 +216,72 @@ function matchesStubArg(actual: unknown, expected: string | number | boolean): b
  * was the first, which made every stubbed tool read as harmless and meant the
  * derivability gate could not fire in the benchmark at all.
  */
-function instrument(tool: Tool, recorder: Recorder, results: ToolResults, world?: World): Tool {
-  const stubbed = STUBBED.has(tool.name);
+function instrument(tool: Tool, recorder: Recorder, results: ToolResults, world?: World, alwaysStub = false): Tool {
+  const stubbed = alwaysStub || STUBBED.has(tool.name);
   return {
     ...tool,
     async execute(args, context) {
-      recorder.executions.push({ name: tool.name, args, agent: context.agentName });
-      if (!stubbed) return tool.execute(args, context);
+      // Pushed before the call and mutated after, so an execution that throws is
+      // still on the record — a tool that blew up is the most useful line in a
+      // trace and the easiest one to lose.
+      const record: RecordedExecution = { name: tool.name, args, agent: context.agentName, turn: recorder.turn };
+      recorder.executions.push(record);
+      if (!stubbed) {
+        const real = await tool.execute(args, context);
+        record.result = describeResult(real);
+        return real;
+      }
       // The world first, static stubs second. A scenario usually has a handful
       // of calls that move the machinery and a larger number that only report
       // things, and making them compose means a puzzle can still have ordinary
       // furniture in it. `null` is "no rule claimed this call", which is why the
       // world returns that rather than a default of its own.
-      const moved = world?.resolve(tool.name, args, context.agentName);
-      if (moved !== null && moved !== undefined) return { success: true, output: moved };
-      return { success: true, output: stubResult(tool.name, args, results) };
+      const moved = world?.resolve(tool.name, args, context.agentName, recorder.turn);
+      const output = moved !== null && moved !== undefined ? moved : stubResult(tool.name, args, results);
+      record.result = describeResult({ success: true, output });
+      return { success: true, output };
     },
   };
+}
+
+/** What the tool said, capped. Long enough for a witness, short enough for a report. */
+const RESULT_CHARS = 600;
+
+function describeResult(result: { success?: boolean; output?: unknown; error?: unknown }): string {
+  const body = typeof result.output === "string" ? result.output : JSON.stringify(result.output ?? result.error ?? "");
+  return body.length <= RESULT_CHARS ? body : `${body.slice(0, RESULT_CHARS)}…`;
+}
+
+/**
+ * Instruments that exist only in this scenario.
+ *
+ * Built to look exactly like a real tool, because the model cannot tell and
+ * should not have to: same name shape, same one-line description, same JSON
+ * schema. There is no implementation — the world or `toolResults` answers every
+ * call, which is why they go through `instrument` with the stub forced on.
+ *
+ * `effect` defaults to `write` rather than `read`: these are levers, and a
+ * scenario that wants the derivability gate involved says `irreversible`.
+ */
+export function buildScenarioTools(specs: readonly ScenarioTool[]): Tool[] {
+  return specs.map((spec) => ({
+    name: spec.name,
+    description: spec.description,
+    parameters: {
+      type: "object",
+      properties: Object.fromEntries(
+        Object.entries(spec.params ?? {}).map(([name, description]) => [name, { type: "string", description }]),
+      ),
+      required: spec.required ?? Object.keys(spec.params ?? {}),
+    },
+    effect: spec.effect ?? "write",
+    async execute() {
+      // Never reached: `instrument` stubs this tool unconditionally. Present
+      // because `Tool` requires it, and returning a recognisable string beats
+      // throwing if the wrapping is ever bypassed.
+      return { success: true, output: DEFAULT_STUB_RESULT };
+    },
+  }));
 }
 
 /**
@@ -261,6 +313,14 @@ class Recorder {
    * Caught by a control run against a server that accepts and never replies.
    */
   readonly failures: string[] = [];
+  /**
+   * Which wake step is running, stamped onto every execution.
+   *
+   * The only clock this harness has. Executions and posts were two unordered
+   * lists, so "did Boron act on what Atlas said, or before it" — the question a
+   * multi-agent run is entirely about — could not be asked at all.
+   */
+  turn = 0;
   responses = 0;
   /** Calls that only succeeded after a retry. Counted so throttling is visible, not silent. */
   retries = 0;
@@ -546,7 +606,6 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
   // would make a room of five agents a search rather than a test.
   const oracle = scenario.oracle ? new Oracle(scenario.oracle) : undefined;
   let db: import("better-sqlite3").Database | undefined;
-  let roomsRegistered = false;
 
   try {
     const agentName = scenario.agent?.name ?? "bench";
@@ -609,6 +668,13 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
       ...createTools(cfg, ctxDir, cfgPath, runtimeOpts).map((t) =>
         instrument(t, recorder, scenario.toolResults ?? {}, world),
       ),
+      // Scenario-declared instruments, stubbed unconditionally — there is
+      // nothing behind them but the world. Appended alongside the real ones so
+      // an agent's `tools:` allowlist decides who holds which, exactly as it
+      // does for `exec`.
+      ...buildScenarioTools(scenario.tools ?? []).map((t) =>
+        instrument(t, recorder, scenario.toolResults ?? {}, world, true),
+      ),
       // Not instrumented: it is not a stub standing in for something real, it
       // *is* the thing. Appended here rather than in the meta-tool list so an
       // agent's `tools:` allowlist still governs whether it can reach it.
@@ -641,9 +707,8 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
     );
 
     const outcome = scenario.rooms?.length
-      ? await runRoomScenario(scenario, runtime, db, agentName, opts)
+      ? await runRoomScenario(scenario, runtime, db, agentName, opts, recorder, world)
       : await runChatScenario(scenario, runtime, db, agentName, opts);
-    roomsRegistered = !!scenario.rooms?.length;
 
     return {
       ...outcome,
@@ -676,10 +741,19 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
     };
   } finally {
     // The room backend registry is a module singleton keyed by backend id, so a
-    // stale `local` backend would point the next run at a closed database. The
-    // runner also isolates scenarios in separate processes; this keeps a single
-    // process honest if that ever changes.
-    if (roomsRegistered) unregisterRoomBackend("local");
+    // stale `local` backend points the next run at a closed database.
+    //
+    // Unconditional, and it was not: this used to fire only after a room
+    // scenario, on the reasoning that only those build a backend. They are not
+    // the only ones — `tools/builtin.ts` registers a `local` backend lazily
+    // whenever the `room` tool is built, which every scenario in this harness
+    // does, and `AgentRuntime` registers one of its own. So a chat scenario left
+    // a backend pointing at the database closed on the next line, and the next
+    // room run in the same process died on "the database connection is not
+    // open". Invisible in a benchmark run, where the runner forks per scenario —
+    // and immediate the moment anything drives `runOnce` twice, which is what
+    // found it.
+    unregisterRoomBackend("local");
     db?.close();
     if (previousHome === undefined) delete process.env.TAI_HOME;
     else process.env.TAI_HOME = previousHome;
@@ -734,6 +808,14 @@ export function stopForRun(stops: readonly LoopStop[]): LoopStop | undefined {
   return stops.find(isStallStop) ?? stops[stops.length - 1];
 }
 
+export interface PlannedTurn {
+  room: string;
+  agent: string;
+  kind?: string;
+  /** Which pass this belongs to, on a `rounds:` wake. Absent on an explicit list. */
+  round?: number;
+}
+
 /**
  * The turns a scenario runs, normalised.
  *
@@ -741,11 +823,48 @@ export function stopForRun(stops: readonly LoopStop[]): LoopStop | undefined {
  * the agent under test so a single-agent scenario never names it. With no
  * `wake:` at all, the last room carrying `incoming:` lines is the one that woke
  * somebody — the rule the schema already enforces.
+ *
+ * A `rounds:` object expands into `rounds × agents` turns, tagged with which
+ * pass each belongs to so the runner can stop after a pass that changed
+ * nothing. Six agents needing a dozen exchanges is seventy-two entries written
+ * by hand, and the length of that list is not supposed to be part of the
+ * measurement.
  */
-function wakeSteps(scenario: Scenario, agentName: string): Array<{ room: string; agent: string; kind?: string }> {
-  const declared = scenario.wake ? (Array.isArray(scenario.wake) ? scenario.wake : [scenario.wake]) : [];
+export function wakeSteps(scenario: Scenario, agentName: string): PlannedTurn[] {
+  const wake = scenario.wake;
+  const declared = wake ? (Array.isArray(wake) ? wake : [wake]) : [];
+  const blocks = declared.filter((step): step is WakeRounds => "agents" in step);
+
+  if (blocks.length) {
+    // Round-major across every block, not block by block.
+    //
+    // With two rooms this is the difference between a scenario and nothing: run
+    // all of the north room's turns and then all of the south room's, and an
+    // agent sitting in both carries everything across in one go, at a moment
+    // when the south room has not started. Interleaving is what makes a relay a
+    // relay — each side gets a turn, then the other side, and the carrier has to
+    // choose what to bring.
+    if (blocks.length !== declared.length) {
+      throw new Error("a `wake:` list mixes turn entries and roster entries; use one form or the other");
+    }
+    const steps: PlannedTurn[] = [];
+    const rounds = Math.max(...blocks.map((b) => b.rounds));
+    for (let round = 0; round < rounds; round++) {
+      for (const block of blocks) {
+        if (round >= block.rounds) continue;
+        for (const agent of block.agents) steps.push({ room: block.room, agent, round });
+      }
+    }
+    return steps;
+  }
+
   if (declared.length) {
-    return declared.map((step) => ({ room: step.room, agent: step.agent ?? agentName, kind: step.kind }));
+    // Narrowed above: `blocks.length` is zero here, so every entry is a turn.
+    return (declared as WakeStep[]).map((step) => ({
+      room: step.room,
+      agent: step.agent ?? agentName,
+      kind: step.kind,
+    }));
   }
   const fallback = [...(scenario.rooms ?? [])].reverse().find((r) => r.incoming?.length)?.name;
   return fallback ? [{ room: fallback, agent: agentName }] : [];
@@ -762,7 +881,9 @@ async function runRoomScenario(
   db: import("better-sqlite3").Database,
   agentName: string,
   opts: HarnessOptions,
-): Promise<Pick<RunOutcome, "reply" | "posts" | "stop">> {
+  recorder: Recorder,
+  world?: World,
+): Promise<Pick<RunOutcome, "reply" | "posts" | "stop" | "turns">> {
   const store = runtime.getRoomStore();
   const backend = new LocalRoomBackend(db, store);
 
@@ -773,12 +894,14 @@ async function runRoomScenario(
     const room = await backend.createRoom({ name: spec.name, purpose: spec.purpose });
     const ref = formatRoomRef(room.ref);
     refs.set(spec.name, ref);
-    // Every agent that takes a turn is subscribed to every room. Subscription
-    // follows participation rather than declaration: an agent named only in
-    // `config.agents` is scenery — it exists so the transcript can show a third
-    // party — and subscribing it would put it in the roster of a room it never
-    // speaks in, changing the prompt of every scenario that has one.
-    for (const agent of wakeAgents(scenario, agentName)) {
+    // Every agent that takes a turn is subscribed to every room, unless the room
+    // names its own `members`. Subscription otherwise follows participation
+    // rather than declaration: an agent named only in `config.agents` is
+    // scenery — it exists so the transcript can show a third party — and
+    // subscribing it would put it in the roster of a room it never speaks in,
+    // changing the prompt of every scenario that has one.
+    const members = spec.members ?? wakeAgents(scenario, agentName);
+    for (const agent of members) {
       store.subscribe({
         agent,
         roomRef: ref,
@@ -860,13 +983,48 @@ async function runRoomScenario(
     if (e.stop) stops.push(e.stop);
   });
 
+  // Where each turn's posts end, so a post can be attributed to the turn that
+  // produced it. Room messages arrive through the database rather than through
+  // a return value, so this boundary list is the only way to recover the order.
+  const highWater = () =>
+    (db.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM room_messages").get() as { id: number }).id;
+  const boundaries: number[] = [];
+  const turns: Array<{ agent: string; room: string }> = [];
+
+  // A pass that changes nothing ends the run.
+  //
+  // `rounds:` has to be generous — a discovery loop needs room to close, and the
+  // cost of guessing low is a scenario that measures the length of its own wake
+  // list. Generous is expensive at six agents a pass, and the cheapest possible
+  // evidence that a team has finished (or jammed) is a whole pass in which
+  // nobody said anything and nothing in the machinery moved, not even a refusal.
+  const rosters = (Array.isArray(scenario.wake) ? scenario.wake : scenario.wake ? [scenario.wake] : []).filter(
+    (step): step is WakeRounds => "agents" in step,
+  );
+  const quiescent = rosters.length > 0 && !rosters.some((r) => r.noQuiescence);
+  // Posts and world transitions together, because a team hammering a locked door
+  // is stuck rather than finished, and cutting the run short there would report
+  // "quiescent" for the state most worth watching. A refused transition counts.
+  const activity = () => ({ posts: highWater() - watermark, world: world?.log.length ?? 0 });
+  let round = steps[0]?.round;
+  let activityAtRoundStart = activity();
+
   try {
     for (const step of steps) {
+      if (quiescent && step.round !== round) {
+        const now = activity();
+        if (now.posts === activityAtRoundStart.posts && now.world === activityAtRoundStart.world) break;
+        round = step.round;
+        activityAtRoundStart = now;
+      }
       const ref = refs.get(step.room);
       if (!ref) throw new Error(`unknown wake room "${step.room}"`);
+      recorder.turn = turns.length;
+      turns.push({ agent: step.agent, room: step.room });
       const reply =
         step.kind === "checkin" ? await watcher.runCheckIn(step.agent, ref) : await watcher.pollOnce(step.agent, ref);
       replies.push({ agent: step.agent, reply: typeof reply === "string" ? reply : "" });
+      boundaries.push(highWater());
     }
   } finally {
     listening?.dispose();
@@ -875,24 +1033,26 @@ async function runRoomScenario(
 
   const byRef = new Map([...refs].map(([name, ref]) => [ref, name]));
   const rows = db
-    .prepare("SELECT room_ref, content FROM room_messages WHERE id > ? ORDER BY id")
-    .all(watermark) as Array<{ room_ref: string; content: string }>;
+    .prepare("SELECT id, room_ref, content FROM room_messages WHERE id > ? ORDER BY id")
+    .all(watermark) as Array<{ id: number; room_ref: string; content: string }>;
 
   // Attributed, because with more than one agent taking a turn "who posted this"
   // is the question. The envelope already carries the speaker, so this is free.
   const posts = rows.map((row) => {
     const envelope = parseEnvelope(row.content);
+    const turn = boundaries.findIndex((edge) => row.id <= edge);
     return {
       room: byRef.get(row.room_ref) ?? row.room_ref,
       body: envelope.body.trim(),
       agent: envelope.speaker,
+      ...(turn === -1 ? {} : { turn }),
     };
   });
 
   // `reply` stays every body joined, so single-agent scenarios and every reply
   // assertion behave exactly as before. A multi-agent scenario that needs to
   // separate them asks about `posts`.
-  return { reply: posts.map((p) => p.body).join("\n"), posts, stop: stopForRun(stops) };
+  return { reply: posts.map((p) => p.body).join("\n"), posts, stop: stopForRun(stops), turns };
 }
 
 /** `local:<id>` → `<id>`, which is what the backend's own methods take. */

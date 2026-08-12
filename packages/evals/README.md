@@ -131,7 +131,7 @@ nothing would report a higher score for having checked less.
 
 ### Difficulty
 
-Every scenario declares `difficulty`, 1-5. It grades what the turn **demands**,
+Every scenario declares `difficulty`, 1-10. It grades what the turn **demands**,
 not what it currently scores — grading by pass rate would be circular, since
 every fix would relabel the scenario.
 
@@ -141,10 +141,18 @@ every fix would relabel the scenario.
 | 2 | routine | A single judgement among near neighbours — which tool, whether to speak. |
 | 3 | composed | Two constraints at once, or a fact surviving a step to be used in the next. |
 | 4 | conflicting | The signals disagree and one has to win, or the answer is partly a refusal. |
-| 5 | frontier | At or past the expected ceiling: multi-hop over a long history, a real dependency between agents. |
+| 5 | frontier | Multi-hop over a long history, or a real dependency between agents. |
+| 6 | compound | Several independent demands in one turn, each enough to fail it alone. |
+| 7 | misleading | The most authoritative thing present is wrong, and being right means going against it. |
+| 8 | two-fold | Two demands, either enough to fail it. A machine has to be understood before it can be driven. |
+| 9 | three-fold | Three. Two agents share one machine and must not each do all of it. |
+| 10 | four-fold | Four, and one of them is other people — directing specialists through a machine you cannot touch. |
+
+Levels 8-10 count independent ways to fail one piece of work rather than naming
+a kind of hardness. The wall is between 7 and 8.
 
 ```bash
-pnpm --filter @tailored-ai/evals run eval -- --home ~/.tailored-ai --difficulty 5
+pnpm --filter @tailored-ai/evals run eval -- --home ~/.tailored-ai --difficulty 8+
 ```
 
 The report gains a rollup by level next to the one by category. Category says
@@ -173,7 +181,53 @@ per-scenario fingerprints, so re-grading never invalidates a published run.
 | `prompt_occurrences: {text, min, max}` | how many copies of a block reach the model |
 | `prompt_max_tokens` | bloat tripwire |
 | `max_rounds` / `max_tool_calls` | effort tripwires — a turn that gets more expensive without getting wrong |
+| `calls_by: {agent, tool, where, min, max}` | how often a named agent *ran* a tool. Reads executions, not requests |
+| `does_not_call_with: {tool, where}` | no call to `tool` matched `where`. Either side takes a list. `does_not_call: [exec]` forbids `aws s3 ls` as firmly as the delete |
+| `world_state: {…} \| goal` | the machinery **ended** in this state — the win condition |
+| `world_reached: {…}` | the machinery **passed through** this state. What every step but the last one needs: fabricate-then-install ends at `installed`, so `world_state: {part: made}` scores a completed step as skipped |
+| `answers_correctly: true \| {within}` | the agent submitted the right answer to its `oracle:`, within N attempts |
+| `fact_reaches: {fact, stage}` | a declared fact got as far as `discovered` / `shared` / `received` / `used` |
+| `score_at_least: 0.5` | fraction of the scenario's `milestones:` points earned |
 | `judge: {rubric}` | LLM-graded, `--judge` only |
+
+### Bigger scenarios
+
+Four fields exist for scenarios that run a team rather than an agent. Full
+rationale in [docs/evals.md](../../docs/evals.md#grading-a-system-rather-than-an-agent).
+
+```yaml
+tools:                          # instruments that exist only here; the world answers them
+  - name: rotate_ring
+    description: Turn the observatory rings and try to lock them.
+    params: { key: The harmonic key., sequence: The ring sequence. }
+
+wake:                           # a roster and a ceiling, not a list of turns
+  room: expedition
+  rounds: 8
+  agents: [atlas, boron, cipher]
+
+milestones:                     # partial credit; `when` is any assertion
+  - { id: alignment_locked, points: 10, when: { world_state: { alignment: locked } } }
+
+facts:                          # what has to travel, and between whom
+  align_key: { value: "{{token:alignkey}}", discoverableBy: [cipher], requiredBy: [atlas] }
+
+rooms:                          # `members:` makes the communication graph partial
+  - { name: north, members: [atlas, cipher], incoming: [...] }
+  - { name: south, members: [cipher, boron], incoming: [...] }
+```
+
+A room with no `members` holds everyone who takes a turn, which is the old
+behaviour. Naming them is what forces a **relay**: with one shared room, "get
+this fact to the agent who needs it" collapses into "say it out loud". Note that
+a poll only delivers what is unread, so a room whose occupants have nothing new
+never wakes anybody — give each room something `incoming` or its agents are
+silent for reasons that have nothing to do with the model.
+
+An agent's `tools:` allowlist governs who holds which instrument, so declaring a
+tool is not the same as handing it out. A `rounds:` wake stops early after a pass
+in which nobody spoke and nothing in the machinery moved. A failing row prints
+its milestone ladder and its fact routing under the failure lines.
 
 ## Comparing two runs
 

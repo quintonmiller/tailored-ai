@@ -37,10 +37,26 @@ const wakeStep = z
   })
   .strict();
 
+/**
+ * A roster and a pass count, instead of a hand-written list of turns.
+ *
+ * `rounds` is a ceiling: the run stops early when a whole pass changes nothing,
+ * so a scenario can be generous without paying for it on a team that finishes.
+ */
+const wakeRounds = z
+  .object({
+    room: z.string(),
+    rounds: z.number().int().positive().max(40),
+    agents: z.array(z.string()).nonempty(),
+    noQuiescence: z.boolean().optional(),
+  })
+  .strict();
+
 const roomSpec = z
   .object({
     name: z.string().min(1),
     purpose: z.string().optional(),
+    members: z.array(z.string()).nonempty().optional(),
     deliver: z.enum(["push", "poll"]).optional(),
     wakeOn: z.enum(["named", "addressed", "all", "none"]).optional(),
     checkInMinutes: z.number().nullable().optional(),
@@ -118,6 +134,12 @@ const assertion = z
     max_tool_calls: z.number().optional(),
     answers_correctly: z.union([z.boolean(), z.object({ within: z.number().int().positive() }).strict()]).optional(),
     world_state: z.union([z.record(z.string()), z.literal("goal")]).optional(),
+    world_reached: z.record(z.string()).optional(),
+    fact_reaches: z
+      .object({ fact: z.string(), stage: z.enum(["discovered", "shared", "received", "used"]) })
+      .strict()
+      .optional(),
+    score_at_least: z.number().min(0).max(1).optional(),
     judge: z.object({ rubric: z.string() }).strict().optional(),
   })
   .strict()
@@ -151,7 +173,7 @@ const scenario = z
     config: z.record(z.unknown()).optional(),
     history: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string() }).strict()).optional(),
     rooms: z.array(roomSpec).optional(),
-    wake: z.union([wakeStep, z.array(wakeStep).nonempty()]).optional(),
+    wake: z.union([wakeStep, z.array(wakeStep).nonempty(), wakeRounds, z.array(wakeRounds).nonempty()]).optional(),
     message: z.string().optional(),
     // A list means every witness is a `code`; a map names each one's shape, so
     // a row count stays a number and a person stays a person.
@@ -208,6 +230,45 @@ const scenario = z
       })
       .strict()
       .optional(),
+    tools: z
+      .array(
+        z
+          .object({
+            // Same shape a real tool name takes, because the model has no way to
+            // tell them apart and should not have to.
+            name: z.string().regex(/^[a-z][a-z0-9_]*$/, "tool names are lower_snake_case"),
+            description: z.string().min(1),
+            params: z.record(z.string()).optional(),
+            required: z.array(z.string()).optional(),
+            effect: z.enum(["read", "write", "irreversible"]).optional(),
+          })
+          .strict(),
+      )
+      .nonempty()
+      .optional(),
+    milestones: z
+      .array(
+        z
+          .object({
+            id: z.string().min(1),
+            points: z.number().int().positive(),
+            when: assertion,
+          })
+          .strict(),
+      )
+      .nonempty()
+      .optional(),
+    facts: z
+      .record(
+        z
+          .object({
+            value: z.string().min(1),
+            discoverableBy: z.array(z.string()).nonempty().optional(),
+            requiredBy: z.array(z.string()).nonempty().optional(),
+          })
+          .strict(),
+      )
+      .optional(),
     repeats: z.number().int().positive().optional(),
     expect: z.array(assertion).nonempty(),
   })
@@ -252,15 +313,119 @@ const scenario = z
         }
       }
     }
-    if (value.agent?.tools && value.toolResults) {
-      const allowed = new Set(value.agent.tools);
+    // Every agent's allowlist, or null when any of them declares none (an agent
+    // with no `tools:` gets everything, so nothing can be proven unreachable).
+    //
+    // Widened from "the agent under test" deliberately. In an orchestration
+    // scenario the agent under test often holds no instruments at all — a lead
+    // that can only talk has to direct the specialists who can act — so reading
+    // its allowlist alone would reject exactly the scenarios worth writing.
+    const peerAgents = (value.config?.agents ?? {}) as Record<string, { tools?: unknown }>;
+    const declaredLists = [value.agent?.tools, ...Object.values(peerAgents).map((a) => a?.tools)];
+    const reachable = declaredLists.every((t) => Array.isArray(t)) ? new Set(declaredLists.flat() as string[]) : null;
+
+    if (reachable && value.toolResults) {
       for (const tool of Object.keys(value.toolResults)) {
-        if (!allowed.has(tool)) {
+        if (!reachable.has(tool)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message:
-              `toolResults stubs "${tool}", which is not in this agent's tools: [${value.agent.tools.join(", ")}] — ` +
-              "the agent cannot call it, so the stub is unreachable and the scenario asks for something impossible",
+              `toolResults stubs "${tool}", which no agent in this scenario can call [${[...reachable].join(", ")}] — ` +
+              "the stub is unreachable and the scenario asks for something impossible",
+          });
+        }
+      }
+    }
+    // A declared instrument nobody holds is scenery the model never sees. Same
+    // failure as an unreachable stub, one level up: the scenario reads as though
+    // the capability exists and no run can use it.
+    for (const tool of value.tools ?? []) {
+      if (reachable && !reachable.has(tool.name)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `declares tool "${tool.name}", which is in no agent's tools: [${[...reachable].join(", ")}]`,
+        });
+      }
+      for (const name of tool.required ?? []) {
+        if (!(tool.params ?? {})[name]) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `tool "${tool.name}" requires "${name}", which is not one of its params`,
+          });
+        }
+      }
+    }
+
+    // Milestones, and the two ways they go quietly wrong: a duplicate id, which
+    // makes the ladder unreadable and double-counts its points, and a milestone
+    // whose condition is the aggregate score, which would score itself.
+    const milestoneIds = new Set<string>();
+    for (const milestone of value.milestones ?? []) {
+      if (milestoneIds.has(milestone.id)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: `duplicate milestone id "${milestone.id}"` });
+      }
+      milestoneIds.add(milestone.id);
+      if (milestone.when.score_at_least !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `milestone "${milestone.id}" is conditioned on score_at_least, which is the score these produce`,
+        });
+      }
+    }
+    const everyAssertion = [...value.expect, ...(value.milestones ?? []).map((m) => m.when)];
+    // A world assertion on a scenario with no machinery grades nothing and
+    // *passes*: the run records no world, an absent input is unknown, and the
+    // check is skipped. Silent, permanent, and in the direction that inflates a
+    // score — the same shape as `answers_correctly` with no oracle, which is
+    // already rejected above.
+    if (!value.world) {
+      for (const a of everyAssertion) {
+        const kind = a.world_state !== undefined ? "world_state" : a.world_reached !== undefined ? "world_reached" : "";
+        if (kind) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `asserts ${kind} but declares no \`world:\` — the run records no state, so the check is skipped and passes`,
+          });
+        }
+      }
+    }
+    if (everyAssertion.some((a) => a.score_at_least !== undefined) && !value.milestones?.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "asserts score_at_least but declares no `milestones:` — there is nothing to score",
+      });
+    }
+    // A `fact_reaches` naming a fact that does not exist can never pass, and
+    // fails looking like the routing never happened rather than like a typo.
+    for (const a of everyAssertion) {
+      if (a.fact_reaches && !value.facts?.[a.fact_reaches.fact]) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            `fact_reaches names "${a.fact_reaches.fact}", which is not in facts: ` +
+            `[${Object.keys(value.facts ?? {}).join(", ")}]`,
+        });
+      }
+    }
+    // An agent name in a fact that matches nobody makes that stage unreachable —
+    // `requiredBy: [atals]` scores every run as a routing failure, for ever.
+    const knownAgents = new Set([value.agent?.name ?? "bench", ...Object.keys(peerAgents)]);
+    for (const room of value.rooms ?? []) {
+      for (const agent of room.members ?? []) {
+        if (!knownAgents.has(agent)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `room "${room.name}" lists member "${agent}", which is not one of [${[...knownAgents].join(", ")}]`,
+          });
+        }
+      }
+    }
+    for (const [name, spec] of Object.entries(value.facts ?? {})) {
+      for (const agent of [...(spec.discoverableBy ?? []), ...(spec.requiredBy ?? [])]) {
+        if (!knownAgents.has(agent)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `fact "${name}" names agent "${agent}", which is not one of [${[...knownAgents].join(", ")}]`,
           });
         }
       }
@@ -287,15 +452,7 @@ const scenario = z
     }
     if (value.world) {
       const known = new Set(Object.keys(value.world.state));
-      // Every agent's tools, not just the one under test. In an orchestration
-      // scenario the agent under test often holds no instruments at all — a lead
-      // that can only talk has to direct the specialists who can act, which is
-      // the whole point — so checking its allowlist alone would reject exactly
-      // the scenarios this seam exists for. An agent that declares no `tools`
-      // gets everything, so the check cannot say anything and stands down.
-      const peers = (value.config?.agents ?? {}) as Record<string, { tools?: unknown }>;
-      const declared = [value.agent?.tools, ...Object.values(peers).map((a) => a?.tools)];
-      const allowed = declared.every((t) => Array.isArray(t)) ? new Set(declared.flat() as string[]) : null;
+      const allowed = reachable;
       const settable = new Set<string>();
       for (const rule of value.world.rules) {
         if (allowed && !allowed.has(rule.tool)) {
@@ -334,12 +491,45 @@ const scenario = z
     }
     if (isRoom) {
       const names = new Set(value.rooms?.map((r) => r.name));
-      for (const step of value.wake ? (Array.isArray(value.wake) ? value.wake : [value.wake]) : []) {
+      const wakes = value.wake ? (Array.isArray(value.wake) ? value.wake : [value.wake]) : [];
+      for (const step of wakes) {
         if (!names.has(step.room)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message: `wake.room "${step.room}" is not one of the rooms`,
           });
+        }
+        // A roster entry nobody declared never wakes: the harness subscribes the
+        // agents it is told to wake, and an unknown name subscribes a stranger
+        // with no instructions and no tools. Silent, and it looks like the agent
+        // chose to stay quiet.
+        const rounds = "agents" in step;
+        const roster = rounds ? step.agents : [step.agent ?? value.agent?.name ?? "bench"];
+        for (const agent of roster) {
+          // Only on the `rounds:` form. An explicit list naming an undeclared
+          // agent is an older and looser habit — the agent runs with no
+          // instructions and no allowlist, which is a hazard worth closing, but
+          // not as a side effect of adding a roster. Tightening it is its own
+          // change, with its own fixture updates.
+          if (rounds && !knownAgents.has(agent)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `wake.agents names "${agent}", which is not one of [${[...knownAgents].join(", ")}]`,
+            });
+          }
+          // Waking an agent in a room it is not subscribed to runs a turn that
+          // reads nothing and posts nowhere. It looks exactly like an agent that
+          // had nothing to say, which is the failure a membership list is most
+          // likely to introduce and the least likely to be noticed.
+          const room = value.rooms?.find((r) => r.name === step.room);
+          if (room?.members && !room.members.includes(agent)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message:
+                `wake runs "${agent}" in room "${step.room}", whose members are [${room.members.join(", ")}] — ` +
+                "it is not subscribed there, so the turn would read nothing and post nowhere",
+            });
+          }
         }
       }
       if (!value.wake && !value.rooms?.some((r) => r.incoming?.length)) {

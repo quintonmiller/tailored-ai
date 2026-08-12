@@ -11,7 +11,9 @@ import { isStallStop } from "@tailored-ai/core";
 import { formatUsd, noCostReason, totalUsage, usdOf } from "./cost.js";
 import { describeDifficulty } from "./difficulty.js";
 import { EFFORT_LABELS, formatMs, summariseScenarios } from "./efficiency.js";
-import type { BenchmarkReport, ScenarioResult } from "./types.js";
+import { milestoneScore } from "./graders.js";
+import { FACT_STAGES } from "./routing.js";
+import type { BenchmarkReport, FactTrace, MilestoneResult, ScenarioResult } from "./types.js";
 
 const num = (n: number) => n.toLocaleString("en-US");
 
@@ -101,6 +103,81 @@ function rateColour(rate: number): string {
   return RED;
 }
 
+/**
+ * How far the run got, step by step.
+ *
+ * The output a long scenario exists to produce. "FAIL" for a team that decoded
+ * the language, restored power and never installed the part is the same word as
+ * "FAIL" for a team that sat still, and no amount of re-running tells them
+ * apart — which is how a hard benchmark stops being usable as a development
+ * instrument and becomes a number people quote.
+ *
+ * Averaged across repeats rather than shown per run: with three runs the
+ * question is which steps are *reliable*, and a step reached once in three is a
+ * different finding from one reached every time.
+ */
+export function printMilestones(scenario: ScenarioResult): void {
+  const withLadders = scenario.runs.filter((r) => r.milestones?.length);
+  if (!withLadders.length) return;
+
+  const runs = withLadders.length;
+  const order = withLadders[0].milestones as MilestoneResult[];
+  const hits = new Map<string, number>();
+  for (const run of withLadders) {
+    for (const m of run.milestones ?? []) if (m.reached) hits.set(m.id, (hits.get(m.id) ?? 0) + 1);
+  }
+
+  const mean = withLadders.reduce((sum, r) => sum + milestoneScore(r.milestones ?? []).fraction, 0) / runs;
+  const possible = milestoneScore(order).possible;
+  console.log(
+    `      ${colour("progress", DIM)}  ${colour(bar(mean, 12), rateColour(mean))} ${(mean * 100).toFixed(0)}% of ${possible} points`,
+  );
+
+  for (const milestone of order) {
+    const hit = hits.get(milestone.id) ?? 0;
+    const mark = hit === runs ? colour("✓", GREEN) : hit === 0 ? colour("×", RED) : colour("~", YELLOW);
+    const rate = runs > 1 ? colour(` ${hit}/${runs}`, DIM) : "";
+    // The reason only for a step nobody reached: a step reached twice in three
+    // has no single reason, and printing one run's would read as the finding.
+    const why =
+      hit === 0 ? colour(`  ${withLadders[0].milestones?.find((m) => m.id === milestone.id)?.detail ?? ""}`, DIM) : "";
+    console.log(
+      `      ${mark} ${milestone.id.padEnd(28)}${colour(String(milestone.points).padStart(3), DIM)}${rate}${why}`,
+    );
+  }
+}
+
+/**
+ * Where each fact got to, on the run that got it furthest.
+ *
+ * The best run rather than the mean, because this is a diagnosis and the
+ * question it answers is "is this reachable at all". A fact that made it to
+ * `used` once is a routing problem; a fact that never left the agent that found
+ * it in any run is a different one.
+ */
+export function printFactRouting(scenario: ScenarioResult): void {
+  const withFacts = scenario.runs.filter((r) => r.facts?.length);
+  if (!withFacts.length) return;
+
+  const depth = (t: FactTrace) => FACT_STAGES.filter((s) => t[s] !== undefined).length;
+  const best = new Map<string, FactTrace>();
+  for (const run of withFacts) {
+    for (const trace of run.facts ?? []) {
+      const seen = best.get(trace.name);
+      if (!seen || depth(trace) > depth(seen)) best.set(trace.name, trace);
+    }
+  }
+
+  console.log(`      ${colour("routing", DIM)}   ${colour("(furthest of any run)", DIM)}`);
+  for (const trace of best.values()) {
+    const marks = FACT_STAGES.map((stage) => {
+      const at = trace[stage];
+      return at ? colour(`${stage[0]}${at.agent}@${at.turn}`, GREEN) : colour(`${stage[0]}—`, RED);
+    }).join(" ");
+    console.log(`      ${trace.name.padEnd(24)} ${marks}`);
+  }
+}
+
 export function printScenario(scenario: ScenarioResult): void {
   const passedRuns = scenario.runs.filter((r) => r.pass).length;
   const label = `${passedRuns}/${scenario.runs.length}`;
@@ -112,7 +189,16 @@ export function printScenario(scenario: ScenarioResult): void {
         : colour("FLAKY", YELLOW);
   console.log(`${verdict} ${label.padEnd(5)} ${scenario.category.padEnd(16)} ${scenario.id}`);
 
-  if (scenario.passRate === 1) return;
+  if (scenario.passRate === 1) {
+    // A row can pass and still have missed steps: the assertions are the win
+    // condition, the ladder is the whole picture, and they are not the same
+    // question. `the-machine` passed its first live run with a milestone
+    // unreached, and because a passing row printed nothing the miss was only
+    // visible by reading the report JSON — where it turned out to be a defect in
+    // the milestone rather than in the run.
+    if (scenario.runs.some((r) => r.milestones?.some((m) => !m.reached))) printMilestones(scenario);
+    return;
+  }
   // The level rides along with the intent rather than the headline, because it
   // only changes how you read a *failure*: a red level-2 row is a defect, a red
   // level-5 row is the scenario doing its job.
@@ -133,6 +219,11 @@ export function printScenario(scenario: ScenarioResult): void {
     const times = scenario.runs.length > 1 ? colour(` (${count}×)`, DIM) : "";
     console.log(`      ${colour("×", RED)} ${detail}${times}`);
   }
+
+  // After the failures, because they say *what* went wrong and these say *how
+  // far it got* — which is only worth reading once you know it went wrong.
+  printMilestones(scenario);
+  printFactRouting(scenario);
 }
 
 /**

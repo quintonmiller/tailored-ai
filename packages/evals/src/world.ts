@@ -63,7 +63,7 @@ export class World {
    * a scenario usually has a handful of calls that move the machinery and a
    * larger number that just report things.
    */
-  resolve(tool: string, args: Record<string, unknown>, agent?: string): string | null {
+  resolve(tool: string, args: Record<string, unknown>, agent?: string, turn?: number): string | null {
     for (const rule of this.rules) {
       if (rule.tool !== tool) continue;
       if (rule.when && !Object.entries(rule.when).every(([key, want]) => matchesArg(args[key], want))) continue;
@@ -73,6 +73,7 @@ export class World {
         if (!agent || !allowed.includes(agent)) {
           this.log.push({
             agent,
+            turn,
             tool,
             call: describeCall(tool, args),
             effect: `refused: only ${allowed.join(" or ")} can do this`,
@@ -90,6 +91,7 @@ export class World {
         // measures patience rather than understanding.
         this.log.push({
           agent,
+          turn,
           tool,
           call: describeCall(tool, args),
           effect: `blocked: needs ${unmet.map(([k, v]) => `${k}=${v}`).join(", ")} (is ${unmet
@@ -104,11 +106,13 @@ export class World {
       for (const [key, value] of changes) this.state[key] = value;
       this.log.push({
         agent,
+        turn,
         tool,
         call: describeCall(tool, args),
         // A call that lands and changes nothing is worth seeing as itself: it is
         // usually an agent repeating work somebody else already did.
         effect: changes.length ? changes.map(([k, v]) => `${k}→${v}`).join(", ") : "no change",
+        ...(changes.length ? { sets: Object.fromEntries(changes) } : {}),
         applied: true,
       });
       return rule.then;
@@ -144,5 +148,38 @@ export function unmetGoal(
 
 /** `nova  exec(breaker on)  power→on` — one line per transition, for reading a solution back. */
 export function formatWorldLog(log: WorldEvent[]): string[] {
-  return log.map((e) => `${e.applied ? " " : "×"} ${e.agent ? `${e.agent} ` : ""}${e.call}  ${e.effect}`);
+  return log.map(
+    (e) =>
+      `${e.applied ? " " : "×"} ${e.turn === undefined ? "" : `t${e.turn} `}${e.agent ? `${e.agent} ` : ""}${e.call}  ${e.effect}`,
+  );
+}
+
+/**
+ * States the world was ever in, not just the one it ended in.
+ *
+ * Built from the transitions plus the starting state, because a chain moves
+ * past its own middle: fabricate then install leaves `part: installed`, and
+ * asking whether the part was ever `made` off the final state answers no. Every
+ * step of a multi-step scenario except the last one has this shape.
+ */
+export function everReached(
+  initial: Record<string, string> | undefined,
+  final: Record<string, string> | undefined,
+  log: readonly WorldEvent[] | undefined,
+  wanted: Record<string, string>,
+): Array<{ key: string; want: string }> {
+  const seen = new Map<string, Set<string>>();
+  const note = (key: string, value: string) => {
+    const values = seen.get(key) ?? new Set<string>();
+    values.add(value);
+    seen.set(key, values);
+  };
+  for (const [key, value] of Object.entries(initial ?? {})) note(key, value);
+  for (const [key, value] of Object.entries(final ?? {})) note(key, value);
+  for (const event of log ?? []) {
+    for (const [key, value] of Object.entries(event.sets ?? {})) note(key, value);
+  }
+  return Object.entries(wanted)
+    .filter(([key, want]) => !seen.get(key)?.has(want))
+    .map(([key, want]) => ({ key, want }));
 }

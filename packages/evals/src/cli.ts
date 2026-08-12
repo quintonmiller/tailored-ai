@@ -19,10 +19,11 @@ import { DEFAULT_PINNED_AT, DEFAULT_TIMEZONE } from "./clock.js";
 import { printComparison } from "./compare.js";
 import { costRecord, usageOfScenarios } from "./cost.js";
 import { describeDifficulty } from "./difficulty.js";
-import { grade } from "./graders.js";
-import type { HarnessOptions } from "./harness.js";
+import { grade, scoreMilestones } from "./graders.js";
+import { type HarnessOptions, wakeSteps } from "./harness.js";
 import { PAYLOAD_FILENAME, readWorkerResult } from "./protocol.js";
 import { printScenario, printStalls, printSummary, score, verdict } from "./report.js";
+import { traceFacts } from "./routing.js";
 import { loadScenarios } from "./schema.js";
 import { substituteTokens } from "./tokens.js";
 import type { BenchmarkReport, CheckResult, RunOutcome, Scenario, ScenarioResult } from "./types.js";
@@ -75,6 +76,16 @@ Options
 
 /** How much worker stdout to keep, purely to explain a worker that died. */
 const TAIL_CHARS = 2000;
+
+/**
+ * Ceiling on the worker backstop, however many turns a scenario declares.
+ *
+ * A six-agent, eight-round scenario multiplies out to half a day of worst-case
+ * per-call timeouts, and a backstop nobody will sit through is not a backstop.
+ * Two hours is longer than any scenario that is working takes and short enough
+ * that a wedged one does not eat a night.
+ */
+const MAX_SCENARIO_MS = 2 * 60 * 60 * 1000;
 
 function git(args: string[]): string {
   try {
@@ -169,7 +180,16 @@ async function runWorker(
     // Backstop for a worker wedged somewhere other than a model call, which the
     // per-call timeout cannot see. Generous on purpose: it is here so a batch
     // finishes, not to bound a slow scenario.
-    const budget = repeats * (options.maxToolRounds + 2) * options.timeoutMs;
+    //
+    // Scaled by the turns the scenario actually runs, which it was not. The old
+    // budget assumed one turn per repeat and so bounded a seven-turn room
+    // scenario at one turn's worth of time; a forty-eight-turn one would be
+    // SIGKILLed halfway and reported as an errored scenario, which reads as a
+    // crash rather than as a timer. Capped, because turns × rounds × per-call
+    // timeout reaches half a day on a large roster and a backstop nobody will
+    // wait for is not one.
+    const turns = Math.max(1, wakeSteps(scenario, scenario.agent?.name ?? "bench").length);
+    const budget = Math.min(repeats * turns * (options.maxToolRounds + 2) * options.timeoutMs, MAX_SCENARIO_MS);
     const kill = setTimeout(() => child.kill("SIGKILL"), budget);
 
     // Identity travels with the result rather than through the worker: the
@@ -310,7 +330,14 @@ async function cmdRun(argv: string[]): Promise<number> {
     return 2;
   }
 
-  const repeats = Number(values.repeats ?? 3);
+  // An explicit `--repeats` beats a scenario's own, and the default does not.
+  //
+  // `scenario.repeats ?? repeats` had the flag losing to the scenario always,
+  // which is right for a suite run — a forty-eight-turn row must not cost three
+  // hours of it — and wrong the moment you want to measure that row's rate,
+  // because there is then no way to ask for more without editing the file.
+  const requested = values.repeats === undefined ? null : Number(values.repeats);
+  const repeats = requested ?? 3;
   const concurrency = Number(values.concurrency ?? 4);
 
   if (values["dry-run"]) {
@@ -337,7 +364,7 @@ async function cmdRun(argv: string[]): Promise<number> {
     const result = await runWorker(
       scenario,
       options,
-      scenario.repeats ?? repeats,
+      requested ?? scenario.repeats ?? repeats,
       !!values.judge,
       !!values.verbose,
       !!values["keep-prompts"],
@@ -495,11 +522,36 @@ async function cmdRegrade(argv: string[]): Promise<number> {
       // And for the world. A report from before worlds existed, or of a run
       // whose scenario has no machinery, carries no final state — which is not
       // the same as a goal that went unreached.
-      if (run.outcome.world === undefined) unreadable.add("world_state");
+      if (run.outcome.world === undefined) {
+        unreadable.add("world_state");
+        unreadable.add("world_reached");
+      }
       if (run.outcome.guesses === undefined) unreadable.add("answers_correctly");
+      if (run.outcome.executions === undefined) unreadable.add("fact_reaches");
       const gradable = checks.filter((c) => !unreadable.has(c.kind));
       skipped += checks.length - gradable.length;
-      runs.push({ ...run, pass: gradable.every((c: CheckResult) => c.pass), checks: gradable });
+      // The ladder and the routing are recomputed, not carried over.
+      //
+      // `...run` kept the stored ones, which made this command useless for the
+      // thing it exists for: a milestone written against the wrong assertion
+      // re-scored to exactly the same wrong answer, and the fix could only be
+      // seen by paying for another run. They are diagnosis rather than score, so
+      // they never move `pass` — a milestone that cannot be graded on an old
+      // report simply reads as not reached, the same as it does live.
+      const milestones = scenario.milestones?.length ? await scoreMilestones(scoped, run.outcome) : undefined;
+      // `scoped`, not `scenario`: the fact values are `{{token:…}}` until
+      // substitution, and tracing against the literal finds nothing anywhere —
+      // which renders as a run that routed none of its facts rather than as a
+      // regrade bug. The same mistake in the same shape as the oracle whose
+      // accepted answer was still the token.
+      const facts = scoped.facts ? traceFacts(scoped.facts, run.outcome) : undefined;
+      runs.push({
+        ...run,
+        pass: gradable.every((c: CheckResult) => c.pass),
+        checks: gradable,
+        ...(milestones ? { milestones } : {}),
+        ...(facts ? { facts } : {}),
+      });
     }
     const passed = runs.filter((r) => r.pass).length;
     const passRate = runs.length ? passed / runs.length : 0;

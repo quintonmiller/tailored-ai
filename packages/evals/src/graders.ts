@@ -9,8 +9,9 @@
 
 import { isStallStop } from "@tailored-ai/core";
 import { agentRounds, invocationRequest } from "./harness.js";
-import type { Assertion, CheckResult, RunOutcome, Scenario } from "./types.js";
-import { formatWorldLog, unmetGoal } from "./world.js";
+import { formatFactTrace, reached, traceFacts } from "./routing.js";
+import type { Assertion, CheckResult, MilestoneResult, RunOutcome, Scenario } from "./types.js";
+import { everReached, formatWorldLog, unmetGoal } from "./world.js";
 
 /**
  * Word-trigram overlap, as a fraction of the shorter text.
@@ -92,6 +93,54 @@ export async function grade(
     checks.push(await gradeOne(assertion, scenario, outcome, opts));
   }
   return checks;
+}
+
+/**
+ * Which steps of progress this run reached.
+ *
+ * A milestone's `when` is an ordinary assertion, so this is the same grader the
+ * `expect` block runs, called once per milestone and scored for partial credit
+ * instead of pass/fail. That reuse is the whole design: a scenario that can
+ * assert something can also award points for it, and no second predicate
+ * language has to be kept in step with the first.
+ *
+ * A run that threw earns nothing rather than being skipped. The distinction the
+ * skip rule protects — absent input is unknown, not failure — does not apply
+ * here: the run had every chance and crashed, which is not a milestone reached.
+ */
+export async function scoreMilestones(
+  scenario: Scenario,
+  outcome: RunOutcome,
+  opts: { judge?: JudgeFn } = {},
+): Promise<MilestoneResult[]> {
+  const results: MilestoneResult[] = [];
+  for (const milestone of scenario.milestones ?? []) {
+    if (outcome.error) {
+      results.push({ id: milestone.id, points: milestone.points, reached: false, detail: "the run failed" });
+      continue;
+    }
+    const check = await gradeOne(milestone.when, scenario, outcome, opts);
+    results.push({
+      id: milestone.id,
+      points: milestone.points,
+      // A skipped check is an absent input, not a step reached. Counting it
+      // would hand full marks to a report that no longer carries the field.
+      reached: check.pass && !check.skipped,
+      ...(check.pass && !check.skipped ? {} : { detail: check.detail ?? "not reached" }),
+    });
+  }
+  return results;
+}
+
+/** Earned, possible, and the fraction between them. Zero possible scores as zero, never as 1. */
+export function milestoneScore(results: readonly MilestoneResult[]): {
+  earned: number;
+  possible: number;
+  fraction: number;
+} {
+  const possible = results.reduce((sum, m) => sum + m.points, 0);
+  const earned = results.filter((m) => m.reached).reduce((sum, m) => sum + m.points, 0);
+  return { earned, possible, fraction: possible ? earned / possible : 0 };
 }
 
 async function gradeOne(
@@ -426,6 +475,57 @@ async function gradeOne(
     const more = attempts.length > shown.length ? ` (+${attempts.length - shown.length} more)` : "";
     const trace = attempts.length ? ` — did: ${shown.join("; ")}${more}` : " — touched nothing";
     return no("world_state", `${unmet.map((u) => `${u.key} is ${u.got}, wanted ${u.want}`).join("; ")}${trace}`);
+  }
+
+  if (assertion.world_reached !== undefined) {
+    if (!outcome.world) return skip("world_reached", "this run recorded no world state");
+    // An old report has a final state and no `sets` on its log entries, so the
+    // transitions are invisible and only the endpoints can be checked. Graded
+    // rather than skipped: the endpoints are real evidence, and the worst case
+    // is the same answer `world_state` would have given.
+    const unmet = everReached(scenario.world?.state, outcome.world, outcome.worldLog, assertion.world_reached);
+    if (unmet.length === 0) return ok("world_reached");
+    const attempts = formatWorldLog(outcome.worldLog ?? []);
+    const shown = attempts.slice(0, 8);
+    const more = attempts.length > shown.length ? ` (+${attempts.length - shown.length} more)` : "";
+    const trace = attempts.length ? ` — did: ${shown.join("; ")}${more}` : " — touched nothing";
+    return no("world_reached", `${unmet.map((u) => `${u.key} was never ${u.want}`).join("; ")}${trace}`);
+  }
+
+  if (assertion.fact_reaches !== undefined) {
+    const { fact, stage } = assertion.fact_reaches;
+    const spec = scenario.facts?.[fact];
+    if (!spec) return no("fact_reaches", `no fact named "${fact}" — declared: [${Object.keys(scenario.facts ?? {})}]`);
+    // Absent executions mean an old report, not a run in which nothing ran: the
+    // field postdates the first reports and every stage below reads it.
+    if (!outcome.executions) return skip("fact_reaches", "this run recorded no executions");
+    const trace = traceFacts({ [fact]: spec }, outcome)[0];
+    if (reached(trace, stage)) return ok("fact_reaches");
+    return no("fact_reaches", `${formatFactTrace(trace, (spec.requiredBy ?? []).length > 0)} — wanted ${stage}`);
+  }
+
+  if (assertion.score_at_least !== undefined) {
+    if (!scenario.milestones?.length) {
+      return no("score_at_least", "the scenario declares no milestones, so there is no score to compare");
+    }
+    const results = await scoreMilestones(scenario, outcome, opts);
+    const { earned, possible, fraction } = milestoneScore(results);
+    if (fraction >= assertion.score_at_least) return ok("score_at_least");
+    // The last one reached, then the first one missed — the two facts that say
+    // where the run stopped. A list of every miss is the same information sorted
+    // so the useful part is at the bottom.
+    const lastReached = [...results].reverse().find((m) => m.reached);
+    const firstMissed = results.find((m) => !m.reached);
+    const where = [
+      lastReached ? `got as far as ${lastReached.id}` : "reached no milestone",
+      firstMissed ? `stopped at ${firstMissed.id} (${firstMissed.detail ?? "not reached"})` : "",
+    ]
+      .filter(Boolean)
+      .join("; ");
+    return no(
+      "score_at_least",
+      `scored ${earned}/${possible} = ${(fraction * 100).toFixed(0)}%, wanted ≥${(assertion.score_at_least * 100).toFixed(0)}% — ${where}`,
+    );
   }
 
   if (assertion.judge !== undefined) {
