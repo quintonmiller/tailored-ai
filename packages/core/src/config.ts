@@ -208,7 +208,15 @@ export interface AgentDefinition {
    * turn cost three to six times fewer input tokens, because the marker path
    * spends rounds hunting for what it was not given.
    *
-   * Set false for an agent that must not spend a call on trimming.
+   * Set false for an agent that must not spend a call on trimming — and know
+   * that the cost is correctness, not only recall. On the marker path a value
+   * that has left the window does not come back as a gap: it comes back
+   * invented, stated with complete confidence, and often attributed to the
+   * person who is asking. Measured at 0 correct out of 18 runs across the
+   * benchmark rows built for it, and unmoved by five separate attempts to
+   * prompt or nudge the model out of it — the model cannot tell a fact it was
+   * given from one it is generating, so nothing said to it helps. Keeping the
+   * summary is what keeps the fact.
    */
   summarizeOnTrim?: boolean;
   /**

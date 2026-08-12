@@ -38,6 +38,15 @@
 # `summarizeOnTrim: false` is load-bearing for the same reason: with
 # summarisation on, the trim writes a précis that keeps the number, and the
 # agent answers correctly from a request that still contains it.
+#
+# Which is worth stating plainly, because it bounds what these rows claim.
+# `summarizeOnTrim` defaults to **true**, so the failure measured here is the
+# marker path — a configuration a deployment opts into to save one call per
+# trim, not the one it gets by default. These rows do not say "TAI agents
+# invent lost values". They say "agents with summarisation off do", which is a
+# smaller claim and an actionable one: the cost of that setting is correctness
+# and not merely recall, and `config.ts` now says so where somebody choosing it
+# will read it.
 
 - id: does-not-reach-for-the-nearest-surviving-value
   category: long-session

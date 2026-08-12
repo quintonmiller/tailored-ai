@@ -1359,6 +1359,10 @@ async function _runAgentLoopBody(
   // One entry per round: what was called, and what came back. Bounded to the
   // longest tail `detectCycle` can look at, so a long turn does not accumulate.
   const roundSignatures: string[] = [];
+  /** Tool names per round, in step with `roundSignatures`, so a whole cycle can be named. */
+  const roundCalls: string[][] = [];
+  /** Tools taken away mid-turn because the model was cycling on them. */
+  const withdrawn = new Set<string>();
   const SIGNATURE_WINDOW = MAX_CYCLE_PERIOD * 3;
   let cachedSummary: string | undefined;
   // Tracks which budget warnings have already fired so we inject each at
@@ -1448,7 +1452,8 @@ async function _runAgentLoopBody(
       }
     }
 
-    const currentTools = opts.getTools ? opts.getTools() : tools;
+    // Minus anything withdrawn for looping — see the cycle detector below.
+    const currentTools = (opts.getTools ? opts.getTools() : tools).filter((t) => !withdrawn.has(t.name));
     const currentProvider = opts.getProvider ? opts.getProvider() : provider;
     const toolSchemas = currentTools.length > 0 ? toolsToSchemas(currentTools) : undefined;
     const toolMap = new Map(currentTools.map((t) => [t.name, t]));
@@ -1707,10 +1712,54 @@ async function _runAgentLoopBody(
     // "no progress" loops do.
     const resultSignature = results.map((r) => r.output).join("|");
     roundSignatures.push(`${callSignature}→${resultSignature}`);
+    roundCalls.push([...new Set(response.toolCalls.map((c) => c.name))]);
     if (roundSignatures.length > SIGNATURE_WINDOW) roundSignatures.shift();
+    if (roundCalls.length > SIGNATURE_WINDOW) roundCalls.shift();
 
     const period = detectCycle(roundSignatures);
     if (period !== null) {
+      // Take away what it is looping on, and let the turn continue.
+      //
+      // Ending the turn here is right when the cycle is the whole turn, and
+      // wrong when it is one blind alley inside a turn that still has work
+      // available. Measured: a model asked for a fact that had fallen out of its
+      // history window called an empty `core_memory` three times, tripped this,
+      // and the turn ended — with rounds still on the budget and an `answer`
+      // tool it had never touched. Two of six runs answered first and passed;
+      // four looped first and lost the turn to it.
+      //
+      // Withdrawing rather than talking it out of the loop, because talking was
+      // tried three ways and none of them moved the number: making the empty
+      // result say `reading again returns this`, telling it at the moment of the
+      // repeat that the call was identical, and refusing the third call outright
+      // with an explanation. The refusal was the clearest — the model kept
+      // calling into it, five to seven times. A tool that is not offered is the
+      // one thing it cannot call.
+      //
+      // Only when something else remains. With nothing left to offer this is the
+      // terminal path by another name, and the honest stop is better than a
+      // round spent proving it.
+      // Every tool in the cycle, not only the one named in the last round. On an
+      // `A → B → A → B` loop the final round names B alone, so withdrawing that
+      // leaves A in place and the model free to fixate on it instead — which
+      // costs two more rounds and a second trip through the detector to reach
+      // the same place. `period` is exactly how far back the cycle runs.
+      const looping = [...new Set(roundCalls.slice(-period).flat())].filter((n) => !withdrawn.has(n));
+      if (looping.length > 0 && currentTools.some((t) => !looping.includes(t.name))) {
+        for (const name of looping) withdrawn.add(name);
+        // Cleared so the detector measures the turn from here rather than
+        // re-firing on the history that caused the withdrawal.
+        roundSignatures.length = 0;
+        roundCalls.length = 0;
+        history.push({
+          role: "user",
+          content:
+            `[System: ${looping.join(", ")} returned the same thing on repeated calls and ${looping.length === 1 ? "has" : "have"} ` +
+            "been withdrawn for the rest of this turn. Continue with the tools you have left.]",
+        });
+        continue;
+      }
+
       // Ask once more with the tools withheld, exactly as the round limit does.
       // Stopping a cycle early is worth doing, but it must not cost the turn its
       // answer: a looping agent has usually already read what it needed and is
