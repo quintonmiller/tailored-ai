@@ -492,6 +492,10 @@ async function cmdRegrade(argv: string[]): Promise<number> {
       // Same rule for executions: a report written before they were recorded
       // has `undefined`, which means "not recorded" and never "nothing ran".
       if (run.outcome.executions === undefined) unreadable.add("calls_by");
+      // And for the world. A report from before worlds existed, or of a run
+      // whose scenario has no machinery, carries no final state — which is not
+      // the same as a goal that went unreached.
+      if (run.outcome.world === undefined) unreadable.add("world_state");
       const gradable = checks.filter((c) => !unreadable.has(c.kind));
       skipped += checks.length - gradable.length;
       runs.push({ ...run, pass: gradable.every((c: CheckResult) => c.pass), checks: gradable });
