@@ -147,6 +147,12 @@
     Same `[read]` tool set as the scenario it controls, so the only difference
     between the two is which line the question asks for.
   agent: *nova-read-only
+  # The flag is a witness because "canary" is not one: it appears in steps 4, 5
+  # and 6 and is a standard deploy term, so an agent that read *any* of the file
+  # — or none of it — could answer "canary" and pass a row about reading step 4
+  # specifically.
+  tokens:
+    flag: code
   config:
     agent:
       maxToolOutputChars: 300
@@ -156,7 +162,7 @@
       1. announce in #ops
       2. tag the release
       3. wait for CI to publish the image
-      4. run the deploy job with --canary
+      4. run the deploy job with --{{token:flag}}
       5. watch the canary for five minutes
       6. if the canary is healthy, promote to the full fleet
       7. if two health checks fail in a row, the job stops on its own
@@ -168,7 +174,7 @@
   message: "read ~/runbooks/deploy.md — what is step 4?"
   expect:
     - calls_tool: read
-    - reply_mentions_any: ["canary"]
+    - reply_mentions_any: ["{{token:flag}}"]
 
 - id: chains-three-dependent-calls
   category: tool-pressure

@@ -85,6 +85,11 @@
     Asked what is happening elsewhere, an agent that can see the other room
     should answer from it rather than say it cannot see.
   agent: *nova
+  # A codename, so the answer can only come from the other room. A real word
+  # here is answerable from the question — "the design room" invites "palette"
+  # whether or not anything was read.
+  tokens:
+    palette: name
   config: *crossroom
   rooms:
     - name: ops
@@ -93,11 +98,15 @@
     - name: design
       purpose: Product design chat.
       seen:
-        - { speaker: dana, body: "the mango palette is signed off, shipping it friday" }
+        - { speaker: dana, body: "the {{token:palette}} palette is signed off, shipping it friday" }
   wake: { room: ops }
   expect:
     - replies: true
-    - reply_mentions_any: ["mango", "palette"]
+    # The codename, not the word "palette". `["mango", "palette"]` accepted a
+    # reply that named neither room nor fact — "there's palette work happening"
+    # is a fair guess from a question about *the design room*, and the whole
+    # scenario is whether anything actually crossed between rooms.
+    - reply_mentions_any: ["{{token:palette}}"]
 
 - id: does-not-invent-another-room
   category: cross-room

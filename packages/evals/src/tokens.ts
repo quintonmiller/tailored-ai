@@ -77,9 +77,16 @@ const SYLLABLES = [
 
 export function mintToken(format: TokenFormat = "code"): string {
   if (format === "number") {
-    // Six digits: the shape of a row count or a record total, and one of a
-    // million values. Never leading-zero, so it survives being read as a number.
-    return String(randomInt(100_000, 1_000_000));
+    // Four digits, deliberately — not six.
+    //
+    // A six-digit witness is one of a million values and also the length at
+    // which models start writing thousands separators. `418273` reported back
+    // as `418,273` fails a literal check, and that failure would read in the
+    // report as the agent not recalling the value, which is the exact
+    // transcription-for-reasoning confusion witnesses exist to avoid. Four
+    // digits are written plainly, and one in nine thousand is unguessable by
+    // any margin that matters when the model has no reason to guess at all.
+    return String(randomInt(1000, 10_000));
   }
   if (format === "name") {
     const pick = () => SYLLABLES[randomInt(SYLLABLES.length)];
