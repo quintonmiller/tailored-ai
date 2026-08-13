@@ -114,11 +114,11 @@ Plus a budget *alert* at 50/80/100%, which is free.
   harness records model, base URL, provider and usage in run metadata; confirm
   before publishing that no key, endpoint credential, or account identifier is
   in there.
-- **This repository has prior form**: a live bot token reached the public repo
-  through documentation and fixtures, not through a config file, and sat there
-  for five days without secret scanning firing. The leak vector for this project
-  is the same shape — a trace, a README example, a changeset, a screenshot in a
-  launch post. Scan what gets published, not just what gets committed.
+- **Scan what gets published, not just what gets committed.** The realistic leak
+  vector for a project like this is never `config.yaml` — it is a trace, a doc
+  example, a changeset, or a screenshot in a launch post. Automated secret
+  scanning is tuned for the first and routinely misses the rest, so the
+  pre-publish review has to be a deliberate step rather than a trusted default.
 
 ### 4. The public HTTP surface
 
