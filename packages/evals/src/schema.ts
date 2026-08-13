@@ -11,6 +11,7 @@
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import YAML from "yaml";
 import { z } from "zod";
 import { MAX_DIFFICULTY, MIN_DIFFICULTY, parseDifficultyFilter } from "./difficulty.js";
@@ -140,6 +141,26 @@ const assertion = z
       .strict()
       .optional(),
     score_at_least: z.number().min(0).max(1).optional(),
+    sim_metric: z
+      .object({ metric: z.string().min(1), at_least: z.number().optional(), at_most: z.number().optional() })
+      .strict()
+      .refine(
+        (v) => v.at_least !== undefined || v.at_most !== undefined,
+        "sim_metric needs at_least, at_most, or both — otherwise it asserts nothing and passes always",
+      )
+      .optional(),
+    beats_baseline: z
+      .object({ policy: z.string().min(1), metric: z.string().min(1).optional(), by: z.number().optional() })
+      .strict()
+      .optional(),
+    responds_within: z
+      .object({
+        event: z.string().min(1),
+        days: z.number().int().nonnegative(),
+        crossingRoles: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     judge: z.object({ rubric: z.string() }).strict().optional(),
   })
   .strict()
@@ -245,6 +266,22 @@ const scenario = z
           .strict(),
       )
       .nonempty()
+      .optional(),
+    simulation: z
+      .object({
+        name: z.string().min(1),
+        seed: z.number().int().optional(),
+        days: z.number().int().positive().max(3650).optional(),
+        daysPerRound: z.number().int().positive().max(90).optional(),
+        roles: z
+          .record(z.string().min(1), z.string().min(1))
+          .refine(
+            (v) => Object.keys(v).length > 0,
+            "a simulation scenario needs at least one role, or no agent can touch the world",
+          ),
+        options: z.record(z.unknown()).optional(),
+      })
+      .strict()
       .optional(),
     milestones: z
       .array(
@@ -385,6 +422,52 @@ const scenario = z
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message: `asserts ${kind} but declares no \`world:\` — the run records no state, so the check is skipped and passes`,
+          });
+        }
+      }
+    }
+    // Same silent-pass shape for the simulation assertions: with no `simulation:`
+    // the run records no economy, every one of them skips, and the scenario is
+    // green having measured nothing.
+    if (!value.simulation) {
+      for (const a of everyAssertion) {
+        const kind =
+          a.sim_metric !== undefined
+            ? "sim_metric"
+            : a.beats_baseline !== undefined
+              ? "beats_baseline"
+              : a.responds_within !== undefined
+                ? "responds_within"
+                : "";
+        if (kind) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `asserts ${kind} but declares no \`simulation:\` — the run records no economy, so the check is skipped and passes`,
+          });
+        }
+      }
+    }
+    // A simulation needs a roster taking turns: the clock ticks once per pass,
+    // so a scenario with a hand-written wake list would run its whole economy
+    // inside a single day and report the opening balance sheet as the result.
+    if (value.simulation) {
+      const wakes = value.wake ? (Array.isArray(value.wake) ? value.wake : [value.wake]) : [];
+      if (!wakes.length || !wakes.every((w) => "agents" in w)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "a `simulation:` scenario needs a `wake:` roster with `rounds:` — one pass is one simulated day, " +
+            "so without it the run never advances the clock",
+        });
+      }
+      const agents = new Set([value.agent?.name ?? "bench", ...Object.keys((value.config?.agents as object) ?? {})]);
+      for (const [role, agent] of Object.entries(value.simulation.roles)) {
+        if (!agents.has(agent)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              `simulation role "${role}" is held by "${agent}", which this scenario does not declare ` +
+              `[${[...agents].join(", ")}] — it would run with no instructions and no instruments`,
           });
         }
       }
@@ -604,35 +687,85 @@ export function fingerprintScenario(scenario: Scenario): string {
     .slice(0, 12);
 }
 
-export function loadScenarios(
+/**
+ * One entry, validated, with a readable error if it is wrong.
+ *
+ * Shared by the YAML loader and by `defineScenario`, so a TypeScript scenario is
+ * held to exactly the rules a YAML one is. Anything less would make TS the loose
+ * path, and the rules being enforced here are the ones whose violation produces
+ * a scenario that passes while measuring nothing.
+ */
+export function validateScenario(entry: unknown, where = "(no id)"): Scenario {
+  const result = scenario.safeParse(entry);
+  if (result.success) return result.data as Scenario;
+  const id = typeof (entry as { id?: unknown })?.id === "string" ? (entry as { id: string }).id : where;
+  const issues = result.error.issues.map((i) => `  ${i.path.join(".") || "(root)"}: ${i.message}`).join("\n");
+  throw new Error(`${id}:\n${issues}`);
+}
+
+/** Scenario files, in a stable order, whatever they are written in. */
+function scenarioFiles(dir: string): string[] {
+  return readdirSync(dir)
+    .filter((f) => /\.(ya?ml|ts|mts|js|mjs)$/.test(f) && !f.endsWith(".d.ts"))
+    .sort();
+}
+
+/**
+ * What one file contributes.
+ *
+ * A YAML file is a list of scenarios. A TypeScript module is whatever it exports
+ * — a scenario, an array of them, or a default export of either — which is what
+ * makes a generated family (the same scenario over five seeds) a loop rather
+ * than five files.
+ */
+async function readScenarioFile(dir: string, file: string): Promise<Scenario[]> {
+  const path = join(dir, file);
+  if (/\.(ts|mts|js|mjs)$/.test(file)) {
+    // `import()` rather than a bundler step: the CLI already runs under tsx, so
+    // a `.ts` scenario loads with no build. This is also the only moment a
+    // scenario module's side effects run — `registerSimulation` among them — so
+    // it has to happen in every process that resolves a simulation by name.
+    const module = (await import(pathToFileURL(path).href)) as Record<string, unknown>;
+    const exported = module.default ?? module.scenarios ?? module.scenario;
+    const list = Array.isArray(exported) ? exported : exported ? [exported] : [];
+    if (!list.length) {
+      throw new Error(`${file}: exports no scenarios — export a Scenario, an array of them, or a default of either`);
+    }
+    // Re-validated even though `defineScenario` already did: a module is free to
+    // export a plain object literal, and the loader is the boundary that decides
+    // what the benchmark will run.
+    return list.map((entry, index) => validateScenario(entry, `${file}[${index}]`));
+  }
+  const parsed = YAML.parse(readFileSync(path, "utf8"));
+  if (!Array.isArray(parsed)) throw new Error(`${file}: expected a list of scenarios at the top level`);
+  return parsed.map((entry) => validateScenario(entry, file));
+}
+
+export async function loadScenarios(
   dir: string,
   filter?: string,
   difficulty?: string,
-): { scenarios: Scenario[]; hash: string; fingerprints: Record<string, string> } {
-  const files = readdirSync(dir)
-    .filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"))
-    .sort();
+): Promise<{
+  scenarios: Scenario[];
+  hash: string;
+  fingerprints: Record<string, string>;
+  /** Scenario id → the file it came from, so a worker can re-import the module. */
+  sources: Record<string, string>;
+}> {
   const scenarios: Scenario[] = [];
   const hash = createHash("sha256");
   const fingerprints: Record<string, string> = {};
+  const sources: Record<string, string> = {};
   const seen = new Set<string>();
 
-  for (const file of files) {
-    const raw = readFileSync(join(dir, file), "utf8");
-    const parsed = YAML.parse(raw);
-    if (!Array.isArray(parsed)) throw new Error(`${file}: expected a list of scenarios at the top level`);
-    for (const entry of parsed) {
-      const result = scenario.safeParse(entry);
-      if (!result.success) {
-        const id = typeof entry?.id === "string" ? entry.id : "(no id)";
-        const issues = result.error.issues.map((i) => `  ${i.path.join(".") || "(root)"}: ${i.message}`).join("\n");
-        throw new Error(`${file} → ${id}:\n${issues}`);
-      }
-      if (seen.has(result.data.id)) throw new Error(`${file}: duplicate scenario id "${result.data.id}"`);
-      seen.add(result.data.id);
-      scenarios.push(result.data as Scenario);
-      hash.update(JSON.stringify(measuredShape(result.data as Scenario)));
-      fingerprints[result.data.id] = fingerprintScenario(result.data as Scenario);
+  for (const file of scenarioFiles(dir)) {
+    for (const parsed of await readScenarioFile(dir, file)) {
+      if (seen.has(parsed.id)) throw new Error(`${file}: duplicate scenario id "${parsed.id}"`);
+      seen.add(parsed.id);
+      scenarios.push(parsed);
+      sources[parsed.id] = join(dir, file);
+      hash.update(JSON.stringify(measuredShape(parsed)));
+      fingerprints[parsed.id] = fingerprintScenario(parsed);
     }
   }
 
@@ -645,5 +778,5 @@ export function loadScenarios(
     const wanted = parseDifficultyFilter(difficulty);
     selected = selected.filter((s) => wanted(s.difficulty));
   }
-  return { scenarios: selected, hash: hash.digest("hex").slice(0, 12), fingerprints };
+  return { scenarios: selected, hash: hash.digest("hex").slice(0, 12), fingerprints, sources };
 }

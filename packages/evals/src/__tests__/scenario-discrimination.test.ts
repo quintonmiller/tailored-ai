@@ -92,7 +92,7 @@ const DEGENERATE: Array<{ name: string; outcome: RunOutcome }> = [
  */
 const rejectingJudge = async () => ({ pass: false, reason: "stub: degenerate reply" });
 
-const { scenarios } = loadScenarios(scenarioDir);
+const { scenarios } = await loadScenarios(scenarioDir);
 
 describe("every scenario rejects a degenerate outcome", () => {
   const graded = scenarios.filter((s) => behaviourAssertions(s).length > 0);

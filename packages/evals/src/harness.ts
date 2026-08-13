@@ -52,6 +52,7 @@ import {
 import YAML from "yaml";
 import { registerPinnedClock, timeConfigBlock } from "./clock.js";
 import { answerTool, Oracle } from "./oracle.js";
+import { createSimulation, type Simulation } from "./sim/index.js";
 import type {
   RecordedCall,
   RecordedExecution,
@@ -126,6 +127,9 @@ export interface HarnessOptions {
 
 const OWNER_ID = "owner-0000";
 const OWNER_LABEL = "quinton";
+
+/** Who says what day it is on a simulation run. Not an agent, and not scored. */
+const DAY_MARKER = "plant-clock";
 
 /**
  * Tools whose real `execute` is replaced.
@@ -475,7 +479,33 @@ export function agentRounds(requests: RecordedRequest[]): number {
 
 export const DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1";
 
-export function buildConfig(scenario: Scenario, opts: HarnessOptions): Record<string, unknown> {
+/**
+ * Which tools each agent gets from the simulation, by role.
+ *
+ * The scenario names roles and the simulation owns what each role can touch, so
+ * neither one has to restate the other. A hand-written allowlist per agent would
+ * work exactly once: the day somebody adds a tool to the sales role, every
+ * scenario silently keeps the old list, six specialists quietly become six
+ * generalists, and the split that the whole benchmark rests on is gone with
+ * nothing red to show for it.
+ */
+export function simulationGrants(sim: Simulation, roles: Record<string, string>): Record<string, string[]> {
+  const perRole = sim.tools();
+  const shared = sim.sharedTools().map((t) => t.name);
+  const grants: Record<string, string[]> = {};
+  for (const [role, agent] of Object.entries(roles)) {
+    const own = perRole[role];
+    if (!own) {
+      throw new Error(
+        `simulation "${sim.name}" has no role "${role}". Known roles: ${Object.keys(perRole).join(", ")}`,
+      );
+    }
+    grants[agent] = [...new Set([...(grants[agent] ?? []), ...own.map((t) => t.name), ...shared])];
+  }
+  return grants;
+}
+
+export function buildConfig(scenario: Scenario, opts: HarnessOptions, sim?: Simulation): Record<string, unknown> {
   const agentName = scenario.agent?.name ?? "bench";
   const providerId = opts.providerId ?? "openai_compatible";
   const agent: Record<string, unknown> = {
@@ -545,7 +575,29 @@ export function buildConfig(scenario: Scenario, opts: HarnessOptions): Record<st
     agents: { [agentName]: agent },
   };
 
-  return deepMerge(config, scenario.config ?? {});
+  const merged = deepMerge(config, scenario.config ?? {});
+
+  if (sim && scenario.simulation) {
+    const agents = (merged.agents ?? {}) as Record<string, Record<string, unknown>>;
+    for (const [agent, granted] of Object.entries(simulationGrants(sim, scenario.simulation.roles))) {
+      const block = agents[agent];
+      if (!block) {
+        throw new Error(
+          `simulation roles name the agent "${agent}", which this scenario does not declare ` +
+            `[${Object.keys(agents).join(", ")}] — it would run with no instructions and no instruments`,
+        );
+      }
+      const declared = Array.isArray(block.tools) ? (block.tools as string[]) : [];
+      // `room` is added rather than assumed. An agent given an allowlist that
+      // omits it cannot post, so it would take its turn, read everything, act on
+      // nothing anybody else could see, and look like an agent with nothing to
+      // say — which is the single most misleading way for a coordination
+      // scenario to fail.
+      block.tools = [...new Set([...declared, ...granted, "room"])];
+    }
+  }
+
+  return merged;
 }
 
 /**
@@ -605,17 +657,36 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
   // scenario the attempts are the team's, not each agent's. Three guesses each
   // would make a room of five agents a search rather than a test.
   const oracle = scenario.oracle ? new Oracle(scenario.oracle) : undefined;
+  // Same lifetime as the world and for the same reason: one economy, driven by
+  // every agent in the scenario. A simulation per agent would be six companies
+  // that happen to share a name.
+  //
+  // Seeded from the run's own seed by default, so repeats of a scenario see
+  // different weather — a stochastic run repeated on identical luck measures
+  // nothing about variance, which is the thing repeats exist to measure.
+  const simSeed = scenario.simulation?.seed ?? opts.seed ?? 0;
+  const sim = scenario.simulation
+    ? createSimulation(scenario.simulation.name, {
+        seed: simSeed,
+        ...(scenario.simulation.days === undefined ? {} : { days: scenario.simulation.days }),
+        ...(scenario.simulation.options ?? {}),
+      })
+    : undefined;
   let db: import("better-sqlite3").Database | undefined;
 
   try {
     const agentName = scenario.agent?.name ?? "bench";
-    const configObject = buildConfig(scenario, opts);
+    const configObject = buildConfig(scenario, opts, sim);
 
     // Every speaker a room line uses has to resolve, or the wake policy reads
     // an unknown label as a person and the transcript loses attribution.
     const rooms = (configObject.rooms ?? {}) as Record<string, unknown>;
     const identities = { ...((rooms.identities ?? {}) as Record<string, unknown>) };
     const declaredAgents = Object.keys((configObject.agents ?? {}) as Record<string, unknown>);
+    // The day marker speaks on every simulation run and appears in no scenario
+    // file, so it has to be declared here or the wake policy reads an unknown
+    // label and the transcript loses attribution for every day boundary.
+    if (scenario.simulation) identities[DAY_MARKER] = `person-${DAY_MARKER}`;
     for (const speaker of collectSpeakers(scenario)) {
       // Agents resolve through `agents:` on their own and must not be given a
       // human id here — the wake policy branches on `kind`, so mislabelling one
@@ -679,6 +750,17 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
       // *is* the thing. Appended here rather than in the meta-tool list so an
       // agent's `tools:` allowlist still governs whether it can reach it.
       ...(oracle ? [answerTool(oracle, recorder)] : []),
+      // The simulation's instruments. Every role's tools are built here and the
+      // per-agent allowlist decides who can reach which — the same mechanism
+      // production uses, rather than a second one invented for the benchmark.
+      // Wrapped so calls are recorded and attributed, but never stubbed: unlike
+      // every other tool in this harness these have a real implementation, and
+      // it is the thing under test.
+      ...(sim
+        ? [...Object.values(sim.tools()).flat(), ...sim.sharedTools()].map((t) =>
+            instrument(t, recorder, scenario.toolResults ?? {}, undefined),
+          )
+        : []),
     ];
 
     const providerFactory = (cfg: Parameters<typeof createProvider>[0], providerId?: string) => {
@@ -707,11 +789,14 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
     );
 
     const outcome = scenario.rooms?.length
-      ? await runRoomScenario(scenario, runtime, db, agentName, opts, recorder, world)
+      ? await runRoomScenario(scenario, runtime, db, agentName, opts, recorder, world, sim)
       : await runChatScenario(scenario, runtime, db, agentName, opts);
 
     return {
       ...outcome,
+      ...(sim && scenario.simulation
+        ? { simulation: describeSimulation(sim, scenario.simulation, simSeed, outcome.dayOfTurn ?? []) }
+        : {}),
       calls: recorder.calls,
       executions: recorder.executions,
       requests: recorder.requests,
@@ -767,7 +852,7 @@ async function runChatScenario(
   db: import("better-sqlite3").Database,
   agentName: string,
   opts: HarnessOptions,
-): Promise<Pick<RunOutcome, "reply" | "posts" | "stop">> {
+): Promise<Pick<RunOutcome, "reply" | "posts" | "stop" | "dayOfTurn">> {
   const session = newSession(db, opts.model, opts.providerId ?? "openai_compatible", `eval:${randomUUID()}`);
   for (const line of scenario.history ?? []) {
     saveMessage(db, session.id, { role: line.role, content: line.content });
@@ -883,7 +968,8 @@ async function runRoomScenario(
   opts: HarnessOptions,
   recorder: Recorder,
   world?: World,
-): Promise<Pick<RunOutcome, "reply" | "posts" | "stop" | "turns">> {
+  sim?: Simulation,
+): Promise<Pick<RunOutcome, "reply" | "posts" | "stop" | "turns" | "dayOfTurn">> {
   const store = runtime.getRoomStore();
   const backend = new LocalRoomBackend(db, store);
 
@@ -1008,19 +1094,75 @@ async function runRoomScenario(
   const activity = () => ({ posts: highWater() - watermark, world: world?.log.length ?? 0 });
   let round = steps[0]?.round;
   let activityAtRoundStart = activity();
+  // Which simulated day each turn ran on. The only clock connecting the
+  // transcript to the economy, and what lets latency be reported in days.
+  const dayOfTurn: number[] = [];
+  const stride = Math.max(1, scenario.simulation?.daysPerRound ?? 1);
+
+  /**
+   * One line a day, from the clock on the wall.
+   *
+   * Required, not decoration. `pollOnce` returns without running a turn when a
+   * room has nothing new in it, so on a round where nobody happened to post,
+   * every agent would sleep — and a run whose team went quiet on day two would
+   * take no further turns while the harness cheerfully advanced the clock to the
+   * horizon. The failure would look exactly like a team that chose to say
+   * nothing, which is the thing this benchmark is supposed to be able to tell
+   * apart from a team that was never woken.
+   *
+   * It carries the day and nothing else. Anything about the state of the
+   * business would be a broadcast, and would hand every agent information the
+   * simulation deliberately gave to one of them.
+   */
+  const strikeTheHour = async () => {
+    if (!sim) return;
+    const horizon = scenario.simulation?.days;
+    for (const ref of refs.values()) {
+      await postLine(backend, room_id(ref), {
+        speaker: DAY_MARKER,
+        body: `Day ${sim.day + 1}${horizon ? ` of ${horizon}` : ""}. Overnight the factory ran, customers ordered, and the books moved. Today's decisions are yours.`,
+      });
+    }
+  };
 
   try {
+    await strikeTheHour();
     for (const step of steps) {
-      if (quiescent && step.round !== round) {
-        const now = activity();
-        if (now.posts === activityAtRoundStart.posts && now.world === activityAtRoundStart.world) break;
+      if (step.round !== round) {
+        // A pass that changed nothing ends the run — unless a simulation is
+        // running, where it does not: the economy moves on its own, so "nobody
+        // said anything" is a fact about the team rather than evidence the run
+        // is over, and stopping there would score a company that was abandoned
+        // on day three as though the horizon were day three.
+        if (quiescent && !sim) {
+          const now = activity();
+          if (now.posts === activityAtRoundStart.posts && now.world === activityAtRoundStart.world) break;
+          activityAtRoundStart = now;
+        }
+        // The clock ticks between rounds, not between turns. One pass of the
+        // roster is one simulated day, so every manager decides on the same
+        // information and the day closes once. Letting an agent close the day
+        // itself is worse in both directions: the managers who had not spoken
+        // yet would be acting on tomorrow's numbers, and a roster that forgot to
+        // call it would run the whole scenario against a frozen world and report
+        // an untouched balance sheet as a result.
+        // `daysPerRound` days pass between decisions, not one. See the note on
+        // `SimulationSpec.daysPerRound`: a horizon short enough for one round
+        // per day is short enough to reward doing nothing.
+        for (let i = 0; i < stride && !sim?.done; i++) sim?.advance();
         round = step.round;
-        activityAtRoundStart = now;
+        await strikeTheHour();
       }
+      // A team cannot manage a company that has already failed. Stopping here
+      // rather than running the roster out keeps `daysManaged` honest — turns
+      // taken after a bankruptcy are turns spent on nothing.
+      if (sim?.done) break;
+
       const ref = refs.get(step.room);
       if (!ref) throw new Error(`unknown wake room "${step.room}"`);
       recorder.turn = turns.length;
       turns.push({ agent: step.agent, room: step.room });
+      if (sim) dayOfTurn.push(sim.day);
       const reply =
         step.kind === "checkin" ? await watcher.runCheckIn(step.agent, ref) : await watcher.pollOnce(step.agent, ref);
       replies.push({ agent: step.agent, reply: typeof reply === "string" ? reply : "" });
@@ -1029,6 +1171,17 @@ async function runRoomScenario(
   } finally {
     listening?.dispose();
     watcher.stop();
+    // Run the company on to the horizon under management's last decisions.
+    //
+    // Not a formality: it is what makes an eight-round agent run comparable with
+    // a baseline swept over the same sixty days. Truncating instead would score
+    // the team on a shorter horizon than the thing it is being compared to, and
+    // flatter every team that stopped early — a company that is abandoned keeps
+    // paying wages, and the balance sheet should say so.
+    if (sim) {
+      let guard = 0;
+      while (!sim.done && guard++ < 10_000) sim.advance();
+    }
   }
 
   const byRef = new Map([...refs].map(([name, ref]) => [ref, name]));
@@ -1038,21 +1191,65 @@ async function runRoomScenario(
 
   // Attributed, because with more than one agent taking a turn "who posted this"
   // is the question. The envelope already carries the speaker, so this is free.
-  const posts = rows.map((row) => {
-    const envelope = parseEnvelope(row.content);
-    const turn = boundaries.findIndex((edge) => row.id <= edge);
-    return {
-      room: byRef.get(row.room_ref) ?? row.room_ref,
-      body: envelope.body.trim(),
-      agent: envelope.speaker,
-      ...(turn === -1 ? {} : { turn }),
-    };
-  });
+  //
+  // The clock's own lines are dropped. They sit above the watermark like
+  // everything else, so leaving them in would credit the harness's day markers
+  // to the team — inflating `posts_by`, and putting a sentence the agents never
+  // wrote into the joined `reply` that every text assertion reads.
+  const posts = rows
+    .map((row) => {
+      const envelope = parseEnvelope(row.content);
+      const turn = boundaries.findIndex((edge) => row.id <= edge);
+      return {
+        room: byRef.get(row.room_ref) ?? row.room_ref,
+        body: envelope.body.trim(),
+        agent: envelope.speaker,
+        ...(turn === -1 ? {} : { turn }),
+      };
+    })
+    .filter((post) => post.agent !== DAY_MARKER);
 
   // `reply` stays every body joined, so single-agent scenarios and every reply
   // assertion behave exactly as before. A multi-agent scenario that needs to
   // separate them asks about `posts`.
-  return { reply: posts.map((p) => p.body).join("\n"), posts, stop: stopForRun(stops), turns };
+  return {
+    reply: posts.map((p) => p.body).join("\n"),
+    posts,
+    stop: stopForRun(stops),
+    turns,
+    ...(dayOfTurn.length ? { dayOfTurn } : {}),
+  };
+}
+
+/**
+ * The economy as the run left it.
+ *
+ * `daysManaged` is separate from `days` on purpose. A roster of eight rounds
+ * against a sixty-day horizon is a company that was managed for eight days and
+ * then ran on by itself, and reporting only the horizon would present that as a
+ * full run. The gap is the most useful number on a scenario whose team went
+ * quiet early.
+ */
+function describeSimulation(
+  sim: Simulation,
+  spec: NonNullable<Scenario["simulation"]>,
+  seed: number,
+  dayOfTurn: number[],
+): import("./types.js").SimulationOutcome {
+  return {
+    name: sim.name,
+    seed,
+    days: sim.day,
+    daysManaged: dayOfTurn.length ? Math.max(...dayOfTurn) + 1 : 0,
+    daysPerRound: spec.daysPerRound ?? 1,
+    ...(sim.endedBecause ? { endedBecause: sim.endedBecause } : {}),
+    metrics: sim.metrics(),
+    objective: sim.objective(),
+    events: sim.events,
+    dayOfTurn,
+    roles: spec.roles,
+    responses: sim.responses ?? {},
+  };
 }
 
 /** `local:<id>` → `<id>`, which is what the backend's own methods take. */

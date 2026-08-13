@@ -28,9 +28,9 @@ afterEach(() => {
 });
 
 /** Write one scenario file and load it, so the zod schema is what is under test. */
-function load(body: string): Scenario[] {
+async function load(body: string): Promise<Scenario[]> {
   writeFileSync(join(dir, "s.yaml"), body);
-  return loadScenarios(dir).scenarios;
+  return (await loadScenarios(dir)).scenarios;
 }
 
 const ROOMS = `
@@ -40,8 +40,8 @@ const ROOMS = `
         - { speaker: quinton, to: [nova], body: "ping" }`;
 
 describe("wake as a sequence", () => {
-  it("takes a list of turns", () => {
-    const [scenario] = load(`
+  it("takes a list of turns", async () => {
+    const [scenario] = await load(`
 - id: two-turns
   category: coordination
   difficulty: 3
@@ -60,8 +60,8 @@ ${ROOMS}
     ]);
   });
 
-  it("still takes a bare object, so every existing scenario is untouched", () => {
-    const [scenario] = load(`
+  it("still takes a bare object, so every existing scenario is untouched", async () => {
+    const [scenario] = await load(`
 - id: one-turn
   category: addressing
   difficulty: 3
@@ -75,10 +75,10 @@ ${ROOMS}
     expect(scenario.wake).toEqual({ room: "ops" });
   });
 
-  it("rejects a step naming a room that does not exist — in any position", () => {
+  it("rejects a step naming a room that does not exist — in any position", async () => {
     // The single-wake version checked this. A list that only validated its
     // first entry would let a typo in the second silently wake nobody.
-    expect(() =>
+    await expect(
       load(`
 - id: bad-second-step
   category: coordination
@@ -91,11 +91,11 @@ ${ROOMS}
   expect:
     - replies: true
 `),
-    ).toThrow(/wake\.room "opss" is not one of the rooms/);
+    ).rejects.toThrow(/wake\.room "opss" is not one of the rooms/);
   });
 
-  it("rejects an empty list rather than silently waking nobody", () => {
-    expect(() =>
+  it("rejects an empty list rather than silently waking nobody", async () => {
+    await expect(
       load(`
 - id: empty-wake
   category: coordination
@@ -106,7 +106,7 @@ ${ROOMS}
   expect:
     - replies: true
 `),
-    ).toThrow();
+    ).rejects.toThrow();
   });
 });
 
@@ -186,12 +186,12 @@ describe("posts_by", () => {
 });
 
 describe("a stub the agent cannot reach", () => {
-  it("rejects toolResults for a tool outside the agent's allowlist", () => {
+  it("rejects toolResults for a tool outside the agent's allowlist", async () => {
     // Four scenarios were written this way in one afternoon, usually by reusing
     // an `&anchor` whose `tools:` is narrower than the new row needs. Each
     // failed looking exactly like a model limitation — the agent correctly said
     // it had no way to check — and each cost a benchmark run to diagnose.
-    expect(() =>
+    await expect(
       load(`
 - id: unreachable-stub
   category: tool-pressure
@@ -206,14 +206,14 @@ describe("a stub the agent cannot reach", () => {
   expect:
     - replies: true
 `),
-    ).toThrow(/no agent in this scenario can call/);
+    ).rejects.toThrow(/no agent in this scenario can call/);
   });
 
-  it("looks at every agent's allowlist, not just the one under test", () => {
+  it("looks at every agent's allowlist, not just the one under test", async () => {
     // A lead that can only talk directs specialists who can act, so the stub a
     // multi-agent scenario needs is almost never on the agent under test.
     // Reading its allowlist alone rejected exactly the scenarios worth writing.
-    const [scenario] = load(`
+    const [scenario] = await load(`
 - id: peer-holds-the-stub
   category: orchestration
   difficulty: 8
@@ -240,8 +240,8 @@ describe("a stub the agent cannot reach", () => {
     expect(scenario.id).toBe("peer-holds-the-stub");
   });
 
-  it("allows a stub when the agent lists the tool", () => {
-    const [scenario] = load(`
+  it("allows a stub when the agent lists the tool", async () => {
+    const [scenario] = await load(`
 - id: reachable-stub
   category: tool-pressure
   difficulty: 3
@@ -258,8 +258,8 @@ describe("a stub the agent cannot reach", () => {
     expect(scenario.toolResults?.exec).toContain("41207");
   });
 
-  it("allows a stub when the agent has no allowlist, because then it has everything", () => {
-    const [scenario] = load(`
+  it("allows a stub when the agent has no allowlist, because then it has everything", async () => {
+    const [scenario] = await load(`
 - id: no-allowlist
   category: tool-pressure
   difficulty: 3

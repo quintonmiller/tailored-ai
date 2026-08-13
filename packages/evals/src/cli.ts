@@ -18,6 +18,7 @@ import { stripSeparator } from "./args.js";
 import { DEFAULT_PINNED_AT, DEFAULT_TIMEZONE } from "./clock.js";
 import { printComparison } from "./compare.js";
 import { costRecord, usageOfScenarios } from "./cost.js";
+import { extractDemo } from "./demo.js";
 import { describeDifficulty } from "./difficulty.js";
 import { grade, scoreMilestones } from "./graders.js";
 import { type HarnessOptions, wakeSteps } from "./harness.js";
@@ -25,6 +26,8 @@ import { PAYLOAD_FILENAME, readWorkerResult } from "./protocol.js";
 import { printScenario, printStalls, printSummary, score, verdict } from "./report.js";
 import { traceFacts } from "./routing.js";
 import { loadScenarios } from "./schema.js";
+import { createSimulation, listSimulations, simulationPolicies } from "./sim/index.js";
+import { formatSweep, gradient, summarise, sweep } from "./sim/sweep.js";
 import { substituteTokens } from "./tokens.js";
 import type { BenchmarkReport, CheckResult, RunOutcome, Scenario, ScenarioResult } from "./types.js";
 
@@ -39,6 +42,12 @@ tai evals — scenario benchmark for the invocation message
   pnpm run eval -- regrade <report.json> [--out <file>]   re-score a finished run
                                                           against today's assertions,
                                                           with no model calls
+  pnpm run eval -- bench [--simulation factory] [--seeds 60] [--days 60]
+                         [--days-per-round 8] [--out <file>]
+                                                          sweep a simulation's baseline
+                                                          policies and print the ladder.
+                                                          No model calls; run this before
+                                                          trusting any agent score.
 
 Options
   --target <name>       Load flag defaults from targets/<name>.json (explicit flags still win)
@@ -157,10 +166,19 @@ async function runWorker(
   judge: boolean,
   verbose: boolean,
   keepPrompts: boolean,
+  source?: string,
 ): Promise<ScenarioResult> {
   const dir = mkdtempSync(join(tmpdir(), "tai-eval-payload-"));
   const payloadPath = join(dir, PAYLOAD_FILENAME);
-  writeFileSync(payloadPath, JSON.stringify({ scenario, options, repeats, judge, keepPrompts }));
+  // The scenario travels as JSON *and* as a path back to the file it came from.
+  //
+  // JSON is enough to run it — a scenario is data by construction, see
+  // `define.ts`. The path is what carries a module's *side effects* across the
+  // process boundary: a scenario file is free to call `registerSimulation`, and
+  // in a worker that only received JSON that registration never happened, so
+  // the run would die on "unknown simulation" naming something the parent had
+  // resolved perfectly well a moment earlier.
+  writeFileSync(payloadPath, JSON.stringify({ scenario, options, repeats, judge, keepPrompts, source }));
 
   return await new Promise<ScenarioResult>((resolvePromise) => {
     const child = spawn(process.execPath, ["--import", "tsx", join(here, "worker.ts"), payloadPath], {
@@ -320,7 +338,7 @@ async function cmdRun(argv: string[]): Promise<number> {
   }
 
   const scenarioDir = values.scenarios ? resolve(values.scenarios) : join(packageRoot, "scenarios");
-  const { scenarios, hash, fingerprints } = loadScenarios(scenarioDir, values.filter, values.difficulty);
+  const { scenarios, hash, fingerprints, sources } = await loadScenarios(scenarioDir, values.filter, values.difficulty);
   if (!scenarios.length) {
     const narrowed = [
       values.filter ? `filter "${values.filter}"` : "",
@@ -368,6 +386,7 @@ async function cmdRun(argv: string[]): Promise<number> {
       !!values.judge,
       !!values.verbose,
       !!values["keep-prompts"],
+      sources[scenario.id],
     );
     done++;
     process.stdout.write(`[${String(done).padStart(3)}/${scenarios.length}] `);
@@ -486,7 +505,7 @@ async function cmdRegrade(argv: string[]): Promise<number> {
   }
   const outFlag = argv.indexOf("--out");
   const report = JSON.parse(readFileSync(resolve(reportPath), "utf8")) as BenchmarkReport;
-  const { scenarios } = loadScenarios(join(packageRoot, "scenarios"));
+  const { scenarios } = await loadScenarios(join(packageRoot, "scenarios"));
   const byId = new Map(scenarios.map((s) => [s.id, s]));
 
   const rescored: ScenarioResult[] = [];
@@ -591,6 +610,113 @@ async function cmdRegrade(argv: string[]): Promise<number> {
   return 0;
 }
 
+/**
+ * `eval bench` — sweep a simulation's baseline policies and print the ladder.
+ *
+ * The cheapest and most important command in this package. It calls no model,
+ * runs in milliseconds, and answers the one question that decides whether any
+ * agent number from that simulation means anything: **does the economy have a
+ * gradient?** If a random policy and a competent one score the same, there are
+ * no decisions in the world and every figure a model run produces afterwards is
+ * noise wearing a dollar sign.
+ *
+ * It is also what turns an agent's score into a statement. "$1.31M" says
+ * nothing. "$1.31M, between the set-and-forget baseline at $829K and textbook
+ * operations at $1.24M" says exactly where a framework sits.
+ *
+ * Three separate builds of the factory economy were caught by this command
+ * before a single model call: a machine ceiling below baseline demand, a
+ * warehouse too small to hold the cheap supplier's lead time, and a horizon so
+ * short that the random policy won outright.
+ */
+function cmdBench(argv: string[]): number {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      simulation: { type: "string", default: "factory" },
+      seeds: { type: "string", default: "60" },
+      days: { type: "string" },
+      "days-per-round": { type: "string" },
+      out: { type: "string" },
+    },
+    allowPositionals: false,
+  });
+
+  const name = values.simulation as string;
+  const policies = simulationPolicies(name);
+  if (!Object.keys(policies).length) {
+    console.error(`No baseline policies for "${name}". Known simulations: ${listSimulations().join(", ") || "(none)"}`);
+    return 2;
+  }
+  const count = Number(values.seeds);
+  const seeds = Array.from({ length: count }, (_, i) => 1000 + i);
+  const days = values.days ? Number(values.days) : undefined;
+  const stride = values["days-per-round"] ? Number(values["days-per-round"]) : 1;
+
+  const summaries = Object.entries(policies).map(([policy, make]) =>
+    summarise(sweep(name, make(), seeds, days, stride)),
+  );
+  const opening = createSimulation(name, { seed: seeds[0], ...(days === undefined ? {} : { days }) }).objective();
+
+  console.log(
+    `\n  ${name} — ${seeds.length} seeds${days ? `, ${days} days` : ""}${stride > 1 ? `, one round per ${stride} days` : ""}` +
+      `\n  opening balance sheet ${Math.round(opening).toLocaleString("en-US")}\n`,
+  );
+  console.log(formatSweep(summaries));
+
+  const { spread, ordered } = gradient(summaries);
+  console.log(
+    `\n  spread ${Math.round(spread).toLocaleString("en-US")} between the weakest and strongest baseline` +
+      `${ordered ? "" : " (the listed order is not monotonic — expected where a baseline is a deliberate trap)"}\n`,
+  );
+  if (spread <= 0) {
+    console.error("  No gradient: every policy scored the same. Any agent number from this simulation is noise.\n");
+    return 1;
+  }
+  if (values.out) {
+    writeFileSync(
+      resolve(values.out as string),
+      JSON.stringify({ simulation: name, seeds, days, stride, summaries }, null, 2),
+    );
+    console.log(`  written to ${values.out}\n`);
+  }
+  return 0;
+}
+
+/**
+ * `eval demo` — cut one run down to what a page can render.
+ *
+ * The demonstration pages on the site show what a team actually did, and the
+ * only way that stays true is for the page to read a build artifact taken from a
+ * real report rather than figures somebody typed in. Regenerate, commit, and the
+ * page renders whatever the run did.
+ */
+function cmdDemo(argv: string[]): number {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    options: { scenario: { type: "string" }, run: { type: "string" }, out: { type: "string" } },
+    allowPositionals: true,
+  });
+  const report = positionals[0];
+  if (!report || !values.scenario) {
+    console.error("usage: eval demo <report.json> --scenario <id> [--run <index>] [--out <file>]");
+    return 2;
+  }
+  const demo = extractDemo(resolve(report), values.scenario as string, Number(values.run ?? 0));
+  const json = JSON.stringify(demo, null, 2);
+  if (values.out) {
+    const path = resolve(values.out as string);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `${json}\n`);
+    console.log(
+      `  ${demo.scenario}: ${demo.turns.length} turns, ${demo.calls.length} calls → ${values.out} (${Math.round(json.length / 1024)} kB)`,
+    );
+  } else {
+    console.log(json);
+  }
+  return 0;
+}
+
 async function main(): Promise<void> {
   const argv = stripSeparator(process.argv.slice(2));
   const [command, ...rest] = argv;
@@ -604,6 +730,14 @@ async function main(): Promise<void> {
   }
   if (command === "regrade") {
     process.exitCode = await cmdRegrade(rest);
+    return;
+  }
+  if (command === "bench") {
+    process.exitCode = cmdBench(rest);
+    return;
+  }
+  if (command === "demo") {
+    process.exitCode = cmdDemo(rest);
     return;
   }
   process.exitCode = await cmdRun(command === "run" ? rest : argv);
