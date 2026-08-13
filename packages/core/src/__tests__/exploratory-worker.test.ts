@@ -117,7 +117,14 @@ describe("ExploratoryWorker.evaluate", () => {
       },
     });
     const worker = new ExploratoryWorker({ runtime: mockRuntime(config) });
-    const result = worker.evaluate("watcher", config.agents.watcher, new Date());
+    // A pinned instant, not `new Date()`. The window here is 00:00-23:59, which
+    // reads as "always" and is not: the last minute of the day falls outside it,
+    // so this test failed on CI at 23:59:45 and would have gone on doing so for
+    // sixty seconds a day. The sibling test above already pins its instant; a
+    // test whose result depends on when you run it is not testing the window.
+    const inside = new Date();
+    inside.setHours(12, 0, 0, 0);
+    const result = worker.evaluate("watcher", config.agents.watcher, inside);
     expect(result.kind).toBe("run");
   });
 
