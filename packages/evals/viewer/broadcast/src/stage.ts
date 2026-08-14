@@ -1837,6 +1837,7 @@ export function mountStage(host: HTMLElement): Renderer {
     mana?: number;
     maxMana?: number;
     readied?: ScenePartyMember["readied"];
+    identity?: ScenePartyMember["identity"];
     /** Enemies only. */
     name?: string;
     family?: string;
@@ -2984,6 +2985,13 @@ export function mountStage(host: HTMLElement): Renderer {
       return;
     }
     if (dying > 0.5) return;
+
+    if (a.side === "party") {
+      ctx.font = `700 ${Math.round(9 * ts)}px ${SANS}`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "alphabetic";
+      inkText(ctx, String(d.identity?.displayName ?? a.id), x, by - 4 * ts, pal.ink, 3);
+    }
 
     if (boss) {
       ctx.font = `700 ${Math.round(12 * ts)}px ${SANS}`;

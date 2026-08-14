@@ -78,6 +78,11 @@ describe("the scene the page is handed", () => {
       expect(Array.isArray(member.pack)).toBe(true);
       expect(typeof member.talentPoints).toBe("number");
       expect(Array.isArray(member.talents)).toBe(true);
+      expect(typeof member.identity.displayName).toBe("string");
+      expect(member.identity.traits).toHaveLength(5);
+      expect(member.identity.traits.every((trait) => trait.score >= 1 && trait.score <= 100)).toBe(true);
+      expect(typeof member.identity.secretGoal.title).toBe("string");
+      expect(member.identity.secretGoal.revealed).toBe(false);
     }
   });
 

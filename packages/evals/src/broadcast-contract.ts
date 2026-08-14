@@ -56,6 +56,28 @@ export interface SceneBeat {
 
 export interface ScenePartyMember {
   id: ClassId;
+  identity: {
+    displayName: string;
+    generatedName: string;
+    nameSource: "generated" | "agent";
+    pronouns: { subject: string; object: string; possessive: string };
+    ancestry: string;
+    appearance: string;
+    backstory: string;
+    publicAspiration: string;
+    archetype: string;
+    traits: Array<{ id: string; name: string; score: number; label: string; description: string }>;
+    /** Details are observer-only; renderers seal them until disclosure or recap. Null supports old traces. */
+    secretGoal: {
+      revealed: boolean;
+      completed: boolean;
+      title: string | null;
+      description: string | null;
+      progress: number | null;
+      target: number | null;
+      unit: string | null;
+    };
+  };
   hp: number;
   maxHp: number;
   mana: number;

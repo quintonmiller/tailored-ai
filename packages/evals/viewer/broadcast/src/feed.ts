@@ -167,6 +167,8 @@ const PHRASES: Record<string, string | undefined> = {
   descend: "calls for the descent",
   revive: "brings {ally} back",
   rest: "calls a halt to rest",
+  choose_name: "chooses the name {name}",
+  reveal_goal: "reveals a private motive",
 
   // Guardian.
   taunt: "roars for their attention",
@@ -495,6 +497,9 @@ function lexicon(): Lexicon {
   return {
     learn(scene) {
       if (!scene) return;
+      for (const member of scene.party ?? []) {
+        if (member.identity?.displayName) names.set(member.id, member.identity.displayName);
+      }
       learnList(scene.enemies, (enemy) => enemy.ref);
       learnList(scene.stock, (item) => item.id);
       learnList(scene.loot, (item) => item.id);
@@ -506,10 +511,6 @@ function lexicon(): Lexicon {
     of(id) {
       const key = String(id ?? "").trim();
       if (!key) return "";
-      // The five keep their lowercase ids. They are named that way in the
-      // combat prose, in the party bars and in the chat, and "uses Healing
-      // Potion on Rogue" beside "cleric heals rogue" reads as two people.
-      if (isClassId(key)) return key;
       return names.get(key) ?? titleise(key);
     },
   };
@@ -643,13 +644,15 @@ function chatPanel(host: HTMLElement): ChatRenderer {
   const take = tailer<Said>();
   let primed = false;
   let rooms = new Set<string>();
+  let displayNames = new Map<string, string>();
 
   /** Shared by store-driven messages and by anything `attachExternalChat` sends. */
   function append(msg: ChatMessage, external: boolean): HTMLDivElement {
     const row = el("div", `bcf-msg${external ? " external" : ""}${primed ? " bcf-new" : ""}`);
 
     const head = el("div", "bcf-head");
-    const who = el("span", "bcf-who", msg.agent || "?");
+    const shown = displayNames.get(msg.agent ?? "") ?? msg.agent ?? "?";
+    const who = el("span", "bcf-who", shown);
     who.style.color = external ? "var(--dim)" : (classColour(msg.agent ?? "") ?? "var(--dim)");
     head.append(who);
 
@@ -681,6 +684,9 @@ function chatPanel(host: HTMLElement): ChatRenderer {
   }
 
   function render(state: PanelState): void {
+    displayNames = new Map(
+      (state.scene?.party ?? []).map((member) => [member.id, member.identity?.displayName ?? member.id]),
+    );
     const { fresh, reset } = take(state?.said);
     if (reset) {
       host.replaceChildren();
@@ -787,7 +793,7 @@ function logPanel(host: HTMLElement): PanelRenderer {
       if (!token) continue;
       const colour = classColour(token.toLowerCase());
       if (colour) {
-        const span = el("span", "name", token);
+        const span = el("span", "name", names.of(token.toLowerCase()));
         span.style.color = colour;
         parent.append(span);
       } else if (numbers && /^\d+$/.test(token)) {
@@ -805,7 +811,7 @@ function logPanel(host: HTMLElement): PanelRenderer {
   }
 
   function actor(name: string): HTMLSpanElement {
-    const span = el("span", "who", name || "?");
+    const span = el("span", "who", names.of(name) || "?");
     span.style.color = classColour(name) ?? "var(--dim)";
     return span;
   }

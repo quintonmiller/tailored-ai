@@ -92,10 +92,17 @@ const FAMILY_BEHAVIOUR = new Map<string, string>(FAMILIES.map((f) => [f.family, 
 
 import { Diagnostics } from "./diagnostics.js";
 import {
+  generatePartyIdentities,
+  goalProgressText,
+  strongestPersonalityTraits,
+  validateDisplayName,
+} from "./identity.js";
+import {
   alive,
   antiSynergies,
   applyStatus,
   type Beat,
+  type CharacterIdentity,
   CLASSES,
   type ClassId,
   clearStatus,
@@ -117,6 +124,7 @@ import {
   type ItemProvenance,
   livingEnemies,
   livingParty,
+  type PersonalGoalEvent,
   type Phase,
   type RoomEnvironmentKind,
   resolveTick,
@@ -334,7 +342,16 @@ const BASE_STATS: Record<
   ClassId,
   Omit<
     Fighter,
-    "id" | "statuses" | "inventory" | "equipped" | "dead" | "cooldowns" | "talentPoints" | "talents" | "bonusHp"
+    | "id"
+    | "identity"
+    | "statuses"
+    | "inventory"
+    | "equipped"
+    | "dead"
+    | "cooldowns"
+    | "talentPoints"
+    | "talents"
+    | "bonusHp"
   >
 > = {
   guardian: { hp: 130, maxHp: 130, mana: 0, maxMana: 0, armor: 8, power: 10, speed: 8, gold: 60, threat: 0, xp: 0 },
@@ -383,6 +400,27 @@ export interface DescentScene {
   earnedXp: number;
   party: Array<{
     id: ClassId;
+    identity: {
+      displayName: string;
+      generatedName: string;
+      nameSource: "generated" | "agent";
+      pronouns: { subject: string; object: string; possessive: string };
+      ancestry: string;
+      appearance: string;
+      backstory: string;
+      publicAspiration: string;
+      archetype: string;
+      traits: Array<{ id: string; name: string; score: number; label: string; description: string }>;
+      secretGoal: {
+        revealed: boolean;
+        completed: boolean;
+        title: string | null;
+        description: string | null;
+        progress: number | null;
+        target: number | null;
+        unit: string | null;
+      };
+    };
     hp: number;
     maxHp: number;
     mana: number;
@@ -513,6 +551,9 @@ export class DescentSimulation implements Simulation {
   private terrainHamperedHits = 0;
   private hazardousRetreats = 0;
   private retreatHazardDamage = 0;
+  private namesChosen = 0;
+  private secretGoalsRevealed = 0;
+  private personalGoalsCompleted = 0;
   private deaths = 0;
   private floorReached = 1;
   private readonly startFloor: number;
@@ -534,6 +575,12 @@ export class DescentSimulation implements Simulation {
   /** Distinguishes separate caches for the sharing diagnostic. */
   private cacheSerial = 0;
   private pendingPath: string | undefined;
+  /** The last agent to choose the pending path, used for personal exploration progress. */
+  private pendingPathChosenBy: ClassId | undefined;
+  /** Identity callouts join the next resolved tick instead of being overwritten by phase narration. */
+  private readonly identityAnnouncements: string[] = [];
+  /** The rogue's scouting motive counts floors, not repeated looks at one junction. */
+  private readonly goalScoutedFloors = new Set<number>();
   /** Who has been handed gold, and what they held before it. See `buyItem`. */
   private readonly toppedUp = new Map<ClassId, number>();
   private itemSerial = 0;
@@ -557,11 +604,13 @@ export class DescentSimulation implements Simulation {
     const startingSkillPoints = preparation ? Math.max(0, Math.floor(Number(options.startingSkillPoints ?? 2))) : 0;
 
     const map = this.maze ? generateFloorMap(startFloor, this.pathRng) : undefined;
+    const identities = generatePartyIdentities(this.rng.fork("identities-v1"));
 
     const party = {} as Record<ClassId, Fighter>;
     for (const id of CLASSES) {
       party[id] = {
         id,
+        identity: identities[id],
         ...BASE_STATS[id],
         statuses: [],
         inventory: [],
@@ -780,6 +829,88 @@ export class DescentSimulation implements Simulation {
   // Prose
   // -------------------------------------------------------------------------
 
+  private displayName(id: ClassId): string {
+    return this.state.party[id]?.identity.displayName ?? id;
+  }
+
+  private publicIdentityLine(identity: CharacterIdentity): string {
+    const traits = strongestPersonalityTraits(identity)
+      .map((trait) => `${trait.label} ${trait.name.toLowerCase()} ${trait.score}`)
+      .join("; ");
+    return `${identity.appearance} Strongest tendencies: ${traits}. Public aspiration: ${identity.publicAspiration}`;
+  }
+
+  private identityDossier(fighter: Fighter): string[] {
+    const identity = fighter.identity;
+    const goal = identity.secretGoal;
+    return [
+      `${identity.displayName}, the ${fighter.id} (${identity.pronouns.subject}/${identity.pronouns.object}).`,
+      identity.appearance,
+      identity.backstory,
+      `Personality — ${identity.archetype}:`,
+      ...identity.traits.map((trait) => `  ${trait.name} ${trait.score}/100 — ${trait.label}; ${trait.description}.`),
+      `Public aspiration: ${identity.publicAspiration}`,
+      `Private motive: ${goal.title} — ${goal.description} Progress: ${goalProgressText(goal)}.`,
+      goal.revealed
+        ? "This motive is known to the party."
+        : "Only you know this motive. Use `reveal_goal` if you want it recorded as public.",
+      !identity.renamed && this.state.phase === "camp"
+        ? `Your provisional name is ${identity.generatedName}. You may use \`choose_name\` once before entering.`
+        : "",
+    ].filter(Boolean);
+  }
+
+  /** Advance one character's private motive from an authoritative game event. */
+  private recordGoalProgress(actor: ClassId, event: PersonalGoalEvent, amount = 1): void {
+    const fighter = this.state.party[actor];
+    const goal = fighter?.identity.secretGoal;
+    if (!fighter || !goal || goal.completed || goal.event !== event || amount <= 0) return;
+    if (event === "damage-taken" && fighter.dead) return;
+    goal.progress =
+      event === "floor-reached" ? Math.max(goal.progress, Math.floor(amount)) : goal.progress + Math.floor(amount);
+    if (goal.progress < goal.target) return;
+
+    goal.progress = goal.target;
+    goal.completed = true;
+    goal.completedAtTick = this.state.tick;
+    if (!goal.revealed) {
+      goal.revealed = true;
+      this.secretGoalsRevealed += 1;
+    }
+    fighter.talentPoints += 1;
+    this.personalGoalsCompleted += 1;
+    const line = `${fighter.identity.displayName} completes the private motive “${goal.title}” and earns one skill point.`;
+    this.identityAnnouncements.push(line);
+    this.note("personal-goal", line);
+  }
+
+  /** Attribute resolved combat consequences without trusting an agent's intended action. */
+  private recordCombatGoalProgress(result: TickResult): void {
+    const latestPartyHit = new Map<string, ClassId>();
+    for (const beat of result.beats) {
+      if (beat.kind === "heal" && beat.from && CLASSES.includes(beat.from as ClassId)) {
+        this.recordGoalProgress(beat.from as ClassId, "healing-done", beat.amount ?? 0);
+      }
+      if (beat.kind === "hit" && beat.to && CLASSES.includes(beat.to as ClassId)) {
+        const hostile = !beat.from || !CLASSES.includes(beat.from as ClassId);
+        if (hostile) this.recordGoalProgress(beat.to as ClassId, "damage-taken", beat.amount ?? 0);
+      }
+      if (
+        beat.kind === "hit" &&
+        beat.from &&
+        beat.to &&
+        CLASSES.includes(beat.from as ClassId) &&
+        !CLASSES.includes(beat.to as ClassId)
+      ) {
+        latestPartyHit.set(beat.to, beat.from as ClassId);
+      }
+      if (beat.kind === "death" && beat.to) {
+        const killer = latestPartyHit.get(beat.to);
+        if (killer) this.recordGoalProgress(killer, "killing-blow");
+      }
+    }
+  }
+
   announce(): string {
     const s = this.state;
     const room = s.map?.rooms.find((candidate) => candidate.id === s.map?.currentRoom);
@@ -811,14 +942,22 @@ export class DescentSimulation implements Simulation {
   private sheet(f: Fighter, full: boolean): string {
     const st = f.statuses.filter((s) => s.ticks > 0).map((s) => `${s.kind}(${s.ticks})`);
     const status = st.length > 0 ? ` [${st.join(", ")}]` : "";
-    if (f.dead) return `  ${f.id}: DOWN`;
+    const name = f.identity.displayName;
+    if (f.dead) return `  ${f.id}: DOWN — ${name}`;
     const mana = f.maxMana > 0 ? `, mana ${f.mana}/${f.maxMana}` : "";
     if (!full) {
       const worn = Object.values(f.equipped)
         .filter(Boolean)
         .map((i) => itemName(i as ItemInstance));
       const wearing = worn.length > 0 ? `, wearing ${worn.join(" + ")}` : "";
-      return `  ${f.id}: ${f.hp}/${f.maxHp} hp${mana}${status}${wearing}`;
+      const goal = f.identity.secretGoal;
+      const sharedGoal = goal.revealed
+        ? `\n    Revealed motive: ${goal.title} — ${goal.description} (${goalProgressText(goal)}).`
+        : "";
+      return (
+        `  ${f.id}: ${f.hp}/${f.maxHp} hp${mana}${status}${wearing} — ${name}\n` +
+        `    ${this.publicIdentityLine(f.identity)}${sharedGoal}`
+      );
     }
     const cds = Object.entries(f.cooldowns)
       .filter(([, v]) => v > 0)
@@ -836,7 +975,7 @@ export class DescentSimulation implements Simulation {
       .filter(([, rank]) => rank > 0)
       .map(([id, rank]) => `${id} ${rank}`);
     return [
-      `  ${f.id}: ${f.hp}/${f.maxHp} hp${mana}${status}`,
+      `  ${f.id}: ${f.hp}/${f.maxHp} hp${mana}${status} — ${name}`,
       `  armour ${f.armor}, power ${f.power}, speed ${f.speed}`,
       `  purse ${f.gold} gold`,
       `  skill points ${f.talentPoints}; talents: ${talents.join(", ") || "(none)"}`,
@@ -908,7 +1047,7 @@ export class DescentSimulation implements Simulation {
     }
 
     if (me) {
-      out.push("", "You:");
+      out.push("", "Your identity:", ...this.identityDossier(me), "", "Your current sheet:");
       out.push(this.sheet(me, true));
       if (me.talentPoints > 0) {
         out.push("", "Skills you can invest in (`invest_skill`):");
@@ -1507,12 +1646,14 @@ export class DescentSimulation implements Simulation {
       case "healing_potion": {
         const healed = Math.min(45, ally.maxHp - ally.hp);
         ally.hp += healed;
+        if (healed > 0) out.beats.push({ kind: "heal", from: actor.id, to: ally.id, amount: healed, note: "item" });
         say(`${actor.id} gives ${ally.id} a potion (${healed}).`);
         break;
       }
       case "greater_potion": {
         const healed = Math.min(Math.round(ally.maxHp * 0.8), ally.maxHp - ally.hp);
         ally.hp += healed;
+        if (healed > 0) out.beats.push({ kind: "heal", from: actor.id, to: ally.id, amount: healed, note: "item" });
         say(`${actor.id} breaks a greater potion over ${ally.id} (${healed}).`);
         break;
       }
@@ -1937,6 +2078,7 @@ export class DescentSimulation implements Simulation {
     }
     s.floor += 1;
     this.floorReached = Math.max(this.floorReached, s.floor);
+    for (const fighter of livingParty(s)) this.recordGoalProgress(fighter.id, "floor-reached", s.floor);
     s.dread = 0;
     s.phase = "explore";
     if (this.maze) {
@@ -1956,6 +2098,7 @@ export class DescentSimulation implements Simulation {
     this.scoutReport = undefined;
     this.descendRequested = false;
     this.pendingPath = undefined;
+    this.pendingPathChosenBy = undefined;
     this.pendingCache = false;
     this.retreatRequested = false;
     this.exploreRequested = false;
@@ -2036,6 +2179,7 @@ export class DescentSimulation implements Simulation {
         this.lastLog = result.lines;
         this.lastBeats = result.beats;
         this.lastBeatsTick = s.tick;
+        this.recordCombatGoalProgress(result);
         s.log.push(...result.lines.map((text) => ({ tick: s.tick, text })));
         this.diag.recordConflicts(result.conflicts.length, result.conflicts, actorsThisRound >= 2);
         this.diag.actionsWasted += result.wasted.length;
@@ -2096,6 +2240,7 @@ export class DescentSimulation implements Simulation {
           s.dread += 2;
           this.retreats += 1;
           this.pendingPath = undefined;
+          this.pendingPathChosenBy = undefined;
           s.paths = [
             {
               id: "back",
@@ -2167,6 +2312,12 @@ export class DescentSimulation implements Simulation {
         break;
     }
 
+    if (this.identityAnnouncements.length > 0) {
+      const announcements = this.identityAnnouncements.splice(0);
+      this.lastLog.push(...announcements);
+      s.log.push(...announcements.map((text) => ({ tick: s.tick, text })));
+    }
+
     // One call to `advance` is one round, whatever phase the party is in.
     //
     // This used to live inside `resolveTick`, so the clock only moved during a
@@ -2234,6 +2385,38 @@ export class DescentSimulation implements Simulation {
   // bot that reaches into the state directly is a bot that ignores mana costs
   // and cooldowns, and a ladder built from one is a ladder measuring a
   // different dungeon. The tools below are a thin agent-facing skin over these.
+
+  chooseName(agent: string | undefined, rawName: string): string {
+    const me = this.who(agent);
+    this.requirePhase("camp");
+    if (me.identity.renamed) throw new Error("you have already chosen your name for this run.");
+    const taken = CLASSES.filter((id) => id !== me.id).map((id) => this.state.party[id].identity.displayName);
+    const name = validateDisplayName(rawName, taken);
+    const old = me.identity.displayName;
+    me.identity.displayName = name;
+    if (me.identity.backstory.startsWith(`${old} `)) {
+      me.identity.backstory = `${name}${me.identity.backstory.slice(old.length)}`;
+    }
+    me.identity.nameSource = "agent";
+    me.identity.renamed = true;
+    this.namesChosen += 1;
+    const line = `${old}, the ${me.id}, chooses to be known as ${name}.`;
+    this.identityAnnouncements.push(line);
+    this.note("name", line);
+    return `${name} it is. Your class id remains ${me.id}; tools and party targets still use that id.`;
+  }
+
+  revealGoal(agent: string | undefined): string {
+    const me = this.who(agent);
+    const goal = me.identity.secretGoal;
+    if (goal.revealed) throw new Error("your private motive is already known to the party.");
+    goal.revealed = true;
+    this.secretGoalsRevealed += 1;
+    const line = `${me.identity.displayName} reveals a private motive: “${goal.title}” — ${goal.description}`;
+    this.identityAnnouncements.push(line);
+    this.note("goal-reveal", line);
+    return `${line} Progress: ${goalProgressText(goal)}.`;
+  }
 
   /** Validate, pay for, and ready a class ability. */
   useAbility(agent: string | undefined, name: string, targetRaw?: unknown): string {
@@ -2352,6 +2535,9 @@ export class DescentSimulation implements Simulation {
     if (previous) me.inventory.push(previous);
     this.effective(me);
     this.refreshMapKnowledge();
+    if (held.rarity === "rare" || held.rarity === "epic") {
+      this.recordGoalProgress(me.id, "rare-equipped");
+    }
     return `You put on ${held.name}.${previous ? ` ${itemName(previous)} goes back into your pack.` : ""} You are now ${me.hp}/${me.maxHp} hp, armour ${me.armor}, power ${me.power}, speed ${me.speed}.`;
   }
 
@@ -2410,6 +2596,7 @@ export class DescentSimulation implements Simulation {
     // moment that is knowable is now.
     this.toppedUp.set(them.id, this.toppedUp.get(them.id) ?? them.gold - give);
     this.diag.recordGoldTransfer();
+    this.recordGoalProgress(me.id, "gold-given", give);
     return `You give ${toRaw} ${give} gold. You have ${me.gold} left.`;
   }
 
@@ -2429,6 +2616,7 @@ export class DescentSimulation implements Simulation {
     if (me.inventory.length >= 6) throw new Error("your pack is full.");
     me.gold -= price;
     this.goldSpent += price;
+    this.recordGoalProgress(me.id, "gold-spent", price);
     me.inventory.push(listing.item);
     this.state.stock = this.state.stock.filter((x) => x !== listing);
     // Pooled means *this buyer could not have afforded it alone*, not merely
@@ -2518,7 +2706,7 @@ export class DescentSimulation implements Simulation {
    * happens to everybody at once.
    */
   choosePath(agent: string | undefined, id: string): string {
-    this.who(agent);
+    const me = this.who(agent);
     this.requirePhase("explore");
     const path = this.state.paths.find((p) => p.id === id.toLowerCase().trim());
     if (!path) {
@@ -2535,6 +2723,7 @@ export class DescentSimulation implements Simulation {
     }
     const already = this.pendingPath;
     this.pendingPath = path.id;
+    this.pendingPathChosenBy = me.id;
     const changed =
       already && already !== path.id
         ? ` This replaces the ${already} way, which ${agent ?? "somebody"} had already chosen.`
@@ -2680,7 +2869,9 @@ export class DescentSimulation implements Simulation {
   private takePath(): void {
     const s = this.state;
     const path = s.paths.find((p) => p.id === this.pendingPath);
+    const chosenBy = this.pendingPathChosenBy;
     this.pendingPath = undefined;
+    this.pendingPathChosenBy = undefined;
     if (!path) return;
 
     if (path.kind === "retreat") {
@@ -2705,7 +2896,11 @@ export class DescentSimulation implements Simulation {
     }
 
     if (s.map) {
+      const wasUnvisited = s.map.rooms.some((room) => room.id === path.id && !room.visited);
       this.moveThroughMap(path.id);
+      if (chosenBy && wasUnvisited && s.map.currentRoom === path.id) {
+        this.recordGoalProgress(chosenBy, "new-room-led");
+      }
       return;
     }
 
@@ -2841,6 +3036,10 @@ export class DescentSimulation implements Simulation {
       });
       this.scoutReport = readings.join("\n");
       this.scoutedFloor = s.floor;
+      if (!this.goalScoutedFloors.has(s.floor)) {
+        this.goalScoutedFloors.add(s.floor);
+        this.recordGoalProgress(me.id, "scout-used");
+      }
       s.dread += 1;
       this.diag.recordAttempt(false);
       return `You go ahead quietly. Nobody else can see any of this:\n${readings.join("\n")}\n\nThey are waiting on you.`;
@@ -2892,7 +3091,7 @@ export class DescentSimulation implements Simulation {
   }
 
   unlockRoute(agent: string | undefined, pathId: string): string {
-    this.who(agent);
+    const me = this.who(agent);
     const { map, route } = this.closedLock(pathId);
     if (map.keys <= 0) {
       throw new Error("the party has no floor key. The rogue can pick this lock, or the guardian can breach it.");
@@ -2900,6 +3099,7 @@ export class DescentSimulation implements Simulation {
     map.keys -= 1;
     route.openedBy = "key";
     this.keysUsed += 1;
+    this.recordGoalProgress(me.id, "lock-opened");
     this.state.paths = pathsFromMap(map);
     this.note("unlock", `The party spent a floor key to open ${route.id} on floor ${this.state.floor}.`);
     return `The iron key turns. The door is open, and the party has ${map.keys} floor key${map.keys === 1 ? "" : "s"} left.`;
@@ -2912,6 +3112,7 @@ export class DescentSimulation implements Simulation {
       const { map, route } = this.closedLock(pathId);
       route.openedBy = "rogue";
       this.locksPicked += 1;
+      this.recordGoalProgress(me.id, "lock-opened");
       this.state.dread += 1;
       this.state.paths = pathsFromMap(map);
       this.note("lock-pick", `The rogue picked ${route.id} on floor ${this.state.floor}.`);
@@ -2935,6 +3136,8 @@ export class DescentSimulation implements Simulation {
       // not turn the physical price into zero. Shields can still absorb it.
       const raw = me.armor + Math.min(18, 8 + this.state.floor);
       const dealt = hurtFighter(me, raw, "physical");
+      this.recordGoalProgress(me.id, "damage-taken", dealt);
+      this.recordGoalProgress(me.id, "lock-opened");
       this.state.paths = pathsFromMap(map);
       this.note("breach", `The guardian breached ${route.id} on floor ${this.state.floor}, taking ${dealt} damage.`);
       if (me.dead) {
@@ -3057,10 +3260,24 @@ export class DescentSimulation implements Simulation {
     return [
       T(
         "look",
-        "The floor, your own sheet, your allies' condition, and whatever is in front of you.",
+        "Your run-specific identity and private motive, the floor, your own sheet, your allies' public identity and condition, and whatever is in front of you.",
         {},
         (_a, agent) => this.describe(agent as ClassId | undefined),
         "read",
+      ),
+
+      T(
+        "choose_name",
+        "Replace your seeded provisional name once during surface preparation. This never changes your class id or tools.",
+        { name: "A unique display name, 2–24 letters with optional spaces, apostrophes, or hyphens." },
+        (args, agent) => this.chooseName(agent, String(args.name ?? "")),
+      ),
+
+      T(
+        "reveal_goal",
+        "Make your private motive and its progress public to the rest of the party.",
+        {},
+        (_args, agent) => this.revealGoal(agent),
       ),
 
       T(
@@ -3365,6 +3582,9 @@ export class DescentSimulation implements Simulation {
       terrainHamperedHits: this.terrainHamperedHits,
       hazardousRetreats: this.hazardousRetreats,
       retreatHazardDamage: this.retreatHazardDamage,
+      namesChosen: this.namesChosen,
+      secretGoalsRevealed: this.secretGoalsRevealed,
+      personalGoalsCompleted: this.personalGoalsCompleted,
       goldEarned: this.goldEarned,
       goldSpent: this.goldSpent,
       goldRemaining: CLASSES.reduce((sum, id) => sum + s.party[id].gold, 0),
@@ -3465,8 +3685,33 @@ export class DescentSimulation implements Simulation {
       party: CLASSES.map((id) => {
         const f = s.party[id];
         const intent = readied.get(id);
+        const goal = f.identity.secretGoal;
         return {
           id,
+          identity: {
+            displayName: f.identity.displayName,
+            generatedName: f.identity.generatedName,
+            nameSource: f.identity.nameSource,
+            pronouns: { ...f.identity.pronouns },
+            ancestry: f.identity.ancestry,
+            appearance: f.identity.appearance,
+            backstory: f.identity.backstory,
+            publicAspiration: f.identity.publicAspiration,
+            archetype: f.identity.archetype,
+            traits: f.identity.traits.map((trait) => ({ ...trait })),
+            secretGoal: {
+              revealed: goal.revealed,
+              completed: goal.completed,
+              // Observer-only data. The broadcast seals it until disclosure or
+              // the recap; agents never receive the scene and `look` applies
+              // the actual information boundary.
+              title: goal.title,
+              description: goal.description,
+              progress: goal.progress,
+              target: goal.target,
+              unit: goal.unit,
+            },
+          },
           hp: f.hp,
           maxHp: f.maxHp,
           mana: f.mana,

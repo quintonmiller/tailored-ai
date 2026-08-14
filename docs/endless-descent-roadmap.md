@@ -21,6 +21,8 @@ The main success criteria are:
    against comparable past runs clear at a glance.
 4. Baseline policies retain a useful gradient, with better coordination and
    memory producing measurably better results.
+5. Every seeded run has a distinct, legible cast whose identities and motives
+   can influence discussion without changing the stable tool-facing class ids.
 
 ## Current foundation
 
@@ -65,10 +67,91 @@ The following work is complete on `feat/endless-descent-overhaul`:
 - The broadcast highlights the character who most recently spoke or acted and
   shows their full stats, equipment, pack, item affixes, talents, cooldowns,
   statuses, gold, skill points, and readied action.
+- Every run now generates a distinct five-character cast with names, pronouns,
+  ancestry, appearance, backstory, public aspirations, five personality scores,
+  and private mechanically tracked motives. Agents may rename themselves and
+  reveal motives without changing their stable class ids.
 - The current 60-seed, 40-round baseline means are: random 101, basic tactics
-  214, tactics-only 594, greedy damage 579, rule-based 643, and oracle 671.
+  214, tactics-only 592, greedy damage 579, rule-based 660, and oracle 691.
 
 ## Prioritized improvements
+
+### P1 — Procedural character identity, personality, and motives
+
+The five classes are mechanically distinct but currently enter every run as
+anonymous roles. Give every run a reproducible cast with preferences, public
+history, and private motives that agents can interpret rather than another set
+of hidden combat modifiers.
+
+Planned work:
+
+- Generate five independent personality scores from 1–100: boldness,
+  self-interest, spending, deliberation, and curiosity. Derive readable labels
+  and a short archetype summary from the same scores.
+- Use a dedicated identity RNG so adding or changing narrative content never
+  perturbs maps, encounters, damage, stock, drops, or procedural items.
+- Give every character a seeded provisional name, pronouns, fantasy ancestry,
+  physical description, concise backstory, and public aspiration.
+- Let an agent replace its provisional name once during surface preparation.
+  Keep `guardian`, `mage`, `rogue`, `cleric`, and `ranger` as immutable ids for
+  tools, permissions, targets, trace replay, and baseline policies.
+- Give every character a concrete private motive selected for its class and
+  personality. Track progress from authoritative game events and award one
+  skill point when it is completed.
+- Let a character reveal its private motive explicitly. Other agents see only
+  public identity and revealed motives; a character always sees its own.
+- Add an opening broadcast sequence that introduces the rolled cast. Keep the
+  display name and strongest traits on compact party cards, with the complete
+  identity, traits, and goal progress in the active-character panel.
+- Use display names in broadcast chat, action summaries, and narration while
+  retaining stable ids in the underlying trace and simulation.
+- Add goal and identity events, metrics, end-of-run disclosure, and policy
+  support without making personality compliance part of the XP objective.
+
+Acceptance criteria:
+
+- The same seed produces byte-for-byte equivalent initial identities, and
+  different seeds regularly produce different names, scores, histories, and
+  motives.
+- Identity generation does not change any non-identity RNG outcome.
+- Generated and agent-chosen names are unique, bounded, and safe to render as
+  text; renaming cannot alter agent authority or tool target resolution.
+- An agent sees its full identity and private motive in `look`, while allies
+  cannot read that motive until it is revealed or completed.
+- Goal progress comes from resolved simulation events, completes at most once,
+  and grants exactly one skill point to its owner.
+- The typed scene contract, narrator, trace replay, compact party strip, active
+  character detail, and opening/end broadcast states agree on identity and goal
+  visibility.
+- Baseline sweeps remain deterministic and retain a useful policy gradient.
+
+Progress as of 2026-08-13:
+
+- Complete: independently seeded 1–100 scores for boldness, self-interest,
+  spending, deliberation, and curiosity, with five readable bands and a
+  strongest-trait archetype summary.
+- Complete: unique provisional names, pronouns, fantasy ancestry, appearance,
+  backstory, and class-aware public aspirations are generated from a dedicated
+  `identities-v1` RNG fork.
+- Complete: `choose_name` permits one validated camp rename while immutable
+  class ids continue to drive tools, permissions, targets, traces, policies,
+  and stage placement.
+- Complete: one unique private motive per character advances from resolved
+  gold, equipment, routing, damage, healing, killing-blow, lock, floor, or
+  scouting events. Completion reveals it and grants exactly one skill point;
+  `reveal_goal` can disclose it earlier.
+- Complete: private `look` shows the owner's full dossier and motive, while
+  allies receive only public identity and already disclosed motives.
+- Complete: identity crosses the exact scene contract into party cards, stage
+  nameplates, the active-character dossier, chat, the action feed, narration,
+  a five-card opening reveal, and an end-of-run motive recap.
+- Complete: identity, disclosure, and completion metrics plus policy actor
+  selection make motives measurable without adding personality compliance to
+  the XP objective.
+- Complete: seven focused identity/privacy/reward tests, the full 679-test eval
+  suite, typechecks, and the broadcast build pass. Across the 60-seed cohort,
+  average motive completions rise from 0.52 for random to 2.30 for rule-based
+  and 2.28 for oracle; the monotonic spine spans 590 XP.
 
 ### P0 — Procedural equipment and item identity
 
@@ -370,14 +453,16 @@ increase controlled variation without degrading reproducibility.
 3. **Complete:** add the first unique item effects and teach baseline policies
    how to value the simple subset.
 4. **In progress:** escaped encounters, room-owned rewards, threat visibility,
-   exploration metrics, one-way drops, traps, and secret shortcuts are
-   complete; add locks, keys, destructible routes, and persistent room hazards
-   next.
-5. Implement zone-specific stage themes and room staging.
-6. Add historical ghost comparisons with strict cohort matching.
-7. Expand talents into active/passive rule changes.
-8. Add events, minibosses, hazards, and optional floor objectives.
-9. Re-run large baseline sweeps, recalibrate milestones, and update benchmark
+   exploration metrics, one-way drops, traps, secret shortcuts, locks, keys,
+   and persistent room hazards are complete; add secret rooms and more
+   destructible or class-specific routes next.
+5. **Complete:** add seeded character identity, personality, public aspirations,
+   private motives, information boundaries, and their broadcast presentation.
+6. Implement zone-specific stage themes and room staging.
+7. Add historical ghost comparisons with strict cohort matching.
+8. Expand talents into active/passive rule changes.
+9. Add events, minibosses, hazards, and optional floor objectives.
+10. Re-run large baseline sweeps, recalibrate milestones, and update benchmark
    documentation and committed comparison cohorts.
 
 ## Deferred ideas

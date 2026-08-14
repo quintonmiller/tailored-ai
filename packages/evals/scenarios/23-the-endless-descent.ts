@@ -30,10 +30,10 @@
  *
  *   random            101   floor 1.4   legal moves, chosen without a thought
  *   basic-tactics     214   floor 3.0   taunt, heal, swing; never opens a pack
- *   tactics-only      594   floor 3.7   plays the fight well, ignores the rest
+ *   tactics-only      592   floor 3.8   plays the fight well, ignores the rest
  *   greedy-dps        579   floor 3.8   spends every point for damage
- *   rule-based        643   floor 3.8   builds, equips, trades and scouts
- *   oracle            671   floor 3.9   knows hidden rules from the first room
+ *   rule-based        660   floor 3.9   builds, equips, trades and scouts
+ *   oracle            691   floor 3.9   knows hidden rules from the first room
  *
  * Sixty seeds, forty rounds, from this scenario's surface preparation state.
  * The maze, boss cadence and compressed content bands all belong to this
@@ -105,6 +105,12 @@ const OBJECTIVE =
 const SHARED =
   "You are one of five in a party about to descend an endless dungeon. You begin outside floor one " +
   "at an outfitter with an opening purse, an empty pack, two skill points, and a shared limited stock. " +
+  "Every run gives you a seeded name, appearance, history, five personality tendencies, a public aspiration, " +
+  "and a private motive. Your first `look` tells you all of yours and only the public identities of the others. " +
+  "Treat the personality scores as tendencies rather than commands: survival and teamwork can justify acting " +
+  "against them. You may call `choose_name` once before entering; your tool-facing class id never changes. " +
+  "A private motive tracks authoritative actions and grants one skill point when completed. Use `reveal_goal` " +
+  "if you want the party to know it before then. " +
   "Use `look` to see your class skills, decide what the party needs, invest, buy or pool gold, equip it, " +
   "then call `enter_dungeon`. You earn another skill point whenever the party levels. Everything happens through " +
   "your tools — nothing moves in this place unless somebody calls one. In a fight your action is " +
@@ -280,8 +286,8 @@ export default defineScenario({
     { id: "reached-the-boss-floor", points: 8, when: { sim_metric: { metric: "floorReached", at_least: 4 } } },
     { id: "put-down-a-boss", points: 10, when: { sim_metric: { metric: "bossesDefeated", at_least: 1 } } },
     // Re-derived over sixty seeds from the surface-preparation configuration:
-    // random 101 · basic-tactics 214 · tactics-only 594 ·
-    // rule-based 643 · oracle 671, at forty rounds. Greedy (579) remains
+    // random 101 · basic-tactics 214 · tactics-only 592 ·
+    // rule-based 660 · oracle 691, at forty rounds. Greedy (579) remains
     // outside the declared spine because it is a deliberately narrow strategy.
     { id: "beat-a-thoughtless-party", points: 8, when: { sim_metric: { metric: "earnedXp", at_least: 200 } } },
     { id: "played-like-a-competent-one", points: 10, when: { sim_metric: { metric: "earnedXp", at_least: 450 } } },

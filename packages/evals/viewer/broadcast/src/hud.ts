@@ -345,6 +345,10 @@ const STYLES = `
   color: var(--who); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .hud-card.dead .hud-who { color: var(--dim); }
+.hud-persona {
+  min-height: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: 8px/1.2 var(--mono); color: var(--faint); text-transform: uppercase; letter-spacing: .04em;
+}
 
 .hud-gold {
   display: flex; align-items: center; gap: 3px;
@@ -376,8 +380,8 @@ const STYLES = `
 .hud-active {
   margin-top: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
   background: linear-gradient(90deg, color-mix(in srgb, var(--active-who, var(--flame)) 8%, transparent), transparent 45%), #0d121b;
-  display: grid; grid-template-columns: 150px minmax(0, 1fr) minmax(0, 1fr); gap: 10px;
-  min-height: 104px; max-height: 142px; overflow: hidden;
+  display: grid; grid-template-columns: 150px minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, 1fr); gap: 10px;
+  min-height: 126px; max-height: 174px; overflow: hidden;
 }
 .hud-active[data-who="guardian"] { --active-who: var(--guardian); }
 .hud-active[data-who="mage"]     { --active-who: var(--mage); }
@@ -405,6 +409,61 @@ const STYLES = `
 .hud-affixes { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); }
 .hud-affixes .bad { color: var(--bad); }
 .hud-detail-empty { color: var(--faint); font: 10px/1.3 var(--sans); }
+.hud-bioline {
+  margin-bottom: 4px; color: var(--dim); font: 9px/1.25 var(--sans);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.hud-traits { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 6px; margin-top: 5px; }
+.hud-traitline {
+  min-width: 0; color: var(--faint); font: 8px/1.15 var(--mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.hud-traitline b { color: var(--ink); margin-left: 3px; }
+.hud-goalline {
+  margin-top: 6px; padding: 4px 5px; border-left: 2px solid var(--active-who);
+  background: color-mix(in srgb, var(--active-who) 7%, transparent);
+  color: var(--dim); font: 8px/1.25 var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.hud-goalline.done { color: var(--good); border-left-color: var(--good); }
+
+/* Run-opening cast reveal and end recap. It is an observer-only overlay and
+   never writes anything back to the simulation. */
+.hud-cast-reveal {
+  position: fixed; z-index: 100; inset: 54px 12px 12px; padding: 22px;
+  display: none; flex-direction: column; justify-content: center; gap: 16px;
+  background: radial-gradient(circle at 50% 25%, rgba(45, 57, 79, .97), rgba(7, 10, 16, .985) 68%);
+  border: 1px solid var(--flame-dim); border-radius: 12px; box-shadow: 0 24px 80px #000;
+}
+.hud-cast-reveal.on { display: flex; }
+.hud-cast-head { display: flex; align-items: end; justify-content: space-between; gap: 20px; }
+.hud-cast-title { color: var(--flame); font: 800 25px/1 var(--sans); letter-spacing: .13em; text-transform: uppercase; }
+.hud-cast-sub { margin-top: 7px; color: var(--dim); font: 12px/1.4 var(--sans); }
+.hud-cast-close {
+  border: 1px solid var(--line); border-radius: 4px; padding: 6px 9px; background: var(--panel-2);
+  color: var(--dim); font: 700 9px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; cursor: pointer;
+}
+.hud-cast-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.hud-cast-card {
+  --cast-who: var(--flame); min-width: 0; padding: 13px; border: 1px solid var(--line); border-top: 3px solid var(--cast-who);
+  border-radius: 8px; background: rgba(17, 22, 33, .94); opacity: 1; transform: none;
+  animation: hud-cast-in .48s ease-out forwards; animation-delay: var(--cast-delay, 0ms);
+}
+.hud-cast-card[data-who="guardian"] { --cast-who: var(--guardian); }
+.hud-cast-card[data-who="mage"] { --cast-who: var(--mage); }
+.hud-cast-card[data-who="rogue"] { --cast-who: var(--rogue); }
+.hud-cast-card[data-who="cleric"] { --cast-who: var(--cleric); }
+.hud-cast-card[data-who="ranger"] { --cast-who: var(--ranger); }
+.hud-cast-name { color: var(--cast-who); font: 800 18px/1 var(--sans); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hud-cast-class { margin-top: 5px; color: var(--faint); font: 700 9px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; }
+.hud-cast-appearance { height: 49px; margin-top: 12px; color: var(--dim); font: 11px/1.45 var(--sans); overflow: hidden; }
+.hud-cast-traits { margin-top: 11px; display: flex; flex-direction: column; gap: 5px; }
+.hud-cast-trait { display: grid; grid-template-columns: 76px 1fr 22px; align-items: center; gap: 5px; color: var(--faint); font: 8px/1 var(--mono); }
+.hud-cast-trait i { display: block; height: 4px; border-radius: 2px; background: #090d14; overflow: hidden; }
+.hud-cast-trait i::after { content: ""; display: block; width: var(--trait); height: 100%; background: var(--cast-who); }
+.hud-cast-aim, .hud-cast-goal { margin-top: 12px; color: var(--ink); font: 10px/1.35 var(--sans); }
+.hud-cast-goal { color: var(--faint); border-top: 1px solid var(--line); padding-top: 8px; }
+.hud-cast-goal.done { color: var(--good); }
+@keyframes hud-cast-in { from { transform: translateY(10px); } to { transform: none; } }
 
 /* The readied band. Full-bleed at the foot of the card because it is the one
    thing on this strip a viewer can read a disaster off before it happens — the
@@ -706,7 +765,7 @@ const STYLES = `
 @media (prefers-reduced-motion: reduce) {
   .meter.hud-tall i, .meter.hud-mid i, .hud-notch, .hud-stop i, .hud-segs i,
   .hud-path, .hud-rung .mk { transition: none; }
-  .hud-card.hurt, .hud-here.moved, .hud-rung.lit, .hud-crown.new { animation: none; }
+  .hud-card.hurt, .hud-here.moved, .hud-rung.lit, .hud-crown.new, .hud-cast-card { animation: none; opacity: 1; transform: none; }
 }
 `;
 
@@ -717,6 +776,100 @@ function installStyles() {
   tag.id = "hud-styles";
   tag.textContent = STYLES;
   document.head.appendChild(tag);
+}
+
+/** Introduce the rolled cast once, then return at the end with every motive disclosed. */
+function buildCastReveal(): Renderer {
+  const root = el("div", "hud-cast-reveal");
+  document.body.appendChild(root);
+  let run: BroadcastState["run"] = null;
+  let openingShown = false;
+  let recapShown = false;
+  let hideTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const hide = () => {
+    root.classList.remove("on");
+    if (hideTimer) clearTimeout(hideTimer);
+    hideTimer = null;
+  };
+
+  function draw(scene: Scene, recap: boolean): void {
+    root.replaceChildren();
+    const heading = el("div", "hud-cast-head");
+    const copy = el("div");
+    copy.append(
+      el("div", "hud-cast-title", recap ? "Expedition recap" : "The dungeon rolls its cast"),
+      el(
+        "div",
+        "hud-cast-sub",
+        recap
+          ? "The names they carried, the tendencies they wrestled with, and the motives the descent finally exposed."
+          : "Five classes remain fixed. Everything that makes the people inside them belongs to this seeded run.",
+      ),
+    );
+    const close = el("button", "hud-cast-close", recap ? "close recap" : "skip introduction");
+    close.type = "button";
+    close.addEventListener("click", hide);
+    heading.append(copy, close);
+
+    const grid = el("div", "hud-cast-grid");
+    for (const [index, member] of (scene.party ?? []).entries()) {
+      const identity = member.identity;
+      const card = el("div", "hud-cast-card");
+      card.dataset.who = member.id;
+      card.style.setProperty("--cast-delay", `${index * 150}ms`);
+      card.append(
+        el("div", "hud-cast-name", identity?.displayName ?? member.id),
+        el("div", "hud-cast-class", member.id),
+        el("div", "hud-cast-appearance", identity?.appearance ?? "No identity recorded in this trace."),
+      );
+      const traits = el("div", "hud-cast-traits");
+      for (const trait of identity?.traits ?? []) {
+        const row = el("div", "hud-cast-trait");
+        const meter = el("i");
+        meter.style.setProperty("--trait", `${Math.max(1, Math.min(100, trait.score))}%`);
+        row.append(el("span", null, trait.name), meter, el("b", null, String(trait.score)));
+        row.title = `${trait.label} — ${trait.description}`;
+        traits.appendChild(row);
+      }
+      card.appendChild(traits);
+      card.appendChild(el("div", "hud-cast-aim", `Public aim · ${identity?.publicAspiration ?? "unknown"}`));
+      const goal = identity?.secretGoal;
+      const goalLabel = goal?.completed ? "Completed motive" : goal?.revealed ? "Revealed motive" : "Private motive";
+      const goalText = (recap || goal?.revealed || goal?.completed) && goal?.title
+        ? `${goalLabel} · ${goal.title}${
+            goal.progress != null && goal.target != null ? ` · ${goal.progress}/${goal.target} ${goal.unit ?? ""}` : ""
+          }`
+        : "Private motive · sealed";
+      card.appendChild(el("div", `hud-cast-goal${goal?.completed ? " done" : ""}`, goalText));
+      grid.appendChild(card);
+    }
+    root.append(heading, grid);
+    root.classList.add("on");
+  }
+
+  return (state) => {
+    if (state.run !== run) {
+      run = state.run;
+      openingShown = false;
+      recapShown = false;
+      hide();
+    }
+    const scene = state.scene;
+    if (!scene || !scene.party?.length) return;
+    if (!openingShown && Number(scene.tick) <= 1 && !state.ended) {
+      openingShown = true;
+      draw(scene, false);
+      hideTimer = setTimeout(hide, stillness() ? 18_000 : 14_000);
+      return;
+    }
+    if (state.ended && !recapShown) {
+      recapShown = true;
+      if (hideTimer) clearTimeout(hideTimer);
+      hideTimer = null;
+      draw(scene, true);
+    }
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -733,6 +886,8 @@ interface ChipHandle {
 /** The nodes on one member's card that ever change after the card is built. */
 interface CardHandle {
   root: HTMLElement;
+  who: HTMLElement;
+  persona: HTMLElement;
   gold: HTMLElement;
   hpNum: HTMLElement;
   hpFill: HTMLElement;
@@ -781,6 +936,7 @@ function buildParty(host: HTMLElement): SceneRenderer {
     const goldNum = el("span", null, "0");
     gold.append(icon("coin"), goldNum);
     head.append(who, gold);
+    const persona = el("div", "hud-persona", "identity pending");
 
     const hpLine = el("div", "hud-barline");
     const hpNum = el("span", "num");
@@ -809,9 +965,11 @@ function buildParty(host: HTMLElement): SceneRenderer {
     lines.append(verb, at);
     ready.append(readyIcon, lines);
 
-    root.append(head, hpLine, hpBar, mana, chips, loadout, ready);
+    root.append(head, persona, hpLine, hpBar, mana, chips, loadout, ready);
     return {
       root,
+      who,
+      persona,
       gold: goldNum,
       hpNum,
       hpFill,
@@ -950,6 +1108,16 @@ function buildParty(host: HTMLElement): SceneRenderer {
 
       flag(refs.root, "dead", !!member.dead);
 
+      text(refs.who, member.identity?.displayName || shout(member.id));
+      const strongest = [...(member.identity?.traits ?? [])]
+        .sort((a, b) => Math.abs(b.score - 50.5) - Math.abs(a.score - 50.5) || a.id.localeCompare(b.id))
+        .slice(0, 2)
+        .map((trait) => `${trait.label} ${trait.score}`);
+      text(refs.persona, `${shout(member.id)} · ${strongest.join(" · ") || "identity pending"}`);
+      refs.persona.title = (member.identity?.traits ?? [])
+        .map((trait) => `${trait.name} ${trait.score}/100 — ${trait.label}`)
+        .join("\n");
+
       const hp = ratio(member.hp, member.maxHp);
       refs.hpFill.style.transform = `scaleX(${hp})`;
       flag(refs.hpBar, "hurt", hp < 0.55 && hp >= 0.25);
@@ -1036,7 +1204,10 @@ function buildActiveCharacter(host: HTMLElement): Renderer {
 
     const summary = el("div", "hud-detailcol");
     const head = el("div", "hud-activehead");
-    head.append(el("div", "hud-activename", member.id), el("span", "hud-tag", "active character"));
+    head.append(
+      el("div", "hud-activename", member.identity?.displayName || member.id),
+      el("span", "hud-tag", member.id),
+    );
     const stats = el("div", "hud-statgrid");
     stats.append(
       stat("HP", `${member.hp}/${member.maxHp}`),
@@ -1047,6 +1218,36 @@ function buildActiveCharacter(host: HTMLElement): Renderer {
       stat("Speed", member.speed),
     );
     summary.append(head, stats);
+
+    const identity = el("div", "hud-detailcol");
+    identity.appendChild(label("Identity, personality, and motive"));
+    const identityData = member.identity;
+    if (!identityData) {
+      identity.appendChild(el("div", "hud-detail-empty", "No run-specific identity in this trace."));
+    } else {
+      const appearance = el("div", "hud-bioline", identityData.appearance);
+      appearance.title = `${identityData.appearance}\n\n${identityData.backstory}\n\nPublic aspiration: ${identityData.publicAspiration}`;
+      identity.append(appearance, el("div", "hud-bioline", `Aim · ${identityData.publicAspiration}`));
+      const traits = el("div", "hud-traits");
+      for (const trait of identityData.traits ?? []) {
+        const row = el("div", "hud-traitline", trait.name);
+        row.append(el("b", null, `${trait.score} · ${trait.label}`));
+        row.title = trait.description;
+        traits.appendChild(row);
+      }
+      identity.appendChild(traits);
+      const goal = identityData.secretGoal;
+      const goalDisclosed = goal?.revealed || goal?.completed;
+      const goalLine = el(
+        "div",
+        `hud-goalline${goal?.completed ? " done" : ""}`,
+        goalDisclosed && goal?.title
+          ? `${goal.completed ? "Completed" : "Motive"} · ${goal.title} · ${goal.progress}/${goal.target} ${goal.unit}`
+          : "Private motive · sealed",
+      );
+      goalLine.title = goalDisclosed ? (goal?.description ?? "") : "This motive has not been revealed.";
+      identity.appendChild(goalLine);
+    }
 
     const items = el("div", "hud-detailcol");
     items.appendChild(label("Equipment and pack"));
@@ -1091,7 +1292,7 @@ function buildActiveCharacter(host: HTMLElement): Renderer {
     actionLine.append(el("span", "hud-tag", "action"), el("b", null, action));
     build.appendChild(actionLine);
 
-    root.append(summary, items, build);
+    root.append(summary, identity, items, build);
   };
 }
 
@@ -1804,6 +2005,7 @@ export function mountHud(hosts: { party: HTMLElement; map: HTMLElement; progress
 
   const renderParty = party ? buildParty(party) : null;
   const renderActiveCharacter = party ? buildActiveCharacter(party) : null;
+  const renderCastReveal = buildCastReveal();
   const renderMap = map ? buildMap(map) : null;
   const renderProgress = progress ? buildProgress(progress) : null;
 
@@ -1842,6 +2044,7 @@ export function mountHud(hosts: { party: HTMLElement; map: HTMLElement; progress
     // authoritative scene snapshots, so this detail view is intentionally not
     // scene-gated.
     renderActiveCharacter?.(s);
+    renderCastReveal(s);
 
     // The progress panel is not scene-gated: milestones arrive on their own
     // event and the scoreboard refreshes on a twenty-second timer, so it has

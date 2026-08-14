@@ -132,6 +132,7 @@ export function culprits(clashes: readonly string[]): Set<ClassId> {
 /** The nodes of one lane, kept so a render writes text rather than rebuilding. */
 interface Lane {
   root: HTMLElement;
+  who: HTMLElement;
   act: HTMLElement;
 }
 
@@ -155,7 +156,7 @@ export function mountRibbon(host: HTMLElement): Renderer {
 
     root.append(who, act);
     host.append(root);
-    lanes.set(id, { root, act });
+    lanes.set(id, { root, who, act });
   }
 
   const warn = document.createElement("div");
@@ -169,12 +170,18 @@ export function mountRibbon(host: HTMLElement): Renderer {
 
     const clashing = culprits(scene.clashes ?? []);
     const fighting = scene.phase === "combat";
+    const names = new Map<string, string>([
+      ...(scene.party ?? []).map((member) => [member.id, member.identity?.displayName ?? member.id] as const),
+      ...(scene.enemies ?? []).map((enemy) => [enemy.ref, enemy.name] as const),
+    ]);
 
     for (const id of CLASSES) {
       const lane = lanes.get(id);
       if (!lane) continue;
       const member = scene.party.find((p) => p.id === id);
       const readied = member?.readied ?? null;
+      lane.who.textContent = member?.identity?.displayName ?? id;
+      lane.who.title = id;
 
       if (member?.dead) {
         lane.root.className = "rib-lane gone";
@@ -199,7 +206,7 @@ export function mountRibbon(host: HTMLElement): Renderer {
       if (readied.target) {
         const at = document.createElement("span");
         at.className = "at";
-        at.textContent = ` → ${readied.target}`;
+        at.textContent = ` → ${names.get(readied.target) ?? readied.target}`;
         lane.act.append(at);
       }
     }

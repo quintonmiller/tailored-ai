@@ -37,6 +37,72 @@ export type Element = "physical" | "fire" | "frost" | "lightning" | "shadow" | "
 
 export type ClassId = "guardian" | "mage" | "rogue" | "cleric" | "ranger";
 
+export type PersonalityTraitId = "boldness" | "self-interest" | "spending" | "deliberation" | "curiosity";
+
+/** One stable score and the prose band derived from it at generation time. */
+export interface PersonalityTrait {
+  id: PersonalityTraitId;
+  name: string;
+  score: number;
+  label: string;
+  description: string;
+}
+
+export type PersonalGoalKind =
+  | "benefactor"
+  | "big-spender"
+  | "rare-collector"
+  | "trailblazer"
+  | "iron-vow"
+  | "lifesaver"
+  | "executioner"
+  | "lock-opener"
+  | "deep-delver"
+  | "watchful-eye";
+
+export type PersonalGoalEvent =
+  | "gold-given"
+  | "gold-spent"
+  | "rare-equipped"
+  | "new-room-led"
+  | "damage-taken"
+  | "healing-done"
+  | "killing-blow"
+  | "lock-opened"
+  | "floor-reached"
+  | "scout-used";
+
+/** A private, mechanically tracked motive. Completion grants one skill point. */
+export interface PersonalGoal {
+  id: PersonalGoalKind;
+  title: string;
+  description: string;
+  event: PersonalGoalEvent;
+  progress: number;
+  target: number;
+  unit: string;
+  revealed: boolean;
+  completed: boolean;
+  completedAtTick?: number;
+}
+
+export interface CharacterIdentity {
+  displayName: string;
+  generatedName: string;
+  nameSource: "generated" | "agent";
+  renamed: boolean;
+  pronouns: { subject: string; object: string; possessive: string };
+  ancestry: string;
+  build: string;
+  distinguishingFeature: string;
+  appearance: string;
+  backstory: string;
+  publicAspiration: string;
+  traits: PersonalityTrait[];
+  archetype: string;
+  secretGoal: PersonalGoal;
+}
+
 export type ItemKind = "weapon" | "armor" | "trinket" | "consumable";
 export type ItemRarity = "common" | "uncommon" | "rare" | "epic";
 export type ItemProvenance = "starting-kit" | "outfitter" | "merchant" | "drop" | "elite" | "boss" | "cache";
@@ -145,6 +211,8 @@ export type HiddenMechanic =
 
 export interface Fighter {
   id: ClassId;
+  /** Run-specific narrative identity. The stable tool-facing identity remains `id`. */
+  identity: CharacterIdentity;
   hp: number;
   maxHp: number;
   mana: number;

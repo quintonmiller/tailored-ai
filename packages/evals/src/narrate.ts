@@ -71,9 +71,9 @@ export function digest(events: TraceEvent[], round: number): string | null {
       (e): e is Extract<TraceEvent, { kind: "state" }> =>
         e.kind === "state" && e.round === round && e.resolved === true,
     );
-  const scene = (resolved ??
-    [...events].reverse().find((e): e is Extract<TraceEvent, { kind: "state" }> => e.kind === "state"))?.snapshot
-    ?.scene as Record<string, unknown> | undefined;
+  const scene = (
+    resolved ?? [...events].reverse().find((e): e is Extract<TraceEvent, { kind: "state" }> => e.kind === "state")
+  )?.snapshot?.scene as Record<string, unknown> | undefined;
 
   const nextRoundEvent = [...events]
     .reverse()
@@ -82,9 +82,7 @@ export function digest(events: TraceEvent[], round: number): string | null {
     .reverse()
     .find((e): e is Extract<TraceEvent, { kind: "round" }> => e.kind === "round" && e.round === round);
   const turns = new Map(
-    events
-      .filter((e): e is Extract<TraceEvent, { kind: "turn" }> => e.kind === "turn")
-      .map((e) => [e.turn, e.round]),
+    events.filter((e): e is Extract<TraceEvent, { kind: "turn" }> => e.kind === "turn").map((e) => [e.turn, e.round]),
   );
 
   const said = events
@@ -104,7 +102,34 @@ export function digest(events: TraceEvent[], round: number): string | null {
   const lines: string[] = [];
   lines.push(`Round ${round + 1}. Floor ${scene?.floor ?? "?"}, ${scene?.phase ?? "?"}.`);
   if (party.length) {
-    lines.push(`Party: ${party.map((p) => (p.dead ? `${p.id} DOWN` : `${p.id} ${p.hp}/${p.maxHp}`)).join(", ")}`);
+    const nameOf = (p: Record<string, unknown>) => {
+      const identity = p.identity as Record<string, unknown> | undefined;
+      const displayName = typeof identity?.displayName === "string" ? identity.displayName : String(p.id ?? "?");
+      return `${displayName} (${p.id})`;
+    };
+    lines.push(
+      `Party: ${party.map((p) => (p.dead ? `${nameOf(p)} DOWN` : `${nameOf(p)} ${p.hp}/${p.maxHp}`)).join(", ")}`,
+    );
+    if (round <= 1) {
+      lines.push(
+        `The cast: ${party
+          .map((p) => {
+            const identity = p.identity as Record<string, unknown> | undefined;
+            return `${nameOf(p)}, ${String(identity?.archetype ?? "personality unrecorded")}; public aim: ${String(
+              identity?.publicAspiration ?? "unknown",
+            )}`;
+          })
+          .join(" | ")}`,
+      );
+    }
+    const disclosed = party.flatMap((p) => {
+      const identity = p.identity as Record<string, unknown> | undefined;
+      const goal = identity?.secretGoal as Record<string, unknown> | undefined;
+      return (goal?.revealed || goal?.completed) && goal?.title
+        ? [`${nameOf(p)}'s ${goal.completed ? "completed" : "revealed"} motive: ${goal.title}`]
+        : [];
+    });
+    if (disclosed.length) lines.push(`Known personal motives: ${disclosed.join("; ")}.`);
   }
   if (enemies.length) {
     lines.push(
@@ -197,10 +222,7 @@ export async function narrate(options: NarrateOptions): Promise<number> {
   for (;;) {
     const events = readTrace(options.tracePath);
     const resolvedRounds = events
-      .filter(
-        (e): e is Extract<TraceEvent, { kind: "state" }> =>
-          e.kind === "state" && e.resolved === true,
-      )
+      .filter((e): e is Extract<TraceEvent, { kind: "state" }> => e.kind === "state" && e.resolved === true)
       .map((e) => e.round);
     const legacyRounds = events
       .filter((e): e is Extract<TraceEvent, { kind: "round" }> => e.kind === "round")
@@ -216,12 +238,8 @@ export async function narrate(options: NarrateOptions): Promise<number> {
 
     for (const round of ready) {
       if (done.has(round)) continue;
-      const resolvedAt = events.findIndex(
-        (e) => e.kind === "state" && e.round === round && e.resolved === true,
-      );
-      const nextBoundary = events.findIndex(
-        (e) => e.kind === "round" && (e as { round: number }).round === round + 1,
-      );
+      const resolvedAt = events.findIndex((e) => e.kind === "state" && e.round === round && e.resolved === true);
+      const nextBoundary = events.findIndex((e) => e.kind === "round" && (e as { round: number }).round === round + 1);
       const boundary = resolvedAt >= 0 ? resolvedAt : nextBoundary;
       const upTo = boundary >= 0 ? events.slice(0, boundary + 1) : events;
       const prompt = digest(upTo, round);

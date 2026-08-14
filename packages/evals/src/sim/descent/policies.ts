@@ -45,6 +45,7 @@ import {
   type Fighter,
   type ItemEffect,
   type ItemInstance,
+  type PersonalGoalEvent,
   type RoomEnvironmentKind,
 } from "./model.js";
 
@@ -125,6 +126,13 @@ const pathHasEscapedEncounter = (s: DescentState, path: DescentState["paths"][nu
       : s.map.rooms.find((candidate) => candidate.id === path.id);
   return room?.encounter?.enemies.some((enemy) => enemy.hp > 0) ?? false;
 };
+
+/** Prefer the owner of a matching unfinished motive when several agents can make the same legal call. */
+const motivatedActor = (s: DescentState, event: PersonalGoalEvent): ClassId | undefined =>
+  CLASSES.find((id) => {
+    const fighter = s.party[id];
+    return !fighter.dead && !fighter.identity.secretGoal.completed && fighter.identity.secretGoal.event === event;
+  });
 
 /** Rough worth of a piece of gear, used to decide upgrades and purchases. */
 function gearScore(item: ItemInstance | string, owner?: ClassId): number {
@@ -368,7 +376,7 @@ function drive(name: string, brain: Brain): Policy {
         }
         case "explore": {
           if (s.map && brain.explore?.(sim, s)) return;
-          const speaker = CLASSES.find((c) => !s.party[c].dead) ?? "guardian";
+          const speaker = motivatedActor(s, "new-room-led") ?? CLASSES.find((c) => !s.party[c].dead) ?? "guardian";
           const room = s.map?.rooms.find((candidate) => candidate.id === s.map?.currentRoom);
           if (room?.kind === "stairs") attempt(() => sim.requestDescend(speaker));
           else attempt(() => sim.choosePath(speaker, brain.path(sim, s)));
@@ -694,7 +702,7 @@ function ruleBasedPolicy(omniscient = false, navigateHazards = true): Policy {
         const current = map?.rooms.find((candidate) => candidate.id === map.currentRoom);
         const route = map && current ? routeBetween(map, current.id, path.id) : undefined;
         if (route?.kind === "locked" && !route.openedBy) {
-          const speaker = CLASSES.find((id) => !s.party[id].dead) ?? "guardian";
+          const speaker = motivatedActor(s, "lock-opened") ?? CLASSES.find((id) => !s.party[id].dead) ?? "guardian";
           if (map && map.keys > 0) attempt(() => sim.unlockRoute(speaker, path.id));
           else if (!s.party.rogue.dead) attempt(() => sim.pickLock("rogue", path.id));
           else if (!s.party.guardian.dead) attempt(() => sim.breachRoute("guardian", path.id));
