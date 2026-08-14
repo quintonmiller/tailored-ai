@@ -517,6 +517,8 @@ const STYLES = `
 .hud-graphedges line[data-kind="one-way"] { stroke: var(--flame); stroke-dasharray: 4 3; marker-end: url(#hud-route-arrow); }
 .hud-graphedges line[data-kind="secret"] { stroke: var(--arcane); stroke-dasharray: 2 3; }
 .hud-graphedges line[data-kind="trap"] { stroke: var(--bad); }
+.hud-graphedges line[data-kind="locked"] { stroke: var(--gold); stroke-width: 3; stroke-dasharray: 1 2; }
+.hud-graphedges line[data-kind="locked"][data-opened="true"] { stroke: var(--dim); stroke-width: 1.5; stroke-dasharray: none; }
 .hud-roomnode {
   position: absolute; z-index: 1; width: 28px; height: 28px; margin: -14px 0 0 -14px;
   display: grid; place-items: center; border-radius: 50%; border: 1px solid var(--line);
@@ -538,6 +540,7 @@ const STYLES = `
 .hud-roomnode[data-kind="boss"], .hud-roomnode[data-kind="elite"] { color: var(--bad); }
 .hud-roomnode[data-kind="market"] { color: var(--gold); }
 .hud-roomnode[data-kind="shrine"] { color: var(--arcane); }
+.hud-roomnode.key { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(221, 182, 88, .1); }
 .hud-roomnode[data-kind="stairs"] { color: var(--good); }
 
 /* Where inside the floor they are. Four stops, because a floor is always
@@ -1224,7 +1227,7 @@ function buildMap(host: HTMLElement): (scene: Scene | null) => void {
     if (key === lastGraph) return;
     lastGraph = key;
     graphCanvas.textContent = "";
-    text(graphZone, map.zone);
+    text(graphZone, `${map.zone} · ${map.keys} floor key${map.keys === 1 ? "" : "s"}`);
 
     const xs = map.rooms.map((room) => room.x);
     const ys = map.rooms.map((room) => room.y);
@@ -1263,10 +1266,19 @@ function buildMap(host: HTMLElement): (scene: Scene | null) => void {
       const b = point(to);
       const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
       line.dataset.kind = route.kind;
+      line.dataset.opened = route.openedBy ? "true" : "false";
       line.setAttribute("x1", `${a.x}%`);
       line.setAttribute("y1", `${a.y}%`);
       line.setAttribute("x2", `${b.x}%`);
       line.setAttribute("y2", `${b.y}%`);
+      const routeTitle = document.createElementNS("http://www.w3.org/2000/svg", "title");
+      routeTitle.textContent =
+        route.kind === "locked"
+          ? route.openedBy
+            ? `Locked door · opened by ${route.openedBy}`
+            : "Locked door · key, rogue lock-pick, or guardian breach"
+          : route.kind;
+      line.appendChild(routeTitle);
       svg.appendChild(line);
     }
     graphCanvas.appendChild(svg);
@@ -1293,8 +1305,16 @@ function buildMap(host: HTMLElement): (scene: Scene | null) => void {
       flag(node, "mapped", room.revealed && !room.visited);
       flag(node, "cleared", room.cleared);
       flag(node, "occupied", !!room.threat);
-      node.append(el("b", null, room.threat ? `⚔${room.threat.enemies}` : (glyphs[room.kind] ?? "?")), el("em", null, room.label));
-      node.title = `${room.label} · ${room.kind}${room.revealed && !room.visited ? " · revealed by equipment" : ""}${room.cleared ? " · cleared" : ""}${room.threat ? ` · ${room.threat.enemies} enemies remain at ${room.threat.hp}/${room.threat.maxHp} hp after ${room.threat.retreats} retreat${room.threat.retreats === 1 ? "" : "s"}` : ""}`;
+      flag(node, "key", room.key);
+      node.append(
+        el(
+          "b",
+          null,
+          room.threat ? `⚔${room.threat.enemies}` : room.key && !room.keyCollected ? "🔑" : (glyphs[room.kind] ?? "?"),
+        ),
+        el("em", null, room.label),
+      );
+      node.title = `${room.label} · ${room.kind}${room.revealed && !room.visited ? " · revealed by equipment" : ""}${room.cleared ? " · cleared" : ""}${room.key ? room.keyCollected ? " · floor key recovered here" : " · floor key waiting here" : ""}${room.threat ? ` · ${room.threat.enemies} enemies remain at ${room.threat.hp}/${room.threat.maxHp} hp after ${room.threat.retreats} retreat${room.threat.retreats === 1 ? "" : "s"}` : ""}`;
       graphCanvas.appendChild(node);
     }
   }

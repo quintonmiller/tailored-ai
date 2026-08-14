@@ -28,16 +28,16 @@
  *
  * ## What the ladder says before any model runs
  *
- *   random             62   floor 1.4   legal moves, chosen without a thought
- *   basic-tactics     192   floor 2.9   taunt, heal, swing; never opens a pack
- *   tactics-only      562   floor 3.8   plays the fight well, ignores the rest
- *   greedy-dps        622   floor 3.9   spends every point for damage
- *   rule-based        610   floor 3.9   builds, equips, trades and scouts
- *   oracle            647   floor 3.9   knows hidden rules from the first room
+ *   random            109   floor 1.6   legal moves, chosen without a thought
+ *   basic-tactics     210   floor 3.0   taunt, heal, swing; never opens a pack
+ *   tactics-only      570   floor 3.7   plays the fight well, ignores the rest
+ *   greedy-dps        566   floor 3.8   spends every point for damage
+ *   rule-based        637   floor 3.8   builds, equips, trades and scouts
+ *   oracle            667   floor 3.9   knows hidden rules from the first room
  *
  * Sixty seeds, forty rounds, from this scenario's surface preparation state.
  * The maze, boss cadence and compressed content bands all belong to this
- * configuration. A competent party earns about ten times random's score, and
+ * configuration. A competent party earns about six times random's score, and
  * the oracle's remaining edge over rule-based puts hidden-rule memory inside
  * the measured horizon without teleporting the party past its own history.
  *
@@ -119,8 +119,11 @@ const SHARED =
   "and finding the stairs does not force you to take them. Use `continue_exploring` after a room, or `retreat` " +
   "during a fight if the unanswered enemy attack and extra dread are worth escaping. Wounded enemies keep their " +
   "health and hold that room if you explore elsewhere; returning resumes the same fight rather than rerolling it. " +
-  "Routes can hide traps, one-way drops, and secret shortcuts. The rogue's `scout` can find them; after scouting, " +
-  "use `disarm_trap` if spending another point of dread is worth making a chosen crossing safe. " +
+  "Routes can hide traps, one-way drops, secret shortcuts, and locked doors. The rogue's `scout` can find hidden " +
+  "features; after scouting, use `disarm_trap` if spending another point of dread is worth making a chosen crossing " +
+  "safe. Clearing a room may recover a floor key. Anybody can spend one with `unlock_route`; without one, the rogue " +
+  "can `pick_lock` for one dread or the guardian can `breach_route` for damage and two dread. Locked routes are " +
+  "optional shortcuts, never the only way to the stairs. " +
   OBJECTIVE;
 
 const hand = (description: string, instructions: string) => ({
@@ -165,7 +168,8 @@ export default defineScenario({
       "You are the guardian. You have the most health and the heaviest armour, and you are the only " +
         "one who can pull enemies onto yourself or put a shield on somebody else. Your inspection " +
         "tells you an enemy's armour and how hard it hits, and nothing about what it resists — the " +
-        "mage sees that. Heavy armour is yours alone; nobody else can wear it.",
+        "mage sees that. Heavy armour is yours alone; nobody else can wear it. You can force a locked " +
+        "route with `breach_route`, but the effort hurts you and raises dread by two.",
     ),
   },
 
@@ -184,6 +188,7 @@ export default defineScenario({
           "something that is winding up, and you are the only one who can go ahead and look at the " +
           "ways on before the party commits. What you see when you scout, you see alone — nobody " +
           "else learns any of it unless you tell them, and looking costs the party time. Your " +
+          "`pick_lock` opens a locked route for one dread when the party has no key. Your " +
           "inspection tells you how fast an enemy is and whether there is something odd about it — " +
           "never what.",
       ),
@@ -251,6 +256,7 @@ export default defineScenario({
     { id: "scouted-before-committing", points: 3, when: { calls_by: { agent: "rogue", tool: "scout" } } },
     { id: "found-a-hidden-way", points: 4, when: { sim_metric: { metric: "secretRoutesFound", at_least: 1 } } },
     { id: "made-a-route-safe", points: 4, when: { sim_metric: { metric: "trapsDisarmed", at_least: 1 } } },
+    { id: "opened-a-locked-way", points: 4, when: { sim_metric: { metric: "lockedRoutesTaken", at_least: 1 } } },
     { id: "fought-at-all", points: 4, when: { sim_metric: { metric: "enemiesDefeated", at_least: 3 } } },
     { id: "mapped-the-floor", points: 4, when: { sim_metric: { metric: "roomsExplored", at_least: 8 } } },
     { id: "cleared-a-floor", points: 5, when: { sim_metric: { metric: "floorsCleared", at_least: 1 } } },
@@ -271,8 +277,8 @@ export default defineScenario({
     { id: "reached-the-boss-floor", points: 8, when: { sim_metric: { metric: "floorReached", at_least: 4 } } },
     { id: "put-down-a-boss", points: 10, when: { sim_metric: { metric: "bossesDefeated", at_least: 1 } } },
     // Re-derived over sixty seeds from the surface-preparation configuration:
-    // random 62 · basic-tactics 192 · tactics-only 562 ·
-    // rule-based 610 · oracle 647, at forty rounds. Greedy (622) remains
+    // random 109 · basic-tactics 210 · tactics-only 570 ·
+    // rule-based 637 · oracle 667, at forty rounds. Greedy (566) remains
     // outside the declared spine because it is a deliberately narrow strategy.
     { id: "beat-a-thoughtless-party", points: 8, when: { sim_metric: { metric: "earnedXp", at_least: 200 } } },
     { id: "played-like-a-competent-one", points: 10, when: { sim_metric: { metric: "earnedXp", at_least: 450 } } },

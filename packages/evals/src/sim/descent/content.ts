@@ -1297,7 +1297,7 @@ export function generateFloorMap(floor: number, rng: Rng): DungeonFloorMap {
       bidirectional,
       kind,
       discovered,
-      featureKnown: kind === "passage" || kind === "one-way",
+      featureKnown: kind === "passage" || kind === "one-way" || kind === "locked",
       triggered: false,
       disarmed: false,
       traversals: 0,
@@ -1352,6 +1352,22 @@ export function generateFloorMap(floor: number, rng: Rng): DungeonFloorMap {
     .sort((a, b) => b.y - a.y || a.id.localeCompare(b.id))[0];
   if (secretTarget) connect(rooms[0], secretTarget, "secret", true, false);
 
+  // A locked loop is always optional: the bidirectional tree above still
+  // reaches every room, including the stairs. That makes a key a shortcut or
+  // escape resource rather than a hidden solvability requirement. The first
+  // two branches are guaranteed to exist and cannot already be connected to
+  // each other, so every generated floor gets one lock.
+  const lockCandidates = rooms.slice(1, -1).flatMap((a, index, possible) =>
+    possible.slice(index + 1).flatMap((b) => {
+      const connected = routes.some(
+        (route) => (route.from === a.id && route.to === b.id) || (route.from === b.id && route.to === a.id),
+      );
+      return connected || Math.abs(a.y - b.y) > 2 ? [] : [{ a, b }];
+    }),
+  );
+  const locked = lockCandidates[routeRng.int(0, Math.max(0, lockCandidates.length - 1))];
+  if (locked) connect(locked.a, locked.b, "locked");
+
   // One or two loops turn the tree into a maze without making its small map
   // unreadable. Avoid linking the stairs around a boss gate.
   const loops = rng.int(1, 2);
@@ -1386,5 +1402,15 @@ export function generateFloorMap(floor: number, rng: Rng): DungeonFloorMap {
     trapped.trap = (["blades", "poison-darts", "ward"] as const)[routeRng.int(0, 2)];
   }
 
-  return { zone: zone.name, currentRoom: "r0", rooms, routes };
+  // Keys are floor resources rather than inventory items: anybody can carry
+  // one, and it cannot leak into another floor. A key is never placed at the
+  // entrance or stairs, so earning it requires choosing and clearing a room.
+  const keyRooms = rooms.filter((room) => room.kind !== "entrance" && room.kind !== "stairs");
+  const keyRoom = keyRooms[routeRng.int(0, Math.max(0, keyRooms.length - 1))];
+  if (keyRoom) {
+    keyRoom.key = true;
+    keyRoom.keyCollected = false;
+  }
+
+  return { zone: zone.name, currentRoom: "r0", rooms, routes, keys: 0 };
 }

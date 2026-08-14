@@ -241,8 +241,9 @@ export interface RoomEncounter {
   retreats: number;
 }
 
-export type DungeonRouteKind = "passage" | "trap" | "one-way" | "secret";
+export type DungeonRouteKind = "passage" | "trap" | "one-way" | "secret" | "locked";
 export type DungeonTrapKind = "blades" | "poison-darts" | "ward";
+export type DungeonLockSolution = "key" | "rogue" | "guardian";
 
 /** A physical connection between rooms, including consequences of crossing it. */
 export interface DungeonRoute {
@@ -258,6 +259,8 @@ export interface DungeonRoute {
   featureKnown: boolean;
   triggered: boolean;
   disarmed: boolean;
+  /** Set once the party spends a key, picks the lock, or breaks the door. */
+  openedBy?: DungeonLockSolution;
   traversals: number;
 }
 
@@ -272,6 +275,9 @@ export interface DungeonRoom {
   /** Learned without entering, usually from an equipped scouting item. */
   revealed: boolean;
   cleared: boolean;
+  /** A floor key is collected the first time this room is cleared. */
+  key?: boolean;
+  keyCollected?: boolean;
   /** Surviving enemies and partial progress left behind after a retreat. */
   encounter?: RoomEncounter;
 }
@@ -281,6 +287,8 @@ export interface DungeonFloorMap {
   currentRoom: string;
   rooms: DungeonRoom[];
   routes: DungeonRoute[];
+  /** Keys are local to this floor and disappear on descent. */
+  keys: number;
 }
 
 export interface DescentState {

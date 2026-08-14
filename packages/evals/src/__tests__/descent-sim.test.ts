@@ -649,6 +649,9 @@ describe("run variation", () => {
       expect(map.routes.filter((route) => route.discovered).length).toBeGreaterThanOrEqual(map.rooms.length);
       expect(map.routes.filter((route) => route.kind === "trap")).toHaveLength(1);
       expect(map.routes.filter((route) => route.kind === "secret")).toHaveLength(1);
+      expect(map.routes.filter((route) => route.kind === "locked")).toHaveLength(1);
+      expect(map.rooms.filter((room) => room.key)).toHaveLength(1);
+      expect(map.keys).toBe(0);
       const drop = map.routes.find((route) => route.kind === "one-way");
       expect(drop).toBeDefined();
       expect(map.rooms.find((room) => room.id === drop?.from)?.links).toContain(drop?.to);
@@ -1188,8 +1191,8 @@ describe("resources the party has to share", () => {
   });
 });
 
-describe("scouting", () => {
-  const atRoute = (kind: "trap" | "secret" | "one-way") => {
+describe("scouting and consequential routes", () => {
+  const atRoute = (kind: "trap" | "secret" | "one-way" | "locked") => {
     for (let seed = 1; seed <= 100; seed++) {
       const sim = createSimulation("descent", { seed, days: 40, maze: true }) as DescentSimulation;
       const map = sim.view().map;
@@ -1305,6 +1308,85 @@ describe("scouting", () => {
     expect(hpAfterReturn).toBe(hpAfter);
     expect(route.traversals).toBe(2);
     expect(sim.metrics().trapsTriggered).toBe(1);
+  });
+
+  it("collects a floor key when its room is cleared", () => {
+    const sim = createSimulation("descent", { seed: 23, days: 40, maze: true }) as DescentSimulation;
+    const state = sim.view();
+    const map = state.map;
+    const keyRoom = map?.rooms.find((room) => room.key);
+    const approach = map?.routes.find(
+      (route) =>
+        route.discovered &&
+        route.bidirectional &&
+        route.kind !== "locked" &&
+        (route.from === keyRoom?.id || route.to === keyRoom?.id),
+    );
+    expect(map && keyRoom && approach).toBeTruthy();
+    if (!map || !keyRoom || !approach) return;
+    const from = approach.from === keyRoom.id ? approach.to : approach.from;
+    map.currentRoom = from;
+    keyRoom.kind = "empty";
+    keyRoom.cleared = false;
+    sim.scoutPaths("rogue");
+
+    sim.choosePath("guardian", keyRoom.id);
+    sim.advance();
+
+    expect(map.keys).toBe(1);
+    expect(keyRoom.keyCollected).toBe(true);
+    expect(sim.metrics().keysFound).toBe(1);
+    expect(sim.announce()).toMatch(/heavy iron key/i);
+  });
+
+  it("keeps a locked shortcut closed until the party spends its floor key", async () => {
+    const { sim, route } = atRoute("locked");
+    const state = sim.view();
+    await call(sim, "rogue", "scout");
+    expect(() => sim.choosePath("guardian", route.to)).toThrow(/is locked/i);
+    expect(await call(sim, "guardian", "unlock_route", { path: route.to })).toMatch(/no floor key/i);
+
+    if (state.map) state.map.keys = 1;
+    expect(await call(sim, "cleric", "unlock_route", { path: route.to })).toMatch(/door is open/i);
+    expect(route.openedBy).toBe("key");
+    expect(state.map?.keys).toBe(0);
+    sim.choosePath("guardian", route.to);
+    sim.advance();
+
+    expect(sim.metrics()).toMatchObject({ keysUsed: 1, lockedRoutesTaken: 1 });
+    expect(sim.scene().floorMap?.routes.find((candidate) => candidate.id === route.id)?.openedBy).toBe("key");
+  });
+
+  it("lets the rogue pick a lock for dread instead of spending a key", async () => {
+    const { sim, route } = atRoute("locked");
+    const before = sim.view().dread;
+    await call(sim, "rogue", "scout");
+    const afterScout = sim.view().dread;
+
+    expect(await call(sim, "guardian", "pick_lock", { path: route.to })).toMatch(/belongs to the rogue/i);
+    expect(await call(sim, "rogue", "pick_lock", { path: route.to })).toMatch(/tumblers yield/i);
+    expect(route.openedBy).toBe("rogue");
+    expect(afterScout).toBeGreaterThan(before);
+    expect(sim.view().dread).toBe(afterScout + 1);
+    const afterPick = sim.view().dread;
+    expect(await call(sim, "rogue", "pick_lock", { path: route.to })).toMatch(/already open/i);
+    expect(sim.view().dread).toBe(afterPick);
+    expect(sim.metrics()).toMatchObject({ locksPicked: 1, keysUsed: 0, doorsBreached: 0 });
+  });
+
+  it("lets the guardian breach a lock for health and more dread", async () => {
+    const { sim, route } = atRoute("locked");
+    const state = sim.view();
+    await call(sim, "rogue", "scout");
+    const hpBefore = state.party.guardian.hp;
+    const dreadBefore = state.dread;
+
+    expect(await call(sim, "rogue", "breach_route", { path: route.to })).toMatch(/belongs to the guardian/i);
+    expect(await call(sim, "guardian", "breach_route", { path: route.to })).toMatch(/tears the door/i);
+    expect(route.openedBy).toBe("guardian");
+    expect(state.party.guardian.hp).toBeLessThan(hpBefore);
+    expect(state.dread).toBe(dreadBefore + 2);
+    expect(sim.metrics()).toMatchObject({ doorsBreached: 1, keysUsed: 0, locksPicked: 0 });
   });
 });
 

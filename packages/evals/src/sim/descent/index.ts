@@ -297,11 +297,15 @@ const pathsFromMap = (map: DungeonFloorMap): DescentState["paths"] => {
         ? "a newly found secret shortcut"
         : route?.kind === "one-way"
           ? "a one-way drop; this route does not lead back"
-          : route?.kind === "trap" && route.disarmed
-            ? "the rogue disarmed a trap here"
-            : route?.kind === "trap" && route.triggered
-              ? "a spent trap litters the passage"
-              : undefined;
+          : route?.kind === "locked" && !route.openedBy
+            ? "a locked iron door; spend a floor key, have the rogue pick it, or have the guardian breach it"
+            : route?.kind === "locked"
+              ? `the door was opened by ${route.openedBy}`
+              : route?.kind === "trap" && route.disarmed
+                ? "the rogue disarmed a trap here"
+                : route?.kind === "trap" && route.triggered
+                  ? "a spent trap litters the passage"
+                  : undefined;
     const destination =
       threat ??
       (room?.visited ? "already explored" : room?.revealed ? `mapped: ${room.kind}` : roomHint(room?.kind ?? "empty"));
@@ -409,6 +413,7 @@ export interface DescentScene {
   floorMap: {
     zone: string;
     currentRoom: string;
+    keys: number;
     rooms: Array<{
       id: string;
       label: string;
@@ -419,6 +424,8 @@ export interface DescentScene {
       visited: boolean;
       revealed: boolean;
       cleared: boolean;
+      key: boolean;
+      keyCollected: boolean;
       threat: { enemies: number; hp: number; maxHp: number; retreats: number } | null;
     }>;
     routes: Array<{
@@ -429,6 +436,7 @@ export interface DescentScene {
       bidirectional: boolean;
       triggered: boolean;
       disarmed: boolean;
+      openedBy: "key" | "rogue" | "guardian" | null;
       traversals: number;
     }>;
   } | null;
@@ -489,6 +497,11 @@ export class DescentSimulation implements Simulation {
   private secretRoutesFound = 0;
   private secretShortcutsTaken = 0;
   private oneWayDropsTaken = 0;
+  private keysFound = 0;
+  private keysUsed = 0;
+  private locksPicked = 0;
+  private doorsBreached = 0;
+  private lockedRoutesTaken = 0;
   private deaths = 0;
   private floorReached = 1;
   private readonly startFloor: number;
@@ -864,7 +877,8 @@ export class DescentSimulation implements Simulation {
       const occupied = s.map.rooms.filter((candidate) => candidate.encounter?.enemies.some(alive));
       out.push(
         `${s.map.zone}; currently in ${room?.label ?? "an unmapped room"}. ` +
-          `${s.map.rooms.filter((candidate) => candidate.visited).length}/${s.map.rooms.length} rooms explored.`,
+          `${s.map.rooms.filter((candidate) => candidate.visited).length}/${s.map.rooms.length} rooms explored. ` +
+          `Floor keys carried: ${s.map.keys}.`,
       );
       if (occupied.length > 0) {
         out.push(
@@ -1570,11 +1584,18 @@ export class DescentSimulation implements Simulation {
     return map?.rooms.find((room) => room.id === map.currentRoom);
   }
 
-  private markRoomCleared(room: DungeonRoom): void {
+  private markRoomCleared(room: DungeonRoom): string | undefined {
     if (!room.cleared && (room.kind === "cache" || room.kind === "market" || room.kind === "shrine")) {
       this.optionalRoomsCompleted += 1;
     }
     room.cleared = true;
+    const map = this.state.map;
+    if (!map || !room.key || room.keyCollected) return undefined;
+    room.keyCollected = true;
+    map.keys += 1;
+    this.keysFound += 1;
+    this.note("key", `The party found a floor key in the ${room.label} on floor ${this.state.floor}.`);
+    return `Among the remains is a heavy iron key. The party now carries ${map.keys} floor key${map.keys === 1 ? "" : "s"}.`;
   }
 
   /** Keep the room's copy authoritative after the resolver replaces `state.enemies`. */
@@ -1588,6 +1609,7 @@ export class DescentSimulation implements Simulation {
     route.traversals += 1;
     if (route.kind === "secret") this.secretShortcutsTaken += 1;
     if (route.kind === "one-way") this.oneWayDropsTaken += 1;
+    if (route.kind === "locked") this.lockedRoutesTaken += 1;
     if (route.kind !== "trap" || route.triggered || route.disarmed) return undefined;
 
     route.triggered = true;
@@ -1729,7 +1751,8 @@ export class DescentSimulation implements Simulation {
     if (s.map) {
       const room = s.map.rooms.find((candidate) => candidate.id === s.map?.currentRoom);
       if (room) {
-        this.markRoomCleared(room);
+        const keyLine = this.markRoomCleared(room);
+        if (keyLine) this.lastLog.push(keyLine);
         room.encounter = undefined;
       }
       s.stock = [];
@@ -2376,6 +2399,15 @@ export class DescentSimulation implements Simulation {
     if (!path) {
       throw new Error(`no way called "${id}". On offer: ${this.state.paths.map((p) => p.id).join(", ")}.`);
     }
+    const map = this.state.map;
+    const current = this.currentRoom();
+    const route = map && current ? routeBetween(map, current.id, path.id) : undefined;
+    if (route?.kind === "locked" && !route.openedBy) {
+      throw new Error(
+        `the ${path.id} way is locked. Spend a floor key with \`unlock_route\`, ask the rogue to \`pick_lock\`, ` +
+          "or ask the guardian to `breach_route` before choosing it.",
+      );
+    }
     const already = this.pendingPath;
     this.pendingPath = path.id;
     const changed =
@@ -2462,9 +2494,14 @@ export class DescentSimulation implements Simulation {
           fighter.hp = Math.min(fighter.maxHp, fighter.hp + Math.round(fighter.maxHp * 0.25));
           fighter.mana = fighter.maxMana;
         }
-        this.markRoomCleared(room);
-        s.phase = "explore";
-        this.lastLog = [`Old light fills the ${room.label}. The party recovers before choosing another route.`];
+        {
+          const keyLine = this.markRoomCleared(room);
+          s.phase = "explore";
+          this.lastLog = [
+            `Old light fills the ${room.label}. The party recovers before choosing another route.`,
+            ...(keyLine ? [keyLine] : []),
+          ];
+        }
         this.note("shrine", `The party rests briefly at the ${room.label}.`);
         finish();
         return;
@@ -2476,9 +2513,14 @@ export class DescentSimulation implements Simulation {
         return;
       case "empty":
       case "entrance":
-        this.markRoomCleared(room);
-        s.phase = "explore";
-        this.lastLog = [`The party searches the ${room.label}. It is quiet, but the routes beyond it are new.`];
+        {
+          const keyLine = this.markRoomCleared(room);
+          s.phase = "explore";
+          this.lastLog = [
+            `The party searches the ${room.label}. It is quiet, but the routes beyond it are new.`,
+            ...(keyLine ? [keyLine] : []),
+          ];
+        }
         finish();
         return;
     }
@@ -2489,7 +2531,7 @@ export class DescentSimulation implements Simulation {
     const map = s.map;
     if (!map) return;
     const room = map.rooms.find((candidate) => candidate.id === map.currentRoom);
-    if (room) this.markRoomCleared(room);
+    const keyLine = room ? this.markRoomCleared(room) : undefined;
     s.phase = "explore";
     s.enemies = [];
     s.pending = [];
@@ -2500,7 +2542,10 @@ export class DescentSimulation implements Simulation {
     s.paths = pathsFromMap(map);
     this.exploreRequested = false;
     this.descendRequested = false;
-    this.lastLog = [`The party leaves the ${room?.label ?? "room"} and keeps exploring floor ${s.floor}.`];
+    this.lastLog = [
+      `The party leaves the ${room?.label ?? "room"} and keeps exploring floor ${s.floor}.`,
+      ...(keyLine ? [keyLine] : []),
+    ];
   }
 
   /** Walk the party into whatever they chose. Called from `advance`. */
@@ -2636,6 +2681,10 @@ export class DescentSimulation implements Simulation {
         }
         if (route?.kind === "secret") return `  ${path.id}: a secret shortcut into the ${path.label}`;
         if (route?.kind === "one-way") return `  ${path.id}: a one-way drop into the ${path.label}; no return here`;
+        if (route?.kind === "locked" && !route.openedBy) {
+          return `  ${path.id}: a locked iron door before the ${path.label}; a key, lock-pick, or breach will open it`;
+        }
+        if (route?.kind === "locked") return `  ${path.id}: an open door into the ${path.label}`;
         if (path.kind === "elite") return `  ${path.id}: something large, and it is guarding something worth having`;
         if (path.kind === "boss") return `  ${path.id}: a gate and the thing guarding the way down`;
         if (path.kind === "market") return `  ${path.id}: a merchant's lamplight`;
@@ -2685,6 +2734,83 @@ export class DescentSimulation implements Simulation {
       this.note("disarm", `The rogue disarmed a ${route.trap ?? "route"} trap on floor ${this.state.floor}.`);
       this.diag.recordAttempt(false);
       return `You disarm the ${route.trap ?? "route"} trap. The party can cross safely. Dread rises to ${this.state.dread}.`;
+    } catch (err) {
+      this.diag.recordAttempt(true);
+      throw err;
+    }
+  }
+
+  /** The closed, adjacent lock named by a currently visible destination. */
+  private closedLock(pathId: string): { map: DungeonFloorMap; route: DungeonRoute } {
+    this.requirePhase("explore");
+    const map = this.state.map;
+    const current = this.currentRoom();
+    if (!map || !current) throw new Error("there is no mapped door to open here.");
+    const id = pathId.toLowerCase().trim();
+    const path = this.state.paths.find((candidate) => candidate.id === id);
+    const route = path ? routeBetween(map, current.id, path.id) : undefined;
+    if (!route || route.kind !== "locked") throw new Error(`there is no locked door on the ${pathId} route.`);
+    if (route.openedBy) throw new Error(`that door is already open; it was opened by ${route.openedBy}.`);
+    return { map, route };
+  }
+
+  unlockRoute(agent: string | undefined, pathId: string): string {
+    this.who(agent);
+    const { map, route } = this.closedLock(pathId);
+    if (map.keys <= 0) {
+      throw new Error("the party has no floor key. The rogue can pick this lock, or the guardian can breach it.");
+    }
+    map.keys -= 1;
+    route.openedBy = "key";
+    this.keysUsed += 1;
+    this.state.paths = pathsFromMap(map);
+    this.note("unlock", `The party spent a floor key to open ${route.id} on floor ${this.state.floor}.`);
+    return `The iron key turns. The door is open, and the party has ${map.keys} floor key${map.keys === 1 ? "" : "s"} left.`;
+  }
+
+  pickLock(agent: string | undefined, pathId: string): string {
+    try {
+      const me = this.who(agent);
+      if (me.id !== "rogue") throw new Error("picking route locks belongs to the rogue.");
+      const { map, route } = this.closedLock(pathId);
+      route.openedBy = "rogue";
+      this.locksPicked += 1;
+      this.state.dread += 1;
+      this.state.paths = pathsFromMap(map);
+      this.note("lock-pick", `The rogue picked ${route.id} on floor ${this.state.floor}.`);
+      this.diag.recordAttempt(false);
+      return `The tumblers yield, but the careful work costs time. The door is open and dread rises to ${this.state.dread}.`;
+    } catch (err) {
+      this.diag.recordAttempt(true);
+      throw err;
+    }
+  }
+
+  breachRoute(agent: string | undefined, pathId: string): string {
+    try {
+      const me = this.who(agent);
+      if (me.id !== "guardian") throw new Error("breaching route doors belongs to the guardian.");
+      const { map, route } = this.closedLock(pathId);
+      route.openedBy = "guardian";
+      this.doorsBreached += 1;
+      this.state.dread += 2;
+      // Armour should make the guardian the right person for this, but should
+      // not turn the physical price into zero. Shields can still absorb it.
+      const raw = me.armor + Math.min(18, 8 + this.state.floor);
+      const dealt = hurtFighter(me, raw, "physical");
+      this.state.paths = pathsFromMap(map);
+      this.note("breach", `The guardian breached ${route.id} on floor ${this.state.floor}, taking ${dealt} damage.`);
+      if (me.dead) {
+        this.deaths += 1;
+        this.note("down", `The guardian was brought down breaching a locked door on floor ${this.state.floor}.`);
+      }
+      if (livingParty(this.state).length === 0) {
+        this.state.wiped = true;
+        this.state.phase = "over";
+        this.note("wipe", `The party died forcing a door on floor ${this.state.floor}.`);
+      }
+      this.diag.recordAttempt(false);
+      return `The guardian tears the door from its frame, takes ${dealt} damage, and raises dread to ${this.state.dread}. The route stays open.`;
     } catch (err) {
       this.diag.recordAttempt(true);
       throw err;
@@ -2882,6 +3008,13 @@ export class DescentSimulation implements Simulation {
       ),
 
       T(
+        "unlock_route",
+        "Spend one of the party's floor keys to open a locked route. The door stays open for this floor.",
+        { path: "The destination room id shown by `look`." },
+        (args, agent) => this.unlockRoute(agent, String(args.path ?? "")),
+      ),
+
+      T(
         "enter_dungeon",
         "Leave the surface outfitter and take the first stair. The party enters together when the round closes.",
         {},
@@ -2994,6 +3127,15 @@ export class DescentSimulation implements Simulation {
     // deeper read of a family. Neither queues, because information the party
     // only receives after the round has resolved is information that arrived
     // too late to be worth anything.
+    byClass.guardian.push(
+      agentTool(
+        "breach_route",
+        "Force open a locked route without a key. This hurts you and raises dread by two, but the door stays open.",
+        { path: "The destination room id shown by `look`." },
+        (args, agent) => this.breachRoute(agent, String(args.path ?? "")),
+      ),
+    );
+
     byClass.rogue.push(
       agentTool(
         "scout",
@@ -3007,6 +3149,12 @@ export class DescentSimulation implements Simulation {
         "Disarm a route trap you found while scouting. This takes time and raises dread, but makes the crossing safe.",
         { path: "The destination room id shown by scout." },
         (args, agent) => this.disarmTrap(agent, String(args.path ?? "")),
+      ),
+      agentTool(
+        "pick_lock",
+        "Pick a locked route without a key. This raises dread by one, but the door stays open.",
+        { path: "The destination room id shown by `look`." },
+        (args, agent) => this.pickLock(agent, String(args.path ?? "")),
       ),
     );
 
@@ -3068,6 +3216,11 @@ export class DescentSimulation implements Simulation {
       secretRoutesFound: this.secretRoutesFound,
       secretShortcutsTaken: this.secretShortcutsTaken,
       oneWayDropsTaken: this.oneWayDropsTaken,
+      keysFound: this.keysFound,
+      keysUsed: this.keysUsed,
+      locksPicked: this.locksPicked,
+      doorsBreached: this.doorsBreached,
+      lockedRoutesTaken: this.lockedRoutesTaken,
       goldEarned: this.goldEarned,
       goldSpent: this.goldSpent,
       goldRemaining: CLASSES.reduce((sum, id) => sum + s.party[id].gold, 0),
@@ -3225,6 +3378,7 @@ export class DescentSimulation implements Simulation {
             return {
               zone: s.map.zone,
               currentRoom: s.map.currentRoom,
+              keys: s.map.keys,
               rooms: s.map.rooms
                 .filter((room) => known.has(room.id))
                 .map((room) => ({
@@ -3247,6 +3401,8 @@ export class DescentSimulation implements Simulation {
                   visited: room.visited,
                   revealed: room.revealed,
                   cleared: room.cleared,
+                  key: room.visited && room.key === true,
+                  keyCollected: room.keyCollected === true,
                 })),
               routes: s.map.routes
                 .filter((route) => route.discovered && known.has(route.from) && known.has(route.to))
@@ -3258,6 +3414,7 @@ export class DescentSimulation implements Simulation {
                   bidirectional: route.bidirectional,
                   triggered: route.triggered,
                   disarmed: route.disarmed,
+                  openedBy: route.openedBy ?? null,
                   traversals: route.traversals,
                 })),
             };

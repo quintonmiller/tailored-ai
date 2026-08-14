@@ -80,9 +80,14 @@ const merchantPrice = (fighter: Fighter, listed: number): number => {
   );
   return Math.round(listed * (1 - discount));
 };
-const usefulPaths = (s: DescentState): DescentState["paths"] => {
+const usefulPaths = (s: DescentState, includeClosedLocks = false): DescentState["paths"] => {
   if (!s.map) return s.paths;
-  const fresh = s.paths.filter((path) => !s.map?.rooms.find((room) => room.id === path.id)?.visited);
+  const canTraverse = (from: string, to: string): boolean => {
+    const route = s.map ? routeBetween(s.map, from, to) : undefined;
+    return includeClosedLocks || route?.kind !== "locked" || route.openedBy !== undefined;
+  };
+  const available = s.paths.filter((path) => canTraverse(s.map?.currentRoom ?? "", path.id));
+  const fresh = available.filter((path) => !s.map?.rooms.find((room) => room.id === path.id)?.visited);
   if (fresh.length > 0) return fresh;
 
   // At a dead end, walk the explored graph toward its nearest frontier rather
@@ -90,8 +95,8 @@ const usefulPaths = (s: DescentState): DescentState["paths"] => {
   // party has already walked plus the exits visible from those rooms.
   const rooms = new Map(s.map.rooms.map((room) => [room.id, room]));
   const seen = new Set([s.map.currentRoom]);
-  const queue = s.paths.map((path) => ({ id: path.id, first: path.id }));
-  for (const path of s.paths) seen.add(path.id);
+  const queue = available.map((path) => ({ id: path.id, first: path.id }));
+  for (const path of available) seen.add(path.id);
   while (queue.length > 0) {
     const step = queue.shift();
     if (!step) break;
@@ -103,11 +108,12 @@ const usefulPaths = (s: DescentState): DescentState["paths"] => {
     }
     for (const id of room.links) {
       if (seen.has(id)) continue;
+      if (!canTraverse(room.id, id)) continue;
       seen.add(id);
       queue.push({ id, first: step.first });
     }
   }
-  return s.paths;
+  return available;
 };
 
 const pathHasEscapedEncounter = (s: DescentState, path: DescentState["paths"][number]): boolean => {
@@ -652,7 +658,19 @@ function ruleBasedPolicy(omniscient = false, navigateHazards = true): Policy {
       return false;
     },
     path: (sim, s) => {
-      const paths = usefulPaths(s);
+      const navigable = usefulPaths(s, navigateHazards);
+      const paths = navigable.filter((path) => {
+        const map = s.map;
+        const current = map?.rooms.find((room) => room.id === map.currentRoom);
+        const route = map && current ? routeBetween(map, current.id, path.id) : undefined;
+        return (
+          route?.kind !== "locked" ||
+          route.openedBy !== undefined ||
+          (map?.keys ?? 0) > 0 ||
+          !s.party.rogue.dead ||
+          !s.party.guardian.dead
+        );
+      });
       const wounded = paths.find((path) => pathHasEscapedEncounter(s, path));
       const cache = paths.find((p) => p.kind === "cache");
       const market = paths.find((p) => p.kind === "market");
@@ -666,6 +684,12 @@ function ruleBasedPolicy(omniscient = false, navigateHazards = true): Policy {
         const map = s.map;
         const current = map?.rooms.find((candidate) => candidate.id === map.currentRoom);
         const route = map && current ? routeBetween(map, current.id, path.id) : undefined;
+        if (route?.kind === "locked" && !route.openedBy) {
+          const speaker = CLASSES.find((id) => !s.party[id].dead) ?? "guardian";
+          if (map && map.keys > 0) attempt(() => sim.unlockRoute(speaker, path.id));
+          else if (!s.party.rogue.dead) attempt(() => sim.pickLock("rogue", path.id));
+          else if (!s.party.guardian.dead) attempt(() => sim.breachRoute("guardian", path.id));
+        }
         if (route?.kind === "trap" && route.featureKnown && !route.triggered && !route.disarmed) {
           attempt(() => sim.disarmTrap("rogue", path.id));
         }

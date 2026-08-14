@@ -43,9 +43,12 @@ The following work is complete on `feat/endless-descent-overhaul`:
   room rewards persist if the party takes another route and returns later.
 - Maze encounters vary enemy count, health, and damage by seed. Layouts, stock,
   drops, and routes are also seeded and reproducible.
-- Every floor adds a one-way loop, a concealed shortcut, and a concealed route
-  trap without compromising the guaranteed traversable room tree. The rogue
-  can scout shortcuts and traps, then spend dread to disarm a chosen crossing.
+- Every floor adds a one-way loop, a concealed shortcut, a locked optional
+  loop, a recoverable floor key, and a concealed route trap without
+  compromising the guaranteed traversable room tree. The party can spend the
+  key, have the rogue pick the lock, have the guardian breach it, or ignore the
+  shortcut; the rogue can also scout hidden routes and spend dread to disarm a
+  chosen trap.
 - The broadcast shows the explored room graph, current room and zone, equipped
   items, invested talents, unspent points, readied actions, and synchronized
   combat results.
@@ -58,8 +61,8 @@ The following work is complete on `feat/endless-descent-overhaul`:
 - The broadcast highlights the character who most recently spoke or acted and
   shows their full stats, equipment, pack, item affixes, talents, cooldowns,
   statuses, gold, skill points, and readied action.
-- The current 60-seed, 40-round baseline means are: random 62, basic tactics
-  192, tactics-only 562, greedy damage 622, rule-based 610, and oracle 647.
+- The current 60-seed, 40-round baseline means are: random 109, basic tactics
+  210, tactics-only 570, greedy damage 566, rule-based 637, and oracle 667.
 
 ## Prioritized improvements
 
@@ -244,8 +247,14 @@ Progress as of 2026-08-13:
   found/taken, and one-way drops used. Rule-based policies scout situationally,
   disarm only a route they intend to use, and take shortcuts only when the
   destination justifies their information cost.
-- Remaining: locked doors and keys, secret rooms beyond shortcuts,
-  destructible routes, persistent environmental room effects, and retreat
+- Complete: every floor has an optional locked loop and one deterministic key
+  earned by clearing a room. A key opens the route freely, the rogue can pick
+  it for one dread, and the guardian can breach it for physical damage and two
+  dread. Closed routes refuse movement explicitly and can never gate the
+  stairs; opening method, key location/state, and five lock/key metrics cross
+  narration, policy state, the scene contract, and the broadcast map.
+- Remaining: secret rooms beyond shortcuts, persistent environmental room
+  effects, additional destructible or class-specific routes, and retreat
   consequences based on room geometry or enemy speed.
 
 ### P1 — Comparable past-run context

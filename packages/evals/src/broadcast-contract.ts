@@ -101,6 +101,7 @@ export interface Scene {
   floorMap: {
     zone: string;
     currentRoom: string;
+    keys: number;
     rooms: Array<{
       id: string;
       label: string;
@@ -111,6 +112,8 @@ export interface Scene {
       visited: boolean;
       revealed: boolean;
       cleared: boolean;
+      key: boolean;
+      keyCollected: boolean;
       threat: { enemies: number; hp: number; maxHp: number; retreats: number } | null;
     }>;
     routes: Array<{
@@ -121,6 +124,7 @@ export interface Scene {
       bidirectional: boolean;
       triggered: boolean;
       disarmed: boolean;
+      openedBy: "key" | "rogue" | "guardian" | null;
       traversals: number;
     }>;
   } | null;
