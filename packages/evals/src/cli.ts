@@ -55,7 +55,7 @@ tai evals — scenario benchmark for the invocation message
                                                           policies and print the ladder.
                                                           No model calls; run this before
                                                           trusting any agent score.
-  pnpm run eval -- watch [--trace <file>] [--port 4380]
+  pnpm run eval -- watch [--trace <file>] [--port 4380] [--host 127.0.0.1]
                                                           live view of a run: state, messages,
                                                           tool calls, milestones and facts.
                                                           Defaults to the newest trace.
@@ -1004,7 +1004,11 @@ async function cmdNarrate(argv: string[]): Promise<number> {
 async function cmdWatch(argv: string[]): Promise<number> {
   const { values } = parseArgs({
     args: argv,
-    options: { trace: { type: "string" }, port: { type: "string", default: "4380" } },
+    options: {
+      trace: { type: "string" },
+      port: { type: "string", default: "4380" },
+      host: { type: "string", default: "127.0.0.1" },
+    },
     allowPositionals: false,
   });
   const path = values.trace ? resolve(values.trace as string) : newestTrace();
@@ -1012,7 +1016,7 @@ async function cmdWatch(argv: string[]): Promise<number> {
     console.error("No trace found. Start a run — traces are written by default — or pass --trace <file>.");
     return 2;
   }
-  const url = await serveWatch(values.trace ? path : undefined, Number(values.port));
+  const url = await serveWatch(values.trace ? path : undefined, Number(values.port), values.host as string);
   console.log(`\n  watching ${path.replace(`${packageRoot}/`, "")}`);
   console.log(`  ${url}\n`);
   console.log("  Ctrl-C to stop.\n");

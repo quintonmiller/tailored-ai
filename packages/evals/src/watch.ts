@@ -52,7 +52,7 @@ export function newestTrace(dir = join(packageRoot, "results", "traces")): strin
 /** A file nobody has appended to for this long is a finished run, not a live one. */
 const STALE_MS = 20_000;
 
-export function serveWatch(tracePath: string | undefined, port: number): Promise<string> {
+export function serveWatch(tracePath: string | undefined, port: number, host = "127.0.0.1"): Promise<string> {
   // Read per request rather than once at startup. It is one small file and the
   // server is a dev tool: caching it means every edit to the viewer needs the
   // server restarted, which is exactly the loop you are in when you are working
@@ -180,6 +180,6 @@ export function serveWatch(tracePath: string | undefined, port: number): Promise
 
   return new Promise((ok, fail) => {
     server.on("error", fail);
-    server.listen(port, "127.0.0.1", () => ok(`http://127.0.0.1:${port}`));
+    server.listen(port, host, () => ok(`http://${host}:${port}`));
   });
 }
