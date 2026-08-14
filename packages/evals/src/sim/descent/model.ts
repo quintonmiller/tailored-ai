@@ -461,55 +461,6 @@ export function antiSynergies(state: DescentState, intents: Intent[]): string[] 
     found.push(`${areas[0].actor}'s area attack will wake whatever ${sleeps[0].actor} puts to sleep`);
   }
 
-  // Fire thaws frost. Two casters, one target, opposite elements.
-  const frost = intents.filter((i) => i.kind === "frostbite");
-  const fire = intents.filter((i) => i.kind === "firebolt" || i.kind === "fireball");
-  for (const f of frost) {
-    if (fire.some((x) => x.target === f.target || x.kind === "fireball")) {
-      found.push(`fire will thaw the freeze ${f.actor} is putting on ${f.target}`);
-      break;
-    }
-  }
-
-  // Two interrupts on one cast is one interrupt and one wasted turn.
-  const interrupts = by("interrupt");
-  const seen = new Set<string>();
-  for (const i of interrupts) {
-    if (i.target && seen.has(i.target)) {
-      found.push(`two interrupts are aimed at ${i.target}; one of them is wasted`);
-      break;
-    }
-    if (i.target) seen.add(i.target);
-  }
-
-  // Taunt pulls everything onto the guardian; stealth is the rogue asking not
-  // to be looked at. Doing both in one round wastes one of them.
-  if (by("taunt").length > 0 && by("vanish").length > 0) {
-    found.push("a taunt and a vanish in the same round work against each other");
-  }
-
-  // Healing into an anti-heal aura, or into a bell about to toll.
-  const heals = intents.filter((i) => i.kind === "heal" || i.kind === "bless");
-  if (heals.length > 0) {
-    const antiheal = livingEnemies(state).find((e) => e.hidden.kind === "punishHeal" && e.age >= 1);
-    if (antiheal) found.push(`${heals[0].actor} is healing in front of ${antiheal.name}`);
-    const bell = livingEnemies(state).find(
-      (e) => e.hidden.kind === "tollHeal" && (e.age + 1) % (e.hidden as { period: number }).period === 0,
-    );
-    if (bell) found.push(`${heals[0].actor} is healing on the tick ${bell.name} tolls`);
-  }
-
-  // Everyone piling onto one target while another is untouched, when the
-  // untouched one is the dangerous one.
-  const attacks = intents.filter((i) => i.target && livingEnemies(state).some((e) => e.ref === i.target));
-  if (attacks.length >= 3 && livingEnemies(state).length >= 2) {
-    const targets = new Set(attacks.map((i) => i.target));
-    if (targets.size === 1) {
-      const ignored = livingEnemies(state).find((e) => e.ref !== attacks[0].target && (e.elite || e.boss));
-      if (ignored) found.push(`the whole party is on one target while ${ignored.name} is untouched`);
-    }
-  }
-
   return found;
 }
 
@@ -527,6 +478,8 @@ export function resolveTick(
   performAbility: (state: DescentState, intent: Intent, out: TickResult) => void,
   enemyAct: (state: DescentState, enemy: Enemy, rng: Rng, out: TickResult) => void,
 ): TickResult {
+  const standingAtStart = new Set(livingParty(state).map((f) => f.id));
+  const windowsAtStart = new Set(livingEnemies(state).filter((e) => e.windowOpen).map((e) => e.ref));
   const out: TickResult = {
     lines: [],
     beats: [],
@@ -633,6 +586,7 @@ export function resolveTick(
   for (const e of state.enemies) {
     if (e.hp <= 0 && !out.slain.includes(e)) {
       out.slain.push(e);
+      out.beats.push({ kind: "death", to: e.ref });
       if (e.hidden.kind === "deathburst") {
         const burst = e.hidden;
         out.mechanicsFired.push({ family: e.family, kind: "deathburst" });
@@ -650,9 +604,9 @@ export function resolveTick(
   state.enemies = state.enemies.filter((e) => alive(e));
 
   for (const f of CLASSES.map((c) => state.party[c])) {
-    if (f.hp <= 0 && !f.dead) {
-      f.dead = true;
-      out.downed.push(f.id);
+    if (f.hp <= 0) f.dead = true;
+    if (f.dead && standingAtStart.has(f.id)) {
+      if (!out.downed.includes(f.id)) out.downed.push(f.id);
       out.beats.push({ kind: "death", to: f.id });
     }
   }
@@ -662,7 +616,9 @@ export function resolveTick(
     for (const s of who.statuses) s.ticks -= 1;
     who.statuses = who.statuses.filter((s) => s.ticks > 0);
   }
-  for (const e of state.enemies) e.windowOpen = false;
+  // A window that existed when the tick began has now been consumed. A window
+  // opened by shield_slam during this tick survives through the next one.
+  for (const e of state.enemies) if (windowsAtStart.has(e.ref)) e.windowOpen = false;
 
   state.intents = [];
 

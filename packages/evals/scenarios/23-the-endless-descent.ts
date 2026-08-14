@@ -196,7 +196,7 @@ export default defineScenario({
       ),
       cleric: hand(
         "Wherever the worst of it has landed.",
-        "You are the cleric. Yours are the only hands that can heal, cleanse or revive, and the " +
+        "You are the cleric. Yours are the only hands that can heal or cleanse, and the " +
           "party does not last long without you. Your inspection reads an enemy's aura — whether it " +
           "is watching the fighters or watching you. Healing is not always safe.",
       ),

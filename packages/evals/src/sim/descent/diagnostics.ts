@@ -136,6 +136,10 @@ export class Diagnostics {
   }
 
   recordEncounter(families: string[]): void {
+    // Enemy refs are unique only inside an encounter (`husk-1`, `husk-2`). An
+    // old inspection must not make a different `husk-1` several floors later
+    // count as informed.
+    this.inspected.clear();
     for (const family of new Set(families)) {
       this.familyEncounters.set(family, (this.familyEncounters.get(family) ?? 0) + 1);
     }
@@ -192,13 +196,19 @@ export class Diagnostics {
    * was shared* — one agent emptying every cache it finds and a party dividing
    * them are the same total in every other metric here.
    */
-  recordCacheTake(who: string): void {
+  recordCacheTake(who: string, cache = "current"): void {
     this.cacheTakes += 1;
-    this.cacheTakers.add(who);
+    const takers = this.cacheTakersByCache.get(cache) ?? new Set<string>();
+    takers.add(who);
+    this.cacheTakersByCache.set(cache, takers);
   }
 
   cacheTakes = 0;
-  readonly cacheTakers = new Set<string>();
+  private readonly cacheTakersByCache = new Map<string, Set<string>>();
+
+  private mostTakersAtOneCache(): number {
+    return Math.max(0, ...[...this.cacheTakersByCache.values()].map((takers) => takers.size));
+  }
 
   // -------------------------------------------------------------------------
 
@@ -268,7 +278,7 @@ export class Diagnostics {
     if (this.cacheTakes > 0) {
       // Perfect is every take going to a different member; the ceiling is the
       // smaller of the takes made and the members available to take them.
-      parts.push(Math.max(0, Math.min(1, this.cacheTakers.size / Math.min(this.cacheTakes, 5))));
+      parts.push(Math.max(0, Math.min(1, this.mostTakersAtOneCache() / Math.min(this.cacheTakes, 5))));
     }
     if (parts.length === 0) return 0;
     return parts.reduce((a, b) => a + b, 0) / parts.length;
@@ -300,7 +310,7 @@ export class Diagnostics {
       goldTransfers: this.goldTransfers,
       pooledPurchases: this.pooledPurchases,
       cacheTakes: this.cacheTakes,
-      cacheTakers: this.cacheTakers.size,
+      cacheTakers: this.mostTakersAtOneCache(),
       misheldTicks: this.misheldTicks,
       preciousOnTrash: this.preciousOnTrash,
       preciousOnSerious: this.preciousOnSerious,

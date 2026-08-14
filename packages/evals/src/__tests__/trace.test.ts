@@ -11,7 +11,8 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { fileSink, looksRefused, readTrace } from "../trace.js";
+import { createSimulation } from "../sim/index.js";
+import { fileSink, finishSimulationTrace, looksRefused, readTrace, type TraceEvent } from "../trace.js";
 
 const scratch = () => mkdtempSync(join(tmpdir(), "tai-trace-"));
 
@@ -61,6 +62,20 @@ describe("a trace file", () => {
       looping.self = looping;
       sink({ kind: "state", at: 1, turn: 0, round: 0, snapshot: looping });
     }).not.toThrow();
+  });
+
+  it("records the fully resolved horizon before ending", () => {
+    const sim = createSimulation("descent", { seed: 1, days: 1 });
+    const events: TraceEvent[] = [];
+    finishSimulationTrace(sim, (event) => events.push(event), { turn: 0, round: 0, turns: 1 });
+
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({
+      kind: "state",
+      resolved: true,
+      snapshot: { tick: 1, ticksSurvived: 1 },
+    });
+    expect(events[1]).toMatchObject({ kind: "end", turns: 1 });
   });
 });
 

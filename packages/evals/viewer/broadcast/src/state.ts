@@ -46,7 +46,15 @@ type TraceEvent =
       refused: boolean;
     }
   | { kind: "post"; at: number; turn: number; agent?: string; room: string; to: string[]; body: string }
-  | { kind: "state"; at: number; turn: number; round: number; snapshot: { scene?: Scene } & Record<string, unknown> }
+  | {
+      kind: "state";
+      at: number;
+      turn: number;
+      round: number;
+      snapshot: { scene?: Scene } & Record<string, unknown>;
+      resolved?: boolean;
+      announce?: string;
+    }
   | { kind: "progress"; at: number; round: number; milestones: Milestone[]; facts?: unknown }
   | { kind: "end"; at: number; reason?: string; turns: number };
 

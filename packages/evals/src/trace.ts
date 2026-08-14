@@ -28,6 +28,7 @@
 
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
+import type { Simulation } from "./sim/types.js";
 
 export type TraceEvent =
   /** Once, first. Everything a viewer needs before any turns arrive. */
@@ -70,8 +71,18 @@ export type TraceEvent =
       refused: boolean;
     }
   | { kind: "post"; at: number; turn: number; agent?: string; room: string; to: string[]; body: string }
-  /** The simulation's own view of itself, after a turn that changed it. */
-  | { kind: "state"; at: number; turn: number; round: number; snapshot: Record<string, unknown> }
+  /** The simulation's own view of itself, after a turn or a resolved boundary. */
+  | {
+      kind: "state";
+      at: number;
+      turn: number;
+      round: number;
+      snapshot: Record<string, unknown>;
+      /** True when this state was emitted after the world clock advanced. */
+      resolved?: boolean;
+      /** The simulation's account of that resolution. */
+      announce?: string;
+    }
   /** Recomputed each round by the real graders, so live and final never disagree. */
   | {
       kind: "progress";
@@ -83,6 +94,41 @@ export type TraceEvent =
   | { kind: "end"; at: number; reason?: string; turns: number };
 
 export type TraceSink = (event: TraceEvent) => void;
+
+/**
+ * Complete a simulation and close its trace without letting those two views
+ * disagree about the final world state.
+ *
+ * Ordering is the contract: resolve to the horizon, publish the authoritative
+ * snapshot, then publish `end`. Emitting `end` first used to omit the final
+ * round from broadcasts and history while the report quietly included it.
+ */
+export function finishSimulationTrace(
+  sim: Simulation | undefined,
+  write: TraceSink | undefined,
+  position: { turn: number; round: number; turns: number },
+): void {
+  if (sim) {
+    let guard = 0;
+    while (!sim.done && guard++ < 10_000) sim.advance();
+    const announce = sim.announce?.();
+    write?.({
+      kind: "state",
+      at: Date.now(),
+      turn: position.turn,
+      round: position.round,
+      snapshot: sim.snapshot(),
+      resolved: true,
+      ...(announce ? { announce } : {}),
+    });
+  }
+  write?.({
+    kind: "end",
+    at: Date.now(),
+    ...(sim?.endedBecause ? { reason: sim.endedBecause } : {}),
+    turns: position.turns,
+  });
+}
 
 /**
  * A sink that appends to a file.

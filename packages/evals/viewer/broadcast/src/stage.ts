@@ -252,6 +252,16 @@ const BUBBLE_MS = 6000;
 const DEATH_MS = 900;
 const GHOST_MS = 1700;
 
+/**
+ * A scene is published after every agent turn, but combat resolves only once
+ * per tick. JSON parsing gives every publication a new object identity, so
+ * object equality cannot tell a new beat batch from another copy of the old
+ * one. The simulation supplies `beatsTick` for exactly this boundary.
+ */
+export function isNewBeatBatch(previous: number | null, next: number): boolean {
+  return next >= 0 && next !== previous;
+}
+
 // ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
@@ -1797,6 +1807,8 @@ export function mountStage(host: HTMLElement): Renderer {
   let facts: Derived | null = null;
   /** Identity of the scene already consumed: the store hands us the same object repeatedly. */
   let lastScene: Scene | null = null;
+  /** Tick of the combat beats already animated. */
+  let lastBeatsTick: number | null = null;
   let first = true;
   /** How much of `state.said` has been turned into bubbles. */
   let saidSeen = -1;
@@ -2173,7 +2185,10 @@ export function mountStage(host: HTMLElement): Renderer {
     }
 
     placeEveryone();
-    scheduleBeats(next.beats, now);
+    if (isNewBeatBatch(lastBeatsTick, next.beatsTick)) {
+      lastBeatsTick = next.beatsTick;
+      scheduleBeats(next.beats, now);
+    }
     first = false;
   }
 
@@ -3511,6 +3526,7 @@ export function mountStage(host: HTMLElement): Renderer {
       scene = null;
       facts = null;
       first = true;
+      lastBeatsTick = null;
       saidSeen = -1;
       bubbles.length = 0;
       for (const a of actorList.slice()) dropActor(a);

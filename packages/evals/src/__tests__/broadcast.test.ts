@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { culprits } from "../../viewer/broadcast/src/ribbon.js";
+import { isNewBeatBatch } from "../../viewer/broadcast/src/stage.js";
 import { readHistory, summariseTrace } from "../history.js";
 import { digest, narrate } from "../narrate.js";
 import type { TraceEvent } from "../trace.js";
@@ -181,6 +182,23 @@ describe("the readied ribbon", () => {
   });
 });
 
+describe("stage beat batches", () => {
+  it("animates one resolved tick once across all five agent snapshots", () => {
+    let consumed: number | null = null;
+    let animations = 0;
+    for (const tick of [7, 7, 7, 7, 7, 8]) {
+      if (!isNewBeatBatch(consumed, tick)) continue;
+      consumed = tick;
+      animations += 1;
+    }
+    expect(animations).toBe(2);
+  });
+
+  it("does not animate the pre-combat sentinel tick", () => {
+    expect(isNewBeatBatch(null, -1)).toBe(false);
+  });
+});
+
 describe("the page's shell", () => {
   /**
    * Every mount point `main.ts` demands has to exist in the markup.
@@ -260,6 +278,39 @@ describe("the commentator", () => {
     // does not publish one, must not produce a silent commentator.
     const text = digest([{ kind: "round", at: 1, round: 0, announce: "The party lingers." }], 0);
     expect(text).toContain("The party lingers.");
+  });
+
+  it("uses the resolved state and only the posts from the round it describes", () => {
+    const events: TraceEvent[] = [
+      { kind: "round", at: 1, round: 0, announce: "The expedition begins." },
+      { kind: "turn", at: 2, turn: 0, round: 0, agent: "guardian", room: "party" },
+      { kind: "post", at: 3, turn: 0, agent: "guardian", room: "party", to: [], body: "Focus the wisp." },
+      {
+        kind: "state",
+        at: 4,
+        turn: 0,
+        round: 0,
+        resolved: true,
+        announce: "The wisp burst and the guardian fell.",
+        snapshot: {
+          scene: {
+            floor: 2,
+            phase: "spoils",
+            party: [{ id: "guardian", hp: 0, maxHp: 100, dead: true }],
+            enemies: [],
+          },
+        },
+      },
+      { kind: "round", at: 5, round: 1, announce: "The wisp burst and the guardian fell." },
+      { kind: "turn", at: 6, turn: 1, round: 1, agent: "mage", room: "party" },
+      { kind: "post", at: 7, turn: 1, agent: "mage", room: "party", to: [], body: "That was last round." },
+    ];
+
+    const text = digest(events, 0) ?? "";
+    expect(text).toContain("Round 1");
+    expect(text).toContain("The wisp burst");
+    expect(text).toContain("Focus the wisp");
+    expect(text).not.toContain("That was last round");
   });
 
   it("writes only its own sidecar, and never touches the trace", async () => {

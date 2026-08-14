@@ -15,7 +15,7 @@
 
 import type { Tool } from "@tailored-ai/core";
 import { describe, expect, it } from "vitest";
-import { FAMILIES, generateEncounter, makeEnemy } from "../sim/descent/content.js";
+import { FAMILIES, generateEncounter, generatePaths, makeEnemy } from "../sim/descent/content.js";
 import { Diagnostics } from "../sim/descent/diagnostics.js";
 import { type DescentSimulation, levelFor } from "../sim/descent/index.js";
 import {
@@ -222,20 +222,22 @@ describe("anti-synergies", () => {
     expect(found.join(" ")).toMatch(/wake whatever rogue puts to sleep/);
   });
 
-  it("spots fire thawing a freeze", () => {
-    const found = antiSynergies(state([{}]), [
-      { actor: "mage", kind: "frostbite", target: "e-0" },
-      { actor: "mage", kind: "firebolt", target: "e-0" },
-    ]);
-    expect(found.join(" ")).toMatch(/thaw the freeze/);
+  it("does not report combinations one actor cannot legally ready", () => {
+    expect(
+      antiSynergies(state([{}]), [
+        { actor: "mage", kind: "frostbite", target: "e-0" },
+        { actor: "mage", kind: "firebolt", target: "e-0" },
+      ]),
+    ).toEqual([]);
   });
 
-  it("spots two interrupts spent on one cast", () => {
-    const found = antiSynergies(state([{}]), [
-      { actor: "rogue", kind: "interrupt", target: "e-0" },
-      { actor: "guardian", kind: "interrupt", target: "e-0" },
-    ]);
-    expect(found.join(" ")).toMatch(/one of them is wasted/);
+  it("does not call taunt plus vanish a clash; both protect the rogue", () => {
+    expect(
+      antiSynergies(state([{}]), [
+        { actor: "guardian", kind: "taunt" },
+        { actor: "rogue", kind: "vanish" },
+      ]),
+    ).toEqual([]);
   });
 
   it("says nothing when two sensible actions do not interfere", () => {
@@ -309,6 +311,29 @@ describe("hidden mechanics", () => {
     await call(sim, "cleric", "heal", { target: "guardian" });
     sim.advance();
     expect(state.party.cleric.hp).toBeLessThan(clericHp);
+  });
+
+  it("keeps a Bonewright's stagger window open through the next tick", async () => {
+    const sim = fresh();
+    await intoCombat(sim);
+    const state = sim.view();
+    const def = FAMILIES.find((family) => family.family === "bonewright");
+    if (!def) throw new Error("bonewright missing from the bestiary");
+    const enemy = makeEnemy(def, 1, 31, 1, false);
+    enemy.hp = 10_000;
+    enemy.maxHp = 10_000;
+    state.enemies = [enemy];
+
+    await call(sim, "guardian", "shield_slam", { target: enemy.ref });
+    sim.advance();
+    expect(enemy.windowOpen, "the party must get a next-tick opportunity").toBe(true);
+
+    const before = enemy.hp;
+    const ordinary = computeDamage(state.party.mage.power, "physical", enemy).dealt;
+    await call(sim, "mage", "attack", { target: enemy.ref });
+    sim.advance();
+    expect(before - enemy.hp).toBeGreaterThan(ordinary);
+    expect(enemy.windowOpen).toBe(false);
   });
 });
 
@@ -403,6 +428,25 @@ describe("the economy", () => {
     const said = await call(sim, "guardian", "buy", { item: "healing_potion" });
     expect(said).toMatch(/the party is in the explore phase/);
   });
+
+  it("does not award cooperation for handing resources to yourself", async () => {
+    const sim = fresh();
+    sim.view().party.guardian.inventory.push("antidote");
+    expect(await call(sim, "guardian", "trade_item", { to: "guardian", item: "antidote" })).toMatch(/not a trade/i);
+    expect(await call(sim, "guardian", "give_gold", { to: "guardian", amount: 1 })).toMatch(/does not move/i);
+    expect(sim.metrics().tradesMade).toBe(0);
+    expect(sim.metrics().goldTransfers).toBe(0);
+  });
+});
+
+describe("run variation", () => {
+  it("assigns path contents to different directions across seeds", () => {
+    const signature = (seed: number) =>
+      generatePaths(31, makeRng(seed))
+        .map((path) => `${path.id}:${path.kind}`)
+        .join("|");
+    expect(new Set(Array.from({ length: 8 }, (_, i) => signature(i + 1))).size).toBeGreaterThan(1);
+  });
 });
 
 describe("descent pressure", () => {
@@ -420,6 +464,23 @@ describe("descent pressure", () => {
     expect(sim.view().phase).toBe("explore");
     sim.advance();
     expect(["combat", "market"]).toContain(sim.view().phase);
+  });
+
+  it("allows one rest per round and resolves dangerous dread before descent", async () => {
+    const sim = fresh();
+    const state = sim.view();
+    state.phase = "spoils";
+    state.dread = 4;
+    for (const fighter of Object.values(state.party)) fighter.hp = 1;
+
+    expect(await call(sim, "guardian", "rest")).toMatch(/recovers/i);
+    expect(await call(sim, "mage", "rest")).toMatch(/already rested/i);
+    await call(sim, "guardian", "descend");
+    sim.advance();
+
+    expect(state.floor).toBe(1);
+    expect(state.phase).toBe("combat");
+    expect(state.dread).toBeGreaterThanOrEqual(6);
   });
 });
 
@@ -493,6 +554,38 @@ describe("the coordination diagnostic", () => {
     await call(sim, "rogue", "attack", { target: ref });
     sim.advance();
     expect(sim.metrics().diagCoordination).toBeGreaterThan(0);
+  });
+});
+
+describe("diagnostic accounting", () => {
+  it("counts one dead-target action as one waste", async () => {
+    const sim = fresh();
+    await intoCombat(sim);
+    const state = sim.view();
+    const enemy = state.enemies[0];
+    enemy.hp = 1;
+    enemy.speed = 1;
+    state.enemies = [enemy];
+    await call(sim, "rogue", "attack", { target: enemy.ref });
+    await call(sim, "guardian", "attack", { target: enemy.ref });
+    sim.advance();
+    expect(sim.metrics().actionsWasted).toBe(1);
+  });
+
+  it("reports party members still down at the horizon", () => {
+    const sim = fresh();
+    sim.view().party.mage.dead = true;
+    sim.view().party.rogue.dead = true;
+    expect(sim.metrics().permanentDeaths).toBe(2);
+  });
+
+  it("does not call separate hoarded caches a divided cache", () => {
+    const diag = new Diagnostics();
+    diag.recordCacheTake("guardian", "cache-a");
+    diag.recordCacheTake("guardian", "cache-a");
+    diag.recordCacheTake("mage", "cache-b");
+    diag.recordCacheTake("mage", "cache-b");
+    expect(diag.metrics().cacheTakers).toBe(1);
   });
 });
 

@@ -53,7 +53,7 @@ import YAML from "yaml";
 import { registerPinnedClock, timeConfigBlock } from "./clock.js";
 import { answerTool, Oracle } from "./oracle.js";
 import { createSimulation, type Simulation } from "./sim/index.js";
-import { looksRefused, type TraceSink } from "./trace.js";
+import { finishSimulationTrace, looksRefused, type TraceSink } from "./trace.js";
 import type {
   RecordedCall,
   RecordedExecution,
@@ -1298,6 +1298,20 @@ async function runRoomScenario(
     });
   };
 
+  /** Publish the simulation state at an actual world boundary. */
+  const traceState = (atRound: number) => {
+    if (!sim) return;
+    recorder.trace?.({
+      kind: "state",
+      at: Date.now(),
+      turn: recorder.turn,
+      round: atRound,
+      snapshot: sim.snapshot(),
+      resolved: true,
+      ...(sim.announce?.() ? { announce: sim.announce() as string } : {}),
+    });
+  };
+
   try {
     await strikeTheHour();
     openRound(round ?? 0);
@@ -1324,6 +1338,10 @@ async function runRoomScenario(
         // `SimulationSpec.daysPerRound`: a horizon short enough for one round
         // per day is short enough to reward doing nothing.
         for (let i = 0; i < stride && !sim?.done; i++) sim?.advance();
+        // The result belongs in the trace before the next round is announced.
+        // Waiting for the first agent turn left the stage showing the previous
+        // room (and its stale intents) throughout a potentially long model call.
+        traceState(round ?? 0);
         round = step.round;
         await strikeTheHour();
         openRound(round ?? 0);
@@ -1365,12 +1383,6 @@ async function runRoomScenario(
     }
   } finally {
     drainPosts();
-    recorder.trace?.({
-      kind: "end",
-      at: Date.now(),
-      ...(sim?.endedBecause ? { reason: sim.endedBecause } : {}),
-      turns: turns.length,
-    });
     listening?.dispose();
     watcher.stop();
     // Run the company on to the horizon under management's last decisions.
@@ -1380,10 +1392,11 @@ async function runRoomScenario(
     // the team on a shorter horizon than the thing it is being compared to, and
     // flatter every team that stopped early — a company that is abandoned keeps
     // paying wages, and the balance sheet should say so.
-    if (sim) {
-      let guard = 0;
-      while (!sim.done && guard++ < 10_000) sim.advance();
-    }
+    finishSimulationTrace(sim, recorder.trace, {
+      turn: recorder.turn,
+      round: round ?? 0,
+      turns: turns.length,
+    });
   }
 
   const byRef = new Map([...refs].map(([name, ref]) => [ref, name]));

@@ -1073,7 +1073,7 @@ function buildMap(host: HTMLElement): (scene: Scene | null) => void {
       flag(segNodes[i], "on", i < d);
       flag(segNodes[i], "hot", i < d && i >= 4);
     }
-    const extra = Math.floor(d / 4);
+    const extra = Math.min(1, Math.floor(d / 4));
     dreadTag.style.display = extra > 0 ? "" : "none";
     flag(dreadTag, "alarm", extra > 0);
     if (extra > 0) text(dreadTag, `+${extra} reinforcement${extra === 1 ? "" : "s"}`);

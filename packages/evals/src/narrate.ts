@@ -65,25 +65,44 @@ const SYSTEM =
  * what a spectator of the room would hear.
  */
 export function digest(events: TraceEvent[], round: number): string | null {
-  const scene = [...events].reverse().find((e): e is Extract<TraceEvent, { kind: "state" }> => e.kind === "state")
-    ?.snapshot?.scene as Record<string, unknown> | undefined;
+  const resolved = [...events]
+    .reverse()
+    .find(
+      (e): e is Extract<TraceEvent, { kind: "state" }> =>
+        e.kind === "state" && e.round === round && e.resolved === true,
+    );
+  const scene = (resolved ??
+    [...events].reverse().find((e): e is Extract<TraceEvent, { kind: "state" }> => e.kind === "state"))?.snapshot
+    ?.scene as Record<string, unknown> | undefined;
 
-  const roundEvent = [...events]
+  const nextRoundEvent = [...events]
+    .reverse()
+    .find((e): e is Extract<TraceEvent, { kind: "round" }> => e.kind === "round" && e.round === round + 1);
+  const currentRoundEvent = [...events]
     .reverse()
     .find((e): e is Extract<TraceEvent, { kind: "round" }> => e.kind === "round" && e.round === round);
+  const turns = new Map(
+    events
+      .filter((e): e is Extract<TraceEvent, { kind: "turn" }> => e.kind === "turn")
+      .map((e) => [e.turn, e.round]),
+  );
 
   const said = events
-    .filter((e): e is Extract<TraceEvent, { kind: "post" }> => e.kind === "post")
+    .filter(
+      (e): e is Extract<TraceEvent, { kind: "post" }> =>
+        e.kind === "post" && (turns.size === 0 || turns.get(e.turn) === round),
+    )
     .slice(-4)
     .map((e) => `${e.agent}: ${e.body.replace(/\s+/g, " ").slice(0, 220)}`);
 
-  if (!scene && !roundEvent) return null;
+  const announce = resolved?.announce ?? nextRoundEvent?.announce ?? currentRoundEvent?.announce;
+  if (!scene && !announce) return null;
 
   const party = (scene?.party as Array<Record<string, unknown>> | undefined) ?? [];
   const enemies = (scene?.enemies as Array<Record<string, unknown>> | undefined) ?? [];
 
   const lines: string[] = [];
-  lines.push(`Round ${round}. Floor ${scene?.floor ?? "?"}, ${scene?.phase ?? "?"}.`);
+  lines.push(`Round ${round + 1}. Floor ${scene?.floor ?? "?"}, ${scene?.phase ?? "?"}.`);
   if (party.length) {
     lines.push(`Party: ${party.map((p) => (p.dead ? `${p.id} DOWN` : `${p.id} ${p.hp}/${p.maxHp}`)).join(", ")}`);
   }
@@ -94,7 +113,7 @@ export function digest(events: TraceEvent[], round: number): string | null {
         .join(", ")}`,
     );
   }
-  if (roundEvent?.announce) lines.push(`What happened:\n${roundEvent.announce}`);
+  if (announce) lines.push(`What happened:\n${announce}`);
   if (said.length) lines.push(`They are saying:\n${said.join("\n")}`);
   return lines.join("\n");
 }
@@ -177,23 +196,35 @@ export async function narrate(options: NarrateOptions): Promise<number> {
 
   for (;;) {
     const events = readTrace(options.tracePath);
-    const rounds = events
+    const resolvedRounds = events
+      .filter(
+        (e): e is Extract<TraceEvent, { kind: "state" }> =>
+          e.kind === "state" && e.resolved === true,
+      )
+      .map((e) => e.round);
+    const legacyRounds = events
       .filter((e): e is Extract<TraceEvent, { kind: "round" }> => e.kind === "round")
       .map((e) => e.round);
     const ended = events.some((e) => e.kind === "end");
 
-    // Never narrate the round currently in progress: its `announce` describes
-    // what the *previous* round did, and its posts are still arriving.
-    const ready = rounds.slice(0, Math.max(0, rounds.length - (ended ? 0 : 1)));
+    // New traces mark resolved states directly. Older traces use the following
+    // round boundary as the only available completion signal.
+    const ready =
+      resolvedRounds.length > 0
+        ? [...new Set(resolvedRounds)]
+        : legacyRounds.slice(0, Math.max(0, legacyRounds.length - (ended ? 0 : 1)));
 
     for (const round of ready) {
       if (done.has(round)) continue;
-      const upTo = events.slice(
-        0,
-        events.findIndex((e) => e.kind === "round" && (e as { round: number }).round === round + 1) + 1 || undefined,
+      const resolvedAt = events.findIndex(
+        (e) => e.kind === "state" && e.round === round && e.resolved === true,
       );
+      const nextBoundary = events.findIndex(
+        (e) => e.kind === "round" && (e as { round: number }).round === round + 1,
+      );
+      const boundary = resolvedAt >= 0 ? resolvedAt : nextBoundary;
+      const upTo = boundary >= 0 ? events.slice(0, boundary + 1) : events;
       const prompt = digest(upTo, round);
-      done.add(round);
       if (!prompt) continue;
 
       let line: string | null = null;
@@ -204,6 +235,7 @@ export async function narrate(options: NarrateOptions): Promise<number> {
       }
       if (!line) continue;
 
+      done.add(round);
       recent.push(line);
       spoken += 1;
       idleSince = Date.now();

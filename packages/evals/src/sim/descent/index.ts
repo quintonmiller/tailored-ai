@@ -320,7 +320,6 @@ export class DescentSimulation implements Simulation {
   private elitesDefeated = 0;
   private enemiesDefeated = 0;
   private deaths = 0;
-  private permanentDeaths = 0;
   private floorReached = 1;
   private readonly startFloor: number;
   private revives = 0;
@@ -329,6 +328,10 @@ export class DescentSimulation implements Simulation {
   private lastBeatsTick = -1;
   private encounterSerious = false;
   private descendRequested = false;
+  /** A party can take one rest action per simulation tick. */
+  private lastRestTick = -1;
+  /** Distinguishes separate caches for the sharing diagnostic. */
+  private cacheSerial = 0;
   private pendingPath: string | undefined;
   /** Who has been handed gold, and what they held before it. See `buyItem`. */
   private readonly toppedUp = new Map<ClassId, number>();
@@ -684,7 +687,6 @@ export class DescentSimulation implements Simulation {
       out.lines.push(`${element} arcs back off ${target.name}'s facets — ${from.id} takes ${took}.`);
       out.beats.push({ kind: "mechanic", from: target.ref, to: from.id, amount: took, element, note: "reflect" });
       out.mechanicsFired.push({ family: target.family, kind: "reflect" });
-      this.diag.recordMechanic(target.family, "reflect");
       if (from.dead) out.downed.push(from.id);
     }
     return dealt;
@@ -698,7 +700,6 @@ export class DescentSimulation implements Simulation {
     const needsEnemy = ABILITIES[kind]?.target === "enemy" || kind === "attack";
     if (needsEnemy && !enemyTarget) {
       out.wasted.push({ actor: actor.id, why: "the target was already dead" });
-      this.diag.actionsWasted += 1;
       out.lines.push(`${actor.id} swings at nothing; ${intent.target} was already down.`);
       return;
     }
@@ -736,7 +737,6 @@ export class DescentSimulation implements Simulation {
         const ally = state.party[(intent.target ?? "") as ClassId];
         if (!ally || ally.dead) {
           out.wasted.push({ actor: actor.id, why: "no such ally standing" });
-          this.diag.actionsWasted += 1;
           break;
         }
         applyStatus(ally, { kind: "shield", ticks: 3, amount: Math.round(actor.power * 2.6) });
@@ -818,7 +818,6 @@ export class DescentSimulation implements Simulation {
         const ally = state.party[(intent.target ?? "") as ClassId];
         if (!ally || ally.dead) {
           out.wasted.push({ actor: actor.id, why: "no such ally standing" });
-          this.diag.actionsWasted += 1;
           break;
         }
         if (kind === "heal") {
@@ -844,7 +843,6 @@ export class DescentSimulation implements Simulation {
             const bled = hurtFighter(actor, Math.round(e.hidden.drain * 1.6), "shadow");
             say(`${e.name} turns toward ${actor.id}: ${e.hidden.drain} mana gone, and ${bled} with it.`);
             out.mechanicsFired.push({ family: e.family, kind: "punishHeal" });
-            this.diag.recordMechanic(e.family, "punishHeal");
             if (actor.dead) out.downed.push(actor.id);
           }
           if (e.hidden.kind === "tollHeal") applyStatus(ally, { kind: "mark", ticks: 1, amount: 0, source: "healed" });
@@ -880,7 +878,6 @@ export class DescentSimulation implements Simulation {
       }
       default:
         out.wasted.push({ actor: actor.id, why: `unknown action ${kind}` });
-        this.diag.actionsWasted += 1;
     }
   };
 
@@ -898,7 +895,6 @@ export class DescentSimulation implements Simulation {
     const power = e.power * (enraged ? (e.hidden as { multiplier: number }).multiplier : 1);
     if (enraged && !e.statuses.some((s) => s.kind === "weaken")) {
       out.mechanicsFired.push({ family: e.family, kind: "enrage" });
-      this.diag.recordMechanic(e.family, "enrage");
     }
 
     const bite = (target: Fighter, raw: number, element: Element = "physical", label = "hits") => {
@@ -920,7 +916,6 @@ export class DescentSimulation implements Simulation {
         if (healed.length > 0) {
           say(`${e.name} tolls.`);
           out.mechanicsFired.push({ family: e.family, kind: "tollHeal" });
-          this.diag.recordMechanic(e.family, "tollHeal");
           for (const f of healed) bite(f, e.hidden.damage, "shadow", "rings through");
         } else {
           say(`${e.name} tolls, and nothing answers it.`);
@@ -1070,7 +1065,6 @@ export class DescentSimulation implements Simulation {
     const say = (t: string) => out.lines.push(t);
     if (!def || !actor.inventory.includes(item)) {
       out.wasted.push({ actor: actor.id, why: `no ${item} in the pack` });
-      this.diag.actionsWasted += 1;
       return;
     }
     const ally = target && this.state.party[target as ClassId] ? this.state.party[target as ClassId] : actor;
@@ -1240,6 +1234,7 @@ export class DescentSimulation implements Simulation {
       this.note("merchant", `A merchant has set up on floor ${s.floor}.`);
     } else if (this.pendingCache || s.floor % 3 === 0) {
       const rolled = rollCache(s.floor, CACHE_OFFERS, this.stockRng);
+      this.cacheSerial += 1;
       s.cache = rolled.items.map((item) => ({ item }));
       s.cacheTakesLeft = CACHE_TAKES;
       s.cacheOrigin = rolled.origin;
@@ -1319,6 +1314,7 @@ export class DescentSimulation implements Simulation {
         // afterwards whether two agents acted in the same round always answered
         // no, and the coordination diagnostic read 0% for every run ever made.
         const actorsThisRound = s.intents.length;
+        this.diag.turnsIdle += Math.max(0, livingParty(s).length - new Set(s.intents.map((i) => i.actor)).size);
         const result = resolveTick(s, this.rng.fork(`tick-${s.tick}`), this.performAbility, this.enemyAct);
         this.lastLog = result.lines;
         this.lastBeats = result.beats;
@@ -1339,8 +1335,10 @@ export class DescentSimulation implements Simulation {
           this.note("down", `${id} went down on floor ${s.floor}.`);
         }
         if (result.mechanicsFired.length > 0) {
-          for (const m of result.mechanicsFired)
+          for (const m of result.mechanicsFired) {
+            this.diag.recordMechanic(m.family, m.kind);
             this.note("mechanic", `Something about the ${m.family} answered back.`);
+          }
         }
 
         const levelled = levelFor(this.totalXp);
@@ -1353,7 +1351,6 @@ export class DescentSimulation implements Simulation {
 
         if (livingParty(s).length === 0) {
           s.wiped = true;
-          this.permanentDeaths = CLASSES.length;
           this.note("wipe", `The party died on floor ${s.floor}.`);
           s.phase = "over";
           break;
@@ -1398,15 +1395,19 @@ export class DescentSimulation implements Simulation {
           this.lastLog = [`${cap(s.cacheOrigin ?? "somebody")} got this far, and no further.`];
           break;
         }
+        // Dread is a consequence, not a number the party can erase by resting
+        // and asking for the stairs in the same round.
+        if (s.dread >= 6) {
+          this.descendRequested = false;
+          this.lastLog = ["Lingering has been noticed."];
+          this.beginEncounter(false);
+          break;
+        }
         if (this.descendRequested) {
           this.descend();
           break;
         }
         this.lastLog = ["The party lingers."];
-        if (s.dread >= 6) {
-          this.lastLog = ["Lingering has been noticed."];
-          this.beginEncounter(false);
-        }
         break;
       }
       case "over":
@@ -1623,6 +1624,7 @@ export class DescentSimulation implements Simulation {
     if (this.state.phase === "combat") throw new Error("not in the middle of a fight.");
     const them = this.state.party[toRaw as ClassId];
     if (!them) throw new Error(`no party member called "${toRaw}".`);
+    if (them.id === me.id) throw new Error("handing an item to yourself is not a trade.");
     if (them.dead) throw new Error(`${toRaw} is down.`);
     if (!me.inventory.includes(item)) throw new Error(`there is no ${item} in your pack.`);
     if (them.inventory.length >= 6) throw new Error(`${toRaw}'s pack is full.`);
@@ -1636,6 +1638,7 @@ export class DescentSimulation implements Simulation {
     const me = this.who(agent);
     const them = this.state.party[toRaw as ClassId];
     if (!them) throw new Error(`no party member called "${toRaw}".`);
+    if (them.id === me.id) throw new Error("giving gold to yourself does not move a purse.");
     const give = Math.max(0, Math.floor(amount));
     if (give <= 0) throw new Error("give a positive amount.");
     if (me.gold < give) throw new Error(`you have ${me.gold} gold, not ${give}.`);
@@ -1710,7 +1713,7 @@ export class DescentSimulation implements Simulation {
     entry.taken = me.id;
     s.cacheTakesLeft -= 1;
     me.inventory.push(item);
-    this.diag.recordCacheTake(me.id);
+    this.diag.recordCacheTake(me.id, `${s.floor}:${this.cacheSerial}`);
     const def = ITEM_BY_ID.get(item);
     const useless =
       def && def.kind !== "consumable" && !canEquip(def, me.id)
@@ -1828,6 +1831,10 @@ export class DescentSimulation implements Simulation {
   restParty(agent: string | undefined): string {
     this.who(agent);
     this.requirePhase("spoils", "market", "cache");
+    if (this.lastRestTick === this.state.tick) {
+      throw new Error("the party has already rested this round. More recovery takes another round.");
+    }
+    this.lastRestTick = this.state.tick;
     for (const f of livingParty(this.state)) {
       f.hp = Math.min(f.maxHp, f.hp + Math.round(f.maxHp * 0.18));
       f.mana = Math.min(f.maxMana, f.mana + Math.round(f.maxMana * 0.35));
@@ -2148,7 +2155,7 @@ export class DescentSimulation implements Simulation {
       partyLevel: this.level,
       deaths: this.deaths,
       revives: this.revives,
-      permanentDeaths: this.permanentDeaths,
+      permanentDeaths: CLASSES.filter((id) => s.party[id].dead).length,
       survivors: livingParty(s).length,
       ticksSurvived: s.tick,
       wiped: s.wiped ? 1 : 0,

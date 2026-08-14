@@ -845,17 +845,18 @@ export function generatePaths(
         ? { label: "A stair with packs stacked at the bottom, and nobody near them", kind: "cache" }
         : { label: "A worn stair, unmarked", kind: "unknown" };
 
-  const paths = [
-    { id: "left", label: "A low passage, unmarked", kind: "unknown", hint: "no telling" },
-    { id: "right", label: marked.label, kind: marked.kind },
-    { id: "forward", label: "A wide hall; something large is moving in it", kind: "elite", hint: "richer, and worse" },
-    { id: "down", label: "A shrine alcove", kind: "shrine", hint: "quiet" },
+  const choices = [
+    { label: "A low passage, unmarked", kind: "unknown", hint: "no telling" },
+    { label: marked.label, kind: marked.kind },
+    { label: "A wide hall; something large is moving in it", kind: "elite", hint: "richer, and worse" },
+    { label: "A shrine alcove", kind: "shrine", hint: "quiet" },
   ];
-  // Shuffle so the same id is not always the same choice, and the party has to
-  // read the labels rather than learn a position.
-  for (let i = paths.length - 1; i > 0; i--) {
+  // Shuffle the contents, then attach them to stable direction ids. Shuffling
+  // complete `{id, content}` objects only changed display order: `down` was
+  // still a shrine and `forward` was still elite on every seed.
+  for (let i = choices.length - 1; i > 0; i--) {
     const j = rng.int(0, i);
-    [paths[i], paths[j]] = [paths[j], paths[i]];
+    [choices[i], choices[j]] = [choices[j], choices[i]];
   }
-  return paths;
+  return ["left", "right", "forward", "down"].map((id, i) => ({ id, ...choices[i] }));
 }
