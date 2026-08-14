@@ -26,6 +26,23 @@ export interface SceneStatus {
   amount: number;
 }
 
+export interface SceneItem {
+  id: string;
+  baseId: string;
+  name: string;
+  kind: string;
+  rarity: string;
+  description: string;
+  affixes: Array<{
+    id: string;
+    name: string;
+    description: string;
+    polarity: "positive" | "negative";
+    modifiers: { power?: number; armor?: number; hp?: number; mana?: number; speed?: number };
+  }>;
+  provenance: { source: string; floor: number };
+}
+
 /** One animatable thing that happened. See the note on `Beat` in the simulation. */
 export interface SceneBeat {
   kind: "hit" | "heal" | "shield" | "status" | "wasted" | "death" | "mechanic" | "guard" | "spawn";
@@ -49,9 +66,10 @@ export interface ScenePartyMember {
   dead: boolean;
   talentPoints: number;
   talents: Array<{ id: string; name: string; rank: number }>;
+  cooldowns: Array<{ id: string; ticks: number }>;
   statuses: SceneStatus[];
-  pack: Array<{ id: string; name: string }>;
-  worn: Array<{ slot: string; id: string; name: string }>;
+  pack: SceneItem[];
+  worn: Array<SceneItem & { slot: string }>;
   readied: { kind: string; target: string | null } | null;
 }
 
@@ -95,8 +113,8 @@ export interface Scene {
   } | null;
   pendingPath: string | null;
   scouted: string | null;
-  stock: Array<{ id: string; name: string; price: number }>;
-  cache: Array<{ id: string; name: string; forClasses: string[]; taken: string | null }>;
+  stock: Array<SceneItem & { price: number }>;
+  cache: Array<SceneItem & { forClasses: string[]; taken: string | null }>;
   cacheTakesLeft: number;
   cacheOrigin: string | null;
   /**
@@ -109,7 +127,7 @@ export interface Scene {
    * to sleep, several seconds before anybody in the party finds out.
    */
   clashes: string[];
-  loot: Array<{ id: string; name: string; to: ClassId }>;
+  loot: Array<SceneItem & { to: ClassId }>;
   beats: SceneBeat[];
   /**
    * Which tick the beats belong to.

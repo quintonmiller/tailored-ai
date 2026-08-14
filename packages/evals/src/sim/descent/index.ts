@@ -66,7 +66,11 @@ import {
   generateFloorMap,
   generatePaths,
   ITEM_BY_ID,
+  itemDef,
+  itemModifiers,
   itemName,
+  itemPrice,
+  makeItemInstance,
   rollCache,
   rollLoot,
   rollStock,
@@ -102,6 +106,8 @@ import {
   hurtEnemy,
   hurtFighter,
   type Intent,
+  type ItemInstance,
+  type ItemProvenance,
   livingEnemies,
   livingParty,
   type Phase,
@@ -132,6 +138,23 @@ interface TalentDef {
   armor?: number;
   power?: number;
   speed?: number;
+}
+
+interface DescentSceneItem {
+  id: string;
+  baseId: string;
+  name: string;
+  kind: string;
+  rarity: string;
+  description: string;
+  affixes: Array<{
+    id: string;
+    name: string;
+    description: string;
+    polarity: "positive" | "negative";
+    modifiers: { power?: number; armor?: number; hp?: number; mana?: number; speed?: number };
+  }>;
+  provenance: { source: string; floor: number };
 }
 
 /**
@@ -337,9 +360,10 @@ export interface DescentScene {
     dead: boolean;
     talentPoints: number;
     talents: Array<{ id: string; name: string; rank: number }>;
+    cooldowns: Array<{ id: string; ticks: number }>;
     statuses: Array<{ kind: string; ticks: number; amount: number }>;
-    pack: Array<{ id: string; name: string }>;
-    worn: Array<{ slot: string; id: string; name: string }>;
+    pack: DescentSceneItem[];
+    worn: Array<DescentSceneItem & { slot: string }>;
     readied: { kind: string; target: string | null } | null;
   }>;
   enemies: Array<{
@@ -371,8 +395,8 @@ export interface DescentScene {
   } | null;
   pendingPath: string | null;
   scouted: string | null;
-  stock: Array<{ id: string; name: string; price: number }>;
-  cache: Array<{ id: string; name: string; forClasses: string[]; taken: string | null }>;
+  stock: Array<DescentSceneItem & { price: number }>;
+  cache: Array<DescentSceneItem & { forClasses: string[]; taken: string | null }>;
   cacheTakesLeft: number;
   cacheOrigin: string | null;
   /**
@@ -385,7 +409,7 @@ export interface DescentScene {
    * to sleep, several seconds before anybody in the party finds out.
    */
   clashes: string[];
-  loot: Array<{ id: string; name: string; to: ClassId }>;
+  loot: Array<DescentSceneItem & { to: ClassId }>;
   beats: Beat[];
   /** Which tick the beats belong to — see the note on the field below. */
   beatsTick: number;
@@ -403,6 +427,8 @@ export class DescentSimulation implements Simulation {
   private readonly encounterRng: Rng;
   private readonly pathRng: Rng;
   private readonly stockRng: Rng;
+  /** Affixes have their own stream so adding one never changes encounter or drop selection. */
+  private readonly itemRng: Rng;
   private readonly damageRng: Rng;
   private readonly maze: boolean;
 
@@ -437,6 +463,7 @@ export class DescentSimulation implements Simulation {
   private pendingPath: string | undefined;
   /** Who has been handed gold, and what they held before it. See `buyItem`. */
   private readonly toppedUp = new Map<ClassId, number>();
+  private itemSerial = 0;
 
   constructor(options: SimulationOptions) {
     const seed = options.seed ?? 1;
@@ -445,6 +472,7 @@ export class DescentSimulation implements Simulation {
     this.encounterRng = this.rng.fork("encounter");
     this.pathRng = this.rng.fork("path");
     this.stockRng = this.rng.fork("stock");
+    this.itemRng = this.rng.fork("items");
     this.damageRng = this.rng.fork("damage");
     this.maze = options.maze === true || options.maze === "true";
 
@@ -482,9 +510,12 @@ export class DescentSimulation implements Simulation {
     } else {
       // Legacy/direct-start simulations retain the sparse fixed kit. Keeping
       // this path is useful for focused combat tests and custom scenarios.
-      party.guardian.inventory.push("healing_potion");
-      party.cleric.inventory.push("healing_potion", "antidote");
-      party.mage.inventory.push("mana_potion");
+      party.guardian.inventory.push(this.makeItem("healing_potion", "starting-kit", startFloor));
+      party.cleric.inventory.push(
+        this.makeItem("healing_potion", "starting-kit", startFloor),
+        this.makeItem("antidote", "starting-kit", startFloor),
+      );
+      party.mage.inventory.push(this.makeItem("mana_potion", "starting-kit", startFloor));
     }
     this.startFloor = startFloor;
 
@@ -499,7 +530,7 @@ export class DescentSimulation implements Simulation {
       paths: map ? pathsFromMap(map) : generatePaths(startFloor, this.pathRng),
       ...(map ? { map } : {}),
       pending: [],
-      stock: preparation ? rollStock(1, this.stockRng) : [],
+      stock: preparation ? this.makeStock(rollStock(1, this.stockRng), "outfitter", 1) : [],
       cache: [],
       cacheTakesLeft: 0,
       log: [],
@@ -540,6 +571,37 @@ export class DescentSimulation implements Simulation {
    */
   private grantedXp = 0;
 
+  private makeItem(baseId: string, source: ItemProvenance, floor: number, affixed = true): ItemInstance {
+    this.itemSerial += 1;
+    return makeItemInstance(
+      baseId,
+      `${baseId}@${String(this.itemSerial).padStart(4, "0")}`,
+      source,
+      floor,
+      affixed ? this.itemRng : undefined,
+    );
+  }
+
+  private makeStock(
+    rolled: Array<{ item: string; price: number }>,
+    source: "outfitter" | "merchant",
+    floor: number,
+  ): DescentState["stock"] {
+    return rolled.map((listing) => {
+      const item = this.makeItem(listing.item, source, floor);
+      const basePrice = ITEM_BY_ID.get(item.baseId)?.price ?? listing.price;
+      const depthFactor = basePrice > 0 ? listing.price / basePrice : 1;
+      return { item, price: Math.round(itemPrice(item) * depthFactor) };
+    });
+  }
+
+  /** Exact instance ids win; a base id remains a compatibility alias. */
+  private heldItem(fighter: Fighter, query: string): ItemInstance | undefined {
+    return (
+      fighter.inventory.find((item) => item.id === query) ?? fighter.inventory.find((item) => item.baseId === query)
+    );
+  }
+
   private equipForDepth(floor: number): void {
     // Fitted to what a `rule-based` party actually holds when it arrives, over
     // twenty seeds: 1,433 experience at floor 8, 3,298 at 12, 15,003 at 25. The
@@ -559,8 +621,9 @@ export class DescentSimulation implements Simulation {
     };
     for (const id of CLASSES) {
       const f = this.state.party[id];
-      for (const item of kit[id]) {
-        const def = ITEM_BY_ID.get(item);
+      for (const baseId of kit[id]) {
+        const item = this.makeItem(baseId, "starting-kit", floor, false);
+        const def = ITEM_BY_ID.get(baseId);
         if (def && (def.kind === "weapon" || def.kind === "armor")) f.equipped[def.kind] = item;
       }
       f.gold = Math.round((this.totalXp * 0.63) / CLASSES.length);
@@ -568,9 +631,9 @@ export class DescentSimulation implements Simulation {
       f.hp = f.maxHp;
       f.mana = f.maxMana;
     }
-    this.state.party.cleric.inventory.push("greater_potion");
-    this.state.party.guardian.inventory.push("healing_potion");
-    this.state.party.ranger.inventory.push("soul_stone");
+    this.state.party.cleric.inventory.push(this.makeItem("greater_potion", "starting-kit", floor));
+    this.state.party.guardian.inventory.push(this.makeItem("healing_potion", "starting-kit", floor));
+    this.state.party.ranger.inventory.push(this.makeItem("soul_stone", "starting-kit", floor));
   }
 
   get day(): number {
@@ -641,7 +704,7 @@ export class DescentSimulation implements Simulation {
     if (!full) {
       const worn = Object.values(f.equipped)
         .filter(Boolean)
-        .map((i) => itemName(i as string));
+        .map((i) => itemName(i as ItemInstance));
       const wearing = worn.length > 0 ? `, wearing ${worn.join(" + ")}` : "";
       return `  ${f.id}: ${f.hp}/${f.maxHp} hp${mana}${status}${wearing}`;
     }
@@ -653,7 +716,10 @@ export class DescentSimulation implements Simulation {
     // the simulation will refuse — a refusal caused by the interface rather
     // than by the decision, which is exactly the kind of noise that makes a
     // tool-correctness diagnostic worthless.
-    const pack = f.inventory.map((i) => `${i} (${itemName(i)})`);
+    const pack = f.inventory.map(
+      (i) =>
+        `${i.id} (${itemName(i)}; ${i.rarity}${i.affixes.length ? `; ${i.affixes.map((a) => a.description).join(", ")}` : ""})`,
+    );
     const talents = Object.entries(f.talents)
       .filter(([, rank]) => rank > 0)
       .map(([id, rank]) => `${id} ${rank}`);
@@ -666,7 +732,10 @@ export class DescentSimulation implements Simulation {
       `  worn: ${
         Object.entries(f.equipped)
           .filter(([, v]) => v)
-          .map(([slot, v]) => `${slot} ${v} (${itemName(v as string)})`)
+          .map(([slot, v]) => {
+            const item = v as ItemInstance;
+            return `${slot} ${item.id} (${itemName(item)}; ${item.rarity}${item.affixes.length ? `; ${item.affixes.map((a) => a.description).join(", ")}` : ""})`;
+          })
           .join(", ") || "(nothing)"
       }`,
       cds.length > 0 ? `  cooling down: ${cds.join(", ")}` : "",
@@ -754,9 +823,9 @@ export class DescentSimulation implements Simulation {
 
     if (s.phase === "market" || s.phase === "camp") {
       out.push("", s.phase === "camp" ? "The surface outfitter has:" : "The merchant has:");
-      for (const item of s.stock) {
-        const def = ITEM_BY_ID.get(item.item);
-        out.push(`  ${item.item} — ${def?.name}, ${item.price} gold. ${def?.desc ?? ""}`);
+      for (const listing of s.stock) {
+        const item = listing.item;
+        out.push(`  ${item.id} — ${item.name}, ${listing.price} gold. ${item.description}`);
       }
       out.push(
         s.phase === "camp"
@@ -770,14 +839,14 @@ export class DescentSimulation implements Simulation {
     if (s.phase === "cache") {
       out.push("", `What is left of ${s.cacheOrigin ?? "an expedition"}. Their packs hold:`);
       for (const entry of s.cache) {
-        const def = ITEM_BY_ID.get(entry.item);
+        const def = itemDef(entry.item);
         // Who can use it is spelled out, because the interesting argument is
         // about that and not about remembering the class table.
         const fit = def && def.kind !== "consumable" && def.classes ? ` — for ${def.classes.join(" or ")}` : "";
         out.push(
           entry.taken
-            ? `  ${entry.item} — ${def?.name}${fit}. Taken by ${entry.taken}.`
-            : `  ${entry.item} — ${def?.name}${fit}. ${def?.desc ?? ""}`,
+            ? `  ${entry.item.id} — ${entry.item.name}${fit}. Taken by ${entry.taken}.`
+            : `  ${entry.item.id} — ${entry.item.name}${fit}. ${entry.item.description}`,
         );
       }
       out.push(
@@ -795,7 +864,7 @@ export class DescentSimulation implements Simulation {
     if (s.phase === "spoils") {
       if (s.pending.length > 0) {
         out.push("", "Picked up:");
-        for (const p of s.pending) out.push(`  ${p.item} (${itemName(p.item)}) → went into ${p.to}'s pack`);
+        for (const p of s.pending) out.push(`  ${p.item.id} (${itemName(p.item)}) → went into ${p.to}'s pack`);
       }
       out.push(
         "",
@@ -1226,17 +1295,18 @@ export class DescentSimulation implements Simulation {
   // -------------------------------------------------------------------------
 
   private consume(actor: Fighter, item: string, target: string | undefined, out: TickResult): void {
-    const def = ITEM_BY_ID.get(item);
+    const held = this.heldItem(actor, item);
+    const def = held ? ITEM_BY_ID.get(held.baseId) : undefined;
     const say = (t: string) => out.lines.push(t);
-    if (!def || !actor.inventory.includes(item)) {
+    if (!def || !held) {
       out.wasted.push({ actor: actor.id, why: `no ${item} in the pack` });
       return;
     }
     const ally = target && this.state.party[target as ClassId] ? this.state.party[target as ClassId] : actor;
-    actor.inventory.splice(actor.inventory.indexOf(item), 1);
-    this.diag.recordConsumable(item, this.encounterSerious);
+    actor.inventory.splice(actor.inventory.indexOf(held), 1);
+    this.diag.recordConsumable(held.baseId, this.encounterSerious);
 
-    switch (item) {
+    switch (held.baseId) {
       case "healing_potion": {
         const healed = Math.min(45, ally.maxHp - ally.hp);
         ally.hp += healed;
@@ -1310,13 +1380,19 @@ export class DescentSimulation implements Simulation {
     let power = base.power + lvl * 3;
     let speed = base.speed;
     for (const id of Object.values(f.equipped)) {
-      const def = id ? ITEM_BY_ID.get(id) : undefined;
+      const def = id ? ITEM_BY_ID.get(id.baseId) : undefined;
       if (!def) continue;
+      const affix = itemModifiers(id);
       maxHp += def.hp ?? 0;
+      maxHp += affix.hp;
       maxMana += def.mana ?? 0;
+      maxMana += affix.mana;
       armor += def.armorBonus ?? 0;
+      armor += affix.armor;
       power += def.power ?? 0;
+      power += affix.power;
       speed += def.speed ?? 0;
+      speed += affix.speed;
     }
     for (const [id, rank] of Object.entries(f.talents)) {
       const talent = TALENTS[id];
@@ -1327,11 +1403,11 @@ export class DescentSimulation implements Simulation {
       power += (talent.power ?? 0) * rank;
       speed += (talent.speed ?? 0) * rank;
     }
-    f.maxHp = maxHp + f.bonusHp;
-    f.maxMana = maxMana;
-    f.armor = armor;
-    f.power = Math.round(power);
-    f.speed = speed;
+    f.maxHp = Math.max(1, maxHp + f.bonusHp);
+    f.maxMana = Math.max(0, maxMana);
+    f.armor = Math.max(0, armor);
+    f.power = Math.max(1, Math.round(power));
+    f.speed = Math.max(1, speed);
     f.hp = Math.min(f.hp, f.maxHp);
     f.mana = Math.min(f.mana, f.maxMana);
   }
@@ -1392,15 +1468,13 @@ export class DescentSimulation implements Simulation {
       this.goldEarned += gold;
     }
     const currentRoom = s.map?.rooms.find((room) => room.id === s.map?.currentRoom);
-    const drops = rollLoot(
-      s.floor,
-      currentRoom?.kind === "boss" || s.floor % 5 === 0,
-      this.encounterSerious,
-      this.lootRng,
-    );
-    for (const item of drops) {
+    const bossDrop = currentRoom?.kind === "boss" || (!s.map && s.floor % 5 === 0);
+    const drops = rollLoot(s.floor, bossDrop, this.encounterSerious, this.lootRng);
+    for (const baseId of drops) {
       const to = CLASSES[this.lootRng.int(0, CLASSES.length - 1)];
       const holder = s.party[to];
+      const source: ItemProvenance = bossDrop ? "boss" : this.encounterSerious ? "elite" : "drop";
+      const item = this.makeItem(baseId, source, s.floor);
       if (holder.inventory.length >= 6) {
         this.lastLog.push(`${itemName(item)} was left behind — ${to}'s pack is full.`);
         continue;
@@ -1408,7 +1482,9 @@ export class DescentSimulation implements Simulation {
       holder.inventory.push(item);
       s.pending.push({ item, to });
     }
-    if (drops.length > 0) this.note("loot", `Spoils on floor ${s.floor}: ${drops.map(itemName).join(", ")}.`);
+    if (s.pending.length > 0) {
+      this.note("loot", `Spoils on floor ${s.floor}: ${s.pending.map((entry) => itemName(entry.item)).join(", ")}.`);
+    }
 
     if (s.map) {
       const room = s.map.rooms.find((candidate) => candidate.id === s.map?.currentRoom);
@@ -1441,12 +1517,12 @@ export class DescentSimulation implements Simulation {
     s.cacheTakesLeft = 0;
     s.cacheOrigin = undefined;
     if (s.floor % 6 === 0) {
-      s.stock = rollStock(s.floor, this.stockRng);
+      s.stock = this.makeStock(rollStock(s.floor, this.stockRng), "merchant", s.floor);
       this.note("merchant", `A merchant has set up on floor ${s.floor}.`);
     } else if (this.pendingCache || s.floor % 3 === 0) {
       const rolled = rollCache(s.floor, CACHE_OFFERS, this.stockRng);
       this.cacheSerial += 1;
-      s.cache = rolled.items.map((item) => ({ item }));
+      s.cache = rolled.items.map((baseId) => ({ item: this.makeItem(baseId, "cache", s.floor) }));
       s.cacheTakesLeft = CACHE_TAKES;
       s.cacheOrigin = rolled.origin;
       this.note("cache", `What is left of ${rolled.origin} is on floor ${s.floor}.`);
@@ -1809,11 +1885,14 @@ export class DescentSimulation implements Simulation {
 
   useItem(agent: string | undefined, item: string, targetRaw?: unknown): string {
     const me = this.who(agent);
-    if (!me.inventory.includes(item)) {
-      throw new Error(`there is no ${item} in your pack. You have: ${me.inventory.join(", ") || "nothing"}.`);
+    const held = this.heldItem(me, item);
+    if (!held) {
+      throw new Error(
+        `there is no ${item} in your pack. You have: ${me.inventory.map((entry) => entry.id).join(", ") || "nothing"}.`,
+      );
     }
     const target = String(targetRaw ?? me.id);
-    if (this.state.phase === "combat") return this.ready(me, { actor: me.id, kind: "use_item", what: item, target });
+    if (this.state.phase === "combat") return this.ready(me, { actor: me.id, kind: "use_item", what: held.id, target });
     const out: TickResult = {
       lines: [],
       beats: [],
@@ -1823,16 +1902,16 @@ export class DescentSimulation implements Simulation {
       mechanicsFired: [],
       wasted: [],
     };
-    this.consume(me, item, target, out);
-    return out.lines.join("\n") || `Used ${item}.`;
+    this.consume(me, held.id, target, out);
+    return out.lines.join("\n") || `Used ${held.name}.`;
   }
 
   equipItem(agent: string | undefined, item: string): string {
     const me = this.who(agent);
     if (this.state.phase === "combat") throw new Error("not in the middle of a fight.");
-    const def = ITEM_BY_ID.get(item);
-    if (!def) throw new Error(`no such item: ${item}.`);
-    if (!me.inventory.includes(item)) throw new Error(`there is no ${item} in your pack.`);
+    const held = this.heldItem(me, item);
+    const def = held ? ITEM_BY_ID.get(held.baseId) : undefined;
+    if (!def || !held) throw new Error(`there is no ${item} in your pack.`);
     if (def.kind === "consumable") throw new Error(`${def.name} is used, not worn. Try use_item.`);
     if (!canEquip(def, me.id)) {
       throw new Error(
@@ -1856,17 +1935,17 @@ export class DescentSimulation implements Simulation {
       if (worn.length >= ATTUNEMENT_SLOTS) {
         throw new Error(
           `the party can only keep ${ATTUNEMENT_SLOTS} trinkets attuned at once, and all ${ATTUNEMENT_SLOTS} are ` +
-            `spoken for: ${worn.map((id) => `${id} (${itemName(this.state.party[id].equipped.trinket as string)})`).join(", ")}. ` +
+            `spoken for: ${worn.map((id) => `${id} (${itemName(this.state.party[id].equipped.trinket as ItemInstance)})`).join(", ")}. ` +
             "Somebody has to take one off before you can put this on.",
         );
       }
     }
 
-    me.equipped[slot] = item;
-    me.inventory.splice(me.inventory.indexOf(item), 1);
+    me.equipped[slot] = held;
+    me.inventory.splice(me.inventory.indexOf(held), 1);
     if (previous) me.inventory.push(previous);
     this.effective(me);
-    return `You put on ${def.name}.${previous ? ` ${itemName(previous)} goes back into your pack.` : ""} You are now ${me.hp}/${me.maxHp} hp, armour ${me.armor}, power ${me.power}, speed ${me.speed}.`;
+    return `You put on ${held.name}.${previous ? ` ${itemName(previous)} goes back into your pack.` : ""} You are now ${me.hp}/${me.maxHp} hp, armour ${me.armor}, power ${me.power}, speed ${me.speed}.`;
   }
 
   /**
@@ -1900,12 +1979,13 @@ export class DescentSimulation implements Simulation {
     if (!them) throw new Error(`no party member called "${toRaw}".`);
     if (them.id === me.id) throw new Error("handing an item to yourself is not a trade.");
     if (them.dead) throw new Error(`${toRaw} is down.`);
-    if (!me.inventory.includes(item)) throw new Error(`there is no ${item} in your pack.`);
+    const held = this.heldItem(me, item);
+    if (!held) throw new Error(`there is no ${item} in your pack.`);
     if (them.inventory.length >= 6) throw new Error(`${toRaw}'s pack is full.`);
-    me.inventory.splice(me.inventory.indexOf(item), 1);
-    them.inventory.push(item);
+    me.inventory.splice(me.inventory.indexOf(held), 1);
+    them.inventory.push(held);
     this.diag.recordTrade();
-    return `You hand ${itemName(item)} to ${toRaw}.`;
+    return `You hand ${itemName(held)} to ${toRaw}.`;
   }
 
   giveGold(agent: string | undefined, toRaw: string, amount: number): string {
@@ -1929,9 +2009,10 @@ export class DescentSimulation implements Simulation {
   buyItem(agent: string | undefined, item: string): string {
     const me = this.who(agent);
     this.requirePhase("market", "camp");
-    const listing = this.state.stock.find((x) => x.item === item);
+    const listing =
+      this.state.stock.find((x) => x.item.id === item) ?? this.state.stock.find((x) => x.item.baseId === item);
     if (!listing) {
-      throw new Error(`the merchant has no ${item}. On offer: ${this.state.stock.map((x) => x.item).join(", ")}.`);
+      throw new Error(`the merchant has no ${item}. On offer: ${this.state.stock.map((x) => x.item.id).join(", ")}.`);
     }
     if (me.gold < listing.price) {
       throw new Error(`${listing.price} gold, and you have ${me.gold}. Somebody could give you the difference.`);
@@ -1939,8 +2020,8 @@ export class DescentSimulation implements Simulation {
     if (me.inventory.length >= 6) throw new Error("your pack is full.");
     me.gold -= listing.price;
     this.goldSpent += listing.price;
-    me.inventory.push(item);
-    this.state.stock = this.state.stock.filter((x) => x.item !== item);
+    me.inventory.push(listing.item);
+    this.state.stock = this.state.stock.filter((x) => x !== listing);
     // Pooled means *this buyer could not have afforded it alone*, not merely
     // that it was expensive.
     //
@@ -1955,7 +2036,7 @@ export class DescentSimulation implements Simulation {
       if (before < listing.price) this.diag.recordPooledPurchase();
       this.toppedUp.delete(me.id);
     }
-    return `You buy ${itemName(item)} for ${listing.price}. You have ${me.gold} gold left.`;
+    return `You buy ${itemName(listing.item)} for ${listing.price}. You have ${me.gold} gold left.`;
   }
 
   /**
@@ -1971,9 +2052,10 @@ export class DescentSimulation implements Simulation {
     const me = this.who(agent);
     this.requirePhase("cache");
     const s = this.state;
-    const entry = s.cache.find((x) => x.item === item && !x.taken);
+    const entry =
+      s.cache.find((x) => x.item.id === item && !x.taken) ?? s.cache.find((x) => x.item.baseId === item && !x.taken);
     if (!entry) {
-      const left = s.cache.filter((x) => !x.taken).map((x) => x.item);
+      const left = s.cache.filter((x) => !x.taken).map((x) => x.item.id);
       throw new Error(
         left.length > 0
           ? `there is no ${item} here. Still in the packs: ${left.join(", ")}.`
@@ -1988,15 +2070,15 @@ export class DescentSimulation implements Simulation {
     if (me.inventory.length >= 6) throw new Error("your pack is full.");
     entry.taken = me.id;
     s.cacheTakesLeft -= 1;
-    me.inventory.push(item);
+    me.inventory.push(entry.item);
     this.diag.recordCacheTake(me.id, `${s.floor}:${this.cacheSerial}`);
-    const def = ITEM_BY_ID.get(item);
+    const def = ITEM_BY_ID.get(entry.item.baseId);
     const useless =
       def && def.kind !== "consumable" && !canEquip(def, me.id)
         ? ` You cannot use it — it is for ${(def.classes ?? []).join(" or ")}.`
         : "";
     return (
-      `You take ${itemName(item)}.${useless} ` +
+      `You take ${itemName(entry.item)}.${useless} ` +
       (s.cacheTakesLeft > 0
         ? `The party can carry ${s.cacheTakesLeft} more thing${s.cacheTakesLeft === 1 ? "" : "s"} out of here.`
         : `That is all the party can carry. Call \`${s.map ? "continue_exploring" : "descend"}\` when everyone is ready.`)
@@ -2006,12 +2088,13 @@ export class DescentSimulation implements Simulation {
   sellItem(agent: string | undefined, item: string): string {
     const me = this.who(agent);
     this.requirePhase("market", "camp");
-    if (!me.inventory.includes(item)) throw new Error(`there is no ${item} in your pack.`);
-    const price = Math.round((ITEM_BY_ID.get(item)?.price ?? 30) * 0.35);
-    me.inventory.splice(me.inventory.indexOf(item), 1);
+    const held = this.heldItem(me, item);
+    if (!held) throw new Error(`there is no ${item} in your pack.`);
+    const price = Math.round(itemPrice(held) * 0.35);
+    me.inventory.splice(me.inventory.indexOf(held), 1);
     me.gold += price;
     this.goldEarned += price;
-    return `You sell ${itemName(item)} for ${price}. You have ${me.gold} gold.`;
+    return `You sell ${itemName(held)} for ${price}. You have ${me.gold} gold.`;
   }
 
   /**
@@ -2069,7 +2152,7 @@ export class DescentSimulation implements Simulation {
         this.beginEncounter(false, true);
         return;
       case "market":
-        s.stock = rollStock(s.floor, this.stockRng);
+        s.stock = this.makeStock(rollStock(s.floor, this.stockRng), "merchant", s.floor);
         s.phase = "market";
         this.lastLog = [`The ${room.label} is occupied by a merchant who knows more routes than they admit.`];
         this.note("merchant", `A merchant is waiting in the ${room.label}.`);
@@ -2077,7 +2160,7 @@ export class DescentSimulation implements Simulation {
       case "cache": {
         const rolled = rollCache(s.floor, CACHE_OFFERS, this.stockRng);
         this.cacheSerial += 1;
-        s.cache = rolled.items.map((item) => ({ item }));
+        s.cache = rolled.items.map((baseId) => ({ item: this.makeItem(baseId, "cache", s.floor) }));
         s.cacheTakesLeft = CACHE_TAKES;
         s.cacheOrigin = rolled.origin;
         s.phase = "cache";
@@ -2156,7 +2239,7 @@ export class DescentSimulation implements Simulation {
     this.fledEnemies = undefined;
 
     if (path.kind === "market") {
-      s.stock = rollStock(s.floor, this.stockRng);
+      s.stock = this.makeStock(rollStock(s.floor, this.stockRng), "merchant", s.floor);
       s.phase = "market";
       this.lastLog = [`The party takes the ${path.id} way and finds a merchant.`];
       return;
@@ -2261,10 +2344,11 @@ export class DescentSimulation implements Simulation {
     const ally = this.state.party[allyRaw as ClassId];
     if (!ally) throw new Error(`no party member called "${allyRaw}".`);
     if (!ally.dead) throw new Error(`${ally.id} is still standing.`);
-    if (!me.inventory.includes("soul_stone")) {
+    const stone = this.heldItem(me, "soul_stone");
+    if (!stone) {
       throw new Error("a soul stone is the only thing that brings anyone back, and you have none.");
     }
-    me.inventory.splice(me.inventory.indexOf("soul_stone"), 1);
+    me.inventory.splice(me.inventory.indexOf(stone), 1);
     ally.dead = false;
     ally.hp = Math.round(ally.maxHp * 0.4);
     ally.statuses = [];
@@ -2695,6 +2779,16 @@ export class DescentSimulation implements Simulation {
     const s = this.state;
     const statuses = (who: { statuses: Status[] }) =>
       who.statuses.filter((x) => x.ticks > 0).map((x) => ({ kind: x.kind, ticks: x.ticks, amount: x.amount }));
+    const serializeItem = (item: ItemInstance): DescentSceneItem => ({
+      id: item.id,
+      baseId: item.baseId,
+      name: item.name,
+      kind: item.kind,
+      rarity: item.rarity,
+      description: item.description,
+      affixes: item.affixes.map((affix) => ({ ...affix, modifiers: { ...affix.modifiers } })),
+      provenance: { ...item.provenance },
+    });
     const readied = new Map(s.intents.map((i) => [i.actor as string, i]));
 
     return {
@@ -2723,11 +2817,14 @@ export class DescentSimulation implements Simulation {
           talents: Object.entries(f.talents)
             .filter(([, rank]) => rank > 0)
             .map(([talentId, rank]) => ({ id: talentId, name: TALENTS[talentId]?.name ?? talentId, rank })),
+          cooldowns: Object.entries(f.cooldowns)
+            .filter(([, ticks]) => ticks > 0)
+            .map(([cooldownId, ticks]) => ({ id: cooldownId, ticks })),
           statuses: statuses(f),
-          pack: f.inventory.map((i) => ({ id: i, name: itemName(i) })),
+          pack: f.inventory.map(serializeItem),
           worn: Object.entries(f.equipped)
             .filter(([, v]) => v)
-            .map(([slot, v]) => ({ slot, id: v, name: itemName(v as string) })),
+            .map(([slot, v]) => ({ slot, ...serializeItem(v as ItemInstance) })),
           readied: intent ? { kind: intent.kind, target: intent.target ?? null } : null,
         };
       }),
@@ -2776,17 +2873,16 @@ export class DescentSimulation implements Simulation {
       // agent knows — while the rest of the party does not — is free dramatic
       // irony: you get to watch whether they pass it on.
       scouted: this.scoutedFloor === s.floor ? (this.scoutReport ?? null) : null,
-      stock: s.stock.map((x) => ({ id: x.item, name: itemName(x.item), price: x.price })),
+      stock: s.stock.map((x) => ({ ...serializeItem(x.item), price: x.price })),
       cache: s.cache.map((x) => ({
-        id: x.item,
-        name: itemName(x.item),
-        forClasses: ITEM_BY_ID.get(x.item)?.classes ?? [],
+        ...serializeItem(x.item),
+        forClasses: ITEM_BY_ID.get(x.item.baseId)?.classes ?? [],
         taken: x.taken ?? null,
       })),
       cacheTakesLeft: s.cacheTakesLeft,
       cacheOrigin: s.cacheOrigin ?? null,
       clashes: antiSynergies(s, s.intents),
-      loot: s.pending.map((x) => ({ id: x.item, name: itemName(x.item), to: x.to })),
+      loot: s.pending.map((x) => ({ ...serializeItem(x.item), to: x.to })),
       beats: this.lastBeats,
       /**
        * Which tick the beats belong to.

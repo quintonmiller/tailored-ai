@@ -15,7 +15,14 @@
 
 import type { Tool } from "@tailored-ai/core";
 import { describe, expect, it } from "vitest";
-import { FAMILIES, generateEncounter, generateFloorMap, generatePaths, makeEnemy } from "../sim/descent/content.js";
+import {
+  FAMILIES,
+  generateEncounter,
+  generateFloorMap,
+  generatePaths,
+  makeEnemy,
+  makeItemInstance,
+} from "../sim/descent/content.js";
 import { Diagnostics } from "../sim/descent/diagnostics.js";
 import { type DescentSimulation, levelFor } from "../sim/descent/index.js";
 import {
@@ -55,6 +62,8 @@ async function call(
 }
 
 const fresh = (seed = 7) => createSimulation("descent", { seed, days: 400 }) as DescentSimulation;
+let testItemSerial = 0;
+const testItem = (baseId: string) => makeItemInstance(baseId, `test-${baseId}-${++testItemSerial}`, "starting-kit", 1);
 
 /** Walk a fresh party into their first fight. */
 async function intoCombat(sim: DescentSimulation): Promise<void> {
@@ -393,20 +402,20 @@ describe("the economy", () => {
     expect(Object.values(state.party).every((fighter) => fighter.gold === 180)).toBe(true);
     expect(Object.values(state.party).flatMap((fighter) => fighter.inventory)).toEqual([]);
 
-    const potion = state.stock.find((listing) => listing.item === "healing_potion");
+    const potion = state.stock.find((listing) => listing.item.baseId === "healing_potion");
     expect(potion).toBeDefined();
-    expect(await call(sim, "guardian", "buy", { item: potion?.item })).toMatch(/You buy Healing Potion/);
+    expect(await call(sim, "guardian", "buy", { item: potion?.item.id })).toMatch(/You buy Healing Potion/);
     expect(await call(sim, "mage", "enter_dungeon")).toMatch(/when the round closes/);
     sim.advance();
 
     expect(state.phase).toBe("explore");
     expect(state.stock).toEqual([]);
-    expect(state.party.guardian.inventory).toContain("healing_potion");
+    expect(state.party.guardian.inventory.some((item) => item.baseId === "healing_potion")).toBe(true);
   });
 
   it("refuses gear to a class that cannot use it, and says who can", async () => {
     const sim = fresh();
-    sim.view().party.mage.inventory.push("plate_cuirass");
+    sim.view().party.mage.inventory.push(testItem("plate_cuirass"));
     const said = await call(sim, "mage", "equip_item", { item: "plate_cuirass" });
     expect(said).toMatch(/cannot use Plate Cuirass/);
     expect(said).toMatch(/guardian/);
@@ -416,7 +425,7 @@ describe("the economy", () => {
     const sim = fresh();
     const state = sim.view();
     state.phase = "market";
-    state.stock = [{ item: "vitality_ring", price: 300 }];
+    state.stock = [{ item: testItem("vitality_ring"), price: 300 }];
     expect(await call(sim, "guardian", "buy", { item: "vitality_ring" })).toMatch(/300 gold, and you have 60/);
     for (const donor of ["mage", "rogue", "cleric", "ranger"]) {
       await call(sim, donor, "give_gold", { to: "guardian", amount: 60 });
@@ -434,8 +443,8 @@ describe("the economy", () => {
     const rich = createSimulation("descent", { seed: 2, days: 40, startFloor: 31 }) as DescentSimulation;
     rich.view().phase = "market";
     rich.view().stock = [
-      { item: "healing_potion", price: 100 },
-      { item: "vitality_ring", price: 380 },
+      { item: testItem("healing_potion"), price: 100 },
+      { item: testItem("vitality_ring"), price: 380 },
     ];
     await call(rich, "guardian", "buy", { item: "healing_potion" });
     expect(rich.metrics().pooledPurchases, "an affordable purchase is not pooling").toBe(0);
@@ -457,7 +466,7 @@ describe("the economy", () => {
 
   it("does not award cooperation for handing resources to yourself", async () => {
     const sim = fresh();
-    sim.view().party.guardian.inventory.push("antidote");
+    sim.view().party.guardian.inventory.push(testItem("antidote"));
     expect(await call(sim, "guardian", "trade_item", { to: "guardian", item: "antidote" })).toMatch(/not a trade/i);
     expect(await call(sim, "guardian", "give_gold", { to: "guardian", amount: 1 })).toMatch(/does not move/i);
     expect(sim.metrics().tradesMade).toBe(0);
@@ -481,6 +490,35 @@ describe("run variation", () => {
     };
     expect(signature(12)).toBe(signature(12));
     expect(new Set(Array.from({ length: 12 }, (_, i) => signature(i + 1))).size).toBeGreaterThan(6);
+  });
+
+  it("rolls reproducible item copies with varied rarity, affixes, and drawbacks", () => {
+    const roll = (seed: number) => makeItemInstance("vitality_ring", "ring@1", "cache", 12, makeRng(seed));
+    expect(roll(17)).toEqual(roll(17));
+
+    const copies = Array.from({ length: 80 }, (_, index) => roll(index + 1));
+    expect(new Set(copies.map((item) => item.rarity)).size).toBeGreaterThan(2);
+    expect(copies.some((item) => item.affixes.length >= 2)).toBe(true);
+    expect(copies.some((item) => item.affixes.some((affix) => affix.polarity === "negative"))).toBe(true);
+  });
+
+  it("publishes full per-copy item identity through the scene contract", () => {
+    const sim = createSimulation("descent", {
+      seed: 9,
+      days: 40,
+      startFloor: 1,
+      preparation: true,
+    }) as DescentSimulation;
+    const stock = sim.scene().stock;
+
+    expect(new Set(stock.map((item) => item.id)).size).toBe(stock.length);
+    expect(stock[0]).toMatchObject({
+      baseId: expect.any(String),
+      rarity: expect.any(String),
+      description: expect.any(String),
+      affixes: expect.any(Array),
+      provenance: { source: "outfitter", floor: 1 },
+    });
   });
 
   it("builds connected floor mazes with branches, loops, zones, and a boss gate", () => {
@@ -857,7 +895,9 @@ describe("resources the party has to share", () => {
     const sim = createSimulation("descent", { seed, days: 40, startFloor: 31 }) as DescentSimulation;
     const s = sim.view();
     s.phase = "cache";
-    s.cache = [{ item: "vitality_ring" }, { item: "plate_cuirass" }, { item: "arc_staff" }, { item: "healing_potion" }];
+    s.cache = ["vitality_ring", "plate_cuirass", "arc_staff", "healing_potion"].map((baseId) => ({
+      item: testItem(baseId),
+    }));
     s.cacheTakesLeft = 2;
     s.cacheOrigin = "a survey party out of Belm";
     return sim;
@@ -876,7 +916,7 @@ describe("resources the party has to share", () => {
   it("says who took what, so the party can see the split", async () => {
     const sim = atCache();
     await call(sim, "cleric", "take", { item: "healing_potion" });
-    expect(sim.view().cache.find((x) => x.item === "healing_potion")?.taken).toBe("cleric");
+    expect(sim.view().cache.find((x) => x.item.baseId === "healing_potion")?.taken).toBe("cleric");
   });
 
   it("reads a shared cache differently from one member emptying it", async () => {
@@ -897,7 +937,7 @@ describe("resources the party has to share", () => {
     const sim = createSimulation("descent", { seed: 4, days: 40, startFloor: 31 }) as DescentSimulation;
     const s = sim.view();
     s.phase = "spoils";
-    for (const who of ["guardian", "mage", "rogue"] as const) s.party[who].inventory.push("vitality_ring");
+    for (const who of ["guardian", "mage", "rogue"] as const) s.party[who].inventory.push(testItem("vitality_ring"));
 
     expect(await call(sim, "guardian", "equip_item", { item: "vitality_ring" })).toMatch(/put on/i);
     expect(await call(sim, "mage", "equip_item", { item: "vitality_ring" })).toMatch(/put on/i);
@@ -914,13 +954,13 @@ describe("resources the party has to share", () => {
     const sim = createSimulation("descent", { seed: 4, days: 40, startFloor: 31 }) as DescentSimulation;
     const s = sim.view();
     s.phase = "spoils";
-    for (const who of ["guardian", "mage", "rogue"] as const) s.party[who].inventory.push("vitality_ring");
+    for (const who of ["guardian", "mage", "rogue"] as const) s.party[who].inventory.push(testItem("vitality_ring"));
     await call(sim, "guardian", "equip_item", { item: "vitality_ring" });
     await call(sim, "mage", "equip_item", { item: "vitality_ring" });
 
     expect(await call(sim, "mage", "unequip", { slot: "trinket" })).toMatch(/take off/i);
     expect(await call(sim, "rogue", "equip_item", { item: "vitality_ring" })).toMatch(/put on/i);
-    expect(s.party.rogue.equipped.trinket).toBe("vitality_ring");
+    expect(s.party.rogue.equipped.trinket?.baseId).toBe("vitality_ring");
     expect(s.party.mage.equipped.trinket).toBeUndefined();
   });
 
@@ -930,9 +970,9 @@ describe("resources the party has to share", () => {
     const sim = createSimulation("descent", { seed: 4, days: 40, startFloor: 31 }) as DescentSimulation;
     const s = sim.view();
     s.phase = "spoils";
-    s.party.guardian.inventory.push("vitality_ring");
-    s.party.mage.inventory.push("vitality_ring");
-    s.party.guardian.inventory.push("swift_charm");
+    s.party.guardian.inventory.push(testItem("vitality_ring"));
+    s.party.mage.inventory.push(testItem("vitality_ring"));
+    s.party.guardian.inventory.push(testItem("swift_charm"));
     await call(sim, "guardian", "equip_item", { item: "vitality_ring" });
     await call(sim, "mage", "equip_item", { item: "vitality_ring" });
     expect(await call(sim, "guardian", "equip_item", { item: "swift_charm" })).toMatch(/put on/i);
@@ -1110,12 +1150,48 @@ describe("a fighter's numbers", () => {
     const sim = fresh();
     const guardian: Fighter = sim.view().party.guardian;
     const armour = guardian.armor;
-    guardian.inventory.push("plate_cuirass");
+    guardian.inventory.push(testItem("plate_cuirass"));
     await call(sim, "guardian", "equip_item", { item: "plate_cuirass" });
     const equipped = guardian.armor;
     expect(equipped).toBeGreaterThan(armour);
     // Equipping the same thing twice must not compound it.
     await call(sim, "guardian", "equip_item", { item: "plate_cuirass" });
     expect(guardian.armor).toBe(equipped);
+  });
+
+  it("applies a rolled copy's modifiers in addition to its base item", async () => {
+    const sim = fresh();
+    const guardian = sim.view().party.guardian;
+    const rolled = Array.from({ length: 100 }, (_, index) =>
+      makeItemInstance("vitality_ring", `rolled-ring-${index}`, "cache", 12, makeRng(index + 1)),
+    ).find((item) => item.affixes.length > 0);
+    expect(rolled).toBeDefined();
+    if (!rolled) return;
+
+    const before = {
+      hp: guardian.maxHp,
+      mana: guardian.maxMana,
+      armor: guardian.armor,
+      power: guardian.power,
+      speed: guardian.speed,
+    };
+    guardian.inventory.push(rolled);
+    await call(sim, "guardian", "equip_item", { item: rolled.id });
+
+    const modifiers = rolled.affixes.reduce(
+      (sum, affix) => ({
+        hp: sum.hp + (affix.modifiers.hp ?? 0),
+        mana: sum.mana + (affix.modifiers.mana ?? 0),
+        armor: sum.armor + (affix.modifiers.armor ?? 0),
+        power: sum.power + (affix.modifiers.power ?? 0),
+        speed: sum.speed + (affix.modifiers.speed ?? 0),
+      }),
+      { hp: 0, mana: 0, armor: 0, power: 0, speed: 0 },
+    );
+    expect(guardian.maxHp).toBe(before.hp + 45 + modifiers.hp);
+    expect(guardian.maxMana).toBe(Math.max(0, before.mana + modifiers.mana));
+    expect(guardian.armor).toBe(Math.max(0, before.armor + modifiers.armor));
+    expect(guardian.power).toBe(Math.max(1, before.power + modifiers.power));
+    expect(guardian.speed).toBe(Math.max(1, before.speed + modifiers.speed));
   });
 });

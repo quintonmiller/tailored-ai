@@ -27,7 +27,19 @@
  */
 
 import type { Rng } from "../rng.js";
-import type { ClassId, DungeonFloorMap, Element, Enemy, HiddenMechanic, RoomKind } from "./model.js";
+import type {
+  ClassId,
+  DungeonFloorMap,
+  Element,
+  Enemy,
+  HiddenMechanic,
+  ItemInstance,
+  ItemKind,
+  ItemModifiers,
+  ItemProvenance,
+  ItemRarity,
+  RoomKind,
+} from "./model.js";
 
 // ---------------------------------------------------------------------------
 // Families
@@ -497,7 +509,7 @@ export function generateEncounter(
 export interface ItemDef {
   id: string;
   name: string;
-  kind: "weapon" | "armor" | "trinket" | "consumable";
+  kind: ItemKind;
   price: number;
   /** Who can equip it. Absent means anyone. */
   classes?: ClassId[];
@@ -742,8 +754,34 @@ export const ITEMS: ItemDef[] = [
 
 export const ITEM_BY_ID = new Map(ITEMS.map((i) => [i.id, i]));
 
-export function itemName(id: string): string {
-  return ITEM_BY_ID.get(id)?.name ?? id;
+export function itemBaseId(item: ItemInstance | string): string {
+  return typeof item === "string" ? item : item.baseId;
+}
+
+export function itemDef(item: ItemInstance | string): ItemDef | undefined {
+  return ITEM_BY_ID.get(itemBaseId(item));
+}
+
+export function itemName(item: ItemInstance | string): string {
+  return typeof item === "string" ? (ITEM_BY_ID.get(item)?.name ?? item) : item.name;
+}
+
+export function itemModifiers(item: ItemInstance): Required<ItemModifiers> {
+  const total = { power: 0, armor: 0, hp: 0, mana: 0, speed: 0 };
+  for (const affix of item.affixes) {
+    total.power += affix.modifiers.power ?? 0;
+    total.armor += affix.modifiers.armor ?? 0;
+    total.hp += affix.modifiers.hp ?? 0;
+    total.mana += affix.modifiers.mana ?? 0;
+    total.speed += affix.modifiers.speed ?? 0;
+  }
+  return total;
+}
+
+export function itemPrice(item: ItemInstance): number {
+  const base = ITEM_BY_ID.get(item.baseId)?.price ?? 30;
+  const rarityFactor: Record<ItemRarity, number> = { common: 1, uncommon: 1.22, rare: 1.5, epic: 1.85 };
+  return Math.max(1, Math.round(base * rarityFactor[item.rarity]));
 }
 
 /** Is this item wearable by this class? Consumables are always usable. */
@@ -753,10 +791,161 @@ export function canEquip(item: ItemDef, who: ClassId): boolean {
 }
 
 /** Every class that could equip this, for the misallocation diagnostic. */
-export function equippableBy(id: string): ClassId[] {
-  const def = ITEM_BY_ID.get(id);
+export function equippableBy(item: ItemInstance | string): ClassId[] {
+  const def = itemDef(item);
   if (!def || def.kind === "consumable") return [];
   return def.classes ?? ["guardian", "mage", "rogue", "cleric", "ranger"];
+}
+
+interface AffixDef {
+  id: string;
+  name: string;
+  polarity: "positive" | "negative";
+  kinds: ItemKind[];
+  modifier: (floor: number) => ItemModifiers;
+  description: (modifiers: ItemModifiers) => string;
+}
+
+const amount = (base: number, floor: number, every: number, cap: number): number =>
+  Math.min(cap, base + Math.floor(Math.max(0, floor - 1) / every));
+
+const POSITIVE_AFFIXES: AffixDef[] = [
+  {
+    id: "forceful",
+    name: "Forceful",
+    polarity: "positive",
+    kinds: ["weapon", "trinket"],
+    modifier: (floor) => ({ power: amount(2, floor, 8, 7) }),
+    description: (m) => `+${m.power} power`,
+  },
+  {
+    id: "guarded",
+    name: "Guarded",
+    polarity: "positive",
+    kinds: ["armor", "trinket"],
+    modifier: (floor) => ({ armor: amount(1, floor, 10, 4) }),
+    description: (m) => `+${m.armor} armour`,
+  },
+  {
+    id: "stalwart",
+    name: "Stalwart",
+    polarity: "positive",
+    kinds: ["weapon", "armor", "trinket"],
+    modifier: (floor) => ({ hp: amount(10, floor, 5, 28) }),
+    description: (m) => `+${m.hp} maximum health`,
+  },
+  {
+    id: "channeling",
+    name: "Channeling",
+    polarity: "positive",
+    kinds: ["weapon", "armor", "trinket"],
+    modifier: (floor) => ({ mana: amount(8, floor, 6, 24) }),
+    description: (m) => `+${m.mana} maximum mana`,
+  },
+  {
+    id: "quickened",
+    name: "Quickened",
+    polarity: "positive",
+    kinds: ["weapon", "armor", "trinket"],
+    modifier: (floor) => ({ speed: amount(1, floor, 14, 3) }),
+    description: (m) => `+${m.speed} speed`,
+  },
+];
+
+const NEGATIVE_AFFIXES: AffixDef[] = [
+  {
+    id: "cumbersome",
+    name: "Cumbersome",
+    polarity: "negative",
+    kinds: ["weapon", "armor", "trinket"],
+    modifier: (floor) => ({ speed: -amount(1, floor, 18, 2) }),
+    description: (m) => `${m.speed} speed`,
+  },
+  {
+    id: "brittle",
+    name: "Brittle",
+    polarity: "negative",
+    kinds: ["weapon", "armor", "trinket"],
+    modifier: (floor) => ({ hp: -amount(8, floor, 7, 22) }),
+    description: (m) => `${m.hp} maximum health`,
+  },
+  {
+    id: "dulling",
+    name: "Dulling",
+    polarity: "negative",
+    kinds: ["armor", "trinket"],
+    modifier: (floor) => ({ power: -amount(1, floor, 15, 3) }),
+    description: (m) => `${m.power} power`,
+  },
+  {
+    id: "draining",
+    name: "Draining",
+    polarity: "negative",
+    kinds: ["weapon", "armor", "trinket"],
+    modifier: (floor) => ({ mana: -amount(6, floor, 9, 14) }),
+    description: (m) => `${m.mana} maximum mana`,
+  },
+];
+
+function rollRarity(source: ItemProvenance, rng: Rng): ItemRarity {
+  const boost = source === "boss" ? 0.18 : source === "elite" ? 0.1 : source === "cache" ? 0.05 : 0;
+  const roll = rng.next() - boost;
+  if (roll < 0.04) return "epic";
+  if (roll < 0.18) return "rare";
+  if (roll < 0.48) return "uncommon";
+  return "common";
+}
+
+/**
+ * Materialise one base-table result into a stable, independently rolled copy.
+ * `id` comes from the simulation's monotonic counter, while all variation comes
+ * from its dedicated item RNG, so other random streams keep their old shape.
+ */
+export function makeItemInstance(
+  baseId: string,
+  id: string,
+  source: ItemProvenance,
+  floor: number,
+  rng?: Rng,
+): ItemInstance {
+  const base = ITEM_BY_ID.get(baseId);
+  if (!base) throw new Error(`unknown base item: ${baseId}`);
+  const rarity = base.kind === "consumable" || !rng ? "common" : rollRarity(source, rng);
+  const affixes: ItemInstance["affixes"] = [];
+  if (rng && base.kind !== "consumable") {
+    const positives = rarity === "common" ? 0 : rarity === "uncommon" ? 1 : rarity === "rare" ? 2 : 3;
+    const negative = rarity === "epic" || (rarity === "rare" && rng.chance(0.45)) ? 1 : 0;
+    const addFrom = (pool: AffixDef[], count: number) => {
+      const available = pool.filter((entry) => entry.kinds.includes(base.kind));
+      for (let i = 0; i < count && available.length > 0; i++) {
+        const index = rng.int(0, available.length - 1);
+        const picked = available.splice(index, 1)[0];
+        const modifiers = picked.modifier(floor);
+        affixes.push({
+          id: picked.id,
+          name: picked.name,
+          description: picked.description(modifiers),
+          polarity: picked.polarity,
+          modifiers,
+        });
+      }
+    };
+    addFrom(POSITIVE_AFFIXES, positives);
+    addFrom(NEGATIVE_AFFIXES, negative);
+  }
+  const rarityName = rarity === "common" ? base.name : `${rarity[0].toUpperCase()}${rarity.slice(1)} ${base.name}`;
+  const affixText =
+    affixes.length > 0 ? ` ${affixes.map((entry) => `${entry.name}: ${entry.description}.`).join(" ")}` : "";
+  return {
+    id,
+    baseId,
+    name: rarityName,
+    kind: base.kind,
+    rarity,
+    description: `${base.desc}${affixText}`,
+    affixes,
+    provenance: { source, floor },
+  };
 }
 
 /** What a defeated encounter leaves behind. */

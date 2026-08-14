@@ -37,6 +37,37 @@ export type Element = "physical" | "fire" | "frost" | "lightning" | "shadow" | "
 
 export type ClassId = "guardian" | "mage" | "rogue" | "cleric" | "ranger";
 
+export type ItemKind = "weapon" | "armor" | "trinket" | "consumable";
+export type ItemRarity = "common" | "uncommon" | "rare" | "epic";
+export type ItemProvenance = "starting-kit" | "outfitter" | "merchant" | "drop" | "elite" | "boss" | "cache";
+
+export interface ItemModifiers {
+  power?: number;
+  armor?: number;
+  hp?: number;
+  mana?: number;
+  speed?: number;
+}
+
+/** One rolled copy of a base item. Its id is the tool-facing identity. */
+export interface ItemInstance {
+  id: string;
+  /** Stable content-table id, retained for compatibility and consumable rules. */
+  baseId: string;
+  name: string;
+  kind: ItemKind;
+  rarity: ItemRarity;
+  description: string;
+  affixes: Array<{
+    id: string;
+    name: string;
+    description: string;
+    polarity: "positive" | "negative";
+    modifiers: ItemModifiers;
+  }>;
+  provenance: { source: ItemProvenance; floor: number };
+}
+
 /**
  * Where the party is in the floor, which decides what the tools will accept.
  *
@@ -115,8 +146,8 @@ export interface Fighter {
   speed: number;
   statuses: Status[];
   gold: number;
-  inventory: string[];
-  equipped: { weapon?: string; armor?: string; trinket?: string };
+  inventory: ItemInstance[];
+  equipped: { weapon?: ItemInstance; armor?: ItemInstance; trinket?: ItemInstance };
   dead: boolean;
   /** Threat drives enemy targeting when nothing overrides it. */
   threat: number;
@@ -232,9 +263,9 @@ export interface DescentState {
   /** Persistent graph for maze-enabled runs. Omitted by legacy/direct simulations. */
   map?: DungeonFloorMap;
   /** Unclaimed drops waiting for the `spoils` phase. */
-  pending: Array<{ item: string; to: ClassId }>;
+  pending: Array<{ item: ItemInstance; to: ClassId }>;
   /** Merchant stock, when there is a merchant. */
-  stock: Array<{ item: string; price: number }>;
+  stock: Array<{ item: ItemInstance; price: number }>;
   /**
    * A dead expedition's packs, and how many of them the party may still take.
    *
@@ -242,7 +273,7 @@ export interface DescentState {
    * hard cap is the point: a purchase is settled privately out of one purse,
    * where a cache cannot be resolved by whoever happens to be richest.
    */
-  cache: Array<{ item: string; taken?: ClassId }>;
+  cache: Array<{ item: ItemInstance; taken?: ClassId }>;
   cacheTakesLeft: number;
   /** Whose expedition it was, for the prose. */
   cacheOrigin?: string;

@@ -13,6 +13,7 @@ export type {
   Scene,
   SceneBeat,
   SceneEnemy,
+  SceneItem,
   ScenePartyMember,
   SceneStatus,
 } from "../../../src/broadcast-contract.js";

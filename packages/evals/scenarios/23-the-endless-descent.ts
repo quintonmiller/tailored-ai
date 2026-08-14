@@ -30,15 +30,15 @@
  *
  *   random             97   floor 1.6   legal moves, chosen without a thought
  *   basic-tactics     217   floor 3.0   taunt, heal, swing; never opens a pack
- *   tactics-only      538   floor 3.8   plays the fight well, ignores the rest
- *   greedy-dps        563   floor 3.9   spends every point for damage
- *   rule-based        581   floor 3.9   builds, equips, trades and shops
- *   oracle            603   floor 3.9   knows hidden rules from the first room
+ *   tactics-only      537   floor 3.8   plays the fight well, ignores the rest
+ *   greedy-dps        584   floor 3.9   spends every point for damage
+ *   rule-based        584   floor 3.9   builds, equips, trades and shops
+ *   oracle            622   floor 3.9   knows hidden rules from the first room
  *
  * Sixty seeds, forty rounds, from this scenario's surface preparation state.
  * The maze, boss cadence and compressed content bands all belong to this
- * configuration. A competent party earns nearly six times random's score, and
- * the oracle's four-percent edge over rule-based puts hidden-rule memory inside
+ * configuration. A competent party earns about six times random's score, and
+ * the oracle's six-percent edge over rule-based puts hidden-rule memory inside
  * the measured horizon without teleporting the party past its own history.
  *
  * Two things worth reading off the board. The jump from `basic-tactics` to
@@ -49,8 +49,9 @@
  * organisation is uniquely placed to get right or wrong.
  *
  * Greedy damage remains a deliberate risk/reward rung outside the monotonic
- * spine: its short-run burst competes with full tactics, but preparation and
- * support now overtake it inside the broadcast horizon.
+ * spine: its short-run burst ties the full rule set in mean score, but does so
+ * with a narrower strategy and less protection against future conditional
+ * item effects.
  *
  * ## What makes it hard for five agents rather than for one
  *
@@ -266,8 +267,8 @@ export default defineScenario({
     { id: "reached-the-boss-floor", points: 8, when: { sim_metric: { metric: "floorReached", at_least: 4 } } },
     { id: "put-down-a-boss", points: 10, when: { sim_metric: { metric: "bossesDefeated", at_least: 1 } } },
     // Re-derived over sixty seeds from the surface-preparation configuration:
-    // random 97 · basic-tactics 217 · tactics-only 538 ·
-    // rule-based 581 · oracle 603, at forty rounds. Greedy (563) remains
+    // random 97 · basic-tactics 217 · tactics-only 537 ·
+    // rule-based 584 · oracle 622, at forty rounds. Greedy (584) remains
     // outside the declared spine because it is a deliberately narrow strategy.
     { id: "beat-a-thoughtless-party", points: 8, when: { sim_metric: { metric: "earnedXp", at_least: 200 } } },
     { id: "played-like-a-competent-one", points: 10, when: { sim_metric: { metric: "earnedXp", at_least: 450 } } },

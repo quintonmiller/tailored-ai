@@ -338,6 +338,7 @@ const STYLES = `
 /* Dead is dimmed AND dashed AND labelled: three signals, because at streaming
    bitrates a 40% opacity difference is not one. */
 .hud-card.dead { opacity: .42; border-style: dashed; border-top-color: var(--faint); }
+.hud-card.active { box-shadow: 0 0 0 1px var(--who), 0 8px 20px -14px var(--who); }
 
 .hud-who {
   font: 800 13px/1 var(--sans); letter-spacing: .1em; text-transform: uppercase;
@@ -371,6 +372,39 @@ const STYLES = `
   min-height: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font: 9px/1.3 var(--mono); color: var(--dim);
 }
+
+.hud-active {
+  margin-top: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--active-who, var(--flame)) 8%, transparent), transparent 45%), #0d121b;
+  display: grid; grid-template-columns: 150px minmax(0, 1fr) minmax(0, 1fr); gap: 10px;
+  min-height: 104px; max-height: 142px; overflow: hidden;
+}
+.hud-active[data-who="guardian"] { --active-who: var(--guardian); }
+.hud-active[data-who="mage"]     { --active-who: var(--mage); }
+.hud-active[data-who="rogue"]    { --active-who: var(--rogue); }
+.hud-active[data-who="cleric"]   { --active-who: var(--cleric); }
+.hud-active[data-who="ranger"]   { --active-who: var(--ranger); }
+.hud-activehead { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
+.hud-activename { color: var(--active-who); font: 800 12px/1 var(--sans); letter-spacing: .1em; text-transform: uppercase; }
+.hud-statgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-top: 7px; }
+.hud-stat { padding: 4px; border: 1px solid rgba(35, 44, 61, .7); border-radius: 4px; }
+.hud-stat b { display: block; color: var(--ink); font: 700 11px/1 var(--mono); }
+.hud-stat span { display: block; margin-top: 3px; color: var(--faint); font: 700 7px/1 var(--sans); letter-spacing: .1em; text-transform: uppercase; }
+.hud-detailcol { min-width: 0; overflow: hidden; }
+.hud-detaillabel { margin-bottom: 5px; color: var(--faint); font: 700 8px/1 var(--sans); letter-spacing: .13em; text-transform: uppercase; }
+.hud-itemline, .hud-skillline {
+  display: flex; align-items: baseline; gap: 5px; min-width: 0; margin-bottom: 4px;
+  font: 9px/1.2 var(--mono); color: var(--dim);
+}
+.hud-itemline b, .hud-skillline b { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hud-itemline .slot, .hud-itemline .rarity {
+  flex: 0 0 auto; padding: 2px 3px; border: 1px solid var(--line); border-radius: 3px;
+  color: var(--faint); font: 700 7px/1 var(--sans); letter-spacing: .08em; text-transform: uppercase;
+}
+.hud-itemline .rarity.rare, .hud-itemline .rarity.epic { color: var(--arcane); border-color: rgba(123, 143, 245, .5); }
+.hud-affixes { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); }
+.hud-affixes .bad { color: var(--bad); }
+.hud-detail-empty { color: var(--faint); font: 10px/1.3 var(--sans); }
 
 /* The readied band. Full-bleed at the foot of the card because it is the one
    thing on this strip a viewer can read a disaster off before it happens — the
@@ -925,6 +959,113 @@ function buildParty(host: HTMLElement): SceneRenderer {
         refs.root.classList.add("hurt");
       }
     }
+  };
+}
+
+/**
+ * Full data for whichever character most recently spoke or used a tool.
+ *
+ * The five-card strip answers "how is everyone?"; this answers "what is this
+ * character actually carrying and built to do?" without making every card
+ * dense enough to become unreadable at broadcast distance.
+ */
+function buildActiveCharacter(host: HTMLElement): Renderer {
+  const root = el("div", "hud-active");
+  root.style.display = "none";
+  host.appendChild(root);
+  let signature = "";
+
+  const label = (name: string) => el("div", "hud-detaillabel", name);
+  const stat = (name: string, value: string | number) => {
+    const box = el("div", "hud-stat");
+    box.append(el("b", null, String(value)), el("span", null, name));
+    return box;
+  };
+
+  return (state) => {
+    const scene = state.scene;
+    const party = scene?.party ?? [];
+    if (!scene || party.length === 0) {
+      root.style.display = "none";
+      return;
+    }
+
+    const latestAgent = [...state.feed]
+      .reverse()
+      .find((entry) => entry.type === "call" || entry.type === "say")?.agent.toLowerCase();
+    const member =
+      party.find((candidate) => latestAgent?.includes(candidate.id)) ??
+      party.find((candidate) => !candidate.dead) ??
+      party[0];
+    root.style.display = "";
+    root.dataset.who = member.id;
+    for (const card of host.querySelectorAll<HTMLElement>(".hud-card")) {
+      flag(card, "active", card.dataset.who === member.id);
+    }
+
+    const nextSignature = `${member.id}:${JSON.stringify(member)}`;
+    if (nextSignature === signature) return;
+    signature = nextSignature;
+    root.textContent = "";
+
+    const summary = el("div", "hud-detailcol");
+    const head = el("div", "hud-activehead");
+    head.append(el("div", "hud-activename", member.id), el("span", "hud-tag", "active character"));
+    const stats = el("div", "hud-statgrid");
+    stats.append(
+      stat("HP", `${member.hp}/${member.maxHp}`),
+      stat("Mana", `${member.mana}/${member.maxMana}`),
+      stat("Gold", member.gold),
+      stat("Armour", member.armor),
+      stat("Power", member.power),
+      stat("Speed", member.speed),
+    );
+    summary.append(head, stats);
+
+    const items = el("div", "hud-detailcol");
+    items.appendChild(label("Equipment and pack"));
+    const allItems = [
+      ...(member.worn ?? []).map((item) => ({ item, slot: item.slot })),
+      ...(member.pack ?? []).map((item) => ({ item, slot: "pack" })),
+    ];
+    if (allItems.length === 0) items.appendChild(el("div", "hud-detail-empty", "Nothing carried or equipped."));
+    for (const { item, slot } of allItems.slice(0, 6)) {
+      const line = el("div", "hud-itemline");
+      const source = item.provenance?.source ?? "legacy trace";
+      const found = item.provenance?.floor ? `, floor ${item.provenance.floor}` : "";
+      line.title = `${item.id}\n${item.description ?? item.name}\nFound: ${source}${found}`;
+      const itemRarity = item.rarity ?? "common";
+      const rarity = el("span", `rarity ${itemRarity}`, itemRarity);
+      const affixes = el("span", "hud-affixes");
+      for (const [index, affix] of (item.affixes ?? []).entries()) {
+        if (index > 0) affixes.append(" · ");
+        const effect = el("span", affix.polarity === "negative" ? "bad" : null, affix.description);
+        affixes.appendChild(effect);
+      }
+      line.append(el("span", "slot", slot), rarity, el("b", null, item.name), affixes);
+      items.appendChild(line);
+    }
+
+    const build = el("div", "hud-detailcol");
+    build.appendChild(label("Skills and current action"));
+    const skillLines = [
+      ...(member.talents ?? []).map((talent) => `${talent.name} ${talent.rank}`),
+      ...(member.cooldowns ?? []).map((cooldown) => `${humanise(cooldown.id)} · ${cooldown.ticks} cooldown`),
+      ...(member.statuses ?? []).map((status) => `${humanise(status.kind)} · ${status.ticks} rounds`),
+    ];
+    if ((member.talentPoints ?? 0) > 0) skillLines.unshift(`${member.talentPoints} unspent skill points`);
+    for (const line of skillLines.slice(0, 6)) build.appendChild(el("div", "hud-skillline", line));
+    if (skillLines.length === 0) build.appendChild(el("div", "hud-detail-empty", "No talents, effects, or cooldowns."));
+    const action = member.readied
+      ? `${shout(member.readied.kind)}${member.readied.target ? ` → ${humanise(member.readied.target)}` : ""}`
+      : scene.phase === "combat"
+        ? "NOT READIED"
+        : `Standing by · ${humanise(scene.phase)}`;
+    const actionLine = el("div", "hud-skillline");
+    actionLine.append(el("span", "hud-tag", "action"), el("b", null, action));
+    build.appendChild(actionLine);
+
+    root.append(summary, items, build);
   };
 }
 
@@ -1598,6 +1739,7 @@ export function mountHud(hosts: { party: HTMLElement; map: HTMLElement; progress
   installStyles();
 
   const renderParty = party ? buildParty(party) : null;
+  const renderActiveCharacter = party ? buildActiveCharacter(party) : null;
   const renderMap = map ? buildMap(map) : null;
   const renderProgress = progress ? buildProgress(progress) : null;
 
@@ -1632,6 +1774,10 @@ export function mountHud(hosts: { party: HTMLElement; map: HTMLElement; progress
       renderMap?.(scene);
       drawn = scene;
     }
+    // Agent speech and tool calls can change the active character between
+    // authoritative scene snapshots, so this detail view is intentionally not
+    // scene-gated.
+    renderActiveCharacter?.(s);
 
     // The progress panel is not scene-gated: milestones arrive on their own
     // event and the scoreboard refreshes on a twenty-second timer, so it has

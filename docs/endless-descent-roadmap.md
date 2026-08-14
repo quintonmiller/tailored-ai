@@ -46,15 +46,22 @@ The following work is complete on `feat/endless-descent-overhaul`:
 - The broadcast shows the explored room graph, current room and zone, equipped
   items, invested talents, unspent points, readied actions, and synchronized
   combat results.
+- Inventory, equipment, stock, caches, and drops use stable per-copy item
+  instances. Seeded rarity and positive/negative stat affixes make copies of
+  the same base item differ while preserving base ids as compatibility aliases.
+- The broadcast highlights the character who most recently spoke or acted and
+  shows their full stats, equipment, pack, item affixes, talents, cooldowns,
+  statuses, gold, skill points, and readied action.
 - The current 60-seed, 40-round baseline means are: random 97, basic tactics
-  217, tactics-only 538, greedy damage 563, rule-based 581, and oracle 603.
+  217, tactics-only 537, greedy damage 584, rule-based 584, and oracle 622.
 
 ## Prioritized improvements
 
 ### P0 — Procedural equipment and item identity
 
-This is the highest-value remaining game-system change. The current item table
-has useful categories but individual copies of an item are identical.
+This remains the highest-value game-system track. Stable varied copies are now
+in place; the next value comes from modifiers and effects that alter tactics,
+exploration, and party allocation rather than only core stats.
 
 Planned work:
 
@@ -90,10 +97,26 @@ Acceptance criteria:
 - Full item details appear in `look` and the broadcast without overwhelming the
   always-visible party strip.
 
+Progress as of 2026-08-13:
+
+- Complete: stable instance ids, base ids, rarity, descriptions, provenance,
+  and seeded, slot-aware affix rolls.
+- Complete: positive and negative modifiers for power, armour, health, mana,
+  and speed affect recomputed fighter stats.
+- Complete: every generated source materialises instances consistently, and a
+  dedicated item RNG keeps affix changes from perturbing encounter or route
+  selection.
+- Complete: detailed item data is available in `look` and the typed broadcast
+  scene contract; callers may use an exact instance id or an unambiguous legacy
+  base id.
+- Remaining: XP, luck, resistance, healing, critical, and cooldown modifiers;
+  play-changing effects; richer policy evaluation; and final balance sweeps.
+
 ### P0 — Broadcast inventory and active-character detail
 
-The party strip now exposes compact equipment and talent summaries. It still
-needs a readable detailed view.
+The party strip and active-character detail are now in place. The remaining
+work is visual categorisation and event explanation: making every object and
+every zero-damage or state-changing result unmistakable.
 
 Planned work:
 
@@ -118,6 +141,18 @@ Acceptance criteria:
   few seconds.
 - Item, actor, and enemy identifiers are validated at the simulation/broadcast
   boundary.
+
+Progress as of 2026-08-13:
+
+- Complete: the active-character panel follows the most recent speaker or tool
+  caller and exposes full build and item detail without crowding all five party
+  cards.
+- Complete: cooldowns and full item-instance data cross the typed scene
+  contract, while the compact party strip remains synchronized with it.
+- Remaining: compact slot/status/skill iconography under every character;
+  stronger actor/interactable visual categories; persistent enemy nameplates;
+  zero-damage reasons; and dedicated movement, retreat, loot, equipment, and
+  level-up event treatments.
 
 ### P1 — Stronger visual zones and room identity
 
@@ -264,9 +299,10 @@ increase controlled variation without degrading reproducibility.
 
 ## Suggested implementation sequence
 
-1. Introduce item instances and affix generation behind compatibility helpers.
-2. Add detailed item/build data to the scene contract and active-character
-   broadcast panel.
+1. **Complete:** introduce item instances and foundational affix generation
+   behind compatibility helpers.
+2. **Complete:** add detailed item/build data to the scene contract and the
+   active-character broadcast panel.
 3. Add unique item effects and teach baseline policies how to value the simple
    subset.
 4. Persist escaped encounters and add richer path/room consequences.

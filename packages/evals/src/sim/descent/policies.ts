@@ -33,9 +33,17 @@
  */
 
 import type { Policy, Simulation } from "../types.js";
-import { equippableBy, ITEM_BY_ID } from "./content.js";
+import { equippableBy, itemDef, itemModifiers } from "./content.js";
 import type { DescentSimulation } from "./index.js";
-import { CLASSES, type ClassId, type DescentState, type Element, type Enemy, type Fighter } from "./model.js";
+import {
+  CLASSES,
+  type ClassId,
+  type DescentState,
+  type Element,
+  type Enemy,
+  type Fighter,
+  type ItemInstance,
+} from "./model.js";
 
 type Sim = DescentSimulation;
 
@@ -90,15 +98,16 @@ const usefulPaths = (s: DescentState): DescentState["paths"] => {
 };
 
 /** Rough worth of a piece of gear, used to decide upgrades and purchases. */
-function gearScore(id: string): number {
-  const def = ITEM_BY_ID.get(id);
+function gearScore(item: ItemInstance | string): number {
+  const def = itemDef(item);
   if (!def) return 0;
+  const affix = typeof item === "string" ? { power: 0, armor: 0, hp: 0, mana: 0, speed: 0 } : itemModifiers(item);
   return (
-    (def.power ?? 0) * 3 +
-    (def.armorBonus ?? 0) * 2.5 +
-    (def.hp ?? 0) * 0.35 +
-    (def.mana ?? 0) * 0.25 +
-    (def.speed ?? 0) * 2
+    ((def.power ?? 0) + affix.power) * 3 +
+    ((def.armorBonus ?? 0) + affix.armor) * 2.5 +
+    ((def.hp ?? 0) + affix.hp) * 0.35 +
+    ((def.mana ?? 0) + affix.mana) * 0.25 +
+    ((def.speed ?? 0) + affix.speed) * 2
   );
 }
 
@@ -122,17 +131,17 @@ function tidyPacks(sim: Sim, s: DescentState): void {
       const owners = equippableBy(item);
       if (owners.length === 0 || owners.includes(id)) continue;
       const taker = owners.find((o) => !s.party[o].dead && s.party[o].inventory.length < 6);
-      if (taker) attempt(() => sim.tradeItem(id, taker, item));
+      if (taker) attempt(() => sim.tradeItem(id, taker, item.id));
     }
   }
   for (const id of CLASSES) {
     const me = s.party[id];
     if (me.dead) continue;
     for (const item of [...me.inventory]) {
-      const def = ITEM_BY_ID.get(item);
+      const def = itemDef(item);
       if (!def || def.kind === "consumable" || !equippableBy(item).includes(id)) continue;
       const current = me.equipped[def.kind];
-      if (!current || gearScore(item) > gearScore(current)) attempt(() => sim.equipItem(id, item));
+      if (!current || gearScore(item) > gearScore(current)) attempt(() => sim.equipItem(id, item.id));
     }
   }
 }
@@ -141,7 +150,9 @@ function tidyPacks(sim: Sim, s: DescentState): void {
 function reviveIfPossible(sim: Sim, s: DescentState): void {
   const fallen = CLASSES.find((c) => s.party[c].dead);
   if (!fallen) return;
-  const bearer = CLASSES.find((c) => !s.party[c].dead && s.party[c].inventory.includes("soul_stone"));
+  const bearer = CLASSES.find(
+    (c) => !s.party[c].dead && s.party[c].inventory.some((item) => item.baseId === "soul_stone"),
+  );
   if (bearer) attempt(() => sim.reviveAlly(bearer, fallen));
 }
 
@@ -156,20 +167,21 @@ function reviveIfPossible(sim: Sim, s: DescentState): void {
 function shop(sim: Sim, s: DescentState): void {
   const total = CLASSES.reduce((sum, c) => sum + s.party[c].gold, 0);
   // Consumables first, then the best affordable piece of gear somebody can use.
-  const wantPotions = CLASSES.flatMap((c) => s.party[c].inventory).filter((i) => i === "healing_potion").length < 3;
+  const wantPotions =
+    CLASSES.flatMap((c) => s.party[c].inventory).filter((item) => item.baseId === "healing_potion").length < 3;
   if (wantPotions) {
-    const listing = s.stock.find((x) => x.item === "healing_potion");
+    const listing = s.stock.find((x) => x.item.baseId === "healing_potion");
     if (listing) {
       const buyer = CLASSES.find(
         (c) => !s.party[c].dead && s.party[c].gold >= listing.price && s.party[c].inventory.length < 6,
       );
-      if (buyer) attempt(() => sim.buyItem(buyer, listing.item));
+      if (buyer) attempt(() => sim.buyItem(buyer, listing.item.id));
     }
   }
 
   const candidates = s.stock
     .filter((x) => {
-      const def = ITEM_BY_ID.get(x.item);
+      const def = itemDef(x.item);
       return def && def.kind !== "consumable" && x.price <= total;
     })
     .map((x) => ({ ...x, worth: gearScore(x.item) }))
@@ -177,7 +189,7 @@ function shop(sim: Sim, s: DescentState): void {
 
   for (const pick of candidates) {
     const owners = equippableBy(pick.item).filter((o) => !s.party[o].dead && s.party[o].inventory.length < 6);
-    const kind = ITEM_BY_ID.get(pick.item)?.kind;
+    const kind = itemDef(pick.item)?.kind;
     if (kind !== "weapon" && kind !== "armor" && kind !== "trinket") continue;
     // Whoever gains most from it, not whoever happens to be able to afford it.
     const target = owners
@@ -195,7 +207,7 @@ function shop(sim: Sim, s: DescentState): void {
         if (attempt(() => sim.giveGold(donor, target.o, give))) needed -= give;
       }
     }
-    if (attempt(() => sim.buyItem(target.o, pick.item))) break;
+    if (attempt(() => sim.buyItem(target.o, pick.item.id))) break;
   }
 }
 
@@ -233,13 +245,15 @@ function loot(sim: Sim, s: DescentState): void {
     const offers = s.cache
       .filter((entry) => !entry.taken)
       .map((entry) => {
-        const def = ITEM_BY_ID.get(entry.item);
+        const def = itemDef(entry.item);
         const kind = def?.kind;
         if (!def) return { entry, taker: undefined as ClassId | undefined, gain: -1 };
         if (kind === "consumable") {
           // Worth something to anybody, and worth more when the party is thin
           // on them. Never worth more than a real upgrade.
-          const held = CLASSES.flatMap((c) => s.party[c].inventory).filter((i) => i === entry.item).length;
+          const held = CLASSES.flatMap((c) => s.party[c].inventory).filter(
+            (item) => item.baseId === entry.item.baseId,
+          ).length;
           const taker = CLASSES.find((c) => !s.party[c].dead && s.party[c].inventory.length < 6);
           return { entry, taker, gain: taker ? Math.max(1, 14 - held * 6) : -1 };
         }
@@ -258,8 +272,8 @@ function loot(sim: Sim, s: DescentState): void {
 
     const pick = offers[0];
     if (!pick?.taker) break;
-    if (!attempt(() => sim.takeFromCache(pick.taker, pick.entry.item))) break;
-    attempt(() => sim.equipItem(pick.taker, pick.entry.item));
+    if (!attempt(() => sim.takeFromCache(pick.taker, pick.entry.item.id))) break;
+    attempt(() => sim.equipItem(pick.taker, pick.entry.item.id));
   }
 }
 
@@ -449,7 +463,9 @@ function basicPolicy(): Policy {
       // Potions only, and only in an emergency. No trading, no shopping.
       const dying = hurtest(s);
       if (dying && dying.hp / dying.maxHp < 0.35) {
-        const bearer = CLASSES.find((c) => !s.party[c].dead && s.party[c].inventory.includes("healing_potion"));
+        const bearer = CLASSES.find(
+          (c) => !s.party[c].dead && s.party[c].inventory.some((item) => item.baseId === "healing_potion"),
+        );
         if (bearer) attempt(() => sim.useItem(bearer, "healing_potion", dying.id));
       }
       return false;
@@ -565,7 +581,8 @@ function ruleBasedPolicy(omniscient = false): Policy {
       const elite = paths.find((p) => p.kind === "elite");
       const shrine = paths.find((p) => p.kind === "shrine");
       const room = CLASSES.some((c) => !s.party[c].dead && s.party[c].inventory.length < 6);
-      const thin = CLASSES.flatMap((c) => s.party[c].inventory).filter((i) => i === "healing_potion").length < 2;
+      const thin =
+        CLASSES.flatMap((c) => s.party[c].inventory).filter((item) => item.baseId === "healing_potion").length < 2;
 
       // Each way on gets the band it is actually right for.
       //
@@ -611,9 +628,9 @@ function ruleBasedPolicy(omniscient = false): Policy {
             // A dying ally is worth a potion when the healing itself is a trap.
             if (dying && healingIsPunished(s)) {
               const potion =
-                f.inventory.find((i) => i === "greater_potion" && serious) ??
-                f.inventory.find((i) => i === "healing_potion");
-              if (potion && attempt(() => sim.useItem("cleric", potion, dying.id))) continue;
+                f.inventory.find((item) => item.baseId === "greater_potion" && serious) ??
+                f.inventory.find((item) => item.baseId === "healing_potion");
+              if (potion && attempt(() => sim.useItem("cleric", potion.id, dying.id))) continue;
             }
             if (dying && healingIsPunished(s) && attempt(() => sim.useDefend("cleric"))) continue;
             if (dying && attempt(() => sim.useAbility("cleric", "heal", dying.id))) continue;
