@@ -30,6 +30,7 @@ import type { Rng } from "../rng.js";
 import type {
   ClassId,
   DungeonFloorMap,
+  DungeonRoute,
   Element,
   Enemy,
   HiddenMechanic,
@@ -1214,6 +1215,43 @@ export function roomHint(kind: RoomKind): string {
   return ROOM_HINTS[kind];
 }
 
+/** The traversable route between two adjacent rooms, respecting one-way drops. */
+export function routeBetween(map: DungeonFloorMap, from: string, to: string): DungeonRoute | undefined {
+  return map.routes.find(
+    (route) =>
+      route.discovered &&
+      ((route.from === from && route.to === to) || (route.bidirectional && route.from === to && route.to === from)),
+  );
+}
+
+/**
+ * What a rogue physically uncovers from one room.
+ *
+ * Secret exits become traversable for everybody once found. Concealed trap
+ * details remain private in the scout report, but `featureKnown` lets the rogue
+ * disarm the correct route later.
+ */
+export function scoutDungeonRoutes(map: DungeonFloorMap, roomId: string): DungeonRoute[] {
+  const found: DungeonRoute[] = [];
+  for (const route of map.routes) {
+    const touches = route.from === roomId || (route.bidirectional && route.to === roomId);
+    if (!touches) continue;
+    if (!route.discovered && route.kind === "secret") {
+      route.discovered = true;
+      const from = map.rooms.find((room) => room.id === route.from);
+      const to = map.rooms.find((room) => room.id === route.to);
+      if (from && !from.links.includes(to?.id ?? "")) from.links.push(route.to);
+      if (route.bidirectional && to && !to.links.includes(from?.id ?? "")) to.links.push(route.from);
+      found.push(route);
+    }
+    if (!route.featureKnown) {
+      route.featureKnown = true;
+      if (!found.includes(route)) found.push(route);
+    }
+  }
+  return found;
+}
+
 /**
  * A small connected room graph with branches and occasional loops.
  *
@@ -1223,6 +1261,7 @@ export function roomHint(kind: RoomKind): string {
  */
 export function generateFloorMap(floor: number, rng: Rng): DungeonFloorMap {
   const zone = ZONES[Math.floor((floor - 1) / 3) % ZONES.length];
+  const routeRng = rng.fork(`route-features-${floor}`);
   const count = rng.int(5, 7);
   const kinds: RoomKind[] = ["combat", "combat", "elite", "cache", "market", "shrine", "empty"];
   for (let i = kinds.length - 1; i > 0; i--) {
@@ -1230,6 +1269,7 @@ export function generateFloorMap(floor: number, rng: Rng): DungeonFloorMap {
     [kinds[i], kinds[j]] = [kinds[j], kinds[i]];
   }
 
+  const routes: DungeonRoute[] = [];
   const rooms: DungeonFloorMap["rooms"] = [
     {
       id: "r0",
@@ -1243,54 +1283,108 @@ export function generateFloorMap(floor: number, rng: Rng): DungeonFloorMap {
       cleared: true,
     },
   ];
+  const connect = (
+    from: DungeonFloorMap["rooms"][number],
+    to: DungeonFloorMap["rooms"][number],
+    kind: DungeonRoute["kind"] = "passage",
+    bidirectional = true,
+    discovered = true,
+  ) => {
+    routes.push({
+      id: `route-${routes.length + 1}`,
+      from: from.id,
+      to: to.id,
+      bidirectional,
+      kind,
+      discovered,
+      featureKnown: kind === "passage" || kind === "one-way",
+      triggered: false,
+      disarmed: false,
+      traversals: 0,
+    });
+    if (discovered) {
+      if (!from.links.includes(to.id)) from.links.push(to.id);
+      if (bidirectional && !to.links.includes(from.id)) to.links.push(from.id);
+    }
+  };
   for (let i = 1; i < count - 1; i++) {
     // The entrance always branches. Later rooms grow from the recent frontier,
     // keeping the drawing legible while still producing different shapes.
-    const parentIndex = i === 2 ? 0 : rng.int(Math.max(0, i - 3), i - 1);
+    const parentIndex = i <= 2 ? 0 : rng.int(Math.max(1, i - 3), i - 1);
     const parent = rooms[parentIndex];
     const kind = floor % 4 === 0 && i === count - 2 ? "boss" : (kinds[(i - 1) % kinds.length] ?? "combat");
-    rooms.push({
+    const room: DungeonFloorMap["rooms"][number] = {
       id: `r${i}`,
       label: zone.rooms[(i - 1 + floor) % zone.rooms.length],
       kind,
-      links: [parent.id],
+      links: [],
       x: parent.x + rng.int(-1, 1),
       y: parent.y + 1,
       visited: false,
       revealed: false,
       cleared: false,
-    });
-    parent.links.push(`r${i}`);
+    };
+    rooms.push(room);
+    connect(parent, room);
   }
 
   const gate = floor % 4 === 0 ? rooms[count - 2] : rooms[rng.int(Math.max(1, count - 4), count - 2)];
-  const stairs = {
+  const stairs: DungeonFloorMap["rooms"][number] = {
     id: `r${count - 1}`,
     label: "stairs into the dark",
     kind: "stairs" as const,
-    links: [gate.id],
+    links: [],
     x: gate.x + rng.int(-1, 1),
     y: gate.y + 1,
     visited: false,
     revealed: false,
     cleared: true,
   };
-  gate.links.push(stairs.id);
   rooms.push(stairs);
+  connect(gate, stairs);
+
+  // One concealed shortcut starts at the entrance and skips at least one
+  // ordinary edge. Rooms after the initial branch never grow directly from
+  // r0, so a useful target always exists. It is registered before loops so a
+  // visible loop cannot consume the same physical connection.
+  const secretTarget = [...rooms]
+    .filter((room) => room.kind !== "stairs" && room.id !== "r0" && !rooms[0].links.includes(room.id))
+    .sort((a, b) => b.y - a.y || a.id.localeCompare(b.id))[0];
+  if (secretTarget) connect(rooms[0], secretTarget, "secret", true, false);
 
   // One or two loops turn the tree into a maze without making its small map
   // unreadable. Avoid linking the stairs around a boss gate.
   const loops = rng.int(1, 2);
   let made = 0;
-  let attempts = 0;
-  while (made < loops && attempts++ < 40) {
-    const a = rooms[rng.int(0, rooms.length - 2)];
-    const b = rooms[rng.int(0, rooms.length - 2)];
-    if (a === b || a.links.includes(b.id) || Math.abs(a.y - b.y) > 2) continue;
-    a.links.push(b.id);
-    b.links.push(a.id);
+  while (made < loops) {
+    const candidates = rooms.slice(0, -1).flatMap((a, index, possible) =>
+      possible.slice(index + 1).flatMap((b) => {
+        const connected = routes.some(
+          (route) => (route.from === a.id && route.to === b.id) || (route.from === b.id && route.to === a.id),
+        );
+        return connected || Math.abs(a.y - b.y) > 2 ? [] : [{ a, b }];
+      }),
+    );
+    if (candidates.length === 0) break;
+    const { a, b } = candidates[rng.int(0, candidates.length - 1)];
+    // The first loop is a downward, one-way drop. It is a shortcut, but never
+    // the only route onward because the bidirectional tree remains intact.
+    const oneWay = made === 0;
+    const from = a.y <= b.y ? a : b;
+    const to = from === a ? b : a;
+    connect(from, to, oneWay ? "one-way" : "passage", !oneWay);
     made += 1;
   }
 
-  return { zone: zone.name, currentRoom: "r0", rooms };
+  // A concealed trap on one ordinary tree route. Route RNG is forked so this
+  // cannot perturb room contents, coordinates, or the existing loop layout.
+  const trapCandidates = routes.filter((route) => route.kind === "passage" && route.to !== stairs.id);
+  const trapped = trapCandidates[routeRng.int(0, Math.max(0, trapCandidates.length - 1))];
+  if (trapped) {
+    trapped.kind = "trap";
+    trapped.featureKnown = false;
+    trapped.trap = (["blades", "poison-darts", "ward"] as const)[routeRng.int(0, 2)];
+  }
+
+  return { zone: zone.name, currentRoom: "r0", rooms, routes };
 }

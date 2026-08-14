@@ -97,7 +97,7 @@ export interface Scene {
   earnedXp: number;
   party: ScenePartyMember[];
   enemies: SceneEnemy[];
-  paths: Array<{ id: string; label: string; kind: string; hint: string | null }>;
+  paths: Array<{ id: string; label: string; kind: string; route: string | null; hint: string | null }>;
   floorMap: {
     zone: string;
     currentRoom: string;
@@ -112,6 +112,16 @@ export interface Scene {
       revealed: boolean;
       cleared: boolean;
       threat: { enemies: number; hp: number; maxHp: number; retreats: number } | null;
+    }>;
+    routes: Array<{
+      id: string;
+      from: string;
+      to: string;
+      kind: string;
+      bidirectional: boolean;
+      triggered: boolean;
+      disarmed: boolean;
+      traversals: number;
     }>;
   } | null;
   pendingPath: string | null;

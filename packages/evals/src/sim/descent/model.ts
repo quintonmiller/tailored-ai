@@ -241,6 +241,26 @@ export interface RoomEncounter {
   retreats: number;
 }
 
+export type DungeonRouteKind = "passage" | "trap" | "one-way" | "secret";
+export type DungeonTrapKind = "blades" | "poison-darts" | "ward";
+
+/** A physical connection between rooms, including consequences of crossing it. */
+export interface DungeonRoute {
+  id: string;
+  from: string;
+  to: string;
+  bidirectional: boolean;
+  kind: DungeonRouteKind;
+  trap?: DungeonTrapKind;
+  /** False only for a secret route that has not been found yet. */
+  discovered: boolean;
+  /** Whether the rogue has identified the route's concealed feature. */
+  featureKnown: boolean;
+  triggered: boolean;
+  disarmed: boolean;
+  traversals: number;
+}
+
 export interface DungeonRoom {
   id: string;
   label: string;
@@ -260,6 +280,7 @@ export interface DungeonFloorMap {
   zone: string;
   currentRoom: string;
   rooms: DungeonRoom[];
+  routes: DungeonRoute[];
 }
 
 export interface DescentState {
@@ -282,7 +303,7 @@ export interface DescentState {
    */
   dread: number;
   /** Paths offered by the current `explore` phase. */
-  paths: Array<{ id: string; label: string; hint?: string; kind: string }>;
+  paths: Array<{ id: string; label: string; hint?: string; kind: string; route?: DungeonRouteKind }>;
   /** Persistent graph for maze-enabled runs. Omitted by legacy/direct simulations. */
   map?: DungeonFloorMap;
   /** Unclaimed drops waiting for the `spoils` phase. */

@@ -75,6 +75,8 @@ import {
   rollLoot,
   rollStock,
   roomHint,
+  routeBetween,
+  scoutDungeonRoutes,
 } from "./content.js";
 
 /**
@@ -99,6 +101,7 @@ import {
   type DescentState,
   type DungeonFloorMap,
   type DungeonRoom,
+  type DungeonRoute,
   type Element,
   type Enemy,
   equippedItemEffects,
@@ -282,21 +285,34 @@ const pathsFromMap = (map: DungeonFloorMap): DescentState["paths"] => {
   if (!here) return [];
   return here.links.flatMap((id) => {
     const room = map.rooms.find((candidate) => candidate.id === id);
+    const route = routeBetween(map, here.id, id);
     if (here.kind === "boss" && !here.cleared && room?.kind === "stairs") return [];
     const enemies = room?.encounter?.enemies.filter(alive) ?? [];
     const threat =
       enemies.length > 0
         ? `${enemies.length} wounded enem${enemies.length === 1 ? "y" : "ies"} remain (${enemies.reduce((sum, enemy) => sum + enemy.hp, 0)}/${enemies.reduce((sum, enemy) => sum + enemy.maxHp, 0)} hp)`
         : undefined;
+    const routeHint =
+      route?.kind === "secret"
+        ? "a newly found secret shortcut"
+        : route?.kind === "one-way"
+          ? "a one-way drop; this route does not lead back"
+          : route?.kind === "trap" && route.disarmed
+            ? "the rogue disarmed a trap here"
+            : route?.kind === "trap" && route.triggered
+              ? "a spent trap litters the passage"
+              : undefined;
+    const destination =
+      threat ??
+      (room?.visited ? "already explored" : room?.revealed ? `mapped: ${room.kind}` : roomHint(room?.kind ?? "empty"));
     return room
       ? [
           {
             id: room.id,
             label: room.label,
-            hint:
-              threat ??
-              (room.visited ? "already explored" : room.revealed ? `mapped: ${room.kind}` : roomHint(room.kind)),
+            hint: [routeHint, destination].filter(Boolean).join("; "),
             kind: room.kind,
+            ...(route ? { route: route.kind } : {}),
           },
         ]
       : [];
@@ -389,7 +405,7 @@ export interface DescentScene {
     statuses: Array<{ kind: string; ticks: number; amount: number }>;
     telegraph: string | null;
   }>;
-  paths: Array<{ id: string; label: string; kind: string; hint: string | null }>;
+  paths: Array<{ id: string; label: string; kind: string; route: string | null; hint: string | null }>;
   floorMap: {
     zone: string;
     currentRoom: string;
@@ -404,6 +420,16 @@ export interface DescentScene {
       revealed: boolean;
       cleared: boolean;
       threat: { enemies: number; hp: number; maxHp: number; retreats: number } | null;
+    }>;
+    routes: Array<{
+      id: string;
+      from: string;
+      to: string;
+      kind: string;
+      bidirectional: boolean;
+      triggered: boolean;
+      disarmed: boolean;
+      traversals: number;
     }>;
   } | null;
   pendingPath: string | null;
@@ -458,6 +484,11 @@ export class DescentSimulation implements Simulation {
   private retreats = 0;
   private encountersReengaged = 0;
   private optionalRoomsCompleted = 0;
+  private trapsTriggered = 0;
+  private trapsDisarmed = 0;
+  private secretRoutesFound = 0;
+  private secretShortcutsTaken = 0;
+  private oneWayDropsTaken = 0;
   private deaths = 0;
   private floorReached = 1;
   private readonly startFloor: number;
@@ -1552,6 +1583,60 @@ export class DescentSimulation implements Simulation {
     if (encounter) encounter.enemies = this.state.enemies;
   }
 
+  /** Resolve a route once, before the destination room takes over narration. */
+  private crossRoute(route: DungeonRoute): string | undefined {
+    route.traversals += 1;
+    if (route.kind === "secret") this.secretShortcutsTaken += 1;
+    if (route.kind === "one-way") this.oneWayDropsTaken += 1;
+    if (route.kind !== "trap" || route.triggered || route.disarmed) return undefined;
+
+    route.triggered = true;
+    route.featureKnown = true;
+    this.trapsTriggered += 1;
+    const s = this.state;
+    const standing = new Set(livingParty(s).map((fighter) => fighter.id));
+    let line: string;
+    switch (route.trap) {
+      case "poison-darts": {
+        const amount = Math.min(7, 2 + Math.floor(s.floor / 4));
+        for (const fighter of livingParty(s)) {
+          applyStatus(fighter, { kind: "poison", ticks: 3, amount, source: route.id });
+        }
+        line = `Darts snap out across the passage. The party is poisoned for ${amount} damage per combat round.`;
+        break;
+      }
+      case "ward": {
+        let drained = 0;
+        for (const fighter of livingParty(s)) {
+          const loss = Math.min(fighter.mana, 8 + Math.floor(s.floor / 3));
+          fighter.mana -= loss;
+          drained += loss;
+        }
+        s.dread += 1;
+        line = `A buried ward drinks ${drained} mana and answers with a sound in the dark. Dread rises to ${s.dread}.`;
+        break;
+      }
+      default: {
+        const raw = Math.min(14, 4 + s.floor);
+        const wounds = livingParty(s).map((fighter) => `${fighter.id} ${hurtFighter(fighter, raw, "physical")}`);
+        line = `Concealed blades sweep the route: ${wounds.join(", ")}.`;
+        break;
+      }
+    }
+    for (const id of standing) {
+      if (!s.party[id].dead) continue;
+      this.deaths += 1;
+      this.note("down", `${id} was brought down by a route trap on floor ${s.floor}.`);
+    }
+    this.note("trap", `The party triggered ${route.trap ?? "a trap"} on floor ${s.floor}.`);
+    if (livingParty(s).length === 0) {
+      s.wiped = true;
+      s.phase = "over";
+      this.note("wipe", `The party died in a trapped passage on floor ${s.floor}.`);
+    }
+    return line;
+  }
+
   private beginEncounter(elite: boolean, boss = !this.state.map && this.state.floor % 5 === 0): void {
     const s = this.state;
     const room = this.currentRoom();
@@ -2307,8 +2392,19 @@ export class DescentSimulation implements Simulation {
     const from = map.rooms.find((room) => room.id === map.currentRoom);
     const room = map.rooms.find((candidate) => candidate.id === roomId);
     if (!from || !room || !from.links.includes(room.id)) return;
+    const route = routeBetween(map, from.id, room.id);
+    if (!route) return;
 
     const revisiting = room.visited;
+    const routeLine = this.crossRoute(route);
+    const finish = () => {
+      if (routeLine) this.lastLog.unshift(routeLine);
+    };
+    if (s.wiped) {
+      this.lastLog = routeLine ? [routeLine, "Nobody reaches the other side."] : ["Nobody reaches the other side."];
+      return;
+    }
+    this.note("move", `The party moves from ${from.label} to ${room.label}.`);
     map.currentRoom = room.id;
     if (!room.visited) this.roomsExplored += 1;
     else this.backtracks += 1;
@@ -2317,6 +2413,7 @@ export class DescentSimulation implements Simulation {
     s.paths = pathsFromMap(map);
     if (room.encounter?.enemies.some(alive)) {
       this.beginEncounter(room.kind === "elite", room.kind === "boss");
+      finish();
       return;
     }
     if (room.cleared) {
@@ -2324,24 +2421,29 @@ export class DescentSimulation implements Simulation {
       this.lastLog = [
         `The party ${revisiting ? "returns" : "comes"} to the ${room.label}. Nothing new is waiting there.`,
       ];
+      finish();
       return;
     }
 
     switch (room.kind) {
       case "combat":
         this.beginEncounter(false, false);
+        finish();
         return;
       case "elite":
         this.beginEncounter(true, false);
+        finish();
         return;
       case "boss":
         this.beginEncounter(false, true);
+        finish();
         return;
       case "market":
         s.stock = this.makeStock(rollStock(s.floor, this.stockRng), "merchant", s.floor);
         s.phase = "market";
         this.lastLog = [`The ${room.label} is occupied by a merchant who knows more routes than they admit.`];
         this.note("merchant", `A merchant is waiting in the ${room.label}.`);
+        finish();
         return;
       case "cache": {
         const rolled = rollCache(s.floor, CACHE_OFFERS, this.stockRng);
@@ -2352,6 +2454,7 @@ export class DescentSimulation implements Simulation {
         s.phase = "cache";
         this.lastLog = [`The ${room.label} holds what remains of ${rolled.origin}.`];
         this.note("cache", `The party finds ${rolled.origin} in the ${room.label}.`);
+        finish();
         return;
       }
       case "shrine":
@@ -2363,17 +2466,20 @@ export class DescentSimulation implements Simulation {
         s.phase = "explore";
         this.lastLog = [`Old light fills the ${room.label}. The party recovers before choosing another route.`];
         this.note("shrine", `The party rests briefly at the ${room.label}.`);
+        finish();
         return;
       case "stairs":
         this.markRoomCleared(room);
         s.phase = "explore";
         this.lastLog = ["The party has found the stairs down. They may descend or turn back and explore more."];
+        finish();
         return;
       case "empty":
       case "entrance":
         this.markRoomCleared(room);
         s.phase = "explore";
         this.lastLog = [`The party searches the ${room.label}. It is quiet, but the routes beyond it are new.`];
+        finish();
         return;
     }
   }
@@ -2502,6 +2608,87 @@ export class DescentSimulation implements Simulation {
       "The party will try to retreat when the round closes. Readied actions will be abandoned, " +
       "and every standing enemy gets one opportunity to attack before the party escapes."
     );
+  }
+
+  scoutPaths(agent: string | undefined): string {
+    try {
+      const me = this.who(agent);
+      if (me.id !== "rogue") throw new Error("scouting belongs to the rogue.");
+      this.requirePhase("explore");
+      const s = this.state;
+      const currentRoom = this.currentRoom();
+      const discovered = s.map && currentRoom ? scoutDungeonRoutes(s.map, currentRoom.id) : [];
+      this.secretRoutesFound += discovered.filter((route) => route.kind === "secret").length;
+      if (s.map) s.paths = pathsFromMap(s.map);
+      const readings = s.paths.map((path) => {
+        const room =
+          path.kind === "retreat"
+            ? s.map?.rooms.find((candidate) => candidate.id === s.map?.currentRoom)
+            : s.map?.rooms.find((candidate) => candidate.id === path.id);
+        const route = s.map && currentRoom ? routeBetween(s.map, currentRoom.id, path.id) : undefined;
+        const survivors = room?.encounter?.enemies.filter(alive) ?? [];
+        if (survivors.length > 0) {
+          const hp = survivors.reduce((sum, enemy) => sum + enemy.hp, 0);
+          return `  ${path.id}: the unfinished fight — ${survivors.length} wounded enem${survivors.length === 1 ? "y" : "ies"}, ${hp} health between them`;
+        }
+        if (route?.kind === "trap" && !route.triggered && !route.disarmed) {
+          return `  ${path.id}: an armed ${route.trap ?? "concealed"} trap before the ${path.label}`;
+        }
+        if (route?.kind === "secret") return `  ${path.id}: a secret shortcut into the ${path.label}`;
+        if (route?.kind === "one-way") return `  ${path.id}: a one-way drop into the ${path.label}; no return here`;
+        if (path.kind === "elite") return `  ${path.id}: something large, and it is guarding something worth having`;
+        if (path.kind === "boss") return `  ${path.id}: a gate and the thing guarding the way down`;
+        if (path.kind === "market") return `  ${path.id}: a merchant's lamplight`;
+        if (path.kind === "cache") {
+          return s.map
+            ? `  ${path.id}: abandoned packs in a quiet room`
+            : `  ${path.id}: packs, their owners, and whatever killed them`;
+        }
+        if (path.kind === "shrine") {
+          return s.map
+            ? `  ${path.id}: a warm shrine; no movement inside`
+            : `  ${path.id}: a shrine, and a fight after it`;
+        }
+        if (path.kind === "stairs") return `  ${path.id}: air moving down another flight`;
+        if (path.kind === "empty" || path.kind === "entrance") return `  ${path.id}: no movement`;
+        return `  ${path.id}: several sets of fresh tracks; exact numbers are hidden past the turn`;
+      });
+      this.scoutReport = readings.join("\n");
+      this.scoutedFloor = s.floor;
+      s.dread += 1;
+      this.diag.recordAttempt(false);
+      return `You go ahead quietly. Nobody else can see any of this:\n${readings.join("\n")}\n\nThey are waiting on you.`;
+    } catch (err) {
+      this.diag.recordAttempt(true);
+      throw err;
+    }
+  }
+
+  disarmTrap(agent: string | undefined, pathId: string): string {
+    try {
+      const me = this.who(agent);
+      if (me.id !== "rogue") throw new Error("disarming route traps belongs to the rogue.");
+      this.requirePhase("explore");
+      const map = this.state.map;
+      const current = this.currentRoom();
+      if (!map || !current) throw new Error("there is no mapped route to disarm here.");
+      const path = this.state.paths.find((candidate) => candidate.id === pathId);
+      const route = path ? routeBetween(map, current.id, path.id) : undefined;
+      if (!route || route.kind !== "trap") throw new Error(`there is no trap on the ${pathId} route.`);
+      if (route.triggered) throw new Error("that trap has already fired.");
+      if (route.disarmed) throw new Error("that trap is already disarmed.");
+      if (!route.featureKnown) throw new Error("you have not found that trap. Scout the routes first.");
+      route.disarmed = true;
+      this.trapsDisarmed += 1;
+      this.state.dread += 1;
+      this.state.paths = pathsFromMap(map);
+      this.note("disarm", `The rogue disarmed a ${route.trap ?? "route"} trap on floor ${this.state.floor}.`);
+      this.diag.recordAttempt(false);
+      return `You disarm the ${route.trap ?? "route"} trap. The party can cross safely. Dread rises to ${this.state.dread}.`;
+    } catch (err) {
+      this.diag.recordAttempt(true);
+      throw err;
+    }
   }
 
   investTalent(agent: string | undefined, talentId: string): string {
@@ -2812,61 +2999,14 @@ export class DescentSimulation implements Simulation {
         "scout",
         "Go ahead alone and look down the ways on. Only you see what is there — the others have to be told.",
         {},
-        (_args, agent) => {
-          try {
-            const me = this.who(agent);
-            if (me.id !== "rogue") throw new Error("scouting belongs to the rogue.");
-            this.requirePhase("explore");
-            const s = this.state;
-            const readings = s.paths.map((p) => {
-              const room =
-                p.kind === "retreat"
-                  ? s.map?.rooms.find((candidate) => candidate.id === s.map?.currentRoom)
-                  : s.map?.rooms.find((candidate) => candidate.id === p.id);
-              const survivors = room?.encounter?.enemies.filter(alive) ?? [];
-              if (survivors.length > 0) {
-                const hp = survivors.reduce((sum, enemy) => sum + enemy.hp, 0);
-                return `  ${p.id}: the unfinished fight — ${survivors.length} wounded enem${survivors.length === 1 ? "y" : "ies"}, ${hp} health between them`;
-              }
-              if (p.kind === "elite") return `  ${p.id}: something large, and it is guarding something worth having`;
-              if (p.kind === "boss") return `  ${p.id}: a gate and the thing guarding the way down`;
-              if (p.kind === "market") return `  ${p.id}: a merchant's lamplight`;
-              if (p.kind === "cache") {
-                return s.map
-                  ? `  ${p.id}: abandoned packs in a quiet room`
-                  : `  ${p.id}: packs, their owners, and whatever killed them`;
-              }
-              if (p.kind === "shrine") {
-                return s.map
-                  ? `  ${p.id}: a warm shrine; no movement inside`
-                  : `  ${p.id}: a shrine, and a fight after it`;
-              }
-              if (p.kind === "stairs") return `  ${p.id}: air moving down another flight`;
-              if (p.kind === "empty" || p.kind === "entrance") return `  ${p.id}: no movement`;
-              return `  ${p.id}: several sets of fresh tracks; exact numbers are hidden past the turn`;
-            });
-            // Private to the rogue, and that is the whole point.
-            //
-            // This used to write into `state.scouted`, which `describe` renders
-            // for everybody — so the party learned what was ahead whether or
-            // not anybody said a word, and the one action in the scenario that
-            // could create information asymmetry created none. Now the rogue
-            // holds it and has to relay it, which is most of what splitting the
-            // party would have bought, for one field.
-            this.scoutReport = readings.join("\n");
-            this.scoutedFloor = s.floor;
-            // Going ahead and coming back costs time, and the dungeon notices.
-            // Without a price, scouting every floor is free and there is no
-            // decision about whether the look was worth it.
-            s.dread += 1;
-            this.diag.recordAttempt(false);
-            return `You go ahead quietly. Nobody else can see any of this:\n${readings.join("\n")}\n\nThey are waiting on you.`;
-          } catch (err) {
-            this.diag.recordAttempt(true);
-            throw err;
-          }
-        },
+        (_args, agent) => this.scoutPaths(agent),
         "read",
+      ),
+      agentTool(
+        "disarm_trap",
+        "Disarm a route trap you found while scouting. This takes time and raises dread, but makes the crossing safe.",
+        { path: "The destination room id shown by scout." },
+        (args, agent) => this.disarmTrap(agent, String(args.path ?? "")),
       ),
     );
 
@@ -2923,6 +3063,11 @@ export class DescentSimulation implements Simulation {
       retreats: this.retreats,
       encountersReengaged: this.encountersReengaged,
       optionalRoomsCompleted: this.optionalRoomsCompleted,
+      trapsTriggered: this.trapsTriggered,
+      trapsDisarmed: this.trapsDisarmed,
+      secretRoutesFound: this.secretRoutesFound,
+      secretShortcutsTaken: this.secretShortcutsTaken,
+      oneWayDropsTaken: this.oneWayDropsTaken,
       goldEarned: this.goldEarned,
       goldSpent: this.goldSpent,
       goldRemaining: CLASSES.reduce((sum, id) => sum + s.party[id].gold, 0),
@@ -3061,7 +3206,13 @@ export class DescentSimulation implements Simulation {
         statuses: statuses(e),
         telegraph: e.telegraph ?? null,
       })),
-      paths: s.paths.map((p) => ({ id: p.id, label: p.label, kind: p.kind, hint: p.hint ?? null })),
+      paths: s.paths.map((p) => ({
+        id: p.id,
+        label: p.label,
+        kind: p.kind,
+        route: p.route ?? null,
+        hint: p.hint ?? null,
+      })),
       floorMap: s.map
         ? (() => {
             const current = s.map.rooms.find((room) => room.id === s.map?.currentRoom);
@@ -3096,6 +3247,18 @@ export class DescentSimulation implements Simulation {
                   visited: room.visited,
                   revealed: room.revealed,
                   cleared: room.cleared,
+                })),
+              routes: s.map.routes
+                .filter((route) => route.discovered && known.has(route.from) && known.has(route.to))
+                .map((route) => ({
+                  id: route.id,
+                  from: route.from,
+                  to: route.to,
+                  kind: route.kind === "trap" && !route.featureKnown ? "passage" : route.kind,
+                  bidirectional: route.bidirectional,
+                  triggered: route.triggered,
+                  disarmed: route.disarmed,
+                  traversals: route.traversals,
                 })),
             };
           })()

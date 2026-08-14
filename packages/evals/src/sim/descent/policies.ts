@@ -33,7 +33,7 @@
  */
 
 import type { Policy, Simulation } from "../types.js";
-import { equippableBy, itemDef, itemModifiers } from "./content.js";
+import { equippableBy, itemDef, itemModifiers, routeBetween } from "./content.js";
 import type { DescentSimulation } from "./index.js";
 import {
   CLASSES,
@@ -543,7 +543,7 @@ function basicPolicy(): Policy {
  * fights.
  */
 function tacticalPolicy(): Policy {
-  const full = ruleBasedPolicy(false);
+  const full = ruleBasedPolicy(false, false);
   return {
     name: "tactics-only",
     act(simulation: Simulation): void {
@@ -579,7 +579,8 @@ function tacticalPolicy(): Policy {
  * would not tell it — no hidden mechanics, no resistances it did not inspect —
  * which is exactly what makes it the right comparison.
  */
-function ruleBasedPolicy(omniscient = false): Policy {
+function ruleBasedPolicy(omniscient = false, navigateHazards = true): Policy {
+  const scoutedByRun = new WeakMap<Sim, Set<number>>();
   const bestElement = (e: Enemy): string => {
     if (!omniscient) return "lightning";
     // The oracle picks by resistance, and never hands a reflecting family the
@@ -628,22 +629,48 @@ function ruleBasedPolicy(omniscient = false): Policy {
       spendTalents(sim, s);
       tidyPacks(sim, s);
       reviveIfPossible(sim, s);
+      const current = s.map?.rooms.find((room) => room.id === s.map?.currentRoom);
+      let scoutedFloors = scoutedByRun.get(sim);
+      if (!scoutedFloors) {
+        scoutedFloors = new Set<number>();
+        scoutedByRun.set(sim, scoutedFloors);
+      }
+      const scoutingWorthTime = healthFraction(s) < 0.7;
+      if (
+        navigateHazards &&
+        scoutingWorthTime &&
+        s.map &&
+        current?.kind === "entrance" &&
+        !scoutedFloors.has(s.floor)
+      ) {
+        if (attempt(() => sim.scoutPaths("rogue"))) scoutedFloors.add(s.floor);
+      }
       if (healthFraction(s) < 0.6 && s.dread < 4) {
         attempt(() => sim.restParty(CLASSES.find((c) => !s.party[c].dead) ?? "guardian"));
         return true;
       }
       return false;
     },
-    path: (_sim, s) => {
+    path: (sim, s) => {
       const paths = usefulPaths(s);
       const wounded = paths.find((path) => pathHasEscapedEncounter(s, path));
       const cache = paths.find((p) => p.kind === "cache");
       const market = paths.find((p) => p.kind === "market");
       const elite = paths.find((p) => p.kind === "elite");
       const shrine = paths.find((p) => p.kind === "shrine");
+      const shortcut = paths.find((p) => p.route === "secret");
       const room = CLASSES.some((c) => !s.party[c].dead && s.party[c].inventory.length < 6);
       const thin =
         CLASSES.flatMap((c) => s.party[c].inventory).filter((item) => item.baseId === "healing_potion").length < 2;
+      const take = (path: DescentState["paths"][number]) => {
+        const map = s.map;
+        const current = map?.rooms.find((candidate) => candidate.id === map.currentRoom);
+        const route = map && current ? routeBetween(map, current.id, path.id) : undefined;
+        if (route?.kind === "trap" && route.featureKnown && !route.triggered && !route.disarmed) {
+          attempt(() => sim.disarmTrap("rogue", path.id));
+        }
+        return path.id;
+      };
 
       // Each way on gets the band it is actually right for.
       //
@@ -653,15 +680,24 @@ function ruleBasedPolicy(omniscient = false): Policy {
       // code and why the first cache build produced a byte-identical ladder.
       // Ordering by *party state* instead gives every path a real turn.
       const health = healthFraction(s);
-      if (health < 0.5 && shrine) return shrine.id;
-      if (health > 0.65 && wounded) return wounded.id;
+      if (health < 0.5 && shrine) return take(shrine);
+      if (health > 0.65 && wounded) return take(wounded);
+      if (
+        shortcut &&
+        ((shortcut.kind === "shrine" && health < 0.75) ||
+          (shortcut.kind === "cache" && room) ||
+          (shortcut.kind === "market" && thin) ||
+          shortcut.kind === "stairs")
+      ) {
+        return take(shortcut);
+      }
       // Strong enough to want the harder room, which pays the most experience.
-      if (health > 0.8 && elite) return elite.id;
+      if (health > 0.8 && elite) return take(elite);
       // Middling: take the ordinary room that also has somebody's packs in it.
-      if (cache && room) return cache.id;
-      if (market && thin) return market.id;
-      if (shrine) return shrine.id;
-      return (paths.find((p) => p.kind === "unknown") ?? paths[0]).id;
+      if (cache && room) return take(cache);
+      if (market && thin) return take(market);
+      if (shrine) return take(shrine);
+      return take(paths.find((p) => p.kind === "unknown") ?? paths[0]);
     },
 
     fight: (sim, s) => {

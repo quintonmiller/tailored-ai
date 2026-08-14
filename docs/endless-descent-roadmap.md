@@ -43,6 +43,9 @@ The following work is complete on `feat/endless-descent-overhaul`:
   room rewards persist if the party takes another route and returns later.
 - Maze encounters vary enemy count, health, and damage by seed. Layouts, stock,
   drops, and routes are also seeded and reproducible.
+- Every floor adds a one-way loop, a concealed shortcut, and a concealed route
+  trap without compromising the guaranteed traversable room tree. The rogue
+  can scout shortcuts and traps, then spend dread to disarm a chosen crossing.
 - The broadcast shows the explored room graph, current room and zone, equipped
   items, invested talents, unspent points, readied actions, and synchronized
   combat results.
@@ -55,8 +58,8 @@ The following work is complete on `feat/endless-descent-overhaul`:
 - The broadcast highlights the character who most recently spoke or acted and
   shows their full stats, equipment, pack, item affixes, talents, cooldowns,
   statuses, gold, skill points, and readied action.
-- The current 60-seed, 40-round baseline means are: random 97, basic tactics
-  217, tactics-only 537, greedy damage 571, rule-based 610, and oracle 625.
+- The current 60-seed, 40-round baseline means are: random 62, basic tactics
+  192, tactics-only 562, greedy damage 622, rule-based 610, and oracle 647.
 
 ## Prioritized improvements
 
@@ -232,9 +235,18 @@ Progress as of 2026-08-13:
 - Complete: metrics now count rooms skipped on descent, backtracking,
   retreats, encounter re-engagements, and optional rooms completed in addition
   to rooms explored.
-- Remaining: locked doors and keys, one-way drops, shortcuts, traps, secret or
-  class-specific routes, persistent environmental room effects, and metrics
-  for shortcuts and secret objectives.
+- Complete: typed routes support one-way drops, rogue-discovered secret
+  shortcuts, and seeded blade, poison-dart, or mana-ward traps. Scouting
+  identifies adjacent route features; disarming trades dread for safety; an
+  undisarmed trap changes party state only on its first crossing.
+- Complete: route kinds and directions appear in path choices and the
+  broadcast floor graph, while metrics count traps triggered/disarmed, secrets
+  found/taken, and one-way drops used. Rule-based policies scout situationally,
+  disarm only a route they intend to use, and take shortcuts only when the
+  destination justifies their information cost.
+- Remaining: locked doors and keys, secret rooms beyond shortcuts,
+  destructible routes, persistent environmental room effects, and retreat
+  consequences based on room geometry or enemy speed.
 
 ### P1 — Comparable past-run context
 
@@ -336,8 +348,9 @@ increase controlled variation without degrading reproducibility.
 3. **Complete:** add the first unique item effects and teach baseline policies
    how to value the simple subset.
 4. **In progress:** escaped encounters, room-owned rewards, threat visibility,
-   and exploration metrics are complete; add physical route constraints,
-   hazards, and secret routes next.
+   exploration metrics, one-way drops, traps, and secret shortcuts are
+   complete; add locks, keys, destructible routes, and persistent room hazards
+   next.
 5. Implement zone-specific stage themes and room staging.
 6. Add historical ghost comparisons with strict cohort matching.
 7. Expand talents into active/passive rule changes.

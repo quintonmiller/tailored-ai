@@ -514,6 +514,9 @@ const STYLES = `
 .hud-graphcanvas { position: relative; height: 132px; border-radius: 6px; background: rgba(8, 12, 18, .52); }
 .hud-graphedges { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
 .hud-graphedges line { stroke: var(--line); stroke-width: 1.5; }
+.hud-graphedges line[data-kind="one-way"] { stroke: var(--flame); stroke-dasharray: 4 3; marker-end: url(#hud-route-arrow); }
+.hud-graphedges line[data-kind="secret"] { stroke: var(--arcane); stroke-dasharray: 2 3; }
+.hud-graphedges line[data-kind="trap"] { stroke: var(--bad); }
 .hud-roomnode {
   position: absolute; z-index: 1; width: 28px; height: 28px; margin: -14px 0 0 -14px;
   display: grid; place-items: center; border-radius: 50%; border: 1px solid var(--line);
@@ -1237,23 +1240,34 @@ function buildMap(host: HTMLElement): (scene: Scene | null) => void {
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("class", "hud-graphedges");
     const roomById = new Map(map.rooms.map((room) => [room.id, room]));
-    const edges = new Set<string>();
-    for (const room of map.rooms) {
-      for (const linked of room.links) {
-        const other = roomById.get(linked);
-        if (!other) continue;
-        const edge = [room.id, other.id].sort().join(":");
-        if (edges.has(edge)) continue;
-        edges.add(edge);
-        const a = point(room);
-        const b = point(other);
-        const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-        line.setAttribute("x1", `${a.x}%`);
-        line.setAttribute("y1", `${a.y}%`);
-        line.setAttribute("x2", `${b.x}%`);
-        line.setAttribute("y2", `${b.y}%`);
-        svg.appendChild(line);
-      }
+    const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+    const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
+    marker.setAttribute("id", "hud-route-arrow");
+    marker.setAttribute("viewBox", "0 0 10 10");
+    marker.setAttribute("refX", "8");
+    marker.setAttribute("refY", "5");
+    marker.setAttribute("markerWidth", "5");
+    marker.setAttribute("markerHeight", "5");
+    marker.setAttribute("orient", "auto-start-reverse");
+    const arrow = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    arrow.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
+    arrow.setAttribute("fill", "context-stroke");
+    marker.appendChild(arrow);
+    defs.appendChild(marker);
+    svg.appendChild(defs);
+    for (const route of map.routes) {
+      const from = roomById.get(route.from);
+      const to = roomById.get(route.to);
+      if (!from || !to) continue;
+      const a = point(from);
+      const b = point(to);
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      line.dataset.kind = route.kind;
+      line.setAttribute("x1", `${a.x}%`);
+      line.setAttribute("y1", `${a.y}%`);
+      line.setAttribute("x2", `${b.x}%`);
+      line.setAttribute("y2", `${b.y}%`);
+      svg.appendChild(line);
     }
     graphCanvas.appendChild(svg);
 
@@ -1357,6 +1371,7 @@ function buildMap(host: HTMLElement): (scene: Scene | null) => void {
       row.row.style.display = path ? "" : "none";
       if (!path) continue;
       const kind = String(path.kind ?? "unknown");
+      const route = String(path.route ?? "passage");
       row.row.dataset.kind = kind;
       reshape(row.glyph, isGlyph(kind) ? kind : "unknown");
       text(row.lab, path.label ?? path.id ?? "");
@@ -1364,7 +1379,7 @@ function buildMap(host: HTMLElement): (scene: Scene | null) => void {
       row.hint.style.display = path.hint ? "" : "none";
       const chosen = !!scene.pendingPath && scene.pendingPath === path.id;
       flag(row.row, "chosen", chosen);
-      text(row.tag, chosen ? "chosen" : kind);
+      text(row.tag, chosen ? "chosen" : route === "passage" ? kind : `${kind} · ${route}`);
     }
 
     const scout = exploring && scene.scouted ? String(scene.scouted) : "";

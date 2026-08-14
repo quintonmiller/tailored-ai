@@ -98,6 +98,7 @@ describe("the tool registry", () => {
     expect(byClass.guardian.map((t) => t.name)).not.toContain("heal");
     expect(byClass.mage.map((t) => t.name)).toContain("fireball");
     expect(byClass.rogue.map((t) => t.name)).toContain("scout");
+    expect(byClass.rogue.map((t) => t.name)).toContain("disarm_trap");
   });
 
   it("refuses an ability held by somebody else, even though the tool exists", async () => {
@@ -645,8 +646,13 @@ describe("run variation", () => {
       }
       expect(seen.size).toBe(map.rooms.length);
       expect(map.rooms[0].links.length).toBeGreaterThanOrEqual(2);
-      const edges = map.rooms.reduce((sum, room) => sum + room.links.length, 0) / 2;
-      expect(edges).toBeGreaterThanOrEqual(map.rooms.length);
+      expect(map.routes.filter((route) => route.discovered).length).toBeGreaterThanOrEqual(map.rooms.length);
+      expect(map.routes.filter((route) => route.kind === "trap")).toHaveLength(1);
+      expect(map.routes.filter((route) => route.kind === "secret")).toHaveLength(1);
+      const drop = map.routes.find((route) => route.kind === "one-way");
+      expect(drop).toBeDefined();
+      expect(map.rooms.find((room) => room.id === drop?.from)?.links).toContain(drop?.to);
+      expect(map.rooms.find((room) => room.id === drop?.to)?.links).not.toContain(drop?.from);
     }
     expect(new Set(maps.map((map) => map.zone)).size).toBeGreaterThan(1);
 
@@ -654,6 +660,15 @@ describe("run variation", () => {
     const stairs = bossMap.rooms.find((room) => room.kind === "stairs");
     expect(stairs?.links).toHaveLength(1);
     expect(bossMap.rooms.find((room) => room.id === stairs?.links[0])?.kind).toBe("boss");
+  });
+
+  it("generates route features reproducibly while varying trap types across seeds", () => {
+    expect(generateFloorMap(3, makeRng(44))).toEqual(generateFloorMap(3, makeRng(44)));
+    const traps = Array.from(
+      { length: 24 },
+      (_, seed) => generateFloorMap(2, makeRng(seed + 1)).routes.find((route) => route.kind === "trap")?.trap,
+    );
+    expect(new Set(traps).size).toBeGreaterThan(1);
   });
 
   it("keeps exploring a persistent room graph until the party chooses the stairs", () => {
@@ -1174,6 +1189,20 @@ describe("resources the party has to share", () => {
 });
 
 describe("scouting", () => {
+  const atRoute = (kind: "trap" | "secret" | "one-way") => {
+    for (let seed = 1; seed <= 100; seed++) {
+      const sim = createSimulation("descent", { seed, days: 40, maze: true }) as DescentSimulation;
+      const map = sim.view().map;
+      const route = map?.routes.find((candidate) => candidate.kind === kind);
+      if (!map || !route) continue;
+      map.currentRoom = route.from;
+      const room = map.rooms.find((candidate) => candidate.id === route.from);
+      if (room) room.visited = true;
+      return { sim, route };
+    }
+    throw new Error(`no generated ${kind} route`);
+  };
+
   it("gives what it found to the scout alone, so it has to be relayed", async () => {
     const sim = createSimulation("descent", { seed: 9, days: 40, startFloor: 31 }) as DescentSimulation;
     expect(sim.view().phase).toBe("explore");
@@ -1203,6 +1232,79 @@ describe("scouting", () => {
   it("belongs to the rogue", async () => {
     const sim = createSimulation("descent", { seed: 9, days: 40, startFloor: 31 }) as DescentSimulation;
     expect(await call(sim, "guardian", "scout")).toMatch(/belongs to the rogue/);
+  });
+
+  it("discovers a secret shortcut without exposing its private report to the party", async () => {
+    const { sim, route } = atRoute("secret");
+    const state = sim.view();
+    expect(state.map?.rooms.find((room) => room.id === route.from)?.links).not.toContain(route.to);
+
+    const report = await call(sim, "rogue", "scout");
+    expect(report).toMatch(/secret shortcut/i);
+    expect(state.paths.map((path) => path.id)).toContain(route.to);
+    expect(state.map?.rooms.find((room) => room.id === route.from)?.links).toContain(route.to);
+    expect(sim.metrics().secretRoutesFound).toBe(1);
+    expect(sim.scene().floorMap?.routes.find((candidate) => candidate.id === route.id)?.kind).toBe("secret");
+    expect(sim.describeFor("guardian")).not.toMatch(/What you saw ahead/);
+
+    sim.choosePath("guardian", route.to);
+    sim.advance();
+    expect(sim.metrics().secretShortcutsTaken).toBe(1);
+  });
+
+  it("makes a one-way drop a real directed edge", async () => {
+    const { sim, route } = atRoute("one-way");
+    const state = sim.view();
+    await call(sim, "rogue", "scout");
+    sim.choosePath("guardian", route.to);
+    sim.advance();
+
+    expect(state.map?.currentRoom).toBe(route.to);
+    expect(state.map?.rooms.find((room) => room.id === route.to)?.links).not.toContain(route.from);
+    expect(sim.metrics().oneWayDropsTaken).toBe(1);
+  });
+
+  it("lets the rogue disarm a scouted trap instead of paying its crossing cost", async () => {
+    const { sim, route } = atRoute("trap");
+    const state = sim.view();
+    route.trap = "blades";
+    await call(sim, "rogue", "scout");
+    expect(await call(sim, "rogue", "disarm_trap", { path: route.to })).toMatch(/cross safely/i);
+    const hpBefore = Object.values(state.party).reduce((sum, fighter) => sum + fighter.hp, 0);
+
+    sim.choosePath("guardian", route.to);
+    sim.advance();
+
+    const hpAfter = Object.values(state.party).reduce((sum, fighter) => sum + fighter.hp, 0);
+    expect(hpAfter).toBe(hpBefore);
+    expect(route).toMatchObject({ disarmed: true, triggered: false, traversals: 1 });
+    expect(sim.metrics()).toMatchObject({ trapsDisarmed: 1, trapsTriggered: 0 });
+  });
+
+  it("makes an undisarmed trap change party state exactly once", async () => {
+    const { sim, route } = atRoute("trap");
+    const state = sim.view();
+    route.trap = "blades";
+    await call(sim, "rogue", "scout");
+    const hpBefore = Object.values(state.party).reduce((sum, fighter) => sum + fighter.hp, 0);
+
+    sim.choosePath("guardian", route.to);
+    sim.advance();
+
+    const hpAfter = Object.values(state.party).reduce((sum, fighter) => sum + fighter.hp, 0);
+    expect(hpAfter).toBeLessThan(hpBefore);
+    expect(route).toMatchObject({ triggered: true, disarmed: false, traversals: 1 });
+    expect(sim.metrics()).toMatchObject({ trapsTriggered: 1, trapsDisarmed: 0 });
+    expect(sim.announce()).toMatch(/concealed blades/i);
+
+    state.phase = "explore";
+    state.enemies = [];
+    sim.choosePath("guardian", route.from);
+    sim.advance();
+    const hpAfterReturn = Object.values(state.party).reduce((sum, fighter) => sum + fighter.hp, 0);
+    expect(hpAfterReturn).toBe(hpAfter);
+    expect(route.traversals).toBe(2);
+    expect(sim.metrics().trapsTriggered).toBe(1);
   });
 });
 
