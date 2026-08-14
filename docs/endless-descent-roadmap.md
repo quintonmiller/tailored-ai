@@ -1,0 +1,289 @@
+# The Endless Descent — improvement roadmap
+
+Updated 2026-08-13. This is the implementation roadmap for the next iterations
+of the benchmark. The original investigation and design review remain in
+[endless-descent-improvements.md](./endless-descent-improvements.md); this file
+reflects the current floor-one, maze-enabled implementation.
+
+## Goals
+
+The benchmark should produce runs that are meaningfully different, require
+coordinated decisions with visible consequences, and remain understandable to
+someone watching without access to the agents' private context.
+
+The main success criteria are:
+
+1. Preparation, routing, combat, equipment, and progression all offer choices
+   without a single universally correct answer.
+2. Seeded runs differ in layout, threats, rewards, and viable builds while
+   remaining exactly reproducible.
+3. The broadcast makes current state, recent events, party builds, and progress
+   against comparable past runs clear at a glance.
+4. Baseline policies retain a useful gradient, with better coordination and
+   memory producing measurably better results.
+
+## Current foundation
+
+The following work is complete on `feat/endless-descent-overhaul`:
+
+- The pre-overhaul tree is preserved at commit `eb57db2` on
+  `backup/endless-descent-pre-overhaul-20260813`.
+- Simulation state, narration, traces, and broadcast animations agree on the
+  resolved tick; repeated combat animations and several accounting defects are
+  fixed.
+- Runs begin at a surface outfitter above floor one with limited seeded stock,
+  individual gold, empty packs, and two skill points per character.
+- Every class has a three-branch, three-rank talent tree and earns another point
+  when the party levels.
+- Maze-enabled floors contain 5–7 persistent rooms with branches, loops,
+  backtracking, encounters, elites, caches, merchants, shrines, stairs, and
+  boss gates.
+- Retreat abandons readied actions, grants enemies an opportunity attack, and
+  adds dread. The party can return to the unfinished encounter or take another
+  available route.
+- Maze encounters vary enemy count, health, and damage by seed. Layouts, stock,
+  drops, and routes are also seeded and reproducible.
+- The broadcast shows the explored room graph, current room and zone, equipped
+  items, invested talents, unspent points, readied actions, and synchronized
+  combat results.
+- The current 60-seed, 40-round baseline means are: random 97, basic tactics
+  217, tactics-only 538, greedy damage 563, rule-based 581, and oracle 603.
+
+## Prioritized improvements
+
+### P0 — Procedural equipment and item identity
+
+This is the highest-value remaining game-system change. The current item table
+has useful categories but individual copies of an item are identical.
+
+Planned work:
+
+- Replace inventory strings with stable item instances containing a unique id,
+  base item id, rarity, affixes, description, and provenance.
+- Generate zero or more positive and negative affixes from seeded, slot-aware
+  pools.
+- Support multiple modifiers on one item: power, armour, health, mana, speed,
+  experience gain, luck, resistance, healing, critical chance, and cooldown
+  changes.
+- Add effects that change play rather than only numbers:
+  - area damage or cleave;
+  - vampirism;
+  - passive regeneration;
+  - reveal adjacent rooms;
+  - reveal more of the floor graph;
+  - merchant discounts or improved sell prices;
+  - extra cache capacity;
+  - conditional shields, counters, or status application.
+- Add drawbacks such as reduced speed, maximum health, healing received,
+  elemental vulnerability, or increased dread generation.
+- Make affixes available consistently through starting stock, merchants,
+  caches, ordinary drops, elites, and bosses.
+- Preserve deterministic generation and retain the base item id for tool calls,
+  narration, diagnostics, and migration of old traces.
+
+Acceptance criteria:
+
+- Two copies of the same base item can create different build decisions.
+- A higher-rarity item is not automatically better for every character.
+- The rule-based policy can evaluate simple upgrades; the oracle can evaluate
+  conditional effects; random remains legal but clearly weaker.
+- Full item details appear in `look` and the broadcast without overwhelming the
+  always-visible party strip.
+
+### P0 — Broadcast inventory and active-character detail
+
+The party strip now exposes compact equipment and talent summaries. It still
+needs a readable detailed view.
+
+Planned work:
+
+- Show small, consistent slot/status/skill icons beneath every character.
+- Add a full active-character panel containing stats, equipment, inventory,
+  item modifiers, talents, cooldowns, gold, and readied action.
+- Clearly distinguish characters, enemies, loot, consumables, room features,
+  and effects so an object can never visually appear to attack.
+- Add persistent enemy nameplates and health-change feedback.
+- Show why an action dealt zero damage: immunity, resistance, armour, shield,
+  miss, invalid target, or stale action.
+- Show retreat intent, opportunity attacks, path movement, room entry, loot
+  assignment, equipping, leveling, and talent investment as explicit events.
+- Keep rendering keyed to authoritative tick/event ids so snapshots cannot
+  replay an animation.
+
+Acceptance criteria:
+
+- A viewer can identify every combatant and interactable object without relying
+  on its silhouette.
+- A viewer can explain the last round and the current pending decision within a
+  few seconds.
+- Item, actor, and enemy identifiers are validated at the simulation/broadcast
+  boundary.
+
+### P1 — Stronger visual zones and room identity
+
+The simulation now names zones, but the stage should make them visually
+distinct.
+
+Planned work:
+
+- Give every zone its own palette, lighting, floor/wall materials, particles,
+  ambient motion, props, and room silhouettes.
+- Give room types recognizable staging: merchant camp, shrine, cache, elite
+  arena, boss gate, stairs, flooded room, narrow bridge, and open hall.
+- Tie generated room labels and map nodes to the same visual theme data used by
+  the stage.
+- Use transitions to show movement between connected rooms and descent between
+  floors.
+- Vary encounter composition and staging by room geometry without changing the
+  underlying deterministic rules.
+
+Acceptance criteria:
+
+- A viewer can recognize the current zone and common room type without reading
+  the text label.
+- Visual variation never changes or obscures the authoritative game state.
+
+### P1 — More consequential exploration
+
+The room graph creates navigation choices, but most edges currently differ only
+by the room at the other end.
+
+Planned work:
+
+- Add locked doors, keys, one-way drops, shortcuts, traps, secret rooms, and
+  destructible or class-specific routes.
+- Add partial information: sounds, tracks, light, architecture, and scout
+  reports should hint at risk without revealing exact contents.
+- Add room hazards and benefits that persist across combat rounds.
+- Let the party leave the stairs and continue exploring for optional rewards,
+  at rising dread and resource risk.
+- Preserve retreat from ordinary encounters while assigning consequences based
+  on room geometry or enemy speed.
+- Persist escaped enemies and their health if the party later returns, rather
+  than regenerating the encounter.
+- Add explicit metrics for rooms explored, rooms skipped, backtracking,
+  shortcuts, retreats, and optional objectives completed.
+
+Acceptance criteria:
+
+- At least two reasonable routes regularly exist, with different expected
+  risks and rewards.
+- Exploration cannot be solved by always taking the same room-kind priority.
+- Retreat is useful in some states but is not a free encounter reroll.
+
+### P1 — Comparable past-run context
+
+The broadcast has history and record infrastructure, but comparisons should be
+configuration-aware and more explanatory.
+
+Planned work:
+
+- Compare only runs with compatible scenario fingerprints, horizon, start
+  mode, and material simulation options.
+- Show current XP, floor, rooms explored, bosses, deaths, and elapsed rounds
+  against the median, best, and previous comparable run.
+- Add a ghost progress line by round and markers for important events.
+- Show deltas such as “one floor ahead,” “two rooms behind,” or “boss reached
+  four rounds earlier,” not only raw totals.
+- Show the current run's position among baseline policies and historical agent
+  runs.
+- Make seed/configuration differences visible so an easier seed is not presented
+  as an organisational improvement.
+
+Acceptance criteria:
+
+- Every comparison names the cohort it uses.
+- Incompatible historical runs are excluded or clearly labelled.
+- The viewer can tell whether a lead came from pace, combat success, optional
+  exploration, or survival.
+
+### P2 — Deeper class progression
+
+The first talent trees create build choices but currently modify core stats.
+
+Planned work:
+
+- Add mutually exclusive talent branches and rank prerequisites.
+- Add active abilities and passive rule changes, not only stat bonuses.
+- Give each class at least one exploration talent and one party-support talent.
+- Add limited respec opportunities with a meaningful cost.
+- Offer level-up choices at predictable breakpoints and make unspent points
+  conspicuous in both tools and broadcast.
+- Teach baseline policies enough about builds to preserve the ladder without
+  giving non-oracle policies hidden information.
+
+Potential examples:
+
+- Guardian: intercept opportunity attacks or hold a doorway.
+- Mage: reveal elemental hazards or chain a spell under a condition.
+- Rogue: expose secret edges or make retreat safer.
+- Cleric: convert overhealing into a temporary shield.
+- Ranger: reveal encounter composition or improve path clues.
+
+### P2 — More encounter and event variety
+
+Planned work:
+
+- Add mixed-family encounter templates with explicit tactical interactions.
+- Add minibosses, rare variants, environmental hazards, and multi-stage bosses.
+- Add non-combat events with tradeoffs involving health, gold, equipment,
+  talents, dread, map information, or party separation.
+- Add wandering enemies that move through the room graph.
+- Add optional floor objectives and rewards so “find stairs immediately” and
+  “clear everything” are both situational strategies.
+- Expand loot tables and shop behaviour by zone and depth.
+
+### P2 — Narration and information hierarchy
+
+Planned work:
+
+- Narrate decisions and consequences, not every repeated attack.
+- Collapse repeated low-information actions into summaries.
+- Use stable terminology shared by tools, narration, event feed, and stage.
+- Give important discoveries, build changes, retreats, deaths, revives, boss
+  phases, and record changes dedicated callouts.
+- Ensure narration always reads resolved state and cites the correct round.
+
+## Correctness and benchmark safeguards
+
+Every tranche should include:
+
+- deterministic same-seed/same-decisions tests;
+- different-seed variation tests;
+- trace ordering and broadcast deduplication tests;
+- scene-contract validation between simulation and browser;
+- illegal-phase, invalid-target, and self-transfer tests;
+- baseline sweeps at the scenario's real options and horizon;
+- milestone reachability checks;
+- explicit configuration fingerprints for historical comparisons;
+- performance checks for long baseline sweeps and repeated browser snapshots.
+
+No feature should be accepted solely because it looks interesting in one run.
+It must either create a measurable decision, make the broadcast clearer, or
+increase controlled variation without degrading reproducibility.
+
+## Suggested implementation sequence
+
+1. Introduce item instances and affix generation behind compatibility helpers.
+2. Add detailed item/build data to the scene contract and active-character
+   broadcast panel.
+3. Add unique item effects and teach baseline policies how to value the simple
+   subset.
+4. Persist escaped encounters and add richer path/room consequences.
+5. Implement zone-specific stage themes and room staging.
+6. Add historical ghost comparisons with strict cohort matching.
+7. Expand talents into active/passive rule changes.
+8. Add events, minibosses, hazards, and optional floor objectives.
+9. Re-run large baseline sweeps, recalibrate milestones, and update benchmark
+   documentation and committed comparison cohorts.
+
+## Deferred ideas
+
+- Splitting the five characters into separate communication rooms remains a
+  possible scenario variant, not a default change. It would confound dungeon
+  play with cross-room message routing in the current benchmark.
+- Permanent meta-progression between benchmark runs is out of scope because it
+  would make runs incomparable. All progression should begin and end within one
+  seeded run.
+- Unseeded randomness is out of scope. Variation must remain reproducible for
+  debugging, grading, narration, and broadcast replay.
