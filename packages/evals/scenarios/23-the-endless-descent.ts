@@ -28,19 +28,18 @@
  *
  * ## What the ladder says before any model runs
  *
- *   random            872   floor 6.0   legal moves, chosen without a thought
- *   basic-tactics     982   floor 6.0   taunt, heal, swing; never opens a pack
- *   greedy-dps      1,365   floor 7.9   spends every point for damage and races forward
- *   tactics-only    1,215   floor 6.7   plays the fight well, ignores the rest
- *   rule-based      1,485   floor 8.2   builds, equips, trades and shops
- *   oracle          1,482   floor 8.1   knows hidden rules, once they appear
+ *   random             97   floor 1.6   legal moves, chosen without a thought
+ *   basic-tactics     217   floor 3.0   taunt, heal, swing; never opens a pack
+ *   tactics-only      538   floor 3.8   plays the fight well, ignores the rest
+ *   greedy-dps        563   floor 3.9   spends every point for damage
+ *   rule-based        581   floor 3.9   builds, equips, trades and shops
+ *   oracle            603   floor 3.9   knows hidden rules from the first room
  *
  * Sixty seeds, forty rounds, from this scenario's surface preparation state.
- * The competent policy's roughly 70% lead over random says preparation and
- * between-fight choices already matter. Oracle and rule-based are intentionally
- * still tied in this short opening band; moving recurring hidden mechanics into
- * the observable horizon is part of the floor-map and pacing pass, rather than
- * pretending a floor-31 teleport measures memory cleanly.
+ * The maze, boss cadence and compressed content bands all belong to this
+ * configuration. A competent party earns nearly six times random's score, and
+ * the oracle's four-percent edge over rule-based puts hidden-rule memory inside
+ * the measured horizon without teleporting the party past its own history.
  *
  * Two things worth reading off the board. The jump from `basic-tactics` to
  * `tactics-only` is the largest on it, so the tactical layer is where most of
@@ -49,10 +48,9 @@
  * equipping, dividing a cache, reviving — which is the part a five-agent
  * organisation is uniquely placed to get right or wrong.
  *
- * Bosses appear once in this horizon for every policy. The next balance pass
- * needs to widen both that outcome and the rule-based/oracle gap without making
- * early floors lethal; the current ladder is a checked baseline, not a claim
- * that the new progression is finished.
+ * Greedy damage remains a deliberate risk/reward rung outside the monotonic
+ * spine: its short-run burst competes with full tactics, but preparation and
+ * support now overtake it inside the broadcast horizon.
  *
  * ## What makes it hard for five agents rather than for one
  *
@@ -117,6 +115,9 @@ const SHARED =
   "are capped for the whole party rather than for you: a dead expedition's packs hold more than the " +
   "five of you can carry out, and only two of you can wear a trinket at a time. Those cannot be " +
   "settled alone. Say what a tool actually returned, in numbers, not in summary. " +
+  "Each floor is a room map: cleared rooms remain available, unexplored routes may hold danger or opportunity, " +
+  "and finding the stairs does not force you to take them. Use `continue_exploring` after a room, or `retreat` " +
+  "during a fight if the unanswered enemy attack and extra dread are worth escaping. " +
   OBJECTIVE;
 
 const hand = (description: string, instructions: string) => ({
@@ -151,7 +152,7 @@ export default defineScenario({
       cleric: "cleric",
       ranger: "ranger",
     },
-    options: { startFloor: START_FLOOR, preparation: true, startingGold: 180, startingSkillPoints: 2 },
+    options: { startFloor: START_FLOOR, preparation: true, startingGold: 180, startingSkillPoints: 2, maze: true },
   },
 
   agent: {
@@ -246,6 +247,7 @@ export default defineScenario({
     { id: "read-an-enemy", points: 3, when: { calls_tool_any: ["inspect_enemy", "read_beast"] } },
     { id: "scouted-before-committing", points: 3, when: { calls_by: { agent: "rogue", tool: "scout" } } },
     { id: "fought-at-all", points: 4, when: { sim_metric: { metric: "enemiesDefeated", at_least: 3 } } },
+    { id: "mapped-the-floor", points: 4, when: { sim_metric: { metric: "roomsExplored", at_least: 8 } } },
     { id: "cleared-a-floor", points: 5, when: { sim_metric: { metric: "floorsCleared", at_least: 1 } } },
     // The out-of-combat layer, which is worth more than the fighting in the
     // measured ladder and which nobody is told to do.
@@ -261,13 +263,14 @@ export default defineScenario({
     { id: "divided-a-cache", points: 8, when: { sim_metric: { metric: "cacheTakers", at_least: 2 } } },
     // Depth, which is the headline the whole simulation is built around.
     { id: "went-three-floors-down", points: 6, when: { sim_metric: { metric: "floorsCleared", at_least: 3 } } },
-    { id: "went-six-floors-down", points: 8, when: { sim_metric: { metric: "floorsCleared", at_least: 6 } } },
+    { id: "reached-the-boss-floor", points: 8, when: { sim_metric: { metric: "floorReached", at_least: 4 } } },
     { id: "put-down-a-boss", points: 10, when: { sim_metric: { metric: "bossesDefeated", at_least: 1 } } },
     // Re-derived over sixty seeds from the surface-preparation configuration:
-    // random 872 · basic-tactics 982 · tactics-only 1,215 ·
-    // rule-based 1,485 · oracle 1,482, at forty rounds.
-    { id: "beat-a-thoughtless-party", points: 8, when: { sim_metric: { metric: "earnedXp", at_least: 1_000 } } },
-    { id: "played-like-a-competent-one", points: 10, when: { sim_metric: { metric: "earnedXp", at_least: 1_400 } } },
+    // random 97 · basic-tactics 217 · tactics-only 538 ·
+    // rule-based 581 · oracle 603, at forty rounds. Greedy (563) remains
+    // outside the declared spine because it is a deliberately narrow strategy.
+    { id: "beat-a-thoughtless-party", points: 8, when: { sim_metric: { metric: "earnedXp", at_least: 200 } } },
+    { id: "played-like-a-competent-one", points: 10, when: { sim_metric: { metric: "earnedXp", at_least: 450 } } },
     // Kept everybody alive, and remembered what the dungeon taught them.
     { id: "nobody-was-left-behind", points: 8, when: { sim_metric: { metric: "permanentDeaths", at_most: 0 } } },
     { id: "did-not-fall-for-the-same-thing-twice", points: 7, when: { sim_metric: { metric: "memoryLapses", at_most: 0 } } },

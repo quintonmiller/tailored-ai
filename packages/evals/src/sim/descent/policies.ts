@@ -59,6 +59,35 @@ const healthFraction = (s: DescentState): number => {
   if (party.length === 0) return 0;
   return party.reduce((sum, f) => sum + f.hp / f.maxHp, 0) / party.length;
 };
+const usefulPaths = (s: DescentState): DescentState["paths"] => {
+  if (!s.map) return s.paths;
+  const fresh = s.paths.filter((path) => !s.map?.rooms.find((room) => room.id === path.id)?.visited);
+  if (fresh.length > 0) return fresh;
+
+  // At a dead end, walk the explored graph toward its nearest frontier rather
+  // than oscillating between two cleared rooms. This uses only topology the
+  // party has already walked plus the exits visible from those rooms.
+  const rooms = new Map(s.map.rooms.map((room) => [room.id, room]));
+  const seen = new Set([s.map.currentRoom]);
+  const queue = s.paths.map((path) => ({ id: path.id, first: path.id }));
+  for (const path of s.paths) seen.add(path.id);
+  while (queue.length > 0) {
+    const step = queue.shift();
+    if (!step) break;
+    const room = rooms.get(step.id);
+    if (!room) continue;
+    if (!room.visited) {
+      const route = s.paths.find((path) => path.id === step.first);
+      return route ? [route] : s.paths;
+    }
+    for (const id of room.links) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      queue.push({ id, first: step.first });
+    }
+  }
+  return s.paths;
+};
 
 /** Rough worth of a piece of gear, used to decide upgrades and purchases. */
 function gearScore(id: string): number {
@@ -241,6 +270,8 @@ function loot(sim: Sim, s: DescentState): void {
 interface Brain {
   /** Spend the opening budget before taking the first stair. */
   prepare?(sim: Sim, s: DescentState): void;
+  /** Optional housekeeping while standing on a persistent floor map. */
+  explore?(sim: Sim, s: DescentState): boolean;
   /** Which way on. */
   path(sim: Sim, s: DescentState): string;
   /** One combat action per living member. */
@@ -262,9 +293,14 @@ function drive(name: string, brain: Brain): Policy {
           if (speaker) attempt(() => sim.enterDungeon(speaker));
           return;
         }
-        case "explore":
-          attempt(() => sim.choosePath(CLASSES.find((c) => !s.party[c].dead) ?? "guardian", brain.path(sim, s)));
+        case "explore": {
+          if (s.map && brain.explore?.(sim, s)) return;
+          const speaker = CLASSES.find((c) => !s.party[c].dead) ?? "guardian";
+          const room = s.map?.rooms.find((candidate) => candidate.id === s.map?.currentRoom);
+          if (room?.kind === "stairs") attempt(() => sim.requestDescend(speaker));
+          else attempt(() => sim.choosePath(speaker, brain.path(sim, s)));
           return;
+        }
         case "combat":
           brain.fight(sim, s);
           return;
@@ -274,7 +310,10 @@ function drive(name: string, brain: Brain): Policy {
           const stay = brain.between(sim, s);
           if (!stay) {
             const speaker = CLASSES.find((c) => !s.party[c].dead);
-            if (speaker) attempt(() => sim.requestDescend(speaker));
+            if (speaker) {
+              if (s.map) attempt(() => sim.continueExploring(speaker));
+              else attempt(() => sim.requestDescend(speaker));
+            }
           }
           return;
         }
@@ -337,13 +376,22 @@ function greedyPolicy(): Policy {
       spendTalents(sim, s, true);
       shop(sim, s);
     },
+    explore: (sim, s) => {
+      spendTalents(sim, s, true);
+      tidyPacks(sim, s);
+      return false;
+    },
     // Greedy about damage, not suicidal about routing. Taking every elite meant
     // it never saw floor six, which made it look like a worse policy than
     // random when what it actually is is a policy with no healer.
-    path: (_sim, s) =>
-      (healthFraction(s) > 0.7 ? s.paths.find((p) => p.kind === "elite") : undefined)?.id ??
-      s.paths.find((p) => p.kind === "unknown")?.id ??
-      s.paths[0].id,
+    path: (_sim, s) => {
+      const paths = usefulPaths(s);
+      return (
+        (healthFraction(s) > 0.7 ? paths.find((p) => p.kind === "elite") : undefined)?.id ??
+        paths.find((p) => p.kind === "unknown")?.id ??
+        paths[0].id
+      );
+    },
     fight: (sim, s) => {
       const target = weakest(s);
       if (!target) return;
@@ -382,8 +430,10 @@ function greedyPolicy(): Policy {
  */
 function basicPolicy(): Policy {
   return drive("basic-tactics", {
-    path: (_sim, s) =>
-      (s.paths.find((p) => p.kind === "shrine") ?? s.paths.find((p) => p.kind !== "elite") ?? s.paths[0]).id,
+    path: (_sim, s) => {
+      const paths = usefulPaths(s);
+      return (paths.find((p) => p.kind === "shrine") ?? paths.find((p) => p.kind !== "elite") ?? paths[0]).id;
+    },
     fight: (sim, s) => {
       const target = weakest(s);
       const hurt = hurtest(s);
@@ -433,7 +483,10 @@ function tacticalPolicy(): Policy {
       // this row exists to isolate.
       if (s.phase === "spoils" || s.phase === "market" || s.phase === "cache") {
         const speaker = CLASSES.find((c) => !s.party[c].dead);
-        if (speaker) attempt(() => sim.requestDescend(speaker));
+        if (speaker) {
+          if (s.map) attempt(() => sim.continueExploring(speaker));
+          else attempt(() => sim.requestDescend(speaker));
+        }
         return;
       }
       full.act(simulation);
@@ -495,11 +548,22 @@ function ruleBasedPolicy(omniscient = false): Policy {
       shop(sim, s);
       tidyPacks(sim, s);
     },
+    explore: (sim, s) => {
+      spendTalents(sim, s);
+      tidyPacks(sim, s);
+      reviveIfPossible(sim, s);
+      if (healthFraction(s) < 0.6 && s.dread < 4) {
+        attempt(() => sim.restParty(CLASSES.find((c) => !s.party[c].dead) ?? "guardian"));
+        return true;
+      }
+      return false;
+    },
     path: (_sim, s) => {
-      const cache = s.paths.find((p) => p.kind === "cache");
-      const market = s.paths.find((p) => p.kind === "market");
-      const elite = s.paths.find((p) => p.kind === "elite");
-      const shrine = s.paths.find((p) => p.kind === "shrine");
+      const paths = usefulPaths(s);
+      const cache = paths.find((p) => p.kind === "cache");
+      const market = paths.find((p) => p.kind === "market");
+      const elite = paths.find((p) => p.kind === "elite");
+      const shrine = paths.find((p) => p.kind === "shrine");
       const room = CLASSES.some((c) => !s.party[c].dead && s.party[c].inventory.length < 6);
       const thin = CLASSES.flatMap((c) => s.party[c].inventory).filter((i) => i === "healing_potion").length < 2;
 
@@ -518,7 +582,7 @@ function ruleBasedPolicy(omniscient = false): Policy {
       if (cache && room) return cache.id;
       if (market && thin) return market.id;
       if (shrine) return shrine.id;
-      return (s.paths.find((p) => p.kind === "unknown") ?? s.paths[0]).id;
+      return (paths.find((p) => p.kind === "unknown") ?? paths[0]).id;
     },
 
     fight: (sim, s) => {

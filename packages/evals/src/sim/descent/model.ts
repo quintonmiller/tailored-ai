@@ -189,6 +189,25 @@ export interface EncounterLog {
   text: string;
 }
 
+export type RoomKind = "entrance" | "empty" | "combat" | "elite" | "boss" | "market" | "cache" | "shrine" | "stairs";
+
+export interface DungeonRoom {
+  id: string;
+  label: string;
+  kind: RoomKind;
+  links: string[];
+  x: number;
+  y: number;
+  visited: boolean;
+  cleared: boolean;
+}
+
+export interface DungeonFloorMap {
+  zone: string;
+  currentRoom: string;
+  rooms: DungeonRoom[];
+}
+
 export interface DescentState {
   floor: number;
   phase: Phase;
@@ -210,6 +229,8 @@ export interface DescentState {
   dread: number;
   /** Paths offered by the current `explore` phase. */
   paths: Array<{ id: string; label: string; hint?: string; kind: string }>;
+  /** Persistent graph for maze-enabled runs. Omitted by legacy/direct simulations. */
+  map?: DungeonFloorMap;
   /** Unclaimed drops waiting for the `spoils` phase. */
   pending: Array<{ item: string; to: ClassId }>;
   /** Merchant stock, when there is a merchant. */

@@ -27,7 +27,7 @@
  */
 
 import type { Rng } from "../rng.js";
-import type { ClassId, Element, Enemy, HiddenMechanic } from "./model.js";
+import type { ClassId, DungeonFloorMap, Element, Enemy, HiddenMechanic, RoomKind } from "./model.js";
 
 // ---------------------------------------------------------------------------
 // Families
@@ -437,15 +437,32 @@ export function makeBoss(floor: number, index: number): Enemy {
  * lingers fights a bigger version of the same encounter, which is what makes
  * camping cost something rather than being free safety.
  */
-export function generateEncounter(floor: number, dread: number, elite: boolean, rng: Rng): Enemy[] {
-  if (floor % 5 === 0) return [makeBoss(floor, Math.floor(floor / 5) - 1)];
+export function generateEncounter(
+  floor: number,
+  dread: number,
+  elite: boolean,
+  rng: Rng,
+  boss = floor % 5 === 0,
+  contentFloor = floor,
+  bossIndex = Math.max(0, Math.floor(floor / 5) - 1),
+  vary = false,
+): Enemy[] {
+  if (boss) return [makeBoss(floor, bossIndex)];
 
-  const pool = familiesAt(floor);
+  const pool = familiesAt(contentFloor);
   // Deep floors get *fewer, nastier* things rather than more of them. Enemy
   // count was rising with depth on top of per-enemy scaling, which is the
   // "bigger fight" reading of difficulty this file's header rejects — and it
   // multiplied directly into encounter length.
-  const base = floor < 5 ? 2 : floor < 12 ? 2 + rng.int(0, 1) : 3;
+  const base = vary
+    ? contentFloor < 5
+      ? rng.int(1, 2)
+      : rng.int(2, 3)
+    : floor < 5
+      ? 2
+      : floor < 12
+        ? 2 + rng.int(0, 1)
+        : 3;
   // Capped at one extra body however long the party dawdled. Dread is a nudge
   // toward moving, not a difficulty dial: uncapped it compounded with itself,
   // and a party that lingered twice walked into an encounter it could not
@@ -456,8 +473,19 @@ export function generateEncounter(floor: number, dread: number, elite: boolean, 
 
   const enemies: Enemy[] = [];
   for (let i = 0; i < count; i++) {
-    const pick = pool[rng.int(0, pool.length - 1)];
-    enemies.push(makeEnemy(pick.def, pick.tier, floor, i + 1, elite && i === 0));
+    // Once the compressed maze band says hidden rules are in play, guarantee
+    // one such family in the encounter. The rest remain fully mixed, so
+    // "assume everything is a trick" is still not a free policy.
+    const candidates =
+      vary && contentFloor >= 15 && i === 0 ? pool.filter((entry) => entry.def.hidden.kind !== "none") : pool;
+    const pick = candidates[rng.int(0, candidates.length - 1)];
+    const enemy = makeEnemy(pick.def, pick.tier, floor, i + 1, elite && i === 0);
+    if (vary) {
+      const healthVariance = 0.88 + rng.next() * 0.24;
+      enemy.maxHp = Math.max(1, Math.round(enemy.maxHp * healthVariance));
+      enemy.hp = enemy.maxHp;
+    }
+    enemies.push(enemy);
   }
   return enemies;
 }
@@ -859,4 +887,126 @@ export function generatePaths(
     [choices[i], choices[j]] = [choices[j], choices[i]];
   }
   return ["left", "right", "forward", "down"].map((id, i) => ({ id, ...choices[i] }));
+}
+
+const ZONES = [
+  {
+    name: "The Sunken Gate",
+    rooms: [
+      "drowned vestibule",
+      "collapsed gallery",
+      "silted guardroom",
+      "chain hall",
+      "flooded archive",
+      "old toll room",
+    ],
+  },
+  {
+    name: "The Fungal Hollows",
+    rooms: [
+      "spore garden",
+      "root-choked crossing",
+      "glowcap grotto",
+      "mycelial nave",
+      "mouldering den",
+      "hollow cistern",
+    ],
+  },
+  {
+    name: "The Ash Foundry",
+    rooms: ["cold furnace", "slag bridge", "hammer vault", "cinder works", "broken smelter", "soot-black gantry"],
+  },
+  {
+    name: "The Crystal Catacombs",
+    rooms: ["prismatic crypt", "faceted transept", "shard gallery", "singing vault", "glass ossuary", "refracted hall"],
+  },
+  {
+    name: "The Null Chapel",
+    rooms: ["lightless nave", "sealed vestry", "hushed cloister", "black reliquary", "sunken choir", "empty sanctum"],
+  },
+] as const;
+
+const ROOM_HINTS: Record<RoomKind, string> = {
+  entrance: "the stair back is sealed",
+  empty: "quiet, for now",
+  combat: "movement beyond the threshold",
+  elite: "something large is breathing there",
+  boss: "the way down is guarded",
+  market: "lamplight and a merchant's mark",
+  cache: "abandoned packs in the dust",
+  shrine: "old light, still warm",
+  stairs: "air moving downward",
+};
+
+export function roomHint(kind: RoomKind): string {
+  return ROOM_HINTS[kind];
+}
+
+/**
+ * A small connected room graph with branches and occasional loops.
+ *
+ * The tree guarantees every room is reachable; extra edges make backtracking
+ * and alternate routes possible. Contents and geometry are independently
+ * seeded, so two runs can share a zone without sharing its useful route.
+ */
+export function generateFloorMap(floor: number, rng: Rng): DungeonFloorMap {
+  const zone = ZONES[Math.floor((floor - 1) / 3) % ZONES.length];
+  const count = rng.int(5, 7);
+  const kinds: RoomKind[] = ["combat", "combat", "elite", "cache", "market", "shrine", "empty"];
+  for (let i = kinds.length - 1; i > 0; i--) {
+    const j = rng.int(0, i);
+    [kinds[i], kinds[j]] = [kinds[j], kinds[i]];
+  }
+
+  const rooms: DungeonFloorMap["rooms"] = [
+    { id: "r0", label: "floor entrance", kind: "entrance", links: [], x: 0, y: 0, visited: true, cleared: true },
+  ];
+  for (let i = 1; i < count - 1; i++) {
+    // The entrance always branches. Later rooms grow from the recent frontier,
+    // keeping the drawing legible while still producing different shapes.
+    const parentIndex = i === 2 ? 0 : rng.int(Math.max(0, i - 3), i - 1);
+    const parent = rooms[parentIndex];
+    const kind = floor % 4 === 0 && i === count - 2 ? "boss" : (kinds[(i - 1) % kinds.length] ?? "combat");
+    rooms.push({
+      id: `r${i}`,
+      label: zone.rooms[(i - 1 + floor) % zone.rooms.length],
+      kind,
+      links: [parent.id],
+      x: parent.x + rng.int(-1, 1),
+      y: parent.y + 1,
+      visited: false,
+      cleared: false,
+    });
+    parent.links.push(`r${i}`);
+  }
+
+  const gate = floor % 4 === 0 ? rooms[count - 2] : rooms[rng.int(Math.max(1, count - 4), count - 2)];
+  const stairs = {
+    id: `r${count - 1}`,
+    label: "stairs into the dark",
+    kind: "stairs" as const,
+    links: [gate.id],
+    x: gate.x + rng.int(-1, 1),
+    y: gate.y + 1,
+    visited: false,
+    cleared: true,
+  };
+  gate.links.push(stairs.id);
+  rooms.push(stairs);
+
+  // One or two loops turn the tree into a maze without making its small map
+  // unreadable. Avoid linking the stairs around a boss gate.
+  const loops = rng.int(1, 2);
+  let made = 0;
+  let attempts = 0;
+  while (made < loops && attempts++ < 40) {
+    const a = rooms[rng.int(0, rooms.length - 2)];
+    const b = rooms[rng.int(0, rooms.length - 2)];
+    if (a === b || a.links.includes(b.id) || Math.abs(a.y - b.y) > 2) continue;
+    a.links.push(b.id);
+    b.links.push(a.id);
+    made += 1;
+  }
+
+  return { zone: zone.name, currentRoom: "r0", rooms };
 }

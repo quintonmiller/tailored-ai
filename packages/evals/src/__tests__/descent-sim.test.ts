@@ -15,7 +15,7 @@
 
 import type { Tool } from "@tailored-ai/core";
 import { describe, expect, it } from "vitest";
-import { FAMILIES, generateEncounter, generatePaths, makeEnemy } from "../sim/descent/content.js";
+import { FAMILIES, generateEncounter, generateFloorMap, generatePaths, makeEnemy } from "../sim/descent/content.js";
 import { Diagnostics } from "../sim/descent/diagnostics.js";
 import { type DescentSimulation, levelFor } from "../sim/descent/index.js";
 import {
@@ -472,6 +472,64 @@ describe("run variation", () => {
         .map((path) => `${path.id}:${path.kind}`)
         .join("|");
     expect(new Set(Array.from({ length: 8 }, (_, i) => signature(i + 1))).size).toBeGreaterThan(1);
+  });
+
+  it("varies maze encounter size and health while remaining seeded", () => {
+    const signature = (seed: number) => {
+      const enemies = generateEncounter(3, 0, false, makeRng(seed), false, 15, 0, true);
+      return enemies.map((enemy) => `${enemy.family}:${enemy.maxHp}`).join("|");
+    };
+    expect(signature(12)).toBe(signature(12));
+    expect(new Set(Array.from({ length: 12 }, (_, i) => signature(i + 1))).size).toBeGreaterThan(6);
+  });
+
+  it("builds connected floor mazes with branches, loops, zones, and a boss gate", () => {
+    const maps = Array.from({ length: 8 }, (_, i) => generateFloorMap(i + 1, makeRng(100 + i)));
+    for (const map of maps) {
+      expect(map.rooms.length).toBeGreaterThanOrEqual(5);
+      expect(map.rooms.length).toBeLessThanOrEqual(7);
+      const seen = new Set(["r0"]);
+      const queue = ["r0"];
+      while (queue.length > 0) {
+        const next = queue.shift();
+        const room = map.rooms.find((candidate) => candidate.id === next);
+        for (const link of room?.links ?? []) {
+          if (!seen.has(link)) {
+            seen.add(link);
+            queue.push(link);
+          }
+        }
+      }
+      expect(seen.size).toBe(map.rooms.length);
+      expect(map.rooms[0].links.length).toBeGreaterThanOrEqual(2);
+      const edges = map.rooms.reduce((sum, room) => sum + room.links.length, 0) / 2;
+      expect(edges).toBeGreaterThanOrEqual(map.rooms.length);
+    }
+    expect(new Set(maps.map((map) => map.zone)).size).toBeGreaterThan(1);
+
+    const bossMap = generateFloorMap(4, makeRng(4));
+    const stairs = bossMap.rooms.find((room) => room.kind === "stairs");
+    expect(stairs?.links).toHaveLength(1);
+    expect(bossMap.rooms.find((room) => room.id === stairs?.links[0])?.kind).toBe("boss");
+  });
+
+  it("keeps exploring a persistent room graph until the party chooses the stairs", () => {
+    const sim = createSimulation("descent", {
+      seed: 17,
+      days: 200,
+      preparation: true,
+      maze: true,
+    }) as DescentSimulation;
+    const policy = simulationPolicies("descent")["rule-based"]();
+    let guard = 0;
+    while (!sim.done && sim.view().floor === 1 && guard++ < 200) {
+      policy.act(sim);
+      sim.advance();
+    }
+
+    expect(sim.view().floor).toBeGreaterThan(1);
+    expect(sim.view().map).toBeDefined();
+    expect(sim.scene().floorMap?.rooms.length).toBeGreaterThan(1);
   });
 });
 

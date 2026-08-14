@@ -472,6 +472,32 @@ const STYLES = `
 .hud-floorno span { font: 600 10px/1 var(--sans); letter-spacing: .18em; color: var(--faint); margin-right: 6px; }
 .hud-here .hud-tag.boss { color: var(--bad); border-color: var(--bad); }
 
+.hud-floorgraph { margin-top: 7px; }
+.hud-zone {
+  margin-bottom: 3px; font: 700 9px/1 var(--sans); letter-spacing: .13em;
+  text-transform: uppercase; color: var(--flame);
+}
+.hud-graphcanvas { position: relative; height: 132px; border-radius: 6px; background: rgba(8, 12, 18, .52); }
+.hud-graphedges { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.hud-graphedges line { stroke: var(--line); stroke-width: 1.5; }
+.hud-roomnode {
+  position: absolute; z-index: 1; width: 28px; height: 28px; margin: -14px 0 0 -14px;
+  display: grid; place-items: center; border-radius: 50%; border: 1px solid var(--line);
+  background: var(--ground); color: var(--faint); font: 800 10px/1 var(--mono);
+}
+.hud-roomnode em {
+  display: none; position: absolute; top: 30px; left: 50%; width: 92px; transform: translateX(-50%);
+  font: 9px/1.15 var(--sans); font-style: normal; text-align: center; color: var(--dim);
+}
+.hud-roomnode.visited { border-color: var(--dim); color: var(--ink); }
+.hud-roomnode.cleared { background: #18212d; }
+.hud-roomnode.current { border: 2px solid var(--flame); color: var(--flame); box-shadow: 0 0 0 4px rgba(240, 160, 75, .12); }
+.hud-roomnode.current em { display: block; color: var(--ink); }
+.hud-roomnode[data-kind="boss"], .hud-roomnode[data-kind="elite"] { color: var(--bad); }
+.hud-roomnode[data-kind="market"] { color: var(--gold); }
+.hud-roomnode[data-kind="shrine"] { color: var(--arcane); }
+.hud-roomnode[data-kind="stairs"] { color: var(--good); }
+
 /* Where inside the floor they are. Four stops, because a floor is always
    junction → room → spoils → market and a phase name alone does not say
    whether the fight is ahead of them or behind them. */
@@ -906,8 +932,9 @@ function buildParty(host: HTMLElement): SceneRenderer {
 // 2. The shaft
 // ---------------------------------------------------------------------------
 
-/** Every fifth floor holds a boss — `content.ts` decides encounters on `floor % 5`. */
-const isBossFloor = (floor: number): boolean => Number.isFinite(floor) && floor > 0 && floor % 5 === 0;
+/** Maze-mode broadcasts put a boss every fourth floor; legacy corridor runs use five. */
+const isBossFloor = (floor: number, step = 5): boolean =>
+  Number.isFinite(floor) && floor > 0 && floor % step === 0;
 
 /** One station inside a floor, and what to call it on the track. */
 interface Stop {
@@ -972,6 +999,11 @@ function buildMap(host: HTMLElement): (scene: Scene | null) => void {
   const bossTag = el("span", "hud-tag boss", "BOSS FLOOR");
   headRow.append(floorNo, bossTag);
 
+  const graph = el("div", "hud-floorgraph");
+  const graphZone = el("div", "hud-zone");
+  const graphCanvas = el("div", "hud-graphcanvas");
+  graph.append(graphZone, graphCanvas);
+
   const track = el("div", "hud-track");
   const stops = STOPS.map((stop) => {
     const node = el("div", "hud-stop");
@@ -997,7 +1029,7 @@ function buildMap(host: HTMLElement): (scene: Scene | null) => void {
 
   const paths = el("div", "hud-paths");
   const pathRows: PathRow[] = [];
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 8; i++) {
     const row = el("div", "hud-path");
     const glyph = icon("unknown");
     const txt = el("div", "txt");
@@ -1016,7 +1048,7 @@ function buildMap(host: HTMLElement): (scene: Scene | null) => void {
 
   const note = el("div", "hud-note");
 
-  here.append(headRow, track, oddPhase, dread, paths, scouted, note);
+  here.append(headRow, graph, track, oddPhase, dread, paths, scouted, note);
 
   const below = el("div", "hud-floors deep");
   const belowRows: DeepFloorRow[] = [];
@@ -1036,6 +1068,74 @@ function buildMap(host: HTMLElement): (scene: Scene | null) => void {
   host.appendChild(root);
 
   let lastFloor: number | null = null;
+  let lastGraph = "";
+
+  function drawFloorGraph(map: NonNullable<Scene["floorMap"]>): void {
+    const key = JSON.stringify(map);
+    if (key === lastGraph) return;
+    lastGraph = key;
+    graphCanvas.textContent = "";
+    text(graphZone, map.zone);
+
+    const xs = map.rooms.map((room) => room.x);
+    const ys = map.rooms.map((room) => room.y);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+    const point = (room: (typeof map.rooms)[number]) => ({
+      x: 10 + ((room.x - minX) / Math.max(1, maxX - minX)) * 80,
+      y: 10 + ((room.y - minY) / Math.max(1, maxY - minY)) * 80,
+    });
+
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", "hud-graphedges");
+    const roomById = new Map(map.rooms.map((room) => [room.id, room]));
+    const edges = new Set<string>();
+    for (const room of map.rooms) {
+      for (const linked of room.links) {
+        const other = roomById.get(linked);
+        if (!other) continue;
+        const edge = [room.id, other.id].sort().join(":");
+        if (edges.has(edge)) continue;
+        edges.add(edge);
+        const a = point(room);
+        const b = point(other);
+        const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        line.setAttribute("x1", `${a.x}%`);
+        line.setAttribute("y1", `${a.y}%`);
+        line.setAttribute("x2", `${b.x}%`);
+        line.setAttribute("y2", `${b.y}%`);
+        svg.appendChild(line);
+      }
+    }
+    graphCanvas.appendChild(svg);
+
+    const glyphs: Record<string, string> = {
+      entrance: "IN",
+      empty: "·",
+      combat: "⚔",
+      elite: "!",
+      boss: "☠",
+      market: "$",
+      cache: "◇",
+      shrine: "✦",
+      stairs: "↓",
+    };
+    for (const room of map.rooms) {
+      const at = point(room);
+      const node = el("div", "hud-roomnode");
+      node.dataset.kind = room.kind;
+      node.style.left = `${at.x}%`;
+      node.style.top = `${at.y}%`;
+      flag(node, "current", room.id === map.currentRoom);
+      flag(node, "visited", room.visited);
+      flag(node, "cleared", room.cleared);
+      node.append(el("b", null, glyphs[room.kind] ?? "?"), el("em", null, room.label));
+      node.title = `${room.label} · ${room.kind}${room.cleared ? " · cleared" : ""}`;
+      graphCanvas.appendChild(node);
+    }
+  }
 
   return function renderMap(scene) {
     empty.style.display = scene ? "none" : "";
@@ -1044,6 +1144,11 @@ function buildMap(host: HTMLElement): (scene: Scene | null) => void {
 
     const floor = Number(scene.floor) || 0;
     const phase = String(scene.phase ?? "");
+    const floorMap = scene.floorMap;
+    const bossStep = floorMap ? 4 : 5;
+    graph.style.display = floorMap ? "" : "none";
+    track.style.display = floorMap ? "none" : "grid";
+    if (floorMap) drawFloorGraph(floorMap);
 
     // Shallower floors, already behind them. Descending order top-to-bottom so
     // the column reads downward the way the party moves.
@@ -1052,12 +1157,12 @@ function buildMap(host: HTMLElement): (scene: Scene | null) => void {
       const row = aboveRows[i];
       row.row.style.visibility = n > 0 ? "" : "hidden";
       text(row.num, n > 0 ? String(n) : "");
-      text(row.label, isBossFloor(n) ? "boss · cleared" : "cleared");
+      text(row.label, isBossFloor(n, bossStep) ? "boss · cleared" : "cleared");
       flag(row.row, "bossfloor", false);
     }
 
     text(floorNum, String(floor));
-    const boss = isBossFloor(floor);
+    const boss = isBossFloor(floor, bossStep);
     flag(here, "boss", boss);
     bossTag.style.display = boss ? "" : "none";
 
@@ -1140,7 +1245,7 @@ function buildMap(host: HTMLElement): (scene: Scene | null) => void {
       const n = floor + i + 1;
       const row = belowRows[i];
       text(row.num, String(n));
-      const bossAhead = isBossFloor(n);
+      const bossAhead = isBossFloor(n, bossStep);
       flag(row.row, "bossfloor", bossAhead);
       text(row.label, bossAhead ? "boss" : "unknown");
       row.mark.style.display = bossAhead ? "" : "none";

@@ -63,12 +63,14 @@ import {
   equippableBy,
   FAMILIES,
   generateEncounter,
+  generateFloorMap,
   generatePaths,
   ITEM_BY_ID,
   itemName,
   rollCache,
   rollLoot,
   rollStock,
+  roomHint,
 } from "./content.js";
 
 /**
@@ -91,6 +93,7 @@ import {
   type ClassId,
   clearStatus,
   type DescentState,
+  type DungeonFloorMap,
   type Element,
   type Enemy,
   type Fighter,
@@ -247,6 +250,25 @@ export const ATTUNEMENT_SLOTS = 2;
 /** Sentence-case, for prose that starts with a name the content table wrote lowercase. */
 const cap = (text: string): string => (text ? text[0].toUpperCase() + text.slice(1) : text);
 
+const pathsFromMap = (map: DungeonFloorMap): DescentState["paths"] => {
+  const here = map.rooms.find((room) => room.id === map.currentRoom);
+  if (!here) return [];
+  return here.links.flatMap((id) => {
+    const room = map.rooms.find((candidate) => candidate.id === id);
+    if (here.kind === "boss" && !here.cleared && room?.kind === "stairs") return [];
+    return room
+      ? [
+          {
+            id: room.id,
+            label: room.label,
+            hint: room.visited ? "already explored" : roomHint(room.kind),
+            kind: room.kind,
+          },
+        ]
+      : [];
+  });
+};
+
 /** How many items a cache offers, and how many of them the party may leave with. */
 export const CACHE_OFFERS = 6;
 export const CACHE_TAKES = 2;
@@ -333,6 +355,20 @@ export interface DescentScene {
     telegraph: string | null;
   }>;
   paths: Array<{ id: string; label: string; kind: string; hint: string | null }>;
+  floorMap: {
+    zone: string;
+    currentRoom: string;
+    rooms: Array<{
+      id: string;
+      label: string;
+      kind: string;
+      links: string[];
+      x: number;
+      y: number;
+      visited: boolean;
+      cleared: boolean;
+    }>;
+  } | null;
   pendingPath: string | null;
   scouted: string | null;
   stock: Array<{ id: string; name: string; price: number }>;
@@ -367,6 +403,8 @@ export class DescentSimulation implements Simulation {
   private readonly encounterRng: Rng;
   private readonly pathRng: Rng;
   private readonly stockRng: Rng;
+  private readonly damageRng: Rng;
+  private readonly maze: boolean;
 
   private level = 1;
   private totalXp = 0;
@@ -375,6 +413,7 @@ export class DescentSimulation implements Simulation {
   private bossesDefeated = 0;
   private elitesDefeated = 0;
   private enemiesDefeated = 0;
+  private roomsExplored = 0;
   private deaths = 0;
   private floorReached = 1;
   private readonly startFloor: number;
@@ -388,6 +427,7 @@ export class DescentSimulation implements Simulation {
   private enterRequested = false;
   /** Retreat is resolved at the round boundary, after enemies get one unanswered attack. */
   private retreatRequested = false;
+  private exploreRequested = false;
   /** The encounter left behind by a retreat. The party may turn back to it from exploration. */
   private fledEnemies: Enemy[] | undefined;
   /** A party can take one rest action per simulation tick. */
@@ -405,6 +445,8 @@ export class DescentSimulation implements Simulation {
     this.encounterRng = this.rng.fork("encounter");
     this.pathRng = this.rng.fork("path");
     this.stockRng = this.rng.fork("stock");
+    this.damageRng = this.rng.fork("damage");
+    this.maze = options.maze === true || options.maze === "true";
 
     const startFloor = Math.max(1, Math.floor(Number(options.startFloor ?? 1)));
     // The CLI's generic `--sim-option` parser cannot know a simulation's
@@ -412,6 +454,8 @@ export class DescentSimulation implements Simulation {
     // scenario definition.
     const preparation = (options.preparation === true || options.preparation === "true") && startFloor === 1;
     const startingSkillPoints = preparation ? Math.max(0, Math.floor(Number(options.startingSkillPoints ?? 2))) : 0;
+
+    const map = this.maze ? generateFloorMap(startFloor, this.pathRng) : undefined;
 
     const party = {} as Record<ClassId, Fighter>;
     for (const id of CLASSES) {
@@ -452,7 +496,8 @@ export class DescentSimulation implements Simulation {
       enemies: [],
       intents: [],
       dread: 0,
-      paths: generatePaths(startFloor, this.pathRng),
+      paths: map ? pathsFromMap(map) : generatePaths(startFloor, this.pathRng),
+      ...(map ? { map } : {}),
       pending: [],
       stock: preparation ? rollStock(1, this.stockRng) : [],
       cache: [],
@@ -462,6 +507,7 @@ export class DescentSimulation implements Simulation {
       horizon: typeof options.days === "number" ? options.days : 400,
     };
     this.floorReached = startFloor;
+    this.roomsExplored = map ? 1 : 0;
     if (startFloor > 1) this.equipForDepth(startFloor);
     if (preparation) {
       this.lastLog = ["The party stands outside the first stair with money, empty packs, and one chance to prepare."];
@@ -564,7 +610,9 @@ export class DescentSimulation implements Simulation {
 
   announce(): string {
     const s = this.state;
-    const head = `Floor ${s.floor} — ${s.phase}${s.dread >= 4 ? ` (something is closing in: dread ${s.dread})` : ""}.`;
+    const room = s.map?.rooms.find((candidate) => candidate.id === s.map?.currentRoom);
+    const place = s.map ? `, ${s.map.zone}${room ? ` / ${room.label}` : ""}` : "";
+    const head = `Floor ${s.floor}${place} — ${s.phase}${s.dread >= 4 ? ` (something is closing in: dread ${s.dread})` : ""}.`;
     if (this.lastLog.length === 0) {
       if (s.phase === "camp") return `${head} The outfitter's wagon is open before the first stair.`;
       if (s.phase === "explore") return `${head} Four ways on; somebody has to choose one.`;
@@ -654,6 +702,13 @@ export class DescentSimulation implements Simulation {
     const out: string[] = [];
     out.push(`Floor ${s.floor}, phase ${s.phase}, tick ${s.tick} of ${s.horizon}. Dread ${s.dread}.`);
     out.push(`Party experience ${this.totalXp}, level ${this.level}.`);
+    if (s.map) {
+      const room = s.map.rooms.find((candidate) => candidate.id === s.map?.currentRoom);
+      out.push(
+        `${s.map.zone}; currently in ${room?.label ?? "an unmapped room"}. ` +
+          `${s.map.rooms.filter((candidate) => candidate.visited).length}/${s.map.rooms.length} rooms explored.`,
+      );
+    }
 
     if (me) {
       out.push("", "You:");
@@ -706,7 +761,9 @@ export class DescentSimulation implements Simulation {
       out.push(
         s.phase === "camp"
           ? "  Buy, sell, pool gold, trade, and equip here. Call `enter_dungeon` when the party is ready."
-          : "  Call `descend` when the party is finished here.",
+          : s.map
+            ? "  Call `continue_exploring` when the party is finished here."
+            : "  Call `descend` when the party is finished here.",
       );
     }
 
@@ -728,7 +785,11 @@ export class DescentSimulation implements Simulation {
           ? `  The party can carry ${s.cacheTakesLeft} more of these out. Everything else stays. Use \`take\`.`
           : "  The party is carrying all it can from here.",
       );
-      out.push("  Call `descend` when the party is finished here.");
+      out.push(
+        s.map
+          ? "  Call `continue_exploring` when the party is finished here."
+          : "  Call `descend` when the party is finished here.",
+      );
     }
 
     if (s.phase === "spoils") {
@@ -736,7 +797,12 @@ export class DescentSimulation implements Simulation {
         out.push("", "Picked up:");
         for (const p of s.pending) out.push(`  ${p.item} (${itemName(p.item)}) → went into ${p.to}'s pack`);
       }
-      out.push("", "Nothing happens until somebody calls `descend`. Dread rises while you stay.");
+      out.push(
+        "",
+        s.map
+          ? "Call `continue_exploring` to leave this cleared room. Dread rises while you stay."
+          : "Nothing happens until somebody calls `descend`. Dread rises while you stay.",
+      );
     }
 
     if (this.lastLog.length > 0) {
@@ -768,7 +834,8 @@ export class DescentSimulation implements Simulation {
    * party learns "do not cast lightning" and then relearns it from area damage.
    */
   private strike(from: Fighter, target: Enemy, raw: number, element: Element, out: TickResult): number {
-    const dealt = hurtEnemy(target, raw, element);
+    const variance = this.state.map ? 0.9 + this.damageRng.next() * 0.2 : 1;
+    const dealt = hurtEnemy(target, raw * variance, element);
     out.beats.push({ kind: "hit", from: from.id, to: target.ref, amount: dealt, element });
     from.threat += dealt * 0.6;
     const factor = target.resist[element] ?? 1;
@@ -995,7 +1062,8 @@ export class DescentSimulation implements Simulation {
     }
 
     const bite = (target: Fighter, raw: number, element: Element = "physical", label = "hits") => {
-      const dealt = hurtFighter(target, raw, element);
+      const variance = state.map ? 0.9 + rng.next() * 0.2 : 1;
+      const dealt = hurtFighter(target, raw * variance, element);
       out.beats.push({ kind: "hit", from: e.ref, to: target.id, amount: dealt, element });
       say(`${e.name} ${label} ${target.id} for ${dealt}.`);
       if (target.dead) {
@@ -1276,12 +1344,27 @@ export class DescentSimulation implements Simulation {
     this.events.push({ day: this.state.tick, kind, message, ...(visibleTo ? { visibleTo } : {}) });
   }
 
-  private beginEncounter(elite: boolean): void {
+  private beginEncounter(elite: boolean, boss = !this.state.map && this.state.floor % 5 === 0): void {
     const s = this.state;
-    s.enemies = generateEncounter(s.floor, s.dread, elite, this.encounterRng);
+    // Maze floors contain several encounters, so they compress the old
+    // one-encounter-per-floor content bands into the forty-round broadcast
+    // horizon without applying deep-floor health/damage scaling early.
+    const contentFloor = s.map
+      ? s.floor === 1
+        ? 1
+        : s.floor === 2
+          ? 5
+          : s.floor === 3
+            ? 15
+            : s.floor === 4
+              ? 25
+              : 28 + (s.floor - 5) * 4
+      : s.floor;
+    const bossIndex = s.map ? Math.floor((s.floor - 1) / 4) : Math.max(0, Math.floor(s.floor / 5) - 1);
+    s.enemies = generateEncounter(s.floor, s.dread, elite, this.encounterRng, boss, contentFloor, bossIndex, !!s.map);
     s.phase = "combat";
     this.scoutReport = undefined;
-    this.encounterSerious = elite || s.floor % 5 === 0 || s.enemies.length >= 4;
+    this.encounterSerious = elite || s.enemies.some((enemy) => enemy.boss) || s.enemies.length >= 4;
     this.diag.recordEncounter(s.enemies.map((e) => e.family));
     for (const f of livingParty(s)) f.threat = 0;
     const roster = s.enemies.map((e) => `${e.ref} (${e.name})`).join(", ");
@@ -1308,7 +1391,13 @@ export class DescentSimulation implements Simulation {
       s.party.guardian.gold += gold - each * CLASSES.length;
       this.goldEarned += gold;
     }
-    const drops = rollLoot(s.floor, s.floor % 5 === 0, this.encounterSerious, this.lootRng);
+    const currentRoom = s.map?.rooms.find((room) => room.id === s.map?.currentRoom);
+    const drops = rollLoot(
+      s.floor,
+      currentRoom?.kind === "boss" || s.floor % 5 === 0,
+      this.encounterSerious,
+      this.lootRng,
+    );
     for (const item of drops) {
       const to = CLASSES[this.lootRng.int(0, CLASSES.length - 1)];
       const holder = s.party[to];
@@ -1320,6 +1409,22 @@ export class DescentSimulation implements Simulation {
       s.pending.push({ item, to });
     }
     if (drops.length > 0) this.note("loot", `Spoils on floor ${s.floor}: ${drops.map(itemName).join(", ")}.`);
+
+    if (s.map) {
+      const room = s.map.rooms.find((candidate) => candidate.id === s.map?.currentRoom);
+      if (room) room.cleared = true;
+      s.stock = [];
+      s.cache = [];
+      s.cacheTakesLeft = 0;
+      s.cacheOrigin = undefined;
+      // Loot is assigned by the resolver, so a separate "leave this empty
+      // combat room" round adds latency but no decision. The party returns to
+      // the map immediately and can trade, equip, rest, invest, retreat back,
+      // or choose any connected route on its next roster round.
+      s.phase = "explore";
+      s.paths = pathsFromMap(s.map);
+      return;
+    }
 
     // A cache is the common find; a merchant is the rarer, stranger one.
     //
@@ -1364,7 +1469,14 @@ export class DescentSimulation implements Simulation {
     this.floorReached = Math.max(this.floorReached, s.floor);
     s.dread = 0;
     s.phase = "explore";
-    s.paths = generatePaths(s.floor, this.pathRng);
+    if (this.maze) {
+      s.map = generateFloorMap(s.floor, this.pathRng);
+      s.paths = pathsFromMap(s.map);
+      this.roomsExplored += 1;
+    } else {
+      s.map = undefined;
+      s.paths = generatePaths(s.floor, this.pathRng);
+    }
     s.stock = [];
     s.cache = [];
     s.cacheTakesLeft = 0;
@@ -1375,6 +1487,7 @@ export class DescentSimulation implements Simulation {
     this.pendingPath = undefined;
     this.pendingCache = false;
     this.retreatRequested = false;
+    this.exploreRequested = false;
     this.fledEnemies = undefined;
     this.note("descend", `The party goes down to floor ${s.floor}.`);
     this.lastLog = [`Down to floor ${s.floor}.`];
@@ -1417,6 +1530,10 @@ export class DescentSimulation implements Simulation {
       }
       case "explore": {
         this.lastBeats = [];
+        if (s.map && this.descendRequested) {
+          this.descend();
+          break;
+        }
         if (this.pendingPath) {
           this.takePath();
           break;
@@ -1527,6 +1644,10 @@ export class DescentSimulation implements Simulation {
       case "market":
       case "cache": {
         this.lastBeats = [];
+        if (s.map && this.exploreRequested) {
+          this.resumeExploration();
+          break;
+        }
         s.dread += 1;
         // Arriving somewhere re-opens the question of whether to leave.
         //
@@ -1860,7 +1981,9 @@ export class DescentSimulation implements Simulation {
       );
     }
     if (s.cacheTakesLeft <= 0) {
-      throw new Error("you are carrying all you can from here. Call `descend` when the party is ready.");
+      throw new Error(
+        `you are carrying all you can from here. Call \`${s.map ? "continue_exploring" : "descend"}\` when the party is ready.`,
+      );
     }
     if (me.inventory.length >= 6) throw new Error("your pack is full.");
     entry.taken = me.id;
@@ -1876,7 +1999,7 @@ export class DescentSimulation implements Simulation {
       `You take ${itemName(item)}.${useless} ` +
       (s.cacheTakesLeft > 0
         ? `The party can carry ${s.cacheTakesLeft} more thing${s.cacheTakesLeft === 1 ? "" : "s"} out of here.`
-        : "That is all the party can carry. Call `descend` when everyone is ready.")
+        : `That is all the party can carry. Call \`${s.map ? "continue_exploring" : "descend"}\` when everyone is ready.`)
     );
   }
 
@@ -1917,6 +2040,94 @@ export class DescentSimulation implements Simulation {
     return `The party will take the ${path.id} way — ${path.label} — when the round closes.${changed}`;
   }
 
+  private moveThroughMap(roomId: string): void {
+    const s = this.state;
+    const map = s.map;
+    if (!map) return;
+    const from = map.rooms.find((room) => room.id === map.currentRoom);
+    const room = map.rooms.find((candidate) => candidate.id === roomId);
+    if (!from || !room || !from.links.includes(room.id)) return;
+
+    map.currentRoom = room.id;
+    if (!room.visited) this.roomsExplored += 1;
+    room.visited = true;
+    s.paths = pathsFromMap(map);
+    if (room.cleared) {
+      s.phase = "explore";
+      this.lastLog = [`The party returns to the ${room.label}. Nothing new is waiting there.`];
+      return;
+    }
+
+    switch (room.kind) {
+      case "combat":
+        this.beginEncounter(false, false);
+        return;
+      case "elite":
+        this.beginEncounter(true, false);
+        return;
+      case "boss":
+        this.beginEncounter(false, true);
+        return;
+      case "market":
+        s.stock = rollStock(s.floor, this.stockRng);
+        s.phase = "market";
+        this.lastLog = [`The ${room.label} is occupied by a merchant who knows more routes than they admit.`];
+        this.note("merchant", `A merchant is waiting in the ${room.label}.`);
+        return;
+      case "cache": {
+        const rolled = rollCache(s.floor, CACHE_OFFERS, this.stockRng);
+        this.cacheSerial += 1;
+        s.cache = rolled.items.map((item) => ({ item }));
+        s.cacheTakesLeft = CACHE_TAKES;
+        s.cacheOrigin = rolled.origin;
+        s.phase = "cache";
+        this.lastLog = [`The ${room.label} holds what remains of ${rolled.origin}.`];
+        this.note("cache", `The party finds ${rolled.origin} in the ${room.label}.`);
+        return;
+      }
+      case "shrine":
+        for (const fighter of livingParty(s)) {
+          fighter.hp = Math.min(fighter.maxHp, fighter.hp + Math.round(fighter.maxHp * 0.25));
+          fighter.mana = fighter.maxMana;
+        }
+        room.cleared = true;
+        s.phase = "explore";
+        this.lastLog = [`Old light fills the ${room.label}. The party recovers before choosing another route.`];
+        this.note("shrine", `The party rests briefly at the ${room.label}.`);
+        return;
+      case "stairs":
+        room.cleared = true;
+        s.phase = "explore";
+        this.lastLog = ["The party has found the stairs down. They may descend or turn back and explore more."];
+        return;
+      case "empty":
+      case "entrance":
+        room.cleared = true;
+        s.phase = "explore";
+        this.lastLog = [`The party searches the ${room.label}. It is quiet, but the routes beyond it are new.`];
+        return;
+    }
+  }
+
+  private resumeExploration(): void {
+    const s = this.state;
+    const map = s.map;
+    if (!map) return;
+    const room = map.rooms.find((candidate) => candidate.id === map.currentRoom);
+    if (room) room.cleared = true;
+    s.phase = "explore";
+    s.enemies = [];
+    s.pending = [];
+    s.stock = [];
+    s.cache = [];
+    s.cacheTakesLeft = 0;
+    s.cacheOrigin = undefined;
+    s.paths = pathsFromMap(map);
+    this.exploreRequested = false;
+    this.descendRequested = false;
+    this.lastLog = [`The party leaves the ${room?.label ?? "room"} and keeps exploring floor ${s.floor}.`];
+  }
+
   /** Walk the party into whatever they chose. Called from `advance`. */
   private takePath(): void {
     const s = this.state;
@@ -1930,6 +2141,12 @@ export class DescentSimulation implements Simulation {
       s.phase = "combat";
       s.paths = [];
       this.lastLog = ["The party turns back. The unfinished fight is exactly where they left it."];
+      return;
+    }
+
+    if (s.map) {
+      this.fledEnemies = undefined;
+      this.moveThroughMap(path.id);
       return;
     }
 
@@ -1973,9 +2190,26 @@ export class DescentSimulation implements Simulation {
 
   requestDescend(agent: string | undefined): string {
     this.who(agent);
+    if (this.state.map) {
+      this.requirePhase("explore");
+      const room = this.state.map.rooms.find((candidate) => candidate.id === this.state.map?.currentRoom);
+      if (room?.kind !== "stairs") {
+        throw new Error("the stairs down have not been reached. Keep exploring, or return by another route.");
+      }
+      this.descendRequested = true;
+      return "The party will take the stairs to the next floor when the round closes.";
+    }
     this.requirePhase("spoils", "market", "cache");
     this.descendRequested = true;
     return "You start down. The party moves when the round closes — anyone who still has business here has until then.";
+  }
+
+  continueExploring(agent: string | undefined): string {
+    this.who(agent);
+    if (!this.state.map) throw new Error("this floor has no room map; use `descend` when the party is ready.");
+    this.requirePhase("spoils", "market", "cache");
+    this.exploreRequested = true;
+    return "The party will leave this room and continue exploring when the round closes.";
   }
 
   enterDungeon(agent: string | undefined): string {
@@ -2040,7 +2274,7 @@ export class DescentSimulation implements Simulation {
 
   restParty(agent: string | undefined): string {
     this.who(agent);
-    this.requirePhase("spoils", "market", "cache");
+    this.requirePhase("spoils", "market", "cache", "explore");
     if (this.lastRestTick === this.state.tick) {
       throw new Error("the party has already rested this round. More recovery takes another round.");
     }
@@ -2193,6 +2427,13 @@ export class DescentSimulation implements Simulation {
 
       T("descend", "Go down to the next floor. Anything left on this one is left behind.", {}, (_a, agent) =>
         this.requestDescend(agent),
+      ),
+
+      T(
+        "continue_exploring",
+        "Leave a cleared room, merchant, or cache and return to the floor map instead of descending.",
+        {},
+        (_a, agent) => this.continueExploring(agent),
       ),
 
       T(
@@ -2380,6 +2621,7 @@ export class DescentSimulation implements Simulation {
       bossesDefeated: this.bossesDefeated,
       elitesDefeated: this.elitesDefeated,
       enemiesDefeated: this.enemiesDefeated,
+      roomsExplored: this.roomsExplored,
       goldEarned: this.goldEarned,
       goldSpent: this.goldSpent,
       goldRemaining: CLASSES.reduce((sum, id) => sum + s.party[id].gold, 0),
@@ -2502,6 +2744,32 @@ export class DescentSimulation implements Simulation {
         telegraph: e.telegraph ?? null,
       })),
       paths: s.paths.map((p) => ({ id: p.id, label: p.label, kind: p.kind, hint: p.hint ?? null })),
+      floorMap: s.map
+        ? (() => {
+            const current = s.map.rooms.find((room) => room.id === s.map?.currentRoom);
+            const known = new Set([
+              s.map.currentRoom,
+              ...s.map.rooms.filter((room) => room.visited).map((room) => room.id),
+              ...(current?.links ?? []),
+            ]);
+            return {
+              zone: s.map.zone,
+              currentRoom: s.map.currentRoom,
+              rooms: s.map.rooms
+                .filter((room) => known.has(room.id))
+                .map((room) => ({
+                  id: room.id,
+                  label: room.label,
+                  kind: room.kind,
+                  links: room.links.filter((id) => known.has(id)),
+                  x: room.x,
+                  y: room.y,
+                  visited: room.visited,
+                  cleared: room.cleared,
+                })),
+            };
+          })()
+        : null,
       pendingPath: this.pendingPath ?? null,
       // Fed from the rogue's *private* report on purpose. The page is a pure
       // reader and cannot change the run, so showing the audience what one

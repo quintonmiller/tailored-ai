@@ -55,6 +55,7 @@ describe("the scene the page is handed", () => {
       "party",
       "enemies",
       "paths",
+      "floorMap",
       "pendingPath",
       "scouted",
       "stock",

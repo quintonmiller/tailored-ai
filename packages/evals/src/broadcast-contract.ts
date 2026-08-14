@@ -79,6 +79,20 @@ export interface Scene {
   party: ScenePartyMember[];
   enemies: SceneEnemy[];
   paths: Array<{ id: string; label: string; kind: string; hint: string | null }>;
+  floorMap: {
+    zone: string;
+    currentRoom: string;
+    rooms: Array<{
+      id: string;
+      label: string;
+      kind: string;
+      links: string[];
+      x: number;
+      y: number;
+      visited: boolean;
+      cleared: boolean;
+    }>;
+  } | null;
   pendingPath: string | null;
   scouted: string | null;
   stock: Array<{ id: string; name: string; price: number }>;
