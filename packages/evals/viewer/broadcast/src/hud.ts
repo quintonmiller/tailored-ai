@@ -524,6 +524,7 @@ const STYLES = `
   font: 9px/1.15 var(--sans); font-style: normal; text-align: center; color: var(--dim);
 }
 .hud-roomnode.visited { border-color: var(--dim); color: var(--ink); }
+.hud-roomnode.mapped { border-style: dashed; border-color: var(--arcane); }
 .hud-roomnode.cleared { background: #18212d; }
 .hud-roomnode.current { border: 2px solid var(--flame); color: var(--flame); box-shadow: 0 0 0 4px rgba(240, 160, 75, .12); }
 .hud-roomnode.current em { display: block; color: var(--ink); }
@@ -1271,9 +1272,10 @@ function buildMap(host: HTMLElement): (scene: Scene | null) => void {
       node.style.top = `${at.y}%`;
       flag(node, "current", room.id === map.currentRoom);
       flag(node, "visited", room.visited);
+      flag(node, "mapped", room.revealed && !room.visited);
       flag(node, "cleared", room.cleared);
       node.append(el("b", null, glyphs[room.kind] ?? "?"), el("em", null, room.label));
-      node.title = `${room.label} · ${room.kind}${room.cleared ? " · cleared" : ""}`;
+      node.title = `${room.label} · ${room.kind}${room.revealed && !room.visited ? " · revealed by equipment" : ""}${room.cleared ? " · cleared" : ""}`;
       graphCanvas.appendChild(node);
     }
   }

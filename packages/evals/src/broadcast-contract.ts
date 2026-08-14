@@ -39,6 +39,7 @@ export interface SceneItem {
     description: string;
     polarity: "positive" | "negative";
     modifiers: { power?: number; armor?: number; hp?: number; mana?: number; speed?: number };
+    effect?: { kind: string; fraction?: number; amount?: number; scope?: string };
   }>;
   provenance: { source: string; floor: number };
 }
@@ -108,6 +109,7 @@ export interface Scene {
       x: number;
       y: number;
       visited: boolean;
+      revealed: boolean;
       cleared: boolean;
     }>;
   } | null;

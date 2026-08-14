@@ -33,6 +33,7 @@ import type {
   Element,
   Enemy,
   HiddenMechanic,
+  ItemEffect,
   ItemInstance,
   ItemKind,
   ItemModifiers,
@@ -803,7 +804,8 @@ interface AffixDef {
   polarity: "positive" | "negative";
   kinds: ItemKind[];
   modifier: (floor: number) => ItemModifiers;
-  description: (modifiers: ItemModifiers) => string;
+  effect?: (floor: number) => ItemEffect;
+  description: (modifiers: ItemModifiers, effect?: ItemEffect) => string;
 }
 
 const amount = (base: number, floor: number, every: number, cap: number): number =>
@@ -887,6 +889,83 @@ const NEGATIVE_AFFIXES: AffixDef[] = [
   },
 ];
 
+const UNIQUE_AFFIXES: AffixDef[] = [
+  {
+    id: "sweeping",
+    name: "Sweeping",
+    polarity: "positive",
+    kinds: ["weapon"],
+    modifier: () => ({}),
+    effect: (floor) => ({ kind: "cleave", fraction: Math.min(0.5, 0.25 + Math.floor(floor / 12) * 0.05) }),
+    description: (_m, effect) =>
+      `single-target physical attacks splash ${Math.round((effect?.kind === "cleave" ? effect.fraction : 0.25) * 100)}% damage onto another enemy`,
+  },
+  {
+    id: "sanguine",
+    name: "Sanguine",
+    polarity: "positive",
+    kinds: ["weapon", "trinket"],
+    modifier: () => ({}),
+    effect: () => ({ kind: "vampirism", fraction: 0.12 }),
+    description: () => "single-target physical damage restores 12% as health",
+  },
+  {
+    id: "mending",
+    name: "Mending",
+    polarity: "positive",
+    kinds: ["armor", "trinket"],
+    modifier: () => ({}),
+    effect: (floor) => ({ kind: "regeneration", amount: amount(3, floor, 8, 8) }),
+    description: (_m, effect) =>
+      `restores ${effect?.kind === "regeneration" ? effect.amount : 3} health at the start of each combat round`,
+  },
+  {
+    id: "scouting",
+    name: "Scouting",
+    polarity: "positive",
+    kinds: ["weapon", "armor", "trinket"],
+    modifier: () => ({}),
+    effect: () => ({ kind: "reveal", scope: "adjacent" }),
+    description: () => "reveals the exact type of every adjacent room",
+  },
+  {
+    id: "cartographic",
+    name: "Cartographic",
+    polarity: "positive",
+    kinds: ["trinket"],
+    modifier: () => ({}),
+    effect: () => ({ kind: "reveal", scope: "floor" }),
+    description: () => "reveals the floor plan and every room type",
+  },
+  {
+    id: "bargaining",
+    name: "Bargaining",
+    polarity: "positive",
+    kinds: ["trinket"],
+    modifier: () => ({}),
+    effect: () => ({ kind: "merchant-discount", fraction: 0.15 }),
+    description: () => "reduces purchase prices by 15% and improves sale prices",
+  },
+  {
+    id: "expedition",
+    name: "Expedition",
+    polarity: "positive",
+    kinds: ["armor", "trinket"],
+    modifier: () => ({}),
+    effect: () => ({ kind: "cache-capacity", amount: 1 }),
+    description: () => "lets the party carry one additional item from each cache",
+  },
+  {
+    id: "relentless",
+    name: "Relentless",
+    polarity: "positive",
+    kinds: ["weapon", "trinket"],
+    modifier: () => ({}),
+    effect: () => ({ kind: "cooldown-reduction", amount: 1 }),
+    description: () => "reduces ability cooldowns by one round",
+  },
+];
+
 function rollRarity(source: ItemProvenance, rng: Rng): ItemRarity {
   const boost = source === "boss" ? 0.18 : source === "elite" ? 0.1 : source === "cache" ? 0.05 : 0;
   const roll = rng.next() - boost;
@@ -921,16 +1000,20 @@ export function makeItemInstance(
         const index = rng.int(0, available.length - 1);
         const picked = available.splice(index, 1)[0];
         const modifiers = picked.modifier(floor);
+        const effect = picked.effect?.(floor);
         affixes.push({
           id: picked.id,
           name: picked.name,
-          description: picked.description(modifiers),
+          description: picked.description(modifiers, effect),
           polarity: picked.polarity,
           modifiers,
+          ...(effect ? { effect } : {}),
         });
       }
     };
     addFrom(POSITIVE_AFFIXES, positives);
+    const unique = rarity === "epic" ? 1 : rarity === "rare" && rng.chance(0.45) ? 1 : 0;
+    addFrom(UNIQUE_AFFIXES, unique);
     addFrom(NEGATIVE_AFFIXES, negative);
   }
   const rarityName = rarity === "common" ? base.name : `${rarity[0].toUpperCase()}${rarity.slice(1)} ${base.name}`;
@@ -1148,7 +1231,17 @@ export function generateFloorMap(floor: number, rng: Rng): DungeonFloorMap {
   }
 
   const rooms: DungeonFloorMap["rooms"] = [
-    { id: "r0", label: "floor entrance", kind: "entrance", links: [], x: 0, y: 0, visited: true, cleared: true },
+    {
+      id: "r0",
+      label: "floor entrance",
+      kind: "entrance",
+      links: [],
+      x: 0,
+      y: 0,
+      visited: true,
+      revealed: true,
+      cleared: true,
+    },
   ];
   for (let i = 1; i < count - 1; i++) {
     // The entrance always branches. Later rooms grow from the recent frontier,
@@ -1164,6 +1257,7 @@ export function generateFloorMap(floor: number, rng: Rng): DungeonFloorMap {
       x: parent.x + rng.int(-1, 1),
       y: parent.y + 1,
       visited: false,
+      revealed: false,
       cleared: false,
     });
     parent.links.push(`r${i}`);
@@ -1178,6 +1272,7 @@ export function generateFloorMap(floor: number, rng: Rng): DungeonFloorMap {
     x: gate.x + rng.int(-1, 1),
     y: gate.y + 1,
     visited: false,
+    revealed: false,
     cleared: true,
   };
   gate.links.push(stairs.id);

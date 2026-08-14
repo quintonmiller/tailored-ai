@@ -41,7 +41,9 @@ import {
   type DescentState,
   type Element,
   type Enemy,
+  equippedItemEffects,
   type Fighter,
+  type ItemEffect,
   type ItemInstance,
 } from "./model.js";
 
@@ -66,6 +68,17 @@ const healthFraction = (s: DescentState): number => {
   const party = living(s);
   if (party.length === 0) return 0;
   return party.reduce((sum, f) => sum + f.hp / f.maxHp, 0) / party.length;
+};
+const merchantPrice = (fighter: Fighter, listed: number): number => {
+  const discount = Math.min(
+    0.35,
+    equippedItemEffects(fighter)
+      .filter(
+        (effect): effect is Extract<ItemEffect, { kind: "merchant-discount" }> => effect.kind === "merchant-discount",
+      )
+      .reduce((sum, effect) => sum + effect.fraction, 0),
+  );
+  return Math.round(listed * (1 - discount));
 };
 const usefulPaths = (s: DescentState): DescentState["paths"] => {
   if (!s.map) return s.paths;
@@ -98,16 +111,41 @@ const usefulPaths = (s: DescentState): DescentState["paths"] => {
 };
 
 /** Rough worth of a piece of gear, used to decide upgrades and purchases. */
-function gearScore(item: ItemInstance | string): number {
+function gearScore(item: ItemInstance | string, owner?: ClassId): number {
   const def = itemDef(item);
   if (!def) return 0;
   const affix = typeof item === "string" ? { power: 0, armor: 0, hp: 0, mana: 0, speed: 0 } : itemModifiers(item);
+  const manaWeight = owner === "mage" || owner === "cleric" || owner === undefined ? 0.25 : 0;
+  const effectScore =
+    typeof item === "string"
+      ? 0
+      : item.affixes.reduce((sum, entry) => {
+          switch (entry.effect?.kind) {
+            case "cleave":
+              return sum + 22 * entry.effect.fraction;
+            case "vampirism":
+              return sum + 90 * entry.effect.fraction;
+            case "regeneration":
+              return sum + entry.effect.amount * 2.5;
+            case "reveal":
+              return sum + (entry.effect.scope === "floor" ? 18 : 7);
+            case "merchant-discount":
+              return sum + entry.effect.fraction * 70;
+            case "cache-capacity":
+              return sum + entry.effect.amount * 22;
+            case "cooldown-reduction":
+              return sum + entry.effect.amount * 16;
+            default:
+              return sum;
+          }
+        }, 0);
   return (
     ((def.power ?? 0) + affix.power) * 3 +
     ((def.armorBonus ?? 0) + affix.armor) * 2.5 +
     ((def.hp ?? 0) + affix.hp) * 0.35 +
-    ((def.mana ?? 0) + affix.mana) * 0.25 +
-    ((def.speed ?? 0) + affix.speed) * 2
+    ((def.mana ?? 0) + affix.mana) * manaWeight +
+    ((def.speed ?? 0) + affix.speed) * 2 +
+    effectScore
   );
 }
 
@@ -141,7 +179,7 @@ function tidyPacks(sim: Sim, s: DescentState): void {
       const def = itemDef(item);
       if (!def || def.kind === "consumable" || !equippableBy(item).includes(id)) continue;
       const current = me.equipped[def.kind];
-      if (!current || gearScore(item) > gearScore(current)) attempt(() => sim.equipItem(id, item.id));
+      if (!current || gearScore(item, id) > gearScore(current, id)) attempt(() => sim.equipItem(id, item.id));
     }
   }
 }
@@ -172,9 +210,10 @@ function shop(sim: Sim, s: DescentState): void {
   if (wantPotions) {
     const listing = s.stock.find((x) => x.item.baseId === "healing_potion");
     if (listing) {
-      const buyer = CLASSES.find(
-        (c) => !s.party[c].dead && s.party[c].gold >= listing.price && s.party[c].inventory.length < 6,
-      );
+      const buyer = CLASSES.find((c) => {
+        const fighter = s.party[c];
+        return !fighter.dead && fighter.gold >= merchantPrice(fighter, listing.price) && fighter.inventory.length < 6;
+      });
       if (buyer) attempt(() => sim.buyItem(buyer, listing.item.id));
     }
   }
@@ -184,7 +223,10 @@ function shop(sim: Sim, s: DescentState): void {
       const def = itemDef(x.item);
       return def && def.kind !== "consumable" && x.price <= total;
     })
-    .map((x) => ({ ...x, worth: gearScore(x.item) }))
+    .map((x) => ({
+      ...x,
+      worth: Math.max(...equippableBy(x.item).map((owner) => gearScore(x.item, owner))),
+    }))
     .sort((a, b) => b.worth - a.worth);
 
   for (const pick of candidates) {
@@ -193,12 +235,13 @@ function shop(sim: Sim, s: DescentState): void {
     if (kind !== "weapon" && kind !== "armor" && kind !== "trinket") continue;
     // Whoever gains most from it, not whoever happens to be able to afford it.
     const target = owners
-      .map((o) => ({ o, gain: gearScore(pick.item) - gearScore(s.party[o].equipped[kind] ?? "") }))
+      .map((o) => ({ o, gain: gearScore(pick.item, o) - gearScore(s.party[o].equipped[kind] ?? "", o) }))
       .sort((a, b) => b.gain - a.gain)[0];
     if (!target || target.gain <= 0) continue;
     const buyer = s.party[target.o];
-    if (buyer.gold < pick.price) {
-      let needed = pick.price - buyer.gold;
+    const price = merchantPrice(buyer, pick.price);
+    if (buyer.gold < price) {
+      let needed = price - buyer.gold;
       for (const donor of CLASSES) {
         if (donor === target.o || needed <= 0) continue;
         const spare = s.party[donor].gold;
@@ -263,7 +306,7 @@ function loot(sim: Sim, s: DescentState): void {
         // Whoever gains most by wearing it, exactly as `shop` does.
         const best = equippableBy(entry.item)
           .filter((o) => !s.party[o].dead && s.party[o].inventory.length < 6)
-          .map((o) => ({ o, gain: gearScore(entry.item) - gearScore(s.party[o].equipped[kind] ?? "") }))
+          .map((o) => ({ o, gain: gearScore(entry.item, o) - gearScore(s.party[o].equipped[kind] ?? "", o) }))
           .sort((a, b) => b.gain - a.gain)[0];
         return { entry, taker: best?.o, gain: best?.gain ?? -1 };
       })

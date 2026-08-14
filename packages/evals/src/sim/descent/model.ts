@@ -49,6 +49,16 @@ export interface ItemModifiers {
   speed?: number;
 }
 
+/** Rule-changing properties carried by procedural affixes. */
+export type ItemEffect =
+  | { kind: "cleave"; fraction: number }
+  | { kind: "vampirism"; fraction: number }
+  | { kind: "regeneration"; amount: number }
+  | { kind: "reveal"; scope: "adjacent" | "floor" }
+  | { kind: "merchant-discount"; fraction: number }
+  | { kind: "cache-capacity"; amount: number }
+  | { kind: "cooldown-reduction"; amount: number };
+
 /** One rolled copy of a base item. Its id is the tool-facing identity. */
 export interface ItemInstance {
   id: string;
@@ -64,6 +74,7 @@ export interface ItemInstance {
     description: string;
     polarity: "positive" | "negative";
     modifiers: ItemModifiers;
+    effect?: ItemEffect;
   }>;
   provenance: { source: ItemProvenance; floor: number };
 }
@@ -230,6 +241,8 @@ export interface DungeonRoom {
   x: number;
   y: number;
   visited: boolean;
+  /** Learned without entering, usually from an equipped scouting item. */
+  revealed: boolean;
   cleared: boolean;
 }
 
@@ -284,6 +297,13 @@ export interface DescentState {
 }
 
 export const CLASSES: ClassId[] = ["guardian", "mage", "rogue", "cleric", "ranger"];
+
+/** Effects currently active on a fighter, derived solely from worn items. */
+export function equippedItemEffects(who: Fighter): ItemEffect[] {
+  return Object.values(who.equipped).flatMap((item) =>
+    item ? item.affixes.flatMap((affix) => (affix.effect ? [affix.effect] : [])) : [],
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Statuses
@@ -570,6 +590,17 @@ export function resolveTick(
       const healed = Math.min(regen.amount, f.maxHp - f.hp);
       f.hp += healed;
       if (healed > 0) out.lines.push(`${f.id} recovers ${healed}.`);
+    }
+    const passive = equippedItemEffects(f)
+      .filter((effect): effect is Extract<ItemEffect, { kind: "regeneration" }> => effect.kind === "regeneration")
+      .reduce((sum, effect) => sum + effect.amount, 0);
+    if (passive > 0 && !f.dead) {
+      const healed = Math.min(passive, f.maxHp - f.hp);
+      f.hp += healed;
+      if (healed > 0) {
+        out.lines.push(`${f.id}'s equipment restores ${healed}.`);
+        out.beats.push({ kind: "heal", from: f.id, to: f.id, amount: healed, note: "item-regeneration" });
+      }
     }
     if (f.dead) out.downed.push(f.id);
   }

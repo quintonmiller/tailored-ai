@@ -49,11 +49,14 @@ The following work is complete on `feat/endless-descent-overhaul`:
 - Inventory, equipment, stock, caches, and drops use stable per-copy item
   instances. Seeded rarity and positive/negative stat affixes make copies of
   the same base item differ while preserving base ids as compatibility aliases.
+- Rare procedural affixes can change rules through cleave, vampirism, passive
+  combat regeneration, map revelation, merchant negotiation, cache capacity,
+  and cooldown reduction.
 - The broadcast highlights the character who most recently spoke or acted and
   shows their full stats, equipment, pack, item affixes, talents, cooldowns,
   statuses, gold, skill points, and readied action.
 - The current 60-seed, 40-round baseline means are: random 97, basic tactics
-  217, tactics-only 537, greedy damage 584, rule-based 584, and oracle 622.
+  217, tactics-only 537, greedy damage 571, rule-based 610, and oracle 625.
 
 ## Prioritized improvements
 
@@ -107,10 +110,16 @@ Progress as of 2026-08-13:
   dedicated item RNG keeps affix changes from perturbing encounter or route
   selection.
 - Complete: detailed item data is available in `look` and the typed broadcast
-  scene contract; callers may use an exact instance id or an unambiguous legacy
-  base id.
-- Remaining: XP, luck, resistance, healing, critical, and cooldown modifiers;
-  play-changing effects; richer policy evaluation; and final balance sweeps.
+  scene contract; callers use exact instance ids to distinguish copies, while a
+  legacy base id deterministically selects a matching copy.
+- Complete: initial play-changing affixes support cleave, vampirism, passive
+  regeneration, adjacent or full-floor revelation, merchant discounts and
+  improved sales, extra cache capacity, and cooldown reduction.
+- Complete: policies account for class fit, numeric modifiers, and the first
+  set of rule-changing effects when buying, assigning, and equipping gear.
+- Remaining: XP, luck, resistance, healing, and critical modifiers;
+  conditional shields, counters, and status effects; more effect-specific
+  policy reasoning; and final balance sweeps.
 
 ### P0 — Broadcast inventory and active-character detail
 
@@ -303,8 +312,8 @@ increase controlled variation without degrading reproducibility.
    behind compatibility helpers.
 2. **Complete:** add detailed item/build data to the scene contract and the
    active-character broadcast panel.
-3. Add unique item effects and teach baseline policies how to value the simple
-   subset.
+3. **Complete:** add the first unique item effects and teach baseline policies
+   how to value the simple subset.
 4. Persist escaped encounters and add richer path/room consequences.
 5. Implement zone-specific stage themes and room staging.
 6. Add historical ghost comparisons with strict cohort matching.

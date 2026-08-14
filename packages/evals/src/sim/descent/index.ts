@@ -100,12 +100,14 @@ import {
   type DungeonFloorMap,
   type Element,
   type Enemy,
+  equippedItemEffects,
   type Fighter,
   getStatus,
   hasStatus,
   hurtEnemy,
   hurtFighter,
   type Intent,
+  type ItemEffect,
   type ItemInstance,
   type ItemProvenance,
   livingEnemies,
@@ -153,6 +155,7 @@ interface DescentSceneItem {
     description: string;
     polarity: "positive" | "negative";
     modifiers: { power?: number; armor?: number; hp?: number; mana?: number; speed?: number };
+    effect?: { kind: string; fraction?: number; amount?: number; scope?: string };
   }>;
   provenance: { source: string; floor: number };
 }
@@ -284,7 +287,7 @@ const pathsFromMap = (map: DungeonFloorMap): DescentState["paths"] => {
           {
             id: room.id,
             label: room.label,
-            hint: room.visited ? "already explored" : roomHint(room.kind),
+            hint: room.visited ? "already explored" : room.revealed ? `mapped: ${room.kind}` : roomHint(room.kind),
             kind: room.kind,
           },
         ]
@@ -390,6 +393,7 @@ export interface DescentScene {
       x: number;
       y: number;
       visited: boolean;
+      revealed: boolean;
       cleared: boolean;
     }>;
   } | null;
@@ -602,6 +606,42 @@ export class DescentSimulation implements Simulation {
     );
   }
 
+  private effectsOf<K extends ItemEffect["kind"]>(fighter: Fighter, kind: K): Array<Extract<ItemEffect, { kind: K }>> {
+    return equippedItemEffects(fighter).filter((effect) => effect.kind === kind) as Array<
+      Extract<ItemEffect, { kind: K }>
+    >;
+  }
+
+  private merchantDiscount(fighter: Fighter): number {
+    return Math.min(
+      0.35,
+      this.effectsOf(fighter, "merchant-discount").reduce((sum, effect) => sum + effect.fraction, 0),
+    );
+  }
+
+  private cacheAllowance(): number {
+    const extra = CLASSES.flatMap((id) => this.effectsOf(this.state.party[id], "cache-capacity")).reduce(
+      (sum, effect) => sum + effect.amount,
+      0,
+    );
+    return Math.min(CACHE_OFFERS, CACHE_TAKES + extra);
+  }
+
+  /** Item-granted map knowledge persists after it has been shared with the party. */
+  private refreshMapKnowledge(): void {
+    const map = this.state.map;
+    if (!map) return;
+    const reveals = CLASSES.flatMap((id) => this.effectsOf(this.state.party[id], "reveal"));
+    if (reveals.length === 0) return;
+    const all = reveals.some((effect) => effect.scope === "floor");
+    const current = map.rooms.find((room) => room.id === map.currentRoom);
+    const visible = all
+      ? map.rooms
+      : map.rooms.filter((room) => room.id === current?.id || current?.links.includes(room.id));
+    for (const room of visible) room.revealed = true;
+    this.state.paths = pathsFromMap(map);
+  }
+
   private equipForDepth(floor: number): void {
     // Fitted to what a `rule-based` party actually holds when it arrives, over
     // twenty seeds: 1,433 experience at floor 8, 3,298 at 12, 15,003 at 25. The
@@ -681,7 +721,9 @@ export class DescentSimulation implements Simulation {
       if (s.phase === "explore") return `${head} Four ways on; somebody has to choose one.`;
       if (s.phase === "spoils") return `${head} The fight is over. Nothing moves until somebody descends.`;
       if (s.phase === "market") return `${head} A merchant is here.`;
-      if (s.phase === "cache") return `${head} A dead expedition's packs are here; the party can carry two things out.`;
+      if (s.phase === "cache") {
+        return `${head} A dead expedition's packs are here; the party can carry ${s.cacheTakesLeft} more thing${s.cacheTakesLeft === 1 ? "" : "s"} out.`;
+      }
       return head;
     }
     return `${head}\n${this.lastLog.slice(0, 14).join("\n")}`;
@@ -825,7 +867,10 @@ export class DescentSimulation implements Simulation {
       out.push("", s.phase === "camp" ? "The surface outfitter has:" : "The merchant has:");
       for (const listing of s.stock) {
         const item = listing.item;
-        out.push(`  ${item.id} — ${item.name}, ${listing.price} gold. ${item.description}`);
+        const discount = me ? this.merchantDiscount(me) : 0;
+        const yourPrice = Math.round(listing.price * (1 - discount));
+        const price = discount > 0 ? `${yourPrice} gold for you (listed ${listing.price})` : `${listing.price} gold`;
+        out.push(`  ${item.id} — ${item.name}, ${price}. ${item.description}`);
       }
       out.push(
         s.phase === "camp"
@@ -902,7 +947,14 @@ export class DescentSimulation implements Simulation {
    * including a fireball that happened to catch a crystal in the blast, or the
    * party learns "do not cast lightning" and then relearns it from area damage.
    */
-  private strike(from: Fighter, target: Enemy, raw: number, element: Element, out: TickResult): number {
+  private strike(
+    from: Fighter,
+    target: Enemy,
+    raw: number,
+    element: Element,
+    out: TickResult,
+    triggerItemEffects = false,
+  ): number {
     const variance = this.state.map ? 0.9 + this.damageRng.next() * 0.2 : 1;
     const dealt = hurtEnemy(target, raw * variance, element);
     out.beats.push({ kind: "hit", from: from.id, to: target.ref, amount: dealt, element });
@@ -913,6 +965,42 @@ export class DescentSimulation implements Simulation {
       element === "physical" ? 1 : factor,
       element === "physical" && target.armor >= 12,
     );
+
+    if (triggerItemEffects && element === "physical" && dealt > 0) {
+      const vampirism = Math.min(
+        0.4,
+        this.effectsOf(from, "vampirism").reduce((sum, effect) => sum + effect.fraction, 0),
+      );
+      if (vampirism > 0) {
+        const healed = Math.min(Math.max(1, Math.round(dealt * vampirism)), from.maxHp - from.hp);
+        from.hp += healed;
+        if (healed > 0) {
+          out.lines.push(`${from.id}'s equipment drinks the hit and restores ${healed}.`);
+          out.beats.push({ kind: "heal", from: from.id, to: from.id, amount: healed, note: "item-vampirism" });
+        }
+      }
+
+      const cleave = Math.min(
+        0.7,
+        this.effectsOf(from, "cleave").reduce((sum, effect) => sum + effect.fraction, 0),
+      );
+      const second = livingEnemies(this.state)
+        .filter((enemy) => enemy.ref !== target.ref)
+        .sort((a, b) => a.ref.localeCompare(b.ref))[0];
+      if (cleave > 0 && second) {
+        const splashed = hurtEnemy(second, dealt * cleave, "physical");
+        from.threat += splashed * 0.6;
+        out.lines.push(`${from.id}'s equipment cleaves into ${second.name} for ${splashed}.`);
+        out.beats.push({
+          kind: "hit",
+          from: from.id,
+          to: second.ref,
+          amount: splashed,
+          element: "physical",
+          note: "item-cleave",
+        });
+      }
+    }
 
     if (target.hidden.kind === "reflect" && target.hidden.element === element && dealt > 0) {
       const back = Math.round(dealt * target.hidden.fraction);
@@ -942,7 +1030,7 @@ export class DescentSimulation implements Simulation {
 
     switch (kind) {
       case "attack": {
-        const dealt = this.strike(actor, enemyTarget as Enemy, power, "physical", out);
+        const dealt = this.strike(actor, enemyTarget as Enemy, power, "physical", out, true);
         say(`${actor.id} hits ${(enemyTarget as Enemy).name} for ${dealt}.`);
         break;
       }
@@ -979,7 +1067,7 @@ export class DescentSimulation implements Simulation {
       }
       case "shield_slam": {
         const target = enemyTarget as Enemy;
-        const dealt = this.strike(actor, target, power * 0.8, "physical", out);
+        const dealt = this.strike(actor, target, power * 0.8, "physical", out, true);
         applyStatus(target, { kind: "stun", ticks: 1, amount: 0 });
         if (target.hidden.kind === "windowAfter" && target.hidden.move === "shield_slam") {
           target.windowOpen = true;
@@ -1015,7 +1103,7 @@ export class DescentSimulation implements Simulation {
       case "backstab": {
         const target = enemyTarget as Enemy;
         const bonus = hasStatus(target, "sleep") || hasStatus(target, "stun") ? 1.5 : 1;
-        const dealt = this.strike(actor, target, power * 1.9 * bonus, "physical", out);
+        const dealt = this.strike(actor, target, power * 1.9 * bonus, "physical", out, true);
         say(`${actor.id} drives a blade into ${target.name} for ${dealt}${bonus > 1 ? " (it never saw it)" : ""}.`);
         break;
       }
@@ -1092,7 +1180,7 @@ export class DescentSimulation implements Simulation {
       // Ranger --------------------------------------------------------------
       case "shoot": {
         const target = enemyTarget as Enemy;
-        const dealt = this.strike(actor, target, power * 1.25, "physical", out);
+        const dealt = this.strike(actor, target, power * 1.25, "physical", out, true);
         say(`${actor.id} puts an arrow into ${target.name} for ${dealt}.`);
         break;
       }
@@ -1523,7 +1611,7 @@ export class DescentSimulation implements Simulation {
       const rolled = rollCache(s.floor, CACHE_OFFERS, this.stockRng);
       this.cacheSerial += 1;
       s.cache = rolled.items.map((baseId) => ({ item: this.makeItem(baseId, "cache", s.floor) }));
-      s.cacheTakesLeft = CACHE_TAKES;
+      s.cacheTakesLeft = this.cacheAllowance();
       s.cacheOrigin = rolled.origin;
       this.note("cache", `What is left of ${rolled.origin} is on floor ${s.floor}.`);
       this.pendingCache = false;
@@ -1549,6 +1637,7 @@ export class DescentSimulation implements Simulation {
       s.map = generateFloorMap(s.floor, this.pathRng);
       s.paths = pathsFromMap(s.map);
       this.roomsExplored += 1;
+      this.refreshMapKnowledge();
     } else {
       s.map = undefined;
       s.paths = generatePaths(s.floor, this.pathRng);
@@ -1864,7 +1953,10 @@ export class DescentSimulation implements Simulation {
     if (def.mana) me.mana -= def.mana;
     // One more than the stated cooldown, because upkeep decrements it on the
     // same tick the ability resolves.
-    if (def.cooldown) me.cooldowns[name] = def.cooldown + 1;
+    if (def.cooldown) {
+      const reduction = this.effectsOf(me, "cooldown-reduction").reduce((sum, effect) => sum + effect.amount, 0);
+      me.cooldowns[name] = Math.max(1, def.cooldown + 1 - reduction);
+    }
     return this.ready(me, { actor: me.id, kind: name, target });
   }
 
@@ -1945,6 +2037,7 @@ export class DescentSimulation implements Simulation {
     me.inventory.splice(me.inventory.indexOf(held), 1);
     if (previous) me.inventory.push(previous);
     this.effective(me);
+    this.refreshMapKnowledge();
     return `You put on ${held.name}.${previous ? ` ${itemName(previous)} goes back into your pack.` : ""} You are now ${me.hp}/${me.maxHp} hp, armour ${me.armor}, power ${me.power}, speed ${me.speed}.`;
   }
 
@@ -2014,12 +2107,14 @@ export class DescentSimulation implements Simulation {
     if (!listing) {
       throw new Error(`the merchant has no ${item}. On offer: ${this.state.stock.map((x) => x.item.id).join(", ")}.`);
     }
-    if (me.gold < listing.price) {
-      throw new Error(`${listing.price} gold, and you have ${me.gold}. Somebody could give you the difference.`);
+    const discount = this.merchantDiscount(me);
+    const price = Math.round(listing.price * (1 - discount));
+    if (me.gold < price) {
+      throw new Error(`${price} gold, and you have ${me.gold}. Somebody could give you the difference.`);
     }
     if (me.inventory.length >= 6) throw new Error("your pack is full.");
-    me.gold -= listing.price;
-    this.goldSpent += listing.price;
+    me.gold -= price;
+    this.goldSpent += price;
     me.inventory.push(listing.item);
     this.state.stock = this.state.stock.filter((x) => x !== listing);
     // Pooled means *this buyer could not have afforded it alone*, not merely
@@ -2033,10 +2128,11 @@ export class DescentSimulation implements Simulation {
     // than one that does not fire.
     const before = this.toppedUp.get(me.id);
     if (before !== undefined) {
-      if (before < listing.price) this.diag.recordPooledPurchase();
+      if (before < price) this.diag.recordPooledPurchase();
       this.toppedUp.delete(me.id);
     }
-    return `You buy ${itemName(listing.item)} for ${listing.price}. You have ${me.gold} gold left.`;
+    const saved = listing.price - price;
+    return `You buy ${itemName(listing.item)} for ${price}${saved > 0 ? ` (${saved} saved by your equipment)` : ""}. You have ${me.gold} gold left.`;
   }
 
   /**
@@ -2090,7 +2186,7 @@ export class DescentSimulation implements Simulation {
     this.requirePhase("market", "camp");
     const held = this.heldItem(me, item);
     if (!held) throw new Error(`there is no ${item} in your pack.`);
-    const price = Math.round(itemPrice(held) * 0.35);
+    const price = Math.round(itemPrice(held) * 0.35 * (1 + this.merchantDiscount(me)));
     me.inventory.splice(me.inventory.indexOf(held), 1);
     me.gold += price;
     this.goldEarned += price;
@@ -2134,6 +2230,7 @@ export class DescentSimulation implements Simulation {
     map.currentRoom = room.id;
     if (!room.visited) this.roomsExplored += 1;
     room.visited = true;
+    this.refreshMapKnowledge();
     s.paths = pathsFromMap(map);
     if (room.cleared) {
       s.phase = "explore";
@@ -2161,7 +2258,7 @@ export class DescentSimulation implements Simulation {
         const rolled = rollCache(s.floor, CACHE_OFFERS, this.stockRng);
         this.cacheSerial += 1;
         s.cache = rolled.items.map((baseId) => ({ item: this.makeItem(baseId, "cache", s.floor) }));
-        s.cacheTakesLeft = CACHE_TAKES;
+        s.cacheTakesLeft = this.cacheAllowance();
         s.cacheOrigin = rolled.origin;
         s.phase = "cache";
         this.lastLog = [`The ${room.label} holds what remains of ${rolled.origin}.`];
@@ -2786,7 +2883,11 @@ export class DescentSimulation implements Simulation {
       kind: item.kind,
       rarity: item.rarity,
       description: item.description,
-      affixes: item.affixes.map((affix) => ({ ...affix, modifiers: { ...affix.modifiers } })),
+      affixes: item.affixes.map((affix) => ({
+        ...affix,
+        modifiers: { ...affix.modifiers },
+        ...(affix.effect ? { effect: { ...affix.effect } } : {}),
+      })),
       provenance: { ...item.provenance },
     });
     const readied = new Map(s.intents.map((i) => [i.actor as string, i]));
@@ -2847,6 +2948,7 @@ export class DescentSimulation implements Simulation {
             const known = new Set([
               s.map.currentRoom,
               ...s.map.rooms.filter((room) => room.visited).map((room) => room.id),
+              ...s.map.rooms.filter((room) => room.revealed).map((room) => room.id),
               ...(current?.links ?? []),
             ]);
             return {
@@ -2862,6 +2964,7 @@ export class DescentSimulation implements Simulation {
                   x: room.x,
                   y: room.y,
                   visited: room.visited,
+                  revealed: room.revealed,
                   cleared: room.cleared,
                 })),
             };

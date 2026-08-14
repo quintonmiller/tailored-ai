@@ -32,6 +32,7 @@ import {
   type Enemy,
   type Fighter,
   hasStatus,
+  type ItemEffect,
 } from "../sim/descent/model.js";
 import { DESCENT_POLICIES } from "../sim/descent/policies.js";
 import { createSimulation, listSimulations, simulationPolicies } from "../sim/index.js";
@@ -64,6 +65,20 @@ async function call(
 const fresh = (seed = 7) => createSimulation("descent", { seed, days: 400 }) as DescentSimulation;
 let testItemSerial = 0;
 const testItem = (baseId: string) => makeItemInstance(baseId, `test-${baseId}-${++testItemSerial}`, "starting-kit", 1);
+const testEffectItem = (baseId: string, ...effects: ItemEffect[]) => {
+  const item = testItem(baseId);
+  for (const effect of effects) {
+    item.affixes.push({
+      id: `test-${effect.kind}`,
+      name: `Test ${effect.kind}`,
+      description: `test ${effect.kind}`,
+      polarity: "positive",
+      modifiers: {},
+      effect,
+    });
+  }
+  return item;
+};
 
 /** Walk a fresh party into their first fight. */
 async function intoCombat(sim: DescentSimulation): Promise<void> {
@@ -474,6 +489,94 @@ describe("the economy", () => {
   });
 });
 
+describe("procedural item effects", () => {
+  it("turns single-target physical attacks into cleave and vampirism", async () => {
+    const sim = fresh();
+    const guardian = sim.view().party.guardian;
+    const weapon = testEffectItem(
+      "iron_sword",
+      { kind: "cleave", fraction: 0.5 },
+      { kind: "vampirism", fraction: 0.5 },
+    );
+    guardian.inventory.push(weapon);
+    await call(sim, "guardian", "equip_item", { item: weapon.id });
+    expect(
+      sim
+        .scene()
+        .party.find((member) => member.id === "guardian")
+        ?.worn.flatMap((item) => item.affixes)
+        .map((affix) => affix.effect?.kind),
+    ).toEqual(expect.arrayContaining(["cleave", "vampirism"]));
+    await intoCombat(sim);
+
+    const original = sim.view().enemies[0];
+    sim.view().enemies = [
+      { ...original, ref: "target-1", hp: 100, maxHp: 100, armor: 0, power: 1, speed: 0, hidden: { kind: "none" } },
+      { ...original, ref: "target-2", hp: 100, maxHp: 100, armor: 0, power: 1, speed: 0, hidden: { kind: "none" } },
+    ];
+    guardian.hp = guardian.maxHp - 30;
+    await call(sim, "guardian", "attack", { target: "target-1" });
+    sim.advance();
+
+    expect(sim.view().enemies.find((enemy) => enemy.ref === "target-2")?.hp).toBeLessThan(100);
+    expect(sim.scene().beats.some((beat) => beat.note === "item-cleave")).toBe(true);
+    expect(sim.scene().beats.some((beat) => beat.note === "item-vampirism")).toBe(true);
+  });
+
+  it("regenerates during combat and reduces ability cooldowns", async () => {
+    const sim = fresh();
+    const guardian = sim.view().party.guardian;
+    const weapon = testEffectItem("iron_sword", { kind: "cooldown-reduction", amount: 1 });
+    const armor = testEffectItem("plate_cuirass", { kind: "regeneration", amount: 6 });
+    guardian.inventory.push(weapon, armor);
+    await call(sim, "guardian", "equip_item", { item: weapon.id });
+    await call(sim, "guardian", "equip_item", { item: armor.id });
+    await intoCombat(sim);
+    guardian.hp -= 20;
+
+    const target = sim.view().enemies[0];
+    await call(sim, "guardian", "shield_slam", { target: target.ref });
+    sim.advance();
+
+    expect(sim.scene().beats.some((beat) => beat.note === "item-regeneration" && beat.amount === 6)).toBe(true);
+    expect(guardian.cooldowns.shield_slam).toBe(1);
+  });
+
+  it("uses equipped merchant, map, and cache effects at their decision points", async () => {
+    let sim = createSimulation("descent", { seed: 1, days: 40, maze: true }) as DescentSimulation;
+    for (let seed = 1; seed < 30 && !sim.view().map?.rooms.some((room) => room.kind === "cache"); seed++) {
+      sim = createSimulation("descent", { seed: seed + 1, days: 40, maze: true }) as DescentSimulation;
+    }
+    const state = sim.view();
+    const trinket = testEffectItem(
+      "vitality_ring",
+      { kind: "merchant-discount", fraction: 0.15 },
+      { kind: "reveal", scope: "floor" },
+      { kind: "cache-capacity", amount: 1 },
+    );
+    state.party.guardian.inventory.push(trinket);
+    await call(sim, "guardian", "equip_item", { item: trinket.id });
+    expect(state.map?.rooms.every((room) => room.revealed)).toBe(true);
+
+    const cache = state.map?.rooms.find((room) => room.kind === "cache");
+    const beforeCache = state.map?.rooms.find((room) => cache?.links.includes(room.id));
+    expect(cache && beforeCache).toBeTruthy();
+    if (!cache || !beforeCache || !state.map) return;
+    state.map.currentRoom = beforeCache.id;
+    beforeCache.visited = true;
+    state.paths = [{ id: cache.id, label: cache.label, kind: cache.kind }];
+    await call(sim, "guardian", "choose_path", { path: cache.id });
+    sim.advance();
+    expect(state.phase).toBe("cache");
+    expect(state.cacheTakesLeft).toBe(3);
+
+    state.phase = "market";
+    state.party.guardian.gold = 100;
+    state.stock = [{ item: testItem("healing_potion"), price: 100 }];
+    expect(await call(sim, "guardian", "buy", { item: "healing_potion" })).toMatch(/for 85 \(15 saved/);
+  });
+});
+
 describe("run variation", () => {
   it("assigns path contents to different directions across seeds", () => {
     const signature = (seed: number) =>
@@ -500,6 +603,8 @@ describe("run variation", () => {
     expect(new Set(copies.map((item) => item.rarity)).size).toBeGreaterThan(2);
     expect(copies.some((item) => item.affixes.length >= 2)).toBe(true);
     expect(copies.some((item) => item.affixes.some((affix) => affix.polarity === "negative"))).toBe(true);
+    const effectCopies = Array.from({ length: 240 }, (_, index) => roll(index + 100));
+    expect(effectCopies.some((item) => item.affixes.some((affix) => affix.effect))).toBe(true);
   });
 
   it("publishes full per-copy item identity through the scene contract", () => {
