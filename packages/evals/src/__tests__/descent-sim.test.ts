@@ -378,6 +378,32 @@ describe("the memory ledger", () => {
 });
 
 describe("the economy", () => {
+  it("starts an opted-in run outside with a finite budget and no predetermined kit", async () => {
+    const sim = createSimulation("descent", {
+      seed: 9,
+      days: 40,
+      startFloor: 1,
+      preparation: true,
+      startingGold: 180,
+    }) as DescentSimulation;
+    const state = sim.view();
+
+    expect(state.phase).toBe("camp");
+    expect(state.stock).toHaveLength(6);
+    expect(Object.values(state.party).every((fighter) => fighter.gold === 180)).toBe(true);
+    expect(Object.values(state.party).flatMap((fighter) => fighter.inventory)).toEqual([]);
+
+    const potion = state.stock.find((listing) => listing.item === "healing_potion");
+    expect(potion).toBeDefined();
+    expect(await call(sim, "guardian", "buy", { item: potion?.item })).toMatch(/You buy Healing Potion/);
+    expect(await call(sim, "mage", "enter_dungeon")).toMatch(/when the round closes/);
+    sim.advance();
+
+    expect(state.phase).toBe("explore");
+    expect(state.stock).toEqual([]);
+    expect(state.party.guardian.inventory).toContain("healing_potion");
+  });
+
   it("refuses gear to a class that cannot use it, and says who can", async () => {
     const sim = fresh();
     sim.view().party.mage.inventory.push("plate_cuirass");
@@ -464,6 +490,38 @@ describe("descent pressure", () => {
     expect(sim.view().phase).toBe("explore");
     sim.advance();
     expect(["combat", "market"]).toContain(sim.view().phase);
+  });
+
+  it("lets the party retreat at the cost of an unanswered attack and dread", async () => {
+    const sim = fresh();
+    await intoCombat(sim);
+    const state = sim.view();
+    const enemy = state.enemies[0];
+    state.enemies = [
+      {
+        ...enemy,
+        hp: enemy.maxHp,
+        power: 20,
+        statuses: [],
+        hidden: { kind: "none" },
+      },
+    ];
+    const partyHp = () => Object.values(state.party).reduce((sum, fighter) => sum + fighter.hp, 0);
+    const hpBefore = partyHp();
+
+    await call(sim, "guardian", "attack", { target: enemy.ref });
+    expect(await call(sim, "rogue", "retreat")).toMatch(/opportunity/i);
+    sim.advance();
+
+    expect(state.phase).toBe("explore");
+    expect(state.dread).toBe(2);
+    expect(partyHp()).toBeLessThan(hpBefore);
+    expect(state.paths[0]).toMatchObject({ id: "back", kind: "retreat" });
+
+    await call(sim, "guardian", "choose_path", { path: "back" });
+    sim.advance();
+    expect(state.phase).toBe("combat");
+    expect(state.enemies[0]).toMatchObject({ ref: enemy.ref, hp: enemy.maxHp });
   });
 
   it("allows one rest per round and resolves dangerous dread before descent", async () => {

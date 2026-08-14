@@ -220,6 +220,8 @@ function loot(sim: Sim, s: DescentState): void {
 // ---------------------------------------------------------------------------
 
 interface Brain {
+  /** Spend the opening budget before taking the first stair. */
+  prepare?(sim: Sim, s: DescentState): void;
   /** Which way on. */
   path(sim: Sim, s: DescentState): string;
   /** One combat action per living member. */
@@ -235,6 +237,12 @@ function drive(name: string, brain: Brain): Policy {
       const sim = simulation as Sim;
       const s = sim.view();
       switch (s.phase) {
+        case "camp": {
+          brain.prepare?.(sim, s);
+          const speaker = CLASSES.find((c) => !s.party[c].dead);
+          if (speaker) attempt(() => sim.enterDungeon(speaker));
+          return;
+        }
         case "explore":
           attempt(() => sim.choosePath(CLASSES.find((c) => !s.party[c].dead) ?? "guardian", brain.path(sim, s)));
           return;
@@ -306,6 +314,7 @@ const allyOrEnemy = (ability: string, s: DescentState, enemy: Enemy): string =>
 /** Everything attacks, nothing heals. Fast, and it dies around floor eight. */
 function greedyPolicy(): Policy {
   return drive("greedy-dps", {
+    prepare: (sim, s) => shop(sim, s),
     // Greedy about damage, not suicidal about routing. Taking every elite meant
     // it never saw floor six, which made it look like a worse policy than
     // random when what it actually is is a policy with no healer.
@@ -391,6 +400,11 @@ function tacticalPolicy(): Policy {
     act(simulation: Simulation): void {
       const sim = simulation as Sim;
       const s = sim.view();
+      if (s.phase === "camp") {
+        const speaker = CLASSES.find((c) => !s.party[c].dead);
+        if (speaker) attempt(() => sim.enterDungeon(speaker));
+        return;
+      }
       // Caches are skipped along with everything else out of combat. A
       // `tactics-only` party that stopped to loot would blur the one thing
       // this row exists to isolate.
@@ -453,6 +467,10 @@ function ruleBasedPolicy(omniscient = false): Policy {
     foes(s).some((e) => e.hidden.kind === "deathburst" && e.hp / e.maxHp < 0.3);
 
   return drive(omniscient ? "oracle" : "rule-based", {
+    prepare: (sim, s) => {
+      shop(sim, s);
+      tidyPacks(sim, s);
+    },
     path: (_sim, s) => {
       const cache = s.paths.find((p) => p.kind === "cache");
       const market = s.paths.find((p) => p.kind === "market");

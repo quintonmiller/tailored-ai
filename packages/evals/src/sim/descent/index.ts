@@ -328,6 +328,12 @@ export class DescentSimulation implements Simulation {
   private lastBeatsTick = -1;
   private encounterSerious = false;
   private descendRequested = false;
+  /** Surface preparation ends together, so an early roster slot cannot strand the rest in the shop. */
+  private enterRequested = false;
+  /** Retreat is resolved at the round boundary, after enemies get one unanswered attack. */
+  private retreatRequested = false;
+  /** The encounter left behind by a retreat. The party may turn back to it from exploration. */
+  private fledEnemies: Enemy[] | undefined;
   /** A party can take one rest action per simulation tick. */
   private lastRestTick = -1;
   /** Distinguishes separate caches for the sharing diagnostic. */
@@ -357,18 +363,30 @@ export class DescentSimulation implements Simulation {
         bonusHp: 0,
       };
     }
-    // Two potions and an antidote between five people. Scarcity is the point:
-    // a party that drinks on floor two has nothing on floor nine.
-    party.guardian.inventory.push("healing_potion");
-    party.cleric.inventory.push("healing_potion", "antidote");
-    party.mage.inventory.push("mana_potion");
-
     const startFloor = Math.max(1, Math.floor(Number(options.startFloor ?? 1)));
+    // The CLI's generic `--sim-option` parser cannot know a simulation's
+    // schema, so booleans arrive as strings there and as booleans from a
+    // scenario definition.
+    const preparation = (options.preparation === true || options.preparation === "true") && startFloor === 1;
+    if (preparation) {
+      // The opening budget replaces a free, predetermined kit. The party has
+      // enough to make several good choices, not enough to buy every role its
+      // obvious best-in-slot item, and the two universal trinket slots make
+      // pooling a genuinely shared decision before the first fight.
+      const startingGold = Math.max(0, Math.floor(Number(options.startingGold ?? 180)));
+      for (const id of CLASSES) party[id].gold = startingGold;
+    } else {
+      // Legacy/direct-start simulations retain the sparse fixed kit. Keeping
+      // this path is useful for focused combat tests and custom scenarios.
+      party.guardian.inventory.push("healing_potion");
+      party.cleric.inventory.push("healing_potion", "antidote");
+      party.mage.inventory.push("mana_potion");
+    }
     this.startFloor = startFloor;
 
     this.state = {
       floor: startFloor,
-      phase: "explore",
+      phase: preparation ? "camp" : "explore",
       tick: 0,
       party,
       enemies: [],
@@ -376,7 +394,7 @@ export class DescentSimulation implements Simulation {
       dread: 0,
       paths: generatePaths(startFloor, this.pathRng),
       pending: [],
-      stock: [],
+      stock: preparation ? rollStock(1, this.stockRng) : [],
       cache: [],
       cacheTakesLeft: 0,
       log: [],
@@ -385,6 +403,9 @@ export class DescentSimulation implements Simulation {
     };
     this.floorReached = startFloor;
     if (startFloor > 1) this.equipForDepth(startFloor);
+    if (preparation) {
+      this.lastLog = ["The party stands outside the first stair with money, empty packs, and one chance to prepare."];
+    }
   }
 
   /**
@@ -485,6 +506,7 @@ export class DescentSimulation implements Simulation {
     const s = this.state;
     const head = `Floor ${s.floor} — ${s.phase}${s.dread >= 4 ? ` (something is closing in: dread ${s.dread})` : ""}.`;
     if (this.lastLog.length === 0) {
+      if (s.phase === "camp") return `${head} The outfitter's wagon is open before the first stair.`;
       if (s.phase === "explore") return `${head} Four ways on; somebody has to choose one.`;
       if (s.phase === "spoils") return `${head} The fight is over. Nothing moves until somebody descends.`;
       if (s.phase === "market") return `${head} A merchant is here.`;
@@ -604,13 +626,17 @@ export class DescentSimulation implements Simulation {
       );
     }
 
-    if (s.phase === "market") {
-      out.push("", "The merchant has:");
+    if (s.phase === "market" || s.phase === "camp") {
+      out.push("", s.phase === "camp" ? "The surface outfitter has:" : "The merchant has:");
       for (const item of s.stock) {
         const def = ITEM_BY_ID.get(item.item);
         out.push(`  ${item.item} — ${def?.name}, ${item.price} gold. ${def?.desc ?? ""}`);
       }
-      out.push("  Call `descend` when the party is finished here.");
+      out.push(
+        s.phase === "camp"
+          ? "  Buy, sell, pool gold, trade, and equip here. Call `enter_dungeon` when the party is ready."
+          : "  Call `descend` when the party is finished here.",
+      );
     }
 
     if (s.phase === "cache") {
@@ -1268,6 +1294,8 @@ export class DescentSimulation implements Simulation {
     this.descendRequested = false;
     this.pendingPath = undefined;
     this.pendingCache = false;
+    this.retreatRequested = false;
+    this.fledEnemies = undefined;
     this.note("descend", `The party goes down to floor ${s.floor}.`);
     this.lastLog = [`Down to floor ${s.floor}.`];
   }
@@ -1294,6 +1322,19 @@ export class DescentSimulation implements Simulation {
     }
 
     switch (s.phase) {
+      case "camp": {
+        this.lastBeats = [];
+        if (this.enterRequested) {
+          this.enterRequested = false;
+          s.phase = "explore";
+          s.stock = [];
+          this.lastLog = ["The outfitter closes the wagon. The party takes the first stair together."];
+          this.note("enter", "The party enters the dungeon.");
+        } else {
+          this.lastLog = ["The party is still choosing how to spend its opening budget."];
+        }
+        break;
+      }
       case "explore": {
         this.lastBeats = [];
         if (this.pendingPath) {
@@ -1310,11 +1351,17 @@ export class DescentSimulation implements Simulation {
         break;
       }
       case "combat": {
+        const fleeing = this.retreatRequested;
+        this.retreatRequested = false;
         // Counted before resolution: `resolveTick` empties the queue, so asking
         // afterwards whether two agents acted in the same round always answered
         // no, and the coordination diagnostic read 0% for every run ever made.
         const actorsThisRound = s.intents.length;
         this.diag.turnsIdle += Math.max(0, livingParty(s).length - new Set(s.intents.map((i) => i.actor)).size);
+        // Retreat replaces the party's readied actions. The enemies still take
+        // their turns, making escape a damage-and-dread trade rather than a
+        // free undo button after seeing a bad encounter.
+        if (fleeing) s.intents = [];
         const result = resolveTick(s, this.rng.fork(`tick-${s.tick}`), this.performAbility, this.enemyAct);
         this.lastLog = result.lines;
         this.lastBeats = result.beats;
@@ -1358,6 +1405,23 @@ export class DescentSimulation implements Simulation {
         if (livingEnemies(s).length === 0) {
           this.lastLog.push("The last of them goes down.");
           this.endEncounter();
+        } else if (fleeing) {
+          this.fledEnemies = s.enemies;
+          s.enemies = [];
+          s.phase = "explore";
+          s.dread += 2;
+          this.pendingPath = undefined;
+          s.paths = [
+            {
+              id: "back",
+              label: "return to the unfinished fight",
+              hint: "the wounded enemies are still there",
+              kind: "retreat",
+            },
+            ...s.paths,
+          ];
+          this.lastLog.push(`The party escapes, but gives the enemy an opening. Dread rises to ${s.dread}.`);
+          this.note("retreat", `The party fled an encounter on floor ${s.floor}.`);
         }
         // Dread deliberately does *not* rise during a fight.
         //
@@ -1654,7 +1718,7 @@ export class DescentSimulation implements Simulation {
 
   buyItem(agent: string | undefined, item: string): string {
     const me = this.who(agent);
-    this.requirePhase("market");
+    this.requirePhase("market", "camp");
     const listing = this.state.stock.find((x) => x.item === item);
     if (!listing) {
       throw new Error(`the merchant has no ${item}. On offer: ${this.state.stock.map((x) => x.item).join(", ")}.`);
@@ -1729,7 +1793,7 @@ export class DescentSimulation implements Simulation {
 
   sellItem(agent: string | undefined, item: string): string {
     const me = this.who(agent);
-    this.requirePhase("market");
+    this.requirePhase("market", "camp");
     if (!me.inventory.includes(item)) throw new Error(`there is no ${item} in your pack.`);
     const price = Math.round((ITEM_BY_ID.get(item)?.price ?? 30) * 0.35);
     me.inventory.splice(me.inventory.indexOf(item), 1);
@@ -1771,6 +1835,20 @@ export class DescentSimulation implements Simulation {
     this.pendingPath = undefined;
     if (!path) return;
 
+    if (path.kind === "retreat" && this.fledEnemies) {
+      s.enemies = this.fledEnemies;
+      this.fledEnemies = undefined;
+      s.phase = "combat";
+      s.paths = [];
+      this.lastLog = ["The party turns back. The unfinished fight is exactly where they left it."];
+      return;
+    }
+
+    // Taking any other route leaves the escaped encounter behind. The enemy
+    // got its opportunity attack and dread remains, so changing plans is
+    // possible without being consequence-free.
+    this.fledEnemies = undefined;
+
     if (path.kind === "market") {
       s.stock = rollStock(s.floor, this.stockRng);
       s.phase = "market";
@@ -1809,6 +1887,23 @@ export class DescentSimulation implements Simulation {
     this.requirePhase("spoils", "market", "cache");
     this.descendRequested = true;
     return "You start down. The party moves when the round closes — anyone who still has business here has until then.";
+  }
+
+  enterDungeon(agent: string | undefined): string {
+    this.who(agent);
+    this.requirePhase("camp");
+    this.enterRequested = true;
+    return "The party will enter the dungeon together when the round closes. Finish any purchases now.";
+  }
+
+  requestRetreat(agent: string | undefined): string {
+    this.who(agent);
+    this.requirePhase("combat");
+    this.retreatRequested = true;
+    return (
+      "The party will try to retreat when the round closes. Readied actions will be abandoned, " +
+      "and every standing enemy gets one opportunity to attack before the party escapes."
+    );
   }
 
   reviveAlly(agent: string | undefined, allyRaw: string): string {
@@ -1969,13 +2064,27 @@ export class DescentSimulation implements Simulation {
 
       T(
         "choose_path",
-        "Pick the way on. One choice per floor; the first one taken is the one that counts.",
-        { path: "left, right, forward or down — whichever ids are on offer." },
+        "Pick one of the ways currently visible. The last choice readied before the round closes is the one taken.",
+        { path: "One of the path ids shown by `look`." },
         (args, agent) => this.choosePath(agent, String(args.path ?? "")),
+      ),
+
+      T(
+        "enter_dungeon",
+        "Leave the surface outfitter and take the first stair. The party enters together when the round closes.",
+        {},
+        (_a, agent) => this.enterDungeon(agent),
       ),
 
       T("descend", "Go down to the next floor. Anything left on this one is left behind.", {}, (_a, agent) =>
         this.requestDescend(agent),
+      ),
+
+      T(
+        "retreat",
+        "Try to escape the current fight. Readied actions are abandoned and enemies get one opportunity attack.",
+        {},
+        (_a, agent) => this.requestRetreat(agent),
       ),
 
       T(

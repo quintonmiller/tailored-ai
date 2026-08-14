@@ -16,40 +16,31 @@
  * all" has been answered — and a marginal improvement in planning, memory,
  * communication or resource management shows up as another floor.
  *
- * ## Why the party starts on floor 31
+ * ## Why the party starts outside floor one
  *
- * Measured, not chosen for flavour. Against the baselines, a forty-five tick
- * run starting from floor one reaches about floor eleven — and floors one to
- * twenty-two are survivable by a party that plays *randomly*. Every rung of the
- * ladder from `tactics-only` upward finished within fifteen percent of every
- * other, because nothing that separates them has happened yet: hidden mechanics
- * do not appear until fifteen, and the dungeon does not out-scale a competent
- * party until the low thirties.
- *
- * So the run starts in the band that discriminates, with the levels, purses and
- * gear a party that walked there would have — fitted to what `rule-based`
- * actually holds on arrival, over twenty seeds. Starting from floor one is two
- * numbers away (`startFloor: 1`, and roughly 150 rounds), and is the right
- * configuration for a run nobody has to wait for.
+ * The old benchmark teleported the party to floor 31 with levels, purses and
+ * equipment it had never chosen. That made the first state difficult, but not
+ * legible or owned: the agents had no plan, no shared history, and no reason to
+ * care about a fitted loadout. This version starts at the outfitter above floor
+ * one. Each character has an opening purse and an empty pack; the stock is
+ * seeded, shared and too broad to buy outright, so the first round is already a
+ * discussion about roles, risk and opportunity cost.
  *
  * ## What the ladder says before any model runs
  *
- *   greedy-dps      5,483   floor 34.7   all damage, no defence; wipes a third of the time
- *   random          4,535   floor 34.7   legal moves, chosen without a thought
- *   basic-tactics   5,698   floor 35.1   taunt, heal, swing; never opens a pack
- *   tactics-only    8,220   floor 35.5   plays the fight well, ignores the rest
- *   rule-based      9,317   floor 35.8   everything a competent player does
- *   oracle          9,877   floor 36.0   and knows every hidden mechanic already
+ *   random            872   floor 6.0   legal moves, chosen without a thought
+ *   basic-tactics     982   floor 6.0   taunt, heal, swing; never opens a pack
+ *   greedy-dps      1,184   floor 6.7   spends for damage and races forward
+ *   tactics-only    1,215   floor 6.7   plays the fight well, ignores the rest
+ *   rule-based      1,390   floor 7.8   prepares, equips, trades and shops
+ *   oracle          1,387   floor 7.8   knows hidden rules, once they appear
  *
- * Twenty-four seeds, forty rounds, experience *earned* rather than the
- * twenty-five thousand the party is handed for standing on floor 31. Swept at
- * this scenario's own start floor — `bench --sim-option startFloor=31` — which
- * is the only ladder that describes the game being played. The default sweep
- * starts on floor 1 and measures a different one.
- *
- * Floor 31 rather than 30 for one blunt reason: 30 is divisible by five, so the
- * party's opening fight was a boss — the hardest fight in the rotation arriving
- * before anybody has agreed on anything.
+ * Sixty seeds, forty rounds, from this scenario's surface preparation state.
+ * The competent policy's roughly 60% lead over random says preparation and
+ * between-fight choices already matter. Oracle and rule-based are intentionally
+ * still tied in this short opening band; moving recurring hidden mechanics into
+ * the observable horizon is part of the floor-map and pacing pass, rather than
+ * pretending a floor-31 teleport measures memory cleanly.
  *
  * Two things worth reading off the board. The jump from `basic-tactics` to
  * `tactics-only` is the largest on it, so the tactical layer is where most of
@@ -58,15 +49,10 @@
  * equipping, dividing a cache, reviving — which is the part a five-agent
  * organisation is uniquely placed to get right or wrong.
  *
- * Bosses are the clearest discriminator on the board and only became one when
- * the pacing was fixed: a forty-round run used to cover a single floor, so *no*
- * policy — the omniscient one included — ever reached a boss at all, and the
- * column read 0.0 all the way down. It now reads 1.0 for the competent rungs
- * and 0.0-0.4 for the rest.
- *
- * Over a full-length run the oracle's lead widens sharply, because perfect
- * recall compounds. At this budget it is +6%, so the memory measurement here is
- * the diagnostic rather than the score.
+ * Bosses appear once in this horizon for every policy. The next balance pass
+ * needs to widen both that outcome and the rule-based/oracle gap without making
+ * early floors lethal; the current ladder is a checked baseline, not a claim
+ * that the new progression is finished.
  *
  * ## What makes it hard for five agents rather than for one
  *
@@ -111,15 +97,17 @@ import { defineScenario } from "../src/define.js";
  */
 const ROUNDS = 40;
 
-/** Where the party is already standing when the run starts. See the note above. */
-const START_FLOOR = 31;
+/** The first floor below the surface outfitter. */
+const START_FLOOR = 1;
 
 const OBJECTIVE =
   "There is no way out and nothing to win. Go as deep as you can and take as much from it as you " +
   "can, for as long as the five of you are still standing.";
 
 const SHARED =
-  "You are one of five in a party descending an endless dungeon. Everything you do happens through " +
+  "You are one of five in a party about to descend an endless dungeon. You begin outside floor one " +
+  "at an outfitter with an opening purse, an empty pack, and a shared limited stock. Decide what the " +
+  "party needs, buy or pool gold, equip it, then call `enter_dungeon`. Everything you do happens through " +
   "your tools — nothing moves in this place unless somebody calls one. In a fight your action is " +
   "*readied*, not taken: the whole round resolves at once when it closes, so what the others do this " +
   "round matters as much as what you do. Talk to them with `room`. You can see your allies' " +
@@ -162,7 +150,7 @@ export default defineScenario({
       cleric: "cleric",
       ranger: "ranger",
     },
-    options: { startFloor: START_FLOOR },
+    options: { startFloor: START_FLOOR, preparation: true, startingGold: 180 },
   },
 
   agent: {
@@ -234,8 +222,8 @@ export default defineScenario({
         {
           speaker: "quinton",
           body:
-            "You have been down here a while and there is no way back up. Whatever you were sent for, " +
-            "it is further down. Keep each other alive and take everything you can carry.",
+            "The first stair is in front of you and the outfitter will not follow. Spend what you have, " +
+            "agree on a plan, then go as deep as you can. Keep each other alive and take everything you can carry.",
         },
       ],
     },
@@ -274,16 +262,11 @@ export default defineScenario({
     { id: "went-three-floors-down", points: 6, when: { sim_metric: { metric: "floorsCleared", at_least: 3 } } },
     { id: "went-six-floors-down", points: 8, when: { sim_metric: { metric: "floorsCleared", at_least: 6 } } },
     { id: "put-down-a-boss", points: 10, when: { sim_metric: { metric: "bossesDefeated", at_least: 1 } } },
-    // Both re-derived against the ladder swept at this scenario's own start
-    // floor, which is the only ladder that describes the game being played:
-    // random 4,534 · basic-tactics 5,675 · tactics-only 8,711 ·
-    // rule-based 9,483 · oracle 9,816, over twelve seeds at forty rounds.
-    //
-    // The previous numbers (2,500 and 6,000) were calibrated before the pacing
-    // fix and had drifted below the bottom of the ladder — a party that beat
-    // nothing collected the "beat a thoughtless party" points.
-    { id: "beat-a-thoughtless-party", points: 8, when: { sim_metric: { metric: "earnedXp", at_least: 4_500 } } },
-    { id: "played-like-a-competent-one", points: 10, when: { sim_metric: { metric: "earnedXp", at_least: 8_700 } } },
+    // Re-derived over sixty seeds from the surface-preparation configuration:
+    // random 872 · basic-tactics 982 · tactics-only 1,215 ·
+    // rule-based 1,390 · oracle 1,387, at forty rounds.
+    { id: "beat-a-thoughtless-party", points: 8, when: { sim_metric: { metric: "earnedXp", at_least: 1_000 } } },
+    { id: "played-like-a-competent-one", points: 10, when: { sim_metric: { metric: "earnedXp", at_least: 1_250 } } },
     // Kept everybody alive, and remembered what the dungeon taught them.
     { id: "nobody-was-left-behind", points: 8, when: { sim_metric: { metric: "permanentDeaths", at_most: 0 } } },
     { id: "did-not-fall-for-the-same-thing-twice", points: 7, when: { sim_metric: { metric: "memoryLapses", at_most: 0 } } },
