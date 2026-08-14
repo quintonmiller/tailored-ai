@@ -652,6 +652,9 @@ describe("run variation", () => {
       expect(map.routes.filter((route) => route.kind === "locked")).toHaveLength(1);
       expect(map.rooms.filter((room) => room.key)).toHaveLength(1);
       expect(map.keys).toBe(0);
+      const ordinaryRooms = map.rooms.filter((room) => room.kind !== "entrance" && room.kind !== "stairs");
+      expect(ordinaryRooms.every((room) => room.environment)).toBe(true);
+      expect(new Set(ordinaryRooms.map((room) => room.environment)).size).toBeGreaterThanOrEqual(3);
       const drop = map.routes.find((route) => route.kind === "one-way");
       expect(drop).toBeDefined();
       expect(map.rooms.find((room) => room.id === drop?.from)?.links).toContain(drop?.to);
@@ -753,6 +756,123 @@ describe("descent pressure", () => {
     sim.advance();
     expect(state.phase).toBe("combat");
     expect(state.enemies[0]).toMatchObject({ ref: enemy.ref, hp: enemy.maxHp });
+  });
+
+  it("makes flooded rooms amplify lightning and suppress fire, while high ground rewards ranged roles", () => {
+    const damageIn = (
+      environment: "flooded" | "narrow-bridge" | "high-ground",
+      actor: "mage" | "ranger",
+      ability: string,
+    ) => {
+      const sim = mazeFight();
+      const state = sim.view();
+      const room = state.map?.rooms.find((candidate) => candidate.id === state.map?.currentRoom);
+      const enemy = state.enemies[0];
+      if (!room || !enemy) throw new Error("terrain test needs a mapped fight");
+      room.environment = environment;
+      Object.assign(enemy, {
+        hp: 1000,
+        maxHp: 1000,
+        armor: 0,
+        power: 0,
+        resist: {},
+        statuses: [],
+        hidden: { kind: "none" },
+      });
+      state.enemies = [enemy];
+      if (room.encounter) room.encounter.enemies = state.enemies;
+      sim.useAbility(actor, ability, enemy.ref);
+      sim.advance();
+      return { damage: 1000 - enemy.hp, metrics: sim.metrics(), log: sim.announce() };
+    };
+
+    const dryFire = damageIn("narrow-bridge", "mage", "firebolt");
+    const wetFire = damageIn("flooded", "mage", "firebolt");
+    const dryLightning = damageIn("narrow-bridge", "mage", "lightning");
+    const wetLightning = damageIn("flooded", "mage", "lightning");
+    const levelShot = damageIn("narrow-bridge", "ranger", "shoot");
+    const highShot = damageIn("high-ground", "ranger", "shoot");
+
+    expect(wetFire.damage).toBeLessThan(dryFire.damage);
+    expect(wetFire.metrics.terrainHamperedHits).toBe(1);
+    expect(wetFire.log).toMatch(/smother the fire/i);
+    expect(wetLightning.damage).toBeGreaterThan(dryLightning.damage);
+    expect(wetLightning.metrics.terrainEmpoweredHits).toBe(1);
+    expect(highShot.damage).toBeGreaterThan(levelShot.damage);
+    expect(highShot.log).toMatch(/raised gallery/i);
+  });
+
+  it("applies a spore cloud to both sides every combat round", () => {
+    const sim = mazeFight();
+    const state = sim.view();
+    const room = state.map?.rooms.find((candidate) => candidate.id === state.map?.currentRoom);
+    const enemy = state.enemies[0];
+    if (!room || !enemy) throw new Error("spore test needs a mapped fight");
+    room.environment = "spore-cloud";
+    Object.assign(enemy, { hp: 1000, maxHp: 1000, power: 0, statuses: [], hidden: { kind: "none" } });
+    state.enemies = [enemy];
+    if (room.encounter) room.encounter.enemies = state.enemies;
+    const partyBefore = Object.values(state.party).reduce((sum, fighter) => sum + fighter.hp, 0);
+
+    sim.advance();
+
+    expect(Object.values(state.party).reduce((sum, fighter) => sum + fighter.hp, 0)).toBeLessThan(partyBefore);
+    expect(enemy.hp).toBeLessThan(1000);
+    expect(sim.metrics()).toMatchObject({ environmentRounds: 1, sporeDamageTaken: expect.any(Number) });
+    expect(sim.metrics().sporeDamageTaken).toBeGreaterThan(0);
+    expect(sim.announce()).toMatch(/spore haze sears every lung/i);
+    expect(sim.scene().floorMap?.rooms.find((candidate) => candidate.id === room.id)?.environment).toMatchObject({
+      kind: "spore-cloud",
+      name: "spore haze",
+      effect: expect.stringMatching(/every living combatant/i),
+    });
+  });
+
+  it("restores caster mana from an arcane well every combat round", () => {
+    const sim = mazeFight();
+    const state = sim.view();
+    const room = state.map?.rooms.find((candidate) => candidate.id === state.map?.currentRoom);
+    if (!room) throw new Error("arcane-well test needs a mapped fight");
+    room.environment = "arcane-well";
+    state.party.mage.mana = 0;
+    state.party.cleric.mana = 0;
+    for (const enemy of state.enemies) enemy.power = 0;
+
+    sim.advance();
+
+    expect(state.party.mage.mana).toBeGreaterThan(0);
+    expect(state.party.cleric.mana).toBeGreaterThan(0);
+    expect(sim.metrics().arcaneManaRestored).toBeGreaterThan(0);
+    expect(sim.announce()).toMatch(/arcane well restores mana/i);
+  });
+
+  it("lets a faster enemy catch the slowest party member retreating across a narrow bridge", async () => {
+    const sim = mazeFight();
+    const state = sim.view();
+    const room = state.map?.rooms.find((candidate) => candidate.id === state.map?.currentRoom);
+    const enemy = state.enemies[0];
+    if (!room || !enemy) throw new Error("bridge test needs a mapped fight");
+    room.environment = "narrow-bridge";
+    Object.assign(enemy, { speed: 99, power: 20, statuses: [], hidden: { kind: "none" } });
+    state.enemies = [enemy];
+    if (room.encounter) room.encounter.enemies = state.enemies;
+    const guardianBefore = state.party.guardian.hp;
+    const dreadBefore = state.dread;
+
+    expect(await call(sim, "rogue", "retreat")).toMatch(/fastest enemy/i);
+    sim.advance();
+
+    expect(state.phase).toBe("explore");
+    expect(state.dread).toBe(dreadBefore + 3);
+    expect(state.party.guardian.hp).toBeLessThan(guardianBefore);
+    expect(sim.metrics().hazardousRetreats).toBe(1);
+    expect(sim.metrics().retreatHazardDamage).toBeGreaterThan(0);
+    expect(sim.announce()).toMatch(/overtakes guardian on the narrow bridge/i);
+
+    sim.choosePath("guardian", "back");
+    sim.advance();
+    expect(room.environment).toBe("narrow-bridge");
+    expect(sim.describeFor("rogue")).toMatch(/narrow bridge/i);
   });
 
   it("keeps escaped enemies wounded if the party explores elsewhere and later returns", async () => {

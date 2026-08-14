@@ -43,6 +43,10 @@ The following work is complete on `feat/endless-descent-overhaul`:
   room rewards persist if the party takes another route and returns later.
 - Maze encounters vary enemy count, health, and damage by seed. Layouts, stock,
   drops, and routes are also seeded and reproducible.
+- Ordinary rooms have independently seeded persistent environments: floods,
+  spores, arcane wells, narrow bridges, and raised galleries. Their effects
+  alter combat, mana, elemental choices, or retreat risk and remain unchanged
+  on re-entry.
 - Every floor adds a one-way loop, a concealed shortcut, a locked optional
   loop, a recoverable floor key, and a concealed route trap without
   compromising the guaranteed traversable room tree. The party can spend the
@@ -61,8 +65,8 @@ The following work is complete on `feat/endless-descent-overhaul`:
 - The broadcast highlights the character who most recently spoke or acted and
   shows their full stats, equipment, pack, item affixes, talents, cooldowns,
   statuses, gold, skill points, and readied action.
-- The current 60-seed, 40-round baseline means are: random 109, basic tactics
-  210, tactics-only 570, greedy damage 566, rule-based 637, and oracle 667.
+- The current 60-seed, 40-round baseline means are: random 101, basic tactics
+  214, tactics-only 594, greedy damage 579, rule-based 643, and oracle 671.
 
 ## Prioritized improvements
 
@@ -253,9 +257,18 @@ Progress as of 2026-08-13:
   dread. Closed routes refuse movement explicitly and can never gate the
   stairs; opening method, key location/state, and five lock/key metrics cross
   narration, policy state, the scene contract, and the broadcast map.
-- Remaining: secret rooms beyond shortcuts, persistent environmental room
-  effects, additional destructible or class-specific routes, and retreat
-  consequences based on room geometry or enemy speed.
+- Complete: every ordinary room has one of five persistent, independently
+  seeded environments. Floods amplify lightning and suppress fire, spores
+  damage both sides each round, arcane wells restore caster mana, and raised
+  galleries empower mage and ranger attacks. Path hints, `look`, narration,
+  policies, seven metrics, the typed scene, map icons, tooltips, and the active
+  map palette all use the same authoritative room state.
+- Complete: retreating across a narrow bridge lets the fastest enemy catch the
+  slowest party member for another reduced attack when its speed is higher,
+  adding dread and explicit narration. The same geometry remains if the party
+  returns to the persistent encounter.
+- Remaining: secret rooms beyond shortcuts, additional destructible or
+  class-specific routes, and a broader environment/geometry catalogue.
 
 ### P1 — Comparable past-run context
 

@@ -114,6 +114,11 @@ export interface Scene {
       cleared: boolean;
       key: boolean;
       keyCollected: boolean;
+      environment: {
+        kind: "flooded" | "spore-cloud" | "arcane-well" | "narrow-bridge" | "high-ground";
+        name: string;
+        effect: string;
+      } | null;
       threat: { enemies: number; hp: number; maxHp: number; retreats: number } | null;
     }>;
     routes: Array<{

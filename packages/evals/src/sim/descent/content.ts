@@ -40,6 +40,7 @@ import type {
   ItemModifiers,
   ItemProvenance,
   ItemRarity,
+  RoomEnvironmentKind,
   RoomKind,
 } from "./model.js";
 
@@ -1211,6 +1212,33 @@ const ROOM_HINTS: Record<RoomKind, string> = {
   stairs: "air moving downward",
 };
 
+export const ROOM_ENVIRONMENTS = {
+  flooded: {
+    name: "flooded chamber",
+    hint: "standing water amplifies lightning by 25% and suppresses fire by 25%",
+  },
+  "spore-cloud": {
+    name: "spore haze",
+    hint: "the air damages every living combatant at the start of each round",
+  },
+  "arcane-well": {
+    name: "arcane well",
+    hint: "the mage and cleric recover extra mana at the start of each combat round",
+  },
+  "narrow-bridge": {
+    name: "narrow bridge",
+    hint: "a faster enemy can catch the slowest party member during retreat",
+  },
+  "high-ground": {
+    name: "raised gallery",
+    hint: "the mage and ranger deal 15% more damage from the high ground",
+  },
+} as const satisfies Record<RoomEnvironmentKind, { name: string; hint: string }>;
+
+export function roomEnvironment(kind: RoomEnvironmentKind) {
+  return ROOM_ENVIRONMENTS[kind];
+}
+
 export function roomHint(kind: RoomKind): string {
   return ROOM_HINTS[kind];
 }
@@ -1262,6 +1290,7 @@ export function scoutDungeonRoutes(map: DungeonFloorMap, roomId: string): Dungeo
 export function generateFloorMap(floor: number, rng: Rng): DungeonFloorMap {
   const zone = ZONES[Math.floor((floor - 1) / 3) % ZONES.length];
   const routeRng = rng.fork(`route-features-${floor}`);
+  const environmentRng = rng.fork(`room-environments-${floor}`);
   const count = rng.int(5, 7);
   const kinds: RoomKind[] = ["combat", "combat", "elite", "cache", "market", "shrine", "empty"];
   for (let i = kinds.length - 1; i > 0; i--) {
@@ -1342,6 +1371,20 @@ export function generateFloorMap(floor: number, rng: Rng): DungeonFloorMap {
   };
   rooms.push(stairs);
   connect(gate, stairs);
+
+  // Every ordinary room has stable geometry or atmosphere. Shuffle a complete
+  // set before assignment so even the smallest floor contains three distinct
+  // environments, rather than occasionally rolling the same effect everywhere.
+  const environments = Object.keys(ROOM_ENVIRONMENTS) as Array<keyof typeof ROOM_ENVIRONMENTS>;
+  for (let i = environments.length - 1; i > 0; i--) {
+    const j = environmentRng.int(0, i);
+    [environments[i], environments[j]] = [environments[j], environments[i]];
+  }
+  for (const [index, room] of rooms
+    .filter((candidate) => candidate.kind !== "entrance" && candidate.kind !== "stairs")
+    .entries()) {
+    room.environment = environments[index % environments.length];
+  }
 
   // One concealed shortcut starts at the entrance and skips at least one
   // ordinary edge. Rooms after the initial branch never grow directly from

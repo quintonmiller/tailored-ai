@@ -74,6 +74,7 @@ import {
   rollCache,
   rollLoot,
   rollStock,
+  roomEnvironment,
   roomHint,
   routeBetween,
   scoutDungeonRoutes,
@@ -117,6 +118,7 @@ import {
   livingEnemies,
   livingParty,
   type Phase,
+  type RoomEnvironmentKind,
   resolveTick,
   type Status,
   type TickResult,
@@ -309,12 +311,13 @@ const pathsFromMap = (map: DungeonFloorMap): DescentState["paths"] => {
     const destination =
       threat ??
       (room?.visited ? "already explored" : room?.revealed ? `mapped: ${room.kind}` : roomHint(room?.kind ?? "empty"));
+    const environmentHint = room?.environment ? roomEnvironment(room.environment).hint : undefined;
     return room
       ? [
           {
             id: room.id,
             label: room.label,
-            hint: [routeHint, destination].filter(Boolean).join("; "),
+            hint: [routeHint, destination, environmentHint].filter(Boolean).join("; "),
             kind: room.kind,
             ...(route ? { route: route.kind } : {}),
           },
@@ -426,6 +429,7 @@ export interface DescentScene {
       cleared: boolean;
       key: boolean;
       keyCollected: boolean;
+      environment: { kind: RoomEnvironmentKind; name: string; effect: string } | null;
       threat: { enemies: number; hp: number; maxHp: number; retreats: number } | null;
     }>;
     routes: Array<{
@@ -502,6 +506,13 @@ export class DescentSimulation implements Simulation {
   private locksPicked = 0;
   private doorsBreached = 0;
   private lockedRoutesTaken = 0;
+  private environmentRounds = 0;
+  private sporeDamageTaken = 0;
+  private arcaneManaRestored = 0;
+  private terrainEmpoweredHits = 0;
+  private terrainHamperedHits = 0;
+  private hazardousRetreats = 0;
+  private retreatHazardDamage = 0;
   private deaths = 0;
   private floorReached = 1;
   private readonly startFloor: number;
@@ -880,6 +891,10 @@ export class DescentSimulation implements Simulation {
           `${s.map.rooms.filter((candidate) => candidate.visited).length}/${s.map.rooms.length} rooms explored. ` +
           `Floor keys carried: ${s.map.keys}.`,
       );
+      if (room?.environment) {
+        const environment = roomEnvironment(room.environment);
+        out.push(`${environment.name}: ${environment.hint}.`);
+      }
       if (occupied.length > 0) {
         out.push(
           `${occupied.length} explored room${occupied.length === 1 ? " remains" : "s remain"} occupied: ${occupied
@@ -1027,8 +1042,31 @@ export class DescentSimulation implements Simulation {
     triggerItemEffects = false,
   ): number {
     const variance = this.state.map ? 0.9 + this.damageRng.next() * 0.2 : 1;
-    const dealt = hurtEnemy(target, raw * variance, element);
-    out.beats.push({ kind: "hit", from: from.id, to: target.ref, amount: dealt, element });
+    const environment = this.currentRoom()?.environment;
+    let terrain = 1;
+    let terrainLine: string | undefined;
+    if (environment === "flooded" && element === "lightning") {
+      terrain = 1.25;
+      terrainLine = "Standing water carries the lightning farther.";
+    } else if (environment === "flooded" && element === "fire") {
+      terrain = 0.75;
+      terrainLine = "Water and wet stone smother the fire.";
+    } else if (environment === "high-ground" && (from.id === "mage" || from.id === "ranger")) {
+      terrain = 1.15;
+      terrainLine = `${from.id} strikes from the raised gallery.`;
+    }
+    if (terrain > 1) this.terrainEmpoweredHits += 1;
+    if (terrain < 1) this.terrainHamperedHits += 1;
+    if (terrainLine && !out.lines.includes(terrainLine)) out.lines.push(terrainLine);
+    const dealt = hurtEnemy(target, raw * terrain * variance, element);
+    out.beats.push({
+      kind: "hit",
+      from: from.id,
+      to: target.ref,
+      amount: dealt,
+      element,
+      ...(environment && terrain !== 1 ? { note: `environment-${environment}` } : {}),
+    });
     from.threat += dealt * 0.6;
     const factor = target.resist[element] ?? 1;
     this.diag.recordAttack(
@@ -1659,6 +1697,91 @@ export class DescentSimulation implements Simulation {
     return line;
   }
 
+  /** Persistent room effects that fire before combatants act each round. */
+  private applyRoomEnvironment = (state: DescentState, out: TickResult): void => {
+    const room = this.currentRoom();
+    if (!room?.environment) return;
+    this.environmentRounds += 1;
+    if (room.environment === "spore-cloud") {
+      const raw = Math.min(6, 1 + Math.floor(state.floor / 3));
+      const wounds: string[] = [];
+      for (const fighter of livingParty(state)) {
+        const dealt = hurtFighter(fighter, raw, "shadow");
+        this.sporeDamageTaken += dealt;
+        wounds.push(`${fighter.id} ${dealt}`);
+        out.beats.push({
+          kind: "mechanic",
+          to: fighter.id,
+          amount: dealt,
+          element: "shadow",
+          note: "environment-spore-cloud",
+        });
+        if (fighter.dead) out.downed.push(fighter.id);
+      }
+      for (const enemy of livingEnemies(state)) {
+        const dealt = hurtEnemy(enemy, raw, "shadow");
+        wounds.push(`${enemy.name} ${dealt}`);
+        out.beats.push({
+          kind: "mechanic",
+          to: enemy.ref,
+          amount: dealt,
+          element: "shadow",
+          note: "environment-spore-cloud",
+        });
+      }
+      out.lines.push(`The spore haze sears every lung: ${wounds.join(", ")}.`);
+      return;
+    }
+    if (room.environment === "arcane-well") {
+      const restored: string[] = [];
+      for (const id of ["mage", "cleric"] as const) {
+        const fighter = state.party[id];
+        if (fighter.dead || fighter.maxMana <= 0) continue;
+        const amount = Math.min(Math.ceil(fighter.maxMana * 0.08), fighter.maxMana - fighter.mana);
+        if (amount <= 0) continue;
+        fighter.mana += amount;
+        this.arcaneManaRestored += amount;
+        restored.push(`${fighter.id} ${amount}`);
+        out.beats.push({ kind: "mechanic", to: fighter.id, amount, note: "environment-arcane-well" });
+      }
+      if (restored.length > 0) out.lines.push(`The arcane well restores mana: ${restored.join(", ")}.`);
+    }
+  };
+
+  /**
+   * A narrow bridge makes speed matter during escape. Every enemy already gets
+   * its normal unanswered turn; the fastest one catches the slowest party
+   * member for one additional, reduced strike if it can overtake them.
+   */
+  private applyRetreatEnvironment(out: TickResult, rng: Rng): void {
+    if (this.currentRoom()?.environment !== "narrow-bridge") return;
+    const hunter = [...livingEnemies(this.state)].sort(
+      (a, b) => b.speed - a.speed || b.power - a.power || a.ref.localeCompare(b.ref),
+    )[0];
+    const target = [...livingParty(this.state)].sort(
+      (a, b) => a.speed - b.speed || a.hp / a.maxHp - b.hp / b.maxHp || a.id.localeCompare(b.id),
+    )[0];
+    if (!hunter || !target) return;
+    if (hunter.speed <= target.speed) {
+      out.lines.push(`The party clears the narrow bridge before ${hunter.name} can catch them.`);
+      return;
+    }
+    const dealt = hurtFighter(target, hunter.power * (0.65 + rng.next() * 0.1), "physical");
+    this.hazardousRetreats += 1;
+    this.retreatHazardDamage += dealt;
+    this.state.dread += 1;
+    out.lines.push(`${hunter.name} overtakes ${target.id} on the narrow bridge for ${dealt}.`);
+    out.beats.push({
+      kind: "hit",
+      from: hunter.ref,
+      to: target.id,
+      amount: dealt,
+      element: "physical",
+      note: "environment-narrow-bridge",
+    });
+    if (target.dead) out.downed.push(target.id);
+  }
+
   private beginEncounter(elite: boolean, boss = !this.state.map && this.state.floor % 5 === 0): void {
     const s = this.state;
     const room = this.currentRoom();
@@ -1907,7 +2030,9 @@ export class DescentSimulation implements Simulation {
         // their turns, making escape a damage-and-dread trade rather than a
         // free undo button after seeing a bad encounter.
         if (fleeing) s.intents = [];
-        const result = resolveTick(s, this.rng.fork(`tick-${s.tick}`), this.performAbility, this.enemyAct);
+        const tickRng = this.rng.fork(`tick-${s.tick}`);
+        const result = resolveTick(s, tickRng, this.performAbility, this.enemyAct, this.applyRoomEnvironment);
+        if (fleeing) this.applyRetreatEnvironment(result, tickRng.fork("retreat-environment"));
         this.lastLog = result.lines;
         this.lastBeats = result.beats;
         this.lastBeatsTick = s.tick;
@@ -2429,8 +2554,11 @@ export class DescentSimulation implements Simulation {
 
     const revisiting = room.visited;
     const routeLine = this.crossRoute(route);
+    const environmentLine = room.environment
+      ? `${roomEnvironment(room.environment).name}: ${roomEnvironment(room.environment).hint}.`
+      : undefined;
     const finish = () => {
-      if (routeLine) this.lastLog.unshift(routeLine);
+      this.lastLog.unshift(...[routeLine, environmentLine].filter((line): line is string => line !== undefined));
     };
     if (s.wiped) {
       this.lastLog = routeLine ? [routeLine, "Nobody reaches the other side."] : ["Nobody reaches the other side."];
@@ -2558,6 +2686,11 @@ export class DescentSimulation implements Simulation {
     if (path.kind === "retreat") {
       if (this.currentRoom()?.encounter?.enemies.some(alive)) {
         this.beginEncounter(false);
+        const environment = this.currentRoom()?.environment;
+        if (environment) {
+          const detail = roomEnvironment(environment);
+          this.lastLog.unshift(`${detail.name}: ${detail.hint}.`);
+        }
         s.paths = [];
         return;
       }
@@ -2649,9 +2782,13 @@ export class DescentSimulation implements Simulation {
     this.who(agent);
     this.requirePhase("combat");
     this.retreatRequested = true;
+    const bridge =
+      this.currentRoom()?.environment === "narrow-bridge"
+        ? " On this narrow bridge, the fastest enemy may also catch the slowest party member for another strike."
+        : "";
     return (
       "The party will try to retreat when the round closes. Readied actions will be abandoned, " +
-      "and every standing enemy gets one opportunity to attack before the party escapes."
+      `and every standing enemy gets one opportunity to attack before the party escapes.${bridge}`
     );
   }
 
@@ -3221,6 +3358,13 @@ export class DescentSimulation implements Simulation {
       locksPicked: this.locksPicked,
       doorsBreached: this.doorsBreached,
       lockedRoutesTaken: this.lockedRoutesTaken,
+      environmentRounds: this.environmentRounds,
+      sporeDamageTaken: this.sporeDamageTaken,
+      arcaneManaRestored: this.arcaneManaRestored,
+      terrainEmpoweredHits: this.terrainEmpoweredHits,
+      terrainHamperedHits: this.terrainHamperedHits,
+      hazardousRetreats: this.hazardousRetreats,
+      retreatHazardDamage: this.retreatHazardDamage,
       goldEarned: this.goldEarned,
       goldSpent: this.goldSpent,
       goldRemaining: CLASSES.reduce((sum, id) => sum + s.party[id].gold, 0),
@@ -3403,6 +3547,13 @@ export class DescentSimulation implements Simulation {
                   cleared: room.cleared,
                   key: room.visited && room.key === true,
                   keyCollected: room.keyCollected === true,
+                  environment: room.environment
+                    ? {
+                        kind: room.environment,
+                        name: roomEnvironment(room.environment).name,
+                        effect: roomEnvironment(room.environment).hint,
+                      }
+                    : null,
                 })),
               routes: s.map.routes
                 .filter((route) => route.discovered && known.has(route.from) && known.has(route.to))

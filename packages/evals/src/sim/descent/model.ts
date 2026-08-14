@@ -232,6 +232,7 @@ export interface EncounterLog {
 }
 
 export type RoomKind = "entrance" | "empty" | "combat" | "elite" | "boss" | "market" | "cache" | "shrine" | "stairs";
+export type RoomEnvironmentKind = "flooded" | "spore-cloud" | "arcane-well" | "narrow-bridge" | "high-ground";
 
 /** Combat state belongs to a room, so leaving cannot reroll its occupants. */
 export interface RoomEncounter {
@@ -278,6 +279,8 @@ export interface DungeonRoom {
   /** A floor key is collected the first time this room is cleared. */
   key?: boolean;
   keyCollected?: boolean;
+  /** Persistent geometry or atmosphere; revisiting never rerolls it. */
+  environment?: RoomEnvironmentKind;
   /** Surviving enemies and partial progress left behind after a retreat. */
   encounter?: RoomEncounter;
 }
@@ -592,6 +595,7 @@ export function resolveTick(
   rng: Rng,
   performAbility: (state: DescentState, intent: Intent, out: TickResult) => void,
   enemyAct: (state: DescentState, enemy: Enemy, rng: Rng, out: TickResult) => void,
+  beforeActions?: (state: DescentState, out: TickResult) => void,
 ): TickResult {
   const standingAtStart = new Set(livingParty(state).map((f) => f.id));
   const windowsAtStart = new Set(
@@ -610,6 +614,7 @@ export function resolveTick(
   };
 
   out.conflicts = antiSynergies(state, state.intents);
+  beforeActions?.(state, out);
 
   // Start-of-tick damage over time, before anybody acts, so a burn can finish
   // something and the party sees why their target was already dead.

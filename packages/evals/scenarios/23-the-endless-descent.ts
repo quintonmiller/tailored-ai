@@ -28,12 +28,12 @@
  *
  * ## What the ladder says before any model runs
  *
- *   random            109   floor 1.6   legal moves, chosen without a thought
- *   basic-tactics     210   floor 3.0   taunt, heal, swing; never opens a pack
- *   tactics-only      570   floor 3.7   plays the fight well, ignores the rest
- *   greedy-dps        566   floor 3.8   spends every point for damage
- *   rule-based        637   floor 3.8   builds, equips, trades and scouts
- *   oracle            667   floor 3.9   knows hidden rules from the first room
+ *   random            101   floor 1.4   legal moves, chosen without a thought
+ *   basic-tactics     214   floor 3.0   taunt, heal, swing; never opens a pack
+ *   tactics-only      594   floor 3.7   plays the fight well, ignores the rest
+ *   greedy-dps        579   floor 3.8   spends every point for damage
+ *   rule-based        643   floor 3.8   builds, equips, trades and scouts
+ *   oracle            671   floor 3.9   knows hidden rules from the first room
  *
  * Sixty seeds, forty rounds, from this scenario's surface preparation state.
  * The maze, boss cadence and compressed content bands all belong to this
@@ -123,7 +123,10 @@ const SHARED =
   "features; after scouting, use `disarm_trap` if spending another point of dread is worth making a chosen crossing " +
   "safe. Clearing a room may recover a floor key. Anybody can spend one with `unlock_route`; without one, the rogue " +
   "can `pick_lock` for one dread or the guardian can `breach_route` for damage and two dread. Locked routes are " +
-  "optional shortcuts, never the only way to the stairs. " +
+  "optional shortcuts, never the only way to the stairs. Every ordinary room also has persistent terrain shown " +
+  "by `look`: floods strengthen lightning and weaken fire, spores hurt both sides each round, arcane wells restore " +
+  "caster mana, high ground helps the mage and ranger, and a fast enemy can catch a slow retreat across a narrow " +
+  "bridge. Leaving and returning never rerolls the room or its terrain. " +
   OBJECTIVE;
 
 const hand = (description: string, instructions: string) => ({
@@ -277,8 +280,8 @@ export default defineScenario({
     { id: "reached-the-boss-floor", points: 8, when: { sim_metric: { metric: "floorReached", at_least: 4 } } },
     { id: "put-down-a-boss", points: 10, when: { sim_metric: { metric: "bossesDefeated", at_least: 1 } } },
     // Re-derived over sixty seeds from the surface-preparation configuration:
-    // random 109 · basic-tactics 210 · tactics-only 570 ·
-    // rule-based 637 · oracle 667, at forty rounds. Greedy (566) remains
+    // random 101 · basic-tactics 214 · tactics-only 594 ·
+    // rule-based 643 · oracle 671, at forty rounds. Greedy (579) remains
     // outside the declared spine because it is a deliberately narrow strategy.
     { id: "beat-a-thoughtless-party", points: 8, when: { sim_metric: { metric: "earnedXp", at_least: 200 } } },
     { id: "played-like-a-competent-one", points: 10, when: { sim_metric: { metric: "earnedXp", at_least: 450 } } },

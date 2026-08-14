@@ -45,6 +45,7 @@ import {
   type Fighter,
   type ItemEffect,
   type ItemInstance,
+  type RoomEnvironmentKind,
 } from "./model.js";
 
 type Sim = DescentSimulation;
@@ -587,7 +588,7 @@ function tacticalPolicy(): Policy {
  */
 function ruleBasedPolicy(omniscient = false, navigateHazards = true): Policy {
   const scoutedByRun = new WeakMap<Sim, Set<number>>();
-  const bestElement = (e: Enemy): string => {
+  const bestElement = (e: Enemy, environment?: RoomEnvironmentKind): string => {
     if (!omniscient) return "lightning";
     // The oracle picks by resistance, and never hands a reflecting family the
     // element it reflects.
@@ -600,7 +601,9 @@ function ruleBasedPolicy(omniscient = false, navigateHazards = true): Policy {
       .filter(([, el]) => !(e.hidden.kind === "reflect" && e.hidden.element === el))
       .map(([name, el]) => ({
         name,
-        factor: e.resist[el] ?? 1,
+        factor:
+          (e.resist[el] ?? 1) *
+          (environment === "flooded" ? (el === "lightning" ? 1.25 : el === "fire" ? 0.75 : 1) : 1),
         weight: name === "lightning" ? 1.9 : name === "firebolt" ? 1.6 : 1.2,
       }))
       .sort((a, b) => b.factor * b.weight - a.factor * a.weight);
@@ -677,6 +680,12 @@ function ruleBasedPolicy(omniscient = false, navigateHazards = true): Policy {
       const elite = paths.find((p) => p.kind === "elite");
       const shrine = paths.find((p) => p.kind === "shrine");
       const shortcut = paths.find((p) => p.route === "secret");
+      const roomFor = (path: DescentState["paths"][number]) =>
+        s.map?.rooms.find((candidate) => candidate.id === path.id);
+      const leadsToFight = (path: DescentState["paths"][number]) =>
+        path.kind === "combat" || path.kind === "elite" || path.kind === "boss";
+      const arcaneWell = paths.find((path) => roomFor(path)?.environment === "arcane-well" && leadsToFight(path));
+      const highGround = paths.find((path) => roomFor(path)?.environment === "high-ground" && leadsToFight(path));
       const room = CLASSES.some((c) => !s.party[c].dead && s.party[c].inventory.length < 6);
       const thin =
         CLASSES.flatMap((c) => s.party[c].inventory).filter((item) => item.baseId === "healing_potion").length < 2;
@@ -704,6 +713,12 @@ function ruleBasedPolicy(omniscient = false, navigateHazards = true): Policy {
       // code and why the first cache build produced a byte-identical ladder.
       // Ordering by *party state* instead gives every path a real turn.
       const health = healthFraction(s);
+      const casters = [s.party.mage, s.party.cleric].filter((fighter) => !fighter.dead && fighter.maxMana > 0);
+      const mana =
+        casters.length > 0
+          ? casters.reduce((sum, fighter) => sum + fighter.mana / fighter.maxMana, 0) / casters.length
+          : 1;
+      if (mana < 0.45 && arcaneWell) return take(arcaneWell);
       if (health < 0.5 && shrine) return take(shrine);
       if (health > 0.65 && wounded) return take(wounded);
       if (
@@ -717,11 +732,20 @@ function ruleBasedPolicy(omniscient = false, navigateHazards = true): Policy {
       }
       // Strong enough to want the harder room, which pays the most experience.
       if (health > 0.8 && elite) return take(elite);
+      if (health > 0.68 && highGround) return take(highGround);
       // Middling: take the ordinary room that also has somebody's packs in it.
       if (cache && room) return take(cache);
       if (market && thin) return take(market);
       if (shrine) return take(shrine);
-      return take(paths.find((p) => p.kind === "unknown") ?? paths[0]);
+      const safer = paths.filter((path) => {
+        const room = roomFor(path);
+        return (
+          health >= 0.7 ||
+          room?.environment !== "spore-cloud" ||
+          (path.kind !== "combat" && path.kind !== "elite" && path.kind !== "boss")
+        );
+      });
+      return take(safer.find((p) => p.kind === "unknown") ?? safer[0] ?? paths[0]);
     },
 
     fight: (sim, s) => {
@@ -770,7 +794,8 @@ function ruleBasedPolicy(omniscient = false, navigateHazards = true): Policy {
               enemies.filter((e) => e.hidden.kind === "deathburst").length >= 2;
             if (!chainRisk && enemies.length >= 3 && f.mana >= 20 && attempt(() => sim.useAbility("mage", "fireball")))
               continue;
-            const spell = bestElement(target);
+            const environment = s.map?.rooms.find((room) => room.id === s.map?.currentRoom)?.environment;
+            const spell = bestElement(target, environment);
             if (attempt(() => sim.useAbility("mage", spell, target.ref))) continue;
             if (attempt(() => sim.useAbility("mage", "firebolt", target.ref))) continue;
             attempt(() => sim.useBasic("mage", target.ref));

@@ -512,6 +512,11 @@ const STYLES = `
   text-transform: uppercase; color: var(--flame);
 }
 .hud-graphcanvas { position: relative; height: 132px; border-radius: 6px; background: rgba(8, 12, 18, .52); }
+.hud-graphcanvas[data-environment="flooded"] { background: radial-gradient(circle at 50% 100%, rgba(55, 128, 170, .24), transparent 66%), rgba(8, 12, 18, .62); }
+.hud-graphcanvas[data-environment="spore-cloud"] { background: radial-gradient(circle at 20% 30%, rgba(104, 145, 73, .2), transparent 52%), rgba(8, 12, 18, .62); }
+.hud-graphcanvas[data-environment="arcane-well"] { background: radial-gradient(circle at 50% 50%, rgba(128, 84, 190, .22), transparent 58%), rgba(8, 12, 18, .62); }
+.hud-graphcanvas[data-environment="narrow-bridge"] { background: linear-gradient(90deg, rgba(8, 12, 18, .7) 34%, rgba(172, 127, 68, .13) 50%, rgba(8, 12, 18, .7) 66%); }
+.hud-graphcanvas[data-environment="high-ground"] { background: linear-gradient(180deg, rgba(190, 203, 216, .13), transparent 55%), rgba(8, 12, 18, .62); }
 .hud-graphedges { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
 .hud-graphedges line { stroke: var(--line); stroke-width: 1.5; }
 .hud-graphedges line[data-kind="one-way"] { stroke: var(--flame); stroke-dasharray: 4 3; marker-end: url(#hud-route-arrow); }
@@ -542,6 +547,16 @@ const STYLES = `
 .hud-roomnode[data-kind="shrine"] { color: var(--arcane); }
 .hud-roomnode.key { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(221, 182, 88, .1); }
 .hud-roomnode[data-kind="stairs"] { color: var(--good); }
+.hud-roomnode[data-environment]::after {
+  position: absolute; right: -6px; top: -6px; min-width: 11px; height: 11px;
+  display: grid; place-items: center; border-radius: 50%; background: var(--panel-2);
+  font: 800 8px/1 var(--mono); color: var(--ink); border: 1px solid var(--line);
+}
+.hud-roomnode[data-environment="flooded"]::after { content: "≈"; color: #69b8e5; }
+.hud-roomnode[data-environment="spore-cloud"]::after { content: "✺"; color: #91bc6c; }
+.hud-roomnode[data-environment="arcane-well"]::after { content: "✧"; color: var(--arcane); }
+.hud-roomnode[data-environment="narrow-bridge"]::after { content: "‖"; color: var(--gold); }
+.hud-roomnode[data-environment="high-ground"]::after { content: "▲"; color: #c3d0dd; }
 
 /* Where inside the floor they are. Four stops, because a floor is always
    junction → room → spoils → market and a phase name alone does not say
@@ -1227,7 +1242,13 @@ function buildMap(host: HTMLElement): (scene: Scene | null) => void {
     if (key === lastGraph) return;
     lastGraph = key;
     graphCanvas.textContent = "";
-    text(graphZone, `${map.zone} · ${map.keys} floor key${map.keys === 1 ? "" : "s"}`);
+    const current = map.rooms.find((room) => room.id === map.currentRoom);
+    const environment = current?.environment;
+    text(
+      graphZone,
+      `${map.zone} · ${map.keys} floor key${map.keys === 1 ? "" : "s"}${environment ? ` · ${environment.name}` : ""}`,
+    );
+    graphCanvas.dataset.environment = environment?.kind ?? "";
 
     const xs = map.rooms.map((room) => room.x);
     const ys = map.rooms.map((room) => room.y);
@@ -1298,6 +1319,7 @@ function buildMap(host: HTMLElement): (scene: Scene | null) => void {
       const at = point(room);
       const node = el("div", "hud-roomnode");
       node.dataset.kind = room.kind;
+      if (room.environment) node.dataset.environment = room.environment.kind;
       node.style.left = `${at.x}%`;
       node.style.top = `${at.y}%`;
       flag(node, "current", room.id === map.currentRoom);
@@ -1314,7 +1336,7 @@ function buildMap(host: HTMLElement): (scene: Scene | null) => void {
         ),
         el("em", null, room.label),
       );
-      node.title = `${room.label} · ${room.kind}${room.revealed && !room.visited ? " · revealed by equipment" : ""}${room.cleared ? " · cleared" : ""}${room.key ? room.keyCollected ? " · floor key recovered here" : " · floor key waiting here" : ""}${room.threat ? ` · ${room.threat.enemies} enemies remain at ${room.threat.hp}/${room.threat.maxHp} hp after ${room.threat.retreats} retreat${room.threat.retreats === 1 ? "" : "s"}` : ""}`;
+      node.title = `${room.label} · ${room.kind}${room.environment ? ` · ${room.environment.name}: ${room.environment.effect}` : ""}${room.revealed && !room.visited ? " · revealed by equipment" : ""}${room.cleared ? " · cleared" : ""}${room.key ? room.keyCollected ? " · floor key recovered here" : " · floor key waiting here" : ""}${room.threat ? ` · ${room.threat.enemies} enemies remain at ${room.threat.hp}/${room.threat.maxHp} hp after ${room.threat.retreats} retreat${room.threat.retreats === 1 ? "" : "s"}` : ""}`;
       graphCanvas.appendChild(node);
     }
   }
