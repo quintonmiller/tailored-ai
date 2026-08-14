@@ -170,6 +170,25 @@ function shop(sim: Sim, s: DescentState): void {
   }
 }
 
+/** Spend visible skill points through the same API an agent uses. */
+function spendTalents(sim: Sim, s: DescentState, damageOnly = false): void {
+  const balanced: Record<ClassId, string[]> = {
+    guardian: damageOnly ? ["warcraft"] : ["bastion", "iron_constitution", "warcraft"],
+    mage: damageOnly ? ["arcane_power"] : ["deep_reserve", "arcane_power", "quick_cast"],
+    rogue: damageOnly ? ["precision"] : ["precision", "agility", "hard_to_kill"],
+    cleric: damageOnly ? ["zeal"] : ["grace", "warded_faith", "zeal"],
+    ranger: damageOnly ? ["deadeye"] : ["deadeye", "survivalist", "trailcraft"],
+  };
+  for (const id of CLASSES) {
+    let guard = 0;
+    while (s.party[id].talentPoints > 0 && guard++ < 12) {
+      const choices = balanced[id];
+      const pick = choices.find((skill) => (s.party[id].talents[skill] ?? 0) < 3);
+      if (!pick || !attempt(() => sim.investTalent(id, pick))) break;
+    }
+  }
+}
+
 /**
  * Take the best couple of things out of a dead expedition's packs.
  *
@@ -314,7 +333,10 @@ const allyOrEnemy = (ability: string, s: DescentState, enemy: Enemy): string =>
 /** Everything attacks, nothing heals. Fast, and it dies around floor eight. */
 function greedyPolicy(): Policy {
   return drive("greedy-dps", {
-    prepare: (sim, s) => shop(sim, s),
+    prepare: (sim, s) => {
+      spendTalents(sim, s, true);
+      shop(sim, s);
+    },
     // Greedy about damage, not suicidal about routing. Taking every elite meant
     // it never saw floor six, which made it look like a worse policy than
     // random when what it actually is is a policy with no healer.
@@ -339,6 +361,7 @@ function greedyPolicy(): Policy {
       }
     },
     between: (sim, s) => {
+      spendTalents(sim, s, true);
       tidyPacks(sim, s);
       if (s.phase === "market") shop(sim, s);
       if (s.phase === "cache") loot(sim, s);
@@ -468,6 +491,7 @@ function ruleBasedPolicy(omniscient = false): Policy {
 
   return drive(omniscient ? "oracle" : "rule-based", {
     prepare: (sim, s) => {
+      spendTalents(sim, s);
       shop(sim, s);
       tidyPacks(sim, s);
     },
@@ -571,6 +595,7 @@ function ruleBasedPolicy(omniscient = false): Policy {
     },
 
     between: (sim, s) => {
+      spendTalents(sim, s);
       tidyPacks(sim, s);
       reviveIfPossible(sim, s);
       if (s.phase === "market") shop(sim, s);

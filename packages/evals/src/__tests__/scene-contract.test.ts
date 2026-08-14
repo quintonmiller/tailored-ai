@@ -75,6 +75,8 @@ describe("the scene the page is handed", () => {
       expect(typeof member.maxHp).toBe("number");
       expect(Array.isArray(member.statuses)).toBe(true);
       expect(Array.isArray(member.pack)).toBe(true);
+      expect(typeof member.talentPoints).toBe("number");
+      expect(Array.isArray(member.talents)).toBe(true);
     }
   });
 

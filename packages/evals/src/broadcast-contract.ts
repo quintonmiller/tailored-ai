@@ -47,6 +47,8 @@ export interface ScenePartyMember {
   speed: number;
   gold: number;
   dead: boolean;
+  talentPoints: number;
+  talents: Array<{ id: string; name: string; rank: number }>;
   statuses: SceneStatus[];
   pack: Array<{ id: string; name: string }>;
   worn: Array<{ slot: string; id: string; name: string }>;

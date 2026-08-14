@@ -120,6 +120,57 @@ interface AbilityDef {
   description: string;
 }
 
+interface TalentDef {
+  owner: ClassId;
+  name: string;
+  description: string;
+  hp?: number;
+  mana?: number;
+  armor?: number;
+  power?: number;
+  speed?: number;
+}
+
+/**
+ * Small, legible class trees rather than automatic stat inflation alone.
+ *
+ * Every rank is useful and each class chooses between survival, output and
+ * tempo/resource capacity. Ranks stack to three; ids are stable because agents
+ * pass them to `invest_skill` and the broadcast uses the same ids.
+ */
+export const TALENTS: Record<string, TalentDef> = {
+  iron_constitution: {
+    owner: "guardian",
+    name: "Iron Constitution",
+    description: "+15 maximum health per rank.",
+    hp: 15,
+  },
+  bastion: { owner: "guardian", name: "Bastion", description: "+2 armour per rank.", armor: 2 },
+  warcraft: { owner: "guardian", name: "Warcraft", description: "+2 power per rank.", power: 2 },
+
+  arcane_power: { owner: "mage", name: "Arcane Power", description: "+2 power per rank.", power: 2 },
+  deep_reserve: { owner: "mage", name: "Deep Reserve", description: "+12 maximum mana per rank.", mana: 12 },
+  quick_cast: { owner: "mage", name: "Quick Cast", description: "+1 speed per rank.", speed: 1 },
+
+  precision: { owner: "rogue", name: "Precision", description: "+2 power per rank.", power: 2 },
+  agility: { owner: "rogue", name: "Agility", description: "+2 speed per rank.", speed: 2 },
+  hard_to_kill: { owner: "rogue", name: "Hard to Kill", description: "+12 maximum health per rank.", hp: 12 },
+
+  grace: { owner: "cleric", name: "Grace", description: "+12 maximum mana per rank.", mana: 12 },
+  warded_faith: {
+    owner: "cleric",
+    name: "Warded Faith",
+    description: "+10 maximum health and +1 armour per rank.",
+    hp: 10,
+    armor: 1,
+  },
+  zeal: { owner: "cleric", name: "Zeal", description: "+2 power per rank.", power: 2 },
+
+  deadeye: { owner: "ranger", name: "Deadeye", description: "+2 power per rank.", power: 2 },
+  trailcraft: { owner: "ranger", name: "Trailcraft", description: "+1 speed per rank.", speed: 1 },
+  survivalist: { owner: "ranger", name: "Survivalist", description: "+12 maximum health per rank.", hp: 12 },
+};
+
 /**
  * One table, used for three things: declaring the tools, validating a call, and
  * letting a baseline policy pick a legal action without duplicating the rules.
@@ -202,7 +253,10 @@ export const CACHE_TAKES = 2;
 
 const BASE_STATS: Record<
   ClassId,
-  Omit<Fighter, "id" | "statuses" | "inventory" | "equipped" | "dead" | "cooldowns" | "bonusHp">
+  Omit<
+    Fighter,
+    "id" | "statuses" | "inventory" | "equipped" | "dead" | "cooldowns" | "talentPoints" | "talents" | "bonusHp"
+  >
 > = {
   guardian: { hp: 130, maxHp: 130, mana: 0, maxMana: 0, armor: 8, power: 10, speed: 8, gold: 60, threat: 0, xp: 0 },
   mage: { hp: 68, maxHp: 68, mana: 60, maxMana: 60, armor: 1, power: 14, speed: 10, gold: 60, threat: 0, xp: 0 },
@@ -259,6 +313,8 @@ export interface DescentScene {
     speed: number;
     gold: number;
     dead: boolean;
+    talentPoints: number;
+    talents: Array<{ id: string; name: string; rank: number }>;
     statuses: Array<{ kind: string; ticks: number; amount: number }>;
     pack: Array<{ id: string; name: string }>;
     worn: Array<{ slot: string; id: string; name: string }>;
@@ -350,6 +406,13 @@ export class DescentSimulation implements Simulation {
     this.pathRng = this.rng.fork("path");
     this.stockRng = this.rng.fork("stock");
 
+    const startFloor = Math.max(1, Math.floor(Number(options.startFloor ?? 1)));
+    // The CLI's generic `--sim-option` parser cannot know a simulation's
+    // schema, so booleans arrive as strings there and as booleans from a
+    // scenario definition.
+    const preparation = (options.preparation === true || options.preparation === "true") && startFloor === 1;
+    const startingSkillPoints = preparation ? Math.max(0, Math.floor(Number(options.startingSkillPoints ?? 2))) : 0;
+
     const party = {} as Record<ClassId, Fighter>;
     for (const id of CLASSES) {
       party[id] = {
@@ -360,14 +423,11 @@ export class DescentSimulation implements Simulation {
         equipped: {},
         dead: false,
         cooldowns: {},
+        talentPoints: startingSkillPoints,
+        talents: {},
         bonusHp: 0,
       };
     }
-    const startFloor = Math.max(1, Math.floor(Number(options.startFloor ?? 1)));
-    // The CLI's generic `--sim-option` parser cannot know a simulation's
-    // schema, so booleans arrive as strings there and as booleans from a
-    // scenario definition.
-    const preparation = (options.preparation === true || options.preparation === "true") && startFloor === 1;
     if (preparation) {
       // The opening budget replaces a free, predetermined kit. The party has
       // enough to make several good choices, not enough to buy every role its
@@ -546,10 +606,14 @@ export class DescentSimulation implements Simulation {
     // than by the decision, which is exactly the kind of noise that makes a
     // tool-correctness diagnostic worthless.
     const pack = f.inventory.map((i) => `${i} (${itemName(i)})`);
+    const talents = Object.entries(f.talents)
+      .filter(([, rank]) => rank > 0)
+      .map(([id, rank]) => `${id} ${rank}`);
     return [
       `  ${f.id}: ${f.hp}/${f.maxHp} hp${mana}${status}`,
       `  armour ${f.armor}, power ${f.power}, speed ${f.speed}`,
       `  purse ${f.gold} gold`,
+      `  skill points ${f.talentPoints}; talents: ${talents.join(", ") || "(none)"}`,
       `  pack: ${pack.length > 0 ? pack.join(", ") : "(empty)"}`,
       `  worn: ${
         Object.entries(f.equipped)
@@ -594,6 +658,13 @@ export class DescentSimulation implements Simulation {
     if (me) {
       out.push("", "You:");
       out.push(this.sheet(me, true));
+      if (me.talentPoints > 0) {
+        out.push("", "Skills you can invest in (`invest_skill`):");
+        for (const [id, talent] of Object.entries(TALENTS)) {
+          if (talent.owner !== me.id) continue;
+          out.push(`  ${id} — ${talent.name}, rank ${me.talents[id] ?? 0}/3. ${talent.description}`);
+        }
+      }
     }
     out.push("", "The others (you can see their condition and what they are wearing, not their packs or purses):");
     for (const id of CLASSES) {
@@ -1179,6 +1250,15 @@ export class DescentSimulation implements Simulation {
       power += def.power ?? 0;
       speed += def.speed ?? 0;
     }
+    for (const [id, rank] of Object.entries(f.talents)) {
+      const talent = TALENTS[id];
+      if (!talent || talent.owner !== f.id || rank <= 0) continue;
+      maxHp += (talent.hp ?? 0) * rank;
+      maxMana += (talent.mana ?? 0) * rank;
+      armor += (talent.armor ?? 0) * rank;
+      power += (talent.power ?? 0) * rank;
+      speed += (talent.speed ?? 0) * rank;
+    }
     f.maxHp = maxHp + f.bonusHp;
     f.maxMana = maxMana;
     f.armor = armor;
@@ -1390,10 +1470,19 @@ export class DescentSimulation implements Simulation {
 
         const levelled = levelFor(this.totalXp);
         if (levelled > this.level) {
+          const gained = levelled - this.level;
           this.level = levelled;
-          for (const id of CLASSES) this.effective(s.party[id]);
-          this.note("level", `The party reaches level ${this.level}.`);
-          this.lastLog.push(`The party reaches level ${this.level}.`);
+          for (const id of CLASSES) {
+            s.party[id].talentPoints += gained;
+            this.effective(s.party[id]);
+          }
+          this.note(
+            "level",
+            `The party reaches level ${this.level}; everyone earns ${gained} skill point${gained === 1 ? "" : "s"}.`,
+          );
+          this.lastLog.push(
+            `The party reaches level ${this.level}; everyone earns ${gained} skill point${gained === 1 ? "" : "s"}.`,
+          );
         }
 
         if (livingParty(s).length === 0) {
@@ -1906,6 +1995,32 @@ export class DescentSimulation implements Simulation {
     );
   }
 
+  investTalent(agent: string | undefined, talentId: string): string {
+    const me = this.who(agent);
+    this.requirePhase("camp", "explore", "spoils", "market", "cache");
+    const talent = TALENTS[talentId];
+    if (!talent) throw new Error(`no skill called "${talentId}".`);
+    if (talent.owner !== me.id) throw new Error(`${talentId} belongs to the ${talent.owner}, not the ${me.id}.`);
+    if (me.talentPoints <= 0) throw new Error("you have no unspent skill points.");
+    const rank = me.talents[talentId] ?? 0;
+    if (rank >= 3) throw new Error(`${talent.name} is already at its maximum rank.`);
+
+    const hpBefore = me.maxHp;
+    const manaBefore = me.maxMana;
+    me.talents[talentId] = rank + 1;
+    me.talentPoints -= 1;
+    this.effective(me);
+    // A health or mana choice should not make a fully-rested character look
+    // injured or drained the instant it is selected.
+    me.hp = Math.min(me.maxHp, me.hp + Math.max(0, me.maxHp - hpBefore));
+    me.mana = Math.min(me.maxMana, me.mana + Math.max(0, me.maxMana - manaBefore));
+    this.note("talent", `${me.id} invests in ${talent.name} (${rank + 1}/3).`);
+    return (
+      `You raise ${talent.name} to rank ${rank + 1}/3. ${talent.description} ` +
+      `${me.talentPoints} skill point${me.talentPoints === 1 ? "" : "s"} remain.`
+    );
+  }
+
   reviveAlly(agent: string | undefined, allyRaw: string): string {
     const me = this.who(agent);
     this.requirePhase("spoils", "market", "cache", "explore");
@@ -2085,6 +2200,13 @@ export class DescentSimulation implements Simulation {
         "Try to escape the current fight. Readied actions are abandoned and enemies get one opportunity attack.",
         {},
         (_a, agent) => this.requestRetreat(agent),
+      ),
+
+      T(
+        "invest_skill",
+        "Spend one of your skill points on a class talent. Each talent has three ranks; use `look` to see your choices.",
+        { skill: "A skill id shown by `look`, such as bastion or arcane_power." },
+        (args, agent) => this.investTalent(agent, String(args.skill ?? "")),
       ),
 
       T(
@@ -2355,6 +2477,10 @@ export class DescentSimulation implements Simulation {
           speed: f.speed,
           gold: f.gold,
           dead: f.dead,
+          talentPoints: f.talentPoints,
+          talents: Object.entries(f.talents)
+            .filter(([, rank]) => rank > 0)
+            .map(([talentId, rank]) => ({ id: talentId, name: TALENTS[talentId]?.name ?? talentId, rank })),
           statuses: statuses(f),
           pack: f.inventory.map((i) => ({ id: i, name: itemName(i) })),
           worn: Object.entries(f.equipped)

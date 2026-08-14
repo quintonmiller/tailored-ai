@@ -30,13 +30,13 @@
  *
  *   random            872   floor 6.0   legal moves, chosen without a thought
  *   basic-tactics     982   floor 6.0   taunt, heal, swing; never opens a pack
- *   greedy-dps      1,184   floor 6.7   spends for damage and races forward
+ *   greedy-dps      1,365   floor 7.9   spends every point for damage and races forward
  *   tactics-only    1,215   floor 6.7   plays the fight well, ignores the rest
- *   rule-based      1,390   floor 7.8   prepares, equips, trades and shops
- *   oracle          1,387   floor 7.8   knows hidden rules, once they appear
+ *   rule-based      1,485   floor 8.2   builds, equips, trades and shops
+ *   oracle          1,482   floor 8.1   knows hidden rules, once they appear
  *
  * Sixty seeds, forty rounds, from this scenario's surface preparation state.
- * The competent policy's roughly 60% lead over random says preparation and
+ * The competent policy's roughly 70% lead over random says preparation and
  * between-fight choices already matter. Oracle and rule-based are intentionally
  * still tied in this short opening band; moving recurring hidden mechanics into
  * the observable horizon is part of the floor-map and pacing pass, rather than
@@ -106,8 +106,9 @@ const OBJECTIVE =
 
 const SHARED =
   "You are one of five in a party about to descend an endless dungeon. You begin outside floor one " +
-  "at an outfitter with an opening purse, an empty pack, and a shared limited stock. Decide what the " +
-  "party needs, buy or pool gold, equip it, then call `enter_dungeon`. Everything you do happens through " +
+  "at an outfitter with an opening purse, an empty pack, two skill points, and a shared limited stock. " +
+  "Use `look` to see your class skills, decide what the party needs, invest, buy or pool gold, equip it, " +
+  "then call `enter_dungeon`. You earn another skill point whenever the party levels. Everything happens through " +
   "your tools — nothing moves in this place unless somebody calls one. In a fight your action is " +
   "*readied*, not taken: the whole round resolves at once when it closes, so what the others do this " +
   "round matters as much as what you do. Talk to them with `room`. You can see your allies' " +
@@ -150,7 +151,7 @@ export default defineScenario({
       cleric: "cleric",
       ranger: "ranger",
     },
-    options: { startFloor: START_FLOOR, preparation: true, startingGold: 180 },
+    options: { startFloor: START_FLOOR, preparation: true, startingGold: 180, startingSkillPoints: 2 },
   },
 
   agent: {
@@ -264,9 +265,9 @@ export default defineScenario({
     { id: "put-down-a-boss", points: 10, when: { sim_metric: { metric: "bossesDefeated", at_least: 1 } } },
     // Re-derived over sixty seeds from the surface-preparation configuration:
     // random 872 · basic-tactics 982 · tactics-only 1,215 ·
-    // rule-based 1,390 · oracle 1,387, at forty rounds.
+    // rule-based 1,485 · oracle 1,482, at forty rounds.
     { id: "beat-a-thoughtless-party", points: 8, when: { sim_metric: { metric: "earnedXp", at_least: 1_000 } } },
-    { id: "played-like-a-competent-one", points: 10, when: { sim_metric: { metric: "earnedXp", at_least: 1_250 } } },
+    { id: "played-like-a-competent-one", points: 10, when: { sim_metric: { metric: "earnedXp", at_least: 1_400 } } },
     // Kept everybody alive, and remembered what the dungeon taught them.
     { id: "nobody-was-left-behind", points: 8, when: { sim_metric: { metric: "permanentDeaths", at_most: 0 } } },
     { id: "did-not-fall-for-the-same-thing-twice", points: 7, when: { sim_metric: { metric: "memoryLapses", at_most: 0 } } },

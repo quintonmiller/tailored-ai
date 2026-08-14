@@ -124,6 +124,10 @@ export interface Fighter {
   xp: number;
   /** Rounds remaining before a martial ability can be used again. */
   cooldowns: Record<string, number>;
+  /** Unspent choices earned at the surface and whenever the party levels. */
+  talentPoints: number;
+  /** Player-chosen talent ranks. Names are stable tool-facing ids. */
+  talents: Record<string, number>;
   /**
    * Health from elixirs, which is permanent and survives a recompute.
    *
@@ -450,7 +454,7 @@ export interface TickResult {
  * the instrument was designed first and the abilities were chosen to be capable
  * of producing these six readings.
  */
-export function antiSynergies(state: DescentState, intents: Intent[]): string[] {
+export function antiSynergies(_state: DescentState, intents: Intent[]): string[] {
   const found: string[] = [];
   const by = (kind: string) => intents.filter((i) => i.kind === kind);
 
@@ -479,7 +483,11 @@ export function resolveTick(
   enemyAct: (state: DescentState, enemy: Enemy, rng: Rng, out: TickResult) => void,
 ): TickResult {
   const standingAtStart = new Set(livingParty(state).map((f) => f.id));
-  const windowsAtStart = new Set(livingEnemies(state).filter((e) => e.windowOpen).map((e) => e.ref));
+  const windowsAtStart = new Set(
+    livingEnemies(state)
+      .filter((e) => e.windowOpen)
+      .map((e) => e.ref),
+  );
   const out: TickResult = {
     lines: [],
     beats: [],

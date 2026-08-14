@@ -1012,6 +1012,39 @@ describe("levelling", () => {
     expect(levelFor(40_000)).toBeGreaterThan(30);
     expect(levelFor(40_000)).toBeLessThan(60);
   });
+
+  it("lets each class spend opening skill points on its own build", async () => {
+    const sim = createSimulation("descent", {
+      seed: 4,
+      days: 40,
+      preparation: true,
+      startingSkillPoints: 2,
+    }) as DescentSimulation;
+    const guardian = sim.view().party.guardian;
+    const armor = guardian.armor;
+
+    expect(await call(sim, "guardian", "invest_skill", { skill: "bastion" })).toMatch(/rank 1\/3/i);
+    expect(guardian.armor).toBe(armor + 2);
+    expect(guardian.talentPoints).toBe(1);
+    expect(guardian.talents.bastion).toBe(1);
+    expect(await call(sim, "mage", "invest_skill", { skill: "bastion" })).toMatch(/belongs to the guardian/i);
+    expect(sim.scene().party.find((member) => member.id === "guardian")).toMatchObject({
+      talentPoints: 1,
+      talents: [{ id: "bastion", name: "Bastion", rank: 1 }],
+    });
+  });
+
+  it("awards every character a spendable point when the party levels", async () => {
+    const sim = fresh();
+    await intoCombat(sim);
+    const enemy = sim.view().enemies[0];
+    sim.view().enemies = [{ ...enemy, hp: 1, maxHp: 1, armor: 0, xp: 100, hidden: { kind: "none" } }];
+    await call(sim, "guardian", "attack", { target: enemy.ref });
+    sim.advance();
+
+    expect(sim.metrics().partyLevel).toBe(2);
+    expect(Object.values(sim.view().party).every((fighter) => fighter.talentPoints === 1)).toBe(true);
+  });
 });
 
 describe("a fighter's numbers", () => {

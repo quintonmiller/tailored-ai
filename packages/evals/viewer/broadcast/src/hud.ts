@@ -367,6 +367,11 @@ const STYLES = `
 .hud-chip.boon { background: rgba(95, 185, 138, .13); color: var(--good); border-color: rgba(95, 185, 138, .3); }
 .hud-chip b { font-weight: 700; opacity: .7; margin-left: 3px; }
 
+.hud-loadout {
+  min-height: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: 9px/1.3 var(--mono); color: var(--dim);
+}
+
 /* The readied band. Full-bleed at the foot of the card because it is the one
    thing on this strip a viewer can read a disaster off before it happens — the
    whole footer is tinted, so the card ends in the member's colour instead of
@@ -652,6 +657,7 @@ interface CardHandle {
   chips: HTMLElement;
   /** The chip nodes inside `chips`, held rather than re-queried — see `chips()`. */
   chipNodes: ChipHandle[];
+  loadout: HTMLElement;
   ready: HTMLElement;
   readyIcon: SVGSVGElement;
   verb: HTMLElement;
@@ -707,6 +713,7 @@ function buildParty(host: HTMLElement): SceneRenderer {
     mana.append(mpLine, mpBar);
 
     const chips = el("div", "hud-chips");
+    const loadout = el("div", "hud-loadout", "—");
 
     const ready = el("div", "hud-ready");
     const readyIcon = icon("strike");
@@ -716,7 +723,7 @@ function buildParty(host: HTMLElement): SceneRenderer {
     lines.append(verb, at);
     ready.append(readyIcon, lines);
 
-    root.append(head, hpLine, hpBar, mana, chips, ready);
+    root.append(head, hpLine, hpBar, mana, chips, loadout, ready);
     return {
       root,
       gold: goldNum,
@@ -728,6 +735,7 @@ function buildParty(host: HTMLElement): SceneRenderer {
       mpFill,
       chips,
       chipNodes: [],
+      loadout,
       ready,
       readyIcon,
       verb,
@@ -873,6 +881,12 @@ function buildParty(host: HTMLElement): SceneRenderer {
 
       text(refs.gold, commas(member.gold ?? 0));
       chips(refs, (member.statuses ?? []).filter((s) => (s?.ticks ?? 0) > 0).slice(0, 6));
+      const worn = (member.worn ?? []).map((item) => `${item.slot.slice(0, 1).toUpperCase()}:${item.name}`);
+      const talents = (member.talents ?? []).map((talent) => `${talent.name} ${talent.rank}`);
+      const points = (member.talentPoints ?? 0) > 0 ? `${member.talentPoints} SP` : "";
+      const loadout = [...worn, ...talents, points].filter(Boolean);
+      text(refs.loadout, loadout.join(" · ") || "no equipment or skills");
+      refs.loadout.title = loadout.join("\n") || "No equipment or invested skills";
       readied(refs, member, scene, names);
 
       // Flash on a drop. `before` is the previous *scene*, so this fires once
