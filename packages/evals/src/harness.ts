@@ -53,6 +53,7 @@ import YAML from "yaml";
 import { registerPinnedClock, timeConfigBlock } from "./clock.js";
 import { answerTool, Oracle } from "./oracle.js";
 import { createSimulation, type Simulation } from "./sim/index.js";
+import { looksRefused, type TraceSink } from "./trace.js";
 import type {
   RecordedCall,
   RecordedExecution,
@@ -123,13 +124,28 @@ export interface HarnessOptions {
   pinnedAt?: string | null;
   /** IANA zone the pinned clock reports. Ignored when `pinnedAt` is null. */
   timeZone?: string;
+  /**
+   * Where to send events as the run happens, when anybody is watching.
+   *
+   * The harness emits and does not write: it has no business knowing whether
+   * there is a viewer or where its output goes, which is the same argument that
+   * moved the clock's announcement out of here and into the simulation. The
+   * worker points this at a file; `eval watch` reads the file.
+   */
+  trace?: TraceSink;
 }
 
 const OWNER_ID = "owner-0000";
 const OWNER_LABEL = "quinton";
 
-/** Who says what day it is on a simulation run. Not an agent, and not scored. */
-const DAY_MARKER = "plant-clock";
+/**
+ * Who says what time it is on a simulation run. Not an agent, and not scored.
+ *
+ * Named for the job rather than for the first world that had one: `plant-clock`
+ * was a sensible speaker in a factory and a strange one in a canal lock, and
+ * the agents read this name.
+ */
+const DAY_MARKER = "clock";
 
 /**
  * Tools whose real `execute` is replaced.
@@ -233,6 +249,16 @@ function instrument(tool: Tool, recorder: Recorder, results: ToolResults, world?
       if (!stubbed) {
         const real = await tool.execute(args, context);
         record.result = describeResult(real);
+        recorder.trace?.({
+          kind: "call",
+          at: Date.now(),
+          turn: recorder.turn,
+          ...(context.agentName ? { agent: context.agentName } : {}),
+          tool: tool.name,
+          args,
+          result: record.result,
+          refused: looksRefused(record.result),
+        });
         return real;
       }
       // The world first, static stubs second. A scenario usually has a handful
@@ -243,6 +269,16 @@ function instrument(tool: Tool, recorder: Recorder, results: ToolResults, world?
       const moved = world?.resolve(tool.name, args, context.agentName, recorder.turn);
       const output = moved !== null && moved !== undefined ? moved : stubResult(tool.name, args, results);
       record.result = describeResult({ success: true, output });
+      recorder.trace?.({
+        kind: "call",
+        at: Date.now(),
+        turn: recorder.turn,
+        ...(context.agentName ? { agent: context.agentName } : {}),
+        tool: tool.name,
+        args,
+        result: record.result,
+        refused: looksRefused(record.result),
+      });
       return { success: true, output };
     },
   };
@@ -299,6 +335,14 @@ export function buildScenarioTools(specs: readonly ScenarioTool[]): Tool[] {
  * the socket.
  */
 class Recorder {
+  /**
+   * Where to send events as they happen, when anybody is watching.
+   *
+   * On the recorder rather than threaded through every call site because the
+   * recorder is already the one object that sees every execution and knows
+   * which turn is running — the two things a live view is made of.
+   */
+  trace?: TraceSink;
   readonly requests: RecordedRequest[] = [];
   readonly calls: RecordedCall[] = [];
   /** Calls that ran, attributed to the agent whose turn ran them. */
@@ -491,6 +535,34 @@ export const DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1";
  */
 export function simulationGrants(sim: Simulation, roles: Record<string, string>): Record<string, string[]> {
   const perRole = sim.tools();
+
+  // Two roles exporting the same tool name is a silent measurement bug rather
+  // than a style question, and it is invisible from inside a simulation: the
+  // harness flattens every role's tools into one registry and each agent's
+  // allowlist selects by *name*, so the roles do not get one implementation
+  // each — they all get whichever was built last. `the-lock` shipped six roles
+  // with a `raise_paddle` apiece, every agent was handed the upper chamber's
+  // one, and the run that found it took sixty-seven minutes and read as a team
+  // hallucinating its own capabilities. It was reporting exactly what it was
+  // told.
+  //
+  // A tool whose behaviour depends on who called it belongs in `sharedTools()`,
+  // where `agentTool` can read `context.agentName`.
+  const owner = new Map<string, string>();
+  for (const [role, tools] of Object.entries(perRole)) {
+    for (const t of tools) {
+      const first = owner.get(t.name);
+      if (first !== undefined) {
+        throw new Error(
+          `simulation "${sim.name}" gives both "${first}" and "${role}" a tool called "${t.name}". ` +
+            "Tools are registered by name, so one of those implementations would serve both agents. " +
+            "Give them different names, or move it to sharedTools() and read the caller from context.agentName.",
+        );
+      }
+      owner.set(t.name, role);
+    }
+  }
+
   const shared = sim.sharedTools().map((t) => t.name);
   const grants: Record<string, string[]> = {};
   for (const [role, agent] of Object.entries(roles)) {
@@ -648,11 +720,38 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
 
   const started = Date.now();
   const recorder = new Recorder();
+  recorder.trace = opts.trace;
+  const emit = opts.trace ?? (() => {});
   // Built once per run, so every agent in a multi-agent scenario drives the same
   // machinery. That is the whole point of a shared world: what one agent unlocks
   // is unlocked for the next one, and two agents doing the same step is visible
   // as a repeat rather than as two independent successes.
   const world = scenario.world ? new World(scenario.world) : undefined;
+  emit({
+    kind: "run",
+    at: Date.now(),
+    scenario: scenario.id,
+    ...(scenario.intent ? { intent: scenario.intent } : {}),
+    model: opts.model,
+    agents: [...new Set(wakeSteps(scenario, scenario.agent?.name ?? "bench").map((step) => step.agent))],
+    rooms: (scenario.rooms ?? []).map((room) => room.name),
+    ...((scenario.rooms ?? []).length
+      ? {
+          roomMembers: Object.fromEntries(
+            (scenario.rooms ?? []).map((room) => [
+              room.name,
+              // Same default the subscription loop uses: a room with no declared
+              // members holds everybody who takes a turn.
+              room.members ?? wakeAgents(scenario, scenario.agent?.name ?? "bench"),
+            ]),
+          ),
+        }
+      : {}),
+    ...(scenario.simulation ? { roles: scenario.simulation.roles } : {}),
+    rounds: Math.max(1, ...wakeSteps(scenario, scenario.agent?.name ?? "bench").map((step) => (step.round ?? 0) + 1)),
+    ...(scenario.facts ? { facts: scenario.facts } : {}),
+    ...(scenario.milestones ? { milestones: scenario.milestones.map((m) => ({ id: m.id, points: m.points })) } : {}),
+  });
   // Same lifetime as the world, and for the same reason: in a multi-agent
   // scenario the attempts are the team's, not each agent's. Three guesses each
   // would make a room of five agents a search rather than a test.
@@ -791,6 +890,27 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
     const outcome = scenario.rooms?.length
       ? await runRoomScenario(scenario, runtime, db, agentName, opts, recorder, world, sim)
       : await runChatScenario(scenario, runtime, db, agentName, opts);
+
+    // The room path emits its own turns and its own ending. A single-turn
+    // session scenario has neither, and without this a viewer pointed at one
+    // would sit on "connecting" forever for a run that finished in nine
+    // seconds — the tool has to be honest about every scenario, not just the
+    // ones it was built to watch.
+    if (!scenario.rooms?.length) {
+      emit({ kind: "turn", at: Date.now(), turn: 0, round: 0, agent: agentName, room: "(session)" });
+      if (outcome.reply) {
+        emit({
+          kind: "post",
+          at: Date.now(),
+          turn: 0,
+          agent: agentName,
+          room: "(session)",
+          to: [],
+          body: outcome.reply,
+        });
+      }
+      emit({ kind: "end", at: Date.now(), turns: 1 });
+    }
 
     return {
       ...outcome,
@@ -1117,16 +1237,70 @@ async function runRoomScenario(
   const strikeTheHour = async () => {
     if (!sim) return;
     const horizon = scenario.simulation?.days;
+    // The simulation says what its own clock says. The harness knows only that
+    // there is a clock and that somebody has to wind it — a runner that writes
+    // this sentence itself has to know whether the world has customers or
+    // water in it, and grows a branch for every world after the first.
+    const body =
+      sim.announce?.() ?? `Day ${sim.day + 1}${horizon ? ` of ${horizon}` : ""}. Today's decisions are yours.`;
     for (const ref of refs.values()) {
-      await postLine(backend, room_id(ref), {
-        speaker: DAY_MARKER,
-        body: `Day ${sim.day + 1}${horizon ? ` of ${horizon}` : ""}. Overnight the factory ran, customers ordered, and the books moved. Today's decisions are yours.`,
+      await postLine(backend, room_id(ref), { speaker: DAY_MARKER, body });
+    }
+  };
+
+  /**
+   * One line per round, for anybody watching.
+   *
+   * Emitted even when the simulation has nothing to announce, because the round
+   * boundary is what a viewer draws its timeline against — and in a puzzle where
+   * state decays every round, "which round was that" is most of the story.
+   */
+  /**
+   * Everything said since the last time we looked, for anybody watching.
+   *
+   * Drained after each turn rather than collected at the end, which is the whole
+   * point: the report already has the transcript, and by the time it exists the
+   * run is over. The same envelope parsing the final mapper does, so a live view
+   * and the report attribute a line to the same speaker.
+   *
+   * The clock's own lines are dropped here exactly as they are there — a day
+   * marker is the harness talking, not the team.
+   */
+  let traced = watermark;
+  const drainPosts = () => {
+    if (!recorder.trace) return;
+    const rows = db
+      .prepare("SELECT id, room_ref, content FROM room_messages WHERE id > ? ORDER BY id")
+      .all(traced) as Array<{ id: number; room_ref: string; content: string }>;
+    for (const row of rows) {
+      traced = Math.max(traced, row.id);
+      const envelope = parseEnvelope(row.content);
+      if (envelope.speaker === DAY_MARKER) continue;
+      recorder.trace({
+        kind: "post",
+        at: Date.now(),
+        turn: recorder.turn,
+        ...(envelope.speaker ? { agent: envelope.speaker } : {}),
+        room: [...refs].find(([, ref]) => ref === row.room_ref)?.[0] ?? row.room_ref,
+        to: envelope.to ?? [],
+        body: envelope.body.trim(),
       });
     }
   };
 
+  const openRound = (n: number) => {
+    recorder.trace?.({
+      kind: "round",
+      at: Date.now(),
+      round: n,
+      ...(sim ? { day: sim.day } : {}),
+      ...(sim?.announce?.() ? { announce: sim.announce() as string } : {}),
+    });
+  };
+
   try {
     await strikeTheHour();
+    openRound(round ?? 0);
     for (const step of steps) {
       if (step.round !== round) {
         // A pass that changed nothing ends the run — unless a simulation is
@@ -1152,6 +1326,7 @@ async function runRoomScenario(
         for (let i = 0; i < stride && !sim?.done; i++) sim?.advance();
         round = step.round;
         await strikeTheHour();
+        openRound(round ?? 0);
       }
       // A team cannot manage a company that has already failed. Stopping here
       // rather than running the roster out keeps `daysManaged` honest — turns
@@ -1163,12 +1338,39 @@ async function runRoomScenario(
       recorder.turn = turns.length;
       turns.push({ agent: step.agent, room: step.room });
       if (sim) dayOfTurn.push(sim.day);
+      recorder.trace?.({
+        kind: "turn",
+        at: Date.now(),
+        turn: recorder.turn,
+        round: step.round ?? 0,
+        agent: step.agent,
+        room: step.room,
+      });
       const reply =
         step.kind === "checkin" ? await watcher.runCheckIn(step.agent, ref) : await watcher.pollOnce(step.agent, ref);
+      // After the turn rather than before: what a viewer wants to see is the
+      // state this agent left behind, next to what it said.
+      if (sim) {
+        recorder.trace?.({
+          kind: "state",
+          at: Date.now(),
+          turn: recorder.turn,
+          round: step.round ?? 0,
+          snapshot: sim.snapshot(),
+        });
+      }
+      drainPosts();
       replies.push({ agent: step.agent, reply: typeof reply === "string" ? reply : "" });
       boundaries.push(highWater());
     }
   } finally {
+    drainPosts();
+    recorder.trace?.({
+      kind: "end",
+      at: Date.now(),
+      ...(sim?.endedBecause ? { reason: sim.endedBecause } : {}),
+      turns: turns.length,
+    });
     listening?.dispose();
     watcher.stop();
     // Run the company on to the horizon under management's last decisions.
@@ -1248,6 +1450,7 @@ function describeSimulation(
     events: sim.events,
     dayOfTurn,
     roles: spec.roles,
+    ...(spec.options ? { options: spec.options } : {}),
     responses: sim.responses ?? {},
   };
 }

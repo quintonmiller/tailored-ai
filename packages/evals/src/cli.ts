@@ -22,14 +22,21 @@ import { extractDemo } from "./demo.js";
 import { describeDifficulty } from "./difficulty.js";
 import { grade, scoreMilestones } from "./graders.js";
 import { type HarnessOptions, wakeSteps } from "./harness.js";
+import { narrate } from "./narrate.js";
 import { PAYLOAD_FILENAME, readWorkerResult } from "./protocol.js";
+import { rehearse } from "./rehearse.js";
 import { printScenario, printStalls, printSummary, score, verdict } from "./report.js";
 import { traceFacts } from "./routing.js";
 import { loadScenarios } from "./schema.js";
 import { createSimulation, listSimulations, simulationPolicies } from "./sim/index.js";
+import { transitionSystem as lockSystem } from "./sim/lock/model.js";
+import { formatLadder, ladder as lockLadder } from "./sim/lock/solvers.js";
+import { formatProof, prove, type TransitionSystem } from "./sim/prove.js";
 import { formatSweep, gradient, summarise, sweep } from "./sim/sweep.js";
+import { simulationReport } from "./sim/types.js";
 import { substituteTokens } from "./tokens.js";
 import type { BenchmarkReport, CheckResult, RunOutcome, Scenario, ScenarioResult } from "./types.js";
+import { newestTrace, serveWatch } from "./watch.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(here, "..");
@@ -48,6 +55,28 @@ tai evals — scenario benchmark for the invocation message
                                                           policies and print the ladder.
                                                           No model calls; run this before
                                                           trusting any agent score.
+  pnpm run eval -- watch [--trace <file>] [--port 4380]
+                                                          live view of a run: state, messages,
+                                                          tool calls, milestones and facts.
+                                                          Defaults to the newest trace.
+  pnpm run eval -- narrate [--trace <file>] [--home <dir>] [--model <id>]
+                                                          commentate on a run from outside
+                                                          it. Reads the trace, writes a
+                                                          sidecar; never touches the run,
+                                                          so a narrated run and a private
+                                                          one are byte-identical.
+  pnpm run eval -- rehearse [--policy rule-based] [--seed 1000]
+                                                          play a baseline through the
+                                                          simulation and write a trace, so the
+                                                          broadcast viewer can be developed in
+                                                          seconds instead of model-hours.
+                                                          Writes to results/rehearsals/, which
+                                                          the scoreboard does not read.
+  pnpm run eval -- prove [--puzzle lock] [--rounds 12]
+                                                          search a puzzle's whole state graph:
+                                                          soft-locks, shortest solution, and
+                                                          whether flailing can win. Exits
+                                                          non-zero if the puzzle is broken.
 
 Options
   --target <name>       Load flag defaults from targets/<name>.json (explicit flags still win)
@@ -65,6 +94,9 @@ Options
   --temperature <n>     Default 0.3
   --max-tokens <n>      Default 2048; 'off' sends no cap (some hosted models reject it)
   --max-tool-rounds <n> Default 6
+  --max-scenario-minutes <n>  Backstop per scenario (default 120). Raise it for a large
+                        roster: five agents over forty rounds is 200 turns, and a run
+                        killed by the backstop is scored as whatever it had reached.
   --keep-prompts        Store full prompt text on every run so \`regrade\` can
                         re-score it completely (bigger report)
   --timeout <ms>        Per model call (default 300000)
@@ -79,6 +111,8 @@ Options
   --judge               Enable LLM-judged assertions (off by default: noisy)
   --out <file>          Report path (default results/<stamp>-<model>.json)
   --min-score <0..1>    Exit non-zero below this score
+  --trace <file>        Where the live trace goes (default results/traces/<stamp>.ndjson).
+                        --trace off writes none. Watch it with \`eval watch\`.
   --dry-run             Validate scenarios and print the plan; call no model
   --verbose             Stream worker stderr
 `;
@@ -87,12 +121,19 @@ Options
 const TAIL_CHARS = 2000;
 
 /**
- * Ceiling on the worker backstop, however many turns a scenario declares.
+ * Default ceiling on the worker backstop, however many turns a scenario declares.
  *
  * A six-agent, eight-round scenario multiplies out to half a day of worst-case
  * per-call timeouts, and a backstop nobody will sit through is not a backstop.
  * Two hours is longer than any scenario that is working takes and short enough
  * that a wedged one does not eat a night.
+ *
+ * "Longer than any scenario that is working takes" stopped being true when
+ * `the-endless-descent` arrived: five agents over forty rounds is two hundred
+ * turns, which at the measured thirty-five seconds a turn lands within minutes
+ * of this limit. A run killed by the backstop is scored as whatever it had
+ * reached, which reads as a bad organisation rather than as a timer — so the
+ * ceiling is a flag now, and this is only its default.
  */
 const MAX_SCENARIO_MS = 2 * 60 * 60 * 1000;
 
@@ -167,6 +208,8 @@ async function runWorker(
   verbose: boolean,
   keepPrompts: boolean,
   source?: string,
+  tracePath?: string,
+  maxScenarioMs: number = MAX_SCENARIO_MS,
 ): Promise<ScenarioResult> {
   const dir = mkdtempSync(join(tmpdir(), "tai-eval-payload-"));
   const payloadPath = join(dir, PAYLOAD_FILENAME);
@@ -178,7 +221,7 @@ async function runWorker(
   // in a worker that only received JSON that registration never happened, so
   // the run would die on "unknown simulation" naming something the parent had
   // resolved perfectly well a moment earlier.
-  writeFileSync(payloadPath, JSON.stringify({ scenario, options, repeats, judge, keepPrompts, source }));
+  writeFileSync(payloadPath, JSON.stringify({ scenario, options, repeats, judge, keepPrompts, source, tracePath }));
 
   return await new Promise<ScenarioResult>((resolvePromise) => {
     const child = spawn(process.execPath, ["--import", "tsx", join(here, "worker.ts"), payloadPath], {
@@ -207,7 +250,7 @@ async function runWorker(
     // timeout reaches half a day on a large roster and a backstop nobody will
     // wait for is not one.
     const turns = Math.max(1, wakeSteps(scenario, scenario.agent?.name ?? "bench").length);
-    const budget = Math.min(repeats * turns * (options.maxToolRounds + 2) * options.timeoutMs, MAX_SCENARIO_MS);
+    const budget = Math.min(repeats * turns * (options.maxToolRounds + 2) * options.timeoutMs, maxScenarioMs);
     const kill = setTimeout(() => child.kill("SIGKILL"), budget);
 
     // Identity travels with the result rather than through the worker: the
@@ -271,6 +314,7 @@ async function cmdRun(argv: string[]): Promise<number> {
       temperature: { type: "string" },
       "max-tokens": { type: "string" },
       "max-tool-rounds": { type: "string" },
+      "max-scenario-minutes": { type: "string" },
       timeout: { type: "string" },
       "thinking-dialect": { type: "string" },
       thinking: { type: "string" },
@@ -280,6 +324,7 @@ async function cmdRun(argv: string[]): Promise<number> {
       "api-key-env": { type: "string" },
       judge: { type: "boolean" },
       "keep-prompts": { type: "boolean" },
+      trace: { type: "string" },
       out: { type: "string" },
       "min-score": { type: "string" },
       "dry-run": { type: "boolean" },
@@ -377,6 +422,23 @@ async function cmdRun(argv: string[]): Promise<number> {
       `(concurrency ${concurrency})\n`,
   );
 
+  /**
+   * Where this run's live trace goes.
+   *
+   * On by default, and deliberately so. The point of a trace is to be watched
+   * while the run happens, and a flag you have to remember before an hour-long
+   * run is a flag you remember afterwards. It costs a few hundred kilobytes and
+   * `--trace off` turns it off.
+   */
+  const traceStamp = startedAt.toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  const tracePath =
+    values.trace === "off"
+      ? undefined
+      : values.trace
+        ? resolve(values.trace as string)
+        : join(packageRoot, "results", "traces", `${traceStamp}.ndjson`);
+  if (tracePath) console.log(`  watch it: pnpm run eval -- watch\n`);
+
   let done = 0;
   const results = await pool(scenarios, concurrency, async (scenario) => {
     const result = await runWorker(
@@ -387,6 +449,8 @@ async function cmdRun(argv: string[]): Promise<number> {
       !!values.verbose,
       !!values["keep-prompts"],
       sources[scenario.id],
+      tracePath ? tracePath.replace(/\.ndjson$/, "") + `.${scenario.id}.ndjson` : undefined,
+      values["max-scenario-minutes"] ? Number(values["max-scenario-minutes"]) * 60_000 : MAX_SCENARIO_MS,
     );
     done++;
     process.stdout.write(`[${String(done).padStart(3)}/${scenarios.length}] `);
@@ -637,6 +701,11 @@ function cmdBench(argv: string[]): number {
       seeds: { type: "string", default: "60" },
       days: { type: "string" },
       "days-per-round": { type: "string" },
+      // Anything a simulation reads off its options bag. `descent` starts on
+      // floor 1 by default and the scenario starts it on 31, so a ladder swept
+      // at the default depth is not the ladder the agents are measured against
+      // — which is how a pacing defect that only appears deep stayed invisible.
+      "sim-option": { type: "string", multiple: true },
       out: { type: "string" },
     },
     allowPositionals: false,
@@ -653,16 +722,43 @@ function cmdBench(argv: string[]): number {
   const days = values.days ? Number(values.days) : undefined;
   const stride = values["days-per-round"] ? Number(values["days-per-round"]) : 1;
 
-  const summaries = Object.entries(policies).map(([policy, make]) =>
-    summarise(sweep(name, make(), seeds, days, stride)),
+  // `--sim-option startFloor=31`. Numbers stay numbers; everything else is
+  // passed through as a string, because a simulation's options bag is opaque to
+  // this command by design.
+  const simOptions: Record<string, unknown> = {};
+  for (const pair of (values["sim-option"] as string[] | undefined) ?? []) {
+    const at = pair.indexOf("=");
+    if (at < 0) {
+      console.error(`  --sim-option wants key=value, got "${pair}".`);
+      return 2;
+    }
+    const key = pair.slice(0, at);
+    const raw = pair.slice(at + 1);
+    simOptions[key] = raw !== "" && Number.isFinite(Number(raw)) ? Number(raw) : raw;
+  }
+
+  const report = simulationReport(name);
+  const summaries = Object.entries(policies).map(([, make]) =>
+    summarise(sweep(name, make(), seeds, days, stride, simOptions), report),
   );
-  const opening = createSimulation(name, { seed: seeds[0], ...(days === undefined ? {} : { days }) }).objective();
+  const opening = createSimulation(name, {
+    seed: seeds[0],
+    ...(days === undefined ? {} : { days }),
+    ...simOptions,
+  }).objective();
 
   console.log(
     `\n  ${name} — ${seeds.length} seeds${days ? `, ${days} days` : ""}${stride > 1 ? `, one round per ${stride} days` : ""}` +
-      `\n  opening balance sheet ${Math.round(opening).toLocaleString("en-US")}\n`,
+      `${
+        Object.keys(simOptions).length
+          ? `\n  options ${Object.entries(simOptions)
+              .map(([k, v]) => `${k}=${v}`)
+              .join(" ")}`
+          : ""
+      }` +
+      `\n  opening ${report.key} ${(report.format ?? ((n: number) => Math.round(n).toLocaleString("en-US")))(opening)}\n`,
   );
-  console.log(formatSweep(summaries));
+  console.log(formatSweep(summaries, report));
 
   const { spread, ordered } = gradient(summaries);
   console.log(
@@ -717,27 +813,232 @@ function cmdDemo(argv: string[]): number {
   return 0;
 }
 
+/**
+ * `eval prove` — search a puzzle's whole state graph and say whether it holds up.
+ *
+ * The equivalent of `bench` for a scenario with a win condition instead of a
+ * balance sheet, and it answers the two questions that decide whether a puzzle
+ * is worth running a model against: can a team get into a state it can never
+ * recover from, and can a team win without understanding anything. Both are
+ * free to check and both are invisible from a transcript, which is why they
+ * belong in a command rather than in an author's head.
+ *
+ * Exits non-zero on a soft-lock or an unreachable goal, so CI can hold the line.
+ */
+function cmdProve(argv: string[]): number {
+  const { values } = parseArgs({
+    args: argv,
+    options: { puzzle: { type: "string", default: "lock" }, rounds: { type: "string", default: "12" } },
+    allowPositionals: false,
+  });
+  const horizon = Number(values.rounds);
+  const puzzles: Record<string, () => { system: TransitionSystem<never>; ladder: () => string }> = {
+    lock: () => ({
+      system: lockSystem() as unknown as TransitionSystem<never>,
+      ladder: () => formatLadder(lockLadder(horizon)),
+    }),
+  };
+  const make = puzzles[values.puzzle as string];
+  if (!make) {
+    console.error(`No puzzle "${values.puzzle}". Known: ${Object.keys(puzzles).join(", ")}`);
+    return 2;
+  }
+
+  const { system, ladder } = make();
+  const proof = prove(system, { horizon });
+  console.log(`\n${formatProof(values.puzzle as string, proof)}\n`);
+  console.log(`  solvers (horizon ${horizon})`);
+  console.log(ladder());
+  console.log("");
+
+  if (proof.softLocks.length) {
+    console.error("  A team can reach a state it cannot recover from. Fix the puzzle before running a model at it.\n");
+    return 1;
+  }
+  if (proof.minRounds === null) {
+    console.error("  The goal is not reachable at all inside the horizon.\n");
+    return 1;
+  }
+  if (proof.blindRate > 0.02) {
+    console.error(
+      `  A blind player wins ${(proof.blindRate * 100).toFixed(1)}% of the time — this measures persistence, not understanding.\n`,
+    );
+    return 1;
+  }
+  return 0;
+}
+
+/**
+ * Everything that is not `run`.
+ *
+ * A table rather than a chain of `if`s so that the two places a subcommand can
+ * appear stay in step. See `main` for why there are two.
+ */
+const SUBCOMMANDS: Record<string, (argv: string[]) => number | Promise<number>> = {
+  compare: cmdCompare,
+  regrade: cmdRegrade,
+  bench: cmdBench,
+  demo: cmdDemo,
+  prove: cmdProve,
+  watch: cmdWatch,
+  narrate: cmdNarrate,
+  rehearse: cmdRehearse,
+};
+
+/**
+ * `eval rehearse` — a trace from a bot, for developing the broadcast against.
+ *
+ * A real run of `the-endless-descent` is two hundred agent turns and about
+ * fifty minutes. Iterating on a viewer against that is not iteration, it is one
+ * attempt an hour. A baseline plays the same simulation through the same public
+ * API and writes the same trace format in under a second.
+ *
+ * Output goes to `results/rehearsals/`, never `results/traces/`: the scoreboard
+ * scans the traces directory, and a bot's score sitting there as a record would
+ * be a lie about what any agent has ever done.
+ */
+async function cmdRehearse(argv: string[]): Promise<number> {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      policy: { type: "string", default: "rule-based" },
+      seed: { type: "string", default: "1000" },
+      rounds: { type: "string", default: "40" },
+      "start-floor": { type: "string", default: "31" },
+      out: { type: "string" },
+    },
+    allowPositionals: false,
+  });
+
+  const policy = values.policy as string;
+  const known = simulationPolicies("descent");
+  if (!known[policy]) {
+    console.error(`unknown policy "${policy}". Known: ${Object.keys(known).join(", ")}`);
+    return 2;
+  }
+
+  const out =
+    (values.out as string | undefined) ?? join(packageRoot, "results", "rehearsals", `descent-${policy}.ndjson`);
+  const result = await rehearse({
+    out,
+    policy,
+    seed: Number(values.seed),
+    rounds: Number(values.rounds),
+    startFloor: Number(values["start-floor"]),
+  });
+
+  console.log(
+    `\n  ${out.replace(`${packageRoot}/`, "")}` +
+      `\n  ${result.turns} turns, reached floor ${result.floor}, earned ${result.earned.toLocaleString()}` +
+      `\n\n  watch it: pnpm run eval -- watch --trace ${out.replace(`${packageRoot}/`, "")}\n`,
+  );
+  return 0;
+}
+
+/**
+ * `eval narrate` — commentary on a run, from outside it.
+ *
+ * A separate command rather than a flag on `run`, and that is a correctness
+ * decision rather than an ergonomic one. The narrator is a model; wiring it
+ * into a run would put an observer's tokens and latency inside the thing being
+ * measured, and a benchmark figure taken while somebody was watching would stop
+ * being comparable with one taken in private. It reads the trace and writes a
+ * sidecar; the run cannot tell whether it is running.
+ */
+async function cmdNarrate(argv: string[]): Promise<number> {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      trace: { type: "string" },
+      home: { type: "string" },
+      "base-url": { type: "string" },
+      model: { type: "string" },
+      "api-key-env": { type: "string" },
+      temperature: { type: "string" },
+      rounds: { type: "string" },
+    },
+    allowPositionals: false,
+  });
+
+  const tracePath = (values.trace as string | undefined) ?? newestTrace();
+  if (!tracePath) {
+    console.error("no trace to narrate. Start a run, or pass --trace <file>.");
+    return 2;
+  }
+
+  const defaults = values.home ? readInstanceDefaults(resolve(values.home as string)) : {};
+  const baseUrl = (values["base-url"] as string) ?? defaults.baseUrl ?? "http://127.0.0.1:8000/v1";
+  const model = (values.model as string) ?? defaults.model;
+  if (!model) {
+    console.error("no model. Pass --model <id>, or --home <dir> to read one from a deployment.");
+    return 2;
+  }
+  const apiKey = values["api-key-env"] ? process.env[values["api-key-env"] as string] : undefined;
+
+  console.log(`
+  narrating ${tracePath.replace(`${packageRoot}/`, "")}`);
+  console.log(`  as ${model} via ${baseUrl}`);
+  console.log(`  writing ${tracePath.replace(/\.ndjson$/, ".narration.ndjson").replace(`${packageRoot}/`, "")}\n`);
+
+  const spoken = await narrate({
+    tracePath,
+    baseUrl,
+    model,
+    ...(apiKey ? { apiKey } : {}),
+    ...(values.temperature ? { temperature: Number(values.temperature) } : {}),
+    ...(values.rounds ? { maxRounds: Number(values.rounds) } : {}),
+    onLine: (line, round) => console.log(`  ${String(round).padStart(3)}  ${line}`),
+  });
+
+  console.log(`\n  ${spoken} line(s) of commentary.\n`);
+  return 0;
+}
+
+/**
+ * `eval watch` — open a live view of the newest run.
+ *
+ * Deliberately has no idea whether a run is in progress. It serves whatever
+ * trace is newest, and the page says whether anything is still being appended
+ * to it — so the same command is "watch this run" and "read the last one".
+ */
+async function cmdWatch(argv: string[]): Promise<number> {
+  const { values } = parseArgs({
+    args: argv,
+    options: { trace: { type: "string" }, port: { type: "string", default: "4380" } },
+    allowPositionals: false,
+  });
+  const path = values.trace ? resolve(values.trace as string) : newestTrace();
+  if (!path) {
+    console.error("No trace found. Start a run — traces are written by default — or pass --trace <file>.");
+    return 2;
+  }
+  const url = await serveWatch(values.trace ? path : undefined, Number(values.port));
+  console.log(`\n  watching ${path.replace(`${packageRoot}/`, "")}`);
+  console.log(`  ${url}\n`);
+  console.log("  Ctrl-C to stop.\n");
+  // Never resolves: the server is the command.
+  return await new Promise<number>(() => {});
+}
+
 async function main(): Promise<void> {
   const argv = stripSeparator(process.argv.slice(2));
-  const [command, ...rest] = argv;
+  let [command, ...rest] = argv;
   if (!command || command === "help" || command === "--help") {
     console.log(USAGE);
     return;
   }
-  if (command === "compare") {
-    process.exitCode = cmdCompare(rest);
-    return;
+  // `pnpm run eval` expands to `tsx src/cli.ts run`, so every documented
+  // subcommand invocation — `pnpm run eval -- bench` — arrives here as
+  // `run bench`, and used to fall through to `cmdRun`, which reported the
+  // subcommand's own flags as unknown options. Both `bench` and `demo` shipped
+  // documented and unreachable by the only route the docs give for them.
+  if (command === "run" && rest[0] && rest[0] in SUBCOMMANDS) {
+    command = rest[0];
+    rest = rest.slice(1);
   }
-  if (command === "regrade") {
-    process.exitCode = await cmdRegrade(rest);
-    return;
-  }
-  if (command === "bench") {
-    process.exitCode = cmdBench(rest);
-    return;
-  }
-  if (command === "demo") {
-    process.exitCode = cmdDemo(rest);
+  const sub = SUBCOMMANDS[command];
+  if (sub) {
+    process.exitCode = await sub(rest);
     return;
   }
   process.exitCode = await cmdRun(command === "run" ? rest : argv);

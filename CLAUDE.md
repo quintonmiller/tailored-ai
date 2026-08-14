@@ -27,6 +27,8 @@ pnpm run test:e2e         # integration smoke scenarios
 pnpm run eval -- --home ~/.tailored-ai   # scenario benchmark against a live model
 pnpm run eval:compare -- a.json b.json   # diff two benchmark runs
 pnpm run eval -- bench                   # sweep a simulation's baselines (no model calls)
+pnpm run eval -- prove                   # search a puzzle for soft-locks + calibrate its budget
+pnpm run eval -- watch                   # live view of a run: state, messages, tool calls, milestones
 ```
 
 ## Project Structure
@@ -150,7 +152,10 @@ Deep notes on each subsystem live under [`docs/`](./docs/):
 | Running two instances (work/personal) on one machine: what `TAI_HOME` isolates and what leaks | [docs/multi-instance.md](./docs/multi-instance.md) |
 | Self-hosting: Docker image, headless `tai init --non-interactive`, exposure/auth options, backups | [docs/self-hosting.md](./docs/self-hosting.md) |
 | Deploy targets (`tai deploy` seam): contract in core, registry in CLI, built-in `docker`, writing a cloud plugin | [docs/deploy-targets.md](./docs/deploy-targets.md) |
-| Benchmarking against a live model: scenarios, scoring, comparing runs, publishing to `/bench`, and simulations (an objective instead of an answer, with non-model baselines) | [docs/evals.md](./docs/evals.md) |
+| Benchmarking against a live model: scenarios, scoring, comparing runs, publishing to `/bench`, simulations (an objective instead of an answer, with non-model baselines), puzzles (proved solvable and proved soft-lock-free before a model runs), endless runs (no win condition at all — scored by what the organisation accumulated before it died, with a six-rung baseline ladder), and `eval watch` for a live view of a run | [docs/evals.md](./docs/evals.md) |
+| The Endless Descent workstream: why an endless benchmark, what was decided and traded off, what it cannot tell you yet, and what to do next | [docs/endless-descent.md](./docs/endless-descent.md) |
+| The Endless Descent review: the measured pacing defect, viewer legibility, theme directions, and gameplay proposals (items, caches, scouting, zones) | [docs/endless-descent-improvements.md](./docs/endless-descent-improvements.md) |
+| Broadcast viewer: a watchable second page over the same trace, the scene/beat data it needs, the run scoreboard, and the observer-only narrator | [docs/broadcast-viewer.md](./docs/broadcast-viewer.md) |
 | Audit findings + open action items (2026-07-28): boundaries, trust, skills, context | [docs/audit-2026-07-28.md](./docs/audit-2026-07-28.md) |
 
 When touching a subsystem, update its doc — keep this index file tight.

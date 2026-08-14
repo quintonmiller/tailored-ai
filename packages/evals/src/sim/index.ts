@@ -12,7 +12,9 @@
  * depending on import order.
  */
 
+import "./descent/index.js";
 import "./factory/index.js";
+import "./lock/index.js";
 
 export {
   createSimulation,

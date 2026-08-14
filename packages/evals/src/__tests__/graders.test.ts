@@ -544,3 +544,51 @@ describe("does_not_call_with", () => {
     expect(checks[0].detail).toContain("s3 rb");
   });
 });
+
+describe("beats_baseline", () => {
+  /**
+   * The baseline has to be replayed in the *same world* the agents played.
+   *
+   * `SimulationOutcome` carries an options bag, and `the-endless-descent` uses
+   * it to start the party on floor 31. Replaying a baseline without it starts
+   * that baseline on floor 1, where it plays a different game and scores about
+   * a quarter as much — so a run would clear a bar four times lower than the
+   * one it was supposed to clear, and read as a pass.
+   *
+   * This is the third place the same omission has been found (the reporter's
+   * replayed ladder and `printSimulation` were the first two), which is why it
+   * is pinned here rather than fixed quietly.
+   */
+  const descentRun = (earnedXp: number) =>
+    outcome({
+      simulation: {
+        name: "descent",
+        seed: 1000,
+        days: 40,
+        daysManaged: 40,
+        daysPerRound: 1,
+        metrics: { earnedXp },
+        objective: earnedXp,
+        events: [],
+        dayOfTurn: {},
+        options: { startFloor: 31 },
+      },
+    });
+
+  it("replays the baseline with the run's own options", async () => {
+    // A floor-1 `basic-tactics` earns around a thousand; a floor-31 one earns
+    // several times that. A score between the two separates a grader that
+    // honours the options from one that ignores them, and nothing else does.
+    const between = 2_500;
+    expect(
+      await passes({ beats_baseline: { policy: "basic-tactics", metric: "earnedXp" } }, descentRun(between)),
+      "a score that only beats the floor-1 baseline must not pass",
+    ).toBe(false);
+  });
+
+  it("passes a run that genuinely beats the baseline it was measured against", async () => {
+    expect(await passes({ beats_baseline: { policy: "basic-tactics", metric: "earnedXp" } }, descentRun(99_999))).toBe(
+      true,
+    );
+  });
+});

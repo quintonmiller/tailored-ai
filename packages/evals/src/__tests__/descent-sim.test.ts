@@ -1,0 +1,879 @@
+/**
+ * The descent, played through its own tools.
+ *
+ * Every test here goes through the flattened tool registry rather than calling
+ * methods on the simulation, because that is the layer where this package has
+ * already been burned once. In `the-lock`, six roles each exported a
+ * `raise_paddle`; the harness flattens `sim.tools()` into one registry and the
+ * agent allowlist selects by *name*, so all six got whichever was registered
+ * last, and a sixty-seven-minute run read as a team hallucinating its own
+ * capabilities. A unit test calling the class directly would have passed.
+ *
+ * So: build the registry the way the harness does, and drive it as an agent
+ * would.
+ */
+
+import type { Tool } from "@tailored-ai/core";
+import { describe, expect, it } from "vitest";
+import { FAMILIES, generateEncounter, makeEnemy } from "../sim/descent/content.js";
+import { Diagnostics } from "../sim/descent/diagnostics.js";
+import { type DescentSimulation, levelFor } from "../sim/descent/index.js";
+import {
+  antiSynergies,
+  applyStatus,
+  computeDamage,
+  type Enemy,
+  type Fighter,
+  hasStatus,
+} from "../sim/descent/model.js";
+import { DESCENT_POLICIES } from "../sim/descent/policies.js";
+import { createSimulation, listSimulations, simulationPolicies } from "../sim/index.js";
+import { makeRng } from "../sim/rng.js";
+import { gradient, summarise, sweep } from "../sim/sweep.js";
+
+/** Exactly how the harness assembles what an agent can call. */
+function registry(sim: DescentSimulation): Map<string, Tool> {
+  const flat = [...Object.values(sim.tools()).flat(), ...sim.sharedTools()];
+  const map = new Map<string, Tool>();
+  for (const tool of flat) {
+    if (map.has(tool.name)) throw new Error(`two tools named ${tool.name} — the second silently replaces the first`);
+    map.set(tool.name, tool);
+  }
+  return map;
+}
+
+async function call(
+  sim: DescentSimulation,
+  agent: string,
+  name: string,
+  args: Record<string, unknown> = {},
+): Promise<string> {
+  const tool = registry(sim).get(name);
+  if (!tool) throw new Error(`no tool called ${name}`);
+  const result = await tool.execute(args, { agentName: agent } as never);
+  return String(result.output ?? "");
+}
+
+const fresh = (seed = 7) => createSimulation("descent", { seed, days: 400 }) as DescentSimulation;
+
+/** Walk a fresh party into their first fight. */
+async function intoCombat(sim: DescentSimulation): Promise<void> {
+  await call(sim, "guardian", "choose_path", { path: sim.view().paths[0].id });
+  sim.advance();
+}
+
+describe("the tool registry", () => {
+  it("has no two tools sharing a name", () => {
+    expect(() => registry(fresh())).not.toThrow();
+  });
+
+  it("gives every class its own abilities and nobody else's", () => {
+    const sim = fresh();
+    const byClass = sim.tools();
+    expect(byClass.cleric.map((t) => t.name)).toContain("heal");
+    expect(byClass.guardian.map((t) => t.name)).not.toContain("heal");
+    expect(byClass.mage.map((t) => t.name)).toContain("fireball");
+    expect(byClass.rogue.map((t) => t.name)).toContain("scout");
+  });
+
+  it("refuses an ability held by somebody else, even though the tool exists", async () => {
+    // The collision regression. `heal` is in the flattened registry, so a
+    // guardian *can* reach it; it has to be told no by the simulation rather
+    // than by an allowlist that may or may not be configured correctly.
+    const sim = fresh();
+    await intoCombat(sim);
+    expect(await call(sim, "guardian", "heal", { target: "guardian" })).toMatch(/belongs to the cleric/i);
+    expect(await call(sim, "cleric", "heal", { target: "guardian" })).toMatch(/Readied/);
+  });
+});
+
+describe("what one agent can see", () => {
+  it("shows an ally's condition but never their pack or their purse", async () => {
+    const sim = fresh();
+    const seen = await call(sim, "guardian", "look");
+    // The cleric opens with a potion and an antidote. The guardian must not be
+    // able to read that — it is the omission the whole trading mechanic rests
+    // on, and `the-lock` shipped an omniscient `look` once already.
+    expect(seen).toMatch(/cleric: \d+\/\d+ hp/);
+    expect(seen).not.toMatch(/antidote/i);
+    const own = await call(sim, "cleric", "look");
+    expect(own).toMatch(/antidote/i);
+    // And the pack names things the way the tools want them named.
+    expect(own).toMatch(/pack:.*healing_potion/);
+  });
+
+  it("tells each class something different about the same enemy", async () => {
+    const sim = fresh();
+    await intoCombat(sim);
+    const ref = sim.view().enemies[0].ref;
+    const asMage = await call(sim, "mage", "inspect_enemy", { target: ref });
+    const asGuardian = await call(sim, "guardian", "inspect_enemy", { target: ref });
+    expect(asMage).toMatch(/Elemental readings/);
+    expect(asGuardian).toMatch(/Armour/);
+    expect(asMage).not.toEqual(asGuardian);
+  });
+
+  it("never reveals a family's hidden rule, to anybody", async () => {
+    const sim = createSimulation("descent", { seed: 3, days: 400 }) as DescentSimulation;
+    // Drop the party in front of a crystal directly rather than descending to
+    // floor 15, and confirm no inspection mentions what it does.
+    await intoCombat(sim);
+    const state = sim.view();
+    state.enemies = [
+      {
+        ref: "crystal-1",
+        name: "Crystal Warden",
+        family: "crystal",
+        hp: 100,
+        maxHp: 100,
+        armor: 4,
+        power: 10,
+        speed: 7,
+        resist: { fire: 0.6 },
+        statuses: [],
+        hidden: { kind: "reflect", element: "lightning", fraction: 1.6 },
+        elite: false,
+        boss: false,
+        xp: 10,
+        gold: 10,
+        age: 0,
+      },
+    ];
+    for (const who of ["guardian", "mage", "rogue", "cleric", "ranger"]) {
+      const said = await call(sim, who, "inspect_enemy", { target: "crystal-1" });
+      expect(said.toLowerCase()).not.toMatch(/reflect|lightning arcs/);
+    }
+    expect(await call(sim, "ranger", "read_beast", { target: "crystal-1" })).not.toMatch(/reflect/i);
+  });
+});
+
+describe("combat resolution", () => {
+  it("readies actions rather than taking them, so a round resolves together", async () => {
+    const sim = fresh();
+    await intoCombat(sim);
+    const ref = sim.view().enemies[0].ref;
+    const before = sim.view().enemies[0].hp;
+    const said = await call(sim, "guardian", "attack", { target: ref });
+    expect(said).toMatch(/resolves when the round closes/);
+    expect(sim.view().enemies[0].hp).toBe(before);
+    sim.advance();
+    expect(sim.view().enemies.find((e) => e.ref === ref)?.hp ?? 0).toBeLessThan(before);
+  });
+
+  it("replaces an earlier action rather than stacking two in one round", async () => {
+    const sim = fresh();
+    await intoCombat(sim);
+    const ref = sim.view().enemies[0].ref;
+    await call(sim, "guardian", "attack", { target: ref });
+    const second = await call(sim, "guardian", "defend");
+    expect(second).toMatch(/replaces your attack/);
+    expect(sim.view().intents.filter((i) => i.actor === "guardian")).toHaveLength(1);
+  });
+
+  it("subtracts armour from physical damage and a resistance from everything", () => {
+    const target = { hp: 100, armor: 10, statuses: [], resist: { fire: 0.5, frost: 0 } };
+    expect(computeDamage(30, "physical", target).dealt).toBe(20);
+    expect(computeDamage(30, "fire", target).dealt).toBe(15);
+    expect(computeDamage(30, "frost", target).dealt).toBe(0);
+    // Armour is physical-only: it must not also blunt a spell.
+    expect(computeDamage(30, "lightning", target).dealt).toBe(30);
+  });
+
+  it("absorbs into a shield before it touches health", () => {
+    const target: { hp: number; armor: number; statuses: [] } & { statuses: never[] } = {
+      hp: 100,
+      armor: 0,
+      statuses: [],
+    };
+    applyStatus(target, { kind: "shield", ticks: 2, amount: 12 });
+    const first = computeDamage(20, "fire", target);
+    expect(first).toEqual({ dealt: 8, absorbed: 12 });
+    expect(hasStatus(target, "shield")).toBe(false);
+  });
+
+  it("thaws a freeze with fire, which is why the two spells fight each other", () => {
+    const target = { hp: 100, armor: 0, statuses: [] };
+    applyStatus(target, { kind: "freeze", ticks: 2, amount: 0 });
+    computeDamage(10, "fire", target);
+    expect(hasStatus(target, "freeze")).toBe(false);
+  });
+});
+
+describe("anti-synergies", () => {
+  const state = (enemies: Partial<Enemy>[] = []) =>
+    ({
+      enemies: enemies.map((e, i) => ({
+        ref: `e-${i}`,
+        name: "thing",
+        hp: 10,
+        maxHp: 10,
+        age: 0,
+        hidden: { kind: "none" },
+        ...e,
+      })),
+      party: {},
+    }) as never;
+
+  it("spots area damage aimed into a sleep", () => {
+    const found = antiSynergies(state([{}, {}]), [
+      { actor: "rogue", kind: "sleep_powder", target: "e-0" },
+      { actor: "mage", kind: "fireball" },
+    ]);
+    expect(found.join(" ")).toMatch(/wake whatever rogue puts to sleep/);
+  });
+
+  it("spots fire thawing a freeze", () => {
+    const found = antiSynergies(state([{}]), [
+      { actor: "mage", kind: "frostbite", target: "e-0" },
+      { actor: "mage", kind: "firebolt", target: "e-0" },
+    ]);
+    expect(found.join(" ")).toMatch(/thaw the freeze/);
+  });
+
+  it("spots two interrupts spent on one cast", () => {
+    const found = antiSynergies(state([{}]), [
+      { actor: "rogue", kind: "interrupt", target: "e-0" },
+      { actor: "guardian", kind: "interrupt", target: "e-0" },
+    ]);
+    expect(found.join(" ")).toMatch(/one of them is wasted/);
+  });
+
+  it("says nothing when two sensible actions do not interfere", () => {
+    expect(
+      antiSynergies(state([{}]), [
+        { actor: "mage", kind: "firebolt", target: "e-0" },
+        { actor: "cleric", kind: "heal", target: "guardian" },
+      ]),
+    ).toEqual([]);
+  });
+});
+
+describe("hidden mechanics", () => {
+  it("reflects lightning back at whoever cast it, and records the lesson", async () => {
+    const sim = fresh();
+    await intoCombat(sim);
+    const state = sim.view();
+    state.enemies = [
+      {
+        ref: "crystal-1",
+        name: "Crystal Warden",
+        family: "crystal",
+        hp: 400,
+        maxHp: 400,
+        armor: 0,
+        power: 1,
+        speed: 1,
+        resist: {},
+        statuses: [],
+        hidden: { kind: "reflect", element: "lightning", fraction: 1.6 },
+        elite: false,
+        boss: false,
+        xp: 1,
+        gold: 0,
+        age: 0,
+      },
+    ];
+    const mageBefore = state.party.mage.hp;
+    await call(sim, "mage", "lightning", { target: "crystal-1" });
+    sim.advance();
+    expect(state.party.mage.hp).toBeLessThan(mageBefore);
+    expect(sim.metrics().memoryOpportunities).toBeGreaterThanOrEqual(0);
+  });
+
+  it("punishes a heal with blood as well as mana, because mana comes back on its own", async () => {
+    const sim = fresh();
+    await intoCombat(sim);
+    const state = sim.view();
+    state.enemies = [
+      {
+        ref: "void-1",
+        name: "Void Priest",
+        family: "void",
+        hp: 400,
+        maxHp: 400,
+        armor: 0,
+        power: 1,
+        speed: 1,
+        resist: {},
+        statuses: [],
+        hidden: { kind: "punishHeal", drain: 20 },
+        elite: false,
+        boss: false,
+        xp: 1,
+        gold: 0,
+        age: 0,
+      },
+    ];
+    state.party.guardian.hp = 40;
+    const clericHp = state.party.cleric.hp;
+    await call(sim, "cleric", "heal", { target: "guardian" });
+    sim.advance();
+    expect(state.party.cleric.hp).toBeLessThan(clericHp);
+  });
+});
+
+describe("the memory ledger", () => {
+  it("counts an opportunity only after the family has taught its lesson once", () => {
+    const diag = new Diagnostics();
+    diag.recordEncounter(["crystal"]);
+    diag.recordMechanic("crystal", "reflect");
+    expect(diag.memoryLedger()).toEqual({ opportunities: 0, repeats: 0 });
+
+    diag.recordEncounter(["crystal"]);
+    expect(diag.memoryLedger()).toEqual({ opportunities: 1, repeats: 0 });
+    expect(diag.report().memory).toBe(1);
+  });
+
+  it("counts a lapse when the same family catches the party again", () => {
+    const diag = new Diagnostics();
+    diag.recordEncounter(["crystal"]);
+    diag.recordMechanic("crystal", "reflect");
+    diag.recordEncounter(["crystal"]);
+    diag.recordMechanic("crystal", "reflect");
+    expect(diag.memoryLedger()).toEqual({ opportunities: 1, repeats: 1 });
+    expect(diag.report().memory).toBe(0);
+  });
+
+  it("treats several firings inside one encounter as one lesson, not three", () => {
+    const diag = new Diagnostics();
+    diag.recordEncounter(["bell"]);
+    diag.recordMechanic("bell", "tollHeal");
+    diag.recordMechanic("bell", "tollHeal");
+    diag.recordMechanic("bell", "tollHeal");
+    diag.recordEncounter(["bell"]);
+    expect(diag.memoryLedger().repeats).toBe(0);
+  });
+
+  it("asks nothing of a family met only once", () => {
+    const diag = new Diagnostics();
+    diag.recordEncounter(["wisp"]);
+    diag.recordMechanic("wisp", "deathburst");
+    expect(diag.report().memory).toBe(1);
+  });
+});
+
+describe("the economy", () => {
+  it("refuses gear to a class that cannot use it, and says who can", async () => {
+    const sim = fresh();
+    sim.view().party.mage.inventory.push("plate_cuirass");
+    const said = await call(sim, "mage", "equip_item", { item: "plate_cuirass" });
+    expect(said).toMatch(/cannot use Plate Cuirass/);
+    expect(said).toMatch(/guardian/);
+  });
+
+  it("lets a pooled purse buy what no single purse could", async () => {
+    const sim = fresh();
+    const state = sim.view();
+    state.phase = "market";
+    state.stock = [{ item: "vitality_ring", price: 300 }];
+    expect(await call(sim, "guardian", "buy", { item: "vitality_ring" })).toMatch(/300 gold, and you have 60/);
+    for (const donor of ["mage", "rogue", "cleric", "ranger"]) {
+      await call(sim, donor, "give_gold", { to: "guardian", amount: 60 });
+    }
+    expect(await call(sim, "guardian", "buy", { item: "vitality_ring" })).toMatch(/You buy Ring of Vitality/);
+    expect(sim.metrics().goldTransfers).toBe(4);
+  });
+
+  it("counts a purchase as pooled only when the buyer could not have afforded it alone", async () => {
+    // The detector originally compared the price against a notional opening
+    // purse of sixty gold. That is true on floor one and nonsense anywhere
+    // else — a party started mid-descent opens with thousands each, so every
+    // ordinary purchase scored as pooled and the scenario awarded ten
+    // milestone points for shopping. An agent run collected them.
+    const rich = createSimulation("descent", { seed: 2, days: 40, startFloor: 31 }) as DescentSimulation;
+    rich.view().phase = "market";
+    rich.view().stock = [
+      { item: "healing_potion", price: 100 },
+      { item: "vitality_ring", price: 380 },
+    ];
+    await call(rich, "guardian", "buy", { item: "healing_potion" });
+    expect(rich.metrics().pooledPurchases, "an affordable purchase is not pooling").toBe(0);
+
+    // Now make one genuinely unaffordable and cover it from another purse.
+    rich.view().party.mage.gold = 50;
+    await call(rich, "mage", "buy", { item: "vitality_ring" });
+    expect(rich.metrics().pooledPurchases, "still not pooled — it was refused").toBe(0);
+    await call(rich, "guardian", "give_gold", { to: "mage", amount: 400 });
+    await call(rich, "mage", "buy", { item: "vitality_ring" });
+    expect(rich.metrics().pooledPurchases).toBe(1);
+  });
+
+  it("refuses an action taken in the wrong phase, and names the phase", async () => {
+    const sim = fresh();
+    const said = await call(sim, "guardian", "buy", { item: "healing_potion" });
+    expect(said).toMatch(/the party is in the explore phase/);
+  });
+});
+
+describe("descent pressure", () => {
+  it("does not let a party stand in the open forever", () => {
+    const sim = fresh();
+    for (let i = 0; i < 4; i++) sim.advance();
+    // Nobody chose a way on; dread found them instead.
+    expect(sim.view().phase).toBe("combat");
+  });
+
+  it("moves the party only when the round closes, so nobody eats a free round", async () => {
+    const sim = fresh();
+    const said = await call(sim, "rogue", "choose_path", { path: sim.view().paths[0].id });
+    expect(said).toMatch(/when the round closes/);
+    expect(sim.view().phase).toBe("explore");
+    sim.advance();
+    expect(["combat", "market"]).toContain(sim.view().phase);
+  });
+});
+
+describe("the clock", () => {
+  it("advances every round, not only during a fight", () => {
+    // This was wrong once, and it was not a cosmetic wrongness: with the tick
+    // living inside combat resolution, a party deliberating on the stairs
+    // advanced no time at all, `done` could never fire for a party that avoided
+    // fighting, and a baseline swept to `days: 40` was given forty *fights*
+    // where an agent run gets forty turns of everything. The ladder and the
+    // agent score were measuring different budgets.
+    const sim = fresh();
+    expect(sim.view().phase).toBe("explore");
+    expect(sim.day).toBe(0);
+    sim.advance();
+    expect(sim.day).toBe(1);
+    sim.advance();
+    expect(sim.day).toBe(2);
+  });
+
+  it("ends a run that spends its whole horizon without fighting", () => {
+    const sim = createSimulation("descent", { seed: 5, days: 6 });
+    let guard = 0;
+    while (!sim.done && guard++ < 50) sim.advance();
+    expect(sim.done).toBe(true);
+    expect(guard).toBeLessThanOrEqual(7);
+  });
+});
+
+describe("the snapshot", () => {
+  /**
+   * `snapshot()` is read as a run's metrics by the live milestone scorer, which
+   * rebuilds a partial run from the trace while the run is still going. A
+   * simulation whose snapshot carries only display fields silently disables
+   * every `sim_metric` milestone for the whole run — the first agent run of
+   * this scenario reported one milestone out of fifteen on screen while the
+   * party had killed a boss and cleared a floor.
+   *
+   * Checked across every registered simulation rather than just this one,
+   * because the convention is undocumented and the next author will not know it
+   * either.
+   */
+  it("is metric-shaped in every simulation, because live scoring reads it as metrics", () => {
+    for (const name of listSimulations()) {
+      const sim = createSimulation(name, { seed: 1, days: 5 });
+      const snapshot = sim.snapshot();
+      const metrics = sim.metrics();
+      const missing = Object.keys(metrics).filter((k) => !(k in snapshot));
+      expect(missing, `${name}.snapshot() is missing metrics: ${missing.join(", ")}`).toEqual([]);
+    }
+  });
+
+  it("still carries what the viewer draws", () => {
+    const snapshot = fresh().snapshot();
+    for (const key of ["floor", "phase", "tick", "dread", "enemies", "readied", "guardian", "survivors"]) {
+      expect(snapshot, `viewer needs ${key}`).toHaveProperty(key);
+    }
+  });
+});
+
+describe("the coordination diagnostic", () => {
+  it("counts a round in which several agents acted", async () => {
+    // `resolveTick` empties the intent queue, so reading its length afterwards
+    // to decide whether the round had more than one actor always answered no,
+    // and this diagnostic reported 0% for every run regardless of play.
+    const sim = fresh();
+    await intoCombat(sim);
+    const ref = sim.view().enemies[0].ref;
+    await call(sim, "guardian", "attack", { target: ref });
+    await call(sim, "ranger", "shoot", { target: ref });
+    await call(sim, "rogue", "attack", { target: ref });
+    sim.advance();
+    expect(sim.metrics().diagCoordination).toBeGreaterThan(0);
+  });
+});
+
+describe("the baseline ladder", () => {
+  const SEEDS = Array.from({ length: 12 }, (_, i) => 2000 + i);
+  const rungs = Object.entries(DESCENT_POLICIES).map(([, make]) =>
+    summarise(sweep("descent", make(), SEEDS, 1500), { key: "earnedXp" }),
+  );
+  const by = (name: string) => rungs.find((r) => r.policy === name) as (typeof rungs)[number];
+
+  /**
+   * The rungs that are meant to be ordered.
+   *
+   * `greedy-dps` is deliberately outside it. Over thirty seeds it lands below
+   * `random`; over twelve the two are within one percent of each other, which
+   * is not an ordering, it is noise — asserting it would give this suite a test
+   * that fails on the seed count rather than on the code.
+   */
+  const SPINE = ["random", "basic-tactics", "tactics-only", "rule-based", "oracle"];
+
+  it("is monotonic — every rung on the spine pays for what it adds", () => {
+    const means = SPINE.map((name) => by(name).mean);
+    expect(means).toEqual([...means].sort((a, b) => a - b));
+  });
+
+  it("puts a party with no healer at the bottom, wherever random lands", () => {
+    expect(by("greedy-dps").mean).toBeLessThan(by("basic-tactics").mean);
+  });
+
+  it("spans a wide enough range to measure an agent into", () => {
+    // Without this check the whole scenario is unfalsifiable: a dungeon where
+    // every policy scores the same would still produce a confident-looking
+    // number for an agent run.
+    const { spread } = gradient(rungs);
+    expect(spread).toBeGreaterThan(20_000);
+  });
+
+  it("makes perfect recall worth a large fraction of the top score", () => {
+    // The scenario's headline claim. If the oracle — which knows every hidden
+    // mechanic from the first tick — cannot clearly beat a party that knows
+    // none of them, the memory diagnostic is measuring something that does not
+    // matter, and the mechanics need sharpening rather than the agents.
+    //
+    // It has already failed once for exactly that reason: with hidden mechanics
+    // that did not scale with depth, the oracle finished *behind* rule-based.
+    expect(by("oracle").mean).toBeGreaterThan(by("rule-based").mean * 1.2);
+  });
+
+  it("ends every run, one way or the other", () => {
+    for (const rung of rungs) expect(rung.runs).toBe(SEEDS.length);
+  });
+});
+
+/**
+ * The pacing contract.
+ *
+ * A forty-round run at floor 31 used to cover one floor and eleven enemies:
+ * nineteen of its first twenty-four rounds were a single fight, and every
+ * scenario milestone needing a descent or a quiet moment was unreachable by any
+ * policy, the omniscient one included. Three separate things caused it and each
+ * is pinned here, because each would be silently undone by an ordinary-looking
+ * balance edit.
+ */
+describe("pacing", () => {
+  it("keeps an encounter short enough that a run is a descent, not a fight", () => {
+    // The measurement that matters, stated as the invariant it protects: a
+    // competent party gets down several floors inside a horizon.
+    const sim = createSimulation("descent", { seed: 1000, days: 40, startFloor: 31 }) as DescentSimulation;
+    const policy = simulationPolicies("descent")["rule-based"]();
+    const phases: Record<string, number> = {};
+    while (!sim.done) {
+      phases[sim.view().phase] = (phases[sim.view().phase] ?? 0) + 1;
+      policy.act(sim);
+      sim.advance();
+    }
+    // Before the fix this was 1. The bar is deliberately below what the
+    // baselines actually manage (about five) so ordinary tuning does not
+    // trip it, and well above the broken behaviour.
+    expect(sim.metrics().floorsCleared, "a forty-round run should be a descent").toBeGreaterThanOrEqual(3);
+    // And combat must not eat the whole run: the decisions this scenario
+    // exists to measure — pathing, spoils, trading, the market — all live in
+    // the other phases.
+    expect(phases.combat, "combat should not be the entire run").toBeLessThan(34);
+  });
+
+  it("keeps encounter health tracking the party's damage rather than outrunning it", () => {
+    // The scaling contract from `depthScale`, checked directly.
+    //
+    // The end-to-end test above cannot see this on its own: with the dread and
+    // enemy-count fixes in place, the old health curve still cleared four
+    // floors against the new one's five, and no threshold separates those
+    // without being brittle to the seed. So this asserts the property itself —
+    // how much longer an encounter takes, per point of party damage, as depth
+    // grows. Flat is the goal; the old curve was 3.4× worse at floor 40 than
+    // at floor 8, which is the "floor 50 is floor 1 with a longer fight"
+    // failure the content header warns about.
+    // Averaged over several rolls, because which families turn up swings a
+    // single encounter's health by more than the effect being measured.
+    const roundsToClear = (floor: number) => {
+      const sim = createSimulation("descent", { seed: 3, days: 10, startFloor: floor }) as DescentSimulation;
+      const damage = Object.values(sim.view().party).reduce((a, f) => a + f.power, 0);
+      const rolls = Array.from({ length: 12 }, (_, i) =>
+        generateEncounter(floor, 0, false, makeRng(100 + i)).reduce((a, e) => a + e.hp, 0),
+      );
+      return rolls.reduce((a, b) => a + b, 0) / rolls.length / damage;
+    };
+    // Measured at the time of the change: 2.1 with the health curve tracking
+    // party damage, 4.8 with the old one. The bar sits between, well clear of
+    // both.
+    const drift = roundsToClear(48) / roundsToClear(8);
+    expect(drift, "an encounter at depth should not take multiples longer to clear").toBeLessThan(3);
+  });
+
+  it("does not charge dread for being in a fight", () => {
+    // Dread is the price of lingering. While combat charged it, a long fight
+    // raised dread, dread bought the next encounter reinforcements, and the
+    // bigger encounter took longer still — with nothing anywhere pushing back.
+    const sim = createSimulation("descent", { seed: 7, days: 40, startFloor: 31 }) as DescentSimulation;
+    const s = sim.view();
+    s.phase = "combat";
+    s.enemies = [makeEnemy(FAMILIES[0], 0, 31, 1, false)];
+    s.dread = 4;
+    sim.advance();
+    expect(s.dread, "a round spent fighting is not a round spent dawdling").toBeLessThanOrEqual(4);
+  });
+
+  it("still charges dread for standing about", () => {
+    // The other half — without this the fix above would simply disable dread.
+    const sim = createSimulation("descent", { seed: 7, days: 40, startFloor: 31 }) as DescentSimulation;
+    const s = sim.view();
+    s.phase = "spoils";
+    const before = s.dread;
+    sim.advance();
+    expect(s.dread).toBeGreaterThan(before);
+  });
+
+  it("caps reinforcements however long the party dawdled", () => {
+    // The ceiling that holds even if the dread accounting is mistuned again.
+    const calm = generateEncounter(31, 0, false, makeRng(5)).length;
+    const dreadful = generateEncounter(31, 40, false, makeRng(5)).length;
+    expect(dreadful - calm, "dread adds at most one body").toBeLessThanOrEqual(1);
+  });
+});
+
+/**
+ * The two mechanics that turn an item from a private upgrade into a party
+ * decision. Both exist because run 3 measured the alternative: 5,309 gold
+ * spent, every coin by one agent on themselves, `diagPooling` reading zero.
+ */
+describe("resources the party has to share", () => {
+  /** Drop a party straight into a cache, since reaching one takes a floor. */
+  function atCache(seed = 4) {
+    const sim = createSimulation("descent", { seed, days: 40, startFloor: 31 }) as DescentSimulation;
+    const s = sim.view();
+    s.phase = "cache";
+    s.cache = [{ item: "vitality_ring" }, { item: "plate_cuirass" }, { item: "arc_staff" }, { item: "healing_potion" }];
+    s.cacheTakesLeft = 2;
+    s.cacheOrigin = "a survey party out of Belm";
+    return sim;
+  }
+
+  it("lets the party carry out only what the cap allows", async () => {
+    const sim = atCache();
+    expect(await call(sim, "guardian", "take", { item: "vitality_ring" })).toMatch(/take Ring of Vitality/i);
+    expect(await call(sim, "mage", "take", { item: "arc_staff" })).toMatch(/take Arcstaff/i);
+    // Third take, with two things still lying there: the cap is the mechanic.
+    const refused = await call(sim, "rogue", "take", { item: "plate_cuirass" });
+    expect(refused).toMatch(/all you can/i);
+    expect(sim.view().cache.filter((x) => x.taken).length).toBe(2);
+  });
+
+  it("says who took what, so the party can see the split", async () => {
+    const sim = atCache();
+    await call(sim, "cleric", "take", { item: "healing_potion" });
+    expect(sim.view().cache.find((x) => x.item === "healing_potion")?.taken).toBe("cleric");
+  });
+
+  it("reads a shared cache differently from one member emptying it", async () => {
+    const shared = atCache();
+    await call(shared, "guardian", "take", { item: "vitality_ring" });
+    await call(shared, "mage", "take", { item: "arc_staff" });
+
+    const hoarded = atCache();
+    await call(hoarded, "guardian", "take", { item: "vitality_ring" });
+    await call(hoarded, "guardian", "take", { item: "arc_staff" });
+
+    // Identical in every other metric — same items, same count, same floor.
+    expect(shared.metrics().cacheTakes).toBe(hoarded.metrics().cacheTakes);
+    expect(shared.metrics().diagPooling).toBeGreaterThan(hoarded.metrics().diagPooling);
+  });
+
+  it("caps how many trinkets the party keeps attuned", async () => {
+    const sim = createSimulation("descent", { seed: 4, days: 40, startFloor: 31 }) as DescentSimulation;
+    const s = sim.view();
+    s.phase = "spoils";
+    for (const who of ["guardian", "mage", "rogue"] as const) s.party[who].inventory.push("vitality_ring");
+
+    expect(await call(sim, "guardian", "equip_item", { item: "vitality_ring" })).toMatch(/put on/i);
+    expect(await call(sim, "mage", "equip_item", { item: "vitality_ring" })).toMatch(/put on/i);
+
+    // The third is not a refusal to be worked around — it names who is holding
+    // the slots, because the next move is asking one of them to give it up.
+    const refused = await call(sim, "rogue", "equip_item", { item: "vitality_ring" });
+    expect(refused).toMatch(/only keep 2 trinkets/i);
+    expect(refused).toMatch(/guardian/);
+    expect(refused).toMatch(/mage/);
+  });
+
+  it("lets somebody give a slot up, so the cap is a negotiation and not a lock", async () => {
+    const sim = createSimulation("descent", { seed: 4, days: 40, startFloor: 31 }) as DescentSimulation;
+    const s = sim.view();
+    s.phase = "spoils";
+    for (const who of ["guardian", "mage", "rogue"] as const) s.party[who].inventory.push("vitality_ring");
+    await call(sim, "guardian", "equip_item", { item: "vitality_ring" });
+    await call(sim, "mage", "equip_item", { item: "vitality_ring" });
+
+    expect(await call(sim, "mage", "unequip", { slot: "trinket" })).toMatch(/take off/i);
+    expect(await call(sim, "rogue", "equip_item", { item: "vitality_ring" })).toMatch(/put on/i);
+    expect(s.party.rogue.equipped.trinket).toBe("vitality_ring");
+    expect(s.party.mage.equipped.trinket).toBeUndefined();
+  });
+
+  it("still lets a trinket be swapped for a better one without freeing a slot", async () => {
+    // Replacing your own is not a new attunement, and blocking it would make
+    // the cap punish upgrading rather than hoarding.
+    const sim = createSimulation("descent", { seed: 4, days: 40, startFloor: 31 }) as DescentSimulation;
+    const s = sim.view();
+    s.phase = "spoils";
+    s.party.guardian.inventory.push("vitality_ring");
+    s.party.mage.inventory.push("vitality_ring");
+    s.party.guardian.inventory.push("swift_charm");
+    await call(sim, "guardian", "equip_item", { item: "vitality_ring" });
+    await call(sim, "mage", "equip_item", { item: "vitality_ring" });
+    expect(await call(sim, "guardian", "equip_item", { item: "swift_charm" })).toMatch(/put on/i);
+  });
+});
+
+describe("scouting", () => {
+  it("gives what it found to the scout alone, so it has to be relayed", async () => {
+    const sim = createSimulation("descent", { seed: 9, days: 40, startFloor: 31 }) as DescentSimulation;
+    expect(sim.view().phase).toBe("explore");
+    const seen = await call(sim, "rogue", "scout");
+    expect(seen).toMatch(/nobody else can see/i);
+
+    // The rogue's own view carries it.
+    expect(sim.describeFor("rogue")).toMatch(/What you saw ahead/);
+    // Everybody else is told only that it happened. This is the property the
+    // whole action exists for: before it, the finding was written into shared
+    // state and `describe` rendered it for the entire party, so the one thing
+    // in the scenario that could create information asymmetry created none.
+    for (const other of ["guardian", "mage", "cleric", "ranger"]) {
+      const view = sim.describeFor(other);
+      expect(view, `${other} should not see the report`).not.toMatch(/What you saw ahead/);
+      expect(view, `${other} should be told to go and ask`).toMatch(/went ahead and came back/);
+    }
+  });
+
+  it("costs something, so looking is a decision rather than a reflex", async () => {
+    const sim = createSimulation("descent", { seed: 9, days: 40, startFloor: 31 }) as DescentSimulation;
+    const before = sim.view().dread;
+    await call(sim, "rogue", "scout");
+    expect(sim.view().dread).toBeGreaterThan(before);
+  });
+
+  it("belongs to the rogue", async () => {
+    const sim = createSimulation("descent", { seed: 9, days: 40, startFloor: 31 }) as DescentSimulation;
+    expect(await call(sim, "guardian", "scout")).toMatch(/belongs to the rogue/);
+  });
+});
+
+describe("starting partway down", () => {
+  it("hands the party what a party that walked there would have", () => {
+    // Walked, not remembered.
+    //
+    // This used to compare `equipForDepth` against three constants measured
+    // from `rule-based` at the time it was written — 1,433 experience at floor
+    // 8, 3,298 at 12, 15,003 at 25. Both sides of that comparison were frozen,
+    // so it went on passing through a pacing change that moved every real
+    // arrival: the formula was unchanged, the constants were unchanged, and
+    // the property they existed to protect was not being checked at all.
+    //
+    // Now it walks a party down and compares against what that party actually
+    // holds. The tolerance is wide because the walk is seeded and short; what
+    // it catches is the failure that matters — a granted curve drifting away
+    // from the game it is meant to summarise.
+    const walkTo = (floor: number, seed: number) => {
+      const sim = createSimulation("descent", { seed, days: 400 }) as DescentSimulation;
+      const policy = simulationPolicies("descent")["rule-based"]();
+      let guard = 0;
+      while (!sim.done && sim.view().floor < floor && guard++ < 5_000) {
+        policy.act(sim);
+        sim.advance();
+      }
+      return sim;
+    };
+
+    for (const floor of [8, 12]) {
+      const walked = [1, 2, 3].map((seed) => walkTo(floor, seed)).filter((s) => s.view().floor >= floor);
+      expect(walked.length, `a rule-based party should reach floor ${floor}`).toBeGreaterThan(0);
+      const mean = walked.reduce((a, s) => a + s.metrics().totalXp, 0) / walked.length;
+
+      const granted = (
+        createSimulation("descent", { seed: 1, days: 10, startFloor: floor }) as DescentSimulation
+      ).metrics().totalXp;
+      expect(granted, `floor ${floor}: granted ${granted} vs walked ${Math.round(mean)}`).toBeGreaterThan(mean * 0.7);
+      expect(granted, `floor ${floor}: granted ${granted} vs walked ${Math.round(mean)}`).toBeLessThan(mean * 1.4);
+    }
+  });
+
+  it("scores what the party earned, never what it was given", () => {
+    const sim = createSimulation("descent", { seed: 1, days: 10, startFloor: 26 }) as DescentSimulation;
+    // Eighteen thousand experience for standing on floor 26. None of it is
+    // theirs, and a threshold scored against `totalXp` would pass on tick zero.
+    expect(sim.metrics().totalXp).toBeGreaterThan(15_000);
+    expect(sim.metrics().earnedXp).toBe(0);
+    expect(sim.objective()).toBe(0);
+    expect(sim.metrics().floorsCleared).toBe(0);
+  });
+
+  it("starts on the floor it was asked for", () => {
+    const sim = createSimulation("descent", { seed: 1, days: 10, startFloor: 26 }) as DescentSimulation;
+    expect(sim.view().floor).toBe(26);
+    expect(sim.snapshot().floor).toBe(26);
+  });
+});
+
+describe("reproducibility", () => {
+  it("gives the same run for the same seed and the same policy", () => {
+    const play = () => {
+      const policy = simulationPolicies("descent")["rule-based"]();
+      const sim = createSimulation("descent", { seed: 4242, days: 300 });
+      let guard = 0;
+      while (!sim.done && guard++ < 2000) {
+        policy.act(sim);
+        sim.advance();
+      }
+      return sim.metrics();
+    };
+    expect(play()).toEqual(play());
+  });
+
+  it("gives different runs for different seeds", () => {
+    const play = (seed: number) => {
+      const policy = simulationPolicies("descent")["rule-based"]();
+      const sim = createSimulation("descent", { seed, days: 300 });
+      let guard = 0;
+      while (!sim.done && guard++ < 2000) {
+        policy.act(sim);
+        sim.advance();
+      }
+      return sim.metrics().totalXp;
+    };
+    expect(play(1)).not.toEqual(play(2));
+  });
+});
+
+describe("levelling", () => {
+  it("keeps the party behind the dungeon, but not so far behind it is arithmetic", () => {
+    expect(levelFor(0)).toBe(1);
+    expect(levelFor(100)).toBe(2);
+    // The failure this replaced: the party reached the floor-five boss at level
+    // two and lost to a number rather than to a decision.
+    expect(levelFor(1_000)).toBeGreaterThanOrEqual(5);
+    // And still behind the dungeon at the depth a good party actually reaches:
+    // roughly level 48 against floor 39, where enemy health has gone up 13×.
+    expect(levelFor(40_000)).toBeGreaterThan(30);
+    expect(levelFor(40_000)).toBeLessThan(60);
+  });
+});
+
+describe("a fighter's numbers", () => {
+  it("recomputes rather than accumulates when gear changes hands", async () => {
+    const sim = fresh();
+    const guardian: Fighter = sim.view().party.guardian;
+    const armour = guardian.armor;
+    guardian.inventory.push("plate_cuirass");
+    await call(sim, "guardian", "equip_item", { item: "plate_cuirass" });
+    const equipped = guardian.armor;
+    expect(equipped).toBeGreaterThan(armour);
+    // Equipping the same thing twice must not compound it.
+    await call(sim, "guardian", "equip_item", { item: "plate_cuirass" });
+    expect(guardian.armor).toBe(equipped);
+  });
+});

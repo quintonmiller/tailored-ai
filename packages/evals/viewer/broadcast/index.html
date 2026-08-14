@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>The Endless Descent — broadcast</title>
+    <link rel="stylesheet" href="/broadcast/style.css" />
+  </head>
+  <body>
+    <!--
+      The shell, and nothing else. Every box below is a mount point owned by
+      exactly one module, and no module reaches into another's box — which is
+      what lets the stage, the HUD, the feed and the scoreboard be written and
+      changed independently.
+
+      `state.js` is the only thing that talks to the server. See
+      docs/broadcast-viewer.md.
+    -->
+    <header class="top">
+      <div class="title">The <b>Endless</b> Descent</div>
+      <div class="facts" id="facts"></div>
+      <div class="pill" id="status">connecting</div>
+    </header>
+
+    <main>
+      <!--
+        Left: everything that can wait a few seconds. The account of what
+        happened moved here from the right column, because it was rotating
+        against the party channel and the party channel is the show.
+      -->
+      <div class="col">
+        <div class="slot" id="slot-left">
+          <section class="panel" data-panel="map">
+            <h2>The descent</h2>
+            <div class="body" id="map"></div>
+          </section>
+          <section class="panel" data-panel="log">
+            <h2>What happened</h2>
+            <div class="body" id="log"></div>
+          </section>
+          <section class="panel" data-panel="records">
+            <h2>Records</h2>
+            <div class="body" id="records"></div>
+          </section>
+          <section class="panel" data-panel="progress">
+            <h2>Progress</h2>
+            <div class="body" id="progress"></div>
+          </section>
+        </div>
+      </div>
+
+      <!--
+        Centre: the stage never rotates away, and under it the two things that
+        explain what it is doing — what each of the five has committed to this
+        round, and how they are holding up.
+      -->
+      <div class="centre">
+        <section class="panel" id="stage"></section>
+        <section class="panel" style="flex: 0 0 auto">
+          <h2>Readied this round</h2>
+          <div id="ribbon"></div>
+        </section>
+        <section class="panel" style="flex: 0 0 auto">
+          <div class="body" id="party" style="padding: 8px 10px"></div>
+        </section>
+      </div>
+
+      <!--
+        Right: commentary above, and the party channel permanently below it.
+        Neither rotates. A viewer following an argument about who takes the
+        second thing out of a cache should never be cut away from it.
+      -->
+      <div class="col">
+        <section class="panel" style="flex: 0 0 auto">
+          <h2>Commentary</h2>
+          <div class="body" id="narration"></div>
+        </section>
+        <section class="panel">
+          <h2>Party channel</h2>
+          <div class="body" id="chat"></div>
+        </section>
+      </div>
+    </main>
+
+    <!--
+      One bundle, built from `viewer/broadcast/src/` by esbuild.
+
+      The developer viewer at `/` is still a single file with an inline script,
+      and that is right for what it is: it re-reads per request, so editing it is
+      instant. This page is five modules and four thousand lines, which is past
+      the point where "no build step" stops being a simplification and starts
+      being an argument for leaving it untyped.
+    -->
+    <script type="module" src="/broadcast/dist/broadcast.js"></script>
+  </body>
+</html>

@@ -1,0 +1,300 @@
+/*
+ * Tokens and layout for the broadcast page.
+ *
+ * Everything here is sized for something being *watched* rather than read at
+ * arm's length: large type, few simultaneous moving things, and no state that is
+ * carried only by a small colour difference. A viewer three metres from a screen
+ * — or looking at a re-encoded stream — has to be able to tell a party in
+ * trouble from a party winning without squinting at a number.
+ *
+ * Single-theme on purpose. This is a lit stage in a dark room; a light variant
+ * would be a different design rather than the same one inverted.
+ */
+
+:root {
+  /* Ground: cold, deep, slightly blue — stone underground rather than pure black. */
+  --ground: #0a0d13;
+  --panel: #111621;
+  --panel-2: #161d2b;
+  --line: #232c3d;
+
+  /* Torchlight. The one warm thing in the palette, so it reads as the accent
+     everywhere it appears without being announced. */
+  --flame: #f0a04b;
+  --flame-dim: #7a4f20;
+
+  --ink: #e8edf6;
+  --dim: #8291ab;
+  --faint: #4d5a72;
+
+  --good: #5fb98a;
+  --warn: #e0b040;
+  --bad: #d9564f;
+  --arcane: #7b8ff5;
+  --gold: #d9b45c;
+
+  /* One colour per class, used by every module: the stage, the bars, the
+     speech bubbles and the log all have to agree on who is who. */
+  --guardian: #d8b45a;
+  --mage: #7b8ff5;
+  --rogue: #b06fd6;
+  --cleric: #5fb98a;
+  --ranger: #4fb3c4;
+
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Inter, sans-serif;
+
+  --gap: 10px;
+  --radius: 10px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  /* A stage that fills whatever it is given, down to a laptop and up to a
+     television, without any panel ever scrolling the page itself. */
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---- header ------------------------------------------------------------ */
+
+.top {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, #141a26, var(--panel));
+  flex: 0 0 auto;
+}
+
+.title {
+  font: 700 19px/1 var(--sans);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.title b {
+  color: var(--flame);
+  font-weight: 700;
+}
+
+.top .facts {
+  display: flex;
+  gap: 14px;
+  font: 13px/1 var(--mono);
+  color: var(--dim);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.top .facts b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.pill {
+  font: 11px/1 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding: 5px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+.pill.live {
+  border-color: #2f6b4b;
+  color: var(--good);
+}
+
+.pill.live::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--good);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.pill.done {
+  border-color: var(--flame-dim);
+  color: var(--flame);
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+/* ---- the three columns ------------------------------------------------- */
+
+main {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 270px minmax(0, 1fr) 320px;
+  gap: var(--gap);
+  padding: var(--gap);
+}
+
+.col {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+}
+
+.centre {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: var(--gap);
+  min-height: 0;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.panel > h2 {
+  margin: 0;
+  padding: 9px 12px 7px;
+  font: 600 10px/1 var(--sans);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--faint);
+  border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+
+.panel > .body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 10px 12px;
+}
+
+/*
+ * A rotating slot: several panels share one box and the director fades between
+ * them. There is more to show than fits, and a static layout would either be
+ * crowded or leave most of it out.
+ */
+.slot {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.slot > .panel {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.45s ease, transform 0.45s ease;
+  pointer-events: none;
+}
+
+.slot > .panel.on {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slot > .panel {
+    transition: none;
+  }
+  .pill.live::before {
+    animation: none;
+  }
+}
+
+/* ---- stage ------------------------------------------------------------- */
+
+#stage {
+  padding: 0;
+  background: radial-gradient(ellipse at 50% 30%, #16202f 0%, #0b0f17 70%);
+}
+
+#stage canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ---- shared small parts ------------------------------------------------ */
+
+.meter {
+  height: 6px;
+  border-radius: 3px;
+  background: #0d1219;
+  overflow: hidden;
+}
+
+.meter i {
+  display: block;
+  height: 100%;
+  width: 100%;
+  transform-origin: left;
+  transition: transform 0.45s ease, background 0.3s ease;
+  background: var(--good);
+}
+
+.meter.hurt i {
+  background: var(--warn);
+}
+
+.meter.dire i {
+  background: var(--bad);
+}
+
+.meter.mana i {
+  background: var(--arcane);
+}
+
+.k {
+  font: 10px/1 var(--sans);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.num {
+  font: 13px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.empty {
+  color: var(--faint);
+  font: 12px/1.5 var(--sans);
+  padding: 6px 0;
+}

@@ -72,6 +72,26 @@ export interface Simulation {
   sharedTools(): Tool[];
   /** Advance one day. Returns what the world did overnight. */
   advance(): SimEvent[];
+  /**
+   * One line, posted in every room at the top of each round.
+   *
+   * Load-bearing rather than decoration. `pollOnce` runs no turn when a room
+   * has nothing new in it, so on a round where nobody happened to post, every
+   * agent would sleep while the harness advanced the clock to the horizon
+   * without them — and the report would show a team that chose to say nothing,
+   * which is precisely the thing this benchmark is supposed to distinguish from
+   * a team that was never woken.
+   *
+   * It belongs to the simulation because it is the simulation's world being
+   * described. The harness used to write this sentence itself, which meant the
+   * runner knew a factory had customers and books; every simulation after the
+   * first would have inherited that or forced the runner to grow a branch per
+   * world.
+   *
+   * Say only what the whole team may know. Anything the simulation deliberately
+   * gave to one role is a leak if it goes here.
+   */
+  announce?(): string | undefined;
   /** Everything that has happened, in order. */
   readonly events: SimEvent[];
   /**
@@ -123,14 +143,45 @@ export interface SimulationOptions {
 
 export type SimulationFactory = (options: SimulationOptions) => Simulation;
 
-const registry = new Map<string, { create: SimulationFactory; policies: Record<string, () => Policy> }>();
+/**
+ * How a simulation wants its baseline ladder printed.
+ *
+ * Declared by the simulation rather than known by the reporter, for the same
+ * reason the round announcement moved out of the harness: `eval bench` used to
+ * render every ladder in dollars with a bankruptcy column, which is the
+ * factory's vocabulary and nobody else's. A dungeon ranked by experience came
+ * out as `$0` in every row.
+ *
+ * Absent means "rank by `objective()`, print it as a number" — which is always
+ * correct, because every simulation has an objective by contract.
+ */
+export interface SimulationReport {
+  /** The metric that ranks a run. Defaults to `objective`. */
+  key: string;
+  /** How to render one value of that metric. */
+  format?: (value: number) => string;
+  /** Extra columns. `mean` averages the metric; `rate` reports how often it was non-zero. */
+  columns?: Array<{ label: string; key: string; kind: "mean" | "rate" }>;
+}
+
+export const DEFAULT_REPORT: SimulationReport = { key: "objective" };
+
+const registry = new Map<
+  string,
+  { create: SimulationFactory; policies: Record<string, () => Policy>; report: SimulationReport }
+>();
 
 export function registerSimulation(
   name: string,
   create: SimulationFactory,
   policies: Record<string, () => Policy> = {},
+  report: SimulationReport = DEFAULT_REPORT,
 ): void {
-  registry.set(name, { create, policies });
+  registry.set(name, { create, policies, report });
+}
+
+export function simulationReport(name: string): SimulationReport {
+  return registry.get(name)?.report ?? DEFAULT_REPORT;
 }
 
 export function createSimulation(name: string, options: SimulationOptions): Simulation {

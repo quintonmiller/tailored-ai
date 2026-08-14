@@ -297,6 +297,16 @@ export interface SimulationOutcome {
   /** Role → agent, carried through so a re-grade can still say who could see what. */
   roles: Record<string, string>;
   /**
+   * The simulation-specific knobs the scenario set, carried for provenance.
+   *
+   * The report replays the baseline ladder live rather than storing it, and a
+   * ladder replayed without these is a ladder for a different world: a descent
+   * that starts the party on floor 30 compared against bots that started on
+   * floor 1 is not a comparison. Same argument as recording the model and the
+   * seed — a benchmark number with no provenance is worse than none.
+   */
+  options?: Record<string, unknown>;
+  /**
    * What answering each event kind looks like, copied off the simulation.
    *
    * Stored on the report rather than looked up at grade time, so a re-grade of
