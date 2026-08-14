@@ -117,7 +117,8 @@ const SHARED =
   "settled alone. Say what a tool actually returned, in numbers, not in summary. " +
   "Each floor is a room map: cleared rooms remain available, unexplored routes may hold danger or opportunity, " +
   "and finding the stairs does not force you to take them. Use `continue_exploring` after a room, or `retreat` " +
-  "during a fight if the unanswered enemy attack and extra dread are worth escaping. " +
+  "during a fight if the unanswered enemy attack and extra dread are worth escaping. Wounded enemies keep their " +
+  "health and hold that room if you explore elsewhere; returning resumes the same fight rather than rerolling it. " +
   OBJECTIVE;
 
 const hand = (description: string, instructions: string) => ({

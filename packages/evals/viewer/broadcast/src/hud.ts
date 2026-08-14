@@ -526,6 +526,10 @@ const STYLES = `
 .hud-roomnode.visited { border-color: var(--dim); color: var(--ink); }
 .hud-roomnode.mapped { border-style: dashed; border-color: var(--arcane); }
 .hud-roomnode.cleared { background: #18212d; }
+.hud-roomnode.occupied {
+  border-color: var(--bad); color: var(--bad);
+  box-shadow: 0 0 0 4px rgba(220, 75, 75, .12);
+}
 .hud-roomnode.current { border: 2px solid var(--flame); color: var(--flame); box-shadow: 0 0 0 4px rgba(240, 160, 75, .12); }
 .hud-roomnode.current em { display: block; color: var(--ink); }
 .hud-roomnode[data-kind="boss"], .hud-roomnode[data-kind="elite"] { color: var(--bad); }
@@ -1274,8 +1278,9 @@ function buildMap(host: HTMLElement): (scene: Scene | null) => void {
       flag(node, "visited", room.visited);
       flag(node, "mapped", room.revealed && !room.visited);
       flag(node, "cleared", room.cleared);
-      node.append(el("b", null, glyphs[room.kind] ?? "?"), el("em", null, room.label));
-      node.title = `${room.label} · ${room.kind}${room.revealed && !room.visited ? " · revealed by equipment" : ""}${room.cleared ? " · cleared" : ""}`;
+      flag(node, "occupied", !!room.threat);
+      node.append(el("b", null, room.threat ? `⚔${room.threat.enemies}` : (glyphs[room.kind] ?? "?")), el("em", null, room.label));
+      node.title = `${room.label} · ${room.kind}${room.revealed && !room.visited ? " · revealed by equipment" : ""}${room.cleared ? " · cleared" : ""}${room.threat ? ` · ${room.threat.enemies} enemies remain at ${room.threat.hp}/${room.threat.maxHp} hp after ${room.threat.retreats} retreat${room.threat.retreats === 1 ? "" : "s"}` : ""}`;
       graphCanvas.appendChild(node);
     }
   }

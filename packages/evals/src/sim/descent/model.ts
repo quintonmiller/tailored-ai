@@ -233,6 +233,14 @@ export interface EncounterLog {
 
 export type RoomKind = "entrance" | "empty" | "combat" | "elite" | "boss" | "market" | "cache" | "shrine" | "stairs";
 
+/** Combat state belongs to a room, so leaving cannot reroll its occupants. */
+export interface RoomEncounter {
+  enemies: Enemy[];
+  /** Gold carried by enemies already killed here, paid only when the room is cleared. */
+  bankedGold: number;
+  retreats: number;
+}
+
 export interface DungeonRoom {
   id: string;
   label: string;
@@ -244,6 +252,8 @@ export interface DungeonRoom {
   /** Learned without entering, usually from an equipped scouting item. */
   revealed: boolean;
   cleared: boolean;
+  /** Surviving enemies and partial progress left behind after a retreat. */
+  encounter?: RoomEncounter;
 }
 
 export interface DungeonFloorMap {

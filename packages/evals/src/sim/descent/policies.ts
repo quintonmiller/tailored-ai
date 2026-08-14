@@ -110,6 +110,15 @@ const usefulPaths = (s: DescentState): DescentState["paths"] => {
   return s.paths;
 };
 
+const pathHasEscapedEncounter = (s: DescentState, path: DescentState["paths"][number]): boolean => {
+  if (!s.map) return path.kind === "retreat";
+  const room =
+    path.kind === "retreat"
+      ? s.map.rooms.find((candidate) => candidate.id === s.map?.currentRoom)
+      : s.map.rooms.find((candidate) => candidate.id === path.id);
+  return room?.encounter?.enemies.some((enemy) => enemy.hp > 0) ?? false;
+};
+
 /** Rough worth of a piece of gear, used to decide upgrades and purchases. */
 function gearScore(item: ItemInstance | string, owner?: ClassId): number {
   const def = itemDef(item);
@@ -443,6 +452,8 @@ function greedyPolicy(): Policy {
     // random when what it actually is is a policy with no healer.
     path: (_sim, s) => {
       const paths = usefulPaths(s);
+      const wounded = paths.find((path) => pathHasEscapedEncounter(s, path));
+      if (healthFraction(s) > 0.72 && wounded) return wounded.id;
       return (
         (healthFraction(s) > 0.7 ? paths.find((p) => p.kind === "elite") : undefined)?.id ??
         paths.find((p) => p.kind === "unknown")?.id ??
@@ -489,7 +500,13 @@ function basicPolicy(): Policy {
   return drive("basic-tactics", {
     path: (_sim, s) => {
       const paths = usefulPaths(s);
-      return (paths.find((p) => p.kind === "shrine") ?? paths.find((p) => p.kind !== "elite") ?? paths[0]).id;
+      const wounded = paths.find((path) => pathHasEscapedEncounter(s, path));
+      return (
+        (healthFraction(s) > 0.7 ? wounded : undefined) ??
+        paths.find((p) => p.kind === "shrine") ??
+        paths.find((p) => p.kind !== "elite") ??
+        paths[0]
+      ).id;
     },
     fight: (sim, s) => {
       const target = weakest(s);
@@ -619,6 +636,7 @@ function ruleBasedPolicy(omniscient = false): Policy {
     },
     path: (_sim, s) => {
       const paths = usefulPaths(s);
+      const wounded = paths.find((path) => pathHasEscapedEncounter(s, path));
       const cache = paths.find((p) => p.kind === "cache");
       const market = paths.find((p) => p.kind === "market");
       const elite = paths.find((p) => p.kind === "elite");
@@ -636,6 +654,7 @@ function ruleBasedPolicy(omniscient = false): Policy {
       // Ordering by *party state* instead gives every path a real turn.
       const health = healthFraction(s);
       if (health < 0.5 && shrine) return shrine.id;
+      if (health > 0.65 && wounded) return wounded.id;
       // Strong enough to want the harder room, which pays the most experience.
       if (health > 0.8 && elite) return elite.id;
       // Middling: take the ordinary room that also has somebody's packs in it.

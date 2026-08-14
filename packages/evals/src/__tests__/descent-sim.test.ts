@@ -677,6 +677,18 @@ describe("run variation", () => {
 });
 
 describe("descent pressure", () => {
+  const mazeFight = () => {
+    for (let seed = 1; seed <= 100; seed++) {
+      const sim = createSimulation("descent", { seed, days: 400, maze: true }) as DescentSimulation;
+      const path = sim.view().paths.find((candidate) => ["combat", "elite", "boss"].includes(candidate.kind));
+      if (!path) continue;
+      sim.choosePath("guardian", path.id);
+      sim.advance();
+      if (sim.view().phase === "combat") return sim;
+    }
+    throw new Error("no seed exposed a combat room from the entrance");
+  };
+
   it("does not let a party stand in the open forever", () => {
     const sim = fresh();
     for (let i = 0; i < 4; i++) sim.advance();
@@ -723,6 +735,83 @@ describe("descent pressure", () => {
     sim.advance();
     expect(state.phase).toBe("combat");
     expect(state.enemies[0]).toMatchObject({ ref: enemy.ref, hp: enemy.maxHp });
+  });
+
+  it("keeps escaped enemies wounded if the party explores elsewhere and later returns", async () => {
+    const sim = mazeFight();
+    const state = sim.view();
+    const roomId = state.map?.currentRoom;
+    const enemy = state.enemies[0];
+    enemy.hp = Math.max(1, enemy.hp - 17);
+    applyStatus(enemy, { kind: "weaken", ticks: 4, amount: 0 });
+    state.enemies = [enemy];
+    const encounter = state.map?.rooms.find((room) => room.id === roomId)?.encounter;
+    if (!encounter) throw new Error("combat room has no encounter state");
+    encounter.enemies = state.enemies;
+
+    await call(sim, "rogue", "retreat");
+    sim.advance();
+    const saved = state.map?.rooms.find((room) => room.id === roomId)?.encounter?.enemies[0];
+    expect(saved).toMatchObject({ ref: enemy.ref, hp: enemy.hp, age: enemy.age });
+
+    const away = state.paths.find((path) => path.id !== "back");
+    expect(away).toBeDefined();
+    sim.choosePath("guardian", away?.id ?? "");
+    sim.advance();
+
+    const returnPath = state.paths.find((path) => path.id === roomId);
+    expect(returnPath?.hint).toMatch(/wounded enem.*remain/i);
+    const mapRoom = sim.scene().floorMap?.rooms.find((room) => room.id === roomId);
+    expect(mapRoom?.threat).toMatchObject({ enemies: 1, hp: enemy.hp, retreats: 1 });
+
+    sim.choosePath("guardian", roomId ?? "");
+    sim.advance();
+    expect(state.phase).toBe("combat");
+    expect(state.enemies[0]).toMatchObject({ ref: saved?.ref, hp: saved?.hp, age: saved?.age });
+    expect(hasStatus(state.enemies[0], "weaken")).toBe(true);
+    expect(sim.metrics()).toMatchObject({ retreats: 1, backtracks: 2, encountersReengaged: 1 });
+  });
+
+  it("keeps partial encounter rewards with their room instead of paying them from the next fight", async () => {
+    const sim = mazeFight();
+    const state = sim.view();
+    const firstRoom = state.map?.rooms.find((room) => room.id === state.map?.currentRoom);
+    const killed = { ...state.enemies[0], hp: 1, maxHp: 1, power: 0, gold: 37, statuses: [] };
+    const survivor = {
+      ...state.enemies[0],
+      ref: `${state.enemies[0].ref}-survivor`,
+      hp: 10_000,
+      maxHp: 10_000,
+      power: 0,
+      gold: 99,
+      statuses: [],
+    };
+    state.enemies = [killed, survivor];
+    if (!firstRoom) throw new Error("combat has no current room");
+    firstRoom.encounter = { enemies: state.enemies, bankedGold: 0, retreats: 0 };
+
+    sim.useBasic("guardian", killed.ref);
+    sim.advance();
+    expect(firstRoom.encounter?.bankedGold).toBe(37);
+    await call(sim, "rogue", "retreat");
+    sim.advance();
+    const away = state.paths.find((path) => path.id !== "back");
+    sim.choosePath("guardian", away?.id ?? "");
+    sim.advance();
+
+    const purseBefore = Object.values(state.party).reduce((sum, fighter) => sum + fighter.gold, 0);
+    const secondRoom = state.map?.rooms.find((room) => room.id === state.map?.currentRoom);
+    const second = { ...killed, ref: "other-room-enemy", hp: 1, maxHp: 1, gold: 11, statuses: [] };
+    if (!secondRoom) throw new Error("movement has no destination room");
+    secondRoom.encounter = { enemies: [second], bankedGold: 0, retreats: 0 };
+    state.enemies = secondRoom.encounter.enemies;
+    state.phase = "combat";
+    sim.useBasic("guardian", second.ref);
+    sim.advance();
+
+    const purseAfter = Object.values(state.party).reduce((sum, fighter) => sum + fighter.gold, 0);
+    expect(purseAfter - purseBefore).toBe(11);
+    expect(firstRoom.encounter?.bankedGold).toBe(37);
   });
 
   it("allows one rest per round and resolves dangerous dread before descent", async () => {

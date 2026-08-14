@@ -39,8 +39,8 @@ The following work is complete on `feat/endless-descent-overhaul`:
   backtracking, encounters, elites, caches, merchants, shrines, stairs, and
   boss gates.
 - Retreat abandons readied actions, grants enemies an opportunity attack, and
-  adds dread. The party can return to the unfinished encounter or take another
-  available route.
+  adds dread. Surviving enemies, health, statuses, boss phase, and deferred
+  room rewards persist if the party takes another route and returns later.
 - Maze encounters vary enemy count, health, and damage by seed. Layouts, stock,
   drops, and routes are also seeded and reproducible.
 - The broadcast shows the explored room graph, current room and zone, equipped
@@ -158,6 +158,9 @@ Progress as of 2026-08-13:
   cards.
 - Complete: cooldowns and full item-instance data cross the typed scene
   contract, while the compact party strip remains synchronized with it.
+- Complete: escaped encounters remain marked on the floor graph with enemy
+  count, combined current/maximum health, and retreat count; path hints and
+  scout reports describe the same authoritative state.
 - Remaining: compact slot/status/skill iconography under every character;
   stronger actor/interactable visual categories; persistent enemy nameplates;
   zero-damage reasons; and dedicated movement, retreat, loot, equipment, and
@@ -214,6 +217,24 @@ Acceptance criteria:
   risks and rewards.
 - Exploration cannot be solved by always taking the same room-kind priority.
 - Retreat is useful in some states but is not a free encounter reroll.
+
+Progress as of 2026-08-13:
+
+- Complete: encounters are owned by rooms. Retreating and exploring elsewhere
+  preserves the exact surviving enemy objects, health, statuses, age, boss
+  phase, and already-earned room rewards until that room is cleared or the
+  floor is left.
+- Complete: partial rewards are isolated by room, fixing the bug where gold
+  from an abandoned fight could be paid out by clearing a different encounter.
+- Complete: occupied rooms remain visible in `look`, path hints, rogue scout
+  reports, the typed scene contract, and the broadcast map. Baseline policies
+  recognize wounded encounters as finishable work when the party is healthy.
+- Complete: metrics now count rooms skipped on descent, backtracking,
+  retreats, encounter re-engagements, and optional rooms completed in addition
+  to rooms explored.
+- Remaining: locked doors and keys, one-way drops, shortcuts, traps, secret or
+  class-specific routes, persistent environmental room effects, and metrics
+  for shortcuts and secret objectives.
 
 ### P1 — Comparable past-run context
 
@@ -314,7 +335,9 @@ increase controlled variation without degrading reproducibility.
    active-character broadcast panel.
 3. **Complete:** add the first unique item effects and teach baseline policies
    how to value the simple subset.
-4. Persist escaped encounters and add richer path/room consequences.
+4. **In progress:** escaped encounters, room-owned rewards, threat visibility,
+   and exploration metrics are complete; add physical route constraints,
+   hazards, and secret routes next.
 5. Implement zone-specific stage themes and room staging.
 6. Add historical ghost comparisons with strict cohort matching.
 7. Expand talents into active/passive rule changes.

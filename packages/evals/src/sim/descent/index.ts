@@ -98,6 +98,7 @@ import {
   clearStatus,
   type DescentState,
   type DungeonFloorMap,
+  type DungeonRoom,
   type Element,
   type Enemy,
   equippedItemEffects,
@@ -282,12 +283,19 @@ const pathsFromMap = (map: DungeonFloorMap): DescentState["paths"] => {
   return here.links.flatMap((id) => {
     const room = map.rooms.find((candidate) => candidate.id === id);
     if (here.kind === "boss" && !here.cleared && room?.kind === "stairs") return [];
+    const enemies = room?.encounter?.enemies.filter(alive) ?? [];
+    const threat =
+      enemies.length > 0
+        ? `${enemies.length} wounded enem${enemies.length === 1 ? "y" : "ies"} remain (${enemies.reduce((sum, enemy) => sum + enemy.hp, 0)}/${enemies.reduce((sum, enemy) => sum + enemy.maxHp, 0)} hp)`
+        : undefined;
     return room
       ? [
           {
             id: room.id,
             label: room.label,
-            hint: room.visited ? "already explored" : room.revealed ? `mapped: ${room.kind}` : roomHint(room.kind),
+            hint:
+              threat ??
+              (room.visited ? "already explored" : room.revealed ? `mapped: ${room.kind}` : roomHint(room.kind)),
             kind: room.kind,
           },
         ]
@@ -395,6 +403,7 @@ export interface DescentScene {
       visited: boolean;
       revealed: boolean;
       cleared: boolean;
+      threat: { enemies: number; hp: number; maxHp: number; retreats: number } | null;
     }>;
   } | null;
   pendingPath: string | null;
@@ -444,6 +453,11 @@ export class DescentSimulation implements Simulation {
   private elitesDefeated = 0;
   private enemiesDefeated = 0;
   private roomsExplored = 0;
+  private roomsSkipped = 0;
+  private backtracks = 0;
+  private retreats = 0;
+  private encountersReengaged = 0;
+  private optionalRoomsCompleted = 0;
   private deaths = 0;
   private floorReached = 1;
   private readonly startFloor: number;
@@ -715,7 +729,8 @@ export class DescentSimulation implements Simulation {
     const s = this.state;
     const room = s.map?.rooms.find((candidate) => candidate.id === s.map?.currentRoom);
     const place = s.map ? `, ${s.map.zone}${room ? ` / ${room.label}` : ""}` : "";
-    const head = `Floor ${s.floor}${place} — ${s.phase}${s.dread >= 4 ? ` (something is closing in: dread ${s.dread})` : ""}.`;
+    const occupied = room?.encounter?.enemies.filter(alive).length ?? 0;
+    const head = `Floor ${s.floor}${place} — ${s.phase}${occupied > 0 && s.phase === "explore" ? ` (${occupied} wounded enem${occupied === 1 ? "y" : "ies"} still hold this room)` : ""}${s.dread >= 4 ? ` (something is closing in: dread ${s.dread})` : ""}.`;
     if (this.lastLog.length === 0) {
       if (s.phase === "camp") return `${head} The outfitter's wagon is open before the first stair.`;
       if (s.phase === "explore") return `${head} Four ways on; somebody has to choose one.`;
@@ -815,10 +830,21 @@ export class DescentSimulation implements Simulation {
     out.push(`Party experience ${this.totalXp}, level ${this.level}.`);
     if (s.map) {
       const room = s.map.rooms.find((candidate) => candidate.id === s.map?.currentRoom);
+      const occupied = s.map.rooms.filter((candidate) => candidate.encounter?.enemies.some(alive));
       out.push(
         `${s.map.zone}; currently in ${room?.label ?? "an unmapped room"}. ` +
           `${s.map.rooms.filter((candidate) => candidate.visited).length}/${s.map.rooms.length} rooms explored.`,
       );
+      if (occupied.length > 0) {
+        out.push(
+          `${occupied.length} explored room${occupied.length === 1 ? " remains" : "s remain"} occupied: ${occupied
+            .map((candidate) => {
+              const enemies = candidate.encounter?.enemies.filter(alive) ?? [];
+              return `${candidate.label} (${enemies.length} enemies, ${enemies.reduce((sum, enemy) => sum + enemy.hp, 0)} hp)`;
+            })
+            .join(", ")}.`,
+        );
+      }
     }
 
     if (me) {
@@ -1508,8 +1534,47 @@ export class DescentSimulation implements Simulation {
     this.events.push({ day: this.state.tick, kind, message, ...(visibleTo ? { visibleTo } : {}) });
   }
 
+  private currentRoom() {
+    const map = this.state.map;
+    return map?.rooms.find((room) => room.id === map.currentRoom);
+  }
+
+  private markRoomCleared(room: DungeonRoom): void {
+    if (!room.cleared && (room.kind === "cache" || room.kind === "market" || room.kind === "shrine")) {
+      this.optionalRoomsCompleted += 1;
+    }
+    room.cleared = true;
+  }
+
+  /** Keep the room's copy authoritative after the resolver replaces `state.enemies`. */
+  private syncRoomEncounter(): void {
+    const encounter = this.currentRoom()?.encounter;
+    if (encounter) encounter.enemies = this.state.enemies;
+  }
+
   private beginEncounter(elite: boolean, boss = !this.state.map && this.state.floor % 5 === 0): void {
     const s = this.state;
+    const room = this.currentRoom();
+    const persisted = room?.encounter;
+    if (persisted?.enemies.some(alive)) {
+      s.enemies = persisted.enemies;
+      s.phase = "combat";
+      this.scoutReport = undefined;
+      this.encounterSerious =
+        room?.kind === "elite" ||
+        room?.kind === "boss" ||
+        s.enemies.some((enemy) => enemy.boss) ||
+        s.enemies.length >= 4;
+      this.encountersReengaged += 1;
+      const hp = s.enemies.reduce((sum, enemy) => sum + enemy.hp, 0);
+      const maxHp = s.enemies.reduce((sum, enemy) => sum + enemy.maxHp, 0);
+      const roster = s.enemies.map((enemy) => `${enemy.ref} (${enemy.name})`).join(", ");
+      this.lastLog = [
+        `The party returns to the unfinished fight: ${roster}. The enemy still has ${hp}/${maxHp} health.`,
+      ];
+      this.note("reengage", `The party returned to a wounded encounter on floor ${s.floor}.`);
+      return;
+    }
     // Maze floors contain several encounters, so they compress the old
     // one-encounter-per-floor content bands into the forty-round broadcast
     // horizon without applying deep-floor health/damage scaling early.
@@ -1526,6 +1591,7 @@ export class DescentSimulation implements Simulation {
       : s.floor;
     const bossIndex = s.map ? Math.floor((s.floor - 1) / 4) : Math.max(0, Math.floor(s.floor / 5) - 1);
     s.enemies = generateEncounter(s.floor, s.dread, elite, this.encounterRng, boss, contentFloor, bossIndex, !!s.map);
+    if (room) room.encounter = { enemies: s.enemies, bankedGold: 0, retreats: 0 };
     s.phase = "combat";
     this.scoutReport = undefined;
     this.encounterSerious = elite || s.enemies.some((enemy) => enemy.boss) || s.enemies.length >= 4;
@@ -1545,8 +1611,9 @@ export class DescentSimulation implements Simulation {
     // high dread is the stairs, so a party that lingered once carried the
     // penalty through every remaining encounter on the floor.
     s.dread = Math.max(0, s.dread - 3);
-    const gold = this.slainGold;
-    this.slainGold = 0;
+    const roomEncounter = this.currentRoom()?.encounter;
+    const gold = roomEncounter?.bankedGold ?? this.slainGold;
+    if (!roomEncounter) this.slainGold = 0;
     if (gold > 0) {
       // Split evenly, remainder to the guardian. Individual purses are the
       // whole reason `give_gold` has anything to do.
@@ -1576,7 +1643,10 @@ export class DescentSimulation implements Simulation {
 
     if (s.map) {
       const room = s.map.rooms.find((candidate) => candidate.id === s.map?.currentRoom);
-      if (room) room.cleared = true;
+      if (room) {
+        this.markRoomCleared(room);
+        room.encounter = undefined;
+      }
       s.stock = [];
       s.cache = [];
       s.cacheTakesLeft = 0;
@@ -1629,6 +1699,11 @@ export class DescentSimulation implements Simulation {
 
   private descend(): void {
     const s = this.state;
+    if (s.map) {
+      this.roomsSkipped += s.map.rooms.filter(
+        (room) => room.kind !== "entrance" && room.kind !== "stairs" && !room.visited,
+      ).length;
+    }
     s.floor += 1;
     this.floorReached = Math.max(this.floorReached, s.floor);
     s.dread = 0;
@@ -1732,9 +1807,11 @@ export class DescentSimulation implements Simulation {
         this.diag.recordConflicts(result.conflicts.length, result.conflicts, actorsThisRound >= 2);
         this.diag.actionsWasted += result.wasted.length;
 
+        const roomEncounter = this.currentRoom()?.encounter;
         for (const e of result.slain) {
           this.totalXp += e.xp;
-          this.slainGold += e.gold;
+          if (roomEncounter) roomEncounter.bankedGold += e.gold;
+          else this.slainGold += e.gold;
           this.enemiesDefeated += 1;
           if (e.boss) this.bossesDefeated += 1;
           if (e.elite) this.elitesDefeated += 1;
@@ -1749,6 +1826,7 @@ export class DescentSimulation implements Simulation {
             this.note("mechanic", `Something about the ${m.family} answered back.`);
           }
         }
+        this.syncRoomEncounter();
 
         const levelled = levelFor(this.totalXp);
         if (levelled > this.level) {
@@ -1777,10 +1855,13 @@ export class DescentSimulation implements Simulation {
           this.lastLog.push("The last of them goes down.");
           this.endEncounter();
         } else if (fleeing) {
-          this.fledEnemies = s.enemies;
+          const encounter = this.currentRoom()?.encounter;
+          if (encounter) encounter.retreats += 1;
+          else this.fledEnemies = s.enemies;
           s.enemies = [];
           s.phase = "explore";
           s.dread += 2;
+          this.retreats += 1;
           this.pendingPath = undefined;
           s.paths = [
             {
@@ -2227,14 +2308,22 @@ export class DescentSimulation implements Simulation {
     const room = map.rooms.find((candidate) => candidate.id === roomId);
     if (!from || !room || !from.links.includes(room.id)) return;
 
+    const revisiting = room.visited;
     map.currentRoom = room.id;
     if (!room.visited) this.roomsExplored += 1;
+    else this.backtracks += 1;
     room.visited = true;
     this.refreshMapKnowledge();
     s.paths = pathsFromMap(map);
+    if (room.encounter?.enemies.some(alive)) {
+      this.beginEncounter(room.kind === "elite", room.kind === "boss");
+      return;
+    }
     if (room.cleared) {
       s.phase = "explore";
-      this.lastLog = [`The party returns to the ${room.label}. Nothing new is waiting there.`];
+      this.lastLog = [
+        `The party ${revisiting ? "returns" : "comes"} to the ${room.label}. Nothing new is waiting there.`,
+      ];
       return;
     }
 
@@ -2270,19 +2359,19 @@ export class DescentSimulation implements Simulation {
           fighter.hp = Math.min(fighter.maxHp, fighter.hp + Math.round(fighter.maxHp * 0.25));
           fighter.mana = fighter.maxMana;
         }
-        room.cleared = true;
+        this.markRoomCleared(room);
         s.phase = "explore";
         this.lastLog = [`Old light fills the ${room.label}. The party recovers before choosing another route.`];
         this.note("shrine", `The party rests briefly at the ${room.label}.`);
         return;
       case "stairs":
-        room.cleared = true;
+        this.markRoomCleared(room);
         s.phase = "explore";
         this.lastLog = ["The party has found the stairs down. They may descend or turn back and explore more."];
         return;
       case "empty":
       case "entrance":
-        room.cleared = true;
+        this.markRoomCleared(room);
         s.phase = "explore";
         this.lastLog = [`The party searches the ${room.label}. It is quiet, but the routes beyond it are new.`];
         return;
@@ -2294,7 +2383,7 @@ export class DescentSimulation implements Simulation {
     const map = s.map;
     if (!map) return;
     const room = map.rooms.find((candidate) => candidate.id === map.currentRoom);
-    if (room) room.cleared = true;
+    if (room) this.markRoomCleared(room);
     s.phase = "explore";
     s.enemies = [];
     s.pending = [];
@@ -2315,17 +2404,23 @@ export class DescentSimulation implements Simulation {
     this.pendingPath = undefined;
     if (!path) return;
 
-    if (path.kind === "retreat" && this.fledEnemies) {
-      s.enemies = this.fledEnemies;
-      this.fledEnemies = undefined;
-      s.phase = "combat";
-      s.paths = [];
-      this.lastLog = ["The party turns back. The unfinished fight is exactly where they left it."];
-      return;
+    if (path.kind === "retreat") {
+      if (this.currentRoom()?.encounter?.enemies.some(alive)) {
+        this.beginEncounter(false);
+        s.paths = [];
+        return;
+      }
+      if (this.fledEnemies) {
+        s.enemies = this.fledEnemies;
+        this.fledEnemies = undefined;
+        s.phase = "combat";
+        s.paths = [];
+        this.lastLog = ["The party turns back. The unfinished fight is exactly where they left it."];
+        return;
+      }
     }
 
     if (s.map) {
-      this.fledEnemies = undefined;
       this.moveThroughMap(path.id);
       return;
     }
@@ -2724,11 +2819,31 @@ export class DescentSimulation implements Simulation {
             this.requirePhase("explore");
             const s = this.state;
             const readings = s.paths.map((p) => {
+              const room =
+                p.kind === "retreat"
+                  ? s.map?.rooms.find((candidate) => candidate.id === s.map?.currentRoom)
+                  : s.map?.rooms.find((candidate) => candidate.id === p.id);
+              const survivors = room?.encounter?.enemies.filter(alive) ?? [];
+              if (survivors.length > 0) {
+                const hp = survivors.reduce((sum, enemy) => sum + enemy.hp, 0);
+                return `  ${p.id}: the unfinished fight — ${survivors.length} wounded enem${survivors.length === 1 ? "y" : "ies"}, ${hp} health between them`;
+              }
               if (p.kind === "elite") return `  ${p.id}: something large, and it is guarding something worth having`;
-              if (p.kind === "market") return `  ${p.id}: a merchant`;
-              if (p.kind === "cache") return `  ${p.id}: packs, and their owners, and whatever killed them`;
-              if (p.kind === "shrine") return `  ${p.id}: a shrine, and a fight after it`;
-              return `  ${p.id}: an ordinary room, ${generateEncounter(s.floor, s.dread, false, makeRng(s.floor * 31 + 7)).length} of them waiting`;
+              if (p.kind === "boss") return `  ${p.id}: a gate and the thing guarding the way down`;
+              if (p.kind === "market") return `  ${p.id}: a merchant's lamplight`;
+              if (p.kind === "cache") {
+                return s.map
+                  ? `  ${p.id}: abandoned packs in a quiet room`
+                  : `  ${p.id}: packs, their owners, and whatever killed them`;
+              }
+              if (p.kind === "shrine") {
+                return s.map
+                  ? `  ${p.id}: a warm shrine; no movement inside`
+                  : `  ${p.id}: a shrine, and a fight after it`;
+              }
+              if (p.kind === "stairs") return `  ${p.id}: air moving down another flight`;
+              if (p.kind === "empty" || p.kind === "entrance") return `  ${p.id}: no movement`;
+              return `  ${p.id}: several sets of fresh tracks; exact numbers are hidden past the turn`;
             });
             // Private to the rogue, and that is the whole point.
             //
@@ -2803,6 +2918,11 @@ export class DescentSimulation implements Simulation {
       elitesDefeated: this.elitesDefeated,
       enemiesDefeated: this.enemiesDefeated,
       roomsExplored: this.roomsExplored,
+      roomsSkipped: this.roomsSkipped,
+      backtracks: this.backtracks,
+      retreats: this.retreats,
+      encountersReengaged: this.encountersReengaged,
+      optionalRoomsCompleted: this.optionalRoomsCompleted,
       goldEarned: this.goldEarned,
       goldSpent: this.goldSpent,
       goldRemaining: CLASSES.reduce((sum, id) => sum + s.party[id].gold, 0),
@@ -2957,6 +3077,16 @@ export class DescentSimulation implements Simulation {
               rooms: s.map.rooms
                 .filter((room) => known.has(room.id))
                 .map((room) => ({
+                  ...(room.encounter
+                    ? {
+                        threat: {
+                          enemies: room.encounter.enemies.filter(alive).length,
+                          hp: room.encounter.enemies.reduce((sum, enemy) => sum + enemy.hp, 0),
+                          maxHp: room.encounter.enemies.reduce((sum, enemy) => sum + enemy.maxHp, 0),
+                          retreats: room.encounter.retreats,
+                        },
+                      }
+                    : { threat: null }),
                   id: room.id,
                   label: room.label,
                   kind: room.kind,

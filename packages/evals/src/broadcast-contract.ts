@@ -111,6 +111,7 @@ export interface Scene {
       visited: boolean;
       revealed: boolean;
       cleared: boolean;
+      threat: { enemies: number; hp: number; maxHp: number; retreats: number } | null;
     }>;
   } | null;
   pendingPath: string | null;
