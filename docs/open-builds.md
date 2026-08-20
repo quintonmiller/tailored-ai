@@ -335,14 +335,57 @@ agent repeating it rather than reporting a clean parse as a working game. It is
 the strongest argument for keeping the honest sentence in the tool output, and
 against ever letting a passing check read as a passing build.
 
+### The full twenty-round run
+
+58 minutes, 220 turns, 408 tool calls. Seven files, 1,039 lines, five distinct
+writers, 33 checks run, **zero problems and zero refusals of any kind** — no
+patch missed its target, no agent reached for a file that was not theirs, no
+budget or path rule fired.
+
+The headline number is the awkward one: **`roundsWithNoWrite` was 11 of 20.**
+Read cold that says the team spent over half the run talking instead of
+building. Read against the artifact it says something else entirely — the team
+declared `design.md` "v1 — COMPLETE" and the tester's round-20 check confirms
+every code file was *byte-identical to round 3*. They finished early and spent
+seventeen rounds verifying rather than churning.
+
+**That metric cannot tell those two apart, and the difference is the whole
+judgement.** It is the clearest example yet of why this scenario refuses to let
+anything assert on its counters: `roundsWithNoWrite: 11` would fail a threshold
+somebody set in good faith, on a run that did the right thing.
+
+Two consequences worth acting on:
+
+- **Twenty rounds is more than the `arcade` brief needs.** A five-agent team
+  reaches a complete v1 in three. Either the brief has to ask for more, or the
+  horizon should come down, or — most interesting — the last stretch should be
+  given a different job than "keep going".
+- **The ownership partition never bit.** Zero ownership refusals across 408
+  calls in this run and 139 in the smoke. Nobody ever tried to write somebody
+  else's file. That is either a layout clear enough to make the rule redundant
+  or a constraint that is not currently under test, and the honest reading is
+  that it has not yet been shown to do measurable work.
+
+The second run invented a different game from the first on the same brief — a
+snake-like "cooling solid trail" where your own path is both hazard and memory —
+which is worth knowing before anybody reads one run as characteristic.
+
+The tester's work is again the most striking artefact. It computed a tunnelling
+analysis by hand — at the `dt` clamp of 0.05 s the ember steps 16 px per frame
+against a 14 px hit radius, so a throttled frame rate could step over a trail
+point — assessed it as edge-case-only, **declined to request a change**, and
+labelled it "a reasoned limitation, not an observed bug. I have not observed it
+at runtime (I cannot run the game)."
+
 ### Two things to watch rather than fix
 
-- **Read amplification.** `read_file` was 47 of 139 calls, and the smoke spent
-  1.6M input tokens against 57K output. Prefix caching absorbs much of it, but
-  the team's default move is to re-read a whole file rather than navigate it.
-- **`outline_file` is nearly unused** — zero calls in the smoke, one in the
-  first rounds of the long run. It exists precisely for the file that has grown
-  too big to read, and the team has not yet reached for it.
+- **Read amplification.** `read_file` was 47 of 139 calls in the smoke and 94 of
+  408 in the long run, which spent **10.6M input tokens against 199K output**.
+  Prefix caching absorbs much of it, but the team's default move is to re-read a
+  whole file rather than navigate it.
+- **`outline_file` is nearly unused** — zero calls in the smoke, three in a
+  twenty-round run. It exists precisely for the file that has grown too big to
+  read, and the team barely reaches for it.
 
 ## Watching it
 
