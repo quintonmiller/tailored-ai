@@ -418,6 +418,50 @@ describe("the scenarios on disk", () => {
   });
 });
 
+describe("tool schemas say what the handlers actually accept", () => {
+  /**
+   * Both halves of this were live at once and neither was visible.
+   *
+   * A tool's schema is validated by core *before* `execute` runs, and a
+   * rejection there happens inside the loop rather than in the tool — so no
+   * `call` event reaches the trace at all. The instrument reads as unused, the
+   * counter it feeds stays zero, and the run looks like a team that never tried
+   * the thing they were in fact trying repeatedly.
+   */
+  it("accepts a number where a number is meant", () => {
+    const s = sim();
+    const read = s.sharedTools().find((t) => t.name === "read_file");
+    const from = (read?.parameters.properties as Record<string, { type: unknown }>).from;
+    // `num()` copes with strings, so the union widens what is accepted and
+    // narrows nothing. Declaring only "string" refused the correct type.
+    expect(from.type).toEqual(["string", "number"]);
+  });
+
+  it("does not require the arguments it documents as optional", () => {
+    const s = sim();
+    const read = s.sharedTools().find((t) => t.name === "read_file");
+    const required = read?.parameters.required as string[];
+    expect(required).toContain("path");
+    expect(required).not.toContain("from");
+    expect(required).not.toContain("to");
+  });
+
+  it("reads a file with no range at all", async () => {
+    const s = sim();
+    await call(s, "write_file", { path: "design.md", content: "# one\n# two\n" }, "lead");
+    const out = await call(s, "read_file", { path: "design.md" }, "builder");
+    expect(out).toMatch(/# one/);
+  });
+
+  it("reads a numeric range passed as numbers", async () => {
+    const s = sim();
+    await call(s, "write_file", { path: "design.md", content: "a\nb\nc\nd\n" }, "lead");
+    const out = await call(s, "read_file", { path: "design.md", from: 2, to: 3 }, "builder");
+    expect(out).toMatch(/lines 2-3/);
+    expect(out).not.toMatch(/\s1\s+a/);
+  });
+});
+
 describe("the brief reaches the agent, in every arm", () => {
   /**
    * The bug this holds shut was invisible and one-sided.

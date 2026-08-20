@@ -26,7 +26,22 @@ export function tool(
     description,
     parameters: {
       type: "object",
-      properties: Object.fromEntries(Object.entries(params).map(([k, d]) => [k, { type: "string", description: d }])),
+      // `["string", "number"]`, not `"string"`, and it is not cosmetic.
+      //
+      // Every parameter here was declared a string because `num()` exists to
+      // cope with models that "pass strings for everything". The schema then
+      // told core's `validateToolArgs` to *reject* the number form outright —
+      // so a model passing the correct type for a numeric argument was refused
+      // before `execute` ever ran, and because the rejection happens inside the
+      // loop rather than in the tool, **no `call` event reached the trace at
+      // all**. The instrument reads as unused and the metric it feeds stays at
+      // zero, which is indistinguishable from a team that never tried.
+      //
+      // A union widens what is accepted and narrows nothing: every handler here
+      // already goes through `String(...)` or `num(...)`.
+      properties: Object.fromEntries(
+        Object.entries(params).map(([k, d]) => [k, { type: ["string", "number"], description: d }]),
+      ),
       required: Object.keys(params),
     },
     effect,

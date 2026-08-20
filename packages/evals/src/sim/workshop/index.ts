@@ -347,6 +347,29 @@ export class WorkshopSimulation implements Simulation {
    * machinery is public, the hands on it are not.
    */
   sharedTools(): Tool[] {
+    /**
+     * Mark some of a tool's parameters as genuinely optional.
+     *
+     * `tool()` makes every declared parameter required, which is right for an
+     * instrument where all the arguments matter and wrong for `read_file`,
+     * whose `from`/`to` describe an optional window. Saying "Optional" in the
+     * description and `required` in the schema is worse than either alone: core
+     * validates against the schema and refuses the call *before* `execute`
+     * runs, so a model that read the description and did the correct thing got
+     * a refusal with no `call` event in the trace — the same shape as the
+     * string/number bug in `tool.ts`, from the other direction.
+     *
+     * Post-processing rather than a new parameter on `tool()`, because the
+     * shared helper is used by three simulations and this concerns one tool.
+     */
+    const optional = (built: Tool, ...keys: string[]): Tool => ({
+      ...built,
+      parameters: {
+        ...built.parameters,
+        required: (built.parameters.required as string[]).filter((k) => !keys.includes(k)),
+      },
+    });
+
     const shared: Tool[] = [
       tool(
         "list_files",
@@ -358,27 +381,31 @@ export class WorkshopSimulation implements Simulation {
         },
         "read",
       ),
-      tool(
-        "read_file",
-        `Read part of a file, with line numbers. Returns ${LIMITS.readLines} lines from the start unless you give a range.`,
-        {
-          path: "Which file, relative to the workspace, like index.html",
-          from: "First line to read. Optional; defaults to 1.",
-          to: "Last line to read. Optional.",
-        },
-        (args) => {
-          this.counts.reads += 1;
-          const path = String(args.path ?? "");
-          const from = args.from === undefined || args.from === "" ? undefined : num(args.from, 1);
-          const to = args.to === undefined || args.to === "" ? undefined : num(args.to, 1);
-          const slice = this.workspace.slice(path, from, to);
-          const tail =
-            slice.to < slice.total
-              ? `\n… lines ${slice.to + 1}-${slice.total} not shown. Read again with from=${slice.to + 1}, or use outline_file.`
-              : "";
-          return `${path}, lines ${slice.from}-${slice.to} of ${slice.total}:\n${slice.text}${tail}`;
-        },
-        "read",
+      optional(
+        tool(
+          "read_file",
+          `Read part of a file, with line numbers. Returns ${LIMITS.readLines} lines from the start unless you give a range.`,
+          {
+            path: "Which file, relative to the workspace, like index.html",
+            from: "First line to read. Optional; defaults to 1.",
+            to: "Last line to read. Optional.",
+          },
+          (args) => {
+            this.counts.reads += 1;
+            const path = String(args.path ?? "");
+            const from = args.from === undefined || args.from === "" ? undefined : num(args.from, 1);
+            const to = args.to === undefined || args.to === "" ? undefined : num(args.to, 1);
+            const slice = this.workspace.slice(path, from, to);
+            const tail =
+              slice.to < slice.total
+                ? `\n… lines ${slice.to + 1}-${slice.total} not shown. Read again with from=${slice.to + 1}, or use outline_file.`
+                : "";
+            return `${path}, lines ${slice.from}-${slice.to} of ${slice.total}:\n${slice.text}${tail}`;
+          },
+          "read",
+        ),
+        "from",
+        "to",
       ),
       tool(
         "outline_file",
