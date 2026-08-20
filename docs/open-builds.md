@@ -1,8 +1,10 @@
 # Open builds — a scenario with a brief instead of a score
 
-**Phase 1 is built and green.** Three scenarios, a `workshop` simulation, a
-`review:` schema flag, a scripted rehearsal, and 41 tests. Nothing has been run
-against a model yet. The later phases at the bottom are still a plan.
+**Phase 1 is built, green, and has been run against a live model.** Three
+scenarios, a `workshop` simulation, a `review:` schema flag, a scripted
+rehearsal, and 47 tests. The first run found three faults and produced an
+artifact worth opening — see *What the first live run found*. The later phases
+at the bottom are still a plan.
 
 ## The idea
 
@@ -270,6 +272,77 @@ Two smaller ones: `announce()` said "round 17 of 16" past the horizon, and
 correct for the factory, where an abandoned company keeps paying wages, and
 meaningless for a workshop nobody is typing in. `runsOnUnattended` now gates it,
 matching the descent's own need for the same switch.
+
+## What the first live run found (2026-08-20)
+
+Run against **Qwen3.8-27B NVFP4 on NInfer**, `medium` effort, 131,072-token
+context, MTP speculative decoding, `openai` thinking dialect (NInfer takes
+`reasoning_effort` as a top-level field and rejects the `vllm_effort` dialect's
+`chat_template_kwargs`). A three-round smoke of 33 turns cost 425 seconds —
+**12.9 s/turn** — though a tester turn that reads six files runs nearer 45 s, so
+budget a twenty-round run at two to three hours rather than one.
+
+### Three faults, none of which would have shown up as red
+
+All three shared a shape worth naming: **core validates a tool's schema before
+`execute` runs, and a rejection there happens inside the loop rather than in the
+tool — so no `call` event reaches the trace at all.** The instrument reads as
+unused and the counter it feeds stays zero, which is indistinguishable from a
+team that never tried.
+
+- **A schema that refused the correct argument.** Simulation parameters were all
+  declared `type: "string"`, because `num()` exists to cope with models that
+  pass strings for everything. That told the validator to reject the *number*
+  form. Now a `["string", "number"]` union, which widens what is accepted and
+  narrows nothing.
+- **Every parameter marked required.** `tool()` requires everything it declares,
+  which is right for an instrument where all the arguments matter and wrong for
+  `read_file`, whose `from`/`to` are an optional window. Saying "Optional" in the
+  description and `required` in the schema is worse than either alone. This was
+  the builder's *first* action in the first run: `read_file({path})`.
+- **The last round was never counted.** `runRoomScenario` advances the clock
+  between rounds, so an N-round run crosses N-1 boundaries and a simulation
+  whose only ending is its horizon never arrives. The smoke announced rounds 0,
+  1 and 2, took all 33 of its turns, and reported `roundsPlayed 2` with an `end`
+  event carrying no reason at all. The descent hides this because its runs
+  usually end in a wipe, which sets `done` from inside. Fixed with `finish?()`
+  on the seam — a simulation is never told how long the roster is, and
+  `runsOnUnattended` answers a different question.
+
+### What the run itself did
+
+Seven files, 613 lines, five distinct writers, `check_syntax` clean, **zero
+ownership refusals** across 139 calls. The team invented a game — a flame in a
+dark room whose light radius *is* its health — and wired it correctly: the page
+loads `content.js` → `engine.js` → `render.js`, the author's `CONTENT` declares
+the same 800×500 canvas the interface put in the markup, `engine.js` exports
+`window.game` and calls `renderFrame()`, and `render.js` exports `renderFrame`
+and reads `game` and `CONTENT` without mutating either.
+
+That contract was agreed by three agents in two channels who never spoke
+directly, which is the measurement this scenario exists to make.
+
+The most valuable single artefact was the tester's `defects.md`. It found a real
+defect no parser could catch — `movementKey()` lowercased only single-character
+keys, so `'ArrowUp'` never matched the lowercase `switch` and half the declared
+control scheme was dead — traced it to a line number, proposed a one-line fix,
+and the lead carried it from `studio` into `build`, where the builder patched it
+and the tester verified it closed. It then wrote a section headed **"Not
+verifiable this run"** listing what nobody could know without executing the page.
+
+That last part is `check_syntax` telling the truth about its own limits and the
+agent repeating it rather than reporting a clean parse as a working game. It is
+the strongest argument for keeping the honest sentence in the tool output, and
+against ever letting a passing check read as a passing build.
+
+### Two things to watch rather than fix
+
+- **Read amplification.** `read_file` was 47 of 139 calls, and the smoke spent
+  1.6M input tokens against 57K output. Prefix caching absorbs much of it, but
+  the team's default move is to re-read a whole file rather than navigate it.
+- **`outline_file` is nearly unused** — zero calls in the smoke, one in the
+  first rounds of the long run. It exists precisely for the file that has grown
+  too big to read, and the team has not yet reached for it.
 
 ## Watching it
 
