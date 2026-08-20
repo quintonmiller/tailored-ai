@@ -432,6 +432,52 @@ run is labelled `fee15cf`, a commit made seven minutes after it started, so it
 did not play the code its own report names. Harmless when the tree is clean and
 misleading during an iteration loop.
 
+### The second jam run, and the fix measured against the first
+
+Two 220-turn runs of the same scenario, one before the indentation fix and one
+after, with near-identical patch volume. This is the cleanest comparison the
+package has produced for a tool change:
+
+| | run 1 (NO GOING BACK) | run 2 (IT GROWS) |
+|---|---|---|
+| patch attempts | 102 | 109 |
+| **refused** | **37 (36%)** | **10 (9%)** |
+| `outline_file` | 4 | 16 |
+| `playtest` | 33 | 58 |
+| rounds with no write | 5 of 20 | **0 of 20** |
+| stalled on tool rounds | yes | no |
+| wall clock | 58 min | 84 min |
+
+**A four-fold drop in patch refusals.** Worth recording that the interim reading
+at turn 49 was 20% and prompted a premature correction here — a partial rate on
+a run whose team is still creating files is not the rate. Wait for the horizon.
+
+**`outline_file` finally earns its place**, four times more used. It was written
+for the file that has grown too big to read and was almost ignored in every
+earlier run; a refusal that shows the real text seems to have taught the shape
+of the file as a thing worth asking about.
+
+**No idle rounds at all.** `roundsWithNoWrite` has now gone 11 → 5 → 0 as the
+jam clock arrived and then the tools stopped wasting turns. The scheduling
+problem the first twenty-round run exposed is closed.
+
+**Raising `--max-tool-rounds` from 20 to 30 removed the stall and cost 45%
+more wall clock.** A turn that checks, plays, reads and patches genuinely needs
+the rounds; the price is that a run is now 84 minutes rather than 58. Both
+numbers belong in any future budget.
+
+**The tool changed how the team works, unprompted.** The builder added
+`window.GAME_DEBUG` hooks — `forceGameOver()` and `spawnBigPest()` — *for the
+tester to drive from a playtest*. Nobody asked for that. Giving one role the
+ability to run the game made another role start building affordances so it could
+be driven, which is what a real team does and something no earlier run
+approached.
+
+One defect noted and not chased: a single post of 38 arrived with no attributed
+author, an envelope with no speaker. It lives in core's envelope parsing rather
+than here, and on a `review:` row nothing asserts on `posts_by`, so the only
+cost is that the viewer cannot filter that line by agent.
+
 ### Two things to watch rather than fix
 
 - **Read amplification.** `read_file` was 47 of 139 calls in the smoke and 94 of
