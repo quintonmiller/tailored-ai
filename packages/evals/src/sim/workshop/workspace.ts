@@ -73,6 +73,8 @@ export interface WorkspaceEdit {
   kind: "create" | "write" | "patch" | "delete";
   linesBefore: number;
   linesAfter: number;
+  /** The exact text was not there; it matched ignoring indentation. See `patch`. */
+  loosened?: boolean;
 }
 
 /**
@@ -327,21 +329,78 @@ export class Workspace {
     const path = normalisePath(raw);
     if (!find) refuse("patch_file needs a `find` string. To create or replace a whole file, use write_file.");
     const current = this.read(path);
-    const first = current.indexOf(find);
+    if (find === replace) refuse("`find` and `replace` are identical, so that patch would change nothing.");
+
+    let first = current.indexOf(find);
+    let width = find.length;
+    let loosened = false;
+
+    /*
+     * Fall back to matching without indentation, when that is unambiguous.
+     *
+     * Measured on the first jam run and it is a defect this file caused. Reads
+     * come back *line-numbered* — `  12  const x = 1;` — so a model copying a
+     * multi-line passage has to strip a prefix it never wrote and reproduce the
+     * leading whitespace of every continuation line exactly. Single-line
+     * patches worked; every multi-line one was refused. The author burned three
+     * calls, then gave up and rewrote a 52-line file whole, which is precisely
+     * the context cost `patch_file` exists to avoid.
+     *
+     * So: exact first, always. Only if that finds nothing, try again comparing
+     * lines with their leading whitespace stripped — and only accept it if it
+     * lands in exactly one place, because a fuzzy match with two candidates is
+     * how a patch silently changes the wrong one. The result says it was
+     * loosened, so nobody reads it as an exact hit.
+     */
+    if (first === -1) {
+      const strip = (text: string) =>
+        text
+          .split("\n")
+          .map((l) => l.trimEnd())
+          .join("\n");
+      const wantedLines = strip(find)
+        .split("\n")
+        .map((l) => l.trim());
+      const haveLines = current.split("\n");
+      const hits: Array<{ start: number; end: number }> = [];
+      for (let i = 0; i + wantedLines.length <= haveLines.length; i++) {
+        let all = true;
+        for (let j = 0; j < wantedLines.length; j++) {
+          if (haveLines[i + j].trim() !== wantedLines[j]) {
+            all = false;
+            break;
+          }
+        }
+        if (all) {
+          // Character offsets of the matched block, so the splice below is
+          // identical to the exact path.
+          const before = haveLines.slice(0, i).join("\n");
+          const start = i === 0 ? 0 : before.length + 1;
+          const block = haveLines.slice(i, i + wantedLines.length).join("\n");
+          hits.push({ start, end: start + block.length });
+          if (hits.length > 1) break;
+        }
+      }
+      if (hits.length === 1) {
+        first = hits[0].start;
+        width = hits[0].end - hits[0].start;
+        loosened = true;
+      }
+    }
+
     if (first === -1) {
       refuse(
-        `that exact text is not in "${path}". Read the file (or outline_file it) and copy the ` +
-          "current text, including its indentation, before patching.",
+        `that exact text is not in "${path}". ${this.nearestTo(path, find)} ` +
+          "Line numbers in a `read_file` result are added by the tool — do not include them in `find`.",
       );
     }
-    if (current.indexOf(find, first + find.length) !== -1) {
+    if (!loosened && current.indexOf(find, first + find.length) !== -1) {
       refuse(
         `that text appears more than once in "${path}", so replacing it would change the wrong one. ` +
           "Include a surrounding line or two to make it unique.",
       );
     }
-    if (find === replace) refuse("`find` and `replace` are identical, so that patch would change nothing.");
-    const next = current.slice(0, first) + replace + current.slice(first + find.length);
+    const next = current.slice(0, first) + replace + current.slice(first + width);
     this.checkBudget(path, next);
     writeFileSync(this.absolute(path), next);
     this.meta.set(path, { lastWriter: by, lastRound: round });
@@ -352,6 +411,7 @@ export class Workspace {
       kind: "patch",
       linesBefore: countLines(current),
       linesAfter: countLines(next),
+      ...(loosened ? { loosened: true } : {}),
     };
     this.edits.push(edit);
     return edit;
@@ -365,6 +425,40 @@ export class Workspace {
     const edit: WorkspaceEdit = { path, by, round, kind: "delete", linesBefore: before, linesAfter: 0 };
     this.edits.push(edit);
     return edit;
+  }
+
+  /**
+   * What is actually there, where the model thought its text was.
+   *
+   * A refusal that only says "not found" costs a whole round trip to recover
+   * from, and the first jam run showed what that looks like: read, patch,
+   * refused, read, patch, refused, give up, rewrite the file. Showing the
+   * nearest region verbatim turns the refusal into a repair — the correct text
+   * to copy is in the message that rejected the wrong one.
+   */
+  private nearestTo(path: string, find: string): string {
+    const lines = this.read(path).split("\n");
+    const needle = find.split("\n")[0].trim();
+    if (!needle) return "";
+    // The line sharing the longest prefix with what they were looking for.
+    let best = -1;
+    let bestScore = 0;
+    for (const [index, line] of lines.entries()) {
+      const have = line.trim();
+      let n = 0;
+      while (n < have.length && n < needle.length && have[n] === needle[n]) n++;
+      if (n > bestScore) {
+        bestScore = n;
+        best = index;
+      }
+    }
+    // Below a few characters it is matching whitespace and punctuation, and
+    // pointing somewhere arbitrary is worse than saying nothing.
+    if (best === -1 || bestScore < 6) return "Read it again and copy the text exactly.";
+    const from = Math.max(0, best - 2);
+    const to = Math.min(lines.length, best + 4);
+    const excerpt = lines.slice(from, to).join("\n");
+    return `The closest thing in the file, exactly as it is stored:\n${excerpt}\n`;
   }
 
   /**

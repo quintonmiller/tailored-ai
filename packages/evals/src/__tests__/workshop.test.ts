@@ -127,6 +127,77 @@ describe("patching", () => {
   });
 });
 
+describe("patching a file you read back with line numbers", () => {
+  /**
+   * The defect this closes was caused by the tool, not the model.
+   *
+   * `read_file` numbers its output, so a model copying a multi-line passage has
+   * to strip a prefix it never wrote and reproduce the leading whitespace of
+   * every continuation line. Measured on the first jam run: single-line patches
+   * landed, every multi-line one was refused, and the author gave up after
+   * three tries and rewrote a 52-line file whole — exactly the context cost
+   * `patch_file` exists to avoid.
+   */
+  it("matches ignoring indentation when that is unambiguous, and says so", async () => {
+    const s = sim();
+    await call(
+      s,
+      "write_file",
+      { path: "engine.js", content: "function a() {\n    var x = 1;\n    var y = 2;\n}\n" },
+      "builder",
+    );
+    // The indentation is wrong, as it would be after a numbered read.
+    const out = await call(
+      s,
+      "patch_file",
+      { path: "engine.js", find: "var x = 1;\nvar y = 2;", replace: "var x = 3;\nvar y = 4;" },
+      "builder",
+    );
+    expect(out).toMatch(/Patched/);
+    expect(out).toMatch(/matched ignoring indentation/);
+    const body = await call(s, "read_file", { path: "engine.js" }, "builder");
+    expect(body).toMatch(/var x = 3;/);
+    expect(s.metrics().patchesRefused).toBe(0);
+  });
+
+  it("refuses rather than guessing when the loose match is ambiguous", async () => {
+    const s = sim();
+    await call(s, "write_file", { path: "engine.js", content: "  ping();\nother();\n    ping();\n" }, "builder");
+    const out = await call(s, "patch_file", { path: "engine.js", find: "ping();", replace: "pong();" }, "builder");
+    // Two candidates: a fuzzy match with two homes is how a patch silently
+    // changes the wrong one.
+    expect(out).toMatch(/Refused/);
+    expect(s.metrics().patchesRefused).toBe(1);
+  });
+
+  it("shows the text that is actually there when nothing matches", async () => {
+    const s = sim();
+    await call(
+      s,
+      "write_file",
+      { path: "engine.js", content: "var TRAIL_COOL_STEPS = 12;\nvar OTHER = 1;\n" },
+      "builder",
+    );
+    const out = await call(
+      s,
+      "patch_file",
+      { path: "engine.js", find: "var TRAIL_COOL_STEPS = 99;", replace: "var TRAIL_COOL_STEPS = 5;" },
+      "builder",
+    );
+    expect(out).toMatch(/Refused/);
+    // The correct text to copy is in the message that rejected the wrong one.
+    expect(out).toMatch(/closest thing in the file/);
+    expect(out).toMatch(/var TRAIL_COOL_STEPS = 12;/);
+  });
+
+  it("tells the reader the line numbers are not in the file", async () => {
+    const s = sim();
+    await call(s, "write_file", { path: "design.md", content: "# one\n# two\n" }, "lead");
+    const out = await call(s, "read_file", { path: "design.md" }, "builder");
+    expect(out).toMatch(/line numbers are added here and are not in the file/);
+  });
+});
+
 describe("ownership", () => {
   it("refuses a write to somebody else's file and names who to ask", async () => {
     const s = sim();

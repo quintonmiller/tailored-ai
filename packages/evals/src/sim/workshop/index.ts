@@ -477,7 +477,14 @@ export class WorkshopSimulation implements Simulation {
               slice.to < slice.total
                 ? `\n… lines ${slice.to + 1}-${slice.total} not shown. Read again with from=${slice.to + 1}, or use outline_file.`
                 : "";
-            return `${path}, lines ${slice.from}-${slice.to} of ${slice.total}:\n${slice.text}${tail}`;
+            // Said every time, because it is the mistake that cost the most in
+            // the first jam run: a model copies a numbered read straight into
+            // `patch_file` and the exact match fails on every continuation
+            // line.
+            return (
+              `${path}, lines ${slice.from}-${slice.to} of ${slice.total} ` +
+              `(the line numbers are added here and are not in the file):\n${slice.text}${tail}`
+            );
           },
           "read",
         ),
@@ -542,7 +549,16 @@ export class WorkshopSimulation implements Simulation {
             this.counts.patches += 1;
             this.writesThisRound += 1;
             const delta = edit.linesAfter - edit.linesBefore;
-            return `Patched ${path}: now ${edit.linesAfter} lines (${delta >= 0 ? "+" : ""}${delta}).`;
+            return (
+              `Patched ${path}: now ${edit.linesAfter} lines (${delta >= 0 ? "+" : ""}${delta}).` +
+              // Never let a loosened match read as an exact one. If the
+              // indentation they sent was wrong, they should know before they
+              // build their next patch on the same wrong copy.
+              (edit.loosened
+                ? " Note: your `find` did not match exactly — it was matched ignoring indentation, and it " +
+                  "was unambiguous so it was applied. Your copy of this passage has the wrong leading whitespace."
+                : "")
+            );
           }),
       ),
       agentTool(
