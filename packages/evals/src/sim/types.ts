@@ -143,6 +143,26 @@ export interface Simulation {
    * and means the role is fully described by the scenario.
    */
   briefFor?(role: string): string | undefined;
+  /**
+   * The roster has run out. Nothing else is going to happen.
+   *
+   * The harness ticks the clock *between* rounds, so an N-round run produces
+   * N-1 boundaries and a simulation whose only ending is its horizon never
+   * reaches it — `done` stays false, `endedBecause` stays undefined, and the
+   * trace records a run that stopped for no stated reason. Measured on
+   * 2026-08-20: a three-round workshop that announced rounds 0, 1 and 2 and
+   * took all 33 of its turns reported two rounds played and an `end` event with
+   * no reason on it.
+   *
+   * A simulation cannot work this out for itself — it is never told how long
+   * the roster is — and `runsOnUnattended` is a different question: that one
+   * asks whether to *keep playing* without the agents, and answering "no" is
+   * not the same as never being told the game is over.
+   *
+   * Called once, before the closing snapshot, so whatever it decides is in the
+   * state the trace and the report both read.
+   */
+  finish?(): void;
   /** The numbers the benchmark reports. Called once, at the end. */
   metrics(): SimMetrics;
   /** The headline figure, so a report can rank runs without knowing the domain. */

@@ -119,6 +119,11 @@ export function finishSimulationTrace(
     // taken.
     let guard = 0;
     if (sim.runsOnUnattended !== false) while (!sim.done && guard++ < 10_000) sim.advance();
+    // Then tell it the run is over, whichever of those two paths it took. See
+    // `Simulation.finish` — a simulation is never told how long the roster is,
+    // so without this the one whose only ending is the horizon never learns it
+    // reached it.
+    sim.finish?.();
     const announce = sim.announce?.();
     write?.({
       kind: "state",

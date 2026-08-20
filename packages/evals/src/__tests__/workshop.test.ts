@@ -288,6 +288,40 @@ describe("the run as a whole", () => {
     );
   });
 
+  /**
+   * Measured live on 2026-08-20, and invisible until the report was read.
+   *
+   * `runRoomScenario` advances the clock *between* rounds, so an N-round run
+   * crosses N-1 boundaries. A simulation whose only ending is its horizon never
+   * arrives: a three-round smoke that announced rounds 0, 1 and 2 and took all
+   * 33 of its turns reported `roundsPlayed 2` and wrote an `end` event carrying
+   * no reason at all. The descent hides this because its runs usually end in a
+   * wipe, which sets `done` from inside.
+   */
+  it("counts the last round, which never gets a boundary tick", () => {
+    const s = sim({ days: 3 });
+    // Two boundaries is what a three-round roster produces.
+    s.advance();
+    s.advance();
+    expect(s.done).toBe(false);
+    expect(s.endedBecause).toBeUndefined();
+
+    s.finish();
+    expect(s.metrics().roundsPlayed).toBe(3);
+    expect(s.done).toBe(true);
+    expect(s.endedBecause).toMatch(/3 rounds ran out/);
+  });
+
+  it("does not double-count when the horizon was reached by advancing", () => {
+    const s = sim({ days: 2 });
+    s.advance();
+    s.advance();
+    expect(s.done).toBe(true);
+    s.finish();
+    s.finish();
+    expect(s.metrics().roundsPlayed).toBe(2);
+  });
+
   it("stops announcing rounds once there are none left", () => {
     const s = sim({ days: 1 });
     s.advance();

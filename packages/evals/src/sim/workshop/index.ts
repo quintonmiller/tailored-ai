@@ -530,6 +530,28 @@ export class WorkshopSimulation implements Simulation {
   private finalise(): void {
     if (this.finalised) return;
     this.finalised = true;
+
+    /*
+     * The last round is played but never gets a boundary, so count it here.
+     *
+     * `runRoomScenario` calls `advance()` *between* rounds — N rounds produce
+     * N-1 boundaries — and then stops when the roster runs out. A simulation
+     * whose only ending is the horizon therefore never reaches it: `done` stays
+     * false, `endedBecause` stays undefined, and the run reports one fewer
+     * round than it played.
+     *
+     * The descent hides this because its runs usually end in a wipe, which sets
+     * `done` from inside. Measured here on 2026-08-20: a three-round smoke that
+     * announced rounds 0, 1 and 2 and took all 33 of its turns reported
+     * `roundsPlayed 2` and wrote an `end` event with no reason on it at all.
+     *
+     * Clamped, so the path where `advance()` reached the horizon itself stays
+     * idempotent. A run killed early still counts the round it was in, which is
+     * honest: those turns were taken.
+     */
+    if (this.writesThisRound === 0) this.roundsWithNoWrite += 1;
+    this.tick = Math.min(this.tick + 1, this.horizon);
+
     this.workspace.snapshot(this.tick);
     const check = checkWorkspace(this.workspace);
     writeFileSync(
@@ -566,6 +588,18 @@ export class WorkshopSimulation implements Simulation {
    * The first climbs when the team's model of a file has drifted from the file;
    * the second climbs when they are talking instead of building.
    */
+  /**
+   * The harness saying the roster has run out. See `Simulation.finish`.
+   *
+   * Separate from `metrics()` calling `finalise()` because the trace's closing
+   * `end` event is written *before* the report asks for metrics, so relying on
+   * `metrics()` alone left the trace saying the run stopped for no reason while
+   * the report knew perfectly well why.
+   */
+  finish(): void {
+    this.finalise();
+  }
+
   metrics(): SimMetrics {
     this.finalise();
     return this.counters();
