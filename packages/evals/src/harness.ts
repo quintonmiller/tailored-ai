@@ -577,6 +577,18 @@ export function simulationGrants(sim: Simulation, roles: Record<string, string>)
   return grants;
 }
 
+/**
+ * What the simulation wants said to one role, if anything.
+ *
+ * The only durable channel a simulation has to an agent. Everything else it
+ * says arrives as a tool result — which a model reads as *what happened*, not
+ * as *what it wants* — and that asymmetry is not a matter of wording. See the
+ * call site.
+ */
+function brief(sim: Simulation, role: string | undefined): string | undefined {
+  return role ? sim.briefFor?.(role) : undefined;
+}
+
 export function buildConfig(scenario: Scenario, opts: HarnessOptions, sim?: Simulation): Record<string, unknown> {
   const agentName = scenario.agent?.name ?? "bench";
   const providerId = opts.providerId ?? "openai_compatible";
@@ -651,6 +663,28 @@ export function buildConfig(scenario: Scenario, opts: HarnessOptions, sim?: Simu
 
   if (sim && scenario.simulation) {
     const agents = (merged.agents ?? {}) as Record<string, Record<string, unknown>>;
+
+    /*
+     * agent → role, which is the direction nothing had.
+     *
+     * `simulation.roles` is written role-first (`{ mage: "mage" }`) because
+     * that is how a scenario casts its parts, and every scenario so far has
+     * named its agents after its roles — so indexing it *by agent* returned the
+     * right answer by coincidence. `the-workshop-alone` is the first row where
+     * they differ (five roles, one agent called `maker`), and there the lookup
+     * silently returned undefined and the agent ran with no brief at all: the
+     * one arm that most needed the task description was the one that did not
+     * get it, and nothing was red.
+     *
+     * First role wins when several map to one agent. That agent is playing all
+     * of them, and a simulation that cares says so itself — the workshop, for
+     * instance, describes every file as yours when ownership is shared.
+     */
+    const roleOf = new Map<string, string>();
+    for (const [role, agent] of Object.entries(scenario.simulation.roles)) {
+      if (!roleOf.has(agent)) roleOf.set(agent, role);
+    }
+
     for (const [agent, granted] of Object.entries(simulationGrants(sim, scenario.simulation.roles))) {
       const block = agents[agent];
       if (!block) {
@@ -660,12 +694,44 @@ export function buildConfig(scenario: Scenario, opts: HarnessOptions, sim?: Simu
         );
       }
       const declared = Array.isArray(block.tools) ? (block.tools as string[]) : [];
-      // `room` is added rather than assumed. An agent given an allowlist that
-      // omits it cannot post, so it would take its turn, read everything, act on
-      // nothing anybody else could see, and look like an agent with nothing to
-      // say — which is the single most misleading way for a coordination
-      // scenario to fail.
-      block.tools = [...new Set([...declared, ...granted, "room"])];
+
+      /*
+       * A fresh object, never a write through to the scenario's own.
+       *
+       * `deepMerge` copies a key it does not already hold by reference, so
+       * `merged.agents.mage` *is* `scenario.config.agents.mage`. Mutating it
+       * edits the loaded scenario for every later caller in the process. The
+       * tools line got away with that because rebuilding a set from a superset
+       * is idempotent; appending text is not, so a scenario built twice —
+       * `--repeats 3`, or two variants in one test file — would accumulate the
+       * brief once per build.
+       */
+      agents[agent] = {
+        ...block,
+        // `room` is added rather than assumed. An agent given an allowlist that
+        // omits it cannot post, so it would take its turn, read everything, act
+        // on nothing anybody else could see, and look like an agent with
+        // nothing to say — which is the single most misleading way for a
+        // coordination scenario to fail.
+        tools: [...new Set([...declared, ...granted, "room"])],
+        // Anything the simulation decided about this agent that the scenario
+        // could not know when it was written — a role drawn at construction, a
+        // brief chosen by `--sim-option`. Appended rather than replacing,
+        // because the scenario's own description of the job is still true.
+        //
+        // It has to live in the instructions rather than in a tool result, and
+        // that is measured rather than assumed: on `the-descent-betrayed`, seed
+        // 610357, a traitor's objective was delivered thirteen times as the
+        // first line of its own tool output, correctly scoped to one agent, and
+        // across nineteen rounds its private reasoning referenced the role zero
+        // times while it played a textbook loyal cleric. One line of transient
+        // data against a persistent instruction is not a fair fight.
+        ...(brief(sim, roleOf.get(agent))
+          ? {
+              instructions: `${String(block.instructions ?? "").trim()}\n\n${brief(sim, roleOf.get(agent))}`.trim(),
+            }
+          : {}),
+      };
     }
   }
 

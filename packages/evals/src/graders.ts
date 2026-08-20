@@ -100,7 +100,10 @@ export async function grade(
   // the same reason. Report the cause once instead of N times.
   if (outcome.error) return [no("run", `the run failed: ${outcome.error}`)];
 
-  for (const assertion of scenario.expect) {
+  // A `review:` scenario has no assertions by construction — the schema refuses
+  // to let it carry any. It returns no checks rather than a vacuous pass, and
+  // `ScenarioResult.review` is what stops the empty list being read as one.
+  for (const assertion of scenario.expect ?? []) {
     checks.push(await gradeOne(assertion, scenario, outcome, opts));
   }
   return checks;

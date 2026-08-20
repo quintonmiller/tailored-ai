@@ -92,7 +92,20 @@ const DEGENERATE: Array<{ name: string; outcome: RunOutcome }> = [
  */
 const rejectingJudge = async () => ({ pass: false, reason: "stub: degenerate reply" });
 
-const { scenarios } = await loadScenarios(scenarioDir);
+const { scenarios: everyScenario } = await loadScenarios(scenarioDir);
+
+/**
+ * A `review:` row is not exempt from discriminating — it makes no claim to
+ * discriminate at all.
+ *
+ * It has no `expect` by construction: the schema refuses to let one carry
+ * assertions, because a review scenario's output is an artifact a person opens
+ * and its simulation reports activity counts that must never become a score.
+ * There is therefore nothing here for a degenerate outcome to fail against, and
+ * including these rows would only lower the coverage ratio below with rows that
+ * cannot raise it.
+ */
+const scenarios = everyScenario.filter((s) => !s.review);
 
 describe("every scenario rejects a degenerate outcome", () => {
   const graded = scenarios.filter((s) => behaviourAssertions(s).length > 0);

@@ -156,7 +156,7 @@ Deep notes on each subsystem live under [`docs/`](./docs/):
 | The Endless Descent workstream: why an endless benchmark, what was decided and traded off, what it cannot tell you yet, and what to do next | [docs/endless-descent.md](./docs/endless-descent.md) |
 | The Endless Descent review: the measured pacing defect, viewer legibility, theme directions, and gameplay proposals (items, caches, scouting, zones) | [docs/endless-descent-improvements.md](./docs/endless-descent-improvements.md) |
 | Broadcast viewer: a watchable second page over the same trace, the scene/beat data it needs, the run scoreboard, and the observer-only narrator | [docs/broadcast-viewer.md](./docs/broadcast-viewer.md) |
-| Open builds (**plan, not built**): a scenario with a brief instead of a score — agents build a real artifact over N rounds and a person reviews it; the workspace simulation, the `review:` schema flag, and the live-preview broadcast | [docs/open-builds.md](./docs/open-builds.md) |
+| Open builds: a scenario with a **brief instead of a score** — five agents across three channels build a real software artifact and a person reviews it. The `workshop` simulation, the `review:` schema flag that forbids assertions, the turn-parity control arms, and what it cannot tell you | [docs/open-builds.md](./docs/open-builds.md) |
 | Audit findings + open action items (2026-07-28): boundaries, trust, skills, context | [docs/audit-2026-07-28.md](./docs/audit-2026-07-28.md) |
 
 When touching a subsystem, update its doc — keep this index file tight.

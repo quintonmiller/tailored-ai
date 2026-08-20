@@ -1048,6 +1048,41 @@ what happens when a fact has to cross a wall; splitting the party too would make
 a low score ambiguous between "could not play the dungeon" and "could not get a
 number across a room".
 
+## Review runs: a scenario that declines to be scored
+
+Every mechanism above produces a verdict. A few questions have none that this
+package can compute — *is the thing they built any good* is the load-bearing
+example — and the honest response is to say so in the schema rather than invent
+a proxy and rank on it.
+
+`review: true` on a scenario does three things:
+
+- `expect` becomes optional, and the wake roster's round cap relaxes from 40 to
+  400. The 40 exists so one row cannot cost more than anybody will wait for;
+  on a row nobody is blocked on, the waiting is the point.
+- `score()` skips the row entirely — it contributes `0/0`, exactly as an errored
+  one does, and `--min-score` cannot be moved by it. The report prints `REVIEW`
+  instead of `PASS`, because a run with no checks satisfies `every()` vacuously.
+- The scenario may **not** carry `expect` or `milestones`. Not "need not" —
+  may not, as a load error.
+
+That last rule is the one that matters and it is stricter than it looks. A
+review scenario still runs a simulation, a simulation must implement `metrics()`,
+and metrics are numbers. A number in a report gets ranked by the next person who
+reads it, and the first one who wants a red/green row will write
+`sim_metric: { metric: "linesWritten", at_least: 400 }` — an assertion that
+measures typing. Making it impossible to express is the only version of this
+rule that survives a Friday afternoon.
+
+The counters such a simulation reports are printed under a heading that says
+*activity, not achievement*, and the useful ones are about process rather than
+outcome: how often a patch missed its target, how many rounds passed with
+nothing written, how often somebody reached for a file that was not theirs.
+
+`the-workshop` is the first of these — five agents across three channels build a
+real software artifact from a brief, with two control arms at matched turn
+budgets. See [open-builds.md](./open-builds.md).
+
 ## Watching a run happen
 
 ```bash

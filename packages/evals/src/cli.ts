@@ -409,7 +409,7 @@ async function cmdRun(argv: string[]): Promise<number> {
     );
     for (const s of scenarios) {
       console.log(
-        `  ${describeDifficulty(s.difficulty).padEnd(14)} ${s.category.padEnd(16)} ${s.id.padEnd(44)} ${s.expect.length} check(s)`,
+        `  ${describeDifficulty(s.difficulty).padEnd(14)} ${s.category.padEnd(16)} ${s.id.padEnd(44)} ${s.review ? "review" : `${s.expect?.length ?? 0} check(s)`}`,
       );
     }
     return 0;

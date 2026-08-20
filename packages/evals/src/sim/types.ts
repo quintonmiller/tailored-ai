@@ -52,6 +52,25 @@ export interface SimEvent {
 }
 
 export interface Simulation {
+  /**
+   * Whether running the world on to its horizon with nobody acting means
+   * anything.
+   *
+   * True by default, because for the factory it does: a company that is
+   * abandoned keeps paying wages, and scoring an eight-round agent run against
+   * a baseline swept over sixty days requires the same sixty days on both
+   * sides. Truncating instead would flatter every team that stopped early.
+   *
+   * False where an unattended tick is a fiction rather than a formality.
+   * Nothing happens in a workshop nobody is typing in, so running on would
+   * advance the clock past the roster and the round count in the report would
+   * stop meaning turns taken.
+   *
+   * A baseline sweep plays every round, so there is nothing to make comparable
+   * — the agents' horizon *is* the run.
+   */
+  runsOnUnattended?: boolean;
+
   readonly name: string;
   /** Days elapsed, from 0. */
   readonly day: number;
@@ -108,6 +127,22 @@ export interface Simulation {
    * organisation instead of about an individual.
    */
   readonly responses?: Record<string, string[]>;
+  /**
+   * Extra standing instructions for one role, decided by the simulation.
+   *
+   * The only durable channel a simulation has to an agent. Everything else it
+   * says arrives as a tool result — which the model reads as *what happened*,
+   * not as *what it wants* — and that asymmetry is not a matter of wording.
+   *
+   * It exists for anything the scenario could not know when it was written: a
+   * role drawn at construction, or a brief selected with `--sim-option`. The
+   * workshop's whole genericity rests on it — the task is a value rather than a
+   * scenario, so the scenario cannot state it and something has to.
+   *
+   * Called once, when the config is built. Returning nothing is the normal case
+   * and means the role is fully described by the scenario.
+   */
+  briefFor?(role: string): string | undefined;
   /** The numbers the benchmark reports. Called once, at the end. */
   metrics(): SimMetrics;
   /** The headline figure, so a report can rank runs without knowing the domain. */

@@ -25,6 +25,7 @@ const GREEN = "[32m";
 const RED = "[31m";
 const YELLOW = "[33m";
 const DIM = "[2m";
+const CYAN = "[36m";
 const RESET = "[0m";
 
 function colour(text: string, code: string): string {
@@ -38,6 +39,12 @@ export function score(scenarios: ScenarioResult[]): BenchmarkReport["score"] {
   let total = 0;
 
   for (const scenario of scenarios) {
+    // A reviewed row contributes nothing to the score, the same way an errored
+    // one does — and for the same reason: no measurement happened here that
+    // this function knows how to read. Counting its vacuously-passing runs
+    // would raise the benchmark's number for having asked it a question with no
+    // answer, which is the one direction a score must never move by accident.
+    if (scenario.review) continue;
     const runsPassed = scenario.runs.filter((r) => r.pass).length;
     const runsTotal = scenario.runs.length;
     passed += runsPassed;
@@ -182,7 +189,71 @@ export function printFactRouting(scenario: ScenarioResult): void {
   }
 }
 
+/**
+ * A row nobody scored, printed so it cannot be mistaken for one that passed.
+ *
+ * Deliberately not PASS/FAIL/FLAKY. The three-verdict vocabulary is the whole
+ * reason `review:` had to become a schema flag rather than a convention: a run
+ * with no checks satisfies `every()` vacuously, and printing PASS next to an
+ * artifact nobody has opened is a lie the report tells in its most-read line.
+ *
+ * What it prints instead is the two things a reviewer needs — where the artifact
+ * is, and what the team did to produce it — under a heading that says the
+ * numbers are activity rather than achievement. That heading is load-bearing.
+ * `linesWritten` beside another run's `linesWritten` is a leaderboard the moment
+ * nobody is told otherwise, and the metric measures typing.
+ */
+function printReview(scenario: ScenarioResult): void {
+  console.log(
+    `${colour("REVIEW", CYAN)} ${String(scenario.runs.length).padEnd(5)} ${scenario.category.padEnd(16)} ${scenario.id}`,
+  );
+  console.log(colour(`      ${scenario.intent.split("\n")[0]}`, DIM));
+
+  for (const [index, run] of scenario.runs.entries()) {
+    const label = scenario.runs.length > 1 ? `run ${index + 1}: ` : "";
+    if (run.outcome.error) {
+      console.log(colour(`      ${label}the run failed: ${run.outcome.error}`, RED));
+      continue;
+    }
+    const sim = run.outcome.simulation;
+    if (!sim) {
+      console.log(colour(`      ${label}no simulation state was recorded`, DIM));
+      continue;
+    }
+    // The simulation announces its own artifact location as an event, because
+    // metrics are numbers and a path is not one. Last wins: a resumed run
+    // announces again.
+    const where = [...sim.events].reverse().find((e) => e.kind === "artifact")?.message;
+    if (where) console.log(`      ${label}${colour("artifact", CYAN)}  ${where}`);
+    const shown = Object.entries(sim.metrics)
+      .filter(([, v]) => typeof v === "number")
+      .map(
+        ([k, v]) => `${k.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase()} ${Math.round(v).toLocaleString("en-US")}`,
+      );
+    if (shown.length) {
+      console.log(colour(`      ${label}activity, not achievement — nothing here is a score:`, DIM));
+      // Three to a line, so twelve counters do not become twelve lines.
+      for (let i = 0; i < shown.length; i += 3) {
+        console.log(
+          colour(
+            `        ${shown
+              .slice(i, i + 3)
+              .map((t) => t.padEnd(30))
+              .join("")}`.trimEnd(),
+            DIM,
+          ),
+        );
+      }
+    }
+  }
+  console.log(colour("      open the artifact and judge it; this row has no verdict", DIM));
+}
+
 export function printScenario(scenario: ScenarioResult): void {
+  if (scenario.review) {
+    printReview(scenario);
+    return;
+  }
   const passedRuns = scenario.runs.filter((r) => r.pass).length;
   const label = `${passedRuns}/${scenario.runs.length}`;
   const verdict =

@@ -43,11 +43,19 @@ const wakeStep = z
  *
  * `rounds` is a ceiling: the run stops early when a whole pass changes nothing,
  * so a scenario can be generous without paying for it on a team that finishes.
+ *
+ * The bound here is the outer one. A **scored** scenario is held to 40 in the
+ * top-level refinement below, which is where that limit has always belonged:
+ * it exists to stop one scenario costing more than anybody will wait for, and
+ * that is a statement about the benchmark rather than about the roster shape.
+ * A `review:` scenario is the case where the waiting is the point — nobody is
+ * blocked on its number, because it does not produce one — so it is allowed a
+ * longer horizon and the real guard becomes `--max-scenario-minutes`.
  */
 const wakeRounds = z
   .object({
     room: z.string(),
-    rounds: z.number().int().positive().max(40),
+    rounds: z.number().int().positive().max(400),
     agents: z.array(z.string()).nonempty(),
     noQuiescence: z.boolean().optional(),
   })
@@ -307,7 +315,24 @@ const scenario = z
       )
       .optional(),
     repeats: z.number().int().positive().optional(),
-    expect: z.array(assertion).nonempty(),
+    /**
+     * This scenario produces an artifact for a person to look at, not a score.
+     *
+     * Every other scenario here answers a question the package can settle by
+     * itself. A few cannot be settled that way at all — *is the thing they
+     * built any good* — and the honest response is to say so in the schema
+     * rather than to invent a proxy and rank on it.
+     *
+     * Setting it has three consequences, and the third is the one that matters:
+     * `expect` becomes optional, the round cap relaxes, and the scenario is
+     * **forbidden** from carrying `expect` or `milestones` at all. That last
+     * rule is not tidiness. A review simulation still has to implement
+     * `metrics()`, metrics are numbers, and a number in a report gets ranked by
+     * the next person who reads it — so the only reliable way to stop activity
+     * counts turning into a score is to make it impossible to assert on them.
+     */
+    review: z.boolean().optional(),
+    expect: z.array(assertion).nonempty().optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -317,6 +342,61 @@ const scenario = z
         code: z.ZodIssueCode.custom,
         message: "a scenario is either a room scenario (`rooms:`) or a chat scenario (`message:`), not both or neither",
       });
+    }
+
+    /*
+     * Scored and reviewed are exclusive, and the schema is where that is
+     * settled rather than in a convention nobody can enforce.
+     *
+     * Without `review:`, `expect` is required and non-empty exactly as it has
+     * always been: a scenario that grades nothing passes for having checked
+     * less, which is the failure this whole file exists to prevent.
+     *
+     * With it, the opposite rule applies and it is stricter. A review scenario
+     * may not carry `expect` or `milestones` — not "may leave them out". The
+     * reason is the pressure that arrives later: a review simulation reports
+     * activity counts because the `Simulation` contract requires `metrics()`,
+     * and the first person who wants a red/green row will reach for
+     * `sim_metric: { metric: "linesWritten", at_least: 400 }`. That assertion
+     * would be measuring typing. Making it a load error is the only version of
+     * this rule that survives contact with a Friday afternoon.
+     */
+    if (value.review) {
+      if (value.expect?.length) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "`review: true` says a person judges this run, so it cannot also carry `expect:` — " +
+            "drop the assertions, or drop `review:` and grade it properly",
+        });
+      }
+      if (value.milestones?.length) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            "`review: true` cannot carry `milestones:` — a milestone ladder is a score, and the " +
+            "activity metrics a review simulation reports are not achievements to rank",
+        });
+      }
+    } else {
+      if (!value.expect?.length) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "a scenario needs `expect:` with at least one assertion, or `review: true` if a person grades it",
+        });
+      }
+      // The cost ceiling, enforced here rather than on the field so the
+      // exception has somewhere to be written down. See `wakeRounds`.
+      for (const step of Array.isArray(value.wake) ? value.wake : value.wake ? [value.wake] : []) {
+        if ("rounds" in step && step.rounds > 40) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              `wake roster for room "${step.room}" asks for ${step.rounds} rounds; a scored scenario is capped at 40 ` +
+              "so one row cannot cost more than anybody will wait for. Only `review: true` scenarios go longer.",
+          });
+        }
+      }
     }
     // A canned result for a tool the agent cannot reach is a scenario that
     // asks for something impossible, and it fails looking exactly like a model
@@ -409,7 +489,7 @@ const scenario = z
         });
       }
     }
-    const everyAssertion = [...value.expect, ...(value.milestones ?? []).map((m) => m.when)];
+    const everyAssertion = [...(value.expect ?? []), ...(value.milestones ?? []).map((m) => m.when)];
     // A world assertion on a scenario with no machinery grades nothing and
     // *passes*: the run records no world, an absent input is unknown, and the
     // check is skipped. Silent, permanent, and in the direction that inflates a
@@ -519,7 +599,7 @@ const scenario = z
     // that does not exist is a condition that can never be true, and a `goal`
     // no rule can set is a scenario that fails every run for a reason nobody
     // can see from the transcript. All three look exactly like a model limit.
-    if (value.expect.some((a) => a.answers_correctly !== undefined) && !value.oracle) {
+    if ((value.expect ?? []).some((a) => a.answers_correctly !== undefined) && !value.oracle) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:

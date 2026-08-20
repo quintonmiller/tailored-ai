@@ -109,8 +109,16 @@ export function finishSimulationTrace(
   position: { turn: number; round: number; turns: number },
 ): void {
   if (sim) {
+    // Only where an unattended world still means something. See
+    // `Simulation.runsOnUnattended`: for the factory it does — an abandoned
+    // company keeps paying wages, and an eight-round agent run has to be
+    // scored over the same sixty days its baselines were swept over, or every
+    // team that stopped early is flattered. For the workshop it does not:
+    // nothing happens in a directory nobody is typing in, and ticking the
+    // clock past the roster would make the round count stop meaning turns
+    // taken.
     let guard = 0;
-    while (!sim.done && guard++ < 10_000) sim.advance();
+    if (sim.runsOnUnattended !== false) while (!sim.done && guard++ < 10_000) sim.advance();
     const announce = sim.announce?.();
     write?.({
       kind: "state",

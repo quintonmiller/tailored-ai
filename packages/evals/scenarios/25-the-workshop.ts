@@ -1,0 +1,422 @@
+/**
+ * Five agents, three channels, a brief, and a directory somebody opens after.
+ *
+ * The first row in this package with no score. Everything else here asks a
+ * question the benchmark can settle by itself — did they reach the state, beat
+ * the baseline, earn the experience — and each of those is a question with an
+ * author, which means it has to be re-authored every time it is answered.
+ * `the-lock` cost a session to write and was solved on its third run.
+ *
+ * A brief cannot be beaten. It can only be executed better, and whether it was
+ * is not a thing this package can compute. So it does not try: `review: true`,
+ * no `expect`, no `milestones`, and a person opens `index.html`.
+ *
+ * ## Why three channels rather than the descent's one
+ *
+ * The descent puts all five agents in one room on purpose, and says why: its
+ * sibling scenarios already measure what happens when a fact must cross a wall,
+ * so splitting the party too would make a low score ambiguous between "could
+ * not play the dungeon" and "could not get a number across a room".
+ *
+ * That argument does not apply to a row with no score to be ambiguous about,
+ * and the reason to split here is different and specific. One room means every
+ * message costs every agent context, and over 220 turns the transcript is the
+ * single largest consumer of the history budget — a team that talks in one
+ * place trims away its own plan. Channels let a team scope a conversation, and
+ * whether they use that well is exactly the sort of thing you can only see by
+ * reading the run.
+ *
+ *     studio   all five        decisions, blockers, anything everyone needs
+ *     build    lead, builder, tester      implementation and defects
+ *     craft    lead, interface, author    what it looks like and what is in it
+ *
+ * The **lead is the only agent in all three**, which makes it the bridge, and —
+ * as `the-machine-across-a-divide` established — nothing tells it that being
+ * the bridge is a job.
+ *
+ * The crossing that matters is not a token. `engine.js` belongs to the builder
+ * and `render.js` belongs to the interface, the second reads state the first
+ * defines, and those two agents share no channel but the all-hands. If they do
+ * not agree on the shape of that state, the artifact opens to a blank canvas
+ * and every syntax check passes on the way there.
+ *
+ * ## The two control arms, at turn parity rather than round parity
+ *
+ * `the-workshop-in-one-room` is the same brief with everybody in `studio` and
+ * nothing else, and `the-workshop-alone` is one agent holding every tool. Both
+ * get **220 turns**, the same as the split arm, because the question is "given
+ * the same budget, does the shape of the team help" and not "does more model
+ * time help". Round parity would have answered the second question while
+ * appearing to answer the first.
+ *
+ * The solo arm is the uncomfortable one and is the reason to build it. It is
+ * the only row in this package that could tell you whether five agents beat one
+ * at a task with an artifact at the end, and it costs one file.
+ */
+
+import { defineScenarios } from "../src/define.js";
+import { WORKSHOP_PLAY_OPTIONS } from "../src/sim/workshop/index.js";
+
+/**
+ * Twenty rounds of eleven turns.
+ *
+ * A budget, not a guess. An agent turn on the local model runs about 35
+ * seconds, measured against `the-lock`, so 220 turns is a little over two hours
+ * — the same order as a descent run, which is the most anybody has been willing
+ * to wait for one row.
+ *
+ * Rounds here buy *building* rather than more chances at the same discovery, so
+ * a longer run is a legitimate configuration rather than a stalled one. The
+ * schema lets a `review:` row go to 400; the bill is the only thing in the way.
+ */
+const ROUNDS = 20;
+
+/** Same total model calls in every arm. See the header. */
+const TURN_BUDGET = 220;
+
+const NOTHING_RUNS =
+  "Nothing you write is executed at any point during this run. `check_syntax` parses every file and " +
+  "reports syntax errors, unclosed tags and references to files nobody created — it cannot tell you " +
+  "whether the thing works. Write as though it ships unrun, because it does.";
+
+const WORKSPACE =
+  "You are building a real artifact in a real directory, and it will still be there when this ends: a " +
+  "person is going to open it and form an opinion. Everything happens through your tools — `list_files` " +
+  "to see what exists and what the brief expects, `read_file` for a numbered slice, `outline_file` to " +
+  "find your way around something long, `write_file` for a whole file, `patch_file` to change one exact " +
+  "passage. Prefer `patch_file`: a whole-file write of a long file costs the entire file twice over, and " +
+  "the run has a fixed budget for that. You can read every file. You can only write the ones that are " +
+  "yours; the rest you have to ask for. Say what a tool actually returned, in numbers, not in summary. " +
+  NOTHING_RUNS;
+
+const hand = (description: string, instructions: string, channels: string) => ({
+  description,
+  instructions: `${instructions}\n\n${channels}\n\n${WORKSPACE}`,
+});
+
+/**
+ * The lead carries one thread across three rooms; everybody else gets one per
+ * room.
+ *
+ * Room sessions are per-`(room, agent)` by default, which is right — what an
+ * agent does in one place should not leak into another. Applied to the bridge
+ * it is wrong in a way that would sink the run: the lead would arrive in
+ * `craft` with no memory of what it agreed in `build` ninety seconds earlier,
+ * and the one agent whose entire job is carrying decisions between channels
+ * would be the one agent unable to.
+ *
+ * Core's own note on this setting says continuity of *work* is better served by
+ * durable state than by a shared session, and that is true — `design.md` is
+ * exactly that durable state and the lead owns it. This is the other half:
+ * continuity of *conversation*, which is what a bridge is made of. The cost is
+ * a session that grows with three rooms rather than one, and the lead is the
+ * agent most likely to hit the history budget because of it. That is a real
+ * trade and it is worth watching in the first run.
+ */
+const BRIDGE = { roomSessionScope: "shared" as const };
+
+const LEAD = hand(
+  "Holds the brief, owns the design, and is the only one in every channel.",
+  "You are the lead. You own `design.md` and you write no code at all — if something needs building, " +
+    "somebody else builds it. Your job is that the five of you are building one thing rather than five: " +
+    "decide what is in scope, write down what was agreed, and notice when two people are assuming " +
+    "different things. `design.md` is the team's memory. This conversation is not — it gets trimmed, and " +
+    "what you did not write down is gone.",
+  "You are in all three channels: `studio`, `build` and `craft`. Nobody else is. The builder and the " +
+    "interface never speak to each other except in `studio`, and their two files have to fit together, " +
+    "so anything one of them decides that the other needs is yours to carry.",
+);
+
+const BUILDER = hand(
+  "Writes the logic. Never sees the channel where the look is decided.",
+  "You are the builder. You own `engine.js` (or `logic.js`, or `site.js` — whichever the brief gives " +
+    "you): state, rules, and everything that happens. You do not draw anything and you do not own the " +
+    "page. Whoever renders your state has to know its shape, and they are not in this channel — say what " +
+    "your state looks like out loud, in `studio`, in the exact names you used.",
+  "You are in `studio` and `build`.",
+);
+
+const INTERFACE = hand(
+  "Owns the page and everything drawn on it.",
+  "You are the interface. You own the entry page, the stylesheet and the rendering file. You decide the " +
+    "load order of the scripts, which means a file you do not own can be broken by a tag you write. You " +
+    "read the state somebody else defines and you never change it. If you do not know its shape, ask in " +
+    "`studio` rather than guessing — a guess here costs a blank screen that every check passes.",
+  "You are in `studio` and `craft`.",
+);
+
+const AUTHOR = hand(
+  "Writes what is in it: data, tuning, copy.",
+  "You are the author. You own the content file — levels, constants, palettes, copy, fixtures. Data, not " +
+    "behaviour: no logic lives in your file. Everything you write is read by somebody else's code, so " +
+    "the names you choose are an interface and changing one silently breaks them.",
+  "You are in `studio` and `craft`.",
+);
+
+const TESTER = hand(
+  "The only one who can check anything.",
+  "You are the tester. You own `defects.md`, you write no code, and you are the only person here who can " +
+    "call `check_syntax`. Nobody else can see whether the artifact parses, so if you do not check and say " +
+    "so, nobody knows. Check often, report what it actually said including line numbers, and write down " +
+    "what you cannot check — a defect nobody can see is still a defect.",
+  "You are in `studio` and `build`. The interface and the author are not in `build`, so a problem in the " +
+    "page or the content has to go through `studio` or through the lead.",
+);
+
+const OPENING =
+  "The brief is in your instructions and in `brief.md`. You have {ROUNDS} rounds and then this stops, " +
+  "finished or not. Agree what you are building before anybody writes a line of it, and leave the last " +
+  "few rounds for making what exists work rather than adding to it.";
+
+const opening = (rounds: number, extra: string) => OPENING.replace("{ROUNDS}", String(rounds)) + extra;
+
+const INTENT =
+  "Five agents with partitioned write access build a real software artifact from a brief over 20 rounds " +
+  "across three channels, and a person reviews what they made. There is no score, no `expect` and no " +
+  "milestone ladder: the deliverable is a directory you open.\n\n" +
+  "It exists because every scored scenario here answers a question somebody had to author, and an " +
+  "authored question has to be re-authored every time it is answered. It is also the only row that can " +
+  "show whether a team stays coherent past its own context window — 220 turns will trim away the " +
+  "conversation that agreed the plan, and what survives is whatever got written into a file.\n\n" +
+  "The brief is a `--sim-option`, not a scenario: `arcade`, `tool` or `site`. Two control arms run the " +
+  "same brief at the same turn budget, one with everybody in a single room and one with a single agent, " +
+  "because the question underneath all of this is whether the shape of the team was worth anything.";
+
+export default defineScenarios(
+  {
+    id: "the-workshop",
+    category: "orchestration",
+    difficulty: 10,
+    review: true,
+    intent: INTENT,
+
+    simulation: {
+      name: "workshop",
+      days: ROUNDS,
+      daysPerRound: 1,
+      // Agent names are role names, deliberately. `write_file` and `patch_file`
+      // are `agentTool`s that read `context.agentName` to decide whether the
+      // caller owns the file, and the simulation is handed roles rather than
+      // agents — so the two vocabularies have to be the same one. The descent
+      // does this too. `sim-roles-are-agent-names.test.ts` holds it.
+      roles: {
+        lead: "lead",
+        builder: "builder",
+        interface: "interface",
+        author: "author",
+        tester: "tester",
+      },
+      options: { ...WORKSHOP_PLAY_OPTIONS },
+    },
+
+    agent: { name: "lead", ...LEAD, extra: BRIDGE },
+
+    config: {
+      agents: {
+        builder: BUILDER,
+        interface: INTERFACE,
+        author: AUTHOR,
+        tester: TESTER,
+      },
+    },
+
+    rooms: [
+      {
+        name: "studio",
+        purpose: "All five of you. Decisions, blockers, and anything the whole team needs.",
+        members: ["lead", "builder", "interface", "author", "tester"],
+        deliver: "poll",
+        wakeOn: "all",
+        incoming: [
+          {
+            speaker: "quinton",
+            body:
+              "Here is the brief. Five of you, twenty rounds, one thing at the end that I am going to open " +
+              "and look at. This channel reaches everybody; the other two do not.",
+          },
+        ],
+      },
+      {
+        name: "build",
+        purpose: "The lead, the builder and the tester. Implementation and defects.",
+        members: ["lead", "builder", "tester"],
+        deliver: "poll",
+        wakeOn: "all",
+        incoming: [
+          {
+            speaker: "quinton",
+            body: "Implementation channel. The interface and the author cannot hear this one.",
+          },
+        ],
+      },
+      {
+        name: "craft",
+        purpose: "The lead, the interface and the author. What it looks like and what is in it.",
+        members: ["lead", "interface", "author"],
+        deliver: "poll",
+        wakeOn: "all",
+        incoming: [
+          {
+            speaker: "quinton",
+            body: "Look and content channel. The builder and the tester cannot hear this one.",
+          },
+        ],
+      },
+    ],
+
+    /*
+     * Round-major across all three channels, which `wakeSteps` does for free and
+     * which is the only ordering that makes a bridge a bridge.
+     *
+     * Running `studio` to exhaustion and then `build` would let the lead carry
+     * everything across in one trip at a moment when the other channels had not
+     * started — a different scenario, and an easier one.
+     *
+     * Eleven turns a round: the lead three, everybody else two.
+     */
+    wake: [
+      { room: "studio", rounds: ROUNDS, agents: ["lead", "builder", "interface", "author", "tester"] },
+      { room: "build", rounds: ROUNDS, agents: ["lead", "builder", "tester"] },
+      { room: "craft", rounds: ROUNDS, agents: ["lead", "interface", "author"] },
+    ],
+
+    repeats: 1,
+  },
+
+  /**
+   * The same brief, the same budget, one room.
+   *
+   * The arm that says whether the channel graph was worth anything. Forty-four
+   * rounds of five turns is the same 220 model calls the split arm gets, so a
+   * difference in the artifact is a difference in the shape of the team rather
+   * than in how long they had.
+   *
+   * Ownership stays on. Changing two things at once would make the comparison
+   * unreadable, and the room graph is the thing under test here.
+   */
+  {
+    id: "the-workshop-in-one-room",
+    category: "orchestration",
+    difficulty: 10,
+    review: true,
+    intent:
+      "The control arm for `the-workshop`: same brief, same five roles, same partitioned write access, " +
+      "same 220 turns — and one shared channel instead of three. Read the two artifacts side by side.",
+
+    simulation: {
+      name: "workshop",
+      days: TURN_BUDGET / 5,
+      daysPerRound: 1,
+      roles: { lead: "lead", builder: "builder", interface: "interface", author: "author", tester: "tester" },
+      options: { ...WORKSHOP_PLAY_OPTIONS },
+    },
+
+    // No `BRIDGE` here: with one room there is nothing to bridge, and a shared
+    // session scope would be an unrelated second difference between the arms.
+    agent: {
+      name: "lead",
+      ...hand(LEAD.description, LEAD.instructions.split("\n\n")[0], "Everybody is in `studio`. There are no other channels."),
+    },
+
+    config: {
+      agents: {
+        builder: hand(BUILDER.description, BUILDER.instructions.split("\n\n")[0], "Everybody is in `studio`."),
+        interface: hand(INTERFACE.description, INTERFACE.instructions.split("\n\n")[0], "Everybody is in `studio`."),
+        author: hand(AUTHOR.description, AUTHOR.instructions.split("\n\n")[0], "Everybody is in `studio`."),
+        tester: hand(TESTER.description, TESTER.instructions.split("\n\n")[0], "Everybody is in `studio`."),
+      },
+    },
+
+    rooms: [
+      {
+        name: "studio",
+        purpose: "All five of you, in one place.",
+        members: ["lead", "builder", "interface", "author", "tester"],
+        deliver: "poll",
+        wakeOn: "all",
+        incoming: [
+          {
+            speaker: "quinton",
+            body: opening(TURN_BUDGET / 5, " Everything is decided in here."),
+          },
+        ],
+      },
+    ],
+
+    wake: [
+      {
+        room: "studio",
+        rounds: TURN_BUDGET / 5,
+        agents: ["lead", "builder", "interface", "author", "tester"],
+      },
+    ],
+
+    repeats: 1,
+  },
+
+  /**
+   * One agent, every tool, the same 220 turns.
+   *
+   * The row that answers the question underneath the whole framework, and the
+   * one most likely to produce an answer nobody wanted. Ownership is off
+   * because there is nobody to own anything, which is the only difference that
+   * cannot be avoided.
+   *
+   * Read it against the other two on the artifact, not on the counters. A solo
+   * agent will win `linesWritten` almost by construction — it never spends a
+   * turn agreeing with anybody — and that is precisely the number that does not
+   * matter.
+   */
+  {
+    id: "the-workshop-alone",
+    category: "orchestration",
+    difficulty: 10,
+    review: true,
+    intent:
+      "The solo control for `the-workshop`: one agent, every tool, no ownership partition, the same brief " +
+      "and the same 220 turns that five agents get. Whether a team beat one person is a question about " +
+      "the artifact, not about the counters.",
+
+    simulation: {
+      name: "workshop",
+      days: TURN_BUDGET,
+      daysPerRound: 1,
+      // Every file belongs to the one role that exists, so the ownership rule
+      // can never fire. Declared rather than switched off, so the tools behave
+      // identically in all three arms.
+      roles: { lead: "maker", builder: "maker", interface: "maker", author: "maker", tester: "maker" },
+      options: { ...WORKSHOP_PLAY_OPTIONS, ownership: "shared", checks: "anyone" },
+    },
+
+    agent: {
+      name: "maker",
+      description: "Building the whole thing alone.",
+      instructions:
+        "You are building this by yourself. Every file is yours and every tool is yours, including " +
+        "`check_syntax`. You have one turn per round and a lot of rounds; treat each one as a small unit " +
+        "of work rather than a burst, and use `design.md` to remember decisions across them — this " +
+        "conversation gets trimmed, and what you did not write down is gone.\n\n" +
+        WORKSPACE,
+    },
+
+    rooms: [
+      {
+        name: "studio",
+        purpose: "Your own working notes. Nobody else is here.",
+        members: ["maker"],
+        deliver: "poll",
+        wakeOn: "all",
+        incoming: [
+          {
+            speaker: "quinton",
+            body: opening(TURN_BUDGET, " You are on your own for this one."),
+          },
+        ],
+      },
+    ],
+
+    wake: [{ room: "studio", rounds: TURN_BUDGET, agents: ["maker"] }],
+
+    repeats: 1,
+  },
+);

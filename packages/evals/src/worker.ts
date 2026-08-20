@@ -265,6 +265,12 @@ async function main(): Promise<void> {
     category: scenario.category,
     intent: scenario.intent,
     difficulty: scenario.difficulty,
+    // Carried so the report does not have to re-read the scenario to find out
+    // whether this row has a verdict. A review row's `pass` is vacuously true —
+    // it has no checks — which is exactly why the flag has to travel with it:
+    // anything that reads `passRate` without noticing would report a perfect
+    // score for a run nobody graded.
+    ...(scenario.review ? { review: true as const } : {}),
     runs,
     passRate: runs.length ? runs.filter((r) => r.pass).length / runs.length : 0,
   };

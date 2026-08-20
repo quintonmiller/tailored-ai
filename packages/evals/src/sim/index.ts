@@ -15,6 +15,7 @@
 import "./descent/index.js";
 import "./factory/index.js";
 import "./lock/index.js";
+import "./workshop/index.js";
 
 export {
   createSimulation,

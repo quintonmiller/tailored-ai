@@ -413,7 +413,17 @@ export interface Scenario {
   facts?: Record<string, FactSpec>;
   /** Overrides the run-wide default. */
   repeats?: number;
-  expect: Assertion[];
+  /**
+   * A person grades this one, so the package does not.
+   *
+   * The scenario runs exactly like any other — same rooms, same rounds, same
+   * trace, same cost accounting — and produces an artifact instead of a
+   * verdict. `expect` and `milestones` are forbidden rather than optional; see
+   * the refinement in `schema.ts` for why that is stricter on purpose.
+   */
+  review?: boolean;
+  /** Absent only on a `review:` scenario, where there is nothing to assert. */
+  expect?: Assertion[];
 }
 
 /**
@@ -966,8 +976,10 @@ export interface ScenarioResult {
   difficulty?: number;
   /** Copied from the scenario so a report explains its own red rows. */
   knownGap?: string;
+  /** A person grades this row. See `Scenario.review` — it has no checks and no score. */
+  review?: boolean;
   runs: RunResult[];
-  /** Fraction of runs that passed every check. */
+  /** Fraction of runs that passed every check. Meaningless, and 1, on a `review` row. */
   passRate: number;
   error?: string;
 }

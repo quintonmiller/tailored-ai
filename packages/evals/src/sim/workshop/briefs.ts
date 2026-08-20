@@ -1,0 +1,238 @@
+/**
+ * What the team is asked to build, as data.
+ *
+ * This is the reason the workshop is a simulation rather than a scenario with
+ * some file tools bolted on. The descent exists because a benchmark with an
+ * answer has to be re-authored every time it is beaten; a build scenario with a
+ * *hardcoded brief* has a milder form of the same disease — "make a video game"
+ * is one sample of one task type, and the first thing anybody wants after
+ * reading the output is to try a different one. A brief is therefore a value,
+ * selected with `--sim-option brief=<id>`, and adding one costs an object
+ * literal rather than a scenario.
+ *
+ * ## Every brief declares its own file layout
+ *
+ * Not decoration, and not the simulation's business to decide. Five agents who
+ * each invent a filename in round one produce five near-duplicate files nobody
+ * agreed on, and the artifact becomes a directory you cannot review. The layout
+ * is shown by `list_files` from round zero with `(not created yet)` beside each
+ * row, which is the cheapest orientation a team can be handed.
+ *
+ * It also carries ownership. Write access is partitioned by role and read
+ * access is not, which is the one asymmetry a build task can survive: hide the
+ * code from the person writing it and the artifact gets worse, and the artifact
+ * is the deliverable.
+ *
+ * ## Choosing what to ask for
+ *
+ * Prefer a brief with an unusual constraint in it. A model that has read a
+ * thousand breakout clones will produce a competent breakout clone, and that
+ * says nothing at all about the framework — the polish is memorised. The
+ * constraint lines below exist to push each brief slightly off the trodden path
+ * without making it strange for the sake of it.
+ */
+
+export type WorkshopRole = "lead" | "builder" | "interface" | "author" | "tester";
+
+export interface BriefFile {
+  path: string;
+  /** Which role may write it. Everybody may read everything. */
+  owner: WorkshopRole;
+  purpose: string;
+}
+
+export interface Brief {
+  id: string;
+  /** One line, used as the run's headline. */
+  title: string;
+  /** What to build, in the team's own terms. Goes into every agent's instructions. */
+  summary: string;
+  /** Hard rules. Violating one is a defect, not a style choice. */
+  constraints: string[];
+  /** The paragraph that decides whether the run finished or merely stopped. */
+  doneLooksLike: string;
+  /** What a reviewer opens. Also what `check_syntax` looks for. */
+  entry: string;
+  layout: BriefFile[];
+}
+
+/**
+ * The constraints every brief inherits.
+ *
+ * Shared because they are properties of the *harness*, not of the task: the
+ * workspace cannot reach the network, nothing here is ever executed, and the
+ * artifact is reviewed by a person opening a file. A brief that restated them
+ * would eventually restate one of them wrongly.
+ */
+export const UNIVERSAL_CONSTRAINTS = [
+  "Everything must run from local files with no network access at all. No CDN links, no fonts fetched " +
+    "over http, no external images. Anything you need, you write.",
+  "Plain HTML, CSS and JavaScript only. No frameworks, no build step, no package manager, no imports " +
+    "between files — scripts are classic <script> tags, loaded in order, sharing globals.",
+  "Nothing you write is ever executed during this run. `check_syntax` parses your files and finds " +
+    "unclosed tags, syntax errors and references to files that do not exist. It cannot tell you " +
+    "whether the thing works. Write as if nobody will run it before it ships, because nobody will.",
+];
+
+const briefs: Brief[] = [
+  {
+    id: "arcade",
+    title: "A small arcade game that runs in a browser",
+    summary:
+      "Build a single-screen arcade game playable with the keyboard. One clear goal, one clear way to " +
+      "lose, a visible score, and a state you can get back from — a game over that lets you start again " +
+      "without reloading the page. It should be understandable in ten seconds by somebody who has never " +
+      "seen it, and still have one idea in it that is yours.",
+    constraints: [
+      "One <canvas>, drawn with 2D context calls. No image files and no sprite sheets — everything is " +
+        "drawn from shapes, paths and text.",
+      "The game must be playable with the arrow keys or WASD, plus at most one action key.",
+      "No sound.",
+    ],
+    doneLooksLike:
+      "Somebody opens index.html, sees a title screen, presses a key, plays, loses, sees a score, and " +
+      "plays again — without ever opening the console or reloading the tab.",
+    entry: "index.html",
+    layout: [
+      { path: "index.html", owner: "interface", purpose: "The page: canvas, script tags in load order, nothing else." },
+      {
+        path: "design.md",
+        owner: "lead",
+        purpose: "What the game is, the rules, and what was decided. The team's shared memory.",
+      },
+      {
+        path: "engine.js",
+        owner: "builder",
+        purpose: "The loop, input handling, state, collision, win and lose conditions.",
+      },
+      {
+        path: "render.js",
+        owner: "interface",
+        purpose: "Everything drawn to the canvas. Reads state, never changes it.",
+      },
+      { path: "content.js", owner: "author", purpose: "Levels, tuning constants, colours, copy. Data, not behaviour." },
+      { path: "style.css", owner: "interface", purpose: "Page framing around the canvas." },
+      { path: "defects.md", owner: "tester", purpose: "What is broken, where, and how it was found." },
+    ],
+  },
+  {
+    id: "tool",
+    title: "A single-page utility that does one job properly",
+    summary:
+      "Build a browser-based utility that takes input from a person and gives back something useful, with " +
+      "no server. Pick something with real edge cases — a text diff, a cron expression explainer, a colour " +
+      "palette generator with contrast checking, a duration calculator. The interesting part is not the " +
+      "happy path; it is what happens on empty input, absurd input, and input that is nearly right.",
+    constraints: [
+      "The whole thing works offline and stores nothing outside the page.",
+      "It must handle at least four named edge cases visibly and deliberately, listed in design.md.",
+      "Keyboard usable throughout: no action may require a mouse.",
+    ],
+    doneLooksLike:
+      "Somebody opens index.html, understands what it is for without instructions, uses it successfully, " +
+      "then tries to break it and gets a helpful message rather than a blank screen or a console error.",
+    entry: "index.html",
+    layout: [
+      { path: "index.html", owner: "interface", purpose: "The page structure and controls." },
+      {
+        path: "design.md",
+        owner: "lead",
+        purpose: "What it does, the edge cases it must handle, and what was decided.",
+      },
+      { path: "logic.js", owner: "builder", purpose: "The actual computation, independent of the DOM." },
+      { path: "ui.js", owner: "interface", purpose: "Wiring the page to the logic: events, rendering, error display." },
+      { path: "fixtures.js", owner: "author", purpose: "Example inputs, presets, copy, and the edge cases as data." },
+      { path: "style.css", owner: "interface", purpose: "Layout and visual design." },
+      { path: "defects.md", owner: "tester", purpose: "What is broken, where, and how it was found." },
+    ],
+  },
+  {
+    id: "site",
+    title: "A small documentation site for a thing that does not exist yet",
+    summary:
+      "Build a two-or-three-page static site documenting a fictional but plausible command-line tool. " +
+      "Invent the tool, then document it as though people already depend on it: what it does, how to " +
+      "install it, a worked example, and a reference for every flag. The writing is the artifact as much " +
+      "as the markup is.",
+    constraints: [
+      "At least two linked pages, navigable in both directions.",
+      "Every flag in the reference must appear in at least one worked example, and every example must " +
+        "only use flags that exist.",
+      "Readable at 400px wide and at 1600px wide.",
+    ],
+    doneLooksLike:
+      "Somebody opens index.html, understands what the tool is for within one screen, finds the reference, " +
+      "and finds no example that contradicts it.",
+    entry: "index.html",
+    layout: [
+      { path: "index.html", owner: "interface", purpose: "The landing page: what the tool is and the first example." },
+      { path: "reference.html", owner: "interface", purpose: "The full flag reference." },
+      {
+        path: "design.md",
+        owner: "lead",
+        purpose: "What the tool is, its flags, and what was decided. The source of truth.",
+      },
+      {
+        path: "content.js",
+        owner: "author",
+        purpose: "The flag table and examples as data, so the pages cannot drift from it.",
+      },
+      {
+        path: "site.js",
+        owner: "builder",
+        purpose: "Rendering content.js into the pages, navigation, anything interactive.",
+      },
+      { path: "style.css", owner: "interface", purpose: "Typography and layout." },
+      { path: "defects.md", owner: "tester", purpose: "Contradictions, dead links, and anything undocumented." },
+    ],
+  },
+];
+
+export const DEFAULT_BRIEF = "arcade";
+
+export function listBriefs(): string[] {
+  return briefs.map((b) => b.id);
+}
+
+export function getBrief(id: unknown): Brief {
+  const wanted = String(id ?? DEFAULT_BRIEF)
+    .trim()
+    .toLowerCase();
+  const found = briefs.find((b) => b.id === wanted);
+  if (!found) {
+    throw new Error(`unknown brief "${wanted}". Known: ${listBriefs().join(", ")}`);
+  }
+  return found;
+}
+
+/**
+ * The brief as the team reads it, in the workspace and in every prompt.
+ *
+ * Written to `brief.md` as well as injected into instructions, and both matter
+ * for different reasons: the instructions are what an agent sees on turn one,
+ * and the file is what it can still read on turn two hundred after the history
+ * budget has trimmed the conversation that set the whole thing up.
+ */
+export function renderBrief(brief: Brief): string {
+  const lines = [
+    `# ${brief.title}`,
+    "",
+    brief.summary,
+    "",
+    "## Constraints",
+    ...[...brief.constraints, ...UNIVERSAL_CONSTRAINTS].map((c) => `- ${c}`),
+    "",
+    "## Done looks like",
+    "",
+    brief.doneLooksLike,
+    "",
+    "## The files, and who writes them",
+    "",
+    "Everybody can read every file. Only the named role can write to one.",
+    "",
+    ...brief.layout.map((f) => `- \`${f.path}\` — **${f.owner}** — ${f.purpose}`),
+    "",
+    `The artifact is reviewed by opening \`${brief.entry}\` in a browser.`,
+  ];
+  return lines.join("\n");
+}
