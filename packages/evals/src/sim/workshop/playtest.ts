@@ -8,14 +8,29 @@
  * how good the artifact could get, because nobody could tell a working game
  * from a black rectangle.
  *
- * ## The model cannot see a screenshot, so this describes one
+ * ## Why this describes a screenshot instead of sending one
  *
- * The serving model is text-only. Handing it a PNG is not an option, and
- * pretending otherwise would be worse than nothing. So the canvas is read back
- * through `getImageData` *inside the page* — no image decoding needed — and
- * reduced to things a sentence can carry: how much of the frame is not
- * background, which colours dominate and in what proportion, and a coarse
- * luminance grid that gives the shape of what is drawn.
+ * **Not because the model cannot see.** That was the original justification
+ * here and it was wrong, corrected on 2026-08-20 by checking rather than
+ * assuming: the artifact being served is `image-text-to-text`, its card lists
+ * registered Vision allocations alongside the Text and MTP ones, and NInfer
+ * serves media behind a `--vision` flag that simply is not on — a request with
+ * an `image_url` part comes back `vision_disabled`, which is a server setting,
+ * not a missing capability.
+ *
+ * The real blocker is one tier down. TAI cannot carry an image at all:
+ * `ToolResult.output` is a `string`, and `ChatMessage.content` is
+ * `string | null` with no content-parts array. There is nowhere to put a PNG
+ * between a tool and a model, so a tool that returned one would have to
+ * stringify it and hope.
+ *
+ * So the canvas is read back through `getImageData` *inside the page* — no
+ * image decoding needed — and reduced to things a sentence can carry: how much
+ * of the frame is not background, which colours dominate and in what
+ * proportion, and a coarse luminance grid giving the shape of what is drawn.
+ * That is worth keeping even after TAI grows an image path: it is small, it
+ * diffs cleanly between frames, and "6.6% of the frame is not background"
+ * survives a history trim in a way an image would not.
  *
  * The real screenshots are written to disk beside the artifact for the human
  * who reviews it. Both audiences get the form they can actually use.

@@ -394,7 +394,7 @@ its rAF loop is alive; there's just nothing to draw"* — the lead carried it in
 zero errors and a moving screen. Both earlier runs shipped a game nobody had
 ever seen run.
 
-**A text-only model can read the frame description.** The tester reported
+**The model can read the frame description.** The tester reported
 *"title screen renders — 'ONE WAY' text visible (bright cluster, ~2% of frame in
 `#f0e0c0`)"*, which is the ASCII luminance grid and the colour histogram being
 used exactly as intended.
@@ -487,6 +487,39 @@ cost is that the viewer cannot filter that line by agent.
 - **`outline_file` is nearly unused** — zero calls in the smoke, three in a
   twenty-round run. It exists precisely for the file that has grown too big to
   read, and the team barely reaches for it.
+
+## Images: a TAI limitation, not a model one
+
+Recorded because this document asserted the opposite and the assertion was
+wrong. `playtest` describes the screen in text, and the original reason given
+was that the serving model could not see. Checked on 2026-08-20 rather than
+assumed:
+
+- **The weights have vision.** The artifact being served is tagged
+  `image-text-to-text` and `multimodal`, and its card says the file contains
+  "the registered Text, Vision, MTP, optimized proposal-head, tokenizer" and
+  accepts "image, multi-image, video, and mixed multimodal messages".
+- **The server supports it and has it switched off.** `ninfer-serve` takes
+  `--vision`, which "enables media and loads the fixed Vision GPU allocations".
+  The running container was started without it, so a request carrying an
+  `image_url` part returns `400 vision_disabled` — *"Vision is disabled for this
+  server"*, which is a setting rather than a capability.
+- **TAI has no image path at all.** `ToolResult.output` is a `string` and
+  `ChatMessage.content` is `string | null`, with no content-parts array. There
+  is nowhere to put an image between a tool and a model.
+
+So the ceiling is ours. Supporting image input would be a core change of real
+scope — a content-parts shape on `ChatMessage`, a way for a `ToolResult` to
+carry media, provider mapping for at least the OpenAI-compatible dialect, and a
+history-trimming policy for messages that are expensive and not summarisable.
+It is a platform capability rather than a workshop feature, which by this repo's
+own tiering makes it a seam that should land on its own merits and not as a
+dependency of one benchmark scenario.
+
+The text description should survive that change regardless. It is small, it
+diffs cleanly frame to frame, and a line like "6.6% of the frame is not
+background" stays useful after a history trim in a way an image would not.
+Sending both, once both are possible, is the likely end state.
 
 ## Watching it
 
