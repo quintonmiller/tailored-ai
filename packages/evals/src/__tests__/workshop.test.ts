@@ -173,7 +173,11 @@ describe("verification is somebody's job", () => {
       "interface",
     );
     const out = await call(s, "check_syntax", {}, "tester");
-    expect(out).toMatch(/nothing here was run/);
+    // The honest sentence is the point: a clean parse must never read as a
+    // working build, and now that `playtest` exists the tool has to point at it
+    // rather than claim nothing can be run at all.
+    expect(out).toMatch(/says nothing about whether it works/);
+    expect(out).toMatch(/playtest/);
   });
 });
 
@@ -359,6 +363,90 @@ describe("the run as a whole", () => {
     const out = await call(s, "write_file", { path: "engine.js", content: "x".repeat(60_000) }, "builder");
     expect(out).toMatch(/Refused/);
     expect(s.metrics().budgetRefusals).toBe(1);
+  });
+});
+
+describe("the jam: a theme, a clock, and categories a person scores", () => {
+  it("draws a theme from the seed, so a run can be repeated", () => {
+    const a = sim({ seed: 3 });
+    const b = sim({ seed: 3 });
+    const c = sim({ seed: 4 });
+    expect(a.theme.id).toBe(b.theme.id);
+    expect(a.theme.id).not.toBe(c.theme.id);
+  });
+
+  it("takes an explicit theme by id or by free text", () => {
+    expect(sim({ theme: "only-one" }).theme.title).toBe("ONLY ONE");
+    // A jam organiser gets to invent one.
+    expect(sim({ theme: "boiling point" }).theme.title).toBe("BOILING POINT");
+  });
+
+  it("tells the team the theme constrains mechanics, and names the lazy reading", () => {
+    const s = sim({ theme: "only-one" });
+    const brief = s.briefFor("builder") ?? "";
+    expect(brief).toMatch(/GAME JAM/);
+    expect(brief).toMatch(/ONLY ONE/);
+    // The shallow reading is named so it can be avoided rather than stumbled into.
+    expect(brief).toMatch(/one life, and nothing else about the game changed/);
+    expect(brief).toMatch(/Theme relevance/);
+  });
+
+  it("writes the scorecard at the start, so an interrupted run still has one", () => {
+    const s = sim({ theme: "it-grows", days: 8 });
+    const card = readFileSync(join(s.root, "JUDGING.md"), "utf8");
+    expect(card).toMatch(/IT GROWS/);
+    for (const category of ["Theme relevance", "Fun", "Visual craft", "Innovation", "Polish", "Technical"]) {
+      expect(card).toContain(category);
+    }
+    expect(card).toContain("**Theme relevance**");
+  });
+
+  it("runs a jam clock with phases rather than a bare round counter", () => {
+    const s = sim({ days: 10 });
+    expect(s.announce()).toMatch(/CONCEPT/);
+    for (let i = 0; i < 4; i++) s.advance();
+    expect(s.announce()).toMatch(/BUILD/);
+    for (let i = 0; i < 4; i++) s.advance();
+    expect(s.announce()).toMatch(/POLISH|SUBMIT/);
+    s.advance();
+    expect(s.announce()).toMatch(/SUBMIT/);
+  });
+
+  it("says nobody has run the game until somebody has", () => {
+    const s = sim();
+    expect(s.announce()).toMatch(/nobody has run it yet/);
+  });
+
+  it("gives every brief a submission file for the judge to read first", () => {
+    for (const id of ["arcade", "tool", "site"]) {
+      const s = sim({ brief: id });
+      expect(s.workspace.ownerOf("submission.md"), `${id} has no submission.md`).toBe("lead");
+    }
+  });
+});
+
+describe("playtest", () => {
+  it("belongs to the tester and the interface, and says so when refused", async () => {
+    const s = sim();
+    expect(s.sharedTools().map((t) => t.name)).toContain("playtest");
+    const out = await call(s, "playtest", {}, "author");
+    expect(out).toMatch(/Refused/);
+    expect(out).toMatch(/tester and interface/);
+  });
+
+  it("is open to everybody when checks are", () => {
+    const s = sim({ checks: "anyone" });
+    expect(s.sharedTools().map((t) => t.name)).toContain("playtest");
+  });
+
+  it("separates never-run from run-and-static in the snapshot", () => {
+    const s = sim();
+    const snapshot = s.snapshot();
+    // -1 rather than 0: "nobody tried" and "tried and nothing moved" are
+    // different findings, and a board that conflates them is worse than one
+    // that omits them.
+    expect(snapshot.playtestAnimates).toBe(-1);
+    expect(snapshot.playtestErrors).toBe(-1);
   });
 });
 

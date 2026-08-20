@@ -74,10 +74,13 @@ const ROUNDS = 20;
 /** Same total model calls in every arm. See the header. */
 const TURN_BUDGET = 220;
 
-const NOTHING_RUNS =
-  "Nothing you write is executed at any point during this run. `check_syntax` parses every file and " +
-  "reports syntax errors, unclosed tags and references to files nobody created — it cannot tell you " +
-  "whether the thing works. Write as though it ships unrun, because it does.";
+const VERIFYING =
+  "You have two instruments and they answer different questions. `check_syntax` parses every file and " +
+  "reports syntax errors, unclosed tags and references to files nobody created; it cannot tell you " +
+  "whether the thing works. `playtest` opens the artifact in a real browser, presses keys at it, and " +
+  "reports console errors, whether it animates, whether it responds to input, and a coarse picture of " +
+  "what is on screen. Neither is a substitute for the other: a page can parse perfectly and draw " +
+  "nothing, and a page can run without errors and still be no fun.";
 
 const WORKSPACE =
   "You are building a real artifact in a real directory, and it will still be there when this ends: a " +
@@ -87,7 +90,7 @@ const WORKSPACE =
   "passage. Prefer `patch_file`: a whole-file write of a long file costs the entire file twice over, and " +
   "the run has a fixed budget for that. You can read every file. You can only write the ones that are " +
   "yours; the rest you have to ask for. Say what a tool actually returned, in numbers, not in summary. " +
-  NOTHING_RUNS;
+  VERIFYING;
 
 const hand = (description: string, instructions: string, channels: string) => ({
   description,
@@ -117,11 +120,14 @@ const BRIDGE = { roomSessionScope: "shared" as const };
 
 const LEAD = hand(
   "Holds the brief, owns the design, and is the only one in every channel.",
-  "You are the lead. You own `design.md` and you write no code at all — if something needs building, " +
-    "somebody else builds it. Your job is that the five of you are building one thing rather than five: " +
-    "decide what is in scope, write down what was agreed, and notice when two people are assuming " +
-    "different things. `design.md` is the team's memory. This conversation is not — it gets trimmed, and " +
-    "what you did not write down is gone.",
+  "You are the lead. You own `design.md` and `submission.md`, and you write no code at all — if " +
+    "something needs building, somebody else builds it. This is a jam: your first job is to decide what " +
+    "your reading of the theme is and write it down before anybody builds anything, because a game that " +
+    "only mentions the theme scores worst on the category judges check first. Your second job is that " +
+    "the five of you are building one thing rather than five. `design.md` is the team's memory and " +
+    "`submission.md` is what a judge reads before they play — title, one-line pitch, controls, and how " +
+    "it uses the theme. This conversation is not memory: it gets trimmed, and what you did not write " +
+    "down is gone.",
   "You are in all three channels: `studio`, `build` and `craft`. Nobody else is. The builder and the " +
     "interface never speak to each other except in `studio`, and their two files have to fit together, " +
     "so anything one of them decides that the other needs is yours to carry.",
@@ -141,7 +147,10 @@ const INTERFACE = hand(
   "You are the interface. You own the entry page, the stylesheet and the rendering file. You decide the " +
     "load order of the scripts, which means a file you do not own can be broken by a tag you write. You " +
     "read the state somebody else defines and you never change it. If you do not know its shape, ask in " +
-    "`studio` rather than guessing — a guess here costs a blank screen that every check passes.",
+    "`studio` rather than guessing — a guess here costs a blank screen that every check passes. You can " +
+    "call `playtest`, which is how you see what you have actually drawn rather than what you intended: " +
+    "it gives you the colour balance and a coarse map of the screen. Use it before you claim anything " +
+    "looks right.",
   "You are in `studio` and `craft`.",
 );
 
@@ -155,10 +164,12 @@ const AUTHOR = hand(
 
 const TESTER = hand(
   "The only one who can check anything.",
-  "You are the tester. You own `defects.md`, you write no code, and you are the only person here who can " +
-    "call `check_syntax`. Nobody else can see whether the artifact parses, so if you do not check and say " +
-    "so, nobody knows. Check often, report what it actually said including line numbers, and write down " +
-    "what you cannot check — a defect nobody can see is still a defect.",
+  "You are the tester. You own `defects.md`, you write no code, and you hold both instruments: " +
+    "`check_syntax` and `playtest`. Only you and the interface can run the game at all, so if you do not " +
+    "run it and say what happened, nobody knows whether it works. Play it often — an error on the " +
+    "console, a screen that never changes, or a game that ends instantly are all things only you can " +
+    "see. Report what the tools actually said, including line numbers and the numbers from the frame " +
+    "description, and write down what you still cannot check.",
   "You are in `studio` and `build`. The interface and the author are not in `build`, so a problem in the " +
     "page or the content has to go through `studio` or through the lead.",
 );
@@ -231,8 +242,10 @@ export default defineScenarios(
           {
             speaker: "quinton",
             body:
-              "Here is the brief. Five of you, twenty rounds, one thing at the end that I am going to open " +
-              "and look at. This channel reaches everybody; the other two do not.",
+              "Jam starts now. The theme is in your instructions and in `brief.md`. Five of you, twenty " +
+              "rounds, and at the end I open whatever exists, play it, and score it on theme relevance, " +
+              "fun, visual craft, innovation, polish and technical soundness. Agree your reading of the " +
+              "theme before anybody writes code. This channel reaches everybody; the other two do not.",
           },
         ],
       },

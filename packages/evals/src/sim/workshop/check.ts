@@ -15,10 +15,14 @@
  * ## What this cannot tell you
  *
  * Whether it works. A syntactically perfect page that throws on load, or draws
- * nothing, passes every check here. That is a real ceiling on the eval and it
- * is stated in the brief so the team knows what verification it is and is not
- * getting — a team told "checks passed" that reads it as "it works" has been
- * misled by the tool, not by the model.
+ * nothing, passes every check here. `playtest.ts` is the instrument for that
+ * question and this one says so in its own output — a team told "checks passed"
+ * that reads it as "it works" has been misled by the tool, not by the model.
+ *
+ * Keeping the two separate is deliberate. Parsing is instant, needs no browser
+ * and can run every round; running the artifact costs a browser launch and a
+ * few seconds. A team should be able to ask the cheap question often and the
+ * expensive one when it matters.
  */
 
 import { Script } from "node:vm";
@@ -274,7 +278,10 @@ export function formatCheck(report: CheckReport, entry: string, workspace: Works
     // Said every time, because it is the sentence a team most needs and least
     // wants to hear. "Checks passed" reads as "it works" unless the tool says
     // otherwise in the same breath.
-    lines.push("Everything parses. This says nothing about whether it works — nothing here was run.");
+    lines.push(
+      "Everything parses. That says nothing about whether it works: this tool never runs anything. " +
+        "Use `playtest` to find out what actually happens on screen.",
+    );
   }
   return lines.join("\n");
 }

@@ -69,9 +69,12 @@ export const UNIVERSAL_CONSTRAINTS = [
     "over http, no external images. Anything you need, you write.",
   "Plain HTML, CSS and JavaScript only. No frameworks, no build step, no package manager, no imports " +
     "between files — scripts are classic <script> tags, loaded in order, sharing globals.",
-  "Nothing you write is ever executed during this run. `check_syntax` parses your files and finds " +
-    "unclosed tags, syntax errors and references to files that do not exist. It cannot tell you " +
-    "whether the thing works. Write as if nobody will run it before it ships, because nobody will.",
+  "You have two instruments and they answer different questions. `check_syntax` parses every file and " +
+    "finds unclosed tags, syntax errors and references to files that do not exist; it cannot tell you " +
+    "whether the thing works. `playtest` opens the artifact in a real browser, presses keys at it, and " +
+    "reports console errors, whether it animates, whether it responds to input, and a coarse picture of " +
+    "the screen. Only the tester and the interface can call it, so if neither of them runs it, nobody " +
+    "knows whether it works.",
 ];
 
 const briefs: Brief[] = [
@@ -113,6 +116,12 @@ const briefs: Brief[] = [
       { path: "content.js", owner: "author", purpose: "Levels, tuning constants, colours, copy. Data, not behaviour." },
       { path: "style.css", owner: "interface", purpose: "Page framing around the canvas." },
       { path: "defects.md", owner: "tester", purpose: "What is broken, where, and how it was found." },
+      {
+        path: "submission.md",
+        owner: "lead",
+        purpose:
+          "The jam submission: title, one-line pitch, controls, and how it uses the theme. What a judge reads first.",
+      },
     ],
   },
   {
@@ -144,6 +153,12 @@ const briefs: Brief[] = [
       { path: "fixtures.js", owner: "author", purpose: "Example inputs, presets, copy, and the edge cases as data." },
       { path: "style.css", owner: "interface", purpose: "Layout and visual design." },
       { path: "defects.md", owner: "tester", purpose: "What is broken, where, and how it was found." },
+      {
+        path: "submission.md",
+        owner: "lead",
+        purpose:
+          "The jam submission: title, one-line pitch, controls, and how it uses the theme. What a judge reads first.",
+      },
     ],
   },
   {
@@ -184,6 +199,12 @@ const briefs: Brief[] = [
       },
       { path: "style.css", owner: "interface", purpose: "Typography and layout." },
       { path: "defects.md", owner: "tester", purpose: "Contradictions, dead links, and anything undocumented." },
+      {
+        path: "submission.md",
+        owner: "lead",
+        purpose:
+          "The jam submission: title, one-line pitch, controls, and how it uses the theme. What a judge reads first.",
+      },
     ],
   },
 ];

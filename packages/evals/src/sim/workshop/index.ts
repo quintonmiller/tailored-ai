@@ -53,7 +53,9 @@ import {
 } from "../types.js";
 import { type Brief, DEFAULT_BRIEF, getBrief, renderBrief, type WorkshopRole } from "./briefs.js";
 import { checkWorkspace, formatCheck } from "./check.js";
+import { formatPlaytest, playtest } from "./playtest.js";
 import { makeScriptedPolicy } from "./policies.js";
+import { JUDGING, pickTheme, renderScorecard, type Theme } from "./themes.js";
 import { LIMITS, Workspace, WorkspaceRefusal } from "./workspace.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -86,6 +88,8 @@ interface WorkshopOptions extends SimulationOptions {
   root?: string;
   /** Injected by tests so a run directory name is stable. */
   stamp?: string;
+  /** The jam theme: an id from `themes.ts`, or free text to use verbatim. */
+  theme?: string;
 }
 
 /** A refusal an agent should read and act on, rather than a crash. */
@@ -129,9 +133,17 @@ export class WorkshopSimulation implements Simulation {
     outlines: 0,
     listings: 0,
     checksRun: 0,
+    playtestsRun: 0,
   };
 
   private lastCheck: { problems: number; filesChecked: number; atRound: number } | undefined;
+  private lastPlaytest:
+    | { ok: boolean; errors: number; animates: boolean; responds: boolean; atRound: number }
+    | undefined;
+  /** Who may call `playtest`. Undefined means everybody. */
+  private readonly playtestRoles: string[] | undefined;
+  /** The jam's theme, which is the creative constraint the work is judged against. */
+  readonly theme: Theme;
   private roundsWithNoWrite = 0;
   private writesThisRound = 0;
   private finalised = false;
@@ -141,6 +153,10 @@ export class WorkshopSimulation implements Simulation {
     this.horizon = Math.max(1, Math.floor(options.days ?? 20));
     this.strictOwnership = String(options.ownership ?? WORKSHOP_PLAY_OPTIONS.ownership) !== "shared";
     this.checksAreTesterOnly = String(options.checks ?? WORKSHOP_PLAY_OPTIONS.checks) !== "anyone";
+    this.theme = pickTheme(options.theme, Number(options.seed ?? 0));
+    // The tester verifies; the interface draws. Asking somebody to draw a screen
+    // they are never allowed to look at is a handicap, not a constraint.
+    this.playtestRoles = this.checksAreTesterOnly ? ["tester", "interface"] : undefined;
 
     // A timestamp rather than the seed alone, because two runs of the same
     // scenario at the same seed are two different artifacts and overwriting the
@@ -160,12 +176,50 @@ export class WorkshopSimulation implements Simulation {
     // is what it can still read on turn two hundred once the history budget has
     // trimmed away the conversation that set the whole thing up.
     mkdirSync(this.root, { recursive: true });
-    writeFileSync(join(this.root, "brief.md"), `${renderBrief(this.brief)}\n`);
+    writeFileSync(join(this.root, "brief.md"), `${this.jamBrief()}\n`);
+    // The scorecard is written at the start, not the end: a run that dies
+    // half-way still leaves a reviewer the questions to ask of what survived.
+    writeFileSync(join(this.root, "JUDGING.md"), `${renderScorecard(this.theme, this.horizon, this.brief.entry)}\n`);
 
     // Announced as an event rather than a metric, because a path is not a
     // number and `metrics()` only carries numbers. This is how the report and
     // the review bundle find the artifact.
     this.events.push({ day: 0, kind: "artifact", message: this.root });
+  }
+
+  /**
+   * The brief, with the jam wrapped around it.
+   *
+   * The theme is chosen at construction from a seed, so no scenario file can
+   * state it — which is exactly what `briefFor` exists for. It goes in the
+   * instructions *and* in `brief.md`, because the instructions are what an
+   * agent reads on turn one and the file is what it can still read on turn two
+   * hundred once the history budget has trimmed the conversation away.
+   */
+  private jamBrief(): string {
+    return [
+      `# GAME JAM — theme: ${this.theme.title}`,
+      "",
+      `You have **${this.horizon} rounds**. That is the whole jam; when it runs out, whatever exists is`,
+      "what gets submitted. A person is going to open it, play it, and score it.",
+      "",
+      `## The theme is ${this.theme.title}`,
+      "",
+      "It is a constraint on the *mechanics*, not a title. The laziest possible reading of it —",
+      `${this.theme.shallow} — is the one that scores worst, and it is the first thing a judge checks.`,
+      "Decide in round one what your reading of it is, write that down, and build the game that",
+      "reading demands. If the theme could be removed without the game changing, you have not used it.",
+      "",
+      "## How you will be judged",
+      "",
+      ...JUDGING.map((c) => `- **${c.name}** — ${c.question}`),
+      "",
+      "Nothing about how much you wrote is scored. A small finished game beats a large unfinished one.",
+      "",
+      "---",
+      "",
+      renderBrief(this.brief),
+    ].join("\n");
   }
 
   get day(): number {
@@ -222,6 +276,28 @@ export class WorkshopSimulation implements Simulation {
         : `last check (round ${this.lastCheck.atRound + 1}): ${this.lastCheck.problems} problem${this.lastCheck.problems === 1 ? "" : "s"}`
       : "nothing has been checked yet";
     const remaining = this.horizon - this.tick;
+    const played = this.horizon - remaining;
+    const fraction = played / this.horizon;
+    // A jam clock rather than a round counter. The phases are what stop a team
+    // adding a feature in the last round and shipping it half-wired — the first
+    // twenty-round run reached a complete v1 by round three and then had
+    // seventeen rounds with nothing to do, which is a scheduling problem the
+    // announcement can actually address.
+    const phase =
+      fraction < 0.2
+        ? "CONCEPT — decide your reading of the theme and write it down. Do not start building until it is agreed."
+        : fraction < 0.7
+          ? "BUILD — make the game the theme demands."
+          : fraction < 0.9
+            ? "POLISH — no new features. Play it, fix what is wrong, make it look considered."
+            : "SUBMIT — freeze the code. Finish `submission.md` and make sure every state resolves.";
+    const seen = this.lastPlaytest
+      ? this.lastPlaytest.ok
+        ? `last playtest (round ${this.lastPlaytest.atRound + 1}): ${this.lastPlaytest.errors} console errors, ` +
+          `${this.lastPlaytest.animates ? "animates" : "static"}, ` +
+          `${this.lastPlaytest.responds ? "responds to input" : "no response to input"}`
+        : `last playtest (round ${this.lastPlaytest.atRound + 1}) could not run it`
+      : "nobody has run it yet";
     // Past the horizon there is no round to announce, and saying "round 17 of
     // 16" is the kind of small wrongness that makes a reader distrust every
     // other number on the page.
@@ -232,7 +308,8 @@ export class WorkshopSimulation implements Simulation {
       );
     }
     return (
-      `Round ${this.tick + 1} of ${this.horizon}. ` +
+      `Round ${this.tick + 1} of ${this.horizon} — theme ${this.theme.title}. ${phase} ` +
+      `${seen}. ` +
       `${files.length} file${files.length === 1 ? "" : "s"}, ${lines} line${lines === 1 ? "" : "s"}; ${check}. ` +
       (remaining <= 3
         ? `${remaining} round${remaining === 1 ? "" : "s"} left — finish what exists rather than starting anything.`
@@ -261,7 +338,7 @@ export class WorkshopSimulation implements Simulation {
     // is theirs.
     if (!this.strictOwnership) {
       return [
-        renderBrief(this.brief),
+        this.jamBrief(),
         "",
         "## Your part",
         "",
@@ -271,7 +348,7 @@ export class WorkshopSimulation implements Simulation {
     }
     const mine = this.brief.layout.filter((f) => f.owner === role);
     return [
-      renderBrief(this.brief),
+      this.jamBrief(),
       "",
       "## Your part",
       "",
@@ -485,6 +562,11 @@ export class WorkshopSimulation implements Simulation {
     ];
 
     if (!this.checksAreTesterOnly) shared.push(this.checkTool());
+    // Always handed out, and gated inside by who picked it up — the same shape
+    // `write_file` uses. A tool registered per-role could not be given to two
+    // of them: `simulationGrants` registers by name, so both would get whichever
+    // was built last.
+    shared.push(this.playtestTool());
     return shared;
   }
 
@@ -501,6 +583,57 @@ export class WorkshopSimulation implements Simulation {
       },
       "read",
     );
+  }
+
+  /**
+   * The one instrument that actually runs the artifact.
+   *
+   * Built by hand rather than through `tool()`, because opening a browser is
+   * asynchronous and the shared helper takes a synchronous handler. Everything
+   * else about it matches: a failure is a refusal the agent reads, never a
+   * crash, because a headless browser that will not start must not end a run
+   * whose model time has already been spent.
+   *
+   * Held by the **tester and the interface**. The tester because verifying is
+   * its job; the interface because it is the one drawing, and asking somebody
+   * to draw a screen they are never allowed to look at is not a constraint,
+   * it is a handicap. Those two share no channel but `studio`, which makes
+   * "what did you actually see" a thing that has to be said out loud.
+   */
+  private playtestTool(): Tool {
+    return {
+      name: "playtest",
+      description:
+        "Open the artifact in a real browser, press keys at it, and report what appeared: console errors, " +
+        "whether it animates, whether it responds to input, and a coarse picture of the screen.",
+      parameters: { type: "object", properties: {}, required: [] },
+      effect: "read",
+      execute: async (_args, context) => {
+        const agent = context?.agentName;
+        if (this.playtestRoles && agent && !this.playtestRoles.includes(agent)) {
+          return {
+            success: true,
+            output:
+              `Refused: playtest belongs to ${this.playtestRoles.join(" and ")}. ` +
+              "Ask one of them to run it and say what they saw.",
+          };
+        }
+        this.counts.playtestsRun += 1;
+        const report = await playtest({
+          entry: this.brief.entry,
+          workspace: this.workspace.filesRoot,
+          shotDir: join(this.root, "playtests", `round-${String(this.tick).padStart(3, "0")}`),
+        });
+        this.lastPlaytest = {
+          ok: report.ok,
+          errors: report.errors.length,
+          animates: report.animates,
+          responds: report.respondsToInput,
+          atRound: this.tick,
+        };
+        return { success: true, output: formatPlaytest(report, this.brief.entry) };
+      },
+    };
   }
 
   /**
@@ -559,6 +692,9 @@ export class WorkshopSimulation implements Simulation {
       `${JSON.stringify(
         {
           brief: this.brief.id,
+          theme: this.theme.title,
+          themeId: this.theme.id,
+          judging: JUDGING.map((c) => c.key),
           title: this.brief.title,
           entry: this.brief.entry,
           rounds: this.horizon,
@@ -632,6 +768,13 @@ export class WorkshopSimulation implements Simulation {
       reads: this.counts.reads,
       outlines: this.counts.outlines,
       checksRun: this.counts.checksRun,
+      playtestsRun: this.counts.playtestsRun,
+      // -1 for "nobody has run it", so a board can tell "not tried" from "tried
+      // and it was static" — the difference between an untested game and a
+      // broken one.
+      playtestAnimates: this.lastPlaytest ? (this.lastPlaytest.animates ? 1 : 0) : -1,
+      playtestResponds: this.lastPlaytest ? (this.lastPlaytest.responds ? 1 : 0) : -1,
+      playtestErrors: this.lastPlaytest ? this.lastPlaytest.errors : -1,
       // Two different questions, and the gap between them is the interesting
       // one. `checkProblems` is what a check would say right now; the team
       // cannot see it unless somebody runs one. `lastCheckProblems` is what
