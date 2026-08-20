@@ -1,10 +1,11 @@
 # Open builds — a scenario with a brief instead of a score
 
-**Phase 1 is built, green, and has been run against a live model.** Three
-scenarios, a `workshop` simulation, a `review:` schema flag, a scripted
-rehearsal, and 47 tests. The first run found three faults and produced an
-artifact worth opening — see *What the first live run found*. The later phases
-at the bottom are still a plan.
+**Built, green, and run against a live model three times.** Three scenarios, a
+`workshop` simulation, a `review:` schema flag, a scripted rehearsal, a real
+headless-browser `playtest`, a game-jam layer with themes and a scorecard, and
+61 tests. Five faults have been found by running it, each of which would have
+been invisible from a trace. The remaining phases at the bottom are still a
+plan.
 
 ## The idea
 
@@ -376,6 +377,60 @@ against a 14 px hit radius, so a throttled frame rate could step over a trail
 point — assessed it as edge-case-only, **declined to request a change**, and
 labelled it "a reasoned limitation, not an observed bug. I have not observed it
 at runtime (I cannot run the game)."
+
+### The first jam run: theme NO GOING BACK
+
+58 minutes, 220 turns, 654 tool calls. Eight files, 1,705 lines, and the run
+ended with `playtest` reporting **0 console errors, animates, responds to
+input** — the first artifact in this package that was verified to actually run
+before anybody looked at it.
+
+**The playtest loop closed a defect nothing else could see.** In round 1 the
+tester ran it and got two `ERR_FILE_NOT_FOUND` against a canvas that was 100%
+flat black, while `check_syntax` was passing clean. It diagnosed the cause from
+the report — *"no JS exceptions from engine.js itself, so the engine loads and
+its rAF loop is alive; there's just nothing to draw"* — the lead carried it into
+`craft`, the interface wrote the missing `render.js`, and round 2 came back with
+zero errors and a moving screen. Both earlier runs shipped a game nobody had
+ever seen run.
+
+**A text-only model can read the frame description.** The tester reported
+*"title screen renders — 'ONE WAY' text visible (bright cluster, ~2% of frame in
+`#f0e0c0`)"*, which is the ASCII luminance grid and the colour histogram being
+used exactly as intended.
+
+**Naming each theme's laziest reading works.** `no-going-back` declares its
+shallow reading as "auto-scrolling in one direction". The lead's round-one post
+locked the concept with *"**ONE WAY.** We are NOT doing auto-scroll"* — it
+rejected the named trap by name. The tester then began treating theme adherence
+as a correctness property, filing a defect that the starting cell was never
+burned and calling it *"a literal 'going back' hole in the theme"*, which the
+builder fixed.
+
+**The jam clock helped.** `roundsWithNoWrite` fell from 11 of 20 to **5 of 20**
+against the previous run's twenty rounds of the same brief. The phases give the
+back half of the jam a job other than "keep going".
+
+Two numbers that are warnings rather than wins:
+
+- **37 of 65 patches were refused.** This run predates the indentation fix
+  above, and it is the same defect measured at scale: more than half of every
+  attempt to edit a file surgically failed on whitespace the tool itself had
+  added. Expect this to fall sharply on the next run; if it does not, the
+  diagnosis was wrong.
+- **The run stalled on `max-rounds`.** One turn hit the 20-tool-round ceiling.
+  A `playtest` costs several seconds and a long result, so a turn that checks,
+  plays, reads and patches can run out of rounds before it runs out of things
+  to do. Worth raising for this scenario specifically.
+
+Context cost more than doubled, to **23.6M input tokens against 314K output**,
+which is what running the game and reading the result costs.
+
+One reporting caveat found while reading this run: the `code` line in a report
+records the git sha at the moment the report is *written*, not at launch. This
+run is labelled `fee15cf`, a commit made seven minutes after it started, so it
+did not play the code its own report names. Harmless when the tree is clean and
+misleading during an iteration loop.
 
 ### Two things to watch rather than fix
 
