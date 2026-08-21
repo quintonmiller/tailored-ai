@@ -1,4 +1,5 @@
 import { messageText } from "../content/types.js";
+import type { PartialCapabilities } from "./capabilities.js";
 import type {
   AIProvider,
   ChatParams,
@@ -157,6 +158,29 @@ export class OpenAIProvider implements AIProvider {
   id: string;
   name: string;
   supportsTools = true;
+
+  /**
+   * Chat Completions, which is what this provider and every OpenAI-compatible
+   * gateway speak.
+   *
+   * The one thing worth stating confidently is the tool-result rule: a `tool`
+   * message's content is a string here, full stop. vLLM rejects an `image_url`
+   * part on `role: "tool"` with "tool message content only supports text
+   * content" (vllm-project/vllm#43203) even for a vision model that accepts the
+   * identical part on a user turn. So media returned by a tool reaches these
+   * models as a following user message or not at all.
+   *
+   * Everything else stays unknown on purpose. This provider fronts arbitrary
+   * local gateways serving whatever was last loaded under whatever name, so
+   * declaring a modality from the model string would be a guess wearing a
+   * uniform. The operator sets `capabilities` on the rung when they know.
+   */
+  capabilities(_model: string): PartialCapabilities {
+    return {
+      toolResultMedia: { supported: true, mode: "follow-up" },
+      tools: { supported: true },
+    };
+  }
 
   private apiKey: string;
   private baseUrl: string;

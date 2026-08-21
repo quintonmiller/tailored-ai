@@ -4,8 +4,9 @@ How images (and audio, video, PDFs, arbitrary files) get into a prompt, out of a
 tool, through the loop, and onto a screen — without breaking the text-only
 assumptions the runtime is built on today.
 
-Status: **P1 and P2 shipped** (content parts, the media store, tools returning
-media, and Anthropic/Bedrock inlining it). P3-P6 are proposals.
+Status: **P1-P3 shipped** (content parts, the media store, tools returning
+media, providers inlining it, and per-model capabilities enforced before the
+request). P4-P6 are proposals.
 
 ## Why now
 
@@ -714,9 +715,18 @@ an MCP server returning a chart hands over the chart. Chat Completions
 deployments — the local path — still get the placeholder, which is correct
 until P3 can tell a vision model from a text one.
 
-**P3 — Capabilities.** `ModelCapabilities`, `SurfaceCapabilities`,
-`ModelEntry.capabilities`, resolution, and the `chatWithFallback` pre-flight.
-Fix `supportsTools` while the seam is open. *Tier 1.*
+**P3 — Capabilities. ✅ Shipped.** `ModelCapabilities` with object leaves and
+the tri-state `"unknown"`; `AIProvider.capabilities(model)` as a function of the
+model id; `ModelEntry.capabilities` per rung, winning over the provider; and the
+pre-flight in `chatWithFallback` that degrades, skips a rung, or errors per
+`MediaPolicy`. `supportsTools` was fixed in the same wave — it is now the
+fallback for an undeclared `tools` capability and finally decides something.
+
+Adaptation runs at the wire boundary and is never persisted, which is what makes
+the `follow-up` rewrite safe: trimming and `stripOrphanedToolMessages` have
+already run against the real history, so the synthesized user turn cannot be
+split from the tool result it follows. That resolves the interaction flagged
+under *What this breaks*.
 
 **P4 — Inbound.** `InboundMessage`; Discord `attachments[]`; Slack `files[]`
 plus the file-only-message fix; `POST /api/media` and `GET /api/media/:id`;

@@ -167,5 +167,30 @@ export interface AIProvider {
    */
   listModels?(): Promise<string[]>;
 
+  /**
+   * What this provider accepts **for a given model**.
+   *
+   * A function, not a constant, and that is load-bearing. `provider-openai`
+   * registers one provider id whose router dispatches per call against
+   * `params.model` to a Responses adapter (which can inline media in a tool
+   * result) or a Chat Completions adapter (which cannot) — a static field could
+   * not describe the provider we already ship. Its own doc comment makes the
+   * general argument: "which endpoint a request needs is a property of the
+   * *model*, and the model is not fixed at build time."
+   *
+   * Omit it to mean "I have not said", which resolves to `"unknown"` rather
+   * than to a conservative no. Undeclared is the common case — a local gateway
+   * serves whatever was last loaded under a name core cannot introspect — so
+   * treating silence as refusal would deny images to a vision model for lack of
+   * a config line.
+   */
+  capabilities?(model: string): import("./capabilities.js").PartialCapabilities;
+
+  /**
+   * @deprecated Declare `tools` through {@link AIProvider.capabilities}
+   * instead. Kept because every provider sets it and removing it is churn
+   * without benefit; it is now read as a fallback rather than ignored, which it
+   * was for its entire life before this.
+   */
   supportsTools: boolean;
 }

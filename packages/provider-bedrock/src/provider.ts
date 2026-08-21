@@ -23,7 +23,13 @@ import type {
   ToolCall,
   ToolSchema,
 } from "@tailored-ai/core";
-import { contentParts, type MessageContent, mediaPlaceholder, messageText } from "@tailored-ai/core";
+import {
+  contentParts,
+  type MessageContent,
+  mediaPlaceholder,
+  messageText,
+  type PartialCapabilities,
+} from "@tailored-ai/core";
 
 // --- Conversion helpers (exported for testing) ---
 
@@ -283,6 +289,27 @@ export class BedrockProvider implements AIProvider {
   id = "bedrock";
   name = "AWS Bedrock";
   supportsTools = true;
+
+  /**
+   * Converse takes images inline in a `toolResult`, so the same reasoning as
+   * the first-party Anthropic provider applies. Bedrock's own
+   * `ListFoundationModels` metadata is no help here: its `inputModalities`
+   * enum is only TEXT | IMAGE | EMBEDDING, so a model that reads PDFs and one
+   * that reads video both just say IMAGE.
+   */
+  capabilities(model: string): PartialCapabilities {
+    const id = model.toLowerCase();
+    const vision = /(anthropic\.claude-(?:3|4|5)|nova-(?:lite|pro|premier))/.test(id);
+    if (!vision) return { tools: { supported: true } };
+    return {
+      input: ["text/*", "image/png", "image/jpeg", "image/gif", "image/webp"],
+      output: ["text/*"],
+      inputBytes: { supported: true },
+      inputUrl: { supported: false },
+      toolResultMedia: { supported: true, mode: "inline" },
+      tools: { supported: true },
+    };
+  }
 
   private client: Pick<BedrockRuntimeClient, "send">;
   private defaultThinking?: ThinkingLevel;

@@ -15,6 +15,13 @@ import { recordTokenUsage } from "../db/autopilot-queries.js";
 import { getCoreMemory, renderCoreMemory } from "../db/core-memory-queries.js";
 import { getSessionMessages, saveMessage } from "../db/queries.js";
 import { hydrateMedia } from "../media/hydrate.js";
+import {
+  adaptForCapabilities,
+  DEFAULT_MEDIA_POLICY,
+  type MediaPolicy,
+  type PartialCapabilities,
+  resolveCapabilities,
+} from "../providers/capabilities.js";
 import type {
   AIProvider,
   ChatParams,
@@ -75,6 +82,12 @@ export interface ModelCandidate {
    * otherwise hand a fallback a request built for the head.
    */
   maxContextTokens?: number;
+  /**
+   * What this rung accepts, from `ModelEntry.capabilities`. Merged over
+   * whatever the provider declares for this model id; anything neither says
+   * stays `"unknown"`.
+   */
+  capabilities?: PartialCapabilities;
 }
 
 /**
@@ -194,25 +207,48 @@ export async function chatWithFallback(
   params: Omit<ChatParams, "model"> | ((candidate: ModelCandidate) => Omit<ChatParams, "model">),
   onTextDelta?: (text: string) => void,
   onReasoningDelta?: (text: string) => void,
+  mediaPolicy: MediaPolicy = DEFAULT_MEDIA_POLICY,
 ): Promise<{ response: ChatResponse; candidate: ModelCandidate; fellBack: boolean }> {
   if (candidates.length === 0) throw new Error("no model candidates configured");
   const paramsFor = typeof params === "function" ? params : () => params;
   let firstError: Error | undefined;
+  let lastSkip: string | undefined;
+  let skippedCount = 0;
   for (let i = 0; i < candidates.length; i++) {
     const candidate = candidates[i];
     const isLast = i === candidates.length - 1;
     try {
-      const response = await chatOnce(
-        candidate.provider,
-        // Two independent per-rung adjustments: the caller sizes the request
-        // for this rung, then the rung's own overrides land on top.
-        applyCandidateParams(paramsFor(candidate), candidate),
-        onTextDelta,
-        onReasoningDelta,
-        isLast,
-      );
+      // Two independent per-rung adjustments: the caller sizes the request for
+      // this rung, then the rung's own overrides land on top.
+      const tuned = applyCandidateParams(paramsFor(candidate), candidate);
+
+      // Then the capability pre-flight, which is the whole reason this lives
+      // here rather than inside a provider. Before this, every failure looked
+      // alike: the catch below treats a 4xx as a legitimate reason to try the
+      // next rung, so "this model has no eyes" was indistinguishable from a
+      // rate limit — and the answer to both was to spend another round-trip
+      // finding out. A declared constraint is now consulted before the request,
+      // not discovered from its rejection.
+      const shaped = shapeForCandidate(tuned, candidate, mediaPolicy);
+      if (shaped.skip) {
+        lastSkip = `${candidate.label} (${candidate.model}) skipped: ${shaped.skip}`;
+        skippedCount++;
+        console.warn(`[agent] ${lastSkip}`);
+        if (isLast) break;
+        continue;
+      }
+
+      const response = await chatOnce(candidate.provider, shaped.params, onTextDelta, onReasoningDelta, isLast);
       if (i > 0) {
-        console.warn(`[agent] answered by fallback ${candidate.label} (${candidate.model}) after ${i} failed`);
+        // Skipped and failed are different stories and must not be told as one:
+        // a rung the capability check declined never made a request, and
+        // reporting it as a failure sends the operator looking for an outage
+        // rather than for the policy that skipped it.
+        const failed = i - skippedCount;
+        const parts = [failed > 0 ? `${failed} failed` : "", skippedCount > 0 ? `${skippedCount} skipped` : ""].filter(
+          Boolean,
+        );
+        console.warn(`[agent] answered by fallback ${candidate.label} (${candidate.model}) after ${parts.join(", ")}`);
       }
       return { response, candidate, fellBack: i > 0 };
     } catch (err) {
@@ -225,7 +261,51 @@ export async function chatWithFallback(
       );
     }
   }
+  // A chain emptied by capability skips has no error to report, and saying
+  // "no model candidates" would send the operator looking for a missing config
+  // block rather than the policy that refused every rung it has.
+  if (!firstError && lastSkip) {
+    throw new Error(
+      `every model candidate was skipped by the media capability check — last: ${lastSkip}. ` +
+        'Set media.onUnsupported to "degrade" to send a text-only version instead.',
+    );
+  }
   throw firstError;
+}
+
+/**
+ * Apply one candidate's declared capabilities to a request.
+ *
+ * Returns the request to send, or a reason to skip this rung entirely. Nothing
+ * here is persisted: adaptation happens at the wire boundary, after trimming
+ * and after `stripOrphanedToolMessages`, so a rewrite that inserts a message
+ * cannot be split from its pair by eviction that already ran.
+ */
+function shapeForCandidate(
+  params: ChatParams,
+  candidate: ModelCandidate,
+  policy: MediaPolicy,
+): { params: ChatParams; skip?: string } {
+  const declared = candidate.provider.capabilities?.(candidate.model);
+  const caps = resolveCapabilities(candidate.capabilities, declared);
+
+  // `supportsTools` finally does something. It was declared on every provider,
+  // hard-set to true by all of them, and read by nothing that changed behaviour
+  // — a capability that described rather than decided. It is now the fallback
+  // for an undeclared `tools` capability, so a provider that genuinely cannot
+  // call tools is skipped rather than sent a request it must reject.
+  const toolsSupported = caps.tools.supported === "unknown" ? candidate.provider.supportsTools : caps.tools.supported;
+  if (params.tools?.length && toolsSupported === false) {
+    return { params, skip: "does not support tool calls, and this request has tools" };
+  }
+
+  const adapted = adaptForCapabilities(params.messages, caps, policy);
+  if (adapted.skip) return { params, skip: adapted.skip };
+  for (const note of adapted.notes) {
+    console.warn(`[agent] ${candidate.label} (${candidate.model}): ${note}`);
+  }
+  if (adapted.messages === params.messages) return { params };
+  return { params: { ...params, messages: adapted.messages } };
 }
 
 /**
@@ -465,6 +545,12 @@ export interface AgentLoopOptions {
    * text projection instead and nothing else changes.
    */
   mediaStore?: import("../media/interface.js").MediaStore;
+  /**
+   * What to do when a request carries media a model has not agreed to take.
+   * Defaults to degrading on a declared refusal and trying on an undeclared
+   * one — see {@link DEFAULT_MEDIA_POLICY}.
+   */
+  mediaPolicy?: MediaPolicy;
   /** Extra fields merged into the ToolContext passed to every tool execution. */
   toolContextExtras?: Partial<import("../tools/interface.js").ToolContext>;
   permissions?: PermissionsConfig;
@@ -1638,6 +1724,7 @@ async function _runAgentLoopBody(
       paramsFor,
       opts.onTextDelta,
       opts.onReasoningDelta,
+      opts.mediaPolicy,
     );
 
     recordResponseUsage(response);

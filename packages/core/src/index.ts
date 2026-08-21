@@ -202,6 +202,7 @@ export {
   resolveTailLayers,
   type SystemPromptOverride,
 } from "./agent/system-prompt.js";
+export { capToolResultOutput } from "./agent/tool-output.js";
 export type { DigestResult, DigestSection } from "./autopilot/digest.js";
 export { buildMorningDigest, recordDigestRun } from "./autopilot/digest.js";
 export type { AutopilotWorkerOptions } from "./autopilot/worker.js";
@@ -537,6 +538,8 @@ export {
   type TaiHttpResponse,
 } from "./http/registry.js";
 export { DEFAULT_MAX_MEDIA_BYTES, DiskMediaStore } from "./media/disk.js";
+export type { HydratedMedia } from "./media/hydrate.js";
+export { hydrateMedia } from "./media/hydrate.js";
 export type { MediaStore, PutMediaOptions, StoredMedia } from "./media/interface.js";
 export { MediaTooLargeError } from "./media/interface.js";
 export type { MediaRow } from "./media/queries.js";
@@ -639,6 +642,22 @@ export {
   readProjectFile,
   resolveProjectFromCwd,
 } from "./projects/resolve.js";
+export type {
+  AdaptResult,
+  MediaPolicy,
+  ModelCapabilities,
+  PartialCapabilities,
+  Support,
+  SupportState,
+  ToolResultMediaSupport,
+} from "./providers/capabilities.js";
+export {
+  adaptForCapabilities,
+  DEFAULT_MEDIA_POLICY,
+  mimeMatches,
+  resolveCapabilities,
+  UNKNOWN_CAPABILITIES,
+} from "./providers/capabilities.js";
 export {
   blobToVector,
   cosine,

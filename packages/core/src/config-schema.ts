@@ -93,6 +93,30 @@ type Identical<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends
 /** Fails the build with "Type 'false' does not satisfy the constraint 'true'". */
 type AssertTrue<T extends true> = T;
 
+/**
+ * A capability leaf. `supported` is tri-state on purpose: `"unknown"` means
+ * nobody said, which is different from a declared no and is the common case.
+ */
+const SupportSchema = z.object({
+  supported: z.union([z.boolean(), z.literal("unknown")]),
+  maxBytes: z.number().optional(),
+  maxItems: z.number().optional(),
+  formats: z.array(z.string()).optional(),
+});
+
+const ToolResultMediaSchema = SupportSchema.extend({
+  mode: z.enum(["inline", "follow-up"]).optional(),
+});
+
+const CapabilitiesSchema = z.object({
+  input: z.array(z.string()).optional(),
+  output: z.array(z.string()).optional(),
+  inputBytes: SupportSchema.optional(),
+  inputUrl: SupportSchema.optional(),
+  toolResultMedia: ToolResultMediaSchema.optional(),
+  tools: SupportSchema.optional(),
+});
+
 const ModelEntrySchema = z.object({
   provider: z.string(),
   model: z.string(),
@@ -102,6 +126,7 @@ const ModelEntrySchema = z.object({
   maxTokens: z.number().optional(),
   // Open on purpose: the provider owns these keys, not core.
   providerExtra: z.record(z.unknown()).optional(),
+  capabilities: CapabilitiesSchema.optional(),
 });
 type _ModelEntryMatches = AssertTrue<Identical<z.infer<typeof ModelEntrySchema>, ModelEntry>>;
 

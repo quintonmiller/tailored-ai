@@ -53,6 +53,27 @@ export interface ModelEntry {
    * rung, in full, or leave it unset to inherit.
    */
   providerExtra?: Record<string, unknown>;
+  /**
+   * What this model accepts, for this rung only.
+   *
+   * Wins over whatever the provider declares, and has to: a local gateway
+   * serves whatever model was last loaded under a name core cannot introspect,
+   * so the operator is frequently the only party who knows. Anything neither
+   * config nor provider states stays `"unknown"` — which is a third state, not
+   * a quiet `false`, because most models will never have a line here and
+   * defaulting them to text-only would blind a vision model for want of config.
+   *
+   * ```yaml
+   * models:
+   *   - provider: openai_compatible
+   *     model: qwen3-vl-32b
+   *     capabilities:
+   *       input: ["text/*", "image/*"]
+   *       inputBytes: { supported: true }
+   *       toolResultMedia: { supported: true, mode: follow-up }
+   * ```
+   */
+  capabilities?: import("./providers/capabilities.js").PartialCapabilities;
 }
 
 /**

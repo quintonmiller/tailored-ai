@@ -14,6 +14,7 @@ import {
   type MessageContent,
   mediaPlaceholder,
   messageText,
+  type PartialCapabilities,
   ProviderHttpError,
   QuirkMemo,
   runQuirkLadder,
@@ -448,6 +449,32 @@ export class AnthropicMessagesProvider implements AIProvider {
   id = "anthropic";
   name = "Anthropic";
   supportsTools = true;
+
+  /**
+   * Claude models take images and PDFs, and — unusually — take them *inside* a
+   * tool result, which is why a tool-returned screenshot never has to be
+   * promoted into a user turn here.
+   *
+   * Keyed on the model id rather than declared as a constant because the
+   * provider serves many models and they do not all agree; a `claude-3-haiku`
+   * and a current Opus differ, and the id is the only thing that says which.
+   */
+  capabilities(model: string): PartialCapabilities {
+    const id = model.toLowerCase();
+    // Every Claude 3 and later takes vision. Anything else — a name we do not
+    // recognize, including one released after this was written — stays unknown
+    // rather than being declared incapable.
+    const vision = /claude-(?:3|4|5|opus|sonnet|haiku|fable|mythos)/.test(id);
+    if (!vision) return { tools: { supported: true } };
+    return {
+      input: ["text/*", "image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf"],
+      output: ["text/*"],
+      inputBytes: { supported: true, maxBytes: 5 * 1024 * 1024 },
+      inputUrl: { supported: true },
+      toolResultMedia: { supported: true, mode: "inline" },
+      tools: { supported: true },
+    };
+  }
 
   private apiKey: string;
   private baseUrl: string;

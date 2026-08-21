@@ -1391,6 +1391,7 @@ export class AgentRuntime {
         maxTokens: entry.maxTokens,
         providerExtra: entry.providerExtra,
         maxContextTokens: entry.maxContextTokens,
+        capabilities: entry.capabilities,
       });
     }
 
