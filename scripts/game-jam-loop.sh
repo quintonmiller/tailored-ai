@@ -56,6 +56,19 @@ TOOL_ROUNDS="${JAM_TOOL_ROUNDS:-30}"
 JAM_MAX_TOKENS="${JAM_MAX_TOKENS:-8192}"
 JAM_THINKING="${JAM_THINKING:-medium}"
 
+# The backstop is a SIGKILL, so it has to be generous rather than tight.
+#
+# `cli.ts` kills the worker outright when this expires: no `finish()`, no
+# `metrics()`, no publish, and the arcade keeps a `draft` row for a game that
+# will never arrive. A cap that trips is not a slow run, it is a lost one.
+#
+# 180 was fine while a jam averaged 28s a turn. Sighted runs are slower — the
+# first measured 50s a turn, because a team that can see its game passes on 14%
+# of its turns instead of 44% and actually does something on the rest. 220 turns
+# at 50s is 183 minutes, i.e. exactly at the old cap. 300 leaves real headroom;
+# a run that finishes early costs nothing for the slack.
+SCENARIO_MINUTES="${JAM_SCENARIO_MINUTES:-300}"
+
 # `--vision` is passed below, and it needs the server started with `--vision`
 # too — NInfer omits the Vision weights and their allocations otherwise, and
 # answers any request carrying an image with `vision_disabled`. The flag costs
@@ -141,7 +154,7 @@ while [ "$STOP" -eq 0 ]; do
     --thinking "$JAM_THINKING" \
     --context-tokens "$CONTEXT_TOKENS" \
     --vision \
-    --max-scenario-minutes 180 \
+    --max-scenario-minutes "$SCENARIO_MINUTES" \
     --sim-option "brief=$BRIEF" \
     >"$LOG" 2>&1
 
