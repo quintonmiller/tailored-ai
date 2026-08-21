@@ -1,4 +1,6 @@
 import type Database from "better-sqlite3";
+import { decodeMessageContent } from "../content/codec.js";
+import { messageText } from "../content/types.js";
 
 /**
  * Take a conversation back to how it stood N turns ago.
@@ -78,7 +80,11 @@ function cutPoint(db: Database.Database, sessionIds: string[], turns: number): n
  * prompts (CLI, DMs, task dispatches), which have no preamble to strip.
  */
 export function messageExcerpt(content: string | null, limit = 140): string {
-  const raw = content ?? "";
+  // The argument is the raw `messages.content` column, which since media
+  // support carries either plain text or encoded content. Decoding first is
+  // what stops a rewind preview quoting `{"__tai_content":true,…}` back at
+  // someone whose only crime was attaching a screenshot.
+  const raw = messageText(decodeMessageContent(content));
   const marker = "New messages:";
   const start = raw.indexOf(marker);
   let body = start === -1 ? raw : raw.slice(start + marker.length);

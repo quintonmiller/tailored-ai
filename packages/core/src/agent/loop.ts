@@ -1913,7 +1913,13 @@ async function _runAgentLoopBody(
     // results are part of the signature so legitimate polling (task_status
     // running → running → completed) does not trip it — only genuine
     // "no progress" loops do.
-    const resultSignature = results.map((r) => r.output).join("|");
+    // Projected, not joined raw: `output` is `string | ToolOutput`, and `join`
+    // stringifies the object arm to `[object Object]` — which made every
+    // media-carrying result compare equal to every other, so a tool returning a
+    // *different* picture each round read as no progress at all. The projection
+    // carries the content hash, so identical bytes still compare equal and
+    // different bytes no longer do.
+    const resultSignature = results.map((r) => toolOutputText(r.output)).join("|");
     roundSignatures.push(`${callSignature}→${resultSignature}`);
     roundCalls.push([...new Set(response.toolCalls.map((c) => c.name))]);
     if (roundSignatures.length > SIGNATURE_WINDOW) roundSignatures.shift();
