@@ -1036,6 +1036,47 @@ describe("the arcade", () => {
     expect(s.metrics().arcadeReads).toBe(1);
   });
 
+  /**
+   * A tool result is charged against the history budget; a web page is not.
+   *
+   * The store lets a team write 8,000 characters of description, which is right
+   * for somebody reading it in a browser and wrong for a single tool result in
+   * a run whose binding constraint is whether the team still remembers its own
+   * plan at round eighteen.
+   */
+  it("trims a long entry for the tool and marks the cut", async () => {
+    const home = temp();
+    const store = new ArcadeStore(home);
+    const past = store.createEntry({
+      runId: "verbose",
+      scenario: "",
+      brief: "arcade",
+      theme: "ONLY ONE",
+      themeId: "only-one",
+      rounds: 20,
+      seed: 0,
+      artifactPath: "/nowhere",
+      entryFile: "index.html",
+      taiVersion: "",
+      simVersion: "",
+      gitSha: "",
+      model: "",
+      provider: "",
+      baseUrl: "",
+      modelMeta: {},
+      credits: {},
+    });
+    const long = "the field grows on its own. ".repeat(300);
+    store.register(past.id, { title: "Verbose", description: long, instructions: long });
+    store.publish(past.id, {});
+
+    const page = await call(sim({ arcadeHome: home }), "arcade_read", { slug: "verbose" }, "lead");
+    expect(page).toMatch(/trimmed; the full text is on the site/);
+    expect(page.length).toBeLessThan(4000);
+    // What is stored is untouched — the trim is a property of the tool result.
+    expect(store.entry(past.id)?.description?.length).toBeGreaterThan(4000);
+  });
+
   it("says so plainly when there is nothing to compare against", async () => {
     const { s } = jam();
     expect(await call(s, "arcade_browse", {}, "lead")).toMatch(/no published games yet/);

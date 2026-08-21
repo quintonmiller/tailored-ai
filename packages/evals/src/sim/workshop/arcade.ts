@@ -51,6 +51,24 @@ import { agentTool, optional, tool } from "../tool.js";
 const BROWSE_LIMIT = 8;
 const BROWSE_MAX = 20;
 
+/*
+ * How much of somebody else's page a tool result may carry.
+ *
+ * The store lets a team write 8,000 characters of description and 4,000 of
+ * instructions, which is right — a jam page should not be clipped for a person
+ * reading it in a browser. Handing all of it back through a tool is a different
+ * question: one `arcade_read` at those limits is roughly three thousand tokens
+ * in a single result, in a run whose history budget is the binding constraint
+ * on whether the team still remembers its own plan at round eighteen.
+ *
+ * So the page keeps everything and the tool result is trimmed, with the cut
+ * marked. A team that needs more than this from a competitor's pitch is not
+ * short of information.
+ */
+const READ_DESCRIPTION = 1200;
+const READ_INSTRUCTIONS = 700;
+const READ_NOTES = 500;
+
 export interface ArcadeCounters {
   arcadeBrowses: number;
   arcadeReads: number;
@@ -258,8 +276,8 @@ export class ArcadeDesk {
       "",
     ];
     if (entry.tagline) lines.push(`Pitch: ${entry.tagline}`, "");
-    if (entry.description) lines.push("About:", entry.description, "");
-    if (entry.instructions) lines.push("How to play:", entry.instructions, "");
+    if (entry.description) lines.push("About:", clip(entry.description, READ_DESCRIPTION), "");
+    if (entry.instructions) lines.push("How to play:", clip(entry.instructions, READ_INSTRUCTIONS), "");
 
     const scored = CATEGORIES.filter((c) => entry.scores[c.key]);
     if (scored.length) {
@@ -276,7 +294,7 @@ export class ArcadeDesk {
       const notes = this.store.reviews(entry.id).filter((review) => review.notes.trim());
       if (notes.length) {
         lines.push("What the judge said:");
-        for (const review of notes) lines.push(`  ${review.reviewer}: ${review.notes}`);
+        for (const review of notes) lines.push(`  ${review.reviewer}: ${clip(review.notes, READ_NOTES)}`);
         lines.push("");
       }
     }
@@ -314,6 +332,19 @@ export class ArcadeDesk {
     );
     return lines.join("\n");
   }
+}
+
+/**
+ * Trim a field for a tool result, and say so.
+ *
+ * Marked rather than silent: a model handed a sentence that stops mid-clause
+ * with no explanation will reasonably treat it as the whole sentence, and the
+ * cheapest defence against that is four words.
+ */
+function clip(value: string, limit: number): string {
+  const text = value.trim();
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit).trimEnd()}… [trimmed; the full text is on the site]`;
 }
 
 /** Trim a long field down to something a tool result can carry. */
