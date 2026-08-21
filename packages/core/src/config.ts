@@ -647,6 +647,16 @@ export interface AgentConfig {
     port: number;
     host: string;
     /**
+     * Content-Security-Policy for every response.
+     *
+     * Unset uses a policy built for the bundled UI, whose `img-src 'self'
+     * data:` is what stops a model- or tool-authored remote `<img>` from
+     * leaking the surrounding conversation to whoever owns that host. Set a
+     * string to replace it (a deployment fronting TAI with its own CDN has
+     * reasons to differ), or `false` to send no security headers at all.
+     */
+    csp?: string | false;
+    /**
      * Legacy bearer token that gates only mutating endpoints (POST/PUT/PATCH/DELETE).
      * Prefer `authToken` below — it gates every route, closing the
      * read-access leak when the server binds non-loopback. Kept for

@@ -15,6 +15,7 @@ import {
   type ToolLogEntry,
   updateSession,
 } from "../api";
+import type { MediaRef } from "../lib/content.js";
 import { describeError, useToast } from "./Toast";
 
 export interface PendingApproval {
@@ -59,7 +60,7 @@ export interface ChatStore {
   sessions: SessionRow[];
   refreshSessions: () => void;
   // Actions
-  send: (text: string) => void;
+  send: (text: string, media?: MediaRef[]) => void;
   interrupt: () => void;
   newChat: () => void;
   loadSession: (s: SessionRow) => void;
@@ -146,15 +147,27 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   }, [turnStart]);
 
   const send = useCallback(
-    (text: string) => {
-      if (!text.trim() || sending) return;
+    (text: string, media?: MediaRef[]) => {
+      // An image with no caption is a real message — requiring text here would
+      // repeat the bug this feature exists to fix.
+      if ((!text.trim() && !media?.length) || sending) return;
       setSending(true);
       setPendingTools([]);
       setApprovals([]);
       setStreamText("");
       setStreamReasoning("");
       setTurnStart(Date.now());
-      setMessages((prev) => [...prev, { role: "user", content: text }]);
+      // Echo the turn locally exactly as the server will store it: a plain
+      // string when there is no media, parts when there is.
+      const localContent = media?.length
+        ? {
+            parts: [
+              ...(text ? [{ type: "text" as const, text }] : []),
+              ...media.map((m) => ({ type: "media" as const, media: m })),
+            ],
+          }
+        : text;
+      setMessages((prev) => [...prev, { role: "user", content: localContent }]);
 
       let finalTools: ToolLogEntry[] = [];
       let recalled: { count: number; sources: string[]; pinned?: string[] } | undefined;
@@ -282,6 +295,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           }
         },
         selectedAgent || undefined,
+        media?.map((m) => m.id),
       );
     },
     [sending, sessionKey, selectedAgent, toast],

@@ -1,4 +1,5 @@
 import type { Message, ToolLogEntry, ToolLogToolEntry } from "./api";
+import { contentText } from "./lib/content.js";
 
 /**
  * Collapse a flat message stream into "turns". A turn is the span from a
@@ -30,7 +31,7 @@ export function groupTurns(messages: Message[]): Message[] {
       const m = span[i];
       if (m.role === "assistant") {
         if (m.content && i !== lastTextIdx) {
-          log.push({ kind: "text", content: m.content });
+          log.push({ kind: "text", content: contentText(m.content) });
         }
         if (m.toolCalls?.length) {
           for (const tc of m.toolCalls) {
@@ -38,7 +39,7 @@ export function groupTurns(messages: Message[]): Message[] {
           }
         }
       } else if (m.role === "tool") {
-        attachToolResult(log, m.toolCallId, m.content ?? "");
+        attachToolResult(log, m.toolCallId, contentText(m.content));
       }
     }
 

