@@ -92,6 +92,33 @@ export function agentTool(
   };
 }
 
+/**
+ * Mark some of a tool's parameters as genuinely optional.
+ *
+ * `tool()` makes every declared parameter required, which is right for an
+ * instrument where all the arguments matter and wrong for one whose arguments
+ * describe a window or a partial update. Saying "Optional" in the description
+ * and `required` in the schema is worse than either alone: core validates
+ * against the schema and refuses the call *before* `execute` runs, so a model
+ * that read the description and did the correct thing gets a refusal with **no
+ * `call` event in the trace at all** — the same shape as the string/number bug
+ * above, from the other direction. The instrument reads as unused and the
+ * metric it feeds stays at zero, which is indistinguishable from a team that
+ * never tried.
+ *
+ * Post-processing rather than a flag on `tool()` because most tools want the
+ * strict behaviour and the exceptions should have to say so.
+ */
+export function optional(built: Tool, ...keys: string[]): Tool {
+  return {
+    ...built,
+    parameters: {
+      ...built.parameters,
+      required: ((built.parameters.required as string[]) ?? []).filter((key) => !keys.includes(key)),
+    },
+  };
+}
+
 /** `num(args.chamber, 0)` — models pass strings for everything. */
 export function num(value: unknown, fallback: number): number {
   const parsed = Number(String(value ?? "").replace(/[^0-9.-]/g, ""));

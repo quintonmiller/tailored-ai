@@ -20,11 +20,13 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { ArcadeStore } from "@tailored-ai/arcade";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { validateScenario } from "../schema.js";
 import { createSimulation, simulationPolicies } from "../sim/index.js";
 import { checkWorkspace } from "../sim/workshop/check.js";
 import type { WorkshopSimulation } from "../sim/workshop/index.js";
+import { JUDGING } from "../sim/workshop/themes.js";
 import { Workspace } from "../sim/workshop/workspace.js";
 
 const temps: string[] = [];
@@ -35,6 +37,29 @@ function temp(): string {
 }
 afterEach(() => {
   for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+/*
+ * No test in this file may reach the real arcade.
+ *
+ * The simulation opens one whenever it is given a `run` context, which is
+ * exactly what a test of that behaviour has to pass — and `~/.tai-arcade` is
+ * where it lands by default. Seven rows appeared in the live database from a
+ * single test doing precisely that, minutes after a *different* leak of
+ * forty-eight was fixed by making the arcade opt-in.
+ *
+ * Twice is a pattern: the per-test `arcadeHome` is the right knob and the wrong
+ * guard, because it protects only the tests that remember it. Redirecting the
+ * default for the whole file protects the ones nobody has written yet.
+ */
+const realArcadeHome = process.env.ARCADE_HOME;
+beforeAll(() => {
+  process.env.ARCADE_HOME = mkdtempSync(join(tmpdir(), "workshop-test-arcade-"));
+});
+afterAll(() => {
+  rmSync(process.env.ARCADE_HOME as string, { recursive: true, force: true });
+  if (realArcadeHome === undefined) delete process.env.ARCADE_HOME;
+  else process.env.ARCADE_HOME = realArcadeHome;
 });
 
 function sim(options: Record<string, unknown> = {}): WorkshopSimulation {
@@ -466,8 +491,12 @@ describe("the jam: a theme, a clock, and categories a person scores", () => {
     const s = sim({ theme: "it-grows", days: 8 });
     const card = readFileSync(join(s.root, "JUDGING.md"), "utf8");
     expect(card).toMatch(/IT GROWS/);
-    for (const category of ["Theme relevance", "Fun", "Visual craft", "Innovation", "Polish", "Technical"]) {
-      expect(card).toContain(category);
+    // Read from the arcade rather than listed here, because the whole point of
+    // moving them there was that the brief, this form and the site's review
+    // form can no longer disagree about what the questions are.
+    for (const category of JUDGING) {
+      expect(card).toContain(category.name);
+      expect(card).toContain(category.question);
     }
     expect(card).toContain("**Theme relevance**");
   });
@@ -576,6 +605,32 @@ describe("the scenarios on disk", () => {
       expect(scenario.review).toBe(true);
       expect(scenario.expect ?? []).toHaveLength(0);
     }
+  });
+
+  /**
+   * The regression this closes was introduced and caught within a minute, and
+   * would have been invisible for a whole run otherwise.
+   *
+   * The control arms used to recover a role's job by splitting its assembled
+   * instructions on the first blank line. Giving the lead a second paragraph —
+   * the one telling it to register the game — silently truncated both control
+   * arms to the first paragraph, so the two arms being compared would have
+   * differed by an instruction nobody intended to vary. Nothing would have
+   * reported it; the arms would simply have stopped being arms.
+   */
+  it("gives every arm the lead's whole job, not the first paragraph of it", async () => {
+    const { loadScenarios } = await import("../schema.js");
+    const { scenarios } = await loadScenarios(new URL("../../scenarios", import.meta.url).pathname, "workshop");
+    for (const id of ["the-workshop", "the-workshop-in-one-room"]) {
+      const scenario = scenarios.find((s) => s.id === id);
+      const lead = scenario?.agent?.instructions ?? "";
+      expect(lead, id).toMatch(/design\.md/);
+      expect(lead, id).toMatch(/arcade_register/);
+    }
+    // The solo arm holds every job at once and is written as one block; it
+    // still has to be told the game needs registering.
+    const alone = scenarios.find((s) => s.id === "the-workshop-alone");
+    expect(alone?.agent?.instructions ?? "").toMatch(/arcade_register/);
   });
 
   it("gives every arm the same number of model calls", async () => {
@@ -733,5 +788,308 @@ describe("a workspace is not a place to smuggle a file out of", () => {
     symlinkSync(outside, join(workspace.filesRoot, "link"));
     expect(() => workspace.read("link/secret.txt")).toThrow(/outside the workspace/);
     expect(() => workspace.write("link/planted.js", "x", "lead", 0)).toThrow(/outside the workspace/);
+  });
+});
+
+describe("the arcade", () => {
+  /**
+   * A workshop with a submission page, and a store that goes away afterwards.
+   *
+   * `arcadeHome` is what turns the arcade on for a test. It is also, with a
+   * `run` context, the *only* thing that does — see the constructor. That gate
+   * exists because this suite constructs the simulation dozens of times, and
+   * the first version of this feature wrote forty-eight rows into the real
+   * database on ~/.tai-arcade, several of them published.
+   */
+  function jam(options: Record<string, unknown> = {}): { s: WorkshopSimulation; store: ArcadeStore } {
+    const home = temp();
+    const s = sim({ arcadeHome: home, ...options });
+    return { s, store: new ArcadeStore(home) };
+  }
+
+  /** Every tool the simulation exposes, however it hands it out. */
+  const allTools = (s: WorkshopSimulation): string[] =>
+    [...s.sharedTools(), ...Object.values(s.tools()).flat()].map((t) => t.name);
+
+  it("hands out no arcade tools unless it was asked to", () => {
+    expect(allTools(sim())).not.toContain("arcade_register");
+    expect(allTools(sim())).not.toContain("arcade_browse");
+  });
+
+  it("opens for a real harness run without being told a home", () => {
+    // `run` is what the harness passes and `bench`/`rehearse`/tests do not.
+    const s = sim({ run: { scenario: "x", model: "m", provider: "p", baseUrl: "u" } });
+    expect(allTools(s)).toContain("arcade_register");
+  });
+
+  it("stays off when the scenario switches it off", () => {
+    expect(allTools(sim({ arcadeHome: temp(), arcade: "off" }))).not.toContain("arcade_register");
+  });
+
+  /**
+   * The reason this is a partition rather than a refusal.
+   *
+   * Measured on the first live run with the arcade in `sharedTools()`: the
+   * interface agent, which cannot register anything, spent four of the team's
+   * six tool calls browsing the arcade and reading three previous entries, and
+   * the run wrote no files at all. A refusal would still have cost the call and
+   * the schema entry — four agents never seeing the tools is the fix.
+   */
+  it("gives the arcade to the agent who writes the submission and to nobody else", async () => {
+    const { simulationGrants } = await import("../harness.js");
+    const s = sim({ arcadeHome: temp() });
+    const grants = simulationGrants(s, {
+      lead: "lead",
+      builder: "builder",
+      interface: "interface",
+      author: "author",
+      tester: "tester",
+    });
+    expect(grants.lead).toContain("arcade_register");
+    expect(grants.lead).toContain("arcade_browse");
+    for (const agent of ["builder", "interface", "author", "tester"]) {
+      expect(grants[agent], agent).not.toContain("arcade_browse");
+      expect(grants[agent], agent).not.toContain("arcade_register");
+      // They keep everything else.
+      expect(grants[agent], agent).toContain("write_file");
+    }
+  });
+
+  it("keeps the arcade reachable when one agent plays every role", async () => {
+    const { simulationGrants } = await import("../harness.js");
+    const s = sim({ arcadeHome: temp(), ownership: "shared", checks: "anyone" });
+    const grants = simulationGrants(s, {
+      lead: "maker",
+      builder: "maker",
+      interface: "maker",
+      author: "maker",
+      tester: "maker",
+    });
+    expect(grants.maker).toContain("arcade_register");
+  });
+
+  it("tells the other four that the page exists without naming tools they lack", () => {
+    const builder = sim({ arcadeHome: temp() }).briefFor("builder") ?? "";
+    expect(builder).toMatch(/arcade/i);
+    expect(builder).toMatch(/lead holds the arcade tools/);
+    expect(builder).not.toMatch(/arcade_register/);
+  });
+
+  it("opens a draft the moment the jam starts, so there is something to read", () => {
+    const { store } = jam();
+    const drafts = store.list({ includeDrafts: true });
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].status).toBe("draft");
+    expect(store.list()).toHaveLength(0);
+  });
+
+  it("records what built it, from the run context rather than from the agents", () => {
+    const home = temp();
+    sim({
+      arcadeHome: home,
+      run: {
+        scenario: "the-workshop",
+        model: "qwen3.8-27b",
+        provider: "openai_compatible",
+        baseUrl: "http://127.0.0.1:8080/v1",
+        gitSha: "abc1234",
+        taiVersion: "0.1.10",
+        modelMeta: { contextTokens: 131072, thinking: "medium" },
+        roles: { lead: "lead", builder: "builder" },
+      },
+    });
+    const entry = new ArcadeStore(home).list({ includeDrafts: true })[0];
+    expect(entry.model).toBe("qwen3.8-27b");
+    expect(entry.gitSha).toBe("abc1234");
+    expect(entry.modelMeta.contextTokens).toBe(131072);
+    expect(entry.credits.builder).toBe("builder");
+    expect(entry.simVersion).toMatch(/workshop/);
+  });
+
+  it("lets only the agent who owns submission.md register the team", async () => {
+    const { s, store } = jam();
+    const refused = await call(s, "arcade_register", { title: "Sneaky" }, "builder");
+    expect(refused).toMatch(/Refused/);
+    expect(refused).toMatch(/lead/);
+    expect(store.list({ includeDrafts: true })[0].title).toBeUndefined();
+
+    const ok = await call(s, "arcade_register", { title: "Overgrowth", genre: "puzzle" }, "lead");
+    expect(ok).toMatch(/Registered/);
+    expect(store.list({ includeDrafts: true })[0].title).toBe("Overgrowth");
+  });
+
+  it("lets anybody register when there is nobody to own anything", async () => {
+    const { s, store } = jam({ ownership: "shared" });
+    await call(s, "arcade_register", { title: "Solo" }, "maker");
+    expect(store.list({ includeDrafts: true })[0].title).toBe("Solo");
+  });
+
+  it("names what is still missing rather than reading back what was written", async () => {
+    const { s } = jam();
+    const before = await call(s, "arcade_entry", {}, "lead");
+    expect(before).toMatch(/Title\s+— empty/);
+    expect(before).toMatch(/Still empty:/);
+
+    await call(s, "arcade_register", { title: "Overgrowth", tagline: "one seed" }, "lead");
+    const after = await call(s, "arcade_entry", {}, "lead");
+    expect(after).toMatch(/Overgrowth/);
+    expect(after).toMatch(/Still empty:.*how to play/);
+  });
+
+  it("refuses an empty registration instead of marking the team registered", async () => {
+    const { s, store } = jam();
+    const out = await call(s, "arcade_register", {}, "lead");
+    expect(out).toMatch(/Refused/);
+    expect(store.list({ includeDrafts: true })[0].registered).toBe(false);
+  });
+
+  it("cannot reach another team's entry — there is no argument for it", async () => {
+    const home = temp();
+    const store = new ArcadeStore(home);
+    const other = store.createEntry({
+      runId: "somebody-else",
+      scenario: "",
+      brief: "arcade",
+      theme: "ONLY ONE",
+      themeId: "only-one",
+      rounds: 20,
+      seed: 0,
+      artifactPath: "/nowhere",
+      entryFile: "index.html",
+      taiVersion: "",
+      simVersion: "",
+      gitSha: "",
+      model: "",
+      provider: "",
+      baseUrl: "",
+      modelMeta: {},
+      credits: {},
+    });
+    store.register(other.id, { title: "Theirs" });
+    store.publish(other.id, {});
+
+    const s = sim({ arcadeHome: home });
+    // Every shape an attempt could take. None of them is a parameter this tool
+    // has, so all of them land on the caller's own row.
+    await call(s, "arcade_register", { title: "Mine", slug: "theirs", id: other.id, entry: other.id }, "lead");
+    expect(store.entry(other.id)?.title).toBe("Theirs");
+  });
+
+  it("shows previous entries and their scores, but not the draft being written", async () => {
+    const home = temp();
+    const store = new ArcadeStore(home);
+    const past = store.createEntry({
+      runId: "last-week",
+      scenario: "",
+      brief: "arcade",
+      theme: "ONLY ONE",
+      themeId: "only-one",
+      rounds: 20,
+      seed: 0,
+      artifactPath: "/nowhere",
+      entryFile: "index.html",
+      taiVersion: "",
+      simVersion: "",
+      gitSha: "",
+      model: "",
+      provider: "",
+      baseUrl: "",
+      modelMeta: {},
+      credits: {},
+    });
+    store.register(past.id, { title: "One Shot", tagline: "a single bullet", genre: "shooter" });
+    store.publish(past.id, {});
+    store.saveReview(past.id, "quinton", { theme: 5, gameplay: 3 }, "the reload is the whole game");
+
+    const s = sim({ arcadeHome: home });
+    const board = await call(s, "arcade_browse", {}, "lead");
+    expect(board).toMatch(/one-shot/);
+    expect(board).toMatch(/4\.00 overall/);
+    expect(board).toMatch(/theme 5\.0/);
+    // The team's own unfinished page is not on the board it is reading.
+    expect(board).not.toMatch(/workshop-test/);
+
+    const page = await call(s, "arcade_read", { slug: "one-shot" }, "lead");
+    expect(page).toMatch(/a single bullet/);
+    expect(page).toMatch(/the reload is the whole game/);
+
+    expect(s.metrics().arcadeBrowses).toBe(1);
+    expect(s.metrics().arcadeReads).toBe(1);
+  });
+
+  it("says so plainly when there is nothing to compare against", async () => {
+    const { s } = jam();
+    expect(await call(s, "arcade_browse", {}, "lead")).toMatch(/no published games yet/);
+  });
+
+  it("refuses a slug that is not there, naming the tool that lists them", async () => {
+    const { s } = jam();
+    const out = await call(s, "arcade_read", { slug: "nope" }, "lead");
+    expect(out).toMatch(/Refused/);
+    expect(out).toMatch(/arcade_browse/);
+  });
+
+  it("publishes the finished game, with its counters, when the jam ends", async () => {
+    const { s, store } = jam({ days: 2 });
+    await call(s, "arcade_register", { title: "Overgrowth", genre: "puzzle" }, "lead");
+    await call(s, "write_file", { path: "index.html", content: "<!doctype html><canvas></canvas>" }, "interface");
+    s.finish();
+
+    const published = store.list();
+    expect(published).toHaveLength(1);
+    expect(published[0].title).toBe("Overgrowth");
+    expect(published[0].registered).toBe(true);
+    expect(published[0].metrics.writes).toBe(1);
+    expect(published[0].downloadPath).toBeTruthy();
+  });
+
+  it("publishes a team that never registered, flagged rather than hidden", async () => {
+    const { s, store } = jam({ days: 2 });
+    await call(s, "write_file", { path: "index.html", content: "<!doctype html>" }, "interface");
+    s.finish();
+    const published = store.list();
+    expect(published).toHaveLength(1);
+    expect(published[0].registered).toBe(false);
+    expect(published[0].title).toBeUndefined();
+  });
+
+  it("does not publish a run that built nothing", () => {
+    const { s, store } = jam({ days: 2 });
+    s.finish();
+    expect(store.list()).toHaveLength(0);
+  });
+
+  it("puts the arcade counters in the snapshot as well as the metrics", async () => {
+    const { s } = jam();
+    await call(s, "arcade_register", { title: "X" }, "lead");
+    const snapshot = s.snapshot();
+    for (const key of Object.keys(s.metrics())) {
+      expect(snapshot).toHaveProperty(key);
+    }
+    expect(s.metrics().arcadeRegistered).toBe(1);
+    expect(s.metrics().arcadeUpdates).toBe(1);
+  });
+
+  it("tells the team the site exists, and only when it does", () => {
+    const withArcade = sim({ arcadeHome: temp() }).briefFor("lead") ?? "";
+    expect(withArcade).toMatch(/## Submitting/);
+    expect(withArcade).toMatch(/not registered on it is a game nobody plays/);
+
+    // A control arm run with the arcade off must not differ by a stray heading.
+    // Matched on the section and the tools rather than on the word: the default
+    // brief is the *arcade* brief and says so in its own first line.
+    const without = sim().briefFor("lead") ?? "";
+    expect(without).not.toMatch(/## Submitting/);
+    expect(without).not.toMatch(/arcade_/);
+  });
+
+  it("nags about an unregistered entry only once the jam is nearly over", async () => {
+    const { s } = jam({ days: 10 });
+    expect(s.announce()).not.toMatch(/arcade/);
+    for (let i = 0; i < 7; i++) s.advance();
+    expect(s.announce()).toMatch(/Nothing is registered on the arcade/);
+
+    await call(s, "arcade_register", { title: "Late But Present" }, "lead");
+    expect(s.announce()).not.toMatch(/Nothing is registered/);
   });
 });

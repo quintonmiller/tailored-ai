@@ -26,7 +26,10 @@
     "lint:fix": "biome check --write packages/",
     "format": "biome format --write packages/",
     "build:ui": "pnpm --filter @tailored-ai/ui run build",
-    "publish:cli": "pnpm --filter @tailored-ai/cli publish --access public"
+    "publish:cli": "pnpm --filter @tailored-ai/cli publish --access public",
+    "arcade": "pnpm --filter @tailored-ai/arcade run arcade",
+    "arcade:import": "pnpm --filter @tailored-ai/arcade run arcade import",
+    "jam:loop": "bash scripts/game-jam-loop.sh"
   },
   "license": "MIT",
   "repository": {

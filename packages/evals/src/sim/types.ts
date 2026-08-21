@@ -188,10 +188,40 @@ export interface Policy {
   act(sim: Simulation): void;
 }
 
+/**
+ * What is running this simulation, for a simulation that has a reason to care.
+ *
+ * Almost none of them do, and that is the default assumption: a world whose
+ * behaviour changes with the model is not measuring the model. Nothing here may
+ * reach a prompt or a rule.
+ *
+ * It exists for provenance. The workshop publishes its artifact to a site that
+ * accumulates over months, and a board of a hundred games where nothing records
+ * *which model built which* cannot answer the question it exists to answer.
+ * That is a label on the output, not an input to the game.
+ *
+ * Absent under `bench` and `rehearse`, which run no model at all, so every
+ * field has to be optional at the point of use.
+ */
+export interface RunContext {
+  scenario: string;
+  model: string;
+  provider: string;
+  baseUrl: string;
+  gitSha?: string;
+  taiVersion?: string;
+  /** Sampling and budget settings: temperature, maxTokens, thinking, context window. */
+  modelMeta?: Record<string, unknown>;
+  /** role → agent name, from the scenario. */
+  roles?: Record<string, string>;
+}
+
 export interface SimulationOptions {
   seed: number;
   /** Simulated days. Short for an agent run, long for a baseline sweep. */
   days?: number;
+  /** What is running this. See {@link RunContext} — provenance only, never a rule. */
+  run?: RunContext;
   /** Simulation-specific knobs, passed through from the scenario. */
   [key: string]: unknown;
 }

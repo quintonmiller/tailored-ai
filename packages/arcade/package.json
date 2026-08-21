@@ -1,0 +1,27 @@
+{
+  "name": "@tailored-ai/arcade",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The jam arcade: a local site and database that hosts what the workshop simulation builds, and the review scores a person gives it. Zero TAI dependencies.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "arcade": "tsx src/cli.ts",
+    "serve": "tsx src/cli.ts serve",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.7.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.0.18"
+  }
+}

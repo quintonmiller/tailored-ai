@@ -578,6 +578,58 @@ after phase 1 improves the review rather than enabling it, and the cheapest
 possible answer to "is this worth more work" is available before any of the
 expensive parts.
 
+## The arcade, and what changed when the output got a home
+
+Full notes in [docs/arcade.md](./arcade.md); what matters here is what it changed
+about *this scenario*.
+
+The eval as originally built produced a directory and a markdown scorecard per
+run. That is the right shape for one run and the wrong shape for thirty, which
+is what running the jam on a loop produces — and every question worth asking of
+thirty runs (*did theme relevance improve*, *is this model reliably worse at
+polish than at gameplay*) is a query rather than a read.
+
+Three things followed.
+
+**Registration became part of the task.** The lead now has to write the page a
+judge reads before playing — title, pitch, genre, what it is, how to play — and
+a run that finishes a working game and never registers it is a visible, countable
+failure rather than an absence. `arcadeRegistered` is a metric; `announce()` says
+so once the jam is 70% gone and not before, because nagging from round one trains
+a team to read past the line.
+
+**The teams can see previous entries and their scores.** This is the change with
+the sharpest experimental consequence and it is a genuine confound: a team that
+can read what scored well last week is playing a different game from one that
+could not, so the imported backlog and everything after it are **not one series**.
+`arcadeBrowses` and `arcadeReads` record who actually looked, which is the only
+reason this is testable rather than merely true.
+
+**Six categories became five, and moved.** `polish` and `technical soundness`
+were never independent — the same cause produces both — and a judge asked to
+separate them writes the same sentence twice. They now live in
+`packages/arcade/src/categories.ts` as the single copy that the brief, the
+artifact scorecard and the site's review form all read; three hand-maintained
+lists would have drifted, and the failure mode is agents told they are judged on
+one thing and scored on another.
+
+### One bug worth writing down, because it happened twice
+
+The arcade store is a real database outside the repo. The first version opened it
+by default, and one test run wrote **forty-eight rows into it**, several
+published, because the suite constructs this simulation forty-eight times and
+`metrics()` publishes. Making the arcade opt-in — a `run` context from the
+harness, or an explicit home — fixed that, and then a *test of the opt-in itself*
+leaked seven more, because passing a `run` context is exactly what that test has
+to do.
+
+Twice is a pattern. The per-test home is the right knob and the wrong guard: it
+protects the tests that remember it, not the ones nobody has written yet. The
+guard is now a `beforeAll` in the test file that redirects `ARCADE_HOME` for
+everything in it. The general shape — *a default that writes outside the process
+is a default that will be triggered by something that never meant to* — is the
+same lesson `TAI_HOME` taught, arrived at from the other direction.
+
 ## What it cannot tell you
 
 - **Runs are not comparable with each other.** Two runs on the same brief differ

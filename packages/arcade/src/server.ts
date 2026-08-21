@@ -1,0 +1,315 @@
+/**
+ * The arcade's HTTP surface: a JSON API, a static site, and a second server
+ * that runs the games.
+ *
+ * ## Why two ports
+ *
+ * The games are written by a language model and then executed in the reviewer's
+ * browser. That is the whole point and it is also the only genuinely
+ * adversarial thing in this package. Served from the same origin as the API, a
+ * game could `fetch("/api/entries/its-own-slug/reviews", …)` and give itself
+ * fives — not because a model would, but because nothing would stop it, and a
+ * review database that can be written by its own subjects is worth nothing.
+ *
+ * So games get their own port. Same host, different origin, no CORS headers on
+ * the API, and the browser refuses the request for us. The alternative —
+ * `<iframe sandbox="allow-scripts">` without `allow-same-origin` — also works
+ * and costs more: it puts the game in an opaque origin where `localStorage`
+ * throws, and a game that saves a high score would crash on load through no
+ * fault of its own.
+ *
+ * Both servers bind to loopback. This is a local tool and there is no
+ * authentication anywhere in it.
+ */
+
+import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { dirname, join, normalize, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { CATEGORIES, GENRES } from "./categories.js";
+import { ArcadeStore } from "./store.js";
+
+const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "web");
+
+const MIME: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".md": "text/plain; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".ico": "image/x-icon",
+  ".zip": "application/zip",
+  ".wav": "audio/wav",
+  ".mp3": "audio/mpeg",
+};
+
+function mimeFor(path: string): string {
+  const dot = path.lastIndexOf(".");
+  return (dot >= 0 && MIME[path.slice(dot).toLowerCase()]) || "application/octet-stream";
+}
+
+function json(res: ServerResponse, status: number, body: unknown): void {
+  const text = JSON.stringify(body);
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": Buffer.byteLength(text),
+    "cache-control": "no-store",
+  });
+  res.end(text);
+}
+
+/**
+ * Serve one file from inside one directory, and refuse anything else.
+ *
+ * The containment check is on the *resolved* path rather than on the request
+ * string, because `%2e%2e/` and `a/../../b` both survive a textual check and
+ * neither survives this one.
+ */
+function sendFile(res: ServerResponse, root: string, relativePath: string, headers: Record<string, string> = {}): void {
+  const full = resolve(root, `.${normalize(`/${relativePath}`)}`);
+  if (full !== root && !full.startsWith(`${root}/`)) {
+    json(res, 403, { error: "outside the served directory" });
+    return;
+  }
+  if (!existsSync(full) || !statSync(full).isFile()) {
+    json(res, 404, { error: "not found" });
+    return;
+  }
+  res.writeHead(200, {
+    "content-type": mimeFor(full),
+    "content-length": statSync(full).size,
+    "cache-control": "no-cache",
+    ...headers,
+  });
+  createReadStream(full).pipe(res);
+}
+
+async function readBody(req: IncomingMessage, limit = 256 * 1024): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length;
+    if (size > limit) throw new Error("body too large");
+    chunks.push(chunk as Buffer);
+  }
+  if (chunks.length === 0) return {};
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+export interface ArcadeServer {
+  site: Server;
+  games: Server;
+  store: ArcadeStore;
+  url: string;
+  gamesUrl: string;
+  close(): Promise<void>;
+}
+
+export interface ServeOptions {
+  home?: string;
+  port?: number;
+  /** Defaults to `port + 1`. */
+  gamesPort?: number;
+  host?: string;
+  store?: ArcadeStore;
+}
+
+export function createArcadeServer(options: ServeOptions = {}): ArcadeServer {
+  const store = options.store ?? new ArcadeStore(options.home);
+  const host = options.host ?? "127.0.0.1";
+  const port = options.port ?? 4321;
+  const gamesPort = options.gamesPort ?? port + 1;
+  const gamesUrl = `http://${host}:${gamesPort}`;
+
+  const site = createServer((req, res) => {
+    handleSite(req, res, store, gamesUrl).catch((err) => {
+      json(res, 500, { error: String((err as Error).message ?? err) });
+    });
+  });
+  const games = createServer((req, res) => {
+    handleGame(req, res, store);
+  });
+
+  return {
+    site,
+    games,
+    store,
+    url: `http://${host}:${port}`,
+    gamesUrl,
+    close: () =>
+      new Promise<void>((done) => {
+        site.close(() => games.close(() => done()));
+      }),
+  };
+}
+
+export async function listen(server: ArcadeServer, options: ServeOptions = {}): Promise<ArcadeServer> {
+  const host = options.host ?? "127.0.0.1";
+  const port = options.port ?? 4321;
+  const gamesPort = options.gamesPort ?? port + 1;
+  await new Promise<void>((done, fail) => {
+    server.site.once("error", fail);
+    server.site.listen(port, host, () => done());
+  });
+  await new Promise<void>((done, fail) => {
+    server.games.once("error", fail);
+    server.games.listen(gamesPort, host, () => done());
+  });
+  return server;
+}
+
+async function handleSite(
+  req: IncomingMessage,
+  res: ServerResponse,
+  store: ArcadeStore,
+  gamesUrl: string,
+): Promise<void> {
+  const url = new URL(req.url ?? "/", "http://arcade.local");
+  const path = decodeURIComponent(url.pathname);
+  const q = url.searchParams;
+
+  if (path === "/api/health") {
+    return json(res, 200, { ok: true, home: store.home, entries: store.count({ includeDrafts: true }) });
+  }
+
+  if (path === "/api/config") {
+    return json(res, 200, {
+      categories: CATEGORIES,
+      genres: GENRES,
+      gamesUrl,
+      sorts: [
+        { key: "overall", label: "Overall score" },
+        ...CATEGORIES.map((c) => ({ key: c.key, label: c.name })),
+        { key: "recent", label: "Date added (newest)" },
+        { key: "oldest", label: "Date added (oldest)" },
+        { key: "reviews", label: "Most reviewed" },
+        { key: "title", label: "Title" },
+      ],
+    });
+  }
+
+  if (path === "/api/facets") return json(res, 200, store.facets());
+
+  if (path === "/api/entries" && req.method === "GET") {
+    const entries = store.list({
+      sort: q.get("sort") ?? "recent",
+      genre: q.get("genre") ?? undefined,
+      model: q.get("model") ?? undefined,
+      theme: q.get("theme") ?? undefined,
+      brief: q.get("brief") ?? undefined,
+      scenario: q.get("scenario") ?? undefined,
+      q: q.get("q") ?? undefined,
+      includeDrafts: q.get("drafts") === "1",
+      limit: q.get("limit") ? Number(q.get("limit")) : undefined,
+    });
+    return json(res, 200, { entries });
+  }
+
+  const detail = /^\/api\/entries\/([^/]+)$/.exec(path);
+  if (detail && req.method === "GET") {
+    const entry = store.entryBySlug(detail[1]);
+    if (!entry) return json(res, 404, { error: "no such game" });
+    const reviewer = q.get("reviewer") ?? "";
+    return json(res, 200, {
+      entry: store.scored(entry.id),
+      media: store.media(entry.id),
+      reviews: store.reviews(entry.id),
+      yourReview: reviewer ? (store.review(entry.id, reviewer) ?? null) : null,
+      playUrl: `${gamesUrl}/play/${entry.slug}/`,
+    });
+  }
+
+  const review = /^\/api\/entries\/([^/]+)\/reviews$/.exec(path);
+  if (review && req.method === "POST") {
+    const entry = store.entryBySlug(review[1]);
+    if (!entry) return json(res, 404, { error: "no such game" });
+    const body = (await readBody(req)) as { reviewer?: string; scores?: Record<string, unknown>; notes?: string };
+    try {
+      const saved = store.saveReview(entry.id, String(body.reviewer ?? ""), body.scores ?? {}, body.notes);
+      return json(res, 200, { review: saved, entry: store.scored(entry.id) });
+    } catch (err) {
+      return json(res, 400, { error: String((err as Error).message ?? err) });
+    }
+  }
+
+  const download = /^\/api\/entries\/([^/]+)\/download$/.exec(path);
+  if (download) {
+    const entry = store.entryBySlug(download[1]);
+    if (!entry?.downloadPath || !existsSync(entry.downloadPath)) {
+      return json(res, 404, { error: "no archive for this game" });
+    }
+    const data = readFileSync(entry.downloadPath);
+    res.writeHead(200, {
+      "content-type": "application/zip",
+      "content-length": data.length,
+      "content-disposition": `attachment; filename="${entry.slug}.zip"`,
+    });
+    return void res.end(data);
+  }
+
+  const shot = /^\/shots\/([^/]+)\/(.+)$/.exec(path);
+  if (shot) {
+    const entry = store.entryBySlug(shot[1]);
+    if (!entry) return json(res, 404, { error: "no such game" });
+    return sendFile(res, join(store.gameDir(entry.id), "shots"), shot[2]);
+  }
+
+  const doc = /^\/artifact\/([^/]+)\/(brief|manifest|JUDGING)$/.exec(path);
+  if (doc) {
+    const entry = store.entryBySlug(doc[1]);
+    if (!entry) return json(res, 404, { error: "no such game" });
+    const file = doc[2] === "manifest" ? "manifest.json" : `${doc[2]}.md`;
+    return sendFile(res, store.gameDir(entry.id), file);
+  }
+
+  if (path.startsWith("/api/")) return json(res, 404, { error: "no such endpoint" });
+
+  // Everything else is the single-page site. Unknown paths return the shell so
+  // a deep link survives a reload; the client routes on the hash.
+  const asset = path === "/" ? "index.html" : path.slice(1);
+  const candidate = resolve(webRoot, `.${normalize(`/${asset}`)}`);
+  if (existsSync(candidate) && statSync(candidate).isFile()) return sendFile(res, webRoot, asset);
+  return sendFile(res, webRoot, "index.html");
+}
+
+/**
+ * The games server. Serves one directory per published game and nothing else.
+ *
+ * The CSP is the second belt after the separate origin: `connect-src 'none'`
+ * means a game cannot make a network request at all, to us or to anywhere. It
+ * needs `unsafe-inline` and `unsafe-eval` because the artifacts are hand-written
+ * pages with inline scripts and that is what they are supposed to be.
+ */
+function handleGame(req: IncomingMessage, res: ServerResponse, store: ArcadeStore): void {
+  const url = new URL(req.url ?? "/", "http://arcade.local");
+  const path = decodeURIComponent(url.pathname);
+  const match = /^\/play\/([^/]+)(\/.*)?$/.exec(path);
+  if (!match) {
+    json(res, 404, { error: "not a game" });
+    return;
+  }
+  const entry = store.entryBySlug(match[1]);
+  if (!entry || !entry.filesPath || !existsSync(entry.filesPath)) {
+    json(res, 404, { error: "this game has no playable copy" });
+    return;
+  }
+  const rest = match[2] && match[2] !== "/" ? match[2] : `/${entry.entryFile || "index.html"}`;
+  sendFile(res, resolve(entry.filesPath), rest, {
+    "content-security-policy":
+      "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:; " +
+      "connect-src 'none'; " +
+      "form-action 'none'; " +
+      "base-uri 'none'; " +
+      "frame-ancestors http://127.0.0.1:* http://localhost:*",
+  });
+}

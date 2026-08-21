@@ -29,6 +29,8 @@ pnpm run eval:compare -- a.json b.json   # diff two benchmark runs
 pnpm run eval -- bench                   # sweep a simulation's baselines (no model calls)
 pnpm run eval -- prove                   # search a puzzle for soft-locks + calibrate its budget
 pnpm run eval -- watch                   # live view of a run: state, messages, tool calls, milestones
+pnpm run arcade                          # the game-jam arcade: site on :4321, games on :4322
+pnpm run jam:loop                        # run jams until stopped; each one adds a game to the arcade
 ```
 
 ## Project Structure
@@ -51,6 +53,7 @@ pnpm monorepo with first-party runtime packages, plugins, and docs:
 | `@tailored-ai/site` | `packages/site/` | Next.js docs site | private |
 | `@tailored-ai/integration-tests` | `packages/integration-tests/` | End-to-end CLI/plugin/server smoke scenarios | private |
 | `@tailored-ai/evals` | `packages/evals/` | Scenario benchmark: real invocation message → live model → score | private |
+| `@tailored-ai/arcade` | `packages/arcade/` | Local site + database hosting what the game jam builds, and the scores a person gives it | private, **no TAI deps** |
 
 - ESM project (`"type": "module"` in all packages)
 - Internal imports within a package use relative `.js` extensions (Node16 module resolution)
@@ -153,6 +156,7 @@ Deep notes on each subsystem live under [`docs/`](./docs/):
 | Self-hosting: Docker image, headless `tai init --non-interactive`, exposure/auth options, backups | [docs/self-hosting.md](./docs/self-hosting.md) |
 | Deploy targets (`tai deploy` seam): contract in core, registry in CLI, built-in `docker`, writing a cloud plugin | [docs/deploy-targets.md](./docs/deploy-targets.md) |
 | Benchmarking against a live model: scenarios, scoring, comparing runs, publishing to `/bench`, simulations (an objective instead of an answer, with non-model baselines), puzzles (proved solvable and proved soft-lock-free before a model runs), endless runs (no win condition at all — scored by what the organisation accumulated before it died, with a six-rung baseline ladder), and `eval watch` for a live view of a run | [docs/evals.md](./docs/evals.md) |
+| The arcade: the local site and database that hosts what the game jam builds — five review categories, per-reviewer scores, the four tools an agent gets, and why the games are served from a second port | [docs/arcade.md](./docs/arcade.md) |
 | The Endless Descent workstream: why an endless benchmark, what was decided and traded off, what it cannot tell you yet, and what to do next | [docs/endless-descent.md](./docs/endless-descent.md) |
 | The Endless Descent review: the measured pacing defect, viewer legibility, theme directions, and gameplay proposals (items, caches, scouting, zones) | [docs/endless-descent-improvements.md](./docs/endless-descent-improvements.md) |
 | Broadcast viewer: a watchable second page over the same trace, the scene/beat data it needs, the run scoreboard, and the observer-only narrator | [docs/broadcast-viewer.md](./docs/broadcast-viewer.md) |

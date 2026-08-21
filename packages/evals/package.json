@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.viewer.json"
   },
   "dependencies": {
+    "@tailored-ai/arcade": "workspace:*",
     "@tailored-ai/core": "workspace:*",
     "yaml": "^2.6.0",
     "zod": "^3.25.76"

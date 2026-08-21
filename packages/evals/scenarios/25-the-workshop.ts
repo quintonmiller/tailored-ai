@@ -92,9 +92,34 @@ const WORKSPACE =
   "yours; the rest you have to ask for. Say what a tool actually returned, in numbers, not in summary. " +
   VERIFYING;
 
-const hand = (description: string, instructions: string, channels: string) => ({
+/**
+ * One role's instructions: what the job is, which channels it is in, and the
+ * workspace rules everybody gets.
+ *
+ * `role` is kept alongside the assembled string because the control arms need
+ * the job without the channel graph, and the obvious way to get it back —
+ * splitting the assembled string on the first blank line — silently truncated
+ * the lead the moment its job description grew a second paragraph. A derived
+ * value that can be recovered by parsing is a value that will eventually be
+ * recovered wrongly.
+ */
+const hand = (description: string, role: string, channels: string) => ({
   description,
-  instructions: `${instructions}\n\n${channels}\n\n${WORKSPACE}`,
+  role,
+  instructions: `${role}\n\n${channels}\n\n${WORKSPACE}`,
+});
+
+/**
+ * The two fields a scenario's agent block is allowed to carry.
+ *
+ * `hand` keeps `role` for the control arms to rebuild from, and the scenario
+ * schema is strict — spreading the whole thing fails validation with
+ * `Unrecognized key(s) in object: 'role'`, which is exactly the right
+ * behaviour and the reason this is a function rather than a convention.
+ */
+const block = (h: { description: string; instructions: string }) => ({
+  description: h.description,
+  instructions: h.instructions,
 });
 
 /**
@@ -127,7 +152,13 @@ const LEAD = hand(
     "the five of you are building one thing rather than five. `design.md` is the team's memory and " +
     "`submission.md` is what a judge reads before they play — title, one-line pitch, controls, and how " +
     "it uses the theme. This conversation is not memory: it gets trimmed, and what you did not write " +
-    "down is gone.",
+    "down is gone.\n\n" +
+    "Registering the game on the arcade is also yours, and it is the one job that cannot be left to the " +
+    "last round: a game that is not registered is a game the judge never opens. `arcade_entry` shows " +
+    "what you have written and what is still missing; `arcade_register` writes it. You can also read " +
+    "what previous teams submitted and what they scored — `arcade_browse` and `arcade_read`. Do that " +
+    "early if you are going to; it is worth more before you have committed to a reading of the theme " +
+    "than after.",
   "You are in all three channels: `studio`, `build` and `craft`. Nobody else is. The builder and the " +
     "interface never speak to each other except in `studio`, and their two files have to fit together, " +
     "so anything one of them decides that the other needs is yours to carry.",
@@ -220,14 +251,14 @@ export default defineScenarios(
       options: { ...WORKSHOP_PLAY_OPTIONS },
     },
 
-    agent: { name: "lead", ...LEAD, extra: BRIDGE },
+    agent: { name: "lead", ...block(LEAD), extra: BRIDGE },
 
     config: {
       agents: {
-        builder: BUILDER,
-        interface: INTERFACE,
-        author: AUTHOR,
-        tester: TESTER,
+        builder: block(BUILDER),
+        interface: block(INTERFACE),
+        author: block(AUTHOR),
+        tester: block(TESTER),
       },
     },
 
@@ -243,9 +274,10 @@ export default defineScenarios(
             speaker: "quinton",
             body:
               "Jam starts now. The theme is in your instructions and in `brief.md`. Five of you, twenty " +
-              "rounds, and at the end I open whatever exists, play it, and score it on theme relevance, " +
-              "fun, visual craft, innovation, polish and technical soundness. Agree your reading of the " +
-              "theme before anybody writes code. This channel reaches everybody; the other two do not.",
+              "rounds, and at the end I open whatever exists on the arcade, play it, and score it on " +
+              "theme relevance, gameplay, visuals, originality and polish. Register your game on the " +
+              "arcade before you run out of rounds — I play what is on the site. Agree your reading of " +
+              "the theme before anybody writes code. This channel reaches everybody; the other two do not.",
           },
         ],
       },
@@ -328,15 +360,15 @@ export default defineScenarios(
     // session scope would be an unrelated second difference between the arms.
     agent: {
       name: "lead",
-      ...hand(LEAD.description, LEAD.instructions.split("\n\n")[0], "Everybody is in `studio`. There are no other channels."),
+      ...block(hand(LEAD.description, LEAD.role, "Everybody is in `studio`. There are no other channels.")),
     },
 
     config: {
       agents: {
-        builder: hand(BUILDER.description, BUILDER.instructions.split("\n\n")[0], "Everybody is in `studio`."),
-        interface: hand(INTERFACE.description, INTERFACE.instructions.split("\n\n")[0], "Everybody is in `studio`."),
-        author: hand(AUTHOR.description, AUTHOR.instructions.split("\n\n")[0], "Everybody is in `studio`."),
-        tester: hand(TESTER.description, TESTER.instructions.split("\n\n")[0], "Everybody is in `studio`."),
+        builder: block(hand(BUILDER.description, BUILDER.role, "Everybody is in `studio`.")),
+        interface: block(hand(INTERFACE.description, INTERFACE.role, "Everybody is in `studio`.")),
+        author: block(hand(AUTHOR.description, AUTHOR.role, "Everybody is in `studio`.")),
+        tester: block(hand(TESTER.description, TESTER.role, "Everybody is in `studio`.")),
       },
     },
 
@@ -409,6 +441,11 @@ export default defineScenarios(
         "`check_syntax`. You have one turn per round and a lot of rounds; treat each one as a small unit " +
         "of work rather than a burst, and use `design.md` to remember decisions across them — this " +
         "conversation gets trimmed, and what you did not write down is gone.\n\n" +
+        "Registering the game on the arcade is yours too, and it is the one job that cannot be left to " +
+        "the last round: a game that is not registered is a game the judge never opens. `arcade_entry` " +
+        "shows what you have written and what is still missing; `arcade_register` writes it. You can " +
+        "also read what previous teams submitted and what they scored — `arcade_browse` and " +
+        "`arcade_read`.\n\n" +
         WORKSPACE,
     },
 

@@ -21,6 +21,7 @@ export {
   createSimulation,
   listSimulations,
   type Policy,
+  type RunContext,
   registerSimulation,
   type SimEvent,
   type SimMetrics,

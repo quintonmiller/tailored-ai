@@ -1,0 +1,45 @@
+/**
+ * The arcade: where the game jam's output goes to be looked at.
+ *
+ * A local site plus the database behind it. Two very different clients read the
+ * same rows — a person with a browser who plays the games and scores them, and
+ * the next run's agents, who get a tool that queries this store directly rather
+ * than over HTTP. The second is why `ArcadeStore` is exported at all: an eval
+ * run must not depend on a server being up, and a simulation that had to poll a
+ * port would fail in a way that looked like the model's fault.
+ *
+ * Nothing here imports from `@tailored-ai/core`, and nothing should. The site
+ * is not part of the framework; it is a thing the benchmark writes to.
+ */
+
+export {
+  CATEGORIES,
+  CATEGORY_KEYS,
+  type Category,
+  cleanScore,
+  GENRES,
+  type Genre,
+  normaliseGenre,
+  overallScore,
+  round2,
+  SCORE_MAX,
+  SCORE_MIN,
+} from "./categories.js";
+export { type PublishResult, publishRun } from "./publish.js";
+export { type ArcadeServer, createArcadeServer, listen, type ServeOptions } from "./server.js";
+export {
+  ARCADE_SCHEMA_VERSION,
+  ArcadeStore,
+  arcadeHome,
+  type CategoryScore,
+  type Entry,
+  type EntryProvenance,
+  type ListQuery,
+  REGISTRATION_FIELDS,
+  type Registration,
+  type Review,
+  type ScoredEntry,
+  slugify,
+  sortEntries,
+} from "./store.js";
+export { crc32, type ZipFile, zip } from "./zip.js";

@@ -87,6 +87,7 @@ Options
   --concurrency <n>     Scenarios in flight (default 4)
   --filter <s>          Only scenarios whose id contains <s>, or whose category is <s>
   --difficulty <spec>   Only scenarios at these levels: 4, 4+, 2-3, 3,5. Composes with --filter.
+  --sim-option k=v      Override a simulation option, repeatable. e.g. brief=site, theme=two-halves
   --seed <n>            Base seed; repeat i uses seed+i (default 1000). --seed off to disable.
   --pinned-at <iso>     Instant every scenario resolves civil time against
                         (default a fixed Wednesday). --pinned-at off uses the host clock.
@@ -106,6 +107,7 @@ Options
   --api-key-env <VAR>   Name of the env var holding the key. Passed to the config as
                         \${VAR} so loadConfig interpolates it and it never reaches disk.
   --thinking-dialect <d> Provider dialect for reasoning, e.g. vllm
+  --context-tokens <n>  The deployment's context window. Recorded, never enforced.
   --plugins <a,b>       Provider plugins to load, e.g. @tailored-ai/provider-openai
   --provider <id>       Provider id the agent runs on (default openai_compatible)
   --judge               Enable LLM-judged assertions (off by default: noisy)
@@ -136,6 +138,21 @@ const TAIL_CHARS = 2000;
  * ceiling is a flag now, and this is only its default.
  */
 const MAX_SCENARIO_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * The version of the framework being benchmarked.
+ *
+ * From `packages/core/package.json`, which is the thing a run actually
+ * exercises — the evals package is private and permanently 0.0.0, so its own
+ * version would record nothing.
+ */
+function coreVersion(): string {
+  try {
+    return JSON.parse(readFileSync(join(packageRoot, "..", "core", "package.json"), "utf8")).version ?? "";
+  } catch {
+    return "";
+  }
+}
 
 function git(args: string[]): string {
   try {
@@ -170,7 +187,14 @@ function readInstanceDefaults(home: string): Partial<HarnessOptions> {
   return out;
 }
 
-type Flags = Record<string, string | boolean | undefined>;
+/**
+ * Parsed command-line values, as `applyTarget` sees them.
+ *
+ * `string[]` is here for repeatable flags like `--sim-option`. A target file
+ * only ever fills in a scalar it left out, and the guard below keeps it that
+ * way rather than growing a merge rule for arrays that nothing needs.
+ */
+type Flags = Record<string, string | string[] | boolean | undefined>;
 
 function applyTarget(values: Flags): void {
   const name = values.target;
@@ -318,7 +342,9 @@ async function cmdRun(argv: string[]): Promise<number> {
       timeout: { type: "string" },
       "thinking-dialect": { type: "string" },
       thinking: { type: "string" },
+      "context-tokens": { type: "string" },
       "provider-extra": { type: "string" },
+      "sim-option": { type: "string", multiple: true },
       plugins: { type: "string" },
       provider: { type: "string" },
       "api-key-env": { type: "string" },
@@ -375,6 +401,12 @@ async function cmdRun(argv: string[]): Promise<number> {
     providerId: values.provider,
     thinkingDialect: values["thinking-dialect"] ?? fromHome.thinkingDialect,
     thinking: values.thinking ?? fromHome.thinking,
+    contextTokens: values["context-tokens"] ? Number(values["context-tokens"]) : undefined,
+    // Read here rather than in the harness so the same values reach a run and
+    // the report it writes, and a simulation that records provenance cannot
+    // disagree with the report about which commit produced it.
+    gitSha: git(["rev-parse", "--short", "HEAD"]) || "unknown",
+    taiVersion: coreVersion(),
   };
 
   if (!options.model) {
@@ -384,6 +416,43 @@ async function cmdRun(argv: string[]): Promise<number> {
 
   const scenarioDir = values.scenarios ? resolve(values.scenarios) : join(packageRoot, "scenarios");
   const { scenarios, hash, fingerprints, sources } = await loadScenarios(scenarioDir, values.filter, values.difficulty);
+
+  /*
+   * `--sim-option brief=site`, the same shape `bench` has taken all along.
+   *
+   * The workshop's whole genericity rests on this: the task is a value rather
+   * than a scenario, and `25-the-workshop.ts` has said "the brief is a
+   * --sim-option, not a scenario" since it was written — which was not true of
+   * `run`, only of `bench`. A run could therefore only ever build the default
+   * brief, and nothing said so.
+   *
+   * Applied to the loaded scenario rather than passed alongside it, because the
+   * harness already merges `simulation.options` into the constructor and adding
+   * a second path for the same thing is how the two drift.
+   */
+  const simOptions: Record<string, unknown> = {};
+  for (const pair of (values["sim-option"] as string[] | undefined) ?? []) {
+    const at = pair.indexOf("=");
+    if (at < 0) {
+      console.error(`  --sim-option wants key=value, got "${pair}".`);
+      return 2;
+    }
+    const raw = pair.slice(at + 1);
+    simOptions[pair.slice(0, at)] = raw !== "" && Number.isFinite(Number(raw)) ? Number(raw) : raw;
+  }
+  if (Object.keys(simOptions).length) {
+    const usable = scenarios.filter((scenario) => scenario.simulation);
+    if (usable.length === 0) {
+      console.error("  --sim-option was given but no selected scenario runs a simulation.");
+      return 2;
+    }
+    for (const scenario of usable) {
+      scenario.simulation = {
+        ...scenario.simulation,
+        options: { ...(scenario.simulation?.options ?? {}), ...simOptions },
+      } as typeof scenario.simulation;
+    }
+  }
   if (!scenarios.length) {
     const narrowed = [
       values.filter ? `filter "${values.filter}"` : "",

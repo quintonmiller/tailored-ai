@@ -113,6 +113,26 @@ export interface HarnessOptions {
   /** Provider id the agent runs on. Defaults to `openai_compatible`. */
   providerId?: string;
   /**
+   * The deployment's context window, in tokens.
+   *
+   * Recorded, never enforced: nothing here reads it to decide anything. It is
+   * on the harness because it is a property of what is being benchmarked and
+   * there is nowhere else to learn it — an OpenAI-compatible `/v1/models` does
+   * not report it, and a served model's real window is a launch flag on the
+   * server rather than anything visible over the wire. So the operator says,
+   * and the run writes it down next to the result.
+   */
+  contextTokens?: number;
+  /**
+   * The commit and the framework version this run exercises.
+   *
+   * Supplied by the CLI, which already computes both for the report, so a
+   * simulation recording provenance and the report describing the same run
+   * cannot disagree about which code produced it.
+   */
+  gitSha?: string;
+  taiVersion?: string;
+  /**
    * Instant every scenario's civil-time reasoning resolves against, as an ISO
    * string. `null` runs on the host clock the way this used to.
    *
@@ -835,6 +855,37 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
         seed: simSeed,
         ...(scenario.simulation.days === undefined ? {} : { days: scenario.simulation.days }),
         ...(scenario.simulation.options ?? {}),
+        /*
+         * What is running this. Provenance, never a rule — see `RunContext`.
+         *
+         * A simulation is otherwise told nothing about the model, which is
+         * correct: a world whose behaviour changes with the model is not
+         * measuring the model. This is the label on the output rather than an
+         * input to the game, and it exists because the workshop publishes its
+         * artifact to a site that outlives the run. A board of a hundred games
+         * that cannot say which model built which answers nothing.
+         *
+         * Spread last so it cannot be shadowed by a scenario option, and read
+         * defensively by everything downstream — `bench` and `rehearse`
+         * construct simulations with no model at all.
+         */
+        run: {
+          scenario: scenario.id,
+          model: opts.model,
+          provider: opts.providerId ?? "openai_compatible",
+          baseUrl: opts.baseUrl,
+          gitSha: opts.gitSha ?? "",
+          taiVersion: opts.taiVersion ?? "",
+          modelMeta: {
+            temperature: opts.temperature,
+            maxTokens: opts.maxTokens,
+            maxToolRounds: opts.maxToolRounds,
+            ...(opts.thinking ? { thinking: opts.thinking } : {}),
+            ...(opts.thinkingDialect ? { thinkingDialect: opts.thinkingDialect } : {}),
+            ...(opts.contextTokens ? { contextTokens: opts.contextTokens } : {}),
+          },
+          roles: scenario.simulation.roles ?? {},
+        },
       })
     : undefined;
   let db: import("better-sqlite3").Database | undefined;

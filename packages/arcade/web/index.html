@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>The Arcade — game jam entries</title>
+    <link rel="stylesheet" href="/style.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#127918;</text></svg>"
+    />
+  </head>
+  <body>
+    <header class="top">
+      <a class="brand" href="#/">
+        <span class="brand-mark">▣</span>
+        <span>The&nbsp;Arcade</span>
+      </a>
+      <div class="who">
+        <label for="reviewer">reviewing as</label>
+        <input id="reviewer" type="text" placeholder="your name" autocomplete="off" spellcheck="false" />
+      </div>
+    </header>
+
+    <main id="view" aria-live="polite">
+      <p class="loading">Loading…</p>
+    </main>
+
+    <footer class="foot">
+      <span id="foot-count"></span>
+      <span class="foot-note">
+        Local only. <code>reviewing as</code> is a label, not a login — anyone with this port can review as anyone.
+      </span>
+    </footer>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

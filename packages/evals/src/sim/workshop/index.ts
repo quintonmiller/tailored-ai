@@ -40,17 +40,19 @@
  */
 
 import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Tool } from "@tailored-ai/core";
-import { agentTool, num, tool } from "../tool.js";
+import { agentTool, num, optional, tool } from "../tool.js";
 import {
+  type RunContext,
   registerSimulation,
   type SimEvent,
   type SimMetrics,
   type Simulation,
   type SimulationOptions,
 } from "../types.js";
+import { ArcadeDesk, openArcade } from "./arcade.js";
 import { type Brief, DEFAULT_BRIEF, getBrief, renderBrief, type WorkshopRole } from "./briefs.js";
 import { checkWorkspace, formatCheck } from "./check.js";
 import { formatPlaytest, playtest } from "./playtest.js";
@@ -61,6 +63,17 @@ import { LIMITS, Workspace, WorkspaceRefusal } from "./workspace.js";
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
 export const WORKSHOP_ROLES: WorkshopRole[] = ["lead", "builder", "interface", "author", "tester"];
+
+/**
+ * The version of the game being played, recorded on every arcade entry.
+ *
+ * Bump it whenever a change would make two runs incomparable — a new tool, a
+ * changed brief, a different round budget, a rule the agents can feel. The git
+ * sha is also recorded and is more precise; this is the coarse one, because
+ * "these forty entries played the same game" is the question a board actually
+ * gets asked and no human reads that off a sha.
+ */
+export const WORKSHOP_VERSION = "workshop-2-arcade";
 
 /**
  * The configuration the scenario plays, declared here so `bench` and `rehearse`
@@ -90,6 +103,28 @@ interface WorkshopOptions extends SimulationOptions {
   stamp?: string;
   /** The jam theme: an id from `themes.ts`, or free text to use verbatim. */
   theme?: string;
+  /**
+   * `off` runs the jam with no arcade at all: no entry, no tools, no publish.
+   *
+   * Note that `on` is not enough on its own — see the constructor. The arcade
+   * also needs either a `run` context or an explicit `arcadeHome`, so that
+   * merely constructing this simulation never writes to a database that
+   * outlives the process.
+   */
+  arcade?: string;
+  /** Where the arcade keeps its data. Tests point this at a temporary directory. */
+  arcadeHome?: string;
+  /**
+   * What is running this, handed down by the harness.
+   *
+   * A simulation is normally told nothing about the model — correctly, since
+   * nothing it does should depend on one. The arcade is the exception and it is
+   * not really an exception: the *page* records which model built the game,
+   * because a board of a hundred entries with no provenance cannot answer the
+   * one question it exists to answer. Absent under `bench` and `rehearse`,
+   * which have no model at all.
+   */
+  run?: RunContext;
 }
 
 /** A refusal an agent should read and act on, rather than a crash. */
@@ -147,6 +182,16 @@ export class WorkshopSimulation implements Simulation {
   private roundsWithNoWrite = 0;
   private writesThisRound = 0;
   private finalised = false;
+  /** The team's page on the arcade. Undefined when the arcade is off or unreachable. */
+  private readonly desk: ArcadeDesk | undefined;
+  /**
+   * The role that speaks for the team on the arcade.
+   *
+   * Whoever owns `submission.md`: the arcade page and that file are the same
+   * document written twice, and splitting them across two agents is how a game
+   * ends up pitched two different ways.
+   */
+  private readonly registrar: string;
 
   constructor(options: WorkshopOptions) {
     this.brief = getBrief(options.brief ?? WORKSHOP_PLAY_OPTIONS.brief);
@@ -185,6 +230,69 @@ export class WorkshopSimulation implements Simulation {
     // number and `metrics()` only carries numbers. This is how the report and
     // the review bundle find the artifact.
     this.events.push({ day: 0, kind: "artifact", message: this.root });
+
+    /*
+     * Open the team's page at the arcade.
+     *
+     * A draft, created now rather than when somebody first calls
+     * `arcade_register`, for two reasons. The team can read what it has (and
+     * has not) written from turn one, which is what makes "still empty:
+     * instructions" a thing they can act on. And a run that dies half-way still
+     * leaves a row saying it happened — the same argument as writing `brief.md`
+     * and the scorecard up here.
+     *
+     * The whole thing degrades to nothing. `openArcade` swallows a store it
+     * cannot open, and every use below is guarded: a locked database costs the
+     * team its submission page, not its run.
+     */
+    const run = options.run;
+    /*
+     * Two ways in, and neither of them is "by default".
+     *
+     * A real harness run (which is what a `run` context means) or an explicit
+     * home. Everything else — `bench`, `rehearse`, a unit test, a scenario
+     * loaded to read its brief — gets no arcade at all.
+     *
+     * This started as a default-on flag and lasted one test run: the suite
+     * constructs this simulation forty-eight times, and forty-eight rows landed
+     * in the real database, several of them *published*, because `metrics()`
+     * publishes and the tests call it. A convention that tests must remember to
+     * pass a temporary home is not a guard; it is a thing somebody forgets in
+     * the next test file. Writing to a store that outlives the process should
+     * take saying so.
+     */
+    const wanted = String(options.arcade ?? "on") !== "off" && (run !== undefined || options.arcadeHome !== undefined);
+    const store = wanted ? openArcade(options.arcadeHome) : undefined;
+    this.registrar = this.brief.layout.find((f) => f.path === "submission.md")?.owner ?? "lead";
+    this.desk = store
+      ? new ArcadeDesk(
+          store,
+          {
+            runId: basename(this.root),
+            scenario: run?.scenario ?? "",
+            brief: this.brief.id,
+            theme: this.theme.title,
+            themeId: this.theme.id,
+            rounds: this.horizon,
+            seed: options.seed ?? null,
+            artifactPath: this.root,
+            entryFile: this.brief.entry,
+            taiVersion: run?.taiVersion ?? "",
+            simVersion: WORKSHOP_VERSION,
+            gitSha: run?.gitSha ?? "",
+            model: run?.model ?? "",
+            provider: run?.provider ?? "",
+            baseUrl: run?.baseUrl ?? "",
+            modelMeta: run?.modelMeta ?? {},
+            credits: run?.roles ?? {},
+          },
+          // A second belt behind `tools()`, which is the real partition. This
+          // one only matters for a direct call — a test, or a policy — and for
+          // the solo arm, where every role resolves to the same agent and the
+          // per-role grant cannot distinguish anybody.
+          this.strictOwnership ? [this.registrar] : undefined,
+        )
+      : undefined;
   }
 
   /**
@@ -216,10 +324,33 @@ export class WorkshopSimulation implements Simulation {
       "",
       "Nothing about how much you wrote is scored. A small finished game beats a large unfinished one.",
       "",
+      ...this.arcadeBrief(),
       "---",
       "",
       renderBrief(this.brief),
     ].join("\n");
+  }
+
+  /**
+   * The paragraph about the site, or nothing when there is no site.
+   *
+   * Split out so the brief reads identically with the arcade off — a control
+   * arm that differs by an empty heading is a control arm that differs.
+   */
+  private arcadeBrief(): string[] {
+    if (!this.desk) return [];
+    return [
+      "## Submitting",
+      "",
+      "There is an arcade where finished games go. A judge browses it, plays what is there and scores it on",
+      "the categories above, and **a game that is not registered on it is a game nobody plays**. The entry is",
+      "the page a judge reads before pressing a key: a title, a one-line pitch, what kind of game it is, what",
+      "it is and how the theme shaped it, and how to play — which keys, what the goal is, how you lose.",
+      "",
+      `The ${this.registrar} holds the arcade tools and writes that page; the rest of you do not have them.`,
+      `If something about the game changes that the page would be wrong about, tell the ${this.registrar}.`,
+      "",
+    ];
   }
 
   get day(): number {
@@ -307,8 +438,15 @@ export class WorkshopSimulation implements Simulation {
         `${files.length} file${files.length === 1 ? "" : "s"}, ${lines} line${lines === 1 ? "" : "s"}; ${check}.`
       );
     }
+    // Said out loud only once it is late enough to matter. Repeating "not
+    // registered" from round one trains the team to read past the line, and the
+    // page cannot sensibly be written before there is a game to describe.
+    const submission =
+      this.desk && !this.desk.registered && fraction >= 0.7
+        ? " Nothing is registered on the arcade yet — a game nobody registers is a game nobody plays."
+        : "";
     return (
-      `Round ${this.tick + 1} of ${this.horizon} — theme ${this.theme.title}. ${phase} ` +
+      `Round ${this.tick + 1} of ${this.horizon} — theme ${this.theme.title}. ${phase}${submission} ` +
       `${seen}. ` +
       `${files.length} file${files.length === 1 ? "" : "s"}, ${lines} line${lines === 1 ? "" : "s"}; ${check}. ` +
       (remaining <= 3
@@ -424,29 +562,6 @@ export class WorkshopSimulation implements Simulation {
    * machinery is public, the hands on it are not.
    */
   sharedTools(): Tool[] {
-    /**
-     * Mark some of a tool's parameters as genuinely optional.
-     *
-     * `tool()` makes every declared parameter required, which is right for an
-     * instrument where all the arguments matter and wrong for `read_file`,
-     * whose `from`/`to` describe an optional window. Saying "Optional" in the
-     * description and `required` in the schema is worse than either alone: core
-     * validates against the schema and refuses the call *before* `execute`
-     * runs, so a model that read the description and did the correct thing got
-     * a refusal with no `call` event in the trace — the same shape as the
-     * string/number bug in `tool.ts`, from the other direction.
-     *
-     * Post-processing rather than a new parameter on `tool()`, because the
-     * shared helper is used by three simulations and this concerns one tool.
-     */
-    const optional = (built: Tool, ...keys: string[]): Tool => ({
-      ...built,
-      parameters: {
-        ...built.parameters,
-        required: (built.parameters.required as string[]).filter((k) => !keys.includes(k)),
-      },
-    });
-
     const shared: Tool[] = [
       tool(
         "list_files",
@@ -664,6 +779,26 @@ export class WorkshopSimulation implements Simulation {
     const byRole: Record<string, Tool[]> = {};
     for (const role of WORKSHOP_ROLES) byRole[role] = [];
     if (this.checksAreTesterOnly) byRole.tester = [this.checkTool()];
+
+    /*
+     * The arcade belongs to whoever writes the submission, and to nobody else.
+     *
+     * It started as a shared instrument on the theory that reading how other
+     * teams scored is useful to anybody. The first live run said otherwise: the
+     * *interface* agent — which cannot register anything — spent four of the
+     * team's six tool calls browsing the arcade and reading three previous
+     * entries, and the run wrote no files at all. A cheap, interesting, public
+     * tool is a tool every agent will call once, and "once" times five agents
+     * times twenty rounds is a large amount of sightseeing.
+     *
+     * Handed out per role rather than gated inside a shared tool, because the
+     * refusal is not the goal — four agents never seeing the tool at all is.
+     * A refusal still costs the call, the schema entry and the turn.
+     *
+     * In the solo arm every role maps to the same agent, so `simulationGrants`
+     * unions these into the one roster it has and the maker keeps them.
+     */
+    if (this.desk) byRole[this.registrar] = [...(byRole[this.registrar] ?? []), ...this.desk.tools()];
     return byRole;
   }
 
@@ -725,6 +860,30 @@ export class WorkshopSimulation implements Simulation {
         2,
       )}\n`,
     );
+
+    /*
+     * Put it on the site.
+     *
+     * After the manifest, because publishing copies that file, and inside the
+     * `finalised` guard so it happens exactly once. A run with no files is not
+     * published at all — a three-round smoke test leaves the same directory
+     * shape as a real jam, and a board padded with empty pages is worse than a
+     * shorter board.
+     *
+     * Wrapped, because this is the last thing a run does and the artifact is
+     * already safely on disk by now. A failure here should cost the entry, not
+     * the run's own report.
+     */
+    const files = this.workspace.list().filter((f) => !f.planned);
+    try {
+      this.desk?.publish(this.root, this.counters(), files.length > 0);
+    } catch (err) {
+      this.events.push({
+        day: this.tick,
+        kind: "arcade-failed",
+        message: `could not publish to the arcade: ${(err as Error).message}`,
+      });
+    }
   }
 
   /**
@@ -797,6 +956,11 @@ export class WorkshopSimulation implements Simulation {
       // they were actually told, and `-1` means nobody has ever asked.
       checkProblems: check.problems.length,
       lastCheckProblems: this.lastCheck?.problems ?? -1,
+      // Whether the team looked at the arcade, and whether it ever wrote its own
+      // page. `arcadeRegistered` is the one that matters: a finished game with
+      // no pitch is a page a judge cannot read, and it is a failure that
+      // survives to the site where it is visible.
+      ...(this.desk?.counts ?? { arcadeBrowses: 0, arcadeReads: 0, arcadeUpdates: 0, arcadeRegistered: 0 }),
       roundsSinceCheck: this.lastCheck === undefined ? this.tick : this.tick - this.lastCheck.atRound,
       distinctWriters: writers.size,
       roundsWithNoWrite: this.roundsWithNoWrite,

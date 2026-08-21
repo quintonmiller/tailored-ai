@@ -30,7 +30,15 @@
  * qualitative eval with no structure to the qualitative part decays into "seems
  * fine" within three runs — and five fixed questions make two reviews
  * comparable, which is the only kind of comparability this eval can have.
+ *
+ * The five questions themselves now live in `@tailored-ai/arcade`, because the
+ * site that stores the answers has to ask the same ones. They are re-exported
+ * here so this file stays the one place the jam is described.
  */
+
+import { CATEGORIES, type Category } from "@tailored-ai/arcade";
+
+export type { Category };
 
 export interface Theme {
   id: string;
@@ -105,68 +113,20 @@ export function pickTheme(requested: unknown, seed: number): Theme {
   return THEMES[index];
 }
 
-export interface Category {
-  key: string;
-  name: string;
-  /** What the judge is being asked. */
-  question: string;
-  /** What a 1 looks like and what a 5 looks like, so the scale means the same thing twice. */
-  low: string;
-  high: string;
-}
-
 /**
- * Six categories, scored 1–5 by a person.
+ * The categories, which live in the arcade rather than here.
  *
- * Theme relevance is first because it is the one this eval adds over "build
- * something", and the one least reachable by recall. The rest are the axes a
- * jam actually argues about, minus audio (the brief forbids sound) and minus
- * anything requiring more than one sitting to assess.
+ * They used to be defined in this file, and that stopped being tenable the
+ * moment a site started collecting the scores. The brief tells the agents what
+ * they are judged on, the scorecard in the artifact directory asks a reviewer
+ * those questions, and the arcade's review form records the answers — three
+ * surfaces, and if any of them drifts the whole record becomes uncomparable in
+ * a way nothing would report. So there is one list, and it is owned by the
+ * thing that stores the numbers.
+ *
+ * They went from six to five in the move; `@tailored-ai/arcade` says why.
  */
-export const JUDGING: Category[] = [
-  {
-    key: "theme",
-    name: "Theme relevance",
-    question: "Does the theme shape the mechanics, or is it decoration?",
-    low: "the theme appears in the title and nowhere else",
-    high: "remove the theme and the game stops making sense",
-  },
-  {
-    key: "fun",
-    name: "Fun",
-    question: "Is the core loop actually enjoyable for a minute?",
-    low: "you understand it and have no reason to continue",
-    high: "you lose and immediately press the key again",
-  },
-  {
-    key: "visual",
-    name: "Visual craft",
-    question: "Does it look considered, given that everything is drawn from shapes?",
-    low: "default colours, unaligned text, nothing framed",
-    high: "a coherent palette and a screen you would screenshot",
-  },
-  {
-    key: "innovation",
-    name: "Innovation",
-    question: "Is there an idea here you have not seen before?",
-    low: "a competent clone of something that exists",
-    high: "one mechanic you would steal",
-  },
-  {
-    key: "polish",
-    name: "Polish & completeness",
-    question: "Does it feel finished — title, play, lose, restart, no dead ends?",
-    low: "it starts mid-game, or a state you cannot leave",
-    high: "every state resolves and nothing needs explaining",
-  },
-  {
-    key: "technical",
-    name: "Technical soundness",
-    question: "Does it run clean and handle the edges?",
-    low: "console errors, or it breaks when you hold two keys",
-    high: "no errors, survives abuse, degrades sensibly",
-  },
-];
+export const JUDGING = CATEGORIES;
 
 /**
  * The scorecard, written into the artifact directory as an empty form.
@@ -189,6 +149,9 @@ export function renderScorecard(theme: Theme, rounds: number, entry: string): st
     "",
     "Score each 1–5. Nothing here is computed and nothing in the benchmark reads it back;",
     "the numbers exist so two reviews weeks apart mean the same thing.",
+    "",
+    "This form is the offline copy. The same five questions are on the game's arcade page, which",
+    "is where a score gets recorded and compared against every other entry — `pnpm run arcade`.",
     "",
     "| # | Category | 1 | 5 | Score | Notes |",
     "|---|---|---|---|---|---|",
