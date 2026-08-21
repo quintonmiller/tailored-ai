@@ -1059,8 +1059,17 @@ than deleted, because the answer is usually less interesting than the reason.
   plain strings verbatim, media-carrying content JSON-encoded, decoding
   validated strictly enough that a legacy message whose text merely looks like
   JSON is not misread. No `ALTER TABLE`, no migration, and the live deployment's
-  2000+ sessions never had to be touched. The retention sweep scans, and has not
-  hurt yet.
+  2000+ sessions never had to be touched.
+
+  The half of the question that was really about retention dissolved rather than
+  being answered. A `message_parts` table was wanted so "which sessions
+  reference this blob" could be a query instead of a scan — but the sweep asks a
+  different question than the one anticipated. Each `media` row carries
+  `last_seen_at`, refreshed on every put of the same content, so
+  `findExpiredMedia` selects on "unused since" with a `LIMIT`, and never walks
+  the message history at all. Content addressing is what makes that work: a
+  re-put of identical bytes is the same row, so re-use keeps a blob alive
+  without anything counting references to it.
 - **Is `media.onUnsupported: "degrade"` the right default?** *Yes, kept.* Both
   alternatives stayed reachable — `skip-rung` for someone who would rather empty
   a fallback chain than send a blinded request, `error` for someone who wants it
