@@ -139,6 +139,30 @@ async function renderBoard(params) {
     entries.length ? grid : el("p", { class: "empty", text: "Nothing here yet. Run the jam." }),
   );
   footCount.textContent = `${entries.length} game${entries.length === 1 ? "" : "s"}`;
+  void showInProgress();
+}
+
+/**
+ * "1 jam in progress", when one is.
+ *
+ * A jam takes about ninety minutes, so a board that has not changed since
+ * breakfast looks exactly like a loop that died at breakfast. A draft row
+ * exists from the moment a run starts, which makes the count free.
+ *
+ * Fetched after the board rather than with it: it is a footnote, and a board
+ * that waits on a footnote is a worse board.
+ */
+async function showInProgress() {
+  const health = await api("/api/health").catch(() => null);
+  if (!health?.inProgress) return;
+  const n = health.inProgress;
+  footCount.append(
+    el("span", {
+      class: "chip",
+      style: "margin-left:10px",
+      text: `${n} jam${n === 1 ? "" : "s"} in progress`,
+    }),
+  );
 }
 
 function card(entry) {

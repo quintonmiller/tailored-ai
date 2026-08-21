@@ -179,7 +179,14 @@ async function handleSite(
   const q = url.searchParams;
 
   if (path === "/api/health") {
-    return json(res, 200, { ok: true, home: store.home, entries: store.count({ includeDrafts: true }) });
+    const published = store.count();
+    const total = store.count({ includeDrafts: true });
+    // `total - published` is the number of jams currently running: a draft is
+    // created when a run starts and published when its rounds run out. Worth
+    // surfacing, because `jam:loop` runs for hours and a board that has not
+    // changed since breakfast is otherwise indistinguishable from a loop that
+    // died at breakfast.
+    return json(res, 200, { ok: true, home: store.home, entries: total, published, inProgress: total - published });
   }
 
   if (path === "/api/config") {
