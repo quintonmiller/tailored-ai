@@ -4,7 +4,7 @@ How images (and audio, video, PDFs, arbitrary files) get into a prompt, out of a
 tool, through the loop, and onto a screen — without breaking the text-only
 assumptions the runtime is built on today.
 
-Status: proposal. Nothing here is built.
+Status: **P1 shipped** (content parts + the media store). P2-P6 are proposals.
 
 ## Why now
 
@@ -686,15 +686,17 @@ how the next reader learns the wrong thing.
 
 Each ships alone and is useful alone.
 
-**P1 — The content model.** `ContentPart`, `MediaRef`, `mediaKind`,
-`messageText`, `MediaStore` + registry + disk implementation, the `media` table
-and its sweep. `Message.content` and `ToolResult.output` widened to their
-unions, the DB read/write encoders, and **the one-time sweep of the template
-sites the compiler cannot catch** (`compact.ts:177`, `loop.ts:1673`, two joins
-in `evals/`). Nothing produces parts yet, so behaviour is unchanged — but this
-is a **breaking type change, not a pure addition**, and it is the phase where
-every read site declares what it does about media. Land it alone, on green
-`typecheck` + `test`, before anything can produce a part.
+**P1 — The content model. ✅ Shipped.** `ContentPart`, `MediaRef`,
+`mediaKind`, `messageText`/`toolOutputText`, `MediaStore` + registry + disk
+implementation, magic-byte type resolution, the `media` table and its retention
+sweep. `Message.content` and `ToolResult.output` widened to their unions, the DB
+codec, and the template sites the compiler could not catch. Nothing produces
+media yet, so behaviour is unchanged.
+
+The union experiment described above was run for real before committing to a
+shape: a bare `ContentPart[]` arm produced **one** compile error in core, the
+object arm produced **25**. 53 tests were added (core 3129 → 3182), including a
+regression test asserting an image is not priced like its caption.
 *Tier 1 (core).*
 
 **P2 — Tools return media.** MCP's `renderContent` stops flattening and maps
