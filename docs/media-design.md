@@ -347,12 +347,36 @@ export interface ModelCapabilities {
 }
 ```
 
+Declared on the provider as **a function of the model id, not a constant**:
+
+```ts
+export interface AIProvider {
+  // …
+  /** What this provider accepts for a given model. Omit to mean text-only. */
+  capabilities?(model: string): ModelCapabilities;
+}
+```
+
+A static field would be unable to describe the provider we already ship.
+`provider-openai` registers a single provider id whose `OpenAIRouterProvider`
+dispatches **per call, against `params.model`**, to a Responses adapter
+(`inline`) or a Chat Completions adapter (`follow-up`). Its doc comment
+(`router.ts:1`) makes the general argument better than this one does:
+
+> which endpoint a request needs is a property of the *model*, and the model is
+> not fixed at build time: an agent can pin its own, a per-call override can name
+> another, and a fallback chain rung can carry a third. Choosing from
+> `defaultModel` when the provider is constructed would silently send an
+> overridden model to the wrong endpoint.
+
+Capability has exactly that shape. A constant would be a second `supportsTools`:
+a declaration that cannot express what is true, and so gets ignored.
+
 Resolution order, most specific first: `ModelEntry.capabilities` in config →
-`AIProvider.capabilities` → a conservative text-only default. Per-rung config
-matters because one provider serves models that differ — and because
-`provider-openai` ships both a Responses adapter (`inline`) and a Chat
-Completions adapter (`follow-up`). `ModelEntry` already has the precedent for
-per-rung overrides in `maxContextTokens`.
+`provider.capabilities(model)` → a conservative text-only default. `ModelEntry`
+already has the precedent for per-rung overrides in `maxContextTokens`, and
+config has to win because a local gateway serves whatever model was last loaded
+under a name core cannot introspect.
 
 **What a surface can show:**
 
