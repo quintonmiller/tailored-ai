@@ -25,8 +25,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { validateScenario } from "../schema.js";
 import { createSimulation, simulationPolicies } from "../sim/index.js";
 import { checkWorkspace } from "../sim/workshop/check.js";
-import { framesToShow } from "../sim/workshop/playtest.js";
 import type { WorkshopSimulation } from "../sim/workshop/index.js";
+import { framesToShow } from "../sim/workshop/playtest.js";
 import { JUDGING } from "../sim/workshop/themes.js";
 import { Workspace } from "../sim/workshop/workspace.js";
 
@@ -523,6 +523,63 @@ describe("the jam: a theme, a clock, and categories a person scores", () => {
       const s = sim({ brief: id });
       expect(s.workspace.ownerOf("submission.md"), `${id} has no submission.md`).toBe("lead");
     }
+  });
+});
+
+describe("the provided library", () => {
+  it("is in the workspace before anybody writes anything", () => {
+    const s = sim();
+    const provided = s.workspace.list().filter((f) => f.provided);
+    expect(provided.map((f) => f.path).sort()).toEqual(["lib/draw.js", "lib/fx.js", "lib/input.js", "lib/loop.js"]);
+    expect(provided.every((f) => f.lines > 0)).toBe(true);
+  });
+
+  it("is not counted as anything the team produced", () => {
+    // The load-bearing one. Charging ~580 lines of library to the team would
+    // make `linesInWorkspace` incomparable with every entry built before the
+    // library existed, and would spend a fifth of the byte budget on turn one.
+    const s = sim();
+    expect(s.metrics().filesPresent).toBe(0);
+    expect(s.metrics().linesInWorkspace).toBe(0);
+    expect(s.metrics().bytesInWorkspace).toBe(0);
+  });
+
+  it("refuses a write from anybody, including when ownership is off", async () => {
+    // Not an ownership rule between teammates: it is what makes the library the
+    // same fixed thing for every entry on the board.
+    const strict = await call(sim(), "write_file", { path: "lib/loop.js", content: "x" }, "builder");
+    expect(strict).toMatch(/came with the workspace/);
+    const shared = await call(sim({ ownership: "shared" }), "write_file", { path: "lib/fx.js", content: "x" }, "maker");
+    expect(shared).toMatch(/came with the workspace/);
+  });
+
+  it("can still be read", async () => {
+    const out = await call(sim(), "read_file", { path: "lib/loop.js", from: 1, to: 3 }, "builder");
+    expect(out).not.toMatch(/Refused/);
+    expect(out).toMatch(/lib\/loop\.js/);
+  });
+
+  it("appears in the listing without spending the budget", async () => {
+    const out = await call(sim(), "list_files", {}, "lead");
+    expect(out.split("\n")[0]).toMatch(/^0 files, 0 of/);
+    expect(out).toMatch(/lib\/loop\.js\s+\[provided\]/);
+  });
+
+  it("tells the team what it can call, not just that it exists", () => {
+    // Four files of source is not an API. Nobody should have to read 580 lines
+    // to discover there is a game loop.
+    const brief = sim().briefFor("builder") ?? "";
+    expect(brief).toMatch(/Loop\.start/);
+    expect(brief).toMatch(/Keys\.pressed/);
+    expect(brief).toMatch(/Draw\.orb/);
+    expect(brief).toMatch(/FX\.burst/);
+  });
+
+  it("leaves a brief with no library alone", () => {
+    // `tool` and `site` are from-scratch briefs and must stay that way.
+    const s = sim({ brief: "tool" });
+    expect(s.workspace.list().filter((f) => f.provided)).toEqual([]);
+    expect(s.briefFor("builder") ?? "").not.toMatch(/Loop\.start/);
   });
 });
 

@@ -547,6 +547,60 @@ load-bearing rather than rhetorical: core evicts a media part at 1,500 tokens a
 piece, so on a long jam the sentence is what remains of a frame nobody can see
 any more. Both are sent, which was the predicted end state.
 
+## They no longer write the game loop every time
+
+Added 2026-08-21, and it is the first change here aimed at the *games* rather
+than at the benchmark.
+
+Every jam before this one started from an empty directory and hand-wrote a
+fixed-timestep loop, keyboard edge detection, a particle emitter and a seeded
+random. Most wrote the naive version of each, because the correct version always
+loses to "make the collision work first" and then the jam ends. That is a few
+hundred lines a run spent on the part of a game nobody plays.
+
+So the arcade brief now ships `lib/` — four files, ~580 lines, present from
+round zero:
+
+| file | global | what it removes |
+|---|---|---|
+| `lib/loop.js` | `Loop` | a loop tied to the monitor: same game twice as fast at 120Hz |
+| `lib/input.js` | `Keys` | OS auto-repeat read as forty jumps, and a key held through a blur |
+| `lib/draw.js` | `Draw` | flat discs. `Draw.orb` is a shaded sphere in one call |
+| `lib/fx.js` | `FX` | the polish round having nothing to spend itself on |
+
+**It is not a framework and it is not optional-looking.** The brief carries a
+one-screen API summary rather than making anyone read 580 lines to discover
+there is a game loop, and it says outright that a game using none of it will
+lose to one that does.
+
+### The accounting is the part that had to be right
+
+A provided file is scenery, not output. It is excluded from `filesPresent`,
+`linesInWorkspace`, `bytesInWorkspace`, the 400,000-byte budget and the file
+cap — otherwise every measurement of what a team produced would be incomparable
+with the eight entries built before the library existed, and a fifth of the
+workspace budget would be spent before round one.
+
+Two consequences worth knowing:
+
+- **Writes are refused for everybody, in every arm**, including the solo one
+  where ownership is off. "You cannot edit the library" is not an ownership rule
+  between teammates; it is what makes the library the same fixed thing for every
+  entry on the board.
+- **`files.length > 0` decides whether to publish.** Counting provided files
+  there would publish an empty entry for a team that wrote nothing, since the
+  library is present in every run from round zero. That one is a real bug that
+  the accounting rule prevents rather than a tidiness argument.
+
+`WORKSHOP_VERSION` moves to `workshop-4-library`. Entries built before it played
+a different game and the board says so.
+
+**What this costs:** the scenario measures less engineering than it did. That is
+a deliberate trade, made because the arcade's purpose has shifted from "watch a
+team build software" toward "produce games worth playing". The from-scratch
+briefs (`tool`, `site`) are untouched and still declare no library, so the
+original game is still available as an arm.
+
 ### The builder was given eyes too
 
 Not part of the image work, but found by the same investigation. `playtest`

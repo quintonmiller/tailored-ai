@@ -41,6 +41,16 @@ export interface BriefFile {
   purpose: string;
 }
 
+/** A file the team is given, rather than one it writes. */
+export interface BriefLibraryFile {
+  /** Where it lands in the workspace, e.g. `lib/loop.js`. */
+  path: string;
+  /** Filename under `assets/workshop-lib/`. */
+  source: string;
+  /** One line, shown beside it in `list_files`. */
+  purpose: string;
+}
+
 export interface Brief {
   id: string;
   /** One line, used as the run's headline. */
@@ -54,6 +64,17 @@ export interface Brief {
   /** What a reviewer opens. Also what `check_syntax` looks for. */
   entry: string;
   layout: BriefFile[];
+  /**
+   * Code the team may call but not write, present from round zero.
+   *
+   * Absent means a from-scratch brief, which is what every entry before
+   * `workshop-4` played. See {@link Brief.libraryNotes} for the summary the
+   * agents actually read — nobody should have to read four files of source to
+   * find out a game loop exists.
+   */
+  library?: BriefLibraryFile[];
+  /** The API summary, injected into the brief. Kept short on purpose. */
+  libraryNotes?: string;
 }
 
 /**
@@ -67,7 +88,8 @@ export interface Brief {
 export const UNIVERSAL_CONSTRAINTS = [
   "Everything must run from local files with no network access at all. No CDN links, no fonts fetched " +
     "over http, no external images. Anything you need, you write.",
-  "Plain HTML, CSS and JavaScript only. No frameworks, no build step, no package manager, no imports " +
+  "Plain HTML, CSS and JavaScript only, apart from the provided `lib/`. No frameworks, no build step, " +
+    "no package manager, no imports " +
     "between files — scripts are classic <script> tags, loaded in order, sharing globals.",
   "You have two instruments and they answer different questions. `check_syntax` parses every file and " +
     "finds unclosed tags, syntax errors and references to files that do not exist; it cannot tell you " +
@@ -125,6 +147,42 @@ const briefs: Brief[] = [
           "The jam submission: title, one-line pitch, controls, and how it uses the theme. What a judge reads first.",
       },
     ],
+    library: [
+      { path: "lib/loop.js", source: "loop.js", purpose: "Fixed-timestep game loop. Global: Loop" },
+      { path: "lib/input.js", source: "input.js", purpose: "Keyboard state, arrows and WASD unified. Global: Keys" },
+      { path: "lib/draw.js", source: "draw.js", purpose: "Canvas shapes, gradients, text, meters. Global: Draw" },
+      { path: "lib/fx.js", source: "fx.js", purpose: "Particles, shake, flash, easing, seeded random. Global: FX" },
+    ],
+    libraryNotes: [
+      "`lib/` is already in the workspace. You can read it and call it; you cannot edit it, and you do not",
+      "need to. Load the four files **before** your own scripts in index.html. Everything below is a plain",
+      "global — no imports, no build step. This exists so you spend the jam on the game rather than on a",
+      "game loop, and a game that uses none of it will lose to one that does.",
+      "",
+      "  Loop.start(update, draw)     update(dt) runs at a constant 60Hz; draw() runs per frame",
+      "  Loop.time, Loop.fps, Loop.stop()",
+      "",
+      "  Keys.down('Left')            held now. Names: Left Right Up Down Action(space) Start(enter) Pause(esc)",
+      "  Keys.pressed('Action')       went down this step only — auto-repeat never counts",
+      "  Keys.axisX(), Keys.axisY()   -1, 0 or 1. Both directions held reads 0",
+      "  Keys.any()                   for 'press anything to start'",
+      "",
+      "  Draw.orb(ctx,x,y,r,colour)   a shaded sphere. The single biggest look-upgrade available to you",
+      "  Draw.glow(ctx,x,y,r,colour)  soft halo; draw it before the thing",
+      "  Draw.rect(ctx,x,y,w,h,radius,fill,stroke)      rounded rectangle",
+      "  Draw.polygon(ctx,x,y,r,sides,rotation,fill,stroke) / Draw.star(ctx,x,y,outer,inner,points,rot,fill)",
+      "  Draw.text(ctx,str,x,y,{size,weight,align,colour,shadow})",
+      "  Draw.bar(ctx,x,y,w,h,value01,fill,back)        a meter: health, heat, charge, time",
+      "  Draw.backdrop(ctx,w,h,topColour,bottomColour)  two-stop wash; beats a flat fill for free",
+      "  Draw.lighten(c,t) / Draw.darken(c,t) / Draw.alpha(c,a)",
+      "",
+      "  FX.burst(x,y,{count,colour,speed,spread,life,size,gravity})   particles",
+      "  FX.shake(amount)             6-10 is a hit, 20 is a death",
+      "  FX.flash(colour,amount)      screen wash that fades",
+      "  FX.update(dt) once per step; FX.begin(ctx) / world / FX.end(ctx) for the shake; FX.draw(ctx) after",
+      "  FX.ease.outBack(t) etc, FX.lerp(a,b,t), FX.clamp(n,lo,hi)",
+      "  FX.rng(seed) -> r(); r.range(lo,hi); r.int(lo,hi); r.pick(list)",
+    ].join("\n"),
   },
   {
     id: "tool",
@@ -254,6 +312,15 @@ export function renderBrief(brief: Brief): string {
     "Everybody can read every file. Only the named role can write to one.",
     "",
     ...brief.layout.map((f) => `- \`${f.path}\` — **${f.owner}** — ${f.purpose}`),
+    ...(brief.library?.length
+      ? [
+          "",
+          "## What you are given",
+          "",
+          ...brief.library.map((f) => `- \`${f.path}\` — provided, read-only — ${f.purpose}`),
+          ...(brief.libraryNotes ? ["", brief.libraryNotes] : []),
+        ]
+      : []),
     "",
     `The artifact is reviewed by opening \`${brief.entry}\` in a browser.`,
   ];

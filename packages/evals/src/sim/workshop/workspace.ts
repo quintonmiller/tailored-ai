@@ -64,6 +64,11 @@ export interface FileInfo {
   planned?: boolean;
   /** Which role is allowed to write it, when the brief says. */
   owner?: string;
+  /**
+   * Shipped with the workspace: readable, callable, and nobody's to write.
+   * Excluded from every count of what the team produced.
+   */
+  provided?: boolean;
 }
 
 export interface WorkspaceEdit {
@@ -167,6 +172,14 @@ export class Workspace {
   readonly filesRoot: string;
   private readonly meta = new Map<string, { lastWriter: string; lastRound: number }>();
   private readonly planned = new Map<string, { owner?: string; purpose: string }>();
+  /**
+   * Files that are already there in round zero and that nobody may write.
+   *
+   * Distinct from `planned`, which is a name with nothing behind it. A provided
+   * file has real bytes on disk from the start: the team reads it, calls it,
+   * and ships it, but cannot change it.
+   */
+  private readonly provided = new Map<string, { purpose: string }>();
   readonly edits: WorkspaceEdit[] = [];
 
   constructor(root: string) {
@@ -186,6 +199,30 @@ export class Workspace {
    */
   plan(path: string, spec: { owner?: string; purpose: string }): void {
     this.planned.set(normalisePath(path), spec);
+  }
+
+  /**
+   * Put a file in the workspace that the team may use but not author.
+   *
+   * The bytes land on disk before round one, so `read_file` and `check_syntax`
+   * see an ordinary file and a `<script src>` pointing at it resolves. What is
+   * *not* ordinary is the accounting: a provided file costs the team no part of
+   * its file count, its byte budget or its reported line count. It is scenery,
+   * not output — and counting a vendored library as work the team did would
+   * make every measurement of what a team produced incomparable with every run
+   * that came before the library existed.
+   */
+  provide(path: string, content: string, purpose: string): void {
+    const clean = normalisePath(path);
+    const target = this.absolute(clean);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, content, "utf8");
+    this.provided.set(clean, { purpose });
+  }
+
+  /** Is this one of the files that arrived with the workspace? */
+  isProvided(path: string): boolean {
+    return this.provided.has(normalisePath(path));
   }
 
   /** Who may write here, if anybody in particular. */
@@ -241,6 +278,7 @@ export class Workspace {
           lines: countLines(text),
           ...(info ? { lastWriter: info.lastWriter, lastRound: info.lastRound } : {}),
           ...(this.planned.get(rel)?.owner ? { owner: this.planned.get(rel)?.owner } : {}),
+          ...(this.provided.has(rel) ? { provided: true } : {}),
         });
       }
     };
@@ -260,9 +298,15 @@ export class Workspace {
     return this.planned.get(normalisePath(path))?.purpose;
   }
 
+  /**
+   * What the team has written, in bytes. Provided files are not the team's.
+   *
+   * Charging a vendored library against the workspace budget would spend a
+   * fifth of it before round one and then refuse a write nobody could explain.
+   */
   private totalBytes(): number {
     return this.list()
-      .filter((f) => !f.planned)
+      .filter((f) => !f.planned && !f.provided)
       .reduce((sum, f) => sum + f.bytes, 0);
   }
 
@@ -282,7 +326,7 @@ export class Workspace {
           `${LIMITS.totalBytes.toLocaleString("en-US")}. Delete something that is not needed.`,
       );
     }
-    if (!this.exists(path) && this.list().filter((f) => !f.planned).length >= LIMITS.files) {
+    if (!this.exists(path) && this.list().filter((f) => !f.planned && !f.provided).length >= LIMITS.files) {
       refuse(`the workspace already holds ${LIMITS.files} files, which is the limit. Work in the ones that exist.`);
     }
   }

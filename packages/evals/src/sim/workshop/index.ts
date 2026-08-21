@@ -39,11 +39,11 @@
  * the deliverable.
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type ContentPart, type MediaStore, mediaPart, textPart, type Tool } from "@tailored-ai/core";
+import { type ContentPart, type MediaStore, mediaPart, type Tool, textPart } from "@tailored-ai/core";
 import { agentTool, num, optional, tool } from "../tool.js";
 import {
   type RunContext,
@@ -74,7 +74,7 @@ export const WORKSHOP_ROLES: WorkshopRole[] = ["lead", "builder", "interface", "
  * "these forty entries played the same game" is the question a board actually
  * gets asked and no human reads that off a sha.
  */
-export const WORKSHOP_VERSION = "workshop-3-sighted";
+export const WORKSHOP_VERSION = "workshop-4-library";
 
 /**
  * The configuration the scenario plays, declared here so `bench` and `rehearse`
@@ -243,6 +243,7 @@ export class WorkshopSimulation implements Simulation {
     for (const file of this.brief.layout) {
       this.workspace.plan(file.path, { owner: file.owner, purpose: file.purpose });
     }
+    this.provideLibrary();
 
     // The brief on disk as well as in the prompt. Both matter, for different
     // reasons: the instructions are what an agent sees on turn one, and the file
@@ -427,7 +428,7 @@ export class WorkshopSimulation implements Simulation {
    * workspace is readable by all, so there is nothing in this line to leak.
    */
   announce(): string {
-    const files = this.workspace.list().filter((f) => !f.planned);
+    const files = this.workspace.list().filter((f) => !f.planned && !f.provided);
     const lines = files.reduce((sum, f) => sum + f.lines, 0);
     const check = this.lastCheck
       ? this.lastCheck.problems === 0
@@ -529,8 +530,54 @@ export class WorkshopSimulation implements Simulation {
     ].join("\n");
   }
 
+  /**
+   * Put the shared library in the workspace, if this brief asks for one.
+   *
+   * Every jam before this one hand-wrote a fixed-timestep loop, keyboard edge
+   * detection, a particle emitter and a seeded RNG, and most of them wrote the
+   * naive version of each because the correct version always loses to "make the
+   * collision work first". That is a few hundred lines per run spent on the
+   * part of a game nobody plays.
+   *
+   * Read from `assets/workshop-lib/` rather than embedded as strings so the
+   * files stay real files — lintable, diffable, and openable by whoever wants
+   * to know what the teams were given.
+   *
+   * Failure here is not fatal. A missing asset directory means a jam without a
+   * library, which is exactly the game the first eight entries played; taking
+   * the run down over it would be a worse outcome than running the older
+   * version of the same jam.
+   */
+  private provideLibrary(): void {
+    if (!this.brief.library?.length) return;
+    const dir = join(packageRoot, "assets", "workshop-lib");
+    for (const file of this.brief.library) {
+      try {
+        const source = readFileSync(join(dir, file.source), "utf8");
+        this.workspace.provide(file.path, source, file.purpose);
+      } catch (err) {
+        this.events.push({
+          day: this.tick,
+          kind: "library-missing",
+          message: `The provided file ${file.path} could not be read: ${(err as Error).message}`,
+        });
+      }
+    }
+  }
+
   /** Nobody may write here but its owner — unless ownership is off for this run. */
   private assertMayWrite(path: string, agent: string | undefined): void {
+    // Provided files are refused for everybody, in every arm, including the
+    // solo one where ownership is off: "you cannot edit the library" is not an
+    // ownership rule between teammates, it is what makes the library a fixed
+    // thing every entry on the board shares.
+    if (this.workspace.isProvided(path)) {
+      this.counts.ownershipRefusals += 1;
+      refuse(
+        `"${path}" came with the workspace and cannot be edited — it is the same for every team. ` +
+          "Read it and call it. If it does not do what you need, write your own in a file you own.",
+      );
+    }
     if (!this.strictOwnership) return;
     const owner = this.workspace.ownerOf(path);
     if (!owner) return;
@@ -563,11 +610,16 @@ export class WorkshopSimulation implements Simulation {
 
   private describeList(): string {
     const files = this.workspace.list();
-    const real = files.filter((f) => !f.planned);
+    // The team's own output. A provided file is listed — they have to know it
+    // is there — but never counted, or the budget line would read as though a
+    // fifth of the workspace were spent before round one.
+    const real = files.filter((f) => !f.planned && !f.provided);
     const rows = files.map((f) => {
       const owner = f.owner ? ` [${f.owner}]` : "";
       if (f.planned)
         return `  ${f.path.padEnd(18)}${owner}  (not created yet) — ${this.workspace.purposeOf(f.path) ?? ""}`;
+      if (f.provided)
+        return `  ${f.path.padEnd(18)}[provided]  ${f.lines} lines — ${this.workspace.purposeOf(f.path) ?? ""}`;
       const who = f.lastWriter ? ` last written by ${f.lastWriter} in round ${(f.lastRound ?? 0) + 1}` : "";
       return `  ${f.path.padEnd(18)}${owner}  ${f.lines} lines, ${f.bytes} bytes;${who || " unchanged"}`;
     });
@@ -970,7 +1022,10 @@ export class WorkshopSimulation implements Simulation {
      * already safely on disk by now. A failure here should cost the entry, not
      * the run's own report.
      */
-    const files = this.workspace.list().filter((f) => !f.planned);
+    // Provided files excluded deliberately: they are present in every run
+    // from round zero, so counting them would make `files.length > 0` true
+    // for a team that wrote nothing at all and publish an empty entry.
+    const files = this.workspace.list().filter((f) => !f.planned && !f.provided);
     try {
       this.desk?.publish(this.root, this.counters(), files.length > 0);
     } catch (err) {
@@ -1021,7 +1076,7 @@ export class WorkshopSimulation implements Simulation {
    * times per run and — worse — would mark the run finished on turn one.
    */
   private counters(): SimMetrics {
-    const files = this.workspace.list().filter((f) => !f.planned);
+    const files = this.workspace.list().filter((f) => !f.planned && !f.provided);
     const check = checkWorkspace(this.workspace);
     const writers = new Set(files.map((f) => f.lastWriter).filter(Boolean));
     return {
