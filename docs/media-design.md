@@ -203,7 +203,7 @@ The pattern is uniform: a declaration, overridable, consulted *before* the
 request. Nobody relies on the 400.
 
 OpenRouter's filter is worth stealing later. `AIProvider.listModels()` returns
-bare ids today (`interface.ts:129`), which is why the setup wizard offers
+bare ids today (`providers/interface.ts:129`), which is why the setup wizard offers
 free-text entry and no capability hint. A provider that can report modalities
 alongside ids would let the wizard stop offering a text-only model to an agent
 whose tools return screenshots. Out of scope here; noted so the `listModels`
@@ -277,8 +277,8 @@ the whole truth.
 Widening `content` to `string | ContentPart[] | null` is the more elegant model
 and is what the vendor APIs do. It is rejected here for a specific reason:
 `content` is read as a string in the compaction transcript builder
-(`compact.ts:162`), the token estimator (`loop.ts:573`), the rewind excerpt
-(`rewind.ts:80`), the repeat detector (`loop.ts:1836`), the SQLite writer, the
+(`compact.ts:177`), the token estimator (`loop.ts:561`), the rewind excerpt
+(`rewind.ts:80`), the repeat detector (`loop.ts:1655`), the SQLite writer, the
 SSE encoder, and the UI. A union turns all of those into a migration that must
 land in one commit. The sidecar lets each of them keep working on day one and be
 upgraded in the phase that cares about it — and any that are never upgraded
@@ -354,7 +354,7 @@ argues the case better than a new one could:
 
 Both properties are load-bearing here too. An agent that screenshots the same
 unchanged screen three times produces one blob and three identical projections,
-so `loop.ts:1856`'s repeat detector still fires. A UUID per capture would break
+so `loop.ts:1713`'s repeat detector still fires. A UUID per capture would break
 it silently, exactly as the comment warns `exec` already does.
 
 Registered through `Registry<MediaStoreFactory>` so a deployment can swap in S3
