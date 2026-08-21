@@ -114,8 +114,10 @@ to a tokenizer; the model gets no image from it. Prompt-templating libraries
 that offer placeholder syntax resolve them into positional blocks before the
 request goes out.
 
-But the *sidecar* half of the intuition is exactly right, and this design uses
-it twice:
+But the *detached-bytes* half of the intuition is exactly right, and this design
+uses it twice (note this is a different idea from the rejected sidecar *field*
+under **Content is one field, widened** — here the bytes sit outside the
+conversation, which is the good version):
 
 - **As storage.** `{ abc: [bytes] }` is a content-addressed store; `abc` is a
   hash. That is precisely the `file_id`/`fileUri` pattern, and it is what keeps
@@ -254,88 +256,140 @@ discriminated union, and it moves an exhaustiveness check from the compiler to a
 function. That is the price of not having core know the list of modalities. MCP
 made the opposite choice and has been adding block types ever since.
 
-### Content is a sidecar, not a widening
+### Content is one field, widened
 
-`Message.content` stays `string | null`. A new optional field carries the parts:
+`Message.content` carries the parts. There is no second field.
 
 ```ts
+/** The non-string arm is an OBJECT, not a bare array. See below — this is load-bearing. */
+export interface MessageContent {
+  parts: ContentPart[];
+}
+
 export interface Message {
   role: "system" | "user" | "assistant" | "tool";
-  content: string | null;   // text projection — always populated
-  parts?: ContentPart[];    // authoritative when present
+  content: string | MessageContent | null;
   toolCalls?: ToolCall[];
   toolCallId?: string;
   reasoning?: string;
 }
+
+/** The text projection, as a function. Not a stored field — nothing to drift. */
+export function messageText(content: string | MessageContent | null): string;
 ```
 
-**The invariant, which every consumer may rely on:** when `parts` is present it
-is authoritative for anything sent to a provider, and `content` is a lossy text
-projection of it, maintained by one helper. When `parts` is absent, `content` is
-the whole truth.
+A string still means what it always meant, so the ~95% text-only path is
+unchanged at every construction site, exactly as the vendor APIs allow
+(`content: string | ContentBlock[]`). Only *reads* change.
 
-Widening `content` to `string | ContentPart[] | null` is the more elegant model
-and is what the vendor APIs do. It is rejected here for a specific reason:
-`content` is read as a string in the compaction transcript builder
-(`compact.ts:177`), the token estimator (`loop.ts:561`), the rewind excerpt
-(`rewind.ts:80`), the repeat detector (`loop.ts:1655`), the SQLite writer, the
-SSE encoder, and the UI. A union turns all of those into a migration that must
-land in one commit. The sidecar lets each of them keep working on day one and be
-upgraded in the phase that cares about it — and any that are never upgraded
-degrade to a readable placeholder rather than to `[object Object]`.
+An earlier draft of this document proposed a sidecar — `content` kept as a
+`string` projection with a parallel `parts?: ContentPart[]`. That is rejected,
+and TAI having no external users is what makes rejecting it affordable: a
+one-time loud break is cheaper than a permanently duplicated field. The deeper
+reason is the failure mode. A sidecar fails *silently* — a consumer keeps
+reading `content`, renders the projection, and the image is invisible forever,
+with no error and no failing test. A break you must fix beats a bug you never
+see.
 
-Precedent: `reasoning?` was added exactly this way in #254 — persisted and
-rendered, deliberately not sent to providers, no consumer forced to change.
+**But a naive `string | ContentPart[]` does not give you that loud break, and
+the compiler proves it.** Widening `Message.content` to that union and running
+`tsc` over `packages/core` produces exactly **one** error. That is not good
+news. `string` and `Array` share `.length`, `.slice`, `.indexOf`, `.includes`
+and `.at`, so the read sites silently accept an array:
 
-The Vercel AI SDK draws the same line, and its reason for drawing it is the one
-that matters here. `UIMessage` is the persisted, transport-facing record and
-carries media as a **URL string**; `ModelMessage` is the per-call projection and
-carries a tagged data union. The split exists because a `Uint8Array` in the
-persisted type would not survive JSON serialization — so the layer that gets
-stored never holds bytes at all. `MediaRef` is that same choice: an id and a
-mime type, stored; bytes resolved at the edge, by whoever is about to need them.
+| Real call site | `string \| ContentPart[]` | `string \| MessageContent` |
+|---|---|---|
+| `(msg.content ?? "").length` — `estimateTokens`, `loop.ts:564` | **compiles** ⚠️ | errors ✓ |
+| `msg.content.slice(0, 300)` — trim log, `loop.ts:784` | **compiles** ⚠️ | errors ✓ |
+| `` `[${msg.role}]: ${msg.content}` `` — `compact.ts:177` | **compiles** ⚠️ | **compiles** ⚠️ |
+| assign to `string \| null` — `saveMessage`, `queries.ts:69` | errors ✓ | errors ✓ |
 
-Where TAI differs, deliberately: our two layers are *record* (`parts`) and
-*text projection* (`content`), not record and wire-projection. The wire
-projection is computed per provider inside the adapter and never stored, because
-storing it would mean storing it per rung of a fallback chain.
+Under the array union, `estimateTokens` would return *the number of parts*
+instead of a character count, and the compaction transcript would hand
+`[object Object]` to the summarizer. Both silently, in the hot path.
 
-The risk of a sidecar is drift, and the risk of an optional field is that it
-becomes decorative. Both are addressed under *Not another dead flag*.
+Wrapping the arm in an object fixes it, because `{ parts }` has no `.length` and
+no `.slice`. Of 47 `Message.content` read sites repo-wide, roughly 40 already
+break loudly under either union (`.replace`, `.trim`, assignment to `string`);
+the object wrapper converts most of the remaining silent ones. **Only bare
+template interpolation stays silent under both** — a finite, greppable set
+(`compact.ts:177`, `loop.ts:1673`, and two joins in `evals/`), swept once by
+hand in P1 rather than trusted to the compiler.
 
-### `ToolResult` gains parts, keeps `output`
+This is a TypeScript-specific tax. Anthropic and OpenAI can use a bare
+`string | Block[]` because JSON has no structural typing to fool. We cannot.
+
+Precedent for the *helper*, not for a second field: `messageText()` is a
+function over one source of truth, so unlike a stored projection it cannot go
+stale. Every site that legitimately only wants text — logging, excerpts, the
+compaction transcript, FTS — calls it and says so at the call site.
+
+The Vercel AI SDK reaches a related conclusion from the persistence side.
+`UIMessage` is the stored, transport-facing record and carries media as a
+**URL string**; `ModelMessage` is the per-call projection carrying a tagged data
+union. The split exists because a `Uint8Array` in the persisted type would not
+survive JSON serialization — the stored layer never holds bytes. `MediaRef` is
+that same choice: an id and a mime type stored, bytes resolved at the edge.
+
+**Storage consequence.** `messages.content` is a single `TEXT` column and stays
+one column — the objection to a duplicated field applies to the API, and
+denormalizing storage to dodge an API problem would be the same mistake wearing
+a hat. Writes JSON-encode the object arm and store the string arm verbatim;
+reads try `JSON.parse` and accept the result only if it strictly matches
+`{ parts: [...] }` with a known `type` on every element, falling back to "this
+is a plain string". Existing rows therefore need **no rewrite** — which matters,
+because the live deployment's `agent.db` holds 2000+ sessions and a bulk
+`UPDATE` over its `messages` table is a risk this design does not need to take.
+The one ambiguity is a legacy message whose literal text is a valid parts array;
+strict shape validation makes that vanishingly unlikely, and it is recorded here
+rather than hidden.
+
+### `ToolResult.output` is widened the same way
 
 ```ts
+export interface ToolOutput {
+  parts: ContentPart[];
+  /** Machine-readable result, when the tool has one. Mirrors MCP structuredContent. */
+  structured?: unknown;
+}
+
 export interface ToolResult {
   success: boolean;
-  output: string;           // text projection — always populated
-  parts?: ContentPart[];    // authoritative when present
-  structured?: unknown;     // JSON result, when the tool has one
+  output: string | ToolOutput;
   error?: string;
   endsTurn?: boolean;
   endsTurnReason?: string;
 }
 ```
 
-Additive by necessity: **40 non-test files declare a `ToolResult` return type,
-and they build it from 398 `success: true|false` literals across 42 files**
-(counted on `main`). A required field would touch every one; an optional one
-touches none.
+Same shape, same reasoning, same object wrapper. A plain string still means
+what it always meant, so **none of the 398 `success: true|false` literals across
+42 files changes** — construction is untouched, because `string` remains a
+member of the union. What changes is the far smaller set of *read* sites:
+`capToolOutput`, the repeat detector's `results.map(r => r.output).join("|")`,
+`executeToolCall`, and the seven `onToolResult` sinks. Those are the places that
+must decide what a tool's media means, which is exactly where the decision
+belongs.
 
-`structured` answers the "JSON" half of the brief. It mirrors MCP's
-`structuredContent`, which pairs a machine-readable payload with the text the
-model reads. It is not sent to the model as a separate channel — models take
-text and media — but it is what event subscribers, the UI, and workflow steps
-should read instead of re-parsing `output`.
+`structured` answers the "JSON" half of the brief and lives inside `ToolOutput`
+rather than beside it — a tool returning structured data is returning a
+structured output, not a string with an attachment. It is not sent to the model
+as a separate channel (models take text and media); it is what event
+subscribers, the UI, and workflow steps read instead of re-parsing prose.
 
-The Vercel AI SDK models the same three-way split as a tagged union on the
-result itself — `output: {type:'json', value}` for a structured result,
-`output: {type:'content', value: [...]}` for a multi-part one — rather than as
-sibling fields. That is the cleaner shape and was not chosen here for the same
-reason `content` is not widened: `output` is a `string` that 40 files already
-build and the loop already caps, hashes, and logs. Sibling fields are what
-"additive" costs. If `ToolResult` is ever redesigned wholesale, the tagged union
-is the better target.
+The Vercel AI SDK goes one step further, making the whole thing a tagged union
+— `output: {type:'json', value}` / `{type:'content', value:[...]}`. That is
+arguably cleaner still, and it was considered. It is not taken because the tag
+buys nothing here that the `string | ToolOutput` union does not already give,
+while costing all 398 construction sites. This is the one place the "no external
+users, so break it" licence is deliberately *not* spent: the churn is large, the
+benefit is aesthetic, and `endsTurn` would have to move too.
+
+`onToolResult?: (name: string, result: string)` becomes
+`(name: string, result: string | ToolOutput)`. Seven consumers — server SSE, CLI,
+task-watcher, cron, rooms watcher, autopilot, exploratory — each break loudly
+and each has a real decision to make about rendering. That is the break working
+as intended.
 
 ### The media store
 
@@ -632,10 +686,15 @@ how the next reader learns the wrong thing.
 
 Each ships alone and is useful alone.
 
-**P1 — The content model.** `ContentPart`, `MediaRef`, `mediaKind`, the
-projection helpers, `MediaStore` + registry + disk implementation, the `media`
-table and its sweep. `parts` added to `Message` and `ToolResult`. Nothing
-produces or consumes parts yet. Pure addition; no behaviour change.
+**P1 — The content model.** `ContentPart`, `MediaRef`, `mediaKind`,
+`messageText`, `MediaStore` + registry + disk implementation, the `media` table
+and its sweep. `Message.content` and `ToolResult.output` widened to their
+unions, the DB read/write encoders, and **the one-time sweep of the template
+sites the compiler cannot catch** (`compact.ts:177`, `loop.ts:1673`, two joins
+in `evals/`). Nothing produces parts yet, so behaviour is unchanged — but this
+is a **breaking type change, not a pure addition**, and it is the phase where
+every read site declares what it does about media. Land it alone, on green
+`typecheck` + `test`, before anything can produce a part.
 *Tier 1 (core).*
 
 **P2 — Tools return media.** MCP's `renderContent` stops flattening and maps
@@ -704,15 +763,29 @@ Also required:
 
 ## What this breaks
 
-Little, by construction — but not nothing.
+Deliberately, and mostly at compile time. TAI has no external consumers of these
+types, so a loud one-time break is the cheap option and a permanently awkward
+API is the expensive one. The list below is what P1 signs up for.
 
+- **Every read of `Message.content` and `ToolResult.output`** must decide what it
+  does about media. 47 `Message.content` read sites repo-wide; ~40 fail to
+  compile immediately, and the object-wrapped union converts most of the rest.
+  Construction sites are untouched, since `string` stays in both unions.
+- **Four sites the compiler will not catch**, because bare template
+  interpolation of an object is legal TypeScript: `compact.ts:177`,
+  `loop.ts:1673`, and two joins in `evals/`. They are listed here because a
+  known finite list swept by hand is honest, and "the compiler has our back" is
+  not. P1 fixes them explicitly and a test asserts `messageText` is used.
+- **`onToolResult`'s signature**, and its seven consumers.
 - **Token estimation is wrong for media.** `estimateTokens` is
-  `content.length / 4`; image tokens are non-linear in bytes. A part's
+  `content.length / 4`; image tokens are non-linear in bytes. A part's text
   projection is short, so the estimate *undercounts* badly, and undercounting
   makes the loop over-fill the window rather than under-fill it. P3 must add a
   per-part estimate — a declared per-image cost is enough to stop the estimate
-  being a fiction.
-- **Compaction sees projections, not images.** `compactSession` builds a text
+  being a fiction. Note this one is *already* latent: under a bare
+  `ContentPart[]` union it would have silently become "number of parts", which
+  is how this design ended up object-wrapped.
+- **Compaction sees text, not images.** `compactSession` builds a text
   transcript; a compacted conversation loses its pictures. Correct for now
   (summarizing images is a different feature) but it means compaction is
   irreversibly lossy in a new way, and the tombstone work in
