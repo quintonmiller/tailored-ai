@@ -29,10 +29,13 @@ import {
 } from "./db/runtime-settings-queries.js";
 import { type EventBus, TypedEventBus } from "./events.js";
 import { HttpRouteRegistry } from "./http/registry.js";
+import type { MediaStore } from "./media/interface.js";
+import { listMediaStoreFactories, resolveMediaStore } from "./media/registry.js";
 import type { MemoryBackend } from "./memory/interface.js";
 import { resolveMemoryBackend } from "./memory/registry.js";
 import { NotificationGate } from "./notifications/dedup.js";
 import { type ProjectContext, type ProjectRef, readProjectFile } from "./projects/resolve.js";
+import { DEFAULT_MEDIA_POLICY, type MediaPolicy } from "./providers/capabilities.js";
 import type { AIProvider } from "./providers/interface.js";
 import { AgentRegistry } from "./resources/agent.js";
 import { migrateConfigAgentsToResources, populateAgentsFromDisk } from "./resources/agent-migration.js";
@@ -107,6 +110,16 @@ export interface RuntimeOptions {
 export class AgentRuntime {
   readonly configPath: string;
   readonly db: Database.Database;
+  /**
+   * Where media lives, built on first use from `media.*`.
+   *
+   * Lazy rather than constructed in the constructor because most deployments
+   * never see a picture, and building it eagerly would create a directory and
+   * a store object for a feature nobody used. Rebuilt on config reload through
+   * {@link AgentRuntime.resetMediaStore}.
+   */
+  private _mediaStore?: MediaStore;
+  private _mediaStoreGeneration = -1;
   readonly contextDir: string;
   readonly kbDir: string;
 
@@ -1123,6 +1136,50 @@ export class AgentRuntime {
    * Build a standard AgentLoopOptions from the current runtime state.
    * Callers can spread additional fields (onToolCall, onToolResult, etc.) on top.
    */
+  /**
+   * The configured media store, or undefined when the configured id is not
+   * registered.
+   *
+   * An unregistered id is reported, not silently replaced with the disk store:
+   * a deployment that asked for S3 and got a local directory would look like it
+   * was working while writing blobs somewhere nobody is watching.
+   */
+  getMediaStore(): MediaStore | undefined {
+    const generation = this._generation;
+    if (this._mediaStore && this._mediaStoreGeneration === generation) return this._mediaStore;
+    const media = this._config.media ?? {};
+    const store = resolveMediaStore(
+      {
+        db: this.db,
+        options: {
+          ...(media.options ?? {}),
+          ...(media.dir !== undefined ? { dir: media.dir } : {}),
+          ...(media.maxBytes !== undefined ? { maxBytes: media.maxBytes } : {}),
+          ...(media.urlBase !== undefined ? { urlBase: media.urlBase } : {}),
+        },
+      },
+      media.store,
+    );
+    if (!store) {
+      console.warn(
+        `[runtime] media.store "${media.store}" is not registered — media will not be stored. ` +
+          `Registered: ${listMediaStoreFactories().join(", ") || "(none)"}`,
+      );
+      return undefined;
+    }
+    this._mediaStore = store;
+    this._mediaStoreGeneration = generation;
+    return store;
+  }
+
+  /** How this deployment handles media a model has not agreed to take. */
+  getMediaPolicy(): MediaPolicy {
+    return {
+      onUnsupported: this._config.media?.onUnsupported ?? DEFAULT_MEDIA_POLICY.onUnsupported,
+      onUnknown: this._config.media?.onUnknown ?? DEFAULT_MEDIA_POLICY.onUnknown,
+    };
+  }
+
   buildLoopOptions(opts: {
     session: Session;
     agentName?: string;
@@ -1212,6 +1269,8 @@ export class AgentRuntime {
       thinking: resolved.thinking,
       maxTokens: resolved.maxTokens,
       providerExtra: resolved.providerExtra,
+      mediaStore: this.getMediaStore(),
+      mediaPolicy: this.getMediaPolicy(),
       contextDir: this.contextDir,
       contextWarnTokens: config.context?.warnTokens,
       agentContextDir: resolved.contextDir,
@@ -1391,6 +1450,7 @@ export class AgentRuntime {
         maxTokens: entry.maxTokens,
         providerExtra: entry.providerExtra,
         maxContextTokens: entry.maxContextTokens,
+        capabilities: entry.capabilities,
       });
     }
 

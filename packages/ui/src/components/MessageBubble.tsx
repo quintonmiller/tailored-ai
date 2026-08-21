@@ -1,14 +1,11 @@
-import { marked } from "marked";
 import { useMemo, useState } from "react";
 import type { MemoryRecall, Message, ToolLogEntry, ToolLogToolEntry } from "../api";
+import { contentMedia, contentText, type MessageContent } from "../lib/content.js";
+import { renderMarkdown } from "../lib/markdown.js";
 import { AskCard, extractAsks } from "./asks";
 import { ChipBody } from "./chips";
+import { MediaAttachments } from "./MediaAttachments.js";
 import { extractProposals, ProposalCard } from "./proposals";
-
-marked.setOptions({
-  breaks: true,
-  gfm: true,
-});
 
 const TRUNCATE_LENGTH = 500;
 const COMPACT_TRUNCATE_LENGTH = 120;
@@ -81,7 +78,13 @@ export function MessageBubble(props: { message: Message }) {
 
   // User message
   if (role === "user") {
-    return <div className="message-bubble user">{content ?? ""}</div>;
+    const media = contentMedia(content);
+    return (
+      <div className="message-bubble user">
+        {contentText(content)}
+        <MediaAttachments media={media} />
+      </div>
+    );
   }
 
   // System — hidden
@@ -194,8 +197,13 @@ function formatElapsed(seconds: number): string {
   return s > 0 ? `${m}m ${s}s` : `${m}m`;
 }
 
-function ToolResultBubble(props: { content: string; compact?: boolean }) {
-  const { content, compact } = props;
+function ToolResultBubble(props: { content: string | MessageContent; compact?: boolean }) {
+  const { compact } = props;
+  // The payoff for the whole media feature on this surface: a tool that
+  // returned a screenshot shows the screenshot, rather than the line of text
+  // that used to stand in for it.
+  const content = contentText(props.content);
+  const media = contentMedia(props.content);
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -221,6 +229,7 @@ function ToolResultBubble(props: { content: string; compact?: boolean }) {
   return (
     <div className={`message-bubble tool${compact ? " tool-compact" : ""}`}>
       <pre className="tool-result-content">{displayContent}</pre>
+      <MediaAttachments media={media} compact={compact} />
       {(isTruncated || content.length > 100) && (
         <div className="tool-result-actions">
           {isTruncated && (
@@ -252,18 +261,21 @@ function truncateCompact(content: string): string {
   return content;
 }
 
-function AssistantBubble(props: { content: string }) {
+function AssistantBubble(props: { content: string | MessageContent }) {
+  const text = contentText(props.content);
+  const media = contentMedia(props.content);
   const { stripped, proposals, asks } = useMemo(() => {
-    const a = extractAsks(props.content);
+    const a = extractAsks(text);
     const p = extractProposals(a.content);
     return { stripped: p.content, proposals: p.proposals, asks: a.asks };
-  }, [props.content]);
-  const html = useMemo(() => marked.parse(stripped) as string, [stripped]);
+  }, [text]);
+  const html = useMemo(() => renderMarkdown(stripped), [stripped]);
 
   return (
     <>
       <div className="message-bubble assistant markdown-body">
         <ChipBody html={html} />
+        <MediaAttachments media={media} />
       </div>
       {asks.map((a, i) => (
         <AskCard key={`ask-${i}`} ask={a} />

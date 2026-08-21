@@ -1,4 +1,5 @@
 import { assembleBriefingContext, type BriefingRuntime } from "./briefing.js";
+import { messageText } from "./content/types.js";
 
 /** A set of generated chat suggestions plus the timestamp they were produced. */
 export interface Suggestions {
@@ -61,7 +62,7 @@ export async function generateSuggestions(
   });
 
   return {
-    suggestions: parseSuggestions(response.content ?? "", count),
+    suggestions: parseSuggestions(messageText(response.content), count),
     generatedAt: Date.now(),
   };
 }

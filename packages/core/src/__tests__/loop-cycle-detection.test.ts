@@ -208,3 +208,116 @@ describe("a turn stopped for cycling still gets asked for an answer", () => {
     expect(withheldCalls).toBe(1);
   });
 });
+
+/**
+ * Media-carrying tool results must not all look like the same result.
+ *
+ * The round signature is built by joining each result's `output`. Since P1 that
+ * field is `string | ToolOutput`, and `Array.prototype.join` stringifies the
+ * object arm to `[object Object]` — so a tool returning *different* pictures
+ * produced *identical* signatures, and the detector cut the turn short claiming
+ * no progress. A browser agent screenshotting two different pages was told to
+ * stop using its screenshot tool.
+ *
+ * This is the failure the design doc warns about, arriving through `.join()`
+ * rather than the `${...}` templates that were swept by hand. The projection
+ * carries the content hash precisely so the detector keeps working: identical
+ * bytes still compare equal, different bytes no longer do.
+ */
+describe("the stall detector reads media results as results, not as [object Object]", () => {
+  let db: Database.Database;
+
+  beforeEach(() => {
+    db = initDatabase(":memory:");
+  });
+  afterEach(() => {
+    db.close();
+  });
+
+  function media(id: string, name: string) {
+    return { id: id.repeat(64).slice(0, 64), mimeType: "image/png", bytes: 100, name };
+  }
+
+  /** Calls one tool every round, so only the *results* can distinguish rounds. */
+  function alwaysScreenshots(): AIProvider {
+    let n = 0;
+    return {
+      id: "fake",
+      name: "fake",
+      supportsTools: true,
+      async chat(params: ChatParams): Promise<ChatResponse> {
+        if (!params.tools?.length) {
+          return { content: "done looking", usage: { input: 1, output: 1 }, finishReason: "stop", toolCalls: [] };
+        }
+        n += 1;
+        return {
+          content: "",
+          usage: { input: 1, output: 1 },
+          finishReason: "tool_calls",
+          toolCalls: [{ id: `c${n}`, name: "screenshot", arguments: {} }],
+        };
+      },
+    } as unknown as AIProvider;
+  }
+
+  /** A new picture every call — real progress, wearing an object. */
+  function movingScreenshot(): Tool {
+    let n = 0;
+    return {
+      name: "screenshot",
+      description: "screenshot",
+      parameters: { type: "object", properties: {} },
+      async execute(): Promise<ToolResult> {
+        n += 1;
+        return {
+          success: true,
+          output: { parts: [{ type: "media", media: media(String(n), `page-${n}.png`) }] },
+        };
+      },
+    };
+  }
+
+  /** The same picture every call — content addressing makes the ids equal. */
+  function frozenScreenshot(): Tool {
+    return {
+      name: "screenshot",
+      description: "screenshot",
+      parameters: { type: "object", properties: {} },
+      async execute(): Promise<ToolResult> {
+        return {
+          success: true,
+          output: { parts: [{ type: "media", media: media("a", "same.png") }] },
+        };
+      },
+    };
+  }
+
+  async function run(tool: Tool): Promise<LoopStop | undefined> {
+    const session = newSession(db, "fake-model", "fake");
+    let stop: LoopStop | undefined;
+    await runAgentLoop("look at each page", {
+      db,
+      session,
+      provider: alwaysScreenshots(),
+      tools: [tool],
+      systemPrompt: "test",
+      maxToolRounds: 6,
+      maxHistoryTokens: 4000,
+      onStop: (s) => {
+        stop = s;
+      },
+    });
+    return stop;
+  }
+
+  it("does not call a different picture every round a stall", async () => {
+    const stop = await run(movingScreenshot());
+    expect(stop?.kind).not.toBe("repeated-calls");
+  });
+
+  it("still calls the same picture every round a stall", async () => {
+    // The other direction, because a detector that never fires is as broken as
+    // one that always does.
+    expect(await run(frozenScreenshot())).toEqual({ kind: "repeated-calls", period: 1 });
+  });
+});

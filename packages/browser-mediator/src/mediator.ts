@@ -237,12 +237,33 @@ export class BrowserMediator {
     });
   }
 
-  async screenshotMeta(): Promise<string> {
-    return this.call("screenshot", {}, async () => {
+  /**
+   * Capture the viewport and return the image.
+   *
+   * This used to take the screenshot, report its size, and drop the buffer on
+   * the floor — "Mediator-owned; caller gets metadata only". That made a
+   * vision-capable browser agent unrepresentable rather than merely
+   * unimplemented: there was no path by which pixels could reach a model.
+   *
+   * The bytes come back raw. Deciding where they live is the host's job, not
+   * this package's — it stays free of any framework dependency, and the TAI
+   * adapter is what puts them in a media store.
+   */
+  async screenshot(): Promise<{ bytes: Buffer; mimeType: string }> {
+    // `callRaw`, not `call`: the audit entry is wanted, the text sanitizer is
+    // not — it matches secrets in strings and has nothing to say about PNG
+    // bytes.
+    const bytes = await this.callRaw("screenshot", {}, async () => {
       const page = this.requirePage();
-      const buf = await page.screenshot({ fullPage: false });
-      return `Captured ${buf.length} bytes. Mediator-owned; caller gets metadata only.`;
+      return page.screenshot({ fullPage: false });
     });
+    return { bytes, mimeType: "image/png" };
+  }
+
+  /** Size-only description, for callers that cannot carry an image. */
+  async screenshotMeta(): Promise<string> {
+    const { bytes } = await this.screenshot();
+    return `Captured ${bytes.length} bytes.`;
   }
 
   async waitFor(opts: { text?: string; selector?: string; timeoutMs?: number }): Promise<string> {

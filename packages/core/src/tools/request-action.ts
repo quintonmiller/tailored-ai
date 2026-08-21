@@ -1,3 +1,4 @@
+import { toolOutputText } from "../content/types.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
 
 export interface TrustedActionsClientOptions {
@@ -191,7 +192,7 @@ export class PurchaseItemTool implements Tool {
     // Parse the action_id out so we can poll for completion.
     let actionId: string | null = null;
     try {
-      const parsed = JSON.parse(enqueueResult.output) as { action_id?: string };
+      const parsed = JSON.parse(toolOutputText(enqueueResult.output)) as { action_id?: string };
       actionId = parsed.action_id ?? null;
     } catch {
       /* leave null */
@@ -209,7 +210,7 @@ export class PurchaseItemTool implements Tool {
       if (s.success) {
         lastStatusOutput = s.output;
         try {
-          const parsed = JSON.parse(s.output) as { status?: string };
+          const parsed = JSON.parse(toolOutputText(s.output)) as { status?: string };
           if (parsed.status && TERMINAL.has(parsed.status)) {
             return { success: true, output: s.output };
           }

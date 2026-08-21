@@ -1,6 +1,21 @@
+import type { MessageContent } from "../content/types.js";
+
 export interface Message {
   role: "system" | "user" | "assistant" | "tool";
-  content: string | null;
+  /**
+   * What this turn says.
+   *
+   * A plain `string` still means exactly what it always did, so the text-only
+   * path is unchanged at every construction site. The `MessageContent` arm
+   * carries ordered parts when a turn includes media (docs/media-design.md).
+   *
+   * That arm is an **object, not a bare `ContentPart[]`**, and that is
+   * load-bearing rather than stylistic: `string` and `Array` share `.length`,
+   * `.slice`, `.indexOf` and `.includes`, so an array arm type-checks at every
+   * existing read site and silently misbehaves. Use {@link messageText} where
+   * you want the text projection, and say so at the call site.
+   */
+  content: string | MessageContent | null;
   toolCalls?: ToolCall[];
   toolCallId?: string;
   /**
@@ -46,6 +61,19 @@ export interface ChatParams {
    * {@link ChatParams.thinking} fragment when both target the same key.
    */
   extra?: Record<string, unknown>;
+  /**
+   * Bytes for the media referenced by {@link ChatParams.messages}, keyed by
+   * `MediaRef.id`, resolved by the caller just before the request.
+   *
+   * History stores references, not payloads, and message-to-wire converters are
+   * synchronous — so something has to turn one into the other, once per request
+   * rather than once per turn. That something is the loop.
+   *
+   * A provider that cannot carry media ignores this and renders the text
+   * projection instead; an id missing from the map means the blob could not be
+   * read, which is likewise a fall back to text. Never persisted.
+   */
+  media?: ReadonlyMap<string, Buffer>;
 }
 
 export interface ToolSchema {
@@ -81,7 +109,12 @@ export interface TokenUsage {
 }
 
 export interface ChatResponse {
-  content: string | null;
+  /**
+   * What the model said. A `MessageContent` arm is reserved for models that
+   * emit media as output; every provider shipping today returns a string or
+   * null. See the note on {@link Message.content} for why the arm is an object.
+   */
+  content: string | MessageContent | null;
   toolCalls?: ToolCall[];
   usage: TokenUsage;
   finishReason: "stop" | "tool_calls" | "length";
@@ -134,5 +167,30 @@ export interface AIProvider {
    */
   listModels?(): Promise<string[]>;
 
+  /**
+   * What this provider accepts **for a given model**.
+   *
+   * A function, not a constant, and that is load-bearing. `provider-openai`
+   * registers one provider id whose router dispatches per call against
+   * `params.model` to a Responses adapter (which can inline media in a tool
+   * result) or a Chat Completions adapter (which cannot) — a static field could
+   * not describe the provider we already ship. Its own doc comment makes the
+   * general argument: "which endpoint a request needs is a property of the
+   * *model*, and the model is not fixed at build time."
+   *
+   * Omit it to mean "I have not said", which resolves to `"unknown"` rather
+   * than to a conservative no. Undeclared is the common case — a local gateway
+   * serves whatever was last loaded under a name core cannot introspect — so
+   * treating silence as refusal would deny images to a vision model for lack of
+   * a config line.
+   */
+  capabilities?(model: string): import("./capabilities.js").PartialCapabilities;
+
+  /**
+   * @deprecated Declare `tools` through {@link AIProvider.capabilities}
+   * instead. Kept because every provider sets it and removing it is churn
+   * without benefit; it is now read as a fallback rather than ignored, which it
+   * was for its entire life before this.
+   */
   supportsTools: boolean;
 }

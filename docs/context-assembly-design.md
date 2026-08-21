@@ -539,5 +539,8 @@ additively.
 - `capToolOutput` caps at write time and never re-caps on fallback to a smaller
   rung — it only drops whole messages.
 - `estimateTokens` excludes `reasoning`, so the DB grows unmeasured.
-- `Message.content` is `string | null`; a string-rendering assembler in core
-  forecloses multimodal.
+- ~~`Message.content` is `string | null`; a string-rendering assembler in core
+  forecloses multimodal.~~ **Closed by media P1.** `Message.content` is now
+  `string | MessageContent | null` and `messageText()` is the one text
+  projection — so an assembler that wants text says so at the call site instead
+  of being the only thing possible. See [media-design.md](./media-design.md).

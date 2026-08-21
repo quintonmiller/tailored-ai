@@ -9,10 +9,27 @@ import {
   formatApprovalDescription,
   type PermissionsConfig,
 } from "../approval.js";
+import {
+  type ContentPart,
+  contentParts,
+  type MediaRef,
+  type MessageContent,
+  messageText,
+  type ToolOutput,
+  toolOutputText,
+} from "../content/types.js";
 import { loadAllContext, loadContextFiles } from "../context.js";
 import { recordTokenUsage } from "../db/autopilot-queries.js";
 import { getCoreMemory, renderCoreMemory } from "../db/core-memory-queries.js";
 import { getSessionMessages, saveMessage } from "../db/queries.js";
+import { hydrateMedia } from "../media/hydrate.js";
+import {
+  adaptForCapabilities,
+  DEFAULT_MEDIA_POLICY,
+  type MediaPolicy,
+  type PartialCapabilities,
+  resolveCapabilities,
+} from "../providers/capabilities.js";
 import type {
   AIProvider,
   ChatParams,
@@ -39,7 +56,7 @@ import {
   resolveCustomLayers,
   type SystemPromptOverride,
 } from "./system-prompt.js";
-import { capToolOutput, resolveToolOutputLimit } from "./tool-output.js";
+import { capToolResultOutput, resolveToolOutputLimit } from "./tool-output.js";
 
 const MAX_RETRIES = 1;
 const RETRY_DELAY_MS = 1000;
@@ -73,6 +90,12 @@ export interface ModelCandidate {
    * otherwise hand a fallback a request built for the head.
    */
   maxContextTokens?: number;
+  /**
+   * What this rung accepts, from `ModelEntry.capabilities`. Merged over
+   * whatever the provider declares for this model id; anything neither says
+   * stays `"unknown"`.
+   */
+  capabilities?: PartialCapabilities;
 }
 
 /**
@@ -192,25 +215,48 @@ export async function chatWithFallback(
   params: Omit<ChatParams, "model"> | ((candidate: ModelCandidate) => Omit<ChatParams, "model">),
   onTextDelta?: (text: string) => void,
   onReasoningDelta?: (text: string) => void,
+  mediaPolicy: MediaPolicy = DEFAULT_MEDIA_POLICY,
 ): Promise<{ response: ChatResponse; candidate: ModelCandidate; fellBack: boolean }> {
   if (candidates.length === 0) throw new Error("no model candidates configured");
   const paramsFor = typeof params === "function" ? params : () => params;
   let firstError: Error | undefined;
+  let lastSkip: string | undefined;
+  let skippedCount = 0;
   for (let i = 0; i < candidates.length; i++) {
     const candidate = candidates[i];
     const isLast = i === candidates.length - 1;
     try {
-      const response = await chatOnce(
-        candidate.provider,
-        // Two independent per-rung adjustments: the caller sizes the request
-        // for this rung, then the rung's own overrides land on top.
-        applyCandidateParams(paramsFor(candidate), candidate),
-        onTextDelta,
-        onReasoningDelta,
-        isLast,
-      );
+      // Two independent per-rung adjustments: the caller sizes the request for
+      // this rung, then the rung's own overrides land on top.
+      const tuned = applyCandidateParams(paramsFor(candidate), candidate);
+
+      // Then the capability pre-flight, which is the whole reason this lives
+      // here rather than inside a provider. Before this, every failure looked
+      // alike: the catch below treats a 4xx as a legitimate reason to try the
+      // next rung, so "this model has no eyes" was indistinguishable from a
+      // rate limit — and the answer to both was to spend another round-trip
+      // finding out. A declared constraint is now consulted before the request,
+      // not discovered from its rejection.
+      const shaped = shapeForCandidate(tuned, candidate, mediaPolicy);
+      if (shaped.skip) {
+        lastSkip = `${candidate.label} (${candidate.model}) skipped: ${shaped.skip}`;
+        skippedCount++;
+        console.warn(`[agent] ${lastSkip}`);
+        if (isLast) break;
+        continue;
+      }
+
+      const response = await chatOnce(candidate.provider, shaped.params, onTextDelta, onReasoningDelta, isLast);
       if (i > 0) {
-        console.warn(`[agent] answered by fallback ${candidate.label} (${candidate.model}) after ${i} failed`);
+        // Skipped and failed are different stories and must not be told as one:
+        // a rung the capability check declined never made a request, and
+        // reporting it as a failure sends the operator looking for an outage
+        // rather than for the policy that skipped it.
+        const failed = i - skippedCount;
+        const parts = [failed > 0 ? `${failed} failed` : "", skippedCount > 0 ? `${skippedCount} skipped` : ""].filter(
+          Boolean,
+        );
+        console.warn(`[agent] answered by fallback ${candidate.label} (${candidate.model}) after ${parts.join(", ")}`);
       }
       return { response, candidate, fellBack: i > 0 };
     } catch (err) {
@@ -223,7 +269,51 @@ export async function chatWithFallback(
       );
     }
   }
+  // A chain emptied by capability skips has no error to report, and saying
+  // "no model candidates" would send the operator looking for a missing config
+  // block rather than the policy that refused every rung it has.
+  if (!firstError && lastSkip) {
+    throw new Error(
+      `every model candidate was skipped by the media capability check — last: ${lastSkip}. ` +
+        'Set media.onUnsupported to "degrade" to send a text-only version instead.',
+    );
+  }
   throw firstError;
+}
+
+/**
+ * Apply one candidate's declared capabilities to a request.
+ *
+ * Returns the request to send, or a reason to skip this rung entirely. Nothing
+ * here is persisted: adaptation happens at the wire boundary, after trimming
+ * and after `stripOrphanedToolMessages`, so a rewrite that inserts a message
+ * cannot be split from its pair by eviction that already ran.
+ */
+function shapeForCandidate(
+  params: ChatParams,
+  candidate: ModelCandidate,
+  policy: MediaPolicy,
+): { params: ChatParams; skip?: string } {
+  const declared = candidate.provider.capabilities?.(candidate.model);
+  const caps = resolveCapabilities(candidate.capabilities, declared);
+
+  // `supportsTools` finally does something. It was declared on every provider,
+  // hard-set to true by all of them, and read by nothing that changed behaviour
+  // — a capability that described rather than decided. It is now the fallback
+  // for an undeclared `tools` capability, so a provider that genuinely cannot
+  // call tools is skipped rather than sent a request it must reject.
+  const toolsSupported = caps.tools.supported === "unknown" ? candidate.provider.supportsTools : caps.tools.supported;
+  if (params.tools?.length && toolsSupported === false) {
+    return { params, skip: "does not support tool calls, and this request has tools" };
+  }
+
+  const adapted = adaptForCapabilities(params.messages, caps, policy);
+  if (adapted.skip) return { params, skip: adapted.skip };
+  for (const note of adapted.notes) {
+    console.warn(`[agent] ${candidate.label} (${candidate.model}): ${note}`);
+  }
+  if (adapted.messages === params.messages) return { params };
+  return { params: { ...params, messages: adapted.messages } };
 }
 
 /**
@@ -454,6 +544,21 @@ export interface AgentLoopOptions {
    * core neither validates nor interprets the keys.
    */
   providerExtra?: Record<string, unknown>;
+  /**
+   * Where tool-produced media lives.
+   *
+   * When set, media references in history are resolved to bytes before each
+   * provider call, so a model that accepts images sees them. When unset — the
+   * default, and every deployment that has not opted in — providers render the
+   * text projection instead and nothing else changes.
+   */
+  mediaStore?: import("../media/interface.js").MediaStore;
+  /**
+   * What to do when a request carries media a model has not agreed to take.
+   * Defaults to degrading on a declared refusal and trying on an undeclared
+   * one — see {@link DEFAULT_MEDIA_POLICY}.
+   */
+  mediaPolicy?: MediaPolicy;
   /** Extra fields merged into the ToolContext passed to every tool execution. */
   toolContextExtras?: Partial<import("../tools/interface.js").ToolContext>;
   permissions?: PermissionsConfig;
@@ -558,16 +663,36 @@ export function estimateToolSchemaTokens(schemas: ToolSchema[] | undefined): num
   return Math.ceil(JSON.stringify(schemas).length / 4);
 }
 
+/**
+ * Rough cost of one media part, in tokens.
+ *
+ * A flat charge, and deliberately so. Image tokenization is non-linear in bytes
+ * and differs per vendor (tiles, patches, detail levels), so any formula here
+ * would be a fiction dressed as arithmetic. What matters for eviction is that a
+ * picture is not free: charging it by the length of its text placeholder — ~15
+ * tokens — would let a window fill with images the budget never saw.
+ *
+ * Sized near a full-detail image on the major vendors, so the estimate errs
+ * toward over-counting. Over-counting evicts early; under-counting overflows
+ * the request, and only one of those is recoverable.
+ */
+export const MEDIA_TOKEN_ESTIMATE = 1500;
+
 export function estimateTokens(msg: Message): number {
   // `msg.reasoning` is intentionally excluded: it's display-only and stripped
   // from every outgoing request (#254), so it costs no wire/history budget.
-  let length = (msg.content ?? "").length;
+  let length = 0;
+  let mediaTokens = 0;
+  for (const part of contentParts(msg.content)) {
+    if (part.type === "text") length += part.text.length;
+    else mediaTokens += MEDIA_TOKEN_ESTIMATE;
+  }
   if (msg.toolCalls) {
     for (const tc of msg.toolCalls) {
       length += tc.name.length + JSON.stringify(tc.arguments).length;
     }
   }
-  return Math.ceil(length / 4);
+  return Math.ceil(length / 4) + mediaTokens;
 }
 
 /**
@@ -781,7 +906,7 @@ export async function summarizeMessages(messages: Message[], provider: AIProvide
   const lines: string[] = [];
   for (const msg of messages) {
     if (msg.content) {
-      lines.push(`[${msg.role}]: ${msg.content.slice(0, 300)}`);
+      lines.push(`[${msg.role}]: ${messageText(msg.content).slice(0, 300)}`);
     } else if (msg.toolCalls) {
       lines.push(`[${msg.role}]: called ${msg.toolCalls.map((tc) => tc.name).join(", ")}`);
     }
@@ -801,7 +926,7 @@ export async function summarizeMessages(messages: Message[], provider: AIProvide
       ],
       temperature: 0.2,
     });
-    return response.content ?? "";
+    return messageText(response.content);
   } catch {
     // If summarization fails, fall back to silent trimming
     return "";
@@ -900,8 +1025,34 @@ async function requestApprovalWithTimeout(
  * every rejection path below returns output alone, so a call the loop refused
  * cannot stop it.
  */
+/**
+ * Append a loop-authored note (timing, approval latency) to a tool result.
+ *
+ * Notes go on the text, never beside the media, so a result that carries an
+ * image still reads as one thing. On a parts result the note joins the last
+ * text part rather than becoming a new one, which keeps the part count stable
+ * and stops a chatty note from separating an image from its caption.
+ */
+function appendToolNote(output: string | ToolOutput, note: string): string | ToolOutput {
+  if (typeof output === "string") return `${output}\n${note}`;
+  const parts = [...output.parts];
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const part = parts[i];
+    if (part.type === "text") {
+      parts[i] = { type: "text", text: `${part.text}\n${note}` };
+      return output.structured === undefined ? { parts } : { parts, structured: output.structured };
+    }
+  }
+  parts.push({ type: "text", text: note });
+  return output.structured === undefined ? { parts } : { parts, structured: output.structured };
+}
+
 interface ToolCallOutcome {
-  output: string;
+  /**
+   * What goes into history. A string for the overwhelming majority of tools;
+   * a {@link ToolOutput} when the call produced media or a structured payload.
+   */
+  output: string | ToolOutput;
   endsTurn?: boolean;
   endsTurnReason?: string;
 }
@@ -1019,23 +1170,23 @@ async function executeToolCall(
   // middle-out afterwards and leaving the middle unreachable.
   const result = await tool.execute(call.arguments, { ...context, maxOutputChars: limit });
   const durationMs = Date.now() - startTime;
-  const rawOutput = result.success ? result.output : `Error: ${result.error ?? "Unknown error"}`;
+  const rawOutput: string | ToolOutput = result.success ? result.output : `Error: ${result.error ?? "Unknown error"}`;
   // Capped here, at the one conversion from ToolResult to the string that
   // becomes history. Every tool — builtin, custom, plugin, MCP — funnels
   // through this call, and it sits upstream of onToolResult, the tool
   // Message, saveMessage and the repeat detector, so all of them see the
   // same bounded string. Still runs for tools that shaped their own output:
   // the budget is the loop's to enforce, not a tool's to honour.
-  let resultOutput = await capToolOutput(rawOutput, {
+  let resultOutput = await capToolResultOutput(rawOutput, {
     toolName: call.name,
     limit,
     sessionId: opts.session.id,
     scratchDir: opts.toolOutputDir,
   });
   if (approvalTimeMs !== undefined) {
-    resultOutput += `\n[approved in ${approvalTimeMs}ms, tool completed in ${durationMs}ms]`;
+    resultOutput = appendToolNote(resultOutput, `[approved in ${approvalTimeMs}ms, tool completed in ${durationMs}ms]`);
   } else if (durationMs >= 100) {
-    resultOutput += `\n[completed in ${durationMs}ms]`;
+    resultOutput = appendToolNote(resultOutput, `[completed in ${durationMs}ms]`);
   }
   // Read from the same place the output is: a tool that failed can still mean
   // to end the turn, so this is deliberately not gated on `result.success`.
@@ -1053,12 +1204,54 @@ function toolsToSchemas(tools: Tool[]): ToolSchema[] {
   }));
 }
 
-export async function runAgentLoop(userMessage: string, opts: AgentLoopOptions): Promise<string> {
+/**
+ * One turn.
+ *
+ * `userMessage` is a union so that all seventeen existing call sites keep
+ * compiling untouched: a `string` means exactly what it always did. The
+ * {@link InboundMessage} arm is how a surface hands over text *and* the media
+ * that came with it — a Discord attachment, a Slack upload, a file dropped on
+ * the composer.
+ */
+export async function runAgentLoop(userMessage: string | InboundMessage, opts: AgentLoopOptions): Promise<string> {
   try {
     return await _runAgentLoopInner(userMessage, opts);
   } finally {
     opts.onActivity?.(null);
   }
+}
+
+/**
+ * Text plus whatever arrived with it.
+ *
+ * Deliberately not `Message`: this is what a *surface* has, before the loop
+ * decides how it becomes a turn. Media is referenced, never inlined, so a
+ * caller stores bytes first and passes ids.
+ */
+export interface InboundMessage {
+  text: string;
+  media?: MediaRef[];
+}
+
+/** The text of an inbound message, whichever form it arrived in. */
+export function inboundText(input: string | InboundMessage): string {
+  return typeof input === "string" ? input : input.text;
+}
+
+/**
+ * The content for the user turn this inbound message becomes.
+ *
+ * A message with no media stays a plain `string`, so a text-only conversation
+ * is byte-identical to what it was — same history rows, same repeat-detector
+ * signatures, same everything.
+ */
+export function inboundContent(input: string | InboundMessage): string | MessageContent {
+  if (typeof input === "string") return input;
+  if (!input.media?.length) return input.text;
+  const parts: ContentPart[] = [];
+  if (input.text) parts.push({ type: "text", text: input.text });
+  for (const media of input.media) parts.push({ type: "media", media });
+  return { parts };
 }
 
 /**
@@ -1175,7 +1368,7 @@ export function warnIfContextIsLarge(contextContent: string, agentName?: string,
   );
 }
 
-async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): Promise<string> {
+async function _runAgentLoopInner(userMessage: string | InboundMessage, opts: AgentLoopOptions): Promise<string> {
   const { session, db, extraInstructions, contextDir, agentContextDir } = opts;
 
   let contextContent = "";
@@ -1225,7 +1418,9 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
   if (opts.injectMemory && opts.getMemoryBackend) {
     const backend = await opts.getMemoryBackend();
     const meta = await buildMemoryBlockWithMeta(backend, {
-      userMessage,
+      // Recall searches text; an image contributes its placeholder, which is
+      // the honest query for "what did the user just send".
+      userMessage: inboundText(userMessage),
       projectId: session.projectId ?? null,
       budgetTokens: opts.memoryInjectBudgetTokens,
       limit: opts.memoryInjectLimit,
@@ -1260,7 +1455,7 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
       agent: agentNameForCore,
       projectId: session.projectId ?? null,
       sessionId: session.id,
-      userMessage,
+      userMessage: inboundText(userMessage),
     },
     // Registered slots plus whatever config declares. Config ones are rebuilt
     // per turn so a `file:` edit lands without a restart.
@@ -1293,7 +1488,7 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
 
   const history = getSessionMessages(db, session.id);
 
-  const userMsg: Message = { role: "user", content: userMessage };
+  const userMsg: Message = { role: "user", content: inboundContent(userMessage) };
   saveMessage(db, session.id, userMsg);
   history.push(userMsg);
 
@@ -1339,7 +1534,7 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
 }
 
 async function _runAgentLoopBody(
-  userMessage: string,
+  userMessage: string | InboundMessage,
   opts: AgentLoopOptions,
   context: ToolContext,
   fullSystemPrompt: string,
@@ -1540,6 +1735,11 @@ async function _runAgentLoopBody(
      * prettier request the rung might still reject is the wrong trade. A
      * request the fallback accepts beats a well-summarised one it does not.
      */
+    // Resolved once per round, not per rung: a fallback chain sends the same
+    // history to each candidate, and re-reading the blobs for a rung that only
+    // trims differently would pay for the same bytes twice.
+    const hydrated = await hydrateMedia(messages, opts.mediaStore);
+
     const paramsFor = (candidate: ModelCandidate): Omit<ChatParams, "model"> => {
       const base = {
         tools: toolSchemas,
@@ -1547,6 +1747,7 @@ async function _runAgentLoopBody(
         thinking: opts.thinking,
         maxTokens: opts.maxTokens,
         extra: opts.providerExtra,
+        media: hydrated,
       };
       const window = candidate.maxContextTokens;
       if (window === undefined || window >= maxHistoryTokens) return { ...base, messages };
@@ -1575,6 +1776,7 @@ async function _runAgentLoopBody(
       paramsFor,
       opts.onTextDelta,
       opts.onReasoningDelta,
+      opts.mediaPolicy,
     );
 
     recordResponseUsage(response);
@@ -1594,7 +1796,7 @@ async function _runAgentLoopBody(
     // turn cut off mid-thought has not finished, and nudging a model that ran
     // out of budget just spends another round arriving at the same place.
     if (response.finishReason === "length") {
-      const noOutput = !(response.content ?? "").trim() && !response.toolCalls?.length;
+      const noOutput = !messageText(response.content).trim() && !response.toolCalls?.length;
       // The rung that answered may carry its own cap, so report the one that
       // actually bit. Naming the deployment default when a fallback's override
       // is what truncated the turn sends the operator to the wrong setting.
@@ -1626,7 +1828,7 @@ async function _runAgentLoopBody(
       if (nudgesRemaining > 0) {
         nudgesRemaining--;
         console.log(
-          `  [nudge ${opts.nudgeOnText! - nudgesRemaining}/${opts.nudgeOnText}] model said: "${(response.content ?? "").slice(0, 100)}"`,
+          `  [nudge ${opts.nudgeOnText! - nudgesRemaining}/${opts.nudgeOnText}] model said: "${messageText(response.content).slice(0, 100)}"`,
         );
         // Use custom nudge message only on the final nudge; earlier nudges push the model to keep working
         const isLastNudge = nudgesRemaining === 0;
@@ -1642,11 +1844,11 @@ async function _runAgentLoopBody(
         continue;
       }
       opts.onStop?.({ kind: "complete" });
-      return response.content ?? "";
+      return messageText(response.content);
     }
 
     // Fire onActivity with the agent's reasoning text (if any) before executing tool calls
-    const reasoningText = (response.content as string | undefined)?.trim() ?? "";
+    const reasoningText = messageText(response.content).trim();
     if (reasoningText && opts.onActivity) {
       const firstSentence = reasoningText.split(/[.!?\n]/)[0].trim();
       opts.onActivity(firstSentence || reasoningText.slice(0, 100));
@@ -1665,15 +1867,16 @@ async function _runAgentLoopBody(
         // the check.
         const outcome = await executeToolCall(call, toolMap, currentToolNames, context, {
           ...opts,
-          userRequest: opts.userRequest ?? userMessage,
+          userRequest: opts.userRequest ?? inboundText(userMessage),
           derivabilityContext:
             opts.derivabilityContext ??
             messages
               .filter((m) => m.role === "user" || m.role === "assistant")
-              .map((m) => `${m.role}: ${m.content ?? ""}`)
+              .map((m) => `${m.role}: ${messageText(m.content)}`)
               .filter((line) => line.length > 6),
         });
-        opts.onToolResult?.(call.name, outcome.output);
+        // Surfaces still receive text; parts reach them in the render phase.
+        opts.onToolResult?.(call.name, toolOutputText(outcome.output));
         return { call, ...outcome };
       }),
     );
@@ -1703,14 +1906,20 @@ async function _runAgentLoopBody(
     const ender = results.find((r) => r.endsTurn);
     if (ender) {
       opts.onStop?.({ kind: "tool-ended", tool: ender.call.name, reason: ender.endsTurnReason });
-      return ender.endsTurnReason ?? response.content ?? "";
+      return ender.endsTurnReason ?? messageText(response.content);
     }
 
     // Detect a stuck model: the same calls AND the same results, cycling. The
     // results are part of the signature so legitimate polling (task_status
     // running → running → completed) does not trip it — only genuine
     // "no progress" loops do.
-    const resultSignature = results.map((r) => r.output).join("|");
+    // Projected, not joined raw: `output` is `string | ToolOutput`, and `join`
+    // stringifies the object arm to `[object Object]` — which made every
+    // media-carrying result compare equal to every other, so a tool returning a
+    // *different* picture each round read as no progress at all. The projection
+    // carries the content hash, so identical bytes still compare equal and
+    // different bytes no longer do.
+    const resultSignature = results.map((r) => toolOutputText(r.output)).join("|");
     roundSignatures.push(`${callSignature}→${resultSignature}`);
     roundCalls.push([...new Set(response.toolCalls.map((c) => c.name))]);
     if (roundSignatures.length > SIGNATURE_WINDOW) roundSignatures.shift();
@@ -1767,7 +1976,7 @@ async function _runAgentLoopBody(
       // this turned two runs that had been answering into stall markers.
       const recovered = await answerWithoutTools();
       opts.onStop?.({ kind: "repeated-calls", period });
-      return recovered ?? response.content ?? "[Agent stopped: repeated identical tool calls detected]";
+      return recovered ?? (messageText(response.content) || "[Agent stopped: repeated identical tool calls detected]");
     }
   }
 
@@ -1868,7 +2077,7 @@ async function _runAgentLoopBody(
       saveMessage(db, session.id, assistantMsg);
       history.push(assistantMsg);
 
-      const answer = (response.content ?? "").trim();
+      const answer = messageText(response.content).trim();
       if (!answer) {
         // Say why it was empty. The previous version returned null silently, so
         // a turn that ended on the marker looked identical whether the model

@@ -21,15 +21,18 @@ import { countTurns, rewindSession, undoRewind } from "../agent/rewind.js";
 import { findOrCreateSession, resetSession } from "../agent/session.js";
 import { slashCommandRegistry } from "../commands/registry.js";
 import { executeCommand, isCommand } from "../commands.js";
+import type { MediaRef, MessageContent } from "../content/types.js";
 import { loadAllContext, loadContextFiles } from "../context.js";
 import { getSessionMessages } from "../db/queries.js";
 import { createProjectTask, queryProjectTasks } from "../db/task-queries.js";
+import { collectTurnMedia, latestMessageId } from "../media/turn.js";
 import type { ProjectRef } from "../projects/resolve.js";
 import { IdentityResolver } from "../rooms/identities.js";
 import { getRoomBackend, registerRoomBackend, unregisterRoomBackend } from "../rooms/registry.js";
 import { formatRoomRef, type Room } from "../rooms/types.js";
 import { makeRoomSessionKey } from "../rooms/watcher.js";
 import type { AgentRuntime } from "../runtime.js";
+import type { SurfaceCapabilities } from "./capabilities.js";
 import { DiscordApprovalHandler } from "./discord-approval.js";
 import { type AuthorizationPolicy, authorizeInteraction, type InteractionIdentity } from "./discord-authorization.js";
 import {
@@ -56,6 +59,7 @@ import { buildRoomCommand, handleRoomAutocomplete, handleRoomCommand } from "./d
 import { DiscordRoomBackend } from "./discord-rooms.js";
 import type { Channel } from "./interface.js";
 import type { OutboundNotifier } from "./outbound.js";
+import { attachmentName, renderForSurface } from "./render.js";
 import { MAX_MESSAGE_LENGTH, splitMessage } from "./split-message.js";
 
 export interface DiscordChannelOptions {
@@ -98,6 +102,9 @@ export function dedupeCommandNames(commands: SlashCommandBuilder[]): SlashComman
   return kept;
 }
 
+/** What discord.js accepts from us: text, files, or both. */
+type DiscordPayload = { content?: string; files?: { attachment: Buffer; name: string }[] };
+
 export class DiscordChannel implements Channel, OutboundNotifier {
   /** Room capability, present only while the gateway is connected. */
   rooms: DiscordRoomBackend | undefined;
@@ -109,6 +116,25 @@ export class DiscordChannel implements Channel, OutboundNotifier {
 
   id = "discord";
   type = "discord";
+
+  /**
+   * Discord previews an uploaded image under the message, so an attachment and
+   * an inline image are the same delivery here.
+   *
+   * `maxBytes` is the conservative floor, not this guild's real ceiling.
+   * Boosted guilds and Nitro accounts allow considerably more, and the client
+   * has no cheap way to learn which applies to a given target. Guessing low
+   * costs a link where an upload would have worked; guessing high costs a
+   * rejected API call and a message that never arrives. The recoverable failure
+   * is the right one to choose.
+   */
+  readonly capabilities: SurfaceCapabilities = {
+    inlineMedia: true,
+    attachments: true,
+    links: true,
+    maxMessageLength: MAX_MESSAGE_LENGTH,
+    maxBytes: 8 * 1024 * 1024,
+  };
 
   private client: Client;
   private runtime: AgentRuntime;
@@ -497,20 +523,83 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     };
   }
 
-  async send(channelId: string, content: string): Promise<void> {
+  async send(channelId: string, content: string | MessageContent): Promise<void> {
     const channel = await this.client.channels.fetch(channelId);
     if (!channel?.isTextBased() || !("send" in channel)) return;
+    await this.deliver(content, (payload) => channel.send(payload));
+  }
 
-    for (const chunk of splitMessage(content)) {
-      await channel.send(chunk);
+  async sendDM(userId: string, content: string | MessageContent): Promise<void> {
+    const user = await this.client.users.fetch(userId);
+    await this.deliver(content, (payload) => user.send(payload));
+  }
+
+  /**
+   * Text first, then the files.
+   *
+   * Discord will take `content` and `files` in one call, but only the *last*
+   * text chunk can carry them — attaching to the first would float the images
+   * above the prose that explains them whenever a long reply is split. So the
+   * split happens first and the attachments ride the final chunk.
+   */
+  private async deliver(
+    content: string | MessageContent,
+    post: (payload: DiscordPayload, first: boolean) => Promise<unknown>,
+  ): Promise<void> {
+    const store = this.runtime.getMediaStore();
+    // Without a store there are no bytes to upload, so the surface genuinely
+    // cannot attach — say so before rendering rather than after. Claiming the
+    // capability and then failing to honour it is how media becomes silence:
+    // the ladder skips the placeholder because it believes the file is going
+    // to be uploaded, and then nothing uploads it.
+    const caps = store ? this.capabilities : { ...this.capabilities, attachments: false, inlineMedia: false };
+    const rendered = renderForSurface(content, caps, { linkFor: (m) => store?.urlFor?.(m.id) });
+    for (const warning of rendered.warnings) console.warn(`[discord] ${warning}`);
+
+    const files = await this.loadAttachments(rendered.attachments);
+    const chunks = rendered.text ? splitMessage(rendered.text) : [];
+
+    if (chunks.length === 0) {
+      if (files.length > 0) await post({ files }, true);
+      return;
+    }
+    for (let i = 0; i < chunks.length; i++) {
+      const last = i === chunks.length - 1;
+      await post(last && files.length > 0 ? { content: chunks[i], files } : { content: chunks[i] }, i === 0);
     }
   }
 
-  async sendDM(userId: string, content: string): Promise<void> {
-    const user = await this.client.users.fetch(userId);
-    for (const chunk of splitMessage(content)) {
-      await user.send(chunk);
+  /** Post an already-rendered payload, bypassing the ladder it has been through. */
+  private async rawSend(channelId: string, payload: DiscordPayload): Promise<void> {
+    const channel = await this.client.channels.fetch(channelId);
+    if (!channel?.isTextBased() || !("send" in channel)) return;
+    await channel.send(payload);
+  }
+
+  /**
+   * Resolve refs to bytes, skipping what the store no longer has.
+   *
+   * A swept blob is a warning, not a failure: retention deleting an old
+   * screenshot must not stop the sentence that described it from being sent.
+   */
+  private async loadAttachments(refs: MediaRef[]): Promise<{ attachment: Buffer; name: string }[]> {
+    if (refs.length === 0) return [];
+    const store = this.runtime.getMediaStore();
+    if (!store) return [];
+    const files: { attachment: Buffer; name: string }[] = [];
+    for (const ref of refs) {
+      try {
+        const found = await store.get(ref.id);
+        if (!found) {
+          console.warn(`[discord] media ${ref.id.slice(0, 8)} is referenced but no longer in the store — not attached`);
+          continue;
+        }
+        files.push({ attachment: found.bytes, name: attachmentName(ref) });
+      } catch (err) {
+        console.warn(`[discord] could not read media ${ref.id.slice(0, 8)}: ${(err as Error).message}`);
+      }
     }
+    return files;
   }
 
   private shouldRespond(msg: DiscordMessage): boolean {
@@ -576,13 +665,50 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     return ref;
   }
 
+  /**
+   * Download a message's attachments into the media store.
+   *
+   * Discord hands us URLs, not bytes, and those URLs expire — so they are
+   * fetched now rather than referenced. Anything that fails to download is
+   * skipped with a warning: a message whose text is fine should not be lost to
+   * one unreachable image.
+   *
+   * Returns an empty array when no store is configured, which is what keeps a
+   * deployment that has not opted into media behaving exactly as before.
+   */
+  private async storeAttachments(msg: DiscordMessage): Promise<MediaRef[]> {
+    const store = this.runtime.getMediaStore();
+    if (!store || !msg.attachments?.size) return [];
+    const refs: MediaRef[] = [];
+    for (const attachment of msg.attachments.values()) {
+      try {
+        const res = await fetch(attachment.url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const bytes = Buffer.from(await res.arrayBuffer());
+        refs.push(
+          await store.put(bytes, {
+            mimeType: attachment.contentType ?? undefined,
+            name: attachment.name ?? undefined,
+          }),
+        );
+      } catch (err) {
+        console.warn(`[discord] could not store attachment ${attachment.name}: ${(err as Error).message}`);
+      }
+    }
+    return refs;
+  }
+
   private async handleMessage(msg: DiscordMessage): Promise<void> {
     if (!this.shouldRespond(msg)) return;
 
     // Strip the bot mention from the content
     const content = msg.content.replace(new RegExp(`<@!?${this.client.user!.id}>`, "g"), "").trim();
 
-    if (!content) return;
+    // Attachments make a message worth answering even with no text: dropping a
+    // screenshot into a DM and saying nothing is a perfectly ordinary way to
+    // ask "what is this?".
+    const hasAttachments = msg.attachments?.size > 0;
+    if (!content && !hasAttachments) return;
 
     // Deduplicate: don't process if we're already handling a message from this user.
     // Project-scoped sessions are namespaced under their project id so the same user
@@ -753,7 +879,11 @@ export class DiscordChannel implements Channel, OutboundNotifier {
         ? new DiscordApprovalHandler((opts) => msg.reply(opts), msg.author.id)
         : undefined;
 
-      const response = await runAgentLoop(content, {
+      const media = await this.storeAttachments(msg);
+      // Watermark before the turn, so what the turn produces can be told apart
+      // from what was already in the session.
+      const watermark = latestMessageId(this.runtime.db, session.id);
+      const response = await runAgentLoop(media.length ? { text: content, media } : content, {
         ...loopOpts,
         approvalHandler,
         ...this.runtime.defaultLoopObservers({ prefix: logPrefix }),
@@ -770,17 +900,30 @@ export class DiscordChannel implements Channel, OutboundNotifier {
         );
       }
 
-      if (!response) return;
+      // Media the turn produced — a screenshot a tool took, a chart it drew.
+      // The web UI shows these in its tool-result bubbles; Discord has no such
+      // bubble, so without this the person who asked to *see* something gets
+      // only a description of it.
+      const produced = collectTurnMedia(this.runtime.db, session.id, watermark);
+      if (!response && produced.length === 0) return;
 
-      const chunks = splitMessage(response);
-      for (let i = 0; i < chunks.length; i++) {
-        if (i === 0) {
-          await msg.reply(chunks[i]);
-        } else {
-          await this.send(msg.channelId, chunks[i]);
-        }
-      }
-      console.log(`[discord] Replied to ${msg.author.username}: "${response.slice(0, 80)}"`);
+      // Reply to the original message so the answer keeps its thread, then use
+      // the plain send for the rest. Only the reply needs `msg.reply`; the
+      // continuation is an ordinary post, and both go through `deliver` so the
+      // ladder and the attachment rules apply identically.
+      const outbound: MessageContent = {
+        parts: [
+          ...(response ? [{ type: "text" as const, text: response }] : []),
+          ...produced.map((media) => ({ type: "media" as const, media })),
+        ],
+      };
+      await this.deliver(outbound, (payload, first) =>
+        first ? msg.reply(payload) : this.rawSend(msg.channelId, payload),
+      );
+      console.log(
+        `[discord] Replied to ${msg.author.username}: "${(response ?? "").slice(0, 80)}"` +
+          (produced.length > 0 ? ` (+${produced.length} media)` : ""),
+      );
     } finally {
       stopTyping();
     }

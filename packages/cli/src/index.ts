@@ -9,6 +9,7 @@ import {
   AutopilotWorker,
   ChannelLifecycleManager,
   CronScheduler,
+  collectTurnMedia,
   createEmbedder,
   createMetaTools,
   createPluginContext,
@@ -19,6 +20,7 @@ import {
   ensureContextDir,
   executeHooks,
   initDatabase,
+  latestMessageId,
   listSessions,
   loadConfig,
   loadExternalAgents,
@@ -48,6 +50,7 @@ import { runProjectCommand } from "./commands/project.js";
 import { runResourcesCommand } from "./commands/resources.js";
 import { runVaultCommand } from "./commands/vault.js";
 import { adoptHomeDir, isSetupDone, resolveHomePaths } from "./home.js";
+import { printMediaForTerminal } from "./media-render.js";
 import { syncOutboundRegistry } from "./outbound-sync.js";
 import { PluginManager } from "./plugins/manager.js";
 import { runSetupWizard, type SetupMode } from "./setup.js";
@@ -488,6 +491,10 @@ async function runSingleMessage(
     // Only create approval handler when permissions require it and stdin is available
     const approvalHandler = loopOpts.permissions ? new CliApprovalHandler() : undefined;
 
+    // See `collectTurnMedia`: the watermark separates what this turn produced
+    // from what the session already held.
+    const watermark = latestMessageId(runtime.db, session.id);
+
     const response = await runAgentLoop(message, {
       ...loopOpts,
       approvalHandler,
@@ -508,10 +515,16 @@ async function runSingleMessage(
       await executeHooks(cliHooks.afterRun, runtime.getTools(), { response: response ?? "" }, session.id, "[cli]");
     }
 
+    const produced = collectTurnMedia(runtime.db, session.id, watermark);
+
     if (json) {
-      console.log(JSON.stringify({ sessionId: session.id, response }));
+      // Refs, not bytes. A script consuming this can fetch what it wants from
+      // the store; inlining base64 here would make every screenshot a
+      // megabyte of stdout nobody asked for.
+      console.log(JSON.stringify({ sessionId: session.id, response, media: produced }));
     } else {
       console.log(response);
+      printMediaForTerminal(produced, runtime.getMediaStore());
     }
   } catch (err) {
     if (json) {

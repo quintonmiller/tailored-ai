@@ -8116,3 +8116,144 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
   background: var(--bg-hover);
 }
 
+
+/* ---------------------------------------------------------------- media --- */
+/* Attachments on a message, and the composer's pending-upload tray.
+   Uses the existing tokens throughout — this is new surface area, not a new
+   visual language. */
+
+.media-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.media-attachments:empty {
+  display: none;
+}
+
+.media-item.media-image {
+  margin: 0;
+  max-width: 320px;
+}
+
+.media-item.media-image img {
+  display: block;
+  /* Never let an image blow out the column; `height: auto` keeps the aspect
+     ratio even though width/height attributes are set for layout reservation. */
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.media-item.media-image figcaption {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.media-item.media-file {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  text-decoration: none;
+  color: var(--text);
+}
+
+.media-item.media-file:hover {
+  background: var(--bg-hover);
+}
+
+.media-file-meta {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.attachment-tray {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 24px 0;
+}
+
+.attachment-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  font-size: 12px;
+}
+
+.attachment-chip.failed {
+  border-color: var(--red);
+}
+
+.attachment-chip.uploading {
+  opacity: 0.7;
+}
+
+.attachment-thumb {
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+.attachment-name {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-meta {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.attachment-remove {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.attachment-remove:hover {
+  color: var(--text);
+}
+
+.chat-attach-btn {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 12px;
+}
+
+.chat-attach-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* Whole bar reacts to a file drag, so the target is obvious rather than a
+   thin invisible strip. */
+.chat-input-bar.dragging {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+}

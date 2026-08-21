@@ -1,4 +1,6 @@
 import type { McpServerConfig } from "../config.js";
+import { type ContentPart, type ToolOutput, toolOutputText } from "../content/types.js";
+import type { MediaStore } from "../media/interface.js";
 import type { Tool, ToolResult } from "../tools/interface.js";
 
 /**
@@ -106,6 +108,15 @@ export interface ConnectOptions {
   onClose?: () => void;
   /** Test seam: bypass config-driven transport construction. */
   createTransport?: () => Promise<unknown> | unknown;
+  /**
+   * Where an MCP server's `image` and `audio` blocks get stored.
+   *
+   * Optional, and its absence is not a failure: without a store the blocks
+   * flatten to the same text markers they always did. That keeps a deployment
+   * that has not configured media working exactly as before, rather than
+   * failing a tool call because a picture arrived.
+   */
+  mediaStore?: MediaStore;
 }
 
 /**
@@ -175,13 +186,14 @@ export async function connectMcpServer(
     };
   }
 
-  const tools = await discoverTools(client, serverId, cfg);
+  const tools = await discoverTools(client, serverId, cfg, opts.mediaStore);
   const connection: McpConnection = {
     serverId,
     tools,
     close: () => client.close(),
   };
   connectionClients.set(connection, client);
+  if (opts.mediaStore) connectionStores.set(connection, opts.mediaStore);
   return connection;
 }
 
@@ -189,7 +201,7 @@ export async function connectMcpServer(
 export async function rediscoverTools(connection: McpConnection, cfg: McpServerConfig): Promise<Tool[]> {
   const inner = connectionClients.get(connection);
   if (!inner) return connection.tools;
-  const tools = await discoverTools(inner, connection.serverId, cfg);
+  const tools = await discoverTools(inner, connection.serverId, cfg, connectionStores.get(connection));
   connection.tools = tools;
   return tools;
 }
@@ -197,13 +209,27 @@ export async function rediscoverTools(connection: McpConnection, cfg: McpServerC
 /** Client handle per connection, kept out of the public McpConnection shape. */
 const connectionClients = new WeakMap<McpConnection, SdkClient>();
 
-async function discoverTools(client: SdkClient, serverId: string, cfg: McpServerConfig): Promise<Tool[]> {
+/**
+ * The store a connection was opened with.
+ *
+ * Kept beside the client so a `list_changed` re-discovery rebuilds tools with
+ * the same store. Without this a server that announces new tools would quietly
+ * downgrade to text markers for the rest of its life.
+ */
+const connectionStores = new WeakMap<McpConnection, MediaStore>();
+
+async function discoverTools(
+  client: SdkClient,
+  serverId: string,
+  cfg: McpServerConfig,
+  mediaStore?: MediaStore,
+): Promise<Tool[]> {
   const listed = await client.listTools();
   const allow = cfg.tools && cfg.tools.length > 0 ? new Set(cfg.tools) : undefined;
   const tools: Tool[] = [];
   for (const t of listed.tools) {
     if (allow && !allow.has(t.name)) continue;
-    tools.push(wrapMcpTool(client, serverId, t, cfg));
+    tools.push(wrapMcpTool(client, serverId, t, cfg, mediaStore));
   }
   return tools;
 }
@@ -213,6 +239,7 @@ function wrapMcpTool(
   serverId: string,
   mcpTool: { name: string; description?: string; inputSchema?: Record<string, unknown> },
   cfg: McpServerConfig,
+  mediaStore?: MediaStore,
 ): Tool {
   return {
     name: mcpToolName(serverId, mcpTool.name),
@@ -223,9 +250,10 @@ function wrapMcpTool(
         const result = await client.callTool({ name: mcpTool.name, arguments: args }, undefined, {
           timeout: cfg.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS,
         });
-        const output = renderContent(result.content);
+        const output = await renderContent(result.content, mediaStore);
         if (result.isError) {
-          return { success: false, output, error: output || "MCP tool reported an error" };
+          const text = toolOutputText(output);
+          return { success: false, output, error: text || "MCP tool reported an error" };
         }
         return { success: true, output };
       } catch (err) {
@@ -251,34 +279,94 @@ function truncateDescription(desc: string): string {
 }
 
 /**
- * Flatten an MCP content array (text / image / audio / resource blocks)
- * into the string a TAI ToolResult carries. Non-text blocks become short
- * markers — the loop's tool results are text-only today.
+ * Map an MCP content array onto TAI content.
+ *
+ * MCP has spoken in `text` / `image` / `audio` / `resource` / `resource_link`
+ * blocks all along; this used to answer every non-text block with a marker like
+ * `[image content (image/png)]`, because a tool result could only be a string.
+ * It can carry parts now, so an MCP server that returns a screenshot, a chart
+ * or a scanned page finally hands over the thing itself.
+ *
+ * Returns a plain string whenever the result is text-only, which is nearly
+ * always. That keeps the common case identical to what it was — same string,
+ * same repeat-detector signature, same truncation — rather than wrapping every
+ * MCP result in a parts array for the sake of uniformity.
+ *
+ * Without a store, or when a block fails to decode, the old marker is still
+ * what comes back. A picture we cannot keep is reported, never dropped.
  */
-function renderContent(content: unknown): string {
-  if (!Array.isArray(content)) return content === undefined || content === null ? "" : String(content);
-  const parts: string[] = [];
+async function renderContent(content: unknown, store?: MediaStore): Promise<string | ToolOutput> {
+  if (!Array.isArray(content)) {
+    return content === undefined || content === null ? "" : String(content);
+  }
+
+  const parts: ContentPart[] = [];
+  const pushText = (text: string) => {
+    if (text.length > 0) parts.push({ type: "text", text });
+  };
+
   for (const block of content as Array<Record<string, unknown>>) {
     switch (block?.type) {
       case "text":
-        parts.push(String(block.text ?? ""));
+        pushText(String(block.text ?? ""));
         break;
       case "resource": {
         const res = block.resource as Record<string, unknown> | undefined;
-        if (res && typeof res.text === "string") parts.push(res.text);
-        else parts.push(`[resource: ${res?.uri ?? "unknown"}]`);
+        if (res && typeof res.text === "string") pushText(res.text);
+        else if (res && typeof res.blob === "string") {
+          const stored = await storeBase64(res.blob, String(res.mimeType ?? ""), store, uriName(res.uri));
+          if (stored) parts.push(stored);
+          else pushText(`[resource: ${res?.uri ?? "unknown"}]`);
+        } else pushText(`[resource: ${res?.uri ?? "unknown"}]`);
         break;
       }
       case "resource_link":
-        parts.push(`[resource link: ${block.uri ?? "unknown"}]`);
+        pushText(`[resource link: ${block.uri ?? "unknown"}]`);
         break;
       case "image":
-      case "audio":
-        parts.push(`[${block.type} content (${block.mimeType ?? "unknown type"})]`);
+      case "audio": {
+        const stored = await storeBase64(
+          typeof block.data === "string" ? block.data : "",
+          String(block.mimeType ?? ""),
+          store,
+        );
+        if (stored) parts.push(stored);
+        else pushText(`[${block.type} content (${block.mimeType ?? "unknown type"})]`);
         break;
+      }
       default:
-        parts.push(JSON.stringify(block));
+        pushText(JSON.stringify(block));
     }
   }
-  return parts.join("\n");
+
+  // Text-only results stay strings, so nothing about the common path changes.
+  if (!parts.some((p) => p.type === "media")) {
+    return parts.map((p) => (p.type === "text" ? p.text : "")).join("\n");
+  }
+  return { parts };
+}
+
+/** Decode one base64 block into the store. Returns undefined when it cannot. */
+async function storeBase64(
+  data: string,
+  mimeType: string,
+  store: MediaStore | undefined,
+  name?: string,
+): Promise<ContentPart | undefined> {
+  if (!store || !data) return undefined;
+  try {
+    const bytes = Buffer.from(data, "base64");
+    if (bytes.byteLength === 0) return undefined;
+    const ref = await store.put(bytes, { mimeType: mimeType || undefined, name });
+    return { type: "media", media: ref };
+  } catch {
+    // A block we cannot store is reported by the caller's marker, not dropped.
+    return undefined;
+  }
+}
+
+function uriName(uri: unknown): string | undefined {
+  if (typeof uri !== "string") return undefined;
+  const tail = uri.split("/").pop();
+  return tail && tail.length > 0 ? tail : undefined;
 }

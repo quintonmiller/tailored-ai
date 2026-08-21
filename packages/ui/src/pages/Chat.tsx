@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchMessages, type SessionRow, setStoredChatSessionId } from "../api";
 import { groupTurns } from "../chat-grouping";
 import { useChatStore } from "../components/ChatContext";
+import { AttachmentTray, filesFromDrop, filesFromPaste, useAttachments } from "../components/Composer.js";
 import { MessageBubble, ThinkingDisclosure, ToolLogPanel } from "../components/MessageBubble";
 import { SuggestionChips } from "../components/SuggestionChips";
 import { VoiceInputButton } from "../components/VoiceInputButton";
 import { useActiveProject } from "../hooks/useActiveProject";
+import type { MediaRef } from "../lib/content.js";
 
 export function Chat(props: { sessionKey?: string; sessionId?: string }) {
   const store = useChatStore();
@@ -75,11 +77,19 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
 
   const agentNames = Object.keys(store.agents);
 
+  const { attachments, add, remove, clear, readyIds, busy } = useAttachments();
+  const [dragging, setDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   function handleSend() {
     const text = input.trim();
-    if (!text || store.sending) return;
+    const media = attachments.filter((a) => a.status === "ready" && a.ref).map((a) => a.ref as MediaRef);
+    // An image with no caption is a message. Blocking it here is the same bug
+    // Slack had, one layer up.
+    if ((!text && media.length === 0) || store.sending || busy) return;
     setInput("");
-    store.send(text);
+    clear();
+    store.send(text, media);
   }
 
   function handleNewChat() {
@@ -258,12 +268,69 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
             />
           )}
         </div>
-        <div className="chat-input-bar">
+        <AttachmentTray attachments={attachments} onRemove={remove} />
+        {/*
+          Drag handlers sit on the bar itself so the whole strip is a target.
+          The linter flags interaction handlers on a non-interactive element;
+          giving it a role to quiet that would be worse accessibility than the
+          warning, since the element is not a button or a listbox. WCAG 2.5.7
+          asks instead for a single-pointer alternative to any dragging
+          movement, and the "+" button below is exactly that — keyboard
+          reachable, and the only path screen-reader users need.
+        */}
+        <div
+          className={`chat-input-bar${dragging ? " dragging" : ""}`}
+          onDragOver={(e) => {
+            // Only claim the drop when files are actually being dragged;
+            // otherwise text selections inside the page start looking droppable.
+            if (!e.dataTransfer.types.includes("Files")) return;
+            e.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(e) => {
+            const files = filesFromDrop(e);
+            if (files.length === 0) return;
+            e.preventDefault();
+            setDragging(false);
+            void add(files);
+          }}
+        >
+          <input
+            type="file"
+            ref={fileInputRef}
+            style={{ display: "none" }}
+            multiple
+            onChange={(e) => {
+              const files = Array.from(e.target.files ?? []);
+              if (files.length) void add(files);
+              // Reset so choosing the same file twice still fires a change.
+              e.target.value = "";
+            }}
+          />
+          <button
+            type="button"
+            className="chat-attach-btn"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={store.sending}
+            title="Attach a file"
+            aria-label="Attach a file"
+          >
+            +
+          </button>
           <input
             type="text"
             placeholder="Type a message..."
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            onPaste={(e) => {
+              // The one that matters: pasting a screenshot is how anyone
+              // actually sends one.
+              const files = filesFromPaste(e);
+              if (files.length === 0) return;
+              e.preventDefault();
+              void add(files);
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
@@ -282,7 +349,7 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
               Stop
             </button>
           ) : (
-            <button type="button" onClick={handleSend} disabled={!input.trim()}>
+            <button type="button" onClick={handleSend} disabled={(!input.trim() && !readyIds.length) || busy}>
               Send
             </button>
           )}

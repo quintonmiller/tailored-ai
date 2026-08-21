@@ -1,6 +1,7 @@
 import { createServer, type Server } from "node:http";
 import { beforeEach, describe, expect, it } from "vitest";
 import { anthropicToolSpec, handleAnthropicToolCall } from "../adapters/anthropic.js";
+import { dispatchToMediator } from "../adapters/dispatch.js";
 import { handleOpenAIToolCall, openaiToolSpec } from "../adapters/openai.js";
 import { createTaiTool } from "../adapters/tai.js";
 import { classifyButtonText, DEFAULT_ALWAYS_HITL, isAlwaysHitl } from "../always-hitl.js";
@@ -79,6 +80,39 @@ describe("adapter shapes", () => {
     const tool = createTaiTool({ egressAllowList: [] });
     expect(tool.name).toBe("browser_mediator");
     expect(typeof tool.execute).toBe("function");
+  });
+});
+
+describe("screenshot dispatch", () => {
+  /**
+   * A stand-in for the mediator, so this covers the dispatch contract without
+   * launching a browser. The real capture is exercised by the integration
+   * block below when Chromium is available.
+   */
+  function fakeMediator(bytes: Buffer) {
+    return {
+      screenshot: async () => ({ bytes, mimeType: "image/png" }),
+      screenshotMeta: async () => `Captured ${bytes.length} bytes.`,
+    } as unknown as Parameters<typeof dispatchToMediator>[0];
+  }
+
+  it("hands the caller the bytes instead of describing them", async () => {
+    // This is the behaviour that used to be impossible: screenshotMeta()
+    // captured a real buffer and dropped it, so no path existed by which
+    // pixels could reach a model.
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+    const r = await dispatchToMediator(fakeMediator(bytes), { action: "screenshot" });
+    expect(r.ok).toBe(true);
+    expect(r.media?.mimeType).toBe("image/png");
+    expect(r.media?.bytes.equals(bytes)).toBe(true);
+  });
+
+  it("still describes the capture in text, for adapters that cannot carry an image", () => {
+    const bytes = Buffer.alloc(2048);
+    return dispatchToMediator(fakeMediator(bytes), { action: "screenshot" }).then((r) => {
+      expect(r.output).toMatch(/screenshot/i);
+      expect(r.output).toContain("2,048");
+    });
   });
 });
 

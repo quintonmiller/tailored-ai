@@ -20,6 +20,7 @@
  * as the answer, so instead it always produces a list and the count decides.
  */
 
+import { messageText } from "../content/types.js";
 import type { AIProvider } from "../providers/interface.js";
 
 /** How many candidates the reply may name before the call is refused. */
@@ -103,7 +104,7 @@ export async function refuseIfAmbiguous(check: DerivabilityCheck): Promise<strin
       // Reasoning is charged against the same budget the answer needs.
       thinking: "off",
     });
-    reply = (response.content ?? "").trim();
+    reply = messageText(response.content).trim();
     if (!reply) {
       // Not "nothing matched" — the model produced no text at all, so the check
       // did not happen. Saying so is the difference between a gate that is open

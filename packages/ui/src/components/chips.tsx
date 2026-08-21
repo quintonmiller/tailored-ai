@@ -43,6 +43,15 @@ function parseAttrs(s: string): Record<string, string> {
 
 /**
  * Split rendered HTML into a sequence of raw-HTML and entity-chip nodes.
+ *
+ * **Contract: `html` must already be sanitized** — in practice it comes from
+ * `renderMarkdown`, which is the only thing that should produce HTML for this
+ * app. The fragments between chips are injected verbatim, so this function
+ * inherits its input's safety rather than establishing any of its own. It
+ * deliberately does not sanitize here: the fragments are slices of a larger
+ * document and can be unbalanced mid-tag, and running a sanitizer over a
+ * fragment would rewrite it (closing tags it thinks are open) and corrupt the
+ * reassembly.
  */
 export function renderWithChips(html: string): ReactNode[] {
   const parts: ReactNode[] = [];
