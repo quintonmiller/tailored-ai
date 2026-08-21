@@ -631,3 +631,38 @@ textarea {
   font-size: 12px;
   color: var(--ink-dim);
 }
+
+/* The team's own write-up, rendered from `submission.md`. Tighter than browser
+   defaults, and the same dimmed ink as the rest of the prose on the page. */
+
+.prose-head {
+  color: var(--ink);
+  font-size: 15px;
+  margin: 16px 0 6px;
+}
+
+.prose-head + .prose-para {
+  margin-top: 0;
+}
+
+.prose-para {
+  color: var(--ink-dim);
+  font-size: 14px;
+  margin: 8px 0;
+}
+
+.prose-list {
+  color: var(--ink-dim);
+  font-size: 14px;
+  margin: 8px 0;
+  padding-left: 20px;
+}
+
+.prose-list li {
+  margin: 4px 0;
+}
+
+.prose-para strong,
+.prose-list strong {
+  color: var(--ink);
+}

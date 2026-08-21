@@ -272,6 +272,23 @@ async function handleSite(
     return sendFile(res, store.gameDir(entry.id), file);
   }
 
+  /*
+   * The team's own write-up, from inside the game rather than beside it.
+   *
+   * `submission.md` is the file the lead owns and is asked to write — title,
+   * pitch, controls, how it uses the theme — and it is very often good even
+   * when nobody filled in the arcade form. Every run that predates the arcade
+   * is in exactly that state, and so is any run whose lead wrote the file and
+   * forgot to register. Serving it lets the page show the real pitch instead of
+   * "the team never wrote a description", labelled as what it is.
+   */
+  const writeup = /^\/artifact\/([^/]+)\/submission$/.exec(path);
+  if (writeup) {
+    const entry = store.entryBySlug(writeup[1]);
+    if (!entry?.filesPath) return json(res, 404, { error: "no such game" });
+    return sendFile(res, resolve(entry.filesPath), "/submission.md");
+  }
+
   if (path.startsWith("/api/")) return json(res, 404, { error: "no such endpoint" });
 
   // Everything else is the single-page site. Unknown paths return the shell so

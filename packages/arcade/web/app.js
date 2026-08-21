@@ -225,7 +225,7 @@ async function renderDetail(slug) {
       ]),
     ]),
     el("div", { class: "columns" }, [
-      el("div", {}, [
+      el("div", { id: "left" }, [
         stagePanel(entry, playUrl, shots, reel),
         textPanel("How to play", entry.instructions, "The team never wrote instructions."),
         textPanel("About", entry.description, "The team never wrote a description."),
@@ -234,6 +234,84 @@ async function renderDetail(slug) {
     ]),
   );
   footCount.textContent = entry.title || entry.slug;
+
+  // The team's own write-up, when the arcade form is empty and the file is not.
+  // Appended after the first paint rather than awaited, so a missing file costs
+  // nothing and the page does not wait on it.
+  if (!entry.description && !entry.instructions) void showWriteup(entry.slug);
+}
+
+/**
+ * `submission.md`, shown when nobody filled in the arcade form.
+ *
+ * Every run that predates the arcade is in that state, and so is any run whose
+ * lead wrote the file and forgot to register — which is a thing that happens
+ * and is worth being able to read rather than being told "the team never wrote
+ * a description" about a team that plainly did. Labelled as coming from the
+ * file, because where a pitch came from is part of what a judge is looking at.
+ */
+async function showWriteup(slug) {
+  const res = await fetch(`/artifact/${encodeURIComponent(slug)}/submission`).catch(() => null);
+  if (!res?.ok) return;
+  const body = (await res.text()).trim();
+  if (!body) return;
+  document.getElementById("left")?.append(
+    el("section", { class: "panel" }, [
+      el("h2", { text: "The team's write-up" }),
+      el("p", {
+        class: "crit-q",
+        text: "From submission.md in the workspace. They never registered it on the arcade.",
+      }),
+      markdownish(body),
+    ]),
+  );
+}
+
+/**
+ * Enough markdown to read a jam pitch, rendered as nodes rather than HTML.
+ *
+ * Headings, bullets, numbered lists, `**bold**` and `` `code` ``, which is all
+ * a `submission.md` has ever used. Everything else stays literal.
+ *
+ * Never `innerHTML`. This text was written by a language model and is displayed
+ * on the same origin as the review API; building nodes and setting
+ * `textContent` means a `<script>` in a pitch is a funny-looking pitch. The
+ * cost of the safe version is about twenty lines and no dependency.
+ */
+function markdownish(source) {
+  const root = document.createDocumentFragment();
+  let list = null;
+
+  const inline = (text, into) => {
+    // One pass over the two spans that matter. The capture groups alternate, so
+    // odd indices are the delimited runs and even ones are the literal text.
+    for (const [index, part] of text.split(/\*\*(.+?)\*\*|`(.+?)`/g).entries()) {
+      if (part === undefined || part === "") continue;
+      if (index % 3 === 1) into.append(el("strong", { text: part }));
+      else if (index % 3 === 2) into.append(el("code", { text: part }));
+      else into.append(document.createTextNode(part));
+    }
+    return into;
+  };
+
+  for (const raw of source.split("\n")) {
+    const line = raw.trimEnd();
+    const bullet = /^\s*(?:[-*]|\d+\.)\s+(.*)$/.exec(line);
+    if (bullet) {
+      if (!list) root.append((list = el("ul", { class: "prose-list" })));
+      list.append(inline(bullet[1], el("li")));
+      continue;
+    }
+    list = null;
+    if (!line.trim()) continue;
+    const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (heading) {
+      root.append(el(heading[1].length <= 2 ? "h3" : "h4", { class: "prose-head", text: heading[2] }));
+      continue;
+    }
+    root.append(inline(line, el("p", { class: "prose-para" })));
+  }
+  return root;
 }
 
 /**
