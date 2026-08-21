@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { type ContentPart, partsToText, type ToolOutput } from "../content/types.js";
 import { taiHomePath } from "../home.js";
 
 /**
@@ -148,4 +149,50 @@ export function resolveToolOutputLimit(
   const specific = perTool?.[toolName];
   if (typeof specific === "number") return specific;
   return globalLimit ?? DEFAULT_MAX_TOOL_OUTPUT_CHARS;
+}
+
+/**
+ * Cap a tool result that may carry media.
+ *
+ * Media is never truncated, because there is nothing to truncate: a part holds
+ * a reference, not bytes, so an image costs a hundred characters of placeholder
+ * whatever its size. The budget exists to stop a wall of text, and that is what
+ * it is spent on.
+ *
+ * A string result takes exactly the path it always did, byte for byte — the
+ * cap, the marker, the hashed scratch file. Only the parts path is new.
+ *
+ * When the text fits, parts come back untouched and in order, which is the case
+ * that matters: "here is the screenshot" plus one image is nowhere near any
+ * limit. When it does not fit, the text parts collapse into a single capped
+ * part at the position of the first one, and media keeps its place around it.
+ * Collapsing loses the interleaving of several text runs, which is a real loss
+ * and an acceptable one: it happens only to output already being truncated, and
+ * the alternative is dividing a budget between text runs in a way no caller
+ * could predict.
+ */
+export async function capToolResultOutput(
+  output: string | ToolOutput,
+  opts: CapToolOutputOptions,
+): Promise<string | ToolOutput> {
+  if (typeof output === "string") return capToolOutput(output, opts);
+
+  const text = partsToText(output.parts.filter((p) => p.type === "text"));
+  const capped = await capToolOutput(text, opts);
+  if (capped === text) return output;
+
+  const parts: ContentPart[] = [];
+  let textPlaced = false;
+  for (const part of output.parts) {
+    if (part.type === "media") {
+      parts.push(part);
+      continue;
+    }
+    if (!textPlaced) {
+      parts.push({ type: "text", text: capped });
+      textPlaced = true;
+    }
+  }
+  if (!textPlaced) parts.unshift({ type: "text", text: capped });
+  return output.structured === undefined ? { parts } : { parts, structured: output.structured };
 }

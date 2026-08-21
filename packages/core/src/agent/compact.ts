@@ -175,7 +175,7 @@ export async function compactSession(
   const lines: string[] = [];
   for (const msg of toSummarise) {
     if (msg.content) {
-      lines.push(`[${msg.role}]: ${msg.content}`);
+      lines.push(`[${msg.role}]: ${messageText(msg.content)}`);
     }
   }
   const transcript = lines.join("\n");

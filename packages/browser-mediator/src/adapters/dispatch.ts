@@ -13,6 +13,15 @@ export interface DispatchResult {
   ok: boolean;
   output: string;
   error?: string;
+  /**
+   * Raw image bytes, when the action produced one.
+   *
+   * Deliberately not a path, a data URL or a store id: this package has no
+   * framework dependency and no opinion about where a host keeps files. The
+   * adapter that owns storage converts it. Adapters that cannot carry an image
+   * ignore this field and still have `output` to show.
+   */
+  media?: { bytes: Buffer; mimeType: string };
 }
 
 export const TOOL_NAME = "browser_mediator";
@@ -68,8 +77,16 @@ export async function dispatchToMediator(
         const value = String(args.value ?? args.text ?? "");
         return { ok: true, output: await mediator.typeText(target, value) };
       }
-      case "screenshot":
-        return { ok: true, output: await mediator.screenshotMeta() };
+      case "screenshot": {
+        const shot = await mediator.screenshot();
+        // `output` still describes the capture, so an adapter that drops the
+        // image says something true rather than nothing.
+        return {
+          ok: true,
+          output: `Captured a ${shot.bytes.length.toLocaleString()}-byte ${shot.mimeType} screenshot.`,
+          media: shot,
+        };
+      }
       case "wait_for":
         return {
           ok: true,

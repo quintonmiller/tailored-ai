@@ -9,7 +9,7 @@ import {
   formatApprovalDescription,
   type PermissionsConfig,
 } from "../approval.js";
-import { contentParts, messageText, toolOutputText } from "../content/types.js";
+import { contentParts, messageText, type ToolOutput, toolOutputText } from "../content/types.js";
 import { loadAllContext, loadContextFiles } from "../context.js";
 import { recordTokenUsage } from "../db/autopilot-queries.js";
 import { getCoreMemory, renderCoreMemory } from "../db/core-memory-queries.js";
@@ -40,7 +40,7 @@ import {
   resolveCustomLayers,
   type SystemPromptOverride,
 } from "./system-prompt.js";
-import { capToolOutput, resolveToolOutputLimit } from "./tool-output.js";
+import { capToolResultOutput, resolveToolOutputLimit } from "./tool-output.js";
 
 const MAX_RETRIES = 1;
 const RETRY_DELAY_MS = 1000;
@@ -921,8 +921,34 @@ async function requestApprovalWithTimeout(
  * every rejection path below returns output alone, so a call the loop refused
  * cannot stop it.
  */
+/**
+ * Append a loop-authored note (timing, approval latency) to a tool result.
+ *
+ * Notes go on the text, never beside the media, so a result that carries an
+ * image still reads as one thing. On a parts result the note joins the last
+ * text part rather than becoming a new one, which keeps the part count stable
+ * and stops a chatty note from separating an image from its caption.
+ */
+function appendToolNote(output: string | ToolOutput, note: string): string | ToolOutput {
+  if (typeof output === "string") return `${output}\n${note}`;
+  const parts = [...output.parts];
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const part = parts[i];
+    if (part.type === "text") {
+      parts[i] = { type: "text", text: `${part.text}\n${note}` };
+      return output.structured === undefined ? { parts } : { parts, structured: output.structured };
+    }
+  }
+  parts.push({ type: "text", text: note });
+  return output.structured === undefined ? { parts } : { parts, structured: output.structured };
+}
+
 interface ToolCallOutcome {
-  output: string;
+  /**
+   * What goes into history. A string for the overwhelming majority of tools;
+   * a {@link ToolOutput} when the call produced media or a structured payload.
+   */
+  output: string | ToolOutput;
   endsTurn?: boolean;
   endsTurnReason?: string;
 }
@@ -1040,23 +1066,23 @@ async function executeToolCall(
   // middle-out afterwards and leaving the middle unreachable.
   const result = await tool.execute(call.arguments, { ...context, maxOutputChars: limit });
   const durationMs = Date.now() - startTime;
-  const rawOutput = result.success ? toolOutputText(result.output) : `Error: ${result.error ?? "Unknown error"}`;
+  const rawOutput: string | ToolOutput = result.success ? result.output : `Error: ${result.error ?? "Unknown error"}`;
   // Capped here, at the one conversion from ToolResult to the string that
   // becomes history. Every tool — builtin, custom, plugin, MCP — funnels
   // through this call, and it sits upstream of onToolResult, the tool
   // Message, saveMessage and the repeat detector, so all of them see the
   // same bounded string. Still runs for tools that shaped their own output:
   // the budget is the loop's to enforce, not a tool's to honour.
-  let resultOutput = await capToolOutput(rawOutput, {
+  let resultOutput = await capToolResultOutput(rawOutput, {
     toolName: call.name,
     limit,
     sessionId: opts.session.id,
     scratchDir: opts.toolOutputDir,
   });
   if (approvalTimeMs !== undefined) {
-    resultOutput += `\n[approved in ${approvalTimeMs}ms, tool completed in ${durationMs}ms]`;
+    resultOutput = appendToolNote(resultOutput, `[approved in ${approvalTimeMs}ms, tool completed in ${durationMs}ms]`);
   } else if (durationMs >= 100) {
-    resultOutput += `\n[completed in ${durationMs}ms]`;
+    resultOutput = appendToolNote(resultOutput, `[completed in ${durationMs}ms]`);
   }
   // Read from the same place the output is: a tool that failed can still mean
   // to end the turn, so this is deliberately not gated on `result.success`.
@@ -1691,10 +1717,11 @@ async function _runAgentLoopBody(
             opts.derivabilityContext ??
             messages
               .filter((m) => m.role === "user" || m.role === "assistant")
-              .map((m) => `${m.role}: ${m.content ?? ""}`)
+              .map((m) => `${m.role}: ${messageText(m.content)}`)
               .filter((line) => line.length > 6),
         });
-        opts.onToolResult?.(call.name, outcome.output);
+        // Surfaces still receive text; parts reach them in the render phase.
+        opts.onToolResult?.(call.name, toolOutputText(outcome.output));
         return { call, ...outcome };
       }),
     );
