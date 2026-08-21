@@ -94,7 +94,7 @@ while [ "$STOP" -eq 0 ]; do
   echo "$(date '+%H:%M:%S')  run $run — seed $SEED — $LOG"
 
   pnpm run eval -- \
-    --filter "$ARM" \
+    --filter "=$ARM" \
     --model "$MODEL" \
     --base-url "$BASE_URL" \
     --seed "$SEED" \

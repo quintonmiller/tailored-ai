@@ -85,7 +85,8 @@ Options
   --model <id>          Model to benchmark (required unless --home supplies one)
   --repeats <n>         Runs per scenario (default 3). The score is a pass rate over these.
   --concurrency <n>     Scenarios in flight (default 4)
-  --filter <s>          Only scenarios whose id contains <s>, or whose category is <s>
+  --filter <s>          Only scenarios whose id contains <s>, or whose category is <s>.
+                        Prefix with = for exactly one id: --filter =the-workshop
   --difficulty <spec>   Only scenarios at these levels: 4, 4+, 2-3, 3,5. Composes with --filter.
   --sim-option k=v      Override a simulation option, repeatable. e.g. brief=site, theme=two-halves
   --seed <n>            Base seed; repeat i uses seed+i (default 1000). --seed off to disable.

@@ -853,7 +853,24 @@ export async function loadScenarios(
   // 4+` is the hard half of one category. The digest and the fingerprints are
   // taken over the *whole* set above, before either applies, so a filtered run
   // still records which version of the questions it was answering.
-  let selected = filter ? scenarios.filter((s) => s.id.includes(filter) || s.category === filter) : scenarios;
+  /*
+   * Substring or category, and `=id` for exactly one.
+   *
+   * The loose form is right nearly always — `--filter long-session` is how you
+   * run a family. It is wrong for a family whose members are named after each
+   * other: `--filter the-workshop` selects `the-workshop`, its one-room arm and
+   * its solo arm, which is three ninety-minute runs when one was meant. That is
+   * a footgun in a loop rather than in a session, because a loop repeats it.
+   *
+   * `=` rather than a second flag, so it cannot be set and forgotten in a
+   * target file, and so the two forms cannot both apply at once.
+   */
+  const exact = filter?.startsWith("=") ? filter.slice(1) : undefined;
+  let selected = exact
+    ? scenarios.filter((s) => s.id === exact)
+    : filter
+      ? scenarios.filter((s) => s.id.includes(filter) || s.category === filter)
+      : scenarios;
   if (difficulty) {
     const wanted = parseDifficultyFilter(difficulty);
     selected = selected.filter((s) => wanted(s.difficulty));

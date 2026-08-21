@@ -633,6 +633,25 @@ describe("the scenarios on disk", () => {
     expect(alone?.agent?.instructions ?? "").toMatch(/arcade_register/);
   });
 
+  /**
+   * `--filter the-workshop` is three ninety-minute runs, not one.
+   *
+   * Substring matching is right nearly always and wrong for a family named
+   * after its head. In a session that costs an afternoon; in `jam:loop` it
+   * costs every iteration, forever.
+   */
+  it("selects one arm on an exact filter and all three on a loose one", async () => {
+    const { loadScenarios } = await import("../schema.js");
+    const dir = new URL("../../scenarios", import.meta.url).pathname;
+    const loose = await loadScenarios(dir, "the-workshop");
+    const exact = await loadScenarios(dir, "=the-workshop");
+    expect(loose.scenarios.length).toBe(3);
+    expect(exact.scenarios.map((s) => s.id)).toEqual(["the-workshop"]);
+    // The set digest is taken over everything before either filter applies, so
+    // a narrowed run still records which version of the questions it answered.
+    expect(exact.hash).toBe(loose.hash);
+  });
+
   it("gives every arm the same number of model calls", async () => {
     const { loadScenarios } = await import("../schema.js");
     const { scenarios } = await loadScenarios(new URL("../../scenarios", import.meta.url).pathname, "workshop");
