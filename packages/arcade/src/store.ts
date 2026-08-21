@@ -545,29 +545,23 @@ export class ArcadeStore {
    * hundreds. When that stops being true this becomes a materialised column and
    * the definition stays in one place.
    */
-  list(query: ListQuery = {}): ScoredEntry[] {
+  /** The WHERE clause a `ListQuery` describes, shared by `list` and `count`. */
+  private filter(query: ListQuery): { clause: string; params: Record<string, unknown> } {
     const where: string[] = [];
     const params: Record<string, unknown> = {};
     if (!query.includeDrafts) where.push("status = 'published'");
-    if (query.genre) {
-      where.push("genre = @genre");
-      params.genre = query.genre;
-    }
-    if (query.model) {
-      where.push("model = @model");
-      params.model = query.model;
-    }
-    if (query.theme) {
-      where.push("theme = @theme");
-      params.theme = query.theme;
-    }
-    if (query.brief) {
-      where.push("brief = @brief");
-      params.brief = query.brief;
-    }
-    if (query.scenario) {
-      where.push("scenario = @scenario");
-      params.scenario = query.scenario;
+    for (const [key, column] of [
+      ["genre", "genre"],
+      ["model", "model"],
+      ["theme", "theme"],
+      ["brief", "brief"],
+      ["scenario", "scenario"],
+    ] as const) {
+      const value = query[key];
+      if (value) {
+        where.push(`${column} = @${key}`);
+        params[key] = value;
+      }
     }
     if (query.q) {
       where.push(
@@ -575,58 +569,96 @@ export class ArcadeStore {
       );
       params.q = `%${query.q.toLowerCase()}%`;
     }
-    const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    return { clause: where.length ? `WHERE ${where.join(" AND ")}` : "", params };
+  }
+
+  list(query: ListQuery = {}): ScoredEntry[] {
+    const { clause, params } = this.filter(query);
     const rows = this.db.prepare(`SELECT * FROM entries ${clause}`).all(params) as EntryRow[];
 
-    const scored = rows.map((row) => this.attachScores(hydrate(row)));
+    const entries = rows.map(hydrate);
+    const scored = this.attachScores(entries);
     const sorted = sortEntries(scored, query.sort ?? "recent");
     const offset = Math.max(0, query.offset ?? 0);
     const limit = query.limit === undefined ? sorted.length : Math.max(0, query.limit);
     return sorted.slice(offset, offset + limit);
   }
 
+  /**
+   * How many rows match, without scoring any of them.
+   *
+   * This used to be `list().length`, which meant every call to `/api/health`
+   * loaded and scored the entire board. Harmless at three games and silly at
+   * three hundred, and the fix is the same query the listing already builds.
+   */
   count(query: ListQuery = {}): number {
-    return this.list({ ...query, limit: undefined, offset: 0 }).length;
+    const { clause, params } = this.filter(query);
+    return (this.db.prepare(`SELECT COUNT(*) AS n FROM entries ${clause}`).get(params) as { n: number }).n;
   }
 
   scored(id: string): ScoredEntry | undefined {
     const entry = this.entry(id);
-    return entry ? this.attachScores(entry) : undefined;
+    return entry ? this.attachScores([entry])[0] : undefined;
   }
 
-  private attachScores(entry: Entry): ScoredEntry {
-    const rows = this.db
+  /**
+   * Scores, review counts and card images for a whole page of entries.
+   *
+   * Three queries for the page rather than three per row. Per-row was correct
+   * and would have made a hundred-game board three hundred round trips; SQLite
+   * is fast enough that nobody would have noticed until it was a habit.
+   */
+  private attachScores(entries: Entry[]): ScoredEntry[] {
+    if (entries.length === 0) return [];
+    const ids = entries.map((e) => e.id);
+    const holes = ids.map(() => "?").join(",");
+
+    const scoreRows = this.db
       .prepare(
-        `SELECT rs.category AS category, AVG(rs.score) AS mean, COUNT(*) AS n
+        `SELECT r.entry_id AS id, rs.category AS category, AVG(rs.score) AS mean, COUNT(*) AS n
            FROM review_scores rs
            JOIN reviews r ON r.id = rs.review_id
-          WHERE r.entry_id = ?
-          GROUP BY rs.category`,
+          WHERE r.entry_id IN (${holes})
+          GROUP BY r.entry_id, rs.category`,
       )
-      .all(entry.id) as { category: string; mean: number; n: number }[];
-    const scores: Record<string, CategoryScore> = {};
-    for (const row of rows) {
-      if (!CATEGORY_KEYS.includes(row.category)) continue;
-      scores[row.category] = { mean: round2(row.mean), count: row.n };
-    }
-    const reviewCount = (
-      this.db.prepare("SELECT COUNT(*) AS n FROM reviews WHERE entry_id = ?").get(entry.id) as { n: number }
-    ).n;
+      .all(...ids) as { id: string; category: string; mean: number; n: number }[];
+
+    const counts = this.db
+      .prepare(`SELECT entry_id AS id, COUNT(*) AS n FROM reviews WHERE entry_id IN (${holes}) GROUP BY entry_id`)
+      .all(...ids) as { id: string; n: number }[];
+
     // A mid-play frame from the final playtest, falling back to whatever exists.
     // A title screen makes every card in the grid look identical, which is the
     // one thing a board of a hundred games cannot afford.
-    const thumb =
-      (
-        this.db
-          .prepare(
-            `SELECT file FROM media
-              WHERE entry_id = ?
-              ORDER BY (kind = 'shot') DESC, (file LIKE '%playing%') DESC, ord
-              LIMIT 1`,
-          )
-          .get(entry.id) as { file: string } | undefined
-      )?.file ?? null;
-    return { ...entry, scores, overall: overallScore(scores), reviewCount, thumb };
+    const thumbs = this.db
+      .prepare(
+        `SELECT entry_id AS id, file FROM media
+          WHERE entry_id IN (${holes})
+          ORDER BY entry_id, (kind = 'shot') DESC, (file LIKE '%playing%') DESC, ord`,
+      )
+      .all(...ids) as { id: string; file: string }[];
+
+    const byId = new Map<string, Record<string, CategoryScore>>();
+    for (const row of scoreRows) {
+      if (!CATEGORY_KEYS.includes(row.category)) continue;
+      const bucket = byId.get(row.id) ?? {};
+      bucket[row.category] = { mean: round2(row.mean), count: row.n };
+      byId.set(row.id, bucket);
+    }
+    const reviewCounts = new Map(counts.map((row) => [row.id, row.n]));
+    const firstThumb = new Map<string, string>();
+    for (const row of thumbs) if (!firstThumb.has(row.id)) firstThumb.set(row.id, row.file);
+
+    return entries.map((entry) => {
+      const scores = byId.get(entry.id) ?? {};
+      return {
+        ...entry,
+        scores,
+        overall: overallScore(scores),
+        reviewCount: reviewCounts.get(entry.id) ?? 0,
+        thumb: firstThumb.get(entry.id) ?? null,
+      };
+    });
   }
 
   /** Distinct values for the filter menus, drawn from what actually exists. */

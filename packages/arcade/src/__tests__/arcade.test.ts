@@ -211,6 +211,69 @@ describe("store", () => {
     expect(store.list({ q: "b" }).map((e) => e.title)).toEqual(["B"]);
   });
 
+  /**
+   * The scores, counts and thumbnails for a whole page come from three grouped
+   * queries rather than three per row. The failure mode of that rewrite is not
+   * a crash — it is one entry quietly wearing another's scores, which would be
+   * invisible on a board where everything has a number.
+   */
+  it("keeps each entry's scores, review count and thumbnail its own", () => {
+    const ids = ["a", "b", "c"].map((runId) => {
+      const entry = store.createEntry(provenance({ runId }));
+      store.register(entry.id, { title: runId.toUpperCase() });
+      store.publish(entry.id, {
+        media: [
+          { kind: "shot", file: `${runId}-04-playing.png`, caption: "playing" },
+          { kind: "reel", file: `${runId}-reel.png`, caption: "round 1" },
+        ],
+      });
+      return entry.id;
+    });
+
+    store.saveReview(ids[0], "one", { theme: 5, gameplay: 5 });
+    store.saveReview(ids[0], "two", { theme: 3 });
+    store.saveReview(ids[1], "one", { visuals: 2 });
+    // `c` is reviewed by nobody.
+
+    const board = store.list({ sort: "title" });
+    expect(board.map((e) => e.title)).toEqual(["A", "B", "C"]);
+
+    expect(board[0].scores.theme).toEqual({ mean: 4, count: 2 });
+    expect(board[0].scores.gameplay).toEqual({ mean: 5, count: 1 });
+    expect(board[0].reviewCount).toBe(2);
+    expect(board[0].overall).toBe(4.5);
+    expect(board[0].thumb).toBe("a-04-playing.png");
+
+    expect(board[1].scores.theme).toBeUndefined();
+    expect(board[1].scores.visuals).toEqual({ mean: 2, count: 1 });
+    expect(board[1].reviewCount).toBe(1);
+    expect(board[1].thumb).toBe("b-04-playing.png");
+
+    expect(board[2].scores).toEqual({});
+    expect(board[2].overall).toBeNull();
+    expect(board[2].reviewCount).toBe(0);
+    expect(board[2].thumb).toBe("c-04-playing.png");
+
+    // The one-entry path has to agree with the page path.
+    expect(store.scored(ids[0])).toEqual(board[0]);
+    expect(store.scored(ids[2])).toEqual(board[2]);
+  });
+
+  it("counts without scoring, and counts the same rows the listing returns", () => {
+    for (const runId of ["a", "b"]) {
+      const entry = store.createEntry(provenance({ runId }));
+      store.register(entry.id, { title: runId, genre: runId === "a" ? "puzzle" : "shooter" });
+      store.publish(entry.id, {});
+    }
+    store.createEntry(provenance({ runId: "still-running" }));
+
+    expect(store.count()).toBe(2);
+    expect(store.count({ includeDrafts: true })).toBe(3);
+    expect(store.count({ genre: "puzzle" })).toBe(1);
+    expect(store.count({ genre: "platformer" })).toBe(0);
+    expect(store.count({ genre: "puzzle" })).toBe(store.list({ genre: "puzzle" }).length);
+  });
+
   it("reports the facets that exist rather than the ones that could", () => {
     const a = store.createEntry(provenance({ runId: "a" }));
     store.register(a.id, { title: "A", genre: "puzzle" });
