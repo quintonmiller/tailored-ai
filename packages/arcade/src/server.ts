@@ -310,6 +310,16 @@ async function handleSite(
 function handleGame(req: IncomingMessage, res: ServerResponse, store: ArcadeStore): void {
   const url = new URL(req.url ?? "/", "http://arcade.local");
   const path = decodeURIComponent(url.pathname);
+
+  // The browser asks for this by itself on a top-level navigation, and a 404
+  // puts a red line in the console of a page whose console is the first place
+  // anybody looks when judging whether a game runs clean. No content is the
+  // honest answer: there is no favicon here.
+  if (path === "/favicon.ico") {
+    res.writeHead(204).end();
+    return;
+  }
+
   const match = /^\/play\/([^/]+)(\/.*)?$/.exec(path);
   if (!match) {
     json(res, 404, { error: "not a game" });

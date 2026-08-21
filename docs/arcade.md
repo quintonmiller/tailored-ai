@@ -213,6 +213,36 @@ run: the suite constructs the workshop forty-eight times, and forty-eight rows
 landed in the real database, several of them published. A convention that tests
 must remember to pass a temporary home is not a guard.
 
+## What the wiring runs found (2026-08-21)
+
+Four short live runs against `qwen3.8-27b`, three rounds each, before the real
+jam loop started.
+
+**The arcade tools were a distraction, and the fix is a partition rather than a
+refusal.** With the tools in `sharedTools()`, the *interface* agent — which
+cannot register anything — spent four of the team's six tool calls browsing the
+arcade and reading three previous entries. A cheap, interesting, public tool is
+one every agent calls once, and once × five agents × twenty rounds is a lot of
+sightseeing. They now go only to the role that owns `submission.md`; a refusal
+would still have cost the call, the schema entry and the turn.
+
+**The zero-write result was the smoke scenario, not the arcade.** All three
+runs wrote no files at all, which looked damning until the control: the same
+scenario with `--sim-option arcade=off` also wrote nothing. Three rounds with
+terse instructions is not enough for this model to get past `list_files` and
+`read_brief`; the twenty-round scenario writes files in round zero. Worth
+recording because the first reading — "the new feature broke the eval" — was
+wrong, and one four-minute control run settled it.
+
+**Verified by hand, since a three-round run cannot reach them:** the review
+round trip in a real browser (five scores → 3.60 overall, restored on reload,
+board re-sorted, no console errors), and both imported games running from the
+arcade's own copy with keyboard input working.
+
+**Not yet verified live:** a model actually calling `arcade_register`, and the
+publish-at-finish path in a real jam. Both need a full run, and the first one
+of the loop is it.
+
 ## What this cannot tell you
 
 - **The scores are one person's.** Five categories with written anchors make two
