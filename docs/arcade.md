@@ -243,6 +243,34 @@ arcade's own copy with keyboard input working.
 publish-at-finish path in a real jam. Both need a full run, and the first one
 of the loop is it.
 
+## The loop's sampling settings are load-bearing
+
+`jam:loop` passes `--max-tokens 8192 --thinking medium`, and those are not
+tuning. The first loop run omitted them and got the CLI defaults — 2,048 tokens
+and the provider's own reasoning setting.
+
+**62 of 158 assistant turns, 39%, produced a reasoning trace and nothing else.**
+No text, no tool call. The mean trace was 8,411 characters, roughly 2,100 tokens
+against a 2,048 cap, so those turns ended mid-thought every time.
+
+What that looked like from outside is the part worth remembering. At round 8 of
+20 the lead had written no design, the builder no code, and the tester was
+posting increasingly pointed escalations to a team that would not answer it:
+
+> *the concept lock in `design.md` is now the critical path with 13 rounds left*
+
+Three of five agents appeared to be refusing to work. Nothing in the report says
+"the cap was too low" — `writes 0` and `filesPresent 3` read exactly like a
+model that cannot do the task, and the obvious suspect was the feature that had
+just been added. It was not the feature; it was one missing flag.
+
+The general form of this has bitten this repo before (`docs/evals.md` on
+`--max-tool-rounds 6` strangling a more exploratory model, and issue #490 on a
+turn spending its whole budget reasoning). The rule that keeps falling out of
+it: **suspect the configuration before the model, and check the reasoning
+column before believing a counter.** A `messages.reasoning` full of text next to
+an empty `content` is the whole diagnosis, and it takes one query.
+
 ## What this cannot tell you
 
 - **The scores are one person's.** Five categories with written anchors make two

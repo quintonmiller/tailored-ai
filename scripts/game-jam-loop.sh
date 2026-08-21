@@ -38,6 +38,24 @@ RUNS=0            # 0 means keep going
 # second run stalled. It costs about 45% more wall clock.
 TOOL_ROUNDS="${JAM_TOOL_ROUNDS:-30}"
 
+# 8192, not the default 2048, and reasoning on.
+#
+# This is the setting that decides whether a run happens at all. Measured on the
+# first loop run, which omitted both: 62 of 158 assistant turns — 39% — produced
+# a reasoning trace and *nothing else*. No text, no tool call. Mean trace length
+# 8,411 characters, which is roughly 2,100 tokens against a 2,048 cap, so the
+# turn ended mid-thought every time.
+#
+# The visible symptom was three of five agents apparently refusing to work: at
+# round 8 of 20 the lead had written no design, the builder no code, and the
+# tester was posting escalations about a team that would not answer it. Nothing
+# in the report says "the cap was too low"; it reads exactly like a model that
+# cannot do the task.
+#
+# The two live jams that produced real games both ran at 8192 with `medium`.
+JAM_MAX_TOKENS="${JAM_MAX_TOKENS:-8192}"
+JAM_THINKING="${JAM_THINKING:-medium}"
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --seed)     SEED="$2"; shift 2 ;;
@@ -47,6 +65,8 @@ while [ $# -gt 0 ]; do
     --model)    MODEL="$2"; shift 2 ;;
     --base-url) BASE_URL="$2"; shift 2 ;;
     --tool-rounds) TOOL_ROUNDS="$2"; shift 2 ;;
+    --max-tokens) JAM_MAX_TOKENS="$2"; shift 2 ;;
+    --thinking) JAM_THINKING="$2"; shift 2 ;;
     -h|--help)  sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -79,6 +99,7 @@ STOP=0
 run=0
 
 echo "jam loop — $ARM, brief $BRIEF, model $MODEL"
+echo "sampling  max-tokens $JAM_MAX_TOKENS, thinking $JAM_THINKING, tool rounds $TOOL_ROUNDS"
 echo "logs      $LOGS"
 echo "arcade    pnpm run arcade   (http://127.0.0.1:4321)"
 echo
@@ -100,6 +121,8 @@ while [ "$STOP" -eq 0 ]; do
     --seed "$SEED" \
     --repeats 1 \
     --max-tool-rounds "$TOOL_ROUNDS" \
+    --max-tokens "$JAM_MAX_TOKENS" \
+    --thinking "$JAM_THINKING" \
     --context-tokens "$CONTEXT_TOKENS" \
     --max-scenario-minutes 180 \
     --sim-option "brief=$BRIEF" \
