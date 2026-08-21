@@ -10,6 +10,80 @@ before the request, inbound attachments, and the UI rendering and composing
 media behind a sanitizer and a CSP. Outbound media on Discord/Slack and the CLI,
 plus the P6 extras, remain.
 
+## Where this stands
+
+Written for whoever picks this up next, including a later version of the person
+who wrote it. The per-phase detail is under **Phases**; this is the short
+version plus the things that are expensive to rediscover.
+
+**Branch:** `worktree-media-support-plan`, seven implementation commits on top
+of the design ones. Nothing merged to `main` yet.
+
+### Shipped
+
+| Phase | What works now |
+|---|---|
+| P1 | `ContentPart` / `MediaRef` / `MessageContent` / `ToolOutput`; `messageText` + `toolOutputText` as the one text projection; `MediaStore` seam + registry + disk store; magic-byte type resolution; the `media` table and its retention sweep; `Message.content` and `ToolResult.output` widened |
+| P2a | MCP image/audio blocks decode into the store instead of flattening to `[image content …]`; `screenshot()` returns real bytes; `capToolResultOutput` caps text and never media |
+| P2b | `hydrateMedia` resolves refs to bytes once per request; Anthropic emits `image`/`document` **inside `tool_result`**; Bedrock emits Converse `image` blocks |
+| P3 | `ModelCapabilities` with object leaves and tri-state `"unknown"`; `AIProvider.capabilities(model)`; `ModelEntry.capabilities`; the pre-flight in `chatWithFallback`; `supportsTools` made live |
+| P4 | `InboundMessage`; Discord `attachments[]`; Slack `files[]` **and its file-only-message bug fixed**; `POST /api/media`, `GET /api/media/:id`, `mediaIds` on `/api/chat`; **the store finally constructed and wired into the runtime** |
+| P5a | One sanitizing `renderMarkdown`; a server CSP; media rendered in user, assistant and tool-result bubbles; composer picker / paste / drop |
+
+New modules worth knowing about: `core/src/content/{types,codec}.ts`,
+`core/src/media/{interface,disk,registry,queries,sniff,hydrate}.ts`,
+`core/src/providers/capabilities.ts`, `ui/src/lib/{content,markdown}.ts`,
+`ui/src/components/{MediaAttachments,Composer}.tsx`.
+
+### What is left
+
+**P5b — outbound on the remaining surfaces.** `Channel.send` still takes only a
+string, so an agent cannot send an image *out* to Discord or Slack even though
+it can receive one from both. Needs `SurfaceCapabilities` (model it on
+`RoomCapabilities` in `rooms/types.ts:153`, which is the house pattern), the
+`send(target, string | OutboundContent)` union, Discord `files:` and Slack
+`files.uploadV2`, and the CLI printing the placeholder plus a `file://` path.
+
+**P6 — optional.** OCR degradation via the existing `extract_document`,
+iTerm2/kitty inline images, audio and video adapters, a resize step.
+
+**Also open**, from earlier phases: the SSE `tool_result` event still truncates
+to 1000 chars at two sites (`packages/server/src/index.ts:1178` and `:2447`) and carries
+text only — surfaces get media from the DB, not the stream. `onToolResult` still
+hands subscribers the text projection.
+
+### Things that cost time to learn
+
+- **Verify the store is actually reached.** P1-P3 built the entire feature and
+  nothing constructed a `MediaStore`; it worked only in tests. That is the
+  `supportsTools` failure mode and it nearly shipped twice inside one
+  workstream. `media-runtime-wiring.test.ts` exists solely to assert the wiring.
+- **The compiler will not find the template sites.** `${msg.content}` on an
+  object is legal TypeScript and renders `[object Object]`. Sweep by grep, not
+  by build; P1 claimed to have done it and had missed `compact.ts`'s transcript
+  builder, which feeds a summarizer prompt.
+- **A worktree needs its native sqlite binding.** `pnpm install --ignore-scripts`
+  leaves `better-sqlite3` unbuilt and the core suite reports ~1,588 phantom
+  failures that look catastrophic and are not. Copy `build/` from the main
+  checkout's `node_modules/.pnpm/better-sqlite3@*/…` rather than debugging it.
+- **Rebuild core before typechecking dependents.** `packages/server` and the
+  provider plugins compile against core's `dist`, so a new core export is
+  invisible until `pnpm --filter @tailored-ai/core build` runs.
+- **Sanitizing URLs by scheme hits every attribute.** Blocking remote images
+  through `ALLOWED_URI_REGEXP` also strips `href` from every external link. Use
+  a hook that can see the tag.
+
+### Verify
+
+```bash
+pnpm run build && pnpm run typecheck && pnpm run test
+pnpm run guard:local-refs && pnpm run guard:pre-v1
+npx biome check packages/    # repo-wide; a file subset misattributes blame
+```
+
+Green as of P5a: core 3,243 · server 132 · ui 19 · provider-anthropic 52 ·
+provider-bedrock 41 · browser-mediator 13, and every other package unchanged.
+
 ## Why now
 
 Three places already have media in hand and throw it away, each with a comment
@@ -845,7 +919,7 @@ API is the expensive one. The list below is what P1 signs up for.
   irreversibly lossy in a new way, and the tombstone work in
   `docs/context-assembly-design.md` step 3 should land first if that matters.
 - **The SSE `tool_result` event truncates to 1000 chars**, at two separate call
-  sites (`packages/server/src/index.ts:1045` and `:2314`). Fine for a projection,
+  sites (`packages/server/src/index.ts:1178` and `:2447`). Fine for a projection,
   wrong for parts — P5 sends refs over SSE, never bytes, and must fix both.
 - **`stripOrphanedToolMessages` and the follow-up-user-message strategy
   interact.** A tool-result image promoted to a user turn is a message with no
