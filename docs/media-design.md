@@ -386,16 +386,56 @@ TypeError."*
 **What a model accepts:**
 
 ```ts
+/**
+ * A leaf is an object, never a bare boolean, so it can grow limits later
+ * without a breaking change. `"unknown"` is distinct from `false`.
+ */
+export type Support =
+  | { supported: true; maxBytes?: number; maxItems?: number; formats?: string[] }
+  | { supported: false }
+  | { supported: "unknown" };
+
 export interface ModelCapabilities {
   /** Mime types or globs accepted as input: ["text/*", "image/*"]. */
   input: string[];
   output: string[];
-  /** How this model's API takes media inside a tool result. */
-  toolResultMedia: "inline" | "follow-up" | "none";
-  maxBytesPerItem?: number;
-  maxItemsPerRequest?: number;
+  /** Inline bytes and a fetchable URL are different capabilities. */
+  inputBytes: Support;
+  inputUrl: Support;
+  /** Media inside a tool result is its own capability, not implied by input. */
+  toolResultMedia: { supported: true; mode: "inline" | "follow-up" } | { supported: false } | { supported: "unknown" };
 }
 ```
+
+Three shapes borrowed rather than invented, each from something that got it
+wrong first:
+
+**A leaf is an object.** Anthropic's Models API returns
+`capabilities.image_input: { supported: true }` — never a bare boolean — so a
+leaf can later grow `max_size` or `formats` without breaking a reader. It also
+makes the whole `capabilities` object nullable, meaning *absent ≠ unsupported*.
+
+**`"unknown"` is not `false`.** LiteLLM's `supports_vision(model)` and its
+sixteen siblings all swallow exceptions and return `False` for a model they have
+never heard of, so "this model has no eyes" and "I have no idea what this model
+is" are the same value. That is precisely wrong for us: a local gateway serves
+whatever was last loaded under a name core cannot introspect, so *unknown is the
+common case*, and treating it as `false` would refuse images to a vision model
+purely for lacking a config line. Unknown is a third state, and policy decides
+what to do with it.
+
+**Bytes, URL, and tool-result media are three capabilities, not one.**
+LangChain's `ModelProfile` splits `image_inputs` / `image_url_inputs` and
+separately carries `image_tool_message` / `pdf_tool_message` — media in a tool
+result is tracked apart from media in a user turn, which is the same distinction
+this design arrived at from the vLLM failure. Independent arrival is worth more
+than either observation alone.
+
+And one shape deliberately *not* borrowed: LiteLLM's flat namespace of 34
+`supports_*` booleans has visibly drifted — `supports_vision` set on 1007
+entries, `supports_image_input` on 6, `supports_multimodal` on 6, all nominally
+about the same thing. Modalities stay in the `input`/`output` arrays; only
+genuinely distinct mechanisms get their own leaf.
 
 Declared on the provider as **a function of the model id, not a constant**:
 
@@ -438,10 +478,25 @@ optional only because 6 provider packages would otherwise fail to compile on
 upgrade; the `supportsTools` rules above are what substitute for the compiler.
 
 Resolution order, most specific first: `ModelEntry.capabilities` in config →
-`provider.capabilities(model)` → a conservative text-only default. `ModelEntry`
-already has the precedent for per-rung overrides in `maxContextTokens`, and
-config has to win because a local gateway serves whatever model was last loaded
-under a name core cannot introspect.
+`provider.capabilities(model)` → **`"unknown"`**. `ModelEntry` already has the
+precedent for per-rung overrides in `maxContextTokens`, and config has to win
+because a local gateway serves whatever model was last loaded under a name core
+cannot introspect.
+
+An earlier draft of this document ended that chain at "a conservative text-only
+default", which is wrong and worth recording as wrong. Most models TAI talks to
+will never have a capability line — auto-discovery is not available for the ones
+that matter, since Bedrock's `inputModalities` enum is only
+`TEXT | IMAGE | EMBEDDING` (a model taking PDFs and a model taking video both
+just say `IMAGE`), and Gemini's Models API publishes **no** modality fields at
+all. So "undeclared" is the normal state, not the exceptional one, and silently
+resolving it to text-only would make the default behaviour "your vision model
+cannot see" until someone writes config. `"unknown"` resolves under
+`media.onUnknown` — `try` (send it; the provider's 400 is the answer, and the
+quirks ladder in `providers/quirks.ts` already exists to memoize exactly that
+kind of learned per-model fact) or `degrade`. `try` is the better default here
+precisely because TAI already has machinery for learning a model's constraints
+from its refusals.
 
 **What a surface can show:**
 
@@ -466,6 +521,13 @@ every provider, and **read by nothing that changes behaviour** — one evals
 recorder and some contract assertions. It is a capability declaration that
 declares into the void, and it is the exact failure mode this design is most at
 risk of repeating.
+
+It is also not a TAI-specific disease. LiteLLM ships a `supports_audio_output`
+helper whose body reads the `supports_audio_input` key — 113 model entries set
+`supports_audio_output`, and nothing correctly reads any of them. LangChain's
+`ModelProfile` documents that *"model inputs can be gated based on supported
+modalities"* and then enforces nothing, leaving the gating to the application.
+Three projects, three declarations that describe more than they decide.
 
 Three rules, adopted as acceptance criteria rather than as good intentions:
 
@@ -505,6 +567,14 @@ than itself.
    with `tesseract.js` / `pdf-parse`, both already optional deps. Off by default
    (`media.ocrFallback`), because OCR is slow and lossy and pretending a photo
    is its caption is its own kind of lie.
+
+   This rung has exactly one shipped precedent in the industry, and it works the
+   same way. OpenRouter's `file-parser` plugin converts a PDF for a model that
+   can't take one — native if available, else an OCR engine — and its documented
+   behaviour for the hardest case matches this ladder exactly: *"If your
+   downstream model does not accept image input at all, OCR-extracted images are
+   stripped entirely and only the parsed text is forwarded."* Convert first,
+   strip last, never silently.
 4. `onUnsupported: "skip-rung"` → don't degrade, try the next model in the
    chain. This is why the check belongs in `chatWithFallback` and not in the
    provider.
@@ -595,8 +665,8 @@ tier 2 channels.*
 CLI; audio and video adapters; a resize step for models with small size caps.
 
 Config (`media.retentionDays`, `media.maxBytes`, `media.onUnsupported`,
-`media.ocrFallback`) and per-model capability declarations are *tier 3* — they
-live in a deployment's `config.yaml`, not here.
+`media.onUnknown`, `media.ocrFallback`) and per-model capability declarations
+are *tier 3* — they live in a deployment's `config.yaml`, not here.
 
 ## Security
 
@@ -673,6 +743,16 @@ Little, by construction — but not nothing.
 - **Do rooms carry media?** `room_messages.content` is TEXT and the envelope is
   regex-parsed (`rooms/envelope.ts`). Agent-to-agent images are a real use case
   and a bigger change than it looks.
+- **Where do capability defaults come from, if not from config?** Hand-writing a
+  line per model is the thing nobody sustains. Three options, none free:
+  `models.dev`'s `api.json` (`modalities: {input:[], output:[]}` per model — it
+  is what LangChain's profiles are generated from, so it is already load-bearing
+  for someone else); OpenRouter's `/api/v1/models`, which is live and filterable
+  by `input_modalities` but only covers models it routes; or shipping a small
+  static table for the handful of models a default install actually names.
+  A bundled table goes stale silently, which is the failure mode this document
+  keeps arguing against — so probably: `"unknown"` plus a good `onUnknown`
+  default, and a table only if that proves annoying in practice.
 - **Do parts need their own provider-options bag?** The AI SDK puts
   `providerOptions` on *every* part, and two real features need it: OpenAI's
   `imageDetail: 'low'` (a large cost lever on image input) and Anthropic's
