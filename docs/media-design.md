@@ -61,7 +61,15 @@ subsystems are already falling into, quietly, in production.
 
 ## What other systems do
 
-Surveyed because the wheel is round already. Verified against primary docs.
+Surveyed because the wheel is round already.
+
+The claims this design actually rests on were checked against primary sources
+and are cited inline below: Anthropic's `tool_result` block types, the
+Responses-vs-Chat-Completions split, and vLLM's refusal of media on a `tool`
+message. MCP's block set is corroborated in-tree — `mcp/client.ts` already
+switches on exactly `text` / `resource` / `resource_link` / `image` / `audio`.
+The remaining rows of the table below are orientation, not evidence; re-check a
+field name against that vendor's docs before writing an adapter against it.
 
 ### Content is an array of positional blocks — everywhere
 
