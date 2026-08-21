@@ -4,7 +4,8 @@ How images (and audio, video, PDFs, arbitrary files) get into a prompt, out of a
 tool, through the loop, and onto a screen — without breaking the text-only
 assumptions the runtime is built on today.
 
-Status: **P1 shipped** (content parts + the media store). P2-P6 are proposals.
+Status: **P1 and P2 shipped** (content parts, the media store, tools returning
+media, and Anthropic/Bedrock inlining it). P3-P6 are proposals.
 
 ## Why now
 
@@ -699,14 +700,19 @@ object arm produced **25**. 53 tests were added (core 3129 → 3182), including 
 regression test asserting an image is not priced like its caption.
 *Tier 1 (core).*
 
-**P2 — Tools return media.** MCP's `renderContent` stops flattening and maps
-`image` / `audio` / `resource` blocks to parts. `screenshotMeta` becomes
-`screenshot` and returns the bytes it already has. Anthropic and Bedrock adapters
-emit inline tool-result media; everything else degrades. `capToolOutput` learns
-to cap the projection and leave parts alone.
-**This is the phase that proves the model end to end** — a browser agent that can
-see is the first thing that works, and it exercises store, projection, provider
-mapping, and degradation in one path. *Tier 1 seam + tier 2 adapters.*
+**P2 — Tools return media. ✅ Shipped.** MCP's `renderContent` stops flattening
+and decodes `image`/`audio`/`resource` blocks into the store;
+`screenshotMeta()` became `screenshot()` and returns the bytes it always
+captured; `capToolResultOutput` caps text and never media; `hydrateMedia`
+resolves references to bytes once per request so synchronous converters can
+inline them; Anthropic emits `image`/`document` blocks **inside `tool_result`**
+and Bedrock emits Converse `image` blocks in `toolResult.content`. Everything
+else degrades to the placeholder.
+
+A browser agent on Anthropic or Bedrock can now see what it screenshotted, and
+an MCP server returning a chart hands over the chart. Chat Completions
+deployments — the local path — still get the placeholder, which is correct
+until P3 can tell a vision model from a text one.
 
 **P3 — Capabilities.** `ModelCapabilities`, `SurfaceCapabilities`,
 `ModelEntry.capabilities`, resolution, and the `chatWithFallback` pre-flight.

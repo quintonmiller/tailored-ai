@@ -9,7 +9,16 @@ import type {
   ToolCall,
   ToolSchema,
 } from "@tailored-ai/core";
-import { messageText, ProviderHttpError, QuirkMemo, runQuirkLadder, WarnOnce } from "@tailored-ai/core";
+import {
+  contentParts,
+  type MessageContent,
+  mediaPlaceholder,
+  messageText,
+  ProviderHttpError,
+  QuirkMemo,
+  runQuirkLadder,
+  WarnOnce,
+} from "@tailored-ai/core";
 import { parseSseStream } from "./sse.js";
 
 /**
@@ -54,14 +63,31 @@ interface ToolUseBlock {
   cache_control?: { type: "ephemeral" };
 }
 
-interface ToolResultBlock {
-  type: "tool_result";
-  tool_use_id: string;
-  content: string;
+interface ImageBlock {
+  type: "image";
+  source: { type: "base64"; media_type: string; data: string } | { type: "url"; url: string };
   cache_control?: { type: "ephemeral" };
 }
 
-type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock;
+interface DocumentBlock {
+  type: "document";
+  source: { type: "base64"; media_type: string; data: string };
+  cache_control?: { type: "ephemeral" };
+}
+
+/**
+ * `tool_result.content` accepts text, image, document and search_result blocks
+ * — Anthropic is one of the few APIs where media can be returned *inline* from
+ * a tool rather than smuggled into a following user turn.
+ */
+interface ToolResultBlock {
+  type: "tool_result";
+  tool_use_id: string;
+  content: string | Array<TextBlock | ImageBlock | DocumentBlock>;
+  cache_control?: { type: "ephemeral" };
+}
+
+type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock | ImageBlock | DocumentBlock;
 
 interface ApiMessage {
   role: "user" | "assistant";
@@ -118,9 +144,60 @@ interface StreamPayload {
  * attach); mid-conversation system messages become user turns; adjacent
  * same-role messages merge (the API requires alternating turns).
  */
+/**
+ * Turn one TAI content value into Anthropic blocks.
+ *
+ * A media part becomes a real `image`/`document` block when its bytes were
+ * hydrated for this request and the type is one Anthropic accepts. Otherwise it
+ * degrades to its text placeholder — the model is told a picture was there,
+ * which is the whole point of the placeholder existing.
+ */
+function toContentBlocks(
+  content: string | MessageContent | null,
+  media: ReadonlyMap<string, Buffer> | undefined,
+): Array<TextBlock | ImageBlock | DocumentBlock> {
+  const blocks: Array<TextBlock | ImageBlock | DocumentBlock> = [];
+  const pushText = (text: string) => {
+    if (text.length > 0) blocks.push({ type: "text", text });
+  };
+
+  for (const part of contentParts(content)) {
+    if (part.type === "text") {
+      pushText(part.text);
+      continue;
+    }
+    const { media: ref, alt } = part;
+    if (ref.url && isSupportedImage(ref.mimeType)) {
+      blocks.push({ type: "image", source: { type: "url", url: ref.url } });
+      continue;
+    }
+    const bytes = media?.get(ref.id);
+    if (!bytes) {
+      pushText(mediaPlaceholder(ref, alt));
+      continue;
+    }
+    const data = bytes.toString("base64");
+    if (isSupportedImage(ref.mimeType)) {
+      blocks.push({ type: "image", source: { type: "base64", media_type: ref.mimeType, data } });
+    } else if (ref.mimeType === "application/pdf") {
+      blocks.push({ type: "document", source: { type: "base64", media_type: ref.mimeType, data } });
+    } else {
+      // Audio and video have no home in this API. Saying so beats a 400.
+      pushText(mediaPlaceholder(ref, alt));
+    }
+  }
+  return blocks;
+}
+
+/** The four image types the Messages API documents. */
+function isSupportedImage(mimeType: string): boolean {
+  return ["image/jpeg", "image/png", "image/gif", "image/webp"].includes(mimeType.toLowerCase());
+}
+
 export function toApiMessages(
   messages: Message[],
   promptCaching: boolean,
+  media?: ReadonlyMap<string, Buffer>,
 ): { system: TextBlock[] | undefined; messages: ApiMessage[] } {
   const systemBlocks: TextBlock[] = [];
   let i = 0;
@@ -141,10 +218,16 @@ export function toApiMessages(
     if (msg.role === "system") {
       result.push({ role: "user", content: messageText(msg.content) });
     } else if (msg.role === "tool") {
+      // Media rides inside the tool_result, which is where it belongs: the
+      // content stays quarantined as tool output rather than being promoted
+      // into a user turn, the position Anthropic's own guidance warns about
+      // for untrusted content.
+      const blocks = toContentBlocks(msg.content, media);
+      const hasMediaBlock = blocks.some((b) => b.type === "image" || b.type === "document");
       const block: ToolResultBlock = {
         type: "tool_result",
         tool_use_id: msg.toolCallId ?? "",
-        content: messageText(msg.content),
+        content: hasMediaBlock ? blocks : messageText(msg.content),
       };
       result.push({ role: "user", content: [block] });
     } else if (msg.role === "assistant" && msg.toolCalls?.length) {
@@ -158,7 +241,9 @@ export function toApiMessages(
       result.push({ role: "assistant", content: blocks });
     } else {
       const role = msg.role === "user" ? "user" : "assistant";
-      result.push({ role, content: messageText(msg.content) });
+      const blocks = toContentBlocks(msg.content, media);
+      const hasMediaBlock = blocks.some((b) => b.type === "image" || b.type === "document");
+      result.push({ role, content: hasMediaBlock ? blocks : messageText(msg.content) });
     }
   }
 
@@ -198,9 +283,19 @@ function estimateTokens(text: string): number {
 
 function blockText(block: ContentBlock): string {
   if (block.type === "text") return block.text;
-  if (block.type === "tool_result") return block.content;
-  return `${block.name}${JSON.stringify(block.input)}`;
+  if (block.type === "tool_result") {
+    return typeof block.content === "string" ? block.content : block.content.map(blockText).join("");
+  }
+  if (block.type === "tool_use") return `${block.name}${JSON.stringify(block.input)}`;
+  // Image and document blocks: this estimator exists only to compare a prefix
+  // against the minimum cacheable size, and an image is certainly above the
+  // few characters its base64 would suggest if measured as text. A flat, honest
+  // stand-in beats measuring a payload whose token cost is not a length.
+  return MEDIA_BLOCK_TEXT_EQUIVALENT;
 }
+
+/** Placeholder string whose length stands in for one media block's token cost. */
+const MEDIA_BLOCK_TEXT_EQUIVALENT = "x".repeat(6000);
 
 function messageTokens(msg: ApiMessage): number {
   if (typeof msg.content === "string") return estimateTokens(msg.content);
@@ -390,7 +485,7 @@ export class AnthropicMessagesProvider implements AIProvider {
   }
 
   private buildBody(params: ChatParams, dropTemperature = false): Record<string, unknown> {
-    const { system, messages } = toApiMessages(params.messages, this.promptCaching);
+    const { system, messages } = toApiMessages(params.messages, this.promptCaching, params.media);
 
     const baseMax = params.maxTokens ?? this.defaultMaxTokens;
     const body: Record<string, unknown> = {

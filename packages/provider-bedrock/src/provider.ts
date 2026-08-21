@@ -9,6 +9,7 @@ import {
   type ConverseStreamOutput,
   type SystemContentBlock,
   type Tool,
+  type ToolResultContentBlock,
 } from "@aws-sdk/client-bedrock-runtime";
 import { fromNodeProviderChain } from "@aws-sdk/credential-providers";
 import type { DocumentType } from "@smithy/types";
@@ -22,7 +23,7 @@ import type {
   ToolCall,
   ToolSchema,
 } from "@tailored-ai/core";
-import { messageText } from "@tailored-ai/core";
+import { contentParts, type MessageContent, mediaPlaceholder, messageText } from "@tailored-ai/core";
 
 // --- Conversion helpers (exported for testing) ---
 
@@ -57,7 +58,79 @@ export function isAnthropicBedrockModel(modelId: string): boolean {
  * Convert internal messages to the Converse API format.
  * Returns { system, messages } since Converse takes system as a top-level param.
  */
-export function toConverseMessages(messages: Message[]): {
+export /**
+ * Converse's image block wants a bare format name, not a mime type.
+ * Returns undefined for anything Converse does not take, so the caller can
+ * fall back to the text placeholder instead of building a request that 400s.
+ */
+function converseImageFormat(mimeType: string): "png" | "jpeg" | "gif" | "webp" | undefined {
+  switch (mimeType.toLowerCase()) {
+    case "image/png":
+      return "png";
+    case "image/jpeg":
+      return "jpeg";
+    case "image/gif":
+      return "gif";
+    case "image/webp":
+      return "webp";
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * TAI content to Converse blocks.
+ *
+ * Bedrock was always the closest provider to being ready for this: the SDK's
+ * `ContentBlock` union has carried `image` and `document` variants all along
+ * and this file simply never constructed one. A part whose bytes were hydrated
+ * for this request becomes a real block; anything else degrades to the text
+ * placeholder, so the model is told what it could not be shown.
+ */
+function toConverseBlocks(
+  content: string | MessageContent | null,
+  media: ReadonlyMap<string, Buffer> | undefined,
+): ContentBlock[] {
+  const blocks: ContentBlock[] = [];
+  const pushText = (text: string) => {
+    if (text.length > 0) blocks.push({ text });
+  };
+
+  for (const part of contentParts(content)) {
+    if (part.type === "text") {
+      pushText(part.text);
+      continue;
+    }
+    const bytes = media?.get(part.media.id);
+    const format = converseImageFormat(part.media.mimeType);
+    if (bytes && format) {
+      blocks.push({ image: { format, source: { bytes: new Uint8Array(bytes) } } });
+    } else {
+      pushText(mediaPlaceholder(part.media, part.alt));
+    }
+  }
+  return blocks;
+}
+
+/**
+ * Blocks for a `toolResult`. Converse rejects an empty content array, so a
+ * result that produced nothing renderable still sends one (empty-ish) text
+ * block rather than an empty list.
+ */
+function toolResultContent(
+  content: string | MessageContent | null,
+  media: ReadonlyMap<string, Buffer> | undefined,
+): ToolResultContentBlock[] {
+  // Converse types tool-result blocks separately from message blocks, but the
+  // `text` and `image` shapes coincide, which is what makes this cast safe.
+  const blocks = toConverseBlocks(content, media) as ToolResultContentBlock[];
+  return blocks.length > 0 ? blocks : [{ text: messageText(content) || "(no output)" }];
+}
+
+export function toConverseMessages(
+  messages: Message[],
+  media?: ReadonlyMap<string, Buffer>,
+): {
   system: SystemContentBlock[];
   messages: BedrockMessage[];
 } {
@@ -82,7 +155,7 @@ export function toConverseMessages(messages: Message[]): {
           {
             toolResult: {
               toolUseId: msg.toolCallId ?? "",
-              content: [{ text: messageText(msg.content) }],
+              content: toolResultContent(msg.content, media),
             },
           },
         ],
@@ -108,7 +181,7 @@ export function toConverseMessages(messages: Message[]): {
       // with no content — merging below keeps the turn order valid.
       if (!msg.content) continue;
       const role = msg.role === "assistant" ? "assistant" : "user";
-      result.push({ role, content: [{ text: messageText(msg.content) }] });
+      result.push({ role, content: toConverseBlocks(msg.content, media) });
     }
   }
 
@@ -225,7 +298,7 @@ export class BedrockProvider implements AIProvider {
   }
 
   private buildInput(params: ChatParams): ConverseCommandInput {
-    const { system, messages } = toConverseMessages(params.messages);
+    const { system, messages } = toConverseMessages(params.messages, params.media);
 
     const baseMax = params.maxTokens ?? 4096;
     const inferenceConfig: ConverseCommandInput["inferenceConfig"] = {

@@ -61,6 +61,19 @@ export interface ChatParams {
    * {@link ChatParams.thinking} fragment when both target the same key.
    */
   extra?: Record<string, unknown>;
+  /**
+   * Bytes for the media referenced by {@link ChatParams.messages}, keyed by
+   * `MediaRef.id`, resolved by the caller just before the request.
+   *
+   * History stores references, not payloads, and message-to-wire converters are
+   * synchronous — so something has to turn one into the other, once per request
+   * rather than once per turn. That something is the loop.
+   *
+   * A provider that cannot carry media ignores this and renders the text
+   * projection instead; an id missing from the map means the blob could not be
+   * read, which is likewise a fall back to text. Never persisted.
+   */
+  media?: ReadonlyMap<string, Buffer>;
 }
 
 export interface ToolSchema {

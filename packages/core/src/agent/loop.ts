@@ -14,6 +14,7 @@ import { loadAllContext, loadContextFiles } from "../context.js";
 import { recordTokenUsage } from "../db/autopilot-queries.js";
 import { getCoreMemory, renderCoreMemory } from "../db/core-memory-queries.js";
 import { getSessionMessages, saveMessage } from "../db/queries.js";
+import { hydrateMedia } from "../media/hydrate.js";
 import type {
   AIProvider,
   ChatParams,
@@ -455,6 +456,15 @@ export interface AgentLoopOptions {
    * core neither validates nor interprets the keys.
    */
   providerExtra?: Record<string, unknown>;
+  /**
+   * Where tool-produced media lives.
+   *
+   * When set, media references in history are resolved to bytes before each
+   * provider call, so a model that accepts images sees them. When unset — the
+   * default, and every deployment that has not opted in — providers render the
+   * text projection instead and nothing else changes.
+   */
+  mediaStore?: import("../media/interface.js").MediaStore;
   /** Extra fields merged into the ToolContext passed to every tool execution. */
   toolContextExtras?: Partial<import("../tools/interface.js").ToolContext>;
   permissions?: PermissionsConfig;
@@ -1587,6 +1597,11 @@ async function _runAgentLoopBody(
      * prettier request the rung might still reject is the wrong trade. A
      * request the fallback accepts beats a well-summarised one it does not.
      */
+    // Resolved once per round, not per rung: a fallback chain sends the same
+    // history to each candidate, and re-reading the blobs for a rung that only
+    // trims differently would pay for the same bytes twice.
+    const hydrated = await hydrateMedia(messages, opts.mediaStore);
+
     const paramsFor = (candidate: ModelCandidate): Omit<ChatParams, "model"> => {
       const base = {
         tools: toolSchemas,
@@ -1594,6 +1609,7 @@ async function _runAgentLoopBody(
         thinking: opts.thinking,
         maxTokens: opts.maxTokens,
         extra: opts.providerExtra,
+        media: hydrated,
       };
       const window = candidate.maxContextTokens;
       if (window === undefined || window >= maxHistoryTokens) return { ...base, messages };
