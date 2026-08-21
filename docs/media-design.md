@@ -83,7 +83,7 @@ copy-pasted into a request builder.
 | OpenAI Responses | `content: []` with `input_text` / `input_image` / `input_file`; image by `file_id`, URL, or data URI |
 | OpenAI Chat Completions | `content: []` with `text` / `image_url` (data URI allowed) |
 | Google Gemini | `parts: []`, each part either inline base64 bytes or a Files API URI, both carrying a mime type. Inline is capped by a **20 MB total request size**; the Files API is the documented path for anything larger or reused |
-| Vercel AI SDK | parts discriminated on `type`: `{type:'text', text}` and `{type:'file', mediaType, data}` — **one file part carrying a media type, no separate image part**; `UIMessage.parts` is the separate UI-facing shape |
+| Vercel AI SDK (v7, `LanguageModelV4`) | parts discriminated on `type`: `{type:'text', text}` and `{type:'file', mediaType, data}` — **one file part carrying a media type, no separate image part**. `UIMessage` (persisted) carries media as a **URL string**; `ModelMessage` (per-call) carries a tagged `FileData` union |
 | MCP | `CallToolResult.content: (TextContent \| ImageContent \| AudioContent \| ResourceLink \| EmbeddedResource)[]` |
 
 Two things are unanimous and worth stating as constraints rather than
@@ -286,8 +286,19 @@ degrade to a readable placeholder rather than to `[object Object]`.
 
 Precedent: `reasoning?` was added exactly this way in #254 — persisted and
 rendered, deliberately not sent to providers, no consumer forced to change.
-Vercel AI SDK draws the same line between `UIMessage.parts` and
-`ModelMessage.content`.
+
+The Vercel AI SDK draws the same line, and its reason for drawing it is the one
+that matters here. `UIMessage` is the persisted, transport-facing record and
+carries media as a **URL string**; `ModelMessage` is the per-call projection and
+carries a tagged data union. The split exists because a `Uint8Array` in the
+persisted type would not survive JSON serialization — so the layer that gets
+stored never holds bytes at all. `MediaRef` is that same choice: an id and a
+mime type, stored; bytes resolved at the edge, by whoever is about to need them.
+
+Where TAI differs, deliberately: our two layers are *record* (`parts`) and
+*text projection* (`content`), not record and wire-projection. The wire
+projection is computed per provider inside the adapter and never stored, because
+storing it would mean storing it per rung of a fallback chain.
 
 The risk of a sidecar is drift, and the risk of an optional field is that it
 becomes decorative. Both are addressed under *Not another dead flag*.
@@ -411,6 +422,21 @@ dispatches **per call, against `params.model`**, to a Responses adapter
 Capability has exactly that shape. A constant would be a second `supportsTools`:
 a declaration that cannot express what is true, and so gets ignored.
 
+The Vercel AI SDK reached the same shape. Its `LanguageModelV4` interface has
+four members, and one of them is `supportedUrls` — **required, not optional**,
+and permitted to return a promise so a provider can fetch a live list. Its
+Google provider builds the value inside the factory closure where `modelId` is
+in scope, gating on the id itself:
+
+```ts
+supportsExternalFileUrls = (id) => /(^|\/)gemini-/.test(id) && !/(^|\/)gemini-2\.0/.test(id)
+```
+
+Two lessons taken: capability is **per model instance, not per provider class**,
+and making it a required member is what stops it becoming decorative. Ours is
+optional only because 6 provider packages would otherwise fail to compile on
+upgrade; the `supportsTools` rules above are what substitute for the compiler.
+
 Resolution order, most specific first: `ModelEntry.capabilities` in config →
 `provider.capabilities(model)` → a conservative text-only default. `ModelEntry`
 already has the precedent for per-rung overrides in `maxContextTokens`, and
@@ -468,6 +494,12 @@ than itself.
    is the position the Anthropic guidance warns about; the marker is what keeps
    the provenance visible to the model rather than laundering tool output into a
    user turn.
+
+   Not invented here: the Vercel AI SDK's Google provider does exactly this for
+   pre-Gemini-3 models — hoists the media to top-level parts and synthesizes a
+   text part reading *"Tool executed successfully and returned this image as a
+   response."* Same manoeuvre, same reason. Ours names the tool, because a
+   marker that doesn't identify the source is not provenance.
 3. Model has no eyes → replace the part with its text projection. Optionally
    enrich via OCR: `extract_document` already turns PDFs and images into text
    with `tesseract.js` / `pdf-parse`, both already optional deps. Off by default
@@ -484,6 +516,24 @@ gets `<img>`; Discord and Slack get a file upload; a terminal gets
 Every rung is lossy in a different direction, so each one says what it did. A
 silently dropped image is the worst outcome available and the current behaviour
 in all four places named at the top.
+
+**The rule that governs all of it: a part that does not reach the model must
+leave either a warning or a placeholder. Never nothing, and never itself.**
+
+The second half of that is not hypothetical. Read at source, the Vercel AI SDK
+exhibits *four different* mismatch behaviours across its providers — silent
+URL→bytes download, a hard `UnsupportedFunctionalityError`, warn-and-drop, and
+**silent `JSON.stringify` of the output value**. The last one applies to its
+OpenAI Chat Completions path and to its `openai-compatible` path, which
+"doesn't even collect warnings" — so a base64 image is serialized into the
+prompt as JSON text: thousands of tokens of noise, no image, no error, no log
+line.
+
+`openai_compatible` is TAI's built-in provider and the default for every local
+gateway. That is precisely the path where the failure is quietest and the
+budget damage is largest. So the adaptation step runs in `chatWithFallback`,
+*before* any provider sees a part — a provider is never handed content it has
+not declared it can carry, and no provider adapter is trusted to notice.
 
 ### Inbound
 
@@ -565,11 +615,20 @@ P5 ships: a sanitizer on every `dangerouslySetInnerHTML` site, and a CSP with
 
 Also required:
 
-- **Sniff mime from magic bytes; never trust the declared type.** A client
-  saying `image/png` over a 4 GB payload, or over HTML, decides nothing.
+- **Resolve the mime type; never trust the declared one.** A client saying
+  `image/png` over a 4 GB payload, or over HTML, decides nothing. Ladder, copied
+  from the AI SDK's `resolveFullMediaType`: use a declared full type if present
+  → otherwise sniff magic bytes → otherwise **fail with a message naming why**,
+  rather than guessing. Note the AI SDK also *recovers* the media type from a
+  data URL rather than trusting the part's own field, for the same reason.
 - **Cap size and count before `put`**, not after.
 - **Never let the server fetch a model-supplied URL** without going through the
   existing egress policy. `browser-mediator/egress-policy.ts` is the prior art.
+  If a fetch path is added anyway, the AI SDK's built-in downloader is a ready
+  checklist: validate redirects rather than following them blindly, enforce a
+  hard byte ceiling (theirs is 100 MiB), and **cancel the response body on an
+  error status** — their comment says why, *"so an error status from an
+  attacker-controlled origin cannot leak open sockets."*
 - Content addressing makes path traversal structurally impossible: the id is a
   hash, and a hash is never a path fragment the caller chose.
 
@@ -614,3 +673,21 @@ Little, by construction — but not nothing.
 - **Do rooms carry media?** `room_messages.content` is TEXT and the envelope is
   regex-parsed (`rooms/envelope.ts`). Agent-to-agent images are a real use case
   and a bigger change than it looks.
+- **Do parts need their own provider-options bag?** The AI SDK puts
+  `providerOptions` on *every* part, and two real features need it: OpenAI's
+  `imageDetail: 'low'` (a large cost lever on image input) and Anthropic's
+  `cacheControl` on a tool-result part. TAI's `providerExtra` exists only at the
+  rung level, so neither is expressible. Not needed for P1–P5; likely needed the
+  first time someone pays for full-detail screenshots in a loop.
+- **If we ever upload to a provider's Files API, the cache key must include the
+  provider.** v7 of the AI SDK deprecated its single `file-id` variants for a
+  map (`{openai: 'file-abc', anthropic: 'file-xyz'}`) precisely because one id
+  left the runtime guessing whose it was. A `MediaRef` gaining a
+  `providerIds?: Record<string, string>` is the shape to copy, not a bare
+  `remoteId`. Nothing in P1–P6 uploads, so this stays a note.
+- **Should a denied approval be its own tool-output arm?** The AI SDK's
+  `ToolResultOutput` has six arms, one of them `execution-denied`, for
+  human-in-the-loop refusals. TAI has an approval system (`approvalHandler`,
+  `request-action`) that currently expresses a denial as ordinary failure text.
+  Orthogonal to media, but it is the same union, and widening it twice would be
+  a shame.
