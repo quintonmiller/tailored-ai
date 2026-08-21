@@ -199,7 +199,35 @@ than running against a dead one: a run against a down port finishes in three
 minutes with zero tool calls and no error at all, which looks exactly like a
 model that did nothing.
 
-A jam is about ninety minutes at 220 turns on the local model.
+A jam is about two and a half hours at 220 turns on the local model — longer
+since the team could see its own game, because a team with something to react to
+passes on far fewer of its turns.
+
+### Watching one happen
+
+The board carries a **Building now** panel while a jam is running: the game's
+title and pitch once the team has registered them, the theme, a round-by-round
+progress bar, the counters, and **the most recent playtest frame**, so the panel
+shows the game as it currently looks rather than a progress bar over an unknown.
+
+It exists because a jam is long. Before it, the site's only acknowledgement that
+anything was happening was a footer chip reading "1 jam in progress", which
+answers *whether* and nothing else — and a board that has not changed since
+breakfast is otherwise indistinguishable from a loop that died at breakfast.
+
+Three decisions in it are worth keeping:
+
+- **A run heartbeats every round**, writing the same counter bag a finished
+  entry carries. One shape means the live panel and a published page never
+  disagree about what a number means, and `store.progress()` refuses to touch a
+  published row so a late heartbeat cannot rewrite a finished game.
+- **Twenty minutes of silence is `stale`**, computed on the server so every
+  surface agrees. A jam that has stopped saying anything is gone, and "in
+  progress" about a dead run is a claim rather than an omission.
+- **No empty box.** With nothing running the section is absent, not a panel
+  saying "nothing is running" — which would be wrong for most of the day.
+
+`GET /api/live` returns the same data if you would rather watch it in a terminal.
 
 ## Turning it off
 

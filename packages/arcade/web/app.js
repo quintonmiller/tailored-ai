@@ -139,30 +139,142 @@ async function renderBoard(params) {
     entries.length ? grid : el("p", { class: "empty", text: "Nothing here yet. Run the jam." }),
   );
   footCount.textContent = `${entries.length} game${entries.length === 1 ? "" : "s"}`;
-  void showInProgress();
+  void showLive();
 }
 
 /**
- * "1 jam in progress", when one is.
+ * What is being built right now, above the board.
  *
- * A jam takes about ninety minutes, so a board that has not changed since
- * breakfast looks exactly like a loop that died at breakfast. A draft row
- * exists from the moment a run starts, which makes the count free.
+ * A jam takes over two hours, so without this a board that has not changed
+ * since breakfast looks exactly like a loop that died at breakfast. It began as
+ * a chip in the footer reading "1 jam in progress", which answered *whether*
+ * and nothing else — and "something is happening somewhere" is the least
+ * interesting true thing the site can say.
  *
- * Fetched after the board rather than with it: it is a footnote, and a board
- * that waits on a footnote is a worse board.
+ * Fetched after the board rather than with it, and it replaces itself in place
+ * on each poll: a board that waits on a live panel is a worse board, and a
+ * panel that rebuilds the page around it is a worse panel.
  */
-async function showInProgress() {
-  const health = await api("/api/health").catch(() => null);
-  if (!health?.inProgress) return;
-  const n = health.inProgress;
-  footCount.append(
-    el("span", {
-      class: "chip",
-      style: "margin-left:10px",
-      text: `${n} jam${n === 1 ? "" : "s"} in progress`,
-    }),
-  );
+const LIVE_POLL_MS = 20_000;
+let livePoll;
+
+async function showLive() {
+  clearTimeout(livePoll);
+  const data = await api("/api/live").catch(() => null);
+  const running = (data?.live ?? []).filter((run) => !run.stale);
+
+  const existing = document.getElementById("live");
+  if (!running.length) {
+    // No empty box. A section that says "nothing is running" is a section that
+    // is wrong for most of the day.
+    existing?.remove();
+  } else {
+    const panel = el("section", { class: "live panel", id: "live" }, [
+      el("h2", {}, [
+        el("span", { class: "pulse" }),
+        running.length === 1 ? "Building now" : `Building now — ${running.length} jams`,
+      ]),
+      ...running.map(liveRow),
+    ]);
+    if (existing) existing.replaceWith(panel);
+    else view.prepend(panel);
+  }
+
+  // Keep polling only while the tab is being looked at. A background tab
+  // hitting this every twenty seconds for a day is pure waste.
+  if (!document.hidden) livePoll = setTimeout(showLive, LIVE_POLL_MS);
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) void showLive();
+});
+
+function liveRow(run) {
+  const m = run.metrics ?? {};
+  const round = Math.max(0, Math.min(run.rounds || 0, m.roundsPlayed ?? 0));
+  const pct = run.rounds ? Math.round((round / run.rounds) * 100) : 0;
+
+  const shot = run.shot
+    ? el("div", { class: "live-shot" }, [
+        // The cache-buster is the point: the filename never changes, so without
+        // it the browser shows round three's screen for the rest of the run.
+        el("img", { src: `/shots/${encodeURIComponent(run.slug)}/${run.shot}?t=${Date.parse(run.updatedAt)}`, alt: "" }),
+      ])
+    : el("div", { class: "live-shot blank" }, [el("span", { text: round ? "not playtested yet" : "just started" })]);
+
+  const heading = run.title
+    ? el("h3", { class: "live-title", text: run.title })
+    : el("h3", { class: "live-title untitled", text: "Untitled so far" });
+
+  const chips = el("div", { class: "chips" }, [
+    el("span", { class: "chip theme", text: run.theme || "no theme" }),
+    el("span", { class: "chip", text: `round ${round} of ${run.rounds}` }),
+    el("span", { class: "chip", text: elapsed(run.elapsedMs) }),
+    ...(run.model ? [el("span", { class: "chip", text: run.model })] : []),
+  ]);
+
+  const bar = el("div", { class: "live-bar" }, [el("div", { class: "live-bar-fill", style: `width:${pct}%` })]);
+
+  // Each label/value pair is one grid item. As bare `dt`+`dd` siblings they are
+  // two, so the grid pairs a label with the *next* fact's value and the whole
+  // row reads as nonsense.
+  const facts = el("dl", { class: "live-facts" });
+  for (const [label, value] of liveFacts(run, m)) {
+    facts.append(el("div", { class: "live-fact" }, [el("dt", { text: label }), el("dd", { text: value })]));
+  }
+
+  return el("div", { class: "live-run" }, [
+    shot,
+    el("div", { class: "live-body" }, [
+      heading,
+      ...(run.tagline ? [el("p", { class: "live-tagline", text: run.tagline })] : []),
+      chips,
+      bar,
+      facts,
+      el("p", {
+        class: "live-note",
+        text: run.registered
+          ? "Registered on the arcade. It will appear on the board when its rounds run out."
+          : "Not registered yet — the team writes its own page before the rounds run out.",
+      }),
+    ]),
+  ]);
+}
+
+/** The handful of numbers worth watching while it happens. */
+function liveFacts(run, m) {
+  const out = [
+    ["Files", String(m.filesPresent ?? 0)],
+    ["Lines", (m.linesInWorkspace ?? 0).toLocaleString()],
+    ["Edits", String((m.writes ?? 0) + (m.patches ?? 0))],
+    ["Playtests", String(m.playtestsRun ?? 0)],
+  ];
+  /*
+   * "Nobody has run it", "ran it and nothing moved" and "nobody told us" are
+   * three different facts, and only the middle one is a verdict.
+   *
+   * The store writes -1 for never-run, so anything below zero — and anything
+   * absent, which is what an older heartbeat carries — means unknown. Rendering
+   * unknown as "static, no response" states a defect the game may not have,
+   * which is the one thing a live panel must not do.
+   */
+  const animates = m.playtestAnimates;
+  const responds = m.playtestResponds;
+  if ((m.playtestsRun ?? 0) > 0 && animates >= 0 && responds >= 0) {
+    const bits = [];
+    if (animates === 1) bits.push("animates");
+    if (responds === 1) bits.push("responds");
+    if (m.playtestErrors > 0) bits.push(`${m.playtestErrors} error${m.playtestErrors === 1 ? "" : "s"}`);
+    out.push(["On screen", bits.length ? bits.join(", ") : "static, no response"]);
+  }
+  if (m.framesShown > 0) out.push(["Frames seen", String(m.framesShown)]);
+  return out;
+}
+
+function elapsed(ms) {
+  const mins = Math.floor((ms ?? 0) / 60000);
+  if (mins < 60) return `${mins}m in`;
+  return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, "0")}m in`;
 }
 
 function card(entry) {

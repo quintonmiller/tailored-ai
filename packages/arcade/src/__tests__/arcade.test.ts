@@ -17,7 +17,7 @@ import { splitCommand, stripSeparator } from "../args.js";
 import { CATEGORIES, CATEGORY_KEYS, cleanScore, normaliseGenre, overallScore } from "../categories.js";
 import { publishRun } from "../publish.js";
 import { createArcadeServer, listen } from "../server.js";
-import { ArcadeStore, type EntryProvenance, type ScoredEntry, slugify, sortEntries } from "../store.js";
+import { ArcadeStore, type EntryProvenance, LIVE_SHOT, type ScoredEntry, slugify, sortEntries } from "../store.js";
 import { crc32, zip } from "../zip.js";
 
 const temps: string[] = [];
@@ -521,5 +521,105 @@ describe("command line", () => {
     // A leading flag is not a command.
     expect(splitCommand(["--port", "5000"])).toEqual({ command: "serve", rest: ["--port", "5000"] });
     expect(splitCommand(["--", "--port", "5000"])).toEqual({ command: "serve", rest: ["--port", "5000"] });
+  });
+});
+
+describe("a jam still in progress", () => {
+  it("records progress on a draft and moves its clock", () => {
+    const store = new ArcadeStore(tempHome());
+    const entry = store.createEntry(provenance({}));
+    const before = store.entry(entry.id)?.updatedAt;
+    store.progress(entry.id, { metrics: { roundsPlayed: 7, linesInWorkspace: 900 }, at: "2030-01-01T00:00:00.000Z" });
+    const after = store.entry(entry.id);
+    expect(after?.metrics.roundsPlayed).toBe(7);
+    expect(after?.metrics.linesInWorkspace).toBe(900);
+    expect(after?.updatedAt).not.toBe(before);
+    // Still a draft: a heartbeat is not a publication.
+    expect(after?.status).toBe("draft");
+  });
+
+  it("refuses to rewrite a game that already finished", () => {
+    // A late heartbeat from a run that has written its manifest must not
+    // replace the final numbers with whatever it last saw.
+    const store = new ArcadeStore(tempHome());
+    const entry = store.createEntry(provenance({}));
+    store.publish(entry.id, { metrics: { roundsPlayed: 20, linesInWorkspace: 1500 } });
+    store.progress(entry.id, { metrics: { roundsPlayed: 3 } });
+    expect(store.entry(entry.id)?.metrics.roundsPlayed).toBe(20);
+  });
+
+  it("keeps one live frame per entry, overwritten in place", () => {
+    const store = new ArcadeStore(tempHome());
+    const entry = store.createEntry(provenance({}));
+    store.liveShot(entry.id, Buffer.from("FIRST"));
+    store.liveShot(entry.id, Buffer.from("SECOND"));
+    expect(readFileSync(join(store.gameDir(entry.id), "shots", LIVE_SHOT), "utf8")).toBe("SECOND");
+  });
+
+  it("is reported by /api/live and disappears when it publishes", async () => {
+    const store = new ArcadeStore(tempHome());
+    const source = tempHome();
+    mkdirSync(join(source, "workspace"), { recursive: true });
+    writeFileSync(join(source, "workspace", "index.html"), "<!doctype html><p>x</p>");
+
+    const entry = store.createEntry(provenance({ artifactPath: source, theme: "TWO HALVES", rounds: 20 }));
+    store.register(entry.id, { title: "Undivided", tagline: "hold on" });
+    store.progress(entry.id, { metrics: { roundsPlayed: 8, filesPresent: 5 } });
+    store.liveShot(entry.id, Buffer.from("PNGDATA"));
+
+    const server = createArcadeServer({ store, port: 0, gamesPort: 0 });
+    await listen(server, { port: 0, gamesPort: 0 });
+    const base = `http://127.0.0.1:${(server.site.address() as { port: number }).port}`;
+    try {
+      const live = (await (await fetch(`${base}/api/live`)).json()) as {
+        live: {
+          slug: string;
+          title: string;
+          theme: string;
+          rounds: number;
+          shot: string | null;
+          stale: boolean;
+          registered: boolean;
+          metrics: Record<string, number>;
+        }[];
+      };
+      expect(live.live).toHaveLength(1);
+      expect(live.live[0].title).toBe("Undivided");
+      expect(live.live[0].theme).toBe("TWO HALVES");
+      expect(live.live[0].rounds).toBe(20);
+      expect(live.live[0].registered).toBe(true);
+      expect(live.live[0].metrics.roundsPlayed).toBe(8);
+      expect(live.live[0].stale).toBe(false);
+      expect(live.live[0].shot).toBe(LIVE_SHOT);
+
+      // The live frame is served by the same route a published shot uses.
+      const img = await fetch(`${base}/shots/${live.live[0].slug}/${LIVE_SHOT}`);
+      expect(img.status).toBe(200);
+      expect(img.headers.get("content-type")).toBe("image/png");
+
+      publishRun(store, entry.id, { artifactPath: source });
+      const after = (await (await fetch(`${base}/api/live`)).json()) as { live: unknown[] };
+      expect(after.live).toHaveLength(0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("calls a run stale once it has stopped saying anything", async () => {
+    // A jam heartbeats every round, so twenty minutes of silence means the run
+    // is gone. "In progress" about a dead run is a claim, not an omission.
+    const store = new ArcadeStore(tempHome());
+    const entry = store.createEntry(provenance({}));
+    store.progress(entry.id, { metrics: { roundsPlayed: 2 }, at: new Date(Date.now() - 45 * 60_000).toISOString() });
+
+    const server = createArcadeServer({ store, port: 0, gamesPort: 0 });
+    await listen(server, { port: 0, gamesPort: 0 });
+    const base = `http://127.0.0.1:${(server.site.address() as { port: number }).port}`;
+    try {
+      const live = (await (await fetch(`${base}/api/live`)).json()) as { live: { stale: boolean }[] };
+      expect(live.live[0].stale).toBe(true);
+    } finally {
+      await server.close();
+    }
   });
 });

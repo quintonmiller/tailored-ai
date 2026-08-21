@@ -666,3 +666,170 @@ textarea {
 .prose-list strong {
   color: var(--ink);
 }
+
+/* ------------------------------------------------------------------ live
+ *
+ * The panel above the board while a jam is running. It borrows the existing
+ * `.panel` and `.chip` vocabulary deliberately — a live section that invents
+ * its own look reads as a banner bolted on, and this is meant to read as the
+ * top of the board rather than as an announcement about it.
+ *
+ * The accent is used for exactly two things here: the pulse and the progress
+ * fill. Everything else stays the same grey as the rest of the page, because
+ * the screenshot is the only thing in the panel that should draw the eye.
+ */
+
+.live {
+  border-color: var(--accent-dim);
+}
+
+.live h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent);
+}
+
+.pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 0 var(--accent);
+  animation: pulse 2s ease-out infinite;
+  flex: none;
+}
+
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(110, 231, 183, 0.5);
+  }
+  70% {
+    box-shadow: 0 0 0 7px rgba(110, 231, 183, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(110, 231, 183, 0);
+  }
+}
+
+/* A person who prefers less motion still gets the colour, just not the ring. */
+@media (prefers-reduced-motion: reduce) {
+  .pulse {
+    animation: none;
+  }
+}
+
+.live-run {
+  display: grid;
+  grid-template-columns: minmax(0, 320px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.live-run + .live-run {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.live-shot {
+  background: #000;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  aspect-ratio: 4 / 3;
+}
+
+.live-shot img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.live-shot.blank {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-faint);
+  font-size: 13px;
+}
+
+.live-body {
+  min-width: 0;
+}
+
+.live-title {
+  margin: 0 0 4px;
+  font-size: 20px;
+  letter-spacing: 0.01em;
+}
+
+.live-title.untitled {
+  color: var(--ink-faint);
+  font-style: italic;
+  font-weight: 500;
+}
+
+.live-tagline {
+  margin: 0 0 10px;
+  color: var(--ink-dim);
+  font-size: 14px;
+}
+
+.live .chips {
+  margin-bottom: 12px;
+}
+
+.live-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--panel-2);
+  overflow: hidden;
+  margin-bottom: 14px;
+}
+
+.live-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 600ms ease;
+}
+
+.live-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 10px 14px;
+  margin: 0 0 12px;
+}
+
+/* One grid item per fact. See the note in `liveFacts`. */
+.live-fact {
+  min-width: 0;
+}
+
+.live-facts dt {
+  color: var(--ink-faint);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.live-facts dd {
+  margin: 2px 0 0;
+  font-family: var(--mono);
+  font-size: 15px;
+  color: var(--ink);
+}
+
+.live-note {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 13px;
+}
+
+@media (max-width: 720px) {
+  .live-run {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

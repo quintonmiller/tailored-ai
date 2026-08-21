@@ -32,13 +32,22 @@
  * written down here so nobody later mistakes it for a login.
  */
 
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { CATEGORY_KEYS, cleanScore, normaliseGenre, overallScore, round2 } from "./categories.js";
 
 export const ARCADE_SCHEMA_VERSION = 1;
+
+/**
+ * The newest frame from a jam still in progress, inside that entry's `shots/`.
+ *
+ * One fixed name rather than one file per playtest: a live view wants the
+ * latest frame and nothing else, and a run that is later discarded would
+ * otherwise leave a directory of PNGs behind with no policy for removing them.
+ */
+export const LIVE_SHOT = "live.png";
 
 /** Where the arcade keeps its database and its copies of the games. */
 export function arcadeHome(explicit?: string): string {
@@ -467,6 +476,48 @@ export class ArcadeStore {
    * browsing mid-jam should not be reading a half-written pitch from a run that
    * is still going, least of all its own.
    */
+  /**
+   * A run saying it is still alive, and how far it has got.
+   *
+   * Called every round while a jam is in progress. It writes the same counter
+   * bag `publish` eventually writes, which is what lets the live panel and a
+   * finished entry share one renderer instead of growing a second shape for
+   * the same numbers.
+   *
+   * `updated_at` moving is the load-bearing half. A jam takes over two hours,
+   * so a board that has not changed since breakfast looks exactly like a loop
+   * that died at breakfast — and "in progress" on a row whose last sign of life
+   * was ninety minutes ago is worse than saying nothing, because it is a claim
+   * rather than an omission.
+   *
+   * Refuses to touch a published entry: a finished game's numbers are final,
+   * and a late heartbeat from a run that already wrote its manifest must not
+   * rewrite them.
+   */
+  progress(id: string, input: { metrics: Record<string, number>; at?: string }): void {
+    const now = input.at ?? new Date().toISOString();
+    this.db
+      .prepare(
+        `UPDATE entries SET metrics = @metrics, updated_at = @now
+          WHERE id = @id AND status = 'draft'`,
+      )
+      .run({ id, metrics: JSON.stringify(input.metrics), now });
+  }
+
+  /**
+   * The frame the live panel shows, written straight into the entry's own
+   * `shots/` so the existing `/shots/:slug/:file` route serves it unchanged.
+   *
+   * Always the same filename. A live view wants the newest frame and nothing
+   * else, and a directory that accumulates one PNG per playtest for a run that
+   * is later discarded is litter with a retention policy attached.
+   */
+  liveShot(id: string, bytes: Buffer): void {
+    const dir = join(this.gameDir(id), "shots");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, LIVE_SHOT), bytes);
+  }
+
   publish(
     id: string,
     input: {

@@ -39,7 +39,7 @@
  * the deliverable.
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -412,8 +412,44 @@ export class WorkshopSimulation implements Simulation {
     if (this.done) {
       this.finalise();
       produced.push({ day: this.tick, kind: "ended", message: `The ${this.horizon} rounds ran out.` });
+    } else {
+      // Round boundaries are the natural heartbeat: roughly every seven
+      // minutes, already the moment the snapshot is taken, and the only place
+      // that knows the round actually completed. Not sent after `finalise()` —
+      // `publish` has already written the final numbers and a heartbeat behind
+      // it would be a draft update to a row that is no longer a draft.
+      this.desk?.heartbeat(this.counters(), this.newestFrame());
     }
     return produced;
+  }
+
+  /**
+   * The most recent playtest frame on disk, for the live panel.
+   *
+   * Reads the directory rather than remembering the path, because the frame
+   * worth showing is whichever the last playtest wrote and a run that has not
+   * playtested since round four should still show round four's screen. Returns
+   * undefined freely: no playtest yet is the normal state for the first few
+   * rounds, and the panel is built to say so.
+   */
+  private newestFrame(): string | undefined {
+    const root = join(this.root, "playtests");
+    try {
+      const rounds = readdirSync(root).sort();
+      for (const round of rounds.reverse()) {
+        const dir = join(root, round);
+        const frames = readdirSync(dir)
+          .filter((f) => f.endsWith(".png"))
+          .sort();
+        // Mid-play if it exists, opening screen otherwise — the same preference
+        // `framesToShow` applies, for the same reason.
+        const pick = frames.find((f) => f.includes("04-playing")) ?? frames[frames.length - 1];
+        if (pick) return join(dir, pick);
+      }
+    } catch {
+      // No playtests directory yet.
+    }
+    return undefined;
   }
 
   /**

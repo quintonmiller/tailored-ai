@@ -35,6 +35,7 @@
  * the site and the run read the same one.
  */
 
+import { readFileSync } from "node:fs";
 import {
   ArcadeStore,
   CATEGORIES,
@@ -122,6 +123,27 @@ export class ArcadeDesk {
   publish(artifactPath: string, metrics: Record<string, number>, hasFiles: boolean): void {
     if (!hasFiles) return;
     publishRun(this.store, this.entryId, { artifactPath, metrics });
+  }
+
+  /**
+   * Say the run is still alive, and how far it has got.
+   *
+   * Called once a round. Two things go over: the counter bag, which is the same
+   * shape a finished entry carries so the site renders both with one renderer,
+   * and the newest playtest frame, so the live panel shows the game as it is
+   * rather than a progress bar over an unknown.
+   *
+   * Swallows everything. A jam must not die because the board it reports to is
+   * unwritable — the artifact on disk is the deliverable and the page is a
+   * convenience.
+   */
+  heartbeat(metrics: Record<string, number>, shot?: string): void {
+    try {
+      this.store.progress(this.entryId, { metrics });
+      if (shot) this.store.liveShot(this.entryId, readFileSync(shot));
+    } catch {
+      // Nothing to say: a missed heartbeat costs a stale panel for one round.
+    }
   }
 
   tools(): Tool[] {

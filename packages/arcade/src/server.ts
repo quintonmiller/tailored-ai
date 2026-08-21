@@ -27,7 +27,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { dirname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CATEGORIES, GENRES } from "./categories.js";
-import { ArcadeStore } from "./store.js";
+import { ArcadeStore, LIVE_SHOT } from "./store.js";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "web");
 
@@ -187,6 +187,49 @@ async function handleSite(
     // changed since breakfast is otherwise indistinguishable from a loop that
     // died at breakfast.
     return json(res, 200, { ok: true, home: store.home, entries: total, published, inProgress: total - published });
+  }
+
+  /**
+   * What is being built right now.
+   *
+   * A separate route from `/api/entries` rather than a `status=draft` filter on
+   * it, because the two answer different questions and want different cache
+   * behaviour: the board is a list somebody scrolls, and this is a thing that
+   * changes every round and gets polled. Keeping them apart also means the
+   * board's paging, sorting and facets never have to reason about a game that
+   * has no scores and no screenshots yet.
+   *
+   * `stale` is computed here rather than in the browser so every surface agrees
+   * on what counts as dead. A jam writes a heartbeat every round — roughly
+   * every seven minutes — so twenty minutes of silence means the run is gone,
+   * and saying "in progress" about it would be a claim rather than an omission.
+   */
+  if (path === "/api/live") {
+    const now = Date.now();
+    const live = store.list({ includeDrafts: true, sort: "new", limit: 8 }).filter((e) => e.status === "draft");
+    return json(res, 200, {
+      live: live.map((entry) => {
+        const since = now - Date.parse(entry.updatedAt || entry.createdAt);
+        return {
+          slug: entry.slug,
+          title: entry.title ?? null,
+          tagline: entry.tagline ?? null,
+          theme: entry.theme,
+          rounds: entry.rounds,
+          model: entry.model,
+          seed: entry.seed,
+          simVersion: entry.simVersion,
+          registered: entry.registered,
+          startedAt: entry.createdAt,
+          updatedAt: entry.updatedAt,
+          elapsedMs: Math.max(0, now - Date.parse(entry.createdAt)),
+          quietMs: Math.max(0, since),
+          stale: since > 20 * 60 * 1000,
+          metrics: entry.metrics,
+          shot: existsSync(join(store.gameDir(entry.id), "shots", LIVE_SHOT)) ? LIVE_SHOT : null,
+        };
+      }),
+    });
   }
 
   if (path === "/api/config") {
