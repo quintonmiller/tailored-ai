@@ -556,6 +556,11 @@ question the team has to notice it should ask — and `playtest` was added later
 and inherited its role list without inheriting the argument for it. The
 consequence was that the agent writing the game loop could not look at the game.
 
+It was not a hypothetical handicap. In the seed-11 jam the builder **called
+`playtest` twice and was refused both times**, while the tester ran it 16 times
+and the interface 10. The agent writing the game loop asked to see the game,
+was told no, and stopped asking.
+
 The measurement that settled it, across the four jams before the change:
 
 | Run | Workspace stops growing | Final code lines |
@@ -563,9 +568,10 @@ The measurement that settled it, across the four jams before the change:
 | seed 14 | round 3 of 20 | 428 |
 | seed 11 | round 14 of 20 | 1,196 |
 
-And across those runs, **44% of every agent turn was an explicit `room` action
-of `pass`**, with another 37% of tool calls spent re-reading files that had not
-changed. Only about 10% wrote anything. This is CLAUDE.md's own rule about
+And across those runs, **44–52% of every agent turn was an explicit `room`
+action of `pass`** (96 of 220 turns in one, 114 of 220 in the other), with
+another 37–38% of tool calls spent re-reading files that had not changed. Only
+10–12% wrote anything. This is CLAUDE.md's own rule about
 instructions that offer a way out, showing up in a place nobody had looked for
 it — but the deeper cause is that a team which cannot see its game has no way to
 falsify "it is finished", so it idles out the clock. More rounds buy more of the
