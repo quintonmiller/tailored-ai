@@ -161,19 +161,31 @@ function multimodalContent(msg: Message, media?: ReadonlyMap<string, Buffer>): O
     }
     const { media: ref, alt } = part;
     const isImage = mediaKind(ref.mimeType) === "image";
+    /*
+     * The caption goes in, ahead of its image.
+     *
+     * `alt` is the only label an inlined image can carry, and on the
+     * `follow-up` path it is the only one that survives at all: the synthesized
+     * user turn takes `...media` and nothing else, so any text the tool wrote
+     * stays behind on the `tool` message. Dropping `alt` there hands a model
+     * two screenshots with no way to tell which is which — measured on a
+     * playtest that sends the opening screen and a mid-play frame together.
+     */
+    const caption = alt ? [{ type: "text" as const, text: alt }] : [];
     // A ref carrying its own URL is the provider's to fetch, so the bytes were
     // deliberately never hydrated for it.
     if (isImage && ref.url) {
-      out.push({ type: "image_url", image_url: { url: ref.url } });
+      out.push(...caption, { type: "image_url", image_url: { url: ref.url } });
       sentAnImage = true;
       continue;
     }
     const bytes = isImage ? media?.get(ref.id) : undefined;
     if (!bytes) {
+      // The placeholder already folds `alt` in, so no separate caption here.
       out.push({ type: "text", text: mediaPlaceholder(ref, alt) });
       continue;
     }
-    out.push({
+    out.push(...caption, {
       type: "image_url",
       image_url: { url: `data:${ref.mimeType};base64,${bytes.toString("base64")}` },
     });

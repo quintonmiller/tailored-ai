@@ -153,6 +153,26 @@ describe("toOpenAIMessages", () => {
     ]);
   });
 
+  it("keeps alt as a caption ahead of the image it labels", () => {
+    // On the follow-up path this is the only label that survives: the
+    // synthesized user turn takes the media parts and nothing else, so text
+    // the tool wrote stays behind on the tool message. Without it a model gets
+    // two screenshots and no way to tell which is which.
+    const bytes = new Map([[png.id, Buffer.from([1])]]);
+    const [wire] = toOpenAIMessages([{ role: "user", content: { parts: [mediaPart(png, "04-playing")] } }], bytes);
+    expect(wire.content).toEqual([
+      { type: "text", text: "04-playing" },
+      { type: "image_url", image_url: { url: `data:image/png;base64,${Buffer.from([1]).toString("base64")}` } },
+    ]);
+  });
+
+  it("does not double up the caption when it falls back to a placeholder", () => {
+    // `mediaPlaceholder` already folds alt in.
+    const [wire] = toOpenAIMessages([{ role: "user", content: { parts: [mediaPart(png, "04-playing")] } }]);
+    expect(typeof wire.content).toBe("string");
+    expect(String(wire.content).match(/04-playing/g)).toHaveLength(1);
+  });
+
   it("passes a ref that carries its own URL straight through", () => {
     const remote: MediaRef = { ...png, url: "https://example.test/a.png" };
     const [wire] = toOpenAIMessages([{ role: "user", content: { parts: [mediaPart(remote)] } }], new Map());

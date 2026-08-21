@@ -820,18 +820,46 @@ export class WorkshopSimulation implements Simulation {
     const store = this.mediaStore;
     if (!store) return [];
     const parts: ContentPart[] = [];
+    const seen = new Set<string>();
+    let collapsed = false;
     for (const path of framesToShow(report)) {
       try {
         const bytes = await readFile(path);
         const label = basename(path, ".png");
         const ref = await store.put(bytes, { mimeType: "image/png", name: `${label}.png` });
+        /*
+         * Deduped on the content hash, not the path.
+         *
+         * `framesToShow` can only compare filenames, and two differently named
+         * frames are routinely the same bytes — which is exactly what happens
+         * while the game is still a black canvas. The store is
+         * content-addressed, so that arrives here as one id twice: 1,500
+         * estimated history tokens spent to show a model the same screen again.
+         */
+        if (seen.has(ref.id)) {
+          collapsed = true;
+          continue;
+        }
+        seen.add(ref.id);
         parts.push(mediaPart(ref, `${label} — round ${this.tick + 1} of ${this.brief.entry}`));
       } catch {
         // A frame we could not hand over is one the text report already
         // describes. Nothing to say about it that would help anybody.
       }
     }
-    this.framesShown += parts.length;
+    // Not a gap to paper over: two pixel-identical frames means the opening
+    // screen and a frame taken mid-play are the same picture, which is a real
+    // and damning fact about the game. Say it in the words the image would
+    // otherwise have had to carry on its own.
+    if (collapsed && parts.length > 0) {
+      parts.push(
+        textPart(
+          "Both captured frames are pixel-identical, so only one is shown: the screen after playing " +
+            "looks exactly like the screen on open. Nothing you pressed changed anything that draws.",
+        ),
+      );
+    }
+    this.framesShown += parts.filter((p) => p.type === "media").length;
     return parts;
   }
 

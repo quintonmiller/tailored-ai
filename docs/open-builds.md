@@ -571,7 +571,40 @@ The measurement that settled it, across the four jams before the change:
 And across those runs, **44–52% of every agent turn was an explicit `room`
 action of `pass`** (96 of 220 turns in one, 114 of 220 in the other), with
 another 37–38% of tool calls spent re-reading files that had not changed. Only
-10–12% wrote anything. This is CLAUDE.md's own rule about
+10–12% wrote anything.
+
+### What it changed, measured
+
+One sighted run (seed 21, theme *KNOT*) against the two complete blind runs at
+the same 220 turns:
+
+| | seed 14 (blind) | seed 11 (blind) | seed 21 (sighted) |
+|---|---|---|---|
+| turns ending in `pass` | 96 (44%) | 114 (52%) | **49 (22%)** |
+| calls that build | 62 (10%) | 64 (12%) | **90 (15%)** |
+| playtests | 0 | 28 | 29 |
+| frames reaching a model | 0 | 0 | **58** |
+| code lines at round 11 | 423 | 712 | **1,037** |
+| final code lines | 428 | 1,196 | 1,514 |
+
+The `pass` rate more than halved and stayed halved — 22% at turn 60, at turn 140
+and at the end, so it is not a fast start decaying into the old behaviour. The
+plateau moved: seed 14 was frozen from round 3, seed 21 was still adding code at
+round 8 and had half again as much of it by round 11.
+
+**The line counts are the least interesting row here**, and are reported mainly
+because they are what a plateau is measured in. Seed 11 finished within 300
+lines of seed 21 and the two artifacts are not comparable to look at: seed 11's
+is a sparse field of primitives, seed 21's has shaded balloons on tethers, drawn
+clouds, a strain indicator and a HUD that fits the game. The honest summary is
+that a team which can see its own screen spends its rounds on how the screen
+looks, which is not a thing this table can hold. That is what the arcade and a
+human reviewer are for.
+
+One caveat worth keeping: this is **n=1 against n=2**, on a benchmark whose
+own noise floor is documented at ~2.6 points of swing on identical code. The
+`pass` collapse is far too large to be noise and is stable across three
+sampling points; the line counts are well inside it. This is CLAUDE.md's own rule about
 instructions that offer a way out, showing up in a place nobody had looked for
 it — but the deeper cause is that a team which cannot see its game has no way to
 falsify "it is finished", so it idles out the clock. More rounds buy more of the
