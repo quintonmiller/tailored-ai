@@ -1,3 +1,6 @@
+import type { MessageContent } from "../content/types.js";
+import type { SurfaceCapabilities } from "./capabilities.js";
+
 /**
  * A message arriving from a transport.
  *
@@ -29,10 +32,22 @@ export interface Channel {
   id: string;
   type: string;
 
+  /**
+   * What this transport can show. See `SurfaceCapabilities` — required for the
+   * same reason it is required on `OutboundNotifier`, and the two are the same
+   * struct because they describe the same surface from two angles.
+   */
+  readonly capabilities: SurfaceCapabilities;
+
   connect(): Promise<void>;
   disconnect(): Promise<void>;
 
-  send(target: string, content: string): Promise<void>;
+  /**
+   * Deliver a message. The `MessageContent` arm carries media; implementations
+   * run it through `renderForSurface` so the degradation ladder is applied in
+   * one shared place rather than reinvented per transport.
+   */
+  send(target: string, content: string | MessageContent): Promise<void>;
 
   /**
    * Optional capability: signal the user that the agent is working on a reply

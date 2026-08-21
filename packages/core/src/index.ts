@@ -52,6 +52,8 @@ export type {
   ToolPermissionConfig,
 } from "./approval.js";
 export { createApprovalRequestId, evaluatePermission, formatApprovalDescription } from "./approval.js";
+export type { SurfaceCapabilities } from "./channels/capabilities.js";
+export { surfaceAccepts, TEXT_ONLY_SURFACE } from "./channels/capabilities.js";
 export { DiscordChannel } from "./channels/discord.js";
 export { type DiscordConfig, type DiscordProjectMapping, getDiscordConfig } from "./channels/discord-config.js";
 export type { Channel, IncomingMessage } from "./channels/interface.js";
@@ -65,6 +67,8 @@ export {
   type StartedChannel,
   startRegisteredChannels,
 } from "./channels/registry.js";
+export type { RenderOptions, SurfaceRendering } from "./channels/render.js";
+export { attachmentName, DEFAULT_MAX_ATTACHMENTS, renderForSurface } from "./channels/render.js";
 export { connectMcpServer, type McpConnection, mcpToolName } from "./mcp/client.js";
 export { type McpHost, McpManager } from "./mcp/manager.js";
 export type { ExpandOptions } from "./prompts/expand.js";
@@ -547,6 +551,8 @@ export { findExpiredMedia, listMediaRows, totalMediaBytes } from "./media/querie
 export type { MediaStoreContext, MediaStoreFactory } from "./media/registry.js";
 export { listMediaStoreFactories, registerMediaStoreFactory, resolveMediaStore } from "./media/registry.js";
 export { sniffMedia, UnknownMediaTypeError } from "./media/sniff.js";
+export type { CollectTurnMediaOptions } from "./media/turn.js";
+export { collectTurnMedia, latestMessageId } from "./media/turn.js";
 export type {
   ListQuery as MemoryListQuery,
   MemoryBackend,

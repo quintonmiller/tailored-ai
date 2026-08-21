@@ -1,6 +1,22 @@
 import { App, LogLevel } from "@slack/bolt";
-import type { AgentRuntime, Channel, MediaRef, OutboundNotifier, ProjectRef } from "@tailored-ai/core";
-import { executeHooks, runAgentLoop } from "@tailored-ai/core";
+import type {
+  AgentRuntime,
+  Channel,
+  MediaRef,
+  MessageContent,
+  OutboundNotifier,
+  ProjectRef,
+  SurfaceCapabilities,
+} from "@tailored-ai/core";
+import {
+  attachmentName,
+  collectTurnMedia,
+  executeHooks,
+  latestMessageId,
+  messageText,
+  renderForSurface,
+  runAgentLoop,
+} from "@tailored-ai/core";
 import type { SlackChannelConfig } from "./types.js";
 
 /**
@@ -54,6 +70,21 @@ interface SlackFile {
 export class SlackChannel implements Channel, OutboundNotifier {
   readonly id = "slack";
   readonly type = "slack";
+
+  /**
+   * Slack previews an uploaded image in the conversation, so attachment and
+   * inline are one delivery here as well.
+   *
+   * The byte cap is Slack's documented 1 GB per-file limit. Unlike Discord's,
+   * this one does not vary by plan, so it can be stated rather than guessed at.
+   */
+  readonly capabilities: SurfaceCapabilities = {
+    inlineMedia: true,
+    attachments: true,
+    links: true,
+    maxMessageLength: MAX_MESSAGE_LENGTH,
+    maxBytes: 1024 * 1024 * 1024,
+  };
 
   private app: App;
   private runtime: AgentRuntime;
@@ -137,15 +168,8 @@ export class SlackChannel implements Channel, OutboundNotifier {
       try {
         const response = await this.runAgent(userKey, content, projectCtx, media);
         if (!response) return;
-        const chunks = splitMessage(response);
-        for (const chunk of chunks) {
-          await client.chat.postMessage({
-            channel: channelId,
-            thread_ts: isDM ? undefined : message.ts,
-            text: chunk,
-          });
-        }
-        console.log(`[slack] Replied to ${user}: "${response.slice(0, 80)}"`);
+        await this.deliver(channelId, response, isDM ? undefined : message.ts);
+        console.log(`[slack] Replied to ${user}: "${messageText(response).slice(0, 80)}"`);
       } catch (err) {
         console.error(`[slack] Error handling message from ${user}:`, (err as Error).message);
         await client.chat
@@ -169,17 +193,63 @@ export class SlackChannel implements Channel, OutboundNotifier {
     console.log("[slack] Disconnected");
   }
 
-  async send(target: string, content: string): Promise<void> {
-    for (const chunk of splitMessage(content)) {
-      await this.app.client.chat.postMessage({ channel: target, text: chunk });
-    }
+  async send(target: string, content: string | MessageContent): Promise<void> {
+    await this.deliver(target, content);
   }
 
-  async sendDM(userId: string, content: string): Promise<void> {
+  async sendDM(userId: string, content: string | MessageContent): Promise<void> {
     const im = await this.app.client.conversations.open({ users: userId });
     const channel = im.channel?.id;
     if (!channel) throw new Error(`Could not open IM with user ${userId}`);
     await this.send(channel, content);
+  }
+
+  /**
+   * Post the text, then upload the files.
+   *
+   * Two calls rather than one because Slack has no combined endpoint —
+   * `chat.postMessage` carries text and `files.uploadV2` carries bytes. Text
+   * goes first so the explanation is above the picture, matching how a person
+   * would send it.
+   *
+   * An upload failure is logged and swallowed on purpose: the text has already
+   * been posted, and throwing here would make the caller believe the whole
+   * reply failed when most of it arrived.
+   */
+  private async deliver(target: string, content: string | MessageContent, threadTs?: string): Promise<void> {
+    const store = this.runtime.getMediaStore();
+    // Without a store there are no bytes to upload, so the surface genuinely
+    // cannot attach — say so before rendering rather than after. Claiming the
+    // capability and then failing to honour it is how media becomes silence:
+    // the ladder skips the placeholder because it believes the file is going
+    // to be uploaded, and then nothing uploads it.
+    const caps = store ? this.capabilities : { ...this.capabilities, attachments: false, inlineMedia: false };
+    const rendered = renderForSurface(content, caps, { linkFor: (m) => store?.urlFor?.(m.id) });
+    for (const warning of rendered.warnings) console.warn(`[slack] ${warning}`);
+
+    for (const chunk of splitMessage(rendered.text)) {
+      if (!chunk) continue;
+      await this.app.client.chat.postMessage({ channel: target, thread_ts: threadTs, text: chunk });
+    }
+
+    if (rendered.attachments.length === 0 || !store) return;
+    for (const ref of rendered.attachments) {
+      try {
+        const found = await store.get(ref.id);
+        if (!found) {
+          console.warn(`[slack] media ${ref.id.slice(0, 8)} is referenced but no longer in the store — not uploaded`);
+          continue;
+        }
+        await this.app.client.files.uploadV2({
+          channel_id: target,
+          thread_ts: threadTs,
+          file: found.bytes,
+          filename: attachmentName(ref),
+        });
+      } catch (err) {
+        console.warn(`[slack] could not upload media ${ref.id.slice(0, 8)}: ${(err as Error).message}`);
+      }
+    }
   }
 
   private resolveProject(channelId: string, isDM: boolean): ProjectRef | null {
@@ -241,7 +311,7 @@ export class SlackChannel implements Channel, OutboundNotifier {
     content: string,
     project: ProjectRef | null,
     media: MediaRef[] = [],
-  ): Promise<string | undefined> {
+  ): Promise<string | MessageContent | undefined> {
     // A Slack message is a person talking, so only `scope: all` stops it. The
     // reply says so rather than going quiet — an agent that silently ignores
     // you reads as broken, not paused.
@@ -260,6 +330,9 @@ export class SlackChannel implements Channel, OutboundNotifier {
     }
 
     const loopOpts = this.runtime.buildLoopOptions({ session, project });
+    // Watermark before the turn so what it produces is separable from what was
+    // already in the session. See `collectTurnMedia`.
+    const watermark = latestMessageId(this.runtime.db, session.id);
     const response = await runAgentLoop(media.length ? { text: content, media } : content, {
       ...loopOpts,
       ...this.runtime.defaultLoopObservers({ prefix: logPrefix }),
@@ -268,7 +341,15 @@ export class SlackChannel implements Channel, OutboundNotifier {
     if (hooks.afterRun.length > 0) {
       await executeHooks(hooks.afterRun, this.runtime.getTools(), { response: response ?? "" }, session.id, logPrefix);
     }
-    return response;
+
+    const produced = collectTurnMedia(this.runtime.db, session.id, watermark);
+    if (!response && produced.length === 0) return undefined;
+    return {
+      parts: [
+        ...(response ? [{ type: "text" as const, text: response }] : []),
+        ...produced.map((m) => ({ type: "media" as const, media: m })),
+      ],
+    };
   }
 }
 

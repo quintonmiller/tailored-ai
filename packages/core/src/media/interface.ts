@@ -58,6 +58,18 @@ export interface MediaStore {
    * Undefined means "no URL; read the bytes instead".
    */
   urlFor?(id: string): string | undefined;
+
+  /**
+   * A path on this machine's filesystem, for surfaces that can open one — a
+   * terminal printing a `file://` link, an editor integration.
+   *
+   * Optional because a store backed by S3 or a CDN genuinely has no local
+   * path, and returning a fabricated one would be worse than returning
+   * nothing. Takes the ref rather than the id so it stays synchronous: the
+   * caller already holds the metadata, and a store should not have to hit the
+   * database to answer where a file is.
+   */
+  localPathFor?(ref: MediaRef): string | undefined;
 }
 
 /** Thrown when a `put` exceeds the configured size ceiling. */

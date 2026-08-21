@@ -113,6 +113,15 @@ export class DiskMediaStore implements MediaStore {
     if (!this.urlBase) return undefined;
     return `${this.urlBase.replace(/\/$/, "")}/${id}`;
   }
+
+  /**
+   * Where the blob sits on disk. Derived from the ref rather than read from the
+   * database, which is what keeps it synchronous — and it is derivable because
+   * the layout is a pure function of the id and the mime type.
+   */
+  localPathFor(ref: MediaRef): string | undefined {
+    return this.pathFor(ref.id, ref.mimeType);
+  }
 }
 
 async function fileExists(path: string): Promise<boolean> {

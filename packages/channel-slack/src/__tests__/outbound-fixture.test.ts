@@ -82,6 +82,9 @@ function makeRuntime(config: unknown): AgentRuntime {
   const r = Object.create(AgentRuntimeClass.prototype) as AgentRuntime;
   (r as unknown as { _outbound: Map<string, OutboundNotifier> })._outbound = new Map();
   (r as unknown as { getConfig: () => unknown }).getConfig = () => config;
+  // `getMediaStore()` reads `_config` directly rather than through the stubbed
+  // accessor, so seed it as well — same reason `_outbound` is seeded above.
+  (r as unknown as { _config: unknown })._config = config;
   return r;
 }
 

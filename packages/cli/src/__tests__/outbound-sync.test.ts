@@ -1,3 +1,4 @@
+import { TEXT_ONLY_SURFACE } from "@tailored-ai/core";
 import { describe, expect, it, vi } from "vitest";
 import { isOutboundNotifier, syncOutboundRegistry } from "../outbound-sync.js";
 
@@ -27,6 +28,7 @@ function fakeChannel(id: string) {
   return {
     id,
     type: id,
+    capabilities: TEXT_ONLY_SURFACE,
     send: async () => {},
     sendDM: async () => {},
     connect: async () => {},
@@ -99,6 +101,7 @@ describe("syncOutboundRegistry", () => {
     const sendOnly = {
       id: "log",
       type: "log",
+      capabilities: TEXT_ONLY_SURFACE,
       send: async () => {},
       connect: async () => {},
       disconnect: async () => {},

@@ -37,7 +37,7 @@ describe("renderMarkdown", () => {
 
 describe("script channel", () => {
   it("strips a script tag", () => {
-    expect(sanitizeHtml('<script>alert(1)</script>')).not.toContain("alert");
+    expect(sanitizeHtml("<script>alert(1)</script>")).not.toContain("alert");
   });
 
   it("strips an inline event handler", () => {
