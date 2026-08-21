@@ -488,7 +488,7 @@ cost is that the viewer cannot filter that line by agent.
   twenty-round run. It exists precisely for the file that has grown too big to
   read, and the team barely reaches for it.
 
-## Images: a TAI limitation, not a model one
+## Images: resolved 2026-08-21 (it was a TAI limitation, not a model one)
 
 Recorded because this document asserted the opposite and the assertion was
 wrong. `playtest` describes the screen in text, and the original reason given
@@ -508,18 +508,68 @@ assumed:
   `ChatMessage.content` is `string | null`, with no content-parts array. There
   is nowhere to put an image between a tool and a model.
 
-So the ceiling is ours. Supporting image input would be a core change of real
-scope — a content-parts shape on `ChatMessage`, a way for a `ToolResult` to
-carry media, provider mapping for at least the OpenAI-compatible dialect, and a
+So the ceiling was ours. Supporting image input was a core change of real scope
+— a content-parts shape on `ChatMessage`, a way for a `ToolResult` to carry
+media, provider mapping for at least the OpenAI-compatible dialect, and a
 history-trimming policy for messages that are expensive and not summarisable.
-It is a platform capability rather than a workshop feature, which by this repo's
-own tiering makes it a seam that should land on its own merits and not as a
-dependency of one benchmark scenario.
+It was a platform capability rather than a workshop feature, which by this
+repo's own tiering made it a seam that should land on its own merits and not as
+a dependency of one benchmark scenario.
 
-The text description should survive that change regardless. It is small, it
-diffs cleanly frame to frame, and a line like "6.6% of the frame is not
-background" stays useful after a history trim in a way an image would not.
-Sending both, once both are possible, is the likely end state.
+### All three were cleared on 2026-08-21
+
+That is what happened, in that order and on those terms.
+
+- **The platform seam landed on its own merits** as `#546`, media support —
+  content parts, a `MediaStore`, per-model capabilities, and the trimmer pricing
+  a media part at 1,500 tokens. See [media-design.md](./media-design.md).
+- **The server flag went on.** `--vision` costs about 10% of the KV pool
+  (187,712 tokens → 169,600 at `--max-concurrency 4`, which is ample: the
+  workshop's agents take turns and never run concurrently). The model then
+  described a real screenshot down to the HUD text.
+- **One thing was still missing**, and it is the interesting one, because it was
+  invisible from every direction. `toOpenAIMessages` flattened *every* message
+  to text, including the follow-up user turn that
+  `adaptForCapabilities` synthesizes precisely to carry the image, while the
+  provider declared `toolResultMedia: { supported: true, mode: "follow-up" }`.
+  So the relay was declared, performed and then silently discarded at the wire.
+  The tell was a 960×720 screenshot billing 244 prompt tokens. Fixed in the same
+  change; the full account is in
+  [media-design.md](./media-design.md#the-half-of-that-workaround-that-shipped-without-the-other-half).
+
+`playtest` now returns two real frames — the opening screen and one taken
+mid-play — beside the report it already wrote.
+
+**The text description survived, as predicted.** It is small, it diffs cleanly
+frame to frame, and a line like "6.6% of the frame is not background" stays
+useful after a history trim in a way an image does not. That last clause is now
+load-bearing rather than rhetorical: core evicts a media part at 1,500 tokens a
+piece, so on a long jam the sentence is what remains of a frame nobody can see
+any more. Both are sent, which was the predicted end state.
+
+### The builder was given eyes too
+
+Not part of the image work, but found by the same investigation. `playtest`
+belonged to the tester and the interface. `check_syntax` is the deliberately
+artificial constraint — the one that makes "has anybody verified this" a
+question the team has to notice it should ask — and `playtest` was added later
+and inherited its role list without inheriting the argument for it. The
+consequence was that the agent writing the game loop could not look at the game.
+
+The measurement that settled it, across the four jams before the change:
+
+| Run | Workspace stops growing | Final code lines |
+|---|---|---|
+| seed 14 | round 3 of 20 | 428 |
+| seed 11 | round 14 of 20 | 1,196 |
+
+And across those runs, **44% of every agent turn was an explicit `room` action
+of `pass`**, with another 37% of tool calls spent re-reading files that had not
+changed. Only about 10% wrote anything. This is CLAUDE.md's own rule about
+instructions that offer a way out, showing up in a place nobody had looked for
+it — but the deeper cause is that a team which cannot see its game has no way to
+falsify "it is finished", so it idles out the clock. More rounds buy more of the
+same; the fix is a signal, not a budget.
 
 ## Watching it
 

@@ -26,7 +26,7 @@ phase, plus the docs. Nothing merged to `main` yet.
 |---|---|
 | P1 | `ContentPart` / `MediaRef` / `MessageContent` / `ToolOutput`; `messageText` + `toolOutputText` as the one text projection; `MediaStore` seam + registry + disk store; magic-byte type resolution; the `media` table and its retention sweep; `Message.content` and `ToolResult.output` widened |
 | P2a | MCP image/audio blocks decode into the store instead of flattening to `[image content …]`; `screenshot()` returns real bytes; `capToolResultOutput` caps text and never media |
-| P2b | `hydrateMedia` resolves refs to bytes once per request; Anthropic emits `image`/`document` **inside `tool_result`**; Bedrock emits Converse `image` blocks |
+| P2b | `hydrateMedia` resolves refs to bytes once per request; Anthropic emits `image`/`document` **inside `tool_result`**; Bedrock emits Converse `image` blocks; `toOpenAIMessages` emits `image_url` parts on user/assistant turns, which is where the `follow-up` relay lands (added 2026-08-21 — see *The half of that workaround that shipped without the other half*) |
 | P3 | `ModelCapabilities` with object leaves and tri-state `"unknown"`; `AIProvider.capabilities(model)`; `ModelEntry.capabilities`; the pre-flight in `chatWithFallback`; `supportsTools` made live |
 | P4 | `InboundMessage`; Discord `attachments[]`; Slack `files[]` **and its file-only-message bug fixed**; `POST /api/media`, `GET /api/media/:id`, `mediaIds` on `/api/chat`; **the store finally constructed and wired into the runtime** |
 | P5a | One sanitizing `renderMarkdown`; a server CSP; media rendered in user, assistant and tool-result bubbles; composer picker / paste / drop |
@@ -288,6 +288,37 @@ Promoting a tool-returned image into a user turn moves attacker-influenceable
 content from the quarantined position into the trusted one. So the fallback is
 not free, and it is not automatic: it is a declared, per-model behaviour with a
 label attached (see *Degradation*).
+
+#### The half of that workaround that shipped without the other half
+
+Fixed 2026-08-21, and worth writing down because of *how it hid*. The ladder
+above was built end to end except for its last rung: `adaptForCapabilities`
+synthesized the following user turn correctly, and `toOpenAIMessages` then
+flattened that turn to a text placeholder along with every other message, since
+it had no access to bytes and took none. The provider meanwhile *declared*
+`toolResultMedia: { supported: true, mode: "follow-up" }`.
+
+Every layer was individually honest. The capability said the relay was
+supported — and the relay was, it just ended in a converter that dropped the
+payload. `notes` recorded "media moved out of the tool result into a following
+user turn". Nothing errored, nothing warned, and the model received a
+well-formed placeholder of the kind this design specifies for the cases where an
+image legitimately cannot be sent. The result was that **no image ever reached a
+model on `openai_compatible`** — the default provider, and the one the entire
+local path speaks — while every observable said it had.
+
+Two things eventually gave it away, neither of them a log line:
+
+- **The token count.** A request carrying a 960×720 screenshot billed 244 prompt
+  tokens. With the image it bills 867.
+- **The model's own reasoning trace**, which read the placeholder and asked
+  whether it could see the image at all.
+
+The lesson for the next modality: a declared capability is a claim about the
+whole path, and the only proof it holds is a round-trip where the model
+describes something that is only knowable from the bytes. Both of the checks
+above are properties of the *request*, not of the code — which is why unit
+tests on either end of this passed throughout.
 
 **How MCP clients handle the same split:** they hold the typed blocks and adapt
 per provider — inline where the API allows it, a follow-up turn or a text
