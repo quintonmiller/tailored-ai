@@ -30,7 +30,7 @@
  * The seam is deliberately narrow so a second simulation costs one file.
  */
 
-import type { Tool } from "@tailored-ai/core";
+import type { MediaStore, Tool } from "@tailored-ai/core";
 
 /** Numbers a run produced. Free-form, because each simulation has its own economics. */
 export type SimMetrics = Record<string, number>;
@@ -163,6 +163,21 @@ export interface Simulation {
    * state the trace and the report both read.
    */
   finish?(): void;
+  /**
+   * Somewhere to put bytes a tool wants to hand the model.
+   *
+   * Called once, after the runtime exists and before any turn runs, with the
+   * *runtime's own* store — not a second one pointed at the same directory.
+   * That matters: the loop hydrates a `MediaRef` by asking its store for the
+   * id, so a simulation holding a different instance would produce refs the
+   * loop resolves to nothing and silently renders as a text placeholder.
+   *
+   * Optional because most simulations have no bytes to hand anybody, and
+   * undefined is a normal answer even for one that does — `bench` and
+   * `rehearse` build simulations with no runtime at all, so a tool that wants
+   * an image has to work without one.
+   */
+  attachMedia?(store: MediaStore | undefined): void;
   /** The numbers the benchmark reports. Called once, at the end. */
   metrics(): SimMetrics;
   /** The headline figure, so a report can rank runs without knowing the domain. */

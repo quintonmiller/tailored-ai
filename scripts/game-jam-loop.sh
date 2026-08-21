@@ -56,6 +56,22 @@ TOOL_ROUNDS="${JAM_TOOL_ROUNDS:-30}"
 JAM_MAX_TOKENS="${JAM_MAX_TOKENS:-8192}"
 JAM_THINKING="${JAM_THINKING:-medium}"
 
+# `--vision` is passed below, and it needs the server started with `--vision`
+# too — NInfer omits the Vision weights and their allocations otherwise, and
+# answers any request carrying an image with `vision_disabled`. The flag costs
+# about 10% of the KV pool (187,712 tokens -> 169,600 at --max-concurrency 4):
+#
+#   docker run -d --name ninfer --device /dev/dxg \
+#     -v /usr/lib/wsl:/usr/lib/wsl:ro -v "$HOME/ninfer/models:/models:ro" \
+#     -e LD_LIBRARY_PATH=/usr/lib/wsl/lib -p 8080:8080 ninfer:local \
+#     ninfer-serve /models/qwen3_8_27b_nvfp4.ninfer --host 0.0.0.0 \
+#     --max-concurrency 4 --max-context 131072 --kv-capacity auto \
+#     --kv-dtype int8 --prefill-chunk 1024 --spec mtp --draft-tokens 3 \
+#     --lm-head-draft --vision
+#
+# Without it every playtest still runs and the run still finishes; the team just
+# never sees its own game, which is the condition the first four jams were in.
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --seed)     SEED="$2"; shift 2 ;;
@@ -124,6 +140,7 @@ while [ "$STOP" -eq 0 ]; do
     --max-tokens "$JAM_MAX_TOKENS" \
     --thinking "$JAM_THINKING" \
     --context-tokens "$CONTEXT_TOKENS" \
+    --vision \
     --max-scenario-minutes 180 \
     --sim-option "brief=$BRIEF" \
     >"$LOG" 2>&1

@@ -25,6 +25,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { validateScenario } from "../schema.js";
 import { createSimulation, simulationPolicies } from "../sim/index.js";
 import { checkWorkspace } from "../sim/workshop/check.js";
+import { framesToShow } from "../sim/workshop/playtest.js";
 import type { WorkshopSimulation } from "../sim/workshop/index.js";
 import { JUDGING } from "../sim/workshop/themes.js";
 import { Workspace } from "../sim/workshop/workspace.js";
@@ -526,17 +527,64 @@ describe("the jam: a theme, a clock, and categories a person scores", () => {
 });
 
 describe("playtest", () => {
-  it("belongs to the tester and the interface, and says so when refused", async () => {
+  it("belongs to the tester, the interface and the builder, and says so when refused", async () => {
     const s = sim();
     expect(s.sharedTools().map((t) => t.name)).toContain("playtest");
     const out = await call(s, "playtest", {}, "author");
     expect(out).toMatch(/Refused/);
-    expect(out).toMatch(/tester and interface/);
+    expect(out).toMatch(/tester and interface and builder/);
+  });
+
+  it("lets the builder look at the screen it is writing the loop for", async () => {
+    // Regression guard for the change itself: the builder used to be refused,
+    // which left the agent writing what moves on screen unable to see it. Four
+    // runs in that condition stopped growing the workspace between round 3 and
+    // round 14 of 20.
+    const s = sim();
+    const out = await call(s, "playtest", {}, "builder");
+    expect(out).not.toMatch(/Refused/);
   });
 
   it("is open to everybody when checks are", () => {
     const s = sim({ checks: "anyone" });
     expect(s.sharedTools().map((t) => t.name)).toContain("playtest");
+  });
+
+  it("shows the opening screen and a mid-play frame, in that order", () => {
+    const report = {
+      screenshots: ["/s/01-opened.png", "/s/03-after-start.png", "/s/04-playing.png", "/s/05-after-input.png"],
+    } as Parameters<typeof framesToShow>[0];
+    // Mid-play last: it is the more useful of the two and the last image is
+    // the one a model weights most heavily.
+    expect(framesToShow(report)).toEqual(["/s/01-opened.png", "/s/04-playing.png"]);
+  });
+
+  it("never sends the same frame twice when only one was captured", () => {
+    const report = { screenshots: ["/s/01-opened.png"] } as Parameters<typeof framesToShow>[0];
+    // The store is content-addressed, so a duplicate would be one id twice in
+    // a single message — which reads to a model as two identical screens.
+    expect(framesToShow(report)).toEqual(["/s/01-opened.png"]);
+  });
+
+  it("shows nothing when the browser never got a frame", () => {
+    expect(framesToShow({ screenshots: [] } as Parameters<typeof framesToShow>[0])).toEqual([]);
+  });
+
+  it("still returns a plain text report when no media store is attached", async () => {
+    // `bench`, `rehearse` and most of these tests build a workshop with no
+    // runtime behind it. A playtest there has to keep working and hand back a
+    // string, not fail over the half of the answer it cannot produce.
+    const s = sim();
+    const out = await call(s, "playtest", {}, "tester");
+    expect(typeof out).toBe("string");
+  });
+
+  it("counts frames that reached a model separately from playtests run", () => {
+    // Zero here beside a healthy playtestsRun is the tell that images are not
+    // wired up — a run without `--vision` plays the game just as often and
+    // shows nobody anything.
+    const s = sim();
+    expect(s.metrics().framesShown).toBe(0);
   });
 
   it("separates never-run from run-and-static in the snapshot", () => {

@@ -72,9 +72,11 @@ export const UNIVERSAL_CONSTRAINTS = [
   "You have two instruments and they answer different questions. `check_syntax` parses every file and " +
     "finds unclosed tags, syntax errors and references to files that do not exist; it cannot tell you " +
     "whether the thing works. `playtest` opens the artifact in a real browser, presses keys at it, and " +
-    "reports console errors, whether it animates, whether it responds to input, and a coarse picture of " +
-    "the screen. Only the tester and the interface can call it, so if neither of them runs it, nobody " +
-    "knows whether it works.",
+    "hands back two actual screenshots — the opening screen and a frame taken mid-play — alongside the " +
+    "console errors, whether it animates and whether it responds to input. Look at the pictures. They " +
+    "are the only way to tell a finished game from a black rectangle that parses, and a game that looks " +
+    "empty, unreadable or unfinished on screen is one you still have work to do on. Only the tester, " +
+    "the interface and the builder can call it, so if none of them runs it, nobody knows whether it works.",
 ];
 
 const briefs: Brief[] = [

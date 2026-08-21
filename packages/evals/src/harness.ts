@@ -114,6 +114,21 @@ export interface HarnessOptions {
   /** Provider id the agent runs on. Defaults to `openai_compatible`. */
   providerId?: string;
   /**
+   * This model has eyes, and tool-returned media should reach them.
+   *
+   * A flag rather than a probe, for the reason core's own capability doc gives:
+   * an OpenAI-compatible endpoint serves whatever was last loaded under a name
+   * nothing can introspect, so the operator is the only party who knows. It is
+   * also not free to be wrong in either direction — undeclared, core leaves
+   * `toolResultMedia` at `"unknown"` and sends the image inline on a
+   * `role: "tool"` message, which the OpenAI Chat Completions shape does not
+   * accept, so a vision model would fail every request that carried a picture.
+   *
+   * Setting it declares the documented shape for that API: images accepted as
+   * bytes, and tool-result media relayed as a **follow-up user turn**.
+   */
+  vision?: boolean;
+  /**
    * The deployment's context window, in tokens.
    *
    * Recorded, never enforced: nothing here reads it to decide anything. It is
@@ -636,6 +651,30 @@ export function buildConfig(scenario: Scenario, opts: HarnessOptions, sim?: Simu
     },
     agent: {
       defaultProvider: providerId,
+      /*
+       * A one-rung chain, declared only to hang `capabilities` on it.
+       *
+       * `ModelEntry.capabilities` is the only place config can state what a
+       * model accepts, and an entry needs a chain to live in. One rung naming
+       * the same provider and model the run already uses is what an unset
+       * `models` builds implicitly, so this changes nothing about routing:
+       * every other field is left unset and inherits, exactly as it did.
+       */
+      ...(opts.vision
+        ? {
+            models: [
+              {
+                provider: providerId,
+                model: opts.model,
+                capabilities: {
+                  input: ["text/*", "image/*"],
+                  inputBytes: { supported: true },
+                  toolResultMedia: { supported: true, mode: "follow-up" },
+                },
+              },
+            ],
+          }
+        : {}),
       extraInstructions: "",
       temperature: opts.temperature,
       ...(opts.maxTokens === null ? {} : { maxTokens: opts.maxTokens }),
@@ -1004,6 +1043,20 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
         instrument(t, recorder, scenario.toolResults ?? {}, world),
       ),
     );
+
+    /*
+     * The runtime's own media store, so a simulation's tool can hand the model
+     * a picture instead of a description of one.
+     *
+     * After construction rather than through `createSimulation`, because the
+     * store does not exist until the runtime resolves it from config — and it
+     * has to be *this* instance, not an equivalent one built beside it, or the
+     * loop hydrates the simulation's refs to nothing. Before the first turn,
+     * which is what makes the ordering safe: `sim.tools()` is called lazily by
+     * the tool factory and each tool reads the store when it executes, not when
+     * it is built.
+     */
+    sim?.attachMedia?.(runtime.getMediaStore());
 
     const outcome = scenario.rooms?.length
       ? await runRoomScenario(scenario, runtime, db, agentName, opts, recorder, world, sim)

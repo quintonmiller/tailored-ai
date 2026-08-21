@@ -40,9 +40,10 @@
  */
 
 import { mkdirSync, writeFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Tool } from "@tailored-ai/core";
+import { type ContentPart, type MediaStore, mediaPart, textPart, type Tool } from "@tailored-ai/core";
 import { agentTool, num, optional, tool } from "../tool.js";
 import {
   type RunContext,
@@ -55,7 +56,7 @@ import {
 import { ArcadeDesk, openArcade } from "./arcade.js";
 import { type Brief, DEFAULT_BRIEF, getBrief, renderBrief, type WorkshopRole } from "./briefs.js";
 import { checkWorkspace, formatCheck } from "./check.js";
-import { formatPlaytest, playtest } from "./playtest.js";
+import { formatPlaytest, framesToShow, playtest } from "./playtest.js";
 import { makeScriptedPolicy } from "./policies.js";
 import { JUDGING, pickTheme, renderScorecard, type Theme } from "./themes.js";
 import { LIMITS, Workspace, WorkspaceRefusal } from "./workspace.js";
@@ -73,7 +74,7 @@ export const WORKSHOP_ROLES: WorkshopRole[] = ["lead", "builder", "interface", "
  * "these forty entries played the same game" is the question a board actually
  * gets asked and no human reads that off a sha.
  */
-export const WORKSHOP_VERSION = "workshop-2-arcade";
+export const WORKSHOP_VERSION = "workshop-3-sighted";
 
 /**
  * The configuration the scenario plays, declared here so `bench` and `rehearse`
@@ -192,6 +193,17 @@ export class WorkshopSimulation implements Simulation {
    * ends up pitched two different ways.
    */
   private readonly registrar: string;
+  /**
+   * Where a screenshot goes so the model can be handed it.
+   *
+   * Undefined whenever nobody attached one — `bench`, `rehearse` and the unit
+   * tests all build a workshop with no runtime behind it — and every read is
+   * guarded, because a playtest that cannot show a picture still has a full
+   * report to give and must not fail over the missing half.
+   */
+  private mediaStore: MediaStore | undefined;
+  /** How many frames actually reached the model, for the report. */
+  private framesShown = 0;
 
   constructor(options: WorkshopOptions) {
     this.brief = getBrief(options.brief ?? WORKSHOP_PLAY_OPTIONS.brief);
@@ -199,9 +211,25 @@ export class WorkshopSimulation implements Simulation {
     this.strictOwnership = String(options.ownership ?? WORKSHOP_PLAY_OPTIONS.ownership) !== "shared";
     this.checksAreTesterOnly = String(options.checks ?? WORKSHOP_PLAY_OPTIONS.checks) !== "anyone";
     this.theme = pickTheme(options.theme, Number(options.seed ?? 0));
-    // The tester verifies; the interface draws. Asking somebody to draw a screen
-    // they are never allowed to look at is a handicap, not a constraint.
-    this.playtestRoles = this.checksAreTesterOnly ? ["tester", "interface"] : undefined;
+    /*
+     * Who is allowed to look at the screen: the tester, the interface, and —
+     * since 2026-08-21 — the builder.
+     *
+     * `check_syntax` is the deliberately artificial constraint, the one that
+     * makes "has anybody verified this" a question the team has to notice it
+     * should ask. `playtest` was added later and inherited that role list
+     * without inheriting the argument for it, which left the agent writing the
+     * game loop unable to see the game. The same sentence that justified giving
+     * it to the interface — asking somebody to draw a screen they may never
+     * look at is a handicap, not a constraint — applies at least as strongly to
+     * whoever writes what moves on that screen.
+     *
+     * Measured on the four runs before this: the workspace stopped growing at
+     * round 3 of 20 in one and round 14 in another, while 44% of all agent
+     * turns were an explicit `pass`. A team that cannot see its game has no way
+     * to falsify "it is finished", and idles for the rest of the jam.
+     */
+    this.playtestRoles = this.checksAreTesterOnly ? ["tester", "interface", "builder"] : undefined;
 
     // A timestamp rather than the seed alone, because two runs of the same
     // scenario at the same seed are two different artifacts and overwriting the
@@ -762,9 +790,49 @@ export class WorkshopSimulation implements Simulation {
           responds: report.respondsToInput,
           atRound: this.tick,
         };
-        return { success: true, output: formatPlaytest(report, this.brief.entry) };
+        const text = formatPlaytest(report, this.brief.entry);
+        const shots = await this.attachFrames(report);
+        if (shots.length === 0) return { success: true, output: text };
+        return { success: true, output: { parts: [textPart(text), ...shots] } };
       },
     };
+  }
+
+  /** Take the runtime's media store. See {@link Simulation.attachMedia}. */
+  attachMedia(store: MediaStore | undefined): void {
+    this.mediaStore = store;
+  }
+
+  /**
+   * Put this playtest's frames in the media store and return them as parts.
+   *
+   * Returns an empty array for every reason it might not work — no store
+   * attached, no screenshot captured, the file unreadable, the store refusing
+   * the bytes — and never throws. The text report is the deliverable; the
+   * pictures are an improvement on it, and an improvement that fails has to
+   * leave the deliverable standing rather than take it down.
+   *
+   * `alt` names which frame this is. Without it the model gets two images in
+   * one message with nothing to say which came first, and "the second one"
+   * is not a thing it can see.
+   */
+  private async attachFrames(report: Awaited<ReturnType<typeof playtest>>): Promise<ContentPart[]> {
+    const store = this.mediaStore;
+    if (!store) return [];
+    const parts: ContentPart[] = [];
+    for (const path of framesToShow(report)) {
+      try {
+        const bytes = await readFile(path);
+        const label = basename(path, ".png");
+        const ref = await store.put(bytes, { mimeType: "image/png", name: `${label}.png` });
+        parts.push(mediaPart(ref, `${label} — round ${this.tick + 1} of ${this.brief.entry}`));
+      } catch {
+        // A frame we could not hand over is one the text report already
+        // describes. Nothing to say about it that would help anybody.
+      }
+    }
+    this.framesShown += parts.length;
+    return parts;
   }
 
   /**
@@ -944,6 +1012,11 @@ export class WorkshopSimulation implements Simulation {
       outlines: this.counts.outlines,
       checksRun: this.counts.checksRun,
       playtestsRun: this.counts.playtestsRun,
+      // Frames that actually reached a model, which is a different fact from
+      // playtests run: a run without `--vision` plays the game just as often
+      // and shows nobody anything. Zero here next to a healthy `playtestsRun`
+      // is the tell that the images are not wired up.
+      framesShown: this.framesShown,
       // -1 for "nobody has run it", so a board can tell "not tried" from "tried
       // and it was static" — the difference between an untested game and a
       // broken one.

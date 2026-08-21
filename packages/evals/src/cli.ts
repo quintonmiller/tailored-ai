@@ -109,6 +109,8 @@ Options
                         \${VAR} so loadConfig interpolates it and it never reaches disk.
   --thinking-dialect <d> Provider dialect for reasoning, e.g. vllm
   --context-tokens <n>  The deployment's context window. Recorded, never enforced.
+  --vision              This model can see. Lets a simulation hand it images, and
+                        declares the tool-result relay the OpenAI shape needs.
   --plugins <a,b>       Provider plugins to load, e.g. @tailored-ai/provider-openai
   --provider <id>       Provider id the agent runs on (default openai_compatible)
   --judge               Enable LLM-judged assertions (off by default: noisy)
@@ -344,6 +346,7 @@ async function cmdRun(argv: string[]): Promise<number> {
       "thinking-dialect": { type: "string" },
       thinking: { type: "string" },
       "context-tokens": { type: "string" },
+      vision: { type: "boolean" },
       "provider-extra": { type: "string" },
       "sim-option": { type: "string", multiple: true },
       plugins: { type: "string" },
@@ -403,6 +406,7 @@ async function cmdRun(argv: string[]): Promise<number> {
     thinkingDialect: values["thinking-dialect"] ?? fromHome.thinkingDialect,
     thinking: values.thinking ?? fromHome.thinking,
     contextTokens: values["context-tokens"] ? Number(values["context-tokens"]) : undefined,
+    vision: values.vision === true,
     // Read here rather than in the harness so the same values reach a run and
     // the report it writes, and a simulation that records provenance cannot
     // disagree with the report about which commit produced it.

@@ -8,32 +8,35 @@
  * how good the artifact could get, because nobody could tell a working game
  * from a black rectangle.
  *
- * ## Why this describes a screenshot instead of sending one
+ * ## It sends the screenshot, and describes it too
  *
- * **Not because the model cannot see.** That was the original justification
- * here and it was wrong, corrected on 2026-08-20 by checking rather than
- * assuming: the artifact being served is `image-text-to-text`, its card lists
- * registered Vision allocations alongside the Text and MTP ones, and NInfer
- * serves media behind a `--vision` flag that simply is not on — a request with
- * an `image_url` part comes back `vision_disabled`, which is a server setting,
- * not a missing capability.
+ * Both blockers this file used to document are gone, and the history is worth
+ * keeping because each was diagnosed by checking rather than assuming:
  *
- * The real blocker is one tier down. TAI cannot carry an image at all:
- * `ToolResult.output` is a `string`, and `ChatMessage.content` is
- * `string | null` with no content-parts array. There is nowhere to put a PNG
- * between a tool and a model, so a tool that returned one would have to
- * stringify it and hope.
+ * - **The model was never the problem.** The served artifact is
+ *   `image-text-to-text` and its card registers Vision allocations beside the
+ *   Text and MTP ones. NInfer keeps media behind a `--vision` flag that was
+ *   simply not on, so an `image_url` part came back `vision_disabled` — a
+ *   server setting, not a missing capability. Turning it on cost 10% of the KV
+ *   pool (187,712 tokens → 169,600) and nothing else.
+ * - **TAI could not carry an image**, which was the real blocker one tier down:
+ *   `ToolResult.output` was a `string` with nowhere to put a PNG. Media support
+ *   landed on 2026-08-21 and `output` now takes ordered content parts.
  *
- * So the canvas is read back through `getImageData` *inside the page* — no
- * image decoding needed — and reduced to things a sentence can carry: how much
- * of the frame is not background, which colours dominate and in what
- * proportion, and a coarse luminance grid giving the shape of what is drawn.
- * That is worth keeping even after TAI grows an image path: it is small, it
- * diffs cleanly between frames, and "6.6% of the frame is not background"
- * survives a history trim in a way an image would not.
+ * So a playtest returns both forms. The **picture** is what makes a defect
+ * legible — a team that could only read "6.6% of the frame is not background"
+ * had no way to tell a working game from a black rectangle, and the first two
+ * live runs both ended with a tester writing "Not verifiable this run".
  *
- * The real screenshots are written to disk beside the artifact for the human
- * who reviews it. Both audiences get the form they can actually use.
+ * The **text projection is kept anyway**, and not out of caution: the canvas is
+ * read back through `getImageData` inside the page and reduced to coverage, a
+ * palette and a coarse luminance grid. It is small, it diffs cleanly between
+ * frames, and it survives a history trim in a way an image does not — core
+ * counts a media part at 1,500 tokens precisely so old frames evict early, and
+ * once one has, its sentence is all that is left of what was on screen.
+ *
+ * The full-resolution PNGs are still written to disk beside the artifact for
+ * the human who reviews it. All three audiences get the form they can use.
  *
  * ## What it does to be safe
  *
@@ -387,6 +390,28 @@ export async function playtest(options: PlaytestOptions): Promise<PlaytestReport
     // `close` can hang on a page with a runaway loop; the run must not.
     await Promise.race([browser?.close(), new Promise((r) => setTimeout(r, timeout))]).catch(() => {});
   }
+}
+
+/**
+ * The frames worth handing to a model that can see, newest last.
+ *
+ * Two, not four. The opening screen and a frame taken mid-play answer different
+ * questions — "does anything appear at all" and "does playing it look like
+ * anything" — and a team gets each of them wrong independently. The two between
+ * them are close enough to their neighbours that a third costs a full image for
+ * a difference the text projection already carries.
+ *
+ * Order matters: the last image is the one a model weights most heavily, and
+ * mid-play is the more useful of the two.
+ */
+export function framesToShow(report: PlaytestReport): string[] {
+  const pick = (needle: string): string | undefined => report.screenshots.find((p) => p.includes(needle));
+  const playing = pick("04-playing") ?? report.screenshots[report.screenshots.length - 1];
+  const opened = pick("01-opened") ?? report.screenshots[0];
+  // Deduped rather than assumed distinct: a run whose only successful capture
+  // was the first frame would otherwise send the same PNG twice, and the store
+  // is content-addressed so it would be the same id twice in one message.
+  return [...new Set([opened, playing].filter((p): p is string => !!p))];
 }
 
 /** The report, as the agent reads it. Numbers and shapes, never a verdict on quality. */
