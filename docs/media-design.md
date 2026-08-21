@@ -4,11 +4,11 @@ How images (and audio, video, PDFs, arbitrary files) get into a prompt, out of a
 tool, through the loop, and onto a screen — without breaking the text-only
 assumptions the runtime is built on today.
 
-Status: **P1-P5 shipped** for the web surface — content parts, the media store,
-tools returning media, providers inlining it, per-model capabilities enforced
-before the request, inbound attachments, and the UI rendering and composing
-media behind a sanitizer and a CSP. Outbound media on Discord/Slack and the CLI,
-plus the P6 extras, remain.
+Status: **P1-P5 shipped** — content parts, the media store, tools returning
+media, providers inlining it, per-model capabilities enforced before the
+request, inbound attachments, the UI rendering and composing media behind a
+sanitizer and a CSP, and media travelling back out to Discord, Slack and the
+terminal. Only the optional P6 extras remain.
 
 ## Where this stands
 
@@ -16,7 +16,7 @@ Written for whoever picks this up next, including a later version of the person
 who wrote it. The per-phase detail is under **Phases**; this is the short
 version plus the things that are expensive to rediscover.
 
-**Branch:** `worktree-media-support-plan`, seven implementation commits on top
+**Branch:** `worktree-media-support-plan`, eight implementation commits on top
 of the design ones. Nothing merged to `main` yet.
 
 ### Shipped
@@ -29,28 +29,33 @@ of the design ones. Nothing merged to `main` yet.
 | P3 | `ModelCapabilities` with object leaves and tri-state `"unknown"`; `AIProvider.capabilities(model)`; `ModelEntry.capabilities`; the pre-flight in `chatWithFallback`; `supportsTools` made live |
 | P4 | `InboundMessage`; Discord `attachments[]`; Slack `files[]` **and its file-only-message bug fixed**; `POST /api/media`, `GET /api/media/:id`, `mediaIds` on `/api/chat`; **the store finally constructed and wired into the runtime** |
 | P5a | One sanitizing `renderMarkdown`; a server CSP; media rendered in user, assistant and tool-result bubbles; composer picker / paste / drop |
+| P5b | `SurfaceCapabilities` (required) on `Channel` **and** `OutboundNotifier`; one shared `renderForSurface` ladder; Discord `files:`, Slack `files.uploadV2`, the CLI's placeholder + `file://`; `collectTurnMedia` as the producer |
 
 New modules worth knowing about: `core/src/content/{types,codec}.ts`,
-`core/src/media/{interface,disk,registry,queries,sniff,hydrate}.ts`,
-`core/src/providers/capabilities.ts`, `ui/src/lib/{content,markdown}.ts`,
-`ui/src/components/{MediaAttachments,Composer}.tsx`.
+`core/src/media/{interface,disk,registry,queries,sniff,hydrate,turn}.ts`,
+`core/src/providers/capabilities.ts`,
+`core/src/channels/{capabilities,render}.ts`,
+`ui/src/lib/{content,markdown}.ts`,
+`ui/src/components/{MediaAttachments,Composer}.tsx`,
+`cli/src/media-render.ts`.
 
 ### What is left
 
-**P5b — outbound on the remaining surfaces.** `Channel.send` still takes only a
-string, so an agent cannot send an image *out* to Discord or Slack even though
-it can receive one from both. Needs `SurfaceCapabilities` (model it on
-`RoomCapabilities` in `rooms/types.ts:153`, which is the house pattern), the
-`send(target, string | OutboundContent)` union, Discord `files:` and Slack
-`files.uploadV2`, and the CLI printing the placeholder plus a `file://` path.
-
-**P6 — optional.** OCR degradation via the existing `extract_document`,
-iTerm2/kitty inline images, audio and video adapters, a resize step.
+**P6 — optional, and genuinely optional.** OCR degradation via the existing
+`extract_document`, iTerm2/kitty inline images, audio and video adapters, a
+resize step for models with small size caps. Nothing in P1-P5 is waiting on any
+of it.
 
 **Also open**, from earlier phases: the SSE `tool_result` event still truncates
-to 1000 chars at two sites (`packages/server/src/index.ts:1178` and `:2447`) and carries
-text only — surfaces get media from the DB, not the stream. `onToolResult` still
-hands subscribers the text projection.
+to 1000 chars at two sites (`packages/server/src/index.ts:1178` and `:2447`) and
+carries text only, and `onToolResult` still hands subscribers the text
+projection.
+
+This is less of a gap after P5b than it looked. Every surface now gets media the
+same way — by reading the record, not the stream — so the streamed projection is
+a *preview*, and the thing it previews is fetched separately. Worth fixing if a
+surface ever needs media before the turn finishes; not worth fixing to make the
+current surfaces work, because they already do.
 
 ### Things that cost time to learn
 
@@ -72,6 +77,19 @@ hands subscribers the text projection.
 - **Sanitizing URLs by scheme hits every attribute.** Blocking remote images
   through `ALLOWED_URI_REGEXP` also strips `href` from every external link. Use
   a hook that can see the tag.
+- **Find the interface production actually calls before widening one.**
+  `Channel.send` and `OutboundNotifier.send` are structurally identical, and
+  every production caller resolves through the *second* one. Widening `Channel`
+  alone would have compiled, passed, and changed nothing anywhere — a third
+  dead flag in the same workstream, and the quietest of the three. A grep for
+  `.send(` found it; reading the interface would not have.
+- **A capability the caller can't honour is worse than no capability.** Both
+  transports declared `attachments: true`, so the ladder skipped the placeholder
+  on the way to an upload that then never happened, because the deployment had
+  no media store. Media vanished silently — the one outcome this whole document
+  argues against — in the code written to prevent it. Capabilities have to
+  describe what will actually happen at the moment of use, not what the
+  transport can do in principle. Its test is what caught it.
 
 ### Verify
 
@@ -81,21 +99,31 @@ pnpm run guard:local-refs && pnpm run guard:pre-v1
 npx biome check packages/    # repo-wide; a file subset misattributes blame
 ```
 
-Green as of P5a: core 3,243 · server 132 · ui 19 · provider-anthropic 52 ·
-provider-bedrock 41 · browser-mediator 13, and every other package unchanged.
+Green as of P5b: core 3,272 · cli 224 · evals 510 · server 132 ·
+trusted-actions 101 (+2 skipped) · provider-openai 83 · deploy-aws 61 ·
+provider-anthropic 52 · provider-bedrock 41 · provider-deepseek 21 · ui 19 ·
+channel-slack 17 · provider-openrouter 15 · google-tools 13 ·
+browser-mediator 13. Both guards pass and `biome check packages/` reports zero
+errors.
 
 ## Why now
+
+**All four holes below are now closed** — see *Phases*. The section is kept in
+its original tense because it is the case for doing the work, and a case for
+work reads badly rewritten as a report of it. Its line numbers point at the tree
+as it was before P1 and no longer resolve; that is what makes them evidence
+rather than directions.
 
 Three places already have media in hand and throw it away, each with a comment
 admitting it:
 
-- **`packages/core/src/mcp/client.ts:253`** — `renderContent()` flattens an MCP
+- **`packages/core/src/mcp/client.ts`** — `renderContent()` flattens an MCP
   tool result's `image` and `audio` blocks to the string
   `[image content (image/png)]`. The doc comment says why: *"the loop's tool
   results are text-only today."* Every MCP server that returns a screenshot,
   chart, or scanned page is already talking to us in a language we refuse to
   hear.
-- **`packages/browser-mediator/src/mediator.ts:240`** — `screenshotMeta()` takes
+- **`packages/browser-mediator/src/mediator.ts`** — `screenshotMeta()` takes
   a real screenshot and returns `Captured ${buf.length} bytes. Mediator-owned;
   caller gets metadata only.` The bytes are discarded inside the function. A
   vision-capable browser agent is not merely unimplemented; it is
@@ -106,7 +134,7 @@ admitting it:
 
 Inbound is the same story from the other side. Discord messages carry
 `attachments[]` and Slack events carry `files[]`; neither is read. A Slack
-message that is *only* an image is not even delivered — `channel.ts:76` guards
+message that is *only* an image is not even delivered — the Slack channel guards
 on `!message.text` and drops the event before the agent exists.
 
 So this is not a feature that would be nice to have. It is a hole that four
@@ -283,7 +311,7 @@ The pattern is uniform: a declaration, overridable, consulted *before* the
 request. Nobody relies on the 400.
 
 OpenRouter's filter is worth stealing later. `AIProvider.listModels()` returns
-bare ids today (`providers/interface.ts:129`), which is why the setup wizard offers
+bare ids today (`providers/interface.ts:168`), which is why the setup wizard offers
 free-text entry and no capability hint. A provider that can report modalities
 alongside ids would let the wizard stop offering a text-only model to an agent
 whose tools return screenshots. Out of scope here; noted so the `listModels`
@@ -374,6 +402,11 @@ the compiler proves it.** Widening `Message.content` to that union and running
 `tsc` over `packages/core` produces exactly **one** error. That is not good
 news. `string` and `Array` share `.length`, `.slice`, `.indexOf`, `.includes`
 and `.at`, so the read sites silently accept an array:
+
+Line numbers in this table and the paragraph after it are **as of the pre-P1
+tree**, since that is the tree the experiment was run against. They have since
+moved; they are left as they were because renumbering them would quietly turn a
+record of a measurement into a claim about current code.
 
 | Real call site | `string \| ContentPart[]` | `string \| MessageContent` |
 |---|---|---|
@@ -497,7 +530,7 @@ argues the case better than a new one could:
 
 Both properties are load-bearing here too. An agent that screenshots the same
 unchanged screen three times produces one blob and three identical projections,
-so `loop.ts:1713`'s repeat detector still fires. A UUID per capture would break
+so `loop.ts:1916`'s repeat detector still fires. A UUID per capture would break
 it silently, exactly as the comment warns `exec` already does.
 
 Registered through `Registry<MediaStoreFactory>` so a deployment can swap in S3
@@ -635,16 +668,60 @@ from its refusals.
 ```ts
 export interface SurfaceCapabilities {
   inlineMedia: boolean;      // an HTML page, a Discord embed
-  attachments: boolean;      // Discord files[], Slack files.upload
+  attachments: boolean;      // Discord files[], Slack files.uploadV2
   links: boolean;            // can render a fetchable URL
+  maxMessageLength: number;
   maxBytes?: number;
   mimeTypes?: string[];
 }
 ```
 
-`Channel` has no capability struct today; the closest thing is a hardcoded
+`Channel` had no capability struct; the closest thing was a hardcoded
 `MAX_MESSAGE_LENGTH` copy-pasted into two `splitMessage` implementations
-(2000 for Discord, 3000 for Slack). Those constants belong here too.
+(2000 for Discord, 3000 for Slack) — one fact recorded twice with nothing
+keeping the copies honest. A limit is a capability, so it moved in.
+
+**Required, not optional**, and unlike `AIProvider.capabilities` this one could
+afford to be: the surface count is small and all of it is in this repo. The
+Vercel lesson applies directly — making `supportedUrls` a required member of
+`LanguageModelV4` is what stopped it becoming decorative. A surface with nothing
+to declare spreads `TEXT_ONLY_SURFACE` and is then *honestly described* rather
+than merely undescribed, and the channel contract suite asserts the struct is
+populated so a new transport cannot ship without one.
+
+It goes on **`OutboundNotifier` as well as `Channel`**, which is the part worth
+writing down. The two interfaces are structurally identical and every production
+caller — cron, autopilot, task-watcher, the workflow executors, the agent
+notifier — resolves through `OutboundNotifier`, not `Channel`. Widening only
+`Channel` would have compiled cleanly, passed every test, and changed nothing
+anywhere in production. That is the `supportsTools` disease in its quietest
+form: not a flag nobody reads, but a flag on the object nobody holds.
+
+### The capability has to be true at the moment of use
+
+A surface that *can* attach files is not the same as a surface that *will*,
+and conflating the two broke the central rule of this document inside the code
+written to enforce it.
+
+Discord and Slack both declare `attachments: true`, truthfully. But the bytes
+come from the `MediaStore`, and a deployment that has not configured one has no
+bytes to send. The ladder, told the surface could attach, routed the part to the
+attachment rung and emitted no placeholder for it — and then the upload step
+found no store and uploaded nothing. The image did not degrade. It disappeared,
+which is the outcome the whole design exists to prevent.
+
+The fix is a rule, not a patch: **resolve capabilities against the conditions of
+this delivery, not the transport's datasheet.** Both channels now narrow their
+own declaration before rendering:
+
+```ts
+const caps = store ? this.capabilities : { ...this.capabilities, attachments: false, inlineMedia: false };
+```
+
+This generalizes. The same shape covers a token without the `files:write` scope,
+a guild that has revoked attachment permission, and a transport in a degraded
+state. The declaration says what the surface can do; the value handed to the
+renderer says what it can do *now*.
 
 ### Not another dead flag
 
@@ -664,7 +741,7 @@ Three projects, three declarations that describe more than they decide.
 Three rules, adopted as acceptance criteria rather than as good intentions:
 
 1. **Capabilities are consulted before the request, at one place.**
-   `chatWithFallback` (`loop.ts:190`) gains a pre-flight adaptation step. That
+   `chatWithFallback` (`loop.ts:213`) gains a pre-flight adaptation step. That
    function currently treats every failure identically — its own comment says a
    4xx is a legitimate reason to try the next rung — which means a
    "this model has no eyes" 400 is today indistinguishable from a rate limit.
@@ -714,6 +791,15 @@ than itself.
 **To a surface:** inline → attachment → link → text projection. An HTML page
 gets `<img>`; Discord and Slack get a file upload; a terminal gets
 `[image: chart.png 1024×768] file:///…`; a log gets the projection alone.
+
+Shipped as `renderForSurface()` in `core/src/channels/render.ts`, in **one**
+implementation that every transport calls. That is not tidiness. Three
+transports each applying the ladder themselves is three chances to decide that a
+file too large to upload is a file not worth mentioning, and the two of them
+that got it wrong would look exactly like the one that got it right — a message
+that arrived. The function returns what to say *and* what to upload, so a
+transport cannot take the bytes without also taking the decision about what to
+do when it can't.
 
 Every rung is lossy in a different direction, so each one says what it did. A
 silently dropped image is the worst outcome available and the current behaviour
@@ -824,7 +910,7 @@ worked only in tests. `media.*` config, `AgentRuntime.getMediaStore()` and the
 Still open for P5: the UI composer (file / paste / drop) and rendering media
 back out to a surface.
 
-**P5 — Render surfaces. ✅ Shipped for the web UI; channels still to do.**
+**P5a — Render surfaces: the web UI. ✅ Shipped.**
 `renderMarkdown` is now the single place markdown becomes HTML, and it
 sanitizes — the six call sites that piped `marked.parse()` straight into
 `dangerouslySetInnerHTML` all go through it. The server sends a CSP whose
@@ -845,8 +931,39 @@ removed in a hook that can see the tag, and `https:` links work again. A link is
 navigation the user chooses; an image `src` is an automatic fetch. Only the
 second is the vector.
 
-Still to do here: `Channel.send` carrying media out to Discord and Slack,
-`SurfaceCapabilities`, and the CLI's placeholder-plus-path rendering.
+**P5b — Outbound on the remaining surfaces. ✅ Shipped.** `Channel.send` and
+`OutboundNotifier.send` take `string | MessageContent`; `SurfaceCapabilities` is
+required on both; one shared `renderForSurface` owns the ladder; Discord uploads
+through `files:` on the final text chunk, Slack posts text then
+`files.uploadV2`, and the CLI prints a placeholder plus a `file://` path to
+stderr so stdout stays exactly the answer.
+
+Two things came out differently from the plan above, both for reasons worth
+keeping.
+
+*There is no `OutboundContent`.* The plan named one; it collapsed into the
+existing `MessageContent`. A third content shape would have earned nothing and
+cost something real — a flat `{ text, media[] }` cannot express "image, then the
+question about it", and positional ordering is listed under *What other systems
+do* as a constraint rather than a preference. Outbound content is content.
+
+*The producer reads the record, not the return value.* Something has to decide
+which media a reply carries, and the obvious move — widen `runAgentLoop` to
+return `string | MessageContent` — would have churned eighteen call sites, most
+of which only ever want text, to serve three surfaces. Instead `collectTurnMedia`
+reads media out of the `messages` table written during the turn, bounded by a
+watermark taken before it. That is the same source the web UI already renders
+from, so a channel and the UI cannot disagree about what a turn produced, and it
+is one fact in one place rather than the same fact travelling two ways. Only
+`tool` and `assistant` rows are read, so an inbound photo is never echoed back
+at the person who just sent it, and results dedupe by content hash — an agent
+that screenshots an unchanged screen three times sends one file.
+
+Terminal inline images were deliberately not attempted. iTerm2 and kitty both
+have escape sequences for it, and emitting one to a terminal that does not
+understand it dumps kilobytes of base64 into the user's scrollback. Detecting
+support means sniffing `TERM_PROGRAM`, guessing wrong under multiplexers, and
+owning that guess. It is a real feature and it is P6's.
 
 **P6 — Optional, unscheduled.** OCR fallback; iTerm2 / kitty inline images in the
 CLI; audio and video adapters; a resize step for models with small size caps.
@@ -895,6 +1012,11 @@ Deliberately, and mostly at compile time. TAI has no external consumers of these
 types, so a loud one-time break is the cheap option and a permanently awkward
 API is the expensive one. The list below is what P1 signs up for.
 
+Written before P1 and kept in that tense: it is the prediction, and the phases
+above record what actually happened. Its line numbers are pre-P1 for the same
+reason as the table further up. Every item here has since been done except where
+the phase notes say otherwise.
+
 - **Every read of `Message.content` and `ToolResult.output`** must decide what it
   does about media. 47 `Message.content` read sites repo-wide; ~40 fail to
   compile immediately, and the object-wrapped union converts most of the rest.
@@ -927,20 +1049,36 @@ API is the expensive one. The list below is what P1 signs up for.
   Eviction must treat the pair atomically or the image outlives its context.
   P3 owns this.
 
-## Open questions
+## Settled by building it
+
+Questions this document asked and the implementation answered. Recorded rather
+than deleted, because the answer is usually less interesting than the reason.
 
 - **Does `parts` go in a new `messages.parts` TEXT column, or a `message_parts`
-  table?** A column matches how `tool_calls` and `reasoning` were added and is
-  one idempotent `ALTER TABLE`. A table makes "which sessions reference this
-  blob" a query instead of a scan, which the retention sweep wants. Leaning
-  column for P1, with the sweep doing a scan until it hurts.
+  table?** *Neither.* The existing `messages.content` column carries both arms:
+  plain strings verbatim, media-carrying content JSON-encoded, decoding
+  validated strictly enough that a legacy message whose text merely looks like
+  JSON is not misread. No `ALTER TABLE`, no migration, and the live deployment's
+  2000+ sessions never had to be touched. The retention sweep scans, and has not
+  hurt yet.
+- **Is `media.onUnsupported: "degrade"` the right default?** *Yes, kept.* Both
+  alternatives stayed reachable — `skip-rung` for someone who would rather empty
+  a fallback chain than send a blinded request, `error` for someone who wants it
+  loud — and degrading still announces itself, so the misconfiguration it hides
+  is visible in the logs rather than silent.
+- **How does an agent express "send this image out"?** *It does not.* The
+  runtime reads what the turn produced out of the message record. Every
+  alternative involved the model naming a media id in its text, which is
+  reconstruction-by-regex over model-authored output, and this document already
+  argues against that under *On `<image:abc>` placeholders*. A placeholder is a
+  rendering, never a transport — including on the way out.
+
+## Open questions
+
 - **Should `structured` be sent to the model at all?** MCP servers that set
   `outputSchema` expect the client to show the model *something* structured.
   Serializing it into the text projection is the obvious answer and may be the
   wrong one.
-- **Is `media.onUnsupported: "degrade"` the right default,** or should a vision
-  agent hitting a text-only rung be a loud failure? Degrade is friendlier and
-  hides a misconfiguration; skip-rung is honest and can empty a fallback chain.
 - **Do rooms carry media?** `room_messages.content` is TEXT and the envelope is
   regex-parsed (`rooms/envelope.ts`). Agent-to-agent images are a real use case
   and a bigger change than it looks.
