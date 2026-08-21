@@ -117,6 +117,21 @@ const CapabilitiesSchema = z.object({
   tools: SupportSchema.optional(),
 });
 
+/**
+ * `media.*` — a closed record core owns, so it is checked in full. `options`
+ * stays open: a store core never heard of owns its own keys.
+ */
+const MediaConfigSchema = z.object({
+  store: z.string().optional(),
+  retentionDays: z.number().optional(),
+  maxBytes: z.number().optional(),
+  dir: z.string().optional(),
+  urlBase: z.string().optional(),
+  onUnsupported: z.enum(["degrade", "skip-rung", "error"]).optional(),
+  onUnknown: z.enum(["try", "degrade"]).optional(),
+  options: z.record(z.unknown()).optional(),
+});
+
 const ModelEntrySchema = z.object({
   provider: z.string(),
   model: z.string(),
@@ -556,6 +571,10 @@ export function findShapeIssues(config: AgentConfig): string[] {
 
   if (config.tools?.exec != null) {
     found.push(...shapeIssues("tools.exec", ExecToolConfigSchema, config.tools.exec));
+  }
+
+  if (config.media != null) {
+    found.push(...shapeIssues("media", MediaConfigSchema, config.media));
   }
 
   // Open bags: only `enabled` is core's to judge.

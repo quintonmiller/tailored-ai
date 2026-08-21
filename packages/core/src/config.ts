@@ -839,6 +839,39 @@ export interface AgentConfig {
     servers: { [serverId: string]: McpServerConfig | undefined };
   };
   /**
+   * Where media (images, audio, PDFs) produced by tools or attached by a user
+   * is kept, and what to do when a model cannot take it.
+   *
+   * Absent means the disk store under `<TAI_HOME>/media`, which is the right
+   * default: a deployment that never sees a picture pays nothing for the table
+   * and the directory, and one that does needs no configuration to start.
+   */
+  media?: {
+    /** Registered store id. `disk` unless a plugin registered another. */
+    store?: string;
+    /** Delete blobs unused for this long. */
+    retentionDays?: number;
+    /** Reject a single item larger than this many bytes. */
+    maxBytes?: number;
+    /** Override the disk store's directory. */
+    dir?: string;
+    /**
+     * Base path the HTTP API serves blobs from, so render surfaces can link
+     * rather than embed. Unset means surfaces read bytes instead.
+     */
+    urlBase?: string;
+    /** What to do when a model declares it cannot take media. */
+    onUnsupported?: "degrade" | "skip-rung" | "error";
+    /**
+     * What to do when nobody declared anything — the common case, since most
+     * models never get a `capabilities` line and neither Bedrock nor Gemini
+     * publishes usable modality metadata.
+     */
+    onUnknown?: "try" | "degrade";
+    /** Store-specific keys, for a store core does not know. */
+    options?: Record<string, unknown>;
+  };
+  /**
    * Plugin modules to load at startup. Each entry is either a package
    * specifier (`"@some-author/tai-plugin-x"`) or an object with `module`,
    * optional `enabled`, and optional `config`. Loading happens before
@@ -1771,6 +1804,7 @@ export function mergeProjectOverlay(
  */
 const KNOWN_TOP_LEVEL_CONFIG_KEY_MAP: Record<keyof AgentConfig, true> = {
   compaction: true,
+  media: true,
   prompt: true,
   server: true,
   database: true,

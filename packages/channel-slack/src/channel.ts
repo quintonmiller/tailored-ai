@@ -1,5 +1,5 @@
 import { App, LogLevel } from "@slack/bolt";
-import type { AgentRuntime, Channel, OutboundNotifier, ProjectRef } from "@tailored-ai/core";
+import type { AgentRuntime, Channel, MediaRef, OutboundNotifier, ProjectRef } from "@tailored-ai/core";
 import { executeHooks, runAgentLoop } from "@tailored-ai/core";
 import type { SlackChannelConfig } from "./types.js";
 
@@ -43,6 +43,14 @@ export interface SlackChannelOptions {
  * /context/tasks built-ins, no command parsing. Those live as TODOs in the
  * README; the goal here is a readable reference implementation.
  */
+/** The subset of Slack's file object this channel uses. */
+interface SlackFile {
+  id?: string;
+  name?: string;
+  mimetype?: string;
+  url_private?: string;
+}
+
 export class SlackChannel implements Channel, OutboundNotifier {
   readonly id = "slack";
   readonly type = "slack";
@@ -73,9 +81,15 @@ export class SlackChannel implements Channel, OutboundNotifier {
       // The message event has many subtypes — keep it simple: respond only
       // to plain user messages and direct messages from users.
       if (message.subtype && message.subtype !== "bot_message" && message.subtype !== undefined) return;
-      if (!("user" in message) || !message.user || !("text" in message) || !message.text) return;
+      // `files` without `text` used to be dropped here, so an image posted
+      // with no caption never reached the agent at all — not as an empty
+      // message, not as anything. That is the bug this whole feature exists to
+      // stop, so the guard now admits a message that carries only files.
+      if (!("user" in message) || !message.user) return;
+      const files = "files" in message ? ((message.files as SlackFile[] | undefined) ?? []) : [];
+      if ((!("text" in message) || !message.text) && files.length === 0) return;
       const user = message.user;
-      const text = message.text;
+      const text = "text" in message && message.text ? message.text : "";
       const channelId = message.channel;
       const isDM = message.channel_type === "im";
 
@@ -103,7 +117,8 @@ export class SlackChannel implements Channel, OutboundNotifier {
 
       // Strip the bot mention so the prompt is clean.
       const content = text.replace(new RegExp(`<@${this.botUserId}>`, "g"), "").trim();
-      if (!content) return;
+      if (!content && files.length === 0) return;
+      const media = await this.storeFiles(files);
 
       const projectCtx = this.resolveProject(channelId, isDM);
       const userKey = this.runtime.makeSessionKey({ channelId: "slack", userId: user, project: projectCtx });
@@ -120,7 +135,7 @@ export class SlackChannel implements Channel, OutboundNotifier {
       console.log(`[slack] ${user} (${source}): "${content.slice(0, 80)}"`);
 
       try {
-        const response = await this.runAgent(userKey, content, projectCtx);
+        const response = await this.runAgent(userKey, content, projectCtx, media);
         if (!response) return;
         const chunks = splitMessage(response);
         for (const chunk of chunks) {
@@ -190,7 +205,43 @@ export class SlackChannel implements Channel, OutboundNotifier {
     return ref;
   }
 
-  private async runAgent(userKey: string, content: string, project: ProjectRef | null): Promise<string | undefined> {
+  /**
+   * Download Slack files into the media store.
+   *
+   * `url_private` needs the bot token — an unauthenticated fetch gets Slack's
+   * sign-in HTML with a 200, which would sail past a naive `res.ok` check and
+   * store a login page as the user's screenshot. Hence the explicit
+   * Authorization header and the content-type check.
+   */
+  private async storeFiles(files: SlackFile[]): Promise<MediaRef[]> {
+    const store = this.runtime.getMediaStore();
+    if (!store || files.length === 0) return [];
+    const refs: MediaRef[] = [];
+    for (const file of files) {
+      if (!file.url_private) continue;
+      try {
+        const res = await fetch(file.url_private, {
+          headers: { Authorization: `Bearer ${this.config.token}` },
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (res.headers.get("content-type")?.includes("text/html")) {
+          throw new Error("got HTML — the download was not authorized");
+        }
+        const bytes = Buffer.from(await res.arrayBuffer());
+        refs.push(await store.put(bytes, { mimeType: file.mimetype, name: file.name }));
+      } catch (err) {
+        console.warn(`[slack] could not store file ${file.name ?? "(unnamed)"}: ${(err as Error).message}`);
+      }
+    }
+    return refs;
+  }
+
+  private async runAgent(
+    userKey: string,
+    content: string,
+    project: ProjectRef | null,
+    media: MediaRef[] = [],
+  ): Promise<string | undefined> {
     // A Slack message is a person talking, so only `scope: all` stops it. The
     // reply says so rather than going quiet — an agent that silently ignores
     // you reads as broken, not paused.
@@ -209,7 +260,7 @@ export class SlackChannel implements Channel, OutboundNotifier {
     }
 
     const loopOpts = this.runtime.buildLoopOptions({ session, project });
-    const response = await runAgentLoop(content, {
+    const response = await runAgentLoop(media.length ? { text: content, media } : content, {
       ...loopOpts,
       ...this.runtime.defaultLoopObservers({ prefix: logPrefix }),
     });

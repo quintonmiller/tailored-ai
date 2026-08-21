@@ -9,7 +9,15 @@ import {
   formatApprovalDescription,
   type PermissionsConfig,
 } from "../approval.js";
-import { contentParts, messageText, type ToolOutput, toolOutputText } from "../content/types.js";
+import {
+  type ContentPart,
+  contentParts,
+  type MediaRef,
+  type MessageContent,
+  messageText,
+  type ToolOutput,
+  toolOutputText,
+} from "../content/types.js";
 import { loadAllContext, loadContextFiles } from "../context.js";
 import { recordTokenUsage } from "../db/autopilot-queries.js";
 import { getCoreMemory, renderCoreMemory } from "../db/core-memory-queries.js";
@@ -1196,12 +1204,54 @@ function toolsToSchemas(tools: Tool[]): ToolSchema[] {
   }));
 }
 
-export async function runAgentLoop(userMessage: string, opts: AgentLoopOptions): Promise<string> {
+/**
+ * One turn.
+ *
+ * `userMessage` is a union so that all seventeen existing call sites keep
+ * compiling untouched: a `string` means exactly what it always did. The
+ * {@link InboundMessage} arm is how a surface hands over text *and* the media
+ * that came with it — a Discord attachment, a Slack upload, a file dropped on
+ * the composer.
+ */
+export async function runAgentLoop(userMessage: string | InboundMessage, opts: AgentLoopOptions): Promise<string> {
   try {
     return await _runAgentLoopInner(userMessage, opts);
   } finally {
     opts.onActivity?.(null);
   }
+}
+
+/**
+ * Text plus whatever arrived with it.
+ *
+ * Deliberately not `Message`: this is what a *surface* has, before the loop
+ * decides how it becomes a turn. Media is referenced, never inlined, so a
+ * caller stores bytes first and passes ids.
+ */
+export interface InboundMessage {
+  text: string;
+  media?: MediaRef[];
+}
+
+/** The text of an inbound message, whichever form it arrived in. */
+export function inboundText(input: string | InboundMessage): string {
+  return typeof input === "string" ? input : input.text;
+}
+
+/**
+ * The content for the user turn this inbound message becomes.
+ *
+ * A message with no media stays a plain `string`, so a text-only conversation
+ * is byte-identical to what it was — same history rows, same repeat-detector
+ * signatures, same everything.
+ */
+export function inboundContent(input: string | InboundMessage): string | MessageContent {
+  if (typeof input === "string") return input;
+  if (!input.media?.length) return input.text;
+  const parts: ContentPart[] = [];
+  if (input.text) parts.push({ type: "text", text: input.text });
+  for (const media of input.media) parts.push({ type: "media", media });
+  return { parts };
 }
 
 /**
@@ -1318,7 +1368,7 @@ export function warnIfContextIsLarge(contextContent: string, agentName?: string,
   );
 }
 
-async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): Promise<string> {
+async function _runAgentLoopInner(userMessage: string | InboundMessage, opts: AgentLoopOptions): Promise<string> {
   const { session, db, extraInstructions, contextDir, agentContextDir } = opts;
 
   let contextContent = "";
@@ -1368,7 +1418,9 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
   if (opts.injectMemory && opts.getMemoryBackend) {
     const backend = await opts.getMemoryBackend();
     const meta = await buildMemoryBlockWithMeta(backend, {
-      userMessage,
+      // Recall searches text; an image contributes its placeholder, which is
+      // the honest query for "what did the user just send".
+      userMessage: inboundText(userMessage),
       projectId: session.projectId ?? null,
       budgetTokens: opts.memoryInjectBudgetTokens,
       limit: opts.memoryInjectLimit,
@@ -1403,7 +1455,7 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
       agent: agentNameForCore,
       projectId: session.projectId ?? null,
       sessionId: session.id,
-      userMessage,
+      userMessage: inboundText(userMessage),
     },
     // Registered slots plus whatever config declares. Config ones are rebuilt
     // per turn so a `file:` edit lands without a restart.
@@ -1436,7 +1488,7 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
 
   const history = getSessionMessages(db, session.id);
 
-  const userMsg: Message = { role: "user", content: userMessage };
+  const userMsg: Message = { role: "user", content: inboundContent(userMessage) };
   saveMessage(db, session.id, userMsg);
   history.push(userMsg);
 
@@ -1482,7 +1534,7 @@ async function _runAgentLoopInner(userMessage: string, opts: AgentLoopOptions): 
 }
 
 async function _runAgentLoopBody(
-  userMessage: string,
+  userMessage: string | InboundMessage,
   opts: AgentLoopOptions,
   context: ToolContext,
   fullSystemPrompt: string,
@@ -1815,7 +1867,7 @@ async function _runAgentLoopBody(
         // the check.
         const outcome = await executeToolCall(call, toolMap, currentToolNames, context, {
           ...opts,
-          userRequest: opts.userRequest ?? userMessage,
+          userRequest: opts.userRequest ?? inboundText(userMessage),
           derivabilityContext:
             opts.derivabilityContext ??
             messages

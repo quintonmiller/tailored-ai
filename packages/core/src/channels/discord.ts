@@ -21,6 +21,7 @@ import { countTurns, rewindSession, undoRewind } from "../agent/rewind.js";
 import { findOrCreateSession, resetSession } from "../agent/session.js";
 import { slashCommandRegistry } from "../commands/registry.js";
 import { executeCommand, isCommand } from "../commands.js";
+import type { MediaRef } from "../content/types.js";
 import { loadAllContext, loadContextFiles } from "../context.js";
 import { getSessionMessages } from "../db/queries.js";
 import { createProjectTask, queryProjectTasks } from "../db/task-queries.js";
@@ -576,13 +577,50 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     return ref;
   }
 
+  /**
+   * Download a message's attachments into the media store.
+   *
+   * Discord hands us URLs, not bytes, and those URLs expire — so they are
+   * fetched now rather than referenced. Anything that fails to download is
+   * skipped with a warning: a message whose text is fine should not be lost to
+   * one unreachable image.
+   *
+   * Returns an empty array when no store is configured, which is what keeps a
+   * deployment that has not opted into media behaving exactly as before.
+   */
+  private async storeAttachments(msg: DiscordMessage): Promise<MediaRef[]> {
+    const store = this.runtime.getMediaStore();
+    if (!store || !msg.attachments?.size) return [];
+    const refs: MediaRef[] = [];
+    for (const attachment of msg.attachments.values()) {
+      try {
+        const res = await fetch(attachment.url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const bytes = Buffer.from(await res.arrayBuffer());
+        refs.push(
+          await store.put(bytes, {
+            mimeType: attachment.contentType ?? undefined,
+            name: attachment.name ?? undefined,
+          }),
+        );
+      } catch (err) {
+        console.warn(`[discord] could not store attachment ${attachment.name}: ${(err as Error).message}`);
+      }
+    }
+    return refs;
+  }
+
   private async handleMessage(msg: DiscordMessage): Promise<void> {
     if (!this.shouldRespond(msg)) return;
 
     // Strip the bot mention from the content
     const content = msg.content.replace(new RegExp(`<@!?${this.client.user!.id}>`, "g"), "").trim();
 
-    if (!content) return;
+    // Attachments make a message worth answering even with no text: dropping a
+    // screenshot into a DM and saying nothing is a perfectly ordinary way to
+    // ask "what is this?".
+    const hasAttachments = msg.attachments?.size > 0;
+    if (!content && !hasAttachments) return;
 
     // Deduplicate: don't process if we're already handling a message from this user.
     // Project-scoped sessions are namespaced under their project id so the same user
@@ -753,7 +791,8 @@ export class DiscordChannel implements Channel, OutboundNotifier {
         ? new DiscordApprovalHandler((opts) => msg.reply(opts), msg.author.id)
         : undefined;
 
-      const response = await runAgentLoop(content, {
+      const media = await this.storeAttachments(msg);
+      const response = await runAgentLoop(media.length ? { text: content, media } : content, {
         ...loopOpts,
         approvalHandler,
         ...this.runtime.defaultLoopObservers({ prefix: logPrefix }),

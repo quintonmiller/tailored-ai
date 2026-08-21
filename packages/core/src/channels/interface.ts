@@ -1,3 +1,13 @@
+/**
+ * A message arriving from a transport.
+ *
+ * This interface was exported for a long time and **constructed by nothing** —
+ * every surface (Discord, Slack, the CLI, the HTTP API, webhooks, rooms, cron,
+ * delegate, agent-to-agent DMs) flattened its own way to a bare `string` before
+ * calling `runAgentLoop`. It is kept, and now carries the fields a channel
+ * actually has, because attachments need somewhere to live that is not a
+ * string.
+ */
 export interface IncomingMessage {
   id: string;
   channelId: string;
@@ -7,6 +17,12 @@ export interface IncomingMessage {
   isDM: boolean;
   isMention: boolean;
   replyTo?: string;
+  /**
+   * Media that arrived with the message — Discord `attachments[]`, Slack
+   * `files[]`, a UI upload. Already stored, so this is a reference rather than
+   * a payload.
+   */
+  media?: import("../content/types.js").MediaRef[];
 }
 
 export interface Channel {

@@ -4,9 +4,10 @@ How images (and audio, video, PDFs, arbitrary files) get into a prompt, out of a
 tool, through the loop, and onto a screen — without breaking the text-only
 assumptions the runtime is built on today.
 
-Status: **P1-P3 shipped** (content parts, the media store, tools returning
-media, providers inlining it, and per-model capabilities enforced before the
-request). P4-P6 are proposals.
+Status: **P1-P4 shipped** — content parts, the media store, tools returning
+media, providers inlining it, per-model capabilities enforced before the
+request, and inbound attachments from Discord, Slack and the HTTP API. The UI
+composer and outbound rendering (P5) and the optional extras (P6) remain.
 
 ## Why now
 
@@ -728,10 +729,25 @@ already run against the real history, so the synthesized user turn cannot be
 split from the tool result it follows. That resolves the interaction flagged
 under *What this breaks*.
 
-**P4 — Inbound.** `InboundMessage`; Discord `attachments[]`; Slack `files[]`
-plus the file-only-message fix; `POST /api/media` and `GET /api/media/:id`;
-`POST /api/chat` accepts `mediaIds`; UI composer gets file / paste / drop.
-*Tier 1 seam + tier 2 channels.*
+**P4 — Inbound. ✅ Shipped (server + channels).** `InboundMessage` and the
+`string | InboundMessage` union on `runAgentLoop`, so all seventeen call sites
+compile untouched; `IncomingMessage` given a body and a `media` field rather
+than left decorative. Discord downloads `attachments[]` (its URLs expire, so
+they are fetched, not referenced); Slack downloads `files[]` **and its
+file-only-message guard is fixed** — an uncaptioned image used to be dropped
+before the agent existed. `POST /api/media` stores an upload and returns a
+content-addressed ref, `GET /api/media/:id` serves it immutable and
+`nosniff`-guarded, and `POST /api/chat` takes `mediaIds`.
+
+Also shipped here, and overdue: **the store is finally constructed.** P1-P3
+built the content model, the store, hydration and the capability pre-flight, and
+nothing ever instantiated a store or handed one to the loop — the whole feature
+worked only in tests. `media.*` config, `AgentRuntime.getMediaStore()` and the
+`buildLoopOptions` wiring close that. It is the same failure mode as
+`supportsTools` and it nearly shipped twice in the same workstream.
+
+Still open for P5: the UI composer (file / paste / drop) and rendering media
+back out to a surface.
 
 **P5 — Outbound render.** `Channel.send` accepts `{ text, parts }`; Discord and
 Slack upload attachments; UI renders image parts; CLI prints the projection plus

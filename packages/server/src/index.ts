@@ -138,7 +138,8 @@ import {
   verifyPassword,
 } from "./auth/proxy-auth.js";
 import { mountPluginHttpRoutes, routePathToRegex } from "./http-routes.js";
-import { checkPortAvailable, portInUseMessage } from "./port.js";
+// `checkPortAvailable` is re-exported below but not called here.
+import { portInUseMessage } from "./port.js";
 
 export interface ServerOptions {
   runtime: AgentRuntime;
@@ -958,13 +959,89 @@ export function createServer(opts: ServerOptions) {
     return c.json({ sessionId: session.id, sessionKey });
   });
 
+  /**
+   * Upload one file and get back a reference.
+   *
+   * Two steps rather than one, deliberately: the client stores bytes here and
+   * then names ids on `/api/chat`. That keeps the chat route JSON — it already
+   * streams SSE back and multipart-plus-SSE on one endpoint is a worse shape —
+   * and it means re-sending the same screenshot costs one upload, since the
+   * store is content-addressed and returns the id it already had.
+   */
+  app.post("/api/media", async (c) => {
+    const store = runtime.getMediaStore();
+    if (!store) return c.json({ error: "no media store configured" }, 503);
+
+    let form: FormData;
+    try {
+      form = await c.req.formData();
+    } catch {
+      return c.json({ error: "expected multipart/form-data with a `file` field" }, 400);
+    }
+    const file = form.get("file");
+    if (!(file instanceof File)) return c.json({ error: "`file` field is required" }, 400);
+
+    const bytes = Buffer.from(await file.arrayBuffer());
+    try {
+      const ref = await store.put(bytes, {
+        // The browser's Content-Type is a claim, not evidence — the store
+        // resolves the real type from the bytes and prefers that.
+        mimeType: file.type || undefined,
+        name: file.name || undefined,
+        sessionId: c.req.query("sessionId") ?? undefined,
+      });
+      return c.json(ref);
+    } catch (err) {
+      const message = (err as Error).message;
+      // A payload over the cap is the caller's mistake, not a server fault.
+      const tooLarge = (err as Error).name === "MediaTooLargeError";
+      return c.json({ error: message }, tooLarge ? 413 : 400);
+    }
+  });
+
+  /** Serve a stored blob, so a render surface can link instead of embedding. */
+  app.get("/api/media/:id", async (c) => {
+    const store = runtime.getMediaStore();
+    if (!store) return c.json({ error: "no media store configured" }, 503);
+    const id = c.req.param("id");
+    // Ids are sha256 hex. Rejecting anything else keeps a malformed id from
+    // reaching the store at all; path traversal is already impossible, since
+    // the id is a hash and never a path fragment the caller chose.
+    if (!/^[0-9a-f]{64}$/.test(id)) return c.json({ error: "bad media id" }, 400);
+    const stored = await store.get(id);
+    if (!stored) return c.json({ error: "not found" }, 404);
+    return new Response(new Uint8Array(stored.bytes), {
+      headers: {
+        "Content-Type": stored.ref.mimeType,
+        "Content-Length": String(stored.bytes.byteLength),
+        // Content-addressed, so a given id's bytes can never change.
+        "Cache-Control": "public, max-age=31536000, immutable",
+        // Never let a stored blob be sniffed into something executable.
+        "X-Content-Type-Options": "nosniff",
+        ...(stored.ref.name
+          ? { "Content-Disposition": `inline; filename="${encodeURIComponent(stored.ref.name)}"` }
+          : {}),
+      },
+    });
+  });
+
   app.post("/api/chat", async (c) => {
-    const body = await c.req.json<{ message: string; sessionKey?: string; agent?: string; profile?: string }>();
-    const { message, sessionKey, agent, profile } = body;
+    const body = await c.req.json<{
+      message: string;
+      sessionKey?: string;
+      agent?: string;
+      profile?: string;
+      /** Ids from `POST /api/media`, in the order they should appear. */
+      mediaIds?: string[];
+    }>();
+    const { message, sessionKey, agent, profile, mediaIds } = body;
     const agentName = agent ?? profile;
 
-    if (!message?.trim()) {
-      return c.json({ error: "message is required" }, 400);
+    // A message carrying only an image is a real message. Requiring text would
+    // repeat the Slack bug this work exists to fix, where an image with no
+    // caption was dropped before the agent ever saw it.
+    if (!message?.trim() && !mediaIds?.length) {
+      return c.json({ error: "message or mediaIds is required" }, 400);
     }
 
     // Reached only under `scope: all` — the default pause deliberately keeps
@@ -1017,7 +1094,12 @@ export function createServer(opts: ServerOptions) {
         const combinedSignal = baseOpts.signal
           ? AbortSignal.any([baseOpts.signal, c.req.raw.signal])
           : c.req.raw.signal;
-        const response = await runAgentLoop(message, {
+        // Resolve the ids the client uploaded into refs. An id the store does
+        // not know is dropped with a warning rather than failing the turn: the
+        // text is still worth answering, and a blob that expired mid-compose
+        // should not cost the user their message.
+        const media = mediaIds?.length ? await resolveMediaIds(runtime, mediaIds) : undefined;
+        const response = await runAgentLoop(media?.length ? { text: message ?? "", media } : (message ?? ""), {
           ...baseOpts,
           approvalHandler,
           signal: combinedSignal,
@@ -3921,3 +4003,23 @@ export function createServer(opts: ServerOptions) {
 }
 
 export { checkPortAvailable, portInUseMessage } from "./port.js";
+
+/**
+ * Turn uploaded ids back into references.
+ *
+ * Unknown ids are skipped, not fatal. The store is content-addressed and
+ * swept on a retention schedule, so an id can legitimately go stale between
+ * upload and send, and losing the whole message over it would be the wrong
+ * trade.
+ */
+async function resolveMediaIds(runtime: AgentRuntime, ids: string[]) {
+  const store = runtime.getMediaStore();
+  if (!store) return undefined;
+  const refs = [];
+  for (const id of ids) {
+    const ref = await store.stat(id);
+    if (ref) refs.push(ref);
+    else console.warn(`[server] media id ${id} is not in the store — dropped from this message`);
+  }
+  return refs;
+}
