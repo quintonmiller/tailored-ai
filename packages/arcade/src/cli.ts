@@ -174,7 +174,25 @@ async function main(raw: string[]): Promise<void> {
       process.exitCode = 1;
       return;
     }
-    const root = resolve(target);
+    /*
+     * Relative to where the command was typed, not to where pnpm ran it.
+     *
+     * `pnpm run arcade:import ./packages/evals/results/workshops` from the repo
+     * root executes with the working directory set to `packages/arcade`, so a
+     * plain `resolve()` looks for `packages/arcade/packages/evals/...` and the
+     * error names a path the user never typed. `INIT_CWD` is what pnpm and npm
+     * both set for this, and falling back to `cwd()` keeps a direct
+     * `tsx src/cli.ts` invocation behaving normally.
+     */
+    const root = resolve(process.env.INIT_CWD ?? process.cwd(), target);
+    if (!existsSync(root)) {
+      // A stack trace from `readdirSync` is not an error message. The usual
+      // cause is a relative path resolved against the package rather than the
+      // shell's directory, which the absolute form makes obvious.
+      console.error(`no such directory: ${root}`);
+      process.exitCode = 1;
+      return;
+    }
     const model = values.model ?? "";
     const dirs = existsSync(join(root, "manifest.json"))
       ? [root]
