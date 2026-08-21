@@ -12,6 +12,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { splitCommand } from "./args.js";
 import { publishRun } from "./publish.js";
 import { createArcadeServer, listen } from "./server.js";
 import { ArcadeStore, type EntryProvenance } from "./store.js";
@@ -131,9 +132,8 @@ function runDate(runId: string, dir: string): string {
   }
 }
 
-async function main(argv: string[]): Promise<void> {
-  const command = argv[0] && !argv[0].startsWith("-") ? argv[0] : "serve";
-  const rest = command === argv[0] ? argv.slice(1) : argv;
+async function main(raw: string[]): Promise<void> {
+  const { command, rest } = splitCommand(raw);
   const { values, positionals } = parseArgs({
     args: rest,
     allowPositionals: true,

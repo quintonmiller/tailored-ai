@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inflateRawSync } from "node:zlib";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { splitCommand, stripSeparator } from "../args.js";
 import { CATEGORIES, CATEGORY_KEYS, cleanScore, normaliseGenre, overallScore } from "../categories.js";
 import { publishRun } from "../publish.js";
 import { createArcadeServer, listen } from "../server.js";
@@ -428,5 +429,34 @@ describe("the server", () => {
       await server.close();
       store.close();
     }
+  });
+});
+
+describe("command line", () => {
+  /**
+   * `pnpm run arcade -- list` forwards the separator to the script.
+   *
+   * Without stripping it, `--` is argv[0], the command sniffer sees a dash,
+   * falls back to `serve`, and the user gets `EADDRINUSE: 127.0.0.1:4321` —
+   * a failure that reads as "the port is busy" rather than "your subcommand
+   * was never parsed". Found by running the documented command.
+   */
+  it("drops the separator a package manager forwards", () => {
+    expect(stripSeparator(["--", "list"])).toEqual(["list"]);
+    expect(stripSeparator(["import", "/dir", "--model", "x"])).toEqual(["import", "/dir", "--model", "x"]);
+    // Only the first. A second is a real end-of-options marker.
+    expect(stripSeparator(["--", "list", "--", "-weird-name"])).toEqual(["list", "--", "-weird-name"]);
+  });
+
+  it("finds the command through the separator, and defaults to serve", () => {
+    expect(splitCommand(["--", "list"])).toEqual({ command: "list", rest: [] });
+    expect(splitCommand(["--", "import", "/dir", "--min-rounds", "10"])).toEqual({
+      command: "import",
+      rest: ["/dir", "--min-rounds", "10"],
+    });
+    expect(splitCommand([])).toEqual({ command: "serve", rest: [] });
+    // A leading flag is not a command.
+    expect(splitCommand(["--port", "5000"])).toEqual({ command: "serve", rest: ["--port", "5000"] });
+    expect(splitCommand(["--", "--port", "5000"])).toEqual({ command: "serve", rest: ["--port", "5000"] });
   });
 });
