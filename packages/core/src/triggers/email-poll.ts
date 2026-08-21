@@ -1,3 +1,4 @@
+import { toolOutputText } from "../content/types.js";
 import type { Tool, ToolContext } from "../tools/interface.js";
 import type { WorkflowEngine } from "../workflows/engine.js";
 
@@ -129,7 +130,7 @@ export class EmailPoller {
     // The gmail tool returns a list of `Message ID: <id>` lines; pull them out.
     // Different gmail tool versions may emit a JSON array; handle both.
     const out: string[] = [];
-    const text = result.output;
+    const text = toolOutputText(result.output);
     try {
       const maybe = JSON.parse(text);
       if (Array.isArray(maybe)) {

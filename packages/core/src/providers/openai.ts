@@ -1,3 +1,4 @@
+import { messageText } from "../content/types.js";
 import type {
   AIProvider,
   ChatParams,
@@ -74,19 +75,40 @@ interface OpenAIChatResponse {
   };
 }
 
+/**
+ * Chat Completions takes text here, so media is flattened to its placeholder.
+ *
+ * Two separate reasons, and both outlive P1 rather than being a stopgap:
+ *
+ * - **A `tool` message's content is a string, full stop.** vLLM rejects an
+ *   `image_url` part on `role: "tool"` with "tool message content only supports
+ *   text content" (vllm-project/vllm#43203), even for a vision model that takes
+ *   the identical part on a `user` message. Media in a tool result reaches a
+ *   Chat Completions model as a following user turn, never inline — see the
+ *   degradation ladder in `docs/media-design.md`.
+ * - **Resolving a MediaRef needs the store, and this function is sync.** The
+ *   user/assistant path can carry `image_url` parts and will, once the
+ *   capability pre-flight and async ref resolution land.
+ *
+ * Flattening through {@link messageText} keeps the lossy step *visible*: the
+ * model is told an image was here. It is never silently dropped, and never
+ * JSON-stringified into the prompt — which is the exact failure this design
+ * exists to avoid.
+ */
 export function toOpenAIMessages(messages: Message[]): OpenAIMessage[] {
   return messages.map((msg) => {
+    const text = messageText(msg.content);
     if (msg.role === "tool") {
       return {
         role: "tool",
-        content: msg.content ?? "",
+        content: text,
         tool_call_id: msg.toolCallId,
       };
     }
     if (msg.role === "assistant" && msg.toolCalls?.length) {
       return {
         role: "assistant",
-        content: msg.content ?? "",
+        content: text,
         tool_calls: msg.toolCalls.map((tc) => ({
           id: tc.id,
           type: "function" as const,
@@ -99,7 +121,7 @@ export function toOpenAIMessages(messages: Message[]): OpenAIMessage[] {
     }
     return {
       role: msg.role,
-      content: msg.content ?? "",
+      content: text,
     };
   });
 }

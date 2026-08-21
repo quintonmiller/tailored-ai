@@ -22,6 +22,7 @@ import type {
   ToolCall,
   ToolSchema,
 } from "@tailored-ai/core";
+import { messageText } from "@tailored-ai/core";
 
 // --- Conversion helpers (exported for testing) ---
 
@@ -81,7 +82,7 @@ export function toConverseMessages(messages: Message[]): {
           {
             toolResult: {
               toolUseId: msg.toolCallId ?? "",
-              content: [{ text: msg.content ?? "" }],
+              content: [{ text: messageText(msg.content) }],
             },
           },
         ],
@@ -89,7 +90,7 @@ export function toConverseMessages(messages: Message[]): {
     } else if (msg.role === "assistant" && msg.toolCalls?.length) {
       const blocks: ContentBlock[] = [];
       if (msg.content) {
-        blocks.push({ text: msg.content });
+        blocks.push({ text: messageText(msg.content) });
       }
       for (const tc of msg.toolCalls) {
         blocks.push({
@@ -107,7 +108,7 @@ export function toConverseMessages(messages: Message[]): {
       // with no content — merging below keeps the turn order valid.
       if (!msg.content) continue;
       const role = msg.role === "assistant" ? "assistant" : "user";
-      result.push({ role, content: [{ text: msg.content }] });
+      result.push({ role, content: [{ text: messageText(msg.content) }] });
     }
   }
 

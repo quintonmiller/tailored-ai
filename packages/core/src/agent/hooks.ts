@@ -1,4 +1,5 @@
 import type { AgentConfig, AgentHook } from "../config.js";
+import { toolOutputText } from "../content/types.js";
 import { applyVars, expandPrompt } from "../prompts/expand.js";
 import type { Tool, ToolContext } from "../tools/interface.js";
 
@@ -103,7 +104,7 @@ export async function executeHooks(
         continue;
       }
 
-      const output = result.output || "";
+      const output = toolOutputText(result.output);
       outputs.push(output);
 
       if (hook.skipIf) {

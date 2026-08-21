@@ -9,7 +9,7 @@ import type {
   ToolCall,
   ToolSchema,
 } from "@tailored-ai/core";
-import { ProviderHttpError, QuirkMemo, runQuirkLadder, WarnOnce } from "@tailored-ai/core";
+import { messageText, ProviderHttpError, QuirkMemo, runQuirkLadder, WarnOnce } from "@tailored-ai/core";
 import { parseSseStream } from "./sse.js";
 
 /**
@@ -126,7 +126,7 @@ export function toApiMessages(
   let i = 0;
   while (i < messages.length && messages[i].role === "system") {
     const content = messages[i].content;
-    if (content) systemBlocks.push({ type: "text", text: content });
+    if (content) systemBlocks.push({ type: "text", text: messageText(content) });
     i++;
   }
   if (promptCaching && systemBlocks.length > 0) {
@@ -139,18 +139,18 @@ export function toApiMessages(
     const msg = messages[i];
 
     if (msg.role === "system") {
-      result.push({ role: "user", content: msg.content ?? "" });
+      result.push({ role: "user", content: messageText(msg.content) });
     } else if (msg.role === "tool") {
       const block: ToolResultBlock = {
         type: "tool_result",
         tool_use_id: msg.toolCallId ?? "",
-        content: msg.content ?? "",
+        content: messageText(msg.content),
       };
       result.push({ role: "user", content: [block] });
     } else if (msg.role === "assistant" && msg.toolCalls?.length) {
       const blocks: ContentBlock[] = [];
       if (msg.content) {
-        blocks.push({ type: "text", text: msg.content });
+        blocks.push({ type: "text", text: messageText(msg.content) });
       }
       for (const tc of msg.toolCalls) {
         blocks.push({ type: "tool_use", id: tc.id, name: tc.name, input: tc.arguments });
@@ -158,7 +158,7 @@ export function toApiMessages(
       result.push({ role: "assistant", content: blocks });
     } else {
       const role = msg.role === "user" ? "user" : "assistant";
-      result.push({ role, content: msg.content ?? "" });
+      result.push({ role, content: messageText(msg.content) });
     }
   }
 

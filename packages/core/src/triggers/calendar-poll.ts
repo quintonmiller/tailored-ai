@@ -1,3 +1,4 @@
+import { toolOutputText } from "../content/types.js";
 import type { Tool, ToolContext } from "../tools/interface.js";
 import type { WorkflowEngine } from "../workflows/engine.js";
 
@@ -106,7 +107,7 @@ export class CalendarPoller {
     if (!tool) return;
     const result = await tool.execute({ action: "list_events", calendar_id: reg.calendarId }, this.buildContext());
     if (!result.success) return;
-    const events = parseEvents(result.output);
+    const events = parseEvents(toolOutputText(result.output));
     const now = (this.opts.now ?? Date.now)();
     const windowEnd = now + reg.beforeMinutes * 60_000;
     for (const ev of events) {

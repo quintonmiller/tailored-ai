@@ -275,6 +275,23 @@ export {
 export { AGENT_DEFINITION_KEYS, AgentDefinitionSchema, CronJobConfigSchema, findShapeIssues } from "./config-schema.js";
 export type { ConfigWriteHost, ConfigWriteResult } from "./config-write.js";
 export { ConfigWriteRejected, updateRawConfig, writeRawConfigText } from "./config-write.js";
+export { decodeMessageContent, encodeMessageContent } from "./content/codec.js";
+// Media (docs/media-design.md): content parts, the text projection, the
+// content-addressed store seam and its bundled disk implementation.
+export type { ContentPart, MediaKind, MediaRef, MessageContent, ToolOutput } from "./content/types.js";
+export {
+  contentParts,
+  hasMedia,
+  mediaKind,
+  mediaPart,
+  mediaPlaceholder,
+  mediaRefs,
+  messageText,
+  partsToText,
+  textPart,
+  toolOutputParts,
+  toolOutputText,
+} from "./content/types.js";
 export { ensureContextDir, loadAllContext, loadContextFiles, migrateContextDir } from "./context.js";
 export type { CompiledSchedule } from "./cron/schedule-dsl.js";
 export { compileSchedule, parseTime, scheduleToCron } from "./cron/schedule-dsl.js";
@@ -519,6 +536,14 @@ export {
   type TaiHttpRequest,
   type TaiHttpResponse,
 } from "./http/registry.js";
+export { DEFAULT_MAX_MEDIA_BYTES, DiskMediaStore } from "./media/disk.js";
+export type { MediaStore, PutMediaOptions, StoredMedia } from "./media/interface.js";
+export { MediaTooLargeError } from "./media/interface.js";
+export type { MediaRow } from "./media/queries.js";
+export { findExpiredMedia, listMediaRows, totalMediaBytes } from "./media/queries.js";
+export type { MediaStoreContext, MediaStoreFactory } from "./media/registry.js";
+export { listMediaStoreFactories, registerMediaStoreFactory, resolveMediaStore } from "./media/registry.js";
+export { sniffMedia, UnknownMediaTypeError } from "./media/sniff.js";
 export type {
   ListQuery as MemoryListQuery,
   MemoryBackend,

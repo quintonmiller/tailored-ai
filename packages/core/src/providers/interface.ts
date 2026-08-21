@@ -1,6 +1,21 @@
+import type { MessageContent } from "../content/types.js";
+
 export interface Message {
   role: "system" | "user" | "assistant" | "tool";
-  content: string | null;
+  /**
+   * What this turn says.
+   *
+   * A plain `string` still means exactly what it always did, so the text-only
+   * path is unchanged at every construction site. The `MessageContent` arm
+   * carries ordered parts when a turn includes media (docs/media-design.md).
+   *
+   * That arm is an **object, not a bare `ContentPart[]`**, and that is
+   * load-bearing rather than stylistic: `string` and `Array` share `.length`,
+   * `.slice`, `.indexOf` and `.includes`, so an array arm type-checks at every
+   * existing read site and silently misbehaves. Use {@link messageText} where
+   * you want the text projection, and say so at the call site.
+   */
+  content: string | MessageContent | null;
   toolCalls?: ToolCall[];
   toolCallId?: string;
   /**
@@ -81,7 +96,12 @@ export interface TokenUsage {
 }
 
 export interface ChatResponse {
-  content: string | null;
+  /**
+   * What the model said. A `MessageContent` arm is reserved for models that
+   * emit media as output; every provider shipping today returns a string or
+   * null. See the note on {@link Message.content} for why the arm is an object.
+   */
+  content: string | MessageContent | null;
   toolCalls?: ToolCall[];
   usage: TokenUsage;
   finishReason: "stop" | "tool_calls" | "length";

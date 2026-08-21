@@ -9,6 +9,7 @@ import {
   formatApprovalDescription,
   type PermissionsConfig,
 } from "../approval.js";
+import { contentParts, messageText, toolOutputText } from "../content/types.js";
 import { loadAllContext, loadContextFiles } from "../context.js";
 import { recordTokenUsage } from "../db/autopilot-queries.js";
 import { getCoreMemory, renderCoreMemory } from "../db/core-memory-queries.js";
@@ -558,16 +559,36 @@ export function estimateToolSchemaTokens(schemas: ToolSchema[] | undefined): num
   return Math.ceil(JSON.stringify(schemas).length / 4);
 }
 
+/**
+ * Rough cost of one media part, in tokens.
+ *
+ * A flat charge, and deliberately so. Image tokenization is non-linear in bytes
+ * and differs per vendor (tiles, patches, detail levels), so any formula here
+ * would be a fiction dressed as arithmetic. What matters for eviction is that a
+ * picture is not free: charging it by the length of its text placeholder — ~15
+ * tokens — would let a window fill with images the budget never saw.
+ *
+ * Sized near a full-detail image on the major vendors, so the estimate errs
+ * toward over-counting. Over-counting evicts early; under-counting overflows
+ * the request, and only one of those is recoverable.
+ */
+export const MEDIA_TOKEN_ESTIMATE = 1500;
+
 export function estimateTokens(msg: Message): number {
   // `msg.reasoning` is intentionally excluded: it's display-only and stripped
   // from every outgoing request (#254), so it costs no wire/history budget.
-  let length = (msg.content ?? "").length;
+  let length = 0;
+  let mediaTokens = 0;
+  for (const part of contentParts(msg.content)) {
+    if (part.type === "text") length += part.text.length;
+    else mediaTokens += MEDIA_TOKEN_ESTIMATE;
+  }
   if (msg.toolCalls) {
     for (const tc of msg.toolCalls) {
       length += tc.name.length + JSON.stringify(tc.arguments).length;
     }
   }
-  return Math.ceil(length / 4);
+  return Math.ceil(length / 4) + mediaTokens;
 }
 
 /**
@@ -781,7 +802,7 @@ export async function summarizeMessages(messages: Message[], provider: AIProvide
   const lines: string[] = [];
   for (const msg of messages) {
     if (msg.content) {
-      lines.push(`[${msg.role}]: ${msg.content.slice(0, 300)}`);
+      lines.push(`[${msg.role}]: ${messageText(msg.content).slice(0, 300)}`);
     } else if (msg.toolCalls) {
       lines.push(`[${msg.role}]: called ${msg.toolCalls.map((tc) => tc.name).join(", ")}`);
     }
@@ -801,7 +822,7 @@ export async function summarizeMessages(messages: Message[], provider: AIProvide
       ],
       temperature: 0.2,
     });
-    return response.content ?? "";
+    return messageText(response.content);
   } catch {
     // If summarization fails, fall back to silent trimming
     return "";
@@ -1019,7 +1040,7 @@ async function executeToolCall(
   // middle-out afterwards and leaving the middle unreachable.
   const result = await tool.execute(call.arguments, { ...context, maxOutputChars: limit });
   const durationMs = Date.now() - startTime;
-  const rawOutput = result.success ? result.output : `Error: ${result.error ?? "Unknown error"}`;
+  const rawOutput = result.success ? toolOutputText(result.output) : `Error: ${result.error ?? "Unknown error"}`;
   // Capped here, at the one conversion from ToolResult to the string that
   // becomes history. Every tool — builtin, custom, plugin, MCP — funnels
   // through this call, and it sits upstream of onToolResult, the tool
@@ -1594,7 +1615,7 @@ async function _runAgentLoopBody(
     // turn cut off mid-thought has not finished, and nudging a model that ran
     // out of budget just spends another round arriving at the same place.
     if (response.finishReason === "length") {
-      const noOutput = !(response.content ?? "").trim() && !response.toolCalls?.length;
+      const noOutput = !messageText(response.content).trim() && !response.toolCalls?.length;
       // The rung that answered may carry its own cap, so report the one that
       // actually bit. Naming the deployment default when a fallback's override
       // is what truncated the turn sends the operator to the wrong setting.
@@ -1626,7 +1647,7 @@ async function _runAgentLoopBody(
       if (nudgesRemaining > 0) {
         nudgesRemaining--;
         console.log(
-          `  [nudge ${opts.nudgeOnText! - nudgesRemaining}/${opts.nudgeOnText}] model said: "${(response.content ?? "").slice(0, 100)}"`,
+          `  [nudge ${opts.nudgeOnText! - nudgesRemaining}/${opts.nudgeOnText}] model said: "${messageText(response.content).slice(0, 100)}"`,
         );
         // Use custom nudge message only on the final nudge; earlier nudges push the model to keep working
         const isLastNudge = nudgesRemaining === 0;
@@ -1642,11 +1663,11 @@ async function _runAgentLoopBody(
         continue;
       }
       opts.onStop?.({ kind: "complete" });
-      return response.content ?? "";
+      return messageText(response.content);
     }
 
     // Fire onActivity with the agent's reasoning text (if any) before executing tool calls
-    const reasoningText = (response.content as string | undefined)?.trim() ?? "";
+    const reasoningText = messageText(response.content).trim();
     if (reasoningText && opts.onActivity) {
       const firstSentence = reasoningText.split(/[.!?\n]/)[0].trim();
       opts.onActivity(firstSentence || reasoningText.slice(0, 100));
@@ -1703,7 +1724,7 @@ async function _runAgentLoopBody(
     const ender = results.find((r) => r.endsTurn);
     if (ender) {
       opts.onStop?.({ kind: "tool-ended", tool: ender.call.name, reason: ender.endsTurnReason });
-      return ender.endsTurnReason ?? response.content ?? "";
+      return ender.endsTurnReason ?? messageText(response.content);
     }
 
     // Detect a stuck model: the same calls AND the same results, cycling. The
@@ -1767,7 +1788,7 @@ async function _runAgentLoopBody(
       // this turned two runs that had been answering into stall markers.
       const recovered = await answerWithoutTools();
       opts.onStop?.({ kind: "repeated-calls", period });
-      return recovered ?? response.content ?? "[Agent stopped: repeated identical tool calls detected]";
+      return recovered ?? (messageText(response.content) || "[Agent stopped: repeated identical tool calls detected]");
     }
   }
 
@@ -1868,7 +1889,7 @@ async function _runAgentLoopBody(
       saveMessage(db, session.id, assistantMsg);
       history.push(assistantMsg);
 
-      const answer = (response.content ?? "").trim();
+      const answer = messageText(response.content).trim();
       if (!answer) {
         // Say why it was empty. The previous version returned null silently, so
         // a turn that ended on the marker looked identical whether the model

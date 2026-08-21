@@ -857,6 +857,34 @@ export function initDatabase(dbPath: string): Database.Database {
     // Column already exists
   }
 
+  // Media blobs (docs/media-design.md). Metadata here, bytes on disk — the same
+  // split `documents` uses.
+  //
+  // Note what is NOT here: no new column on `messages`. Content that carries
+  // media is JSON-encoded into the existing `content` column and decoded on
+  // read, so no existing row is rewritten. A bulk UPDATE over a live agent.db
+  // is a risk this feature does not need to take.
+  //
+  // `id` is the sha256 of the bytes, so it is the primary key and a re-store of
+  // identical bytes is an upsert rather than a duplicate.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS media (
+      id           TEXT PRIMARY KEY,
+      mime_type    TEXT NOT NULL,
+      bytes        INTEGER NOT NULL,
+      name         TEXT,
+      width        INTEGER,
+      height       INTEGER,
+      path         TEXT NOT NULL,
+      session_id   TEXT,
+      created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      last_seen_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    -- Retention sweeps by "unused since", so that is what gets the index.
+    CREATE INDEX IF NOT EXISTS idx_media_last_seen ON media(last_seen_at);
+  `);
+
   // Safe migration: conversation rewind. A rewound message keeps its row and
   // gains the number of the rewind that hid it; `getSessionMessages` skips
   // stamped rows. Soft rather than a DELETE so the transcript survives, the

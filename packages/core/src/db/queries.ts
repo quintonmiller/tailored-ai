@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { decodeMessageContent, encodeMessageContent } from "../content/codec.js";
 import type { Message } from "../providers/interface.js";
 
 export interface SessionRow {
@@ -66,7 +67,7 @@ export function saveMessage(db: Database.Database, sessionId: string, msg: Messa
   ).run(
     sessionId,
     msg.role,
-    msg.content,
+    encodeMessageContent(msg.content),
     msg.toolCalls ? JSON.stringify(msg.toolCalls) : null,
     msg.toolCallId ?? null,
     msg.reasoning ?? null,
@@ -288,7 +289,7 @@ export function getSessionMessages(db: Database.Database, sessionId: string): Me
 
   return rows.map((row) => ({
     role: row.role as Message["role"],
-    content: row.content,
+    content: decodeMessageContent(row.content),
     toolCalls: row.tool_calls ? JSON.parse(row.tool_calls) : undefined,
     toolCallId: row.tool_call_id ?? undefined,
     reasoning: row.reasoning ?? undefined,

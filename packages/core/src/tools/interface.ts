@@ -1,3 +1,5 @@
+import type { ToolOutput } from "../content/types.js";
+
 export interface ToolContext {
   sessionId: string;
   workingDirectory: string;
@@ -78,7 +80,21 @@ export interface ToolContext {
 
 export interface ToolResult {
   success: boolean;
-  output: string;
+  /**
+   * What the call produced.
+   *
+   * A plain `string` still means what it always did — every existing tool is
+   * unchanged, because `string` remains a member of the union. The
+   * {@link ToolOutput} arm carries ordered parts (media, or text interleaved
+   * with media) and an optional `structured` payload for a JSON result
+   * (docs/media-design.md).
+   *
+   * The arm is an object rather than a bare `ContentPart[]` for the same reason
+   * {@link import("../providers/interface.js").Message.content}'s is: an array
+   * would silently satisfy the existing `.length` / `.slice` readers. Use
+   * {@link toolOutputText} for the text projection.
+   */
+  output: string | ToolOutput;
   error?: string;
   /**
    * End the agent's turn as soon as this call returns, without another model
