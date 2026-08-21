@@ -1,3 +1,4 @@
+import { toolOutputText } from "../../content/types.js";
 import type { Tool, ToolContext } from "../../tools/interface.js";
 import type { StepContext, StepExecutor, StepResult } from "../engine.js";
 import { resolveValue } from "../scope.js";
@@ -46,7 +47,7 @@ export class ToolCallExecutor implements StepExecutor {
 
     const result = await tool.execute(args, toolCtx);
     if (!result.success) {
-      throw new Error(`tool_call "${s.tool}" failed: ${result.error ?? result.output}`);
+      throw new Error(`tool_call "${s.tool}" failed: ${result.error ?? toolOutputText(result.output)}`);
     }
     return { output: result.output };
   }

@@ -5,6 +5,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TEXT_ONLY_SURFACE } from "../channels/capabilities.js";
 import type { Channel, IncomingMessage } from "../channels/interface.js";
 import { ChannelLifecycleManager } from "../channels/lifecycle.js";
 import { channelFactoryRegistry } from "../channels/registry.js";
@@ -13,6 +14,7 @@ import type { AgentRuntime } from "../runtime.js";
 class FakeChannel implements Channel {
   readonly id: string;
   readonly type = "fake";
+  readonly capabilities = TEXT_ONLY_SURFACE;
   connected = false;
   constructor(id: string) {
     this.id = id;

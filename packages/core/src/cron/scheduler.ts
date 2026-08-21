@@ -7,6 +7,8 @@ import { executeHooks } from "../agent/hooks.js";
 import { runAgentLoop } from "../agent/loop.js";
 import { findOrCreateSession, resetSession } from "../agent/session.js";
 import type { CronJobConfig } from "../config.js";
+import { decodeMessageContent } from "../content/codec.js";
+import { messageText } from "../content/types.js";
 import { saveMessage } from "../db/queries.js";
 import { PASSTHROUGH_GATE, resolveGate } from "../notifications/dedup.js";
 import type { ProjectRef } from "../projects/resolve.js";
@@ -140,7 +142,10 @@ export class CronScheduler {
           "SELECT content FROM messages WHERE session_id = ? AND role = 'assistant' AND content IS NOT NULL ORDER BY id DESC LIMIT 1",
         )
         .get(sessionRow.id) as { content: string } | undefined;
-      if (msgRow) lastResponse = `Your last response was:\n${msgRow.content}`;
+      // Decoded, not interpolated raw: the column carries encoded content once
+      // a message holds media, and pasting that JSON into the next prompt would
+      // spend tokens teaching the model our storage format.
+      if (msgRow) lastResponse = `Your last response was:\n${messageText(decodeMessageContent(msgRow.content))}`;
     }
     vars.last_response = lastResponse;
 

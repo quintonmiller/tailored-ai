@@ -8,7 +8,14 @@ import type {
   ToolCall,
   ToolSchema,
 } from "@tailored-ai/core";
-import { ProviderHttpError, QuirkMemo, reasoningEffortThinkingMap, runQuirkLadder, WarnOnce } from "@tailored-ai/core";
+import {
+  messageText,
+  ProviderHttpError,
+  QuirkMemo,
+  reasoningEffortThinkingMap,
+  runQuirkLadder,
+  WarnOnce,
+} from "@tailored-ai/core";
 import { parseSseStream } from "./sse.js";
 
 // --- Wire-format types ---
@@ -70,14 +77,18 @@ interface ApiChatResponse {
 // --- Conversion helpers (exported for testing) ---
 
 export function toApiMessages(messages: Message[]): ApiMessage[] {
+  // Chat Completions is text-only on this path; see the note on core's
+  // `toOpenAIMessages`. Media flattens to a visible placeholder rather than
+  // being dropped or JSON-stringified into the prompt.
   return messages.map((msg) => {
+    const text = messageText(msg.content);
     if (msg.role === "tool") {
-      return { role: "tool", content: msg.content ?? "", tool_call_id: msg.toolCallId };
+      return { role: "tool", content: text, tool_call_id: msg.toolCallId };
     }
     if (msg.role === "assistant" && msg.toolCalls?.length) {
       return {
         role: "assistant",
-        content: msg.content ?? "",
+        content: text,
         tool_calls: msg.toolCalls.map((tc) => ({
           id: tc.id,
           type: "function" as const,
@@ -85,7 +96,7 @@ export function toApiMessages(messages: Message[]): ApiMessage[] {
         })),
       };
     }
-    return { role: msg.role, content: msg.content ?? "" };
+    return { role: msg.role, content: text };
   });
 }
 

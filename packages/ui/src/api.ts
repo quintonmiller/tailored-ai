@@ -1,3 +1,4 @@
+import type { MediaRef, MessageContent } from "./lib/content.js";
 export interface SessionRow {
   id: string;
   key: string | null;
@@ -59,7 +60,11 @@ export interface MemoryRecall {
 
 export interface Message {
   role: "system" | "user" | "assistant" | "tool";
-  content: string | null;
+  /**
+   * A plain string for a text-only turn, which is still the overwhelming
+   * majority; a parts object when the turn carries media.
+   */
+  content: string | MessageContent | null;
   toolCalls?: { id: string; name: string; arguments: Record<string, unknown> }[];
   toolCallId?: string;
   // UI-only: collapsed log of tool calls + results that preceded this assistant
@@ -1442,15 +1447,38 @@ export interface ChatEvent {
   data: Record<string, unknown>;
 }
 
+/**
+ * Store one file and get back a reference.
+ *
+ * Two steps rather than one: this stores bytes, and `sendChat` names ids. The
+ * chat route already streams SSE back, and multipart-plus-SSE on one endpoint
+ * is a worse shape than two clean ones.
+ */
+export async function uploadMedia(file: File): Promise<MediaRef> {
+  const form = new FormData();
+  form.set("file", file);
+  // No Content-Type header on purpose: the browser sets multipart/form-data
+  // *with the boundary*, and setting it by hand loses the boundary and makes
+  // the body unparseable on the other end.
+  const res = await fetch("/api/media", { method: "POST", body: form });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}) as { error?: string });
+    throw new Error(detail.error ?? `upload failed (${res.status})`);
+  }
+  return (await res.json()) as MediaRef;
+}
+
 export function sendChat(
   message: string,
   sessionKey: string | undefined,
   onEvent: (event: ChatEvent) => void,
   agent?: string,
+  mediaIds?: string[],
 ): AbortController {
   const controller = new AbortController();
   const body: Record<string, unknown> = { message, sessionKey };
   if (agent) body.agent = agent;
+  if (mediaIds?.length) body.mediaIds = mediaIds;
 
   fetch("/api/chat", {
     method: "POST",

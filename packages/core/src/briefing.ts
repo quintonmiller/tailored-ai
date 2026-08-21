@@ -1,5 +1,6 @@
 import { SESSION_SUMMARY_TAG } from "./agent/summarize-session.js";
 import type { AgentConfig } from "./config.js";
+import { messageText } from "./content/types.js";
 import { listFormPending } from "./db/form-queries.js";
 import { listNotes } from "./db/note-queries.js";
 import { queryProjectTasks } from "./db/task-queries.js";
@@ -139,7 +140,7 @@ export async function generateBriefing(
   });
 
   return {
-    content: (response.content ?? "").trim(),
+    content: messageText(response.content).trim(),
     generatedAt: Date.now(),
   };
 }

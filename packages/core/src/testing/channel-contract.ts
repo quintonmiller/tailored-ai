@@ -76,6 +76,27 @@ export function runChannelContractSuite<C extends Channel>(opts: ChannelContract
       expect(channel.type.length).toBeGreaterThan(0);
     });
 
+    it("declares surface capabilities", async () => {
+      // A capability struct nobody asserts is a capability struct nobody fills
+      // in — which is precisely how `AIProvider.supportsTools` spent its life
+      // declared on every provider and read by nothing. The contract is where
+      // that gets prevented for surfaces.
+      const channel = await harness.build();
+      const caps = channel.capabilities;
+      expect(
+        caps,
+        "Channel.capabilities is required — spread TEXT_ONLY_SURFACE if there is nothing to declare",
+      ).toBeDefined();
+      expect(typeof caps.inlineMedia).toBe("boolean");
+      expect(typeof caps.attachments).toBe("boolean");
+      expect(typeof caps.links).toBe("boolean");
+      expect(caps.maxMessageLength).toBeGreaterThan(0);
+      // A surface that takes uploads has to say how big, or the ladder cannot
+      // tell "fits" from "will be rejected by the API".
+      if (caps.attachments)
+        expect(caps.maxBytes, "a surface accepting uploads must declare maxBytes").toBeGreaterThan(0);
+    });
+
     it("connect() then disconnect() resolves cleanly", async () => {
       const channel = await harness.build();
       await channel.connect();

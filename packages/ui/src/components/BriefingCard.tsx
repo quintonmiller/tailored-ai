@@ -1,8 +1,6 @@
-import { marked } from "marked";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { type BriefingResponse, fetchBriefing, refreshBriefing } from "../api";
-
-marked.setOptions({ breaks: true, gfm: true });
+import { renderMarkdown } from "../lib/markdown.js";
 
 /**
  * Home-page briefing card. Renders nothing until `GET /api/briefing` confirms
@@ -45,7 +43,7 @@ export function BriefingCard() {
   }, []);
 
   const html = useMemo(() => {
-    if (state?.enabled) return marked.parse(state.content || "") as string;
+    if (state?.enabled) return renderMarkdown(state.content || "");
     return "";
   }, [state]);
 

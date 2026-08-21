@@ -8,9 +8,9 @@
  * needs no code — only the renderer *types* live in the bundle.
  */
 
-import { marked } from "marked";
 import { type ReactNode, useEffect, useState } from "react";
 import { type DashboardWidgetSpec, fetchWidgetData } from "../api";
+import { renderMarkdown } from "../lib/markdown.js";
 
 export interface WidgetProps {
   widget: DashboardWidgetSpec;
@@ -235,7 +235,7 @@ function MarkdownWidget({ widget }: WidgetProps) {
     <div
       className="widget-markdown"
       // marked output of trusted, config/endpoint-sourced content
-      dangerouslySetInnerHTML={{ __html: marked.parse(raw) as string }}
+      dangerouslySetInnerHTML={{ __html: renderMarkdown(raw) }}
     />
   );
 }

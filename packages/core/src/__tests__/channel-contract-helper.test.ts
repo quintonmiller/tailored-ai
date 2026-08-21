@@ -4,6 +4,7 @@
  * the helper itself ever stops asserting the right things, this test breaks.
  */
 
+import { TEXT_ONLY_SURFACE } from "../channels/capabilities.js";
 import type { Channel, IncomingMessage } from "../channels/interface.js";
 import type { Plugin } from "../plugin-context.js";
 import { runChannelContractSuite } from "../testing/channel-contract.js";
@@ -11,6 +12,7 @@ import { runChannelContractSuite } from "../testing/channel-contract.js";
 class InMemoryChannel implements Channel {
   readonly id = "in-memory";
   readonly type = "in-memory";
+  readonly capabilities = TEXT_ONLY_SURFACE;
   connected = false;
   sent: { target: string; content: string }[] = [];
   private handler?: (msg: IncomingMessage) => void;

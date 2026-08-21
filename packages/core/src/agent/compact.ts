@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { messageText } from "../content/types.js";
 import { createNote } from "../db/note-queries.js";
 import {
   getSessionMessages,
@@ -174,7 +175,7 @@ export async function compactSession(
   const lines: string[] = [];
   for (const msg of toSummarise) {
     if (msg.content) {
-      lines.push(`[${msg.role}]: ${msg.content}`);
+      lines.push(`[${msg.role}]: ${messageText(msg.content)}`);
     }
   }
   const transcript = lines.join("\n");
@@ -275,7 +276,7 @@ async function saveDurableFacts(
       ],
       temperature: 0.3,
     });
-    const lines = (res.content ?? "")
+    const lines = messageText(res.content)
       .split("\n")
       .map((l) => l.replace(/^\s*(?:[-*\u2022]|\d+[.)])\s*/, "").trim())
       .filter((l) => l.length > 8)

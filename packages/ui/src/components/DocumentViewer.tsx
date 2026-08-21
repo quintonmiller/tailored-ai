@@ -1,8 +1,6 @@
-import { marked } from "marked";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { type DocumentWithContent, deleteDocumentApi, fetchDocument, updateDocumentApi } from "../api";
-
-marked.setOptions({ breaks: true, gfm: true });
+import { renderMarkdown } from "../lib/markdown.js";
 
 function relativeTime(iso: string): string {
   const diff = Date.now() - new Date(`${iso}Z`).getTime();
@@ -71,7 +69,7 @@ export function DocumentViewer({ projectId, docId }: { projectId: string; docId:
     }
   };
 
-  const renderedHtml = useMemo(() => (doc ? (marked.parse(doc.content) as string) : ""), [doc]);
+  const renderedHtml = useMemo(() => (doc ? renderMarkdown(doc.content) : ""), [doc]);
 
   const goBack = () => {
     window.location.hash = `#/projects/${projectId}/documents`;

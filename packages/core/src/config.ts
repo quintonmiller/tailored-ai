@@ -53,6 +53,27 @@ export interface ModelEntry {
    * rung, in full, or leave it unset to inherit.
    */
   providerExtra?: Record<string, unknown>;
+  /**
+   * What this model accepts, for this rung only.
+   *
+   * Wins over whatever the provider declares, and has to: a local gateway
+   * serves whatever model was last loaded under a name core cannot introspect,
+   * so the operator is frequently the only party who knows. Anything neither
+   * config nor provider states stays `"unknown"` — which is a third state, not
+   * a quiet `false`, because most models will never have a line here and
+   * defaulting them to text-only would blind a vision model for want of config.
+   *
+   * ```yaml
+   * models:
+   *   - provider: openai_compatible
+   *     model: qwen3-vl-32b
+   *     capabilities:
+   *       input: ["text/*", "image/*"]
+   *       inputBytes: { supported: true }
+   *       toolResultMedia: { supported: true, mode: follow-up }
+   * ```
+   */
+  capabilities?: import("./providers/capabilities.js").PartialCapabilities;
 }
 
 /**
@@ -626,6 +647,16 @@ export interface AgentConfig {
     port: number;
     host: string;
     /**
+     * Content-Security-Policy for every response.
+     *
+     * Unset uses a policy built for the bundled UI, whose `img-src 'self'
+     * data:` is what stops a model- or tool-authored remote `<img>` from
+     * leaking the surrounding conversation to whoever owns that host. Set a
+     * string to replace it (a deployment fronting TAI with its own CDN has
+     * reasons to differ), or `false` to send no security headers at all.
+     */
+    csp?: string | false;
+    /**
      * Legacy bearer token that gates only mutating endpoints (POST/PUT/PATCH/DELETE).
      * Prefer `authToken` below — it gates every route, closing the
      * read-access leak when the server binds non-loopback. Kept for
@@ -816,6 +847,39 @@ export interface AgentConfig {
    */
   mcp?: {
     servers: { [serverId: string]: McpServerConfig | undefined };
+  };
+  /**
+   * Where media (images, audio, PDFs) produced by tools or attached by a user
+   * is kept, and what to do when a model cannot take it.
+   *
+   * Absent means the disk store under `<TAI_HOME>/media`, which is the right
+   * default: a deployment that never sees a picture pays nothing for the table
+   * and the directory, and one that does needs no configuration to start.
+   */
+  media?: {
+    /** Registered store id. `disk` unless a plugin registered another. */
+    store?: string;
+    /** Delete blobs unused for this long. */
+    retentionDays?: number;
+    /** Reject a single item larger than this many bytes. */
+    maxBytes?: number;
+    /** Override the disk store's directory. */
+    dir?: string;
+    /**
+     * Base path the HTTP API serves blobs from, so render surfaces can link
+     * rather than embed. Unset means surfaces read bytes instead.
+     */
+    urlBase?: string;
+    /** What to do when a model declares it cannot take media. */
+    onUnsupported?: "degrade" | "skip-rung" | "error";
+    /**
+     * What to do when nobody declared anything — the common case, since most
+     * models never get a `capabilities` line and neither Bedrock nor Gemini
+     * publishes usable modality metadata.
+     */
+    onUnknown?: "try" | "degrade";
+    /** Store-specific keys, for a store core does not know. */
+    options?: Record<string, unknown>;
   };
   /**
    * Plugin modules to load at startup. Each entry is either a package
@@ -1750,6 +1814,7 @@ export function mergeProjectOverlay(
  */
 const KNOWN_TOP_LEVEL_CONFIG_KEY_MAP: Record<keyof AgentConfig, true> = {
   compaction: true,
+  media: true,
   prompt: true,
   server: true,
   database: true,

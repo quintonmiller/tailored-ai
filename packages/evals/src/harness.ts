@@ -41,6 +41,7 @@ import {
   loadConfig,
   loadPlugins,
   makeRoomSessionKey,
+  messageText,
   newSession,
   parseEnvelope,
   RoomWatcher,
@@ -440,11 +441,11 @@ function estimateTokens(text: string): number {
 export function describeRequest(params: ChatParams): RecordedRequest {
   const system = params.messages
     .filter((m) => m.role === "system")
-    .map((m) => m.content ?? "")
+    .map((m) => messageText(m.content))
     .join("\n");
   const messages = params.messages
     .filter((m) => m.role !== "system")
-    .map((m) => ({ role: m.role, content: m.content ?? "" }));
+    .map((m) => ({ role: m.role, content: messageText(m.content) }));
   const toolText = JSON.stringify(params.tools ?? []);
   const body = [system, ...messages.map((m) => m.content)].join("\n");
   const toolNames = (params.tools ?? []).map((t) => t.function.name);
