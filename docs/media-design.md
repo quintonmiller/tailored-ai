@@ -63,13 +63,17 @@ subsystems are already falling into, quietly, in production.
 
 Surveyed because the wheel is round already.
 
-The claims this design actually rests on were checked against primary sources
-and are cited inline below: Anthropic's `tool_result` block types, the
-Responses-vs-Chat-Completions split, and vLLM's refusal of media on a `tool`
-message. MCP's block set is corroborated in-tree — `mcp/client.ts` already
-switches on exactly `text` / `resource` / `resource_link` / `image` / `audio`.
-The remaining rows of the table below are orientation, not evidence; re-check a
-field name against that vendor's docs before writing an adapter against it.
+Checked against primary sources: Anthropic's `tool_result` block types, the
+Responses-vs-Chat-Completions split, vLLM's refusal of media on a `tool`
+message, the Vercel AI SDK's part and tool-output shapes, OpenRouter's modality
+fields, and Gemini's inline-size cap. MCP's block set is corroborated in-tree —
+`mcp/client.ts` already switches on exactly `text` / `resource` /
+`resource_link` / `image` / `audio`.
+
+Exact field *spellings* below are still worth re-reading against the vendor's
+docs before writing an adapter; several of these APIs renamed things during
+2025–26, and this table is here for the shape of the answer, not to be
+copy-pasted into a request builder.
 
 ### Content is an array of positional blocks — everywhere
 
@@ -78,8 +82,8 @@ field name against that vendor's docs before writing an adapter against it.
 | Anthropic Messages | `content: string \| ContentBlock[]`, blocks `text` / `image` / `document` / `tool_use` / `tool_result`; sources are a discriminated union `base64` / `url` / `file` (Files API `file_id`) |
 | OpenAI Responses | `content: []` with `input_text` / `input_image` / `input_file`; image by `file_id`, URL, or data URI |
 | OpenAI Chat Completions | `content: []` with `text` / `image_url` (data URI allowed) |
-| Google Gemini | `parts: []` with `inlineData {mimeType, data}` or `fileData {fileUri}` via the Files API |
-| Vercel AI SDK | `ModelMessage.content: Array<TextPart \| ImagePart \| FilePart>`; `UIMessage.parts` is the separate UI-facing shape |
+| Google Gemini | `parts: []`, each part either inline base64 bytes or a Files API URI, both carrying a mime type. Inline is capped by a **20 MB total request size**; the Files API is the documented path for anything larger or reused |
+| Vercel AI SDK | parts discriminated on `type`: `{type:'text', text}` and `{type:'file', mediaType, data}` — **one file part carrying a media type, no separate image part**; `UIMessage.parts` is the separate UI-facing shape |
 | MCP | `CallToolResult.content: (TextContent \| ImageContent \| AudioContent \| ResourceLink \| EmbeddedResource)[]` |
 
 Two things are unanimous and worth stating as constraints rather than
@@ -89,10 +93,14 @@ preferences:
 encoded by block order. Any design that loses ordering loses the ability to ask
 about two images distinctly.
 
-**Every one of them separates the reference from the bytes.** `file_id`,
-`fileUri`, `url`, and MCP's `resource_link` all exist so that a large payload is
-named in the conversation and fetched elsewhere. Nobody's durable conversation
-record is made of base64.
+**Every one of them separates the reference from the bytes.** Anthropic's
+`file_id`, Gemini's Files API URI, OpenAI's `file_id`, and MCP's `resource_link`
+all exist so a large payload is *named* in the conversation and fetched
+elsewhere. Gemini puts a number on why: inline bytes are capped by a 20 MB total
+request size, and the Files API is the documented escape. Nobody's durable
+conversation record is made of base64 — which is the same conclusion
+`capToolOutput` reaches from the other direction, since it head/tail-slices its
+input and would cut a base64 string into garbage.
 
 ### On `<image:abc>` placeholders
 
@@ -182,16 +190,24 @@ is the only one that survives a fallback chain whose rungs disagree.
 
 ### Capability declaration
 
-- **OpenRouter** publishes `architecture.input_modalities` and
-  `output_modalities` per model (`["text","image","file"]`).
+- **OpenRouter** publishes `input_modalities` and `output_modalities` per model
+  as string arrays (`"text"`, `"image"`, `"file"`, …), and lets you *filter the
+  model list* by output modality.
 - **LiteLLM** ships a static `model_cost` map with `supports_vision`.
 - **Anthropic** exposes a `capabilities` field on the Models API
   (`GET /v1/models/{id}`).
 - **Vercel AI SDK** carries per-model flags and downgrades URLs to bytes when a
   provider can't fetch them itself.
 
-The pattern is uniform: a static declaration, overridable, consulted *before*
-the request. Nobody relies on the 400.
+The pattern is uniform: a declaration, overridable, consulted *before* the
+request. Nobody relies on the 400.
+
+OpenRouter's filter is worth stealing later. `AIProvider.listModels()` returns
+bare ids today (`interface.ts:129`), which is why the setup wizard offers
+free-text entry and no capability hint. A provider that can report modalities
+alongside ids would let the wizard stop offering a text-only model to an agent
+whose tools return screenshots. Out of scope here; noted so the `listModels`
+signature is widened once rather than twice.
 
 ## The design
 
@@ -226,6 +242,12 @@ A single `media` variant rather than separate `image` / `audio` / `video` /
 a union in core. The mime type already carries the kind; every consumer that
 cares — provider adapters, render surfaces — has to switch on mime anyway.
 `mediaKind()` gives the ergonomics back without the coupling.
+
+The closest framework-layer analogue reached the same conclusion independently:
+the Vercel AI SDK has no image part. It has `{type:'file', mediaType, data}`,
+and an image is a file whose `mediaType` starts with `image/`. That is this
+design's `media` part with different spelling, arrived at by a project that
+started with a separate image part and collapsed it.
 
 Tradeoff, stated honestly: this is less idiomatic TypeScript than a wide
 discriminated union, and it moves an exhaustiveness check from the compiler to a
@@ -294,6 +316,15 @@ touches none.
 model reads. It is not sent to the model as a separate channel — models take
 text and media — but it is what event subscribers, the UI, and workflow steps
 should read instead of re-parsing `output`.
+
+The Vercel AI SDK models the same three-way split as a tagged union on the
+result itself — `output: {type:'json', value}` for a structured result,
+`output: {type:'content', value: [...]}` for a multi-part one — rather than as
+sibling fields. That is the cleaner shape and was not chosen here for the same
+reason `content` is not widened: `output` is a `string` that 40 files already
+build and the loop already caps, hashes, and logs. Sibling fields are what
+"additive" costs. If `ToolResult` is ever redesigned wholesale, the tagged union
+is the better target.
 
 ### The media store
 
