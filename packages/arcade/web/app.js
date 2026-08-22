@@ -215,7 +215,23 @@ async function renderWatch(slug) {
 
   const feed = el("div", { class: "feed", id: "feed" });
   if (data.activity.length === 0) {
-    feed.append(el("p", { class: "empty", text: "Nothing said yet. The first round is still going." }));
+    /*
+     * Two different silences, and guessing wrong is worse than saying less.
+     *
+     * Before the first round is out, nobody has spoken yet and saying so is
+     * useful. Deep into a run it means something else entirely — most likely a
+     * jam that started before the feed existed — and "the first round is still
+     * going" at round 3 is the page inventing a reason it does not have.
+     */
+    const early = (run.metrics?.roundsPlayed ?? 0) <= 1;
+    feed.append(
+      el("p", {
+        class: "empty",
+        text: early
+          ? "Nothing said yet — the first round is still going."
+          : "No transcript for this run. Jams that started before the feed existed do not have one.",
+      }),
+    );
   }
   for (const row of data.activity) feed.append(feedRow(row));
 
