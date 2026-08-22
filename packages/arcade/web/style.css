@@ -777,7 +777,8 @@ textarea {
   font-size: 14px;
 }
 
-.live .chips {
+.live .chips,
+.watch-head .chips {
   margin-bottom: 12px;
 }
 
@@ -832,4 +833,136 @@ textarea {
   .live-run {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/* ------------------------------------------------------- watching a jam
+ *
+ * A transcript is a reading surface, not a scanning one, so this is the one
+ * place on the site with a measure: the body text is capped so a long post
+ * stays readable rather than running the full width of a desktop window.
+ */
+
+.live-title a,
+.live-shot {
+  color: inherit;
+  text-decoration: none;
+  display: block;
+}
+
+.live-title a:hover {
+  color: var(--accent);
+}
+
+.watch-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.watch-link:hover {
+  text-decoration: underline;
+}
+
+.back {
+  color: var(--ink-dim);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.back:hover {
+  color: var(--ink);
+}
+
+.watch-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.watch-title h1 {
+  margin: 0;
+  font-size: 26px;
+}
+
+.watch-shot {
+  margin-top: 14px;
+  background: #000;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  max-width: 480px;
+}
+
+.watch-shot img {
+  width: 100%;
+  display: block;
+}
+
+.feed {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.feed-post {
+  border-left: 2px solid var(--line);
+  padding-left: 12px;
+}
+
+.feed-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.feed-agent {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.chip.room {
+  background: var(--panel-2);
+  color: var(--ink-dim);
+}
+
+.feed-when {
+  color: var(--ink-faint);
+  font-size: 12px;
+  font-family: var(--mono);
+}
+
+.feed-body {
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 68ch;
+}
+
+/* Work reads as a log line, deliberately quieter than talk: in a jam the
+ * conversation is the story and the edits are the margin notes. */
+.feed-did {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-faint);
+  padding-left: 14px;
+}
+
+.feed-did .feed-agent {
+  font-family: var(--sans);
+  color: var(--ink-dim);
+  font-weight: 500;
+}
+
+.feed-what {
+  color: var(--accent);
 }

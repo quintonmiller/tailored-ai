@@ -17,7 +17,16 @@ import { splitCommand, stripSeparator } from "../args.js";
 import { CATEGORIES, CATEGORY_KEYS, cleanScore, normaliseGenre, overallScore } from "../categories.js";
 import { publishRun } from "../publish.js";
 import { createArcadeServer, listen } from "../server.js";
-import { ArcadeStore, type EntryProvenance, LIVE_SHOT, type ScoredEntry, slugify, sortEntries } from "../store.js";
+import {
+  ACTIVITY_BODY_MAX,
+  ACTIVITY_KEEP,
+  ArcadeStore,
+  type EntryProvenance,
+  LIVE_SHOT,
+  type ScoredEntry,
+  slugify,
+  sortEntries,
+} from "../store.js";
 import { crc32, zip } from "../zip.js";
 
 const temps: string[] = [];
@@ -600,6 +609,79 @@ describe("a jam still in progress", () => {
       publishRun(store, entry.id, { artifactPath: source });
       const after = (await (await fetch(`${base}/api/live`)).json()) as { live: unknown[] };
       expect(after.live).toHaveLength(0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps a rolling feed and trims the oldest", () => {
+    const store = new ArcadeStore(tempHome());
+    const entry = store.createEntry(provenance({}));
+    store.addActivity(entry.id, [
+      { kind: "post", agent: "lead", room: "studio", round: 1, body: "theme decided" },
+      { kind: "did", agent: "builder", room: "engine.js", round: 2, body: "created it — 180 lines" },
+    ]);
+    const feed = store.activity(entry.id);
+    // Oldest first: a conversation reads forwards.
+    expect(feed.map((r) => r.body)).toEqual(["theme decided", "created it — 180 lines"]);
+    expect(feed[0].kind).toBe("post");
+    expect(feed[1].kind).toBe("did");
+
+    store.addActivity(
+      entry.id,
+      Array.from({ length: 300 }, (_, i) => ({ kind: "post" as const, body: `msg ${i}` })),
+    );
+    const trimmed = store.activity(entry.id);
+    expect(trimmed).toHaveLength(ACTIVITY_KEEP);
+    expect(trimmed[trimmed.length - 1].body).toBe("msg 299");
+    expect(trimmed[0].body).not.toBe("theme decided");
+  });
+
+  it("clips a long message and marks the cut", () => {
+    // A message that merely looked truncated would read as an agent that
+    // stopped mid-sentence.
+    const store = new ArcadeStore(tempHome());
+    const entry = store.createEntry(provenance({}));
+    store.addActivity(entry.id, [{ kind: "post", body: "x".repeat(5000) }]);
+    const [row] = store.activity(entry.id);
+    expect(row.body?.length).toBe(ACTIVITY_BODY_MAX + 1);
+    expect(row.body?.endsWith("…")).toBe(true);
+  });
+
+  it("serves the feed, and `since` makes a repeat poll empty", async () => {
+    const store = new ArcadeStore(tempHome());
+    const entry = store.createEntry(provenance({}));
+    store.register(entry.id, { title: "Wake" });
+    store.addActivity(entry.id, [{ kind: "post", agent: "lead", room: "studio", body: "first" }]);
+
+    const server = createArcadeServer({ store, port: 0, gamesPort: 0 });
+    await listen(server, { port: 0, gamesPort: 0 });
+    const base = `http://127.0.0.1:${(server.site.address() as { port: number }).port}`;
+    try {
+      const first = (await (await fetch(`${base}/api/live/wake`)).json()) as {
+        run: { title: string };
+        activity: { body: string }[];
+        cursor: number;
+      };
+      expect(first.run.title).toBe("Wake");
+      expect(first.activity.map((r) => r.body)).toEqual(["first"]);
+
+      // Nothing new: the cursor must hold rather than reset, or the next poll
+      // re-sends the whole transcript.
+      const repeat = (await (await fetch(`${base}/api/live/wake?since=${first.cursor}`)).json()) as {
+        activity: unknown[];
+        cursor: number;
+      };
+      expect(repeat.activity).toHaveLength(0);
+      expect(repeat.cursor).toBe(first.cursor);
+
+      store.addActivity(entry.id, [{ kind: "post", agent: "tester", room: "build", body: "second" }]);
+      const next = (await (await fetch(`${base}/api/live/wake?since=${repeat.cursor}`)).json()) as {
+        activity: { body: string }[];
+      };
+      expect(next.activity.map((r) => r.body)).toEqual(["second"]);
+
+      expect((await fetch(`${base}/api/live/no-such-run`)).status).toBe(404);
     } finally {
       await server.close();
     }

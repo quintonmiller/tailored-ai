@@ -28,12 +28,17 @@ export {
 export { type PublishResult, publishRun } from "./publish.js";
 export { type ArcadeServer, createArcadeServer, listen, type ServeOptions } from "./server.js";
 export {
+  ACTIVITY_BODY_MAX,
+  ACTIVITY_KEEP,
+  type ActivityInput,
+  type ActivityRow,
   ARCADE_SCHEMA_VERSION,
   ArcadeStore,
   arcadeHome,
   type CategoryScore,
   type Entry,
   type EntryProvenance,
+  LIVE_SHOT,
   type ListQuery,
   REGISTRATION_FIELDS,
   type Registration,

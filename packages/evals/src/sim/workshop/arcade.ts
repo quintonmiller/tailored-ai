@@ -37,6 +37,7 @@
 
 import { readFileSync } from "node:fs";
 import {
+  type ActivityInput,
   ArcadeStore,
   CATEGORIES,
   type Entry,
@@ -51,6 +52,9 @@ import { agentTool, optional, tool } from "../tool.js";
 /** How many entries a browse returns before the history budget starts to notice. */
 const BROWSE_LIMIT = 8;
 const BROWSE_MAX = 20;
+
+/** Buffered activity rows that trigger a write before the round ends. */
+const FLUSH_AT = 12;
 
 /*
  * How much of somebody else's page a tool result may carry.
@@ -94,6 +98,8 @@ export class ArcadeDesk {
 
   private readonly store: ArcadeStore;
   private readonly entryId: string;
+  /** Unwritten activity. See {@link ArcadeDesk.note}. */
+  private readonly pending: ActivityInput[] = [];
   /** Roles allowed to write the registration. Undefined means everybody. */
   private readonly registrarRoles: string[] | undefined;
 
@@ -121,6 +127,9 @@ export class ArcadeDesk {
    * board full of empty pages is worse than a shorter board.
    */
   publish(artifactPath: string, metrics: Record<string, number>, hasFiles: boolean): void {
+    // Before the early return: a run that wrote nothing still said things, and
+    // the feed is the only record of that which outlives the worktree.
+    this.flush();
     if (!hasFiles) return;
     publishRun(this.store, this.entryId, { artifactPath, metrics });
   }
@@ -143,6 +152,32 @@ export class ArcadeDesk {
       if (shot) this.store.liveShot(this.entryId, readFileSync(shot));
     } catch {
       // Nothing to say: a missed heartbeat costs a stale panel for one round.
+    }
+    this.flush();
+  }
+
+  /**
+   * Note something the team said or did, for the live feed.
+   *
+   * Buffered rather than written straight through. Posts arrive one at a time,
+   * several per turn, and a synchronous SQLite write per message would put the
+   * arcade in the critical path of every agent turn for the sake of a page
+   * nobody may have open. The buffer is drained on the round heartbeat and
+   * whenever it gets long enough to be worth a transaction.
+   */
+  note(row: ActivityInput): void {
+    this.pending.push(row);
+    if (this.pending.length >= FLUSH_AT) this.flush();
+  }
+
+  /** Write the buffer. Called on the heartbeat, and once more at publish. */
+  flush(): void {
+    if (this.pending.length === 0) return;
+    const batch = this.pending.splice(0);
+    try {
+      this.store.addActivity(this.entryId, batch);
+    } catch {
+      // A dropped batch costs a gap in a live feed and nothing else.
     }
   }
 
@@ -233,6 +268,12 @@ export class ArcadeDesk {
             );
           }
           this.store.register(this.entryId, fields);
+          this.note({
+            kind: "did",
+            ...(agent ? { agent } : {}),
+            room: "arcade",
+            body: `registered the game${fields.title ? ` as ${fields.title}` : ""}`,
+          });
           this.counts.arcadeUpdates += 1;
           this.counts.arcadeRegistered = 1;
           return this.renderOwn("Registered.");

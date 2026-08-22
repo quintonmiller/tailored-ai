@@ -526,6 +526,51 @@ describe("the jam: a theme, a clock, and categories a person scores", () => {
   });
 });
 
+describe("the live feed", () => {
+  /** A workshop with a real arcade behind it, pointed at a temp home. */
+  function withArcade(): { sim: WorkshopSimulation; store: ArcadeStore } {
+    const home = temp();
+    const s = sim({ arcadeHome: home });
+    return { sim: s, store: new ArcadeStore(home) };
+  }
+
+  it("forwards what was said, stamped with the round", () => {
+    const { sim: s, store } = withArcade();
+    s.observePost({ agent: "lead", room: "studio", body: "Theme reading is decided." });
+    // Buffered until a flush; the heartbeat on the round boundary is one.
+    s.advance();
+    const entry = store.list({ includeDrafts: true })[0];
+    const feed = store.activity(entry.id);
+    const post = feed.find((row) => row.kind === "post");
+    expect(post?.agent).toBe("lead");
+    expect(post?.room).toBe("studio");
+    expect(post?.body).toBe("Theme reading is decided.");
+    expect(post?.round).toBe(1);
+  });
+
+  it("records work that changed something, and not the reading around it", async () => {
+    // `read_file` and `list_files` are 37% of everything a team does. A feed of
+    // "read engine.js" ninety times buries the writes that changed the game.
+    const { sim: s, store } = withArcade();
+    await call(s, "write_file", { path: "engine.js", content: "var a = 1;\n" }, "builder");
+    await call(s, "read_file", { path: "engine.js" }, "tester");
+    await call(s, "list_files", {}, "lead");
+    s.advance();
+    const entry = store.list({ includeDrafts: true })[0];
+    const did = store.activity(entry.id).filter((row) => row.kind === "did");
+    expect(did.map((row) => row.room)).toEqual(["engine.js"]);
+    expect(did[0].agent).toBe("builder");
+    expect(did[0].body).toMatch(/created it/);
+  });
+
+  it("says nothing at all when the arcade is off", () => {
+    // `bench`, `rehearse` and most tests run with no arcade. Observing a post
+    // there must be a no-op rather than a crash.
+    const s = sim({ arcade: "off" });
+    expect(() => s.observePost({ agent: "lead", room: "studio", body: "hello" })).not.toThrow();
+  });
+});
+
 describe("the provided library", () => {
   it("is in the workspace before anybody writes anything", () => {
     const s = sim();

@@ -229,6 +229,40 @@ Three decisions in it are worth keeping:
 
 `GET /api/live` returns the same data if you would rather watch it in a terminal.
 
+### Watching what the agents say
+
+Clicking the live panel opens `#/live/<slug>`: the run's numbers, the newest
+frame, and **the transcript** — what each agent said, in which channel, on which
+round, with the work it did threaded through.
+
+The two views answer different questions and are deliberately separate. The
+board panel answers *how far along*; this answers *what is happening*, and it is
+much heavier — a couple of hundred messages, some of them essays. Making the
+board carry it would mean paying for the transcript on every poll of a summary.
+
+- **Talk is the story, work is the margin.** Posts get the reading treatment,
+  capped at 68 characters a line so a long one stays readable. Edits, checks and
+  playtests are quiet mono log lines, because in a jam the conversation is what
+  explains the artifact and the edits are the footnotes.
+- **Not every tool call.** `read_file` and `list_files` are 37% of everything a
+  team does; a feed of "read engine.js" ninety times buries the four writes that
+  changed the game. What lands is what changed something, or what checked it.
+- **A cursor, not a re-render.** The page polls with `?since=<id>` and appends,
+  so a two-hour watch transfers each message once — and it only scrolls if you
+  were already at the bottom, because yanking a reader out of round four is
+  worse than a stale view.
+
+The feed is rolling: 250 messages an entry, bodies clipped at 2,000 characters
+with the cut marked. The complete record is the run's trace, which this
+deliberately does not duplicate.
+
+**The seam this needed.** The simulation never saw room posts — they are drained
+from the eval's own tables into the trace. `Simulation.observePost` hands them
+over as they land. It is **for recording, never for deciding**: a world whose
+behaviour changed with what the agents said to each other would make every
+measurement taken from it a fact about the transcript rather than about the
+work. Nothing enforces that; it is a rule because the alternative is untestable.
+
 ## Turning it off
 
 The arcade opens only when the simulation is given a `run` context (which the

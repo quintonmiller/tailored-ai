@@ -178,6 +178,22 @@ export interface Simulation {
    * an image has to work without one.
    */
   attachMedia?(store: MediaStore | undefined): void;
+  /**
+   * Something was said in one of the rooms.
+   *
+   * **For recording, never for deciding.** Same rule as {@link RunContext}: a
+   * world whose behaviour changes with what the agents say to each other is no
+   * longer a world they are acting on, it is one that reads their minds — and
+   * every measurement taken from it would be about the transcript rather than
+   * about the work. Nothing in the harness enforces this; it is a rule because
+   * the alternative is untestable.
+   *
+   * It exists because the transcript is the only place "what is this team
+   * actually doing right now" is written down, and the simulation is the only
+   * thing that knows where to put it. Called for every post as it lands, after
+   * the message is in the room, with the day marker already filtered out.
+   */
+  observePost?(post: { agent?: string; room: string; body: string; to: string[] }): void;
   /** The numbers the benchmark reports. Called once, at the end. */
   metrics(): SimMetrics;
   /** The headline figure, so a report can rank runs without knowing the domain. */

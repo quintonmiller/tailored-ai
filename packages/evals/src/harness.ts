@@ -1439,7 +1439,10 @@ async function runRoomScenario(
    */
   let traced = watermark;
   const drainPosts = () => {
-    if (!recorder.trace) return;
+    // The simulation wants these even when nothing is tracing: `observePost` is
+    // how a live view learns what the team is saying, and a run watched through
+    // the arcade rather than through `eval watch` passes no trace callback.
+    if (!recorder.trace && !sim?.observePost) return;
     const rows = db
       .prepare("SELECT id, room_ref, content FROM room_messages WHERE id > ? ORDER BY id")
       .all(traced) as Array<{ id: number; room_ref: string; content: string }>;
@@ -1447,15 +1450,21 @@ async function runRoomScenario(
       traced = Math.max(traced, row.id);
       const envelope = parseEnvelope(row.content);
       if (envelope.speaker === DAY_MARKER) continue;
-      recorder.trace({
-        kind: "post",
-        at: Date.now(),
-        turn: recorder.turn,
+      const post = {
         ...(envelope.speaker ? { agent: envelope.speaker } : {}),
         room: [...refs].find(([, ref]) => ref === row.room_ref)?.[0] ?? row.room_ref,
         to: envelope.to ?? [],
         body: envelope.body.trim(),
-      });
+      };
+      recorder.trace?.({ kind: "post", at: Date.now(), turn: recorder.turn, ...post });
+      // Never allowed to take the run down. A simulation that throws while
+      // being told what was said would turn a reporting problem into a lost
+      // run, and the artifact is the deliverable.
+      try {
+        sim?.observePost?.(post);
+      } catch {
+        // Nothing to say; the trace already has it.
+      }
     }
   };
 

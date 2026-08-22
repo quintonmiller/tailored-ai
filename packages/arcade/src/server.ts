@@ -232,6 +232,53 @@ async function handleSite(
     });
   }
 
+  /**
+   * One run, with what its agents have been saying and doing.
+   *
+   * Split from `/api/live` because the feed is much larger than the summary and
+   * the board polls the summary every twenty seconds. `since` makes the detail
+   * view cheap to keep open: it returns only what arrived after the id the
+   * browser already has, so a two-hour watch does not re-send the transcript
+   * every time it refreshes.
+   */
+  const liveOne = /^\/api\/live\/([^/]+)$/.exec(path);
+  if (liveOne) {
+    const entry = store.entryBySlug(liveOne[1]);
+    if (!entry) return json(res, 404, { error: "no such run" });
+    const since = Number(q.get("since") ?? 0);
+    const all = store.activity(entry.id);
+    const activity = Number.isFinite(since) && since > 0 ? all.filter((row) => row.id > since) : all;
+    const now = Date.now();
+    const quiet = now - Date.parse(entry.updatedAt || entry.createdAt);
+    return json(res, 200, {
+      run: {
+        slug: entry.slug,
+        title: entry.title ?? null,
+        tagline: entry.tagline ?? null,
+        theme: entry.theme,
+        rounds: entry.rounds,
+        model: entry.model,
+        seed: entry.seed,
+        simVersion: entry.simVersion,
+        brief: entry.brief,
+        registered: entry.registered,
+        status: entry.status,
+        startedAt: entry.createdAt,
+        updatedAt: entry.updatedAt,
+        elapsedMs: Math.max(0, now - Date.parse(entry.createdAt)),
+        stale: entry.status === "draft" && quiet > 20 * 60 * 1000,
+        metrics: entry.metrics,
+        credits: entry.credits,
+        shot: existsSync(join(store.gameDir(entry.id), "shots", LIVE_SHOT)) ? LIVE_SHOT : null,
+      },
+      activity,
+      // The browser sends this back as `since`. Taken from the full feed rather
+      // than the filtered one, or a poll that returns nothing would reset the
+      // cursor and re-send everything on the following poll.
+      cursor: all.length ? all[all.length - 1].id : since,
+    });
+  }
+
   if (path === "/api/config") {
     return json(res, 200, {
       categories: CATEGORIES,

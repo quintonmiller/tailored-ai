@@ -189,22 +189,155 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden) void showLive();
 });
 
+// --------------------------------------------------------------- watch a jam
+
+/**
+ * One run, and what its agents are saying to each other.
+ *
+ * The panel on the board answers "how far along"; this answers "what is
+ * happening". They are different questions and the second one is much heavier —
+ * a couple of hundred messages, some of them essays — which is why it is a
+ * route somebody chooses rather than something the board carries.
+ *
+ * Polls with a cursor, so a watch left open for two hours transfers each
+ * message once instead of re-sending the transcript every eight seconds.
+ */
+const WATCH_POLL_MS = 8000;
+let watchPoll;
+let watchCursor = 0;
+
+async function renderWatch(slug) {
+  watchCursor = 0;
+  view.replaceChildren(el("p", { class: "loading", text: "Loading…" }));
+  const data = await api(`/api/live/${encodeURIComponent(slug)}`);
+  const run = data.run;
+  watchCursor = data.cursor ?? 0;
+
+  const feed = el("div", { class: "feed", id: "feed" });
+  if (data.activity.length === 0) {
+    feed.append(el("p", { class: "empty", text: "Nothing said yet. The first round is still going." }));
+  }
+  for (const row of data.activity) feed.append(feedRow(row));
+
+  const m = run.metrics ?? {};
+  const round = Math.max(0, Math.min(run.rounds || 0, m.roundsPlayed ?? 0));
+
+  view.replaceChildren(
+    el("p", {}, [el("a", { class: "back", href: "#/", text: "← the board" })]),
+    el("section", { class: "panel watch-head", id: "watch-head" }, [
+      el("div", { class: "watch-title" }, [
+        run.status === "draft" ? el("span", { class: "pulse" }) : null,
+        el("h1", { text: run.title ?? "Untitled so far" }),
+      ]),
+      ...(run.tagline ? [el("p", { class: "live-tagline", text: run.tagline })] : []),
+      el("div", { class: "chips" }, [
+        el("span", { class: "chip theme", text: run.theme || "no theme" }),
+        el("span", { class: "chip", text: `round ${round} of ${run.rounds}` }),
+        el("span", { class: "chip", text: elapsed(run.elapsedMs) }),
+        ...(run.model ? [el("span", { class: "chip", text: run.model })] : []),
+        ...(run.status === "published" ? [el("span", { class: "chip flag", text: "finished" })] : []),
+        ...(run.stale ? [el("span", { class: "chip flag", text: "no signal" })] : []),
+      ]),
+      el("div", { class: "live-bar" }, [
+        el("div", {
+          class: "live-bar-fill",
+          style: `width:${run.rounds ? Math.round((round / run.rounds) * 100) : 0}%`,
+        }),
+      ]),
+      watchFacts(run, m),
+      ...(run.shot
+        ? [
+            el("div", { class: "watch-shot" }, [
+              el("img", { src: `/shots/${encodeURIComponent(slug)}/${run.shot}?t=${Date.parse(run.updatedAt)}`, alt: "" }),
+            ]),
+          ]
+        : []),
+    ]),
+    el("section", { class: "panel" }, [el("h2", { text: "What they are saying" }), feed]),
+  );
+
+  if (run.status === "draft" && !document.hidden) watchPoll = setTimeout(() => pollWatch(slug), WATCH_POLL_MS);
+}
+
+/**
+ * Append what arrived since the last poll.
+ *
+ * Appends rather than re-renders, which is what makes it readable: rebuilding
+ * the feed would throw away the reader's scroll position every eight seconds,
+ * on the one view somebody is reading rather than scanning.
+ */
+async function pollWatch(slug) {
+  clearTimeout(watchPoll);
+  const data = await api(`/api/live/${encodeURIComponent(slug)}?since=${watchCursor}`).catch(() => null);
+  if (!data) {
+    watchPoll = setTimeout(() => pollWatch(slug), WATCH_POLL_MS);
+    return;
+  }
+  watchCursor = data.cursor ?? watchCursor;
+  const feed = document.getElementById("feed");
+  if (feed) {
+    if (data.activity.length) feed.querySelector(".empty")?.remove();
+    // Only scroll if they were already at the bottom. Yanking somebody back
+    // down while they are reading round four is worse than a stale view.
+    const atBottom = window.innerHeight + window.scrollY >= document.body.offsetHeight - 120;
+    for (const row of data.activity) feed.append(feedRow(row));
+    if (atBottom && data.activity.length) window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+  }
+  if (data.run.status === "draft" && !document.hidden) {
+    watchPoll = setTimeout(() => pollWatch(slug), WATCH_POLL_MS);
+  }
+}
+
+/** The same numbers the board panel shows, built by the same function. */
+function watchFacts(run, m) {
+  const facts = el("dl", { class: "live-facts" });
+  for (const [label, value] of liveFacts(run, m)) {
+    facts.append(el("div", { class: "live-fact" }, [el("dt", { text: label }), el("dd", { text: value })]));
+  }
+  return facts;
+}
+
+function feedRow(row) {
+  const when = row.at ? new Date(row.at).toLocaleTimeString(undefined, { timeStyle: "short" }) : "";
+  if (row.kind === "did") {
+    return el("div", { class: "feed-did" }, [
+      el("span", { class: "feed-when", text: when }),
+      el("span", { class: "feed-agent", text: row.agent || "" }),
+      el("span", { class: "feed-what", text: row.room || "" }),
+      el("span", { class: "feed-detail", text: row.body || "" }),
+    ]);
+  }
+  return el("div", { class: "feed-post" }, [
+    el("div", { class: "feed-meta" }, [
+      el("span", { class: "feed-agent", text: row.agent || "someone" }),
+      el("span", { class: "chip room", text: row.room || "" }),
+      el("span", { class: "feed-when", text: `round ${row.round ?? 0} · ${when}` }),
+    ]),
+    // textContent, not innerHTML: every one of these was written by a model.
+    el("p", { class: "feed-body", text: row.body || "" }),
+  ]);
+}
+
 function liveRow(run) {
   const m = run.metrics ?? {};
   const round = Math.max(0, Math.min(run.rounds || 0, m.roundsPlayed ?? 0));
   const pct = run.rounds ? Math.round((round / run.rounds) * 100) : 0;
 
+  const href = `#/live/${encodeURIComponent(run.slug)}`;
+
   const shot = run.shot
-    ? el("div", { class: "live-shot" }, [
+    ? el("a", { class: "live-shot", href }, [
         // The cache-buster is the point: the filename never changes, so without
         // it the browser shows round three's screen for the rest of the run.
         el("img", { src: `/shots/${encodeURIComponent(run.slug)}/${run.shot}?t=${Date.parse(run.updatedAt)}`, alt: "" }),
       ])
-    : el("div", { class: "live-shot blank" }, [el("span", { text: round ? "not playtested yet" : "just started" })]);
+    : el("a", { class: "live-shot blank", href }, [
+        el("span", { text: round ? "not playtested yet" : "just started" }),
+      ]);
 
-  const heading = run.title
-    ? el("h3", { class: "live-title", text: run.title })
-    : el("h3", { class: "live-title untitled", text: "Untitled so far" });
+  const heading = el("h3", { class: run.title ? "live-title" : "live-title untitled" }, [
+    el("a", { href, text: run.title ?? "Untitled so far" }),
+  ]);
 
   const chips = el("div", { class: "chips" }, [
     el("span", { class: "chip theme", text: run.theme || "no theme" }),
@@ -231,12 +364,9 @@ function liveRow(run) {
       chips,
       bar,
       facts,
-      el("p", {
-        class: "live-note",
-        text: run.registered
-          ? "Registered on the arcade. It will appear on the board when its rounds run out."
-          : "Not registered yet — the team writes its own page before the rounds run out.",
-      }),
+      el("p", { class: "live-note" }, [
+        el("a", { href, class: "watch-link", text: "Watch what they are saying →" }),
+      ]),
     ]),
   ]);
 }
@@ -757,9 +887,16 @@ function metaPanel(entry) {
 
 async function render() {
   const { path, params } = route();
+  // Leaving a view must stop its timers. Both the live panel and the watch view
+  // poll, and a hashchange that only swapped the DOM would leave the old one
+  // running against elements that are no longer on the page.
+  clearTimeout(livePoll);
+  clearTimeout(watchPoll);
   try {
     const game = /^\/g\/(.+)$/.exec(path);
-    if (game) await renderDetail(decodeURIComponent(game[1]));
+    const watch = /^\/live\/(.+)$/.exec(path);
+    if (watch) await renderWatch(decodeURIComponent(watch[1]));
+    else if (game) await renderDetail(decodeURIComponent(game[1]));
     else await renderBoard(params);
   } catch (err) {
     view.replaceChildren(el("p", { class: "empty", text: String(err.message ?? err) }));

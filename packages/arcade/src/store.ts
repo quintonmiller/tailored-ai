@@ -49,6 +49,28 @@ export const ARCADE_SCHEMA_VERSION = 1;
  */
 export const LIVE_SHOT = "live.png";
 
+/** Messages kept per entry. A jam produces a couple of hundred. */
+export const ACTIVITY_KEEP = 250;
+/** Longest message body stored. The tester writes essays. */
+export const ACTIVITY_BODY_MAX = 2000;
+
+/** One thing the team said or did. `kind` is `post` for talk, `did` for work. */
+export interface ActivityInput {
+  kind: "post" | "did";
+  agent?: string;
+  /** Which channel, for a post. For work, the file or instrument touched. */
+  room?: string;
+  body?: string;
+  round?: number;
+  at?: string;
+}
+
+export interface ActivityRow extends ActivityInput {
+  id: number;
+  at: string;
+  kind: "post" | "did";
+}
+
 /** Where the arcade keeps its database and its copies of the games. */
 export function arcadeHome(explicit?: string): string {
   const chosen = explicit ?? process.env.ARCADE_HOME ?? join(homedir(), ".tai-arcade");
@@ -225,6 +247,27 @@ CREATE TABLE IF NOT EXISTS reviews (
   updated_at TEXT NOT NULL,
   UNIQUE (entry_id, reviewer)
 );
+
+/*
+ * What the team said and did, newest last.
+ *
+ * Rolling rather than complete: this exists so a person can watch a jam happen,
+ * not so the run can be replayed. The run's own trace is the complete record
+ * and stays the complete record — duplicating it here would put a second copy
+ * of every message in a database whose value is that it outlives the worktree.
+ */
+CREATE TABLE IF NOT EXISTS activity (
+  id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  entry_id TEXT NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+  at       TEXT NOT NULL,
+  round    INTEGER NOT NULL DEFAULT 0,
+  kind     TEXT NOT NULL,
+  agent    TEXT NOT NULL DEFAULT '',
+  room     TEXT NOT NULL DEFAULT '',
+  body     TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS activity_entry ON activity(entry_id, id);
 
 CREATE TABLE IF NOT EXISTS review_scores (
   review_id INTEGER NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
@@ -516,6 +559,56 @@ export class ArcadeStore {
     const dir = join(this.gameDir(id), "shots");
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, LIVE_SHOT), bytes);
+  }
+
+  /**
+   * Record what the team just said or did.
+   *
+   * Trimmed to {@link ACTIVITY_KEEP} rows per entry on write. A jam produces a
+   * couple of hundred messages and some of them are essays, so an untrimmed
+   * feed is a slow page for the one view nobody scrolls to the bottom of —
+   * and the complete record already exists in the run's trace.
+   *
+   * Bodies are clipped rather than stored whole for the same reason. The cut is
+   * marked, because a message that merely *looks* like it ended mid-sentence
+   * would read as an agent that stopped mid-sentence.
+   */
+  addActivity(entryId: string, rows: ActivityInput[]): void {
+    if (rows.length === 0) return;
+    const insert = this.db.prepare(
+      `INSERT INTO activity (entry_id, at, round, kind, agent, room, body)
+       VALUES (@entryId, @at, @round, @kind, @agent, @room, @body)`,
+    );
+    const write = this.db.transaction((batch: ActivityInput[]) => {
+      for (const row of batch) {
+        const body = row.body ?? "";
+        insert.run({
+          entryId,
+          at: row.at ?? new Date().toISOString(),
+          round: row.round ?? 0,
+          kind: row.kind,
+          agent: row.agent ?? "",
+          room: row.room ?? "",
+          body: body.length > ACTIVITY_BODY_MAX ? `${body.slice(0, ACTIVITY_BODY_MAX)}…` : body,
+        });
+      }
+      this.db
+        .prepare(
+          `DELETE FROM activity WHERE entry_id = ? AND id NOT IN (
+             SELECT id FROM activity WHERE entry_id = ? ORDER BY id DESC LIMIT ?
+           )`,
+        )
+        .run(entryId, entryId, ACTIVITY_KEEP);
+    });
+    write(rows);
+  }
+
+  /** The feed, oldest first, which is the order a conversation reads in. */
+  activity(entryId: string, limit = ACTIVITY_KEEP): ActivityRow[] {
+    const rows = this.db
+      .prepare("SELECT * FROM activity WHERE entry_id = ? ORDER BY id DESC LIMIT ?")
+      .all(entryId, Math.max(1, Math.min(ACTIVITY_KEEP, limit))) as ActivityRow[];
+    return rows.reverse();
   }
 
   publish(

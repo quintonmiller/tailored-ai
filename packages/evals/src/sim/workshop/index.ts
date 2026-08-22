@@ -752,6 +752,7 @@ export class WorkshopSimulation implements Simulation {
             this.counts.writes += 1;
             this.writesThisRound += 1;
             const delta = edit.linesAfter - edit.linesBefore;
+            this.noted(agent, path, `${edit.kind === "create" ? "created" : "rewrote"} it — ${edit.linesAfter} lines`);
             return (
               `${edit.kind === "create" ? "Created" : "Replaced"} ${path}: ${edit.linesAfter} lines` +
               (edit.kind === "create" ? "." : ` (${delta >= 0 ? "+" : ""}${delta}).`)
@@ -780,6 +781,7 @@ export class WorkshopSimulation implements Simulation {
             this.counts.patches += 1;
             this.writesThisRound += 1;
             const delta = edit.linesAfter - edit.linesBefore;
+            this.noted(agent, path, `patched it — ${edit.linesAfter} lines (${delta >= 0 ? "+" : ""}${delta})`);
             return (
               `Patched ${path}: now ${edit.linesAfter} lines (${delta >= 0 ? "+" : ""}${delta}).` +
               // Never let a loosened match read as an exact one. If the
@@ -802,6 +804,7 @@ export class WorkshopSimulation implements Simulation {
             this.assertMayWrite(path, agent);
             this.workspace.remove(path, agent ?? "unknown", this.tick);
             this.counts.deletes += 1;
+            this.noted(agent, path, "deleted it");
             this.writesThisRound += 1;
             return `Deleted ${path}.`;
           }),
@@ -826,6 +829,17 @@ export class WorkshopSimulation implements Simulation {
         this.counts.checksRun += 1;
         const report = checkWorkspace(this.workspace);
         this.lastCheck = { problems: report.problems.length, filesChecked: report.filesChecked, atRound: this.tick };
+        // No agent: `tool()` handlers are handed args and nothing else, and
+        // `check_syntax` reads perfectly well as an action rather than a
+        // person. Restructuring it into an `agentTool` to attribute a line in
+        // a feed would be the tail wagging the dog.
+        this.noted(
+          undefined,
+          "check_syntax",
+          report.problems.length === 0
+            ? `${report.filesChecked} files parsed clean`
+            : `${report.problems.length} problem${report.problems.length === 1 ? "" : "s"} in ${report.filesChecked} files`,
+        );
         return formatCheck(report, this.brief.entry, this.workspace);
       },
       "read",
@@ -878,6 +892,14 @@ export class WorkshopSimulation implements Simulation {
           responds: report.respondsToInput,
           atRound: this.tick,
         };
+        this.noted(
+          agent,
+          "playtest",
+          report.ok
+            ? `${report.animates ? "animates" : "static"}, ${report.respondsToInput ? "responds to input" : "no response"}` +
+                `${report.errors.length ? `, ${report.errors.length} console error${report.errors.length === 1 ? "" : "s"}` : ""}`
+            : "could not run it",
+        );
         const text = formatPlaytest(report, this.brief.entry);
         const shots = await this.attachFrames(report);
         if (shots.length === 0) return { success: true, output: text };
@@ -889,6 +911,42 @@ export class WorkshopSimulation implements Simulation {
   /** Take the runtime's media store. See {@link Simulation.attachMedia}. */
   attachMedia(store: MediaStore | undefined): void {
     this.mediaStore = store;
+  }
+
+  /**
+   * Forward what was said to the arcade's live feed.
+   *
+   * Recording only — nothing here reads a post to decide anything, and the
+   * interface says why that rule is not negotiable. The round is stamped on so
+   * a reader can see the conversation against the clock the team was working
+   * to; it is the only thing added.
+   */
+  observePost(post: { agent?: string; room: string; body: string }): void {
+    this.desk?.note({
+      kind: "post",
+      round: this.tick + 1,
+      ...(post.agent ? { agent: post.agent } : {}),
+      room: post.room,
+      body: post.body,
+    });
+  }
+
+  /**
+   * Note a piece of work for the live feed.
+   *
+   * Deliberately not every tool call. `list_files` and `read_file` are 37% of
+   * everything a team does and none of it is legible as activity — a feed of
+   * "read engine.js" repeated ninety times buries the four writes that changed
+   * the game. What lands here is what changed something, or what checked it.
+   */
+  private noted(agent: string | undefined, what: string, detail: string): void {
+    this.desk?.note({
+      kind: "did",
+      round: this.tick + 1,
+      ...(agent ? { agent } : {}),
+      room: what,
+      body: detail,
+    });
   }
 
   /**
