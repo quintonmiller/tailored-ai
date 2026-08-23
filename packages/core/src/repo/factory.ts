@@ -13,7 +13,7 @@
 
 import type { AgentConfig } from "../config.js";
 import type { EventBus } from "../events.js";
-import { Registry } from "../registry.js";
+import { type Disposer, Registry } from "../registry.js";
 import { GhRepoBackend } from "./github.js";
 import type { RepoBackend } from "./interface.js";
 
@@ -26,8 +26,8 @@ export type RepoBackendFactory = (config: AgentConfig, deps: RepoBackendDeps) =>
 
 export const repoBackendFactoryRegistry = new Registry<RepoBackendFactory>("repo-backend");
 
-export function registerRepoBackendFactory(id: string, factory: RepoBackendFactory): void {
-  repoBackendFactoryRegistry.register(id, factory);
+export function registerRepoBackendFactory(id: string, factory: RepoBackendFactory): Disposer {
+  return repoBackendFactoryRegistry.register(id, factory);
 }
 
 // Built-in repo backends register on module load. The github backend reads

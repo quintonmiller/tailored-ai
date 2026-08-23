@@ -516,8 +516,14 @@ export {
   type RuntimeEventHandler,
   type RuntimeEventMap,
   type RuntimeEventPayload,
+  type RuntimeWaterfallEvent,
+  type RuntimeWaterfallMap,
+  type RuntimeWaterfallPayload,
   type Subscription,
   TypedEventBus,
+  type WaterfallHandler,
+  type WaterfallNext,
+  type WaterfallOptions,
 } from "./events.js";
 export type {
   ExploratoryActivity,
@@ -715,7 +721,7 @@ export {
   THINKING_LEVELS,
   type ThinkingMapper,
 } from "./providers/thinking.js";
-export { Registry } from "./registry.js";
+export { type Disposer, Registry } from "./registry.js";
 export type {
   AgentBody,
   ApprovalGateOptions,

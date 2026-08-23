@@ -1,3 +1,4 @@
+import type { Disposer } from "../registry.js";
 import type { StepExecutor } from "../workflows/engine.js";
 import type { StepType } from "../workflows/types.js";
 import type { Resource, ResourceManifest, ResourceOrigin } from "./interface.js";
@@ -121,7 +122,7 @@ export class StepExecutorRegistry {
    * plugin may override a built-in type by registering for the same type
    * string — the last-registered factory wins in {@link buildAll}.
    */
-  registerFactory(type: string, factory: StepExecutorFactory): void {
+  registerFactory(type: string, factory: StepExecutorFactory): Disposer {
     // Replace any existing entry for the same type (idempotent on reload).
     const idx = this.factories.findIndex((f) => f.type === type);
     if (idx !== -1) {
@@ -129,6 +130,16 @@ export class StepExecutorRegistry {
     } else {
       this.factories.push({ type, factory });
     }
+    let disposed = false;
+    return () => {
+      if (disposed) return;
+      disposed = true;
+      // Same identity rule as Registry: only drop the entry this call made.
+      // A later registerFactory for the same type replaced ours and belongs
+      // to that caller.
+      const at = this.factories.findIndex((f) => f.type === type && f.factory === factory);
+      if (at !== -1) this.factories.splice(at, 1);
+    };
   }
 
   /**

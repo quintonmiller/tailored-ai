@@ -25,7 +25,7 @@
 
 import type { ChannelFactory } from "./channels/registry.js";
 import { registerChannelFactory } from "./channels/registry.js";
-import type { SlashCommandRegistryView } from "./commands/registry.js";
+import type { SlashCommandDescriptor, SlashCommandRegistryView } from "./commands/registry.js";
 import { slashCommandRegistry } from "./commands/registry.js";
 import { type EventBus, TypedEventBus } from "./events.js";
 import { createHttpRegistryView, type HttpRegistryView, HttpRouteRegistry } from "./http/registry.js";
@@ -33,6 +33,7 @@ import type { MemoryBackendFactory } from "./memory/registry.js";
 import { registerMemoryBackendFactory } from "./memory/registry.js";
 import type { EmbeddingFactory, ProviderFactory } from "./providers/factories.js";
 import { registerEmbeddingFactory, registerProviderFactory } from "./providers/factories.js";
+import type { Disposer } from "./registry.js";
 import type { RepoBackendFactory } from "./repo/factory.js";
 import { registerRepoBackendFactory } from "./repo/factory.js";
 import type { StepExecutorFactory } from "./resources/step-executor-registry.js";
@@ -48,44 +49,57 @@ import { registerToolFactory } from "./tools/tool-factories.js";
 import type { UiProviderFactory } from "./ui/registry.js";
 import { registerUiProviderFactory } from "./ui/registry.js";
 
+/**
+ * Every registry view hands back a {@link Disposer} — the inverse of the
+ * registration it just made.
+ *
+ * Ignoring it keeps the old behaviour, so this is source-compatible with every
+ * plugin written before the contract existed. Returning it is what makes
+ * teardown possible at all: without a per-registration inverse there is no
+ * unit to revert, and unloading a plugin can only be approximated by throwing
+ * away shared state — which is what `reload()` does today, and why #58 and #65
+ * happened. The loader collects these automatically (see
+ * {@link CreatePluginContextOptions.collect}), so a plugin gets correct
+ * teardown of its registrations without writing an uninstall path.
+ */
 export interface ToolRegistryView {
-  register(id: string, factory: ToolFactory): void;
+  register(id: string, factory: ToolFactory): Disposer;
 }
 
 export interface ChannelRegistryView {
-  register(id: string, factory: ChannelFactory): void;
+  register(id: string, factory: ChannelFactory): Disposer;
 }
 
 export interface ProviderRegistryView {
-  register(id: string, factory: ProviderFactory): void;
+  register(id: string, factory: ProviderFactory): Disposer;
 }
 
 export interface EmbeddingRegistryView {
-  register(id: string, factory: EmbeddingFactory): void;
+  register(id: string, factory: EmbeddingFactory): Disposer;
 }
 
 export interface MemoryBackendRegistryView {
-  register(id: string, factory: MemoryBackendFactory): void;
+  register(id: string, factory: MemoryBackendFactory): Disposer;
 }
 
 export interface TaskBackendRegistryView {
-  register(id: string, factory: TaskBackendFactory): void;
+  register(id: string, factory: TaskBackendFactory): Disposer;
 }
 
 export interface RepoBackendRegistryView {
-  register(id: string, factory: RepoBackendFactory): void;
+  register(id: string, factory: RepoBackendFactory): Disposer;
 }
 
 export interface SandboxBackendRegistryView {
-  register(id: string, factory: SandboxFactory): void;
+  register(id: string, factory: SandboxFactory): Disposer;
 }
 
 export interface UiProviderRegistryView {
-  register(id: string, factory: UiProviderFactory): void;
+  register(id: string, factory: UiProviderFactory): Disposer;
 }
 
 export interface TimeProviderRegistryView {
-  register(id: string, factory: TimeProviderFactory): void;
+  register(id: string, factory: TimeProviderFactory): Disposer;
 }
 
 /**
@@ -98,7 +112,7 @@ export interface TimeProviderRegistryView {
  * an existing type overrides the built-in; the last-registered factory wins.
  */
 export interface StepExecutorRegistryView {
-  register(type: string, factory: StepExecutorFactory): void;
+  register(type: string, factory: StepExecutorFactory): Disposer;
 }
 
 /**
@@ -330,6 +344,39 @@ export interface CreatePluginContextOptions {
    * outside the loader; routes then land directly under `/api/ext/`.
    */
   httpPrefix?: string;
+  /**
+   * Called with the disposer for every registration made through this context.
+   *
+   * {@link loadPlugins} passes a per-entry collector so a plugin's
+   * registrations can be undone as a unit when it is unloaded, without the
+   * plugin author tracking them by hand. Omit it and registrations behave
+   * exactly as they did before: the disposer is still returned to the caller,
+   * nobody else holds it.
+   */
+  collect?: (dispose: Disposer) => void;
+}
+
+/**
+ * Route registration returns its own disposer already; this only tees a copy
+ * into the collector so plugin teardown covers routes as well. Routes are the
+ * clearest case for the collector: the underlying registry deliberately
+ * survives `reload()` because the HTTP router cannot unmount, so a route left
+ * behind by an unloaded plugin stays reachable until the process restarts.
+ */
+function collectingHttp(view: HttpRegistryView, collect: ((dispose: Disposer) => void) | undefined): HttpRegistryView {
+  if (!collect) return view;
+  return {
+    register: (descriptor) => {
+      const dispose = view.register(descriptor);
+      collect(dispose);
+      return dispose;
+    },
+    mount: (prefix, routes) => {
+      const dispose = view.mount(prefix, routes);
+      collect(dispose);
+      return dispose;
+    },
+  };
 }
 
 /**
@@ -342,7 +389,17 @@ export interface CreatePluginContextOptions {
  * `default(ctx)` function get invoked with the right shape.
  */
 export function createPluginContext(opts: CreatePluginContextOptions = {}): PluginContext {
-  const { runtime } = opts;
+  const { runtime, collect } = opts;
+  // Hand every registration's disposer to the collector on the way out, while
+  // still returning it to the caller. One wrapper rather than ten call sites
+  // that each have to remember.
+  const collecting =
+    <A extends unknown[]>(fn: (...args: A) => Disposer) =>
+    (...args: A): Disposer => {
+      const dispose = fn(...args);
+      collect?.(dispose);
+      return dispose;
+    };
   // Routes register against the runtime's registry so the server can read
   // them after the runtime is built. A context with no runtime — or a partial
   // runtime stub that predates the seam — gets a throwaway registry, so
@@ -350,32 +407,38 @@ export function createPluginContext(opts: CreatePluginContextOptions = {}): Plug
   const httpRegistry =
     typeof opts.runtime?.getHttpRoutes === "function" ? opts.runtime.getHttpRoutes() : new HttpRouteRegistry();
   return {
-    tools: { register: registerToolFactory },
-    channels: { register: registerChannelFactory },
-    providers: { register: registerProviderFactory },
-    embeddings: { register: registerEmbeddingFactory },
-    memoryBackends: { register: registerMemoryBackendFactory },
-    taskBackends: { register: registerTaskBackendFactory },
-    repoBackends: { register: registerRepoBackendFactory },
-    sandboxBackends: { register: registerSandboxFactory },
-    uiProviders: { register: registerUiProviderFactory },
-    timeProviders: { register: registerTimeProviderFactory },
-    http: createHttpRegistryView(httpRegistry, opts.httpPrefix),
+    tools: { register: collecting(registerToolFactory) },
+    channels: { register: collecting(registerChannelFactory) },
+    providers: { register: collecting(registerProviderFactory) },
+    embeddings: { register: collecting(registerEmbeddingFactory) },
+    memoryBackends: { register: collecting(registerMemoryBackendFactory) },
+    taskBackends: { register: collecting(registerTaskBackendFactory) },
+    repoBackends: { register: collecting(registerRepoBackendFactory) },
+    sandboxBackends: { register: collecting(registerSandboxFactory) },
+    uiProviders: { register: collecting(registerUiProviderFactory) },
+    timeProviders: { register: collecting(registerTimeProviderFactory) },
+    http: collectingHttp(createHttpRegistryView(httpRegistry, opts.httpPrefix), collect),
     // Step executors are registered into the runtime's per-instance registry
     // so factories reach the same registry that createWorkflowEngine reads.
     // When no runtime is available (bare/test context) the call is a no-op —
     // the plugin simply won't have its executor included in any engine created
     // from a different runtime instance.
     stepExecutors: {
-      register(type: string, factory: StepExecutorFactory): void {
-        runtime?.getStepExecutorRegistry().registerFactory(type, factory);
+      register(type: string, factory: StepExecutorFactory): Disposer {
+        // No runtime means no registry to register into, so the disposer has
+        // nothing to undo. Returning a no-op keeps the contract total rather
+        // than making every caller check.
+        const dispose = runtime?.getStepExecutorRegistry().registerFactory(type, factory);
+        if (!dispose) return () => {};
+        collect?.(dispose);
+        return dispose;
       },
     },
     // Process-wide, like the channel/provider factory registries: the channels
     // that serve these commands read the same module-level registry, and the
     // Discord client re-syncs from it on every config reload.
     commands: {
-      register: (descriptor) => slashCommandRegistry.register(descriptor),
+      register: collecting((descriptor: SlashCommandDescriptor) => slashCommandRegistry.register(descriptor)),
     },
     // Prefer an explicit bus; else the runtime's own bus so plugin
     // subscriptions land where the runtime emits; else a fresh bus.

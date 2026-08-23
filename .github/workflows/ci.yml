@@ -72,6 +72,14 @@ jobs:
       - name: Build
         run: pnpm run build
 
+      - name: Catalog freshness (generated docs match the code)
+        # The catalogs are generated from DEFAULT_CONFIG and the tool-factory
+        # registry, so a config field or a tool added without regenerating them
+        # is drift CI can see. Must run after Build: both import the compiled
+        # modules rather than re-parsing the TypeScript, so the catalog always
+        # describes what actually ships.
+        run: pnpm run verify:catalogs
+
       - name: Typecheck
         run: pnpm run typecheck
 

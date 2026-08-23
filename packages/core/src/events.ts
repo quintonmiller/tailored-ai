@@ -636,6 +636,73 @@ export type RuntimeEventHandler<K extends RuntimeEvent> = (
 ) => void | boolean | Promise<void | boolean>;
 
 /**
+ * Events dispatched as a **waterfall** rather than a broadcast.
+ *
+ * A waterfall is around-middleware: each listener receives the payload and a
+ * `next`, may transform the payload, and either delegates or short-circuits.
+ * `emit` lets a listener observe and `emitAsync` lets it veto; only a waterfall
+ * lets it *change* what happens. That is the difference between a plugin that
+ * can refuse an operation and one that can correct it.
+ *
+ * **The dispatch mode is part of an event's contract.** A waterfall event is
+ * declared here and nowhere else, so it can never be `emit`ed by accident, and
+ * a broadcast event can never be handed a `next` it does not expect.
+ *
+ * The map is extended by declaration merging, exactly like
+ * {@link RuntimeEventMap}, so a plugin can declare and dispatch its own
+ * waterfall without a core release:
+ *
+ * ```ts
+ * declare module "@tailored-ai/core" {
+ *   interface RuntimeWaterfallMap {
+ *     "myplugin.outbound": { text: string };
+ *   }
+ * }
+ * ```
+ *
+ * Core declares none yet. The obvious first one — transforming an agent
+ * request before the model sees it, which is what #417 needs — is blocked on
+ * the agent loop having no bus to dispatch on; see #534.
+ */
+// biome-ignore lint/suspicious/noEmptyInterface: extended by declaration merging, in core and in plugins.
+export interface RuntimeWaterfallMap {}
+
+export type RuntimeWaterfallEvent = keyof RuntimeWaterfallMap;
+
+export type RuntimeWaterfallPayload<K extends RuntimeWaterfallEvent> = RuntimeWaterfallMap[K];
+
+/**
+ * Hand the payload to the rest of the chain and get back what they made of it.
+ *
+ * Pass the payload you want downstream to see — the one you were given, or your
+ * own replacement.
+ */
+export type WaterfallNext<T> = (payload: T) => Promise<T>;
+
+/**
+ * One link in a waterfall chain.
+ *
+ * Call `next(payload)` to delegate and return its result; return your own value
+ * without calling `next` to short-circuit and own the outcome. A listener that
+ * only annotates **must** delegate — short-circuiting is for the listener that
+ * owns the decision.
+ */
+export type WaterfallHandler<K extends RuntimeWaterfallEvent> = (
+  payload: RuntimeWaterfallPayload<K>,
+  next: WaterfallNext<RuntimeWaterfallPayload<K>>,
+) => RuntimeWaterfallPayload<K> | Promise<RuntimeWaterfallPayload<K>>;
+
+/** Options for {@link EventBus.onWaterfall}. */
+export interface WaterfallOptions {
+  /**
+   * Run before listeners registered earlier. For the rare listener that must
+   * see the payload first — a policy that decides whether the rest of the chain
+   * runs at all. Ordinary listeners should not need it.
+   */
+  prepend?: boolean;
+}
+
+/**
  * Returned by `on()` so callers can stop receiving an event without
  * keeping the handler identity around. Calling `dispose()` more than
  * once is a no-op.
@@ -668,9 +735,39 @@ export interface EventBus {
    */
   emitAsync<K extends RuntimeEvent>(event: K, payload: RuntimeEventPayload<K>): Promise<boolean>;
   /**
-   * Remove every subscriber. Used during runtime reload so internal
-   * subscribers re-arm cleanly and stale plugin handlers from a previous
-   * generation can't keep firing.
+   * Register an around-middleware listener for a waterfall event.
+   * Returns a disposer, like {@link EventBus.on}.
+   */
+  onWaterfall<K extends RuntimeWaterfallEvent>(
+    event: K,
+    handler: WaterfallHandler<K>,
+    opts?: WaterfallOptions,
+  ): Subscription;
+  /**
+   * Run the waterfall chain and return the payload it produced.
+   *
+   * Listeners run in registration order, each able to transform the payload and
+   * delegate to the rest via `next`. With no listeners the payload comes back
+   * unchanged, so a caller never needs to special-case the empty chain.
+   *
+   * A **throwing listener is skipped**, not fatal: the chain continues with the
+   * payload that listener was handed. One bad subscriber must not break the
+   * operation it was only observing — the same rule `emit` and `emitAsync`
+   * already follow.
+   *
+   * A listener that returns nothing is treated as a pass-through rather than as
+   * an instruction to truncate: if it delegated, its downstream result stands;
+   * if it did not, the chain continues without it. Forgetting to return must
+   * not silently drop every listener after you.
+   */
+  waterfall<K extends RuntimeWaterfallEvent>(
+    event: K,
+    payload: RuntimeWaterfallPayload<K>,
+  ): Promise<RuntimeWaterfallPayload<K>>;
+  /**
+   * Remove every subscriber, broadcast and waterfall alike. Used during runtime
+   * reload so internal subscribers re-arm cleanly and stale plugin handlers from
+   * a previous generation can't keep firing.
    */
   clear(): void;
   /**
@@ -678,12 +775,18 @@ export interface EventBus {
    * Returns 0 for events nobody subscribed to.
    */
   listenerCount<K extends RuntimeEvent>(event: K): number;
+  /** Number of listeners in a waterfall chain. Returns 0 for an empty chain. */
+  waterfallCount<K extends RuntimeWaterfallEvent>(event: K): number;
 }
 
 // Internal handler storage is widened to `RuntimeEventHandler<RuntimeEvent>`
 // to make a single Set per event work. The on/off/emit public methods keep
 // per-event type safety.
 type AnyHandler = RuntimeEventHandler<RuntimeEvent>;
+
+// Same widening for waterfall chains. Order matters here in a way it does not
+// for a Set, so chains are arrays.
+type AnyWaterfall = (payload: unknown, next: (payload: unknown) => Promise<unknown>) => unknown;
 
 /**
  * Default in-memory `EventBus` implementation. The runtime owns one
@@ -692,6 +795,10 @@ type AnyHandler = RuntimeEventHandler<RuntimeEvent>;
  */
 export class TypedEventBus implements EventBus {
   private handlers: Map<RuntimeEvent, Set<AnyHandler>> = new Map();
+  // Keyed by plain string: `keyof RuntimeWaterfallMap` is `never` until a
+  // declaration merge adds an event, which would make the storage untypeable
+  // while leaving the public signatures correctly typed by the map.
+  private waterfalls: Map<string, AnyWaterfall[]> = new Map();
 
   on<K extends RuntimeEvent>(event: K, handler: RuntimeEventHandler<K>): Subscription {
     let set = this.handlers.get(event);
@@ -760,11 +867,81 @@ export class TypedEventBus implements EventBus {
     return !vetoed;
   }
 
+  onWaterfall<K extends RuntimeWaterfallEvent>(
+    event: K,
+    handler: WaterfallHandler<K>,
+    opts: WaterfallOptions = {},
+  ): Subscription {
+    const key = String(event);
+    let chain = this.waterfalls.get(key);
+    if (!chain) {
+      chain = [];
+      this.waterfalls.set(key, chain);
+    }
+    const entry = handler as unknown as AnyWaterfall;
+    if (opts.prepend) chain.unshift(entry);
+    else chain.push(entry);
+    let disposed = false;
+    return {
+      dispose: () => {
+        if (disposed) return;
+        disposed = true;
+        const current = this.waterfalls.get(key);
+        if (!current) return;
+        const at = current.indexOf(entry);
+        if (at !== -1) current.splice(at, 1);
+        if (current.length === 0) this.waterfalls.delete(key);
+      },
+    };
+  }
+
+  async waterfall<K extends RuntimeWaterfallEvent>(
+    event: K,
+    payload: RuntimeWaterfallPayload<K>,
+  ): Promise<RuntimeWaterfallPayload<K>> {
+    const chain = this.waterfalls.get(String(event));
+    if (!chain || chain.length === 0) return payload;
+    // Snapshot so a listener registering or disposing mid-dispatch behaves the
+    // same as it does for emit: this dispatch runs the chain it started with.
+    const snapshot = [...chain];
+
+    const run = async (index: number, current: unknown): Promise<unknown> => {
+      if (index >= snapshot.length) return current;
+      const handler = snapshot[index];
+      // Hold the promise, not the resolved value: a listener may call `next`
+      // without awaiting it (a pure observer often does), and by the time the
+      // handler returns, the downstream chain is still in flight.
+      let delegated: Promise<unknown> | undefined;
+      const next = (forwarded: unknown): Promise<unknown> => {
+        delegated = run(index + 1, forwarded);
+        return delegated;
+      };
+      try {
+        const out = await handler(current, next);
+        if (out !== undefined) return out;
+        // Returned nothing. If it delegated, it was observing and the
+        // downstream result stands; if not, carry on without it rather than
+        // letting a forgotten `return` truncate the chain silently.
+        return delegated ? await delegated : run(index + 1, current);
+      } catch (err) {
+        console.error(`[events] waterfall listener for "${String(event)}" threw:`, err);
+        return delegated ? await delegated : run(index + 1, current);
+      }
+    };
+
+    return (await run(0, payload)) as RuntimeWaterfallPayload<K>;
+  }
+
   clear(): void {
     this.handlers.clear();
+    this.waterfalls.clear();
   }
 
   listenerCount<K extends RuntimeEvent>(event: K): number {
     return this.handlers.get(event)?.size ?? 0;
+  }
+
+  waterfallCount<K extends RuntimeWaterfallEvent>(event: K): number {
+    return this.waterfalls.get(String(event))?.length ?? 0;
   }
 }

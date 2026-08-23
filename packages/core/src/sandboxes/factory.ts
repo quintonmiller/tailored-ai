@@ -1,5 +1,5 @@
 import type { AgentConfig, AgentDefinition } from "../config.js";
-import { Registry } from "../registry.js";
+import { type Disposer, Registry } from "../registry.js";
 import { DockerSandbox } from "./docker.js";
 import { HostSandbox } from "./host.js";
 import type { Sandbox } from "./interface.js";
@@ -18,8 +18,8 @@ export type SandboxFactory = (config: AgentConfig) => Sandbox;
 
 export const sandboxFactoryRegistry = new Registry<SandboxFactory>("sandbox");
 
-export function registerSandboxFactory(id: string, factory: SandboxFactory): void {
-  sandboxFactoryRegistry.register(id, factory);
+export function registerSandboxFactory(id: string, factory: SandboxFactory): Disposer {
+  return sandboxFactoryRegistry.register(id, factory);
 }
 
 /**

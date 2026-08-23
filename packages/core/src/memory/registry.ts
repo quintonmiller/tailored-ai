@@ -1,4 +1,4 @@
-import { Registry } from "../registry.js";
+import { type Disposer, Registry } from "../registry.js";
 import type { AgentRuntime } from "../runtime.js";
 import type { MemoryBackend } from "./interface.js";
 
@@ -14,8 +14,8 @@ export type MemoryBackendFactory = (
 
 export const memoryBackendFactoryRegistry = new Registry<MemoryBackendFactory>("memory-backend");
 
-export function registerMemoryBackendFactory(id: string, factory: MemoryBackendFactory): void {
-  memoryBackendFactoryRegistry.register(id, factory);
+export function registerMemoryBackendFactory(id: string, factory: MemoryBackendFactory): Disposer {
+  return memoryBackendFactoryRegistry.register(id, factory);
 }
 
 /**

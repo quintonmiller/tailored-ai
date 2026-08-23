@@ -1,4 +1,4 @@
-import { Registry } from "../registry.js";
+import { type Disposer, Registry } from "../registry.js";
 import type { AgentRuntime } from "../runtime.js";
 import type { Channel } from "./interface.js";
 
@@ -19,8 +19,8 @@ export type ChannelFactory = (
 
 export const channelFactoryRegistry = new Registry<ChannelFactory>("channel");
 
-export function registerChannelFactory(id: string, factory: ChannelFactory): void {
-  channelFactoryRegistry.register(id, factory);
+export function registerChannelFactory(id: string, factory: ChannelFactory): Disposer {
+  return channelFactoryRegistry.register(id, factory);
 }
 
 export interface StartedChannel {
