@@ -971,6 +971,37 @@ Summing per-term hits had ranked `setAngularVelocity` above `setVelocity` for
 `Structs.Map.keys` for "keyboard cursor keys", because one exact match on a
 common word beat a partial match on `createCursorKeys`. Both rank correctly now.
 
+### The skeleton, because a library is not a starting point
+
+The first run offered an engine did not take it: `engineChosen: 0`, zero `docs`
+lookups, and the team wrote its own loop with the small `lib/`. Handing over a
+megabyte of library and a code sample still leaves somebody to type the skeleton
+before anything renders — and the brief itself warns that porting a half-built
+game onto an engine costs more than starting on one, so the cliff is at exactly
+the moment they are deciding.
+
+`use_engine` now writes a running skeleton: an entry page and one file with a
+thing you can move and a line of HUD. Deliberately **the minimum that runs, not a
+game** — it exists so `playtest` has something to say from round one and the
+checkpoint has a working build to save, not to decide what the game is.
+
+Three properties it has to have, each with a test:
+
+- **It runs.** Both skeletons playtest clean out of the box — no console errors,
+  animates, responds to keys. A skeleton that rendered a black rectangle would be
+  worse than none, and would be handed to every team that asks.
+- **It is nobody's.** Written unclaimed, so the scaffold says what runs and not
+  who owns it. Claiming both files for whoever typed `use_engine` would hand one
+  agent the page and the logic and undo the partition the team is meant to
+  negotiate. The first write to either claims it, which is the ordinary rule.
+- **It is not counted as their work.** `scaffoldLines` is reported separately and
+  the writer is disowned, so `distinctWriters` still answers "how many of the
+  five wrote something". Counting the skeleton as team output would make every
+  engine run look more productive than it was.
+
+It never overwrites a file the team already made. Installing an engine at round
+six must not delete six rounds of work.
+
 ### Babylon, and being honest about what is missing
 
 Babylon.js 8 is the 3D option, and it beat three.js on the things that matter

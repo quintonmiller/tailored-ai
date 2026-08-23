@@ -324,6 +324,18 @@ export class Workspace {
     return this.provided.has(normalisePath(path));
   }
 
+  /**
+   * Forget who wrote a file, without touching the file.
+   *
+   * For the engine skeleton: it is real, editable, claimable team code, and it
+   * is not something any of them did. Leaving `scaffold` as the last writer
+   * would put it in `distinctWriters`, which is supposed to answer "how many of
+   * the five actually wrote something".
+   */
+  disownWriter(path: string): void {
+    this.meta.delete(normalisePath(path));
+  }
+
   /** Who may write here, if anybody in particular. */
   ownerOf(path: string): string | undefined {
     return this.planned.get(normalisePath(path))?.owner;

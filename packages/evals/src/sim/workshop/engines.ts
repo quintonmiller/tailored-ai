@@ -50,6 +50,24 @@ export interface EngineSpec {
   blurb: string;
   /** Shown once, when a team installs it. The smallest thing that runs. */
   start: string;
+  /**
+   * A running skeleton, written into the workspace on install.
+   *
+   * The first run that was offered an engine did not take it: `engineChosen: 0`,
+   * zero `docs` lookups, and the team wrote its own loop with the small `lib/`.
+   * Handing over a megabyte of library and a code sample still leaves somebody
+   * to type the skeleton before anything renders, and the brief itself warns
+   * that porting a half-built game onto an engine costs more than starting on
+   * one — so the moment to remove that cost is the moment they ask.
+   *
+   * Deliberately the *minimum that runs*: a page, a thing you can move, and a
+   * line of HUD. Not a game. It exists so `playtest` has something to say from
+   * round one and so the checkpoint has something to save, not to decide what
+   * the game is. Every file is an ordinary team file — claimable, editable,
+   * deletable — and the lines are counted separately so a scaffolded run stays
+   * comparable with one that wrote its own.
+   */
+  scaffold: { path: string; content: string }[];
 }
 
 export const ENGINES: EngineSpec[] = [
@@ -88,6 +106,74 @@ export const ENGINES: EngineSpec[] = [
       "`generateTexture` is the move that matters here: it draws a texture at runtime, which is how you " +
       "get sprites when image files are not allowed. `docs` looks up any API you are unsure of — use it " +
       "rather than guessing a signature.",
+    scaffold: [
+      {
+        path: "index.html",
+        content: `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Game</title>
+    <style>
+      html, body { margin: 0; background: #0d0f13; height: 100%; overflow: hidden; }
+      canvas { display: block; margin: 0 auto; }
+    </style>
+  </head>
+  <body>
+    <script src="lib/phaser.js"></script>
+    <script src="game.js"></script>
+  </body>
+</html>
+`,
+      },
+      {
+        path: "game.js",
+        content: `// The skeleton, not the game. Restructure it however the game needs.
+const CONFIG = {
+  type: Phaser.AUTO,
+  width: 960,
+  height: 720,
+  backgroundColor: '#0d0f13',
+  physics: { default: 'arcade', arcade: { gravity: { y: 0 } } },
+  scene: { create: create, update: update },
+};
+
+function create() {
+  // No image files are allowed, so textures are drawn at runtime.
+  const g = this.add.graphics();
+  g.fillStyle(0x6ee7b7, 1);
+  g.fillCircle(14, 14, 14);
+  g.generateTexture('player', 28, 28);
+  g.destroy();
+
+  this.player = this.physics.add.image(480, 360, 'player');
+  this.player.setCollideWorldBounds(true).setDamping(true).setDrag(0.86);
+
+  this.keys = this.input.keyboard.createCursorKeys();
+  this.hud = this.add.text(16, 16, '', {
+    fontFamily: 'monospace',
+    fontSize: '18px',
+    color: '#9aa3b2',
+  });
+  this.elapsed = 0;
+}
+
+function update(time, delta) {
+  this.elapsed += delta / 1000;
+
+  const speed = 900;
+  this.player.setAcceleration(
+    (this.keys.left.isDown ? -speed : 0) + (this.keys.right.isDown ? speed : 0),
+    (this.keys.up.isDown ? -speed : 0) + (this.keys.down.isDown ? speed : 0)
+  );
+
+  this.hud.setText('TIME ' + this.elapsed.toFixed(1));
+}
+
+new Phaser.Game(CONFIG);
+`,
+      },
+    ],
   },
   {
     id: "babylon",
@@ -140,6 +226,77 @@ export const ENGINES: EngineSpec[] = [
       "There are *no texture or model files*. Colour comes from `StandardMaterial` and its `diffuseColor`, " +
       "`emissiveColor` and `alpha`; shape comes from `MeshBuilder`. `docs` looks up any signature you are " +
       "unsure of — use it rather than guessing.",
+    scaffold: [
+      {
+        path: "index.html",
+        content: `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Game</title>
+    <style>
+      html, body { margin: 0; background: #0d0f13; height: 100%; overflow: hidden; }
+      canvas { display: block; width: 100vw; height: 100vh; }
+    </style>
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+    <script src="lib/babylon.js"></script>
+    <script src="game.js"></script>
+  </body>
+</html>
+`,
+      },
+      {
+        path: "game.js",
+        content: `// The skeleton, not the game. Restructure it however the game needs.
+const canvas = document.getElementById('game');
+const engine = new BABYLON.Engine(canvas, true);
+
+const scene = new BABYLON.Scene(engine);
+scene.clearColor = new BABYLON.Color4(0.05, 0.06, 0.08, 1);
+scene.collisionsEnabled = true;
+
+const camera = new BABYLON.ArcRotateCamera('camera', -Math.PI / 2, Math.PI / 3, 24, BABYLON.Vector3.Zero(), scene);
+new BABYLON.HemisphericLight('light', new BABYLON.Vector3(0, 1, 0), scene);
+
+// No texture files are allowed, so colour comes from materials.
+const skin = new BABYLON.StandardMaterial('skin', scene);
+skin.diffuseColor = new BABYLON.Color3(0.43, 0.9, 0.72);
+
+const player = BABYLON.MeshBuilder.CreateBox('player', { size: 2 }, scene);
+player.material = skin;
+player.position.y = 1;
+player.checkCollisions = true;
+player.ellipsoid = new BABYLON.Vector3(1, 1, 1);
+
+const groundSkin = new BABYLON.StandardMaterial('ground', scene);
+groundSkin.diffuseColor = new BABYLON.Color3(0.11, 0.13, 0.17);
+const ground = BABYLON.MeshBuilder.CreateGround('ground', { width: 40, height: 40 }, scene);
+ground.material = groundSkin;
+ground.checkCollisions = true;
+
+const held = {};
+addEventListener('keydown', function (e) { held[e.code] = true; });
+addEventListener('keyup', function (e) { held[e.code] = false; });
+
+engine.runRenderLoop(function () {
+  const dt = Math.min(engine.getDeltaTime() / 1000, 0.05);
+  const speed = 12;
+  const move = new BABYLON.Vector3(
+    ((held.ArrowRight ? 1 : 0) - (held.ArrowLeft ? 1 : 0)) * speed * dt,
+    0,
+    ((held.ArrowUp ? 1 : 0) - (held.ArrowDown ? 1 : 0)) * speed * dt
+  );
+  player.moveWithCollisions(move);
+  player.rotation.y += dt * 0.6;
+  scene.render();
+});
+
+addEventListener('resize', function () { engine.resize(); });
+`,
+      },
+    ],
   },
 ];
 

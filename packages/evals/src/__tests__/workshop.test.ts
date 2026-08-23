@@ -708,10 +708,18 @@ describe("a real game engine, when the team asks for one", () => {
 
     const file = s.workspace.list().find((f) => f.path === "lib/phaser.js");
     expect(file?.provided).toBe(true);
-    // Provided files are scenery, not output — or every count of what the team
+    // The library is scenery, not output — or every count of what the team
     // produced becomes incomparable with every run before engines existed.
-    expect(s.metrics().filesPresent).toBe(0);
-    expect(s.metrics().linesInWorkspace).toBe(0);
+    expect(
+      s.workspace
+        .list()
+        .filter((f) => !f.provided)
+        .some((f) => f.path.includes("phaser")),
+    ).toBe(false);
+    // The skeleton *is* in the workspace, because the team edits it, so its
+    // lines are reported separately rather than hidden or double-counted.
+    expect(s.metrics().scaffoldLines).toBeGreaterThan(20);
+    expect(s.metrics().linesInWorkspace).toBe(s.metrics().scaffoldLines);
 
     const edit = await call(s, "write_file", { path: "lib/phaser.js", content: "// mine" }, "builder");
     expect(edit).toMatch(/came with the workspace/);
@@ -752,6 +760,66 @@ describe("a real game engine, when the team asks for one", () => {
       expect(out, banned).not.toMatch(/Phaser\.Sound|Loader\.|MatterJS/);
     }
   });
+
+  /*
+   * The scaffold has to *run*, or it is worse than nothing.
+   *
+   * The whole point is that `playtest` says something useful from round one and
+   * the checkpoint has a working build to save. A skeleton that renders a black
+   * rectangle would poison both, and would be handed to every team that asks for
+   * an engine.
+   */
+  it("writes a Phaser skeleton that plays straight away", async () => {
+    const s = sim();
+    const out = await call(s, "use_engine", { name: "phaser" }, "builder");
+    expect(out).toMatch(/running skeleton/);
+    expect(s.workspace.exists("index.html")).toBe(true);
+    expect(s.workspace.exists("game.js")).toBe(true);
+
+    const report = await call(s, "playtest", {}, "tester");
+    expect(report).toMatch(/no console errors/i);
+    expect(report).toMatch(/screen changed after keys/);
+  }, 60_000);
+
+  it("writes a Babylon skeleton that plays straight away", async () => {
+    const s = sim();
+    await call(s, "use_engine", { name: "babylon" }, "builder");
+    const report = await call(s, "playtest", {}, "tester");
+    expect(report).toMatch(/no console errors/i);
+    expect(report).toMatch(/It animates on its own/);
+  }, 90_000);
+
+  it("leaves the skeleton unclaimed, and out of the team's own numbers", async () => {
+    const s = sim();
+    await call(s, "use_engine", { name: "phaser" }, "builder");
+
+    // Nobody owns it, so the team still has to divide the work.
+    expect(s.workspace.ownerOf("game.js")).toBeUndefined();
+    expect(s.workspace.ownerOf("index.html")).toBeUndefined();
+    // And nobody is credited with having written it.
+    expect(s.metrics().distinctWriters).toBe(0);
+    expect(s.metrics().scaffoldLines).toBeGreaterThan(20);
+
+    // The first writer takes it, exactly as with any other unclaimed file.
+    await call(
+      s,
+      "patch_file",
+      { path: "game.js", find: "const speed = 900;", replace: "const speed = 600;" },
+      "builder",
+    );
+    expect(s.workspace.ownerOf("game.js")).toBe("builder");
+    expect(s.metrics().distinctWriters).toBe(1);
+  }, 30_000);
+
+  it("never overwrites work the team already did", async () => {
+    const s = sim();
+    await call(s, "write_file", { path: "game.js", content: "// six rounds of work\n" }, "builder");
+    const out = await call(s, "use_engine", { name: "phaser" }, "builder");
+    expect(out).toMatch(/Left alone because you already made/);
+    expect(s.workspace.read("game.js")).toMatch(/six rounds of work/);
+    // The file they had not made is still written for them.
+    expect(s.workspace.exists("index.html")).toBe(true);
+  }, 30_000);
 
   it("refuses docs before an engine is chosen", async () => {
     expect(await call(sim(), "docs", { query: "sprite" }, "builder")).toMatch(/no engine is installed/);

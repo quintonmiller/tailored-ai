@@ -253,6 +253,8 @@ export class WorkshopSimulation implements Simulation {
   private lastCheckpointEdits: number | undefined;
   /** Claims freed at the last round boundary, for the announcement. */
   private lapsedLastRound: { path: string; from: string; purpose: string }[] = [];
+  /** Lines the engine skeleton wrote, so a scaffolded run stays comparable. */
+  private scaffoldLines = 0;
   /** The engine this team chose, if any. Nothing is installed until asked for. */
   private engine: EngineSpec | undefined;
   private engineDocs: EngineDocs | undefined;
@@ -977,10 +979,52 @@ export class WorkshopSimulation implements Simulation {
                 }
                 this.engine = engine;
                 if (engine.docs) this.engineDocs = new EngineDocs(engine.docs);
+
+                /*
+                 * Write the skeleton, and leave it unclaimed.
+                 *
+                 * Unclaimed on purpose: the scaffold says what runs, not who
+                 * owns it. Claiming both files for whoever typed `use_engine`
+                 * would hand one agent the page and the logic and undo the
+                 * partition the team is supposed to negotiate — and the first
+                 * write to either claims it anyway, which is the rule already.
+                 *
+                 * A file the team already made is never overwritten. Installing
+                 * an engine in round six must not delete six rounds of work.
+                 */
+                const made: string[] = [];
+                const skipped: string[] = [];
+                for (const file of engine.scaffold) {
+                  if (this.workspace.exists(file.path)) {
+                    skipped.push(file.path);
+                    continue;
+                  }
+                  try {
+                    this.workspace.write(file.path, file.content, "scaffold", this.tick);
+                    this.scaffoldLines += file.content.split("\n").length;
+                    made.push(file.path);
+                  } catch {
+                    // A scaffold that will not write is not worth failing the
+                    // install over; the engine and its docs are the substance.
+                  }
+                }
+                // Not counted as anybody's work, so `distinctWriters` still
+                // answers "how many of them wrote something".
+                for (const path of made) this.workspace.disownWriter(path);
+
                 this.desk?.note({ kind: "did", room: engine.path, body: `installed ${engine.title}` });
                 return (
                   `${engine.title} is installed at \`${engine.path}\`. It does not count against your file ` +
-                  `budget and you cannot edit it.\n\n${engine.start}`
+                  `budget and you cannot edit it.\n\n` +
+                  (made.length
+                    ? `I have written a running skeleton: ${made.map((p) => `\`${p}\``).join(" and ")}. ` +
+                      `It is nobody's yet — claim what you are going to work on. \`playtest\` it now and you ` +
+                      `will see something move; then make it a game.\n\n`
+                    : "") +
+                  (skipped.length
+                    ? `Left alone because you already made ${skipped.map((p) => `\`${p}\``).join(" and ")}.\n\n`
+                    : "") +
+                  engine.start
                 );
               },
             ),
@@ -1614,6 +1658,10 @@ export class WorkshopSimulation implements Simulation {
       // Which engine a team reached for, given a free choice. 0 is "none, they
       // wrote it themselves", which is a real answer and not a failure.
       engineChosen: this.engine ? 1 : 0,
+      // Subtract from `linesInWorkspace` to compare a scaffolded run with one
+      // that wrote its own loop. Counting the skeleton as team output would
+      // make every engine run look more productive than it was.
+      scaffoldLines: this.scaffoldLines,
       // Frames that actually reached a model, which is a different fact from
       // playtests run: a run without `--vision` plays the game just as often
       // and shows nobody anything. Zero here next to a healthy `playtestsRun`
