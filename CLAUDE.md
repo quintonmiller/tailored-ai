@@ -84,7 +84,7 @@ TAI is a modular framework for running personal agents. Keep docs and APIs orien
 - **No conditional response tokens**: never use patterns like "reply NO_REPLY if...". Smaller models read the sentinel as the answer. The general failure — an instruction that offers a way out gets taken — is still live, so only offer one where you genuinely want silence.
 - **Low temperature**: default 0.3 for deterministic tool selection.
 - **Simple agent loop**: No complex state machines. Loop: chat → tool calls → chat → stop.
-- **Hot-reloadable runtime**: Config, tools, and provider are mutable at runtime. The agent loop re-resolves tools each iteration so changes take effect immediately without restart.
+- **Hot-reloadable runtime, within limits**: `reload()` re-reads config and rebuilds tools, provider and time provider; the agent loop re-resolves tools each iteration, so those changes take effect without restart. Channels are reconciled per config block, so only a transport whose own block changed restarts. What reload does *not* do is unwind a plugin: it clears the event bus wholesale and re-runs every plugin, so anything else a plugin owns — timers, sockets, pollers, HTTP routes — is the plugin author's to clean up via the disposers registration now returns ([architecture.md](./docs/architecture.md#registration-disposers)). Don't assume "hot-reloadable" means a plugin can be removed cleanly at runtime; that is [#533](https://github.com/quintonmiller/tailored-ai/issues/533).
 - **Replaceable opinions**: Default behavior should be useful, but workflow opinions should move toward plugins/event subscribers instead of hardcoded core paths.
 
 ## Examples use a neutral cast
@@ -152,6 +152,7 @@ Deep notes on each subsystem live under [`docs/`](./docs/):
 | Self-hosting: Docker image, headless `tai init --non-interactive`, exposure/auth options, backups | [docs/self-hosting.md](./docs/self-hosting.md) |
 | Deploy targets (`tai deploy` seam): contract in core, registry in CLI, built-in `docker`, writing a cloud plugin | [docs/deploy-targets.md](./docs/deploy-targets.md) |
 | Benchmarking against a live model: scenarios, scoring, comparing runs, publishing to `/bench`, and simulations (an objective instead of an answer, with non-model baselines) | [docs/evals.md](./docs/evals.md) |
+| **Defensive patterns — bug classes that shipped here, each stated as the rule that prevents it.** Read before lifecycle, teardown, config, provider, or prompt-assembly work | [docs/defensive-patterns.md](./docs/defensive-patterns.md) |
 | Audit findings + open action items (2026-07-28): boundaries, trust, skills, context | [docs/audit-2026-07-28.md](./docs/audit-2026-07-28.md) |
 
 When touching a subsystem, update its doc — keep this index file tight.
