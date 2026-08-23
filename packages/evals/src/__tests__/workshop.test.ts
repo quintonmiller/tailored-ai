@@ -998,7 +998,7 @@ describe("choosing an engine, and being told what it is worth", () => {
   it("asks every round until the team answers, and then stops", async () => {
     const s = sim();
     expect(s.announce()).toMatch(/No engine chosen yet/);
-    expect(s.briefFor("lead") ?? "").toMatch(/First decision: which engine/);
+    expect(s.briefFor("lead") ?? "").toMatch(/First decision: which foundation/);
     // The point of the choice, stated where they read it.
     expect(s.briefFor("lead") ?? "").toMatch(/judged on the game, not on how it was built/);
 
@@ -1009,16 +1009,19 @@ describe("choosing an engine, and being told what it is worth", () => {
   it("treats writing your own as a decision, not an absence", async () => {
     const s = sim();
     const out = await call(s, "use_engine", { name: "none" }, "lead");
-    expect(out).toMatch(/Noted: no engine/);
-    // Nothing rewards it, and the tool says so rather than leaving them to guess.
-    expect(out).toMatch(/Nothing in the scorecard rewards that/);
+    // It installs the library rather than meaning "keep what you already had",
+    // and names what the library does not have, since that is the whole of the
+    // decision being taken.
+    expect(out).toMatch(/Installed the small library/);
+    expect(out).toMatch(/no sprites, no scenes, no tweens/);
 
     // `engineChosen: 0` cannot tell "decided against" from "never noticed".
     expect(s.metrics().engineChosen).toBe(0);
     expect(s.metrics().engineDeclined).toBe(1);
     expect(s.announce()).not.toMatch(/No engine chosen yet/);
-    // And nothing was installed.
+    // No *engine* was installed — but the library was, which is the change.
     expect(s.workspace.list().some((f) => f.path.includes("phaser"))).toBe(false);
+    expect(s.workspace.list().some((f) => f.path === "lib/loop.js")).toBe(true);
   });
 
   it("says there is no final version, because they keep declaring one", () => {
@@ -1385,19 +1388,100 @@ describe("the live feed", () => {
   });
 });
 
-describe("the provided library", () => {
-  it("is in the workspace before anybody writes anything", () => {
+describe("nothing is free until you choose", () => {
+  /*
+   * Why the workspace starts empty.
+   *
+   * Four consecutive runs chose `use_engine none`, and each gave the same
+   * reason: "the provided lib covers everything, not going to burn rounds
+   * porting to Phaser". That is a correct reading of the economics. `lib/`
+   * was already installed, already read by round two, and free; an engine
+   * cost an install, an API and a port.
+   *
+   * So "none" never meant "I will write my own engine" — it meant *keep the
+   * engine you already gave me*, which is why the brief's argument that
+   * nothing rewards writing your own engine never landed. Nobody was writing
+   * one. Now all three options install a foundation and a skeleton, and the
+   * decision is which foundation rather than whether to pay for one.
+   */
+  it("gives the open arm an empty workspace until use_engine runs", () => {
     const s = sim();
+    expect(s.workspace.list()).toHaveLength(0);
+    expect(s.briefFor("builder") ?? "").toMatch(/The workspace is empty/);
+  });
+
+  it("installs an engine and its skeleton, without the library", async () => {
+    const s = sim();
+    await call(s, "use_engine", { name: "phaser" }, "builder");
+    const paths = s.workspace.list().map((f) => f.path);
+    expect(paths).toContain("lib/phaser.js");
+    // The point of the change: taking an engine does not also hand you the
+    // 2D canvas kit whose presence made the engine look expensive.
+    expect(paths).not.toContain("lib/loop.js");
+    expect(s.metrics().engineChosen).toBe(1);
+  });
+
+  it("installs the library on its own if nobody ever decides", () => {
+    // Making the library conditional must not make an empty workspace a way
+    // to lose the jam.
+    const s = sim();
+    // `advance()` is the round boundary; `announce()` is called once per agent
+    // per round and does not move the clock.
+    for (let i = 0; i < 3; i += 1) s.advance();
+    expect(s.workspace.list().some((f) => f.path === "lib/loop.js")).toBe(true);
+    expect(s.metrics().engineDefaulted).toBe(1);
+    // Not the same finding as a team that decided against an engine.
+    expect(s.metrics().engineDeclined).toBe(0);
+  });
+
+  it("stops telling them a game that ignores the library loses", () => {
+    /*
+     * The sentence that made the other four runs rational. It read "a game
+     * that uses none of it will lose to one that does" — and a Phaser game
+     * uses none of it. The brief said "pick an engine" and "not using this
+     * loses" in the same document.
+     */
+    const brief = sim({ direction: "prescribed" }).briefFor("builder") ?? "";
+    expect(brief).toMatch(/Loop\.start/);
+    expect(brief).not.toMatch(/will lose to one that does/);
+  });
+});
+
+describe("the provided library", () => {
+  /**
+   * A sim with the library actually in it.
+   *
+   * It used to be there at construction. In the open arm it is now what
+   * `use_engine none` installs, because being free was the whole reason four
+   * consecutive teams chose it without weighing anything. The prescribed
+   * control arm still gets it at construction.
+   */
+  async function withLibrary(): Promise<WorkshopSimulation> {
+    const s = sim();
+    await call(s, "use_engine", { name: "none" }, "builder");
+    return s;
+  }
+
+  it("is in the workspace once the team has chosen no engine", async () => {
+    const s = await withLibrary();
     const provided = s.workspace.list().filter((f) => f.provided);
     expect(provided.map((f) => f.path).sort()).toEqual(["lib/draw.js", "lib/fx.js", "lib/input.js", "lib/loop.js"]);
     expect(provided.every((f) => f.lines > 0)).toBe(true);
   });
 
-  it("is not counted as anything the team produced", () => {
+  it("is in the prescribed arm from the start, which is the control", () => {
+    // An arm that differs in what is on disk at round one is not a control arm.
+    const provided = sim({ direction: "prescribed" })
+      .workspace.list()
+      .filter((f) => f.provided);
+    expect(provided.map((f) => f.path).sort()).toEqual(["lib/draw.js", "lib/fx.js", "lib/input.js", "lib/loop.js"]);
+  });
+
+  it("is not counted as anything the team produced", async () => {
     // The load-bearing one. Charging ~580 lines of library to the team would
     // make `linesInWorkspace` incomparable with every entry built before the
     // library existed, and would spend a fifth of the byte budget on turn one.
-    const s = sim();
+    const s = await withLibrary();
     expect(s.metrics().filesPresent).toBe(0);
     expect(s.metrics().linesInWorkspace).toBe(0);
     expect(s.metrics().bytesInWorkspace).toBe(0);
@@ -1406,20 +1490,22 @@ describe("the provided library", () => {
   it("refuses a write from anybody, including when ownership is off", async () => {
     // Not an ownership rule between teammates: it is what makes the library the
     // same fixed thing for every entry on the board.
-    const strict = await call(sim(), "write_file", { path: "lib/loop.js", content: "x" }, "builder");
+    const strict = await call(await withLibrary(), "write_file", { path: "lib/loop.js", content: "x" }, "builder");
     expect(strict).toMatch(/came with the workspace/);
-    const shared = await call(sim({ ownership: "shared" }), "write_file", { path: "lib/fx.js", content: "x" }, "maker");
+    const sharedSim = sim({ ownership: "shared" });
+    await call(sharedSim, "use_engine", { name: "none" }, "maker");
+    const shared = await call(sharedSim, "write_file", { path: "lib/fx.js", content: "x" }, "maker");
     expect(shared).toMatch(/came with the workspace/);
   });
 
   it("can still be read", async () => {
-    const out = await call(sim(), "read_file", { path: "lib/loop.js", from: 1, to: 3 }, "builder");
+    const out = await call(await withLibrary(), "read_file", { path: "lib/loop.js", from: 1, to: 3 }, "builder");
     expect(out).not.toMatch(/Refused/);
     expect(out).toMatch(/lib\/loop\.js/);
   });
 
   it("appears in the listing without spending the budget", async () => {
-    const out = await call(sim(), "list_files", {}, "lead");
+    const out = await call(await withLibrary(), "list_files", {}, "lead");
     expect(out.split("\n")[0]).toMatch(/^0 files, 0 of/);
     expect(out).toMatch(/lib\/loop\.js\s+\[provided\]/);
   });

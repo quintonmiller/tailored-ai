@@ -192,10 +192,24 @@ const briefs: Brief[] = [
       { path: "lib/fx.js", source: "fx.js", purpose: "Particles, shake, flash, easing, seeded random. Global: FX" },
     ],
     libraryNotes: [
-      "`lib/` is already in the workspace. You can read it and call it; you cannot edit it, and you do not",
-      "need to. Load the four files **before** your own scripts in index.html. Everything below is a plain",
-      "global — no imports, no build step. This exists so you spend the jam on the game rather than on a",
-      "game loop, and a game that uses none of it will lose to one that does.",
+      /*
+       * The last clause of this paragraph used to read "and a game that uses
+       * none of it will lose to one that does".
+       *
+       * It was written to stop teams hand-rolling a fixed-timestep loop, which
+       * it did. It also told every team that a game not built on `lib/` loses —
+       * and a game built on Phaser uses none of `lib/`. The same brief said
+       * "pick an engine" and "not using this loses", four runs running, and
+       * every one of them resolved the contradiction the way the sentence
+       * pointed. `use_engine none` four times, `engineChosen: 0`, and not one
+       * documentation lookup.
+       *
+       * Third time this exact failure has been found in this file's prose: a
+       * sentence written to encourage one thing, read as a rule about another.
+       */
+      "You can read `lib/` and call it; you cannot edit it, and you do not need to. Load the four files",
+      "**before** your own scripts in index.html. Everything below is a plain global — no imports, no",
+      "build step. It exists so you spend the jam on the game rather than on a game loop.",
       "",
       "  Loop.start(update, draw)     update(dt) runs at a constant 60Hz; draw() runs per frame",
       "  Loop.time, Loop.fps, Loop.stop()",
@@ -338,17 +352,31 @@ export function getBrief(id: unknown): Brief {
  * file set, an architecture they will not deviate from by so much as one file.
  * The open arm says what to build and leaves the rest alone.
  */
-export function renderBrief(brief: Brief, direction: "open" | "prescribed" = "prescribed"): string {
+/**
+ * @param pending The library is not installed yet — it is what `use_engine
+ * none` will put there. Without this the brief said "the workspace is empty"
+ * in one section and listed four provided files in the next, which is the
+ * kind of contradiction a reader resolves by believing whichever half suits
+ * them. The API summary still belongs here either way: a team cannot weigh
+ * an engine against the library without knowing what the library does.
+ */
+export function renderBrief(brief: Brief, direction: "open" | "prescribed" = "prescribed", pending = false): string {
   const open = direction === "open";
   const constraints = open ? (brief.openConstraints ?? brief.constraints) : brief.constraints;
   const given = brief.library?.length
     ? [
         "",
-        "## What you are given",
+        pending ? "## What `use_engine none` would give you" : "## What you are given",
         "",
-        ...brief.library.map((f) => `- \`${f.path}\` — provided, read-only — ${f.purpose}`),
+        ...brief.library.map((f) =>
+          pending ? `- \`${f.path}\` — ${f.purpose}` : `- \`${f.path}\` — provided, read-only — ${f.purpose}`,
+        ),
         ...(brief.libraryNotes ? ["", brief.libraryNotes] : []),
-        ...(open ? ["", "Use it or ignore it. It is there to save you time, not to tell you what to write."] : []),
+        ...(pending
+          ? ["", "None of this is in the workspace yet. Weigh it against the engines above and choose."]
+          : open
+            ? ["", "Use it or ignore it. It is there to save you time, not to tell you what to write."]
+            : []),
       ]
     : [];
 

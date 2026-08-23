@@ -90,6 +90,18 @@ export interface WorkspaceEdit {
  * cannot see this file: say what the rule is and what to do instead, never just
  * "invalid".
  */
+/**
+ * Paths nobody on the team may own or write.
+ *
+ * `lib/` is where an installed foundation lands — the 2D kit, Phaser,
+ * Babylon — so it is reserved as a namespace rather than as whatever files
+ * happen to be in it right now. Before the team chooses, it is empty and
+ * still not theirs.
+ */
+export function isReservedPath(path: string): boolean {
+  return path === "lib" || path.startsWith("lib/");
+}
+
 export class WorkspaceRefusal extends Error {}
 
 function refuse(message: string): never {
@@ -216,9 +228,18 @@ export class Workspace {
    */
   claim(path: string, owner: string, purpose: string, round = 0): { path: string; already: boolean } {
     const clean = normalisePath(path);
-    // Not `isProvided`: that answers about the file on disk, and the point here
-    // is to refuse the *path*, whether or not it has been written yet.
-    if (this.provided.has(clean)) {
+    /*
+     * Not `isProvided`: that answers about the file on disk, and the point
+     * here is to refuse the *path*, whether or not it has been written yet.
+     *
+     * `provided` alone stopped being enough once the library arrived with
+     * `use_engine` instead of at construction — before anybody chose, the set
+     * was empty and `lib/loop.js` was claimable like any other path, which
+     * would have let a role own a filename the install was about to take. The
+     * whole `lib/` prefix is reserved: it is where every foundation lands,
+     * whichever one the team picks.
+     */
+    if (this.provided.has(clean) || isReservedPath(clean)) {
       refuse(`"${clean}" is provided for you and nobody owns it. It is read-only for the whole team.`);
     }
     const held = this.planned.get(clean)?.owner;

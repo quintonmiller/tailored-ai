@@ -60,7 +60,7 @@ import { availableEngines, EngineDocs, type EngineSpec, engineSource, findEngine
 import { formatPlaytest, framesToShow, playtest } from "./playtest.js";
 import { makeScriptedPolicy } from "./policies.js";
 import { type Diversifier, JUDGING, pickDiversifier, pickTheme, renderScorecard, type Theme } from "./themes.js";
-import { LIMITS, Workspace, WorkspaceRefusal } from "./workspace.js";
+import { isReservedPath, LIMITS, Workspace, WorkspaceRefusal } from "./workspace.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
@@ -268,6 +268,10 @@ export class WorkshopSimulation implements Simulation {
   private scaffoldLines = 0;
   /** The team said "none" out loud, rather than never deciding. */
   private engineDeclined = false;
+  /** The library is in the workspace. Set by whichever path put it there. */
+  private libraryProvided = false;
+  /** Nobody chose in time, so the library went in on its own. */
+  private engineDefaulted = false;
   /** The runtime's room subscriptions. See {@link Simulation.attachRooms}. */
   private rooms: Parameters<NonNullable<Simulation["attachRooms"]>>[0] | undefined;
   /** Room name to ref, for the same. */
@@ -322,7 +326,29 @@ export class WorkshopSimulation implements Simulation {
         this.workspace.plan(file.path, { owner: file.owner, purpose: file.purpose });
       }
     }
-    this.provideLibrary();
+    /*
+     * The library is installed by `use_engine`, not by existing.
+     *
+     * Four runs in a row chose "none", and the reason each gave was the same:
+     * "the provided lib covers everything, not going to burn rounds porting to
+     * Phaser". That is a correct reading of the economics we set up. `lib/` was
+     * already in the workspace, already read by round two, and free; an engine
+     * cost an install, an API to learn and a port. "none" did not mean "write
+     * my own engine" — it meant *keep the engine you already gave me*, which is
+     * why the brief's argument ("nothing rewards writing your own engine")
+     * never landed. They were not writing one.
+     *
+     * So nothing is pre-installed when there is a choice to make, and all three
+     * options have the same shape: `use_engine` installs a foundation and a
+     * running skeleton, `none` included. The decision is then about which
+     * foundation fits the game rather than about whether to pay for one.
+     *
+     * When there are no engines — the prescribed control arm, `bench`,
+     * `rehearse`, any checkout without the vendored assets — the library goes
+     * in at construction exactly as before. An arm that differs in what is on
+     * disk at round one is not a control arm.
+     */
+    if (!this.open || !availableEngines().length) this.provideLibrary();
 
     // The brief on disk as well as in the prompt. Both matter, for different
     // reasons: the instructions are what an agent sees on turn one, and the file
@@ -458,7 +484,12 @@ export class WorkshopSimulation implements Simulation {
       ...this.engineBrief(),
       "---",
       "",
-      renderBrief(this.brief, this.open ? "open" : "prescribed"),
+      renderBrief(
+        this.brief,
+        this.open ? "open" : "prescribed",
+        // Pending exactly when the choice is still live and nothing is installed.
+        this.open && availableEngines().length > 0 && !this.libraryProvided,
+      ),
     ].join("\n");
   }
 
@@ -570,6 +601,27 @@ export class WorkshopSimulation implements Simulation {
     this.writesThisRound = 0;
     this.tick += 1;
     this.freeStaleClaims(produced);
+    /*
+     * Nobody chose, so the cheapest option gets chosen for them.
+     *
+     * Making the library conditional on `use_engine` is what makes the choice
+     * real; it must not also make an empty workspace a way to lose the jam.
+     * Three rounds is long enough to be a decision rather than an oversight,
+     * and leaves seventeen.
+     *
+     * Recorded apart from `engineDeclined`, because "decided against an
+     * engine" and "never answered" are different findings — conflating them
+     * is exactly how `engineChosen: 0` hid this for four runs.
+     */
+    if (this.open && !this.engine && !this.engineDeclined && !this.libraryProvided && this.tick >= 3) {
+      this.provideLibrary();
+      this.engineDefaulted = true;
+      produced.push({
+        day: this.tick,
+        kind: "engine-defaulted",
+        message: "No engine was chosen by round 3, so the small library was installed by default.",
+      });
+    }
     if (this.done) {
       this.finalise();
       produced.push({ day: this.tick, kind: "ended", message: `The ${this.horizon} rounds ran out.` });
@@ -856,7 +908,8 @@ export class WorkshopSimulation implements Simulation {
    * version of the same jam.
    */
   private provideLibrary(): void {
-    if (!this.brief.library?.length) return;
+    if (!this.brief.library?.length || this.libraryProvided) return;
+    this.libraryProvided = true;
     const dir = join(packageRoot, "assets", "workshop-lib");
     for (const file of this.brief.library) {
       try {
@@ -878,7 +931,7 @@ export class WorkshopSimulation implements Simulation {
     // solo one where ownership is off: "you cannot edit the library" is not an
     // ownership rule between teammates, it is what makes the library a fixed
     // thing every entry on the board shares.
-    if (this.workspace.isProvided(path)) {
+    if (this.workspace.isProvided(path) || isReservedPath(path)) {
       this.counts.ownershipRefusals += 1;
       refuse(
         `"${path}" came with the workspace and cannot be edited — it is the same for every team. ` +
@@ -1069,10 +1122,14 @@ export class WorkshopSimulation implements Simulation {
                  */
                 if (wanted === "none") {
                   this.engineDeclined = true;
+                  this.provideLibrary();
+                  const installed = this.brief.library?.map((f) => f.path).join(", ") ?? "";
                   return (
-                    "Noted: no engine. You are writing the loop, the input handling and the drawing " +
-                    "yourself on top of `lib/`. Nothing in the scorecard rewards that over using an " +
-                    "engine, so spend the time you save on the game itself."
+                    `Installed the small library: ${installed}. A fixed-timestep loop, keyboard state, ` +
+                    "canvas shapes and particles — about 580 lines, and that is the whole of it. There " +
+                    "are no sprites, no scenes, no tweens, no camera, no physics and no audio: anything " +
+                    "of that kind you want, you write. Load the files before your own scripts in " +
+                    "`index.html`, call them as plain globals, and spend what you saved on the game."
                   );
                 }
                 const engine = findEngine(wanted);
@@ -1491,22 +1548,30 @@ export class WorkshopSimulation implements Simulation {
     const engines = availableEngines();
     if (!engines.length) return [];
     return [
-      "## First decision: which engine",
+      "## First decision: which foundation",
       "",
-      "Before you build anything, pick one and say so. `use_engine` installs it along with a running",
-      "skeleton you can playtest immediately, and `docs` then looks up its exact API — signatures,",
-      "parameters and defaults — so you never have to guess a method name.",
+      "**The workspace is empty.** Nothing is installed until you choose, and `use_engine` is what puts",
+      "something in it — in every case a foundation *and* a running skeleton you can playtest on the",
+      "turn you install it. Three options, and they cost the same:",
       "",
       ...engines.map((e) => `- **${e.id}** — ${e.blurb}`),
-      "- **none** — no engine. You write the loop, the input handling and the drawing yourself, on top",
-      "  of the small `lib/` you already have.",
+      "- **none** — a 580-line library: a fixed-timestep loop, keyboard state, canvas shapes and",
+      "  particles. That is the whole of it. No sprites, no scenes, no tweens, no camera, no physics,",
+      "  no audio — anything of that kind, you write yourself, in rounds you were going to spend on",
+      "  the game.",
       "",
-      "**You are judged on the game, not on how it was built.** Nothing in the scorecard rewards having",
-      "written your own engine, and an hour spent on a game loop is an hour not spent on the game. Pick",
-      "`none` only if the engines genuinely do not fit what you want to make — not to prove anything.",
+      "`docs` then looks up any API on what you installed — real signatures, parameters and defaults —",
+      "so you are never guessing a method name from memory.",
       "",
-      "Decide in the first round or two. Porting a half-built game onto an engine costs far more than",
-      "starting on one.",
+      "**You are judged on the game, not on how it was built**, and none of these is the virtuous",
+      "choice. Pick the one that makes the game you want cheapest to build. A worked example of the",
+      "difference: a particle burst, a screen shake and an eased pop on a score are three calls in an",
+      "engine and roughly a hundred lines of your own without one — and it is exactly that hundred",
+      "lines, repeated across a dozen small effects, that decides whether the thing looks finished.",
+      "",
+      "One warning that is not about virtue: **porting a half-built game onto an engine costs far more",
+      "than starting on one.** This is the cheapest decision to make now and the most expensive to",
+      "revisit, so make it in round one and say which you chose in `studio`.",
       "",
     ];
   }
@@ -1570,6 +1635,8 @@ export class WorkshopSimulation implements Simulation {
       lastCheckpointEdits: this.lastCheckpointEdits ?? null,
       engine: this.engine?.id ?? null,
       engineDeclined: this.engineDeclined,
+      libraryProvided: this.libraryProvided,
+      engineDefaulted: this.engineDefaulted,
       lastPlaytest: this.lastPlaytest ?? null,
       lastCheck: this.lastCheck ?? null,
       claims: this.workspace.claims(),
@@ -1585,6 +1652,8 @@ export class WorkshopSimulation implements Simulation {
     if (typeof s.framesShown === "number") this.framesShown = s.framesShown;
     if (typeof s.scaffoldLines === "number") this.scaffoldLines = s.scaffoldLines;
     if (typeof s.engineDeclined === "boolean") this.engineDeclined = s.engineDeclined;
+    if (typeof s.libraryProvided === "boolean") this.libraryProvided = s.libraryProvided;
+    if (typeof s.engineDefaulted === "boolean") this.engineDefaulted = s.engineDefaulted;
     if (typeof s.lastCheckpointEdits === "number") this.lastCheckpointEdits = s.lastCheckpointEdits;
     if (s.counts && typeof s.counts === "object") Object.assign(this.counts, s.counts);
     if (s.lastPlaytest && typeof s.lastPlaytest === "object") {
@@ -1924,6 +1993,9 @@ export class WorkshopSimulation implements Simulation {
       // 1 only when the team said "none" out loud. Distinguishes a decision
       // from never having noticed the choice, which `engineChosen: 0` cannot.
       engineDeclined: this.engineDeclined ? 1 : 0,
+      // Nobody answered and the library went in on its own. Distinct from
+      // `engineDeclined`, which is a decision somebody took.
+      engineDefaulted: this.engineDefaulted ? 1 : 0,
       // Frames that actually reached a model, which is a different fact from
       // playtests run: a run without `--vision` plays the game just as often
       // and shows nobody anything. Zero here next to a healthy `playtestsRun`
