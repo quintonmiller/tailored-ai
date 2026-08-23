@@ -242,14 +242,12 @@ describe("loadPlugins teardown", () => {
   });
 
   it("scopes collection per plugin", async () => {
-    const loaded = await loadPlugins(
-      baseConfig(["a", "b"]),
-      (name: string) =>
-        Promise.resolve({
-          default: (ctx: ReturnType<typeof createPluginContext>) => {
-            ctx.tools.register(name === "a" ? "p-tool" : "p-tool-2", () => []);
-          },
-        }),
+    const loaded = await loadPlugins(baseConfig(["a", "b"]), (name: string) =>
+      Promise.resolve({
+        default: (ctx: ReturnType<typeof createPluginContext>) => {
+          ctx.tools.register(name === "a" ? "p-tool" : "p-tool-2", () => []);
+        },
+      }),
     );
 
     await loaded[0].stop?.();

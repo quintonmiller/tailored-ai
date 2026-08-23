@@ -194,6 +194,58 @@ observes what they added. And `reload()` still clears the event bus wholesale
 rather than unwinding per plugin — see [#533](https://github.com/quintonmiller/tailored-ai/issues/533)
 for what remains.
 
+## Event dispatch modes
+
+The bus has three modes, and the mode is part of an event's contract rather than
+a choice at the call site.
+
+| Mode | Call | A listener can | Declared in |
+|---|---|---|---|
+| broadcast | `emit` | observe | `RuntimeEventMap` |
+| vetoable | `emitAsync` | observe, or return `false` to block | `RuntimeEventMap` |
+| waterfall | `waterfall` | observe, transform, or short-circuit | `RuntimeWaterfallMap` |
+
+`emit` is synchronous and fire-and-forget. `emitAsync` awaits subscribers in
+registration order and returns `false` if any vetoed — a throwing handler counts
+as non-veto, so a broken observability plugin can't accidentally block real work.
+
+**Waterfall** is around-middleware. A listener receives `(payload, next)`:
+
+```ts
+bus.onWaterfall("myplugin.outbound", async (msg, next) => {
+  return next({ ...msg, text: redact(msg.text) });   // delegate
+});
+```
+
+Call `next(payload)` to delegate and return its result; return your own value
+without calling `next` to short-circuit and own the outcome. A listener that
+only annotates **must** delegate. `{ prepend: true }` runs a listener before
+ones registered earlier — for a policy that decides whether the rest of the
+chain runs at all, not for ordinary use.
+
+Two failure rules, matching the rest of the bus: a **throwing listener is
+skipped** and the chain continues with the payload it was handed; a listener
+that **returns nothing** is a pass-through, so a forgotten `return` cannot
+silently drop every listener after it.
+
+Waterfall events live in a separate map so a waterfall can never be `emit`ed by
+accident. `RuntimeWaterfallMap` is extended by declaration merging, in core and
+in plugins alike:
+
+```ts
+declare module "@tailored-ai/core" {
+  interface RuntimeWaterfallMap {
+    "myplugin.outbound": { text: string };
+  }
+}
+```
+
+Core declares none yet. The first one worth having — transforming an agent
+request before the model sees it, which is what
+[#417](https://github.com/quintonmiller/tailored-ai/issues/417) needs — is
+blocked on the agent loop having no bus to dispatch on. See
+[#534](https://github.com/quintonmiller/tailored-ai/issues/534).
+
 ## Plugin HTTP Routes
 
 Plugins mount HTTP endpoints on the TAI server through a framework-agnostic seam — core never imports Hono, the dependency direction stays server → core.

@@ -516,8 +516,14 @@ export {
   type RuntimeEventHandler,
   type RuntimeEventMap,
   type RuntimeEventPayload,
+  type RuntimeWaterfallEvent,
+  type RuntimeWaterfallMap,
+  type RuntimeWaterfallPayload,
   type Subscription,
   TypedEventBus,
+  type WaterfallHandler,
+  type WaterfallNext,
+  type WaterfallOptions,
 } from "./events.js";
 export type {
   ExploratoryActivity,
