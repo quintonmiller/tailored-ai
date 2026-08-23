@@ -171,7 +171,7 @@ export class Workspace {
   /** `<root>/workspace` — what the team writes. `rounds/` and the brief sit beside it. */
   readonly filesRoot: string;
   private readonly meta = new Map<string, { lastWriter: string; lastRound: number }>();
-  private readonly planned = new Map<string, { owner?: string; purpose: string }>();
+  private readonly planned = new Map<string, { owner?: string; purpose: string; claimedAt?: number }>();
   /**
    * Files that are already there in round zero and that nobody may write.
    *
@@ -214,7 +214,7 @@ export class Workspace {
    * Refuses a provided file outright: `lib/` is fixed scenery and claiming it
    * would let one role quietly take the library out of everybody else's reach.
    */
-  claim(path: string, owner: string, purpose: string): { path: string; already: boolean } {
+  claim(path: string, owner: string, purpose: string, round = 0): { path: string; already: boolean } {
     const clean = normalisePath(path);
     // Not `isProvided`: that answers about the file on disk, and the point here
     // is to refuse the *path*, whether or not it has been written yet.
@@ -223,10 +223,68 @@ export class Workspace {
     }
     const held = this.planned.get(clean)?.owner;
     if (held && held !== owner) {
-      refuse(`"${clean}" is already the ${held}'s. Ask them for the change, or claim a different file.`);
+      refuse(
+        `"${clean}" is already the ${held}'s. Ask them for the change, claim a different file, or — if ` +
+          `they are not writing it — ask the lead to release it.`,
+      );
     }
-    this.planned.set(clean, { owner, purpose });
+    this.planned.set(clean, { owner, purpose, claimedAt: round });
     return { path: clean, already: held === owner };
+  }
+
+  /**
+   * Give up a file, so somebody else can take it.
+   *
+   * The missing half of `claim`, and its absence cost a whole run: on
+   * 2026-08-23 a builder claimed `game.js`, wrote nothing for five rounds, and
+   * the team did everything right — the tester escalated with real tool output,
+   * the lead set a deadline and authorised a handoff, the author volunteered.
+   * The workspace refused all of it eleven times, because a claim was a
+   * freehold. One quiet agent could freeze the jam.
+   *
+   * Anyone may release their own. `byLead` is what lets the lead free somebody
+   * else's, which is exactly what the team tried to do and could not.
+   *
+   * Releasing never deletes the file. A written file that is released becomes
+   * writable by whoever claims it next, contents untouched.
+   */
+  release(path: string, role: string, byLead = false): { path: string; from: string } {
+    const clean = normalisePath(path);
+    const held = this.planned.get(clean)?.owner;
+    if (!held) refuse(`"${clean}" is not claimed by anybody, so there is nothing to release.`);
+    if (held !== role && !byLead) {
+      refuse(`"${clean}" is the ${held}'s, and only they or the lead can release it.`);
+    }
+    const spec = this.planned.get(clean);
+    if (spec) this.planned.set(clean, { purpose: spec.purpose });
+    return { path: clean, from: held };
+  }
+
+  /**
+   * Drop claims on files nobody ever wrote.
+   *
+   * The rule the team can hold in its head: **claiming reserves a name, writing
+   * makes it yours.** A reservation nobody acts on lapses; a file that exists
+   * stays with whoever wrote it for as long as they want it.
+   *
+   * Automatic, because the failure it fixes is an agent that has gone quiet and
+   * a quiet agent will not release anything. Any mechanism that needs the holder
+   * to act cannot solve the case where the holder is the problem.
+   *
+   * Only ever touches claims — a `plan()` from the brief carries no `claimedAt`
+   * and is an assignment rather than a reservation, so the prescribed arm is
+   * untouched.
+   */
+  lapseClaims(round: number, after: number): { path: string; from: string; purpose: string }[] {
+    const freed: { path: string; from: string; purpose: string }[] = [];
+    for (const [path, spec] of this.planned) {
+      if (spec.claimedAt === undefined || !spec.owner) continue;
+      if (this.exists(path)) continue;
+      if (round - spec.claimedAt < after) continue;
+      freed.push({ path, from: spec.owner, purpose: spec.purpose });
+      this.planned.set(path, { purpose: spec.purpose });
+    }
+    return freed;
   }
 
   /**

@@ -145,6 +145,17 @@ interface WorkshopOptions extends SimulationOptions {
   run?: RunContext;
 }
 
+/**
+ * Rounds a claim survives without the file appearing.
+ *
+ * Two, because that is what the failure looked like: a builder claimed
+ * `game.js` at round 2 and the team wanted it at round 5, having spent three
+ * rounds establishing the holder had stopped. Two frees it exactly when the
+ * evidence is in, and costs a working agent nothing — anybody who claims a file
+ * and writes it in the next round or two keeps it.
+ */
+const CLAIM_LAPSE_ROUNDS = 2;
+
 /** A refusal an agent should read and act on, rather than a crash. */
 function refuse(message: string): never {
   throw new WorkspaceRefusal(message);
@@ -195,6 +206,10 @@ export class WorkshopSimulation implements Simulation {
      * prescribed layout used to prevent for free.
      */
     claims: 0,
+    /** Files handed back, by their owner or by the lead. */
+    releases: 0,
+    /** Claims that lapsed because nobody ever wrote the file. */
+    claimsLapsed: 0,
   };
 
   private lastCheck: { problems: number; filesChecked: number; atRound: number } | undefined;
@@ -233,6 +248,8 @@ export class WorkshopSimulation implements Simulation {
   private readonly open: boolean;
   /** Edits at the last automatic checkpoint, so an unchanged one is skipped. */
   private lastCheckpointEdits: number | undefined;
+  /** Claims freed at the last round boundary, for the announcement. */
+  private lapsedLastRound: { path: string; from: string; purpose: string }[] = [];
 
   constructor(options: WorkshopOptions) {
     this.brief = getBrief(options.brief ?? WORKSHOP_PLAY_OPTIONS.brief);
@@ -457,6 +474,7 @@ export class WorkshopSimulation implements Simulation {
     if (this.writesThisRound === 0) this.roundsWithNoWrite += 1;
     this.writesThisRound = 0;
     this.tick += 1;
+    this.freeStaleClaims(produced);
     if (this.done) {
       this.finalise();
       produced.push({ day: this.tick, kind: "ended", message: `The ${this.horizon} rounds ran out.` });
@@ -579,8 +597,15 @@ export class WorkshopSimulation implements Simulation {
     // "nothing submitted yet" at round nine is the single most useful thing the
     // announcement can say, and "0.3.0 is up" is what makes carrying on safe.
     const builds = this.open && this.desk ? ` ${this.describeBuilds()}` : "";
+    // Loud, and only on the round it happens. A file coming free is the one
+    // piece of state that unblocks a team waiting on somebody who has stopped.
+    const freed = this.lapsedLastRound.length
+      ? ` FREE TO CLAIM: ${this.lapsedLastRound
+          .map((f) => `${f.path} (the ${f.from} reserved it and never wrote it)`)
+          .join("; ")}.`
+      : "";
     return (
-      `Round ${this.tick + 1} of ${this.horizon} — theme ${this.theme.title}. ${phase}${submission}${builds} ` +
+      `Round ${this.tick + 1} of ${this.horizon} — theme ${this.theme.title}. ${phase}${submission}${builds}${freed} ` +
       `${seen}. ` +
       `${files.length} file${files.length === 1 ? "" : "s"}, ${lines} line${lines === 1 ? "" : "s"}; ${check}. ` +
       (remaining <= 3
@@ -730,7 +755,7 @@ export class WorkshopSimulation implements Simulation {
        * backstop for the far more common case of somebody simply starting.
        */
       if (this.open && agent) {
-        this.workspace.claim(path, agent, "claimed by writing it");
+        this.workspace.claim(path, agent, "claimed by writing it", this.tick);
         this.counts.claims += 1;
       }
       return;
@@ -875,11 +900,25 @@ export class WorkshopSimulation implements Simulation {
                 if (!role) refuse("only a named role can claim a file.");
                 const purpose = String(args.purpose ?? "").trim();
                 if (!purpose) refuse("say what the file is for — the others read it beside the name.");
-                const { path, already } = this.workspace.claim(String(args.path ?? ""), role, purpose);
+                const { path, already } = this.workspace.claim(String(args.path ?? ""), role, purpose, this.tick);
                 this.counts.claims += 1;
                 return already
                   ? `\`${path}\` was already yours; its purpose now reads "${purpose}".`
                   : `\`${path}\` is yours. Nobody else can write it. Say so in the room so the others build around it.`;
+              },
+            ),
+            agentTool(
+              "release_file",
+              "Give up a file you claimed so somebody else can write it. The lead can release anybody's.",
+              { path: "The file to release." },
+              (args, agent) => {
+                const role = String(agent ?? "");
+                if (!role) refuse("only a named role can release a file.");
+                const { path, from } = this.workspace.release(String(args.path ?? ""), role, role === this.registrar);
+                this.counts.releases += 1;
+                return from === role
+                  ? `\`${path}\` is free. Anybody can claim it now — say so in the room.`
+                  : `\`${path}\` is released from the ${from}. Anybody can claim it now, including you.`;
               },
             ),
           ]
@@ -1089,6 +1128,38 @@ export class WorkshopSimulation implements Simulation {
     } catch {
       // A checkpoint that cannot be written costs the safety net for one round.
       // Taking the jam down over it would cost the whole run.
+    }
+  }
+
+  /**
+   * Free files that were claimed and never written, and say so out loud.
+   *
+   * The saying-so is half the mechanism. A claim that lapses silently leaves the
+   * team believing the file is still spoken for, which is the same deadlock with
+   * an extra step — on 2026-08-23 the author asked for `game.js` eleven times
+   * and every refusal was correct as the rules then stood.
+   */
+  private freeStaleClaims(produced: SimEvent[]): void {
+    // Cleared every round, not only when something lapses: the announcement
+    // says "free to claim" and that has to be true this round, not three rounds
+    // ago when somebody has already taken it.
+    this.lapsedLastRound = [];
+    if (!this.open) return;
+    const freed = this.workspace.lapseClaims(this.tick, CLAIM_LAPSE_ROUNDS);
+    if (freed.length === 0) return;
+    this.counts.claimsLapsed += freed.length;
+    this.lapsedLastRound = freed;
+    for (const f of freed) {
+      produced.push({
+        day: this.tick,
+        kind: "note",
+        message: `${f.path} is unclaimed again — the ${f.from} reserved it and never wrote it.`,
+      });
+      this.desk?.note({
+        kind: "did",
+        room: f.path,
+        body: `claim lapsed — reserved by the ${f.from}, never written`,
+      });
     }
   }
 
@@ -1376,6 +1447,11 @@ export class WorkshopSimulation implements Simulation {
       // Read against `ownershipRefusals`: claims low with refusals high is a
       // team that started writing before it divided the work.
       claims: this.counts.claims,
+      releases: this.counts.releases,
+      // Non-zero means somebody claimed a file and never wrote it. High here
+      // with low `writes` is a team blocked on one quiet agent, which is the
+      // failure this counter exists to make visible rather than mysterious.
+      claimsLapsed: this.counts.claimsLapsed,
       // Frames that actually reached a model, which is a different fact from
       // playtests run: a run without `--vision` plays the game just as often
       // and shows nobody anything. Zero here next to a healthy `playtestsRun`

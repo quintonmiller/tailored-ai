@@ -367,6 +367,11 @@ export function renderBrief(brief: Brief, direction: "open" | "prescribed" = "pr
         "files you are going to write with `claim_file` so two people do not write the same one. A file " +
         "belongs to whoever claimed it; everybody can read everything.",
       "",
+      "Claiming reserves a name; writing makes it yours. A file you claim and do not write comes free " +
+        "again after a couple of rounds, and the round announcement says when that happens — so a name " +
+        "somebody reserved and then went quiet on is never lost to the team. You can also hand a file " +
+        "back yourself with `release_file`, and the lead can release anybody's.",
+      "",
       `The artifact is reviewed by opening \`${brief.entry}\` in a browser, so that file has to exist.`,
     ].join("\n");
   }

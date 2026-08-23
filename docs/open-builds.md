@@ -874,6 +874,44 @@ apart from the deliberate ones. A run whose only builds are automatic is a run
 where the mechanism did not land, and that has to be visible rather than hidden
 inside a healthy-looking total.
 
+### The deadlock that cost a run, and the rule that replaced it
+
+The first live open-arm run (seed 26, 2026-08-23) died at round 7 with **one file
+on disk**. The builder claimed `game.js` at round 2 and then wrote nothing for
+five rounds — 14 turns, 14 `read_file` calls, zero writes, zero posts.
+
+The team did everything right. The tester escalated with real tool output every
+round; the lead set a hard deadline and authorised a handoff; the author
+volunteered to take over. The workspace refused them **eleven times**:
+
+> `game.js` is already the builder's.
+
+`claim_file` had no release, no expiry and no reassignment, so a claim was a
+freehold and one quiet agent could freeze the jam. The same shape had already
+happened once in the prescribed arm — WAKE (seed 23) shipped with no `engine.js`
+because its builder produced nothing and nobody else could write the file — and
+it was not recognised as the same bug at the time.
+
+The rule now is one sentence: **claiming reserves a name, writing makes it
+yours.**
+
+- A claim on a file that still does not exist **lapses after two rounds**, and
+  the round announcement says so in as many words: `FREE TO CLAIM: game.js (the
+  builder reserved it and never wrote it)`. Automatic, because the failure it
+  fixes is an agent that has gone quiet, and a quiet agent will not release
+  anything — any mechanism needing the holder to act cannot solve the case where
+  the holder *is* the problem. Announcing is half of it: a claim that lapses
+  silently leaves the team believing the file is still spoken for.
+- **`release_file`** hands a file back. Anybody may release their own; the lead
+  may release anybody's, which is precisely what the deadlocked team tried to do.
+- A file that **exists** never lapses. Write it and it is yours for as long as
+  you want it.
+- Assignments from the brief in the prescribed arm carry no claim timestamp and
+  are never touched by any of this.
+
+`claimsLapsed` is the counter that makes the failure legible rather than
+mysterious: high, next to low `writes`, is a team blocked on somebody who stopped.
+
 ### Proving it without a model
 
 `pnpm exec tsx packages/evals/scripts/workshop-rehearse.ts` runs the whole thing

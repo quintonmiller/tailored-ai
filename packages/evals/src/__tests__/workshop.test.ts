@@ -601,6 +601,80 @@ describe("the open arm: a brief that says what, not how", () => {
   it("has no planned-files metric to report", () => {
     expect(sim().metrics().plannedFilesMade).toBe(0);
   });
+
+  /*
+   * The deadlock of 2026-08-23, which cost a whole run.
+   *
+   * A builder claimed `game.js` and wrote nothing for five rounds. The tester
+   * escalated, the lead set a deadline and authorised a handoff, the author
+   * volunteered — and the workspace refused eleven times, because a claim was a
+   * freehold with no way out. Seven rounds in, the jam had one file.
+   */
+  it("frees a claim on a file nobody ever wrote, and says so where the team reads it", async () => {
+    const s = sim();
+    await call(s, "claim_file", { path: "game.js", purpose: "the loop" }, "builder");
+    expect(s.workspace.ownerOf("game.js")).toBe("builder");
+
+    // The builder goes quiet. Nobody else can touch it while the claim is warm.
+    s.advance();
+    const early = await call(s, "write_file", { path: "game.js", content: "// mine" }, "author");
+    expect(early).toMatch(/belongs to the builder/);
+
+    s.advance();
+    expect(s.workspace.ownerOf("game.js")).toBeUndefined();
+    // Said out loud, or the team goes on believing it is spoken for.
+    expect(s.announce()).toMatch(/FREE TO CLAIM: game\.js/);
+    expect(s.metrics().claimsLapsed).toBe(1);
+
+    const out = await call(s, "write_file", { path: "game.js", content: "// mine now\n" }, "author");
+    expect(out).not.toMatch(/Refused/);
+  });
+
+  it("leaves a claim alone once the file exists", async () => {
+    const s = sim();
+    await call(s, "claim_file", { path: "engine.js", purpose: "the loop" }, "builder");
+    await call(s, "write_file", { path: "engine.js", content: "var a = 1;\n" }, "builder");
+    for (let i = 0; i < 4; i++) s.advance();
+    // Claiming reserves a name; writing makes it yours, for as long as you want.
+    expect(s.workspace.ownerOf("engine.js")).toBe("builder");
+    expect(s.metrics().claimsLapsed).toBe(0);
+  });
+
+  it("lets an owner hand a file back, and the lead take one off somebody", async () => {
+    const s = sim();
+    await call(s, "claim_file", { path: "engine.js", purpose: "the loop" }, "builder");
+    await call(s, "write_file", { path: "engine.js", content: "var a = 1;\n" }, "builder");
+
+    // Not yours and you are not the lead.
+    const refused = await call(s, "release_file", { path: "engine.js" }, "author");
+    expect(refused).toMatch(/only they or the lead/);
+
+    // The lead can, which is exactly what the deadlocked team tried to do.
+    const byLead = await call(s, "release_file", { path: "engine.js" }, "lead");
+    expect(byLead).toMatch(/released from the builder/);
+    expect(s.workspace.ownerOf("engine.js")).toBeUndefined();
+
+    // Releasing frees the name and keeps the work.
+    expect(s.workspace.read("engine.js")).toMatch(/var a = 1;/);
+    const taken = await call(s, "write_file", { path: "engine.js", content: "var b = 2;\n" }, "author");
+    expect(taken).not.toMatch(/Refused/);
+    expect(s.metrics().releases).toBe(1);
+  });
+
+  it("refuses to release a file nobody claimed", async () => {
+    const s = sim();
+    const out = await call(s, "release_file", { path: "nothing.js" }, "lead");
+    expect(out).toMatch(/not claimed by anybody/);
+  });
+
+  it("never lapses the prescribed arm's assignments", async () => {
+    const s = sim({ direction: "prescribed" });
+    expect(s.workspace.ownerOf("engine.js")).toBe("builder");
+    for (let i = 0; i < 5; i++) s.advance();
+    // Those are assignments from the brief, not reservations somebody made.
+    expect(s.workspace.ownerOf("engine.js")).toBe("builder");
+    expect(s.metrics().claimsLapsed).toBe(0);
+  });
 });
 
 describe("submitting a build mid-jam", () => {

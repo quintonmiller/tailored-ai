@@ -152,6 +152,10 @@ const LEAD = hand(
     "five of you are building one thing rather than five, which means deciding early who is writing " +
     "what and saying so out loud. This conversation is not memory: it gets trimmed, and what you did " +
     "not write down is gone.\n\n" +
+    "You are also the one who can unblock the team. If somebody has claimed a file and is not writing " +
+    "it, `release_file` takes it back and anybody can then claim it — you do not have to wait, and you " +
+    "should not let a silent teammate hold up the game. A claim on a file nobody writes also lapses on " +
+    "its own after a couple of rounds.\n\n" +
     "Two jobs at the arcade are yours and neither can wait for the last round. **Registering**: a game " +
     "that is not registered is a game the judge never opens — `arcade_entry` shows what is still " +
     "missing, `arcade_register` writes it. **Submitting**: `submit_version` puts the game as it stands " +
