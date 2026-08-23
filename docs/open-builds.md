@@ -1218,25 +1218,79 @@ fifteen teams, same game, two independently called SEAM — and says that an ent
 a judge could swap for one already on the shelf scores a one however well it is
 built.
 
-### Every jam ever run sampled at temperature 0.3
+### The temperature theory, and why it was wrong
 
-The most embarrassing line in this section. `--temperature` defaults to 0.3
-across the eval package, which is correct for the thing it was tuned for —
-deterministic tool selection — and is *below Qwen's own recommended band* of
-0.6–0.7. Fifteen creative concepts sampled near-greedily are the modal concept
-fifteen times, and no amount of brief-writing was going to change that.
+`--temperature` defaults to 0.3 across the eval package, which is right for the
+thing it was tuned for — deterministic tool selection — and is *below Qwen's own
+recommended band* of 0.6–0.7. Fifteen creative concepts sampled near-greedily
+looked like fifteen draws of the modal concept, so the jam loop was raised to
+0.7 alongside the other four changes.
 
-`scripts/game-jam-loop.sh` now runs at 0.7 (`JAM_TEMPERATURE` overrides it).
-Watch `patchesRefused` and `checkProblems` for tool-calling damage; if higher
-temperature costs more than it buys, the honest move is a per-call temperature
-rather than reverting the run to greedy.
+It was reverted the same afternoon. Both halves of the theory turned out to be
+wrong, and the way they were caught is more useful than the conclusion.
 
-### What this does not yet answer
+**It cost far more than anyone was watching for.** At 0.7 the two roles with no
+file to write reasoned until they were truncated. The lead capped on 3 of 3
+completions and the author on 2 of 2; at 0.3 the lead capped on 2 of 50. Across
+one run, **73% of all output tokens went into turns that produced nothing** —
+against 27% after the revert, and 5% on the next run.
 
-Whether it worked. The four changes landed together, deliberately — the goal was
-to move the output, not to attribute the movement — so the next cohort tells you
-the direction and not the cause. Attribution needs `diversifier=none` at the
-same temperature, and that costs runs nobody has spent yet.
+This was invisible until a week ago. A truncated turn and an idle turn are the
+same three bytes in the trace, and the session home that could tell them apart
+used to be a `mkdtemp` deleted in a `finally`. Keeping it so runs could resume
+is what made `token_usage` readable afterwards, and the diagnosis is one query:
+a completion returning at exactly `--max-tokens` next to an assistant row with
+empty content is a model that spent its entire budget thinking and never
+reached a tool call. `scripts/jam-stalls.mjs` is that query.
+
+**It is not context.** The obvious theory is that the truncating agent is the
+one whose history got too long, and the numbers say the opposite: the lead
+capped on every call with a 9k prompt while the interface, at 17k, capped on two
+of seven. Truncation follows having nothing concrete to do. The coding roles
+converge on a file; the coordinating ones re-adjudicate "should I reply or
+`pass`" every turn, and that question has no terminating answer.
+
+**And the diversity was never coming from sampling.** The falsifiable prediction
+of the revert was that concepts would collapse back to one game at 0.3. They did
+not. The very next run, at 0.3, registered *"you tend a garden of words — each
+word sprouts small and grows until it overgrows and is lost; type it letter by
+letter to harvest it"*. That is what a `words` diversifier produces, and it
+produces it near-greedily, because a rule that forbids the modal game forbids it
+at every temperature. The constraint was doing the work sampling was being
+credited with.
+
+Raising `--max-tokens` is not the fix either — it was tried, at 16384, and the
+lead spent all of that too. A runaway is not a near-miss.
+
+If a future run does show sampling mattering, the shape of the answer is a
+**per-role** temperature rather than a global one: only two of the five roles
+were hurt, and `AgentDefinition.temperature` already exists.
+
+
+### What the first two runs showed
+
+The changes landed together, deliberately — the goal was to move the output, not
+to attribute the movement. Two runs in, the direction is not subtle:
+
+| seed | theme + diversifier | what they built |
+|---|---|---|
+| 32 | ONLY ONE + `make-not-dodge` | a one-stroke wire-routing puzzle |
+| 33 | IT GROWS + `words` | a typing game where words grow until they are lost |
+
+Against fourteen of fourteen real-time avoidance games. Both concepts were
+settled inside two turns, and in both the team quoted the diversifier back while
+deciding — *"the diversifier check passes (connect/arrange, no avoiding)"* — so
+it is being used as a design gate rather than read and forgotten.
+
+Two caveats worth keeping.
+
+**Attribution is still owed.** Four changes are live. Isolating them needs
+`--sim-option diversifier=none` at the same temperature, and that costs runs
+nobody has spent.
+
+**`genre` is not the metric it looks like.** Seed 33's typing game self-tagged
+as `arcade`, so counting genre tags will undercount divergence. The pitch is the
+honest signal — read the column, do not sum it.
 
 And one cause is identified but unfixed: `lib/` is a 2D keyboard-arcade kit
 (Loop, Keys, Draw, FX), it is pre-installed, and it is free. `use_engine none`
