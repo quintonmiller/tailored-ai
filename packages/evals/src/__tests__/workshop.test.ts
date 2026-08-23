@@ -226,7 +226,7 @@ describe("patching a file you read back with line numbers", () => {
 
 describe("ownership", () => {
   it("refuses a write to somebody else's file and names who to ask", async () => {
-    const s = sim();
+    const s = sim({ direction: "prescribed" });
     const out = await call(s, "write_file", { path: "engine.js", content: "// mine" }, "author");
     expect(out).toMatch(/belongs to the builder/);
     expect(s.metrics().ownershipRefusals).toBe(1);
@@ -446,7 +446,7 @@ describe("the run as a whole", () => {
   });
 
   it("puts the brief in the durable place rather than only in a tool result", () => {
-    const s = sim();
+    const s = sim({ direction: "prescribed" });
     const brief = s.briefFor("builder");
     expect(brief).toMatch(/## Your part/);
     expect(brief).toMatch(/engine\.js/);
@@ -503,7 +503,7 @@ describe("the jam: a theme, a clock, and categories a person scores", () => {
   });
 
   it("runs a jam clock with phases rather than a bare round counter", () => {
-    const s = sim({ days: 10 });
+    const s = sim({ days: 10, direction: "prescribed" });
     expect(s.announce()).toMatch(/CONCEPT/);
     for (let i = 0; i < 4; i++) s.advance();
     expect(s.announce()).toMatch(/BUILD/);
@@ -520,9 +520,152 @@ describe("the jam: a theme, a clock, and categories a person scores", () => {
 
   it("gives every brief a submission file for the judge to read first", () => {
     for (const id of ["arcade", "tool", "site"]) {
-      const s = sim({ brief: id });
+      const s = sim({ brief: id, direction: "prescribed" });
       expect(s.workspace.ownerOf("submission.md"), `${id} has no submission.md`).toBe("lead");
     }
+  });
+});
+
+describe("the open arm: a brief that says what, not how", () => {
+  it("hands over no layout at all", () => {
+    const open = sim();
+    // Twelve prescribed runs produced the same eight files. Nothing is planned
+    // here, so `list_files` starts empty of anything the team did not make.
+    expect(open.workspace.list().filter((f) => !f.provided)).toHaveLength(0);
+    expect(open.workspace.ownerOf("engine.js")).toBeUndefined();
+
+    const prescribed = sim({ direction: "prescribed" });
+    expect(prescribed.workspace.ownerOf("engine.js")).toBe("builder");
+  });
+
+  it("describes the goal without naming the files", () => {
+    const brief = sim().briefFor("builder") as string;
+    expect(brief).toMatch(/claim_file/);
+    expect(brief).not.toMatch(/render\.js/);
+    // The medium survives; the decisions about the game do not.
+    expect(brief).toMatch(/One <canvas>/);
+    expect(brief).not.toMatch(/at most one action key/);
+  });
+
+  it("gives a file to whoever claims it first and refuses the second", async () => {
+    const s = sim();
+    const first = await call(s, "claim_file", { path: "engine.js", purpose: "the loop" }, "builder");
+    expect(first).toMatch(/is yours/);
+
+    const second = await call(s, "claim_file", { path: "engine.js", purpose: "mine now" }, "author");
+    expect(second).toMatch(/already the builder's/);
+    expect(s.workspace.ownerOf("engine.js")).toBe("builder");
+
+    // And the claim is what the write rule reads.
+    const blocked = await call(s, "write_file", { path: "engine.js", content: "// mine" }, "author");
+    expect(blocked).toMatch(/belongs to the builder/);
+    expect(s.metrics().writes).toBe(0);
+  });
+
+  it("lets a claimant restate what a file is for", async () => {
+    const s = sim();
+    await call(s, "claim_file", { path: "engine.js", purpose: "the loop" }, "builder");
+    const again = await call(s, "claim_file", { path: "engine.js", purpose: "loop and collision" }, "builder");
+    expect(again).toMatch(/already yours/);
+    expect(s.metrics().ownershipRefusals).toBe(0);
+  });
+
+  it("claims a file for whoever writes it first, so nobody has to claim before starting", async () => {
+    const s = sim();
+    await call(s, "write_file", { path: "engine.js", content: "var a = 1;\n" }, "builder");
+    expect(s.workspace.ownerOf("engine.js")).toBe("builder");
+
+    const blocked = await call(s, "write_file", { path: "engine.js", content: "// mine" }, "author");
+    expect(blocked).toMatch(/belongs to the builder/);
+  });
+
+  it("refuses a claim on the library, which belongs to nobody", async () => {
+    const s = sim();
+    const out = await call(s, "claim_file", { path: "lib/loop.js", purpose: "mine" }, "builder");
+    expect(out).toMatch(/read-only for the whole team/);
+  });
+
+  it("shows a clock instead of telling the team when to stop building", () => {
+    const open = sim({ days: 10 });
+    for (let i = 0; i < 8; i++) open.advance();
+    // Two rounds from the end the prescribed arm is saying "freeze the code".
+    // The open arm still says "submit" — that is the opposite instruction, and
+    // the thing being asserted is the absence of a stop, not of the word.
+    expect(open.announce()).not.toMatch(/POLISH|no new features|freeze the code|rather than starting anything/i);
+
+    const prescribed = sim({ days: 10, direction: "prescribed" });
+    for (let i = 0; i < 8; i++) prescribed.advance();
+    expect(prescribed.announce()).toMatch(/POLISH|SUBMIT/);
+  });
+
+  it("has no planned-files metric to report", () => {
+    expect(sim().metrics().plannedFilesMade).toBe(0);
+  });
+});
+
+describe("submitting a build mid-jam", () => {
+  function withArcade(options: Record<string, unknown> = {}): { sim: WorkshopSimulation; store: ArcadeStore } {
+    const home = temp();
+    const s = sim({ arcadeHome: home, ...options });
+    return { sim: s, store: new ArcadeStore(home) };
+  }
+
+  /** Enough of a game that the workspace is worth submitting. */
+  async function build(s: WorkshopSimulation, body: string): Promise<void> {
+    await call(s, "write_file", { path: "index.html", content: "<!doctype html><canvas id=c></canvas>" }, "lead");
+    await call(s, "write_file", { path: "engine.js", content: body }, "lead");
+  }
+
+  it("puts a playable build on the board and lets the jam carry on", async () => {
+    const { sim: s, store } = withArcade();
+    await build(s, "// 0.1.0\n");
+    const out = await call(s, "submit_version", { version: "0.1.0", notes: "it runs" }, "lead");
+    expect(out).toMatch(/Submitted 0\.1\.0/);
+    expect(out).toMatch(/judged unless you submit a newer one/);
+
+    const entry = store.list({ includeDrafts: true })[0];
+    expect(entry.status).toBe("published");
+    // Still live, so the rest of the jam still counts.
+    expect(entry.live).toBe(true);
+    expect(store.versions(entry.id)).toHaveLength(1);
+    expect(s.metrics().arcadeSubmits).toBe(1);
+  });
+
+  it("numbers a build for a team that did not name one", async () => {
+    const { sim: s, store } = withArcade();
+    await build(s, "// one\n");
+    await call(s, "submit_version", {}, "lead");
+    await call(s, "submit_version", {}, "lead");
+    const entry = store.list({ includeDrafts: true })[0];
+    expect(store.versions(entry.id).map((v) => v.version)).toEqual(["0.2.0", "0.1.0"]);
+  });
+
+  it("refuses to submit an empty workspace", async () => {
+    const { sim: s } = withArcade();
+    const out = await call(s, "submit_version", { version: "0.1.0" }, "lead");
+    expect(out).toMatch(/nothing to submit/);
+  });
+
+  it("says what is on the board in every announcement", async () => {
+    const { sim: s } = withArcade();
+    expect(s.announce()).toMatch(/Nothing is on the board yet/);
+    await build(s, "// 0.1.0\n");
+    await call(s, "submit_version", { version: "0.3.0" }, "lead");
+    expect(s.announce()).toMatch(/0\.3\.0 is on the board/);
+  });
+
+  it("keeps the submitted build when the run stops mid-rewrite", async () => {
+    const { sim: s, store } = withArcade();
+    await build(s, "// the good build\n");
+    await call(s, "submit_version", { version: "0.4.0" }, "lead");
+
+    // 0.5.0 is started and the clock runs out on top of it.
+    await call(s, "write_file", { path: "engine.js", content: "// half a rewrite\n" }, "lead");
+    await s.finish?.();
+
+    const entry = store.list()[0];
+    expect(readFileSync(join(entry.filesPath as string, "engine.js"), "utf8")).toBe("// the good build\n");
+    expect(entry.live).toBe(false);
   });
 });
 

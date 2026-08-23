@@ -257,7 +257,7 @@ async function renderWatch(slug) {
       el("div", { class: "live-bar" }, [
         el("div", {
           class: "live-bar-fill",
-          style: `width:${run.rounds ? Math.round((round / run.rounds) * 100) : 0}%`,
+          style: `--fill:${run.rounds ? (round / run.rounds).toFixed(3) : 0}`,
         }),
       ]),
       watchFacts(run, m),
@@ -362,7 +362,9 @@ function liveRow(run) {
     ...(run.model ? [el("span", { class: "chip", text: run.model })] : []),
   ]);
 
-  const bar = el("div", { class: "live-bar" }, [el("div", { class: "live-bar-fill", style: `width:${pct}%` })]);
+  const bar = el("div", { class: "live-bar" }, [
+    el("div", { class: "live-bar-fill", style: `--fill:${(pct / 100).toFixed(3)}` }),
+  ]);
 
   // Each label/value pair is one grid item. As bare `dt`+`dd` siblings they are
   // two, so the grid pairs a label with the *next* fact's value and the whole
@@ -474,7 +476,7 @@ async function renderDetail(slug) {
   view.replaceChildren(el("p", { class: "loading", text: "Loading…" }));
   const who = reviewer();
   const data = await api(`/api/entries/${encodeURIComponent(slug)}?reviewer=${encodeURIComponent(who)}`);
-  const { entry, media, reviews, yourReview, playUrl } = data;
+  const { entry, media, reviews, yourReview, playUrl, versions } = data;
 
   const shots = media.filter((m) => m.kind === "shot");
   const reel = media.filter((m) => m.kind === "reel");
@@ -491,6 +493,13 @@ async function renderDetail(slug) {
           el("span", { class: "chip", text: `${entry.rounds} rounds` }),
           el("span", { class: "chip", text: fmtDate(entry.publishedAt ?? entry.createdAt) }),
           entry.registered ? null : el("span", { class: "chip flag", text: "never registered" }),
+          // A team that shipped a build and kept going. The board only ever
+          // showed finished games before versions existed, so this state needs
+          // saying out loud or it reads as an ordinary entry.
+          entry.live ? el("span", { class: "chip live", text: "still building" }) : null,
+          versions && versions.length > 1
+            ? el("span", { class: "chip", text: `${versions.length} builds` })
+            : null,
         ]),
       ]),
       el("div", { class: "overall-box" }, [
@@ -512,7 +521,7 @@ async function renderDetail(slug) {
         textPanel("How to play", entry.instructions, "The team never wrote instructions."),
         textPanel("About", entry.description, "The team never wrote a description."),
       ]),
-      el("div", {}, [reviewPanel(entry, yourReview), reviewsPanel(reviews), metaPanel(entry)]),
+      el("div", {}, [reviewPanel(entry, yourReview), buildsPanel(versions), reviewsPanel(reviews), metaPanel(entry)]),
     ]),
   );
   footCount.textContent = entry.title || entry.slug;
@@ -809,6 +818,32 @@ function reviewPanel(entry, existing) {
     el("div", { style: "margin-top:12px" }, [notes]),
     el("div", { class: "stage-actions" }, [save, status]),
   ]);
+}
+
+/**
+ * Every build the team put up, newest first.
+ *
+ * Worth a panel rather than a line because it is the only view that shows a
+ * team's judgement about its own work — when they thought it was worth showing,
+ * how often they came back, and what they said had changed. One build is not a
+ * history, so it does not get a panel.
+ */
+function buildsPanel(versions) {
+  if (!versions || versions.length < 2) return null;
+  const list = el("div", {});
+  versions.forEach((v, i) => {
+    list.append(
+      el("div", { class: `build-item${i === 0 ? " current" : ""}` }, [
+        el("div", { class: "build-head" }, [
+          el("span", { class: "build-v", text: v.version }),
+          v.round === null ? null : el("span", { class: "build-round", text: `round ${v.round + 1}` }),
+          i === 0 ? el("span", { class: "chip", text: "judged" }) : null,
+        ]),
+        v.notes ? el("p", { class: "build-notes", text: v.notes }) : null,
+      ]),
+    );
+  });
+  return el("section", { class: "panel" }, [el("h2", { text: `Builds (${versions.length})` }), list]);
 }
 
 function reviewsPanel(reviews) {

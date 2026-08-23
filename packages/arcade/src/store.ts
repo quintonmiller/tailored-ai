@@ -38,7 +38,7 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { CATEGORY_KEYS, cleanScore, normaliseGenre, overallScore, round2 } from "./categories.js";
 
-export const ARCADE_SCHEMA_VERSION = 1;
+export const ARCADE_SCHEMA_VERSION = 2;
 
 /**
  * The newest frame from a jam still in progress, inside that entry's `shots/`.
@@ -133,12 +133,45 @@ export interface Entry extends EntryProvenance, Registration {
   slug: string;
   status: "draft" | "published";
   registered: boolean;
+  /**
+   * The jam that made this is still running.
+   *
+   * Independent of `status` on purpose. A team that submits a build at round
+   * twelve and keeps working is published *and* live: playable on the board,
+   * still accumulating versions. Only the end of the run clears this, so a run
+   * that is killed leaves `live` set — which is why the site treats a live
+   * entry that has gone quiet as finished rather than as still building.
+   */
+  live: boolean;
   createdAt: string;
   updatedAt: string;
   publishedAt: string | null;
   metrics: Record<string, number>;
   filesPath: string | null;
   downloadPath: string | null;
+}
+
+/** One build a team put on the board, and what was true when they did. */
+export interface Version {
+  id: number;
+  entryId: string;
+  /** The team's own name for the build. `0.4.0`, `rc1`, whatever they chose. */
+  version: string;
+  /** What changed, in the team's words. */
+  notes: string;
+  round: number | null;
+  filesPath: string;
+  metrics: Record<string, number>;
+  createdAt: string;
+}
+
+export interface VersionInput {
+  version: string;
+  notes?: string;
+  round?: number;
+  filesPath: string;
+  metrics?: Record<string, number>;
+  at?: string;
 }
 
 export interface CategoryScore {
@@ -189,6 +222,7 @@ CREATE TABLE IF NOT EXISTS entries (
   slug          TEXT NOT NULL UNIQUE,
   status        TEXT NOT NULL DEFAULT 'draft',
   registered    INTEGER NOT NULL DEFAULT 0,
+  live          INTEGER NOT NULL DEFAULT 0,
 
   title         TEXT,
   tagline       TEXT,
@@ -225,6 +259,19 @@ CREATE TABLE IF NOT EXISTS entries (
 
 CREATE INDEX IF NOT EXISTS entries_status  ON entries(status);
 CREATE INDEX IF NOT EXISTS entries_created ON entries(created_at);
+
+CREATE TABLE IF NOT EXISTS versions (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  entry_id   TEXT NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+  version    TEXT NOT NULL,
+  notes      TEXT NOT NULL DEFAULT '',
+  round      INTEGER,
+  files_path TEXT NOT NULL,
+  metrics    TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS versions_entry ON versions(entry_id, id);
 
 CREATE TABLE IF NOT EXISTS media (
   id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -282,6 +329,7 @@ interface EntryRow {
   slug: string;
   status: string;
   registered: number;
+  live: number;
   title: string | null;
   tagline: string | null;
   description: string | null;
@@ -312,6 +360,30 @@ interface EntryRow {
   published_at: string | null;
 }
 
+interface VersionRow {
+  id: number;
+  entry_id: string;
+  version: string;
+  notes: string;
+  round: number | null;
+  files_path: string;
+  metrics: string;
+  created_at: string;
+}
+
+function hydrateVersion(row: VersionRow): Version {
+  return {
+    id: row.id,
+    entryId: row.entry_id,
+    version: row.version,
+    notes: row.notes,
+    round: row.round,
+    filesPath: row.files_path,
+    metrics: parseJson<Record<string, number>>(row.metrics, {}),
+    createdAt: row.created_at,
+  };
+}
+
 function parseJson<T>(raw: string, fallback: T): T {
   try {
     const value = JSON.parse(raw);
@@ -327,6 +399,7 @@ function hydrate(row: EntryRow): Entry {
     slug: row.slug,
     status: row.status === "published" ? "published" : "draft",
     registered: row.registered === 1,
+    live: row.live === 1,
     title: row.title ?? undefined,
     tagline: row.tagline ?? undefined,
     description: row.description ?? undefined,
@@ -391,11 +464,34 @@ export class ArcadeStore {
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("foreign_keys = ON");
     this.db.exec(SCHEMA);
+    this.migrate();
     this.db
       .prepare(
         "INSERT INTO meta (key, value) VALUES ('schema', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
       )
       .run(String(ARCADE_SCHEMA_VERSION));
+  }
+
+  /**
+   * Columns added to `entries` after the first release.
+   *
+   * `CREATE TABLE IF NOT EXISTS` in `SCHEMA` covers a new *table* but says
+   * nothing about a new *column* on a table that already exists, and the board
+   * this runs against is months of games that must not be rebuilt to gain a
+   * flag. So each addition is applied on open if the column is missing, which
+   * is idempotent and cheap — `table_info` on a table with a dozen rows.
+   *
+   * Additive only. A migration here may never drop or rewrite a column: the
+   * arcade is the record of what was built, and a schema change is not a reason
+   * to lose any of it.
+   */
+  private migrate(): void {
+    const columns = new Set(
+      (this.db.prepare("PRAGMA table_info(entries)").all() as { name: string }[]).map((c) => c.name),
+    );
+    if (!columns.has("live")) {
+      this.db.exec("ALTER TABLE entries ADD COLUMN live INTEGER NOT NULL DEFAULT 0");
+    }
   }
 
   close(): void {
@@ -429,11 +525,11 @@ export class ArcadeStore {
     this.db
       .prepare(
         `INSERT INTO entries (
-           id, slug, status, registered, run_id, scenario, brief, theme, theme_id, rounds, seed,
+           id, slug, status, registered, live, run_id, scenario, brief, theme, theme_id, rounds, seed,
            artifact_path, entry_file, tai_version, sim_version, git_sha, model, provider, base_url,
            model_meta, credits, created_at, updated_at
          ) VALUES (
-           @id, @slug, 'draft', 0, @runId, @scenario, @brief, @theme, @themeId, @rounds, @seed,
+           @id, @slug, 'draft', 0, 1, @runId, @scenario, @brief, @theme, @themeId, @rounds, @seed,
            @artifactPath, @entryFile, @taiVersion, @simVersion, @gitSha, @model, @provider, @baseUrl,
            @modelMeta, @credits, @now, @now
          )`,
@@ -533,16 +629,21 @@ export class ArcadeStore {
    * was ninety minutes ago is worse than saying nothing, because it is a claim
    * rather than an omission.
    *
-   * Refuses to touch a published entry: a finished game's numbers are final,
-   * and a late heartbeat from a run that already wrote its manifest must not
+   * Refuses to touch a finished entry: a finished game's numbers are final, and
+   * a late heartbeat from a run that already wrote its manifest must not
    * rewrite them.
+   *
+   * Gated on `live` rather than on `status = 'draft'` because those stopped
+   * meaning the same thing when teams gained the ability to submit a build
+   * mid-jam. A team that ships `0.4.0` at round twelve is published and still
+   * building, and its heartbeat has fourteen rounds left to report.
    */
   progress(id: string, input: { metrics: Record<string, number>; at?: string }): void {
     const now = input.at ?? new Date().toISOString();
     this.db
       .prepare(
         `UPDATE entries SET metrics = @metrics, updated_at = @now
-          WHERE id = @id AND status = 'draft'`,
+          WHERE id = @id AND live = 1`,
       )
       .run({ id, metrics: JSON.stringify(input.metrics), now });
   }
@@ -611,6 +712,80 @@ export class ArcadeStore {
     return rows.reverse();
   }
 
+  /**
+   * A team putting a build on the board without ending its jam.
+   *
+   * This is the whole point of versions: before it existed a run had exactly
+   * one chance to publish, at the horizon, so the rational move was to freeze
+   * the code well before the end and spend the remaining rounds proving it
+   * still worked. A team that can ship `0.4.0` and carry on has no reason to
+   * stop early, and a run that is killed at round sixteen leaves a playable
+   * game behind instead of a directory somebody has to rescue by hand.
+   *
+   * The entry becomes `published` on the first submit — submitting *is* what
+   * publishing means at a jam — but stays `live`, so heartbeats keep landing
+   * and the site can say "playable, still building". `files_path` moves to the
+   * newest build, which is what `/play/:slug` serves, and every earlier build
+   * stays on disk and in the table.
+   */
+  submitVersion(id: string, input: VersionInput): Version {
+    const entry = this.entry(id);
+    if (!entry) throw new Error(`no such entry: ${id}`);
+    const now = input.at ?? new Date().toISOString();
+    const version = input.version.trim() || "0.1.0";
+
+    const submit = this.db.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT INTO versions (entry_id, version, notes, round, files_path, metrics, created_at)
+           VALUES (@entryId, @version, @notes, @round, @filesPath, @metrics, @now)`,
+        )
+        .run({
+          entryId: id,
+          version,
+          notes: input.notes ?? "",
+          round: input.round ?? null,
+          filesPath: input.filesPath,
+          metrics: JSON.stringify(input.metrics ?? {}),
+          now,
+        });
+      // `published_at` is COALESCEd so the board keeps saying when the game
+      // first appeared rather than when it was last touched.
+      this.db
+        .prepare(
+          `UPDATE entries
+              SET status = 'published',
+                  files_path = @filesPath,
+                  published_at = COALESCE(published_at, @now),
+                  updated_at = @now
+            WHERE id = @id`,
+        )
+        .run({ id, filesPath: input.filesPath, now });
+      return this.db.prepare("SELECT last_insert_rowid() AS id").get() as { id: number };
+    });
+
+    const { id: rowId } = submit();
+    return this.version(rowId) as Version;
+  }
+
+  /** Every build a team submitted, newest first. */
+  versions(entryId: string): Version[] {
+    const rows = this.db
+      .prepare("SELECT * FROM versions WHERE entry_id = ? ORDER BY id DESC")
+      .all(entryId) as VersionRow[];
+    return rows.map(hydrateVersion);
+  }
+
+  version(rowId: number): Version | undefined {
+    const row = this.db.prepare("SELECT * FROM versions WHERE id = ?").get(rowId) as VersionRow | undefined;
+    return row ? hydrateVersion(row) : undefined;
+  }
+
+  /** The run is over: stop the heartbeat gate, whatever else happened. */
+  endRun(id: string): void {
+    this.db.prepare("UPDATE entries SET live = 0 WHERE id = ?").run(id);
+  }
+
   publish(
     id: string,
     input: {
@@ -630,6 +805,7 @@ export class ArcadeStore {
       .prepare(
         `UPDATE entries
             SET status = 'published',
+                live = 0,
                 metrics = @metrics,
                 files_path = @filesPath,
                 download_path = @downloadPath,

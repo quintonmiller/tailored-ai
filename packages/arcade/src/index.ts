@@ -25,7 +25,7 @@ export {
   SCORE_MAX,
   SCORE_MIN,
 } from "./categories.js";
-export { type PublishResult, publishRun } from "./publish.js";
+export { type PublishResult, publishRun, snapshotVersion } from "./publish.js";
 export { type ArcadeServer, createArcadeServer, listen, type ServeOptions } from "./server.js";
 export {
   ACTIVITY_BODY_MAX,
@@ -46,5 +46,7 @@ export {
   type ScoredEntry,
   slugify,
   sortEntries,
+  type Version,
+  type VersionInput,
 } from "./store.js";
 export { crc32, type ZipFile, zip } from "./zip.js";

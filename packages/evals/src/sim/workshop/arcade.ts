@@ -45,6 +45,7 @@ import {
   GENRES,
   publishRun,
   type ScoredEntry,
+  snapshotVersion,
 } from "@tailored-ai/arcade";
 import type { Tool } from "@tailored-ai/core";
 import { agentTool, optional, tool } from "../tool.js";
@@ -80,6 +81,14 @@ export interface ArcadeCounters {
   arcadeUpdates: number;
   /** 1 once the team has written anything at all about its own game. */
   arcadeRegistered: number;
+  /**
+   * Builds put on the board during the jam.
+   *
+   * The number to read next to `roundsWithNoWrite`: a team that submits once at
+   * the end is the old behaviour wearing a new tool, and a team that submits
+   * five times has actually stopped treating the horizon as a cliff.
+   */
+  arcadeSubmits: number;
 }
 
 /**
@@ -94,6 +103,7 @@ export class ArcadeDesk {
     arcadeReads: 0,
     arcadeUpdates: 0,
     arcadeRegistered: 0,
+    arcadeSubmits: 0,
   };
 
   private readonly store: ArcadeStore;
@@ -102,11 +112,27 @@ export class ArcadeDesk {
   private readonly pending: ActivityInput[] = [];
   /** Roles allowed to write the registration. Undefined means everybody. */
   private readonly registrarRoles: string[] | undefined;
+  /** The run's own directory, which is where a build gets copied from. */
+  private readonly artifactPath: string;
+  /** Where the jam is up to, asked at submit time so it is never stale. */
+  private readonly now: () => { round: number; metrics: Record<string, number> };
 
-  constructor(store: ArcadeStore, provenance: EntryProvenance, registrarRoles?: string[]) {
+  constructor(
+    store: ArcadeStore,
+    provenance: EntryProvenance,
+    registrarRoles?: string[],
+    now: () => { round: number; metrics: Record<string, number> } = () => ({ round: 0, metrics: {} }),
+  ) {
     this.store = store;
     this.entryId = store.createEntry(provenance).id;
     this.registrarRoles = registrarRoles;
+    this.artifactPath = provenance.artifactPath;
+    this.now = now;
+  }
+
+  /** Builds this team has put on the board, newest first. */
+  get submitted(): { version: string; round: number | null }[] {
+    return this.store.versions(this.entryId).map((v) => ({ version: v.version, round: v.round }));
   }
 
   get id(): string {
@@ -182,7 +208,7 @@ export class ArcadeDesk {
   }
 
   tools(): Tool[] {
-    return [this.browseTool(), this.readTool(), this.entryTool(), this.registerTool()];
+    return [this.browseTool(), this.readTool(), this.entryTool(), this.registerTool(), this.submitTool()];
   }
 
   // ------------------------------------------------------------------ tools
@@ -285,6 +311,79 @@ export class ArcadeDesk {
       "instructions",
       "genre",
     );
+  }
+
+  /**
+   * Putting the current build on the board, mid-jam, as many times as they like.
+   *
+   * The tool exists to remove a bad incentive rather than to add a capability.
+   * With one publish at the horizon the safe play was to stop building early
+   * and spend the last third of the jam proving the game still worked — which
+   * is exactly what teams did, and why the write curve collapsed two-thirds of
+   * the way through every run. A team that can ship what it has and carry on
+   * has no reason to freeze.
+   *
+   * Says out loud that the last submitted build is the judged one, because that
+   * is the rule which makes submitting early rational rather than merely
+   * permitted.
+   */
+  private submitTool(): Tool {
+    return optional(
+      agentTool(
+        "submit_version",
+        "Put the game as it stands right now on the arcade as a numbered build, and keep working. " +
+          "The most recent build you submit is the one that gets judged, so submit as soon as it is " +
+          "playable and again whenever it gets better.",
+        {
+          version: "What to call this build, like 0.2.0 or 1.0. Optional; defaults to the next number.",
+          notes: "What changed since the last build, in one or two lines. Optional.",
+        },
+        (args, agent) => {
+          if (this.registrarRoles && !this.registrarRoles.includes(String(agent ?? ""))) {
+            throw new Error(
+              `only ${this.registrarRoles.join(" or ")} submits the team's build. Say it is ready instead.`,
+            );
+          }
+          const { round, metrics } = this.now();
+          const version = str(args.version) ?? this.nextVersion();
+          const notes = str(args.notes) ?? "";
+          let built: number;
+          try {
+            built = snapshotVersion(this.store, this.entryId, {
+              artifactPath: this.artifactPath,
+              version,
+              notes,
+              round,
+              metrics,
+            }).files;
+          } catch (err) {
+            // The tool's own refusals are worth reading; anything else is an
+            // arcade problem and must not read as the team's mistake.
+            throw new Error(String((err as Error).message ?? err));
+          }
+          this.counts.arcadeSubmits += 1;
+          this.note({
+            kind: "did",
+            ...(agent ? { agent } : {}),
+            room: "arcade",
+            body: `submitted build ${version}${notes ? ` — ${notes}` : ""}`,
+          });
+          const history = this.submitted;
+          return (
+            `Submitted ${version} — ${built} file${built === 1 ? "" : "s"}, playable on the arcade now. ` +
+            `This is the build that gets judged unless you submit a newer one. ` +
+            (history.length > 1 ? `Builds so far: ${history.map((h) => h.version).join(", ")}.` : "Your first build.")
+          );
+        },
+      ),
+      "version",
+      "notes",
+    );
+  }
+
+  /** `0.1.0`, `0.2.0`, … for a team that did not name its build. */
+  private nextVersion(): string {
+    return `0.${this.store.versions(this.entryId).length + 1}.0`;
   }
 
   // -------------------------------------------------------------- rendering

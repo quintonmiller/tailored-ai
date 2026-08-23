@@ -202,6 +202,34 @@ export class Workspace {
   }
 
   /**
+   * A role taking responsibility for a file, when the brief did not assign one.
+   *
+   * First claim wins, and a second claimant is refused rather than silently
+   * overwriting the first — an ownership table that changes under the previous
+   * owner is worse than no ownership at all, because their next write fails for
+   * a reason nothing told them about. Re-claiming your own file is allowed and
+   * only updates the stated purpose, so a role can say what a file is for after
+   * the shape of it has changed.
+   *
+   * Refuses a provided file outright: `lib/` is fixed scenery and claiming it
+   * would let one role quietly take the library out of everybody else's reach.
+   */
+  claim(path: string, owner: string, purpose: string): { path: string; already: boolean } {
+    const clean = normalisePath(path);
+    // Not `isProvided`: that answers about the file on disk, and the point here
+    // is to refuse the *path*, whether or not it has been written yet.
+    if (this.provided.has(clean)) {
+      refuse(`"${clean}" is provided for you and nobody owns it. It is read-only for the whole team.`);
+    }
+    const held = this.planned.get(clean)?.owner;
+    if (held && held !== owner) {
+      refuse(`"${clean}" is already the ${held}'s. Ask them for the change, or claim a different file.`);
+    }
+    this.planned.set(clean, { owner, purpose });
+    return { path: clean, already: held === owner };
+  }
+
+  /**
    * Put a file in the workspace that the team may use but not author.
    *
    * The bytes land on disk before round one, so `read_file` and `check_syntax`

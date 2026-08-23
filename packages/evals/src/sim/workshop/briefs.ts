@@ -10,18 +10,25 @@
  * selected with `--sim-option brief=<id>`, and adding one costs an object
  * literal rather than a scenario.
  *
- * ## Every brief declares its own file layout
+ * ## Every brief declares a layout, and one arm uses it
  *
- * Not decoration, and not the simulation's business to decide. Five agents who
- * each invent a filename in round one produce five near-duplicate files nobody
- * agreed on, and the artifact becomes a directory you cannot review. The layout
- * is shown by `list_files` from round zero with `(not created yet)` beside each
- * row, which is the cheapest orientation a team can be handed.
+ * The reasoning was that five agents who each invent a filename in round one
+ * produce five near-duplicate files nobody agreed on, so the layout is shown by
+ * `list_files` from round zero with `(not created yet)` beside each row — the
+ * cheapest orientation a team can be handed.
  *
- * It also carries ownership. Write access is partitioned by role and read
- * access is not, which is the one asymmetry a build task can survive: hide the
- * code from the person writing it and the artifact gets worse, and the artifact
- * is the deliverable.
+ * It worked, and then it kept working: twelve consecutive runs produced a
+ * byte-identical file set, and not one team ever made a file the brief had not
+ * named. Orientation turned out to be the whole architecture. So `direction=open`
+ * (the default) ignores `layout` entirely and the team claims files as it goes,
+ * while `direction=prescribed` keeps this as the control arm. See
+ * `docs/open-builds.md`.
+ *
+ * The layout also carries ownership, and that is kept in both arms — write access
+ * is partitioned by role and read access is not, which is the one asymmetry a
+ * build task can survive: hide the code from the person writing it and the
+ * artifact gets worse, and the artifact is the deliverable. The open arm keeps
+ * the partition and drops only the part that says which files exist.
  *
  * ## Choosing what to ask for
  *
@@ -57,8 +64,27 @@ export interface Brief {
   title: string;
   /** What to build, in the team's own terms. Goes into every agent's instructions. */
   summary: string;
+  /**
+   * How the same task reads when the team is not told how to build it.
+   *
+   * The prescribed `summary` above describes a shape; this one describes an
+   * ambition and leaves the shape to the team. Both are kept because the
+   * difference between them is a measurement — see the `direction` option in
+   * `index.ts`. Absent falls back to `summary`.
+   */
+  openSummary?: string;
   /** Hard rules. Violating one is a defect, not a style choice. */
   constraints: string[];
+  /**
+   * The subset of `constraints` that survives into the open arm.
+   *
+   * The prescribed list mixes two kinds of rule: properties of the medium (one
+   * canvas, no image files) which are what make the artifact reviewable and
+   * self-contained, and decisions about the game (at most one action key) which
+   * are exactly the prescription being tested. Only the first kind belongs in
+   * an open brief. Absent means every constraint carries over.
+   */
+  openConstraints?: string[];
   /** The paragraph that decides whether the run finished or merely stopped. */
   doneLooksLike: string;
   /** What a reviewer opens. Also what `check_syntax` looks for. */
@@ -110,10 +136,21 @@ const briefs: Brief[] = [
       "lose, a visible score, and a state you can get back from — a game over that lets you start again " +
       "without reloading the page. It should be understandable in ten seconds by somebody who has never " +
       "seen it, and still have one idea in it that is yours.",
+    openSummary:
+      "You are a team at a game jam. Build the best game you can in the time you have, on the theme, " +
+      "playable in a browser with a keyboard. How you structure it, what files you make, who writes " +
+      "what, and what kind of game it is are yours to decide. Aim for something a person will want to " +
+      "play twice.",
     constraints: [
       "One <canvas>, drawn with 2D context calls. No image files and no sprite sheets — everything is " +
         "drawn from shapes, paths and text.",
       "The game must be playable with the arrow keys or WASD, plus at most one action key.",
+      "No sound.",
+    ],
+    openConstraints: [
+      "One <canvas>, drawn with 2D context calls. No image files and no sprite sheets — everything is " +
+        "drawn from shapes, paths and text.",
+      "Playable with a keyboard.",
       "No sound.",
     ],
     doneLooksLike:
@@ -293,15 +330,54 @@ export function getBrief(id: unknown): Brief {
  * for different reasons: the instructions are what an agent sees on turn one,
  * and the file is what it can still read on turn two hundred after the history
  * budget has trimmed the conversation that set the whole thing up.
+ *
+ * Two arms, and the difference between them is the experiment. The prescribed
+ * arm names eight files and their owners, which is orientation a team gets for
+ * free — and, on the evidence of twelve runs that produced a byte-identical
+ * file set, an architecture they will not deviate from by so much as one file.
+ * The open arm says what to build and leaves the rest alone.
  */
-export function renderBrief(brief: Brief): string {
-  const lines = [
+export function renderBrief(brief: Brief, direction: "open" | "prescribed" = "prescribed"): string {
+  const open = direction === "open";
+  const constraints = open ? (brief.openConstraints ?? brief.constraints) : brief.constraints;
+  const given = brief.library?.length
+    ? [
+        "",
+        "## What you are given",
+        "",
+        ...brief.library.map((f) => `- \`${f.path}\` — provided, read-only — ${f.purpose}`),
+        ...(brief.libraryNotes ? ["", brief.libraryNotes] : []),
+        ...(open ? ["", "Use it or ignore it. It is there to save you time, not to tell you what to write."] : []),
+      ]
+    : [];
+
+  if (open) {
+    return [
+      `# ${brief.title}`,
+      "",
+      brief.openSummary ?? brief.summary,
+      "",
+      "## Constraints",
+      ...[...constraints, ...UNIVERSAL_CONSTRAINTS].map((c) => `- ${c}`),
+      ...given,
+      "",
+      "## How you work is up to you",
+      "",
+      "No file layout is prescribed. Decide together what to build and how to split it, then claim the " +
+        "files you are going to write with `claim_file` so two people do not write the same one. A file " +
+        "belongs to whoever claimed it; everybody can read everything.",
+      "",
+      `The artifact is reviewed by opening \`${brief.entry}\` in a browser, so that file has to exist.`,
+    ].join("\n");
+  }
+
+  return [
     `# ${brief.title}`,
     "",
     brief.summary,
     "",
     "## Constraints",
-    ...[...brief.constraints, ...UNIVERSAL_CONSTRAINTS].map((c) => `- ${c}`),
+    ...[...constraints, ...UNIVERSAL_CONSTRAINTS].map((c) => `- ${c}`),
     "",
     "## Done looks like",
     "",
@@ -312,17 +388,8 @@ export function renderBrief(brief: Brief): string {
     "Everybody can read every file. Only the named role can write to one.",
     "",
     ...brief.layout.map((f) => `- \`${f.path}\` — **${f.owner}** — ${f.purpose}`),
-    ...(brief.library?.length
-      ? [
-          "",
-          "## What you are given",
-          "",
-          ...brief.library.map((f) => `- \`${f.path}\` — provided, read-only — ${f.purpose}`),
-          ...(brief.libraryNotes ? ["", brief.libraryNotes] : []),
-        ]
-      : []),
+    ...given,
     "",
     `The artifact is reviewed by opening \`${brief.entry}\` in a browser.`,
-  ];
-  return lines.join("\n");
+  ].join("\n");
 }

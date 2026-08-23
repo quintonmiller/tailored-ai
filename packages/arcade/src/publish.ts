@@ -25,7 +25,7 @@
 
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import type { ArcadeStore, Entry } from "./store.js";
+import type { ArcadeStore, Entry, Version } from "./store.js";
 import { zip } from "./zip.js";
 
 /** Frames from one playtest round, in the order they were taken. */
@@ -85,12 +85,89 @@ export interface PublishResult {
   archiveBytes: number;
 }
 
+/** A version name that is safe as one path segment, and still recognisable. */
+function versionSlug(version: string): string {
+  const cleaned = version
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9.]+/g, "-")
+    .replace(/^[-.]+|[-.]+$/g, "")
+    .slice(0, 40);
+  return cleaned || "build";
+}
+
+/**
+ * Snapshot the workspace as a submitted build.
+ *
+ * Deliberately much cheaper than `publishRun`: a copy of the files and a row,
+ * with no screenshots, no reel and no archive. A team may submit a dozen times
+ * in a jam and each one happens inside an agent's turn, so this has to cost
+ * about what a file copy costs. The expensive treatment happens once, at the
+ * end, in `publishRun`.
+ *
+ * Each build gets its own directory and nothing is ever overwritten — the point
+ * of versions is that an earlier one survives whatever the team does next.
+ */
+export function snapshotVersion(
+  store: ArcadeStore,
+  entryId: string,
+  input: {
+    artifactPath: string;
+    version: string;
+    notes?: string;
+    round?: number;
+    metrics?: Record<string, number>;
+    at?: string;
+  },
+): { version: Version; files: number } {
+  const entry = store.entry(entryId);
+  if (!entry) throw new Error(`no such entry: ${entryId}`);
+
+  const workspace = join(input.artifactPath, "workspace");
+  if (!existsSync(workspace)) throw new Error("there is no workspace to submit yet");
+  const built = walk(workspace).filter((f) => !f.startsWith("lib/"));
+  if (built.length === 0) throw new Error("the workspace is empty — there is nothing to submit");
+
+  const ordinal = store.versions(entryId).length + 1;
+  const dir = join(
+    store.gameDir(entryId),
+    "versions",
+    `${String(ordinal).padStart(3, "0")}-${versionSlug(input.version)}`,
+  );
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  cpSync(workspace, dir, { recursive: true });
+
+  const version = store.submitVersion(entryId, {
+    version: input.version,
+    ...(input.notes === undefined ? {} : { notes: input.notes }),
+    ...(input.round === undefined ? {} : { round: input.round }),
+    filesPath: dir,
+    ...(input.metrics === undefined ? {} : { metrics: input.metrics }),
+    ...(input.at === undefined ? {} : { at: input.at }),
+  });
+
+  return { version, files: walk(dir).length };
+}
+
 /**
  * Publish one run.
  *
  * Safe to call twice: the destination is cleared first, so a re-publish of a
  * corrected run replaces its files rather than merging into them. The entry row
  * keeps its original `published_at`.
+ *
+ * ## What gets published when a team submitted builds
+ *
+ * The last *submitted* build, not the final state of the workspace — the same
+ * rule a real jam runs on. A team that ships `0.4.0`, starts `0.5.0` and is
+ * still mid-refactor when the clock stops has `0.4.0` judged, which is the
+ * whole reason to submit early and often. Publishing the raw workspace instead
+ * would mean an unfinished edit at the horizon could destroy a good build that
+ * was already on the board, which is exactly the risk versions exist to remove.
+ *
+ * A team that never submitted anything still gets its workspace published: a
+ * half-finished game on the board beats a hole where a run happened.
  */
 export function publishRun(
   store: ArcadeStore,
@@ -108,8 +185,10 @@ export function publishRun(
   mkdirSync(filesDir, { recursive: true });
   mkdirSync(shotsDir, { recursive: true });
 
-  const workspace = join(input.artifactPath, "workspace");
-  if (existsSync(workspace)) cpSync(workspace, filesDir, { recursive: true });
+  const submitted = store.versions(entryId);
+  const latest = submitted[0];
+  const source = latest && existsSync(latest.filesPath) ? latest.filesPath : join(input.artifactPath, "workspace");
+  if (existsSync(source)) cpSync(source, filesDir, { recursive: true });
 
   // The brief and the manifest travel with the game. Somebody who downloads it
   // in six months needs to know what the team was asked for, and the manifest

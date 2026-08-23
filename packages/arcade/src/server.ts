@@ -323,6 +323,16 @@ async function handleSite(
       reviews: store.reviews(entry.id),
       yourReview: reviewer ? (store.review(entry.id, reviewer) ?? null) : null,
       playUrl: `${gamesUrl}/play/${entry.slug}/`,
+      // Build history, newest first. Absent `filesPath`: which directory on this
+      // machine holds a build is provenance for the run, not something a page
+      // needs, and a path is the kind of thing that ends up rendered by mistake.
+      versions: store.versions(entry.id).map((v) => ({
+        version: v.version,
+        notes: v.notes,
+        round: v.round,
+        metrics: v.metrics,
+        createdAt: v.createdAt,
+      })),
     });
   }
 

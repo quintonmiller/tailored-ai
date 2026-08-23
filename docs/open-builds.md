@@ -773,6 +773,86 @@ everything in it. The general shape — *a default that writes outside the proce
 is a default that will be triggered by something that never meant to* — is the
 same lesson `TAI_HOME` taught, arrived at from the other direction.
 
+## The measured ceiling, and what was done about it (2026-08-22)
+
+Nine published games in, the output stopped moving. Every one of them landed at
+1,200–1,550 lines across eight files, and OVERGROWTH reached 1,281 lines in
+**fifteen** rounds — the same as the games that ran twenty. About a quarter of
+that was markdown, so the game itself was 810–1,060 lines every time.
+
+Three findings, all measured rather than inferred:
+
+**The teams were finishing early and then verifying.** On ONE (seed 24, a
+twenty-round sighted run), rounds 4–11 carried 74% of all edits and rounds 12–20
+carried 13.5%. The late rounds are not a team that ran out of road; they are a
+team that knows it is done. The lead says "Game is finished and verified" at
+round 14 and **"FREEZE THE CODE"** at round 19, and the author spends a turn
+reading all 99 lines of its own file to confirm nothing changed.
+
+**The layout was the architecture.** All twelve entries produced a byte-identical
+file set — `content.js defects.md design.md engine.js index.html render.js
+style.css submission.md`. Not one team ever created a file the brief had not
+named, or declined one it had. `content.js` is specced as "Levels, tuning
+constants, colours, copy" and came back as 97–99 lines of pure tuning constants
+in every single game: no levels, no enemy types, no items.
+
+**Half the jam was structurally forbidden from adding anything.** The phase
+ladder said CONCEPT below 0.2 ("do not start building"), POLISH from 0.7 ("no new
+features") and SUBMIT from 0.9 ("freeze the code"). Only 0.2–0.7 was BUILD — ten
+rounds of twenty — and teams stopped around 0.6 regardless.
+
+The tempting fix was to raise the bar in `doneLooksLike`. That is the same
+disease: it would have produced twelve identically *bigger* games. Two changes
+went in instead.
+
+### Versions: submitting a build without ending the jam
+
+`submit_version` puts the workspace on the arcade as a numbered build and the
+team keeps working. The entry becomes `published` on the first submit — that is
+what submitting means at a jam — but stays `live`, so heartbeats keep landing and
+the site can say "playable, still building".
+
+**The last submitted build is the one judged**, not the final state of the
+workspace. A team that ships `0.4.0`, starts `0.5.0` and is mid-refactor at the
+horizon has `0.4.0` judged. This is the rule that makes submitting early rational
+rather than merely permitted, and it is why publishing the raw workspace would
+have been wrong: an unfinished edit at the end could otherwise destroy a good
+build already on the board.
+
+It also removes the reason the freeze existed. With one publish at the horizon,
+stopping early and proving the thing still worked *was* the correct play. With
+versions it is not, so the phase ladder could go too.
+
+### `direction=open`: a brief that says what, not how
+
+The open arm — now the default — plans no files at all. `list_files` starts
+genuinely empty and the brief reads roughly as a jam brief does: build the best
+game you can, on the theme, in a browser, with a keyboard.
+
+Ownership is kept, because partitioned write access is the variable this
+scenario exists to test. It is just no longer handed over: roles take files with
+`claim_file`, first claim wins, and a second claimant is refused and told who to
+ask. Writing an unclaimed file claims it, so round one does not deadlock on a
+tool nobody remembered to call — the tool is for reserving a file before it
+exists, and the auto-claim covers the far more common case of somebody simply
+starting.
+
+`openConstraints` carries the subset of the rules that survives. One canvas and
+no image files are properties of the medium and stay; "at most one action key" is
+a decision about the game and goes.
+
+**`direction=prescribed` keeps the old behaviour as a control arm**, because
+de-prescribing is not obviously an improvement. A team handed a layout has
+orientation on turn one; a team that has to invent one may spend rounds on it and
+arrive somewhere worse. The sameness is not in question — twelve identical file
+sets settle that — but whether the games get *better* is, and only a pair of arms
+on the same code can answer it.
+
+Read `claims` against `ownershipRefusals` (claims low and refusals high is a team
+that started writing before it divided the work) and `arcadeSubmits` against
+`roundsWithNoWrite` (one submit at the end is the old behaviour wearing a new
+tool; five is a team that stopped treating the horizon as a cliff).
+
 ## What it cannot tell you
 
 - **Runs are not comparable with each other.** Two runs on the same brief differ
@@ -795,9 +875,10 @@ same lesson `TAI_HOME` taught, arrived at from the other direction.
    test and the worse demo.
 2. **Should the lead be able to write code?** As shipped it cannot, which is
    clean and possibly wastes the strongest agent in the room.
-3. **Twenty rounds with no definition of done means the team never has to
-   converge.** The opening message says to leave the last few rounds for fixing
-   rather than adding; whether that is enough is a thing to read off run one.
+3. ~~**Twenty rounds with no definition of done means the team never has to
+   converge.**~~ Answered, and backwards: the definition of done was too *small*,
+   not absent. Teams satisfied it by round eight and spent the last third
+   verifying. See the measured ceiling above.
 4. **Where does the reviewer's verdict live?** Nowhere, today. If reviews are
    worth keeping they want a file in the workshop directory and a line in the
    history board — which is one step from a score, and should be resisted or
@@ -810,6 +891,7 @@ same lesson `TAI_HOME` taught, arrived at from the other direction.
 | the directory, path rules, snapshots, outline | `packages/evals/src/sim/workshop/workspace.ts` |
 | parse-only checking | `packages/evals/src/sim/workshop/check.ts` |
 | the briefs, layouts and ownership | `packages/evals/src/sim/workshop/briefs.ts` |
+| submitted builds, and which one is judged | `packages/arcade/src/publish.ts`, `store.ts` |
 | tools, roles, metrics, `briefFor` | `packages/evals/src/sim/workshop/index.ts` |
 | the scripted bot | `packages/evals/src/sim/workshop/policies.ts` |
 | the three scenarios | `packages/evals/scenarios/25-the-workshop.ts` |

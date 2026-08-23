@@ -12,15 +12,17 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inflateRawSync } from "node:zlib";
+import Database from "better-sqlite3";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { splitCommand, stripSeparator } from "../args.js";
 import { CATEGORIES, CATEGORY_KEYS, cleanScore, normaliseGenre, overallScore } from "../categories.js";
-import { publishRun } from "../publish.js";
+import { publishRun, snapshotVersion } from "../publish.js";
 import { createArcadeServer, listen } from "../server.js";
 import {
   ACTIVITY_BODY_MAX,
   ACTIVITY_KEEP,
   ArcadeStore,
+  type Entry,
   type EntryProvenance,
   LIVE_SHOT,
   type ScoredEntry,
@@ -431,6 +433,124 @@ describe("publishing a run", () => {
     expect(result.shots).toBe(0);
     expect(store.scored(entry.id)?.thumb).toBeNull();
     store.close();
+  });
+});
+
+describe("submitting builds during a jam", () => {
+  function workspace(): string {
+    const dir = tempHome();
+    mkdirSync(join(dir, "workspace"), { recursive: true });
+    writeFileSync(join(dir, "workspace", "index.html"), "<!doctype html><canvas id=c></canvas>");
+    writeFileSync(join(dir, "workspace", "engine.js"), "// v1\n");
+    return dir;
+  }
+
+  it("puts a build on the board without ending the jam", () => {
+    const store = new ArcadeStore(tempHome());
+    const source = workspace();
+    const entry = store.createEntry(provenance({ artifactPath: source }));
+    expect(entry.live).toBe(true);
+    expect(entry.status).toBe("draft");
+
+    const { version } = snapshotVersion(store, entry.id, { artifactPath: source, version: "0.4.0", round: 11 });
+    expect(version.version).toBe("0.4.0");
+
+    const after = store.entry(entry.id) as Entry;
+    // Published, so a person can play and score it — and still live, so the
+    // team has the rest of the jam to improve on it.
+    expect(after.status).toBe("published");
+    expect(after.live).toBe(true);
+    expect(existsSync(join(after.filesPath as string, "index.html"))).toBe(true);
+    store.close();
+  });
+
+  it("keeps taking heartbeats after a team has submitted", () => {
+    const store = new ArcadeStore(tempHome());
+    const source = workspace();
+    const entry = store.createEntry(provenance({ artifactPath: source }));
+    snapshotVersion(store, entry.id, { artifactPath: source, version: "0.1.0" });
+
+    store.progress(entry.id, { metrics: { writes: 42 } });
+    expect((store.entry(entry.id) as Entry).metrics.writes).toBe(42);
+
+    // Once the run is over the numbers are final, whatever arrives late.
+    store.endRun(entry.id);
+    store.progress(entry.id, { metrics: { writes: 999 } });
+    expect((store.entry(entry.id) as Entry).metrics.writes).toBe(42);
+    store.close();
+  });
+
+  it("judges the last submitted build, not an unfinished edit at the horizon", () => {
+    const store = new ArcadeStore(tempHome());
+    const source = workspace();
+    const entry = store.createEntry(provenance({ artifactPath: source }));
+
+    writeFileSync(join(source, "workspace", "engine.js"), "// the good build\n");
+    snapshotVersion(store, entry.id, { artifactPath: source, version: "0.4.0", round: 11 });
+
+    // The team starts 0.5.0 and the clock stops mid-refactor.
+    writeFileSync(join(source, "workspace", "engine.js"), "// half a rewrite, does not run\n");
+    publishRun(store, entry.id, { artifactPath: source });
+
+    const shipped = readFileSync(join(store.gameDir(entry.id), "files", "engine.js"), "utf8");
+    expect(shipped).toBe("// the good build\n");
+    expect((store.entry(entry.id) as Entry).live).toBe(false);
+    store.close();
+  });
+
+  it("still publishes the workspace when a team never submitted anything", () => {
+    const store = new ArcadeStore(tempHome());
+    const source = workspace();
+    const entry = store.createEntry(provenance({ artifactPath: source }));
+    publishRun(store, entry.id, { artifactPath: source });
+    expect(readFileSync(join(store.gameDir(entry.id), "files", "engine.js"), "utf8")).toBe("// v1\n");
+    store.close();
+  });
+
+  it("keeps every build, newest first, each in its own directory", () => {
+    const store = new ArcadeStore(tempHome());
+    const source = workspace();
+    const entry = store.createEntry(provenance({ artifactPath: source }));
+
+    snapshotVersion(store, entry.id, { artifactPath: source, version: "0.1.0", notes: "it runs" });
+    writeFileSync(join(source, "workspace", "engine.js"), "// v2\n");
+    snapshotVersion(store, entry.id, { artifactPath: source, version: "0.2.0", notes: "a second verb" });
+
+    const versions = store.versions(entry.id);
+    expect(versions.map((v) => v.version)).toEqual(["0.2.0", "0.1.0"]);
+    expect(versions[0].notes).toBe("a second verb");
+    // The earlier build is still on disk and still says what it said.
+    expect(readFileSync(join(versions[1].filesPath, "engine.js"), "utf8")).toBe("// v1\n");
+    store.close();
+  });
+
+  it("refuses to submit nothing", () => {
+    const store = new ArcadeStore(tempHome());
+    const source = tempHome();
+    mkdirSync(join(source, "workspace"), { recursive: true });
+    const entry = store.createEntry(provenance({ artifactPath: source }));
+    expect(() => snapshotVersion(store, entry.id, { artifactPath: source, version: "0.1.0" })).toThrow(
+      /nothing to submit/,
+    );
+    store.close();
+  });
+
+  it("adds the live flag to a board that predates it, keeping every row", () => {
+    const home = tempHome();
+    const store = new ArcadeStore(home);
+    const entry = store.createEntry(provenance());
+    store.register(entry.id, { title: "Older Than Versions" });
+    store.close();
+
+    // What an existing arcade.db looks like: the column simply is not there.
+    const raw = new Database(join(home, "arcade.db"));
+    raw.exec("ALTER TABLE entries DROP COLUMN live");
+    raw.close();
+
+    const reopened = new ArcadeStore(home);
+    expect(reopened.entry(entry.id)?.title).toBe("Older Than Versions");
+    expect(reopened.entry(entry.id)?.live).toBe(false);
+    reopened.close();
   });
 });
 

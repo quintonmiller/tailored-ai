@@ -74,7 +74,7 @@ export const WORKSHOP_ROLES: WorkshopRole[] = ["lead", "builder", "interface", "
  * "these forty entries played the same game" is the question a board actually
  * gets asked and no human reads that off a sha.
  */
-export const WORKSHOP_VERSION = "workshop-4-library";
+export const WORKSHOP_VERSION = "workshop-5-open";
 
 /**
  * The configuration the scenario plays, declared here so `bench` and `rehearse`
@@ -90,6 +90,7 @@ export const WORKSHOP_PLAY_OPTIONS = {
   brief: DEFAULT_BRIEF,
   ownership: "strict",
   checks: "tester",
+  direction: "open",
 } as const;
 
 interface WorkshopOptions extends SimulationOptions {
@@ -98,6 +99,22 @@ interface WorkshopOptions extends SimulationOptions {
   ownership?: string;
   /** `tester` gives verification to one role; `anyone` hands it to everybody. */
   checks?: string;
+  /**
+   * How much of the *how* the brief supplies.
+   *
+   * `prescribed` names eight files, their owners and a paragraph defining done,
+   * which is what every entry before `workshop-5` played. `open` states the
+   * goal and the medium and leaves structure to the team, who claim files as
+   * they go.
+   *
+   * The control arm exists because de-prescribing is not obviously an
+   * improvement: a team handed a layout has orientation on turn one, and a team
+   * that has to invent one may spend rounds on it and arrive somewhere worse.
+   * Twelve prescribed runs produced a byte-identical file set, so the *sameness*
+   * is not in question; whether the games get better is, and only a pair of arms
+   * on the same code can answer it.
+   */
+  direction?: string;
   /** Where the artifact goes. Defaults under `results/workshops/`. */
   root?: string;
   /** Injected by tests so a run directory name is stable. */
@@ -170,6 +187,14 @@ export class WorkshopSimulation implements Simulation {
     listings: 0,
     checksRun: 0,
     playtestsRun: 0,
+    /**
+     * Files claimed in the open arm.
+     *
+     * Reads against `ownershipRefusals`: claims low and refusals high is a team
+     * that started writing before it divided the work, which is the failure the
+     * prescribed layout used to prevent for free.
+     */
+    claims: 0,
   };
 
   private lastCheck: { problems: number; filesChecked: number; atRound: number } | undefined;
@@ -204,12 +229,15 @@ export class WorkshopSimulation implements Simulation {
   private mediaStore: MediaStore | undefined;
   /** How many frames actually reached the model, for the report. */
   private framesShown = 0;
+  /** The brief states the goal and leaves structure to the team. */
+  private readonly open: boolean;
 
   constructor(options: WorkshopOptions) {
     this.brief = getBrief(options.brief ?? WORKSHOP_PLAY_OPTIONS.brief);
     this.horizon = Math.max(1, Math.floor(options.days ?? 20));
     this.strictOwnership = String(options.ownership ?? WORKSHOP_PLAY_OPTIONS.ownership) !== "shared";
     this.checksAreTesterOnly = String(options.checks ?? WORKSHOP_PLAY_OPTIONS.checks) !== "anyone";
+    this.open = String(options.direction ?? WORKSHOP_PLAY_OPTIONS.direction) === "open";
     this.theme = pickTheme(options.theme, Number(options.seed ?? 0));
     /*
      * Who is allowed to look at the screen: the tester, the interface, and —
@@ -240,8 +268,14 @@ export class WorkshopSimulation implements Simulation {
     );
     this.workspace = new Workspace(this.root);
 
-    for (const file of this.brief.layout) {
-      this.workspace.plan(file.path, { owner: file.owner, purpose: file.purpose });
+    // The open arm plans nothing. `list_files` therefore starts genuinely
+    // empty, which is the point: a layout shown from round zero with "(not
+    // created yet)" beside each row is orientation, and it is also the reason
+    // twelve consecutive runs produced the same eight files.
+    if (!this.open) {
+      for (const file of this.brief.layout) {
+        this.workspace.plan(file.path, { owner: file.owner, purpose: file.purpose });
+      }
     }
     this.provideLibrary();
 
@@ -320,6 +354,10 @@ export class WorkshopSimulation implements Simulation {
           // the solo arm, where every role resolves to the same agent and the
           // per-role grant cannot distinguish anybody.
           this.strictOwnership ? [this.registrar] : undefined,
+          // Asked at submit time rather than pushed on the heartbeat: a build
+          // submitted mid-round would otherwise be filed under the counters as
+          // they stood before any of that round's work.
+          () => ({ round: this.tick, metrics: this.counters() }),
         )
       : undefined;
   }
@@ -337,8 +375,16 @@ export class WorkshopSimulation implements Simulation {
     return [
       `# GAME JAM — theme: ${this.theme.title}`,
       "",
-      `You have **${this.horizon} rounds**. That is the whole jam; when it runs out, whatever exists is`,
-      "what gets submitted. A person is going to open it, play it, and score it.",
+      ...(this.open
+        ? [
+            `You have **${this.horizon} rounds**. That is the whole jam. Submit a build the moment it is`,
+            "playable and keep improving it — the last build you submit is the one a person opens, plays",
+            "and scores, so nothing you have already put up can be lost by carrying on.",
+          ]
+        : [
+            `You have **${this.horizon} rounds**. That is the whole jam; when it runs out, whatever exists is`,
+            "what gets submitted. A person is going to open it, play it, and score it.",
+          ]),
       "",
       `## The theme is ${this.theme.title}`,
       "",
@@ -356,7 +402,7 @@ export class WorkshopSimulation implements Simulation {
       ...this.arcadeBrief(),
       "---",
       "",
-      renderBrief(this.brief),
+      renderBrief(this.brief, this.open ? "open" : "prescribed"),
     ].join("\n");
   }
 
@@ -479,8 +525,24 @@ export class WorkshopSimulation implements Simulation {
     // twenty-round run reached a complete v1 by round three and then had
     // seventeen rounds with nothing to do, which is a scheduling problem the
     // announcement can actually address.
-    const phase =
-      fraction < 0.2
+    /*
+     * The open arm shows a clock and no phases.
+     *
+     * The ladder below was written to stop a team shipping a half-wired feature
+     * in the last round, and it did — by forbidding feature work in ten of
+     * twenty rounds and telling teams at 70% to stop adding. Measured on ONE,
+     * rounds 4-11 carried 74% of all edits and rounds 12-20 carried 13.5%: the
+     * team had already stopped before POLISH began, and then spent the last
+     * third re-reading its own files to confirm it was done.
+     *
+     * What made freezing rational was having one chance to publish. Versions
+     * removed that, so the schedule can go too: a team that can submit a build
+     * and carry on does not need to be told when to stop, and being told when
+     * to stop is the part that capped what got built.
+     */
+    const phase = this.open
+      ? "Build. Submit a build as soon as it is playable, then keep making it better — the last build you submit is the one judged."
+      : fraction < 0.2
         ? "CONCEPT — decide your reading of the theme and write it down. Do not start building until it is agreed."
         : fraction < 0.7
           ? "BUILD — make the game the theme demands."
@@ -510,14 +572,30 @@ export class WorkshopSimulation implements Simulation {
       this.desk && !this.desk.registered && fraction >= 0.7
         ? " Nothing is registered on the arcade yet — a game nobody registers is a game nobody plays."
         : "";
+    // What is actually on the board, which is the only number that decides what
+    // a person ends up playing. Stated every round in the open arm because
+    // "nothing submitted yet" at round nine is the single most useful thing the
+    // announcement can say, and "0.3.0 is up" is what makes carrying on safe.
+    const builds = this.open && this.desk ? ` ${this.describeBuilds()}` : "";
     return (
-      `Round ${this.tick + 1} of ${this.horizon} — theme ${this.theme.title}. ${phase}${submission} ` +
+      `Round ${this.tick + 1} of ${this.horizon} — theme ${this.theme.title}. ${phase}${submission}${builds} ` +
       `${seen}. ` +
       `${files.length} file${files.length === 1 ? "" : "s"}, ${lines} line${lines === 1 ? "" : "s"}; ${check}. ` +
       (remaining <= 3
-        ? `${remaining} round${remaining === 1 ? "" : "s"} left — finish what exists rather than starting anything.`
+        ? this.open
+          ? `${remaining} round${remaining === 1 ? "" : "s"} left — submit again if what you have now is better than what is up.`
+          : `${remaining} round${remaining === 1 ? "" : "s"} left — finish what exists rather than starting anything.`
         : `${remaining} rounds left.`)
     );
+  }
+
+  /** "0.3.0 is on the board (round 12)." — or that nothing is. */
+  private describeBuilds(): string {
+    const builds = this.desk?.submitted ?? [];
+    const newest = builds[0];
+    if (!newest) return "Nothing is on the board yet — submit as soon as it is playable.";
+    const when = newest.round === null ? "" : ` (round ${newest.round + 1})`;
+    return `${newest.version} is on the board${when}${builds.length > 1 ? `, ${builds.length} builds so far` : ""}.`;
   }
 
   /**
@@ -547,6 +625,25 @@ export class WorkshopSimulation implements Simulation {
         "",
         "Every file in that layout is yours to write. The owners named above are how the work would be " +
           "divided if there were more of you; in this run there is nothing stopping you writing any of it.",
+      ].join("\n");
+    }
+    // Nothing is assigned in the open arm, so there is no "your part" to state
+    // — only how a part comes to be yours. Saying it here rather than only in
+    // the brief matters because this is the durable channel: on turn two
+    // hundred this is still in the prompt and round one's conversation is not.
+    if (this.open) {
+      return [
+        this.jamBrief(),
+        "",
+        "## Your part",
+        "",
+        `You are the **${role}**. Nobody has been assigned any file — decide together what the game ` +
+          "needs, then claim what you are going to write with `claim_file`. A file belongs to whoever " +
+          "claimed it and writing to somebody else's is refused, so claim before you build and say what " +
+          "you have claimed.",
+        "",
+        "Everybody can read everything. If you need a change in a file that is not yours, ask the person " +
+          "who claimed it, and if it is yours and somebody asks, actually make it.",
       ].join("\n");
     }
     const mine = this.brief.layout.filter((f) => f.owner === role);
@@ -616,7 +713,26 @@ export class WorkshopSimulation implements Simulation {
     }
     if (!this.strictOwnership) return;
     const owner = this.workspace.ownerOf(path);
-    if (!owner) return;
+    if (!owner) {
+      /*
+       * In the open arm, writing an unclaimed file claims it.
+       *
+       * Without this the arm has no partition at all until somebody remembers
+       * to call `claim_file`, and two roles can spend three rounds writing over
+       * each other in the same file — which is the failure the prescribed
+       * layout prevented for free and the main risk in removing it. Requiring
+       * the claim *first* would be the other extreme: round one would refuse
+       * every write for a reason the team has to infer.
+       *
+       * So the tool is for reserving a file before it exists, and this is the
+       * backstop for the far more common case of somebody simply starting.
+       */
+      if (this.open && agent) {
+        this.workspace.claim(path, agent, "claimed by writing it");
+        this.counts.claims += 1;
+      }
+      return;
+    }
     if (owner === agent) return;
     this.counts.ownershipRefusals += 1;
     refuse(
@@ -736,9 +852,36 @@ export class WorkshopSimulation implements Simulation {
         "read_brief",
         "Read the brief again: what is being built, the constraints, and who writes which file.",
         {},
-        () => renderBrief(this.brief),
+        () => renderBrief(this.brief, this.open ? "open" : "prescribed"),
         "read",
       ),
+      // Only in the open arm. In the prescribed arm every file already has an
+      // owner from the brief, and a tool that could reassign them would quietly
+      // dismantle the partition the arm exists to test.
+      ...(this.open
+        ? [
+            agentTool(
+              "claim_file",
+              "Take responsibility for a file you are going to write. Nobody else can write it after that, " +
+                "so claim it before you start and tell the others what you claimed.",
+              {
+                path: "The file, like `engine.js` or `src/enemies.js`.",
+                purpose: "One line: what goes in it. The others see this beside the filename.",
+              },
+              (args, agent) => {
+                const role = String(agent ?? "");
+                if (!role) refuse("only a named role can claim a file.");
+                const purpose = String(args.purpose ?? "").trim();
+                if (!purpose) refuse("say what the file is for — the others read it beside the name.");
+                const { path, already } = this.workspace.claim(String(args.path ?? ""), role, purpose);
+                this.counts.claims += 1;
+                return already
+                  ? `\`${path}\` was already yours; its purpose now reads "${purpose}".`
+                  : `\`${path}\` is yours. Nobody else can write it. Say so in the room so the others build around it.`;
+              },
+            ),
+          ]
+        : []),
       agentTool(
         "write_file",
         "Write a whole file, creating it or replacing everything in it. For changing part of an existing file, patch_file is safer.",
@@ -1210,12 +1353,21 @@ export class WorkshopSimulation implements Simulation {
       // page. `arcadeRegistered` is the one that matters: a finished game with
       // no pitch is a page a judge cannot read, and it is a failure that
       // survives to the site where it is visible.
-      ...(this.desk?.counts ?? { arcadeBrowses: 0, arcadeReads: 0, arcadeUpdates: 0, arcadeRegistered: 0 }),
+      ...(this.desk?.counts ?? {
+        arcadeBrowses: 0,
+        arcadeReads: 0,
+        arcadeUpdates: 0,
+        arcadeRegistered: 0,
+        arcadeSubmits: 0,
+      }),
       roundsSinceCheck: this.lastCheck === undefined ? this.tick : this.tick - this.lastCheck.atRound,
       distinctWriters: writers.size,
       roundsWithNoWrite: this.roundsWithNoWrite,
       entryExists: this.workspace.exists(this.brief.entry) ? 1 : 0,
-      plannedFilesMade: this.brief.layout.filter((f) => this.workspace.exists(f.path)).length,
+      // Meaningless in the open arm — nothing was planned, so "how much of the
+      // plan got made" has no denominator. Reported as 0 rather than as a count
+      // of files that happen to share a name with the arm that isn't running.
+      plannedFilesMade: this.open ? 0 : this.brief.layout.filter((f) => this.workspace.exists(f.path)).length,
     };
   }
 
