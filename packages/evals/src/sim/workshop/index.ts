@@ -209,6 +209,13 @@ export class WorkshopSimulation implements Simulation {
     claims: 0,
     /** Files handed back, by their owner or by the lead. */
     releases: 0,
+    /**
+     * Times an agent changed how closely it follows a room.
+     *
+     * Read against the skip rate: an agent that keeps being woken and having
+     * nothing to do, and never turns that down, has not understood that it can.
+     */
+    attentionChanges: 0,
     /** Claims that lapsed because nobody ever wrote the file. */
     claimsLapsed: 0,
     /** API lookups against the chosen engine's documentation. */
@@ -255,6 +262,12 @@ export class WorkshopSimulation implements Simulation {
   private lapsedLastRound: { path: string; from: string; purpose: string }[] = [];
   /** Lines the engine skeleton wrote, so a scaffolded run stays comparable. */
   private scaffoldLines = 0;
+  /** The team said "none" out loud, rather than never deciding. */
+  private engineDeclined = false;
+  /** The runtime's room subscriptions. See {@link Simulation.attachRooms}. */
+  private rooms: Parameters<NonNullable<Simulation["attachRooms"]>>[0] | undefined;
+  /** Room name to ref, for the same. */
+  private roomRefs: ReadonlyMap<string, string> = new Map();
   /** The engine this team chose, if any. Nothing is installed until asked for. */
   private engine: EngineSpec | undefined;
   private engineDocs: EngineDocs | undefined;
@@ -407,6 +420,11 @@ export class WorkshopSimulation implements Simulation {
             `You have **${this.horizon} rounds**. That is the whole jam. Submit a build the moment it is`,
             "playable and keep improving it — the last build you submit is the one a person opens, plays",
             "and scores, so nothing you have already put up can be lost by carrying on.",
+            "",
+            "**There is no final version.** Do not declare one, do not freeze the code, and do not stop",
+            "early to protect what you have: the clock decides when the jam ends, and whatever you last",
+            "submitted is what gets judged. A team that stops at round twelve has thrown away eight",
+            "rounds of improvement for nothing.",
           ]
         : [
             `You have **${this.horizon} rounds**. That is the whole jam; when it runs out, whatever exists is`,
@@ -606,6 +624,14 @@ export class WorkshopSimulation implements Simulation {
     // "nothing submitted yet" at round nine is the single most useful thing the
     // announcement can say, and "0.3.0 is up" is what makes carrying on safe.
     const builds = this.open && this.desk ? ` ${this.describeBuilds()}` : "";
+    // Asked once a round until answered, because it is the decision that gets
+    // more expensive with every round it is deferred.
+    const engine =
+      this.open && !this.engine && !this.engineDeclined && availableEngines().length
+        ? ` No engine chosen yet — \`use_engine\` takes ${availableEngines()
+            .map((e) => e.id)
+            .join(" or ")}, or "none" if you are writing it yourself.`
+        : "";
     // Loud, and only on the round it happens. A file coming free is the one
     // piece of state that unblocks a team waiting on somebody who has stopped.
     const freed = this.lapsedLastRound.length
@@ -614,7 +640,7 @@ export class WorkshopSimulation implements Simulation {
           .join("; ")}.`
       : "";
     return (
-      `Round ${this.tick + 1} of ${this.horizon} — theme ${this.theme.title}. ${phase}${submission}${builds}${freed} ` +
+      `Round ${this.tick + 1} of ${this.horizon} — theme ${this.theme.title}. ${phase}${submission}${engine}${builds}${freed} ` +
       `${seen}. ` +
       `${files.length} file${files.length === 1 ? "" : "s"}, ${lines} line${lines === 1 ? "" : "s"}; ${check}. ` +
       (remaining <= 3
@@ -946,22 +972,44 @@ export class WorkshopSimulation implements Simulation {
         ? [
             tool(
               "use_engine",
-              `Install a game engine into the workspace and get a working example. Available: ${availableEngines()
+              `Install a game engine into the workspace, with a running skeleton. Available: ${availableEngines()
                 .map((e) => e.id)
-                .join(", ")}. You do not have to use one.`,
+                .join(", ")}, or "none" to write it yourself. Decide in the first round or two — it is ` +
+                "the one choice that is expensive to change later.",
               {
                 name: `Which engine: ${availableEngines()
                   .map((e) => e.id)
-                  .join(" or ")}.`,
+                  .join(", ")}, or "none".`,
               },
               (args) => {
-                const engine = findEngine(args.name);
+                const wanted = String(args.name ?? "")
+                  .trim()
+                  .toLowerCase();
+                /*
+                 * "none" is a choice, not an absence.
+                 *
+                 * The first team offered an engine never mentioned it —
+                 * `engineChosen: 0`, zero doc lookups — and nothing
+                 * distinguishes that from a team that considered one and
+                 * decided against. Recording the refusal separates the two, and
+                 * stops the announcement nagging a team that has already
+                 * decided.
+                 */
+                if (wanted === "none") {
+                  this.engineDeclined = true;
+                  return (
+                    "Noted: no engine. You are writing the loop, the input handling and the drawing " +
+                    "yourself on top of `lib/`. Nothing in the scorecard rewards that over using an " +
+                    "engine, so spend the time you save on the game itself."
+                  );
+                }
+                const engine = findEngine(wanted);
                 if (!engine || !availableEngines().some((e) => e.id === engine.id)) {
                   refuse(
                     `there is no engine called "${String(args.name ?? "")}". ` +
                       `Available: ${availableEngines()
                         .map((e) => e.id)
-                        .join(", ")}.`,
+                        .join(", ")}, or "none".`,
                   );
                 }
                 if (this.engine && this.engine.id !== engine.id) {
@@ -1045,6 +1093,68 @@ export class WorkshopSimulation implements Simulation {
                 return this.engineDocs.render(String(args.query ?? ""));
               },
               "read",
+            ),
+          ]
+        : []),
+      /*
+       * Deciding how often to be interrupted.
+       *
+       * Measured across one jam: a quarter of every turn taken was the watcher
+       * correctly declining to run an agent that had nothing to do, and the
+       * tester was woken and skipped on 43% of its turns. Being idle is not the
+       * waste — being *woken* is, and until now nothing could be done about it
+       * because the wake policy was fixed by the scenario.
+       *
+       * Two settings, not three. `wakeOn: "none"` exists in the store and is
+       * deliberately not offered: an agent that made itself unwakeable in every
+       * room would be gone for the rest of the jam with no way back, and a team
+       * whose builder has silently left is the failure mode this whole scenario
+       * keeps rediscovering. `addressed` is the quiet setting and it always has
+       * a way back — anybody can say the agent's name.
+       */
+      ...(this.rooms
+        ? [
+            agentTool(
+              "attention",
+              "Choose how closely you follow a room. `everything` wakes you on every message; " +
+                "`mentions` wakes you only when somebody names you. Use `mentions` for a room you are " +
+                "not working in right now — you can still read it, and anybody can still reach you.",
+              {
+                room: "Which room.",
+                level: "`everything` or `mentions`.",
+              },
+              (args, agent) => {
+                const role = String(agent ?? "");
+                if (!role) refuse("only a named role can change its own attention.");
+                const room = String(args.room ?? "").trim();
+                const ref = this.roomRefs.get(room);
+                if (!ref) {
+                  refuse(
+                    `there is no room called "${room}". Yours are: ${[...this.roomRefs.keys()].join(", ") || "none"}.`,
+                  );
+                }
+                const level = String(args.level ?? "")
+                  .trim()
+                  .toLowerCase();
+                const wakeOn = level === "mentions" ? "addressed" : level === "everything" ? "all" : undefined;
+                if (!wakeOn) refuse('level must be "everything" or "mentions".');
+                try {
+                  this.rooms?.subscribe({ agent: role, roomRef: ref, wakeOn });
+                } catch (err) {
+                  refuse(`could not change your attention: ${String((err as Error).message ?? err)}`);
+                }
+                this.counts.attentionChanges += 1;
+                this.desk?.note({
+                  kind: "did",
+                  agent: role,
+                  room: "attention",
+                  body: `follows ${room} on ${level}`,
+                });
+                return wakeOn === "addressed"
+                  ? `You will only be woken for \`${room}\` when somebody names you. You can still read it ` +
+                      "whenever you like, and this is reversible."
+                  : `You will be woken for everything in \`${room}\`.`;
+              },
             ),
           ]
         : []),
@@ -1309,16 +1419,22 @@ export class WorkshopSimulation implements Simulation {
     const engines = availableEngines();
     if (!engines.length) return [];
     return [
-      "## You can have a real game engine",
+      "## First decision: which engine",
       "",
-      "`use_engine` installs one into the workspace, with a working example. `docs` then looks up its",
-      "exact API — signatures, parameters and defaults — so you never have to guess a method name.",
+      "Before you build anything, pick one and say so. `use_engine` installs it along with a running",
+      "skeleton you can playtest immediately, and `docs` then looks up its exact API — signatures,",
+      "parameters and defaults — so you never have to guess a method name.",
       "",
       ...engines.map((e) => `- **${e.id}** — ${e.blurb}`),
+      "- **none** — no engine. You write the loop, the input handling and the drawing yourself, on top",
+      "  of the small `lib/` you already have.",
       "",
-      "You do not have to use one. The small `lib/` you already have is enough for many games, and",
-      "writing it yourself is a legitimate choice. Decide early though: porting a half-built game onto",
-      "an engine costs more than starting on it.",
+      "**You are judged on the game, not on how it was built.** Nothing in the scorecard rewards having",
+      "written your own engine, and an hour spent on a game loop is an hour not spent on the game. Pick",
+      "`none` only if the engines genuinely do not fit what you want to make — not to prove anything.",
+      "",
+      "Decide in the first round or two. Porting a half-built game onto an engine costs far more than",
+      "starting on one.",
       "",
     ];
   }
@@ -1381,6 +1497,7 @@ export class WorkshopSimulation implements Simulation {
       scaffoldLines: this.scaffoldLines,
       lastCheckpointEdits: this.lastCheckpointEdits ?? null,
       engine: this.engine?.id ?? null,
+      engineDeclined: this.engineDeclined,
       lastPlaytest: this.lastPlaytest ?? null,
       lastCheck: this.lastCheck ?? null,
       claims: this.workspace.claims(),
@@ -1395,6 +1512,7 @@ export class WorkshopSimulation implements Simulation {
     if (typeof s.writesThisRound === "number") this.writesThisRound = s.writesThisRound;
     if (typeof s.framesShown === "number") this.framesShown = s.framesShown;
     if (typeof s.scaffoldLines === "number") this.scaffoldLines = s.scaffoldLines;
+    if (typeof s.engineDeclined === "boolean") this.engineDeclined = s.engineDeclined;
     if (typeof s.lastCheckpointEdits === "number") this.lastCheckpointEdits = s.lastCheckpointEdits;
     if (s.counts && typeof s.counts === "object") Object.assign(this.counts, s.counts);
     if (s.lastPlaytest && typeof s.lastPlaytest === "object") {
@@ -1419,6 +1537,12 @@ export class WorkshopSimulation implements Simulation {
   /** Take the runtime's media store. See {@link Simulation.attachMedia}. */
   attachMedia(store: MediaStore | undefined): void {
     this.mediaStore = store;
+  }
+
+  /** Take the runtime's room store. See {@link Simulation.attachRooms}. */
+  attachRooms(store: Parameters<NonNullable<Simulation["attachRooms"]>>[0], rooms: ReadonlyMap<string, string>): void {
+    this.rooms = store;
+    this.roomRefs = rooms;
   }
 
   /**
@@ -1711,6 +1835,7 @@ export class WorkshopSimulation implements Simulation {
       // team that started writing before it divided the work.
       claims: this.counts.claims,
       releases: this.counts.releases,
+      attentionChanges: this.counts.attentionChanges,
       // Non-zero means somebody claimed a file and never wrote it. High here
       // with low `writes` is a team blocked on one quiet agent, which is the
       // failure this counter exists to make visible rather than mysterious.
@@ -1723,6 +1848,9 @@ export class WorkshopSimulation implements Simulation {
       // that wrote its own loop. Counting the skeleton as team output would
       // make every engine run look more productive than it was.
       scaffoldLines: this.scaffoldLines,
+      // 1 only when the team said "none" out loud. Distinguishes a decision
+      // from never having noticed the choice, which `engineChosen: 0` cannot.
+      engineDeclined: this.engineDeclined ? 1 : 0,
       // Frames that actually reached a model, which is a different fact from
       // playtests run: a run without `--vision` plays the game just as often
       // and shows nobody anything. Zero here next to a healthy `playtestsRun`

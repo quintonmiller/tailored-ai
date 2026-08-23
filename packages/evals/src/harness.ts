@@ -1414,6 +1414,10 @@ async function runRoomScenario(
     for (const line of scenario.history) saveMessage(db, session.id, { role: line.role, content: line.content });
   }
 
+  // Handed over once the rooms exist and their refs are known: a subscription is
+  // addressed by ref, so this cannot usefully happen any earlier.
+  sim?.attachRooms?.(store, refs);
+
   // Turns run in order, against the same rooms, so a later agent wakes on what
   // an earlier one posted. That is the whole point: one agent answering once
   // cannot produce a cascade, a silence where everybody deferred, or a handoff.

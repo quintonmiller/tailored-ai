@@ -212,6 +212,34 @@ export interface Simulation {
    * disk — the workspace, the arcade row and the trace all outlive the process
    * and re-reading them is more honest than carrying a copy that can disagree.
    */
+  /**
+   * The room subscriptions, so a simulation can let an agent change its own.
+   *
+   * Handed over the same way the media store is, and for the same reason: the
+   * capability belongs to the runtime, the decision about who may use it
+   * belongs to the scenario.
+   *
+   * The motivating measurement: across one jam a quarter of all turns were the
+   * watcher correctly declining to run an agent that had nothing to do, and the
+   * tester was woken and skipped on 43% of its turns. Being woken constantly is
+   * the cost; being absent is not. An agent that can say "only when you need me"
+   * removes the cost instead of being told to look busy.
+   */
+  attachRooms?(
+    store: {
+      subscribe(input: {
+        agent: string;
+        roomRef: string;
+        deliver?: string;
+        wakeOn?: string;
+        checkInMinutes?: number | null;
+        role?: string | null;
+      }): unknown;
+    },
+    /** Room name to ref, because a subscription is addressed by ref. */
+    rooms: ReadonlyMap<string, string>,
+  ): void;
+
   checkpoint?(): unknown;
 
   /**

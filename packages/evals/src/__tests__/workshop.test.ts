@@ -945,6 +945,104 @@ describe("a 3D engine, and the API it is honest about", () => {
   }, 90_000);
 });
 
+describe("choosing an engine, and being told what it is worth", () => {
+  it("asks every round until the team answers, and then stops", async () => {
+    const s = sim();
+    expect(s.announce()).toMatch(/No engine chosen yet/);
+    expect(s.briefFor("lead") ?? "").toMatch(/First decision: which engine/);
+    // The point of the choice, stated where they read it.
+    expect(s.briefFor("lead") ?? "").toMatch(/judged on the game, not on how it was built/);
+
+    await call(s, "use_engine", { name: "phaser" }, "builder");
+    expect(s.announce()).not.toMatch(/No engine chosen yet/);
+  }, 30_000);
+
+  it("treats writing your own as a decision, not an absence", async () => {
+    const s = sim();
+    const out = await call(s, "use_engine", { name: "none" }, "lead");
+    expect(out).toMatch(/Noted: no engine/);
+    // Nothing rewards it, and the tool says so rather than leaving them to guess.
+    expect(out).toMatch(/Nothing in the scorecard rewards that/);
+
+    // `engineChosen: 0` cannot tell "decided against" from "never noticed".
+    expect(s.metrics().engineChosen).toBe(0);
+    expect(s.metrics().engineDeclined).toBe(1);
+    expect(s.announce()).not.toMatch(/No engine chosen yet/);
+    // And nothing was installed.
+    expect(s.workspace.list().some((f) => f.path.includes("phaser"))).toBe(false);
+  });
+
+  it("says there is no final version, because they keep declaring one", () => {
+    // Seed 28 announced "1.0.0 (final)" at round 3 of 20 and the phase ladder
+    // had already been removed — the instinct outlived the instruction.
+    const brief = sim().briefFor("builder") ?? "";
+    expect(brief).toMatch(/There is no final version/);
+    expect(brief).toMatch(/the clock decides when the jam ends/);
+  });
+});
+
+describe("deciding how often to be interrupted", () => {
+  /** The sim with a room store attached, as the harness does. */
+  function withRooms(): { sim: WorkshopSimulation; calls: { agent: string; roomRef: string; wakeOn?: string }[] } {
+    const s = sim();
+    const calls: { agent: string; roomRef: string; wakeOn?: string }[] = [];
+    s.attachRooms?.(
+      { subscribe: (input) => calls.push(input as (typeof calls)[number]) },
+      new Map([
+        ["studio", "room:studio"],
+        ["build", "room:build"],
+      ]),
+    );
+    return { sim: s, calls };
+  }
+
+  it("lets an agent ask to be woken only when it is named", async () => {
+    const { sim: s, calls } = withRooms();
+    const out = await call(s, "attention", { room: "build", level: "mentions" }, "author");
+    expect(out).toMatch(/only be woken/);
+    expect(calls).toEqual([{ agent: "author", roomRef: "room:build", wakeOn: "addressed" }]);
+    expect(s.metrics().attentionChanges).toBe(1);
+  });
+
+  it("turns it back up again", async () => {
+    const { sim: s, calls } = withRooms();
+    await call(s, "attention", { room: "studio", level: "everything" }, "tester");
+    expect(calls[0].wakeOn).toBe("all");
+  });
+
+  /*
+   * The safety property, and the reason `none` is not offered.
+   *
+   * The store supports `wakeOn: "none"` — a read-only seat. An agent that set it
+   * on every room would be gone for the rest of the jam with no way back, and a
+   * team whose builder has silently left is the failure this scenario keeps
+   * rediscovering. `addressed` is the quiet setting and always has a way back.
+   */
+  it("will not let an agent make itself unreachable", async () => {
+    const { sim: s, calls } = withRooms();
+    expect(await call(s, "attention", { room: "studio", level: "none" }, "builder")).toMatch(
+      /everything.*or.*mentions|mentions/,
+    );
+    expect(await call(s, "attention", { room: "studio", level: "silent" }, "builder")).toMatch(/Refused|must be/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("refuses a room that is not this jam's", async () => {
+    const { sim: s } = withRooms();
+    expect(await call(s, "attention", { room: "lobby", level: "mentions" }, "lead")).toMatch(/no room called/);
+  });
+
+  it("is absent when nothing attached a room store", async () => {
+    // `bench` and `rehearse` run without a runtime, and a tool that would throw
+    // on use is worse than one that is not there.
+    expect(
+      sim()
+        .sharedTools()
+        .map((t) => t.name),
+    ).not.toContain("attention");
+  });
+});
+
 describe("stopping a jam and picking it up later", () => {
   /*
    * The simulation half of resume.
