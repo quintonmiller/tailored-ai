@@ -1122,6 +1122,130 @@ single `data.js` of tuning constants onto the board with no `index.html` and
 nothing to run. The bar is now the brief's entry file — no entry file, no
 artifact.
 
+## Fifteen teams built the same game (2026-08-23)
+
+The single strongest result this scenario has produced, and it is a result about
+the harness rather than about the model.
+
+Pull every entry the arcade has ever held and read the pitches in one column:
+
+| seed | theme | title | pitch |
+|---|---|---|---|
+| 11 | TWO HALVES | UNDIVIDED | One creature, two halves — the world tries to tear you apart. |
+| 12 | THE LAST ONE | THE LAST ONE | You are the last one. Keep the light alive. |
+| 13 | HELD TOGETHER | SEAM | You are the needle. Stitch the frays. |
+| 14 | YOU ARE THE HAZARD | EMBER | You are the fire. The more you burn, the harder the sky answers. |
+| 21 | HELD TOGETHER | KNOT | You are the knot holding a bunch of balloons. |
+| 22 | YOU ARE THE HAZARD | SINGULARITY | You are the black hole. |
+| 23 | NO GOING BACK | WAKE | Your trail is a one-way road. |
+| 24 | ONLY ONE | ONE | The last of your kind. |
+| 25 | IT GROWS | OVERGROWTH | Feed the light. Prune the dark. |
+| 26 | OUT OF CONTROL | Haywire | You can't stop — you can only steer. |
+| 27 | TWO HALVES | SEAM | One body, two halves — keep the seam intact. |
+| 28 | THE LAST ONE | THE LAST ONE | The last light in a dying dark. Keep it alive. |
+| 29 | HELD TOGETHER | THREADKEEPER | The world drifts apart. You are the tension. |
+| 30 | YOU ARE THE HAZARD | ECHO | Every death leaves a ghost that replays your path. |
+
+An abstract one-word title, a pitch that begins *you are the*, and underneath
+every one of them a real-time keyboard game about avoiding things on a dark
+canvas while a number goes up. Two teams independently produced a game called
+**SEAM**, for two *different* themes. Two independently produced **THE LAST
+ONE**. Eight distinct themes went in; one game came out.
+
+That is not a model being unimaginative. Four separate things in this repository
+were deciding the game before any team had an idea.
+
+### The Visuals criterion was a style guide
+
+It read: *"Does it look considered, given that everything is drawn from
+shapes?"* — and `jamBrief()` prints all five criteria verbatim, because a team
+should know what it is judged on. So every team read, in the brief, that
+everything is drawn from shapes.
+
+That clause was written as context for a judge. It arrived as an instruction.
+
+### The theme's `shallow` line was the only mechanic in the brief
+
+Every theme carried one, so the brief could name the laziest reading and warn
+against it. YOU ARE THE HAZARD carried `"an enemy that copies your movement"`.
+Seed 30 shipped a game whose own pitch was *"every death leaves a ghost that
+replays your path"*.
+
+Eight thousand words of brief, one concrete mechanic in it, and that mechanic
+was the thing we said not to build. A model reaching for an idea takes the idea
+on offer, and the warning label is not read as a warning.
+
+The rule, which cost a run: **never name a mechanic you do not want built.**
+Warn about the relationship — theme as decoration rather than as constraint —
+and leave the mechanics unnamed. The `shallow` field is gone.
+
+### A theme constrains what a game is *about*, which is the paintable axis
+
+This is the deep one. "About" is exactly the dimension a model can satisfy with
+a coat of paint: rename the player, recolour the hazard, rewrite the pitch, ship
+the same loop. None of the eight themes forbids dodging things, so all eight got
+dodging things. The genre was never chosen; it was *defaulted to*, and a
+constraint cannot dislodge a default it does not touch.
+
+Hence the **diversifier**: a second seeded constraint, on form rather than on
+subject. Real jams run these — one button, no words, no colour — and they work
+because they are cheap to check and expensive to ignore. You cannot decorate
+your way out of "the player never moves".
+
+Nine of them, in `themes.ts`. Five (`stillness`, `turn-based`,
+`make-not-dodge`, `no-enemies`, `words`) make a real-time avoidance game
+*structurally illegal* rather than merely unimaginative, which is the point: the
+constraint has to bite on the axis where the collapse is happening, and prose
+asking for more imagination had failed fifteen times running.
+
+It is stated as a rule in the brief, repeated in every round's announcement (the
+brief is the first thing a long room history trims away — the same fix that
+finally made the engine choice visible), and asked as the **first question on
+the scorecard**, phrased so that *no* is the pass. `--sim-option
+diversifier=none` turns it off for a control arm.
+
+Nine, not eight, is deliberate: nine is coprime with the eight themes, so theme
+and diversifier do not move in lockstep with the seed. With eight of each, every
+theme would have been welded to one diversifier forever — the same mode collapse
+one level up.
+
+### Originality was judged against a shelf the team never looked at
+
+`arcade_browse` has existed since the arcade did. Teams used it about once a run,
+to sightsee. Nothing told them that the originality score is a *comparison*, or
+what it is compared to. The brief now describes the collapse in plain words —
+fifteen teams, same game, two independently called SEAM — and says that an entry
+a judge could swap for one already on the shelf scores a one however well it is
+built.
+
+### Every jam ever run sampled at temperature 0.3
+
+The most embarrassing line in this section. `--temperature` defaults to 0.3
+across the eval package, which is correct for the thing it was tuned for —
+deterministic tool selection — and is *below Qwen's own recommended band* of
+0.6–0.7. Fifteen creative concepts sampled near-greedily are the modal concept
+fifteen times, and no amount of brief-writing was going to change that.
+
+`scripts/game-jam-loop.sh` now runs at 0.7 (`JAM_TEMPERATURE` overrides it).
+Watch `patchesRefused` and `checkProblems` for tool-calling damage; if higher
+temperature costs more than it buys, the honest move is a per-call temperature
+rather than reverting the run to greedy.
+
+### What this does not yet answer
+
+Whether it worked. The four changes landed together, deliberately — the goal was
+to move the output, not to attribute the movement — so the next cohort tells you
+the direction and not the cause. Attribution needs `diversifier=none` at the
+same temperature, and that costs runs nobody has spent yet.
+
+And one cause is identified but unfixed: `lib/` is a 2D keyboard-arcade kit
+(Loop, Keys, Draw, FX), it is pre-installed, and it is free. `use_engine none`
+means *keep it*, which is what both runs since the choice was forced have
+chosen, inside two turns, without discussing it. The default still answers "what
+kind of game is this" before anybody asks. Making the workspace start empty —
+so `none` installs the minimal kit rather than inheriting it — would make that
+choice real, at some cost in early productivity.
+
 ## Stopping a jam and picking it up later
 
 A run is three hours of one GPU, so "stop it and come back tomorrow" is a real
