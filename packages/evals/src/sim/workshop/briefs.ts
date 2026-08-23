@@ -148,8 +148,9 @@ const briefs: Brief[] = [
       "No sound.",
     ],
     openConstraints: [
-      "One <canvas>, drawn with 2D context calls. No image files and no sprite sheets — everything is " +
-        "drawn from shapes, paths and text.",
+      "One <canvas>. No bitmap image files and no sprite sheets — everything on screen is drawn by your " +
+        "code, from shapes, paths, gradients and text. You may write `.svg` files and draw them, and you " +
+        "may generate textures at runtime.",
       "Playable with a keyboard.",
       "No sound.",
     ],

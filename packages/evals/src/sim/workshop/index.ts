@@ -56,6 +56,7 @@ import {
 import { ArcadeDesk, openArcade } from "./arcade.js";
 import { type Brief, DEFAULT_BRIEF, getBrief, renderBrief, type WorkshopRole } from "./briefs.js";
 import { checkWorkspace, formatCheck } from "./check.js";
+import { availableEngines, EngineDocs, type EngineSpec, engineSource, findEngine } from "./engines.js";
 import { formatPlaytest, framesToShow, playtest } from "./playtest.js";
 import { makeScriptedPolicy } from "./policies.js";
 import { JUDGING, pickTheme, renderScorecard, type Theme } from "./themes.js";
@@ -210,6 +211,8 @@ export class WorkshopSimulation implements Simulation {
     releases: 0,
     /** Claims that lapsed because nobody ever wrote the file. */
     claimsLapsed: 0,
+    /** API lookups against the chosen engine's documentation. */
+    docLookups: 0,
   };
 
   private lastCheck: { problems: number; filesChecked: number; atRound: number } | undefined;
@@ -250,6 +253,9 @@ export class WorkshopSimulation implements Simulation {
   private lastCheckpointEdits: number | undefined;
   /** Claims freed at the last round boundary, for the announcement. */
   private lapsedLastRound: { path: string; from: string; purpose: string }[] = [];
+  /** The engine this team chose, if any. Nothing is installed until asked for. */
+  private engine: EngineSpec | undefined;
+  private engineDocs: EngineDocs | undefined;
 
   constructor(options: WorkshopOptions) {
     this.brief = getBrief(options.brief ?? WORKSHOP_PLAY_OPTIONS.brief);
@@ -419,6 +425,7 @@ export class WorkshopSimulation implements Simulation {
       "Nothing about how much you wrote is scored. A small finished game beats a large unfinished one.",
       "",
       ...this.arcadeBrief(),
+      ...this.engineBrief(),
       "---",
       "",
       renderBrief(this.brief, this.open ? "open" : "prescribed"),
@@ -882,6 +889,81 @@ export class WorkshopSimulation implements Simulation {
         () => renderBrief(this.brief, this.open ? "open" : "prescribed"),
         "read",
       ),
+      /*
+       * The engine, and its manual.
+       *
+       * Shared rather than per-role: whoever is writing the game needs the API,
+       * and gating it behind one role reproduces the arcade-tools problem in a
+       * worse place — an agent that cannot look up a signature guesses one.
+       *
+       * `use_engine` is deliberately a *tool* rather than a run option. The team
+       * choosing is the point, and what they choose is a measurement nothing
+       * else here can make.
+       */
+      ...(availableEngines().length
+        ? [
+            tool(
+              "use_engine",
+              `Install a game engine into the workspace and get a working example. Available: ${availableEngines()
+                .map((e) => e.id)
+                .join(", ")}. You do not have to use one.`,
+              {
+                name: `Which engine: ${availableEngines()
+                  .map((e) => e.id)
+                  .join(" or ")}.`,
+              },
+              (args) => {
+                const engine = findEngine(args.name);
+                if (!engine || !availableEngines().some((e) => e.id === engine.id)) {
+                  refuse(
+                    `there is no engine called "${String(args.name ?? "")}". ` +
+                      `Available: ${availableEngines()
+                        .map((e) => e.id)
+                        .join(", ")}.`,
+                  );
+                }
+                if (this.engine && this.engine.id !== engine.id) {
+                  refuse(
+                    `this team is already using ${this.engine.title}. Two engines in one game is a ` +
+                      `broken game — finish with the one you have.`,
+                  );
+                }
+                if (this.engine)
+                  return `${engine.title} is already installed at \`${engine.path}\`.\n\n${engine.start}`;
+                try {
+                  this.workspace.provide(engine.path, engineSource(engine), `${engine.title} — provided, read-only`);
+                } catch (err) {
+                  refuse(`could not install ${engine.title}: ${String((err as Error).message ?? err)}`);
+                }
+                this.engine = engine;
+                if (engine.docs) this.engineDocs = new EngineDocs(engine.docs);
+                this.desk?.note({ kind: "did", room: engine.path, body: `installed ${engine.title}` });
+                return (
+                  `${engine.title} is installed at \`${engine.path}\`. It does not count against your file ` +
+                  `budget and you cannot edit it.\n\n${engine.start}`
+                );
+              },
+            ),
+            tool(
+              "docs",
+              "Look up the exact API of the engine you installed — signatures, parameters and defaults. " +
+                "Use it instead of guessing a method name.",
+              { query: "What you need, like `arcade physics velocity` or `Sprite.setScale`." },
+              (args) => {
+                if (!this.engineDocs) {
+                  refuse(
+                    this.engine
+                      ? `there is no API documentation for ${this.engine.title}.`
+                      : "no engine is installed yet. `use_engine` installs one, and its documentation comes with it.",
+                  );
+                }
+                this.counts.docLookups += 1;
+                return this.engineDocs.render(String(args.query ?? ""));
+              },
+              "read",
+            ),
+          ]
+        : []),
       // Only in the open arm. In the prescribed arm every file already has an
       // owner from the brief, and a tool that could reassign them would quietly
       // dismantle the partition the arm exists to test.
@@ -1129,6 +1211,32 @@ export class WorkshopSimulation implements Simulation {
       // A checkpoint that cannot be written costs the safety net for one round.
       // Taking the jam down over it would cost the whole run.
     }
+  }
+
+  /**
+   * The engines on offer, if any are.
+   *
+   * Stated in the brief rather than left to be discovered in the tool list,
+   * because a tool nobody knows the purpose of is a tool nobody calls — and this
+   * one changes what is worth attempting. A team that does not know it can have
+   * arcade physics will not design a game that needs it.
+   */
+  private engineBrief(): string[] {
+    const engines = availableEngines();
+    if (!engines.length) return [];
+    return [
+      "## You can have a real game engine",
+      "",
+      "`use_engine` installs one into the workspace, with a working example. `docs` then looks up its",
+      "exact API — signatures, parameters and defaults — so you never have to guess a method name.",
+      "",
+      ...engines.map((e) => `- **${e.id}** — ${e.blurb}`),
+      "",
+      "You do not have to use one. The small `lib/` you already have is enough for many games, and",
+      "writing it yourself is a legitimate choice. Decide early though: porting a half-built game onto",
+      "an engine costs more than starting on it.",
+      "",
+    ];
   }
 
   /**
@@ -1452,6 +1560,10 @@ export class WorkshopSimulation implements Simulation {
       // with low `writes` is a team blocked on one quiet agent, which is the
       // failure this counter exists to make visible rather than mysterious.
       claimsLapsed: this.counts.claimsLapsed,
+      docLookups: this.counts.docLookups,
+      // Which engine a team reached for, given a free choice. 0 is "none, they
+      // wrote it themselves", which is a real answer and not a failure.
+      engineChosen: this.engine ? 1 : 0,
       // Frames that actually reached a model, which is a different fact from
       // playtests run: a run without `--vision` plays the game just as often
       // and shows nobody anything. Zero here next to a healthy `playtestsRun`

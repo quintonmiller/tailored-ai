@@ -937,6 +937,66 @@ that started writing before it divided the work) and `arcadeSubmits` against
 `roundsWithNoWrite` (one submit at the end is the old behaviour wearing a new
 tool; five is a team that stopped treating the horizon as a cliff).
 
+## Real engines, and the manual that makes them usable (2026-08-23)
+
+`use_engine` installs a real game engine into the workspace, and `docs` looks up
+its exact API. Phaser 4 first; the seam takes more.
+
+**The argument against an engine had been specific, and it stopped holding.** It
+was: our 580-line `lib/` is competitive for 2D, the brief bans image files so
+sprites and atlases are unusable, and a big API costs context for surface the
+model half-remembers. The first two collapsed once the image ban came up for
+review and 3D was on the table. The third is what the docs index answers, and the
+shape of it is worth stating precisely: a model that has read thousands of Phaser
+tutorials **has the idiom and half-remembers the signature**. Training data is
+best at the first and worst at the second; a `.d.ts` is exactly the inverse. They
+compose rather than overlap.
+
+**Chosen, not issued.** Nothing is installed until a team asks. That keeps the
+choice with them, it keeps a megabyte nobody used out of every published game,
+and *which engine a team reaches for* is a measurement nothing else here makes.
+
+**The index is filtered by the jam's own constraints**, which is a relevance
+decision before it is a size one. Dropped: `Loader` and `FileTypes` (no image
+files), `Sound` (no audio), `Physics.Matter` (not in the arcade-physics build we
+vendor — documenting an engine that is not in the file produces confident code
+that cannot run), and renderer internals. 13,875 documented declarations become
+9,737 a jam game could call, 8 MB of TypeScript becomes 3.2 MB of JSONL, and a
+four-result answer costs about 350 tokens.
+
+Search is lexical, and scored on **coverage minus surplus**: how many of the
+query's words appear in the member name, less the words it did not ask for.
+Summing per-term hits had ranked `setAngularVelocity` above `setVelocity` for
+"arcade physics set velocity" — both contain every term — and returned
+`Structs.Map.keys` for "keyboard cursor keys", because one exact match on a
+common word beat a partial match on `createCursorKeys`. Both rank correctly now.
+
+### Two flags were deciding what kind of games could exist
+
+Neither was a design decision; both were side effects that had been shaping the
+output for months.
+
+**`--disable-gpu` meant `getContext("webgl")` returned null.** Anything using
+WebGL rendered nothing, threw nothing, and handed the team a black screen with no
+error — the exact condition that made the first four jams unable to see their own
+work. Replaced with `--use-gl=angle --use-angle=swiftshader
+--enable-unsafe-swiftshader`: WebGL 1 and 2 both initialise, Babylon renders lit
+3D at ~60fps, Phaser boots WebGL instead of falling back to canvas.
+
+**The frame sampler called `getContext("2d")` and gave up when it returned
+null** — which is what a WebGL canvas always returns. Every Phaser or Babylon
+game would have reported `nocontext`: never animating, never responding, no
+luminance grid. A working game read as a dead one.
+
+Fixing that needed a second thing. Copying the canvas into a 2D one *succeeded*
+and returned a blank image, because a WebGL drawing buffer is cleared once the
+browser presents it. The game cannot opt in for us — it creates its own context —
+so `preserveDrawingBuffer` is forced via `evaluateOnNewDocument`, before any page
+script runs. Measured: 0 lit pixels before, 172,800 after.
+
+Both fixes are in the harness, not the artifact. The file a person opens is
+untouched.
+
 ## What it cannot tell you
 
 - **Runs are not comparable with each other.** Two runs on the same brief differ

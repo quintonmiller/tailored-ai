@@ -677,6 +677,118 @@ describe("the open arm: a brief that says what, not how", () => {
   });
 });
 
+describe("a real game engine, when the team asks for one", () => {
+  it("installs nothing until somebody chooses", () => {
+    const s = sim();
+    expect(s.workspace.list().some((f) => f.path.includes("phaser"))).toBe(false);
+    expect(s.metrics().engineChosen).toBe(0);
+    // But the brief has to say the choice exists, or nobody makes it.
+    expect(s.briefFor("builder") ?? "").toMatch(/use_engine/);
+  });
+
+  it("installs on request, read-only and off the file budget", async () => {
+    const s = sim();
+    const out = await call(s, "use_engine", { name: "phaser" }, "builder");
+    expect(out).toMatch(/Phaser 4 is installed/);
+    expect(out).toMatch(/generateTexture/);
+    expect(s.metrics().engineChosen).toBe(1);
+
+    const file = s.workspace.list().find((f) => f.path === "lib/phaser.js");
+    expect(file?.provided).toBe(true);
+    // Provided files are scenery, not output — or every count of what the team
+    // produced becomes incomparable with every run before engines existed.
+    expect(s.metrics().filesPresent).toBe(0);
+    expect(s.metrics().linesInWorkspace).toBe(0);
+
+    const edit = await call(s, "write_file", { path: "lib/phaser.js", content: "// mine" }, "builder");
+    expect(edit).toMatch(/came with the workspace/);
+  });
+
+  it("refuses a second engine rather than shipping a broken game", async () => {
+    const s = sim();
+    await call(s, "use_engine", { name: "phaser" }, "builder");
+    const again = await call(s, "use_engine", { name: "phaser" }, "interface");
+    expect(again).toMatch(/already installed/);
+    const unknown = await call(s, "use_engine", { name: "unreal" }, "builder");
+    expect(unknown).toMatch(/no engine called/);
+  });
+
+  it("answers an API question with a real signature", async () => {
+    const s = sim();
+    await call(s, "use_engine", { name: "phaser" }, "builder");
+    const out = await call(s, "docs", { query: "arcade physics set velocity" }, "builder");
+    expect(out).toMatch(/setVelocity/);
+    // The signature and its parameters are the half the model half-remembers.
+    expect(out).toMatch(/@param/);
+    expect(s.metrics().docLookups).toBe(1);
+  });
+
+  it("says what to do when nothing matches, rather than nothing", async () => {
+    const s = sim();
+    await call(s, "use_engine", { name: "phaser" }, "builder");
+    expect(await call(s, "docs", { query: "zzzzqqqq" }, "builder")).toMatch(/Nothing in the API matches/);
+  });
+
+  it("does not document what the brief forbids", async () => {
+    const s = sim();
+    await call(s, "use_engine", { name: "phaser" }, "builder");
+    // Audio and image loading are banned, and Matter is not in the build we
+    // vendor. Documenting any of them produces confident code that cannot run.
+    for (const banned of ["play a sound effect", "load a spritesheet image", "matter physics body"]) {
+      const out = await call(s, "docs", { query: banned }, "builder");
+      expect(out, banned).not.toMatch(/Phaser\.Sound|Loader\.|MatterJS/);
+    }
+  });
+
+  it("refuses docs before an engine is chosen", async () => {
+    expect(await call(sim(), "docs", { query: "sprite" }, "builder")).toMatch(/no engine is installed/);
+  });
+
+  /**
+   * The whole loop, through the real tools: install, build, run.
+   *
+   * Every piece is covered above in isolation, and none of it would catch the
+   * engine being vendored in a form the browser cannot load — the failure that
+   * actually threatens this, since modern libraries ship ESM by default and a
+   * classic `<script>` tag cannot load one. three.js is exactly that case.
+   */
+  it("builds and runs a real Phaser game end to end", async () => {
+    const s = sim();
+    await call(s, "use_engine", { name: "phaser" }, "builder");
+    await call(
+      s,
+      "write_file",
+      {
+        path: "index.html",
+        content:
+          '<!doctype html><html><body style="margin:0;background:#0d0f13"><script src="lib/phaser.js"></script><script src="game.js"></script></body></html>',
+      },
+      "interface",
+    );
+    await call(
+      s,
+      "write_file",
+      {
+        path: "game.js",
+        content:
+          "new Phaser.Game({\n  type: Phaser.AUTO, width: 960, height: 720, backgroundColor: '#0d0f13',\n  physics: { default: 'arcade', arcade: { gravity: { y: 400 } } },\n  scene: {\n    create() {\n      const g = this.add.graphics();\n      g.fillStyle(0x6ee7b7, 1); g.fillCircle(24, 24, 24);\n      g.generateTexture('orb', 48, 48); g.destroy();\n      this.orb = this.physics.add.image(480, 80, 'orb').setBounce(0.85).setCollideWorldBounds(true);\n      this.add.text(24, 24, 'ENGINE TEST', { fontFamily: 'monospace', fontSize: '28px', color: '#e6e9ef' });\n      this.keys = this.input.keyboard.createCursorKeys();\n    },\n    update() {\n      this.orb.setVelocityX(this.keys.left.isDown ? -300 : this.keys.right.isDown ? 300 : 0);\n    },\n  },\n});\n",
+      },
+      "builder",
+    );
+
+    expect(await call(s, "check_syntax", {}, "tester")).toMatch(/0 problems/);
+
+    const report = await call(s, "playtest", {}, "tester");
+    expect(report).toMatch(/no console errors/i);
+    expect(report).toMatch(/It animates on its own/);
+    expect(report).toMatch(/screen changed after keys/);
+    // The canvas is WebGL, and reading it at all is the thing that was broken:
+    // before `preserveDrawingBuffer` was forced, every frame sampled empty and
+    // a working Phaser game reported as a dead one.
+    expect(report).toMatch(/Canvas 960x720/);
+  }, 60_000);
+});
+
 describe("submitting a build mid-jam", () => {
   function withArcade(options: Record<string, unknown> = {}): { sim: WorkshopSimulation; store: ArcadeStore } {
     const home = temp();

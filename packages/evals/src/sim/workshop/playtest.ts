@@ -90,6 +90,8 @@ interface PageLike {
   setRequestInterception(on: boolean): Promise<void>;
   goto(url: string, opts: Record<string, unknown>): Promise<unknown>;
   evaluate(fn: string): Promise<unknown>;
+  /** Runs before any of the page's own scripts. See the WebGL note below. */
+  evaluateOnNewDocument(fn: string): Promise<unknown>;
   screenshot(opts: { path: string }): Promise<unknown>;
   keyboard: {
     press(key: string): Promise<void>;
@@ -120,9 +122,19 @@ const SAMPLE = `(() => {
       text: (document.body ? document.body.innerText : '').slice(0, 600),
       elements: document.getElementsByTagName('*').length };
   }
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return { kind: 'nocontext' };
+  // A WebGL canvas has no 2D context, and asking for one returns null rather
+  // than throwing. That used to end the sample here: every Phaser or Babylon
+  // game reported "nocontext", so it never animated, never responded and never
+  // produced a luminance grid — a working game read as a dead one.
   const w = canvas.width, h = canvas.height;
+  let ctx = canvas.getContext('2d');
+  if (!ctx) {
+    const off = document.createElement('canvas');
+    off.width = w; off.height = h;
+    ctx = off.getContext('2d');
+    if (!ctx) return { kind: 'nocontext' };
+    try { ctx.drawImage(canvas, 0, 0); } catch (e) { return { kind: 'nocontext' }; }
+  }
   const data = ctx.getImageData(0, 0, w, h).data;
 
   // Colour histogram, quantised so anti-aliasing does not shatter it.
@@ -250,7 +262,23 @@ export async function playtest(options: PlaytestOptions): Promise<PlaytestReport
     browser = await puppeteer.launch({
       headless: true,
       args: [
-        "--disable-gpu",
+        /*
+         * Software GL, not no GL.
+         *
+         * This was `--disable-gpu`, which was chosen for headless stability and
+         * had a consequence nobody decided: `canvas.getContext("webgl")`
+         * returned **null**, so anything using WebGL rendered nothing, threw
+         * nothing, and handed the team a black screen with no error — the exact
+         * condition that made the first four jams unable to see their own work.
+         * A browser flag was quietly deciding what kind of games could exist.
+         *
+         * Measured with these three: WebGL 1 and 2 both initialise on
+         * SwiftShader, a Babylon scene renders lit 3D at ~60fps, and Phaser
+         * boots on its WebGL renderer instead of falling back to canvas.
+         */
+        "--use-gl=angle",
+        "--use-angle=swiftshader",
+        "--enable-unsafe-swiftshader",
         "--disable-dev-shm-usage",
         "--disable-extensions",
         "--no-first-run",
@@ -263,6 +291,28 @@ export async function playtest(options: PlaytestOptions): Promise<PlaytestReport
     });
     const page = await browser.newPage();
     await page.setViewport({ width: 960, height: 720 });
+
+    /*
+     * Keep every WebGL frame readable after it has been composited.
+     *
+     * By default a WebGL drawing buffer is cleared once the browser presents
+     * it, so copying the canvas afterwards yields a blank image — measured:
+     * `drawImage` succeeded and returned 0 lit pixels across every frame. The
+     * game cannot opt in for us because the game creates its own context, so
+     * the attribute is forced here, before any of the page's scripts run.
+     *
+     * Costs a little performance in the harness and nothing in the artifact:
+     * this affects the browser `playtest` drives, never the file a person opens.
+     */
+    await page.evaluateOnNewDocument(`(() => {
+      const real = HTMLCanvasElement.prototype.getContext;
+      HTMLCanvasElement.prototype.getContext = function (kind, attrs) {
+        if (typeof kind === 'string' && kind.indexOf('webgl') !== -1) {
+          attrs = Object.assign({}, attrs, { preserveDrawingBuffer: true });
+        }
+        return real.call(this, kind, attrs);
+      };
+    })()`);
 
     page.on("console", (message: { text(): string; type(): string }) => {
       const text = `${message.text()}`.slice(0, 300);
