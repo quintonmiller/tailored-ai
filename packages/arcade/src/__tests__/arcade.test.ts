@@ -524,6 +524,36 @@ describe("submitting builds during a jam", () => {
     store.close();
   });
 
+  it("keeps a team on the live panel after it ships its first build", async () => {
+    // The regression this is here for: `/api/live` filtered on `status ===
+    // 'draft'`, so submitting made a run vanish from the panel — the run most
+    // worth watching was the only one not shown.
+    const store = new ArcadeStore(tempHome());
+    const source = workspace();
+    const entry = store.createEntry(provenance({ artifactPath: source }));
+    store.register(entry.id, { title: "Still Building" });
+    snapshotVersion(store, entry.id, { artifactPath: source, version: "0.4.0", round: 11 });
+    expect((store.entry(entry.id) as Entry).status).toBe("published");
+
+    const server = createArcadeServer({ store, port: 0, gamesPort: 0 });
+    await listen(server, { port: 0, gamesPort: 0 });
+    const base = `http://127.0.0.1:${(server.site.address() as { port: number }).port}`;
+    try {
+      // Re-read: registering a title renames the slug while the entry is new.
+      const slug = (store.entry(entry.id) as Entry).slug;
+      const live = (await (await fetch(`${base}/api/live`)).json()) as { live: { slug: string }[] };
+      expect(live.live.map((e) => e.slug)).toContain(slug);
+
+      // And it leaves once the run is over, published or not.
+      store.endRun(entry.id);
+      const after = (await (await fetch(`${base}/api/live`)).json()) as { live: { slug: string }[] };
+      expect(after.live).toHaveLength(0);
+    } finally {
+      await server.close();
+      store.close();
+    }
+  });
+
   it("refuses to submit nothing", () => {
     const store = new ArcadeStore(tempHome());
     const source = tempHome();

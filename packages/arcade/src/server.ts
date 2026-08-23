@@ -206,7 +206,17 @@ async function handleSite(
    */
   if (path === "/api/live") {
     const now = Date.now();
-    const live = store.list({ includeDrafts: true, sort: "new", limit: 8 }).filter((e) => e.status === "draft");
+    /*
+     * `live`, not `status === "draft"`.
+     *
+     * Those meant the same thing until a team could submit a build mid-jam.
+     * Now the good case — shipped `0.4.0` at round two and still building — is
+     * `published`, and filtering on draft-ness dropped it from the panel
+     * entirely: the run most worth watching was the one that disappeared. The
+     * flag exists precisely to separate "the jam is still running" from "there
+     * is something on the board".
+     */
+    const live = store.list({ includeDrafts: true, sort: "new", limit: 8 }).filter((e) => e.live);
     return json(res, 200, {
       live: live.map((entry) => {
         const since = now - Date.parse(entry.updatedAt || entry.createdAt);
