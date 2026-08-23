@@ -21,6 +21,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ArcadeStore } from "@tailored-ai/arcade";
+import { initDatabase, LocalRoomBackend, RoomStore } from "@tailored-ai/core";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { validateScenario } from "../schema.js";
 import { createSimulation, simulationPolicies } from "../sim/index.js";
@@ -1088,6 +1089,44 @@ describe("deciding how often to be interrupted", () => {
         .sharedTools()
         .map((t) => t.name),
     ).not.toContain("attention");
+  });
+});
+
+describe("picking a jam up in a home that already has its rooms", () => {
+  /*
+   * The harness half of resume, which the block below calls "covered by the run
+   * itself" — and which was not covered at all.
+   *
+   * `runRoomScenario` creates the scenario's rooms on the way in. That is
+   * correct exactly once. On a resume the session home already holds them, and
+   * `createRoom` refuses a duplicate name rather than handing back the room
+   * that is already there, so every resume died one second in with
+   *
+   *   Room name "studio" is already used by local:studio.
+   *
+   * The loop then reported the run "done", moved on to the next seed, and left
+   * an afternoon of conversation in a directory nothing would ever open again.
+   * A resume that fails on first use is worse than no resume: the checkpoint is
+   * written either way, so the failure looks exactly like success.
+   */
+  it("reuses a room that is already there instead of refusing it", async () => {
+    const home = mkdtempSync(join(tmpdir(), "resume-rooms-"));
+    const db = initDatabase(join(home, "agent.db"));
+    const store = new RoomStore(db);
+    const backend = new LocalRoomBackend(db, store);
+
+    const first = await backend.createRoom({ name: "studio", purpose: "the jam" });
+    expect(first.ref.id).toBeTruthy();
+
+    // What a second run against the same home does, which is what a resume is.
+    // The lookup the harness now performs finds it...
+    expect(store.getRoomByName("studio")?.ref.id).toBe(first.ref.id);
+    // ...and the call it used to make unconditionally still throws, which is
+    // why the lookup has to come first rather than being a fallback.
+    await expect(backend.createRoom({ name: "studio", purpose: "the jam" })).rejects.toThrow(/already used/);
+
+    db.close();
+    rmSync(home, { recursive: true, force: true });
   });
 });
 

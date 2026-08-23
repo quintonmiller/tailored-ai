@@ -1341,9 +1341,21 @@ async function runRoomScenario(
 
   const refs = new Map<string, string>();
   for (const spec of scenario.rooms ?? []) {
-    // createRoom already persists through the store, so there is nothing to
-    // upsert afterwards — doing it again would just rewrite the same row.
-    const room = await backend.createRoom({ name: spec.name, purpose: spec.purpose });
+    /*
+     * createRoom already persists through the store, so there is nothing to
+     * upsert afterwards — doing it again would just rewrite the same row.
+     *
+     * On a resume the row is already there, and `createRoom` refuses a
+     * duplicate name rather than returning the existing room. That made every
+     * resume fail one second in with `Room name "studio" is already used`,
+     * which is worse than having no resume at all: the checkpoint is written,
+     * the loop reports the run "done", and an afternoon of work is stranded in
+     * a session directory nothing will ever open again. Reuse the room when it
+     * exists, whether or not this run believes it is resuming — a home that
+     * already has the room is the only fact that matters.
+     */
+    const existing = store.getRoomByName(spec.name);
+    const room = existing ?? (await backend.createRoom({ name: spec.name, purpose: spec.purpose }));
     const ref = formatRoomRef(room.ref);
     refs.set(spec.name, ref);
     // Every agent that takes a turn is subscribed to every room, unless the room
