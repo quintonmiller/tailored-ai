@@ -914,6 +914,16 @@ describe("submitting a build mid-jam", () => {
     expect(store.versions(entry.id).map((v) => v.version)).toEqual(["0.2.0", "0.1.0"]);
   });
 
+  it("does not put a run with no entry file on the board", async () => {
+    // Seed 26 published with one `data.js` of tuning constants and no
+    // `index.html`: a page a reviewer opens and cannot play.
+    const { sim: s, store } = withArcade();
+    await call(s, "write_file", { path: "data.js", content: "const TUNING = { speed: 1 };\n" }, "author");
+    await s.finish?.();
+    expect(store.list()).toHaveLength(0);
+    expect(store.list({ includeDrafts: true })[0].status).toBe("draft");
+  });
+
   it("refuses to submit an empty workspace", async () => {
     const { sim: s } = withArcade();
     const out = await call(s, "submit_version", { version: "0.1.0" }, "lead");

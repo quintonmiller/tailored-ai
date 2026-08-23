@@ -645,6 +645,40 @@ export class WorkshopSimulation implements Simulation {
    * scenario cannot state it; this is the only durable channel a simulation has
    * to an agent, and it is exactly what it is for.
    */
+  /**
+   * End the turn in a tool call.
+   *
+   * Measured 2026-08-23, the most expensive defect this scenario has had: **44%
+   * of all agent turns produced nothing at all** — no tool call, no message.
+   * By role: builder 73%, lead 53%, interface 43%, author 39%, tester 6%. The
+   * ordering is the clue; the tester's job is "run a tool and report", and it is
+   * the only role that reliably acts.
+   *
+   * Probed directly against the model, three repeats each:
+   *
+   * | config                      | acted | output      | reasoning |
+   * |-----------------------------|-------|-------------|-----------|
+   * | medium, as shipped          | 0/3   | 8,192 (cap) | ~7,000    |
+   * | medium, cap raised to 16384 | 0/1   | 16,384 (cap)| ~13,700   |
+   * | `reasoning_effort: low`     | 3/3   | 538–2,291   | ~1,000    |
+   * | **medium + this paragraph** | 3/3   | 341–1,271   | ~900      |
+   *
+   * Raising the cap is the intuitive fix and it is the wrong one: the model
+   * simply reasons twice as long and still never commits. Doubling the budget
+   * doubled the trace and produced nothing, at 145 seconds a turn.
+   *
+   * This wording is preferred over dropping the effort level because it keeps
+   * the reasoning quality we chose, and because it lives in our prompt rather
+   * than a model flag — a different model gets the same instruction. In the
+   * probe it also produced the highest rate of actual `write_file` calls.
+   */
+  private static readonly ACT_THIS_TURN =
+    "## Finish the turn\n\n" +
+    "Think briefly, then act. **Every turn must end in a tool call.** If you are not sure what the best " +
+    "move is, make the smallest useful one — write a few lines, read the file you are about to change, " +
+    "or say one thing in a room — rather than deliberating without doing anything. A turn that ends " +
+    "with no tool call spends a round of the jam and leaves nothing behind, and you only get twenty.";
+
   briefFor(role: string): string | undefined {
     // With ownership off, a role-specific "your part" is not merely unhelpful,
     // it is wrong: the solo arm plays every role through one agent, and telling
@@ -659,6 +693,8 @@ export class WorkshopSimulation implements Simulation {
         "",
         "Every file in that layout is yours to write. The owners named above are how the work would be " +
           "divided if there were more of you; in this run there is nothing stopping you writing any of it.",
+        "",
+        WorkshopSimulation.ACT_THIS_TURN,
       ].join("\n");
     }
     // Nothing is assigned in the open arm, so there is no "your part" to state
@@ -678,6 +714,8 @@ export class WorkshopSimulation implements Simulation {
         "",
         "Everybody can read everything. If you need a change in a file that is not yours, ask the person " +
           "who claimed it, and if it is yours and somebody asks, actually make it.",
+        "",
+        WorkshopSimulation.ACT_THIS_TURN,
       ].join("\n");
     }
     const mine = this.brief.layout.filter((f) => f.owner === role);
@@ -694,6 +732,8 @@ export class WorkshopSimulation implements Simulation {
       "",
       "Writing to a file you do not own is refused. That is not a bug to work around — it is how the " +
         "work is divided, and the way through it is to ask.",
+      "",
+      WorkshopSimulation.ACT_THIS_TURN,
     ].join("\n");
   }
 
@@ -1483,8 +1523,18 @@ export class WorkshopSimulation implements Simulation {
     // from round zero, so counting them would make `files.length > 0` true
     // for a team that wrote nothing at all and publish an empty entry.
     const files = this.workspace.list().filter((f) => !f.planned && !f.provided);
+    /*
+     * A game is a thing you can open, so the entry file is the bar.
+     *
+     * `files.length > 0` was too low and let a real non-game onto the board:
+     * seed 26 published with a single `data.js` of tuning constants, no
+     * `index.html`, and nothing to run. The brief says the artifact is reviewed
+     * by opening the entry file — if that does not exist there is no artifact,
+     * and a page a reviewer cannot play is worse than a shorter board.
+     */
+    const playable = files.length > 0 && this.workspace.exists(this.brief.entry);
     try {
-      this.desk?.publish(this.root, this.counters(), files.length > 0);
+      this.desk?.publish(this.root, this.counters(), playable);
     } catch (err) {
       this.events.push({
         day: this.tick,

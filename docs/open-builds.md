@@ -1025,6 +1025,72 @@ script runs. Measured: 0 lit pixels before, 172,800 after.
 Both fixes are in the harness, not the artifact. The file a person opens is
 untouched.
 
+## The most expensive defect this scenario has had (2026-08-23)
+
+**44% of all agent turns produced nothing at all** — no tool call, no message.
+By role, on seed 27:
+
+| role | empty turns |
+|---|---|
+| builder | 27 of 37 (73%) |
+| lead | 29 of 55 (53%) |
+| interface | 16 of 37 (43%) |
+| author | 14 of 36 (39%) |
+| tester | 2 of 36 (6%) |
+
+The ordering is the clue. The tester's job is "run a tool and report what it
+said", and it is the only role that reliably acts; the roles that deliberate go
+silent. The builder knew, and said so in the one round it managed to speak: *"I
+own the 17 rounds of silence."* It was not refusing. Its turns were coming back
+empty.
+
+The consequence is the whole run. At round 18 of 20, `index.html` still
+referenced a `game.js` nobody had written, so every playtest failed, so the game
+never ran, so the automatic checkpoint never fired, so nothing reached the board.
+
+Probed directly against the model, three repeats each:
+
+| config | acted | output | reasoning |
+|---|---|---|---|
+| medium, as shipped | **0/3** | 8,192 (cap) | ~7,000 |
+| medium, cap raised to 16,384 | **0/1** | 16,384 (cap) | ~13,700 |
+| `reasoning_effort: low` | 3/3 | 538–2,291 | ~1,000 |
+| **medium + "finish the turn" paragraph** | **3/3** | 341–1,271 | ~900 |
+
+**Raising the cap is the intuitive fix and it is the wrong one.** The model
+simply reasons twice as long and still never commits: doubling the budget
+doubled the trace, produced nothing, and cost 145 seconds a turn. The same
+failure is recorded in `scripts/game-jam-loop.sh` at `max_tokens: 2048`, and it
+came back at 8192 because deliberative roles reason past any cap you set.
+
+What fixes it is telling them to finish. The paragraph is in `briefFor`, so it
+reaches every role through the durable channel, and it is preferred over lowering
+the effort level because it keeps the reasoning quality we chose and lives in our
+prompt rather than a model flag. In the probe it also produced the highest rate
+of actual `write_file` calls.
+
+Worth knowing for this endpoint: NInfer **rejects**
+`chat_template_kwargs.enable_thinking` — that is the vLLM dialect. It takes
+`reasoning_effort`.
+
+### The kill that did not kill
+
+Seed 26 was stopped at round 7 with `pkill -f 'cli.ts run'`, and three hours
+later published a finished twenty-round entry. The loop script and the
+`pnpm`/`tsx` parents died; the worker that actually calls the model did not,
+because its command line does not contain the pattern. It spent two hours sharing
+the GPU with the run that replaced it — which makes seed 27's numbers
+untrustworthy as a measurement of anything.
+
+`scripts/jam-stop.sh` kills by **process group**, TERM then KILL, and then
+verifies nothing survived rather than assuming. `--check` lists what is running
+without killing anything.
+
+That run also exposed a publish guard set too low: `files.length > 0` let a
+single `data.js` of tuning constants onto the board with no `index.html` and
+nothing to run. The bar is now the brief's entry file — no entry file, no
+artifact.
+
 ## What it cannot tell you
 
 - **Runs are not comparable with each other.** Two runs on the same brief differ
