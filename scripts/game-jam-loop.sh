@@ -141,6 +141,14 @@ while [ "$STOP" -eq 0 ]; do
   [ "$STOP" -eq 0 ] || break
 
   LOG="$LOGS/$(date '+%Y-%m-%d-%H-%M-%S')-seed-$SEED.log"
+  # Every run gets a session directory, so stopping it is pausing it rather than
+  # losing it. Costs a directory; the alternative cost three hours.
+  SESSION="$ROOT/packages/evals/results/sessions/seed-$SEED"
+  RESUME=""
+  if [ -f "$SESSION/run.json" ]; then
+    RESUME="--resume"
+    echo "$(date '+%H:%M:%S')  resuming seed $SEED from $(grep -o '\"round\": *[0-9]*' "$SESSION/run.json" | head -1)"
+  fi
   echo "$(date '+%H:%M:%S')  run $run — seed $SEED — $LOG"
 
   pnpm run eval -- \
@@ -156,6 +164,7 @@ while [ "$STOP" -eq 0 ]; do
     --vision \
     --max-scenario-minutes "$SCENARIO_MINUTES" \
     --sim-option "brief=$BRIEF" \
+    --session "$SESSION" $RESUME \
     >"$LOG" 2>&1
 
   status=$?
