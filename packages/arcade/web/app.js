@@ -838,6 +838,9 @@ function buildsPanel(versions) {
           el("span", { class: "build-v", text: v.version }),
           v.round === null ? null : el("span", { class: "build-round", text: `round ${v.round + 1}` }),
           i === 0 ? el("span", { class: "chip", text: "judged" }) : null,
+          // A checkpoint is not a decision the team took, and a page that let
+          // the two look alike would be describing a choice nobody made.
+          v.auto ? el("span", { class: "chip", text: "auto" }) : null,
         ]),
         v.notes ? el("p", { class: "build-notes", text: v.notes }) : null,
       ]),

@@ -108,6 +108,8 @@ function callTool(sim: WorkshopSimulation, name: string, args: Record<string, un
   void found.execute(args, { agentName: agent } as Parameters<typeof found.execute>[1]);
 }
 
+const WAVES = "const WAVES = [1, 2, 3];\n";
+
 const SCRIPT: Step[] = [
   { role: "lead", run: (s) => callTool(s, "write_file", { path: "design.md", content: DESIGN }, "lead") },
   { role: "interface", run: (s) => callTool(s, "write_file", { path: "index.html", content: PAGE }, "interface") },
@@ -116,6 +118,48 @@ const SCRIPT: Step[] = [
   { role: "interface", run: (s) => callTool(s, "write_file", { path: "render.js", content: RENDER }, "interface") },
   { role: "interface", run: (s) => callTool(s, "write_file", { path: "style.css", content: STYLE }, "interface") },
   { role: "tester", run: (s) => callTool(s, "check_syntax", {}, "tester") },
+  /*
+   * The open arm's own path, so the no-model run exercises it too.
+   *
+   * These do nothing in the prescribed arm — `claim_file` is not handed out
+   * there and `callTool` will not find it — and the try/catch in `act` swallows
+   * that, the same way the script already walks into the ownership rule on
+   * purpose.
+   *
+   * Worth having because the alternative is finding a wiring fault in the
+   * claim/submit path ninety minutes into a run against a live model.
+   */
+  {
+    role: "author",
+    run: (s) => callTool(s, "claim_file", { path: "waves.js", purpose: "wave tables" }, "author"),
+  },
+  // Somebody else's claim, refused the same way a write to their file is.
+  {
+    role: "builder",
+    run: (s) => callTool(s, "claim_file", { path: "waves.js", purpose: "mine now" }, "builder"),
+  },
+  {
+    role: "author",
+    run: (s) => callTool(s, "write_file", { path: "waves.js", content: WAVES }, "author"),
+  },
+  {
+    role: "lead",
+    run: (s) => callTool(s, "submit_version", { version: "0.1.0", notes: "it runs" }, "lead"),
+  },
+  // More work, then a second build — the case the mechanism exists for.
+  {
+    role: "author",
+    run: (s) => callTool(s, "patch_file", { path: "waves.js", find: "1, 2, 3", replace: "1, 2, 3, 5, 8" }, "author"),
+  },
+  {
+    role: "lead",
+    run: (s) => callTool(s, "submit_version", { notes: "longer waves" }, "lead"),
+  },
+  // A role that does not own the submission trying to ship one.
+  {
+    role: "tester",
+    run: (s) => callTool(s, "submit_version", { version: "9.9.9" }, "tester"),
+  },
   // The drifted patch: `state.score += dt` is what is actually in the file.
   {
     role: "builder",

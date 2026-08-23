@@ -117,6 +117,7 @@ export function snapshotVersion(
     notes?: string;
     round?: number;
     metrics?: Record<string, number>;
+    auto?: boolean;
     at?: string;
   },
 ): { version: Version; files: number } {
@@ -144,6 +145,7 @@ export function snapshotVersion(
     ...(input.round === undefined ? {} : { round: input.round }),
     filesPath: dir,
     ...(input.metrics === undefined ? {} : { metrics: input.metrics }),
+    ...(input.auto === undefined ? {} : { auto: input.auto }),
     ...(input.at === undefined ? {} : { at: input.at }),
   });
 

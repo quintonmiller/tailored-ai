@@ -654,6 +654,59 @@ describe("submitting a build mid-jam", () => {
     expect(s.announce()).toMatch(/0\.3\.0 is on the board/);
   });
 
+  /**
+   * A game that genuinely animates and responds, so `playtest` comes back clean.
+   *
+   * The backstop deliberately refuses to checkpoint anything less — a saved
+   * black rectangle that parses is what would get judged if the run then died.
+   */
+  const RUNNING_GAME = `<!doctype html><html><body><canvas id="game" width="320" height="240"></canvas>
+<script>
+const c = document.getElementById('game').getContext('2d');
+let t = 0, hit = 0;
+addEventListener('keydown', () => { hit += 1; });
+function frame() { t += 1; c.fillStyle = '#000'; c.fillRect(0, 0, 320, 240);
+  c.fillStyle = '#6ee7b7'; c.fillRect((t * 3) % 300, 100 + hit * 10, 20, 20);
+  requestAnimationFrame(frame); }
+frame();
+</script></body></html>`;
+
+  it("checkpoints a working build so a killed run keeps one, without anybody asking", async () => {
+    const { sim: s, store } = withArcade();
+    await call(s, "write_file", { path: "index.html", content: RUNNING_GAME }, "lead");
+    await call(s, "playtest", {}, "tester");
+
+    const entry = store.list({ includeDrafts: true })[0];
+    const builds = store.versions(entry.id);
+    expect(builds).toHaveLength(1);
+    expect(builds[0].auto).toBe(true);
+    // Counted apart from the deliberate ones, or "did the team choose to ship"
+    // stops being answerable.
+    expect(s.metrics().arcadeAutoSubmits).toBe(1);
+    expect(s.metrics().arcadeSubmits).toBe(0);
+  }, 30_000);
+
+  it("does not checkpoint the same workspace twice", async () => {
+    const { sim: s, store } = withArcade();
+    await call(s, "write_file", { path: "index.html", content: RUNNING_GAME }, "lead");
+    await call(s, "playtest", {}, "tester");
+    await call(s, "playtest", {}, "tester");
+
+    const entry = store.list({ includeDrafts: true })[0];
+    expect(store.versions(entry.id)).toHaveLength(1);
+  }, 45_000);
+
+  it("does not checkpoint a game that does not run", async () => {
+    const { sim: s, store } = withArcade();
+    // Parses, renders nothing, ignores input. Exactly what must not be saved.
+    await call(s, "write_file", { path: "index.html", content: "<!doctype html><html><body></body></html>" }, "lead");
+    await call(s, "playtest", {}, "tester");
+
+    const entry = store.list({ includeDrafts: true })[0];
+    expect(store.versions(entry.id)).toHaveLength(0);
+    expect(s.metrics().arcadeAutoSubmits).toBe(0);
+  }, 30_000);
+
   it("keeps the submitted build when the run stops mid-rewrite", async () => {
     const { sim: s, store } = withArcade();
     await build(s, "// the good build\n");

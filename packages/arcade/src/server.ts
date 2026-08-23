@@ -331,6 +331,7 @@ async function handleSite(
         notes: v.notes,
         round: v.round,
         metrics: v.metrics,
+        auto: v.auto,
         createdAt: v.createdAt,
       })),
     });

@@ -848,6 +848,52 @@ arrive somewhere worse. The sameness is not in question — twelve identical fil
 sets settle that — but whether the games get *better* is, and only a pair of arms
 on the same code can answer it.
 
+### The backstop, and the tool grant that made it necessary
+
+`submit_version` goes to one role only — whoever writes the submission — and that
+is deliberate, for a reason the first live run measured: when the arcade tools
+were shared, the *interface* agent spent four of the team's six tool calls
+browsing the board and reading previous entries, and the run wrote no files at
+all. A cheap, interesting, public tool is one every agent calls once, and once
+times five roles times twenty rounds is a lot of sightseeing.
+
+That leaves the whole point of versions resting on one agent remembering. At a
+natural end nothing is lost, because `publishRun` falls back to the workspace —
+so the exposure is exactly the case versions exist for: a run killed mid-jam,
+which is how OVERGROWTH came to be published by hand.
+
+So a **clean playtest checkpoints the workspace**. It costs no turn, no schema
+entry and nobody's attention, which is what makes it affordable where handing the
+tool to five roles was not. It fires only when the game actually runs — no
+console errors, animates, responds to input — because a saved black rectangle
+that parses is what would get judged if the run then died, and only when there
+has been new work since the last build, or the history fills with noise.
+
+Checkpoints are marked `auto` on the row and counted as `arcadeAutoSubmits`,
+apart from the deliberate ones. A run whose only builds are automatic is a run
+where the mechanism did not land, and that has to be visible rather than hidden
+inside a healthy-looking total.
+
+### Proving it without a model
+
+`pnpm exec tsx packages/evals/scripts/workshop-rehearse.ts` runs the whole thing
+against a scripted bot in about a minute and now covers the new paths: claiming a
+file, having a second claimant refused, submitting, doing more work, submitting
+again, and a role without the tool trying to. It publishes into a throwaway
+arcade under `results/rehearsals/` — never `~/.tai-arcade`, because a scripted
+bot's output must never reach the board a person reviews — and prints what landed:
+
+```
+  220 turns, 8 files, 60 lines
+  submitted 2 build(s), 0 automatic; 8 claims, 1 ownership refusals
+  board     workshop-workspace — published, 2 build(s) kept
+              0.2.0 r13 — longer waves
+              0.1.0 r11 — it runs
+```
+
+The backstop itself is covered by tests rather than the bot, which never calls
+`playtest` because it is a real browser and slow.
+
 Read `claims` against `ownershipRefusals` (claims low and refusals high is a team
 that started writing before it divided the work) and `arcadeSubmits` against
 `roundsWithNoWrite` (one submit at the end is the old behaviour wearing a new

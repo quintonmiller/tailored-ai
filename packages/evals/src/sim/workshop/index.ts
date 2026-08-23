@@ -231,6 +231,8 @@ export class WorkshopSimulation implements Simulation {
   private framesShown = 0;
   /** The brief states the goal and leaves structure to the team. */
   private readonly open: boolean;
+  /** Edits at the last automatic checkpoint, so an unchanged one is skipped. */
+  private lastCheckpointEdits: number | undefined;
 
   constructor(options: WorkshopOptions) {
     this.brief = getBrief(options.brief ?? WORKSHOP_PLAY_OPTIONS.brief);
@@ -1043,12 +1045,51 @@ export class WorkshopSimulation implements Simulation {
                 `${report.errors.length ? `, ${report.errors.length} console error${report.errors.length === 1 ? "" : "s"}` : ""}`
             : "could not run it",
         );
+        this.checkpoint(report);
         const text = formatPlaytest(report, this.brief.entry);
         const shots = await this.attachFrames(report);
         if (shots.length === 0) return { success: true, output: text };
         return { success: true, output: { parts: [textPart(text), ...shots] } };
       },
     };
+  }
+
+  /**
+   * Put a working game on the board without anybody deciding to.
+   *
+   * `submit_version` belongs to one role, for a measured reason (see `tools()`),
+   * and that leaves the whole point of versions resting on one agent
+   * remembering. At a natural end nothing is lost — `publishRun` falls back to
+   * the workspace — so the exposure is precisely the case that motivated
+   * versions in the first place: a run killed mid-jam, which is how OVERGROWTH
+   * came to be published by hand.
+   *
+   * So a clean playtest checkpoints the workspace. Costs no turn, no schema
+   * entry and nobody's attention, which is what makes it affordable where
+   * handing the tool to five roles was not.
+   *
+   * Counted as `arcadeAutoSubmits`, separately from the deliberate ones, so
+   * "did the team choose to ship" stays answerable. A run whose only builds are
+   * automatic is a run where the mechanism did not land, and that has to be
+   * visible rather than hidden inside a healthy-looking total.
+   */
+  private checkpoint(report: Awaited<ReturnType<typeof playtest>>): void {
+    if (!this.desk) return;
+    // Only a game that actually runs. A checkpoint of a black rectangle that
+    // parses would be worse than none: it is what gets judged if the run dies.
+    if (!report.ok || report.errors.length > 0 || !report.animates || !report.respondsToInput) return;
+    // Nothing new since the last build on the board. Re-submitting an unchanged
+    // workspace every playtest would fill the history with noise and make the
+    // count meaningless.
+    const edits = this.counts.writes + this.counts.patches;
+    if (this.lastCheckpointEdits !== undefined && edits <= this.lastCheckpointEdits) return;
+    try {
+      this.desk.autoSubmit(this.tick, edits);
+      this.lastCheckpointEdits = edits;
+    } catch {
+      // A checkpoint that cannot be written costs the safety net for one round.
+      // Taking the jam down over it would cost the whole run.
+    }
   }
 
   /** Take the runtime's media store. See {@link Simulation.attachMedia}. */
@@ -1332,6 +1373,9 @@ export class WorkshopSimulation implements Simulation {
       outlines: this.counts.outlines,
       checksRun: this.counts.checksRun,
       playtestsRun: this.counts.playtestsRun,
+      // Read against `ownershipRefusals`: claims low with refusals high is a
+      // team that started writing before it divided the work.
+      claims: this.counts.claims,
       // Frames that actually reached a model, which is a different fact from
       // playtests run: a run without `--vision` plays the game just as often
       // and shows nobody anything. Zero here next to a healthy `playtestsRun`

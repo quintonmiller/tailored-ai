@@ -89,6 +89,14 @@ export interface ArcadeCounters {
    * five times has actually stopped treating the horizon as a cliff.
    */
   arcadeSubmits: number;
+  /**
+   * Builds the harness checkpointed after a clean playtest, nobody having asked.
+   *
+   * Kept apart from `arcadeSubmits` so "did the team choose to ship" survives
+   * the existence of a safety net. A run whose only builds are automatic is a
+   * run where the mechanism did not land.
+   */
+  arcadeAutoSubmits: number;
 }
 
 /**
@@ -104,6 +112,7 @@ export class ArcadeDesk {
     arcadeUpdates: 0,
     arcadeRegistered: 0,
     arcadeSubmits: 0,
+    arcadeAutoSubmits: 0,
   };
 
   private readonly store: ArcadeStore;
@@ -384,6 +393,33 @@ export class ArcadeDesk {
   /** `0.1.0`, `0.2.0`, … for a team that did not name its build. */
   private nextVersion(): string {
     return `0.${this.store.versions(this.entryId).length + 1}.0`;
+  }
+
+  /**
+   * The harness putting a working build on the board, unasked.
+   *
+   * Called after a clean playtest. See `WorkshopSimulation.checkpoint` for why
+   * this exists rather than the tool simply being handed to more roles.
+   *
+   * Marked `auto` on the row so a page can distinguish "the team shipped this"
+   * from "nobody stopped us losing this", and so `arcadeSubmits` keeps meaning
+   * what it meant before the backstop existed.
+   */
+  autoSubmit(round: number, metricsEdits: number): void {
+    snapshotVersion(this.store, this.entryId, {
+      artifactPath: this.artifactPath,
+      version: this.nextVersion(),
+      notes: "automatic checkpoint — the game ran clean and there was new work since the last build",
+      round,
+      metrics: { edits: metricsEdits },
+      auto: true,
+    });
+    this.counts.arcadeAutoSubmits += 1;
+    this.note({
+      kind: "did",
+      room: "arcade",
+      body: "checkpointed a working build (automatic)",
+    });
   }
 
   // -------------------------------------------------------------- rendering

@@ -17,11 +17,12 @@
  * a scoreboard as something an agent did.
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createSimulation, simulationPolicies } from "../src/sim/index.js";
 import { fileSink } from "../src/trace.js";
+import { ArcadeStore } from "@tailored-ai/arcade";
 import type { WorkshopSimulation } from "../src/sim/workshop/index.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -37,7 +38,27 @@ writeFileSync(out, "");
 const write = fileSink(out);
 
 const root = join(packageRoot, "results", "rehearsals", "workshop-workspace");
-const sim = createSimulation("workshop", { seed: 1, days: rounds, brief, root, stamp: "rehearsal" }) as WorkshopSimulation;
+/*
+ * A throwaway arcade, so the rehearsal exercises the claim/submit path.
+ *
+ * Without one the desk is never constructed, `submit_version` and `claim_file`
+ * do not exist, and the script's steps for them are silently swallowed — which
+ * is a no-model run that reports success while testing none of the code most
+ * likely to be wrong.
+ *
+ * Pointed at `results/` rather than `~/.tai-arcade` on purpose: a rehearsal must
+ * never add a scripted bot's output to the board a person reviews.
+ */
+const arcadeHome = join(packageRoot, "results", "rehearsals", "arcade");
+rmSync(arcadeHome, { recursive: true, force: true });
+const sim = createSimulation("workshop", {
+  seed: 1,
+  days: rounds,
+  brief,
+  root,
+  stamp: "rehearsal",
+  arcadeHome,
+}) as WorkshopSimulation;
 const policy = simulationPolicies("workshop").scripted();
 
 const ROOMS: Record<string, string[]> = {
@@ -90,8 +111,28 @@ for (let round = 0; round < rounds && !sim.done; round++) {
 }
 write({ kind: "end", at: tick(), reason: sim.endedBecause, turns: turn });
 
+// Publishing is where the version history, the entry row and the playable copy
+// all have to agree, and it is the last thing a run does — so a rehearsal that
+// stops short of it leaves the most breakable step untested.
+await sim.finish?.();
+
 const metrics = sim.metrics();
 console.log(`wrote ${out}`);
 console.log(`  artifact  ${sim.root}`);
 console.log(`  ${turn} turns, ${metrics.filesPresent} files, ${metrics.linesInWorkspace} lines`);
+console.log(
+  `  submitted ${metrics.arcadeSubmits ?? 0} build(s), ${metrics.arcadeAutoSubmits ?? 0} automatic; ` +
+    `${metrics.claims ?? 0} claims, ${metrics.ownershipRefusals ?? 0} ownership refusals`,
+);
+
+const board = new ArcadeStore(arcadeHome);
+for (const entry of board.list({ includeDrafts: true })) {
+  const builds = board.versions(entry.id);
+  console.log(`  board     ${entry.slug} — ${entry.status}, ${builds.length} build(s) kept`);
+  for (const b of builds) {
+    console.log(`              ${b.version}${b.auto ? " (auto)" : ""}${b.round === null ? "" : ` r${b.round + 1}`} — ${b.notes}`);
+  }
+}
+board.close();
+
 console.log(`  watch it: npx tsx src/cli.ts watch --trace ${out.replace(`${packageRoot}/`, "")}`);

@@ -107,6 +107,12 @@ the whole reason to submit early, and why `publishRun` prefers the last submitte
 build over the final directory. A team that never submitted anything still gets
 its workspace published; a half-finished game beats a hole where a run happened.
 
+A **clean playtest also checkpoints the workspace automatically**, because the
+tool belongs to one role and the safety net should not depend on that role
+remembering. Checkpoints fire only when the game actually runs and only when
+there is new work since the last build; they are marked `auto` on the row and
+counted separately, so "did the team choose to ship" stays answerable.
+
 Submitting publishes the entry but does **not** end the jam. `entries.live` is
 what says a run is still going, separately from `status`, so a submitted game is
 playable and scoreable on the board while its team keeps building. Heartbeats are

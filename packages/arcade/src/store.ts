@@ -162,6 +162,14 @@ export interface Version {
   round: number | null;
   filesPath: string;
   metrics: Record<string, number>;
+  /**
+   * The harness checkpointed this after a clean playtest; nobody chose to ship it.
+   *
+   * Worth keeping on the row rather than only in a counter, because a page that
+   * showed an automatic checkpoint as "the team submitted 0.3.0" would be
+   * describing a decision that was never taken.
+   */
+  auto: boolean;
   createdAt: string;
 }
 
@@ -171,6 +179,7 @@ export interface VersionInput {
   round?: number;
   filesPath: string;
   metrics?: Record<string, number>;
+  auto?: boolean;
   at?: string;
 }
 
@@ -268,6 +277,7 @@ CREATE TABLE IF NOT EXISTS versions (
   round      INTEGER,
   files_path TEXT NOT NULL,
   metrics    TEXT NOT NULL DEFAULT '{}',
+  auto       INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
 );
 
@@ -368,6 +378,7 @@ interface VersionRow {
   round: number | null;
   files_path: string;
   metrics: string;
+  auto: number;
   created_at: string;
 }
 
@@ -380,6 +391,7 @@ function hydrateVersion(row: VersionRow): Version {
     round: row.round,
     filesPath: row.files_path,
     metrics: parseJson<Record<string, number>>(row.metrics, {}),
+    auto: row.auto === 1,
     createdAt: row.created_at,
   };
 }
@@ -491,6 +503,12 @@ export class ArcadeStore {
     );
     if (!columns.has("live")) {
       this.db.exec("ALTER TABLE entries ADD COLUMN live INTEGER NOT NULL DEFAULT 0");
+    }
+    const versionColumns = new Set(
+      (this.db.prepare("PRAGMA table_info(versions)").all() as { name: string }[]).map((c) => c.name),
+    );
+    if (versionColumns.size > 0 && !versionColumns.has("auto")) {
+      this.db.exec("ALTER TABLE versions ADD COLUMN auto INTEGER NOT NULL DEFAULT 0");
     }
   }
 
@@ -737,8 +755,8 @@ export class ArcadeStore {
     const submit = this.db.transaction(() => {
       this.db
         .prepare(
-          `INSERT INTO versions (entry_id, version, notes, round, files_path, metrics, created_at)
-           VALUES (@entryId, @version, @notes, @round, @filesPath, @metrics, @now)`,
+          `INSERT INTO versions (entry_id, version, notes, round, files_path, metrics, auto, created_at)
+           VALUES (@entryId, @version, @notes, @round, @filesPath, @metrics, @auto, @now)`,
         )
         .run({
           entryId: id,
@@ -747,6 +765,7 @@ export class ArcadeStore {
           round: input.round ?? null,
           filesPath: input.filesPath,
           metrics: JSON.stringify(input.metrics ?? {}),
+          auto: input.auto ? 1 : 0,
           now,
         });
       // `published_at` is COALESCEd so the board keeps saying when the game
