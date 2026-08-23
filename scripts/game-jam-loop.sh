@@ -32,12 +32,23 @@ CONTEXT_TOKENS="${JAM_CONTEXT_TOKENS:-131072}"
 ARM="the-workshop"
 BRIEF="arcade"
 SEED=1
-# Every jam before 2026-08-23 ran at the framework default of 0.3, which is
-# tuned for deterministic tool selection and is below Qwen's own recommended
-# band (0.6-0.7). Fifteen consecutive runs produced the same game; a creative
-# concept sampled near-greedily fifteen times is the modal concept fifteen
-# times. Watch `patchesRefused` and `checkProblems` for tool-calling damage.
-JAM_TEMPERATURE=${JAM_TEMPERATURE:-0.7}
+# Raised to 0.7 on 2026-08-23 on the theory that fifteen identical games were a
+# near-greedy sampler picking the modal concept fifteen times, and reverted the
+# same afternoon, because the cost showed up somewhere nobody was looking.
+#
+# At 0.7 the roles with no file to write reasoned until they were truncated. The
+# lead capped on 3 of 3 calls and the author on 2 of 2, against 4% for the lead
+# at 0.3 — and it was not context, the lead's prompt was 9k while the interface
+# capped on 2 of 7 at 17k. 73% of the run's output tokens went into turns that
+# produced nothing. `scripts/jam-stalls.mjs` is the measurement.
+#
+# The reason reverting is safe: the diversity that arrived with it did not come
+# from it. A diversifier that says "the verb is build, never avoid" makes an
+# avoidance game *structurally* illegal, at any temperature — the constraint
+# does the work sampling was being asked to do. If the concepts collapse back to
+# one game at 0.3, that theory is wrong and the answer is a per-role temperature
+# rather than a global one, since only two of the five roles were hurt.
+JAM_TEMPERATURE=${JAM_TEMPERATURE:-0.3}
 RUNS=0            # 0 means keep going
 # Thirty, not the default six. Measured across two full jams: a turn that
 # checks, plays, reads and patches genuinely needs the rounds, and at twenty the
