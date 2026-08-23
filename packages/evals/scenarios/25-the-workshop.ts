@@ -146,12 +146,19 @@ const BRIDGE = { roomSessionScope: "shared" as const };
 const LEAD = hand(
   "Holds the brief, owns the design, and is the only one in every channel.",
   "You are the lead. You hold the design and the write-up, and you write no code at all — if something " +
-    "needs building, somebody else builds it. This is a jam: your first job is to decide what your " +
-    "reading of the theme is and write it down before anybody builds anything, because a game that only " +
-    "mentions the theme scores worst on the category judges check first. Your second job is that the " +
-    "five of you are building one thing rather than five, which means deciding early who is writing " +
-    "what and saying so out loud. This conversation is not memory: it gets trimmed, and what you did " +
-    "not write down is gone.\n\n" +
+    "needs building, somebody else builds it. This is a jam, so it starts the way a jam starts.\n\n" +
+    "What the game is, and what it is built on, are both yours to settle — how you settle them is up " +
+    "to you. You can decide and announce, or ask the other four for pitches first and choose between " +
+    "them; `pitch` exists for the second. Either way write the theme reading down, because a game " +
+    "that only mentions the theme scores worst on the category a judge checks first, and the " +
+    "conversation is not memory — it gets trimmed, and what you did not write down is gone.\n\n" +
+    "The foundation is `use_engine`: phaser, babylon or none. `docs` will show you what any of them " +
+    "can do before you install one, so it is a question you can answer rather than guess at. It gets " +
+    "more expensive to revisit the longer it is left, whichever way it ends up going.\n\n" +
+    "Keeping the five of you building one thing rather than five is the part nobody else can do — " +
+    "deciding who is writing what, and saying so out loud.\n\n" +
+    "If the game turns out not to be fun, changing course is your call, and it is a real option " +
+    "rather than an admission — a build already on the board keeps its score whatever you do next.\n\n" +
     "You are also the one who can unblock the team. If somebody has claimed a file and is not writing " +
     "it, `release_file` takes it back and anybody can then claim it — you do not have to wait, and you " +
     "should not let a silent teammate hold up the game. A claim on a file nobody writes also lapses on " +
@@ -324,9 +331,15 @@ export default defineScenarios(
             body:
               "Jam starts now. The theme is in your instructions and in `brief.md`. Five of you, twenty " +
               "rounds, and at the end I open whatever exists on the arcade, play it, and score it on " +
-              "theme relevance, gameplay, visuals, originality and polish. Register your game on the " +
-              "arcade before you run out of rounds — I play what is on the site. Agree your reading of " +
-              "the theme before anybody writes code. This channel reaches everybody; the other two do not.",
+              "theme relevance, gameplay, visuals, originality and polish — five categories, all worth " +
+              "the same. I would rather play something rough that surprises me than something tidy I " +
+              "have played before.\n\n" +
+              "How you land on an idea is up to you — `pitch` is there if you want a few on the table " +
+              "before choosing. Same for what you build it on: `use_engine`, and `docs` will show you " +
+              "what each option can do before you commit. Register on the arcade before you run out of " +
+              "rounds; I play what is on the site, and I play the last build you submitted, so put " +
+              "something up early and keep going.\n\n" +
+              "This channel reaches everybody; the other two do not.",
           },
         ],
       },

@@ -218,6 +218,19 @@ export class WorkshopSimulation implements Simulation {
      * nothing to do, and never turns that down, has not understood that it can.
      */
     attentionChanges: 0,
+    /**
+     * Documentation searched for an engine nobody has installed yet.
+     *
+     * The interesting number, because it separates a team that weighed the
+     * choice from one that defaulted through it. `docLookups` cannot: it is
+     * downstream of `engineChosen` by construction, so the two were one fact
+     * counted twice.
+     */
+    docLookupsBeforeChoosing: 0,
+    /** Candidate games put on the table before one was chosen. */
+    pitches: 0,
+    /** How many of the five contributed one. One is the failure mode. */
+    pitchAuthors: 0,
     /** Claims that lapsed because nobody ever wrote the file. */
     claimsLapsed: 0,
     /** API lookups against the chosen engine's documentation. */
@@ -268,6 +281,20 @@ export class WorkshopSimulation implements Simulation {
   private scaffoldLines = 0;
   /** The team said "none" out loud, rather than never deciding. */
   private engineDeclined = false;
+  /**
+   * Candidate games, before anybody committed to one.
+   *
+   * A jam opens with everybody throwing ideas at the wall; this scenario opened
+   * with one agent deciding alone. Measured across every run: the concept was
+   * settled in turn 0 or 1, announced as "DECISION LOCKED", and never debated —
+   * across twenty-five traces no agent ever argued for a different direction.
+   * The others replied "agreed".
+   *
+   * One idea, thought of once, by one agent, in its first minute, is the whole
+   * explanation for a shelf of near-identical games. This is the divergence
+   * step that was missing.
+   */
+  private pitches: { agent: string; idea: string; unlike: string; round: number }[] = [];
   /** The library is in the workspace. Set by whichever path put it there. */
   private libraryProvided = false;
   /** Nobody chose in time, so the library went in on its own. */
@@ -472,13 +499,41 @@ export class WorkshopSimulation implements Simulation {
       "is, write that down, and build the game that reading demands. If the theme could be removed",
       "without the game changing, you have not used it — and that is the first thing a judge checks.",
       "",
+      ...this.ideationBrief(),
       ...this.diversifierBrief(),
       ...this.catalogueBrief(),
       "## How you will be judged",
       "",
       ...JUDGING.map((c) => `- **${c.name}** — ${c.question}`),
       "",
-      "Nothing about how much you wrote is scored. A small finished game beats a large unfinished one.",
+      /*
+       * This used to end "A small finished game beats a large unfinished one."
+       *
+       * Written to stop teams over-scoping and never finishing. Read as a
+       * ranking rule with "small" on the winning side — and it sat as the last
+       * line before the foundation choice, which is exactly where scope gets
+       * decided. Every other scope signal pointed the same way: the brief's own
+       * title said "a small arcade game", the round announcement said "submit as
+       * soon as it is playable" twenty times a run, and `doneLooksLike` is not
+       * rendered in this arm at all, so "playable" was the only stated target in
+       * the whole jam.
+       *
+       * The replacement gives them the arithmetic instead of a slogan, because
+       * five equally weighted categories make this checkable rather than a
+       * matter of taste — and because the submission machinery has already
+       * removed the downside the slogan was protecting against.
+       */
+      "Five categories, weighted the same. That has a consequence worth doing the arithmetic on: a clean,",
+      "finished game of a kind the judge has seen before scores 3, 3, 3, **1**, 5 — an average of 3.0. A",
+      "rougher game built around one idea nobody has seen scores 4, 4, 3, **5**, 2 — an average of 3.6, and",
+      "it wins while being the less finished of the two.",
+      "",
+      "So finishing is not the goal; being worth playing is. Nothing about how much you wrote is scored",
+      "either — a hundred lines that surprise a person beat a thousand that do not.",
+      "",
+      "**And you cannot lose by reaching.** The last build you submitted is the one judged, so once a",
+      "playable version is on the board, an ambitious change that does not work out costs you nothing at",
+      "all. Bank something playable early, then swing at the thing you actually want to make.",
       "",
       ...this.arcadeBrief(),
       ...this.engineBrief(),
@@ -491,6 +546,45 @@ export class WorkshopSimulation implements Simulation {
         this.open && availableEngines().length > 0 && !this.libraryProvided,
       ),
     ].join("\n");
+  }
+
+  /**
+   * Round one is for ideas, and the door stays open after it.
+   *
+   * Every run so far settled the game in turn zero or one: one agent decided
+   * alone, posted "DECISION LOCKED", and the other four ratified it. Across
+   * twenty-five traces nobody ever argued for a different direction. That is
+   * not a team choosing a game, it is a team being told one — and the first
+   * idea a model has about a jam theme is the same idea every time, which is
+   * the shelf.
+   *
+   * A real jam brainstorms, converges on something that borrows from several
+   * pitches, commits, and then still changes course when it turns out to be
+   * wrong. Two of those four beats were missing here, and the missing ones are
+   * the beginning and the end.
+   */
+  private ideationBrief(): string[] {
+    if (!this.open) return [];
+    return [
+      "## Deciding what to make",
+      "",
+      "`pitch` puts an idea on the table. It costs one call, is never refused, and nobody is judged on a",
+      "pitch that loses.",
+      "",
+      "Two things worth knowing, and what you do with them is yours to decide.",
+      "",
+      "**Brainstorming costs rounds you could spend building, and usually produces a stronger game.** The",
+      "first idea a theme suggests tends to be the idea it suggests to everybody — the shelf is what that",
+      "looks like fifteen times over. Teams that put a few different games up and picked from them often",
+      "found the good one was third or fourth, or was two pitches combined. Teams that took the first idea",
+      "started building sooner. Both are real; how you trade them off is your call.",
+      "",
+      "**Changing direction later is cheaper than it feels.** The last build you submitted is the one",
+      "judged, so once something playable is on the board, a change of course cannot take away what you",
+      "have banked. If you are four rounds in and it is not fun, that is worth saying out loud rather than",
+      "working around.",
+      "",
+    ];
   }
 
   /**
@@ -748,6 +842,29 @@ export class WorkshopSimulation implements Simulation {
     // until it was in the announcement rather than only in the brief, and the
     // brief is the first thing trimmed out of a long room history.
     const div = this.diversifier ? `, diversifier: ${this.diversifier.rule.replace(/\.$/, "")}` : "";
+    /*
+     * Counted out loud until there are enough, then it stops.
+     *
+     * The same device that finally made the engine choice visible: a brief is
+     * read once and trimmed away, an announcement arrives every round. Only in
+     * the first few rounds — after that the team should be building, and a jam
+     * that is still brainstorming at round six has a different problem.
+     */
+    /*
+     * Reported, not demanded.
+     *
+     * An earlier version of this counted pitches against a threshold and told
+     * the team to keep going until it was met. That is the prescription this
+     * whole scenario keeps having to remove: a rule about how to work produces
+     * teams that all work the same way, which is how fifteen identical games
+     * happened. The announcement already states files, lines and builds without
+     * telling anybody what the numbers should be; ideas are stated the same way.
+     */
+    const people = new Set(this.pitches.map((p) => p.agent)).size;
+    const ideas =
+      this.open && this.tick < 4 && this.pitches.length > 0
+        ? ` ${this.pitches.length} ${this.pitches.length === 1 ? "idea" : "ideas"} pitched, from ${people} of you.`
+        : "";
     // Asked once a round until answered, because it is the decision that gets
     // more expensive with every round it is deferred.
     const engine =
@@ -764,7 +881,7 @@ export class WorkshopSimulation implements Simulation {
           .join("; ")}.`
       : "";
     return (
-      `Round ${this.tick + 1} of ${this.horizon} — theme ${this.theme.title}${div}. ${phase}${submission}${engine}${builds}${freed} ` +
+      `Round ${this.tick + 1} of ${this.horizon} — theme ${this.theme.title}${div}. ${phase}${submission}${ideas}${engine}${builds}${freed} ` +
       `${seen}. ` +
       `${files.length} file${files.length === 1 ? "" : "s"}, ${lines} line${lines === 1 ? "" : "s"}; ${check}. ` +
       (remaining <= 3
@@ -1077,9 +1194,31 @@ export class WorkshopSimulation implements Simulation {
       ),
       tool(
         "read_brief",
-        "Read the brief again: what is being built, the constraints, and who writes which file.",
+        this.open
+          ? "Read the brief again: the theme, the constraint, what you are judged on, and your options."
+          : "Read the brief again: what is being built, the constraints, and who writes which file.",
         {},
-        () => renderBrief(this.brief, this.open ? "open" : "prescribed"),
+        /*
+         * The whole brief, not the inner half.
+         *
+         * This used to call `renderBrief` directly, which meant two things.
+         * It omitted the third argument, so `pending` defaulted to false and the
+         * team was handed the 58-line library API under the heading "What you
+         * are given", each file marked "provided, read-only" — in a workspace
+         * where nothing was installed. And `renderBrief` does not contain
+         * `engineBrief()` at all, so the foundation choice simply did not exist
+         * in the document.
+         *
+         * A tool called `read_brief` was therefore returning a brief in which
+         * `none` was pre-installed and the alternatives were not mentioned, and
+         * it is call number one of a typical run. Whatever the system prompt
+         * said, this was the authoritative copy — and after two hundred turns of
+         * history trimming it is the only copy.
+         *
+         * Returning `jamBrief()` makes divergence impossible rather than
+         * unlikely: there is now one function that renders the brief.
+         */
+        () => this.jamBrief(),
         "read",
       ),
       /*
@@ -1207,24 +1346,97 @@ export class WorkshopSimulation implements Simulation {
             ),
             tool(
               "docs",
-              "Look up the exact API of the engine you installed — signatures, parameters and defaults. " +
-                "Use it instead of guessing a method name.",
-              { query: "What you need, like `arcade physics velocity` or `Sprite.setScale`." },
+              "Look up the exact API of an engine — signatures, parameters and defaults. Works before you " +
+                "install one, so you can find out what a foundation would give you without committing to it.",
+              {
+                query: "What you need, like `arcade physics velocity` or `Sprite.setScale`.",
+                engine: "Optional. Which engine to search, when you have not installed one yet.",
+              },
               (args) => {
-                if (!this.engineDocs) {
-                  refuse(
-                    this.engine
-                      ? `there is no API documentation for ${this.engine.title}.`
-                      : "no engine is installed yet. `use_engine` installs one, and its documentation comes with it.",
-                  );
+                const query = String(args.query ?? "");
+                if (this.engineDocs) {
+                  this.counts.docLookups += 1;
+                  return this.engineDocs.render(query);
                 }
-                this.counts.docLookups += 1;
-                return this.engineDocs.render(String(args.query ?? ""));
+                /*
+                 * Readable before you commit, not only after.
+                 *
+                 * This refused unless an engine was already installed, which put
+                 * the information needed to evaluate the choice behind making the
+                 * choice — while the library's entire API sat in the brief for
+                 * free. Asked to choose between something it can inspect and
+                 * something it cannot, a model takes the one it can inspect, and
+                 * the teams said so in their own reasoning: "engine API risk", "a
+                 * framework would fight me for it", "Phaser 4 text layout is
+                 * fiddly". None of them could check.
+                 *
+                 * It also collapsed two metrics into one. `docLookups` cannot be
+                 * non-zero while `engineChosen` is zero, so the pair looked like
+                 * two agreeing signals and was one fact counted twice.
+                 */
+                const available = availableEngines();
+                if (!available.length) refuse("there are no engines in this jam.");
+                const asked = String(args.engine ?? "").trim();
+                const named = asked ? findEngine(asked) : undefined;
+                if (asked && (!named || !available.some((e) => e.id === named.id))) {
+                  refuse(`there is no engine called "${asked}". Available: ${available.map((e) => e.id).join(", ")}.`);
+                }
+                const target = named ?? available[0];
+                if (!target.docs) refuse(`there is no API documentation for ${target.title}.`);
+                const docs = new EngineDocs(target.docs);
+                this.counts.docLookupsBeforeChoosing += 1;
+                const others = available.filter((e) => e.id !== target.id).map((e) => e.id);
+                return (
+                  `${target.title} — **not installed**. \`use_engine ${target.id}\` installs it, with a running ` +
+                  `skeleton.\n\n${docs.render(query)}` +
+                  (others.length ? `\n\nPass \`engine\` to search ${others.join(" or ")} instead.` : "")
+                );
               },
               "read",
             ),
           ]
         : []),
+      /*
+       * Ideas on the table before one of them becomes the game.
+       *
+       * Deliberately cheap and deliberately plural: a pitch costs one call, is
+       * never refused for being bad, and the announcement counts them until
+       * there are enough. Nothing here picks a winner — the team still decides,
+       * and the lead still decides how. What changes is that there is something
+       * to decide *between*.
+       *
+       * `unlike` is the load-bearing field. "A game about growing plants" is a
+       * pitch; "a game about growing plants, and unlike the shelf there is
+       * nothing to avoid and no timer" is a proposal a team can compare.
+       */
+      agentTool(
+        "pitch",
+        "Put an idea on the table. Cheap, repeatable, and never refused — nobody is judged on a pitch " + "that loses.",
+        {
+          idea: "The game in a sentence or two. What you do, and what makes it worth a minute.",
+          unlike: "What makes it unlike the games already on the arcade. Be specific.",
+        },
+        (args, agent) => {
+          const role = String(agent ?? "");
+          const idea = String(args.idea ?? "").trim();
+          if (!idea) refuse("a pitch needs an idea.");
+          this.pitches.push({
+            agent: role,
+            idea,
+            unlike: String(args.unlike ?? "").trim(),
+            round: this.tick,
+          });
+          this.desk?.note({ kind: "did", agent: role, room: "pitch", body: idea.slice(0, 200) });
+          const people = new Set(this.pitches.map((p) => p.agent)).size;
+          // States where things stand and stops. Telling them how many ideas is
+          // enough would be inventing a rule, and a rule about how to work is
+          // what produced a shelf of identical games.
+          return (
+            `Pitched. ${this.pitches.length} ${this.pitches.length === 1 ? "idea" : "ideas"} on the table ` +
+            `from ${people} of ${people === 1 ? "you" : "you"}.`
+          );
+        },
+      ),
       /*
        * Deciding how often to be interrupted.
        *
@@ -1584,13 +1796,18 @@ export class WorkshopSimulation implements Simulation {
             "The smallest thing that runs:",
             "",
             "```js",
-            "var ctx = document.querySelector('canvas').getContext('2d');",
+            // Checked against the real library. `Keys.pressed` is edge-only
+            // ("went down this step"), so held movement needs `Keys.down`, and
+            // `Draw.backdrop` takes (ctx, w, h, top, bottom) — the first version
+            // of this snippet got both wrong and was the one piece of sample
+            // code in the brief that did not run.
+            "var cv = document.querySelector('canvas');",
+            "var ctx = cv.getContext('2d');",
             "var x = 480;",
             "Loop.start(function (dt) {",
-            "  if (Keys.pressed('left')) x -= 300 * dt;",
-            "  if (Keys.pressed('right')) x += 300 * dt;",
+            "  x += Keys.axisX() * 300 * dt;",
             "}, function () {",
-            "  Draw.backdrop(ctx, '#0d0f13');",
+            "  Draw.backdrop(ctx, cv.width, cv.height, '#12161d', '#05070c');",
             "  Draw.orb(ctx, x, 300, 16, '#6ee7b7');",
             "});",
             "```",
@@ -1601,10 +1818,35 @@ export class WorkshopSimulation implements Simulation {
       "and defaults — so you are never guessing a method name from memory.",
       "",
       "**You are judged on the game, not on how it was built**, and none of these is the virtuous",
-      "choice. Pick the one that makes the game you want cheapest to build. A worked example of the",
-      "difference: a particle burst, a screen shake and an eased pop on a score are three calls in an",
-      "engine and roughly a hundred lines of your own without one — and it is exactly that hundred",
-      "lines, repeated across a dozen small effects, that decides whether the thing looks finished.",
+      "choice. Pick the one that makes the game you want cheapest to build.",
+      "",
+      /*
+       * What the engines actually buy, once the asset ban is accounted for.
+       *
+       * The previous version of this paragraph offered "a particle burst, a
+       * screen shake and an eased pop are three calls in an engine and a hundred
+       * lines without one". All three are in `lib/` — `FX.burst`, `FX.shake`,
+       * `FX.ease` — and three separate teams caught it and said so in their
+       * reasoning before choosing `none`. One wrote: "the 'none' library already
+       * provides FX.burst, FX.shake, FX.flash, FX.ease, so those are already
+       * handled... the cost argument for phaser is weakened."
+       *
+       * An argument a reader can refute from the same page does not merely fail;
+       * it discredits the section it is in. These four are the real delta, and
+       * every one of them is something `lib/` genuinely cannot do.
+       */
+      "The honest difference, for a game that wants any of it:",
+      "",
+      "- **A world bigger than the screen.** A camera that follows, scrolls and shakes is an engine",
+      "  feature and a system you would otherwise design, debug and tune yourself.",
+      "- **Many things colliding.** Dozens of bodies with mass, bounce and separation. Two circles",
+      "  overlapping is easy; twenty bodies resolving against each other is not.",
+      "- **Staged motion.** Tween chains that sequence an intro, a death, a menu — timing you author",
+      "  rather than hand-roll per effect.",
+      "- **A third dimension.** Nothing outside Babylon gives you this at all.",
+      "",
+      "If the game wants none of those, `none` is genuinely the right answer and the scorecard does not",
+      "care. If it wants two of them, writing them yourself is the jam.",
       "",
       "One warning that is not about virtue: **porting a half-built game onto an engine costs far more",
       "than starting on one.** This is the cheapest decision to make now and the most expensive to",
@@ -1672,6 +1914,7 @@ export class WorkshopSimulation implements Simulation {
       lastCheckpointEdits: this.lastCheckpointEdits ?? null,
       engine: this.engine?.id ?? null,
       engineDeclined: this.engineDeclined,
+      pitches: this.pitches,
       libraryProvided: this.libraryProvided,
       engineDefaulted: this.engineDefaulted,
       lastPlaytest: this.lastPlaytest ?? null,
@@ -1689,6 +1932,7 @@ export class WorkshopSimulation implements Simulation {
     if (typeof s.framesShown === "number") this.framesShown = s.framesShown;
     if (typeof s.scaffoldLines === "number") this.scaffoldLines = s.scaffoldLines;
     if (typeof s.engineDeclined === "boolean") this.engineDeclined = s.engineDeclined;
+    if (Array.isArray(s.pitches)) this.pitches = s.pitches as typeof this.pitches;
     if (typeof s.libraryProvided === "boolean") this.libraryProvided = s.libraryProvided;
     if (typeof s.engineDefaulted === "boolean") this.engineDefaulted = s.engineDefaulted;
     if (typeof s.lastCheckpointEdits === "number") this.lastCheckpointEdits = s.lastCheckpointEdits;
@@ -2015,6 +2259,9 @@ export class WorkshopSimulation implements Simulation {
       claims: this.counts.claims,
       releases: this.counts.releases,
       attentionChanges: this.counts.attentionChanges,
+      docLookupsBeforeChoosing: this.counts.docLookupsBeforeChoosing,
+      pitches: this.pitches.length,
+      pitchAuthors: new Set(this.pitches.map((p) => p.agent)).size,
       // Non-zero means somebody claimed a file and never wrote it. High here
       // with low `writes` is a team blocked on one quiet agent, which is the
       // failure this counter exists to make visible rather than mysterious.
