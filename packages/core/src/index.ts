@@ -715,7 +715,7 @@ export {
   THINKING_LEVELS,
   type ThinkingMapper,
 } from "./providers/thinking.js";
-export { Registry } from "./registry.js";
+export { type Disposer, Registry } from "./registry.js";
 export type {
   AgentBody,
   ApprovalGateOptions,

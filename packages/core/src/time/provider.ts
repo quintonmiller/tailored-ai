@@ -1,5 +1,5 @@
 import type { AgentConfig } from "../config.js";
-import { Registry } from "../registry.js";
+import { type Disposer, Registry } from "../registry.js";
 
 /**
  * Clock and timezone source supplied by core or a plugin.
@@ -25,8 +25,8 @@ export interface ResolvedTimeProvider {
 
 export const timeProviderFactoryRegistry = new Registry<TimeProviderFactory>("time-provider-factory");
 
-export function registerTimeProviderFactory(id: string, factory: TimeProviderFactory): void {
-  timeProviderFactoryRegistry.register(id, factory);
+export function registerTimeProviderFactory(id: string, factory: TimeProviderFactory): Disposer {
+  return timeProviderFactoryRegistry.register(id, factory);
 }
 
 export function systemTimeZone(): string {

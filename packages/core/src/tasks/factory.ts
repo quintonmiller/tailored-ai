@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 import type { AgentConfig } from "../config.js";
-import { Registry } from "../registry.js";
+import { type Disposer, Registry } from "../registry.js";
 import { BeadsTaskBackend } from "./beads.js";
 import { BeansTaskBackend } from "./beans.js";
 import { GitHubTaskBackend } from "./github.js";
@@ -11,8 +11,8 @@ export type TaskBackendFactory = (config: AgentConfig, db: Database.Database) =>
 
 export const taskBackendFactoryRegistry = new Registry<TaskBackendFactory>("task-backend");
 
-export function registerTaskBackendFactory(id: string, factory: TaskBackendFactory): void {
-  taskBackendFactoryRegistry.register(id, factory);
+export function registerTaskBackendFactory(id: string, factory: TaskBackendFactory): Disposer {
+  return taskBackendFactoryRegistry.register(id, factory);
 }
 
 // Built-in task backends register on module load.

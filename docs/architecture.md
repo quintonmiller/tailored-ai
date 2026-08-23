@@ -155,6 +155,45 @@ The server mounts a UI via the registry in `packages/core/src/ui/registry.ts`. T
 2. Register at module import: `registerUiProviderFactory("my-ui", (runtime, slice) => ...)`. `slice` is the matching `server.ui.my-ui` block from config.
 3. Tell users to set `server.ui.provider: my-ui` in their `config.yaml`. The kill-switch `server.ui.enabled: false` skips UI entirely.
 
+## Registration disposers
+
+Every `register` in core returns a `Disposer` — the inverse of the registration
+it just made. That holds for `Registry<T>` (which all ten factory registries are
+built on), `StepExecutorRegistry.registerFactory`, the slash-command registry,
+the HTTP route view, and every `PluginContext` namespace.
+
+```ts
+const dispose = ctx.tools.register("echo", () => [echoTool]);
+// …later
+dispose();   // the factory is gone; nothing else moved
+```
+
+Two properties are load-bearing:
+
+- **It removes only the entry that call made.** If something re-registered the
+  same id afterwards, that entry belongs to whoever registered it. A disposer
+  that deleted it would silently break a live registration it never owned —
+  invisible until something that should work stops working.
+- **It is idempotent.** Calling it twice is a no-op, so composing disposers
+  never needs a guard at the call site.
+
+**Plugins get this for free.** `loadPlugins` passes a per-entry collector into
+the context, so every registration a plugin makes through `ctx` is captured and
+composed onto `LoadedPlugin.stop` along with whatever the plugin's own
+`register(ctx)` returned. Unloading a plugin is then the inverse of loading it,
+without the plugin author writing an uninstall path. The plugin's own disposer
+runs first — it may still need what it registered while shutting down — and the
+registrations come out last-in-first-out.
+
+Ignoring the return value is fine and changes nothing; the contract is there for
+whoever owns a lifecycle.
+
+Two limits worth knowing. **Side-effect plugins are not covered**: they call the
+module-scope `register*` functions at import time with no context, so nothing
+observes what they added. And `reload()` still clears the event bus wholesale
+rather than unwinding per plugin — see [#533](https://github.com/quintonmiller/tailored-ai/issues/533)
+for what remains.
+
 ## Plugin HTTP Routes
 
 Plugins mount HTTP endpoints on the TAI server through a framework-agnostic seam — core never imports Hono, the dependency direction stays server → core.

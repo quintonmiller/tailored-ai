@@ -1,5 +1,5 @@
 import type { AgentConfig } from "../config.js";
-import { Registry } from "../registry.js";
+import { type Disposer, Registry } from "../registry.js";
 import type { EmbeddingProvider } from "./embedding.js";
 import type { AIProvider } from "./interface.js";
 import { OpenAIProvider } from "./openai.js";
@@ -23,12 +23,12 @@ export type EmbeddingFactory = (config: AgentConfig) => EmbeddingProvider | unde
 export const providerFactoryRegistry = new Registry<ProviderFactory>("provider");
 export const embeddingFactoryRegistry = new Registry<EmbeddingFactory>("embedding");
 
-export function registerProviderFactory(id: string, factory: ProviderFactory): void {
-  providerFactoryRegistry.register(id, factory);
+export function registerProviderFactory(id: string, factory: ProviderFactory): Disposer {
+  return providerFactoryRegistry.register(id, factory);
 }
 
-export function registerEmbeddingFactory(id: string, factory: EmbeddingFactory): void {
-  embeddingFactoryRegistry.register(id, factory);
+export function registerEmbeddingFactory(id: string, factory: EmbeddingFactory): Disposer {
+  return embeddingFactoryRegistry.register(id, factory);
 }
 
 /**

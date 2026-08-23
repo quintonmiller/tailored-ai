@@ -1,5 +1,5 @@
 import type { AgentConfig } from "./config.js";
-import { createHttpRegistryView } from "./http/registry.js";
+import { createHttpRegistryView, type HttpRegistryView } from "./http/registry.js";
 import {
   createPluginContext,
   type Plugin,
@@ -8,6 +8,7 @@ import {
   type PluginDisposer,
   type PluginMeta,
 } from "./plugin-context.js";
+import type { Disposer } from "./registry.js";
 
 export interface LoadedPlugin {
   module: string;
@@ -19,10 +20,23 @@ export interface LoadedPlugin {
   shape?: "register" | "side-effect" | "skipped";
   error?: string;
   /**
-   * Teardown returned by a `register(ctx)` plugin, if any. The host calls
-   * this on shutdown / reload to dispose subscriptions, timers, etc.
-   * Undefined for side-effect imports, skipped entries, and register plugins
-   * that returned nothing.
+   * Complete teardown for this plugin: whatever its `register(ctx)` returned,
+   * followed by the inverse of every registration it made through `ctx` —
+   * tools, channels, providers, backends, commands, HTTP routes — run in
+   * reverse order.
+   *
+   * The plugin's own disposer runs first because it may still need the things
+   * it registered; the registrations then come out last-in-first-out, so a
+   * later registration never outlives one it was layered on.
+   *
+   * A plugin therefore gets correct teardown of its registrations without
+   * writing an uninstall path, which is the point: before this, cleanup rested
+   * on each author remembering, and #58 and #65 are what that produced.
+   *
+   * Undefined for skipped entries, and for plugins that neither registered
+   * anything through `ctx` nor returned a disposer. **Side-effect imports stay
+   * undefined**: they register at module scope without a context, so nothing
+   * observes what they added and there is nothing to hand back.
    */
   stop?: PluginDisposer;
   /** The module's optional `meta` export (#228). */
@@ -44,6 +58,83 @@ export interface LoadPluginsOptions {
    * each gets its own registries — see #47 follow-up).
    */
   context?: PluginContext;
+}
+
+/**
+ * Wrap a context so every registration made through it is also handed to
+ * `collect`, and give it this entry's own config bag and route namespace.
+ *
+ * Each view is re-wrapped by hand rather than mapped generically: there are
+ * twelve, the list is closed, and an explicit wrapper is what makes a new view
+ * a compile error here instead of a registration that silently escapes
+ * collection. Calls delegate through an arrow so a view implemented as a
+ * method keeps its receiver.
+ */
+function collectingContext(
+  base: PluginContext,
+  http: HttpRegistryView,
+  collect: (dispose: Disposer) => void,
+  config: Record<string, unknown>,
+): PluginContext {
+  const wrap =
+    <A extends unknown[]>(fn: (...args: A) => Disposer) =>
+    (...args: A): Disposer => {
+      const dispose = fn(...args);
+      collect(dispose);
+      return dispose;
+    };
+  return {
+    ...base,
+    config,
+    tools: { register: wrap((...a) => base.tools.register(...a)) },
+    channels: { register: wrap((...a) => base.channels.register(...a)) },
+    providers: { register: wrap((...a) => base.providers.register(...a)) },
+    embeddings: { register: wrap((...a) => base.embeddings.register(...a)) },
+    memoryBackends: { register: wrap((...a) => base.memoryBackends.register(...a)) },
+    taskBackends: { register: wrap((...a) => base.taskBackends.register(...a)) },
+    repoBackends: { register: wrap((...a) => base.repoBackends.register(...a)) },
+    sandboxBackends: { register: wrap((...a) => base.sandboxBackends.register(...a)) },
+    uiProviders: { register: wrap((...a) => base.uiProviders.register(...a)) },
+    timeProviders: { register: wrap((...a) => base.timeProviders.register(...a)) },
+    stepExecutors: { register: wrap((...a) => base.stepExecutors.register(...a)) },
+    commands: { register: wrap((...a) => base.commands.register(...a)) },
+    http: {
+      register: wrap((...a) => http.register(...a)),
+      mount: wrap((...a) => http.mount(...a)),
+    },
+  };
+}
+
+/**
+ * Build the teardown for one plugin, or `undefined` when there is nothing to
+ * tear down.
+ *
+ * A throwing disposer is logged and the rest still run: teardown that gives up
+ * halfway is worse than no teardown, because it leaves a half-removed plugin
+ * that nothing will retry.
+ */
+function composeStop(
+  moduleName: string,
+  own: PluginDisposer | undefined,
+  registered: Disposer[],
+): PluginDisposer | undefined {
+  if (!own && registered.length === 0) return undefined;
+  return async () => {
+    if (own) {
+      try {
+        await own();
+      } catch (err) {
+        console.warn(`[plugins] ${moduleName}: disposer threw: ${(err as Error).message}`);
+      }
+    }
+    for (let i = registered.length - 1; i >= 0; i--) {
+      try {
+        registered[i]();
+      } catch (err) {
+        console.warn(`[plugins] ${moduleName}: unregister threw: ${(err as Error).message}`);
+      }
+    }
+  };
 }
 
 /**
@@ -83,9 +174,10 @@ export interface LoadPluginsOptions {
  * off switch for default plugins, whose module names `migrateDefaultPlugins`
  * re-appends if deleted (see config.ts).
  *
- * **Disposers**: a `register(ctx)` plugin may return a teardown function; it
- * is captured on {@link LoadedPlugin.stop} so the host can dispose it on
- * shutdown / reload.
+ * **Disposers**: a `register(ctx)` plugin may return a teardown function, and
+ * every registration it makes through `ctx` yields one of its own. Both are
+ * composed onto {@link LoadedPlugin.stop} so the host can undo a plugin as a
+ * unit on shutdown / reload.
  */
 export async function loadPlugins(
   config: AgentConfig,
@@ -123,7 +215,10 @@ export async function loadPlugins(
     const httpRegistry =
       typeof baseCtx.runtime?.getHttpRoutes === "function" ? baseCtx.runtime.getHttpRoutes() : undefined;
     const http = httpRegistry ? createHttpRegistryView(httpRegistry, moduleName) : baseCtx.http;
-    const ctx: PluginContext = { ...baseCtx, config: entryConfig, http };
+    // Every registration this plugin makes lands here, so unloading it can be
+    // the exact inverse of loading it rather than an approximation.
+    const registered: Disposer[] = [];
+    const ctx = collectingContext(baseCtx, http, (dispose) => registered.push(dispose), entryConfig);
     try {
       const mod = (await importer(moduleName)) as
         | { default?: unknown; meta?: unknown; validateConfig?: unknown }
@@ -153,7 +248,7 @@ export async function loadPlugins(
           module: moduleName,
           ok: true,
           shape: "register",
-          stop: typeof disposer === "function" ? disposer : undefined,
+          stop: composeStop(moduleName, typeof disposer === "function" ? disposer : undefined, registered),
           meta,
           warnings,
         });

@@ -2,7 +2,7 @@ import type Database from "better-sqlite3";
 import type { AgentConfig } from "../config.js";
 import type { EventBus } from "../events.js";
 import type { EmbeddingProvider } from "../providers/embedding.js";
-import { Registry } from "../registry.js";
+import { type Disposer, Registry } from "../registry.js";
 import type { TaskBackend } from "../tasks/interface.js";
 import type { Tool } from "./interface.js";
 import type { TaskBackendResolver, TasksToolNotify } from "./tasks.js";
@@ -54,8 +54,8 @@ export type ToolFactory = (config: AgentConfig, ctx: ToolFactoryContext) => Tool
 
 export const toolFactoryRegistry = new Registry<ToolFactory>("tool-factory");
 
-export function registerToolFactory(id: string, factory: ToolFactory): void {
-  toolFactoryRegistry.register(id, factory);
+export function registerToolFactory(id: string, factory: ToolFactory): Disposer {
+  return toolFactoryRegistry.register(id, factory);
 }
 
 /**

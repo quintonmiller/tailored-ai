@@ -1,4 +1,4 @@
-import { Registry } from "../registry.js";
+import { type Disposer, Registry } from "../registry.js";
 import type { AgentRuntime } from "../runtime.js";
 import type { UiProvider } from "./interface.js";
 
@@ -14,8 +14,8 @@ export type UiProviderFactory = (
 
 export const uiProviderFactoryRegistry = new Registry<UiProviderFactory>("ui-provider");
 
-export function registerUiProviderFactory(id: string, factory: UiProviderFactory): void {
-  uiProviderFactoryRegistry.register(id, factory);
+export function registerUiProviderFactory(id: string, factory: UiProviderFactory): Disposer {
+  return uiProviderFactoryRegistry.register(id, factory);
 }
 
 /**
