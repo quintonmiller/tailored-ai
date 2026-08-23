@@ -789,6 +789,81 @@ describe("a real game engine, when the team asks for one", () => {
   }, 60_000);
 });
 
+describe("a 3D engine, and the API it is honest about", () => {
+  it("offers both engines and installs the one asked for", async () => {
+    const s = sim();
+    // The brief lists the choice; picking is the team's.
+    const brief = s.briefFor("builder") ?? "";
+    expect(brief).toMatch(/phaser/);
+    expect(brief).toMatch(/babylon/);
+
+    const out = await call(s, "use_engine", { name: "babylon" }, "builder");
+    expect(out).toMatch(/Babylon\.js 8 is installed/);
+    expect(s.workspace.list().find((f) => f.path === "lib/babylon.js")?.provided).toBe(true);
+    expect(s.workspace.list().some((f) => f.path === "lib/phaser.js")).toBe(false);
+  });
+
+  it("refuses to mix two engines in one game", async () => {
+    const s = sim();
+    await call(s, "use_engine", { name: "babylon" }, "builder");
+    expect(await call(s, "use_engine", { name: "phaser" }, "builder")).toMatch(/already using Babylon/);
+  });
+
+  it("warns about the physics that is not there, rather than leaving it to be discovered", async () => {
+    const s = sim();
+    const out = await call(s, "use_engine", { name: "babylon" }, "builder");
+    // A model that knows Babylon knows PhysicsImpostor. It is not in this build,
+    // and silence would produce confident code that throws at runtime.
+    expect(out).toMatch(/no physics plugin/i);
+    expect(out).toMatch(/moveWithCollisions/);
+  });
+
+  it("looks up 3D API and keeps the missing physics out of the answers", async () => {
+    const s = sim();
+    await call(s, "use_engine", { name: "babylon" }, "builder");
+    expect(await call(s, "docs", { query: "create a box mesh" }, "builder")).toMatch(/CreateBox/);
+    expect(await call(s, "docs", { query: "does one mesh intersect another" }, "builder")).toMatch(/intersectsMesh/);
+
+    const physics = await call(s, "docs", { query: "physics impostor gravity" }, "builder");
+    expect(physics).not.toMatch(/Impostor|Havok|PhysicsAggregate/);
+    // No texture files exist, so the index must not suggest them.
+    expect(await call(s, "docs", { query: "diffuse texture image" }, "builder")).not.toMatch(/diffuseTexture/);
+  });
+
+  it("builds and runs a real 3D game end to end", async () => {
+    const s = sim();
+    await call(s, "use_engine", { name: "babylon" }, "builder");
+    await call(
+      s,
+      "write_file",
+      {
+        path: "index.html",
+        content:
+          '<!doctype html><html><body style="margin:0"><canvas id="game" style="width:100vw;height:100vh"></canvas><script src="lib/babylon.js"></script><script src="game.js"></script></body></html>',
+      },
+      "interface",
+    );
+    await call(
+      s,
+      "write_file",
+      {
+        path: "game.js",
+        content:
+          "const canvas = document.getElementById('game');\nconst engine = new BABYLON.Engine(canvas, true);\nconst scene = new BABYLON.Scene(engine);\nscene.clearColor = new BABYLON.Color4(0.05, 0.06, 0.08, 1);\nnew BABYLON.ArcRotateCamera('cam', Math.PI / 4, Math.PI / 3, 14, BABYLON.Vector3.Zero(), scene);\nnew BABYLON.HemisphericLight('light', new BABYLON.Vector3(0, 1, 0), scene);\nconst player = BABYLON.MeshBuilder.CreateBox('player', { size: 2 }, scene);\nconst mat = new BABYLON.StandardMaterial('m', scene);\nmat.diffuseColor = new BABYLON.Color3(0.4, 0.9, 0.6);\nplayer.material = mat;\nconst ground = BABYLON.MeshBuilder.CreateGround('g', { width: 40, height: 40 }, scene);\nground.position.y = -1.5;\nconst held = {};\naddEventListener('keydown', (e) => { held[e.code] = true; });\naddEventListener('keyup', (e) => { held[e.code] = false; });\nengine.runRenderLoop(() => {\n  const dt = engine.getDeltaTime() / 1000;\n  player.rotation.y += dt;\n  if (held.ArrowLeft) player.position.x -= 10 * dt;\n  if (held.ArrowRight) player.position.x += 10 * dt;\n  scene.render();\n});\n",
+      },
+      "builder",
+    );
+
+    expect(await call(s, "check_syntax", {}, "tester")).toMatch(/0 problems/);
+
+    // The whole point of the flag work: WebGL initialises, the frame is
+    // readable after compositing, and a rotating lit mesh reads as motion.
+    const report = await call(s, "playtest", {}, "tester");
+    expect(report).toMatch(/no console errors/i);
+    expect(report).toMatch(/It animates on its own/);
+  }, 90_000);
+});
+
 describe("submitting a build mid-jam", () => {
   function withArcade(options: Record<string, unknown> = {}): { sim: WorkshopSimulation; store: ArcadeStore } {
     const home = temp();

@@ -32,14 +32,27 @@ interface DocEntry {
   doc: string;
 }
 
+/**
+ * Members carry modifiers, and the name is not the first word on the line.
+ *
+ * Babylon writes `static CreateBox(options: {...})` and `readonly position`;
+ * Phaser mostly does not. Stripping them is what lets one parser read both.
+ */
+const MODIFIERS = /^(?:export\s+|declare\s+|public\s+|private\s+|protected\s+|static\s+|readonly\s+|abstract\s+|get\s+|set\s+)+/;
+
 function parse(source: string): DocEntry[] {
   const lines = source.split("\n");
   const entries: DocEntry[] = [];
-  const scope: string[] = [];
+  /** Each open scope, with the brace depth it was opened at. */
+  const scope: { name: string; depth: number }[] = [];
+  let depth = 0;
   let doc: string | null = null;
 
+  const path = (): string => scope.map((s) => s.name).join(".");
+
   for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i].trim();
+    const raw = lines[i];
+    const line = raw.trim();
 
     if (line.startsWith("/**")) {
       const buf: string[] = [];
@@ -53,32 +66,43 @@ function parse(source: string): DocEntry[] {
       continue;
     }
 
-    const opened = line.match(/^(?:export\s+)?(?:declare\s+)?(?:abstract\s+)?(namespace|class|interface)\s+([A-Za-z0-9_]+)/);
+    const opens = (line.match(/\{/g) ?? []).length;
+    const closes = (line.match(/\}/g) ?? []).length;
+
+    // `declare module BABYLON.Debug`, `namespace Physics`, `class Sprite`.
+    const opened = line
+      .replace(MODIFIERS, "")
+      .match(/^(module|namespace|class|interface)\s+([A-Za-z0-9_.]+)/);
     if (opened) {
-      scope.push(opened[2]);
-      if (opened[1] !== "namespace" && doc) {
-        entries.push({ name: scope.join("."), kind: "class", sig: line.replace(/\s*\{$/, ""), doc });
+      if (opened[1] === "class" || opened[1] === "interface") {
+        if (doc) entries.push({ name: [path(), opened[2]].filter(Boolean).join("."), kind: "class", sig: line.replace(/\s*\{$/, ""), doc });
       }
+      scope.push({ name: opened[2], depth });
+      depth += opens - closes;
       doc = null;
       continue;
     }
-    if (line === "}" && scope.length) {
-      scope.pop();
-      continue;
-    }
 
-    if (doc && /^[A-Za-z_][A-Za-z0-9_]*\??\s*[(:<]/.test(line)) {
-      const name = (line.match(/^([A-Za-z_][A-Za-z0-9_]*)/) as RegExpMatchArray)[1];
+    // A documented member, once its modifiers are out of the way.
+    const member = doc ? line.replace(MODIFIERS, "").match(/^([A-Za-z_][A-Za-z0-9_]*)\??\s*[(:<]/) : null;
+    if (member) {
+      const prefix = path();
       entries.push({
-        name: scope.length ? `${scope.join(".")}.${name}` : name,
+        name: prefix ? `${prefix}.${member[1]}` : member[1],
         kind: line.includes("(") ? "method" : "property",
         sig: line.replace(/;$/, ""),
         doc,
       });
       doc = null;
-      continue;
+    } else if (line && !line.startsWith("*")) {
+      doc = null;
     }
-    if (line && !line.startsWith("*")) doc = null;
+
+    depth += opens - closes;
+    // Close every scope the braces have now left. Depth-tracked rather than
+    // matching a bare `}`, because a multi-line options type closes with one too
+    // and would otherwise pop a class that is still open.
+    while (scope.length && depth <= scope[scope.length - 1].depth) scope.pop();
   }
   return entries;
 }
@@ -86,43 +110,62 @@ function parse(source: string): DocEntry[] {
 /**
  * Drop what this jam cannot reach.
  *
- * Not a size optimisation — a relevance one. A query for "velocity" competing
- * against four hundred renderer internals is a query that returns internals, and
- * the index should describe the engine *as the team can actually use it*.
+ * Not a size optimisation — a relevance one, and a correctness one. A query for
+ * "velocity" competing against four hundred renderer internals returns
+ * internals; worse, documenting an API that is not in the vendored build
+ * produces confident code that cannot run. The index should describe the engine
+ * *as this team can actually use it*.
  *
- * Each exclusion is a constraint that already exists somewhere else:
- *
- * - **Loader, FileTypes, Video, Tilemap** — the brief forbids image files, so
- *   everything that loads or maps an external asset is unreachable.
- * - **Sound** — the brief forbids audio.
- * - **Physics.Matter** — we vendor the *arcade physics* build, which does not
- *   contain it. Documenting an engine that is not in the file is worse than
- *   documenting nothing: it produces confident code that cannot run.
- * - **Renderer internals** — pipelines, shaders, framebuffers. Real API, and
- *   nothing a jam game touches.
- *
- * `Types.*` stays. It reads as noise and is not: those are the config-object
- * shapes, and "what options does this take" is exactly the question a model
- * half-remembers.
+ * Every exclusion restates a constraint that already exists somewhere else — the
+ * brief's, or the build we chose to vendor.
  */
-const UNREACHABLE = new RegExp(
-  [
-    // Renderer internals.
-    "\\b(WebGL|Pipeline|Shader|Renderer|Framebuffer|GLTexture|Internal|Deprecated|__)\\b",
-    // Asset loading and anything that maps one. Unanchored: the declarations
-    // nest inconsistently, so `Sound.play` and `Phaser.Sound.play` both occur.
-    "\\b(Loader|FileTypes|Tilemap|Tileset|LayerData|MapData)",
-    // Audio.
-    "\\bSound\\b",
-    // Not in the arcade-physics build we vendor.
-    "\\bMatter\\b",
-    // Real API, unreachable without image files.
-    "\\b(Video|RenderTexture|Stamp|TileSprite|DynamicBitmapText|PathFollower|Spritesheet|Atlas)\\b",
-  ].join("|"),
-);
+const PROFILES: Record<string, RegExp> = {
+  // Case-insensitive and mostly unanchored, for the same reason as Babylon:
+  // `Phaser.Game.sound` and `Config.loaderImageLoadType` are the real member
+  // names, and a `\b`-anchored PascalCase pattern matches neither.
+  phaser: new RegExp(
+    [
+      // Renderer internals.
+      "(webgl|pipeline|shader|renderer|framebuffer|gltexture|internal|deprecated|__)",
+      // Asset loading, and anything that maps one.
+      "(loader|filetypes|tilemap|tileset|layerdata|mapdata|spritesheet|atlas)",
+      // Audio.
+      "sound",
+      // Not in the arcade-physics build we vendor.
+      "matter",
+      // Real API, unreachable without image files.
+      "(video|rendertexture|tilesprite|dynamicbitmaptext|pathfollower)",
+    ].join("|"),
+    "i",
+  ),
+  // Case-insensitive: Babylon names members in camelCase and classes in Pascal,
+  // so `texture` and `Texture` are the same exclusion.
+  babylon: new RegExp(
+    [
+      // Asset loading of every kind: no image, model or texture files exist.
+      "\\b(SceneLoader|AssetsManager|AssetContainer|FilesInput|glTF|GLTF|OBJFile|STLFile|Loader)",
+      "(texture|dds|ktx|basis|draco)",
+      // Audio.
+      "\\b(Sound|Audio|WebAudio|Analyser)",
+      // Physics needs a plugin package we do not vendor. Babylon's built-in
+      // collision — intersectsMesh, moveWithCollisions, ellipsoids — is what a
+      // game here can actually call, and stays.
+      // No word boundary and case-insensitive below: the members are named
+      // `physicsImpostor` and `getPhysicsImpostor`, and `\\bPhysics` matches
+      // neither. This one has to be airtight — a familiar-looking physics API
+      // that is not in the build is the worst thing the index could suggest.
+      "(havok|cannonjs|ammojs|impostor|physicsaggregate|physicsbody|physicsshape|physicsengine|physicsmaterial|physicsconstraint|physicsviewer|physicsjoint|physicsprestep)",
+      // Headsets, editors, debug tooling, node-graph materials.
+      "\\b(WebXR|XR|VRExperience|DeviceOrientation|Inspector|DebugLayer|NodeMaterial|NodeGeometry|Recast|Navigation)",
+      // Engine internals and the WebGPU backend.
+      "\\b(WebGPU|ThinEngine|NativeEngine|Effect|EffectLayer|PostProcessRenderPipeline|RenderTargetTexture|Internal|Deprecated|__)",
+    ].join("|"),
+    "i",
+  ),
+};
 
-function useful(e: DocEntry): boolean {
-  if (UNREACHABLE.test(e.name)) return false;
+function useful(e: DocEntry, exclude: RegExp): boolean {
+  if (exclude.test(e.name)) return false;
   if (e.doc.length < 12) return false;
   // A `.d.ts` repeats a class member on every subclass. The qualified name keeps
   // them distinct and search dedupes on the doc, so nothing is lost here.
@@ -154,13 +197,22 @@ const read = (flag: string): string | undefined => {
 const input = read("--in");
 const output = read("--out");
 if (!input || !output) {
-  console.error("usage: build-engine-docs.ts --in <engine.d.ts> --out <engine.docs.jsonl>");
+  console.error("usage: build-engine-docs.ts --in <engine.d.ts> --out <engine.docs.jsonl> [--profile phaser|babylon]");
+  process.exit(2);
+}
+
+const profile = read("--profile") ?? "phaser";
+const exclude = PROFILES[profile];
+if (!exclude) {
+  console.error(`unknown profile "${profile}". Known: ${Object.keys(PROFILES).join(", ")}`);
   process.exit(2);
 }
 
 const source = readFileSync(input, "utf8");
 const all = parse(source);
-const kept = all.filter(useful).map((e) => ({ ...e, doc: trimDoc(e.doc), sig: e.sig.slice(0, 400) }));
+const kept = all
+  .filter((e) => useful(e, exclude))
+  .map((e) => ({ ...e, doc: trimDoc(e.doc), sig: e.sig.slice(0, 400) }));
 const body = `${kept.map((e) => JSON.stringify(e)).join("\n")}\n`;
 writeFileSync(output, body);
 

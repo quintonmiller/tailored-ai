@@ -940,7 +940,7 @@ tool; five is a team that stopped treating the horizon as a cliff).
 ## Real engines, and the manual that makes them usable (2026-08-23)
 
 `use_engine` installs a real game engine into the workspace, and `docs` looks up
-its exact API. Phaser 4 first; the seam takes more.
+its exact API. Phaser 4 for 2D, Babylon.js 8 for 3D; one per team.
 
 **The argument against an engine had been specific, and it stopped holding.** It
 was: our 580-line `lib/` is competitive for 2D, the brief bans image files so
@@ -970,6 +970,34 @@ Summing per-term hits had ranked `setAngularVelocity` above `setVelocity` for
 "arcade physics set velocity" — both contain every term — and returned
 `Structs.Map.keys` for "keyboard cursor keys", because one exact match on a
 common word beat a partial match on `createCursorKeys`. Both rank correctly now.
+
+### Babylon, and being honest about what is missing
+
+Babylon.js 8 is the 3D option, and it beat three.js on the things that matter
+here: it ships a classic-script build (three has been ESM-only since r160 and
+would need bundling), it has the larger documented surface, and it includes
+collision — `intersectsMesh`, `moveWithCollisions`, per-mesh ellipsoids — so a 3D
+game can move and collide without a physics plugin. Measured, it also **parses
+faster than Phaser** (156 ms against 273 ms) despite being 5.8× the size, which
+retired the objection I had raised about its weight.
+
+What it does *not* have is a physics engine. Babylon's physics needs Havok,
+Cannon or Ammo, which are separate libraries we do not vendor — so
+`PhysicsImpostor` and `PhysicsAggregate` will not work, no matter how familiar
+they look to a model that has read the tutorials. Two things follow, and both are
+the point:
+
+- The index **excludes every physics-plugin symbol**, because documenting an API
+  that is not in the build is worse than documenting nothing: it produces
+  confident code that throws at runtime.
+- The install message **says so out loud**, and names what to use instead.
+  Silence would leave the gap to be discovered by a team mid-jam.
+
+The exclusion lists are the load-bearing part and they are easy to get subtly
+wrong. Both profiles started `\b`-anchored and PascalCase, and both leaked:
+`physicsImpostor` and `diffuseTexture` are single words with no internal
+boundary, and `Phaser.Game.sound` and `Config.loaderImageLoadType` are lowercase.
+Case-insensitive and mostly unanchored is what actually holds.
 
 ### Two flags were deciding what kind of games could exist
 

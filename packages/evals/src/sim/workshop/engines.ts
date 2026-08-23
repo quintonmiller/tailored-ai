@@ -89,6 +89,58 @@ export const ENGINES: EngineSpec[] = [
       "get sprites when image files are not allowed. `docs` looks up any API you are unsure of — use it " +
       "rather than guessing a signature.",
   },
+  {
+    id: "babylon",
+    title: "Babylon.js 8",
+    file: "babylon.min.js",
+    path: "lib/babylon.js",
+    docs: "babylon.docs.jsonl",
+    global: "BABYLON",
+    blurb:
+      "Babylon.js 8 — a full 3D engine: meshes, cameras, lights, materials, built-in collision. Pick this " +
+      "if the game is in three dimensions.",
+    start:
+      "Babylon is at `lib/babylon.js` and gives you the `BABYLON` global. Load it before your own scripts, " +
+      "and give the page a `<canvas>` to render into.\n\n" +
+      "The smallest thing that runs:\n\n" +
+      "```js\n" +
+      "const canvas = document.getElementById('game');\n" +
+      "const engine = new BABYLON.Engine(canvas, true);\n" +
+      "const scene = new BABYLON.Scene(engine);\n" +
+      "scene.clearColor = new BABYLON.Color4(0.05, 0.06, 0.08, 1);\n" +
+      "const camera = new BABYLON.ArcRotateCamera('cam', Math.PI / 4, Math.PI / 3, 12, BABYLON.Vector3.Zero(), scene);\n" +
+      "new BABYLON.HemisphericLight('light', new BABYLON.Vector3(0, 1, 0), scene);\n" +
+      "\n" +
+      "const player = BABYLON.MeshBuilder.CreateBox('player', { size: 2 }, scene);\n" +
+      "const mat = new BABYLON.StandardMaterial('m', scene);\n" +
+      "mat.diffuseColor = new BABYLON.Color3(0.4, 0.9, 0.6);\n" +
+      "player.material = mat;\n" +
+      "const ground = BABYLON.MeshBuilder.CreateGround('g', { width: 40, height: 40 }, scene);\n" +
+      "ground.position.y = -1;\n" +
+      "\n" +
+      "const held = {};\n" +
+      "addEventListener('keydown', (e) => { held[e.code] = true; });\n" +
+      "addEventListener('keyup', (e) => { held[e.code] = false; });\n" +
+      "\n" +
+      "engine.runRenderLoop(() => {\n" +
+      "  const dt = engine.getDeltaTime() / 1000;\n" +
+      "  if (held.ArrowLeft) player.position.x -= 8 * dt;\n" +
+      "  if (held.ArrowRight) player.position.x += 8 * dt;\n" +
+      "  scene.render();\n" +
+      "});\n" +
+      "addEventListener('resize', () => engine.resize());\n" +
+      "```\n\n" +
+      "**Two things to know before you design around them.**\n\n" +
+      "There is *no physics plugin*. Babylon's physics needs Havok, Cannon or Ammo, which are separate " +
+      "libraries you do not have, so `PhysicsImpostor` and `PhysicsAggregate` will not work no matter how " +
+      "familiar they look. What you do have is built-in collision: `mesh.intersectsMesh(other)`, " +
+      "`mesh.moveWithCollisions(vector)` with `scene.collisionsEnabled` and per-mesh `ellipsoid`, and " +
+      "`mesh.checkCollisions`. Gravity is a number you subtract yourself. Plenty of good 3D games need " +
+      "nothing more.\n\n" +
+      "There are *no texture or model files*. Colour comes from `StandardMaterial` and its `diffuseColor`, " +
+      "`emissiveColor` and `alpha`; shape comes from `MeshBuilder`. `docs` looks up any signature you are " +
+      "unsure of — use it rather than guessing.",
+  },
 ];
 
 export function findEngine(id: unknown): EngineSpec | undefined {
@@ -126,6 +178,24 @@ function words(identifier: string): string[] {
     .toLowerCase()
     .split(/[^a-z0-9]+/)
     .filter(Boolean);
+}
+
+/**
+ * Does an identifier's word answer one of the query's?
+ *
+ * Prefix rather than equality, because people do not conjugate the way an API
+ * does. "does one mesh intersect another" was answering with
+ * `BoneLookController.mesh` — the query said `intersect`, the method says
+ * `intersects`, and exact matching could not see they were the same word. Four
+ * characters is the floor: below it a prefix is a coincidence.
+ */
+function matches(word: string, terms: string[]): boolean {
+  return terms.some((t) => {
+    if (t === word) return true;
+    const shorter = t.length < word.length ? t : word;
+    const longer = t.length < word.length ? word : t;
+    return shorter.length >= 4 && longer.startsWith(shorter);
+  });
 }
 
 /** How many results one lookup returns before it costs more than it explains. */
@@ -176,7 +246,6 @@ export class EngineDocs {
       .filter((t) => t.length > 2);
     if (!terms.length) return [];
 
-    const wanted = new Set(terms);
     const scored: { entry: DocEntry; score: number }[] = [];
     for (const entry of this.load()) {
       const name = entry.name.toLowerCase();
@@ -193,14 +262,14 @@ export class EngineDocs {
        * returned `Structs.Map.keys`, because an exact match on one common word
        * beat a partial match on the right method.
        */
-      const covered = tailWords.filter((w) => wanted.has(w)).length;
-      const extra = tailWords.filter((w) => !wanted.has(w)).length;
+      const covered = tailWords.filter((w) => matches(w, terms)).length;
+      const extra = tailWords.filter((w) => !matches(w, terms)).length;
       let score = covered * 20 - extra * 6;
 
       // The namespace is weaker evidence than the member name, and still
       // evidence: "arcade physics" should favour something under Physics.Arcade.
       for (const term of terms) {
-        if (!tailWords.includes(term) && name.includes(term)) score += 5;
+        if (!tailWords.some((w) => matches(w, [term])) && name.includes(term)) score += 5;
         if (doc.includes(term)) score += 2;
       }
 
