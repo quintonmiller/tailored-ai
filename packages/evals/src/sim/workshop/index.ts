@@ -1250,7 +1250,7 @@ export class WorkshopSimulation implements Simulation {
                 `${report.errors.length ? `, ${report.errors.length} console error${report.errors.length === 1 ? "" : "s"}` : ""}`
             : "could not run it",
         );
-        this.checkpoint(report);
+        this.checkpointBuild(report);
         const text = formatPlaytest(report, this.brief.entry);
         const shots = await this.attachFrames(report);
         if (shots.length === 0) return { success: true, output: text };
@@ -1278,7 +1278,7 @@ export class WorkshopSimulation implements Simulation {
    * automatic is a run where the mechanism did not land, and that has to be
    * visible rather than hidden inside a healthy-looking total.
    */
-  private checkpoint(report: Awaited<ReturnType<typeof playtest>>): void {
+  private checkpointBuild(report: Awaited<ReturnType<typeof playtest>>): void {
     if (!this.desk) return;
     // Only a game that actually runs. A checkpoint of a black rectangle that
     // parses would be worse than none: it is what gets judged if the run dies.
@@ -1352,6 +1352,67 @@ export class WorkshopSimulation implements Simulation {
         room: f.path,
         body: `claim lapsed — reserved by the ${f.from}, never written`,
       });
+    }
+  }
+
+  /**
+   * Everything about this jam that is not already on disk.
+   *
+   * Deliberately not the workspace, the arcade row or the trace: all three
+   * outlive the process, and carrying a second copy would give a resumed run two
+   * versions of the truth that can disagree. What is here is the run's own
+   * bookkeeping — the clock, the counters, the claim table, what the last
+   * playtest said — plus the two decisions a team already made that the
+   * directory does not record: which engine it took, and how much of the
+   * workspace was skeleton rather than theirs.
+   *
+   * The arcade desk is deliberately absent. `createEntry` is idempotent on the
+   * run id, and the run id is the artifact directory's name, so a resumed run
+   * reconnects to its own row by construction rather than by remembering an id.
+   */
+  checkpoint(): unknown {
+    return {
+      version: 1,
+      tick: this.tick,
+      counts: this.counts,
+      roundsWithNoWrite: this.roundsWithNoWrite,
+      writesThisRound: this.writesThisRound,
+      framesShown: this.framesShown,
+      scaffoldLines: this.scaffoldLines,
+      lastCheckpointEdits: this.lastCheckpointEdits ?? null,
+      engine: this.engine?.id ?? null,
+      lastPlaytest: this.lastPlaytest ?? null,
+      lastCheck: this.lastCheck ?? null,
+      claims: this.workspace.claims(),
+      writers: this.workspace.writers(),
+    };
+  }
+
+  restore(state: unknown): void {
+    const s = (state ?? {}) as Record<string, unknown>;
+    if (typeof s.tick === "number") this.tick = s.tick;
+    if (typeof s.roundsWithNoWrite === "number") this.roundsWithNoWrite = s.roundsWithNoWrite;
+    if (typeof s.writesThisRound === "number") this.writesThisRound = s.writesThisRound;
+    if (typeof s.framesShown === "number") this.framesShown = s.framesShown;
+    if (typeof s.scaffoldLines === "number") this.scaffoldLines = s.scaffoldLines;
+    if (typeof s.lastCheckpointEdits === "number") this.lastCheckpointEdits = s.lastCheckpointEdits;
+    if (s.counts && typeof s.counts === "object") Object.assign(this.counts, s.counts);
+    if (s.lastPlaytest && typeof s.lastPlaytest === "object") {
+      this.lastPlaytest = s.lastPlaytest as typeof this.lastPlaytest;
+    }
+    if (s.lastCheck && typeof s.lastCheck === "object") this.lastCheck = s.lastCheck as typeof this.lastCheck;
+    if (Array.isArray(s.claims)) this.workspace.restoreClaims(s.claims);
+    if (Array.isArray(s.writers)) this.workspace.restoreWriters(s.writers);
+
+    // The engine's *files* are already in the workspace — `provide` wrote them
+    // and they survived on disk. What is restored here is the run knowing it
+    // has one, so `docs` works and a second `use_engine` is still refused.
+    if (typeof s.engine === "string") {
+      const engine = findEngine(s.engine);
+      if (engine) {
+        this.engine = engine;
+        if (engine.docs) this.engineDocs = new EngineDocs(engine.docs);
+      }
     }
   }
 

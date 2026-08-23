@@ -945,6 +945,87 @@ describe("a 3D engine, and the API it is honest about", () => {
   }, 90_000);
 });
 
+describe("stopping a jam and picking it up later", () => {
+  /*
+   * The simulation half of resume.
+   *
+   * The harness half — keeping the agent home so the conversation survives — is
+   * covered by the run itself; what is tested here is that the jam's own
+   * bookkeeping round-trips, because that is the part that silently produces a
+   * *plausible* wrong answer. A resumed run that forgets its claims hands every
+   * file to whoever writes next; one that forgets its writers reports a team of
+   * one; one that forgets its clock replays rounds it already played.
+   */
+  it("comes back on the same round with the same counters", async () => {
+    const before = sim({ days: 20 });
+    await call(before, "write_file", { path: "game.js", content: "var a = 1;\n" }, "builder");
+    await call(before, "claim_file", { path: "render.js", purpose: "drawing" }, "interface");
+    // Written, so the claim is permanent — an unwritten one would lapse over
+    // the two rounds below, and this test is about the restore, not the lapse.
+    await call(before, "write_file", { path: "render.js", content: "// draw\n" }, "interface");
+    before.advance();
+    before.advance();
+
+    const saved = JSON.parse(JSON.stringify(before.checkpoint()));
+
+    const after = sim({ days: 20, root: before.root });
+    after.restore(saved);
+
+    expect(after.metrics().roundsPlayed).toBe(before.metrics().roundsPlayed);
+    expect(after.metrics().writes).toBe(before.metrics().writes);
+    expect(after.metrics().claims).toBe(before.metrics().claims);
+    // Ownership is the one that goes wrong quietly: the file is on disk either
+    // way, and only the claim table says who may write it next.
+    expect(after.workspace.ownerOf("render.js")).toBe("interface");
+    expect(after.workspace.ownerOf("game.js")).toBe("builder");
+    expect(after.metrics().distinctWriters).toBe(before.metrics().distinctWriters);
+  });
+
+  it("keeps the lapse clock, so a resumed claim still expires on time", async () => {
+    const before = sim({ days: 20 });
+    await call(before, "claim_file", { path: "game.js", purpose: "the loop" }, "builder");
+    before.advance();
+
+    const after = sim({ days: 20, root: before.root });
+    after.restore(JSON.parse(JSON.stringify(before.checkpoint())));
+
+    // One more round either side of the restore is two in total: the claim goes.
+    after.advance();
+    expect(after.workspace.ownerOf("game.js")).toBeUndefined();
+    expect(after.metrics().claimsLapsed).toBe(1);
+  });
+
+  it("remembers which engine the team took", async () => {
+    const before = sim({ days: 20 });
+    await call(before, "use_engine", { name: "babylon" }, "builder");
+    before.advance();
+
+    const after = sim({ days: 20, root: before.root });
+    after.restore(JSON.parse(JSON.stringify(before.checkpoint())));
+
+    expect(after.metrics().engineChosen).toBe(1);
+    // Which means `docs` still answers and a second engine is still refused —
+    // the two things a resumed team would otherwise get wrong about itself.
+    expect(await call(after, "docs", { query: "create a box mesh" }, "builder")).toMatch(/CreateBox/);
+    expect(await call(after, "use_engine", { name: "phaser" }, "builder")).toMatch(/already using Babylon/);
+  }, 30_000);
+
+  it("survives a checkpoint from a version that knew less", () => {
+    const s = sim({ days: 20 });
+    // A field that is not there must leave its default alone rather than throw:
+    // a resumed run slightly wrong about a counter beats one that will not run.
+    s.restore({ version: 1, tick: 4 });
+    // Neither of these may throw, and neither may undo the field that was there.
+    s.restore(undefined);
+    s.restore("nonsense");
+    // Read once: `metrics()` finalises, which counts the last unbounded round,
+    // so a second call reports a different number by design.
+    const m = s.metrics();
+    expect(m.roundsPlayed).toBe(5);
+    expect(m.writes).toBe(0);
+  });
+});
+
 describe("submitting a build mid-jam", () => {
   function withArcade(options: Record<string, unknown> = {}): { sim: WorkshopSimulation; store: ArcadeStore } {
     const home = temp();

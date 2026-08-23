@@ -21,9 +21,9 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { AIProvider, ChatParams, ChatResponse, Tool } from "@tailored-ai/core";
 import {
   AgentRuntime,
@@ -128,6 +128,17 @@ export interface HarnessOptions {
    * bytes, and tool-result media relayed as a **follow-up user turn**.
    */
   vision?: boolean;
+  /**
+   * A directory this run keeps its state in, so it can be stopped and resumed.
+   *
+   * Without one the agent's home is a temp directory this module deletes when
+   * the run ends, which is right for a benchmark sweep and fatal for a
+   * three-hour jam: interrupting it did not pause the run, it destroyed the
+   * conversation. With one, the home lives here and stays.
+   */
+  session?: string;
+  /** Continue from the checkpoint in `session` rather than starting over. */
+  resume?: boolean;
   /**
    * The deployment's context window, in tokens.
    *
@@ -839,8 +850,69 @@ function collectSpeakers(scenario: Scenario): string[] {
   return [...speakers];
 }
 
+/**
+ * Where a paused run picks up.
+ *
+ * `round` is the last one that *finished*, so a resume starts at the next one.
+ * `sim` is whatever the simulation's own `checkpoint()` returned and is opaque
+ * here — the harness has no business knowing what a jam keeps in it.
+ */
+interface Checkpoint {
+  round: number;
+  at: string;
+  sim?: unknown;
+}
+
+function checkpointPath(session: string): string {
+  return join(session, "run.json");
+}
+
+function readCheckpoint(session: string): Checkpoint | undefined {
+  const file = checkpointPath(session);
+  if (!existsSync(file)) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as Checkpoint;
+    return typeof parsed?.round === "number" ? parsed : undefined;
+  } catch {
+    // A corrupt checkpoint means starting over, which is what would have
+    // happened without one. Refusing to run would be the worse failure.
+    return undefined;
+  }
+}
+
+function writeCheckpoint(session: string, round: number, sim?: Simulation): void {
+  try {
+    mkdirSync(session, { recursive: true });
+    const state: Checkpoint = {
+      round,
+      at: new Date().toISOString(),
+      ...(sim?.checkpoint ? { sim: sim.checkpoint() } : {}),
+    };
+    writeFileSync(checkpointPath(session), `${JSON.stringify(state, null, 2)}\n`);
+  } catch {
+    // A run must not die because it could not write its own save file.
+  }
+}
+
 export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise<RunOutcome> {
-  const home = mkdtempSync(join(tmpdir(), "tai-eval-"));
+  /*
+   * A run that can be stopped and picked up tomorrow.
+   *
+   * Everything durable about a jam already survives the process — the workspace
+   * is a real directory, the arcade row is a SQLite row, the trace is an
+   * append-only file. Everything *ephemeral* lived in a `mkdtemp` home that this
+   * function deleted in its `finally`: the room messages, the sessions, the
+   * memory. So a three-hour run interrupted at round twelve was not paused, it
+   * was destroyed, and freeing the GPU meant throwing the jam away.
+   *
+   * With a session directory the home is that directory, and nothing deletes it.
+   * The conversation is in `home/`, the simulation's own bookkeeping in
+   * `sim.json`, and where to start again in `run.json`.
+   */
+  const session = opts.session ? resolve(opts.session) : undefined;
+  const home = session ? join(session, "home") : mkdtempSync(join(tmpdir(), "tai-eval-"));
+  if (session) mkdirSync(home, { recursive: true });
+  const resumed = session && opts.resume ? readCheckpoint(session) : undefined;
   const previousHome = process.env.TAI_HOME;
   process.env.TAI_HOME = home;
 
@@ -1059,7 +1131,7 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
     sim?.attachMedia?.(runtime.getMediaStore());
 
     const outcome = scenario.rooms?.length
-      ? await runRoomScenario(scenario, runtime, db, agentName, opts, recorder, world, sim)
+      ? await runRoomScenario(scenario, runtime, db, agentName, opts, recorder, world, sim, { session, resumed })
       : await runChatScenario(scenario, runtime, db, agentName, opts);
 
     // The room path emits its own turns and its own ending. A single-turn
@@ -1133,7 +1205,9 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
     db?.close();
     if (previousHome === undefined) delete process.env.TAI_HOME;
     else process.env.TAI_HOME = previousHome;
-    rmSync(home, { recursive: true, force: true });
+    // A session home is the point of the session: deleting it here would make
+    // `--session` mean "write a checkpoint and then remove what it points at".
+    if (!session) rmSync(home, { recursive: true, force: true });
   }
 }
 
@@ -1260,6 +1334,7 @@ async function runRoomScenario(
   recorder: Recorder,
   world?: World,
   sim?: Simulation,
+  persist?: { session?: string; resumed?: Checkpoint },
 ): Promise<Pick<RunOutcome, "reply" | "posts" | "stop" | "turns" | "dayOfTurn">> {
   const store = runtime.getRoomStore();
   const backend = new LocalRoomBackend(db, store);
@@ -1327,7 +1402,9 @@ async function runRoomScenario(
   // conversation forward is the agent's SESSION, written by the previous turn.
   // Seeding the room here under the key `runTurn` will compute is the only way
   // to reproduce a room the agent is genuinely mid-conversation in.
-  if (scenario.history?.length) {
+  // Seeding history again on a resume would replay the scenario's opening into a
+  // conversation that has already had twelve rounds of it.
+  if (scenario.history?.length && !persist?.resumed) {
     const session = findOrCreateSession(
       db,
       makeRoomSessionKey(wakeRef, agentName),
@@ -1496,6 +1573,13 @@ async function runRoomScenario(
     await strikeTheHour();
     openRound(round ?? 0);
     for (const step of steps) {
+      // Resume at a round boundary: everything before the checkpoint already
+      // happened, and its consequences are in the workspace, the arcade and the
+      // conversation. Replaying those turns would double every write.
+      if (persist?.resumed && (step.round ?? 0) < persist.resumed.round) {
+        round = step.round;
+        continue;
+      }
       if (step.round !== round) {
         // A pass that changed nothing ends the run — unless a simulation is
         // running, where it does not: the economy moves on its own, so "nobody
@@ -1518,6 +1602,9 @@ async function runRoomScenario(
         // `SimulationSpec.daysPerRound`: a horizon short enough for one round
         // per day is short enough to reward doing nothing.
         for (let i = 0; i < stride && !sim?.done; i++) sim?.advance();
+        // Written after the clock moves, so the file describes a round that is
+        // finished rather than one halfway through.
+        if (persist?.session) writeCheckpoint(persist.session, step.round ?? 0, sim);
         // The result belongs in the trace before the next round is announced.
         // Waiting for the first agent turn left the stage showing the previous
         // room (and its stale intents) throughout a potentially long model call.

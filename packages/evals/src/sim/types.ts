@@ -194,6 +194,35 @@ export interface Simulation {
    * the message is in the room, with the day marker already filtered out.
    */
   observePost?(post: { agent?: string; room: string; body: string; to: string[] }): void;
+
+  /**
+   * Enough state to continue this run in a new process.
+   *
+   * A jam is three hours of one GPU, which makes "stop it and pick it up
+   * tomorrow" a real requirement rather than a nicety — and until now the only
+   * way to free the card was to throw the run away.
+   *
+   * Taken at round boundaries, never mid-round. `advance()` already runs there,
+   * the workspace snapshot is taken there and the arcade heartbeat fires there,
+   * so it is the one moment where the world is not half-changed. The cost is
+   * losing at most one partial round, which is a much better trade than the
+   * bookkeeping mid-turn resume would need.
+   *
+   * Must be JSON-serialisable, and must not include anything already durable on
+   * disk — the workspace, the arcade row and the trace all outlive the process
+   * and re-reading them is more honest than carrying a copy that can disagree.
+   */
+  checkpoint?(): unknown;
+
+  /**
+   * Take back the state from {@link Simulation.checkpoint}.
+   *
+   * Called once, after construction and before any turn. A simulation that
+   * cannot restore some part of itself should leave that part at its
+   * constructed default rather than throw: a resumed run that is slightly wrong
+   * about a counter is worth more than a run that will not start.
+   */
+  restore?(state: unknown): void;
   /** The numbers the benchmark reports. Called once, at the end. */
   metrics(): SimMetrics;
   /** The headline figure, so a report can rank runs without knowing the domain. */

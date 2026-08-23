@@ -1122,6 +1122,58 @@ single `data.js` of tuning constants onto the board with no `index.html` and
 nothing to run. The bar is now the brief's entry file — no entry file, no
 artifact.
 
+## Stopping a jam and picking it up later
+
+A run is three hours of one GPU, so "stop it and come back tomorrow" is a real
+requirement. Until now interrupting a jam did not pause it, it **destroyed** it —
+and not for the reason you would guess.
+
+Everything durable already survived the process: the workspace is a real
+directory, the arcade row is a SQLite row, the trace is an append-only file. What
+did not survive was the *conversation*. `runOnce` built the agent's home with
+`mkdtempSync` and deleted it in a `finally`, and that home held the room
+messages, the sessions and the memory. Right for a benchmark sweep; fatal for a
+long build.
+
+```bash
+pnpm run eval -- --filter =the-workshop --session results/sessions/jam-29
+pnpm run eval -- --filter =the-workshop --session results/sessions/jam-29 --resume
+```
+
+With `--session` the home lives in that directory and nothing deletes it. Beside
+it sits `run.json`: the last round that *finished*, plus whatever the simulation
+kept.
+
+**Round boundaries, never mid-round.** `advance()` already runs there, the
+workspace snapshot is taken there and the arcade heartbeat fires there, so it is
+the one moment when the world is not half-changed. The cost is losing at most one
+partial round, which is a far better trade than the bookkeeping a mid-turn resume
+would need. On resume the harness skips every step below the checkpoint's round;
+replaying them would double every write.
+
+**The checkpoint deliberately does not copy what is already on disk.** Not the
+workspace, not the arcade row, not the trace — a second copy is a second version
+of the truth, and the two can disagree. What it does carry is the run's own
+bookkeeping and three things the directory cannot tell you:
+
+- **the claim table**, with the round each claim was made. Without it every file
+  goes to whoever writes next, and the lapse rule has no clock.
+- **the writers**, or `distinctWriters` reports a team of one.
+- **which engine the team took**, so `docs` still answers and a second
+  `use_engine` is still refused.
+
+The arcade desk is absent on purpose: `createEntry` is idempotent on the run id
+and the run id is the artifact directory's name, so a resumed run reconnects to
+its own row by construction rather than by remembering an id.
+
+`restore` is deliberately forgiving — an unknown or missing field leaves its
+default alone rather than throwing. A resumed run slightly wrong about a counter
+is worth more than one that will not start.
+
+Verified end to end with the scripted bot: five rounds, stop, restore into a
+fresh simulation, five more. `roundsPlayed` reads 11 where a restart would read
+6, and all five files and all five claims survive.
+
 ## What it cannot tell you
 
 - **Runs are not comparable with each other.** Two runs on the same brief differ

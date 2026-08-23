@@ -109,6 +109,12 @@ Options
                         \${VAR} so loadConfig interpolates it and it never reaches disk.
   --thinking-dialect <d> Provider dialect for reasoning, e.g. vllm
   --context-tokens <n>  The deployment's context window. Recorded, never enforced.
+  --session <dir>       Keep this run's state in <dir> so it can be stopped and
+                        resumed. Without it the agent's home is a temp directory
+                        that is deleted when the run ends, which turns an
+                        interrupted three-hour jam into a lost one.
+  --resume              Continue the run in --session from its last finished
+                        round, rather than starting it again.
   --vision              This model can see. Lets a simulation hand it images, and
                         declares the tool-result relay the OpenAI shape needs.
   --plugins <a,b>       Provider plugins to load, e.g. @tailored-ai/provider-openai
@@ -347,6 +353,8 @@ async function cmdRun(argv: string[]): Promise<number> {
       thinking: { type: "string" },
       "context-tokens": { type: "string" },
       vision: { type: "boolean" },
+      session: { type: "string" },
+      resume: { type: "boolean" },
       "provider-extra": { type: "string" },
       "sim-option": { type: "string", multiple: true },
       plugins: { type: "string" },
@@ -407,6 +415,8 @@ async function cmdRun(argv: string[]): Promise<number> {
     thinking: values.thinking ?? fromHome.thinking,
     contextTokens: values["context-tokens"] ? Number(values["context-tokens"]) : undefined,
     vision: values.vision === true,
+    ...(values.session ? { session: String(values.session) } : {}),
+    resume: values.resume === true,
     // Read here rather than in the harness so the same values reach a run and
     // the report it writes, and a simulation that records provenance cannot
     // disagree with the report about which commit produced it.

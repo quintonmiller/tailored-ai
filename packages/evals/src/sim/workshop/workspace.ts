@@ -336,6 +336,42 @@ export class Workspace {
     this.meta.delete(normalisePath(path));
   }
 
+  /**
+   * The claim table, for a checkpoint.
+   *
+   * The files themselves are already on disk and are re-read on restore; what
+   * cannot be recovered from the directory is who reserved what and when, and
+   * that is exactly what the lapse rule runs on. A resumed run that forgot its
+   * claims would hand every file back to whoever wrote next.
+   */
+  claims(): { path: string; owner?: string; purpose: string; claimedAt?: number }[] {
+    return [...this.planned.entries()].map(([path, spec]) => ({ path, ...spec }));
+  }
+
+  /** Take back a claim table from {@link Workspace.claims}. */
+  restoreClaims(rows: { path: string; owner?: string; purpose: string; claimedAt?: number }[]): void {
+    for (const row of rows) {
+      const { path, ...spec } = row;
+      this.planned.set(path, spec);
+    }
+  }
+
+  /**
+   * The last writer of each file, which `distinctWriters` counts.
+   *
+   * Derived from the edit log during a run and lost with the process. Included
+   * because "how many of the five wrote something" is a headline number, and a
+   * resumed run reporting one writer for a team of four would be wrong in the
+   * direction that looks like a finding.
+   */
+  writers(): { path: string; lastWriter: string; lastRound: number }[] {
+    return [...this.meta.entries()].map(([path, m]) => ({ path, ...m }));
+  }
+
+  restoreWriters(rows: { path: string; lastWriter: string; lastRound: number }[]): void {
+    for (const row of rows) this.meta.set(row.path, { lastWriter: row.lastWriter, lastRound: row.lastRound });
+  }
+
   /** Who may write here, if anybody in particular. */
   ownerOf(path: string): string | undefined {
     return this.planned.get(normalisePath(path))?.owner;
