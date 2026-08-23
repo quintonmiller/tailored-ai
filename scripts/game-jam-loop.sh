@@ -59,7 +59,19 @@ TOOL_ROUNDS="${JAM_TOOL_ROUNDS:-30}"
 # cannot do the task.
 #
 # The two live jams that produced real games both ran at 8192 with `medium`.
-JAM_MAX_TOKENS="${JAM_MAX_TOKENS:-8192}"
+# The completion budget, *including* reasoning tokens.
+#
+# At 8192 a thinking model can spend the entire budget reasoning and get
+# truncated before it emits a tool call, which the trace records as a turn that
+# did nothing. Measured on one afternoon: at temperature 0.3, 8% of completions
+# came back at exactly 8192; at 0.7 it was 29%, and the two agents with the
+# longest histories (lead, author) capped on *every* call. Those were the
+# stalled turns — not the model declining to act, the model never getting to.
+#
+# Raising the ceiling costs wall-clock and buys back turns. A jam is bounded by
+# rounds rather than by tokens, so a turn that ends in a tool call is worth more
+# than a fast one that ends in nothing.
+JAM_MAX_TOKENS="${JAM_MAX_TOKENS:-16384}"
 JAM_THINKING="${JAM_THINKING:-medium}"
 
 # The backstop is a SIGKILL, so it has to be generous rather than tight.
