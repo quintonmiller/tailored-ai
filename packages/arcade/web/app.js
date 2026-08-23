@@ -489,6 +489,10 @@ async function renderDetail(slug) {
         entry.tagline ? el("p", { class: "tagline", text: entry.tagline }) : null,
         el("div", { class: "chips" }, [
           entry.theme ? el("span", { class: "chip theme", text: `theme: ${entry.theme}` }) : null,
+          // The form constraint the run was given. A judge cannot score "did
+          // they honour it" without seeing it, and it is the first question on
+          // the scorecard.
+          entry.diversifier ? el("span", { class: "chip theme", text: `+ ${entry.diversifier}` }) : null,
           entry.genre ? el("span", { class: "chip", text: entry.genre }) : null,
           el("span", { class: "chip", text: `${entry.rounds} rounds` }),
           el("span", { class: "chip", text: fmtDate(entry.publishedAt ?? entry.createdAt) }),
@@ -888,6 +892,7 @@ function metaPanel(entry) {
     ["Scenario", entry.scenario],
     ["Brief", entry.brief],
     ["Theme", entry.theme],
+    ["Diversifier", entry.diversifier],
     ["Rounds", entry.rounds],
     ["Seed", entry.seed],
     ["TAI version", entry.taiVersion],
