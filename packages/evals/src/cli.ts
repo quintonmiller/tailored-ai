@@ -80,6 +80,8 @@ Options
   --out <file>          Report path (default results/<stamp>-<model>.json)
   --min-score <0..1>    Exit non-zero below this score
   --dry-run             Validate scenarios and print the plan; call no model
+  --record <dir>        Save every model call under <dir>, one file per run
+  --replay <dir>        Answer from a recording in <dir>; never call a model
   --verbose             Stream worker stderr
 `;
 
@@ -283,6 +285,8 @@ async function cmdRun(argv: string[]): Promise<number> {
       out: { type: "string" },
       "min-score": { type: "string" },
       "dry-run": { type: "boolean" },
+      record: { type: "string" },
+      replay: { type: "string" },
       verbose: { type: "boolean" },
       scenarios: { type: "string" },
       help: { type: "boolean" },
@@ -321,6 +325,8 @@ async function cmdRun(argv: string[]): Promise<number> {
     pinnedAt: values["pinned-at"] === "off" ? null : (values["pinned-at"] ?? DEFAULT_PINNED_AT),
     timeZone: values["time-zone"] ?? DEFAULT_TIMEZONE,
     timeoutMs: values.timeout ? Number(values.timeout) : 300_000,
+    recordDir: values.record,
+    replayDir: values.replay,
     plugins: values.plugins
       ? String(values.plugins)
           .split(",")

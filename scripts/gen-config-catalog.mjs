@@ -81,6 +81,21 @@ function sourceFiles() {
 const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
+ * Report a read count as a bucket rather than a number.
+ *
+ * An exact count changes whenever any source file happens to mention a common
+ * word like `path` or `model`, so a committed catalog would go stale on
+ * unrelated work and the freshness gate would train people to regenerate
+ * without reading. The bucket moves only when the answer meaningfully changes,
+ * and zero — the only value that is a finding — is still exact.
+ */
+function bucket(n) {
+  if (n === 0) return "**none**";
+  if (n === 1) return "1";
+  return n <= 5 ? "2–5" : "6+";
+}
+
+/**
  * Files that reference the field by its dotted tail (`server.port`). Much
  * stricter than the leaf alone, and the column that actually distinguishes
  * "read as config" from "that word appears somewhere".
@@ -174,7 +189,9 @@ lines.push(
 lines.push("");
 lines.push("**Reads** counts source files under `packages/<pkg>/src` that mention the leaf");
 lines.push("key as a property access or a quoted key. **Path** is the stricter signal: files");
-lines.push("containing the dotted tail (`server.port`). Both exclude `config.ts` itself and tests.");
+lines.push("containing the dotted tail (`server.port`). Both exclude `config.ts` itself and tests,");
+lines.push("and both are reported as buckets so an unrelated file mentioning a common word does");
+lines.push("not make this page stale.");
 lines.push("Neither is a proof. A common word matches unrelated code, and a Path of 0 with");
 lines.push("a non-zero Reads usually just means the field is destructured or aliased at the");
 lines.push("call site. A field with **0 in both** is the one to go and look at: a field");
@@ -190,9 +207,9 @@ if (unread.length > 0) {
   lines.push("Nothing matched either signal. Verify before concluding — but this is the");
 lines.push("shape of a field that parses, documents, and does nothing.");
   lines.push("");
-  lines.push("| Field | Default | Reads | Path |");
-  lines.push("| --- | --- | --- | --- |");
-  for (const f of unread) lines.push(`| \`${f.path}\` | ${f.def} | ${f.reads} | ${f.pathReads} |`);
+  lines.push("| Field | Default |");
+  lines.push("| --- | --- |");
+  for (const f of unread) lines.push(`| \`${f.path}\` | ${f.def} |`);
   lines.push("");
 }
 
@@ -204,8 +221,7 @@ for (const [section, list] of [...sections.entries()].sort((a, b) => a[0].locale
   lines.push("| Field | Type | Default | Reads | Path |");
   lines.push("| --- | --- | --- | --- | --- |");
   for (const f of list.sort((a, b) => a.path.localeCompare(b.path))) {
-    const flag = (n) => (n === 0 ? "**0**" : String(n));
-    lines.push(`| \`${f.path}\` | ${f.type} | ${f.def} | ${flag(f.reads)} | ${flag(f.pathReads)} |`);
+    lines.push(`| \`${f.path}\` | ${f.type} | ${f.def} | ${bucket(f.reads)} | ${bucket(f.pathReads)} |`);
   }
   lines.push("");
 }

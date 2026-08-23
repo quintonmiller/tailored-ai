@@ -130,6 +130,51 @@ Two rules it follows, both learned the hard way:
 A regraded report is written with `regradedFrom` set and is **not** a baseline:
 its score pairs one commit's questions with another commit's answers.
 
+`regrade` re-scores answers the model already gave. To make the *agent* run
+again — loop, tools, compaction, prompt assembly — without a model, record and
+replay it.
+
+## Recording a run, and replaying it
+
+```bash
+pnpm run eval -- --record recordings/baseline    # once, against a live model
+pnpm run eval -- --replay recordings/baseline    # any number of times, offline
+```
+
+`--record` writes every model call to `recordings/<scenario-id>-seed<n>.jsonl`
+as it happens. `--replay` answers from those files and never opens a socket.
+The wrapper sits on the provider seam, so the loop, the tools, compaction and
+prompt assembly all run exactly as they do live and none of them know.
+
+What that buys, in order of how much it hurts today:
+
+- **A dead endpoint can no longer look like a regression.** A run against an
+  unreachable backend finishes in minutes with a zero and no error — the
+  `Recorder` tracks `failures` because a run against a server that accepted and
+  never replied once scored 100% on prompt assertions. Under replay there is no
+  endpoint to be down.
+- **Small deltas become measurable.** Run-to-run swing on identical code is
+  real, so a change worth a point or two cannot be seen by re-running. Replay is
+  deterministic: same code, same transcript, and a diff means something changed.
+- **CI can run it.** No key, no endpoint, no cost.
+
+Two rules, both deliberate:
+
+- **A missing recording is an error, never a live call.** Falling through is how
+  a "replay" run quietly stops being deterministic and starts costing money.
+- **A changed request is a miss, and the message says so.** Requests are matched
+  by a hash over the model, messages, tools, sampling and media references, so a
+  prompt edit invalidates its fixtures. That is the correct answer rather than
+  an inconvenience: the model would have been asked something different, and a
+  recording cannot say what it would have replied. Re-record.
+
+One consequence worth planning around: **re-recording needs the model back**.
+Recordings are cheap to keep and cheap to regenerate, but they are not free to
+regenerate *right now*, so a prompt change and its re-record belong together.
+
+Repeats are keyed by seed, so `--repeats 3` records three files and replays all
+three rather than having each repeat overwrite the last.
+
 ## Difficulty, and why the overall score cannot answer "where does this stop working"
 
 Every scenario carries a required `difficulty`, 1-10. It is a claim about what

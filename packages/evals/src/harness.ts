@@ -53,6 +53,7 @@ import {
 import YAML from "yaml";
 import { registerPinnedClock, timeConfigBlock } from "./clock.js";
 import { answerTool, Oracle } from "./oracle.js";
+import { replayLayer } from "./replay.js";
 import { createSimulation, type Simulation } from "./sim/index.js";
 import type {
   RecordedCall,
@@ -112,6 +113,23 @@ export interface HarnessOptions {
   plugins?: string[];
   /** Provider id the agent runs on. Defaults to `openai_compatible`. */
   providerId?: string;
+  /**
+   * Write every model call to `<dir>/<scenario-id>.jsonl` as it happens, so the
+   * run can be repeated later without a model.
+   *
+   * One file per scenario, because scenarios execute in separate workers and a
+   * shared file would interleave two runs' calls and read back as divergence.
+   */
+  recordDir?: string;
+  /**
+   * Answer every model call from a recording made by {@link recordDir}, and
+   * never reach the network.
+   *
+   * A request with no recorded answer is an error, never a live call: falling
+   * through is how a "replay" run quietly stops being deterministic and starts
+   * costing money. Mutually exclusive with `recordDir`.
+   */
+  replayDir?: string;
   /**
    * Instant every scenario's civil-time reasoning resolves against, as an ISO
    * string. `null` runs on the host clock the way this used to.
@@ -766,7 +784,20 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
 
     const providerFactory = (cfg: Parameters<typeof createProvider>[0], providerId?: string) => {
       const built = createProvider(cfg, providerId);
-      return { provider: recorder.wrap(built.provider, opts.timeoutMs), model: built.model };
+      // Record/replay sits *under* the recorder: the recorder's timeout and
+      // retry belong to the live call, and its usage accounting should see the
+      // same numbers either way, so a replayed run reports what the recorded
+      // one cost.
+      const layered = replayLayer(built.provider, {
+        recordDir: opts.recordDir,
+        replayDir: opts.replayDir,
+        // The seed is part of the identity, not decoration: `--repeats 3` runs
+        // this same scenario three times with seeds n, n+1, n+2, and one file
+        // per scenario would have each repeat truncate the last. The same seeds
+        // are used on replay, so a record/replay pair still lines up.
+        scenarioId: opts.seed === null ? scenario.id : `${scenario.id}-seed${opts.seed}`,
+      });
+      return { provider: recorder.wrap(layered, opts.timeoutMs), model: built.model };
     };
 
     const runtime = new AgentRuntime(

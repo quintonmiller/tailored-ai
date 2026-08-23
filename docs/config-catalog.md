@@ -8,7 +8,9 @@ source of truth for defaults. Generated, so it cannot drift from the code.
 
 **Reads** counts source files under `packages/<pkg>/src` that mention the leaf
 key as a property access or a quoted key. **Path** is the stricter signal: files
-containing the dotted tail (`server.port`). Both exclude `config.ts` itself and tests.
+containing the dotted tail (`server.port`). Both exclude `config.ts` itself and tests,
+and both are reported as buckets so an unrelated file mentioning a common word does
+not make this page stale.
 Neither is a proof. A common word matches unrelated code, and a Path of 0 with
 a non-zero Reads usually just means the field is destructured or aliased at the
 call site. A field with **0 in both** is the one to go and look at: a field
@@ -23,180 +25,180 @@ Fields: **72** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `agent.defaultProvider` | string | `openai_compatible` | 12 | 12 |
-| `agent.extraInstructions` | string | `""` | 2 | 2 |
-| `agent.maxContextTokens` | number | `32768` | 3 | 1 |
-| `agent.maxHistoryTokens` | number | `20000` | 3 | 3 |
-| `agent.maxToolOutputChars` | number | `32000` | 4 | 2 |
-| `agent.maxToolRounds` | number | `10` | 8 | 2 |
-| `agent.temperature` | number | `0.3` | 17 | 6 |
+| `agent.defaultProvider` | string | `openai_compatible` | 6+ | 6+ |
+| `agent.extraInstructions` | string | `""` | 2–5 | 2–5 |
+| `agent.maxContextTokens` | number | `32768` | 2–5 | 1 |
+| `agent.maxHistoryTokens` | number | `20000` | 2–5 | 2–5 |
+| `agent.maxToolOutputChars` | number | `32000` | 2–5 | 2–5 |
+| `agent.maxToolRounds` | number | `10` | 6+ | 2–5 |
+| `agent.temperature` | number | `0.3` | 6+ | 6+ |
 
 ### `agents`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `agents` | object | {} | 32 | 91 |
+| `agents` | object | {} | 6+ | 6+ |
 
 ### `autopilot`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
 | `autopilot.memorySweepCron` | string | `14 3 * * *` | 1 | 1 |
-| `autopilot.taskPrompt` | string | `You have picked up task {{task_id}}: "{{task_title}}".  R…` | 2 | 2 |
+| `autopilot.taskPrompt` | string | `You have picked up task {{task_id}}: "{{task_title}}".  R…` | 2–5 | 2–5 |
 
 ### `briefing`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `briefing.enabled` | boolean | `false` | 37 | 1 |
-| `briefing.prompt` | string | `You are the user's personal assistant. Write a brief, fri…` | 24 | 1 |
+| `briefing.enabled` | boolean | `false` | 6+ | 1 |
+| `briefing.prompt` | string | `You are the user's personal assistant. Write a brief, fri…` | 6+ | 1 |
 | `briefing.ttlMinutes` | number | `30` | 1 | 1 |
 
 ### `channels`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `channels` | object | {} | 17 | 44 |
+| `channels` | object | {} | 6+ | 6+ |
 
 ### `commands`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `commands` | object | {} | 7 | 27 |
+| `commands` | object | {} | 6+ | 6+ |
 
 ### `context`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `context.directory` | string | `./data/context` | 4 | 1 |
+| `context.directory` | string | `./data/context` | 2–5 | 1 |
 | `context.kbDirectory` | string | `./data/kb` | 1 | 1 |
-| `context.warnTokens` | number | `4000` | 2 | 2 |
+| `context.warnTokens` | number | `4000` | 2–5 | 2–5 |
 
 ### `cron`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `cron.enabled` | boolean | `false` | 37 | 4 |
-| `cron.jobs` | array | `[]` | 6 | 6 |
+| `cron.enabled` | boolean | `false` | 6+ | 2–5 |
+| `cron.jobs` | array | `[]` | 6+ | 6+ |
 
 ### `custom_tools`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `custom_tools` | object | {} | 3 | 10 |
+| `custom_tools` | object | {} | 2–5 | 6+ |
 
 ### `database`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `database.path` | string | `./agent.db` | 38 | 2 |
+| `database.path` | string | `./agent.db` | 6+ | 2–5 |
 
 ### `mcp`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `mcp.servers` | object | {} | 4 | 4 |
+| `mcp.servers` | object | {} | 2–5 | 2–5 |
 
 ### `plugins`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `plugins` | array | `[{"module":"builtin:agent-notifier"},{"module":"builtin:owne` | 22 | 71 |
+| `plugins` | array | `[{"module":"builtin:agent-notifier"},{"module":"builtin:owne` | 6+ | 6+ |
 
 ### `prompts`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `prompts.allowShellExpansion` | boolean | `false` | 2 | 1 |
-| `prompts.maxIncludeDepth` | number | `5` | 1 | **0** |
-| `prompts.shellTimeoutMs` | number | `5000` | 1 | **0** |
+| `prompts.allowShellExpansion` | boolean | `false` | 2–5 | 1 |
+| `prompts.maxIncludeDepth` | number | `5` | 1 | **none** |
+| `prompts.shellTimeoutMs` | number | `5000` | 1 | **none** |
 
 ### `providers`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `providers.openai_compatible.baseUrl` | string | `http://localhost:11434/v1` | 21 | **0** |
-| `providers.openai_compatible.defaultModel` | string | `""` | 17 | **0** |
+| `providers.openai_compatible.baseUrl` | string | `http://localhost:11434/v1` | 6+ | **none** |
+| `providers.openai_compatible.defaultModel` | string | `""` | 6+ | **none** |
 
 ### `schedules`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `schedules.enabled` | boolean | `true` | 37 | 1 |
-| `schedules.maxDeferrals` | number | `3` | 1 | **0** |
-| `schedules.maxHorizonDays` | number | `365` | 2 | 1 |
+| `schedules.enabled` | boolean | `true` | 6+ | 1 |
+| `schedules.maxDeferrals` | number | `3` | 1 | **none** |
+| `schedules.maxHorizonDays` | number | `365` | 2–5 | 1 |
 | `schedules.maxPerAgent` | number | `20` | 1 | 1 |
-| `schedules.minIntervalMinutes` | number | `15` | 2 | 1 |
-| `schedules.tickSeconds` | number | `30` | 1 | **0** |
+| `schedules.minIntervalMinutes` | number | `15` | 2–5 | 1 |
+| `schedules.tickSeconds` | number | `30` | 1 | **none** |
 
 ### `server`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `server.host` | string | `127.0.0.1` | 13 | 4 |
-| `server.port` | number | `3000` | 7 | 6 |
+| `server.host` | string | `127.0.0.1` | 6+ | 2–5 |
+| `server.port` | number | `3000` | 6+ | 6+ |
 
 ### `suggestions`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `suggestions.count` | number | `4` | 11 | 1 |
-| `suggestions.enabled` | boolean | `false` | 37 | 1 |
-| `suggestions.prompt` | string | `You are the user's personal assistant. From the state bel…` | 24 | 1 |
+| `suggestions.count` | number | `4` | 6+ | 1 |
+| `suggestions.enabled` | boolean | `false` | 6+ | 1 |
+| `suggestions.prompt` | string | `You are the user's personal assistant. From the state bel…` | 6+ | 1 |
 | `suggestions.ttlMinutes` | number | `15` | 1 | 1 |
 
 ### `tasks`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `tasks.backend` | string | `native` | 18 | 3 |
+| `tasks.backend` | string | `native` | 6+ | 2–5 |
 
 ### `taskWatcher`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `taskWatcher.debounceMs` | number | `5000` | 1 | **0** |
-| `taskWatcher.enabled` | boolean | `false` | 37 | **0** |
-| `taskWatcher.maxStallRetries` | number | `1` | 2 | 1 |
-| `taskWatcher.prompt` | string | `Task {{action}}: {{task_title}} ({{task_id}}), status: {{…` | 24 | **0** |
-| `taskWatcher.triggers` | array | `["created","updated"]` | 7 | **0** |
+| `taskWatcher.debounceMs` | number | `5000` | 1 | **none** |
+| `taskWatcher.enabled` | boolean | `false` | 6+ | **none** |
+| `taskWatcher.maxStallRetries` | number | `1` | 2–5 | 1 |
+| `taskWatcher.prompt` | string | `Task {{action}}: {{task_title}} ({{task_id}}), status: {{…` | 6+ | **none** |
+| `taskWatcher.triggers` | array | `["created","updated"]` | 6+ | **none** |
 
 ### `time`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `time.provider` | string | `system` | 41 | 4 |
+| `time.provider` | string | `system` | 6+ | 2–5 |
 
 ### `tools`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `tools.ask_user.enabled` | boolean | `true` | 37 | 1 |
-| `tools.ask_user.inboxFile` | string | `inbox.md` | 2 | 1 |
-| `tools.collections.enabled` | boolean | `true` | 37 | 1 |
-| `tools.documents.enabled` | boolean | `true` | 37 | 1 |
-| `tools.edit.enabled` | boolean | `true` | 37 | 1 |
-| `tools.exec.enabled` | boolean | `true` | 37 | **0** |
-| `tools.extract_document.enabled` | boolean | `false` | 37 | 1 |
-| `tools.facts.enabled` | boolean | `true` | 37 | 1 |
-| `tools.memory.enabled` | boolean | `true` | 37 | 1 |
-| `tools.projects.directory` | string | `./data/projects` | 4 | 2 |
-| `tools.projects.enabled` | boolean | `true` | 37 | 1 |
-| `tools.read.enabled` | boolean | `true` | 37 | 1 |
-| `tools.recall.defaultTtlDays` | number | `14` | 2 | 1 |
-| `tools.recall.enabled` | boolean | `true` | 37 | 1 |
-| `tools.room.enabled` | boolean | `true` | 37 | 1 |
-| `tools.tasks.enabled` | boolean | `true` | 37 | 1 |
-| `tools.web_fetch.enabled` | boolean | `true` | 37 | 1 |
-| `tools.web_search.apiKey` | string | `""` | 20 | 1 |
-| `tools.web_search.enabled` | boolean | `false` | 37 | 2 |
-| `tools.web_search.maxResults` | number | `5` | 2 | 1 |
-| `tools.web_search.provider` | string | `brave` | 41 | **0** |
-| `tools.write.enabled` | boolean | `true` | 37 | 1 |
+| `tools.ask_user.enabled` | boolean | `true` | 6+ | 1 |
+| `tools.ask_user.inboxFile` | string | `inbox.md` | 2–5 | 1 |
+| `tools.collections.enabled` | boolean | `true` | 6+ | 1 |
+| `tools.documents.enabled` | boolean | `true` | 6+ | 1 |
+| `tools.edit.enabled` | boolean | `true` | 6+ | 1 |
+| `tools.exec.enabled` | boolean | `true` | 6+ | **none** |
+| `tools.extract_document.enabled` | boolean | `false` | 6+ | 1 |
+| `tools.facts.enabled` | boolean | `true` | 6+ | 1 |
+| `tools.memory.enabled` | boolean | `true` | 6+ | 1 |
+| `tools.projects.directory` | string | `./data/projects` | 2–5 | 2–5 |
+| `tools.projects.enabled` | boolean | `true` | 6+ | 1 |
+| `tools.read.enabled` | boolean | `true` | 6+ | 1 |
+| `tools.recall.defaultTtlDays` | number | `14` | 2–5 | 1 |
+| `tools.recall.enabled` | boolean | `true` | 6+ | 1 |
+| `tools.room.enabled` | boolean | `true` | 6+ | 1 |
+| `tools.tasks.enabled` | boolean | `true` | 6+ | 1 |
+| `tools.web_fetch.enabled` | boolean | `true` | 6+ | 1 |
+| `tools.web_search.apiKey` | string | `""` | 6+ | 1 |
+| `tools.web_search.enabled` | boolean | `false` | 6+ | 2–5 |
+| `tools.web_search.maxResults` | number | `5` | 2–5 | 1 |
+| `tools.web_search.provider` | string | `brave` | 6+ | **none** |
+| `tools.write.enabled` | boolean | `true` | 6+ | 1 |
 
 ### `webhooks`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `webhooks.enabled` | boolean | `false` | 37 | 1 |
-| `webhooks.routes` | array | `[]` | 2 | 1 |
+| `webhooks.enabled` | boolean | `false` | 6+ | 1 |
+| `webhooks.routes` | array | `[]` | 2–5 | 1 |
