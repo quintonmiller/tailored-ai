@@ -49,15 +49,15 @@ export const CATEGORIES: Category[] = [
   {
     key: "visuals",
     name: "Visuals",
-    question: "Does it look considered, given that everything is drawn from shapes?",
+    question: "Does it look considered — has somebody decided how this should look?",
     low: "default colours, unaligned text, nothing framed",
     high: "a coherent palette and a screen you would screenshot",
   },
   {
     key: "originality",
     name: "Originality",
-    question: "Is there an idea here you have not seen before?",
-    low: "a competent clone of something that exists",
+    question: "Is there an idea here you have not seen before — including on the rest of this arcade?",
+    low: "a competent clone of something that exists, or of another entry here",
     high: "one mechanic you would steal",
   },
   {

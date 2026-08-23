@@ -478,14 +478,62 @@ describe("the jam: a theme, a clock, and categories a person scores", () => {
     expect(sim({ theme: "boiling point" }).theme.title).toBe("BOILING POINT");
   });
 
-  it("tells the team the theme constrains mechanics, and names the lazy reading", () => {
+  it("tells the team the theme constrains mechanics, and names no mechanic at all", () => {
     const s = sim({ theme: "only-one" });
     const brief = s.briefFor("builder") ?? "";
     expect(brief).toMatch(/GAME JAM/);
     expect(brief).toMatch(/ONLY ONE/);
-    // The shallow reading is named so it can be avoided rather than stumbled into.
-    expect(brief).toMatch(/one life, and nothing else about the game changed/);
     expect(brief).toMatch(/Theme relevance/);
+    /*
+     * This assertion used to be its own opposite.
+     *
+     * Each theme carried a `shallow` line naming its laziest reading, and the
+     * brief printed it as the thing that scores worst. On YOU ARE THE HAZARD
+     * that line was "an enemy that copies your movement"; the team shipped a
+     * game pitched as "every death leaves a ghost that replays your path". It
+     * was the only concrete mechanic in the entire brief, so it was the one
+     * that got built.
+     */
+    expect(brief).not.toMatch(/one life, and nothing else about the game changed/);
+    expect(brief).not.toMatch(/laziest possible reading/);
+  });
+
+  it("states the form constraint as a rule, and repeats it every round", () => {
+    // Seeded, and coprime with the theme list so the pair does not lock.
+    const s = sim({ theme: "only-one", diversifier: "stillness" });
+    const brief = s.briefFor("builder") ?? "";
+    expect(brief).toMatch(/## The diversifier/);
+    expect(brief).toMatch(/The player never moves through space/);
+    // A brief is the first thing a long room history trims away, so the
+    // constraint also rides on the announcement — the fix that finally made
+    // the engine choice visible.
+    expect(s.announce()).toMatch(/The player never moves through space/);
+    expect(s.snapshot().diversifier).toBe("stillness");
+  });
+
+  it("can be run without one, so a control arm is possible", () => {
+    const s = sim({ theme: "only-one", diversifier: "none" });
+    expect(s.diversifier).toBeUndefined();
+    expect(s.briefFor("builder") ?? "").not.toMatch(/## The diversifier/);
+    expect(s.announce()).not.toMatch(/diversifier/);
+  });
+
+  it("puts the diversifier on the scorecard as the first question", () => {
+    const s = sim({ theme: "only-one", diversifier: "one-key" });
+    const card = readFileSync(join(s.root, "JUDGING.md"), "utf8");
+    expect(card).toMatch(/One key is the entire control scheme/);
+    expect(card).toMatch(/Did they honour it\?/);
+  });
+
+  it("tells the team what is already on the shelf it is judged against", () => {
+    // Originality was scored against fifteen near-identical entries the team
+    // could browse and had no reason to.
+    const brief = sim({ theme: "only-one" }).briefFor("builder") ?? "";
+    expect(brief).toMatch(/What is already on the arcade/);
+    // The collapse is described concretely, because "be original" has now
+    // failed fifteen times and naming what happened is the only new information.
+    expect(brief).toMatch(/same game fifteen times/);
+    expect(brief).toMatch(/scores a one/);
   });
 
   it("writes the scorecard at the start, so an interrupted run still has one", () => {

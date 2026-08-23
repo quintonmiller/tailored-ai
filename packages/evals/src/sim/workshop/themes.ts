@@ -44,9 +44,25 @@ export interface Theme {
   id: string;
   /** What the teams are told, verbatim. Short on purpose: a theme is a prompt, not a spec. */
   title: string;
-  /** One line on what a *shallow* reading looks like, so the brief can warn against it. */
-  shallow: string;
 }
+
+/*
+ * There used to be a `shallow` field here: one line per theme naming the
+ * laziest reading, so the brief could warn against it. It was removed because
+ * it worked in reverse.
+ *
+ * YOU ARE THE HAZARD carried `shallow: "an enemy that copies your movement"`.
+ * The brief said, in as many words, that this was the worst possible reading
+ * and the first thing a judge would check. The team then built a game whose own
+ * pitch was "every death leaves a ghost that replays your path". The warning
+ * was the only concrete mechanic anywhere in eight thousand words of brief, and
+ * a model reaching for an idea took the one idea on offer.
+ *
+ * The general rule, which cost a run to learn: never name a mechanic you do not
+ * want built. Warn about the *relationship* — theme as decoration rather than
+ * as constraint — which is what the judging criteria already do, and leave the
+ * mechanics unnamed.
+ */
 
 /**
  * Real jam themes, in the sense that each admits several honest readings and
@@ -56,44 +72,146 @@ export const THEMES: Theme[] = [
   {
     id: "only-one",
     title: "ONLY ONE",
-    shallow: "one life, and nothing else about the game changed",
   },
   {
     id: "it-grows",
     title: "IT GROWS",
-    shallow: "a number goes up",
   },
   {
     id: "out-of-control",
     title: "OUT OF CONTROL",
-    shallow: "the controls are randomly inverted",
   },
   {
     id: "two-halves",
     title: "TWO HALVES",
-    shallow: "a split screen with the same game twice",
   },
   {
     id: "the-last-one",
     title: "THE LAST ONE",
-    shallow: "a survival mode with a countdown",
   },
   {
     id: "held-together",
     title: "HELD TOGETHER",
-    shallow: "a health bar renamed to something about tape",
   },
   {
     id: "you-are-the-hazard",
     title: "YOU ARE THE HAZARD",
-    shallow: "an enemy that copies your movement",
   },
   {
     id: "no-going-back",
     title: "NO GOING BACK",
-    shallow: "auto-scrolling in one direction",
   },
 ];
+
+/**
+ * A second constraint, on *form* rather than on subject.
+ *
+ * ## Why
+ *
+ * Fifteen consecutive entries were the same game. Abstract single-noun titles
+ * (SEAM, KNOT, EMBER, WAKE, ECHO), a "you are the X, keep it alive" pitch, and
+ * underneath all of them a real-time keyboard avoidance loop on a dark canvas.
+ * SEAM was built twice, for two *different* themes; so was THE LAST ONE.
+ * Different inputs, identical output — the theme was not reaching the design at
+ * all, because something else was deciding it first.
+ *
+ * A theme constrains what the game is *about*, and "about" is exactly the axis
+ * a model can satisfy with a coat of paint. None of the eight themes forbids
+ * dodging things, so all eight got dodging things. The genre was never chosen;
+ * it was defaulted to, and a theme cannot dislodge a default it does not touch.
+ *
+ * ## What a diversifier is
+ *
+ * Real jams run these alongside the theme, and they constrain form: one button,
+ * no words, no colour. They work because they are cheap to check and expensive
+ * to ignore — you cannot decorate your way out of "the player never moves".
+ *
+ * Several of these are *deliberately incompatible* with the modal entry above.
+ * `stillness`, `turn-based`, `make-not-dodge`, `no-enemies` and `words` each
+ * make a real-time avoidance game structurally illegal rather than merely
+ * unimaginative. That is the whole point: the constraint has to bite on the
+ * axis where the collapse is happening, and prose asking for more imagination
+ * has now failed fifteen times running.
+ *
+ * ## Nine, not eight
+ *
+ * Nine is coprime with the eight themes, so theme and diversifier do not move
+ * in lockstep with the seed — consecutive seeds vary both, and the pairing does
+ * not repeat for seventy-two runs. With eight of each, every theme would have
+ * been welded to one diversifier forever, which is the same mode collapse one
+ * level up.
+ */
+export interface Diversifier {
+  id: string;
+  /** Stated to the team verbatim, as a rule of the jam. */
+  rule: string;
+  /** What the judge is asked, on the scorecard. Must be answerable without playing well. */
+  check: string;
+}
+
+export const DIVERSIFIERS: Diversifier[] = [
+  {
+    id: "no-contact",
+    rule: "Nothing harms the player by touching it. No collision damage, no contact deaths.",
+    check: "Can anything hurt the player by touching it?",
+  },
+  {
+    id: "stillness",
+    rule: "The player never moves through space. Whatever the player controls, it is not a position.",
+    check: "Does the player move something around the screen?",
+  },
+  {
+    id: "one-key",
+    rule: "One key is the entire control scheme. Press, hold and release are all fair; a second key is not.",
+    check: "Does anything respond to a second key?",
+  },
+  {
+    id: "turn-based",
+    rule: "Nothing in the world moves unless the player has just acted. No real-time loop.",
+    check: "Does anything move while the player sits still?",
+  },
+  {
+    id: "no-numbers",
+    rule: "No score, no timer, no counters, no bars. Nothing numeric on screen at any point.",
+    check: "Is there a number, a bar or a clock anywhere on screen?",
+  },
+  {
+    id: "make-not-dodge",
+    rule: "The verb is build, arrange or connect — never avoid, shoot or survive.",
+    check: "Is the player mostly avoiding things?",
+  },
+  {
+    id: "words",
+    rule: "Text is the main thing on screen and text is the game — not a HUD sitting on top of one.",
+    check: "Would the game still work with all the words removed?",
+  },
+  {
+    id: "mouse-only",
+    rule: "The mouse is the only input. The keyboard does nothing.",
+    check: "Does any key do anything?",
+  },
+  {
+    id: "no-enemies",
+    rule: "Nothing in the game is hostile. No enemies, no chasers, no antagonist, no threat.",
+    check: "Is something in there trying to end the run?",
+  },
+];
+
+/** The diversifier for a run: an explicit id, or one drawn from the seed. */
+export function pickDiversifier(requested: unknown, seed: number): Diversifier | undefined {
+  const raw = String(requested ?? "")
+    .trim()
+    .toLowerCase();
+  if (raw === "none" || raw === "off") return undefined;
+  if (raw) {
+    const found = DIVERSIFIERS.find((d) => d.id === raw);
+    if (found) return found;
+    // Free text, used verbatim, so an afternoon can test a constraint that is
+    // not on the list without editing the list.
+    return { id: "custom", rule: String(requested).trim(), check: "Did they honour the diversifier?" };
+  }
+  return DIVERSIFIERS[Math.abs(Math.floor(seed)) % DIVERSIFIERS.length];
+}
 
 /**
  * The theme for a run: an explicit id, free text, or one drawn from the seed.
@@ -107,7 +225,7 @@ export function pickTheme(requested: unknown, seed: number): Theme {
     const found = THEMES.find((t) => t.id === raw.toLowerCase() || t.title.toLowerCase() === raw.toLowerCase());
     if (found) return found;
     // Free text, used verbatim. A jam organiser gets to invent a theme.
-    return { id: "custom", title: raw.toUpperCase(), shallow: "a title-screen mention and nothing in the mechanics" };
+    return { id: "custom", title: raw.toUpperCase() };
   }
   const index = Math.abs(Math.floor(seed)) % THEMES.length;
   return THEMES[index];
@@ -135,11 +253,20 @@ export const JUDGING = CATEGORIES;
  * somebody opens the folder, possibly days later, and the questions have to be
  * there when they do.
  */
-export function renderScorecard(theme: Theme, rounds: number, entry: string): string {
+export function renderScorecard(theme: Theme, rounds: number, entry: string, diversifier?: Diversifier): string {
   const lines = [
     "# Jam scorecard",
     "",
     `**Theme:** ${theme.title}`,
+    ...(diversifier
+      ? [
+          `**Diversifier:** ${diversifier.rule}`,
+          "",
+          // Asked first, and answerable in ten seconds. A constraint nobody
+          // checks is a suggestion, and the team is told a judge checks this.
+          `> **Did they honour it?** ${diversifier.check}  \`yes / no\` — *no* is the pass.`,
+        ]
+      : []),
     `**Jam length:** ${rounds} rounds`,
     `**Open:** \`workspace/${entry}\``,
     "",

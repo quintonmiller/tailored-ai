@@ -59,7 +59,7 @@ import { checkWorkspace, formatCheck } from "./check.js";
 import { availableEngines, EngineDocs, type EngineSpec, engineSource, findEngine } from "./engines.js";
 import { formatPlaytest, framesToShow, playtest } from "./playtest.js";
 import { makeScriptedPolicy } from "./policies.js";
-import { JUDGING, pickTheme, renderScorecard, type Theme } from "./themes.js";
+import { type Diversifier, JUDGING, pickDiversifier, pickTheme, renderScorecard, type Theme } from "./themes.js";
 import { LIMITS, Workspace, WorkspaceRefusal } from "./workspace.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -120,6 +120,8 @@ interface WorkshopOptions extends SimulationOptions {
   root?: string;
   /** Injected by tests so a run directory name is stable. */
   stamp?: string;
+  /** The form constraint: an id from `themes.ts`, free text, or `none` to run without one. */
+  diversifier?: unknown;
   /** The jam theme: an id from `themes.ts`, or free text to use verbatim. */
   theme?: string;
   /**
@@ -230,6 +232,8 @@ export class WorkshopSimulation implements Simulation {
   private readonly playtestRoles: string[] | undefined;
   /** The jam's theme, which is the creative constraint the work is judged against. */
   readonly theme: Theme;
+  /** The form constraint for this run, or nothing when the run turned it off. */
+  readonly diversifier: Diversifier | undefined;
   private roundsWithNoWrite = 0;
   private writesThisRound = 0;
   private finalised = false;
@@ -279,6 +283,7 @@ export class WorkshopSimulation implements Simulation {
     this.checksAreTesterOnly = String(options.checks ?? WORKSHOP_PLAY_OPTIONS.checks) !== "anyone";
     this.open = String(options.direction ?? WORKSHOP_PLAY_OPTIONS.direction) === "open";
     this.theme = pickTheme(options.theme, Number(options.seed ?? 0));
+    this.diversifier = pickDiversifier(options.diversifier, Number(options.seed ?? 0));
     /*
      * Who is allowed to look at the screen: the tester, the interface, and —
      * since 2026-08-21 — the builder.
@@ -327,7 +332,10 @@ export class WorkshopSimulation implements Simulation {
     writeFileSync(join(this.root, "brief.md"), `${this.jamBrief()}\n`);
     // The scorecard is written at the start, not the end: a run that dies
     // half-way still leaves a reviewer the questions to ask of what survived.
-    writeFileSync(join(this.root, "JUDGING.md"), `${renderScorecard(this.theme, this.horizon, this.brief.entry)}\n`);
+    writeFileSync(
+      join(this.root, "JUDGING.md"),
+      `${renderScorecard(this.theme, this.horizon, this.brief.entry, this.diversifier)}\n`,
+    );
 
     // Announced as an event rather than a metric, because a path is not a
     // number and `metrics()` only carries numbers. This is how the report and
@@ -376,6 +384,7 @@ export class WorkshopSimulation implements Simulation {
             brief: this.brief.id,
             theme: this.theme.title,
             themeId: this.theme.id,
+            diversifier: this.diversifier?.id ?? null,
             rounds: this.horizon,
             seed: options.seed ?? null,
             artifactPath: this.root,
@@ -433,11 +442,12 @@ export class WorkshopSimulation implements Simulation {
       "",
       `## The theme is ${this.theme.title}`,
       "",
-      "It is a constraint on the *mechanics*, not a title. The laziest possible reading of it —",
-      `${this.theme.shallow} — is the one that scores worst, and it is the first thing a judge checks.`,
-      "Decide in round one what your reading of it is, write that down, and build the game that",
-      "reading demands. If the theme could be removed without the game changing, you have not used it.",
+      "It is a constraint on the *mechanics*, not a title. Decide in round one what your reading of it",
+      "is, write that down, and build the game that reading demands. If the theme could be removed",
+      "without the game changing, you have not used it — and that is the first thing a judge checks.",
       "",
+      ...this.diversifierBrief(),
+      ...this.catalogueBrief(),
       "## How you will be judged",
       "",
       ...JUDGING.map((c) => `- **${c.name}** — ${c.question}`),
@@ -450,6 +460,64 @@ export class WorkshopSimulation implements Simulation {
       "",
       renderBrief(this.brief, this.open ? "open" : "prescribed"),
     ].join("\n");
+  }
+
+  /**
+   * The form constraint, stated as a rule rather than as advice.
+   *
+   * Deliberately blunt, and deliberately placed above the judging criteria: a
+   * team reads the constraint before it reads what it is scored on, so the
+   * constraint is part of the problem rather than a note on the answer.
+   */
+  private diversifierBrief(): string[] {
+    if (!this.diversifier) return [];
+    return [
+      "## The diversifier",
+      "",
+      "Every jam runs one alongside the theme. It constrains the *form* of the game, and it is a rule,",
+      "not a suggestion:",
+      "",
+      `> **${this.diversifier.rule}**`,
+      "",
+      "Before anything else is scored, a judge answers one question about your entry, and the answer",
+      "has to be **no**:",
+      "",
+      `> *${this.diversifier.check}*`,
+      "",
+      "Do not go looking for the reading that lets you build what you were going to build anyway.",
+      "Build the game the constraint makes possible, which is a different game from the one you",
+      "first thought of. That is what it is for.",
+      "",
+    ];
+  }
+
+  /**
+   * What is already on the arcade, and why repeating it scores a one.
+   *
+   * Originality was being judged against a category description while the team
+   * had no idea what it was competing with. It could browse the arcade and
+   * never had a reason to. Naming the collapse directly is the cheapest thing
+   * that could work, and it is honest: this really is what is on there.
+   */
+  private catalogueBrief(): string[] {
+    return [
+      "## What is already on the arcade",
+      "",
+      "Fifteen teams have run this jam before you, on eight different themes, and they submitted the",
+      "same game fifteen times: an abstract one-word title, a pitch that starts *you are the*, and",
+      "underneath it a real-time keyboard game about avoiding things on a dark canvas while a number",
+      "goes up. Two of them independently produced a game called SEAM, for two different themes.",
+      "",
+      this.desk
+        ? "`arcade_browse` shows you the shelf. **A judge scoring originality is comparing you to it**, and"
+        : "**A judge scoring originality is comparing you to that shelf**, and",
+      "an entry they could swap for one already there scores a one, however well it is built. If your",
+      "idea would fit that description, it is the idea the theme handed everybody else, and you thought",
+      "of it in the first thirty seconds for the same reason they did. Spend one round on three ideas",
+      "that are not it — a different verb, a different kind of game, something nobody would call an",
+      "arcade game — and pick from those.",
+      "",
+    ];
   }
 
   /**
@@ -624,6 +692,10 @@ export class WorkshopSimulation implements Simulation {
     // "nothing submitted yet" at round nine is the single most useful thing the
     // announcement can say, and "0.3.0 is up" is what makes carrying on safe.
     const builds = this.open && this.desk ? ` ${this.describeBuilds()}` : "";
+    // Repeated every round, and short. The engine choice was ignored entirely
+    // until it was in the announcement rather than only in the brief, and the
+    // brief is the first thing trimmed out of a long room history.
+    const div = this.diversifier ? `, diversifier: ${this.diversifier.rule.replace(/\.$/, "")}` : "";
     // Asked once a round until answered, because it is the decision that gets
     // more expensive with every round it is deferred.
     const engine =
@@ -640,7 +712,7 @@ export class WorkshopSimulation implements Simulation {
           .join("; ")}.`
       : "";
     return (
-      `Round ${this.tick + 1} of ${this.horizon} — theme ${this.theme.title}. ${phase}${submission}${engine}${builds}${freed} ` +
+      `Round ${this.tick + 1} of ${this.horizon} — theme ${this.theme.title}${div}. ${phase}${submission}${engine}${builds}${freed} ` +
       `${seen}. ` +
       `${files.length} file${files.length === 1 ? "" : "s"}, ${lines} line${lines === 1 ? "" : "s"}; ${check}. ` +
       (remaining <= 3
@@ -1719,6 +1791,7 @@ export class WorkshopSimulation implements Simulation {
           brief: this.brief.id,
           theme: this.theme.title,
           themeId: this.theme.id,
+          diversifier: this.diversifier?.id ?? null,
           judging: JUDGING.map((c) => c.key),
           title: this.brief.title,
           entry: this.brief.entry,
@@ -1925,6 +1998,10 @@ export class WorkshopSimulation implements Simulation {
       round: this.tick,
       rounds: this.horizon,
       brief: this.brief.id,
+      theme: this.theme.id,
+      // Read by `jam-report` to check that a cohort actually varied its
+      // constraints, which is the thing the whole change is for.
+      diversifier: this.diversifier?.id ?? null,
       workshop: {
         root: this.root,
         entry: this.brief.entry,

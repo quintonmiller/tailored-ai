@@ -91,6 +91,14 @@ export interface EntryProvenance {
   brief: string;
   theme: string;
   themeId: string;
+  /**
+   * The form constraint the run was given, or null.
+   *
+   * Kept next to the theme because a judge needs both: the theme says what the
+   * game is about, the diversifier says what shape it was forced into, and
+   * "did they honour it" is the first question on the scorecard.
+   */
+  diversifier?: string | null;
   rounds: number;
   seed: number | null;
   artifactPath: string;
@@ -244,6 +252,7 @@ CREATE TABLE IF NOT EXISTS entries (
   brief         TEXT NOT NULL DEFAULT '',
   theme         TEXT NOT NULL DEFAULT '',
   theme_id      TEXT NOT NULL DEFAULT '',
+  diversifier   TEXT,
   rounds        INTEGER NOT NULL DEFAULT 0,
   seed          INTEGER,
   artifact_path TEXT NOT NULL DEFAULT '',
@@ -350,6 +359,7 @@ interface EntryRow {
   brief: string;
   theme: string;
   theme_id: string;
+  diversifier: string | null;
   rounds: number;
   seed: number | null;
   artifact_path: string;
@@ -422,6 +432,7 @@ function hydrate(row: EntryRow): Entry {
     brief: row.brief,
     theme: row.theme,
     themeId: row.theme_id,
+    diversifier: row.diversifier ?? null,
     rounds: row.rounds,
     seed: row.seed,
     artifactPath: row.artifact_path,
@@ -504,6 +515,9 @@ export class ArcadeStore {
     if (!columns.has("live")) {
       this.db.exec("ALTER TABLE entries ADD COLUMN live INTEGER NOT NULL DEFAULT 0");
     }
+    if (!columns.has("diversifier")) {
+      this.db.exec("ALTER TABLE entries ADD COLUMN diversifier TEXT");
+    }
     const versionColumns = new Set(
       (this.db.prepare("PRAGMA table_info(versions)").all() as { name: string }[]).map((c) => c.name),
     );
@@ -543,11 +557,11 @@ export class ArcadeStore {
     this.db
       .prepare(
         `INSERT INTO entries (
-           id, slug, status, registered, live, run_id, scenario, brief, theme, theme_id, rounds, seed,
+           id, slug, status, registered, live, run_id, scenario, brief, theme, theme_id, diversifier, rounds, seed,
            artifact_path, entry_file, tai_version, sim_version, git_sha, model, provider, base_url,
            model_meta, credits, created_at, updated_at
          ) VALUES (
-           @id, @slug, 'draft', 0, 1, @runId, @scenario, @brief, @theme, @themeId, @rounds, @seed,
+           @id, @slug, 'draft', 0, 1, @runId, @scenario, @brief, @theme, @themeId, @diversifier, @rounds, @seed,
            @artifactPath, @entryFile, @taiVersion, @simVersion, @gitSha, @model, @provider, @baseUrl,
            @modelMeta, @credits, @now, @now
          )`,
@@ -560,6 +574,7 @@ export class ArcadeStore {
         brief: provenance.brief,
         theme: provenance.theme,
         themeId: provenance.themeId,
+        diversifier: provenance.diversifier ?? null,
         rounds: provenance.rounds,
         seed: provenance.seed,
         artifactPath: provenance.artifactPath,

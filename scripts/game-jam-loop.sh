@@ -32,6 +32,12 @@ CONTEXT_TOKENS="${JAM_CONTEXT_TOKENS:-131072}"
 ARM="the-workshop"
 BRIEF="arcade"
 SEED=1
+# Every jam before 2026-08-23 ran at the framework default of 0.3, which is
+# tuned for deterministic tool selection and is below Qwen's own recommended
+# band (0.6-0.7). Fifteen consecutive runs produced the same game; a creative
+# concept sampled near-greedily fifteen times is the modal concept fifteen
+# times. Watch `patchesRefused` and `checkProblems` for tool-calling damage.
+JAM_TEMPERATURE=${JAM_TEMPERATURE:-0.7}
 RUNS=0            # 0 means keep going
 # Thirty, not the default six. Measured across two full jams: a turn that
 # checks, plays, reads and patches genuinely needs the rounds, and at twenty the
@@ -154,6 +160,7 @@ while [ "$STOP" -eq 0 ]; do
   pnpm run eval -- \
     --filter "=$ARM" \
     --model "$MODEL" \
+    --temperature "$JAM_TEMPERATURE" \
     --base-url "$BASE_URL" \
     --seed "$SEED" \
     --repeats 1 \
