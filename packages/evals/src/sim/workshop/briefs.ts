@@ -371,7 +371,11 @@ export function renderBrief(brief: Brief, direction: "open" | "prescribed" = "pr
         ...brief.library.map((f) =>
           pending ? `- \`${f.path}\` — ${f.purpose}` : `- \`${f.path}\` — provided, read-only — ${f.purpose}`,
         ),
-        ...(brief.libraryNotes ? ["", brief.libraryNotes] : []),
+        // The full API listing is 58 lines. Before the choice it outweighed
+        // every engine put together and made `none` the only legible option;
+        // the compact snippet in the engine section carries the decision, and
+        // this arrives once there is something to call.
+        ...(brief.libraryNotes && !pending ? ["", brief.libraryNotes] : []),
         ...(pending
           ? ["", "None of this is in the workspace yet. Weigh it against the engines above and choose."]
           : open

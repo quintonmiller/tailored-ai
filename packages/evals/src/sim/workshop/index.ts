@@ -1554,14 +1554,51 @@ export class WorkshopSimulation implements Simulation {
       "something in it — in every case a foundation *and* a running skeleton you can playtest on the",
       "turn you install it. Three options, and they cost the same:",
       "",
-      ...engines.map((e) => `- **${e.id}** — ${e.blurb}`),
-      "- **none** — a 580-line library: a fixed-timestep loop, keyboard state, canvas shapes and",
-      "  particles. That is the whole of it. No sprites, no scenes, no tweens, no camera, no physics,",
-      "  no audio — anything of that kind, you write yourself, in rounds you were going to spend on",
-      "  the game.",
-      "",
-      "`docs` then looks up any API on what you installed — real signatures, parameters and defaults —",
-      "so you are never guessing a method name from memory.",
+      /*
+       * Each option shows what calling it looks like, and they are the same
+       * size.
+       *
+       * The fifth consecutive `none` was chosen without a stated reason, and
+       * the asymmetry left by then was informational: the brief documented
+       * the library's whole API inline — 58 lines of `Loop.start`,
+       * `Keys.pressed`, `Draw.orb`, `FX.burst` — while each engine got a
+       * single sentence, and their runnable examples only appeared *after*
+       * installing. Asked to choose between an API it can already read and
+       * one it would have to look up, a model takes the one on the page.
+       *
+       * So the engines get their snippet here, and the library's full API
+       * moves to after the choice (see `renderBrief`'s `pending`). Nobody is
+       * arguing for engines; the three options are simply legible at the
+       * moment the decision is made.
+       */
+      ...engines.flatMap((e) => [`### ${e.id}`, "", e.blurb, "", e.start, ""]),
+      ...(this.brief.library?.length
+        ? [
+            "### none — the small library",
+            "",
+            "A fixed-timestep loop, keyboard state, canvas shapes and particles, in about 580 lines.",
+            "That is the whole of it: no sprites, no scenes, no tweens, no camera, no physics and no",
+            "audio — anything of that kind, you write yourself, in rounds you were going to spend on",
+            "the game.",
+            "",
+            "The smallest thing that runs:",
+            "",
+            "```js",
+            "var ctx = document.querySelector('canvas').getContext('2d');",
+            "var x = 480;",
+            "Loop.start(function (dt) {",
+            "  if (Keys.pressed('left')) x -= 300 * dt;",
+            "  if (Keys.pressed('right')) x += 300 * dt;",
+            "}, function () {",
+            "  Draw.backdrop(ctx, '#0d0f13');",
+            "  Draw.orb(ctx, x, 300, 16, '#6ee7b7');",
+            "});",
+            "```",
+            "",
+          ]
+        : ["### none — no engine", "", "You write the loop, the input handling and the drawing yourself.", ""]),
+      "Whichever you install, `docs` looks up its exact API afterwards — real signatures, parameters",
+      "and defaults — so you are never guessing a method name from memory.",
       "",
       "**You are judged on the game, not on how it was built**, and none of these is the virtuous",
       "choice. Pick the one that makes the game you want cheapest to build. A worked example of the",

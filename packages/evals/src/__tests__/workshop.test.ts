@@ -1510,14 +1510,36 @@ describe("the provided library", () => {
     expect(out).toMatch(/lib\/loop\.js\s+\[provided\]/);
   });
 
-  it("tells the team what it can call, not just that it exists", () => {
+  it("tells the team what it can call, not just that it exists", async () => {
     // Four files of source is not an API. Nobody should have to read 580 lines
     // to discover there is a game loop.
-    const brief = sim().briefFor("builder") ?? "";
+    const s = await withLibrary();
+    const brief = s.briefFor("builder") ?? "";
     expect(brief).toMatch(/Loop\.start/);
     expect(brief).toMatch(/Keys\.pressed/);
     expect(brief).toMatch(/Draw\.orb/);
     expect(brief).toMatch(/FX\.burst/);
+  });
+
+  it("holds the full API back until the team has chosen, and shows a taste before", () => {
+    /*
+     * The fifth consecutive `none` was chosen with no stated reason at all,
+     * and by then the remaining asymmetry was informational: 58 lines of
+     * library API on the page against one sentence per engine, with the
+     * engines' runnable examples only appearing after installing one. A model
+     * choosing between an API it can read and one it would have to look up
+     * takes the one on the page.
+     *
+     * Before the choice all three now show a snippet of comparable size; the
+     * long reference arrives once there is something to call.
+     */
+    const brief = sim().briefFor("builder") ?? "";
+    // The engines are callable-looking at decision time...
+    expect(brief).toMatch(/new Phaser\.Game/);
+    // ...and so is the library, in the same amount of space.
+    expect(brief).toMatch(/Loop\.start/);
+    // But the 58-line reference is not competing with them yet.
+    expect(brief).not.toMatch(/Keys\.pressed\(name\)|Draw\.meter/);
   });
 
   it("leaves a brief with no library alone", () => {
