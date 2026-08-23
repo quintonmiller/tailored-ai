@@ -72,7 +72,24 @@ else
   exit 1
 fi
 
-echo
-echo "A killed run leaves its arcade row a draft with \`live\` still set. The site"
-echo "treats a live row that has gone quiet as finished, so it will not claim the"
-echo "jam is still building — but the row stays until the next run publishes."
+# A killed run leaves its arcade row with `live` still set, and the live panel is
+# the first thing a person looks at. The script used to print a paragraph
+# explaining that and leave the rows alone; after three stops in one afternoon
+# the panel was showing five jams building at once, none of which existed.
+#
+# Nothing is deleted. `live = 0` is what `ArcadeStore.endRun` does, and it is
+# simply true once this script has verified that no jam process survives — which
+# is why it runs here, after the check, rather than next to the kill.
+ARCADE_DB="${ARCADE_HOME:-$HOME/.tai-arcade}/arcade.db"
+if [ -f "$ARCADE_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
+  ended=$(sqlite3 "$ARCADE_DB" \
+    "UPDATE entries SET live = 0 WHERE live = 1; SELECT changes();" 2>/dev/null)
+  if [ -n "$ended" ] && [ "$ended" -gt 0 ] 2>/dev/null; then
+    echo
+    echo "marked $ended arcade row(s) as no longer building (nothing deleted)"
+  fi
+elif [ -f "$ARCADE_DB" ]; then
+  echo
+  echo "note: sqlite3 not installed — killed runs may still show as building on the"
+  echo "      live panel until the next run publishes."
+fi
