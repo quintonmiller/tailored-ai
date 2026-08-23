@@ -228,7 +228,20 @@ export class Workspace {
           `they are not writing it — ask the lead to release it.`,
       );
     }
-    this.planned.set(clean, { owner, purpose, claimedAt: round });
+    /*
+     * Re-claiming your own file must not extend the lease.
+     *
+     * Measured on seed 27: a builder claimed `game.js` four times across
+     * eighteen rounds and never wrote it. Each claim refreshed `claimedAt`, so
+     * the two-round lapse never fired and the file was locked for the whole jam
+     * — the deadlock the lapse was written to prevent, wearing a renewal.
+     *
+     * The lease therefore dates from when *this owner* first took the file. A
+     * different owner claiming after a lapse still gets a fresh one.
+     */
+    const existing = this.planned.get(clean);
+    const since = existing?.owner === owner && existing.claimedAt !== undefined ? existing.claimedAt : round;
+    this.planned.set(clean, { owner, purpose, claimedAt: since });
     return { path: clean, already: held === owner };
   }
 

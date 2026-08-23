@@ -630,6 +630,19 @@ describe("the open arm: a brief that says what, not how", () => {
     expect(out).not.toMatch(/Refused/);
   });
 
+  it("does not let re-claiming refresh the lease", async () => {
+    // Seed 27: a builder claimed `game.js` four times over eighteen rounds and
+    // never wrote it. Each claim reset the clock, so the lapse never fired and
+    // the file was locked for the whole jam.
+    const s = sim();
+    await call(s, "claim_file", { path: "game.js", purpose: "the loop" }, "builder");
+    s.advance();
+    await call(s, "claim_file", { path: "game.js", purpose: "still mine" }, "builder");
+    s.advance();
+    expect(s.workspace.ownerOf("game.js")).toBeUndefined();
+    expect(s.metrics().claimsLapsed).toBe(1);
+  });
+
   it("leaves a claim alone once the file exists", async () => {
     const s = sim();
     await call(s, "claim_file", { path: "engine.js", purpose: "the loop" }, "builder");
