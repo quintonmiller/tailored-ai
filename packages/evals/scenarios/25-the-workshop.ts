@@ -234,6 +234,43 @@ const INTENT =
   "same brief at the same turn budget, one with everybody in a single room and one with a single agent, " +
   "because the question underneath all of this is whether the shape of the team was worth anything.";
 
+/*
+ * `delegate` is stubbed by the harness, and the stub lies.
+ *
+ * Every tool that reaches outside the process is stubbed in the benchmark, and
+ * the default stub answers "(stubbed in the benchmark — assume it succeeded and
+ * continue)". For `exec` or `web_fetch` that is exactly right: the scenario does
+ * not care, and a fake success keeps the run moving.
+ *
+ * For `delegate` in *this* scenario it is corrosive, and it took a live run to
+ * see why. The lead called `delegate` three times — handing the builder, the
+ * interface and the author explicit file assignments — was told three times
+ * that it had worked, and then, believing the work was assigned, built the whole
+ * game itself inside a single turn. Nobody was delegated to. The builder never
+ * received anything.
+ *
+ * Two things break, and the second is worse than the first:
+ *
+ * 1. A lead that thinks it has assigned the work stops coordinating through the
+ *    rooms, which is the only mechanism this scenario exists to test.
+ * 2. It routes around the information asymmetry on purpose. The builder is not
+ *    supposed to see the channel where the look is decided; the lead's delegate
+ *    prompt handed it the theme reading, the diversifier and the file layout
+ *    directly. A benchmark about coordinating under partial information cannot
+ *    ship a tool that quietly dissolves the partition.
+ *
+ * So the stub tells the truth instead. It is phrased as a fact about this world
+ * rather than as a refusal, because an error reads as something to retry and a
+ * fact reads as something to plan around — and it points at the tool that does
+ * work, since an agent told only "no" tends to try the same thing again.
+ */
+const DELEGATION_IS_NOT_A_THING = {
+  delegate:
+    "There is nobody to delegate to. The other four are not your subagents — they are running " +
+    "on their own clocks, and the only way to reach them is `room`. Post what you need in the " +
+    "channel they are in and they will read it on their next turn.",
+} as const;
+
 export default defineScenarios(
   {
     id: "the-workshop",
@@ -271,6 +308,8 @@ export default defineScenarios(
         tester: block(TESTER),
       },
     },
+
+    toolResults: DELEGATION_IS_NOT_A_THING,
 
     rooms: [
       {
@@ -382,6 +421,8 @@ export default defineScenarios(
       },
     },
 
+    toolResults: DELEGATION_IS_NOT_A_THING,
+
     rooms: [
       {
         name: "studio",
@@ -460,6 +501,8 @@ export default defineScenarios(
         "`arcade_read`.\n\n" +
         WORKSPACE,
     },
+
+    toolResults: DELEGATION_IS_NOT_A_THING,
 
     rooms: [
       {
