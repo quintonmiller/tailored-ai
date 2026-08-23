@@ -153,6 +153,8 @@ Deep notes on each subsystem live under [`docs/`](./docs/):
 | Deploy targets (`tai deploy` seam): contract in core, registry in CLI, built-in `docker`, writing a cloud plugin | [docs/deploy-targets.md](./docs/deploy-targets.md) |
 | Benchmarking against a live model: scenarios, scoring, comparing runs, publishing to `/bench`, and simulations (an objective instead of an answer, with non-model baselines) | [docs/evals.md](./docs/evals.md) |
 | **Defensive patterns — bug classes that shipped here, each stated as the rule that prevents it.** Read before lifecycle, teardown, config, provider, or prompt-assembly work | [docs/defensive-patterns.md](./docs/defensive-patterns.md) |
+| Config catalog — every `DEFAULT_CONFIG` field, its default, and whether anything reads it. Generated; `pnpm run gen:catalogs` | [docs/config-catalog.md](./docs/config-catalog.md) |
+| Tool catalog — every registered tool factory, its real config gate, and whether that gate has a default. Generated | [docs/tool-catalog.md](./docs/tool-catalog.md) |
 | Audit findings + open action items (2026-07-28): boundaries, trust, skills, context | [docs/audit-2026-07-28.md](./docs/audit-2026-07-28.md) |
 
 When touching a subsystem, update its doc — keep this index file tight.
