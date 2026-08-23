@@ -970,13 +970,21 @@ describe("the scenarios on disk", () => {
     for (const id of ["the-workshop", "the-workshop-in-one-room"]) {
       const scenario = scenarios.find((s) => s.id === id);
       const lead = scenario?.agent?.instructions ?? "";
-      expect(lead, id).toMatch(/design\.md/);
+      // Both halves of the job. The first paragraph is the design and the theme
+      // reading; the second is the arcade, and it is the one that got dropped
+      // when this was written as a single string. Asserted on the tool names
+      // rather than on a filename, because the open arm does not hand out
+      // filenames and a guard that depends on one would fail for the wrong
+      // reason.
+      expect(lead, id).toMatch(/reading of the theme/);
       expect(lead, id).toMatch(/arcade_register/);
+      expect(lead, id).toMatch(/submit_version/);
     }
     // The solo arm holds every job at once and is written as one block; it
     // still has to be told the game needs registering.
     const alone = scenarios.find((s) => s.id === "the-workshop-alone");
     expect(alone?.agent?.instructions ?? "").toMatch(/arcade_register/);
+    expect(alone?.agent?.instructions ?? "").toMatch(/submit_version/);
   });
 
   /**
