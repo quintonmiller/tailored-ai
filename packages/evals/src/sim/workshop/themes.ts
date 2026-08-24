@@ -36,7 +36,7 @@
  * here so this file stays the one place the jam is described.
  */
 
-import { CATEGORIES, type Category } from "@tailored-ai/arcade";
+import { CATEGORIES, type Category, CLAIMS, GATES } from "@tailored-ai/arcade";
 
 export type { Category };
 
@@ -254,6 +254,24 @@ export const JUDGING = CATEGORIES;
  * there when they do.
  */
 export function renderScorecard(theme: Theme, rounds: number, entry: string, diversifier?: Diversifier): string {
+  /*
+   * Gates bracket the scores rather than sitting among them.
+   *
+   * `keep` is asked first because scoring rationalises: a judge who has just
+   * written five 4s finds a reason to say yes. It is the ground truth the
+   * whole rubric is a proxy for, and the only question here with nothing to
+   * optimise toward except the actual goal.
+   */
+  const before = GATES.filter((g) => g.when === "before").flatMap((g) => [
+    `**${g.question}**  \`yes / no\` — answer this before you look at the scale.`,
+    "",
+  ]);
+  const after = GATES.filter((g) => g.when === "after").flatMap((g) => [
+    `**${g.name}.** ${g.question}  \`yes / no\` — *${g.pass}* is the pass.`,
+    "",
+  ]);
+  const claimed = CLAIMS.flatMap((c) => [`- ${c.check}  \`yes / no\``]);
+
   const lines = [
     "# Jam scorecard",
     "",
@@ -271,26 +289,43 @@ export function renderScorecard(theme: Theme, rounds: number, entry: string, div
     `**Open:** \`workspace/${entry}\``,
     "",
     "Screenshots taken during the run are in `playtests/`, one directory per round in which",
-    "somebody ran the game. `submission.md` is the team's own pitch — read that first, the way",
-    "you would on a jam page.",
+    "somebody ran the game. `submission.md` is the team's own pitch — read it first, the way you",
+    "would on a jam page, and then **score from the game**. The pitch is what they claim; you are",
+    "scoring what you played. These teams write persuasive pitches, and at least one has quoted a",
+    "top anchor from this form back at the reader before they pressed a key.",
     "",
+    ...before,
     "Score each 1–5. Nothing here is computed and nothing in the benchmark reads it back;",
     "the numbers exist so two reviews weeks apart mean the same thing.",
     "",
-    "This form is the offline copy. The same five questions are on the game's arcade page, which",
+    `This form is the offline copy. The same ${JUDGING.length} questions are on the game's arcade page, which`,
     "is where a score gets recorded and compared against every other entry — `pnpm run arcade`.",
     "",
     "| # | Category | 1 | 5 | Score | Notes |",
     "|---|---|---|---|---|---|",
-    ...JUDGING.map((c) => `| ${c.key} | **${c.name}** | ${c.low} | ${c.high} |  |  |`),
+    ...JUDGING.map(
+      (c) =>
+        `| ${c.key} | **${c.name}** | ${c.low} | ${c.high} |  | ${
+          // The one anchor that needs a prompt rather than a scale. A caption
+          // saying LEVEL 2 and a palette shift is eleven lines; a judge who
+          // cannot name what changed is looking at the fake.
+          c.key === "depth" ? "*name the thing that changed*" : ""
+        } |`,
+    ),
     "",
     "## The question each one is asking",
     "",
     ...JUDGING.map((c) => `- **${c.name}** — ${c.question}`),
     "",
+    ...after,
+    "## What they claimed",
+    "",
+    "Nothing here is scored. Confirm what you can see; a claim you cannot verify is a no.",
+    "",
+    ...claimed,
+    "",
     "## Overall",
     "",
-    "- Would you keep it? ",
     "- What is the one thing you would change first? ",
     "- What did they never notice? ",
   ];

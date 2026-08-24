@@ -26,7 +26,7 @@ import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { dirname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CATEGORIES, GENRES } from "./categories.js";
+import { CATEGORIES, CLAIMS, GATES, GENRES } from "./categories.js";
 import { ArcadeStore, LIVE_SHOT } from "./store.js";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "web");
@@ -294,6 +294,11 @@ async function handleSite(
   if (path === "/api/config") {
     return json(res, 200, {
       categories: CATEGORIES,
+      // Answered yes/no and never averaged. The form has to ask them or the
+      // site and the offline scorecard drift, which is the exact failure the
+      // single-source-of-truth in categories.ts exists to prevent.
+      gates: GATES,
+      claims: CLAIMS,
       genres: GENRES,
       gamesUrl,
       sorts: [

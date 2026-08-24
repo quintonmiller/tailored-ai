@@ -15,7 +15,7 @@ import { inflateRawSync } from "node:zlib";
 import Database from "better-sqlite3";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { splitCommand, stripSeparator } from "../args.js";
-import { CATEGORIES, CATEGORY_KEYS, cleanScore, normaliseGenre, overallScore } from "../categories.js";
+import { CATEGORIES, CATEGORY_KEYS, CLAIMS, cleanScore, GATES, normaliseGenre, overallScore } from "../categories.js";
 import { publishRun, snapshotVersion } from "../publish.js";
 import { createArcadeServer, listen } from "../server.js";
 import {
@@ -67,13 +67,54 @@ function provenance(overrides: Partial<EntryProvenance> = {}): EntryProvenance {
 }
 
 describe("categories", () => {
-  it("has five, each with both anchors", () => {
-    expect(CATEGORIES).toHaveLength(5);
+  it("gives every category both anchors and a question", () => {
+    expect(CATEGORIES.length).toBeGreaterThanOrEqual(5);
     for (const category of CATEGORIES) {
       expect(category.low.length).toBeGreaterThan(4);
       expect(category.high.length).toBeGreaterThan(4);
       expect(category.question.endsWith("?")).toBe(true);
     }
+  });
+
+  it("asks the judge one thing and tells the builder another", () => {
+    /*
+     * The invariant that cost twenty-four identical games to learn.
+     *
+     * There used to be one string, and `jamBrief()` quoted it verbatim, so the
+     * judge's question was also the build spec. `gameplay` asked "is the core
+     * loop actually enjoyable for a minute?" — fine to ask a person, and handed
+     * to a builder it names a duration, so a duration is what got built.
+     */
+    for (const category of CATEGORIES) {
+      expect(category.aim.length).toBeGreaterThan(40);
+      expect(category.aim).not.toBe(category.question);
+    }
+    // The two specific phrasings that were shaping the shelf.
+    const questions = CATEGORIES.map((c) => c.question).join(" ");
+    const aims = CATEGORIES.map((c) => c.aim).join(" ");
+    expect(aims).not.toMatch(/for a minute/);
+    expect(`${questions} ${aims}`).not.toMatch(/drawn from shapes/);
+  });
+
+  it("keeps gates and claims out of the mean", () => {
+    // A yes/no answer that averaged with 1-5 scores would be silently wrong,
+    // and `overallScore` reads `CATEGORY_KEYS` only.
+    for (const gate of GATES) expect(CATEGORY_KEYS).not.toContain(gate.key);
+    for (const claim of CLAIMS) expect(CATEGORY_KEYS).not.toContain(claim.key);
+    // `keep` is the ground truth the rubric is a proxy for, so it is asked
+    // before the numbers rather than after them.
+    expect(GATES.find((g) => g.key === "keep")?.when).toBe("before");
+  });
+
+  it("does not score scope or story, and says so where it is decided", () => {
+    // Both were considered and rejected: size is already counted by the
+    // harness, and story under an asset ban is a thirty-line diff whose value
+    // would be set by which diversifier the seed drew.
+    expect(CATEGORY_KEYS).not.toContain("scope");
+    expect(CATEGORY_KEYS).not.toContain("story");
+    // The part of scope worth keeping survives as a self-evident claim.
+    expect(CLAIMS.map((c) => c.key)).toContain("ending");
+    for (const claim of CLAIMS) expect(claim.check.endsWith("?")).toBe(true);
   });
 
   it("averages the category means, not every score handed in", () => {
@@ -606,7 +647,10 @@ describe("the server", () => {
 
     try {
       const config = await (await fetch(`${base}/api/config`)).json();
-      expect(config.categories).toHaveLength(5);
+      expect(config.categories.length).toBeGreaterThanOrEqual(5);
+      // The form has to ask what the offline scorecard asks, or the two drift.
+      expect(config.gates.length).toBeGreaterThan(0);
+      expect(config.claims.length).toBeGreaterThan(0);
 
       const board = await (await fetch(`${base}/api/entries?sort=overall`)).json();
       expect(board.entries).toHaveLength(1);

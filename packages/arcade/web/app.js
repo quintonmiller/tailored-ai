@@ -745,6 +745,40 @@ function reviewPanel(entry, existing) {
   const chosen = { ...(existing?.scores ?? {}) };
   const card = el("div", { class: "scorecard" });
 
+  /*
+   * A yes/no row. Used for the gates and for the claims a team made.
+   *
+   * Neither enters the overall score. `keep` is rendered above the scale on
+   * purpose — scoring rationalises, so the gut answer has to be taken before
+   * the judge has written five numbers they now want to justify.
+   */
+  const gateRow = (item, hint) => {
+    const yes = el("div", { class: "pip", text: "yes" });
+    const no = el("div", { class: "pip", text: "no" });
+    const paint = () => {
+      yes.classList.toggle("on", chosen[item.key] === 1);
+      no.classList.toggle("on", chosen[item.key] === 0);
+    };
+    yes.onclick = () => {
+      chosen[item.key] = chosen[item.key] === 1 ? undefined : 1;
+      paint();
+    };
+    no.onclick = () => {
+      chosen[item.key] = chosen[item.key] === 0 ? undefined : 0;
+      paint();
+    };
+    paint();
+    return el("div", { class: "criterion gate" }, [
+      el("p", { class: "crit-q", text: item.question ?? item.check }),
+      el("div", { class: "pips" }, [yes, no]),
+      hint ? el("div", { class: "anchors" }, [el("span", { text: hint })]) : null,
+    ]);
+  };
+
+  for (const gate of (config.gates ?? []).filter((g) => g.when === "before")) {
+    card.append(gateRow(gate, "answer this before you look at the scale"));
+  }
+
   for (const category of config.categories) {
     const pips = el("div", { class: "pips" });
     const paint = () => {
@@ -779,8 +813,22 @@ function reviewPanel(entry, existing) {
     );
   }
 
+  for (const gate of (config.gates ?? []).filter((g) => g.when === "after")) {
+    card.append(gateRow(gate, `${gate.pass} is the pass`));
+  }
+
+  if ((config.claims ?? []).length) {
+    card.append(
+      el("div", { class: "criterion" }, [
+        el("div", { class: "crit-head" }, [el("span", { class: "crit-name", text: "What they claimed" })]),
+        el("p", { class: "crit-q", text: "Not scored. Confirm what you can see — a claim you cannot verify is a no." }),
+      ]),
+    );
+    for (const claim of config.claims) card.append(gateRow(claim));
+  }
+
   const notes = el("textarea", {
-    placeholder: "Would you keep it? What would you change first?",
+    placeholder: "What would you change first? What did they never notice?",
     value: existing?.notes ?? "",
   });
   notes.value = existing?.notes ?? "";

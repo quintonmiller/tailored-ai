@@ -453,13 +453,18 @@ export class ArcadeDesk {
         ? `${entry.slug} — not yet judged`
         : `${entry.slug} — ${entry.overall.toFixed(2)} overall from ${entry.reviewCount} review${entry.reviewCount === 1 ? "" : "s"}`;
     const facts = [entry.theme, entry.genre, `${entry.rounds} rounds`].filter(Boolean).join(" · ");
-    const out = [head, `  ${entry.tagline ? `"${entry.tagline}" · ` : ""}${facts}`];
-    const scored = CATEGORIES.filter((c) => entry.scores[c.key]);
-    if (scored.length) {
-      out.push(`  ${scored.map((c) => `${c.key} ${entry.scores[c.key].mean.toFixed(1)}`).join("  ")}`);
-    }
-    out.push("");
-    return out;
+    /*
+     * The overall figure, and no per-category breakdown.
+     *
+     * This used to print each category's mean beside its key. With one review
+     * that is inert; with thirty it is a fitness gradient — "visuals 4.2,
+     * originality 1.8" tells the next team exactly where the marginal point is,
+     * and teams optimising the rubric instead of making a game is the failure
+     * this scenario keeps rediscovering. One number says "that one went well"
+     * without naming a lever, and the judge's own words — which `arcade_read`
+     * still shows — are far harder to hill-climb than a vector of five floats.
+     */
+    return [head, `  ${entry.tagline ? `"${entry.tagline}" · ` : ""}${facts}`, ""];
   }
 
   private renderEntry(entry: ScoredEntry, withReviews: boolean): string {
@@ -477,15 +482,14 @@ export class ArcadeDesk {
     if (entry.description) lines.push("About:", clip(entry.description, READ_DESCRIPTION), "");
     if (entry.instructions) lines.push("How to play:", clip(entry.instructions, READ_INSTRUCTIONS), "");
 
-    const scored = CATEGORIES.filter((c) => entry.scores[c.key]);
-    if (scored.length) {
-      lines.push("Scores:");
-      for (const category of scored) {
-        lines.push(
-          `  ${category.name.padEnd(18)} ${entry.scores[category.key].mean.toFixed(1)}  — ${category.question}`,
-        );
-      }
-      lines.push("");
+    // The overall score is in the heading above; the breakdown is deliberately
+    // not here. See `summarise`. What a judge *wrote* is the useful signal and
+    // it is right below.
+    if (entry.overall !== null) {
+      lines.push(
+        `Scored ${entry.overall.toFixed(2)} overall by ${entry.reviewCount} judge${entry.reviewCount === 1 ? "" : "s"}.`,
+        "",
+      );
     }
 
     if (withReviews) {

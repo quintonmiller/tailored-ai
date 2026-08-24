@@ -484,7 +484,13 @@ describe("the jam: a theme, a clock, and categories a person scores", () => {
     const brief = s.briefFor("builder") ?? "";
     expect(brief).toMatch(/GAME JAM/);
     expect(brief).toMatch(/ONLY ONE/);
-    expect(brief).toMatch(/Theme relevance/);
+    // The brief renders each category's *aim*, not the judge's question —
+    // the question is what the judge answers, the aim is what a builder
+    // reaches for, and quoting the former at a builder is what produced a
+    // shelf of sixty-second games.
+    expect(brief).toMatch(/\*\*Theme\.\*\*/);
+    expect(brief).toMatch(/Decide early what your reading of the theme is/);
+    expect(brief).not.toMatch(/for a minute/);
     /*
      * This assertion used to be its own opposite.
      *
@@ -548,7 +554,11 @@ describe("the jam: a theme, a clock, and categories a person scores", () => {
       expect(card).toContain(category.name);
       expect(card).toContain(category.question);
     }
-    expect(card).toContain("**Theme relevance**");
+    expect(card).toContain("**Theme**");
+    // The judge's copy keeps the question and the anchors, and never shows
+    // the agent-facing aim.
+    expect(card).toContain("Does the theme shape the mechanics you played");
+    expect(card).not.toContain("Decide early what your reading");
   });
 
   it("runs a jam clock with phases rather than a bare round counter", () => {
@@ -2185,7 +2195,18 @@ describe("the arcade", () => {
     const board = await call(s, "arcade_browse", {}, "lead");
     expect(board).toMatch(/one-shot/);
     expect(board).toMatch(/4\.00 overall/);
-    expect(board).toMatch(/theme 5\.0/);
+    /*
+     * The per-category breakdown is deliberately gone.
+     *
+     * It used to print "theme 5.0  gameplay 3.0" beside every entry. With
+     * one review that is inert; with thirty it is a fitness gradient that
+     * tells the next team exactly which lever to pull — and teams optimising
+     * the rubric rather than making a game is the failure this scenario
+     * keeps rediscovering. The overall figure survives, and so does what the
+     * judge actually wrote, which is far harder to hill-climb.
+     */
+    expect(board).not.toMatch(/theme 5\.0/);
+    expect(board).not.toMatch(/gameplay 3\.0/);
     // The team's own unfinished page is not on the board it is reading.
     expect(board).not.toMatch(/workshop-test/);
 

@@ -36,7 +36,16 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
-import { CATEGORY_KEYS, cleanScore, normaliseGenre, overallScore, round2 } from "./categories.js";
+import {
+  CATEGORY_KEYS,
+  CLAIM_KEYS,
+  cleanScore,
+  GATE_KEYS,
+  normaliseGenre,
+  overallScore,
+  RUBRIC_VERSION,
+  round2,
+} from "./categories.js";
 
 export const ARCADE_SCHEMA_VERSION = 2;
 
@@ -309,6 +318,8 @@ CREATE TABLE IF NOT EXISTS reviews (
   entry_id   TEXT NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
   reviewer   TEXT NOT NULL,
   notes      TEXT NOT NULL DEFAULT '',
+  -- Which rubric this was scored against, so two rubrics never average silently.
+  rubric     TEXT NOT NULL DEFAULT 'v1',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   UNIQUE (entry_id, reviewer)
@@ -517,6 +528,13 @@ export class ArcadeStore {
     }
     if (!columns.has("diversifier")) {
       this.db.exec("ALTER TABLE entries ADD COLUMN diversifier TEXT");
+    }
+    const reviewColumns = new Set(
+      (this.db.prepare("PRAGMA table_info(reviews)").all() as { name: string }[]).map((c) => c.name),
+    );
+    if (reviewColumns.size > 0 && !reviewColumns.has("rubric")) {
+      // Existing reviews predate the split into six categories and two gates.
+      this.db.exec("ALTER TABLE reviews ADD COLUMN rubric TEXT NOT NULL DEFAULT 'v1'");
     }
     const versionColumns = new Set(
       (this.db.prepare("PRAGMA table_info(versions)").all() as { name: string }[]).map((c) => c.name),
@@ -1057,12 +1075,21 @@ export class ArcadeStore {
     const run = this.db.transaction(() => {
       this.db
         .prepare(
-          `INSERT INTO reviews (entry_id, reviewer, notes, created_at, updated_at)
-                VALUES (@entryId, @reviewer, @notes, @now, @now)
+          `INSERT INTO reviews (entry_id, reviewer, notes, rubric, created_at, updated_at)
+                VALUES (@entryId, @reviewer, @notes, @rubric, @now, @now)
            ON CONFLICT(entry_id, reviewer) DO UPDATE
-                SET notes = excluded.notes, updated_at = excluded.updated_at`,
+                SET notes = excluded.notes, rubric = excluded.rubric, updated_at = excluded.updated_at`,
         )
-        .run({ entryId, reviewer: name, notes: String(notes ?? "").slice(0, 4000), now });
+        .run({
+          entryId,
+          reviewer: name,
+          notes: String(notes ?? "").slice(0, 4000),
+          // Which rubric this review was written against. Without it, the day
+          // the categories change again `overall` starts averaging two
+          // different questions and nothing anywhere says so.
+          rubric: RUBRIC_VERSION,
+          now,
+        });
       const row = this.db.prepare("SELECT id FROM reviews WHERE entry_id = ? AND reviewer = ?").get(entryId, name) as {
         id: number;
       };
@@ -1072,6 +1099,21 @@ export class ArcadeStore {
       for (const key of CATEGORY_KEYS) {
         const value = cleanScore(scores?.[key]);
         if (value !== null) insert.run(row.id, key, value);
+      }
+      /*
+       * Gates and claims share the table and are stored as 1 or 0.
+       *
+       * They are read back by `gatesOf`, never by `attachScores`, which filters
+       * to `CATEGORY_KEYS` — so a yes/no answer cannot leak into the mean. That
+       * filter is also why the read path needed changing at all: rows with an
+       * unrecognised key were being silently dropped, which is safe and
+       * invisible, and invisible is how a rubric change corrupts a back
+       * catalogue without anybody noticing.
+       */
+      for (const key of [...GATE_KEYS, ...CLAIM_KEYS]) {
+        const raw = scores?.[key];
+        if (raw === undefined || raw === null || raw === "") continue;
+        insert.run(row.id, key, raw === true || raw === "yes" || raw === 1 ? 1 : 0);
       }
     });
     run();

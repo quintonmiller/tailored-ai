@@ -43,6 +43,7 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { CLAIMS, type Claim, GATES, type Gate } from "@tailored-ai/arcade";
 import { type ContentPart, type MediaStore, mediaPart, type Tool, textPart } from "@tailored-ai/core";
 import { agentTool, num, optional, tool } from "../tool.js";
 import {
@@ -504,7 +505,15 @@ export class WorkshopSimulation implements Simulation {
       ...this.catalogueBrief(),
       "## How you will be judged",
       "",
-      ...JUDGING.map((c) => `- **${c.name}** — ${c.question}`),
+      /*
+       * `aim`, not `question`.
+       *
+       * The judge's wording used to be quoted here verbatim, and an agent builds
+       * the minimum artifact that makes the answer yes. "Is the core loop
+       * enjoyable for a minute?" named a duration and got one: twenty-four
+       * one-screen games with a sixty-second loop. See `categories.ts`.
+       */
+      ...JUDGING.flatMap((c) => [`**${c.name}.** ${c.aim}`, ""]),
       "",
       /*
        * This used to end "A small finished game beats a large unfinished one."
@@ -523,17 +532,26 @@ export class WorkshopSimulation implements Simulation {
        * matter of taste — and because the submission machinery has already
        * removed the downside the slogan was protecting against.
        */
-      "Five categories, weighted the same. That has a consequence worth doing the arithmetic on: a clean,",
-      "finished game of a kind the judge has seen before scores 3, 3, 3, **1**, 5 — an average of 3.0. A",
-      "rougher game built around one idea nobody has seen scores 4, 4, 3, **5**, 2 — an average of 3.6, and",
-      "it wins while being the less finished of the two.",
+      // Derived, not typed out. The previous version hardcoded "Five categories"
+      // and a five-number worked example, which stopped being true the moment
+      // the rubric changed — a brief the agents reason from must not be able to
+      // go stale in a way nothing reports.
+      `${JUDGING.length} categories, weighted the same, and that is worth doing the arithmetic on. A clean`,
+      "one-screen game of a kind the judge has seen before scores 3, 3, **1**, 3, **1**, 4 — an average of",
+      "2.5. A rougher game with a second half in it and one mechanic nobody has used scores 4, 3, **4**, 2,",
+      "**5**, 3 — an average of 3.5, and it wins while being the less finished of the two.",
       "",
-      "So finishing is not the goal; being worth playing is. Nothing about how much you wrote is scored",
-      "either — a hundred lines that surprise a person beat a thousand that do not.",
+      "**Depth and originality are a third of your score between them**, and they are the two that games",
+      "built this way are worst at. Finishing is not the goal; being worth playing a second time is.",
+      "Nothing about how much you wrote is scored either — a hundred lines that surprise a person beat a",
+      "thousand that do not.",
       "",
       "**And you cannot lose by reaching.** The last build you submitted is the one judged, so once a",
       "playable version is on the board, an ambitious change that does not work out costs you nothing at",
       "all. Bank something playable early, then swing at the thing you actually want to make.",
+      "",
+      ...this.gatesBrief(),
+      ...this.claimsBrief(),
       "",
       ...this.arcadeBrief(),
       ...this.engineBrief(),
@@ -583,6 +601,51 @@ export class WorkshopSimulation implements Simulation {
       "judged, so once something playable is on the board, a change of course cannot take away what you",
       "have banked. If you are four rounds in and it is not fun, that is worth saying out loud rather than",
       "working around.",
+      "",
+    ];
+  }
+
+  /**
+   * The yes/no questions, which are not categories and do not average.
+   *
+   * `finished` is the old `polish` score. Stated as a gate rather than a
+   * number because it is where somebody stops playing, and everything else is
+   * scored on whatever they saw before they stopped — which is a harsher thing
+   * to say than "one fifth of your mark".
+   */
+  private gatesBrief(): string[] {
+    if (!GATES.length) return [];
+    return [
+      "Two more questions are answered yes or no. Neither is a category and neither averages with",
+      "anything:",
+      "",
+      ...GATES.map((g: Gate) => `- *${g.question}* — **${g.pass}** is the pass.`),
+      "",
+      "The second one is where a person stops playing, and everything above is scored on whatever they",
+      "saw before they stopped.",
+      "",
+    ];
+  }
+
+  /**
+   * Claims a team can make about its own game, which a judge confirms by
+   * looking rather than by trusting.
+   *
+   * Nothing here is scored, on purpose — see `CLAIMS` in the arcade package for
+   * the Global Game Jam rules this borrows. Volume is the cheapest thing a
+   * model can produce, so scoring scope rewards the fake; a claim that has to
+   * be visible in the three minutes a judge is already spending rewards
+   * reaching a state instead.
+   */
+  private claimsBrief(): string[] {
+    if (!CLAIMS.length) return [];
+    return [
+      "## What you can claim",
+      "",
+      "None of this is scored and there is no prize for collecting them. They go on your arcade page,",
+      "a judge confirms them by looking, and a claim they cannot see is worse than one you never made:",
+      "",
+      ...CLAIMS.map((c: Claim) => `- ${c.label}`),
       "",
     ];
   }
