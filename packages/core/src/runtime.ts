@@ -1299,6 +1299,11 @@ export class AgentRuntime {
       // Read per turn, not captured: config is hot-reloadable, and a slot the
       // operator has just added should appear on the next turn.
       promptSlots: config.prompt?.slots,
+      // Handed to the loop so a subscriber can reach a turn from outside it.
+      // Filled in here rather than at each call site so every caller that goes
+      // through the runtime gets it without changing — the loop's own option is
+      // optional, for the callers that build their options by hand.
+      events: this.events,
       // Tool-context agent name (docs/agent-unification.md). Every call to
       // a tool that maintains identity (core_memory, Sleep) needs a stable
       // agent string. When the caller doesn't specify one (anonymous chat

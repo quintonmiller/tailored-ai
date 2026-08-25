@@ -40,6 +40,7 @@
  *   subscriptions across reloads are out of scope for the first cut.
  */
 
+import type { ContextSlot, ContextSlotContext } from "./agent/context-slots.js";
 import type { LoopStop } from "./agent/loop.js";
 import type { WakeReason } from "./rooms/watcher.js";
 
@@ -660,12 +661,37 @@ export type RuntimeEventHandler<K extends RuntimeEvent> = (
  * }
  * ```
  *
- * Core declares none yet. The obvious first one — transforming an agent
- * request before the model sees it, which is what #417 needs — is blocked on
- * the agent loop having no bus to dispatch on; see #534.
+ * Core declares one: `agent.context_slots`, the slot list the loop is about to
+ * render. See {@link ContextSlotWaterfall}.
  */
-// biome-ignore lint/suspicious/noEmptyInterface: extended by declaration merging, in core and in plugins.
-export interface RuntimeWaterfallMap {}
+export interface RuntimeWaterfallMap {
+  /**
+   * The context slots a turn is about to render, before any of them run.
+   *
+   * The first core waterfall, and chosen because it is the smallest honest one:
+   * `renderContextSlots` is already a pure function over a slot list, so a
+   * subscriber that reorders, drops, caps or adds a slot needs no knowledge of
+   * how the prompt is composed — which is the property #417 is after.
+   *
+   * The list is handed over *before* rendering rather than after, so a
+   * subscriber can stop a slot from running at all. A slot that is expensive,
+   * or that reads something the subscriber knows is unavailable, is better not
+   * called than called and discarded.
+   */
+  "agent.context_slots": ContextSlotWaterfall;
+}
+
+/**
+ * Payload for `agent.context_slots`.
+ *
+ * Carries the same context the slots themselves are rendered with, so a
+ * subscriber can decide per agent, session or message without reaching for
+ * anything the loop has not already resolved.
+ */
+export interface ContextSlotWaterfall extends ContextSlotContext {
+  /** Registered slots plus whatever config declared, in render order. */
+  slots: ContextSlot[];
+}
 
 export type RuntimeWaterfallEvent = keyof RuntimeWaterfallMap;
 
