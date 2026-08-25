@@ -175,6 +175,68 @@ regenerate *right now*, so a prompt change and its re-record belong together.
 Repeats are keyed by seed, so `--repeats 3` records three files and replays all
 three rather than having each repeat overwrite the last.
 
+### Witnesses are recorded too, and have to be
+
+A recording's first line is not a call — it is the witness values that run
+minted. Scenarios mint fresh unguessable values on every run *on purpose*
+([tokens.ts](../packages/evals/src/tokens.ts)) and substitute them into the
+prompt, so a replay that minted its own would ask a different question and miss
+every fixture it owned. Sixteen of the twenty scenario files declare witnesses,
+so a replay without them covers only the minority that has none.
+
+Reusing them gives up nothing. A witness is fresh so that a **live** model
+cannot satisfy a check with a value it never read; under replay there is no
+model, and whether the recorded answer carried the value was settled when the
+recording was made. Live runs are untouched and still mint cryptographically.
+
+This is worth knowing because it is invisible to unit tests — a fake upstream
+answers whatever it is asked, so record and replay agree no matter what is in
+the prompt. It took one run against a real model, where the single scenario that
+used a witness missed on every request while the other four replayed perfectly.
+The score was unchanged, because that scenario was failing anyway.
+
+### A run's state belongs to the run, not the provider
+
+A run does not build one provider. `reload()` rebuilds it mid-turn and the
+`admin` tool triggers a reload, so a turn whose first response calls `admin`
+builds two. That broke both halves while the state lived on the provider:
+
+- **Recording** truncated its file on the rebuild, discarding every call so far
+  — including the one whose response *caused* the reload. On replay the run's
+  very first request was the one request missing from its own recording.
+- **Replay** built a fresh reader whose place in the recording restarted at
+  zero, so a request the run made twice got the first recorded answer both
+  times. Not an error — a quietly wrong replay, which is worse.
+
+`openRun()` decides both once, before the run starts, and `replayLayer()` only
+wraps. If you add state to this path, that is where it goes.
+
+### What still cannot replay: a real tool that mints an id
+
+The recording covers the model boundary, and that is not the only thing feeding
+the prompt. Tools that are left real — `schedule`, `core_memory`, `recall`,
+`tasks`, `room` — run for real on replay too, and one of them minting a random
+id puts that id in a tool result, which lands in the history, which changes the
+next request:
+
+```
+replay: no recorded response for request 01cfec753f09d7f2 — the request differs
+from every one recorded, so the prompt has changed.
+Last message: Scheduled f4af for Tue, Aug 25, 02:00 (in 12d 16h), waking…
+```
+
+`f4af` is `randomUUID().slice(0, 4)` from `schedules/store.ts`. On the current
+scenario set this costs one run in thirty-two, and it costs it *loudly* — the
+miss names the request and the message that diverged, which is the behaviour a
+changed prompt is supposed to get. It is a limitation, not a silent wrong
+answer.
+
+Fixing it properly means recording tool results as well as model calls, which is
+a real design question rather than an oversight: replaying a tool's *text*
+without running it skips side effects a later turn may depend on, and running it
+while overriding its text leaves the recorded id and the stored row disagreeing.
+Tracked in [#550](https://github.com/quintonmiller/tailored-ai/issues/550).
+
 ## Difficulty, and why the overall score cannot answer "where does this stop working"
 
 Every scenario carries a required `difficulty`, 1-10. It is a claim about what

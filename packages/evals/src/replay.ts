@@ -26,12 +26,52 @@
  * `chatStream` is deliberately not implemented: every caller falls back to
  * `chat()` when it is absent, and a recorded stream would only differ from a
  * recorded response in chunk boundaries nothing here asserts on.
+ *
+ * A recording therefore has to hold more than the calls. Scenarios mint fresh
+ * unguessable witnesses every run and substitute them into the prompt, so a
+ * replay that minted its own would ask a different question and miss every
+ * fixture it owned — see {@link Recording}. That was not caught by any unit
+ * test, because a fake upstream answers whatever it is asked; it took one live
+ * run, where sixteen of the twenty scenario files declare witnesses and the
+ * only scenario that used one missed on every request.
  */
 
 import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { AIProvider, ChatParams, ChatResponse } from "@tailored-ai/core";
+
+/**
+ * A recording: what one run of one scenario asked, and what it was told.
+ *
+ * The witnesses are stored with the calls, and that is load-bearing rather than
+ * housekeeping. A scenario mints fresh unguessable values on every run *on
+ * purpose* — see `tokens.ts` — and substitutes them into the prompt, so a
+ * replay that minted its own would send a different request and miss every
+ * fixture it owned. Sixteen of the twenty scenario files declare witnesses, so
+ * "replay" without this covers the minority of the benchmark that has none.
+ *
+ * Reusing them costs nothing that freshness was buying. A witness is fresh so
+ * that a *live* model cannot satisfy a check with a value it never read. Under
+ * replay there is no model: the recorded answer either carried the value or it
+ * did not, and that was decided when the recording was made. Live runs are
+ * untouched and still mint cryptographically.
+ */
+export interface Recording {
+  /** The witness values the recorded run minted. Empty if it declared none. */
+  tokens: Record<string, string>;
+  /** Every model call the run made, in the order it made them. */
+  fixtures: Fixture[];
+}
+
+/**
+ * A line in a recording file.
+ *
+ * Tagged on both arms rather than inferred from which fields are present: an
+ * untagged header would be one renamed field away from parsing as a call with
+ * an undefined key, which fails much later and reads as divergence.
+ */
+type RecordLine = ({ kind: "tokens" } & Pick<Recording, "tokens">) | ({ kind: "call" } & Fixture);
 
 /** One recorded call: the request it answers, and what came back. */
 export interface Fixture {
@@ -150,19 +190,26 @@ export function replayProvider(fixtures: readonly Fixture[], id = "replay"): AIP
   };
 }
 
-/** Read a recording. A missing or empty file yields no fixtures. */
-export function loadFixtures(path: string): Fixture[] {
+/** Read a recording. A missing or empty file yields nothing. */
+export function loadRecording(path: string): Recording {
   let text: string;
   try {
     text = readFileSync(path, "utf8");
   } catch {
-    return [];
+    return { tokens: {}, fixtures: [] };
   }
-  const fixtures: Fixture[] = [];
+  const recording: Recording = { tokens: {}, fixtures: [] };
   for (const [i, line] of text.split("\n").entries()) {
     if (!line.trim()) continue;
     try {
-      fixtures.push(JSON.parse(line) as Fixture);
+      const parsed = JSON.parse(line) as RecordLine;
+      if (parsed.kind === "tokens") recording.tokens = parsed.tokens;
+      else if (parsed.kind === "call") {
+        const { kind: _kind, ...fixture } = parsed;
+        recording.fixtures.push(fixture);
+      } else {
+        console.warn(`[replay] ${path}:${i + 1} has an unknown kind and was skipped`);
+      }
     } catch (err) {
       // One malformed line is not a reason to discard a long recording, but it
       // is a reason to say so — a silently short fixture file reads as a
@@ -170,23 +217,85 @@ export function loadFixtures(path: string): Fixture[] {
       console.warn(`[replay] ${path}:${i + 1} is not valid JSON and was skipped: ${(err as Error).message}`);
     }
   }
-  return fixtures;
+  return recording;
 }
 
-/** Open a recording for append. Returns the sink `recordingProvider` wants. */
-export function fixtureWriter(path: string): (fixture: Fixture) => void {
+/**
+ * Start a recording: truncate the file and write the witness header.
+ *
+ * Called **once per run**, by the run itself, and deliberately not by the
+ * writer. A provider is not built once per run — the runtime rebuilds it on
+ * `reload()`, which the `admin` tool triggers mid-turn — and a writer that
+ * truncated whenever it was constructed threw away every call recorded before
+ * the rebuild. The lost call was the one whose response *caused* the reload, so
+ * on replay the run's very first request was the one request missing from its
+ * own recording.
+ *
+ * Truncating here keeps what that was for: a re-record replaces the previous
+ * run rather than appending a second one, which would read as divergence.
+ *
+ * The witnesses go first, before any call can, because the run that is about to
+ * be recorded has already substituted them into its prompts — and a replay
+ * needs them *before* it starts, to substitute the same ones.
+ */
+export function beginRecording(dir: string, id: string, tokens: Record<string, string>): string {
+  const path = fixturePath(dir, id);
   mkdirSync(dirname(path), { recursive: true });
-  // Truncate up front so a re-record replaces the previous run rather than
-  // appending a second one, which would look like divergence on replay.
-  writeFileSync(path, "");
-  return (fixture) => appendFileSync(path, `${JSON.stringify(fixture)}\n`);
+  writeFileSync(path, `${JSON.stringify({ kind: "tokens", tokens } satisfies RecordLine)}\n`);
+  return path;
 }
 
-/** Where one scenario's recording lives inside a record/replay directory. */
-export function fixturePath(dir: string, scenarioId: string): string {
-  // Scenario ids reach here from files on disk and are used as a filename.
-  // Anything path-shaped is flattened rather than trusted.
-  return join(dir, `${scenarioId.replace(/[^\w.-]/g, "_")}.jsonl`);
+/**
+ * A sink that appends calls to an already-started recording.
+ *
+ * Append-only, and never truncating: see {@link beginRecording}. Written per
+ * call rather than flushed at the end so a run that crashes halfway still
+ * leaves a usable partial recording — the runs worth recording are the long
+ * ones.
+ */
+export function recordingWriter(path: string): (fixture: Fixture) => void {
+  mkdirSync(dirname(path), { recursive: true });
+  return (fixture) => appendFileSync(path, `${JSON.stringify({ kind: "call", ...fixture } satisfies RecordLine)}\n`);
+}
+
+/** Where one run's recording lives inside a record/replay directory. */
+export function fixturePath(dir: string, runId: string): string {
+  // Run ids carry a scenario id, which reaches here from a file on disk and is
+  // used as a filename. Anything path-shaped is flattened rather than trusted.
+  return join(dir, `${runId.replace(/[^\w.-]/g, "_")}.jsonl`);
+}
+
+/**
+ * The identity of one run: a scenario, at a seed.
+ *
+ * Shared by the worker (which needs the witnesses before the run) and the
+ * harness (which needs the file during it) so the two cannot drift. They
+ * computed the same string independently once; a change to one of them would
+ * have produced a run that recorded to one file and replayed from another,
+ * reported as a missing recording.
+ */
+export function runId(scenarioId: string, seed: number | null | undefined): string {
+  // `--repeats 3` runs one scenario three times at seeds n, n+1, n+2. Without
+  // the seed in the name each repeat would truncate the last.
+  return seed === null || seed === undefined ? scenarioId : `${scenarioId}-seed${seed}`;
+}
+
+/**
+ * The witnesses a recorded run minted, for a replay about to repeat it.
+ *
+ * Separate from `replayLayer` because of *when* it is needed: the scenario is
+ * substituted before the run starts, and the provider is not built until the
+ * first model call. A missing recording is reported here rather than at that
+ * first call, where the message would blame the prompt for a file that was
+ * never made.
+ */
+export function recordedTokens(replayDir: string, id: string): Record<string, string> {
+  const path = fixturePath(replayDir, id);
+  const recording = loadRecording(path);
+  if (recording.fixtures.length === 0) {
+    throw new Error(`replay: no recording for run "${id}" at ${path} — record it first with --record`);
+  }
+  return recording.tokens;
 }
 
 /**
@@ -201,29 +310,63 @@ export function fixturePath(dir: string, scenarioId: string): string {
  * workers, so a single shared file would interleave two runs' calls and read
  * back as divergence.
  */
-export function replayLayer(
-  provider: AIProvider,
-  opts: { recordDir?: string; replayDir?: string; scenarioId: string },
-): AIProvider {
+export interface RunRecording {
+  /** Serves the recording. Built once per run, and shared by every provider it makes. */
+  replaying?: AIProvider;
+  /** File that calls are appended to. Already truncated and headed. */
+  recordPath?: string;
+}
+
+/**
+ * Prepare one run's record/replay state, before the run starts.
+ *
+ * Everything here is deliberately *per run* rather than per provider, because a
+ * run does not build one provider. The runtime rebuilds it on `reload()`, which
+ * the `admin` tool triggers mid-turn, and both halves of this were wrong when
+ * that state lived on the provider:
+ *
+ * - Recording truncated the file on every rebuild, discarding every call so far
+ *   — including the one whose response *caused* the reload.
+ * - Replay built a fresh {@link replayProvider}, whose "which duplicate have I
+ *   served" counter restarted at zero. A request the run makes twice would be
+ *   answered with the first recorded response both times: not an error, just a
+ *   quietly wrong replay, which is the exact failure this file exists to remove.
+ */
+export function openRun(opts: {
+  recordDir?: string;
+  replayDir?: string;
+  id: string;
+  tokens?: Record<string, string>;
+}): RunRecording {
   if (opts.recordDir && opts.replayDir) {
     throw new Error(
       "replay: --record and --replay are mutually exclusive — a run either produces a recording or consumes one",
     );
   }
   if (opts.replayDir) {
-    const path = fixturePath(opts.replayDir, opts.scenarioId);
-    const fixtures = loadFixtures(path);
-    if (fixtures.length === 0) {
+    const path = fixturePath(opts.replayDir, opts.id);
+    const recording = loadRecording(path);
+    if (recording.fixtures.length === 0) {
       // Falling back to a live call here is the whole failure this avoids: the
       // run would silently stop being deterministic and start costing money.
-      throw new Error(
-        `replay: no recording for scenario "${opts.scenarioId}" at ${path} — record it first with --record`,
-      );
+      throw new Error(`replay: no recording for run "${opts.id}" at ${path} — record it first with --record`);
     }
-    return replayProvider(fixtures);
+    return { replaying: replayProvider(recording.fixtures) };
   }
   if (opts.recordDir) {
-    return recordingProvider(provider, fixtureWriter(fixturePath(opts.recordDir, opts.scenarioId)));
+    return { recordPath: beginRecording(opts.recordDir, opts.id, opts.tokens ?? {}) };
   }
+  return {};
+}
+
+/**
+ * Put the run's record/replay layer around a provider, if either mode is on.
+ *
+ * Called once per provider the runtime builds — which is more than once per run.
+ * All the state it needs was decided by {@link openRun}; this only wraps.
+ */
+export function replayLayer(provider: AIProvider, run: RunRecording): AIProvider {
+  if (run.replaying) return run.replaying;
+  if (run.recordPath) return recordingProvider(provider, recordingWriter(run.recordPath));
   return provider;
 }

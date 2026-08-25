@@ -185,3 +185,38 @@ a live credential.
 
 **Rule:** spot-check "nothing found" with a different method before relaying it,
 especially for anything security-shaped.
+
+## Run-scoped state must not live on a rebuildable object
+
+A component the runtime rebuilds cannot hold state whose lifetime is longer than
+the object. The provider is rebuilt by `reload()` — which the `admin` tool
+triggers mid-turn, so a turn whose first response calls `admin` builds two — and
+the benchmark's record/replay hung both its halves off the provider. Recording
+truncated its file whenever a writer was constructed, so the rebuild discarded
+every call so far, including the one whose response *caused* the reload. Replay
+built a fresh reader whose position in the recording restarted at zero, so a
+request the run made twice was answered with the first recorded response both
+times.
+
+The two failures are worth contrasting. The first was loud on the next replay: a
+missing fixture is an error that names itself. The second was silent, and
+produced a run that looked deterministic and was wrong.
+
+**Rule:** ask what the state's lifetime actually is, then put it on something
+that lives exactly that long — a run's state is decided once, before the run
+starts, and handed to each rebuilt component. "Constructed once" is an
+assumption about a collaborator's lifecycle, not a fact about your own; anything
+initialised in a constructor runs again every time that collaborator is rebuilt.
+
+## A fake collaborator cannot falsify an agreement about a third party
+
+Record/replay passed 24 unit tests against a fake upstream while being unable to
+replay 16 of the benchmark's 20 scenario files. The fake answered whatever it
+was asked, so recording and replay agreed no matter what the prompt contained —
+and what the prompt contained was the whole bug, because scenarios mint fresh
+unguessable witnesses per run and substitute them in.
+
+**Rule:** when a test doubles the thing an agreement is *about*, it can only
+confirm the two sides call each other. If correctness depends on a real input's
+shape — a prompt, a schema, a wire format — one end-to-end run against the real
+thing is not optional coverage, it is the only coverage.

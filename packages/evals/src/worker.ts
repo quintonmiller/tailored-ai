@@ -19,6 +19,7 @@ import { pathToFileURL } from "node:url";
 import { grade, type JudgeFn, scoreMilestones } from "./graders.js";
 import { type HarnessOptions, runOnce } from "./harness.js";
 import { writeWorkerResult } from "./protocol.js";
+import { recordedTokens, runId } from "./replay.js";
 import { traceFacts } from "./routing.js";
 import { mintTokens, substituteTokens } from "./tokens.js";
 import type { RunOutcome, RunResult, Scenario, ScenarioResult } from "./types.js";
@@ -125,10 +126,18 @@ async function main(): Promise<void> {
     // the agent assembled the code correctly, the stub returned the secret, and
     // the assertion was still looking for the literal `{{token:secret}}`.
     // Fresh per repeat, so a value cannot survive from one run into the next.
-    const tokens = mintTokens(scenario.tokens ?? []);
+    //
+    // Except on replay, which reuses what the recording minted. Fresh witnesses
+    // go into the prompt, so a replay that minted its own would send a request
+    // that matched nothing it had recorded — and sixteen of the twenty scenario
+    // files declare witnesses. Freshness is there to stop a *live* model
+    // satisfying a check with a value it never read; replay has no model. See
+    // `Recording` in replay.js.
+    const id = runId(scenario.id, options.seed);
+    const tokens = options.replayDir ? recordedTokens(options.replayDir, id) : mintTokens(scenario.tokens ?? []);
     const scoped = Object.keys(tokens).length ? substituteTokens(scenario, tokens) : scenario;
 
-    const outcome = await runOnce(scoped, options);
+    const outcome = await runOnce(scoped, { ...options, tokens });
     const checks = await grade(scoped, outcome, { judge });
     // Graded whether or not anything asserts on them: a milestone ladder and a
     // fact trace are diagnosis, and the run you most want them for is the one

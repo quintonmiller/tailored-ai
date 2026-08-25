@@ -53,7 +53,7 @@ import {
 import YAML from "yaml";
 import { registerPinnedClock, timeConfigBlock } from "./clock.js";
 import { answerTool, Oracle } from "./oracle.js";
-import { replayLayer } from "./replay.js";
+import { openRun, replayLayer, runId } from "./replay.js";
 import { createSimulation, type Simulation } from "./sim/index.js";
 import type {
   RecordedCall,
@@ -114,10 +114,10 @@ export interface HarnessOptions {
   /** Provider id the agent runs on. Defaults to `openai_compatible`. */
   providerId?: string;
   /**
-   * Write every model call to `<dir>/<scenario-id>.jsonl` as it happens, so the
-   * run can be repeated later without a model.
+   * Write every model call to `<dir>/<scenario-id>-seed<n>.jsonl` as it
+   * happens, so the run can be repeated later without a model.
    *
-   * One file per scenario, because scenarios execute in separate workers and a
+   * One file per run, because scenarios execute in separate workers and a
    * shared file would interleave two runs' calls and read back as divergence.
    */
   recordDir?: string;
@@ -130,6 +130,15 @@ export interface HarnessOptions {
    * costing money. Mutually exclusive with `recordDir`.
    */
   replayDir?: string;
+  /**
+   * The witness values this run is using, for the recording's header.
+   *
+   * Supplied by the caller rather than minted here because the scenario is
+   * substituted before the run starts and the provider is not built until the
+   * first model call — by which point the prompts already carry them. Only
+   * read when recording; on replay the caller got these *from* the recording.
+   */
+  tokens?: Record<string, string>;
   /**
    * Instant every scenario's civil-time reasoning resolves against, as an ISO
    * string. `null` runs on the host clock the way this used to.
@@ -666,6 +675,16 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
   process.env.TAI_HOME = home;
 
   const started = Date.now();
+  // Once per run, before anything is recorded or replayed — not when a provider
+  // is built, because the runtime builds more than one. `reload()` rebuilds it
+  // mid-turn, and both halves of record/replay were wrong when their state
+  // lived on the provider. See `openRun`.
+  const recording = openRun({
+    recordDir: opts.recordDir,
+    replayDir: opts.replayDir,
+    id: runId(scenario.id, opts.seed),
+    tokens: opts.tokens,
+  });
   const recorder = new Recorder();
   // Built once per run, so every agent in a multi-agent scenario drives the same
   // machinery. That is the whole point of a shared world: what one agent unlocks
@@ -788,15 +807,7 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
       // retry belong to the live call, and its usage accounting should see the
       // same numbers either way, so a replayed run reports what the recorded
       // one cost.
-      const layered = replayLayer(built.provider, {
-        recordDir: opts.recordDir,
-        replayDir: opts.replayDir,
-        // The seed is part of the identity, not decoration: `--repeats 3` runs
-        // this same scenario three times with seeds n, n+1, n+2, and one file
-        // per scenario would have each repeat truncate the last. The same seeds
-        // are used on replay, so a record/replay pair still lines up.
-        scenarioId: opts.seed === null ? scenario.id : `${scenario.id}-seed${opts.seed}`,
-      });
+      const layered = replayLayer(built.provider, recording);
       return { provider: recorder.wrap(layered, opts.timeoutMs), model: built.model };
     };
 
