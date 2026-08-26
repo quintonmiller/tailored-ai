@@ -29,6 +29,7 @@ import {
   AgentRuntime,
   createEmbedder,
   createMetaTools,
+  createNote,
   createPluginContext,
   createProvider,
   createTools,
@@ -55,6 +56,7 @@ import { registerPinnedClock, timeConfigBlock } from "./clock.js";
 import { answerTool, Oracle } from "./oracle.js";
 import { createSimulation, type Simulation } from "./sim/index.js";
 import type {
+  MemorySeed,
   RecordedCall,
   RecordedExecution,
   RecordedRequest,
@@ -97,6 +99,15 @@ export interface HarnessOptions {
    */
   thinkingDialect?: string;
   thinking?: string;
+  /**
+   * Whether the agent's memory is injected into the request.
+   *
+   * The arm selector for #542. Undefined leaves core's own default in place
+   * (`false`), which is what every published run so far used — so a scenario
+   * with a seeded corpus and no flag measures the pull-based path, and the same
+   * scenario with `--inject-memory` measures the push-based one.
+   */
+  injectMemory?: boolean;
   /**
    * Provider plugins to load before the runtime is built, e.g.
    * `@tailored-ai/provider-openai`.
@@ -513,6 +524,11 @@ export function buildConfig(scenario: Scenario, opts: HarnessOptions, sim?: Simu
     description: scenario.agent?.description ?? "Benchmark agent.",
     ...(scenario.agent?.instructions ? { instructions: scenario.agent.instructions } : {}),
     ...(scenario.agent?.tools ? { tools: scenario.agent.tools } : {}),
+    // The arm, not a scenario property. `injectMemory` defaults to false in
+    // core, and no published run has ever set it — so "injection on" is an arm
+    // nobody has run, not the baseline. Set here rather than per scenario so
+    // one suite can be run both ways and the two compared.
+    ...(opts.injectMemory === undefined ? {} : { injectMemory: opts.injectMemory }),
     ...(scenario.agent?.extra ?? {}),
   };
 
@@ -789,6 +805,13 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
       ),
     );
 
+    // What the agent already remembers. Written after the runtime is built and
+    // before either path runs, so a chat turn and a room turn get the same
+    // corpus — the run's home is a fresh mkdtemp, so without this the memory
+    // database is empty at turn one and both arms of a memory experiment score
+    // identically for want of anything to recall.
+    seedMemory(db, scenario);
+
     const outcome = scenario.rooms?.length
       ? await runRoomScenario(scenario, runtime, db, agentName, opts, recorder, world, sim)
       : await runChatScenario(scenario, runtime, db, agentName, opts);
@@ -845,6 +868,36 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
     else process.env.TAI_HOME = previousHome;
     rmSync(home, { recursive: true, force: true });
   }
+}
+
+/**
+ * Write the scenario's `memory:` into the run's notes.
+ *
+ * Left unowned (`agent: null`) unless the seed says otherwise: an unowned note
+ * is visible to every agent, which is what a scenario means by "the agent knows
+ * this" and avoids a corpus that silently belongs to nobody in a room scenario
+ * where more than one agent takes a turn.
+ */
+function seedMemory(db: import("better-sqlite3").Database, scenario: Scenario): void {
+  for (const entry of scenario.memory ?? []) createNote(db, memoryNoteInput(entry));
+}
+
+/**
+ * One seed as core's note shape.
+ *
+ * Separate from the write so the mapping is testable without a database: a bare
+ * string is a plain note, and `pinned` is the `pinned` tag, which is what
+ * `listPinnedNotes` looks for alongside `importance >= 0.95`.
+ */
+export function memoryNoteInput(entry: string | MemorySeed): Parameters<typeof createNote>[1] {
+  const seed = typeof entry === "string" ? { content: entry } : entry;
+  const tags = [...(seed.tags ?? []), ...(seed.pinned ? ["pinned"] : [])];
+  return {
+    content: seed.content,
+    ...(tags.length ? { tags } : {}),
+    ...(seed.importance === undefined ? {} : { importance: seed.importance }),
+    ...(seed.agent ? { agent: seed.agent } : {}),
+  };
 }
 
 async function runChatScenario(

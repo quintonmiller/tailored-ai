@@ -100,6 +100,70 @@ whenever the loop declines a call — the derivability gate refusing an ambiguou
 delete is a request with no execution — so `calls_by: {agent, tool, max: 0}` is
 how a scenario asks whether something actually ran.
 
+## Memory — seeding what the agent already knows
+
+`history:` seeds a conversation, `toolResults:` seeds tool output, `world:`
+seeds simulation state. None of them seed what an agent is supposed to remember
+from *before*, and until `memory:` existed nothing did: every run builds its
+home with `mkdtempSync`, so the notes database was empty at turn one and any
+recall scored the cost of an empty query rather than the value of a memory.
+
+```yaml
+tokens: [key]
+memory:
+  - "the staging cluster deploy key is {{token:key}}"
+  - content: "always sign off with OK"
+    pinned: true          # injected regardless of relevance; same as importance: 1
+message: "what's the deploy key for the staging cluster?"
+expect:
+  - reply_mentions_any: ["{{token:key}}"]
+```
+
+A bare string is a plain note. The object form takes `tags`, `importance`,
+`pinned` and `agent`; a note is left unowned unless `agent` names one, because
+an unowned note is visible to every agent, which is what a scenario means by
+"the agent knows this".
+
+Seed with a **witness**. The fact then exists only in memory, so a reply
+containing it proves retrieval rather than confabulation — the same property
+that makes any other witness assertion worth having.
+
+### Which mechanism retrieved it is an arm, not a scenario
+
+`injectMemory` defaults to `false` in core, and no published run has ever set
+it, so "the agent is handed its memory" is an arm nobody has run rather than the
+baseline. `--inject-memory` selects it:
+
+```bash
+pnpm run eval -- --home ~/.tailored-ai --repeats 5
+pnpm run eval -- --home ~/.tailored-ai --repeats 5 --inject-memory
+```
+
+Same scenarios, same assertions, and the **delta between the two runs** is the
+result. The report records `injectMemory` so a reader can tell which arm a
+number came from.
+
+Two things to avoid here. A `prompt_not_contains` on the witness looks like the
+way to separate the arms mechanically, and is the wrong instrument: in the pull
+arm it is a tautology, and in the push arm it fails an agent for being handed
+exactly what the arm exists to hand it. And per the [noise
+floor](#comparing-runs), a delta under roughly three points is not evidence —
+run repeats.
+
+One run of each arm over the shipped memory scenarios (qwen3.6:27b, n=1 — a
+smoke test, not a result) is enough to show what the arms actually change:
+
+| | round-1 prompt | rounds | tool calls | witness handed over |
+|---|---|---|---|---|
+| pull | 2115 tokens | 2 | `recall` | no |
+| push | 2176 tokens | 1 | none | yes |
+
+Same answers on both. So the question the experiment is really asking is not
+"can the agent get the fact" but "what does each route cost" — a round-trip and
+a tool call against roughly sixty tokens of standing context, on a corpus of
+two notes. Whether that trade holds at a realistic corpus size is what repeats
+and more scenarios are for.
+
 ## Replaying a run without a model
 
 ```bash

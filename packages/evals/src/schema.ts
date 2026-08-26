@@ -67,6 +67,24 @@ const roomSpec = z
   })
   .strict();
 
+/**
+ * A note the agent already holds. A bare string is the common case; the object
+ * form is for a scenario that needs the pinned tier, where injection does not
+ * depend on the recall ranker agreeing that the note is relevant.
+ */
+const memorySeed = z.union([
+  z.string().min(1),
+  z
+    .object({
+      content: z.string().min(1),
+      tags: z.array(z.string()).optional(),
+      importance: z.number().min(0).max(1).optional(),
+      pinned: z.boolean().optional(),
+      agent: z.string().optional(),
+    })
+    .strict(),
+]);
+
 const assertion = z
   .object({
     calls_tool: z.string().optional(),
@@ -193,6 +211,7 @@ const scenario = z
       .optional(),
     config: z.record(z.unknown()).optional(),
     history: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string() }).strict()).optional(),
+    memory: z.array(memorySeed).nonempty().optional(),
     rooms: z.array(roomSpec).optional(),
     wake: z.union([wakeStep, z.array(wakeStep).nonempty(), wakeRounds, z.array(wakeRounds).nonempty()]).optional(),
     message: z.string().optional(),

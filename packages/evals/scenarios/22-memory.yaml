@@ -1,0 +1,96 @@
+# Whether an agent can get at what it already knows.
+#
+# Every scenario before these ran against an empty memory database: the harness
+# builds each run on a fresh temp home and never seeded a note, so a recall
+# returned nothing and scored the cost of an empty query rather than the value
+# of a memory. `memory:` seeds the corpus; `--inject-memory` picks the arm.
+#
+# The two arms are meant to be run over the same file and compared:
+#
+#   pnpm run eval -- --filter memory --repeats 5                   # it fetches
+#   pnpm run eval -- --filter memory --repeats 5 --inject-memory   # it is handed
+#
+# The assertions are deliberately the same in both arms, and the *delta between
+# the two runs* is the result. A `prompt_not_contains` on the witness would look
+# like the mechanical separator to reach for, and it is the wrong instrument: in
+# the pull arm it is a tautology (nothing puts the fact there) and in the push
+# arm it fails an agent for being handed exactly what the arm exists to hand it.
+#
+# Per the noise floor, a delta under roughly three points is not evidence — run
+# each arm with repeats.
+#
+# What one run of each actually did (qwen3.6:27b, n=1, so a smoke test and not a
+# result): both arms answered all three correctly. The difference was in how.
+#
+#            round-1 prompt   rounds   tool calls   witness handed over
+#   pull          2115           2       recall            no
+#   push          2176           1        none             yes
+#
+# So on this set injection bought a round and a tool call for ~60 tokens, and
+# changed no answer. Note what that does to the third scenario: it was written
+# expecting to be red without injection, and it is not — the agent reaches for
+# `core_memory` and `recall` unprompted and finds the pinned note itself. Left
+# in, because "the model goes looking without being asked" is worth measuring,
+# and it is the same reflex `does-not-search-memory-for-what-it-was-just-told`
+# scores as a fault when the answer was already in front of it.
+
+- id: recalls-a-fact-nobody-put-in-the-prompt
+  category: memory
+  difficulty: 3
+  intent: >
+    The fact exists only in the agent's notes. A reply containing the witness
+    proves retrieval happened — the value was minted for this run, so it cannot
+    be guessed, confabulated, or produced by a turn that stalled. Which
+    mechanism retrieved it is the arm, not the scenario.
+  tokens: [key]
+  agent:
+    name: nova
+    instructions: "You are Nova. Answer from what you know. Keep replies short."
+    tools: [recall]
+  memory:
+    - "the staging cluster deploy key is {{token:key}}"
+    - "the staging cluster lives in eu-west-2 and is rebuilt every Sunday"
+  message: "what's the deploy key for the staging cluster?"
+  expect:
+    - reply_mentions_any: ["{{token:key}}"]
+
+- id: does-not-invent-a-fact-that-was-never-stored
+  category: memory
+  difficulty: 3
+  intent: >
+    The other half of the pair, and the one that stops the first from being
+    passed by a model that answers confidently regardless. The corpus is
+    adjacent but silent on what is asked, so the only correct turn says it does
+    not know.
+  agent:
+    name: nova
+    instructions: "You are Nova. Answer from what you know. Keep replies short."
+    tools: [recall]
+  memory:
+    - "the staging cluster lives in eu-west-2 and is rebuilt every Sunday"
+    - "the staging cluster's owner is the platform team"
+  message: "what's the deploy key for the staging cluster?"
+  expect:
+    - reply_mentions_any: ["don't", "do not", "not sure", "no record", "nothing", "can't find", "cannot find"]
+
+- id: reads-a-pinned-note-without-being-asked
+  category: memory
+  difficulty: 2
+  intent: >
+    A pinned note is injected regardless of relevance to the message, so this
+    does not depend on the recall ranker agreeing that the note matters. If it
+    fails with injection on, the injection path itself is broken rather than the
+    ranking. It does not discriminate between the arms the way it was written to:
+    without injection the agent goes looking on its own and finds the note
+    anyway, which is a finding rather than a flaw in the scenario.
+  tokens: [style]
+  agent:
+    name: nova
+    instructions: "You are Nova. Keep replies short."
+    tools: [recall]
+  memory:
+    - content: "always sign off with the word {{token:style}}"
+      pinned: true
+  message: "give me a one-line status update on anything at all"
+  expect:
+    - reply_mentions_any: ["{{token:style}}"]
