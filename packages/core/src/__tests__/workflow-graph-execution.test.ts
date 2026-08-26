@@ -18,14 +18,14 @@ class TimedExecutor implements StepExecutor {
 
   constructor(delays: Record<string, number>) {
     this.delays = delays;
-    this.start = Date.now();
+    this.start = performance.now();
   }
 
   async execute(step: WorkflowStepDef, _ctx: StepContext): Promise<StepResult> {
     const delay = this.delays[step.name] ?? 50;
-    this.events.push({ name: step.name, phase: "start", t: Date.now() - this.start });
+    this.events.push({ name: step.name, phase: "start", t: performance.now() - this.start });
     await new Promise((r) => setTimeout(r, delay));
-    this.events.push({ name: step.name, phase: "end", t: Date.now() - this.start });
+    this.events.push({ name: step.name, phase: "end", t: performance.now() - this.start });
     return { output: `done:${step.name}` };
   }
 }
