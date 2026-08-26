@@ -240,11 +240,53 @@ declare module "@tailored-ai/core" {
 }
 ```
 
-Core declares none yet. The first one worth having — transforming an agent
-request before the model sees it, which is what
-[#417](https://github.com/quintonmiller/tailored-ai/issues/417) needs — is
-blocked on the agent loop having no bus to dispatch on. See
-[#534](https://github.com/quintonmiller/tailored-ai/issues/534).
+Core declares one: `agent.context_slots`. See [the loop's bus](#the-loops-bus).
+
+### The loop's bus
+
+That was blocked on a plainer problem: `runAgentLoop` had no bus at all. It
+neither took one nor read one, which is why the loop kept absorbing features
+that belong beside it — `prompt.ts`, `context.ts`, `memory-inject.ts`,
+`chat-live-state.ts`, `watcher.ts` and `load-skill.ts` each append their own
+block from inside, because there was no way to subscribe to "a request is being
+assembled" and hand one back.
+
+`AgentLoopOptions.events` now carries an `EventBus`, filled in by
+`runtime.buildLoopOptions()` from `runtime.events`, so every caller that goes
+through the runtime gets it without changing. It is **optional**: the benchmark
+harness and most tests build loop options by hand, and a loop built without a
+runtime should dispatch to nobody rather than refuse to run.
+
+#### `agent.context_slots`
+
+The first thing dispatched on it, and the first core waterfall: the slot list a
+turn is about to render.
+
+```ts
+bus.onWaterfall("agent.context_slots", async (payload, next) =>
+  next({ ...payload, slots: payload.slots.filter((s) => s.id !== "expensive") }),
+);
+```
+
+The payload carries the turn's `agent`, `sessionId`, `projectId` and
+`userMessage` alongside `slots`, so a subscriber can decide per agent or per
+message without reaching for anything the loop has not already resolved.
+
+Two properties worth knowing:
+
+- **The list arrives before anything renders**, so a subscriber can stop a slot
+  running rather than discard what it produced. A slot that is expensive, or
+  that reads something the subscriber knows is unavailable, is better not called.
+- **An empty chain returns what it was handed**, so a turn with a bus and no
+  subscribers assembles a byte-identical prompt to one with no bus at all. That
+  is what makes the seam safe to land ahead of any consumer, and it is asserted
+  directly rather than assumed.
+
+`renderContextSlots` was chosen as the first consumer because it is already a
+pure function over a slot list: a subscriber needs no knowledge of how the
+system prompt is composed, which is the property
+[#417](https://github.com/quintonmiller/tailored-ai/issues/417) is after. See
+[#548](https://github.com/quintonmiller/tailored-ai/issues/548).
 
 ## Plugin HTTP Routes
 

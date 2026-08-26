@@ -22,6 +22,7 @@ import { loadAllContext, loadContextFiles } from "../context.js";
 import { recordTokenUsage } from "../db/autopilot-queries.js";
 import { getCoreMemory, renderCoreMemory } from "../db/core-memory-queries.js";
 import { getSessionMessages, saveMessage } from "../db/queries.js";
+import type { EventBus } from "../events.js";
 import { hydrateMedia } from "../media/hydrate.js";
 import {
   adaptForCapabilities,
@@ -639,6 +640,24 @@ export interface AgentLoopOptions {
    * re-reads it per turn, so an edit lands without a restart.
    */
   promptSlots?: ConfigDeclaredSlot[];
+  /**
+   * The runtime's event bus, for anything that wants to observe or transform a
+   * turn from outside the loop.
+   *
+   * The loop had no bus at all, and that absence is why it kept absorbing
+   * features that belong beside it: `prompt.ts`, `context.ts`,
+   * `memory-inject.ts`, `chat-live-state.ts`, `watcher.ts` and `load-skill.ts`
+   * each append their own block *from inside*, because there was no way to
+   * subscribe to "a request is being assembled" and hand one back. #417
+   * measures what that costs.
+   *
+   * Optional on purpose. Many callers build loop options by hand — the
+   * benchmark harness and most tests among them — and a loop built without a
+   * runtime should dispatch to nobody rather than refuse to run.
+   * `runtime.buildLoopOptions()` fills it in, so every caller that goes through
+   * the runtime gets it without changing its own call.
+   */
+  events?: EventBus;
 }
 
 /**
@@ -1450,17 +1469,29 @@ async function _runAgentLoopInner(userMessage: string | InboundMessage, opts: Ag
   // narrowing and any per-call extras.
   // Plugin- and config-contributed blocks. Rendered here, placed by core: the
   // contributor said only whether its content changes between turns.
-  const slotBlocks = renderContextSlots(
-    {
-      agent: agentNameForCore,
-      projectId: session.projectId ?? null,
-      sessionId: session.id,
-      userMessage: inboundText(userMessage),
-    },
-    // Registered slots plus whatever config declares. Config ones are rebuilt
-    // per turn so a `file:` edit lands without a restart.
-    [...listContextSlots(), ...slotsFromConfig(opts.promptSlots, (path) => readFileSync(path, "utf8"))],
-  );
+  const slotContext = {
+    agent: agentNameForCore,
+    projectId: session.projectId ?? null,
+    sessionId: session.id,
+    userMessage: inboundText(userMessage),
+  };
+  // Registered slots plus whatever config declares. Config ones are rebuilt
+  // per turn so a `file:` edit lands without a restart.
+  const declaredSlots = [
+    ...listContextSlots(),
+    ...slotsFromConfig(opts.promptSlots, (path) => readFileSync(path, "utf8")),
+  ];
+  // The first core waterfall, and the first thing on the loop's bus. Handed the
+  // list *before* rendering so a subscriber can stop an expensive slot running
+  // at all, not merely discard what it produced.
+  //
+  // With no subscribers this returns the payload it was given, so the assembled
+  // prompt is byte-identical to the one built without a bus — which is what
+  // makes it safe to land ahead of any consumer.
+  const slots = opts.events
+    ? (await opts.events.waterfall("agent.context_slots", { ...slotContext, slots: declaredSlots })).slots
+    : declaredSlots;
+  const slotBlocks = renderContextSlots(slotContext, slots);
 
   const resolvedBase = resolveBase(opts.systemPrompt, { selfModifying: opts.selfModifying });
   const customLayers = resolveCustomLayers(opts.systemPrompt?.custom);
