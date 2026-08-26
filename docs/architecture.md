@@ -6,7 +6,7 @@ Deep notes on the runtime, factories, and how to add new tools/channels/provider
 
 `packages/core/src/runtime.ts` holds all mutable state (config, tools, model provider, time provider) and provides getters that return the current values. Key behaviors:
 
-- **`reload()`** — re-reads `config.yaml`, rebuilds tools, model provider, and time provider. All-or-nothing: keeps previous state on failure.
+- **`reload()`** — re-reads `config.yaml`, rebuilds tools, model provider, and time provider. All-or-nothing: keeps previous state on failure. It can fire **mid-turn**: `updateRawConfig` reloads after every config write, so the `admin` tool lets an agent rebuild its own provider between rounds, and an external edit to `config.yaml` does the same via the watcher. Anything holding per-turn or per-run state on a rebuilt collaborator loses it — see [defensive-patterns.md](./defensive-patterns.md#a-reload-can-rebuild-a-collaborator-in-the-middle-of-a-turn).
 - **`startWatching()`** — uses `fs.watch` with 500ms debounce to auto-reload on config file changes.
 - **`resolveHooks({ agentName?, overrideHooks? })`** — resolves merged hooks for an agent + optional overrides (e.g. cron job hooks).
 - **`generation`** — monotonic counter that increments on each successful reload.

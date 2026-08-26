@@ -185,3 +185,46 @@ a live credential.
 
 **Rule:** spot-check "nothing found" with a different method before relaying it,
 especially for anything security-shaped.
+
+## A reload can rebuild a collaborator in the middle of a turn
+
+`reload()` rebuilds tools, the provider and the time provider. Two paths reach
+it without anyone deciding a turn should end: `updateRawConfig` calls
+`host.reload()` after every config write (`config-write.ts`), and the config
+watcher reloads on an external edit to `config.yaml` after a 500ms debounce
+(`runtime.ts`).
+
+Both are reachable mid-turn. `admin` is a meta tool appended to every top-level
+turn, so a model can rewrite config and rebuild its own provider between one
+round and the next — a turn whose first response calls `admin` runs its
+remaining rounds on a different provider instance than it started on. A person
+editing `config.yaml` while an agent is working does the same thing.
+
+That broke a wrapper which assumed one provider per run and hung per-run state
+on it. Both halves failed, and the contrast is the useful part. One truncated a
+file whenever it was constructed, so the rebuild discarded everything gathered
+so far — including the record of the very call whose response had caused the
+reload. That failure was loud at the next use. The other restarted a position
+counter at zero, so a repeated lookup silently returned the first answer twice:
+no error, just a wrong result that looked right.
+
+**Rule:** ask what a piece of state's lifetime actually is, then put it on
+something that lives exactly that long. State belonging to a run is decided once
+before the run starts and handed to each rebuilt collaborator. "Constructed
+once" is an assumption about someone else's lifecycle, not a fact about your
+own — anything you initialise in a constructor runs again every time that
+collaborator is rebuilt.
+
+## A fake collaborator cannot falsify an agreement about a third party
+
+A wrapper around the model provider passed 24 unit tests against a fake upstream
+while being unable to handle most of the benchmark's real scenarios. The fake
+answered whatever it was asked, so both sides of the wrapper agreed no matter
+what the prompt contained — and the prompt's contents were the entire question,
+because scenarios substitute freshly minted per-run values into it.
+
+**Rule:** a double for the thing an agreement is *about* can only confirm that
+the two sides call each other. Where correctness depends on the shape of a real
+input — a prompt, a schema, a wire format — one run against the real thing is
+not extra coverage on top of the unit tests, it is the only coverage that can
+fail.
