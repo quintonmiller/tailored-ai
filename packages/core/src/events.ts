@@ -446,6 +446,21 @@ export interface RuntimeEventMap {
   "agent.request_assembled": RequestAssembled;
 
   /**
+   * A tool call ran. The counterpart to `agent.pre_tool_use`: that one says a
+   * call is about to happen and can stop it, this one says one did.
+   *
+   * Only calls that actually executed are reported. A refusal — from a
+   * subscriber, the skill allowlist, validation, the approval gate or the
+   * derivability check — returns before this, which is what lets a subscriber
+   * count executions rather than intentions. The same distinction `calls_by`
+   * makes in the benchmark, and for the same reason.
+   *
+   * `args` is what the tool was actually given, so a rewrite by a
+   * `agent.pre_tool_use` subscriber is visible here rather than the original.
+   */
+  "agent.post_tool_use": ToolUsed;
+
+  /**
    * A subscriber is asking the watcher to re-fire routing for a task —
    * bypassing the assignee-transition gate so the same agent runs again.
    * The default StallGuard plugin emits this when it wants a retry; the
@@ -607,6 +622,23 @@ export interface RuntimeEventMap {
   };
 }
 
+/** Payload for `agent.post_tool_use`. */
+export interface ToolUsed {
+  sessionId: string;
+  /** The agent whose turn this is, when it has a name. */
+  agent?: string;
+  /** Project scope, mirroring `session.projectId`. */
+  projectId: string | null;
+  tool: string;
+  /** What the tool was given, after any `agent.pre_tool_use` rewrite. */
+  args: Record<string, unknown>;
+  /** The text the model will see, after the loop's output cap. */
+  output: string;
+  /** False when the tool reported failure. It still ran. */
+  success: boolean;
+  durationMs: number;
+}
+
 /**
  * Payload for `agent.request_assembled`.
  *
@@ -757,6 +789,52 @@ export interface RuntimeWaterfallMap {
    * called than called and discarded.
    */
   "agent.context_slots": ContextSlotWaterfall;
+
+  /**
+   * A tool call the loop is about to run — the seam for policy on any tool,
+   * without the policy knowing the tool or the tool knowing the policy.
+   *
+   * A waterfall rather than a veto-only `emitAsync`, because refusing is the
+   * weaker of the two useful answers. A subscriber can replace `args`, which is
+   * the difference between a guard that says no and one that says "not like
+   * that" — narrow a path, drop a flag, cap a limit.
+   *
+   * Dispatched **before the approval gate**: a rewrite has to happen before a
+   * human is asked, or they approve one call and a different one runs. And
+   * **before validation**, so whatever will actually execute is what gets
+   * validated. A refusal short-circuits the rest, so nothing downstream sees a
+   * call that was stopped here.
+   *
+   * This is not where a ceiling that must outlive a human's approval belongs.
+   * Those live inside the tools — `exec`'s allowlist, the path boundary, the
+   * sandbox — where nothing can reorder them.
+   */
+  "agent.pre_tool_use": PreToolUseWaterfall;
+}
+
+/**
+ * Payload for `agent.pre_tool_use`.
+ */
+export interface PreToolUseWaterfall {
+  sessionId: string;
+  /** The agent whose turn this is, when it has a name. */
+  agent?: string;
+  /** Project scope, mirroring `session.projectId`. */
+  projectId: string | null;
+  /**
+   * The tool about to run. Deliberately not replaceable: swapping the tool
+   * would leave the model's own record of what it called wrong. Refuse this
+   * call and say what to do instead.
+   */
+  tool: string;
+  /** The call's arguments. Replace them to change what runs. */
+  args: Record<string, unknown>;
+  /**
+   * Set to refuse the call. The text is returned to the model in place of the
+   * tool's output, so write it as an instruction — the model reads it and
+   * decides what to do next, and "denied" alone tells it nothing.
+   */
+  deny?: string;
 }
 
 /**

@@ -443,6 +443,7 @@ describe("migrateDefaultPlugins — seed missing builtin: entries", () => {
       "builtin:scope-creep-flagger",
       "builtin:coder-project-guard",
       "builtin:room-announcer",
+      "builtin:tool-called-trigger",
       // then the disabled set
       ...DEFAULT_DISABLED_PLUGIN_MODULES,
     ]);
@@ -763,6 +764,7 @@ describe("loadConfig — default host", () => {
       "builtin:scope-creep-flagger",
       "builtin:coder-project-guard",
       "builtin:room-announcer",
+      "builtin:tool-called-trigger",
       ...DEFAULT_DISABLED_PLUGIN_MODULES,
     ]);
     // The disabled stall-guard is preserved as-is (durable off switch).
