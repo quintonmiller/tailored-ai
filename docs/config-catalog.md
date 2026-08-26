@@ -28,7 +28,7 @@ Fields: **72** · with no read site found: **0**
 | `agent.maxContextTokens` | number | `32768` | 3 | 1 |
 | `agent.maxHistoryTokens` | number | `20000` | 3 | 3 |
 | `agent.maxToolOutputChars` | number | `32000` | 4 | 2 |
-| `agent.maxToolRounds` | number | `10` | 8 | 2 |
+| `agent.maxToolRounds` | number | `10` | 9 | 2 |
 | `agent.temperature` | number | `0.3` | 17 | 6 |
 
 ### `agents`
