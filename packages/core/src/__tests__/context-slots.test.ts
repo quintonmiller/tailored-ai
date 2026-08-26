@@ -97,7 +97,7 @@ describe("placement follows refresh, and nothing else", () => {
   });
 
   it("is empty when nothing applies, so callers can skip the block", () => {
-    expect(renderContextSlots(ctx)).toEqual({ reload: "", turn: "" });
+    expect(renderContextSlots(ctx)).toEqual({ reload: "", turn: "", rendered: [] });
   });
 });
 

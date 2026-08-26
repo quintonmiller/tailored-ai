@@ -40,8 +40,9 @@
  *   subscriptions across reloads are out of scope for the first cut.
  */
 
-import type { ContextSlot, ContextSlotContext } from "./agent/context-slots.js";
+import type { ContextSlot, ContextSlotContext, RenderedSlot } from "./agent/context-slots.js";
 import type { LoopStop } from "./agent/loop.js";
+import type { ChatParams } from "./providers/interface.js";
 import type { WakeReason } from "./rooms/watcher.js";
 
 /**
@@ -421,6 +422,30 @@ export interface RuntimeEventMap {
   };
 
   /**
+   * A request was handed to a provider — the exact one, after the fallback
+   * rung was chosen and after media shaping, and after it was sent.
+   *
+   * Emitted once per wire request, so a round that fell back emits one record
+   * per rung it actually called. `attempt` and `answered` tell them apart; a
+   * rung the capability check skipped never made a request and emits nothing.
+   *
+   * **A faithful copy, not a projection.** Rebuilding this later from session
+   * state would be cheaper and would be wrong: `paramsFor` re-trims history per
+   * rung, so which messages went out depends on which rung answered, and a
+   * reconstruction would confidently produce the head rung's request instead.
+   * Authoritative and wrong is worse than absent.
+   *
+   * Broadcast, deliberately. A subscriber that could rewrite this would make
+   * the record a lie — and it fires after the request was sent, so there is
+   * nothing left to change anyway. `params` is the live object for that reason:
+   * read it, do not mutate it.
+   *
+   * Core emits and stores nothing. Retention, redaction, format and location
+   * are opinions, and they belong to a subscriber.
+   */
+  "agent.request_assembled": RequestAssembled;
+
+  /**
    * A subscriber is asking the watcher to re-fire routing for a task —
    * bypassing the assignee-transition gate so the same agent runs again.
    * The default StallGuard plugin emits this when it wants a retry; the
@@ -580,6 +605,59 @@ export interface RuntimeEventMap {
     name?: string;
     conclusion: "success" | "failure" | "neutral" | "cancelled" | "skipped" | "timed_out";
   };
+}
+
+/**
+ * Payload for `agent.request_assembled`.
+ *
+ * `params` is the request itself, so most of what a consumer wants is already
+ * in it. The other fields are what the loop knows and the request does not:
+ * where in the turn this was, which rung sent it, and how the system prompt
+ * came to be the size it is.
+ */
+export interface RequestAssembled {
+  sessionId: string;
+  /** The agent whose turn this is, when it has a name. */
+  agent?: string;
+  /** Project scope, mirroring `session.projectId`. */
+  projectId: string | null;
+  /**
+   * Round within the turn, 1-based — the same number the loop's own
+   * budget messages use ("3/6 rounds used"), so the two can be read together.
+   */
+  round: number;
+  /**
+   * Which call this is. `"round"` is the normal tool-calling request;
+   * `"final_report"` is the toolless summary the loop makes after exhausting
+   * `maxToolRounds`, which shares a round number with the last one and is
+   * otherwise indistinguishable from it.
+   */
+  phase: "round" | "final_report";
+  /** 0-based rung in the fallback chain. Non-zero means an earlier rung failed. */
+  attempt: number;
+  /** The rung's configured label. */
+  rung: string;
+  /** The model actually asked, which a rung override may change. */
+  model: string;
+  /** True when this request produced the answer; false when it failed and a later rung was tried. */
+  answered: boolean;
+  /**
+   * Exactly what the provider was handed: system prompt, the messages that
+   * survived trimming, tool schemas, sampling, hydrated media. Already sent —
+   * treat as read-only.
+   */
+  params: ChatParams;
+  /**
+   * What each context slot contributed to the system prompt, in render order.
+   * Empty when nothing rendered; absent slots were filtered, threw, or returned
+   * nothing.
+   */
+  slots: RenderedSlot[];
+  /**
+   * Messages the session held before trimming, to read `params.messages.length`
+   * against. The difference is what the budget dropped.
+   */
+  historyLength: number;
 }
 
 /**
