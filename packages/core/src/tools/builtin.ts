@@ -24,6 +24,7 @@ import { createTaskBackend } from "../tasks/factory.js";
 import { AskUserTool } from "./ask-user.js";
 import { BrowserTool } from "./browser.js";
 import { ClaudeCodeTool } from "./claude-code.js";
+import { CodingAgentTool } from "./coding-agent.js";
 import { CollectionsTool } from "./collections.js";
 import { createCustomTools } from "./custom.js";
 import { DocumentsTool } from "./documents.js";
@@ -233,6 +234,11 @@ registerToolFactory("schedule", (config, ctx) => {
 registerToolFactory("claude_code", (config) => {
   if (!config.tools.claude_code?.enabled) return [];
   return [new ClaudeCodeTool(config.tools.claude_code)];
+});
+
+registerToolFactory("coding_agent", (config) => {
+  if (!config.tools.coding_agent?.enabled) return [];
+  return [new CodingAgentTool(config.tools.coding_agent)];
 });
 
 registerToolFactory("browser", (config) => {
