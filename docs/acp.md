@@ -52,6 +52,24 @@ imported on first use. If it is absent the tool fails with an install hint and
 nothing else is affected. Only structural types cross the boundary, so core
 compiles without the package.
 
+### and why it stops here
+
+ACP is an external boundary. It is deliberately **not** how TAI talks to its own
+agents, and the temptation to make it one has been considered and declined
+([#181](https://github.com/quintonmiller/tailored-ai/issues/181)).
+
+Two reasons, both structural. `cwd` is a *required* field on `session/new`, so
+every ACP session is anchored to a workspace — and a room conversation, a
+briefing cron or an email triage turn has no working directory. And the
+protocol's vocabulary is code editing (`fs/read_text_file`, `terminal/*`, edit
+review, plans); rooms, memory tiers, schedules and wake policy have no
+expression in it.
+
+Driving a TAI agent over ACP would also put JSON-RPC in front of `runAgentLoop`
+and replace nothing inside it. What makes internal and external agents
+interchangeable is a contract at the *caller's* level — #181's `AgentHarness` —
+of which this is one implementation.
+
 ## What this gets over `claude_code`
 
 `claude_code` is `execFile` on the `claude` binary with a prompt string. That is
