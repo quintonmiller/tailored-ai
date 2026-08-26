@@ -30,11 +30,11 @@ describe("ExecTool stdin", () => {
 
   it("does not hang when a command reads stdin inside a pipeline", async () => {
     const tool = new ExecTool(undefined, 5000);
-    const started = Date.now();
+    const started = performance.now();
     const result = await tool.execute({ command: "cat | wc -c" }, ctx);
 
     expect(result.success).toBe(true);
     // The shape of the original bug: it would sit here for the whole timeout.
-    expect(Date.now() - started).toBeLessThan(4000);
+    expect(performance.now() - started).toBeLessThan(4000);
   });
 });

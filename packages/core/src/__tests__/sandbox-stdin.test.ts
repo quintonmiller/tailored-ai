@@ -20,13 +20,13 @@ describe("HostSandbox stdin", () => {
     const sandbox = new HostSandbox();
     const handle = await sandbox.prepare({ cwd: process.cwd() });
 
-    const started = Date.now();
+    const started = performance.now();
     // Reads to EOF. With an open pipe this blocks until the 30s default.
     const result = await sandbox.exec(handle, "cat; echo done", { timeoutMs: 5000 });
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("done");
-    expect(Date.now() - started).toBeLessThan(4000);
+    expect(performance.now() - started).toBeLessThan(4000);
   });
 
   it("does not hang when ExecTool routes through the sandbox", async () => {
@@ -40,10 +40,10 @@ describe("HostSandbox stdin", () => {
       sandboxHandle: handle,
     };
 
-    const started = Date.now();
+    const started = performance.now();
     const result = await new ExecTool(undefined, 5000).execute({ command: "cat | wc -c" }, ctx);
 
     expect(result.success).toBe(true);
-    expect(Date.now() - started).toBeLessThan(4000);
+    expect(performance.now() - started).toBeLessThan(4000);
   });
 });
