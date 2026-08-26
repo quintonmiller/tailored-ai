@@ -7,6 +7,7 @@ import { DEFAULT_AUTOPILOT_TASK_PROMPT } from "./autopilot/task-prompt.js";
 import { DEFAULT_BRIEFING_PROMPT } from "./briefing.js";
 import { AGENT_DEFINITION_KEYS, findShapeIssues } from "./config-schema.js";
 import { type DashboardWidget, validateDashboardWidget } from "./dashboard/index.js";
+import { isWaterfallEvent, KNOWN_BROADCAST_EVENTS, listKnownEvents } from "./events.js";
 import type { ThinkingLevel } from "./providers/interface.js";
 import { DEFAULT_SUGGESTIONS_PROMPT } from "./suggestions.js";
 import { META_TOOL_NAMES } from "./tools/tool-factories.js";
@@ -279,6 +280,27 @@ export interface AgentDefinition {
   hooks?: {
     beforeRun?: AgentHook | AgentHook[];
     afterRun?: AgentHook | AgentHook[];
+    /**
+     * Hooks bound to runtime events, keyed by event name.
+     *
+     * `beforeRun` and `afterRun` are two fixed points; this is the rest of the
+     * bus. Anything in `RuntimeEventMap` or `RuntimeWaterfallMap` can be named
+     * here, so config reaches what previously took writing a plugin.
+     *
+     * An unknown event name is reported by `validateConfig` rather than
+     * ignored — the whole point of keying off TAI's own event catalog is that
+     * a typo is a warning instead of a hook that silently never fires.
+     *
+     * ```yaml
+     * hooks:
+     *   on:
+     *     agent.pre_tool_use:
+     *       - when: { tool: exec }
+     *         tool: policy_check
+     *         denyIf: "BLOCK"
+     * ```
+     */
+    on?: Record<string, EventHook | EventHook[]>;
   };
   /**
    * Sandbox kind to run shell/file tools in. Defaults to "host" (no isolation).
@@ -419,6 +441,49 @@ export interface OnlineAgentConfig {
 
 /** @deprecated Use AgentDefinition instead. */
 export type AgentProfile = AgentDefinition;
+
+/**
+ * A hook bound to a runtime event rather than to the start or end of a turn.
+ *
+ * Same idea as {@link AgentHook} — run a registered tool — with the two things
+ * an event needs that a fixed point does not: a way to say *which* occurrences
+ * matter, and a way to act on the result.
+ */
+export interface EventHook {
+  /** Registered tool to invoke. */
+  tool: string;
+  /** Arguments, template-expanded like any other hook's. */
+  args?: Record<string, unknown>;
+  /**
+   * Payload fields that must all match for this hook to run. A plain value is
+   * compared exactly; wrap it in slashes for a regex (`"/^exec$/"`).
+   *
+   * Exact by default deliberately: these gate tool execution, and an unanchored
+   * pattern that quietly matches a neighbouring tool name is the wrong kind of
+   * surprise in a security control.
+   */
+  when?: Record<string, string>;
+  /**
+   * Regex against the tool's output. On a refusable event, a match refuses the
+   * operation and the tool's output becomes the reason the model is shown.
+   *
+   * Ignored on events that cannot be refused — `validateConfig` says so rather
+   * than letting it look like it is doing something.
+   */
+  denyIf?: string;
+  /**
+   * What to do when this hook errors.
+   *
+   * On a refusable event the default is `"abort"`, which refuses the operation.
+   * A policy check that cannot run has not passed, and treating its failure as
+   * approval is the exact shape of the gap #545 found. The refusal names the
+   * hook and the error, so a broken hook is diagnosable rather than mysterious.
+   *
+   * On an event that cannot be refused there is nothing to abort, so a failure
+   * is logged and the run continues regardless of this setting.
+   */
+  onError?: "abort" | "continue";
+}
 
 export interface AgentHook {
   tool: string;
@@ -630,6 +695,9 @@ export const DEFAULT_PLUGIN_MODULES = [
   // must first be switched on would leave them exactly where they were. Costs
   // a registry walk per tool call, and nothing when no workflow declares it.
   "builtin:tool-called-trigger",
+  // On by default and free when unused: it subscribes only to events some
+  // agent actually names under `hooks.on`, so a config with none costs nothing.
+  "builtin:config-hooks",
 ] as const;
 
 /**
@@ -2399,6 +2467,32 @@ export function validateConfig(config: AgentConfig): string[] {
         `agents.${name}.${field} must be a list of names — got ${typeof value}. ` +
           `Write it as a YAML list, or as JSON like ["read", "memory"].`,
       );
+    }
+
+    // Event hooks: the whole reason to key these off TAI's own event catalog is
+    // that a typo can be caught. An unrecognised name would otherwise be a hook
+    // that parses, validates and never fires — the failure this codebase keeps
+    // producing, most recently a whole trigger kind (#561).
+    for (const [event, declared] of Object.entries(agent?.hooks?.on ?? {})) {
+      if (!isWaterfallEvent(event) && !KNOWN_BROADCAST_EVENTS.includes(event as never)) {
+        const known = listKnownEvents();
+        const suggestion = known.find((k) => k.split(".")[1] === event.split(".")[1]);
+        warnings.push(
+          `agents.${name}.hooks.on."${event}" is not a runtime event, so these hooks will never fire.` +
+            (suggestion ? ` Did you mean "${suggestion}"?` : ` Known events: ${known.join(", ")}`),
+        );
+        continue;
+      }
+      // `denyIf` on a broadcast event reads like a control and is not one.
+      if (!isWaterfallEvent(event)) {
+        const hooks = Array.isArray(declared) ? declared : [declared];
+        if (hooks.some((h) => h?.denyIf)) {
+          warnings.push(
+            `agents.${name}.hooks.on."${event}" sets denyIf, but ${event} is a broadcast — it reports something that already happened and cannot be refused. ` +
+              `Use a waterfall event (${[...new Set(listKnownEvents().filter(isWaterfallEvent))].join(", ")}) to refuse.`,
+          );
+        }
+      }
     }
   }
 

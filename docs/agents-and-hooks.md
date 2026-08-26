@@ -248,6 +248,8 @@ agents:
 
 Hooks run tool calls before and/or after the agent loop. They are a first-class feature of agents and work across all entry points: CLI, Discord, HTTP API, webhooks, cron, and delegate.
 
+`beforeRun` and `afterRun` are two fixed points in a turn. [`hooks.on`](#hooks-on-runtime-events) is the rest of the bus — the same idea bound to any runtime event, which is where policy on a tool call lives.
+
 ### Configuration
 
 Hooks can be defined at two levels:
@@ -363,6 +365,73 @@ Shared module used by all entry points:
 - **`hasHooks(hooks)`** / **`EMPTY_HOOKS`** — utilities
 
 `AgentRuntime.resolveHooks({ agentName?, overrideHooks? })` is the main entry point for callers. It reads the agent's hooks from config and merges with any overrides. Each entry point (CLI, Discord, server, delegate, cron) wraps its `runAgentLoop` call with ~5-8 lines of beforeRun/afterRun hook execution.
+
+## Hooks on runtime events
+
+`beforeRun` and `afterRun` are two points in a turn. `hooks.on` binds the same
+kind of hook — run a registered tool — to anything on the runtime bus.
+
+```yaml
+agents:
+  coder:
+    hooks:
+      on:
+        agent.pre_tool_use:
+          - when: { tool: exec }
+            tool: policy_check
+            args: { command: "{{args}}" }
+            denyIf: "BLOCK"
+```
+
+That runs `policy_check` before every `exec` call the coder makes, and refuses
+the call when the tool's output matches `denyIf` — the tool's own output becomes
+the text the model is shown, so it should say what to do instead.
+
+| field | |
+|---|---|
+| `tool` | registered tool to invoke |
+| `args` | template-expanded from the event payload, like any other hook's |
+| `when` | payload fields that must all match. Exact, or `/regex/` between slashes |
+| `denyIf` | regex on the tool's output. Refuses, on events that can be refused |
+| `onError` | `abort` (default on refusable events) or `continue` |
+
+### Four things worth knowing
+
+**The event names are TAI's own.** They come from `RuntimeEventMap` and
+`RuntimeWaterfallMap` — the same catalog plugins subscribe to. So a typo is a
+`validateConfig` warning naming the near miss, not a hook that parses and never
+fires. That failure mode is the one this codebase keeps producing, most recently
+an entire trigger kind ([#561](https://github.com/quintonmiller/tailored-ai/issues/561)).
+
+**Only some events can be refused.** `denyIf` means something on a waterfall
+(`agent.pre_tool_use`, `agent.context_slots`) and nothing on a broadcast, which
+reports what already happened. Setting it on a broadcast is a warning rather
+than a silent no-op.
+
+**A failed policy hook refuses by default.** A check that could not run has not
+passed, and reading its failure as approval is the shape
+[#545](https://github.com/quintonmiller/tailored-ai/issues/545) describes. The
+refusal names the hook and the error so it is diagnosable rather than
+mysterious; `onError: continue` opts out where the hook is genuinely optional.
+
+**Hooks are scoped to their agent.** A hook under `agents.coder` fires on the
+coder's turns, matched against the event's `agent` field. Events with no agent
+on them — task and schedule events — are better served by a plugin today.
+
+Matching is exact by default rather than an unanchored regex, deliberately:
+these gate tool execution, and a pattern quietly matching a neighbouring tool
+name is the wrong kind of surprise in a security control.
+
+Delivered by `builtin:config-hooks`, enabled by default and free when unused —
+it subscribes only to events some agent actually names.
+
+### What this is not
+
+A hook is still a call to a **registered tool**, with the runtime's context. It
+cannot spawn a process. That is a different handler type and a separate
+decision, because it would hand config the ability to run arbitrary code with
+the agent's privileges — worth doing deliberately, with the scrubbed-environment
+rule attached, rather than inheriting it as a side effect.
 
 ## Adding a Cron Job
 

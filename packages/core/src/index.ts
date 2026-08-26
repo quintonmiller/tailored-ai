@@ -177,6 +177,12 @@ export type {
 } from "./acp/client.js";
 export { DEFAULT_ACP_TIMEOUT_MS, decidePermission, runAcpPrompt } from "./acp/client.js";
 export {
+  matchesWhen,
+  type ResolvedEventHooks,
+  resolveEventHooks,
+  runEventHooks,
+} from "./agent/event-hooks.js";
+export {
   type ChunkOptions,
   chunkText,
   type IndexResult,
@@ -272,6 +278,7 @@ export type {
   CronHook,
   CronJobConfig,
   CustomToolConfig,
+  EventHook,
   OnlineAgentConfig,
   PluginEntry,
   TaskWatcherConfig,
@@ -523,6 +530,9 @@ export {
   type AgentCompletedTask,
   type AgentCompletedWorktree,
   type EventBus,
+  isWaterfallEvent,
+  KNOWN_BROADCAST_EVENTS,
+  listKnownEvents,
   type PreToolUseWaterfall,
   type RequestAssembled,
   type RuntimeEvent,
@@ -532,6 +542,7 @@ export {
   type RuntimeWaterfallEvent,
   type RuntimeWaterfallMap,
   type RuntimeWaterfallPayload,
+  registerWaterfallEvent,
   type Subscription,
   type ToolUsed,
   TypedEventBus,
@@ -627,6 +638,7 @@ export {
   emojiForStatus,
 } from "./plugins/agent-notifier.js";
 export { CoderProjectGuard, type CoderProjectGuardOptions } from "./plugins/coder-project-guard.js";
+export { ConfigHooks, type ConfigHooksOptions } from "./plugins/config-hooks.js";
 export { DmMirror, type DmMirrorConfig, type DmMirrorOptions, truncate } from "./plugins/dm-mirror.js";
 export { OwnerNotifier, type OwnerNotifierOptions } from "./plugins/owner-notifier.js";
 export {

@@ -75,6 +75,7 @@ import type {
   AgentDefinition,
   AgentHook,
   CronJobConfig,
+  EventHook,
   ModelEntry,
   OnlineAgentConfig,
 } from "./config.js";
@@ -156,9 +157,36 @@ type _AgentHookMatches = AssertTrue<Identical<z.infer<typeof AgentHookSchema>, A
 /** `beforeRun: {…}` and `beforeRun: [{…}]` are both accepted, as they always were. */
 const HookSlotSchema = z.union([AgentHookSchema, z.array(AgentHookSchema)]);
 
-const HooksSchema = z.object({
+const EventHookSchema = z.object({
+  tool: z.string(),
+  args: z.record(z.unknown()).optional(),
+  when: z.record(z.string()).optional(),
+  denyIf: z.string().optional(),
+  onError: z.enum(["abort", "continue"]).optional(),
+});
+type _EventHookMatches = AssertTrue<Identical<z.infer<typeof EventHookSchema>, EventHook>>;
+
+/** Same one-or-many shape the fixed slots accept. */
+const EventHookSlotSchema = z.union([EventHookSchema, z.array(EventHookSchema)]);
+
+/**
+ * The two fixed points, on their own.
+ *
+ * Cron jobs take hooks as per-run *overrides* merged into an agent's own, so
+ * `on:` has no meaning there — a subscription is not something one scheduled
+ * run turns on for itself.
+ */
+const TurnHooksSchema = z.object({
   beforeRun: HookSlotSchema.optional(),
   afterRun: HookSlotSchema.optional(),
+});
+
+const HooksSchema = TurnHooksSchema.extend({
+  // Open keys on purpose: the event catalog is `RuntimeEventMap`, which plugins
+  // extend by declaration merging, so a closed enum here would reject a
+  // plugin's own event. `validateConfig` checks the names against the live
+  // registry instead, where a plugin's events are visible.
+  on: z.record(EventHookSlotSchema).optional(),
 });
 
 const CommandRulesSchema = z.object({
@@ -385,7 +413,7 @@ export const CronJobConfigSchema = z.object({
     .optional(),
   wakeAgent: z.boolean().optional(),
   newSession: z.boolean().optional(),
-  hooks: HooksSchema.optional(),
+  hooks: TurnHooksSchema.optional(),
   project: z.string().optional(),
 });
 type _CronJobConfigMatches = AssertTrue<Identical<z.infer<typeof CronJobConfigSchema>, CronJobConfig>>;
