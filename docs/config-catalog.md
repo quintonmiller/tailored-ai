@@ -101,7 +101,7 @@ Fields: **72** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `plugins` | array | `[{"module":"builtin:agent-notifier"},{"module":"builtin:owne` | 22 | 71 |
+| `plugins` | array | `[{"module":"builtin:agent-notifier"},{"module":"builtin:owne` | 23 | 72 |
 
 ### `prompts`
 
@@ -159,7 +159,7 @@ Fields: **72** · with no read site found: **0**
 | `taskWatcher.enabled` | boolean | `false` | 37 | **0** |
 | `taskWatcher.maxStallRetries` | number | `1` | 2 | 1 |
 | `taskWatcher.prompt` | string | `Task {{action}}: {{task_title}} ({{task_id}}), status: {{…` | 26 | **0** |
-| `taskWatcher.triggers` | array | `["created","updated"]` | 7 | **0** |
+| `taskWatcher.triggers` | array | `["created","updated"]` | 8 | **0** |
 
 ### `time`
 

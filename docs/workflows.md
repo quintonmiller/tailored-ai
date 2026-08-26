@@ -239,9 +239,40 @@ but the cost/benefit isn't compelling yet.
 | Webhook | `webhooks.routes[].workflow:` | Parallel to `agent:`. |
 | Agent tool | `run_workflow` tool | For nesting workflows from inside agents. |
 | Programmatic | `runtime.runWorkflow(name, input)` | TS callers. |
+| Tool call | `triggers: [{ kind: tool_called, tool: exec }]` | Fires after the tool ran. See below. |
 
 The cron and webhook configs gain a `workflow:` field as a peer of
 `agent:`. Existing configs keep working unchanged.
+
+### `tool_called`
+
+```yaml
+triggers:
+  - kind: tool_called
+    tool: exec
+```
+
+The workflow receives `{ tool, args, output }` — the arguments the tool was
+actually given, and the text the model saw come back.
+
+It fires **after** the call completed, and only for calls that ran: a tool
+refused by a `agent.pre_tool_use` subscriber, the skill allowlist, validation,
+the approval gate or the derivability check never reaches it. So this counts
+executions, not intentions. It cannot block a call — for that, subscribe to
+`agent.pre_tool_use` directly ([architecture.md](./architecture.md#agentpre_tool_use-and-agentpost_tool_use)).
+
+Fire-and-forget: the tool has already returned and the model is waiting on the
+loop, so a workflow's failure is logged rather than surfaced into the turn, and
+a slow workflow never delays a reply.
+
+Delivered by `builtin:tool-called-trigger`, enabled by default. A deployment
+that wants different behaviour disables it and subscribes its own handler.
+
+> This trigger kind was declared, validated and listed in the UI long before
+> anything dispatched it, so a config using it silently did nothing
+> ([#561](https://github.com/quintonmiller/tailored-ai/issues/561)). It could
+> not be fixed on its own: every other trigger kind has a poller, and this one
+> needed a tool-level event on the bus, which did not exist.
 
 ## Storage
 

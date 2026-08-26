@@ -523,6 +523,7 @@ export {
   type AgentCompletedTask,
   type AgentCompletedWorktree,
   type EventBus,
+  type PreToolUseWaterfall,
   type RequestAssembled,
   type RuntimeEvent,
   type RuntimeEventHandler,
@@ -532,6 +533,7 @@ export {
   type RuntimeWaterfallMap,
   type RuntimeWaterfallPayload,
   type Subscription,
+  type ToolUsed,
   TypedEventBus,
   type WaterfallHandler,
   type WaterfallNext,
@@ -650,6 +652,7 @@ export {
   StallGuard,
   type StallGuardOptions,
 } from "./plugins/stall-guard.js";
+export { ToolCalledTrigger, type ToolCalledTriggerOptions } from "./plugins/tool-called-trigger.js";
 export { VerifyGate, type VerifyGateOptions } from "./plugins/verify-gate.js";
 export { type LoadedPlugin, type LoadPluginsOptions, loadPlugins } from "./plugins.js";
 export type {

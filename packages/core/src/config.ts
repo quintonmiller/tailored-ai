@@ -624,6 +624,12 @@ export const DEFAULT_PLUGIN_MODULES = [
   // have closed it. Costs one line per real membership change, and nothing at
   // all for the config-declared subscriptions re-applied on every reload.
   "builtin:room-announcer",
+  // On by default for a sharper reason: `tool_called` has been a validated,
+  // UI-advertised workflow trigger that silently never fired (#561). The fix
+  // has to reach the deployments already relying on the promise, and one that
+  // must first be switched on would leave them exactly where they were. Costs
+  // a registry walk per tool call, and nothing when no workflow declares it.
+  "builtin:tool-called-trigger",
 ] as const;
 
 /**

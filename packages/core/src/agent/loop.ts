@@ -1153,7 +1153,31 @@ async function executeToolCall(
     };
   }
 
-  const validationError = validateToolArgs(tool, call.arguments);
+  // --- Pre-tool-use waterfall ---
+  //
+  // Placed here for two reasons that are easy to get wrong. It runs *before*
+  // the approval gate, because a subscriber that rewrites arguments must do so
+  // before a human is asked — otherwise the human approves one call and a
+  // different one runs. And it runs *before* validation, so whatever will
+  // actually execute is what gets validated, original or rewritten.
+  //
+  // What must stay authoritative after a human says yes does not belong here:
+  // those ceilings live inside the tools themselves — `exec`'s allowlist, the
+  // path boundary, the sandbox — where nothing can reorder them.
+  let args = call.arguments;
+  if (opts.events) {
+    const decided = await opts.events.waterfall("agent.pre_tool_use", {
+      sessionId: opts.session.id,
+      agent: opts.toolContextExtras?.agentName as string | undefined,
+      projectId: opts.session.projectId ?? null,
+      tool: call.name,
+      args: call.arguments,
+    });
+    if (decided.deny) return { output: decided.deny };
+    args = decided.args;
+  }
+
+  const validationError = validateToolArgs(tool, args);
   if (validationError) {
     return {
       output: `Error: ${validationError}. Expected parameters: ${JSON.stringify(Object.keys((tool.parameters as { properties?: Record<string, unknown> }).properties ?? {}))}`,
@@ -1162,7 +1186,7 @@ async function executeToolCall(
 
   // --- Approval gate ---
   let approvalTimeMs: number | undefined;
-  const permission = evaluatePermission(call.name, call.arguments, opts.permissions);
+  const permission = evaluatePermission(call.name, args, opts.permissions);
   if (permission === "approve") {
     if (!opts.approvalHandler) {
       // Nothing can ask: cron, rooms, the task watcher, webhooks — every path
@@ -1185,9 +1209,9 @@ async function executeToolCall(
       const request: ApprovalRequest = {
         requestId: createApprovalRequestId(),
         toolName: call.name,
-        toolArgs: call.arguments,
+        toolArgs: args,
         sessionId: opts.session.id,
-        description: formatApprovalDescription(call.name, call.arguments),
+        description: formatApprovalDescription(call.name, args),
       };
 
       opts.onApprovalRequest?.(request);
@@ -1212,14 +1236,14 @@ async function executeToolCall(
   // everything, and where an agent that resolves "the old one" by guessing does
   // its damage.
   if (approvalTimeMs === undefined && opts.checkDerivability !== false) {
-    if (effectOf(tool, call.arguments) === "irreversible") {
+    if (effectOf(tool, args) === "irreversible") {
       const refusal = await refuseIfAmbiguous({
         provider: opts.provider,
         model: opts.session.model,
         request: opts.userRequest ?? "",
         context: opts.derivabilityContext ?? [],
         toolName: call.name,
-        args: call.arguments,
+        args,
       });
       if (refusal) {
         opts.onDerivabilityRefusal?.(call.name, refusal);
@@ -1234,7 +1258,7 @@ async function executeToolCall(
   // Told before the call, not after: a tool that can page serves a prefix that
   // fits and names the next offset, which is strictly better than being cut
   // middle-out afterwards and leaving the middle unreachable.
-  const result = await tool.execute(call.arguments, { ...context, maxOutputChars: limit });
+  const result = await tool.execute(args, { ...context, maxOutputChars: limit });
   const durationMs = Date.now() - startTime;
   const rawOutput: string | ToolOutput = result.success ? result.output : `Error: ${result.error ?? "Unknown error"}`;
   // Capped here, at the one conversion from ToolResult to the string that
@@ -1254,6 +1278,25 @@ async function executeToolCall(
   } else if (durationMs >= 100) {
     resultOutput = appendToolNote(resultOutput, `[completed in ${durationMs}ms]`);
   }
+  // --- Post-tool-use ---
+  // A record, so a broadcast rather than a waterfall: the call has happened and
+  // there is nothing left to change. Emitted after capping, so a subscriber
+  // sees the string the model will see rather than a fuller one it will not.
+  //
+  // Only calls that actually ran reach here — a refusal from any gate above
+  // returned already — which is what lets a subscriber count executions rather
+  // than intentions.
+  opts.events?.emit("agent.post_tool_use", {
+    sessionId: opts.session.id,
+    agent: opts.toolContextExtras?.agentName as string | undefined,
+    projectId: opts.session.projectId ?? null,
+    tool: call.name,
+    args,
+    output: toolOutputText(resultOutput),
+    success: result.success !== false,
+    durationMs,
+  });
+
   // Read from the same place the output is: a tool that failed can still mean
   // to end the turn, so this is deliberately not gated on `result.success`.
   return { output: resultOutput, endsTurn: result.endsTurn, endsTurnReason: result.endsTurnReason };

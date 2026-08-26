@@ -341,6 +341,53 @@ opinions and belong to a subscriber — a table, an `event_journal`, or a JSONL
 sidecar are all subscriber choices rather than core commitments. See
 [#535](https://github.com/quintonmiller/tailored-ai/issues/535).
 
+#### `agent.pre_tool_use` and `agent.post_tool_use`
+
+Tool-level dispatch: policy on any tool, without the policy knowing the tool or
+the tool knowing the policy.
+
+```ts
+bus.onWaterfall("agent.pre_tool_use", (p, next) => {
+  if (p.tool !== "exec") return next(p);
+  const cmd = String(p.args.command ?? "");
+  if (cmd.includes("--force")) {
+    // Not a refusal — a correction.
+    return next({ ...p, args: { ...p.args, command: cmd.replace("--force", "") } });
+  }
+  return next(p);
+});
+```
+
+`pre_tool_use` is a **waterfall**, because refusing is the weaker of the two
+useful answers. A subscriber may set `deny` (the text goes back to the model in
+place of the tool's output) or replace `args` — the difference between a guard
+that says no and one that says "not like that". The tool name itself is
+deliberately not replaceable: swapping it would leave the model's own record of
+what it called wrong.
+
+Two placement decisions inside `executeToolCall`, both easy to get wrong:
+
+- **Before the approval gate.** A rewrite has to reach the human who approves
+  it, or they approve one call and a different one runs. Asserted directly.
+- **Before validation.** So whatever actually executes is what got validated,
+  original or rewritten. A subscriber is not more trusted than the model.
+
+What must stay authoritative *after* a human says yes does not belong here.
+Those ceilings live inside the tools — `exec`'s allowlist, the path boundary,
+the sandbox — where nothing can reorder them.
+
+`post_tool_use` is a broadcast: the call has happened and there is nothing left
+to change. Only calls that actually ran reach it — a refusal from any gate
+returns earlier — which is what lets a subscriber count executions rather than
+intentions. `args` is what the tool was given, so a rewrite is visible there
+rather than the original.
+
+The first consumer is `builtin:tool-called-trigger`, which runs workflows whose
+`tool_called` trigger names the tool. That trigger had been declared, validated
+and advertised in the UI since long before anything dispatched it
+([#561](https://github.com/quintonmiller/tailored-ai/issues/561)) — it could not
+be fixed until this seam existed.
+
 ## Plugin HTTP Routes
 
 Plugins mount HTTP endpoints on the TAI server through a framework-agnostic seam — core never imports Hono, the dependency direction stays server → core.
