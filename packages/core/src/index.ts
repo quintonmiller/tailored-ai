@@ -13,6 +13,8 @@ export type {
   ConfigDeclaredSlot,
   ContextSlot,
   ContextSlotContext,
+  RenderedSlot,
+  RenderedSlots,
   SlotRefresh,
 } from "./agent/context-slots.js";
 export {
@@ -24,7 +26,7 @@ export {
 } from "./agent/context-slots.js";
 export type { ResolvedHooks } from "./agent/hooks.js";
 export { applyTemplates, EMPTY_HOOKS, executeHooks, hasHooks, mergeHooks, normalizeHooks } from "./agent/hooks.js";
-export type { AgentLoopOptions, ModelCandidate } from "./agent/loop.js";
+export type { AgentLoopOptions, ModelCandidate, SentRequest } from "./agent/loop.js";
 export {
   applyCandidateParams,
   describeTruncation,
@@ -512,6 +514,7 @@ export {
   type AgentCompletedTask,
   type AgentCompletedWorktree,
   type EventBus,
+  type RequestAssembled,
   type RuntimeEvent,
   type RuntimeEventHandler,
   type RuntimeEventMap,

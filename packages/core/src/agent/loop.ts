@@ -100,6 +100,30 @@ export interface ModelCandidate {
 }
 
 /**
+ * One request that reached a provider, reported to `chatWithFallback`'s
+ * observer after the fact.
+ *
+ * `params` is the object handed to the provider, not a copy of it, and by the
+ * time an observer sees it the request has already gone out. Reading it is the
+ * point; mutating it changes nothing but the record.
+ */
+export interface SentRequest {
+  params: ChatParams;
+  candidate: ModelCandidate;
+  /** 0-based position in the chain. Non-zero means an earlier rung failed. */
+  attempt: number;
+  /** Whether this request returned a response, or threw and moved the chain on. */
+  answered: boolean;
+}
+
+/**
+ * Curried so the phase and round are bound where they are known — the loop
+ * body — and the request itself is filled in where it is known: inside
+ * `chatWithFallback`, after the rung was chosen.
+ */
+type RecordRequest = (phase: "round" | "final_report", round: number) => (sent: SentRequest) => void;
+
+/**
  * Fold a rung's overrides into the call's params.
  *
  * Explicitly per-field rather than a spread of the candidate: `undefined` on an
@@ -210,6 +234,10 @@ async function chatOnce(
  * `params` may be a function of the candidate, which is how a rung with a
  * smaller context window gets a request sized for it rather than one built for
  * the head of the chain. A plain object behaves as it always did.
+ *
+ * `onSent` observes each request that actually reached a provider. It is the
+ * only place that can: the request is a function of the rung, and the rung is
+ * chosen here.
  */
 export async function chatWithFallback(
   candidates: ModelCandidate[],
@@ -217,6 +245,7 @@ export async function chatWithFallback(
   onTextDelta?: (text: string) => void,
   onReasoningDelta?: (text: string) => void,
   mediaPolicy: MediaPolicy = DEFAULT_MEDIA_POLICY,
+  onSent?: (sent: SentRequest) => void,
 ): Promise<{ response: ChatResponse; candidate: ModelCandidate; fellBack: boolean }> {
   if (candidates.length === 0) throw new Error("no model candidates configured");
   const paramsFor = typeof params === "function" ? params : () => params;
@@ -247,19 +276,37 @@ export async function chatWithFallback(
         continue;
       }
 
-      const response = await chatOnce(candidate.provider, shaped.params, onTextDelta, onReasoningDelta, isLast);
-      if (i > 0) {
-        // Skipped and failed are different stories and must not be told as one:
-        // a rung the capability check declined never made a request, and
-        // reporting it as a failure sends the operator looking for an outage
-        // rather than for the policy that skipped it.
-        const failed = i - skippedCount;
-        const parts = [failed > 0 ? `${failed} failed` : "", skippedCount > 0 ? `${skippedCount} skipped` : ""].filter(
-          Boolean,
-        );
-        console.warn(`[agent] answered by fallback ${candidate.label} (${candidate.model}) after ${parts.join(", ")}`);
+      // `finally` rather than a line before the call, so an observer can never
+      // see a request that was not sent, and can never change one that was.
+      let answered = false;
+      try {
+        const response = await chatOnce(candidate.provider, shaped.params, onTextDelta, onReasoningDelta, isLast);
+        answered = true;
+        if (i > 0) {
+          // Skipped and failed are different stories and must not be told as one:
+          // a rung the capability check declined never made a request, and
+          // reporting it as a failure sends the operator looking for an outage
+          // rather than for the policy that skipped it.
+          const failed = i - skippedCount;
+          const parts = [
+            failed > 0 ? `${failed} failed` : "",
+            skippedCount > 0 ? `${skippedCount} skipped` : "",
+          ].filter(Boolean);
+          console.warn(
+            `[agent] answered by fallback ${candidate.label} (${candidate.model}) after ${parts.join(", ")}`,
+          );
+        }
+        return { response, candidate, fellBack: i > 0 };
+      } finally {
+        // An observer must not be able to fail a turn. This one runs on the
+        // success path too, where a throw would replace the response the caller
+        // is about to receive with an error from a logger.
+        try {
+          onSent?.({ params: shaped.params, candidate, attempt: i, answered });
+        } catch (e) {
+          console.error(`[agent] request observer threw: ${(e as Error).message}`);
+        }
       }
-      return { response, candidate, fellBack: i > 0 };
     } catch (err) {
       const error = err as Error;
       firstError ??= error;
@@ -1519,6 +1566,39 @@ async function _runAgentLoopInner(userMessage: string | InboundMessage, opts: Ag
 
   const history = getSessionMessages(db, session.id);
 
+  /**
+   * Say what was assembled, once per request that reached a provider.
+   *
+   * Built here rather than at the call sites because the two of them — the
+   * tool-calling round and the toolless final report — differ only in `phase`,
+   * and a record that could not tell them apart would show two requests for the
+   * same round with no way to know which was which.
+   *
+   * `undefined` without a bus, so a loop with no subscribers allocates no
+   * closure per rung and `chatWithFallback` skips the observer entirely.
+   */
+  const recordRequest: RecordRequest | undefined =
+    opts.events &&
+    ((phase, round) => (sent) => {
+      opts.events?.emit("agent.request_assembled", {
+        sessionId: session.id,
+        agent: agentNameForCore,
+        projectId: session.projectId ?? null,
+        round,
+        phase,
+        attempt: sent.attempt,
+        rung: sent.candidate.label,
+        model: sent.params.model,
+        answered: sent.answered,
+        params: sent.params,
+        slots: slotBlocks.rendered,
+        // Read at emit time, not at build time: the array grows as the turn
+        // runs, and the count that matters is the one this request was trimmed
+        // from.
+        historyLength: history.length,
+      });
+    });
+
   const userMsg: Message = { role: "user", content: inboundContent(userMessage) };
   saveMessage(db, session.id, userMsg);
   history.push(userMsg);
@@ -1558,7 +1638,16 @@ async function _runAgentLoopInner(userMessage: string | InboundMessage, opts: Ag
   };
 
   try {
-    return await _runAgentLoopBody(userMessage, opts, context, fullSystemPrompt, systemPromptTokens, history, tailMsg);
+    return await _runAgentLoopBody(
+      userMessage,
+      opts,
+      context,
+      fullSystemPrompt,
+      systemPromptTokens,
+      history,
+      tailMsg,
+      recordRequest,
+    );
   } finally {
     await cleanupSandbox();
   }
@@ -1572,6 +1661,7 @@ async function _runAgentLoopBody(
   systemPromptTokens: number,
   history: Message[],
   tailMsg?: Message,
+  recordRequest?: RecordRequest,
 ): Promise<string> {
   const { provider, session, db, tools, maxToolRounds, maxHistoryTokens, temperature } = opts;
   const tailTokens = tailMsg ? estimateTokens(tailMsg) : 0;
@@ -1808,6 +1898,7 @@ async function _runAgentLoopBody(
       opts.onTextDelta,
       opts.onReasoningDelta,
       opts.mediaPolicy,
+      recordRequest?.("round", rounds),
     );
 
     recordResponseUsage(response);
@@ -2097,6 +2188,11 @@ async function _runAgentLoopBody(
         },
         opts.onTextDelta,
         opts.onReasoningDelta,
+        // No media on this request to shape, so the policy stays at its default
+        // rather than being threaded through; explicit `undefined` only because
+        // the observer sits behind it.
+        undefined,
+        recordRequest?.("final_report", rounds),
       );
       recordResponseUsage(response);
 

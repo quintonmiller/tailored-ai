@@ -115,6 +115,37 @@ export function capSlot(text: string, budgetTokens: number | undefined): string 
 }
 
 /**
+ * What one slot actually put in a turn's prompt.
+ *
+ * Reported at render time rather than worked out later, because once the prompt
+ * is a single string the slot boundaries are gone and the only way back is to
+ * parse headings out of composed text. This is the cheap half of what #417
+ * asks — where the request's size comes from — and it costs a length read.
+ */
+export interface RenderedSlot {
+  id: string;
+  refresh: SlotRefresh;
+  /** Characters this slot contributed, heading included, after any capping. */
+  chars: number;
+  /** Whether the slot's own `budgetTokens` cut it short. */
+  truncated: boolean;
+}
+
+/** The two placed blocks, and an account of what went into them. */
+export interface RenderedSlots {
+  /** Standing blocks, for the system prompt. */
+  reload: string;
+  /** Volatile blocks, for behind the history. */
+  turn: string;
+  /**
+   * Every slot that rendered something, in render order. A slot that was
+   * filtered out by `agents`, threw, or returned nothing does not appear:
+   * this is what the prompt contains, not what was offered.
+   */
+  rendered: RenderedSlot[];
+}
+
+/**
  * Render every applicable slot, split by where it belongs.
  *
  * A slot that throws or returns nothing is skipped and the turn continues. That
@@ -125,8 +156,9 @@ export function capSlot(text: string, budgetTokens: number | undefined): string 
 export function renderContextSlots(
   ctx: ContextSlotContext,
   registered: ContextSlot[] = listContextSlots(),
-): { reload: string; turn: string } {
+): RenderedSlots {
   const parts: Record<SlotRefresh, string[]> = { reload: [], turn: [] };
+  const rendered: RenderedSlot[] = [];
 
   for (const slot of registered) {
     if (!appliesTo(slot, ctx.agent)) continue;
@@ -141,13 +173,24 @@ export function renderContextSlots(
       continue;
     }
     if (!text) continue;
-    const body = capSlot(text.trim(), slot.budgetTokens);
-    parts[slot.refresh].push(slot.title ? `## ${slot.title}\n\n${body}` : body);
+    const trimmedText = text.trim();
+    const body = capSlot(trimmedText, slot.budgetTokens);
+    const part = slot.title ? `## ${slot.title}\n\n${body}` : body;
+    parts[slot.refresh].push(part);
+    // capSlot only ever shortens, so a length difference is exact truncation
+    // detection without comparing the strings themselves.
+    rendered.push({
+      id: slot.id,
+      refresh: slot.refresh,
+      chars: part.length,
+      truncated: body.length !== trimmedText.length,
+    });
   }
 
   return {
     reload: parts.reload.length > 0 ? `\n\n${parts.reload.join("\n\n")}\n` : "",
     turn: parts.turn.length > 0 ? `\n\n${parts.turn.join("\n\n")}\n` : "",
+    rendered,
   };
 }
 

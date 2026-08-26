@@ -288,6 +288,59 @@ system prompt is composed, which is the property
 [#417](https://github.com/quintonmiller/tailored-ai/issues/417) is after. See
 [#548](https://github.com/quintonmiller/tailored-ai/issues/548).
 
+#### `agent.request_assembled`
+
+What the model was actually shown. Broadcast, once per request that reached a
+provider.
+
+```ts
+bus.on("agent.request_assembled", (r) => {
+  if (!r.answered) return; // a rung that failed and moved the chain on
+  appendJsonl(`${home}/requests.jsonl`, {
+    session: r.sessionId,
+    round: r.round,
+    phase: r.phase,
+    system: r.params.messages[0].content,
+    messages: r.params.messages.length,
+    of: r.historyLength,
+    slots: r.slots,
+  });
+});
+```
+
+`params` is the `ChatParams` object the provider was handed — system prompt, the
+messages that survived trimming, tool schemas, sampling, hydrated media. The
+other fields are what the loop knows and the request does not: `round` and
+`phase`, which rung sent it (`attempt`, `rung`, `answered`), the `historyLength`
+the request was trimmed from, and `slots` — what each context slot contributed
+and whether its own budget cut it short.
+
+**A faithful copy, not a projection.** It is cheaper to store the loop's state
+and rebuild the request later, and it is wrong: `paramsFor` re-trims the history
+per fallback rung, so which messages went out depends on which rung answered,
+and a reconstruction from session state would confidently produce the head
+rung's request instead. Authoritative and wrong is worse than absent. The test
+for this asserts object identity rather than deep equality, so a shaping step
+inserted after the record fails the build.
+
+Three consequences of that shape:
+
+- **It fires after the request was sent**, in a `finally` around the provider
+  call. An observer cannot see a request that did not go out, and cannot change
+  one that did — which is why this is `emit` and not a waterfall. A subscriber
+  that could rewrite this would make the record a lie.
+- **A round can emit more than one.** A chain that falls back emits one record
+  per rung it actually called, told apart by `attempt` and `answered`. A rung
+  the capability pre-flight skipped never made a request and emits nothing.
+- **The toolless final report is `phase: "final_report"`.** It shares a round
+  number with the last tool-calling round, and without the field the two are
+  distinguishable only by noticing that one carries no tool schemas.
+
+Core emits and stores nothing. Retention, redaction, format and location are
+opinions and belong to a subscriber — a table, an `event_journal`, or a JSONL
+sidecar are all subscriber choices rather than core commitments. See
+[#535](https://github.com/quintonmiller/tailored-ai/issues/535).
+
 ## Plugin HTTP Routes
 
 Plugins mount HTTP endpoints on the TAI server through a framework-agnostic seam — core never imports Hono, the dependency direction stays server → core.
