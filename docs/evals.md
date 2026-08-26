@@ -150,6 +150,20 @@ exactly what the arm exists to hand it. And per the [noise
 floor](#comparing-runs), a delta under roughly three points is not evidence —
 run repeats.
 
+One run of each arm over the shipped memory scenarios (qwen3.6:27b, n=1 — a
+smoke test, not a result) is enough to show what the arms actually change:
+
+| | round-1 prompt | rounds | tool calls | witness handed over |
+|---|---|---|---|---|
+| pull | 2115 tokens | 2 | `recall` | no |
+| push | 2176 tokens | 1 | none | yes |
+
+Same answers on both. So the question the experiment is really asking is not
+"can the agent get the fact" but "what does each route cost" — a round-trip and
+a tool call against roughly sixty tokens of standing context, on a corpus of
+two notes. Whether that trade holds at a realistic corpus size is what repeats
+and more scenarios are for.
+
 ## Replaying a run without a model
 
 ```bash

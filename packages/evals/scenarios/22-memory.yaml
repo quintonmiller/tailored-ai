@@ -7,8 +7,8 @@
 #
 # The two arms are meant to be run over the same file and compared:
 #
-#   tai-eval run --scenarios ... --repeats 5              # the agent fetches
-#   tai-eval run --scenarios ... --repeats 5 --inject-memory   # it is handed over
+#   pnpm run eval -- --filter memory --repeats 5                   # it fetches
+#   pnpm run eval -- --filter memory --repeats 5 --inject-memory   # it is handed
 #
 # The assertions are deliberately the same in both arms, and the *delta between
 # the two runs* is the result. A `prompt_not_contains` on the witness would look
@@ -16,13 +16,23 @@
 # the pull arm it is a tautology (nothing puts the fact there) and in the push
 # arm it fails an agent for being handed exactly what the arm exists to hand it.
 #
-# The third scenario is expected to be red in the pull arm. That is not a gap,
-# it is the floor: a pinned note is injected regardless of relevance, so if it
-# fails with `--inject-memory` the injection path is broken rather than the
-# ranking.
-#
 # Per the noise floor, a delta under roughly three points is not evidence — run
 # each arm with repeats.
+#
+# What one run of each actually did (qwen3.6:27b, n=1, so a smoke test and not a
+# result): both arms answered all three correctly. The difference was in how.
+#
+#            round-1 prompt   rounds   tool calls   witness handed over
+#   pull          2115           2       recall            no
+#   push          2176           1        none             yes
+#
+# So on this set injection bought a round and a tool call for ~60 tokens, and
+# changed no answer. Note what that does to the third scenario: it was written
+# expecting to be red without injection, and it is not — the agent reaches for
+# `core_memory` and `recall` unprompted and finds the pinned note itself. Left
+# in, because "the model goes looking without being asked" is worth measuring,
+# and it is the same reflex `does-not-search-memory-for-what-it-was-just-told`
+# scores as a fault when the answer was already in front of it.
 
 - id: recalls-a-fact-nobody-put-in-the-prompt
   category: memory
@@ -68,9 +78,11 @@
   difficulty: 2
   intent: >
     A pinned note is injected regardless of relevance to the message, so this
-    one does not depend on the recall ranker agreeing that the note matters. It
-    is the arm's floor: if this fails with injection on, the injection path
-    itself is broken rather than the ranking.
+    does not depend on the recall ranker agreeing that the note matters. If it
+    fails with injection on, the injection path itself is broken rather than the
+    ranking. It does not discriminate between the arms the way it was written to:
+    without injection the agent goes looking on its own and finds the note
+    anyway, which is a finding rather than a flaw in the scenario.
   tokens: [style]
   agent:
     name: nova
