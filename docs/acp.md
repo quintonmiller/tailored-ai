@@ -9,12 +9,26 @@ tools:
   coding_agent:
     enabled: true
     agents:
-      builder:
-        command: some-coding-agent
-        args: ["--acp"]
-    defaultAgent: builder
+      claude:
+        command: claude-code-acp
+        # Claude Code refuses to start inside another Claude Code session.
+        # Clearing these is required when TAI itself was launched from one.
+        env: { CLAUDECODE: "", CLAUDE_CODE_ENTRYPOINT: "" }
+      codex:
+        command: codex-acp
+        # Pin a model: the adapter's bundled Codex fails to parse the live
+        # model list if it names a reasoning level the build predates.
+        args: ["-c", "model=gpt-5.5"]
+    defaultAgent: claude
     permissions: deny        # the default; see below
 ```
+
+**Neither Claude Code nor Codex speaks ACP itself.** `claude` has no ACP mode
+and `codex app-server` is Codex's own protocol. Both are reached through the
+adapters Zed publishes — `@zed-industries/claude-code-acp` and
+`@zed-industries/codex-acp` — which is a good argument for core shipping no
+agent defaults: the thing you launch is usually not the thing you think of as
+the agent, and it moves independently of both.
 
 An agent then calls it like any other tool:
 
@@ -88,6 +102,45 @@ Two details of how the answer is chosen:
 
 If neither kind is on offer, the answer is `cancelled`, which is the protocol's
 own way of saying "no decision" and the safe reading of an unanswerable ask.
+
+### A policy is not a sandbox
+
+**`permissions` decides what TAI answers when it is asked. It cannot stop an
+agent that does not ask.** This is not theoretical — it is what happened the
+first time this was pointed at a real agent:
+
+| agent | `permissions: deny`, told to write a file | |
+|---|---|---|
+| Claude Code | asked, was refused, wrote nothing | `denied: ["Write …/hello.txt"]` |
+| Codex | never asked, wrote the file | `denied: []` |
+
+Codex's own reply says why: *"Automatic approval review approved (risk: low,
+authorization: unknown)."* It has an internal auto-approval that decided the
+write was low-risk, so no `session/request_permission` ever reached the client
+and there was nothing for the policy to answer.
+
+So treat `permissions: deny` as **a preference expressed to a cooperating
+agent**, not as containment. Real containment for an agent that acts without
+asking is the boundary it cannot talk its way past:
+
+- the agent entry's `cwd`, and the calling turn's `workingDirectoryBoundary`;
+- the agent's own settings, where it has them — Codex takes
+  `-c approval_policy=…` and `-c sandbox_mode=…`, which TAI passes through
+  `args` without needing to understand;
+- the OS, via a sandbox. Running the agent through TAI's sandbox seam is the
+  durable answer and is not implemented yet
+  ([#560](https://github.com/quintonmiller/tailored-ai/issues/560)).
+
+## Verified against
+
+Both adapters, on a real account, from this repo's client:
+
+| | handshake | text back | `deny` + write | `allow` + write |
+|---|---|---|---|---|
+| `claude-code-acp` 0.16.2 | ✅ | ✅ | refused, no file | wrote the file |
+| `codex-acp` 0.16.0 | ✅ | ✅ | **auto-approved, wrote the file** | wrote the file |
+
+Round-trip for a one-word reply: ~34s for Claude Code, ~9s for Codex.
 
 ## The working directory
 

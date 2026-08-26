@@ -35,4 +35,12 @@ The session runs inside the calling turn's `workingDirectoryBoundary` when it
 has one, so a subagent is not a hole through a containment the parent turn is
 subject to.
 
+**A policy is not a sandbox, and the docs say so.** Verified against both real
+adapters: told to write a file under `permissions: deny`, Claude Code asked, was
+refused and wrote nothing; Codex never asked and wrote it, having auto-approved
+internally ("risk: low"). The handshake is cooperative by design — ACP lets an
+agent ask, it does not oblige it to — so `deny` is a preference expressed to a
+cooperating agent rather than containment. Running the agent under the sandbox
+seam is the durable answer and is tracked separately.
+
 `claude_code` is untouched. Superseding it is a separate decision.
