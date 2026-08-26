@@ -76,6 +76,7 @@
     }
   },
   "optionalDependencies": {
+    "@agentclientprotocol/sdk": "^1.4.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "pdf-parse": "^1.1.1",
     "tesseract.js": "^5.1.1"

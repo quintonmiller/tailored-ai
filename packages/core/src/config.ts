@@ -1055,6 +1055,39 @@ export interface AgentConfig {
       model?: string;
       timeoutMs?: number;
     };
+    /**
+     * Delegate a coding task to an external agent over the Agent Client
+     * Protocol.
+     *
+     * Core knows the protocol and never a vendor: there is no built-in agent
+     * list and no default command, so `agents` is the only thing that decides
+     * what runs. That is what keeps a protocol client in core from becoming an
+     * integration with one product's CLI.
+     */
+    coding_agent?: {
+      enabled: boolean;
+      /** Agents this deployment can drive, by the name a model will ask for. */
+      agents?: Record<
+        string,
+        {
+          command: string;
+          args?: string[];
+          env?: Record<string, string>;
+          /** Overrides the calling turn's working directory. */
+          cwd?: string;
+        }
+      >;
+      /** Which entry in `agents` to use when the call does not name one. */
+      defaultAgent?: string;
+      /**
+       * What to answer when the agent asks permission to act. Defaults to
+       * `deny`, because an agent asks precisely when it is about to write a
+       * file or run a command, and an unattended path should not say yes on
+       * the owner's behalf.
+       */
+      permissions?: "deny" | "allow";
+      timeoutMs?: number;
+    };
     notify_owner?: {
       enabled: boolean;
       /** Optional outbound channel id override. Defaults to the default channel. */

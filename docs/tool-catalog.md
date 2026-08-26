@@ -11,7 +11,7 @@ This is the *registered* set, not the set any one agent sees: a factory returns
 `[]` when its config gate is off or unconfigured, and an agent's `tools:` allowlist
 narrows further.
 
-Registered factories: **24** · meta-tools always injected: **8**
+Registered factories: **25** · meta-tools always injected: **8**
 
 ## No default for the config gate
 
@@ -26,6 +26,7 @@ not assumed broken.
 | `browser` | `tools.browser` |
 | `browser_mediator` | `tools.browser_mediator` |
 | `claude_code` | `tools.claude_code` |
+| `coding_agent` | `tools.coding_agent` |
 | `md_to_pdf` | `tools.md_to_pdf` |
 | `notify_owner` | `tools.notify_owner` |
 | `trusted_actions` | `trustedActions` |
@@ -39,6 +40,7 @@ not assumed broken.
 | `browser` | `tools.browser` | **none** | `packages/core/src/tools/builtin.ts` |
 | `browser_mediator` | `tools.browser_mediator` | **none** | `packages/core/src/tools/builtin-optional.ts` |
 | `claude_code` | `tools.claude_code` | **none** | `packages/core/src/tools/builtin.ts` |
+| `coding_agent` | `tools.coding_agent` | **none** | `packages/core/src/tools/builtin.ts` |
 | `collections` | `tools.collections` | yes | `packages/core/src/tools/builtin.ts` |
 | `documents` | `tools.documents` | yes | `packages/core/src/tools/builtin.ts` |
 | `edit` | `tools.edit` | yes | `packages/core/src/tools/builtin.ts` |

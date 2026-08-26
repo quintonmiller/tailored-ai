@@ -35,7 +35,7 @@ Fields: **72** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `agents` | object | {} | 32 | 91 |
+| `agents` | object | {} | 33 | 92 |
 
 ### `autopilot`
 
@@ -49,7 +49,7 @@ Fields: **72** · with no read site found: **0**
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
 | `briefing.enabled` | boolean | `false` | 37 | 1 |
-| `briefing.prompt` | string | `You are the user's personal assistant. Write a brief, fri…` | 24 | 1 |
+| `briefing.prompt` | string | `You are the user's personal assistant. Write a brief, fri…` | 26 | 1 |
 | `briefing.ttlMinutes` | number | `30` | 1 | 1 |
 
 ### `channels`
@@ -95,7 +95,7 @@ Fields: **72** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `mcp.servers` | object | {} | 4 | 4 |
+| `mcp.servers` | object | {} | 5 | 5 |
 
 ### `plugins`
 
@@ -142,7 +142,7 @@ Fields: **72** · with no read site found: **0**
 | --- | --- | --- | --- | --- |
 | `suggestions.count` | number | `4` | 11 | 1 |
 | `suggestions.enabled` | boolean | `false` | 37 | 1 |
-| `suggestions.prompt` | string | `You are the user's personal assistant. From the state bel…` | 24 | 1 |
+| `suggestions.prompt` | string | `You are the user's personal assistant. From the state bel…` | 26 | 1 |
 | `suggestions.ttlMinutes` | number | `15` | 1 | 1 |
 
 ### `tasks`
@@ -158,7 +158,7 @@ Fields: **72** · with no read site found: **0**
 | `taskWatcher.debounceMs` | number | `5000` | 1 | **0** |
 | `taskWatcher.enabled` | boolean | `false` | 37 | **0** |
 | `taskWatcher.maxStallRetries` | number | `1` | 2 | 1 |
-| `taskWatcher.prompt` | string | `Task {{action}}: {{task_title}} ({{task_id}}), status: {{…` | 24 | **0** |
+| `taskWatcher.prompt` | string | `Task {{action}}: {{task_title}} ({{task_id}}), status: {{…` | 26 | **0** |
 | `taskWatcher.triggers` | array | `["created","updated"]` | 7 | **0** |
 
 ### `time`

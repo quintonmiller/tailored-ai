@@ -165,6 +165,15 @@ import "./channels/discord-builtin.js";
 // memory backend factory. Same pattern as discord-builtin.
 import "./memory/builtin.js";
 
+export type {
+  AcpAgentSpec,
+  AcpPermissionPolicy,
+  AcpPermissionRequest,
+  AcpPermissionResponse,
+  AcpPromptResult,
+  RunAcpPromptOptions,
+} from "./acp/client.js";
+export { DEFAULT_ACP_TIMEOUT_MS, decidePermission, runAcpPrompt } from "./acp/client.js";
 export {
   type ChunkOptions,
   chunkText,
@@ -938,6 +947,7 @@ export {
   sanitizeToolResult,
 } from "./tools/browser-output-sanitizer.js";
 export { ClaudeCodeTool } from "./tools/claude-code.js";
+export { CodingAgentTool } from "./tools/coding-agent.js";
 export { CollectionsTool } from "./tools/collections.js";
 export type {
   CommandRules,
