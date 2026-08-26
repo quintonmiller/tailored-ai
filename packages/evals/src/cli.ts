@@ -69,6 +69,9 @@ Options
                         re-score it completely (bigger report)
   --timeout <ms>        Per model call (default 300000)
   --thinking <level>    off | auto | low | medium | high (default: the provider's)
+  --inject-memory       Hand the agent's memory to it in the request, instead of
+                        leaving it to fetch what it needs. Core's default is off,
+                        so this is the second arm of a scenario with \`memory:\`.
   --provider-extra <j>  JSON merged into agent.providerExtra, e.g.
                         '{"reasoning_effort":"none","max_completion_tokens":2048}'
   --api-key-env <VAR>   Name of the env var holding the key. Passed to the config as
@@ -274,6 +277,7 @@ async function cmdRun(argv: string[]): Promise<number> {
       timeout: { type: "string" },
       "thinking-dialect": { type: "string" },
       thinking: { type: "string" },
+      "inject-memory": { type: "boolean" },
       "provider-extra": { type: "string" },
       plugins: { type: "string" },
       provider: { type: "string" },
@@ -330,6 +334,7 @@ async function cmdRun(argv: string[]): Promise<number> {
     providerId: values.provider,
     thinkingDialect: values["thinking-dialect"] ?? fromHome.thinkingDialect,
     thinking: values.thinking ?? fromHome.thinking,
+    injectMemory: values["inject-memory"] ? true : undefined,
   };
 
   if (!options.model) {
@@ -417,6 +422,10 @@ async function cmdRun(argv: string[]): Promise<number> {
       // all (#492 was the same bug in a unit test).
       maxTokens: options.maxTokens,
       thinking: options.thinking ?? null,
+      // Which arm this was. Two reports over the same scenarios are only
+      // comparable if the reader can tell whether the agent was handed its
+      // memory or left to fetch it, and nothing else in the report says.
+      injectMemory: options.injectMemory ?? null,
       pinnedAt: options.pinnedAt ?? null,
       timeZone: options.pinnedAt === null ? null : (options.timeZone ?? DEFAULT_TIMEZONE),
       judge: !!values.judge,

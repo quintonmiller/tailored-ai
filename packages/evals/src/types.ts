@@ -51,6 +51,50 @@ export interface HistoryLine {
   content: string;
 }
 
+/**
+ * A note the agent is supposed to already know, written into its memory before
+ * the turn runs.
+ *
+ * `history:` seeds a conversation, `toolResults:` seeds tool output and
+ * `world:` seeds simulation state. None of them seed what an agent is meant to
+ * remember from *before* — so every published run so far has scored memory
+ * against an empty database, which measures the cost of an empty query rather
+ * than the value of a memory.
+ *
+ * Pairs with a witness. Put the fact in a token, seed it only here, and the
+ * assertions can tell retrieval from confabulation:
+ *
+ * ```yaml
+ * tokens: { fact: code }
+ * memory:
+ *   - "the staging cluster deploy key is {{token:fact}}"
+ * message: "what's the staging deploy key?"
+ * expect:
+ *   - prompt_not_contains: "{{token:fact}}"   # nobody handed it over
+ *   - reply_mentions_any: ["{{token:fact}}"]  # and it came back anyway
+ * ```
+ */
+export interface MemorySeed {
+  content: string;
+  tags?: string[];
+  /**
+   * 0..1. At or above 0.95 the note joins the pinned tier and is injected
+   * regardless of relevance to the message, which is how a scenario stops
+   * depending on the recall ranker to make its point.
+   */
+  importance?: number;
+  /** Shorthand for the `pinned` tag. Same effect as `importance: 1`. */
+  pinned?: boolean;
+  /**
+   * Whose note it is. Defaults to unowned, which every agent can see.
+   *
+   * Note that `listNotes` has no agent filter, so an owned note is still
+   * readable by the `recall` tool from any agent; ownership narrows the
+   * *injected* set, not the searchable one.
+   */
+  agent?: string;
+}
+
 export interface AgentSpec {
   /** Name in `config.agents`. Defaults to `bench`. */
   name?: string;
@@ -343,6 +387,16 @@ export interface Scenario {
    * next wake prompt.
    */
   history?: HistoryLine[];
+  /**
+   * What the agent already remembers, written into the run's notes before the
+   * turn. A bare string is a note with no tags and default importance.
+   *
+   * Retrieval is not implied. With injection off and no memory tool in the
+   * agent's reach, a seeded corpus is unreachable and the scenario measures
+   * nothing — which is the point of seeding it: the two arms differ by whether
+   * the fact was *handed over* or *fetched*.
+   */
+  memory?: Array<string | MemorySeed>;
   /** Room scenario: rooms to create, and which one wakes the agent. */
   rooms?: RoomSpec[];
   /**
@@ -991,6 +1045,12 @@ export interface BenchmarkReport {
      */
     maxTokens?: number | null;
     thinking?: string | null;
+    /**
+     * Whether the agent was handed its memory or left to fetch it. Null means
+     * the flag was not passed and core's default (off) applied — which is what
+     * every run before this field existed did.
+     */
+    injectMemory?: boolean | null;
     pinnedAt?: string | null;
     timeZone?: string | null;
     judge: boolean;
