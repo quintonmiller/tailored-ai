@@ -69,7 +69,7 @@ describe("matchesWhen", () => {
 });
 
 describe("runEventHooks", () => {
-  const base = { payload: { tool: "exec" }, sessionId: "s", refusable: true };
+  const base = { event: "agent.pre_tool_use", payload: { tool: "exec" }, sessionId: "s", refusable: true };
 
   it("runs the tool and allows by default", async () => {
     expect(await runEventHooks({ ...base, hooks: [{ tool: "policy_check" }], tools: [says("fine")] })).toEqual({});
@@ -276,7 +276,7 @@ describe("ConfigHooks on the bus", () => {
 });
 
 describe("the handler registry", () => {
-  const base = { payload: { tool: "exec" }, sessionId: "s", refusable: true, tools: [] };
+  const base = { event: "agent.pre_tool_use", payload: { tool: "exec" }, sessionId: "s", refusable: true, tools: [] };
 
   it("ships `tool` and nothing else", () => {
     // What core knows how to do. A handler that spawns a process hands config

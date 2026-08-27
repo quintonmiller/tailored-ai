@@ -71,11 +71,15 @@ export class ConfigHooks {
       if (isWaterfallEvent(event)) {
         this.subscriptions.push(
           bus.onWaterfall(event, async (payload, next) => {
-            const deny = await this.run(entries, payload, true);
+            const { deny, args } = await this.run(entries, payload, true);
             // A refusal short-circuits rather than continuing the chain: handing
             // the payload on with `deny` set would let a later subscriber clear
             // it, and a refusal a subsequent link can undo is not one.
-            return deny ? { ...payload, deny } : next(payload);
+            if (deny) return { ...payload, deny };
+            // A rewrite continues down the chain, because it is not a decision
+            // — a later subscriber should see the corrected call and is free to
+            // refuse it.
+            return next(args ? { ...payload, args } : payload);
           }),
         );
         continue;
@@ -100,24 +104,33 @@ export class ConfigHooks {
     entries: ResolvedEventHooks[],
     payload: Record<string, unknown>,
     refusable: boolean,
-  ): Promise<string | undefined> {
+  ): Promise<{ deny?: string; args?: Record<string, unknown> }> {
     const agent = typeof payload.agent === "string" ? payload.agent : undefined;
     const config = this.runtime.getConfig();
+    // Threaded across agents for the same reason it is threaded across hooks:
+    // whoever looks next should see the call as it now stands.
+    let current = payload;
+    let rewritten: Record<string, unknown> | undefined;
 
     for (const entry of entries) {
       if (entry.agent !== agent) continue;
-      const { deny } = await runEventHooks({
+      const { deny, args } = await runEventHooks({
+        event: entry.event,
         hooks: entry.hooks,
-        payload,
+        payload: current,
         tools: this.runtime.getTools(),
         sessionId: typeof payload.sessionId === "string" ? payload.sessionId : "event-hook",
         refusable,
         promptsConfig: config.prompts,
         logPrefix: `[hooks:${entry.event}]`,
       });
-      if (deny) return deny;
+      if (deny) return { deny };
+      if (args) {
+        rewritten = args;
+        current = { ...current, args };
+      }
     }
-    return undefined;
+    return rewritten ? { args: rewritten } : {};
   }
 }
 

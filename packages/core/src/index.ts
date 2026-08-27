@@ -642,6 +642,7 @@ export {
   buildNotification,
   emojiForStatus,
 } from "./plugins/agent-notifier.js";
+export { readClaudeAnswer, registerClaudeHookHandler } from "./plugins/claude-hooks.js";
 export { CoderProjectGuard, type CoderProjectGuardOptions } from "./plugins/coder-project-guard.js";
 export { ConfigHooks, type ConfigHooksOptions } from "./plugins/config-hooks.js";
 export { DmMirror, type DmMirrorConfig, type DmMirrorOptions, truncate } from "./plugins/dm-mirror.js";

@@ -730,6 +730,13 @@ export const DEFAULT_DISABLED_PLUGIN_MODULES = [
   "builtin:session-summarizer",
   "builtin:verify-gate",
   "builtin:dm-mirror",
+  // Off until asked for, and for a stronger reason than the others here. It
+  // adds the `command` hook handler, which hands *config* the ability to run
+  // arbitrary programs with the agent's privileges. Every other hook can only
+  // reach a tool the deployment already registered and enabled — a real
+  // boundary, and one this removes. Enabling it should be a decision somebody
+  // made, not a default they inherited.
+  "builtin:claude-hooks",
 ] as const;
 
 export interface AgentConfig {

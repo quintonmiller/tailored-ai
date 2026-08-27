@@ -465,6 +465,65 @@ the ability to run arbitrary code with the agent's privileges, which is a
 decision to make when installing a plugin, not one to inherit from the module
 every deployment loads.
 
+### A hook that is a program
+
+`builtin:claude-hooks` adds the `command` handler: run a program, hand it the
+event as JSON on stdin, read its answer off stdout and its exit code.
+
+```yaml
+plugins:
+  - module: builtin:claude-hooks
+    enabled: true          # seeded disabled — see below
+
+agents:
+  coder:
+    hooks:
+      on:
+        agent.pre_tool_use:
+          - type: command
+            when: { tool: exec }
+            options:
+              command: ./.tai/hooks/check-command.sh
+              timeoutMs: 10000
+```
+
+The script gets Claude Code's field names (`hook_event_name`, `tool_name`,
+`tool_input`, `session_id`) and answers in its vocabulary:
+
+| the script does | TAI does |
+|---|---|
+| `exit 2`, message on stderr | refuses, stderr is the reason |
+| `{"hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":"…"}}` | refuses with that reason |
+| `{"hookSpecificOutput":{"updatedInput":{…}}}` | **rewrites** the call |
+| `{"continue":false,"stopReason":"…"}` | refuses |
+| anything else on stdout | advisory — `denyIf` can still match it |
+
+An explicit decision beats the exit code: a script that says exactly why is more
+useful than one that only says no.
+
+**What this is for, honestly.** Not portability. Claude Code's tools are `Bash`,
+`Read`, `Write`, `Edit`; TAI's are `exec`, `read`, `write`, `edit`. Matchers are
+exact, so `"matcher": "Bash"` — the commonest example in the wild — matches
+nothing here, and a borrowed script would run and gate nothing. TAI does **not**
+rename `exec` to `Bash` on the way out, because manufacturing that
+compatibility would send the script's own logic after the wrong thing.
+
+What it delivers is that a hook can be **a program in any language**. Their JSON
+shape is used because it is documented and already implemented by several
+others, not because a borrowed script works unedited.
+
+**It is seeded disabled**, and should be enabled deliberately. Every other hook
+can only reach a tool the deployment already registered; this one runs anything
+on the box with the agent's privileges. The environment handed to it is scrubbed
+of `*_API_KEY`, `*_TOKEN`, `*_SECRET`, `AWS_*`, `OPENAI_*`, `ANTHROPIC_*` and
+`OTEL_*` — not a boundary, since the hook runs as the agent, but hygiene against
+a credential riding along into a subprocess.
+
+One deliberate divergence from their contract: a `command` whose binary does not
+exist **refuses** on a refusable event, where Claude Code would treat a broken
+hook as advisory. The command is named right there in the hook, so its absence
+is unambiguous — the check this call was supposed to get did not happen.
+
 ### Absent is not failed
 
 Two failure modes that look alike and are treated differently on purpose:

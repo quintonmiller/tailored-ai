@@ -43,6 +43,8 @@ export interface ResolvedEventHooks {
 
 /** Everything a handler is given about one occurrence. */
 export interface EventHookContext {
+  /** The event name, so a handler that speaks a dialect can translate it. */
+  event: string;
   /** The declaration, including the handler's own `options`. */
   hook: EventHook;
   /** The event payload, exactly as the bus carried it. */
@@ -71,6 +73,18 @@ export interface EventHookResult {
    * distinction that separates it from a hook that ran and threw.
    */
   skipped?: string;
+  /**
+   * Replacement for the payload's `args`, on an event that carries them.
+   *
+   * The difference between a guard that says no and one that says "not like
+   * that" — narrow a path, drop a flag, cap a limit. A later hook in the same
+   * chain sees the rewritten call, so a second check reviews what will actually
+   * run rather than what was first asked for.
+   *
+   * Ignored on an event that cannot be refused: rewriting a record of something
+   * that already happened would make the record a lie.
+   */
+  args?: Record<string, unknown>;
 }
 
 export type EventHookHandler = (ctx: EventHookContext) => Promise<EventHookResult>;
@@ -174,6 +188,8 @@ export function matchesWhen(payload: Record<string, unknown>, when: Record<strin
 }
 
 export interface RunEventHooksOptions {
+  /** The event these hooks are bound to. */
+  event: string;
   hooks: EventHook[];
   payload: Record<string, unknown>;
   tools: Tool[];
@@ -191,11 +207,18 @@ export interface RunEventHooksOptions {
  * opinion after a refusal changes nothing, and running it would let a later
  * hook's side effects happen on an operation that is not going to occur.
  */
-export async function runEventHooks(opts: RunEventHooksOptions): Promise<{ deny?: string }> {
+export async function runEventHooks(
+  opts: RunEventHooksOptions,
+): Promise<{ deny?: string; args?: Record<string, unknown> }> {
   const prefix = opts.logPrefix ?? "[event-hooks]";
+  // Carried forward across the chain: a hook that rewrites the call is
+  // rewriting it for the hooks after it too, so a later check reviews what will
+  // actually run rather than what was first asked for.
+  let payload = opts.payload;
+  let rewritten: Record<string, unknown> | undefined;
 
   for (const hook of opts.hooks) {
-    if (!matchesWhen(opts.payload, hook.when)) continue;
+    if (!matchesWhen(payload, hook.when)) continue;
 
     const kind = hook.type ?? "tool";
     const handler = handlers.get(kind);
@@ -213,8 +236,9 @@ export async function runEventHooks(opts: RunEventHooksOptions): Promise<{ deny?
 
     try {
       const result = await handler({
+        event: opts.event,
         hook,
-        payload: opts.payload,
+        payload,
         sessionId: opts.sessionId,
         refusable: opts.refusable,
         tools: opts.tools,
@@ -234,6 +258,12 @@ export async function runEventHooks(opts: RunEventHooksOptions): Promise<{ deny?
       if (opts.refusable && hook.denyIf && result.output && new RegExp(hook.denyIf).test(result.output)) {
         return { deny: result.output };
       }
+      // Only where the operation has not happened yet. Rewriting a record of
+      // something already done would make the record a lie.
+      if (opts.refusable && result.args) {
+        rewritten = result.args;
+        payload = { ...payload, args: result.args };
+      }
     } catch (err) {
       const message = `hook "${hook.tool ?? kind}" failed: ${(err as Error).message}`;
       console.error(`${prefix} ${message}`);
@@ -246,7 +276,7 @@ export async function runEventHooks(opts: RunEventHooksOptions): Promise<{ deny?
       }
     }
   }
-  return {};
+  return rewritten ? { args: rewritten } : {};
 }
 
 /** Payload fields a hook's `args` templates can interpolate. */
