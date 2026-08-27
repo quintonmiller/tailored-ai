@@ -190,7 +190,12 @@ describe("resolveEventHooks", () => {
 });
 
 function fakeRuntime(config: AgentConfig, tools: Tool[], events: TypedEventBus): AgentRuntime {
-  return { events, getConfig: () => config, getTools: () => tools } as unknown as AgentRuntime;
+  return {
+    events,
+    getConfig: () => config,
+    getTools: () => tools,
+    agentToolContext: () => ({}),
+  } as unknown as AgentRuntime;
 }
 
 describe("ConfigHooks on the bus", () => {

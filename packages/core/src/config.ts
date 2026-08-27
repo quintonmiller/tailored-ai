@@ -7,7 +7,7 @@ import { DEFAULT_AUTOPILOT_TASK_PROMPT } from "./autopilot/task-prompt.js";
 import { DEFAULT_BRIEFING_PROMPT } from "./briefing.js";
 import { AGENT_DEFINITION_KEYS, findShapeIssues } from "./config-schema.js";
 import { type DashboardWidget, validateDashboardWidget } from "./dashboard/index.js";
-import { isWaterfallEvent, KNOWN_BROADCAST_EVENTS, listKnownEvents } from "./events.js";
+import { isAgentScopedEvent, isWaterfallEvent, KNOWN_BROADCAST_EVENTS, listKnownEvents } from "./events.js";
 import type { ThinkingLevel } from "./providers/interface.js";
 import { DEFAULT_SUGGESTIONS_PROMPT } from "./suggestions.js";
 import { META_TOOL_NAMES } from "./tools/tool-factories.js";
@@ -1038,6 +1038,29 @@ export interface AgentConfig {
     /** Retries allowed when a room refuses the wake for being at its ceiling. */
     maxDeferrals: number;
   };
+  /**
+   * The deployment's own event hooks, as opposed to an agent's.
+   *
+   * `agents.<name>.hooks.on` scopes a hook to one agent, which only works on
+   * events that say which agent they belong to. Most do not — a task
+   * transition, a proposal opening, a compaction are things that happen to the
+   * deployment. Declared here they fire on every occurrence, and `when:` still
+   * narrows them.
+   *
+   * Deliberately only `on`. `beforeRun`/`afterRun` are two points in *an
+   * agent's* turn and mean nothing without one.
+   *
+   * ```yaml
+   * hooks:
+   *   on:
+   *     task.needs_human:
+   *       - tool: notify
+   *         args: { message: "task ${taskId} needs a human" }
+   * ```
+   */
+  hooks?: {
+    on?: Record<string, EventHook | EventHook[]>;
+  };
   agents: Record<string, AgentDefinition>;
   /**
    * How a session is summarised when it is compacted.
@@ -1960,6 +1983,7 @@ const KNOWN_TOP_LEVEL_CONFIG_KEY_MAP: Record<keyof AgentConfig, true> = {
   externalAgents: true,
   cron: true,
   schedules: true,
+  hooks: true,
   agents: true,
   context: true,
   tools: true,
@@ -2050,6 +2074,61 @@ function editDistance(a: string, b: string): number {
  * a newer doc describes but this installed version predates, is silently
  * ignored otherwise (#252). Top-level only — nested bags are open.
  */
+/**
+ * Warnings for one `hooks.on` block.
+ *
+ * The whole reason to key these off TAI's own event catalog is that a mistake
+ * can be caught. A hook that parses, validates and never fires is the failure
+ * this codebase keeps producing — a whole trigger kind advertised and never
+ * dispatched (#561), a `fileBoundary` that never reached the tool context. Each
+ * check below is one way a hook can be silently inert.
+ *
+ * @param agentScoped whether these are declared under an agent, which decides
+ * if an event that names no agent can reach them.
+ */
+function eventHookWarnings(
+  on: Record<string, EventHook | EventHook[]> | undefined,
+  path: string,
+  agentScoped: boolean,
+): string[] {
+  const warnings: string[] = [];
+  for (const [event, declared] of Object.entries(on ?? {})) {
+    if (!isWaterfallEvent(event) && !KNOWN_BROADCAST_EVENTS.includes(event as never)) {
+      const known = listKnownEvents();
+      const suggestion = known.find((k) => k.split(".")[1] === event.split(".")[1]);
+      warnings.push(
+        `${path}."${event}" is not a runtime event, so these hooks will never fire.` +
+          (suggestion ? ` Did you mean "${suggestion}"?` : ` Known events: ${known.join(", ")}`),
+      );
+      continue;
+    }
+
+    // Declared under an agent, on an event that never says which agent it
+    // belongs to. Dispatch scopes by that field, so these hooks bind cleanly
+    // and are then never run — and the fix is a move, not an edit, which is
+    // why the message names the destination.
+    if (agentScoped && !isAgentScopedEvent(event)) {
+      warnings.push(
+        `${path}."${event}" will never fire: ${event} does not say which agent it belongs to, so a hook under an agent cannot be matched to it. ` +
+          `Declare it at the top level (\`hooks.on\`) to run it on every occurrence.`,
+      );
+      continue;
+    }
+
+    // `denyIf` on a broadcast event reads like a control and is not one.
+    if (!isWaterfallEvent(event)) {
+      const hooks = Array.isArray(declared) ? declared : [declared];
+      if (hooks.some((h) => h?.denyIf)) {
+        warnings.push(
+          `${path}."${event}" sets denyIf, but ${event} is a broadcast — it reports something that already happened and cannot be refused. ` +
+            `Use a waterfall event (${[...new Set(listKnownEvents().filter(isWaterfallEvent))].join(", ")}) to refuse.`,
+        );
+      }
+    }
+  }
+  return warnings;
+}
+
 function unknownTopLevelKeys(config: AgentConfig): string[] {
   const supportedList = [...KNOWN_TOP_LEVEL_CONFIG_KEYS].sort().join(", ");
   const found: string[] = [];
@@ -2492,32 +2571,9 @@ export function validateConfig(config: AgentConfig): string[] {
       );
     }
 
-    // Event hooks: the whole reason to key these off TAI's own event catalog is
-    // that a typo can be caught. An unrecognised name would otherwise be a hook
-    // that parses, validates and never fires — the failure this codebase keeps
-    // producing, most recently a whole trigger kind (#561).
-    for (const [event, declared] of Object.entries(agent?.hooks?.on ?? {})) {
-      if (!isWaterfallEvent(event) && !KNOWN_BROADCAST_EVENTS.includes(event as never)) {
-        const known = listKnownEvents();
-        const suggestion = known.find((k) => k.split(".")[1] === event.split(".")[1]);
-        warnings.push(
-          `agents.${name}.hooks.on."${event}" is not a runtime event, so these hooks will never fire.` +
-            (suggestion ? ` Did you mean "${suggestion}"?` : ` Known events: ${known.join(", ")}`),
-        );
-        continue;
-      }
-      // `denyIf` on a broadcast event reads like a control and is not one.
-      if (!isWaterfallEvent(event)) {
-        const hooks = Array.isArray(declared) ? declared : [declared];
-        if (hooks.some((h) => h?.denyIf)) {
-          warnings.push(
-            `agents.${name}.hooks.on."${event}" sets denyIf, but ${event} is a broadcast — it reports something that already happened and cannot be refused. ` +
-              `Use a waterfall event (${[...new Set(listKnownEvents().filter(isWaterfallEvent))].join(", ")}) to refuse.`,
-          );
-        }
-      }
-    }
+    warnings.push(...eventHookWarnings(agent?.hooks?.on, `agents.${name}.hooks.on`, true));
   }
+  warnings.push(...eventHookWarnings(config.hooks?.on, "hooks.on", false));
 
   // Rooms: a subscription naming an agent that doesn't exist, or a ref in the
   // wrong shape, means an agent silently never wakes — the failure mode this

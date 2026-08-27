@@ -198,7 +198,11 @@ export function registerClaudeHookHandler(): () => void {
 
     const args = Array.isArray(options.args) ? options.args.map(String) : [];
     const timeoutMs = typeof options.timeoutMs === "number" ? options.timeoutMs : DEFAULT_TIMEOUT_MS;
-    const cwd = typeof options.cwd === "string" ? options.cwd : undefined;
+    // Where the agent works, unless the hook says otherwise. A default, not a
+    // boundary — nothing here can confine a subprocess, and `command` is the
+    // handler that grants arbitrary execution in the first place. It is here so
+    // a relative path means the same thing to a hook program as to the agent.
+    const cwd = typeof options.cwd === "string" ? options.cwd : ctx.toolContext?.workingDirectoryBoundary;
     const extraEnv =
       options.env && typeof options.env === "object"
         ? Object.fromEntries(Object.entries(options.env as Record<string, unknown>).map(([k, v]) => [k, String(v)]))

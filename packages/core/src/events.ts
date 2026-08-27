@@ -934,6 +934,73 @@ type Identical<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends
 type AssertTrue<T extends true> = T;
 type _BroadcastListMatches = AssertTrue<Identical<keyof RuntimeEventMap, (typeof KNOWN_BROADCAST_EVENTS)[number]>>;
 
+/**
+ * Which events name an agent in their payload, as data.
+ *
+ * A config-declared hook under `agents.<name>` can only be scoped to its agent
+ * if the occurrence says which agent it belongs to. Most events do not: a task
+ * transition, a proposal opening and a compaction are things that happen to a
+ * deployment, not to an agent. Hooks for those belong at the top level.
+ *
+ * Without this list that distinction was invisible — `validateConfig` blessed
+ * every name in the catalog, and the two thirds that carry no agent bound
+ * cleanly and then never fired. Which is precisely the failure the catalog was
+ * introduced to prevent, one level down. The list exists so the warning can
+ * name the problem at config time instead.
+ *
+ * `keyof` rather than assignability: every payload is assignable to
+ * `{ agent?: string }`, because an absent optional property satisfies it. Only
+ * `keyof` distinguishes a payload that declares the field from one that does
+ * not.
+ */
+type NamesAnAgent<T> = "agent" extends keyof T ? true : "agentName" extends keyof T ? true : false;
+type AgentScopedFrom<M> = { [K in keyof M]: NamesAnAgent<M[K]> extends true ? K : never }[keyof M];
+type AgentScopedEvent = AgentScopedFrom<RuntimeEventMap> | AgentScopedFrom<RuntimeWaterfallMap>;
+
+export const AGENT_SCOPED_EVENTS = [
+  "agent.completed",
+  "agent.context_slots",
+  "agent.dispatched",
+  "agent.post_tool_use",
+  "agent.pre_tool_use",
+  "agent.request_assembled",
+  "agent.stalled",
+  "room.membership_changed",
+  "room.turn_ended",
+  "room.woke",
+  "schedule.cancelled",
+  "schedule.created",
+  "schedule.fired",
+  "task.needs_human",
+] as const;
+
+/** Same guard as above, for the same reason: a new event arrives classified or not at all. */
+type _AgentScopedListMatches = AssertTrue<Identical<AgentScopedEvent, (typeof AGENT_SCOPED_EVENTS)[number]>>;
+
+/**
+ * Whether an occurrence of `event` says which agent it belongs to.
+ *
+ * Plugin events are unknown here and answer `false`, which is the safe reading:
+ * it steers a hook toward the top level, where it fires, rather than under an
+ * agent, where it would not.
+ */
+export function isAgentScopedEvent(event: string): boolean {
+  return (AGENT_SCOPED_EVENTS as readonly string[]).includes(event);
+}
+
+/**
+ * The agent an occurrence belongs to, under either spelling.
+ *
+ * Four events say `agentName` where the rest say `agent` — history, not
+ * design. Normalising here rather than at each reader is what keeps a hook's
+ * `when: { agent: … }` meaning one thing across the whole catalog.
+ */
+export function agentOfPayload(payload: Record<string, unknown>): string | undefined {
+  if (typeof payload.agent === "string") return payload.agent;
+  if (typeof payload.agentName === "string") return payload.agentName;
+  return undefined;
+}
+
 export type RuntimeWaterfallEvent = keyof RuntimeWaterfallMap;
 
 export type RuntimeWaterfallPayload<K extends RuntimeWaterfallEvent> = RuntimeWaterfallMap[K];

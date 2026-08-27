@@ -1,7 +1,7 @@
 import { type FSWatcher, statSync, watch } from "node:fs";
 import { resolve } from "node:path";
 import type Database from "better-sqlite3";
-import { resolveAgent } from "./agent/agents.js";
+import { type ResolveAgentOptions, type ResolvedAgent, resolveAgent } from "./agent/agents.js";
 import { EMPTY_HOOKS, mergeHooks, type ResolvedHooks } from "./agent/hooks.js";
 import type { AgentLoopOptions, ModelCandidate } from "./agent/loop.js";
 import { runAgentLoop } from "./agent/loop.js";
@@ -56,7 +56,7 @@ import { globalSandboxRegistry } from "./sandboxes/registry.js";
 import { createTaskBackend } from "./tasks/factory.js";
 import type { TaskBackend } from "./tasks/interface.js";
 import { type ResolvedTimeProvider, resolveTimeProvider } from "./time/provider.js";
-import type { Tool } from "./tools/interface.js";
+import type { Tool, ToolContext } from "./tools/interface.js";
 import { resolveWorkflowsDir } from "./workflows/loader.js";
 import { WorkflowRegistry } from "./workflows/registry.js";
 import type { WorkflowDefinition } from "./workflows/types.js";
@@ -1180,6 +1180,65 @@ export class AgentRuntime {
     };
   }
 
+  /**
+   * The privilege-bearing half of a tool context: who is calling, and the
+   * limits their calls run under.
+   *
+   * One builder rather than one per caller, because the two that existed
+   * disagreed. A tool invoked from a config-declared hook was constructed with
+   * neither the agent's `fileBoundary` nor its `execRules`, so a hook could
+   * reach past a boundary and around a command allowlist that constrained the
+   * very agent whose calls it was there to police. A guard with more authority
+   * than the thing it guards is the wrong way round, and it was only possible
+   * because "the context an agent's tools run with" was assembled in two
+   * places. Now it is assembled here, and a field added to it cannot reach one
+   * caller and miss the other.
+   */
+  private toolContextExtrasFor(resolved: ResolvedAgent, agentName?: string): Partial<ToolContext> {
+    return {
+      agentName: agentName ?? (this._config.agents?.default ? "default" : undefined),
+      // Declared per-agent boundary. Same enforcement the task watcher
+      // injects for worktrees, so an agent granted `write` is confined to
+      // where it is supposed to work rather than the whole filesystem.
+      ...(resolved.fileBoundary ? { workingDirectoryBoundary: resolved.fileBoundary } : {}),
+      ...(resolved.execRules ? { execRules: resolved.execRules } : {}),
+    };
+  }
+
+  /**
+   * What an agent's own tool calls run under, for a caller outside the loop.
+   *
+   * A config-declared hook invokes tools without a turn to borrow a context
+   * from, and has to be given one. Resolving the agent here means the hook
+   * inherits exactly the agent's limits — not the loop's incidental ones, and
+   * not none.
+   */
+  agentToolContext(agentName?: string): Partial<ToolContext> {
+    const resolved = resolveAgent(
+      agentName,
+      this._config,
+      this.getResolvableTools(),
+      undefined,
+      this.contextDir,
+      this.kbDir,
+      this.buildResolveOptions(),
+    );
+    return this.toolContextExtrasFor(resolved, agentName);
+  }
+
+  /** Skill/agent lookups `resolveAgent` needs, in one place for its two callers. */
+  private buildResolveOptions(): ResolveAgentOptions {
+    return {
+      resolveSkill: (id: string) => this._skillRegistry.get(id),
+      describeSkill: (id: string) => {
+        const entry = this._skillRegistry.listWithManifests().find((r) => r.manifest.id === id);
+        return entry ? { description: entry.manifest.description } : undefined;
+      },
+      listSkillIds: () => this._skillRegistry.listWithManifests().map((r) => r.manifest.id),
+      resolveAgentDef: (id: string) => this._agentRegistry.get(id),
+    };
+  }
+
   buildLoopOptions(opts: {
     session: Session;
     agentName?: string;
@@ -1208,14 +1267,7 @@ export class AgentRuntime {
   }): AgentLoopOptions {
     const agentName = opts.agentName ?? opts.profileName;
     const config = this._config;
-    const resolveSkill = (id: string) => this._skillRegistry.get(id);
-    const describeSkill = (id: string) => {
-      const entry = this._skillRegistry.listWithManifests().find((r) => r.manifest.id === id);
-      return entry ? { description: entry.manifest.description } : undefined;
-    };
-    const listSkillIds = () => this._skillRegistry.listWithManifests().map((r) => r.manifest.id);
-    const resolveAgentDef = (id: string) => this._agentRegistry.get(id);
-    const resolveOpts = { resolveSkill, describeSkill, listSkillIds, resolveAgentDef };
+    const resolveOpts = this.buildResolveOptions();
     const resolved = resolveAgent(
       agentName,
       config,
@@ -1313,14 +1365,7 @@ export class AgentRuntime {
       // exploratory worker can still override by passing their own
       // toolContextExtras — those override fields are spread AFTER this
       // in the loop body (see agent/loop.ts ToolContext construction).
-      toolContextExtras: {
-        agentName: agentName ?? (config.agents?.default ? "default" : undefined),
-        // Declared per-agent boundary. Same enforcement the task watcher
-        // injects for worktrees, so an agent granted `write` is confined to
-        // where it is supposed to work rather than the whole filesystem.
-        ...(resolved.fileBoundary ? { workingDirectoryBoundary: resolved.fileBoundary } : {}),
-        ...(resolved.execRules ? { execRules: resolved.execRules } : {}),
-      },
+      toolContextExtras: this.toolContextExtrasFor(resolved, agentName),
       getTools: () => {
         const r = resolveAgent(
           agentName,
