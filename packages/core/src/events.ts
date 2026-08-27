@@ -849,6 +849,91 @@ export interface ContextSlotWaterfall extends ContextSlotContext {
   slots: ContextSlot[];
 }
 
+/**
+ * Waterfall events, as data.
+ *
+ * `RuntimeWaterfallMap` is a type and vanishes at runtime, but anything
+ * dispatching by a name it read from config has to know which mode an event
+ * uses — `onWaterfall` and `on` are not interchangeable. Core's own waterfalls
+ * are listed here; a plugin that declares one through module augmentation
+ * registers it with {@link registerWaterfallEvent} so config-declared hooks can
+ * reach it too.
+ */
+const waterfallEvents = new Set<string>(["agent.context_slots", "agent.pre_tool_use"]);
+
+/** Declare a plugin's waterfall event so config-declared subscribers dispatch it correctly. */
+export function registerWaterfallEvent(event: string): void {
+  waterfallEvents.add(event);
+}
+
+/** Whether `event` is dispatched as a waterfall rather than a broadcast. */
+export function isWaterfallEvent(event: string): boolean {
+  return waterfallEvents.has(event);
+}
+
+/** Every event name a config-declared hook may bind to, in both dispatch modes. */
+export function listKnownEvents(): string[] {
+  return [...new Set([...KNOWN_BROADCAST_EVENTS, ...waterfallEvents])].sort();
+}
+
+/**
+ * Broadcast event names, as data, for the same reason as above.
+ *
+ * Kept beside {@link RuntimeEventMap} and checked against it by a test, so the
+ * two cannot drift: a new event that is not listed here is invisible to config,
+ * which is the failure mode this whole area keeps producing.
+ */
+export const KNOWN_BROADCAST_EVENTS = [
+  "agent.completed",
+  "agent.dispatched",
+  "agent.messaged",
+  "agent.post_tool_use",
+  "agent.request_assembled",
+  "agent.stalled",
+  "agents.pause_changed",
+  "digest.ready",
+  "form.completed",
+  "question.asked",
+  "repo.check.completed",
+  "repo.proposal.closed",
+  "repo.proposal.merged",
+  "repo.proposal.opened",
+  "repo.proposal.reviewed",
+  "room.archived",
+  "room.membership_changed",
+  "room.message",
+  "room.turn_ended",
+  "room.unarchived",
+  "room.woke",
+  "runtime.reloaded",
+  "schedule.cancelled",
+  "schedule.created",
+  "schedule.fired",
+  "session.compacted",
+  "task.commented",
+  "task.created",
+  "task.dispatch_requested",
+  "task.needs_human",
+  "task.transitioned",
+  "task.updated",
+] as const;
+
+/**
+ * Fails the build if {@link KNOWN_BROADCAST_EVENTS} and {@link RuntimeEventMap}
+ * disagree.
+ *
+ * Not a nicety. An event missing from the list is invisible to config-declared
+ * hooks *and* reported by `validateConfig` as "not a runtime event" — so a new
+ * event would arrive already broken for the one audience that cannot read the
+ * type. A compile error is the cheapest possible version of that news.
+ *
+ * Declaration merging means a plugin's own events are not in scope here, which
+ * is correct: they register through {@link registerWaterfallEvent} at runtime.
+ */
+type Identical<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false;
+type AssertTrue<T extends true> = T;
+type _BroadcastListMatches = AssertTrue<Identical<keyof RuntimeEventMap, (typeof KNOWN_BROADCAST_EVENTS)[number]>>;
+
 export type RuntimeWaterfallEvent = keyof RuntimeWaterfallMap;
 
 export type RuntimeWaterfallPayload<K extends RuntimeWaterfallEvent> = RuntimeWaterfallMap[K];
