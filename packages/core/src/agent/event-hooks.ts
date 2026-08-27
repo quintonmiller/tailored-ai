@@ -2,8 +2,8 @@
  * Hooks bound to runtime events.
  *
  * `beforeRun` and `afterRun` are two fixed points. This is the rest of the bus,
- * reachable from config: name any event, filter it, run a registered tool, and
- * — on an event that can be refused — let the tool's answer refuse it.
+ * reachable from config: name any event, filter it, run something, and — on an
+ * event that can be refused — let the answer refuse it.
  *
  * The event catalog is deliberately TAI's own rather than a second one invented
  * for hooks. That is what makes a typo a `validateConfig` warning instead of a
@@ -11,10 +11,22 @@
  * producing (see #561, where a whole trigger kind was advertised and never
  * dispatched).
  *
- * What a hook *is* stays what it was: a call to a registered tool, with the
- * runtime's context. A hook that spawns a process is a different handler type
- * and a separate decision — it hands config the ability to run arbitrary code,
- * which this deliberately does not.
+ * ## What runs a hook is a registry
+ *
+ * Core ships one handler, `tool`, which invokes a registered tool with the
+ * runtime's context. That is the whole of what config could previously reach.
+ *
+ * Anything else — a subprocess speaking someone's wire protocol, an HTTP
+ * endpoint, a model call — registers through {@link registerEventHookHandler}
+ * and reads its own fields out of the opaque `options` bag. Core stays unaware
+ * of them, which is the same split `tasks.backend` and `sandbox.backend` use:
+ * an open selector, an opaque options bag, and no built-in privileged over a
+ * plugin.
+ *
+ * The reason that matters here rather than being tidiness: a handler that
+ * spawns a process hands config the ability to run arbitrary code with the
+ * agent's privileges. That belongs behind a plugin somebody installs on
+ * purpose, not in the module every deployment loads.
  */
 
 import type { AgentConfig, EventHook } from "../config.js";
@@ -28,6 +40,85 @@ export interface ResolvedEventHooks {
   event: string;
   hooks: EventHook[];
 }
+
+/** Everything a handler is given about one occurrence. */
+export interface EventHookContext {
+  /** The declaration, including the handler's own `options`. */
+  hook: EventHook;
+  /** The event payload, exactly as the bus carried it. */
+  payload: Record<string, unknown>;
+  sessionId: string;
+  /** Whether this event can be refused. A `deny` from a handler is ignored when false. */
+  refusable: boolean;
+  /** The runtime's tools, for handlers that invoke one. */
+  tools: Tool[];
+  promptsConfig?: AgentConfig["prompts"];
+}
+
+export interface EventHookResult {
+  /** What the handler produced. `denyIf` is matched against this. */
+  output?: string;
+  /**
+   * An explicit refusal from the handler, independent of `denyIf`. A dialect
+   * with its own refusal vocabulary — an exit code, a decision field — reports
+   * it here rather than encoding it back into text for a regex to find.
+   */
+  deny?: string;
+  /**
+   * Set when nothing ran because the target was absent — a tool that is not
+   * registered, a binary that does not exist. Reported, and never a refusal:
+   * a hook that was never wired never had a verdict to lose, which is the
+   * distinction that separates it from a hook that ran and threw.
+   */
+  skipped?: string;
+}
+
+export type EventHookHandler = (ctx: EventHookContext) => Promise<EventHookResult>;
+
+const handlers = new Map<string, EventHookHandler>();
+
+/**
+ * Register a handler kind. Returns a disposer, so a plugin can undo itself on
+ * reload — the contract every other registration in core now follows.
+ */
+export function registerEventHookHandler(kind: string, handler: EventHookHandler): () => void {
+  handlers.set(kind, handler);
+  return () => {
+    if (handlers.get(kind) === handler) handlers.delete(kind);
+  };
+}
+
+/** Handler kinds available right now. Used to explain an unknown one. */
+export function listEventHookHandlers(): string[] {
+  return [...handlers.keys()].sort();
+}
+
+/**
+ * Core's own handler: call a registered tool.
+ *
+ * Registered here rather than special-cased in the runner, so the built-in goes
+ * through the same path a plugin's does and cannot quietly depend on being
+ * first.
+ */
+registerEventHookHandler("tool", async (ctx) => {
+  const name = ctx.hook.tool;
+  if (!name) throw new Error("a `tool` hook needs a `tool:` name");
+
+  const tool = ctx.tools.find((t) => t.name === name);
+  // Absent, not failed. See the note on the catch in `runEventHooks`.
+  if (!tool) return { skipped: `tool "${name}" is not registered` };
+
+  const args: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(ctx.hook.args ?? {})) {
+    args[key] =
+      typeof value === "string" ? await expandPrompt(value, stringVars(ctx.payload), ctx.promptsConfig) : value;
+  }
+
+  const context: ToolContext = { sessionId: ctx.sessionId, workingDirectory: process.cwd(), env: {} };
+  const result = await tool.execute(args, context);
+  if (result.success === false) throw new Error(result.error ?? "(no detail)");
+  return { output: toolOutputText(result.output) };
+});
 
 /**
  * Collect every config-declared event hook, across agents.
@@ -102,41 +193,54 @@ export interface RunEventHooksOptions {
  */
 export async function runEventHooks(opts: RunEventHooksOptions): Promise<{ deny?: string }> {
   const prefix = opts.logPrefix ?? "[event-hooks]";
-  const context: ToolContext = { sessionId: opts.sessionId, workingDirectory: process.cwd(), env: {} };
 
   for (const hook of opts.hooks) {
     if (!matchesWhen(opts.payload, hook.when)) continue;
 
-    const tool = opts.tools.find((t) => t.name === hook.tool);
-    if (!tool) {
-      // A missing tool is a configuration problem — a disabled plugin, a
-      // renamed tool — and it should not take an unrelated operation down.
-      // Same reading `executeHooks` gives it.
-      console.error(`${prefix} hook tool "${hook.tool}" not found, skipping`);
+    const kind = hook.type ?? "tool";
+    const handler = handlers.get(kind);
+    if (!handler) {
+      // Absent, not failed — the distinction the catch below turns on. Nothing
+      // registered this kind, which is a wiring problem (a plugin that did not
+      // load), and a wiring problem should not take an unrelated operation
+      // down. `listEventHookHandlers()` names what is available so the message
+      // is actionable rather than a shrug.
+      console.error(
+        `${prefix} no handler for hook type "${kind}" — available: ${listEventHookHandlers().join(", ") || "(none)"}`,
+      );
       continue;
     }
 
-    const args: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(hook.args ?? {})) {
-      args[key] =
-        typeof value === "string" ? await expandPrompt(value, stringVars(opts.payload), opts.promptsConfig) : value;
-    }
-
     try {
-      const result = await tool.execute(args, context);
-      if (result.success === false) throw new Error(result.error ?? "(no detail)");
+      const result = await handler({
+        hook,
+        payload: opts.payload,
+        sessionId: opts.sessionId,
+        refusable: opts.refusable,
+        tools: opts.tools,
+        promptsConfig: opts.promptsConfig,
+      });
 
-      const output = toolOutputText(result.output);
-      if (opts.refusable && hook.denyIf && new RegExp(hook.denyIf).test(output)) {
-        return { deny: output };
+      if (result.skipped) {
+        // Same reading as an unregistered handler: a disabled plugin or a
+        // renamed tool is configuration, not a verdict.
+        console.error(`${prefix} ${result.skipped}, skipping`);
+        continue;
+      }
+
+      // A dialect with its own refusal vocabulary reports it directly; `denyIf`
+      // is the text-matching fallback for handlers that only produce output.
+      if (opts.refusable && result.deny) return { deny: result.deny };
+      if (opts.refusable && hook.denyIf && result.output && new RegExp(hook.denyIf).test(result.output)) {
+        return { deny: result.output };
       }
     } catch (err) {
-      const message = `hook "${hook.tool}" failed: ${(err as Error).message}`;
+      const message = `hook "${hook.tool ?? kind}" failed: ${(err as Error).message}`;
       console.error(`${prefix} ${message}`);
       // Fail closed on anything refusable, unless told otherwise. A policy
-      // check that could not run has not passed, and reading its failure as
-      // approval is precisely the gap #545 describes. Named rather than
-      // generic, so a broken hook is diagnosable instead of a mystery refusal.
+      // check that ran and broke has an unknown verdict, and reading that as
+      // approval is precisely the gap #545 describes. Distinct from *absent*
+      // above: a hook that was never wired never had a verdict to lose.
       if (opts.refusable && (hook.onError ?? "abort") === "abort") {
         return { deny: `Refused: a policy hook could not run — ${message}` };
       }

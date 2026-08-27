@@ -425,13 +425,57 @@ name is the wrong kind of surprise in a security control.
 Delivered by `builtin:config-hooks`, enabled by default and free when unused —
 it subscribes only to events some agent actually names.
 
-### What this is not
+### What runs a hook is a registry
 
-A hook is still a call to a **registered tool**, with the runtime's context. It
-cannot spawn a process. That is a different handler type and a separate
-decision, because it would hand config the ability to run arbitrary code with
-the agent's privileges — worth doing deliberately, with the scrubbed-environment
-rule attached, rather than inheriting it as a side effect.
+Core ships one handler, `tool` — invoke a registered tool with the runtime's
+context. That is the whole of what config can reach out of the box, and a hook
+with no `type:` gets it.
+
+Anything else registers:
+
+```ts
+import { registerEventHookHandler } from "@tailored-ai/core";
+
+const dispose = registerEventHookHandler("http", async (ctx) => {
+  const res = await fetch(String(ctx.hook.options?.url), {
+    method: "POST",
+    body: JSON.stringify(ctx.payload),
+  });
+  return { output: await res.text() };
+});
+```
+
+```yaml
+hooks:
+  on:
+    agent.pre_tool_use:
+      - type: http
+        options: { url: "http://localhost:8080/gate" }
+        denyIf: "BLOCK"
+```
+
+`type` is an open string and `options` is opaque to core — the same shape
+`tasks.backend` and `sandbox.backend` use, so no built-in is privileged over a
+plugin. A handler returns `output` for `denyIf` to match, or `deny` directly
+when its dialect has its own refusal vocabulary (an exit code, a decision
+field).
+
+**A handler that spawns a process is deliberately not in core.** It hands config
+the ability to run arbitrary code with the agent's privileges, which is a
+decision to make when installing a plugin, not one to inherit from the module
+every deployment loads.
+
+### Absent is not failed
+
+Two failure modes that look alike and are treated differently on purpose:
+
+| | |
+|---|---|
+| the tool is not registered, or no handler claims the `type` | logged, **skipped** — a disabled plugin should not take an unrelated operation down |
+| the hook ran and threw | **refuses**, on a refusable event — a check with an unknown verdict has not passed |
+
+A hook that was never wired never had a verdict to lose. One that ran and broke
+did.
 
 ## Adding a Cron Job
 

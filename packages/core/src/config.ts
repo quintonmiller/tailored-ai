@@ -450,10 +450,26 @@ export type AgentProfile = AgentDefinition;
  * matter, and a way to act on the result.
  */
 export interface EventHook {
-  /** Registered tool to invoke. */
-  tool: string;
+  /**
+   * Which registered handler runs this hook. Defaults to `"tool"`, the one
+   * core ships.
+   *
+   * An open string, not an enum: a plugin registers its own kind through
+   * `registerEventHookHandler`, and core must not know their names — the same
+   * rule `tasks.backend` and `sandbox.backend` follow.
+   */
+  type?: string;
+  /** Registered tool to invoke. Required by the `tool` handler. */
+  tool?: string;
   /** Arguments, template-expanded like any other hook's. */
   args?: Record<string, unknown>;
+  /**
+   * Handler-specific settings, opaque to core.
+   *
+   * A handler owns its own keys, exactly as a task backend or a sandbox does.
+   * Core never reads inside this.
+   */
+  options?: Record<string, unknown>;
   /**
    * Payload fields that must all match for this hook to run. A plain value is
    * compared exactly; wrap it in slashes for a regex (`"/^exec$/"`).

@@ -158,8 +158,13 @@ type _AgentHookMatches = AssertTrue<Identical<z.infer<typeof AgentHookSchema>, A
 const HookSlotSchema = z.union([AgentHookSchema, z.array(AgentHookSchema)]);
 
 const EventHookSchema = z.object({
-  tool: z.string(),
+  // Open on purpose: a plugin registers its own handler kind, and core must
+  // not know their names.
+  type: z.string().optional(),
+  tool: z.string().optional(),
   args: z.record(z.unknown()).optional(),
+  // Opaque on purpose: the handler owns these keys, not core.
+  options: z.record(z.unknown()).optional(),
   when: z.record(z.string()).optional(),
   denyIf: z.string().optional(),
   onError: z.enum(["abort", "continue"]).optional(),
