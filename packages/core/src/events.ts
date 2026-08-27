@@ -461,6 +461,27 @@ export interface RuntimeEventMap {
   "agent.post_tool_use": ToolUsed;
 
   /**
+   * A human is being asked to approve a tool call.
+   *
+   * The approval path used to run start to finish without the bus hearing
+   * anything, so a deployment could not log its own approvals, notice an agent
+   * hitting the same one repeatedly, or see that it had been blocked on one
+   * nobody answered. Emitted before the approver is asked, so the pair brackets
+   * the wait rather than reporting it after the fact.
+   */
+  "approval.requested": ApprovalRequested;
+
+  /**
+   * How an approval ended — including the case where it never began.
+   *
+   * Always emitted for a call that needed approval, whatever happened to it.
+   * That completeness is what makes it an audit trail: a record that covered
+   * only the calls a person saw would be silent about the ones that ran because
+   * nobody was there to ask.
+   */
+  "approval.settled": ApprovalSettled;
+
+  /**
    * A subscriber is asking the watcher to re-fire routing for a task —
    * bypassing the assignee-transition gate so the same agent runs again.
    * The default StallGuard plugin emits this when it wants a retry; the
@@ -623,6 +644,59 @@ export interface RuntimeEventMap {
 }
 
 /** Payload for `agent.post_tool_use`. */
+/**
+ * Payload for `approval.requested` — a human is being asked about a tool call.
+ *
+ * Emitted only when somebody is actually asked. The unattended case, where a
+ * call needed approval and no approver existed, reaches the bus as an
+ * `approval.settled` with `outcome: "unattended"` and no request before it —
+ * which is the point: an audit that showed only the approvals that happened
+ * would be silent about exactly the calls nobody saw.
+ */
+export interface ApprovalRequested {
+  sessionId: string;
+  /** The agent whose turn this is, when it has a name. */
+  agent?: string;
+  /** Project scope, mirroring `session.projectId`. */
+  projectId: string | null;
+  tool: string;
+  /** Joins this to the tool events for the same call. */
+  toolUseId: string;
+  /** The approval request's own id, joining this to its `approval.settled`. */
+  requestId: string;
+  /** Exactly what the approver was shown, not a reconstruction of it. */
+  description: string;
+}
+
+/** Payload for `approval.settled` — how an approval ended, including not happening. */
+export interface ApprovalSettled {
+  sessionId: string;
+  agent?: string;
+  projectId: string | null;
+  tool: string;
+  toolUseId: string;
+  /** Absent when nobody was asked, which is what `unattended` means. */
+  requestId?: string;
+  /**
+   * `unattended` is not a decision — it is a call that needed one on a path
+   * with no approver: cron, a room wake, the task watcher. Whether it then ran
+   * is `permissions.noHandlerAction`, and this is the only place that fact
+   * becomes visible per call rather than as a one-time warning in a log.
+   */
+  outcome: "approved" | "rejected" | "unattended";
+  /**
+   * True when the answer came from the clock rather than a person.
+   * `{ outcome: "approved", timedOut: true }` is `timeoutAction: auto_approve`
+   * firing — the case an auditor most wants to be able to find, and the one
+   * that reads exactly like a human approval if the fact is not carried.
+   */
+  timedOut: boolean;
+  /** The approver's stated reason, when they gave one. */
+  reason?: string;
+  /** How long the answer took. Absent when nobody was asked. */
+  responseTimeMs?: number;
+}
+
 export interface ToolUsed {
   sessionId: string;
   /** The agent whose turn this is, when it has a name. */
@@ -630,6 +704,14 @@ export interface ToolUsed {
   /** Project scope, mirroring `session.projectId`. */
   projectId: string | null;
   tool: string;
+  /**
+   * The provider's id for this call — the same one `agent.pre_tool_use` and the
+   * approval events carry, so a subscriber can join what was proposed, what was
+   * approved, and what actually ran.
+   */
+  toolUseId: string;
+  /** Where the call ran. */
+  cwd: string;
   /** What the tool was given, after any `agent.pre_tool_use` rewrite. */
   args: Record<string, unknown>;
   /** The text the model will see, after the loop's output cap. */
@@ -827,6 +909,17 @@ export interface PreToolUseWaterfall {
    * call and say what to do instead.
    */
   tool: string;
+  /**
+   * The provider's id for this call, carried on every event it produces.
+   *
+   * What makes the tool events joinable. Without it a subscriber sees a tool
+   * name and cannot tell one `exec` in a turn from the next, so it can count
+   * calls but never follow one — and "did the call I let through do what it
+   * said" has no way to be asked.
+   */
+  toolUseId: string;
+  /** Where the call runs. A hook otherwise has to guess at it. */
+  cwd: string;
   /** The call's arguments. Replace them to change what runs. */
   args: Record<string, unknown>;
   /**
@@ -891,6 +984,8 @@ export const KNOWN_BROADCAST_EVENTS = [
   "agent.request_assembled",
   "agent.stalled",
   "agents.pause_changed",
+  "approval.requested",
+  "approval.settled",
   "digest.ready",
   "form.completed",
   "question.asked",
@@ -965,6 +1060,8 @@ export const AGENT_SCOPED_EVENTS = [
   "agent.pre_tool_use",
   "agent.request_assembled",
   "agent.stalled",
+  "approval.requested",
+  "approval.settled",
   "room.membership_changed",
   "room.turn_ended",
   "room.woke",

@@ -388,6 +388,37 @@ and advertised in the UI since long before anything dispatched it
 ([#561](https://github.com/quintonmiller/tailored-ai/issues/561)) — it could not
 be fixed until this seam existed.
 
+Both carry **`toolUseId`**, the provider's own id for the call, and **`cwd`**.
+The id is what makes the tool events joinable: without it a subscriber sees a
+tool name and cannot tell one `exec` in a turn from the next, so it can count
+calls but never follow one. The approval events below carry the same id, which
+is what lets "did the call I approved do what it said" be asked at all.
+
+#### `approval.requested` and `approval.settled`
+
+The approval gate on the bus. `requested` fires before the approver is asked, so
+the pair brackets the wait and an outstanding approval is observable rather than
+only its outcome.
+
+`settled` fires for **every** call that needed approval, and its `outcome` has
+three values, not two:
+
+| outcome | |
+|---|---|
+| `approved` / `rejected` | somebody answered, or the clock did |
+| `unattended` | the call needed a person on a path that has none — cron, a room wake, the task watcher |
+
+That third value is the point. A record covering only the approvals somebody
+answered would be silent about exactly the calls nobody saw, and whether those
+run is a config flag (`permissions.noHandlerAction`) whose effect was previously
+visible only as a one-time warning in a log rather than per call. This is the
+audit half of [#545](https://github.com/quintonmiller/tailored-ai/issues/545).
+
+`timedOut` is carried separately from `outcome` for a related reason:
+with `timeoutAction: auto_approve`, a call nobody looked at comes back as
+`approved` and reads exactly like a considered yes. `{ outcome: "approved",
+timedOut: true }` is the case an auditor most wants to be able to find.
+
 ## Plugin HTTP Routes
 
 Plugins mount HTTP endpoints on the TAI server through a framework-agnostic seam — core never imports Hono, the dependency direction stays server → core.
