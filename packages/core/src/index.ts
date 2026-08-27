@@ -177,8 +177,13 @@ export type {
 } from "./acp/client.js";
 export { DEFAULT_ACP_TIMEOUT_MS, decidePermission, runAcpPrompt } from "./acp/client.js";
 export {
+  type EventHookContext,
+  type EventHookHandler,
+  type EventHookResult,
+  listEventHookHandlers,
   matchesWhen,
   type ResolvedEventHooks,
+  registerEventHookHandler,
   resolveEventHooks,
   runEventHooks,
 } from "./agent/event-hooks.js";

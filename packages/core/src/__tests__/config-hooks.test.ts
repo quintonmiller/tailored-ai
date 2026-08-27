@@ -9,7 +9,13 @@
  * keeps producing; #561 was a whole trigger kind of it.
  */
 import { describe, expect, it, vi } from "vitest";
-import { matchesWhen, resolveEventHooks, runEventHooks } from "../agent/event-hooks.js";
+import {
+  listEventHookHandlers,
+  matchesWhen,
+  registerEventHookHandler,
+  resolveEventHooks,
+  runEventHooks,
+} from "../agent/event-hooks.js";
 import { type AgentConfig, validateConfig } from "../config.js";
 import { TypedEventBus } from "../events.js";
 import { ConfigHooks } from "../plugins/config-hooks.js";
@@ -266,6 +272,90 @@ describe("ConfigHooks on the bus", () => {
     const config = configWith({ "agent.pre_tool_uses": { tool: "policy_check" } });
     // Constructing must not throw; `validateConfig` is where the user is told.
     expect(() => new ConfigHooks({ runtime: fakeRuntime(config, [], events) }).stop()).not.toThrow();
+  });
+});
+
+describe("the handler registry", () => {
+  const base = { payload: { tool: "exec" }, sessionId: "s", refusable: true, tools: [] };
+
+  it("ships `tool` and nothing else", () => {
+    // What core knows how to do. A handler that spawns a process hands config
+    // arbitrary code execution, and that belongs behind a plugin somebody
+    // installs on purpose.
+    expect(listEventHookHandlers()).toEqual(["tool"]);
+  });
+
+  it("dispatches to a registered kind, with its own options", async () => {
+    const seen: unknown[] = [];
+    const off = registerEventHookHandler("probe", async (ctx) => {
+      seen.push(ctx.hook.options);
+      return { output: "ok" };
+    });
+
+    await runEventHooks({ ...base, hooks: [{ type: "probe", options: { url: "http://x" } }] });
+
+    expect(seen).toEqual([{ url: "http://x" }]);
+    off();
+  });
+
+  it("lets a handler refuse in its own vocabulary, without denyIf", async () => {
+    // A dialect with an exit code or a decision field says so directly rather
+    // than encoding it back into text for a regex to find.
+    const off = registerEventHookHandler("probe", async () => ({ deny: "blocked by policy" }));
+    const out = await runEventHooks({ ...base, hooks: [{ type: "probe" }] });
+    expect(out.deny).toBe("blocked by policy");
+    off();
+  });
+
+  it("ignores a handler's refusal on an event that cannot be refused", async () => {
+    const off = registerEventHookHandler("probe", async () => ({ deny: "blocked" }));
+    const out = await runEventHooks({ ...base, refusable: false, hooks: [{ type: "probe" }] });
+    expect(out.deny).toBeUndefined();
+    off();
+  });
+
+  it("still applies denyIf to a handler's output", async () => {
+    const off = registerEventHookHandler("probe", async () => ({ output: "verdict: BLOCK" }));
+    const out = await runEventHooks({ ...base, hooks: [{ type: "probe", denyIf: "BLOCK" }] });
+    expect(out.deny).toBe("verdict: BLOCK");
+    off();
+  });
+
+  it("fails closed when a registered handler throws", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const off = registerEventHookHandler("probe", async () => {
+      throw new Error("subprocess died");
+    });
+    const out = await runEventHooks({ ...base, hooks: [{ type: "probe" }] });
+    expect(out.deny).toContain("subprocess died");
+    off();
+    vi.restoreAllMocks();
+  });
+
+  it("skips an unregistered kind rather than refusing", async () => {
+    // Absent, not failed: nothing registered this kind, which is a wiring
+    // problem — a plugin that did not load — and a wiring problem should not
+    // take an unrelated operation down.
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const out = await runEventHooks({ ...base, hooks: [{ type: "nobody-registered-this" }] });
+    expect(out.deny).toBeUndefined();
+    vi.restoreAllMocks();
+  });
+
+  it("unregisters through the disposer it returned", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const off = registerEventHookHandler("probe", async () => ({ deny: "blocked" }));
+    off();
+    const out = await runEventHooks({ ...base, hooks: [{ type: "probe" }] });
+    expect(out.deny).toBeUndefined();
+    vi.restoreAllMocks();
+  });
+
+  it("treats a hook with no tool and no type as a broken tool hook", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const out = await runEventHooks({ ...base, hooks: [{}] });
+    expect(out.deny).toContain("needs a `tool:` name");
+    vi.restoreAllMocks();
   });
 });
 
