@@ -307,7 +307,11 @@ stop_one() {
   if ! is_running "$name" "$inst"; then
     echo "  $label not running"
     rm -f "$(pid_file "$name" "$inst")"
-    return
+    # "not running" is the state an orphaned model server leaves behind, so
+    # this is exactly the branch somebody hits when they stop the router twice
+    # wondering why the GPU is still full.
+    [[ "$name" == "vllm" ]] && verify_gpu_released
+    return 0
   fi
   local pid; pid="$(cat "$(pid_file "$name" "$inst")")"
   echo "  stopping $label (pgid $pid)..."
@@ -323,6 +327,55 @@ stop_one() {
   fi
   rm -f "$(pid_file "$name" "$inst")"
   echo "  $label stopped"
+  [[ "$name" == "vllm" ]] && verify_gpu_released
+  return 0
+}
+
+# --------------------------------------------------------------------------
+# "vllm stopped" is a claim about a pid file, not about the GPU
+# --------------------------------------------------------------------------
+#
+# stop_one kills the process *group* of the pid it launched, which is correct
+# for everything tai-ctl starts directly. It is not sufficient for the router:
+# llama-swap spawns each vLLM in a process group of its own so that it can kill
+# a model without killing itself, and a group-directed signal aimed at the
+# router therefore never reaches the model server it started. Observed on
+# 2026-08-14: `stop vllm` reported "vllm stopped", `status` agreed, and ~30 GB
+# of VRAM stayed held by a server on :8106 that nothing was tracking any more.
+#
+# The next `start vllm` then fails during memory profiling, minutes later, with
+# an error about the KV cache not fitting — which is true and says nothing about
+# the cause. So this checks the thing that actually matters and says what it
+# found. It does not kill anything: the surviving process cannot be identified
+# by name with any confidence (`pkill -f vllm` on this box would also match an
+# editor, a log tail, or this script), and a stop command that guesses at extra
+# processes to kill is worse than one that reports honestly and hands over the
+# exact pid.
+verify_gpu_released() {
+  command -v nvidia-smi >/dev/null 2>&1 || return 0
+  local apps=""
+  # A few seconds of grace: a server that received SIGTERM releases its memory
+  # when it exits, not when it is signalled, and a false alarm here would train
+  # the reader to ignore a real one.
+  for _ in 1 2 3 4 5 6; do
+    apps="$(nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader 2>/dev/null || true)"
+    [[ -z "${apps// }" ]] && return 0
+    sleep 1
+  done
+  echo ""
+  echo "  WARNING: the GPU is still held after stopping vllm." >&2
+  echo "  These processes survived the stop and are not tracked by tai-ctl:" >&2
+  local pid mem
+  while IFS=, read -r pid mem; do
+    pid="${pid// }"; mem="${mem# }"
+    [[ -n "$pid" ]] || continue
+    echo "    pid $pid — $mem — $(ps -o args= -p "$pid" 2>/dev/null | cut -c1-90)" >&2
+  done <<< "$apps"
+  echo "" >&2
+  echo "  The next 'start vllm' will fail during memory profiling until they are gone." >&2
+  echo "  Stop them by pid once you have checked what they are:" >&2
+  echo "    kill $(echo "$apps" | cut -d, -f1 | tr -d ' ' | tr '\n' ' ')" >&2
+  echo "" >&2
 }
 
 # --------------------------------------------------------------------------
@@ -442,6 +495,16 @@ cmd_status() {
   pid="-"; state="stopped"
   if is_running vllm; then pid="$(cat "$(pid_file vllm)")"; state="running"; fi
   printf "%-10s  %-7s  %-9s  %-8s  %s\n" "(shared)" "vllm" "$state" "$pid" "$(log_file vllm)"
+  # "stopped" here means "no pid file", which is not the same as "the GPU is
+  # free" — see verify_gpu_released. A router that was stopped while one of its
+  # model servers survived reports exactly this, and the memory is the only
+  # place the difference is visible.
+  if [[ "$state" == "stopped" ]] && command -v nvidia-smi >/dev/null 2>&1; then
+    local held; held="$(nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader 2>/dev/null || true)"
+    if [[ -n "${held// }" ]]; then
+      printf "%-10s  %-7s  %s\n" "(shared)" "gpu" "held by untracked pid(s): $(echo "$held" | tr '\n' ';' | sed 's/;$//')"
+    fi
+  fi
 
   local names; names="$(instance_names)"
   [[ -n "$INSTANCE" ]] && names="$INSTANCE"
