@@ -100,6 +100,21 @@ export interface PromptSlotConfig {
 }
 
 export interface AgentDefinition {
+  /**
+   * Which `media.renditions` entry shapes pictures for this agent.
+   *
+   * Agent-level and not per rung, deliberately. A rendition is computed once
+   * per round, before the fallback chain picks a candidate, for the same reason
+   * hydration is: the history is re-sent every round and every rung sees the
+   * same one. A per-rung setting would have to re-run an OCR pass for each
+   * fallback attempt AND re-hydrate, since a rendition can mint bytes that did
+   * not exist when the round began. "Thumbnail locally, original in the cloud"
+   * is a real want and is not this field.
+   *
+   * Unset inherits `media.rendition`; both unset means the picture is passed
+   * through untouched.
+   */
+  mediaRendition?: string;
   description?: string;
   model?: string;
   provider?: string;
@@ -977,6 +992,30 @@ export interface AgentConfig {
     onUnknown?: "try" | "degrade";
     /** Store-specific keys, for a store core does not know. */
     options?: Record<string, unknown>;
+    /**
+     * Named recipes for what a model is shown instead of a raw picture.
+     *
+     * `transform` is a registered rendition id — core ships none, so every
+     * value here comes from a plugin (OCR, resize, describe, path-only). See
+     * `docs/media-rendition-design.md`.
+     *
+     * ```yaml
+     * media:
+     *   renditions:
+     *     ocr-only: { transform: ocr, options: { language: eng } }
+     *     thumb:    { transform: resize, options: { maxWidth: 640 } }
+     * ```
+     */
+    renditions?: {
+      [name: string]: { transform: string; options?: Record<string, unknown> } | undefined;
+    };
+    /**
+     * Which of them applies when an agent does not name one.
+     *
+     * Unset means pictures reach the model untouched, which is what every
+     * deployment does today and must keep doing without configuration.
+     */
+    rendition?: string;
   };
   /**
    * Plugin modules to load at startup. Each entry is either a package

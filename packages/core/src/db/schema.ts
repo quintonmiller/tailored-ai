@@ -857,6 +857,27 @@ export function initDatabase(dbPath: string): Database.Database {
     // Column already exists
   }
 
+  // Computed renditions of a media blob: what a model was shown instead of the
+  // picture (docs/media-rendition-design.md). An OCR pass is seconds and the
+  // history is re-sent every round, so without this a five-round turn reads the
+  // same screenshot five times.
+  //
+  // `parts` is the answer verbatim — a JSON ContentPart[], which is what the
+  // renderer returned and what the loop splices in. The derived blob, if the
+  // rendition minted one, is inside it; there is no second column claiming to
+  // say the same thing, because two places to look is how they disagree.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS media_renditions (
+      parent_id  TEXT NOT NULL,
+      -- transform id plus a hash of its settings: a 640px thumbnail and a 128px
+      -- one are different renditions of one blob.
+      recipe     TEXT NOT NULL,
+      parts      TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (parent_id, recipe)
+    );
+  `);
+
   // Media blobs (docs/media-design.md). Metadata here, bytes on disk — the same
   // split `documents` uses.
   //

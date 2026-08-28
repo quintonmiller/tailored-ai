@@ -31,6 +31,14 @@ import { type EventBus, TypedEventBus } from "./events.js";
 import { HttpRouteRegistry } from "./http/registry.js";
 import type { MediaStore } from "./media/interface.js";
 import { listMediaStoreFactories, resolveMediaStore } from "./media/registry.js";
+import { SqliteRenditionCache } from "./media/rendition-cache.js";
+import {
+  listMediaRenditionFactories,
+  type RenditionCache,
+  type ResolvedRendition,
+  recipeFor,
+  resolveMediaRendition,
+} from "./media/renditions.js";
 import type { MemoryBackend } from "./memory/interface.js";
 import { resolveMemoryBackend } from "./memory/registry.js";
 import { NotificationGate } from "./notifications/dedup.js";
@@ -120,6 +128,9 @@ export class AgentRuntime {
    */
   private _mediaStore?: MediaStore;
   private _mediaStoreGeneration = -1;
+  private _renditions = new Map<string, ResolvedRendition | undefined>();
+  private _renditionGeneration = -1;
+  private _renditionCache?: RenditionCache;
   readonly contextDir: string;
   readonly kbDir: string;
 
@@ -1172,6 +1183,52 @@ export class AgentRuntime {
     return store;
   }
 
+  /**
+   * What `name` shows a model instead of a raw picture.
+   *
+   * Built per config generation and remembered, because a rendition may hold
+   * something expensive — a warm OCR worker, an HTTP client — and rebuilding it
+   * every turn would throw that away. A miss is cached too: an unregistered
+   * transform should warn once per reload, not once per message.
+   *
+   * Misconfiguration is reported and then ignored, which is the same call
+   * `getMediaStore` makes for an unknown store id: naming a transform nobody
+   * registered is a mistake worth seeing, and it must not cost the turn.
+   */
+  getMediaRendition(name?: string): ResolvedRendition | undefined {
+    if (!name) return undefined;
+    if (this._renditionGeneration !== this._generation) {
+      this._renditions.clear();
+      this._renditionGeneration = this._generation;
+    }
+    if (this._renditions.has(name)) return this._renditions.get(name);
+
+    const entry = this._config.media?.renditions?.[name];
+    let resolved: ResolvedRendition | undefined;
+    if (!entry) {
+      console.warn(`[runtime] media rendition "${name}" is not defined under media.renditions — sending media as-is.`);
+    } else {
+      const options = entry.options ?? {};
+      const rendition = resolveMediaRendition(entry.transform, options);
+      if (!rendition) {
+        console.warn(
+          `[runtime] media rendition "${name}" wants transform "${entry.transform}", which no plugin registered — ` +
+            `sending media as-is. Registered: ${listMediaRenditionFactories().join(", ") || "(none)"}`,
+        );
+      } else {
+        resolved = { rendition, recipe: recipeFor(entry.transform, options) };
+      }
+    }
+    this._renditions.set(name, resolved);
+    return resolved;
+  }
+
+  /** Where computed renditions are remembered. One per runtime, over this db. */
+  getRenditionCache(): RenditionCache {
+    this._renditionCache ??= new SqliteRenditionCache(this.db);
+    return this._renditionCache;
+  }
+
   /** How this deployment handles media a model has not agreed to take. */
   getMediaPolicy(): MediaPolicy {
     return {
@@ -1271,6 +1328,19 @@ export class AgentRuntime {
       providerExtra: resolved.providerExtra,
       mediaStore: this.getMediaStore(),
       mediaPolicy: this.getMediaPolicy(),
+      ...(() => {
+        const rendition = this.getMediaRendition(resolved.mediaRendition ?? config.media?.rendition);
+        return rendition
+          ? {
+              mediaRendition: {
+                resolved: rendition,
+                options:
+                  config.media?.renditions?.[resolved.mediaRendition ?? config.media?.rendition ?? ""]?.options ?? {},
+                cache: this.getRenditionCache(),
+              },
+            }
+          : {};
+      })(),
       contextDir: this.contextDir,
       contextWarnTokens: config.context?.warnTokens,
       agentContextDir: resolved.contextDir,

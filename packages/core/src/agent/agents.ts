@@ -142,6 +142,8 @@ export interface ResolvedAgent {
   /** Per-agent task-watcher dispatch preamble template (unexpanded). Empty when unset. */
   taskPreamble: string;
   injectMemory: boolean;
+  /** `media.renditions` entry that shapes pictures for this agent, if any. */
+  mediaRendition: string | undefined;
   memoryInjectBudgetTokens: number | undefined;
   memoryInjectLimit: number | undefined;
   budgetWarnings: boolean;
@@ -230,6 +232,7 @@ export function resolveAgent(
     worktree: dep.worktree ?? false,
     taskPreamble: dep.taskPreamble ?? "",
     injectMemory: dep.injectMemory ?? false,
+    mediaRendition: dep.mediaRendition,
     memoryInjectBudgetTokens: dep.memoryInjectBudgetTokens,
     memoryInjectLimit: dep.memoryInjectLimit,
     budgetWarnings: dep.budgetWarnings ?? false,
@@ -313,6 +316,7 @@ export function resolveAgent(
     worktree: agent?.worktree ?? defaults.worktree,
     taskPreamble: agent?.taskPreamble ?? defaults.taskPreamble,
     injectMemory: agent?.injectMemory ?? defaults.injectMemory,
+    mediaRendition: agent?.mediaRendition ?? defaults.mediaRendition,
     memoryInjectBudgetTokens: agent?.memoryInjectBudgetTokens ?? defaults.memoryInjectBudgetTokens,
     memoryInjectLimit: agent?.memoryInjectLimit ?? defaults.memoryInjectLimit,
     budgetWarnings: agent?.budgetWarnings ?? defaults.budgetWarnings,

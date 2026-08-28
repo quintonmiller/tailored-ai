@@ -586,6 +586,20 @@ export type { MediaRow } from "./media/queries.js";
 export { findExpiredMedia, listMediaRows, totalMediaBytes } from "./media/queries.js";
 export type { MediaStoreContext, MediaStoreFactory } from "./media/registry.js";
 export { listMediaStoreFactories, registerMediaStoreFactory, resolveMediaStore } from "./media/registry.js";
+export { SqliteRenditionCache } from "./media/rendition-cache.js";
+export {
+  applyRenditions,
+  listMediaRenditionFactories,
+  type MediaRendition,
+  type MediaRenditionFactory,
+  type MediaRenditionFactoryContext,
+  type RenditionCache,
+  type RenditionContext,
+  type ResolvedRendition,
+  recipeFor,
+  registerMediaRenditionFactory,
+  resolveMediaRendition,
+} from "./media/renditions.js";
 export { sniffMedia, UnknownMediaTypeError } from "./media/sniff.js";
 export type { CollectTurnMediaOptions } from "./media/turn.js";
 export { collectTurnMedia, latestMessageId } from "./media/turn.js";
@@ -747,6 +761,7 @@ export {
   WarnOnce,
 } from "./providers/quirks.js";
 export {
+  effortTemplateMap,
   enableThinkingTemplateMap,
   isThinkingLevel,
   OPENAI_COMPATIBLE_THINKING_DIALECTS,

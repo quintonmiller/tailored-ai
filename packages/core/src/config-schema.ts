@@ -131,6 +131,10 @@ const MediaConfigSchema = z.object({
   onUnsupported: z.enum(["degrade", "skip-rung", "error"]).optional(),
   onUnknown: z.enum(["try", "degrade"]).optional(),
   options: z.record(z.unknown()).optional(),
+  renditions: z
+    .record(z.object({ transform: z.string(), options: z.record(z.unknown()).optional() }).optional())
+    .optional(),
+  rendition: z.string().optional(),
 });
 
 const ModelEntrySchema = z.object({
@@ -299,6 +303,7 @@ type _MemoryChunksMatches = AssertTrue<
  * it derives its key set from this shape.
  */
 export const AgentDefinitionSchema = z.object({
+  mediaRendition: z.string().optional(),
   description: z.string().optional(),
   model: z.string().optional(),
   provider: z.string().optional(),

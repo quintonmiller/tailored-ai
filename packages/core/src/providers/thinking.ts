@@ -45,6 +45,39 @@ export const enableThinkingTemplateMap: ThinkingMapper = (level) => {
 };
 
 /**
+ * The effort rungs a template-side `reasoning_effort` understands. Deliberately
+ * *not* the same list as {@link THINKING_LEVELS}: templates in this family
+ * accept `low`/`medium`/`xhigh` and raise on anything else, so core's `high`
+ * has to land on the top rung by name rather than by hope.
+ */
+const TEMPLATE_EFFORT: Partial<Record<ThinkingLevel, string>> = {
+  low: "low",
+  medium: "medium",
+  high: "xhigh",
+};
+
+/**
+ * vLLM / Qwen template toggle *with* effort, for templates that read
+ * `chat_template_kwargs.reasoning_effort` alongside `enable_thinking`.
+ *
+ * Separate from {@link enableThinkingTemplateMap} rather than folded into it:
+ * a template that doesn't declare the kwarg either ignores it or raises, and
+ * the ones that do raise reject core's `high` outright (they accept `xhigh`).
+ * Sending effort to every vLLM endpoint would therefore break the endpoints
+ * that work today, so this is opt-in per provider — `thinkingDialect: vllm_effort`.
+ *
+ * Without it a model whose template defaults to its *highest* effort can only
+ * be asked for that default, which is a real cost: measured on Qwen3.8, the
+ * top rung spends roughly twice the output tokens of `medium`.
+ */
+export const effortTemplateMap: ThinkingMapper = (level) => {
+  if (level === "auto") return undefined;
+  if (level === "off") return { chat_template_kwargs: { enable_thinking: false } };
+  const effort = TEMPLATE_EFFORT[level];
+  return { chat_template_kwargs: { enable_thinking: true, ...(effort ? { reasoning_effort: effort } : {}) } };
+};
+
+/**
  * Generic OpenAI-compatible dialects core's built-in `openai_compatible`
  * provider can select via `providers.<id>.thinkingDialect`. These are
  * wire-protocol conventions core legitimately owns — not vendor plugins.
@@ -52,5 +85,6 @@ export const enableThinkingTemplateMap: ThinkingMapper = (level) => {
 export const OPENAI_COMPATIBLE_THINKING_DIALECTS: Record<string, ThinkingMapper | undefined> = {
   openai: reasoningEffortThinkingMap,
   vllm: enableThinkingTemplateMap,
+  vllm_effort: effortTemplateMap,
   none: undefined,
 };

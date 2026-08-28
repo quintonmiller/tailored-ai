@@ -24,6 +24,7 @@ import { getCoreMemory, renderCoreMemory } from "../db/core-memory-queries.js";
 import { getSessionMessages, saveMessage } from "../db/queries.js";
 import type { EventBus } from "../events.js";
 import { hydrateMedia } from "../media/hydrate.js";
+import { applyRenditions } from "../media/renditions.js";
 import {
   adaptForCapabilities,
   DEFAULT_MEDIA_POLICY,
@@ -396,6 +397,18 @@ export type LoopStop =
 export const MAX_CYCLE_PERIOD = 3;
 
 /**
+ * How many times one identical call may return one identical result before the
+ * tool is withdrawn for the rest of the turn.
+ *
+ * Three, matching the period-1 threshold of the cycle detector, because it is
+ * the same judgement: twice can be a retry, three times is a model that has
+ * stopped learning from the answer. This catches what `detectCycle` cannot —
+ * a call repeating while the calls *beside* it change, which produces no
+ * repeating round signature at all.
+ */
+export const IDENTICAL_CALL_LIMIT = 3;
+
+/**
  * How many times a cycle of this length must repeat before it counts as a stall.
  *
  * Period 1 keeps its historical threshold of three identical rounds. Longer
@@ -607,6 +620,20 @@ export interface AgentLoopOptions {
    * one — see {@link DEFAULT_MEDIA_POLICY}.
    */
   mediaPolicy?: MediaPolicy;
+  /**
+   * What the model is shown instead of a raw picture, when a deployment has
+   * chosen something other than the picture — OCR text, a path, a thumbnail, a
+   * description. Unset passes media through, which is what every deployment
+   * that has not configured a rendition does.
+   *
+   * See `docs/media-rendition-design.md`. The cache is optional and separate
+   * because a caller without a database still works; it just pays every round.
+   */
+  mediaRendition?: {
+    resolved: import("../media/renditions.js").ResolvedRendition;
+    options: Record<string, unknown>;
+    cache?: import("../media/renditions.js").RenditionCache;
+  };
   /** Extra fields merged into the ToolContext passed to every tool execution. */
   toolContextExtras?: Partial<import("../tools/interface.js").ToolContext>;
   permissions?: PermissionsConfig;
@@ -839,13 +866,19 @@ export function dropUnansweredToolCalls(messages: Message[]): Message[] {
   return out;
 }
 
-export function trimHistory(messages: Message[], maxTokens: number): Message[] {
+/**
+ * Where the surviving history begins: evict from the front until the rest fits.
+ *
+ * `minDropped` is a floor the caller has already dropped and will not take
+ * back. Both trim paths share this so a turn's window can only ever narrow —
+ * see {@link trimHistoryWithStart}.
+ */
+function evictionStart(messages: Message[], maxTokens: number, minDropped: number): number {
+  // Never past the last message: an empty history is not a request.
+  let start = Math.min(Math.max(0, minDropped), Math.max(0, messages.length - 1));
   let total = 0;
-  for (const msg of messages) total += estimateTokens(msg);
+  for (let i = start; i < messages.length; i++) total += estimateTokens(messages[i]);
 
-  if (total <= maxTokens) return stripOrphanedToolMessages(messages);
-
-  let start = 0;
   while (start < messages.length - 1 && total > maxTokens) {
     total -= estimateTokens(messages[start]);
     start++;
@@ -855,7 +888,44 @@ export function trimHistory(messages: Message[], maxTokens: number): Message[] {
       start++;
     }
   }
-  return stripOrphanedToolMessages(ensureUserMessagePresent(messages.slice(start), messages));
+  return start;
+}
+
+/**
+ * Trim, and say how much of the front went — so the caller can hold a turn's
+ * window open at its narrowest.
+ *
+ * The budget is recomputed every round because the tool schemas are part of it
+ * and the tool set can change mid-turn. That is correct as a *ceiling* and
+ * wrong as a floor: when tools are withdrawn the schemas stop being charged,
+ * the budget jumps by thousands of tokens, and the next trim hands back
+ * messages the model was told were gone.
+ *
+ * Measured on the benchmark 2026-08-14, on a row whose whole premise is that a
+ * fact was trimmed away. For nineteen rounds the model was shown
+ * `[System: 68 earlier messages … are no longer shown]` and hunted through
+ * every memory tool it had for the fact. On round twenty the repeated-call
+ * check withdrew the last of those tools, ~4,800 tokens of schemas left the
+ * budget, and the entire 73-message history reappeared — no marker, no
+ * explanation. The model read the fact and answered it, which was true and
+ * scored as a confabulation.
+ *
+ * The turn is the right scope for the floor. Across turns the window should
+ * reopen; within one, "no longer shown" has to keep meaning that, or the model
+ * is working against a context that contradicts what it was told about itself.
+ */
+export function trimHistoryWithStart(
+  messages: Message[],
+  maxTokens: number,
+  minDropped = 0,
+): { messages: Message[]; start: number } {
+  const start = evictionStart(messages, maxTokens, minDropped);
+  if (start === 0) return { messages: stripOrphanedToolMessages(messages), start: 0 };
+  return { messages: stripOrphanedToolMessages(ensureUserMessagePresent(messages.slice(start), messages)), start };
+}
+
+export function trimHistory(messages: Message[], maxTokens: number, minDropped = 0): Message[] {
+  return trimHistoryWithStart(messages, maxTokens, minDropped).messages;
 }
 
 /** Roughly what `markDroppedHistory`'s line costs, reserved before trimming. */
@@ -892,6 +962,32 @@ export function markDroppedHistory(history: Message[], trimmed: Message[]): Mess
 }
 
 /**
+ * Everything this loop injects into the history wearing the `user` role.
+ *
+ * Two of them exist — the dropped-history marker in {@link markDroppedHistory}
+ * and the tool-set-change notice in the loop below — and both are `user`
+ * messages on purpose, because strict OpenAI-mode providers reject a system
+ * message that is not first. That workaround has a cost: anything asking "is
+ * there still a user message here?" gets a yes from a notice that carries no
+ * question.
+ */
+const SYNTHETIC_NOTICE = /^\s*\[System: /;
+
+/**
+ * A `user` message the *person* wrote, as opposed to one this loop injected.
+ *
+ * Load-bearing for the safety net below. A live run against a model that leans
+ * on tool calls produced a final request consisting of exactly two messages —
+ * the drop marker and the tool-update notice — with the actual question trimmed
+ * away, because the net saw `role === "user"` on a notice and concluded nothing
+ * needed restoring. The model answered the notice ("Noted — tool set updated"),
+ * which is correct for what it was shown and useless to everybody.
+ */
+function isRealUserMessage(m: Message): boolean {
+  return m.role === "user" && !SYNTHETIC_NOTICE.test(messageText(m.content));
+}
+
+/**
  * Safety net: if trimming dropped every user-role message, splice one back in.
  * Providers (vLLM, OpenAI, Anthropic) all reject requests with no user message
  * — we'd rather show a stale prompt than crash with "No user query found in
@@ -914,10 +1010,10 @@ export function markDroppedHistory(history: Message[], trimmed: Message[]): Mess
  * bad options, and it is the one that matches what "the current turn" means.
  */
 function ensureUserMessagePresent(trimmed: Message[], original: Message[]): Message[] {
-  if (trimmed.some((m) => m.role === "user")) return trimmed;
+  if (trimmed.some(isRealUserMessage)) return trimmed;
   // findLast is ES2023; this file targets ES2022.
   let latestUser: Message | undefined;
-  for (const msg of original) if (msg.role === "user") latestUser = msg;
+  for (const msg of original) if (isRealUserMessage(msg)) latestUser = msg;
   if (!latestUser) return trimmed;
   // Insert after any leading system summary block so the chronology is
   // [system summary?, original task, ...kept turns].
@@ -1009,53 +1105,45 @@ export async function trimHistoryWithSummary(
   provider?: AIProvider,
   model?: string,
   existingSummary?: string,
-): Promise<{ messages: Message[]; summary?: string }> {
-  let total = 0;
-  for (const msg of messages) total += estimateTokens(msg);
-
-  if (total <= maxTokens) return { messages: stripOrphanedToolMessages(messages), summary: existingSummary };
-
-  // Figure out which messages will be dropped
-  let start = 0;
-  let dropTotal = total;
-  while (start < messages.length - 1 && dropTotal > maxTokens) {
-    dropTotal -= estimateTokens(messages[start]);
-    start++;
-    while (start < messages.length - 1 && messages[start].role === "tool") {
-      dropTotal -= estimateTokens(messages[start]);
-      start++;
-    }
-  }
+  minDropped = 0,
+): Promise<{ messages: Message[]; summary?: string; start: number }> {
+  // Same floor as the plain path, and for the same reason: a message this turn
+  // has already summarised away must not reappear beside its own summary.
+  const start = evictionStart(messages, maxTokens, minDropped);
+  if (start === 0) return { messages: stripOrphanedToolMessages(messages), summary: existingSummary, start: 0 };
 
   const dropped = messages.slice(0, start);
   const kept = messages.slice(start);
 
-  // Summarize dropped messages if provider is available and we're actually dropping content
+  // The summary comes back beside the messages, never inside them.
+  //
+  // It used to be spliced in as a `system` message ahead of the kept turns,
+  // which put a system message somewhere other than index 0. Qwen3.6's chat
+  // template tolerates that; Qwen3.8's raises `System message must be at the
+  // beginning.` and the whole request 400s — so every session long enough to
+  // compact failed outright, which is not a degraded reply but a dead agent.
+  //
+  // The loop three hundred lines below already knew this: its tool-change
+  // notice carries a comment saying it uses `role: "user"` precisely because
+  // strict providers reject a mid-history system message. The lesson simply had
+  // not reached here. The caller now folds the summary into the leading system
+  // prompt, where it is both legal for every template and, being context about
+  // the conversation rather than a turn in it, where it belonged anyway.
   if (provider && model && dropped.length > 0 && !existingSummary) {
     const summary = await summarizeMessages(dropped, provider, model);
     if (summary) {
-      const summaryMsg: Message = {
-        role: "system",
-        content: `[Earlier conversation summary: ${summary}]`,
-      };
-      return {
-        messages: stripOrphanedToolMessages(ensureUserMessagePresent([summaryMsg, ...kept], messages)),
-        summary,
-      };
+      return { messages: stripOrphanedToolMessages(ensureUserMessagePresent(kept, messages)), summary, start };
     }
   } else if (existingSummary) {
     // Re-use cached summary from a previous round
-    const summaryMsg: Message = {
-      role: "system",
-      content: `[Earlier conversation summary: ${existingSummary}]`,
-    };
     return {
-      messages: stripOrphanedToolMessages(ensureUserMessagePresent([summaryMsg, ...kept], messages)),
+      messages: stripOrphanedToolMessages(ensureUserMessagePresent(kept, messages)),
       summary: existingSummary,
+      start,
     };
   }
 
-  return { messages: stripOrphanedToolMessages(ensureUserMessagePresent(kept, messages)) };
+  return { messages: stripOrphanedToolMessages(ensureUserMessagePresent(kept, messages)), start };
 }
 
 /** Request approval with timeout handling. */
@@ -1672,6 +1760,7 @@ async function _runAgentLoopInner(userMessage: string | InboundMessage, opts: Ag
     approvalHandler: opts.approvalHandler,
     permissions: opts.permissions,
     db,
+    mediaStore: opts.mediaStore,
     sandbox: opts.sandbox,
     sandboxHandle,
     activeSkill,
@@ -1707,6 +1796,26 @@ async function _runAgentLoopBody(
   recordRequest?: RecordRequest,
 ): Promise<string> {
   const { provider, session, db, tools, maxToolRounds, maxHistoryTokens, temperature } = opts;
+  /**
+   * The history as the model will be shown it.
+   *
+   * Defined once and used by every path that builds a request, because there is
+   * more than one: the round loop and the out-of-rounds final report each
+   * compose their own `messages` from `history`, and wiring only the first is
+   * how a feature ends up working for ordinary turns and not for the turn that
+   * ran out of rounds.
+   *
+   * `history` itself is never touched. Renditions shape the request, not the
+   * record.
+   */
+  const renderHistory = async (msgs: Message[]): Promise<Message[]> =>
+    opts.mediaRendition && opts.mediaStore
+      ? await applyRenditions(msgs, opts.mediaRendition.resolved, {
+          store: opts.mediaStore,
+          options: opts.mediaRendition.options,
+          cache: opts.mediaRendition.cache,
+        })
+      : msgs;
   const tailTokens = tailMsg ? estimateTokens(tailMsg) : 0;
   // Same source the core-memory lookup uses: every entry point that runs a
   // named agent sets it. Undefined for the default/unnamed session.
@@ -1723,7 +1832,22 @@ async function _runAgentLoopBody(
   /** Tools taken away mid-turn because the model was cycling on them. */
   const withdrawn = new Set<string>();
   const SIGNATURE_WINDOW = MAX_CYCLE_PERIOD * 3;
+  /**
+   * `tool(args)→result` → how many times this turn has seen exactly that.
+   *
+   * Feeds the verbatim-repeat check in the round loop, which catches what
+   * `detectCycle` structurally cannot: one call repeating while the calls
+   * around it change.
+   */
+  const identicalCalls = new Map<string, number>();
   let cachedSummary: string | undefined;
+  /**
+   * The narrowest this turn's history window has been — a ratchet, not a
+   * budget. See {@link trimHistoryWithStart}: the per-round budget is charged
+   * for tool schemas, so withdrawing a tool mid-turn would otherwise widen the
+   * window and hand back messages already announced as dropped.
+   */
+  let droppedFloor = 0;
   // Tracks which budget warnings have already fired so we inject each at
   // most once per loop. Without this the warning would replay every round
   // past the threshold.
@@ -1842,6 +1966,13 @@ async function _runAgentLoopBody(
     // round, so a turn that gains or loses tools mid-flight changes this. One
     // number computed once would be wrong for the rest of the turn.
     const toolSchemaTokens = estimateToolSchemaTokens(toolSchemas);
+
+    // Applied before the budget is spent, not after: a rendition changes size,
+    // usually by a lot — a page of OCR text is a fraction of the 1,500 tokens
+    // the same screenshot is priced at — and trimming the original would evict
+    // turns to make room for bytes that are about to be replaced.
+    const shownHistory = await renderHistory(history);
+
     const historyBudget = Math.max(0, maxHistoryTokens - systemPromptTokens - tailTokens - toolSchemaTokens);
     warnIfNoHistoryFits(
       {
@@ -1850,7 +1981,7 @@ async function _runAgentLoopBody(
         tailTokens,
         toolSchemaTokens,
         historyBudget,
-        historyLength: history.length,
+        historyLength: shownHistory.length,
       },
       opts.toolContextExtras?.agentName as string | undefined,
     );
@@ -1858,24 +1989,39 @@ async function _runAgentLoopBody(
     if (opts.summarizeOnTrim) {
       const currentProvider = opts.getProvider ? opts.getProvider() : provider;
       const result = await trimHistoryWithSummary(
-        history,
+        shownHistory,
         historyBudget,
         currentProvider,
         session.model,
         cachedSummary,
+        droppedFloor,
       );
       trimmed = result.messages;
+      droppedFloor = result.start;
       if (result.summary) cachedSummary = result.summary;
     } else {
       // Reserve room for the marker before trimming rather than prepending it
       // afterwards, which would push the request back over the budget it was
       // just trimmed to fit.
-      const historyTokens = history.reduce((n, m) => n + estimateTokens(m), 0);
+      const historyTokens = shownHistory.reduce((n, m) => n + estimateTokens(m), 0);
       const overBudget = historyTokens > historyBudget;
-      trimmed = trimHistory(history, overBudget ? Math.max(0, historyBudget - DROP_MARKER_TOKENS) : historyBudget);
-      trimmed = markDroppedHistory(history, trimmed);
+      const result = trimHistoryWithStart(
+        shownHistory,
+        overBudget ? Math.max(0, historyBudget - DROP_MARKER_TOKENS) : historyBudget,
+        droppedFloor,
+      );
+      droppedFloor = result.start;
+      trimmed = markDroppedHistory(shownHistory, result.messages);
     }
-    const messages: Message[] = [{ role: "system", content: fullSystemPrompt }, ...trimmed];
+    // The compaction summary rides in the system prompt rather than as a second
+    // system message in the history — see `trimHistoryWithSummary`. It goes
+    // last so the persona still opens the prompt, and it survives the
+    // small-window refit below, which is right: a summary of what was dropped
+    // is worth more to a narrow model than one more old turn.
+    const promptWithSummary = cachedSummary
+      ? `${fullSystemPrompt}\n\n[Earlier conversation summary: ${cachedSummary}]`
+      : fullSystemPrompt;
+    const messages: Message[] = [{ role: "system", content: promptWithSummary }, ...trimmed];
     if (tailMsg) messages.push(tailMsg);
 
     const chain = opts.getModelChain?.() ?? [];
@@ -1899,6 +2045,11 @@ async function _runAgentLoopBody(
      * prettier request the rung might still reject is the wrong trade. A
      * request the fallback accepts beats a well-summarised one it does not.
      */
+    // Hydration comes after the renditions above, and the order is load-bearing:
+    // a rendition can mint bytes that did not exist when the round began — a
+    // thumbnail, a re-encode — so hydrating first would fetch the original and
+    // miss the replacement.
+    //
     // Resolved once per round, not per rung: a fallback chain sends the same
     // history to each candidate, and re-reading the blobs for a rung that only
     // trims differently would pay for the same bytes twice.
@@ -1920,7 +2071,7 @@ async function _runAgentLoopBody(
       // window is usually the tight one, and `base.tools` sends the identical
       // schemas to a rung with far less room for them.
       const rungBudget = Math.max(0, window - systemPromptTokens - tailTokens - toolSchemaTokens);
-      const refitted = trimHistory(history, rungBudget);
+      const refitted = trimHistory(shownHistory, rungBudget, droppedFloor);
       if (refitted.length < trimmed.length) {
         console.warn(
           `[agent] ${candidate.label} (${candidate.model}) has a ${window}-token window against a ` +
@@ -1930,7 +2081,7 @@ async function _runAgentLoopBody(
       // The volatile tail rides behind the history and must survive the refit:
       // rebuilding the array from the system prompt alone would drop the live
       // state and recall the model is meant to read this turn.
-      const refittedMessages: Message[] = [{ role: "system", content: fullSystemPrompt }, ...refitted];
+      const refittedMessages: Message[] = [{ role: "system", content: promptWithSummary }, ...refitted];
       if (tailMsg) refittedMessages.push(tailMsg);
       return { ...base, messages: refittedMessages };
     };
@@ -2078,6 +2229,46 @@ async function _runAgentLoopBody(
     // results are part of the signature so legitimate polling (task_status
     // running → running → completed) does not trip it — only genuine
     // "no progress" loops do.
+    // One call repeated verbatim, whatever else the round contained.
+    //
+    // `detectCycle` below compares *whole rounds*, so it only fires when every
+    // call in a round repeats in lockstep. A model that asks the same question
+    // of the same store every round while varying the call beside it never
+    // produces two matching round signatures, and sails straight past it.
+    //
+    // Measured on the benchmark: an agent hunting a fact that had been trimmed
+    // out of its history called
+    // `recall(action="query", query="stripe webhook cutover")` **seventeen
+    // times**, byte-identical, mixing `task_query` and `task_status` alongside
+    // it, and burned the whole round budget. The detector never fired once. It
+    // then answered correctly anyway, and scored zero because the turn was
+    // ruled a stall.
+    //
+    // Same argument as the cycle detector for including the result: identical
+    // arguments returning an identical answer is the definition of no progress,
+    // while polling a task that is genuinely changing yields different output
+    // and never trips this.
+    for (const r of results) {
+      const key = `${r.call.name}(${JSON.stringify(r.call.arguments ?? {})})→${toolOutputText(r.output)}`;
+      const seen = (identicalCalls.get(key) ?? 0) + 1;
+      identicalCalls.set(key, seen);
+      if (seen < IDENTICAL_CALL_LIMIT || withdrawn.has(r.call.name)) continue;
+      // Same guard the cycle detector uses: withdrawing the last tool is the
+      // terminal path wearing a different hat, and an honest stop beats a round
+      // spent proving it.
+      if (!currentTools.some((t) => t.name !== r.call.name && !withdrawn.has(t.name))) continue;
+      withdrawn.add(r.call.name);
+      roundSignatures.length = 0;
+      roundCalls.length = 0;
+      history.push({
+        role: "user",
+        content:
+          `[System: ${r.call.name} has returned the same answer to the same question ${seen} times and has been ` +
+          "withdrawn for the rest of this turn. It does not hold what you are looking for. Answer from what you " +
+          "already have, or say plainly that you cannot.]",
+      });
+    }
+
     // Projected, not joined raw: `output` is `string | ToolOutput`, and `join`
     // stringifies the object arm to `[object Object]` — which made every
     // media-carrying result compare equal to every other, so a tool returning a
@@ -2197,11 +2388,16 @@ async function _runAgentLoopBody(
       // were occupying — which on a 41-tool deployment is thousands of tokens,
       // and is the part of the turn the model most needs to read to answer.
       const historyBudget = Math.max(0, maxHistoryTokens - systemPromptTokens - tailTokens);
-      const historyTokens = history.reduce((n, m) => n + estimateTokens(m), 0);
+      // Same rendition as every other round. A deployment that configured OCR
+      // wants this call reading the text too — and it is strictly better than
+      // what it would otherwise get, since this request is never hydrated and a
+      // picture reaches it as a placeholder either way.
+      const shownHistory = await renderHistory(history);
+      const historyTokens = shownHistory.reduce((n, m) => n + estimateTokens(m), 0);
       const overBudget = historyTokens > historyBudget;
       const trimmed = markDroppedHistory(
-        history,
-        trimHistory(history, overBudget ? Math.max(0, historyBudget - DROP_MARKER_TOKENS) : historyBudget),
+        shownHistory,
+        trimHistory(shownHistory, overBudget ? Math.max(0, historyBudget - DROP_MARKER_TOKENS) : historyBudget),
       );
       const messages: Message[] = [{ role: "system", content: fullSystemPrompt }, ...trimmed];
       if (tailMsg) messages.push(tailMsg);
@@ -2231,9 +2427,11 @@ async function _runAgentLoopBody(
         },
         opts.onTextDelta,
         opts.onReasoningDelta,
-        // No media on this request to shape, so the policy stays at its default
-        // rather than being threaded through; explicit `undefined` only because
-        // the observer sits behind it.
+        // This request is never hydrated, so whatever media the history holds
+        // reaches the model as its text projection and there is no policy
+        // decision left to make. (It is not that there IS no media — the
+        // history can be full of it.) Explicit `undefined` only because the
+        // observer sits behind it.
         undefined,
         recordRequest?.("final_report", rounds),
       );

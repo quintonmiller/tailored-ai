@@ -91,6 +91,8 @@ function collectingContext(
     providers: { register: wrap((...a) => base.providers.register(...a)) },
     embeddings: { register: wrap((...a) => base.embeddings.register(...a)) },
     memoryBackends: { register: wrap((...a) => base.memoryBackends.register(...a)) },
+    mediaStores: { register: wrap((...a) => base.mediaStores.register(...a)) },
+    mediaRenditions: { register: wrap((...a) => base.mediaRenditions.register(...a)) },
     taskBackends: { register: wrap((...a) => base.taskBackends.register(...a)) },
     repoBackends: { register: wrap((...a) => base.repoBackends.register(...a)) },
     sandboxBackends: { register: wrap((...a) => base.sandboxBackends.register(...a)) },
