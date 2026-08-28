@@ -50,11 +50,14 @@ import {
   saveMessage,
   TypedEventBus,
   unregisterRoomBackend,
+  validateConfig,
 } from "@tailored-ai/core";
 import YAML from "yaml";
 import { registerPinnedClock, timeConfigBlock } from "./clock.js";
 import { answerTool, Oracle } from "./oracle.js";
 import { createSimulation, type Simulation } from "./sim/index.js";
+import { replayTrace } from "./sim/replay.js";
+import { finishSimulationTrace, looksRefused, type TraceSink } from "./trace.js";
 import type {
   MemorySeed,
   RecordedCall,
@@ -87,6 +90,26 @@ export interface HarnessOptions {
    */
   maxTokens: number | null;
   maxToolRounds: number;
+  /**
+   * History budget and declared model window, or `undefined` to inherit core's.
+   *
+   * Both default to *nothing*, so `loadConfig` supplies `DEFAULT_CONFIG`'s
+   * values and a benchmark agent trims exactly like a deployed one. The harness
+   * used to hardcode `maxHistoryTokens: 110000` — 5.5x core's default and 3.4x
+   * core's default window — which silently disabled trimming for the sixteen of
+   * twenty scenario files that do not set their own. See {@link buildConfig}.
+   */
+  maxHistoryTokens?: number;
+  maxContextTokens?: number;
+  /**
+   * Start from a world an earlier run played into, rather than a fresh one.
+   *
+   * `{ trace, round }` — the trace to replay and how far. See `sim/replay.ts`.
+   * A run resumed this way is not comparable with a full one and should not be
+   * scored against a cohort: the party arrives with no memory of how it got
+   * there, which is the trade that makes it fast.
+   */
+  resumeFrom?: { trace: string; round: number };
   /** vLLM sampling controls, sent as `providerExtra`. Mirrors a deployment's own. */
   providerExtra: Record<string, unknown>;
   /** Per-run seed. Sent to the provider so a repeat is reproducible. */
@@ -135,13 +158,28 @@ export interface HarnessOptions {
   pinnedAt?: string | null;
   /** IANA zone the pinned clock reports. Ignored when `pinnedAt` is null. */
   timeZone?: string;
+  /**
+   * Where to send events as the run happens, when anybody is watching.
+   *
+   * The harness emits and does not write: it has no business knowing whether
+   * there is a viewer or where its output goes, which is the same argument that
+   * moved the clock's announcement out of here and into the simulation. The
+   * worker points this at a file; `eval watch` reads the file.
+   */
+  trace?: TraceSink;
 }
 
 const OWNER_ID = "owner-0000";
 const OWNER_LABEL = "quinton";
 
-/** Who says what day it is on a simulation run. Not an agent, and not scored. */
-const DAY_MARKER = "plant-clock";
+/**
+ * Who says what time it is on a simulation run. Not an agent, and not scored.
+ *
+ * Named for the job rather than for the first world that had one: `plant-clock`
+ * was a sensible speaker in a factory and a strange one in a canal lock, and
+ * the agents read this name.
+ */
+const DAY_MARKER = "clock";
 
 /**
  * Tools whose real `execute` is replaced.
@@ -152,7 +190,7 @@ const DAY_MARKER = "plant-clock";
  * throwaway database, and a scenario about scheduling that stubs `schedule`
  * would be testing nothing.
  */
-const STUBBED = new Set([
+export const STUBBED = new Set([
   "exec",
   "read",
   "write",
@@ -232,8 +270,30 @@ function matchesStubArg(actual: unknown, expected: string | number | boolean): b
  * was the first, which made every stubbed tool read as harmless and meant the
  * derivability gate could not fire in the benchmark at all.
  */
-function instrument(tool: Tool, recorder: Recorder, results: ToolResults, world?: World, alwaysStub = false): Tool {
-  const stubbed = alwaysStub || STUBBED.has(tool.name);
+/**
+ * @param stubbing How this tool's name interacts with {@link STUBBED}.
+ *   `"auto"` consults the list, `"always"` stubs regardless (scenario-declared
+ *   instruments, which have nothing behind them), and `"never"` refuses to —
+ *   which is what a *simulation's* tools need, because they have a real
+ *   implementation and it is the thing under test.
+ *
+ *   The last mode exists because the comment at the call site already claimed
+ *   it. Simulation tools were passed through `instrument` with the default, so
+ *   any of them whose name happened to appear in `STUBBED` was replaced by
+ *   "(stubbed in the benchmark — assume it succeeded and continue)" — the tool
+ *   returned success, the simulation never saw the call, and the metric it
+ *   feeds stayed at zero. Measured live on 2026-08-18: the descent's `read`
+ *   collided with core's file-reading `read`, a model called it in round 3, and
+ *   the run reported the instrument unused.
+ */
+function instrument(
+  tool: Tool,
+  recorder: Recorder,
+  results: ToolResults,
+  world?: World,
+  stubbing: "auto" | "always" | "never" = "auto",
+): Tool {
+  const stubbed = stubbing === "always" || (stubbing !== "never" && STUBBED.has(tool.name));
   return {
     ...tool,
     async execute(args, context) {
@@ -245,6 +305,16 @@ function instrument(tool: Tool, recorder: Recorder, results: ToolResults, world?
       if (!stubbed) {
         const real = await tool.execute(args, context);
         record.result = describeResult(real);
+        recorder.trace?.({
+          kind: "call",
+          at: Date.now(),
+          turn: recorder.turn,
+          ...(context.agentName ? { agent: context.agentName } : {}),
+          tool: tool.name,
+          args,
+          result: record.result,
+          refused: looksRefused(record.result),
+        });
         return real;
       }
       // The world first, static stubs second. A scenario usually has a handful
@@ -255,16 +325,66 @@ function instrument(tool: Tool, recorder: Recorder, results: ToolResults, world?
       const moved = world?.resolve(tool.name, args, context.agentName, recorder.turn);
       const output = moved !== null && moved !== undefined ? moved : stubResult(tool.name, args, results);
       record.result = describeResult({ success: true, output });
+      recorder.trace?.({
+        kind: "call",
+        at: Date.now(),
+        turn: recorder.turn,
+        ...(context.agentName ? { agent: context.agentName } : {}),
+        tool: tool.name,
+        args,
+        result: record.result,
+        refused: looksRefused(record.result),
+      });
       return { success: true, output };
     },
   };
 }
 
 /** What the tool said, capped. Long enough for a witness, short enough for a report. */
-const RESULT_CHARS = 600;
+/**
+ * How much of a tool's answer the *trace* keeps. The model always gets all of
+ * it — `instrument` returns the tool's real result untouched.
+ *
+ * Raised from 600 on 2026-08-19, because 600 had quietly made the record
+ * unreadable. Every simulation tool prepends whatever mail a character is owed,
+ * and a traitor's standing reminder is 400-odd characters on its own — so 35%
+ * of one run's 508 calls were cut mid-word, and every one of the traitor's
+ * `size_up` calls was truncated *before* the line saying what the reading
+ * actually said.
+ *
+ * A review of that run concluded the traitor had lost its intelligence tool
+ * entirely. It had not; only the record of it had. That is the more dangerous
+ * failure of the two — a missing tool gets fixed, a missing *record* produces
+ * confident analysis of a game nobody played.
+ */
+const RESULT_CHARS = 4000;
 
-function describeResult(result: { success?: boolean; output?: unknown; error?: unknown }): string {
-  const body = typeof result.output === "string" ? result.output : JSON.stringify(result.output ?? result.error ?? "");
+/**
+ * What a tool call actually said, for the trace.
+ *
+ * The first non-empty of `output` then `error`, and the ordering matters
+ * because core's `fail()` returns `{ success: false, output: "", error }` — the
+ * message goes in `error` and an empty string goes in `output`. Preferring
+ * `output` whenever it was a string therefore recorded **every refused
+ * core-tool call as blank**.
+ *
+ * Measured across runs: 6 of 324 calls in one, 10 of 429 in another, all of
+ * them `room` posts that omitted the required `room` argument. Every one is
+ * followed by an identical call that supplies it, so each cost a duplicate post
+ * and a wasted tool round — and none of it was visible to the viewer, the
+ * scoreboard, or anybody reading the trace afterwards. The model got the error;
+ * the record did not.
+ */
+export function describeResult(result: { success?: boolean; output?: unknown; error?: unknown }): string {
+  const parts = [result.output, result.error];
+  let body = "";
+  for (const part of parts) {
+    const text = typeof part === "string" ? part : part === undefined ? "" : JSON.stringify(part);
+    if (text.trim()) {
+      body = text;
+      break;
+    }
+  }
   return body.length <= RESULT_CHARS ? body : `${body.slice(0, RESULT_CHARS)}…`;
 }
 
@@ -311,6 +431,14 @@ export function buildScenarioTools(specs: readonly ScenarioTool[]): Tool[] {
  * the socket.
  */
 class Recorder {
+  /**
+   * Where to send events as they happen, when anybody is watching.
+   *
+   * On the recorder rather than threaded through every call site because the
+   * recorder is already the one object that sees every execution and knows
+   * which turn is running — the two things a live view is made of.
+   */
+  trace?: TraceSink;
   readonly requests: RecordedRequest[] = [];
   readonly calls: RecordedCall[] = [];
   /** Calls that ran, attributed to the agent whose turn ran them. */
@@ -437,6 +565,74 @@ export function turnFailed(responses: number, failures: string[]): { error: stri
   return { error: `no model response: ${failures[0]}` };
 }
 
+/**
+ * Warnings core raised about the configuration this run assembled.
+ *
+ * The benchmark's job is to connect TAI to a problem, so a benchmark that hides
+ * what TAI says about the connection is worse than useless — it is a run that
+ * looks healthy while being misconfigured. `validateConfig` already knew the
+ * 2026-08-17 descent failure was coming and said so in one sentence:
+ *
+ *   agent.maxHistoryTokens (110000) is not smaller than agent.maxContextTokens
+ *   (32768), so a full request cannot fit the model's window with room for its
+ *   reply.
+ *
+ * Nothing read it. The run died at round 13 and reported a score.
+ *
+ * Deduplicated across the runs of a cohort, because the config is assembled per
+ * run and the same sentence repeated ninety times is noise rather than signal.
+ */
+const _reportedConfigWarnings = new Set<string>();
+
+export function configWarningsToReport(warnings: string[], seen: Set<string> = _reportedConfigWarnings): string[] {
+  const fresh = warnings.filter((w) => !seen.has(w));
+  for (const w of fresh) seen.add(w);
+  return fresh;
+}
+
+function reportConfigWarnings(config: Parameters<typeof validateConfig>[0]): void {
+  for (const warning of configWarningsToReport(validateConfig(config))) {
+    console.warn(`  [config] ${warning}`);
+  }
+}
+
+/**
+ * How many answerless turns in a row mean the run is over rather than unlucky.
+ *
+ * Ten is two full five-agent rounds. One dead turn is a blip the loop recovers
+ * from; two consecutive rounds where nobody in the party got a reply is a dead
+ * endpoint, and every turn after it is spent on nothing.
+ */
+export const DEAD_RUN_TURNS = 10;
+
+/**
+ * Has the model stopped answering *mid-run*?
+ *
+ * {@link turnFailed} only catches a run that was never alive: it asks whether
+ * `responses` is zero across the whole scenario, so a run that answered for
+ * seventy turns and then died reports no error at all — just a low score, which
+ * is indistinguishable from a team that played badly.
+ *
+ * That is not hypothetical. On 2026-08-17 a descent run met a server whose
+ * context cap it had outgrown; from round 13 every request came back
+ * `400 context_length_exceeded`, and the harness played the remaining 130 turns
+ * with nobody in them, scoring a clean zero and flagging nothing. The
+ * simulation advanced the whole time, so the broadcast showed two enemies at
+ * full health biting a party that never swung back.
+ *
+ * The loop already stops early for the analogous case one line up — a
+ * simulation that has failed is not worth running the roster out on. A model
+ * that has stopped answering is the same judgement about the other side.
+ */
+export function runIsDead(consecutiveDeadTurns: number, lastFailure?: string): { error: string } | undefined {
+  if (consecutiveDeadTurns < DEAD_RUN_TURNS) return undefined;
+  return {
+    error:
+      `the model stopped answering: ${consecutiveDeadTurns} consecutive turns got no reply` +
+      `${lastFailure ? ` (${lastFailure})` : ""}. Stopped rather than playing the horizon out empty.`,
+  };
+}
+
 /** ~4 chars per token. Same rough estimator core budgets with, and good enough to catch bloat. */
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
@@ -503,6 +699,34 @@ export const DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1";
  */
 export function simulationGrants(sim: Simulation, roles: Record<string, string>): Record<string, string[]> {
   const perRole = sim.tools();
+
+  // Two roles exporting the same tool name is a silent measurement bug rather
+  // than a style question, and it is invisible from inside a simulation: the
+  // harness flattens every role's tools into one registry and each agent's
+  // allowlist selects by *name*, so the roles do not get one implementation
+  // each — they all get whichever was built last. `the-lock` shipped six roles
+  // with a `raise_paddle` apiece, every agent was handed the upper chamber's
+  // one, and the run that found it took sixty-seven minutes and read as a team
+  // hallucinating its own capabilities. It was reporting exactly what it was
+  // told.
+  //
+  // A tool whose behaviour depends on who called it belongs in `sharedTools()`,
+  // where `agentTool` can read `context.agentName`.
+  const owner = new Map<string, string>();
+  for (const [role, tools] of Object.entries(perRole)) {
+    for (const t of tools) {
+      const first = owner.get(t.name);
+      if (first !== undefined) {
+        throw new Error(
+          `simulation "${sim.name}" gives both "${first}" and "${role}" a tool called "${t.name}". ` +
+            "Tools are registered by name, so one of those implementations would serve both agents. " +
+            "Give them different names, or move it to sharedTools() and read the caller from context.agentName.",
+        );
+      }
+      owner.set(t.name, role);
+    }
+  }
+
   const shared = sim.sharedTools().map((t) => t.name);
   const grants: Record<string, string[]> = {};
   for (const [role, agent] of Object.entries(roles)) {
@@ -515,6 +739,11 @@ export function simulationGrants(sim: Simulation, roles: Record<string, string>)
     grants[agent] = [...new Set([...(grants[agent] ?? []), ...own.map((t) => t.name), ...shared])];
   }
   return grants;
+}
+
+/** What the simulation wants said to one role, if anything. */
+function brief(sim: Simulation, role: string | undefined): string | undefined {
+  return role ? sim.briefFor?.(role) : undefined;
 }
 
 export function buildConfig(scenario: Scenario, opts: HarnessOptions, sim?: Simulation): Record<string, unknown> {
@@ -552,7 +781,20 @@ export function buildConfig(scenario: Scenario, opts: HarnessOptions, sim?: Simu
       temperature: opts.temperature,
       ...(opts.maxTokens === null ? {} : { maxTokens: opts.maxTokens }),
       maxToolRounds: opts.maxToolRounds,
-      maxHistoryTokens: 110000,
+      // Omitted rather than defaulted, because omitting is how `loadConfig` is
+      // asked for the code's own value — the same trick `deepMerge`'s `null`
+      // exists for. A number written here would be a number this benchmark
+      // measures itself against instead of measuring TAI.
+      //
+      // It used to say 110000. Nothing needed it: every scenario that sets a
+      // budget sets a *smaller* one (1400 through 20000), and the sixteen files
+      // that set none inherited a budget larger than the model's window, so
+      // `trimHistory` never bound and the request grew without limit. A descent
+      // run of 2026-08-17 reached 44,913 tokens against a 32,768-token server
+      // and died at round 13 — with core's own `validateConfig` already
+      // reporting, unheard, that this exact pair could not fit.
+      ...(opts.maxHistoryTokens === undefined ? {} : { maxHistoryTokens: opts.maxHistoryTokens }),
+      ...(opts.maxContextTokens === undefined ? {} : { maxContextTokens: opts.maxContextTokens }),
       providerExtra: {
         ...opts.providerExtra,
         ...(opts.seed !== null ? { seed: opts.seed } : {}),
@@ -596,7 +838,8 @@ export function buildConfig(scenario: Scenario, opts: HarnessOptions, sim?: Simu
 
   if (sim && scenario.simulation) {
     const agents = (merged.agents ?? {}) as Record<string, Record<string, unknown>>;
-    for (const [agent, granted] of Object.entries(simulationGrants(sim, scenario.simulation.roles))) {
+    const roles = scenario.simulation.roles;
+    for (const [agent, granted] of Object.entries(simulationGrants(sim, roles))) {
       const block = agents[agent];
       if (!block) {
         throw new Error(
@@ -605,12 +848,36 @@ export function buildConfig(scenario: Scenario, opts: HarnessOptions, sim?: Simu
         );
       }
       const declared = Array.isArray(block.tools) ? (block.tools as string[]) : [];
-      // `room` is added rather than assumed. An agent given an allowlist that
-      // omits it cannot post, so it would take its turn, read everything, act on
-      // nothing anybody else could see, and look like an agent with nothing to
-      // say — which is the single most misleading way for a coordination
-      // scenario to fail.
-      block.tools = [...new Set([...declared, ...granted, "room"])];
+
+      /*
+       * A fresh object, never a write through to the scenario's own.
+       *
+       * `deepMerge` copies a key it does not already hold by reference, so
+       * `merged.agents.mage` *is* `scenario.config.agents.mage`. Mutating it
+       * edits the loaded scenario for every later caller in the process. The
+       * tools line got away with that for months because rebuilding a set from
+       * a superset is idempotent; appending text is not, so a scenario built
+       * twice — `--repeats 3`, or two variants in one test file — accumulated
+       * the brief once per build. Found by a test that ran two variants in a
+       * row and got the first one's instructions back.
+       */
+      agents[agent] = {
+        ...block,
+        // `room` is added rather than assumed. An agent given an allowlist that
+        // omits it cannot post, so it would take its turn, read everything, act
+        // on nothing anybody else could see, and look like an agent with
+        // nothing to say — which is the single most misleading way for a
+        // coordination scenario to fail.
+        tools: [...new Set([...declared, ...granted, "room"])],
+        // Anything the simulation decided about this agent that the scenario
+        // could not know when it was written — a role drawn at construction,
+        // for instance. Appended rather than replacing, because the scenario's
+        // own description of the job is still true: a traitor is still the
+        // cleric, and still the only one who can heal.
+        ...(brief(sim, roles[agent])
+          ? { instructions: `${String(block.instructions ?? "").trim()}\n\n${brief(sim, roles[agent])}`.trim() }
+          : {}),
+      };
     }
   }
 
@@ -621,12 +888,17 @@ export function buildConfig(scenario: Scenario, opts: HarnessOptions, sim?: Simu
  * Scenario config over harness config, where `null` **removes** a key.
  *
  * The removal case is how a scenario tests a code default. The harness writes a
- * value for everything it cares about — `maxHistoryTokens: 110000`, so the long
- * session scenarios have room — which means a scenario can otherwise only ever
- * exercise a number it wrote down itself. `default-history-budget-keeps-the-conversation`
- * did exactly that, pinning `2000` and calling it "the default": the day the
- * default moved, the scenario would have gone on measuring the old one and
- * reporting it as current.
+ * value for most of what it cares about, which means a scenario can otherwise
+ * only ever exercise a number it wrote down itself.
+ * `default-history-budget-keeps-the-conversation` did exactly that, pinning
+ * `2000` and calling it "the default": the day the default moved, the scenario
+ * would have gone on measuring the old one and reporting it as current.
+ *
+ * `maxHistoryTokens` is no longer among the keys the harness writes — it is
+ * omitted unless a target or scenario asks for one, so the benchmark inherits
+ * core's budget the way a deployment does. This paragraph used to cite the
+ * harness's own `110000` as the reason the removal case was needed, which is
+ * how a value nothing depended on survived long enough to kill a run.
  *
  * `null` drops the key so `loadConfig` supplies `DEFAULT_CONFIG`'s value, which
  * is the only way the assertion tracks the code instead of restating it.
@@ -665,11 +937,60 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
 
   const started = Date.now();
   const recorder = new Recorder();
+  recorder.trace = opts.trace;
+  const emit = opts.trace ?? (() => {});
   // Built once per run, so every agent in a multi-agent scenario drives the same
   // machinery. That is the whole point of a shared world: what one agent unlocks
   // is unlocked for the next one, and two agents doing the same step is visible
   // as a repeat rather than as two independent successes.
   const world = scenario.world ? new World(scenario.world) : undefined;
+  // Resolved before the run event rather than beside the simulation below,
+  // because the trace has to record which world this was in order for a later
+  // comparison to know whether two runs played the same game.
+  const simSeed = scenario.simulation?.seed ?? opts.seed ?? 0;
+  emit({
+    kind: "run",
+    at: Date.now(),
+    scenario: scenario.id,
+    // Where this world came from, when it was not built from the seed below.
+    //
+    // Without it a resumed run's trace is a lie about its own world: it records
+    // the scenario's seed while having played somewhere else entirely, and
+    // resuming *from* that trace silently rebuilds a fresh dungeon and replays
+    // the second run's calls onto it. That happened on 2026-08-18 and produced a
+    // continuation with different characters in it.
+    ...(opts.resumeFrom ? { resumedFrom: { trace: opts.resumeFrom.trace, round: opts.resumeFrom.round } } : {}),
+    ...(scenario.intent ? { intent: scenario.intent } : {}),
+    model: opts.model,
+    agents: [...new Set(wakeSteps(scenario, scenario.agent?.name ?? "bench").map((step) => step.agent))],
+    rooms: (scenario.rooms ?? []).map((room) => room.name),
+    ...((scenario.rooms ?? []).length
+      ? {
+          roomMembers: Object.fromEntries(
+            (scenario.rooms ?? []).map((room) => [
+              room.name,
+              // Same default the subscription loop uses: a room with no declared
+              // members holds everybody who takes a turn.
+              room.members ?? wakeAgents(scenario, scenario.agent?.name ?? "bench"),
+            ]),
+          ),
+        }
+      : {}),
+    ...(scenario.simulation ? { roles: scenario.simulation.roles } : {}),
+    rounds: Math.max(1, ...wakeSteps(scenario, scenario.agent?.name ?? "bench").map((step) => (step.round ?? 0) + 1)),
+    ...(scenario.facts ? { facts: scenario.facts } : {}),
+    ...(scenario.milestones ? { milestones: scenario.milestones.map((m) => ({ id: m.id, points: m.points })) } : {}),
+    ...(scenario.simulation
+      ? {
+          simulation: {
+            name: scenario.simulation.name,
+            seed: simSeed,
+            ...(scenario.simulation.days === undefined ? {} : { days: scenario.simulation.days }),
+            ...(scenario.simulation.options ? { options: scenario.simulation.options } : {}),
+          },
+        }
+      : {}),
+  });
   // Same lifetime as the world, and for the same reason: in a multi-agent
   // scenario the attempts are the team's, not each agent's. Three guesses each
   // would make a room of five agents a search rather than a test.
@@ -681,14 +1002,68 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
   // Seeded from the run's own seed by default, so repeats of a scenario see
   // different weather — a stochastic run repeated on identical luck measures
   // nothing about variance, which is the thing repeats exist to measure.
-  const simSeed = scenario.simulation?.seed ?? opts.seed ?? 0;
-  const sim = scenario.simulation
-    ? createSimulation(scenario.simulation.name, {
-        seed: simSeed,
-        ...(scenario.simulation.days === undefined ? {} : { days: scenario.simulation.days }),
-        ...(scenario.simulation.options ?? {}),
-      })
+  //
+  // `resumeFrom` replaces construction with replay: the world is rebuilt from a
+  // trace some earlier run wrote, up to a chosen round, and the model is handed
+  // that instead of a fresh dungeon. It exists because the questions worth
+  // asking about this scenario are all about its second half — a reveal that
+  // unlocks on round eleven, a traitor whose best moment is round thirty — and
+  // paying twenty-six minutes of GPU to reach round eleven made each of those a
+  // once-a-day question rather than a once-a-minute one.
+  //
+  // Deliberately not a saved-state file: replay has no format to keep in step
+  // with the simulation, and it can only reach states a run actually played
+  // into, which is the right constraint for a benchmark.
+  const resumed = opts.resumeFrom
+    ? await replayTrace(
+        opts.resumeFrom.trace,
+        opts.resumeFrom.round,
+        scenario.simulation?.daysPerRound ?? 1,
+        // The scenario's own options win over the recorded ones, so a resumed
+        // run can ask what a *different* configuration does in the same world.
+        scenario.simulation?.options ?? {},
+      )
     : undefined;
+  if (resumed?.drift.length) {
+    // Thrown, not warned. A rebuilt world that disagrees with the trace it
+    // claims to continue makes every number measured on top of it a number
+    // about nothing, so there is no version of this worth completing.
+    //
+    // It *was* a `console.warn`, and that was useless: scenarios run in a child
+    // process whose stdout the parent only reads on failure, so the warning
+    // fired correctly into a channel nobody reads. Which is the third time in
+    // one day that a correct diagnostic went unheard here — see the narrator's
+    // swallowed HTTP errors and `validateConfig`'s unread output.
+    throw new Error(
+      `the world rebuilt from ${opts.resumeFrom?.trace} disagrees with what that run recorded, on: ` +
+        `${resumed.drift.join(", ")}. Either an override reached world generation, or the trace is itself ` +
+        "from a resumed run and does not carry its own origin. Nothing measured on this world would mean anything.",
+    );
+  }
+  if (resumed && scenario.simulation?.days !== undefined) {
+    // After the drift check, never before. Replay has to run at the horizon the
+    // trace was recorded under or the world it rebuilds is a different world —
+    // see `Simulation.setHorizon`. Moving it here extends the *future* of a
+    // faithfully rebuilt past, which is the only version of "resume for
+    // longer" that means anything.
+    const setter = resumed.sim as { setHorizon?: (days: number) => void };
+    if (typeof setter.setHorizon !== "function") {
+      throw new Error(
+        `resuming asked for a ${scenario.simulation.days}-round horizon, and "${resumed.sim.name}" cannot move ` +
+          "its own. Resume it at the horizon it was recorded with, or teach the simulation `setHorizon`.",
+      );
+    }
+    setter.setHorizon(scenario.simulation.days);
+  }
+  const sim = resumed
+    ? resumed.sim
+    : scenario.simulation
+      ? createSimulation(scenario.simulation.name, {
+          seed: simSeed,
+          ...(scenario.simulation.days === undefined ? {} : { days: scenario.simulation.days }),
+          ...(scenario.simulation.options ?? {}),
+        })
+      : undefined;
   let db: import("better-sqlite3").Database | undefined;
 
   try {
@@ -739,6 +1114,7 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
     const configPath = join(home, "config.yaml");
     writeFileSync(configPath, YAML.stringify(configObject));
     const config = loadConfig(configPath);
+    reportConfigWarnings(config);
 
     db = initDatabase(join(home, "agent.db"));
     const contextDir = join(home, "data", "context");
@@ -761,7 +1137,7 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
       // an agent's `tools:` allowlist decides who holds which, exactly as it
       // does for `exec`.
       ...buildScenarioTools(scenario.tools ?? []).map((t) =>
-        instrument(t, recorder, scenario.toolResults ?? {}, world, true),
+        instrument(t, recorder, scenario.toolResults ?? {}, world, "always"),
       ),
       // Not instrumented: it is not a stub standing in for something real, it
       // *is* the thing. Appended here rather than in the meta-tool list so an
@@ -775,7 +1151,7 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
       // it is the thing under test.
       ...(sim
         ? [...Object.values(sim.tools()).flat(), ...sim.sharedTools()].map((t) =>
-            instrument(t, recorder, scenario.toolResults ?? {}, undefined),
+            instrument(t, recorder, scenario.toolResults ?? {}, undefined, "never"),
           )
         : []),
     ];
@@ -815,6 +1191,27 @@ export async function runOnce(scenario: Scenario, opts: HarnessOptions): Promise
     const outcome = scenario.rooms?.length
       ? await runRoomScenario(scenario, runtime, db, agentName, opts, recorder, world, sim)
       : await runChatScenario(scenario, runtime, db, agentName, opts);
+
+    // The room path emits its own turns and its own ending. A single-turn
+    // session scenario has neither, and without this a viewer pointed at one
+    // would sit on "connecting" forever for a run that finished in nine
+    // seconds — the tool has to be honest about every scenario, not just the
+    // ones it was built to watch.
+    if (!scenario.rooms?.length) {
+      emit({ kind: "turn", at: Date.now(), turn: 0, round: 0, agent: agentName, room: "(session)" });
+      if (outcome.reply) {
+        emit({
+          kind: "post",
+          at: Date.now(),
+          turn: 0,
+          agent: agentName,
+          room: "(session)",
+          to: [],
+          body: outcome.reply,
+        });
+      }
+      emit({ kind: "end", at: Date.now(), turns: 1 });
+    }
 
     return {
       ...outcome,
@@ -1023,7 +1420,7 @@ async function runRoomScenario(
   recorder: Recorder,
   world?: World,
   sim?: Simulation,
-): Promise<Pick<RunOutcome, "reply" | "posts" | "stop" | "turns" | "dayOfTurn">> {
+): Promise<Pick<RunOutcome, "reply" | "posts" | "stop" | "turns" | "dayOfTurn" | "error">> {
   const store = runtime.getRoomStore();
   const backend = new LocalRoomBackend(db, store);
 
@@ -1151,6 +1548,9 @@ async function runRoomScenario(
   // Which simulated day each turn ran on. The only clock connecting the
   // transcript to the economy, and what lets latency be reported in days.
   const dayOfTurn: number[] = [];
+  /** Consecutive turns that got no reply at all. See {@link runIsDead}. */
+  let deadTurns = 0;
+  let deadStop: { error: string } | undefined;
   const stride = Math.max(1, scenario.simulation?.daysPerRound ?? 1);
 
   /**
@@ -1171,16 +1571,84 @@ async function runRoomScenario(
   const strikeTheHour = async () => {
     if (!sim) return;
     const horizon = scenario.simulation?.days;
+    // The simulation says what its own clock says. The harness knows only that
+    // there is a clock and that somebody has to wind it — a runner that writes
+    // this sentence itself has to know whether the world has customers or
+    // water in it, and grows a branch for every world after the first.
+    const body =
+      sim.announce?.() ?? `Day ${sim.day + 1}${horizon ? ` of ${horizon}` : ""}. Today's decisions are yours.`;
     for (const ref of refs.values()) {
-      await postLine(backend, room_id(ref), {
-        speaker: DAY_MARKER,
-        body: `Day ${sim.day + 1}${horizon ? ` of ${horizon}` : ""}. Overnight the factory ran, customers ordered, and the books moved. Today's decisions are yours.`,
+      await postLine(backend, room_id(ref), { speaker: DAY_MARKER, body });
+    }
+  };
+
+  /**
+   * One line per round, for anybody watching.
+   *
+   * Emitted even when the simulation has nothing to announce, because the round
+   * boundary is what a viewer draws its timeline against — and in a puzzle where
+   * state decays every round, "which round was that" is most of the story.
+   */
+  /**
+   * Everything said since the last time we looked, for anybody watching.
+   *
+   * Drained after each turn rather than collected at the end, which is the whole
+   * point: the report already has the transcript, and by the time it exists the
+   * run is over. The same envelope parsing the final mapper does, so a live view
+   * and the report attribute a line to the same speaker.
+   *
+   * The clock's own lines are dropped here exactly as they are there — a day
+   * marker is the harness talking, not the team.
+   */
+  let traced = watermark;
+  const drainPosts = () => {
+    if (!recorder.trace) return;
+    const rows = db
+      .prepare("SELECT id, room_ref, content FROM room_messages WHERE id > ? ORDER BY id")
+      .all(traced) as Array<{ id: number; room_ref: string; content: string }>;
+    for (const row of rows) {
+      traced = Math.max(traced, row.id);
+      const envelope = parseEnvelope(row.content);
+      if (envelope.speaker === DAY_MARKER) continue;
+      recorder.trace({
+        kind: "post",
+        at: Date.now(),
+        turn: recorder.turn,
+        ...(envelope.speaker ? { agent: envelope.speaker } : {}),
+        room: [...refs].find(([, ref]) => ref === row.room_ref)?.[0] ?? row.room_ref,
+        to: envelope.to ?? [],
+        body: envelope.body.trim(),
       });
     }
   };
 
+  const openRound = (n: number) => {
+    recorder.trace?.({
+      kind: "round",
+      at: Date.now(),
+      round: n,
+      ...(sim ? { day: sim.day } : {}),
+      ...(sim?.announce?.() ? { announce: sim.announce() as string } : {}),
+    });
+  };
+
+  /** Publish the simulation state at an actual world boundary. */
+  const traceState = (atRound: number) => {
+    if (!sim) return;
+    recorder.trace?.({
+      kind: "state",
+      at: Date.now(),
+      turn: recorder.turn,
+      round: atRound,
+      snapshot: sim.snapshot(),
+      resolved: true,
+      ...(sim.announce?.() ? { announce: sim.announce() as string } : {}),
+    });
+  };
+
   try {
     await strikeTheHour();
+    openRound(round ?? 0);
     for (const step of steps) {
       if (step.round !== round) {
         // A pass that changed nothing ends the run — unless a simulation is
@@ -1204,8 +1672,13 @@ async function runRoomScenario(
         // `SimulationSpec.daysPerRound`: a horizon short enough for one round
         // per day is short enough to reward doing nothing.
         for (let i = 0; i < stride && !sim?.done; i++) sim?.advance();
+        // The result belongs in the trace before the next round is announced.
+        // Waiting for the first agent turn left the stage showing the previous
+        // room (and its stale intents) throughout a potentially long model call.
+        traceState(round ?? 0);
         round = step.round;
         await strikeTheHour();
+        openRound(round ?? 0);
       }
       // A team cannot manage a company that has already failed. Stopping here
       // rather than running the roster out keeps `daysManaged` honest — turns
@@ -1217,12 +1690,47 @@ async function runRoomScenario(
       recorder.turn = turns.length;
       turns.push({ agent: step.agent, room: step.room });
       if (sim) dayOfTurn.push(sim.day);
+      recorder.trace?.({
+        kind: "turn",
+        at: Date.now(),
+        turn: recorder.turn,
+        round: step.round ?? 0,
+        agent: step.agent,
+        room: step.room,
+      });
+      const responsesBefore = recorder.responses;
+      const failuresBefore = recorder.failures.length;
       const reply =
         step.kind === "checkin" ? await watcher.runCheckIn(step.agent, ref) : await watcher.pollOnce(step.agent, ref);
+      // A turn that produced no reply *and* logged a provider error got nothing
+      // back. Counted consecutively, because the loop recovers from one and a
+      // recovered turn is a real turn — it is the unbroken run of them that
+      // says the endpoint is gone rather than flaky.
+      if (recorder.responses === responsesBefore && recorder.failures.length > failuresBefore) {
+        deadTurns += 1;
+      } else {
+        deadTurns = 0;
+      }
+      // After the turn rather than before: what a viewer wants to see is the
+      // state this agent left behind, next to what it said.
+      if (sim) {
+        recorder.trace?.({
+          kind: "state",
+          at: Date.now(),
+          turn: recorder.turn,
+          round: step.round ?? 0,
+          snapshot: sim.snapshot(),
+        });
+      }
+      drainPosts();
       replies.push({ agent: step.agent, reply: typeof reply === "string" ? reply : "" });
       boundaries.push(highWater());
+
+      deadStop = runIsDead(deadTurns, recorder.failures[recorder.failures.length - 1]);
+      if (deadStop) break;
     }
   } finally {
+    drainPosts();
     listening?.dispose();
     watcher.stop();
     // Run the company on to the horizon under management's last decisions.
@@ -1232,10 +1740,11 @@ async function runRoomScenario(
     // the team on a shorter horizon than the thing it is being compared to, and
     // flatter every team that stopped early — a company that is abandoned keeps
     // paying wages, and the balance sheet should say so.
-    if (sim) {
-      let guard = 0;
-      while (!sim.done && guard++ < 10_000) sim.advance();
-    }
+    finishSimulationTrace(sim, recorder.trace, {
+      turn: recorder.turn,
+      round: round ?? 0,
+      turns: turns.length,
+    });
   }
 
   const byRef = new Map([...refs].map(([name, ref]) => [ref, name]));
@@ -1272,6 +1781,7 @@ async function runRoomScenario(
     stop: stopForRun(stops),
     turns,
     ...(dayOfTurn.length ? { dayOfTurn } : {}),
+    ...(deadStop ?? {}),
   };
 }
 
@@ -1302,6 +1812,7 @@ function describeSimulation(
     events: sim.events,
     dayOfTurn,
     roles: spec.roles,
+    ...(spec.options ? { options: spec.options } : {}),
     responses: sim.responses ?? {},
   };
 }

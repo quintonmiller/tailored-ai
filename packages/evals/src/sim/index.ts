@@ -12,7 +12,9 @@
  * depending on import order.
  */
 
+import "./descent/index.js";
 import "./factory/index.js";
+import "./lock/index.js";
 
 export {
   createSimulation,
@@ -22,7 +24,11 @@ export {
   type SimEvent,
   type SimMetrics,
   type Simulation,
+  type SimulationDefaults,
   type SimulationFactory,
   type SimulationOptions,
+  simulationDefaults,
+  simulationKnobs,
   simulationPolicies,
+  unknownSimOptions,
 } from "./types.js";

@@ -427,7 +427,7 @@
       purpose: The observatory and archive channel.
       members: [atlas, cipher, delta]
       incoming:
-        - speaker: quinton
+        - speaker: robin
           body: >
             You wake inside an enormous unknown machine. You do not know what it
             does or how it works. Your objective is to ACTIVATE THE MACHINE.
@@ -436,7 +436,7 @@
       purpose: The reactor, workshop and control channel.
       members: [delta, boron, echo, flux]
       incoming:
-        - speaker: quinton
+        - speaker: robin
           body: >
             You wake inside an enormous unknown machine. You do not know what it
             does or how it works. Your objective is to ACTIVATE THE MACHINE.

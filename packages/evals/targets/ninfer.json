@@ -1,0 +1,11 @@
+{
+  "_comment": "NInfer serving Qwen3.6-27B NVFP4 on :8080, as an A/B against the same weights under vLLM on :8000. MEASURED 2026-08-17, not inferred from docs. `thinking: auto` is mandatory: this artifact's chat template is NOT effort-capable \u2014 it accepts reasoning_effort 'none' or nothing at all, and returns reasoning_effort_not_supported for low/medium/high/xhigh alike. Core's openai dialect sends the rung verbatim, so any thinking level other than auto/off 400s every request; auto sends nothing and gets the template's default, which is thinking ON. (The effort rungs the repo's vllm_effort dialect targets belong to the Qwen3.8 artifact, not this one.) The dialect must still be openai rather than vllm_effort: NInfer rejects unknown non-null chat_template_kwargs, which is what that dialect sends. `model` is the artifact's own identity.model_id, confirmed via GET /v1/models. Start the server with --max-concurrency 8 (default 1 would serialise the five agents) and --max-context 32768 (default 8192 returns context_length_exceeded).",
+  "base-url": "http://127.0.0.1:8080/v1",
+  "model": "qwen3.6-27b",
+  "thinking": "auto",
+  "thinking-dialect": "openai",
+  "max-tokens": "8192",
+  "max-tool-rounds": "20",
+  "temperature": "0.3",
+  "max-context-tokens": "32768"
+}

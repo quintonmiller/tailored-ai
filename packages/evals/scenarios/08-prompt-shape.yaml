@@ -22,7 +22,7 @@
     - name: ops
       purpose: Deploys and incidents.
       incoming:
-        - { speaker: quinton, to: [nova], body: "all good?" }
+        - { speaker: robin, to: [nova], body: "all good?" }
   wake: { room: ops }
   expect:
     - prompt_contains: 'Room "ops". You are nova.'
@@ -39,7 +39,7 @@
   rooms:
     - name: ops
       incoming:
-        - { speaker: quinton, to: [nova], body: "all good?" }
+        - { speaker: robin, to: [nova], body: "all good?" }
   wake: { room: ops }
   expect:
     - prompt_contains: 'room(action="pass")'
@@ -59,11 +59,11 @@
   rooms:
     - name: ops
       incoming:
-        - { speaker: quinton, body: "morning both" }
+        - { speaker: robin, body: "morning both" }
         - { speaker: dana, body: "morning" }
   wake: { room: ops }
   expect:
-    - prompt_contains: "quinton [person]"
+    - prompt_contains: "robin [person]"
     - prompt_contains: "dana [agent]"
 
 - id: persona-appears-once
@@ -77,7 +77,7 @@
   rooms:
     - name: ops
       incoming:
-        - { speaker: quinton, to: [nova], body: "all good?" }
+        - { speaker: robin, to: [nova], body: "all good?" }
   wake: { room: ops }
   expect:
     - prompt_occurrences: { text: "You are Nova, a calm and practical assistant", min: 1, max: 1 }
@@ -93,7 +93,7 @@
   rooms:
     - name: ops
       incoming:
-        - { speaker: quinton, to: [nova], body: "all good?" }
+        - { speaker: robin, to: [nova], body: "all good?" }
   wake: { room: ops }
   expect:
     - prompt_max_tokens: 4000
@@ -114,10 +114,10 @@
   rooms:
     - name: ops
       seen:
-        - { speaker: quinton, body: "{{token:marker}}" }
-        - { speaker: quinton, body: "aardvark-marker-two" }
+        - { speaker: robin, body: "{{token:marker}}" }
+        - { speaker: robin, body: "aardvark-marker-two" }
       incoming:
-        - { speaker: quinton, to: [nova], body: "all good?" }
+        - { speaker: robin, to: [nova], body: "all good?" }
   wake: { room: ops }
   expect:
     - prompt_not_contains: "{{token:marker}}"

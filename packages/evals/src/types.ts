@@ -341,6 +341,16 @@ export interface SimulationOutcome {
   /** Role → agent, carried through so a re-grade can still say who could see what. */
   roles: Record<string, string>;
   /**
+   * The simulation-specific knobs the scenario set, carried for provenance.
+   *
+   * The report replays the baseline ladder live rather than storing it, and a
+   * ladder replayed without these is a ladder for a different world: a descent
+   * that starts the party on floor 30 compared against bots that started on
+   * floor 1 is not a comparison. Same argument as recording the model and the
+   * seed — a benchmark number with no provenance is worse than none.
+   */
+  options?: Record<string, unknown>;
+  /**
    * What answering each event kind looks like, copied off the simulation.
    *
    * Stored on the report rather than looked up at grade time, so a re-grade of
@@ -1044,7 +1054,32 @@ export interface BenchmarkReport {
      * host clock, so a re-run on a different day may legitimately differ.
      */
     maxTokens?: number | null;
+    /**
+     * How many tool rounds a turn was allowed before the harness called it a
+     * stall.
+     *
+     * Recorded because it is a *scoring* setting disguised as a plumbing one. A
+     * model that searches before it answers spends rounds; one that answers
+     * immediately does not. Comparing the two under a low cap does not measure
+     * which is better, it measures which gives up sooner — and a report that
+     * does not say what the cap was cannot be read back to notice that.
+     * Measured on Qwen3.8, raising it from 6 to 20 moved a category from 33.3%
+     * to 54.2% and dropped stalls from 16 to 5, with no change to the model.
+     */
+    maxToolRounds?: number;
     thinking?: string | null;
+    /**
+     * The dialect that carried {@link thinking} to the wire.
+     *
+     * The level alone does not identify the request. Under `vllm` every enabled
+     * level sends the same `enable_thinking: true`, so the template's own
+     * default decides the effort — `medium` and `high` are the same call. Under
+     * `vllm_effort` they are different calls. Without this field a report
+     * asking for `medium` cannot be told apart from one that asked for medium
+     * and was served the template's maximum, which is exactly the confound that
+     * made every Qwen3.8 number before 2026-08-15 an `xhigh` number.
+     */
+    thinkingDialect?: string | null;
     /**
      * Whether the agent was handed its memory or left to fetch it. Null means
      * the flag was not passed and core's default (off) applied — which is what

@@ -24,7 +24,7 @@
       seen:
         - { speaker: nova, body: "Rolled staging back to the previous tag; it's healthy again." }
       incoming:
-        - { speaker: quinton, body: "thanks nova, appreciate it" }
+        - { speaker: robin, body: "thanks nova, appreciate it" }
   wake: { room: ops }
   expect:
     - tool_args: { tool: room, where: { action: pass } }
@@ -42,8 +42,8 @@
     - name: ops
       purpose: Deploys and incidents.
       incoming:
-        - { speaker: quinton, to: [dana], body: "dana can you take the friday retro?" }
-        - { speaker: dana, to: [quinton], body: "yep, I'll set it up" }
+        - { speaker: robin, to: [dana], body: "dana can you take the friday retro?" }
+        - { speaker: dana, to: [robin], body: "yep, I'll set it up" }
   wake: { room: ops }
   expect:
     - tool_args: { tool: room, where: { action: pass } }
@@ -72,7 +72,7 @@
     - name: ops
       purpose: Deploys and incidents.
       incoming:
-        - { speaker: quinton, to: [nova], body: "nova, what's the command to tail the agent log?" }
+        - { speaker: robin, to: [nova], body: "nova, what's the command to tail the agent log?" }
   wake: { room: ops }
   expect:
     - replies: true
@@ -89,7 +89,7 @@
     - name: ops
       purpose: Deploys and incidents.
       incoming:
-        - { speaker: quinton, body: "has anyone got the staging URL handy?" }
+        - { speaker: robin, body: "has anyone got the staging URL handy?" }
   wake: { room: ops }
   expect:
     - replies: true
@@ -128,10 +128,10 @@
     - name: ops
       purpose: Deploys and incidents.
       incoming:
-        - { speaker: quinton, to: [dana], body: "did you get lunch yet? the place on 4th is doing the thing again" }
-        - { speaker: dana, to: [quinton], body: "not yet, saving myself for the weekend" }
-        - { speaker: quinton, body: "anyway — does anyone know what the retry limit is on the queue worker? it's not in the runbook" }
-        - { speaker: dana, to: [quinton], body: "no idea, that's not my end" }
+        - { speaker: robin, to: [dana], body: "did you get lunch yet? the place on 4th is doing the thing again" }
+        - { speaker: dana, to: [robin], body: "not yet, saving myself for the weekend" }
+        - { speaker: robin, body: "anyway — does anyone know what the retry limit is on the queue worker? it's not in the runbook" }
+        - { speaker: dana, to: [robin], body: "no idea, that's not my end" }
   wake: { room: ops }
   expect:
     # It has to speak: an agent that passed on this would be leaving an open

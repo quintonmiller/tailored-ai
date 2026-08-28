@@ -10,7 +10,7 @@
 import { describe, expect, it } from "vitest";
 import { compareReports } from "../compare.js";
 import { grade, trigramOverlap } from "../graders.js";
-import { describeRequest, retryDelayMs, turnFailed } from "../harness.js";
+import { DEAD_RUN_TURNS, describeRequest, retryDelayMs, runIsDead, turnFailed } from "../harness.js";
 import { score } from "../report.js";
 import type { Assertion, BenchmarkReport, RunOutcome, Scenario } from "../types.js";
 
@@ -261,6 +261,40 @@ describe("a turn that got no answer", () => {
 
   it("is not an error when nothing failed", () => {
     expect(turnFailed(0, [])).toBeUndefined();
+  });
+
+  it("says nothing about a run that answered and then died", () => {
+    // The gap `runIsDead` exists to close. `turnFailed` asks whether the whole
+    // scenario ever got a reply, so a run that worked for seventy turns and
+    // then lost its endpoint looks exactly like a team that played badly.
+    expect(turnFailed(70, ["400 context_length_exceeded"])).toBeUndefined();
+  });
+});
+
+describe("a run that dies halfway through", () => {
+  // 2026-08-17: a descent run outgrew its server's context window at round 13.
+  // Every later request came back `400 context_length_exceeded`, and the
+  // harness played the remaining 130 turns with nobody in them — scoring a
+  // clean zero, flagging nothing, and leaving the broadcast showing two enemies
+  // at full health biting a party that never swung back.
+  it("stops once a run of turns has got no reply at all", () => {
+    expect(runIsDead(DEAD_RUN_TURNS, "400 context_length_exceeded")).toEqual({
+      error:
+        `the model stopped answering: ${DEAD_RUN_TURNS} consecutive turns got no reply ` +
+        "(400 context_length_exceeded). Stopped rather than playing the horizon out empty.",
+    });
+  });
+
+  it("tolerates a blip shorter than two full rounds", () => {
+    // One agent losing one turn is what the loop is built to recover from.
+    // Aborting on it would fail a run over a single transient 503.
+    expect(runIsDead(DEAD_RUN_TURNS - 1, "transient 503")).toBeUndefined();
+    expect(runIsDead(1, "transient 503")).toBeUndefined();
+    expect(runIsDead(0)).toBeUndefined();
+  });
+
+  it("still reports when there is no failure text to quote", () => {
+    expect(runIsDead(DEAD_RUN_TURNS)?.error).toContain("consecutive turns got no reply");
   });
 });
 
@@ -542,5 +576,53 @@ describe("does_not_call_with", () => {
       looked,
     );
     expect(checks[0].detail).toContain("s3 rb");
+  });
+});
+
+describe("beats_baseline", () => {
+  /**
+   * The baseline has to be replayed in the *same world* the agents played.
+   *
+   * `SimulationOutcome` carries an options bag, and `the-endless-descent` uses
+   * it to start the party on floor 31. Replaying a baseline without it starts
+   * that baseline on floor 1, where it plays a different game and scores about
+   * a quarter as much — so a run would clear a bar four times lower than the
+   * one it was supposed to clear, and read as a pass.
+   *
+   * This is the third place the same omission has been found (the reporter's
+   * replayed ladder and `printSimulation` were the first two), which is why it
+   * is pinned here rather than fixed quietly.
+   */
+  const descentRun = (earnedXp: number) =>
+    outcome({
+      simulation: {
+        name: "descent",
+        seed: 1000,
+        days: 40,
+        daysManaged: 40,
+        daysPerRound: 1,
+        metrics: { earnedXp },
+        objective: earnedXp,
+        events: [],
+        dayOfTurn: {},
+        options: { startFloor: 31 },
+      },
+    });
+
+  it("replays the baseline with the run's own options", async () => {
+    // A floor-1 `basic-tactics` earns around a thousand; a floor-31 one earns
+    // several times that. A score between the two separates a grader that
+    // honours the options from one that ignores them, and nothing else does.
+    const between = 2_500;
+    expect(
+      await passes({ beats_baseline: { policy: "basic-tactics", metric: "earnedXp" } }, descentRun(between)),
+      "a score that only beats the floor-1 baseline must not pass",
+    ).toBe(false);
+  });
+
+  it("passes a run that genuinely beats the baseline it was measured against", async () => {
+    expect(await passes({ beats_baseline: { policy: "basic-tactics", metric: "earnedXp" } }, descentRun(99_999))).toBe(
+      true,
+    );
   });
 });
