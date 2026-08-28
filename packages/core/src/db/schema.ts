@@ -557,6 +557,19 @@ export function initDatabase(dbPath: string): Database.Database {
       author_id    TEXT NOT NULL,
       author_label TEXT NOT NULL,
       content      TEXT NOT NULL,
+      -- JSON array of MediaRef, for messages that carried an attachment.
+      --
+      -- A column here, unlike the messages table, which encodes media into its
+      -- existing content instead. Two reasons the trade lands the other way:
+      -- this column is added by a nullable ADD COLUMN, which is metadata-only
+      -- in SQLite and rewrites no row, so the bulk-UPDATE risk that decided the
+      -- other case does not arise; and content here is envelope text that
+      -- parseEnvelope reads back and a human reads directly, so JSON in it
+      -- would break both.
+      --
+      -- NULL, not '[]', when there was none: absent and empty say the same
+      -- thing and NULL costs nothing on the overwhelming majority of rows.
+      media        TEXT,
       created_at   TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -653,6 +666,13 @@ export function initDatabase(dbPath: string): Database.Database {
         SELECT RAISE(ABORT, 'audit_log is append-only: DELETE not allowed');
       END;
   `);
+
+  // Safe migration: attachments on local-backend room messages
+  try {
+    db.exec("ALTER TABLE room_messages ADD COLUMN media TEXT");
+  } catch {
+    // Column already exists
+  }
 
   // Safe migration for existing DBs that lack session_key
   try {

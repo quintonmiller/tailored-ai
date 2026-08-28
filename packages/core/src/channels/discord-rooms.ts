@@ -22,6 +22,8 @@ import {
   type TextChannel,
   WebhookClient,
 } from "discord.js";
+import type { MediaRef } from "../content/types.js";
+import type { MediaStore } from "../media/interface.js";
 import { formatEnvelope, parseEnvelope } from "../rooms/envelope.js";
 import type { RoomStore } from "../rooms/store.js";
 import type {
@@ -34,6 +36,7 @@ import type {
   RoomMessage,
 } from "../rooms/types.js";
 import { formatRoomRef } from "../rooms/types.js";
+import { attachmentName } from "./render.js";
 
 const MAX_MESSAGE_LENGTH = 2000;
 
@@ -80,6 +83,9 @@ function unpadSnowflake(cursor: string): string {
  * is module-private, so this is the same rule kept local: break on a newline,
  * fall back to a space, hard-cut only when neither lands in the back half.
  */
+/** How many captured attachments to remember; see `capturedAttachments`. */
+const MAX_CAPTURE_MEMO = 256;
+
 function splitForDiscord(text: string, limit = MAX_MESSAGE_LENGTH): string[] {
   if (text.length <= limit) return [text];
 
@@ -118,6 +124,14 @@ export interface DiscordRoomBackendOptions {
   /** Inverse of {@link DiscordRoomBackendOptions.nativeIdFor}, for inbound mentions. */
   labelForNativeId?: (nativeId: string) => string | undefined;
   /**
+   * Where attachments are kept, resolved per call.
+   *
+   * A getter rather than the store itself: media can be configured, or
+   * reconfigured, by a reload after this backend was constructed, and a
+   * captured reference would pin whatever was true at connect time.
+   */
+  mediaStore?: () => MediaStore | undefined;
+  /**
    * Known identity labels, so `[note] ...` in a human's message stays body text
    * instead of inventing a speaker. Wire this to `IdentityResolver.isKnown`.
    */
@@ -146,6 +160,10 @@ export class DiscordRoomBackend implements RoomBackend {
       history: true,
       // Set once a webhook exists for the room; see ensureWebhook.
       nativeSpeakers: true,
+      // Attachments both ways. True even with no media store configured: this
+      // says the transport has the concept, and the store is what decides
+      // whether any bytes are actually carried.
+      media: true,
       threads: true,
       edit: true,
       reactions: true,
@@ -443,14 +461,25 @@ export class DiscordRoomBackend implements RoomBackend {
 
     const threadId = message.parentId ? await this.threadFor(id, message.parentId) : undefined;
 
+    // The split happens first and the files ride the FINAL chunk, so a long
+    // message does not show its attachment above the text that introduces it.
+    // An attachment-only post still sends: `chunks` is empty when there is no
+    // text, and dropping the message would lose the one thing it carried.
+    const files = await this.loadFiles(message.media);
+    const chunks = splitForDiscord(text);
+    // Same rule as the prefixed path: last non-empty chunk, seeded with the
+    // final index so an attachment-only post still has somewhere to ride.
+    const fileIdx = chunks.reduce((acc, chunk, i) => (chunk ? i : acc), chunks.length - 1);
+
     let last: DiscordMessage | null = null;
-    for (const chunk of splitForDiscord(text)) {
-      if (!chunk) continue;
+    for (const [i, chunk] of chunks.entries()) {
+      if (!chunk && !(files.length > 0 && i === fileIdx)) continue;
       last = (await webhook.send({
         content: chunk,
         username: webhookUsername(message.speaker),
         avatarURL: message.speaker ? this.opts.avatarFor?.(message.speaker) : undefined,
         ...(threadId ? { threadId } : {}),
+        ...(files.length > 0 && i === fileIdx ? { files } : {}),
         // parse: [] keeps @everyone/@here and stray text inert; `users` is the
         // explicit allowlist of people this message actually addressed.
         allowedMentions: { parse: [], users },
@@ -488,9 +517,20 @@ export class DiscordRoomBackend implements RoomBackend {
     const bodyBudget = MAX_MESSAGE_LENGTH - envelopeOverhead - 8;
     const parts = splitForDiscord(message.body.trim(), Math.max(bodyBudget, 200));
 
+    const files = await this.loadFiles(message.media);
+    // The last NON-EMPTY part, so a long message does not show its attachment
+    // above the text that introduces it. Indexes are preserved rather than
+    // filtered because chunk 0 alone carries the addressee — re-indexing past
+    // an empty first part would move the ping onto the wrong message.
+    //
+    // The seed is the final index, and that is what carries an attachment-only
+    // post: splitForDiscord("") is [""], so there is always exactly one chunk
+    // for the files to ride even when the body is empty.
+    const fileIdx = parts.reduce((acc, part, i) => (part ? i : acc), parts.length - 1);
+
     let last: DiscordMessage | null = null;
     for (const [i, part] of parts.entries()) {
-      if (!part) continue;
+      if (!part && !(files.length > 0 && i === fileIdx)) continue;
       last = await channel.send({
         content: formatEnvelope({
           speaker: message.speaker,
@@ -498,6 +538,7 @@ export class DiscordRoomBackend implements RoomBackend {
           body: part,
           renderAddressee: (l) => this.renderAddressee(l, message.notify === true),
         }),
+        ...(files.length > 0 && i === fileIdx ? { files } : {}),
         // parse: [] keeps @everyone/@here inert — unlike every other Discord
         // mention form they are live in raw content and take no brackets —
         // while `users` lets through exactly who we addressed.
@@ -558,10 +599,21 @@ export class DiscordRoomBackend implements RoomBackend {
     // was read straight back in by the next startup backlog scan. A foreign
     // webhook could be blocked in real time and still reach an agent minutes
     // later, which is not a guard at all.
-    return [...batch.values()]
-      .reverse()
-      .filter((msg) => this.admits(msg))
-      .map((msg) => this.toRoomMessage(msg));
+    const admitted = [...batch.values()].reverse().filter((msg) => this.admits(msg));
+
+    // Attachments are captured here and nowhere else. Every path that builds a
+    // transcript an agent will read comes through fetchSince — the push
+    // listener only decides whether to wake someone — so this is the one place
+    // that has to pay for the download, and messages without attachments pay
+    // nothing.
+    return await Promise.all(
+      admitted.map(async (msg) => {
+        const base = this.toRoomMessage(msg);
+        if (!msg.attachments?.size) return base;
+        const media = await this.captureAttachments(msg);
+        return media.length ? { ...base, media } : base;
+      }),
+    );
   }
 
   /**
@@ -633,6 +685,92 @@ export class DiscordRoomBackend implements RoomBackend {
       const label = resolve(id);
       return label ? `@${label}` : whole;
     });
+  }
+
+  /**
+   * Capture a message's attachments into the media store.
+   *
+   * Fetched now rather than referenced, because Discord's attachment URLs
+   * expire: an agent reads its backlog long after the message landed, and a
+   * deferred link would be dead by the time anything looked. One unreachable
+   * attachment is skipped with a warning — a message whose text is fine must
+   * not be lost to an image that would not download.
+   *
+   * Returns an empty array with no store configured, which is what keeps a
+   * deployment that never opted into media reading exactly as it did before.
+   */
+  private async captureAttachments(msg: DiscordMessage): Promise<MediaRef[]> {
+    const store = this.opts.mediaStore?.();
+    if (!store || !msg.attachments?.size) return [];
+    const refs: MediaRef[] = [];
+    for (const attachment of msg.attachments.values()) {
+      // Already have it. This matters more than it looks: the cross-room view
+      // re-reads every OTHER room from a null cursor each time its slice cache
+      // expires, and that read walks the same recent messages again — so
+      // without a memo, an image sitting in a room's backlog would be
+      // re-downloaded on a schedule, to render a view that is text and never
+      // looks at the bytes.
+      const memo = this.capturedAttachments.get(attachment.id);
+      if (memo) {
+        refs.push(memo);
+        continue;
+      }
+      try {
+        const res = await fetch(attachment.url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        refs.push(
+          await store.put(Buffer.from(await res.arrayBuffer()), {
+            mimeType: attachment.contentType ?? undefined,
+            name: attachment.name ?? undefined,
+          }),
+        );
+        this.rememberCapture(attachment.id, refs[refs.length - 1]);
+      } catch (err) {
+        console.warn(`[discord:rooms] could not store attachment ${attachment.name}: ${(err as Error).message}`);
+      }
+    }
+    return refs;
+  }
+
+  /**
+   * Attachment id to the ref its bytes were stored under.
+   *
+   * Bounded and oldest-out rather than a true LRU: this exists to collapse
+   * repeated reads of a *recent* backlog, and that working set is small and
+   * only moves forward. A miss costs one download and is always correct — the
+   * store is content-addressed, so re-storing the same bytes is the same ref.
+   */
+  private readonly capturedAttachments = new Map<string, MediaRef>();
+
+  private rememberCapture(attachmentId: string, ref: MediaRef): void {
+    if (this.capturedAttachments.size >= MAX_CAPTURE_MEMO) {
+      const oldest = this.capturedAttachments.keys().next().value;
+      if (oldest !== undefined) this.capturedAttachments.delete(oldest);
+    }
+    this.capturedAttachments.set(attachmentId, ref);
+  }
+
+  /** Read refs back out of the store as files Discord can upload. */
+  private async loadFiles(refs: MediaRef[] | undefined): Promise<{ attachment: Buffer; name: string }[]> {
+    if (!refs?.length) return [];
+    const store = this.opts.mediaStore?.();
+    if (!store) return [];
+    const files: { attachment: Buffer; name: string }[] = [];
+    for (const ref of refs) {
+      try {
+        const found = await store.get(ref.id);
+        if (!found) {
+          console.warn(
+            `[discord:rooms] media ${ref.id.slice(0, 8)} is referenced but no longer in the store — not attached`,
+          );
+          continue;
+        }
+        files.push({ attachment: found.bytes, name: attachmentName(ref) });
+      } catch (err) {
+        console.warn(`[discord:rooms] could not read media ${ref.id.slice(0, 8)}: ${(err as Error).message}`);
+      }
+    }
+    return files;
   }
 
   private toRoomMessage(msg: DiscordMessage): RoomMessage {

@@ -1,4 +1,4 @@
-import { messageText } from "../content/types.js";
+import { contentParts, mediaKind, mediaPlaceholder, messageText } from "../content/types.js";
 import type { PartialCapabilities } from "./capabilities.js";
 import type {
   AIProvider,
@@ -13,9 +13,12 @@ import type {
 import { parseSseStream } from "./sse.js";
 import type { ThinkingMapper } from "./thinking.js";
 
+/** A content block on a user or assistant turn. Chat Completions' multimodal shape. */
+export type OpenAIContentPart = { type: "text"; text: string } | { type: "image_url"; image_url: { url: string } };
+
 export interface OpenAIMessage {
   role: string;
-  content: string | null;
+  content: string | OpenAIContentPart[] | null;
   tool_calls?: {
     id: string;
     type: "function";
@@ -77,26 +80,37 @@ interface OpenAIChatResponse {
 }
 
 /**
- * Chat Completions takes text here, so media is flattened to its placeholder.
+ * An image reaches a user or assistant turn; everything else flattens to text.
  *
- * Two separate reasons, and both outlive P1 rather than being a stopgap:
+ * The asymmetry is the API's, not a preference:
  *
  * - **A `tool` message's content is a string, full stop.** vLLM rejects an
  *   `image_url` part on `role: "tool"` with "tool message content only supports
  *   text content" (vllm-project/vllm#43203), even for a vision model that takes
- *   the identical part on a `user` message. Media in a tool result reaches a
- *   Chat Completions model as a following user turn, never inline — see the
- *   degradation ladder in `docs/media-design.md`.
- * - **Resolving a MediaRef needs the store, and this function is sync.** The
- *   user/assistant path can carry `image_url` parts and will, once the
- *   capability pre-flight and async ref resolution land.
+ *   the identical part on a `user` message. Media returned by a tool reaches
+ *   these models as a *following user turn* — which is what
+ *   {@link import("./capabilities.js").adaptForCapabilities} synthesizes when
+ *   `toolResultMedia.mode` is `follow-up`, and what this provider declares.
+ * - **A user or assistant turn takes an array of parts**, which is where an
+ *   image can actually go.
  *
- * Flattening through {@link messageText} keeps the lossy step *visible*: the
- * model is told an image was here. It is never silently dropped, and never
- * JSON-stringified into the prompt — which is the exact failure this design
- * exists to avoid.
+ * That second half used to be missing, and the gap was invisible in exactly the
+ * way that costs a day: this provider *declared* `toolResultMedia` supported
+ * with `mode: "follow-up"`, `adaptForCapabilities` duly moved the image onto a
+ * new user turn, and then this function flattened that turn to a placeholder
+ * too. Every layer reported success and no image ever reached a model on the
+ * default provider. The tell was the token count — a request carrying a
+ * 960×720 screenshot billed 244 prompt tokens — and the model's own reasoning
+ * trace, which asked whether it could see the image at all.
+ *
+ * Bytes come from {@link ChatParams.media}, hydrated once per request by the
+ * loop. A ref whose bytes are absent — evicted, unreadable, or never stored —
+ * degrades to {@link mediaPlaceholder} rather than vanishing: **a part that
+ * does not reach the model must leave a placeholder, never nothing.** Only
+ * images inline; Chat Completions has no portable block for a PDF, so a
+ * document says so in words instead of being JSON-stringified into the prompt.
  */
-export function toOpenAIMessages(messages: Message[]): OpenAIMessage[] {
+export function toOpenAIMessages(messages: Message[], media?: ReadonlyMap<string, Buffer>): OpenAIMessage[] {
   return messages.map((msg) => {
     const text = messageText(msg.content);
     if (msg.role === "tool") {
@@ -122,9 +136,50 @@ export function toOpenAIMessages(messages: Message[]): OpenAIMessage[] {
     }
     return {
       role: msg.role,
-      content: text,
+      content: multimodalContent(msg, media) ?? text,
     };
   });
+}
+
+/**
+ * The parts array for a turn carrying at least one sendable image.
+ *
+ * Returns undefined when there is nothing to gain — no media, or no bytes for
+ * any of it — so the ordinary text-only request is byte-for-byte what it was
+ * before this existed, and a caller that never hydrates media is unaffected.
+ */
+function multimodalContent(msg: Message, media?: ReadonlyMap<string, Buffer>): OpenAIContentPart[] | undefined {
+  const parts = contentParts(msg.content);
+  if (!parts.some((p) => p.type === "media")) return undefined;
+
+  const out: OpenAIContentPart[] = [];
+  let sentAnImage = false;
+  for (const part of parts) {
+    if (part.type === "text") {
+      if (part.text) out.push({ type: "text", text: part.text });
+      continue;
+    }
+    const { media: ref, alt } = part;
+    const isImage = mediaKind(ref.mimeType) === "image";
+    // A ref carrying its own URL is the provider's to fetch, so the bytes were
+    // deliberately never hydrated for it.
+    if (isImage && ref.url) {
+      out.push({ type: "image_url", image_url: { url: ref.url } });
+      sentAnImage = true;
+      continue;
+    }
+    const bytes = isImage ? media?.get(ref.id) : undefined;
+    if (!bytes) {
+      out.push({ type: "text", text: mediaPlaceholder(ref, alt) });
+      continue;
+    }
+    out.push({
+      type: "image_url",
+      image_url: { url: `data:${ref.mimeType};base64,${bytes.toString("base64")}` },
+    });
+    sentAnImage = true;
+  }
+  return sentAnImage ? out : undefined;
 }
 
 export function toOpenAITools(tools: ToolSchema[]): object[] {
@@ -199,7 +254,7 @@ export class OpenAIProvider implements AIProvider {
   private buildBody(params: ChatParams): Record<string, unknown> {
     const body: Record<string, unknown> = {
       model: params.model,
-      messages: toOpenAIMessages(params.messages),
+      messages: toOpenAIMessages(params.messages, params.media),
       temperature: params.temperature ?? 0.3,
     };
 

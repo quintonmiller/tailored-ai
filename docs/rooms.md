@@ -189,6 +189,58 @@ the Discord client, which are sent in the same form.
 `<name>` is still *read* so messages already sitting in a room keep parsing;
 it is never written.
 
+## Images and files
+
+A room carries attachments both ways. Drop a screenshot into a room channel and
+the agent subscribed there can look at it; a chart an agent's tools produced
+goes back up with its reply.
+
+This is newer than rooms themselves, and the gap it closed was invisible from
+the outside. Registering a room makes the DM/@mention path stand down for that
+channel, and the rooms path that replaces it read `msg.content` and nothing
+else — so the same image that worked in a DM vanished in `#eng`, and an image
+posted with no caption arrived as an empty message the agent could not see at
+all. Nothing reported it, because the text half still worked.
+
+**Inbound.** Attachments are captured into the media store when the backlog is
+read, not when the message lands: a Discord attachment URL expires long before
+an agent wakes, reads its backlog and decides to look. Each one is also named in
+the transcript against its own line:
+
+```
+[alex] have a look
+[image: chart.png 1280x1000 image/png #cafc7f71]
+```
+
+That line is doing real work. The pictures reach the model as parts on one turn
+with no ordering of their own, so the transcript is what says *which* message an
+image belongs to — and it is all that survives once the history budget evicts
+the picture itself.
+
+A wake carries at most four images, newest first. The loop prices a media part
+at 1,500 tokens; a busy room that collected twenty screenshots between wakes
+would otherwise spend its entire history budget on pictures and evict the
+conversation that explains them. The rest still appear as their placeholder
+lines, so nothing goes unmentioned even when it goes unseen. An agent's own
+posts are skipped — that image is already in its session from the turn that
+made it.
+
+**Outbound.** Media a turn produced rides the agent's reply, attached to the
+last chunk so a long message does not show its picture above the text that
+introduces it. A reply with no text never carries one: silence is a meaningful
+move in a room — it is what `pass` means — so posting a chart under a turn that
+deliberately said nothing would invert the agent's own decision.
+
+**Backends declare it.** `RoomCapabilities.media` is required, so a new backend
+has to answer rather than inherit a default. Both built-ins support it; one that
+does not still posts the body, and the text projection names what it could not
+carry.
+
+Nothing here needs configuring. The media store defaults to a disk store under
+`<TAI_HOME>/media`, and a deployment with no store reads rooms exactly as it did
+before — `fetchSince` returns no media rather than failing on a message that has
+some.
+
 ## Wake policy: two independent axes
 
 The question "should this message start an agent run?" has two halves, and they

@@ -1151,9 +1151,16 @@ than deleted, because the answer is usually less interesting than the reason.
   `outputSchema` expect the client to show the model *something* structured.
   Serializing it into the text projection is the obvious answer and may be the
   wrong one.
-- **Do rooms carry media?** `room_messages.content` is TEXT and the envelope is
-  regex-parsed (`rooms/envelope.ts`). Agent-to-agent images are a real use case
-  and a bigger change than it looks.
+- ~~**Do rooms carry media?**~~ **Answered: they do.** `RoomMessage.media` and
+  `OutboundRoomMessage.media` carry refs, and `RoomCapabilities.media` is a
+  required field so each backend answers for itself. The envelope stayed text
+  and regex-parsed — media went into a nullable `room_messages.media` column
+  rather than into `content`, because `content` is what `parseEnvelope` reads
+  back and what a human reads directly, so JSON in it would break both. That is
+  the opposite trade from the `messages` table, where the deciding factor was
+  avoiding a bulk UPDATE on a live database; a nullable `ALTER TABLE ADD COLUMN`
+  is metadata-only and rewrites no row, so that risk does not arise here. See
+  `docs/rooms.md`, "Images and files".
 - **Where do capability defaults come from?** The *default* half is settled:
   `"unknown"` plus `media.onUnknown: "try"` is what shipped, and it is why an
   undeclared vision model still gets shown pictures. What stays open is whether
