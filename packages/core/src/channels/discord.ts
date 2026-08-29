@@ -469,6 +469,9 @@ export class DiscordChannel implements Channel, OutboundNotifier {
       // come back in resolvable to the identity rather than a bare snowflake.
       nativeIdFor: (label) => this.identities().get(label)?.nativeIds?.discord,
       labelForNativeId: (nativeId) => this.identities().byNativeId("discord", nativeId)?.label,
+      // Resolved per call: media can be configured by a reload after this
+      // backend was built, and a captured reference would pin connect-time.
+      mediaStore: () => this.runtime.getMediaStore(),
     });
     this.rooms = backend;
     registerRoomBackend(backend);

@@ -117,10 +117,9 @@ describe("toOpenAIMessages", () => {
     ]);
   });
 
-  it("sends a placeholder for media rather than dropping it silently", () => {
-    // Chat Completions cannot take an image here. The model must still be told
-    // one existed — a vanished image is the worst available outcome, and a
-    // JSON-stringified one is the second worst.
+  it("sends a placeholder for media whose bytes nobody hydrated", () => {
+    // The model must still be told an image existed — a vanished image is the
+    // worst available outcome, and a JSON-stringified one is the second worst.
     const [wire] = toOpenAIMessages([{ role: "user", content: { parts: [mediaPart(png)] } }]);
     expect(typeof wire.content).toBe("string");
     expect(wire.content).toContain("screenshot.png");
@@ -128,8 +127,50 @@ describe("toOpenAIMessages", () => {
   });
 
   it("keeps a tool message's content a string, which vLLM requires", () => {
-    const [wire] = toOpenAIMessages([{ role: "tool", content: { parts: [mediaPart(png)] }, toolCallId: "t1" }]);
+    const bytes = new Map([[png.id, Buffer.from("not really a png")]]);
+    const [wire] = toOpenAIMessages([{ role: "tool", content: { parts: [mediaPart(png)] }, toolCallId: "t1" }], bytes);
+    // Even with bytes in hand: vllm-project/vllm#43203 rejects an image part
+    // on a tool message, so this one stays flat no matter what is available.
     expect(typeof wire.content).toBe("string");
     expect(wire.tool_call_id).toBe("t1");
+  });
+
+  it("inlines a hydrated image on a user turn as a data URI", () => {
+    // The regression this pins: the provider declared `toolResultMedia` with
+    // mode "follow-up", `adaptForCapabilities` duly moved the image to a user
+    // turn, and this converter then flattened that turn too — so no image ever
+    // reached a model on the default provider while every layer reported
+    // success.
+    const bytes = new Map([[png.id, Buffer.from([1, 2, 3, 4])]]);
+    const [wire] = toOpenAIMessages([{ role: "user", content: { parts: [textPart("look:"), mediaPart(png)] } }], bytes);
+    expect(Array.isArray(wire.content)).toBe(true);
+    expect(wire.content).toEqual([
+      { type: "text", text: "look:" },
+      {
+        type: "image_url",
+        image_url: { url: `data:image/png;base64,${Buffer.from([1, 2, 3, 4]).toString("base64")}` },
+      },
+    ]);
+  });
+
+  it("passes a ref that carries its own URL straight through", () => {
+    const remote: MediaRef = { ...png, url: "https://example.test/a.png" };
+    const [wire] = toOpenAIMessages([{ role: "user", content: { parts: [mediaPart(remote)] } }], new Map());
+    expect(wire.content).toEqual([{ type: "image_url", image_url: { url: "https://example.test/a.png" } }]);
+  });
+
+  it("describes a document instead of inlining it — there is no portable block", () => {
+    const pdf: MediaRef = { id: "a".repeat(64), mimeType: "application/pdf", bytes: 900, name: "spec.pdf" };
+    const bytes = new Map([[pdf.id, Buffer.from([9, 9])]]);
+    const [wire] = toOpenAIMessages([{ role: "user", content: { parts: [mediaPart(pdf)] } }], bytes);
+    expect(typeof wire.content).toBe("string");
+    expect(wire.content).toContain("spec.pdf");
+  });
+
+  it("leaves a text-only request untouched when a media map is present", () => {
+    // A hydrated map on a request that carries no media must not change the
+    // wire shape: the ordinary case has to stay byte-identical.
+    const wire = toOpenAIMessages([{ role: "user", content: "hi" }], new Map([[png.id, Buffer.from([1])]]));
+    expect(wire).toEqual([{ role: "user", content: "hi" }]);
   });
 });
