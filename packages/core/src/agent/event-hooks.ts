@@ -34,9 +34,17 @@ import { toolOutputText } from "../content/types.js";
 import { expandPrompt } from "../prompts/expand.js";
 import type { Tool, ToolContext } from "../tools/interface.js";
 
-/** One agent's hooks for one event. */
+/**
+ * One declaration site's hooks for one event.
+ *
+ * `agent` undefined means the top-level `hooks.on` — the deployment's own,
+ * fired on every occurrence. Most events cannot be scoped to an agent at all
+ * (a task transition or a proposal opening does not belong to one), so without
+ * a place to declare hooks that are not an agent's, two thirds of the catalog
+ * had nowhere to be declared that would fire.
+ */
 export interface ResolvedEventHooks {
-  agent: string;
+  agent?: string;
   event: string;
   hooks: EventHook[];
 }
@@ -54,6 +62,17 @@ export interface EventHookContext {
   refusable: boolean;
   /** The runtime's tools, for handlers that invoke one. */
   tools: Tool[];
+  /**
+   * The limits a tool invoked from this hook runs under — the declaring
+   * agent's boundary and command rules.
+   *
+   * Supplied by the caller rather than assembled here, because only the
+   * runtime can resolve an agent. Absent means no agent could be resolved, and
+   * the handler treats that as "no additional privilege", never as
+   * "unrestricted": a hook must not be able to reach anywhere the agent it
+   * guards cannot.
+   */
+  toolContext?: Partial<ToolContext>;
   promptsConfig?: AgentConfig["prompts"];
 }
 
@@ -128,7 +147,19 @@ registerEventHookHandler("tool", async (ctx) => {
       typeof value === "string" ? await expandPrompt(value, stringVars(ctx.payload), ctx.promptsConfig) : value;
   }
 
-  const context: ToolContext = { sessionId: ctx.sessionId, workingDirectory: process.cwd(), env: {} };
+  // The agent's own limits, not the process's. A hook that called `exec` used
+  // to run outside the deployment's command rules, and one that called `write`
+  // outside the agent's file boundary — so the guard was more privileged than
+  // what it guarded. `workingDirectory` follows the boundary when there is one:
+  // a relative path in a hook's `args` should resolve where the agent works,
+  // not wherever the server happens to have been started.
+  const extras = ctx.toolContext ?? {};
+  const context: ToolContext = {
+    sessionId: ctx.sessionId,
+    workingDirectory: extras.workingDirectoryBoundary ?? process.cwd(),
+    env: {},
+    ...extras,
+  };
   const result = await tool.execute(args, context);
   if (result.success === false) throw new Error(result.error ?? "(no detail)");
   return { output: toolOutputText(result.output) };
@@ -142,6 +173,15 @@ registerEventHookHandler("tool", async (ctx) => {
  */
 export function resolveEventHooks(config: AgentConfig): ResolvedEventHooks[] {
   const out: ResolvedEventHooks[] = [];
+
+  // Deployment-level first, deliberately: the deployment's policy gets first
+  // refusal, and a refusal stops the chain. An agent's own hook cannot preempt
+  // a rule the operator set for everyone.
+  for (const [event, declared] of Object.entries(config.hooks?.on ?? {})) {
+    const hooks = Array.isArray(declared) ? declared : [declared];
+    if (hooks.length > 0) out.push({ event, hooks });
+  }
+
   for (const [agent, block] of Object.entries(config.agents ?? {})) {
     const on = block?.hooks?.on;
     if (!on) continue;
@@ -193,6 +233,8 @@ export interface RunEventHooksOptions {
   hooks: EventHook[];
   payload: Record<string, unknown>;
   tools: Tool[];
+  /** See {@link EventHookContext.toolContext}. */
+  toolContext?: Partial<ToolContext>;
   sessionId: string;
   /** Whether this event can be refused. Decides what a `denyIf` or an error means. */
   refusable: boolean;
@@ -242,6 +284,7 @@ export async function runEventHooks(
         sessionId: opts.sessionId,
         refusable: opts.refusable,
         tools: opts.tools,
+        toolContext: opts.toolContext,
         promptsConfig: opts.promptsConfig,
       });
 

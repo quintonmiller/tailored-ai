@@ -14,7 +14,7 @@
  */
 
 import { type ResolvedEventHooks, resolveEventHooks, runEventHooks } from "../agent/event-hooks.js";
-import { isWaterfallEvent, type Subscription } from "../events.js";
+import { agentOfPayload, isWaterfallEvent, type Subscription } from "../events.js";
 import type { Plugin, PluginMeta } from "../plugin-context.js";
 import type { AgentRuntime } from "../runtime.js";
 
@@ -93,32 +93,47 @@ export class ConfigHooks {
   }
 
   /**
-   * Run every declaring agent's hooks for one occurrence.
+   * Run every declaring site's hooks for one occurrence.
    *
-   * Scoped by `payload.agent`: a hook declared under `agents.reviewer` fires on
-   * the reviewer's turns and nobody else's. An event with no agent on it — a
-   * task or schedule event — matches nothing, which is why those are better
-   * served by a plugin today.
+   * Two scopes. A hook under `agents.reviewer` fires on the reviewer's
+   * occurrences and nobody else's; a hook under the top-level `hooks.on` fires
+   * on all of them. The second exists because most events name no agent at all
+   * — a task transition, a proposal opening, a compaction — and before it,
+   * those bound cleanly under an agent and then never ran.
+   *
+   * The agent is read under either spelling. Four events say `agentName` where
+   * the rest say `agent`, and the scoping used to look only for the latter, so
+   * a hook on `agent.completed` never matched despite the payload naming the
+   * agent right there.
    */
   private async run(
     entries: ResolvedEventHooks[],
-    payload: Record<string, unknown>,
+    rawPayload: Record<string, unknown>,
     refusable: boolean,
   ): Promise<{ deny?: string; args?: Record<string, unknown> }> {
-    const agent = typeof payload.agent === "string" ? payload.agent : undefined;
+    const agent = agentOfPayload(rawPayload);
+    // Normalised once, before matching: `when: { agent: … }` should mean the
+    // same thing on every event rather than depending on which spelling that
+    // event happens to use. Never overwrites a field the payload already has.
+    const payload = agent && rawPayload.agent === undefined ? { ...rawPayload, agent } : rawPayload;
     const config = this.runtime.getConfig();
-    // Threaded across agents for the same reason it is threaded across hooks:
+    // Resolved once per occurrence rather than per hook: it is the same answer
+    // for every hook in this dispatch, and resolving an agent is not free.
+    const toolContext = this.runtime.agentToolContext(agent);
+    // Threaded across entries for the same reason it is threaded across hooks:
     // whoever looks next should see the call as it now stands.
     let current = payload;
     let rewritten: Record<string, unknown> | undefined;
 
     for (const entry of entries) {
-      if (entry.agent !== agent) continue;
+      // `undefined` is the deployment's own, which is not scoped to anyone.
+      if (entry.agent !== undefined && entry.agent !== agent) continue;
       const { deny, args } = await runEventHooks({
         event: entry.event,
         hooks: entry.hooks,
         payload: current,
         tools: this.runtime.getTools(),
+        toolContext,
         sessionId: typeof payload.sessionId === "string" ? payload.sessionId : "event-hook",
         refusable,
         promptsConfig: config.prompts,

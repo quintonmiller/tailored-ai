@@ -414,16 +414,59 @@ passed, and reading its failure as approval is the shape
 refusal names the hook and the error so it is diagnosable rather than
 mysterious; `onError: continue` opts out where the hook is genuinely optional.
 
-**Hooks are scoped to their agent.** A hook under `agents.coder` fires on the
-coder's turns, matched against the event's `agent` field. Events with no agent
-on them — task and schedule events — are better served by a plugin today.
+**A hook belongs either to an agent or to the deployment.** See
+[below](#whose-hook-is-it) — most events cannot be scoped to an agent, and
+declaring one there is a `validateConfig` warning rather than a hook that never
+runs.
+
+**A hook's tool runs with the declaring agent's limits.** Its `fileBoundary` and
+its `exec` rules, the same ones that agent's own calls run under — so a hook
+cannot reach anywhere the agent it guards cannot. It has to be that way round: a
+guard with more authority than the thing it guards can be used to escape the
+very confinement it exists to enforce.
 
 Matching is exact by default rather than an unanchored regex, deliberately:
 these gate tool execution, and a pattern quietly matching a neighbouring tool
 name is the wrong kind of surprise in a security control.
 
 Delivered by `builtin:config-hooks`, enabled by default and free when unused —
-it subscribes only to events some agent actually names.
+it subscribes only to events something actually names.
+
+### Whose hook is it
+
+Two places to declare one, and which you want depends on the event.
+
+```yaml
+hooks:                        # the deployment's — every occurrence
+  on:
+    task.needs_human:
+      - tool: notify
+        args: { message: "task ${taskId} needs a human" }
+
+agents:
+  coder:
+    hooks:                    # the coder's — only occurrences that name it
+      on:
+        agent.pre_tool_use:
+          - when: { tool: exec }
+            tool: policy_check
+            denyIf: "BLOCK"
+```
+
+An agent-scoped hook is matched against the agent the occurrence names. Only
+some events name one: a tool call, a room wake, a scheduled fire. Most do not —
+a task transition, a proposal opening, a compaction happen to the deployment,
+not to an agent — and there is nothing to match them against.
+
+So a hook on `task.created` declared under an agent will never fire, and
+`validateConfig` says so and names the top level as the fix. This was worth a
+warning because it was silent for a release: hooks bound cleanly to two thirds
+of the catalog and quietly never ran. Both `agent` and `agentName` are read, and
+`when: { agent: … }` matches either, so the field's spelling on a given event is
+not something you have to know.
+
+Deployment hooks run first. A refusal stops the chain, so an agent's own hook
+cannot preempt a rule the operator set for everyone.
 
 ### What runs a hook is a registry
 
