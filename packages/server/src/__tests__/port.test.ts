@@ -69,7 +69,7 @@ describe("portInUseMessage", () => {
     const msg = portInUseMessage("0.0.0.0", 3000);
 
     expect(msg).toContain("3000");
-    expect(msg).toContain("tai-ctl.sh status");
+    expect(msg).toContain("holds the agent slot");
   });
 
   /** The likely cause is another instance, not a mystery — say so. */
