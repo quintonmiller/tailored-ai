@@ -110,6 +110,10 @@ These are properties of TAI, and each one was learned by getting it wrong:
   instance, so switching or restarting an instance must leave it alone —
   reloading a 27B model to restart an agent costs minutes for nothing, and
   stopping it on behalf of one instance takes the GPU out from under the others.
+- **Do not inject an empty `TZ` into that scrubbed environment.** An absent
+  `TZ` tells libc and Node to read `/etc/localtime`; `TZ=""` does not mean
+  "unset", it means UTC. A supervisor that writes `TZ=${TZ:-}` unconditionally
+  moves every scheduled time by the machine's offset.
 - **Ask the agent whether it is up, not the process table.** A live pid means
   the process exists, not that channels are connected or plugins are loaded.
   `/api/health` reports a `generation`; that is the readiness signal.
