@@ -9,6 +9,7 @@ import { buildOpenAICompatibleProvider } from "../providers/factories.js";
 import type { ChatParams } from "../providers/interface.js";
 import { OpenAIProvider } from "../providers/openai.js";
 import {
+  effortTemplateMap,
   enableThinkingTemplateMap,
   isThinkingLevel,
   reasoningEffortThinkingMap,
@@ -29,6 +30,52 @@ describe("generic thinking mappers (#254)", () => {
     expect(enableThinkingTemplateMap("high", params)).toEqual({ chat_template_kwargs: { enable_thinking: true } });
     expect(enableThinkingTemplateMap("off", params)).toEqual({ chat_template_kwargs: { enable_thinking: false } });
     expect(enableThinkingTemplateMap("auto", params)).toBeUndefined();
+  });
+
+  /**
+   * The template these serve accepts `low`, `medium` and `xhigh`, and raises
+   * `Unexpected reasoning effort` on anything else — so core's `high` has to be
+   * translated, not forwarded. Getting this wrong is not a quality regression,
+   * it is a 400 on every request.
+   */
+  it("effortTemplateMap sends the template's rungs, mapping high to xhigh", () => {
+    expect(effortTemplateMap("low", params)).toEqual({
+      chat_template_kwargs: { enable_thinking: true, reasoning_effort: "low" },
+    });
+    expect(effortTemplateMap("medium", params)).toEqual({
+      chat_template_kwargs: { enable_thinking: true, reasoning_effort: "medium" },
+    });
+    expect(effortTemplateMap("high", params)).toEqual({
+      chat_template_kwargs: { enable_thinking: true, reasoning_effort: "xhigh" },
+    });
+  });
+
+  it("effortTemplateMap never sends a rung the template would reject", () => {
+    const accepted = new Set(["low", "medium", "xhigh"]);
+    for (const level of THINKING_LEVELS) {
+      const kwargs = effortTemplateMap(level, params)?.chat_template_kwargs as
+        | { reasoning_effort?: string }
+        | undefined;
+      const effort = kwargs?.reasoning_effort;
+      if (effort !== undefined) expect(accepted, `level ${level}`).toContain(effort);
+    }
+  });
+
+  it("effortTemplateMap turns thinking off without naming an effort", () => {
+    // The template only reads `reasoning_effort` inside its thinking branch;
+    // sending one alongside `enable_thinking: false` would be contradictory.
+    expect(effortTemplateMap("off", params)).toEqual({ chat_template_kwargs: { enable_thinking: false } });
+    expect(effortTemplateMap("auto", params)).toBeUndefined();
+  });
+
+  it("the plain vllm dialect stays free of effort", () => {
+    // Templates without the kwarg raise on unexpected kwargs, so the existing
+    // dialect must keep sending exactly what it sent before.
+    for (const level of THINKING_LEVELS) {
+      const fragment = enableThinkingTemplateMap(level, params);
+      const kwargs = fragment?.chat_template_kwargs as Record<string, unknown> | undefined;
+      if (kwargs) expect(Object.keys(kwargs)).toEqual(["enable_thinking"]);
+    }
   });
 
   it("isThinkingLevel / THINKING_LEVELS", () => {
@@ -112,6 +159,16 @@ describe("openai_compatible factory thinking config (#254)", () => {
     );
     await provider.chat({ ...params, thinking: "off" });
     expect(body().chat_template_kwargs).toEqual({ enable_thinking: false });
+  });
+
+  it("thinkingDialect:vllm_effort reaches the wire with the mapped rung", async () => {
+    const body = captureBody();
+    const { provider } = buildOpenAICompatibleProvider(
+      { baseUrl: "http://x/v1", defaultModel: "m", thinkingDialect: "vllm_effort", thinking: "medium" },
+      "vllm",
+    );
+    await provider.chat(params);
+    expect(body().chat_template_kwargs).toEqual({ enable_thinking: true, reasoning_effort: "medium" });
   });
 
   it("no dialect (default none) ignores thinking", async () => {

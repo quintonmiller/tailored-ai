@@ -13,21 +13,18 @@
  * docstring (see docs/model-fallbacks.md). Any agent that sets its own
  * `provider:` keeps it; everything else follows the default.
  *
- * Instances come from ~/.tai/instances.conf, the same file tai-ctl.sh reads.
- * Restart the agent service afterwards — config hot-reload does not reliably
- * pick up a provider change:
+ * Instances come from ~/.tai/instances.conf.
  *
- *   scripts/tai-ctl.sh restart -i <instance> agent
+ * Restart the agent service afterwards — config hot-reload does not reliably
+ * pick up a provider change. How you restart it is your deployment's business;
+ * TAI itself has no restart command (see issue #604).
  */
 
 import { existsSync, copyFileSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { dirname } from "node:path";
 import { parseDocument } from "yaml";
 
-const REPO = dirname(dirname(fileURLToPath(import.meta.url)));
 const INSTANCES_CONF = join(homedir(), ".tai", "instances.conf");
 
 function usage(msg) {
@@ -139,4 +136,4 @@ writeFileSync(configPath, text, "utf8");
 
 console.log(`${current} -> ${target} (${targetModel})`);
 console.log(`backup: ${backup}`);
-console.log(`\nRestart to apply:  ${join(REPO, "scripts/tai-ctl.sh")} restart -i ${instance} agent`);
+console.log(`\nRestart the "${instance}" agent service to apply.`);

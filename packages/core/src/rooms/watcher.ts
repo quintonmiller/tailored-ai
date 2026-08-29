@@ -23,7 +23,9 @@ import { resolveAgent } from "../agent/agents.js";
 import { registerContextSlot, unregisterContextSlot } from "../agent/context-slots.js";
 import { estimateTokens, isStallStop, type LoopStop, runAgentLoop, stallReasonOf } from "../agent/loop.js";
 import { findOrCreateSession } from "../agent/session.js";
+import { type MediaRef, mediaPlaceholder } from "../content/types.js";
 import type { Subscription } from "../events.js";
+import { collectTurnMedia, latestMessageId } from "../media/turn.js";
 import { PASSTHROUGH_GATE } from "../notifications/dedup.js";
 import type { AgentRuntime } from "../runtime.js";
 import { describeBooking, lateLine, recurringLine, type WakeContext } from "../schedules/wake-context.js";
@@ -228,6 +230,42 @@ export function condenseOwnLine(body: string): string {
  * Older context is not lost: prior wakes left it in the agent's own session,
  * and a first-ever wake has a null cursor, so it still receives the backlog.
  */
+/**
+ * How many attachments one wake may carry into the prompt.
+ *
+ * A cap rather than everything, because the loop prices a media part at 1,500
+ * tokens for budgeting: a room that took twenty screenshots between wakes would
+ * otherwise spend the entire history budget on pictures and evict the
+ * conversation that explains them. The most recent are kept — a wake is about
+ * what just happened — and the rest survive as their transcript placeholders,
+ * so nothing goes unmentioned even when it goes unseen.
+ */
+export const MAX_WAKE_MEDIA = 4;
+
+/**
+ * The attachments a turn should actually look at, newest first-served.
+ *
+ * Own posts are excluded: an agent's own image is already in its session from
+ * the turn that produced it, and re-attaching it on the way back in pays for
+ * the same picture twice. Deduped by ref id, which is a content address — the
+ * same file posted twice is one blob and must not be sent as two.
+ */
+export function mediaForTurn(messages: RoomMessage[] | undefined, limit = MAX_WAKE_MEDIA): MediaRef[] {
+  if (!messages?.length) return [];
+  const picked: MediaRef[] = [];
+  const seen = new Set<string>();
+  for (const msg of [...messages].reverse()) {
+    if (msg.fromSelf) continue;
+    for (const ref of msg.media ?? []) {
+      if (seen.has(ref.id)) continue;
+      seen.add(ref.id);
+      picked.push(ref);
+      if (picked.length >= limit) return picked.reverse();
+    }
+  }
+  return picked.reverse();
+}
+
 export function describeSinceLastTurn(transcript: string[]): string[] {
   if (transcript.length === 0) return ["Nothing new here since your last turn.", ""];
   return ["New since your last turn:", ...transcript, ""];
@@ -1470,7 +1508,14 @@ export class RoomWatcher {
   ): string[] {
     return messages.map((m) => {
       const speaker = m.speaker ?? m.authorLabel;
-      const body = speaksAs(m.speaker, agent, label, identities) ? condenseOwnLine(m.body) : m.body;
+      const spoken = speaksAs(m.speaker, agent, label, identities) ? condenseOwnLine(m.body) : m.body;
+      // Named in the text even when the image itself also rides the turn. The
+      // transcript is what says WHICH line an attachment belongs to — the
+      // pictures arrive as parts on one user turn with no ordering of their
+      // own — and it is all that survives once the history budget evicts the
+      // part. A caption-less image would otherwise render as a blank line.
+      const notes = (m.media ?? []).map((ref) => mediaPlaceholder(ref));
+      const body = notes.length ? [spoken, ...notes].filter(Boolean).join("\n") : spoken;
       // An unresolved label is not "no information" — it is the most
       // important case there is. Leaving the marker off there would make
       // its absence meaningful, which is the failure this is fixing.
@@ -2016,8 +2061,17 @@ export class RoomWatcher {
     if (reason && this.readLimits().toolActivity !== "none") {
       activity.push(`woke: ${describeWakeReason(reason)}`);
     }
+    // Watermarked before the turn so what it produces can be told apart from
+    // what its session already held. Outside the try, because the reply that
+    // reads it is delivered outside too.
+    const watermark = latestMessageId(this.runtime.db, session.id);
     try {
-      reply = await runAgentLoop(prompt, {
+      // Attached here, at the one choke point every wake path shares, so an
+      // image reaches a check-in and a scheduled wake exactly as it reaches an
+      // ordinary one. The transcript already names each attachment against its
+      // line; this is what lets the model actually look.
+      const media = mediaForTurn(messages);
+      reply = await runAgentLoop(media.length ? { text: prompt, media } : prompt, {
         ...base,
         toolContextExtras: { ...base.toolContextExtras, workingMemory },
         onStop: (s) => {
@@ -2143,7 +2197,14 @@ export class RoomWatcher {
     if (batch) {
       this.dropUnroutedReply(sub.agent, batch, reply, workingMemory);
     } else {
-      posted = await this.deliverReply(sub, reply, label, workingMemory, messages ?? []);
+      posted = await this.deliverReply(
+        sub,
+        reply,
+        label,
+        workingMemory,
+        messages ?? [],
+        collectTurnMedia(this.runtime.db, session.id, watermark),
+      );
     }
     // Attached underneath the reply, so the room reads as conversation and
     // the record of what was actually done is one click away. Without this
@@ -2421,8 +2482,13 @@ export class RoomWatcher {
     label: string,
     workingMemory: Map<string, string>,
     seen: RoomMessage[],
+    produced: MediaRef[] = [],
   ): Promise<RoomMessage | null> {
     const body = (reply ?? "").trim();
+    // Media only ever rides a reply that HAS a reply. Unlike a DM, silence is
+    // a meaningful move in a room — it is what `pass` means — so posting a
+    // chart under a turn that deliberately said nothing would invert the
+    // agent's own decision. A turn that wants to show something says so.
     if (!body) return null;
     // A model asked to "call room(action=\"pass\")" sometimes writes the call
     // instead of making it. Posting that verbatim is noise, and it means the
@@ -2478,7 +2544,15 @@ export class RoomWatcher {
         // An automatic reply never pings. It is a turn in a conversation the
         // person will read when they look; if an agent actually needs them it
         // says so through `room(action="post", notify=true)`.
-        posted = await backend.post(ref.id, { body: spoken, speaker: label, to, notify: false });
+        posted = await backend.post(ref.id, {
+          body: spoken,
+          speaker: label,
+          to,
+          notify: false,
+          // A backend that cannot carry files ignores these; the reply still
+          // posts, and the model's own words are what describe what it made.
+          ...(produced.length ? { media: produced } : {}),
+        });
       },
     );
     return posted;

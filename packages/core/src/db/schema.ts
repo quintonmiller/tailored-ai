@@ -557,6 +557,19 @@ export function initDatabase(dbPath: string): Database.Database {
       author_id    TEXT NOT NULL,
       author_label TEXT NOT NULL,
       content      TEXT NOT NULL,
+      -- JSON array of MediaRef, for messages that carried an attachment.
+      --
+      -- A column here, unlike the messages table, which encodes media into its
+      -- existing content instead. Two reasons the trade lands the other way:
+      -- this column is added by a nullable ADD COLUMN, which is metadata-only
+      -- in SQLite and rewrites no row, so the bulk-UPDATE risk that decided the
+      -- other case does not arise; and content here is envelope text that
+      -- parseEnvelope reads back and a human reads directly, so JSON in it
+      -- would break both.
+      --
+      -- NULL, not '[]', when there was none: absent and empty say the same
+      -- thing and NULL costs nothing on the overwhelming majority of rows.
+      media        TEXT,
       created_at   TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -653,6 +666,13 @@ export function initDatabase(dbPath: string): Database.Database {
         SELECT RAISE(ABORT, 'audit_log is append-only: DELETE not allowed');
       END;
   `);
+
+  // Safe migration: attachments on local-backend room messages
+  try {
+    db.exec("ALTER TABLE room_messages ADD COLUMN media TEXT");
+  } catch {
+    // Column already exists
+  }
 
   // Safe migration for existing DBs that lack session_key
   try {
@@ -856,6 +876,27 @@ export function initDatabase(dbPath: string): Database.Database {
   } catch {
     // Column already exists
   }
+
+  // Computed renditions of a media blob: what a model was shown instead of the
+  // picture (docs/media-rendition-design.md). An OCR pass is seconds and the
+  // history is re-sent every round, so without this a five-round turn reads the
+  // same screenshot five times.
+  //
+  // `parts` is the answer verbatim — a JSON ContentPart[], which is what the
+  // renderer returned and what the loop splices in. The derived blob, if the
+  // rendition minted one, is inside it; there is no second column claiming to
+  // say the same thing, because two places to look is how they disagree.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS media_renditions (
+      parent_id  TEXT NOT NULL,
+      -- transform id plus a hash of its settings: a 640px thumbnail and a 128px
+      -- one are different renditions of one blob.
+      recipe     TEXT NOT NULL,
+      parts      TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (parent_id, recipe)
+    );
+  `);
 
   // Media blobs (docs/media-design.md). Metadata here, bytes on disk — the same
   // split `documents` uses.

@@ -24,9 +24,39 @@ Tool definitions travel in their own request field rather than as a message, whi
 
 The same subtraction applies when a fallback rung re-fits history to its own `maxContextTokens`, where it matters more: the schemas sent are identical, and the window is usually tighter.
 
-Summarization on trim, **on by default**: `summarizeOnTrim` replaces the drop marker with a summary of what was cut. Set it to `false` per agent to opt out. When enabled, `trimHistoryWithSummary()` calls the LLM to summarize dropped messages into a `[Earlier conversation summary: ...]` system message. The summary is cached across loop rounds to avoid re-summarization. Falls back to the drop marker if summarization fails.
+Summarization on trim, **on by default**: `summarizeOnTrim` replaces the drop marker with a summary of what was cut. Set it to `false` per agent to opt out. When enabled, `trimHistoryWithSummary()` calls the LLM to summarize dropped messages, returns the text **beside** the trimmed messages, and the caller appends it to the leading system prompt as `[Earlier conversation summary: ...]`. The summary is cached across loop rounds to avoid re-summarization. Falls back to the drop marker if summarization fails.
+
+### The summary is not a message
+
+It used to be spliced into the history as a second `system` message ahead of the kept turns. That puts a system message somewhere other than index 0, and **that is not universally legal**: Qwen3.6's chat template tolerates it, Qwen3.8's raises `System message must be at the beginning.` and the request 400s. Every session long enough to compact failed outright — not a degraded reply, a dead agent. It cost 9 of 303 runs in a benchmark before anyone noticed, because a 400 scores the same as a wrong answer.
+
+The rule was already known one screen away: the tool-set-change notice injects itself with `role: "user"` and carries a comment saying it does so precisely because strict providers reject a mid-history system message. The lesson had not reached the compaction path.
+
+Folding it into the system prompt is also the better shape on its own terms — a summary of the conversation is context, not a turn in it — and it survives the fallback refit, where one more old turn would not.
 
 The default flipped to `true` on 2026-08-10 on benchmark evidence: across three trim pairs — the fact under discussion, a peripheral fact, and the room path — correctness with the flag on was never worse and the turn cost three to six times fewer input tokens. The marker path is not cheaper for being one call shorter; it spends rounds hunting for what it was not given. The summarising call is bounded (300 characters per message, 3,000-character transcript), so it cannot grow with the history it replaces.
+
+### Synthetic notices are not user messages
+
+Seven places in the loop inject `[System: ...]` text wearing the **`user`** role — the drop marker, the refreshed-context tail, two tool-budget reminders, the tool-set-change notice, the repeated-call warning, and the rounds-exhausted notice. They use `user` because of the rule above.
+
+That has a cost, and `isRealUserMessage()` pays it. Anything asking *"is a user message still here?"* gets a yes from a notice carrying no question. `ensureUserMessagePresent()` — the net that splices the person's question back after a hard trim — used to test `role === "user"` and was therefore satisfied by a notice, so it restored nothing. A live request reached the model consisting of exactly two messages, the drop marker and the tool-update notice, with the question trimmed away; the model replied "Noted — tool set updated", which is correct for what it was shown and useless to anybody.
+
+The check is detection-only: notices stay in the array, so a history with no real question still carries a `user` message and no provider rejects it for that.
+
+### The window ratchets shut within a turn
+
+The history budget is `maxHistoryTokens` minus the system prompt, the tail, **and the tool schemas** — and it is recomputed every round, because `getTools()` re-resolves every round and a turn can gain or lose tools mid-flight. That is right as a *ceiling*: a budget computed once would overflow the context the moment the tool set grew.
+
+It was also acting as a floor, and that is wrong. Withdraw a tool and thousands of tokens of schema stop being charged; the budget jumps, and the next trim keeps messages the previous one evicted. The model is told `[System: 68 earlier messages … are no longer shown]`, works for nineteen rounds on that basis, and then silently gets them all back.
+
+Measured on the benchmark 2026-08-14, on the row whose entire premise is that a fact was trimmed away. `maxHistoryTokens: 2500` against ~4,800 tokens of tool schemas left a history budget of **zero**, so every round showed the marker and the question and nothing else. The agent spent its whole round budget searching memory tools for the fact. On the last round the repeated-call check withdrew the final tool, the schemas left the budget, and all 73 messages returned — no marker, no explanation. The model read the row count and reported it. That answer was *true*, and it scored as a confabulation.
+
+So `trimHistoryWithStart()` returns where the surviving history begins, and the loop holds that index as a floor for the rest of the turn (`droppedFloor`). Both trim paths honour it, as does the smaller-rung refit. The turn is the right scope: across turns the window should reopen; within one, "no longer shown" has to keep meaning that, or the model is reasoning against a context that contradicts what it was told about itself.
+
+Two things this does not do. It never evicts the whole history — a request with no messages is not a request — and it changes nothing for a caller that passes no floor, which is every caller outside the loop.
+
+Worth knowing separately: **tool schemas are charged against `maxHistoryTokens`**. A small budget and a large tool set can leave nothing for history at all, silently. `warnIfNoHistoryFits()` exists for exactly this and is worth reading when an agent seems to have no memory of the turn it is in.
 
 ### Compaction is reversible
 
@@ -273,7 +303,13 @@ Reasoning models emit a thinking trace and accept an effort knob. The loop handl
 
 **Capture.** `ChatResponse.reasoning` and a streamed `reasoning` event carry the trace. The loop persists `reasoning` on the assistant `Message` (a nullable `messages.reasoning` column) and the chat SSE route forwards `reasoning` deltas + includes the final trace on the `response` event. It is **display-only**: every message→wire converter ignores `Message.reasoning`, so it is never re-sent (some APIs 400 on a re-sent reasoning-only assistant turn), and `estimateTokens` excludes it from the history budget. The web UI renders it as a collapsible "Thinking" disclosure, collapsed by default.
 
-**Control.** `ChatParams.thinking: "off" | "auto" | "low" | "medium" | "high"` is provider-agnostic; each provider maps it to its wire format. Set a per-provider default (`providers.<id>.thinking`) and/or a per-agent override (`agents.<name>.thinking`); the per-agent level wins per call (`params.thinking ?? defaultThinking`). Core ships the seam — `OpenAIProvider`'s `thinkingMap` option plus the generic exported mappers `reasoningEffortThinkingMap` and `enableThinkingTemplateMap` — and the `openai_compatible` provider exposes a `thinkingDialect` (`openai` | `vllm` | `none`) to pick one. Vendor budget/effort policy lives in each provider plugin, so core never learns a plugin's name.
+**Control.** `ChatParams.thinking: "off" | "auto" | "low" | "medium" | "high"` is provider-agnostic; each provider maps it to its wire format. Set a per-provider default (`providers.<id>.thinking`) and/or a per-agent override (`agents.<name>.thinking`); the per-agent level wins per call (`params.thinking ?? defaultThinking`). Core ships the seam — `OpenAIProvider`'s `thinkingMap` option plus the generic exported mappers `reasoningEffortThinkingMap`, `enableThinkingTemplateMap` and `effortTemplateMap` — and the `openai_compatible` provider exposes a `thinkingDialect` (`openai` | `vllm` | `vllm_effort` | `none`) to pick one. Vendor budget/effort policy lives in each provider plugin, so core never learns a plugin's name.
+
+**`vllm` vs `vllm_effort`.** `vllm` sends `chat_template_kwargs.enable_thinking` only — an on/off switch, which is all older Qwen templates read. Newer ones also read `chat_template_kwargs.reasoning_effort`, and `vllm_effort` sends both.
+
+It is a separate dialect rather than an addition to `vllm` for two reasons. A template that does not declare the kwarg either ignores it or raises, so sending effort everywhere would break endpoints that work today. And the templates that *do* read it accept `low` / `medium` / `xhigh` and **raise on anything else** — including core's own `high`, which returns `Unexpected reasoning effort high` as a 400. `effortTemplateMap` therefore translates `high` → `xhigh` rather than forwarding it.
+
+This matters because a template's default is its *top* rung. Without the dialect a model can only be asked for its most expensive setting: measured on Qwen3.8, `xhigh` spends roughly twice the output tokens of `medium`, and every benchmark number taken before this existed was taken at `xhigh` whether or not that was wanted.
 
 | Level | OpenAI (`reasoning_effort`) | DeepSeek (`thinking`) | vLLM (`enable_thinking`) | Anthropic / Bedrock (`budget_tokens`) |
 |---|---|---|---|---|

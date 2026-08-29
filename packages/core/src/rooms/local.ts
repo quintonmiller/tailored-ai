@@ -9,6 +9,7 @@
  */
 
 import type Database from "better-sqlite3";
+import type { MediaRef } from "../content/types.js";
 import { formatEnvelope, parseEnvelope } from "./envelope.js";
 import type { RoomStore } from "./store.js";
 import {
@@ -29,6 +30,8 @@ interface MessageRow {
   author_id: string;
   author_label: string;
   content: string;
+  /** JSON array of MediaRef, or null on every message that carried none. */
+  media: string | null;
   created_at: string;
 }
 
@@ -68,6 +71,11 @@ export class LocalRoomBackend implements RoomBackend {
     // Nowhere to file a retired room: there is no channel list to tidy. The
     // archive is complete in the database either way.
     archive: false,
+    // Refs, not bytes: the media store already holds the blob, so carrying an
+    // attachment here is one more column. Supporting it makes the seam real
+    // rather than Discord-only, which is what lets the watcher's media path be
+    // tested without a gateway.
+    media: true,
   };
 
   private readonly handlers = new Set<(message: RoomMessage) => void>();
@@ -115,8 +123,8 @@ export class LocalRoomBackend implements RoomBackend {
     // id. Transport backends have a real account id to put in this column.
     const author = message.speaker ?? "unknown";
     const info = this.db
-      .prepare("INSERT INTO room_messages (room_ref, author_id, author_label, content) VALUES (?, ?, ?, ?)")
-      .run(ref, author, author, content);
+      .prepare("INSERT INTO room_messages (room_ref, author_id, author_label, content, media) VALUES (?, ?, ?, ?, ?)")
+      .run(ref, author, author, content, message.media?.length ? JSON.stringify(message.media) : null);
 
     // Read back rather than reconstruct, so created_at is the value SQLite's
     // datetime('now') default actually wrote.
@@ -202,6 +210,18 @@ export class LocalRoomBackend implements RoomBackend {
     // identity-aware predicate before deciding who was addressed, so a body
     // that merely opens with "[note]" can only be misread in this raw view.
     const parsed = parseEnvelope(row.content);
+    // A row written before this column existed, or by a caller that attached
+    // nothing, reads as null. Malformed JSON is dropped rather than thrown:
+    // one bad row must not make a whole backlog unreadable.
+    let media: MediaRef[] = [];
+    if (row.media) {
+      try {
+        const parsedMedia: unknown = JSON.parse(row.media);
+        if (Array.isArray(parsedMedia)) media = parsedMedia as MediaRef[];
+      } catch {
+        console.warn(`[rooms:local] message ${row.id} has unreadable media metadata; ignoring it.`);
+      }
+    }
     return {
       id: String(row.id),
       room: ref,
@@ -216,6 +236,7 @@ export class LocalRoomBackend implements RoomBackend {
       // No bot user exists here, so "was this us?" is unanswerable at this
       // layer. The watcher decides self-ness from the speaker label instead.
       fromSelf: false,
+      ...(media.length ? { media } : {}),
       createdAt: row.created_at,
     };
   }

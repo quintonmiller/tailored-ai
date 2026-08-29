@@ -29,6 +29,8 @@ import type { SlashCommandDescriptor, SlashCommandRegistryView } from "./command
 import { slashCommandRegistry } from "./commands/registry.js";
 import { type EventBus, TypedEventBus } from "./events.js";
 import { createHttpRegistryView, type HttpRegistryView, HttpRouteRegistry } from "./http/registry.js";
+import { type MediaStoreFactory, registerMediaStoreFactory } from "./media/registry.js";
+import { type MediaRenditionFactory, registerMediaRenditionFactory } from "./media/renditions.js";
 import type { MemoryBackendFactory } from "./memory/registry.js";
 import { registerMemoryBackendFactory } from "./memory/registry.js";
 import type { EmbeddingFactory, ProviderFactory } from "./providers/factories.js";
@@ -82,6 +84,14 @@ export interface MemoryBackendRegistryView {
   register(id: string, factory: MemoryBackendFactory): Disposer;
 }
 
+export interface MediaStoreRegistryView {
+  register(id: string, factory: MediaStoreFactory): Disposer;
+}
+
+export interface MediaRenditionRegistryView {
+  register(id: string, factory: MediaRenditionFactory): Disposer;
+}
+
 export interface TaskBackendRegistryView {
   register(id: string, factory: TaskBackendFactory): Disposer;
 }
@@ -125,6 +135,23 @@ export interface PluginContext {
   providers: ProviderRegistryView;
   embeddings: EmbeddingRegistryView;
   memoryBackends: MemoryBackendRegistryView;
+  /**
+   * Where media bytes live. An S3 or GCS store registers here.
+   *
+   * This existed as an exported function long before it was offered on the
+   * context, which meant media plugins registered at module scope — the one
+   * shape with no disposer to hand back, and the case CLAUDE.md warns about.
+   */
+  mediaStores: MediaStoreRegistryView;
+  /**
+   * What a model is shown instead of a raw picture — OCR text, a path, a
+   * thumbnail, a description, or a cheap copy plus a handle it can spend.
+   *
+   * Core ships the seam and no strategy: a resize needs an image library, OCR
+   * needs a WASM blob, and a describing rendition needs somebody's API. See
+   * `docs/media-rendition-design.md`.
+   */
+  mediaRenditions: MediaRenditionRegistryView;
   taskBackends: TaskBackendRegistryView;
   repoBackends: RepoBackendRegistryView;
   sandboxBackends: SandboxBackendRegistryView;
@@ -412,6 +439,8 @@ export function createPluginContext(opts: CreatePluginContextOptions = {}): Plug
     providers: { register: collecting(registerProviderFactory) },
     embeddings: { register: collecting(registerEmbeddingFactory) },
     memoryBackends: { register: collecting(registerMemoryBackendFactory) },
+    mediaStores: { register: collecting(registerMediaStoreFactory) },
+    mediaRenditions: { register: collecting(registerMediaRenditionFactory) },
     taskBackends: { register: collecting(registerTaskBackendFactory) },
     repoBackends: { register: collecting(registerRepoBackendFactory) },
     sandboxBackends: { register: collecting(registerSandboxFactory) },

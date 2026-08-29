@@ -63,6 +63,8 @@ export interface Room {
   archiveReason?: string;
 }
 
+import type { MediaRef } from "../content/types.js";
+
 export type RoomMemberKind = "agent" | "human" | "unknown";
 
 export interface RoomMember {
@@ -102,12 +104,33 @@ export interface RoomMessage {
   authorLabel: string;
   /** True when the transport reports this as our own bot user's message. */
   fromSelf: boolean;
+  /**
+   * Anything that arrived attached to this message, already in the media store.
+   *
+   * Resolved refs rather than transport URLs, because a Discord attachment URL
+   * expires: by the time an agent wakes, reads its backlog and decides to look,
+   * the link a fetch deferred to may be dead. The bytes are captured when the
+   * message is read.
+   *
+   * Absent, not empty, when the transport carries no media or no store is
+   * configured — which is what keeps a deployment that never opted into media
+   * behaving exactly as it did before.
+   */
+  media?: MediaRef[];
   createdAt: string;
 }
 
 export interface OutboundRoomMessage {
   /** The message body, without an envelope — the backend adds it. */
   body: string;
+  /**
+   * Files to post alongside the body.
+   *
+   * A backend that declares `media: false` drops these and posts the body
+   * alone — the text projection already names what was attached, so the reader
+   * is told something existed rather than being silently shortchanged.
+   */
+  media?: MediaRef[];
   /**
    * Attach this message underneath an existing one rather than posting it at
    * the top level.
@@ -182,6 +205,15 @@ export interface RoomCapabilities {
    * envelope falls back to that prefix only where this is false.
    */
   nativeSpeakers: boolean;
+  /**
+   * Can carry files in and out — an image dropped in the channel reaches the
+   * agent, and one an agent produces reaches the channel.
+   *
+   * Separate from whether a media store is configured. This says the transport
+   * has the concept at all; a backend that declares it true still returns no
+   * media when the deployment has nowhere to put the bytes.
+   */
+  media: boolean;
 }
 
 /**

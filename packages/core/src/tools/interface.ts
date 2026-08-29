@@ -38,6 +38,16 @@ export interface ToolContext {
   /** Name of the agent currently running. Used as the author on tool-initiated records (comments, etc.). */
   agentName?: string;
   db?: import("better-sqlite3").Database;
+  /**
+   * The media store, for tools that hand blobs back.
+   *
+   * The reason this is here rather than reconstructed from `db`: a tool that
+   * lets an agent ask for a picture again — the full-size version of a
+   * thumbnail it was shown, say — needs the same store the loop reads, not a
+   * second one guessing at the configured directory. See
+   * `docs/media-rendition-design.md`.
+   */
+  mediaStore?: import("../media/interface.js").MediaStore;
   /** Sandbox handle to route shell/file operations through. When unset, tools execute on the host. */
   sandbox?: import("../sandboxes/interface.js").Sandbox;
   sandboxHandle?: import("../sandboxes/interface.js").SandboxHandle;
