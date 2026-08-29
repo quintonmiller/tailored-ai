@@ -440,7 +440,7 @@ Two places to declare one, and which you want depends on the event.
 hooks:                        # the deployment's — every occurrence
   on:
     task.needs_human:
-      - tool: notify
+      - tool: notify_owner
         args: { message: "task {{taskId}} needs a human" }
 
 agents:
