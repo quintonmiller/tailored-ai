@@ -1147,17 +1147,25 @@ export async function trimHistoryWithSummary(
 }
 
 /** Request approval with timeout handling. */
+/**
+ * Ask, with a clock running.
+ *
+ * Returns whether the clock answered rather than the person, because the two
+ * are otherwise indistinguishable to anything downstream: with
+ * `timeoutAction: auto_approve`, a call nobody looked at comes back as
+ * `approved: true` and reads exactly like a considered yes. Recovering that
+ * from the reason string would be parsing our own prose.
+ */
 async function requestApprovalWithTimeout(
   handler: ApprovalHandler,
   request: ApprovalRequest,
   permissions: PermissionsConfig,
-): Promise<ApprovalResponse> {
+): Promise<{ response: ApprovalResponse; timedOut: boolean }> {
   const timeoutMs = permissions.timeoutMs ?? 300000;
   if (timeoutMs <= 0) {
-    return handler.requestApproval(request);
+    return { response: await handler.requestApproval(request), timedOut: false };
   }
 
-  const _startTime = Date.now();
   const result = await Promise.race([
     handler.requestApproval(request),
     new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
@@ -1166,11 +1174,17 @@ async function requestApprovalWithTimeout(
   if (result === null) {
     // Timeout
     if (permissions.timeoutAction === "auto_approve") {
-      return { approved: true, reason: "auto-approved on timeout", responseTimeMs: timeoutMs };
+      return {
+        response: { approved: true, reason: "auto-approved on timeout", responseTimeMs: timeoutMs },
+        timedOut: true,
+      };
     }
-    return { approved: false, reason: `approval timed out after ${timeoutMs}ms`, responseTimeMs: timeoutMs };
+    return {
+      response: { approved: false, reason: `approval timed out after ${timeoutMs}ms`, responseTimeMs: timeoutMs },
+      timedOut: true,
+    };
   }
-  return result;
+  return { response: result, timedOut: false };
 }
 
 /**
@@ -1259,6 +1273,8 @@ async function executeToolCall(
       agent: opts.toolContextExtras?.agentName as string | undefined,
       projectId: opts.session.projectId ?? null,
       tool: call.name,
+      toolUseId: call.id,
+      cwd: context.workingDirectory,
       args: call.arguments,
     });
     if (decided.deny) return { output: decided.deny };
@@ -1275,6 +1291,14 @@ async function executeToolCall(
   // --- Approval gate ---
   let approvalTimeMs: number | undefined;
   const permission = evaluatePermission(call.name, args, opts.permissions);
+  /** Identity every approval event for this call shares. */
+  const approvalSubject = {
+    sessionId: opts.session.id,
+    agent: opts.toolContextExtras?.agentName as string | undefined,
+    projectId: opts.session.projectId ?? null,
+    tool: call.name,
+    toolUseId: call.id,
+  };
   if (permission === "approve") {
     if (!opts.approvalHandler) {
       // Nothing can ask: cron, rooms, the task watcher, webhooks — every path
@@ -1287,6 +1311,11 @@ async function executeToolCall(
       // autonomous runs that have worked for months, and a guard that breaks
       // what it protects is the shape this codebase keeps hitting. What
       // changes is that it says so.
+      // Emitted on both branches, because the interesting fact is the same
+      // either way: this call needed a person and there was not one. A record
+      // that only covered approvals somebody answered would be silent about
+      // exactly the calls nobody saw — the shape #545 describes.
+      opts.events?.emit("approval.settled", { ...approvalSubject, outcome: "unattended", timedOut: false });
       if ((opts.permissions?.noHandlerAction ?? "auto") === "reject") {
         return {
           output: `Tool call rejected: "${call.name}" needs approval and no approver is available on this path. Ask the owner directly, or do the part that does not need approval.`,
@@ -1303,8 +1332,24 @@ async function executeToolCall(
       };
 
       opts.onApprovalRequest?.(request);
-      const response = await requestApprovalWithTimeout(opts.approvalHandler, request, opts.permissions!);
+      // Before the wait, not after it, so the pair brackets the pause. A
+      // subscriber can then see an approval that is still outstanding, which is
+      // the state nothing could observe before.
+      opts.events?.emit("approval.requested", {
+        ...approvalSubject,
+        requestId: request.requestId,
+        description: request.description,
+      });
+      const { response, timedOut } = await requestApprovalWithTimeout(opts.approvalHandler, request, opts.permissions!);
       opts.onApprovalResponse?.(request, response);
+      opts.events?.emit("approval.settled", {
+        ...approvalSubject,
+        requestId: request.requestId,
+        outcome: response.approved ? "approved" : "rejected",
+        timedOut,
+        reason: response.reason,
+        responseTimeMs: response.responseTimeMs,
+      });
 
       if (!response.approved) {
         const reason = response.reason ? ` Reason: ${response.reason}` : "";
@@ -1379,6 +1424,8 @@ async function executeToolCall(
     agent: opts.toolContextExtras?.agentName as string | undefined,
     projectId: opts.session.projectId ?? null,
     tool: call.name,
+    toolUseId: call.id,
+    cwd: context.workingDirectory,
     args,
     output: toolOutputText(resultOutput),
     success: result.success !== false,
