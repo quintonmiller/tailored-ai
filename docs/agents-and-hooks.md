@@ -441,7 +441,7 @@ hooks:                        # the deployment's — every occurrence
   on:
     task.needs_human:
       - tool: notify
-        args: { message: "task ${taskId} needs a human" }
+        args: { message: "task {{taskId}} needs a human" }
 
 agents:
   coder:
