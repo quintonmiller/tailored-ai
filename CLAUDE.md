@@ -149,6 +149,7 @@ Deep notes on each subsystem live under [`docs/`](./docs/):
 | MCP client: config-declared servers, tool discovery, lifecycle | [docs/mcp.md](./docs/mcp.md) |
 | ACP client: drive an external coding agent over a real session (`coding_agent` tool, permission policy) | [docs/acp.md](./docs/acp.md) |
 | Media: content parts, the content-addressed media store, model/surface capabilities, and the degradation ladder — in and out, across models, tools, channels, the UI and the CLI | [docs/media-design.md](./docs/media-design.md) |
+| Media renditions: the seam that lets a deployment choose what the model actually sees — OCR, a path, a resized copy, a description, or a cheap copy plus a handle. Core ships the seam, plugins ship the strategies | [docs/media-rendition-design.md](./docs/media-rendition-design.md) |
 | Running two instances (work/personal) on one machine: what `TAI_HOME` isolates and what leaks | [docs/multi-instance.md](./docs/multi-instance.md) |
 | Self-hosting: Docker image, headless `tai init --non-interactive`, exposure/auth options, backups | [docs/self-hosting.md](./docs/self-hosting.md) |
 | Deploy targets (`tai deploy` seam): contract in core, registry in CLI, built-in `docker`, writing a cloud plugin | [docs/deploy-targets.md](./docs/deploy-targets.md) |

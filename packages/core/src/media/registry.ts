@@ -8,7 +8,7 @@
  */
 
 import type Database from "better-sqlite3";
-import { Registry } from "../registry.js";
+import { type Disposer, Registry } from "../registry.js";
 import { DiskMediaStore } from "./disk.js";
 import type { MediaStore } from "./interface.js";
 
@@ -22,8 +22,16 @@ export type MediaStoreFactory = (ctx: MediaStoreContext) => MediaStore | undefin
 
 const registry = new Registry<MediaStoreFactory>("media-store");
 
-export function registerMediaStoreFactory(id: string, factory: MediaStoreFactory): void {
-  registry.register(id, factory);
+/**
+ * Returns the inverse, like every other registration in core.
+ *
+ * It used to return void and drop the disposer the registry already handed
+ * back, which made a media-store plugin the one kind that could not be
+ * unregistered — see the "registrations return their inverse" note in
+ * CLAUDE.md.
+ */
+export function registerMediaStoreFactory(id: string, factory: MediaStoreFactory): Disposer {
+  return registry.register(id, factory);
 }
 
 export function listMediaStoreFactories(): string[] {

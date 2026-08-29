@@ -66,6 +66,25 @@ export function upsertMediaRow(
   ).run(ref.id, ref.mimeType, ref.bytes, ref.name ?? null, ref.width ?? null, ref.height ?? null, path, sessionId);
 }
 
+/**
+ * Mark a blob as still in use, without re-storing it.
+ *
+ * Retention measures "unused since", and until renditions existed the only
+ * thing that refreshed the clock was {@link upsertMediaRow} — putting the same
+ * bytes again. Reading never counted, which was harmless while reading was the
+ * only other thing anyone did.
+ *
+ * It stops being harmless the moment a rendition exists. The rendition is what
+ * gets served from then on, so the ORIGINAL stops being touched and becomes the
+ * first thing the sweep deletes — which breaks the one feature that depends on
+ * the original outliving its cheap copy: an agent handed a thumbnail, spending
+ * its handle an hour later on an image that is gone. Nothing fails at the time.
+ * It fails a week later, on exactly the request the feature exists to serve.
+ */
+export function touchMedia(db: Database.Database, id: string): void {
+  db.prepare("UPDATE media SET last_seen_at = datetime('now') WHERE id = ?").run(id);
+}
+
 export function getMediaRow(db: Database.Database, id: string): MediaRow | undefined {
   const raw = db.prepare("SELECT * FROM media WHERE id = ?").get(id) as RawMediaRow | undefined;
   return raw ? toRow(raw) : undefined;

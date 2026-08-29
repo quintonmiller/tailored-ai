@@ -9,7 +9,6 @@ import type {
   SlotChoice,
   ToolsDraft,
 } from "./editor/types.js";
-import { defaultDraft } from "./editor/types.js";
 import { ensureHomeStructure, resolveHomePaths } from "./home.js";
 
 interface SetupResult {
