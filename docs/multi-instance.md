@@ -6,8 +6,9 @@ with only one running at a time. The examples below use `personal` and `work` as
 instance names; they are yours to choose.
 
 Status: **supported, not yet widely exercised.** `TAI_HOME` is honoured everywhere
-([#311]) so `-c <config>` selects a whole instance, and `tai-ctl.sh` takes an
-instance on every command ([#312]). A double start still fails opaquely ([#313]).
+([#311]) so `-c <config>` selects a whole instance, and the supervisor you run
+them under takes an instance on every command ([#312]). A double start still
+fails opaquely ([#313]).
 This doc records what holds, what leaks, and what is left.
 
 [#311]: https://github.com/quintonmiller/tailored-ai/issues/311
@@ -80,52 +81,44 @@ interactive CLI and a long-running server that has no meaningful cwd. No deploym
 has a `tai.lock` yet, so nothing is broken today; deciding it inside a "honour
 `TAI_HOME`" change would have been a silent semantic switch.
 
-## The service script
+## Running them as services
 
-`scripts/tai-ctl.sh` takes an instance:
+TAI has no `start` / `stop` / `restart` command ([#604]). `tai` runs in the
+foreground, so anything that must survive a closed terminal needs a supervisor —
+systemd, a launch agent, a container, or a shell script — and that supervisor is
+deployment logic: it belongs in your own config repo, not here.
 
-```
-tai-ctl.sh start   -i personal [agent|ui|vllm|all] [--no-build]
-tai-ctl.sh restart -i personal agent
-tai-ctl.sh switch  -i work            # stop the others, start this one
-tai-ctl.sh status                     # every instance; -i narrows it
-tai-ctl.sh instances                  # what's declared, and who holds the agent slot
-```
+This repo used to carry one (`scripts/tai-ctl.sh`). It was removed for exactly
+that reason, and because a framework repo describing one machine's pid-file
+layout is the thing [CLAUDE.md](../CLAUDE.md#where-logic-goes) tier 3 exists to
+prevent.
 
-Instances are declared in `~/.tai/instances.conf` as `name=/path/to/home`, one per
-line. The file is created on first run holding the single instance that already
-exists.
+What is *not* deployment-specific is what such a supervisor has to get right.
+These are properties of TAI, and each one was learned by getting it wrong:
 
-Per-machine settings go in `~/.tai/env`, sourced before `tai-ctl`'s own defaults
-if the file exists. Write entries as `VAR="${VAR:-value}"` so a one-off
-`VAR=... tai-ctl ...` still outranks the file. This is where `VLLM_SCRIPT` belongs
-on a box that fronts vLLM with a router: the built-in default starts a single
-model server directly, so without the pin a plain `tai-ctl restart vllm` quietly
-swaps a multi-model setup for a one-model one. A shell rc cannot do this job —
-it reaches interactive shells, not cron or a detached service.
-
-`-i` is required by every command that touches `agent` or `ui`. With two homes
-sharing one port and one machine, an unqualified `restart` is a coin flip, and
-getting it wrong means the work bot answering personal messages. `vllm` needs no
-instance — one model server serves all of them — so its pid and log stay outside
-the per-instance directories, and it is no longer in the default target set:
-switching instances has nothing to do with the model server, and reloading a 27B
-model to restart an agent costs minutes for nothing.
-
-Three details worth keeping if you touch it:
-
-- **The agent is spawned with a scrubbed environment** (`env -i`) carrying an
+- **Spawn the agent with a scrubbed environment** (`env -i`) carrying an
   explicit `TAI_HOME`. The scrub matters more than the assignment: `dotenv` does
   not overwrite a variable already present in the environment, so a
   `DISCORD_TOKEN` exported in the invoking shell outranks the instance's own
-  `.env`, and the wrong bot logs in with no error anywhere.
-- **Exclusivity is enforced by scanning every instance's pid file for a live
-  process**, not by a stored owner marker. Pid liveness is the only truth, so a
-  crashed instance releases the slot with nothing stale to clean up.
-- **The old flat layout is adopted on first run.** `agent.pid` and `agent.log`
-  used to sit directly in `~/.tai/{run,logs}`; an agent started under the previous
-  script would otherwise be invisible to `stop` — reported as "not running" while
-  it went on holding port 3000.
+  `.env` — and the wrong bot logs in, with no error anywhere.
+- **Enforce one agent at a time by pid liveness**, not a stored owner marker.
+  Two homes share one port, so an unqualified restart is a coin flip and getting
+  it wrong means one instance's bot answering the other's messages. Liveness is
+  the only truth: a crashed instance releases the slot with nothing stale to
+  clean up.
+- **Do not tie the model server to an instance.** One model server serves every
+  instance, so switching or restarting an instance must leave it alone —
+  reloading a 27B model to restart an agent costs minutes for nothing, and
+  stopping it on behalf of one instance takes the GPU out from under the others.
+- **Ask the agent whether it is up, not the process table.** A live pid means
+  the process exists, not that channels are connected or plugins are loaded.
+  `/api/health` reports a `generation`; that is the readiness signal.
+- **A stopped supervisor is not a stopped stack.** If the model server runs
+  under something else — a container, a router, a separate unit — then "the
+  agent is stopped" says nothing about whether the GPU came back. Check the
+  device, not the bookkeeping.
+
+[#604]: https://github.com/quintonmiller/tailored-ai/issues/604
 
 ## Ports
 
@@ -204,7 +197,7 @@ until it is.
    and addressed purely by config, so there is nothing to duplicate.
 6. **Plugins: symlink or reinstall**, knowing that a symlink couples both instances
    to one `tai plugin` operation.
-7. **Run it:** `tai-ctl.sh switch -i <name>` stops the others and starts this one.
+7. **Run it:** start this instance, stopping any other first — they share a port.
 
 Then decide what, if anything, moves across — which is the rest of this page.
 
@@ -240,11 +233,11 @@ containment, use separate unix users or a sandbox.
 A plugin can register `/instance` to report which deployment is running and switch
 between them, using the slash-command seam described in
 [architecture.md](./architecture.md#plugin-slash-commands). It is deployment-specific —
-it shells out to `tai-ctl.sh` and reads `~/.tai/instances.conf` — so it belongs in the
+it shells out to whatever supervises the instances on that box — so it belongs in the
 plugin home, not this repo.
 
 Worth writing down because the obvious implementation cannot work: **the switch kills
-the process serving the command.** `tai-ctl.sh switch` stops the running agent, and the
+the process serving the command.** Switching stops the running agent, and the
 plugin is running inside that agent. Two things make it survivable:
 
 - **Run the switch fully detached.** `spawn(..., { detached: true })` puts the child in
