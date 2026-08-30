@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import YAML from "yaml";
+import { isLifecycleEvent, lifecycleTier } from "./agent/lifecycle.js";
 import { DEFAULT_MAX_TOOL_OUTPUT_CHARS } from "./agent/tool-output.js";
 import type { PermissionsConfig } from "./approval.js";
 import { DEFAULT_AUTOPILOT_TASK_PROMPT } from "./autopilot/task-prompt.js";
@@ -1097,8 +1098,29 @@ export interface AgentConfig {
    *         args: { message: "task ${taskId} needs a human" }
    * ```
    */
+  /**
+   * The deployment's own hooks — fired on every occurrence, not scoped to an
+   * agent.
+   *
+   * This is also where the four `tai:` lifecycle events are declared (see
+   * `agent/lifecycle.ts`). They belong to the process rather than to any agent:
+   * there is no agent when `tai:init:start` fires.
+   */
   hooks?: {
     on?: Record<string, EventHook | EventHook[]>;
+    /**
+     * Allow the `script` hook handler, which runs an arbitrary program.
+     *
+     * Off by default, and deliberately a config flag rather than a plugin
+     * entry. `builtin:claude-hooks` gates its own `command` handler by shipping
+     * disabled; that cannot work for `script`, which has to exist before
+     * plugins load because `tai:init:start` fires before them.
+     *
+     * Turning this on hands *config* the ability to run programs with the
+     * agent's privileges. Every other hook can only reach a tool the deployment
+     * already registered and enabled — a real boundary, and one this removes.
+     */
+    allowScripts?: boolean;
   };
   agents: Record<string, AgentDefinition>;
   /**
@@ -2132,6 +2154,35 @@ function eventHookWarnings(
 ): string[] {
   const warnings: string[] = [];
   for (const [event, declared] of Object.entries(on ?? {})) {
+    if (isLifecycleEvent(event)) {
+      // A lifecycle event belongs to the process, never to an agent — there is
+      // no agent when `tai:init:start` fires.
+      if (agentScoped) {
+        warnings.push(
+          `${path}."${event}" will never fire: ${event} is a process lifecycle event and belongs to the deployment, not to an agent. ` +
+            `Declare it at the top level (\`hooks.on\`).`,
+        );
+        continue;
+      }
+      // A `runtime`-tier handler on a `process`-tier phase resolves to a
+      // handler that cannot work. Caught here rather than at dispatch, because
+      // the runner's own answer is to log and continue — which is a hook that
+      // validates and does nothing, the exact shape this function exists for.
+      const tier = lifecycleTier(event);
+      if (tier === "process") {
+        const hooks = Array.isArray(declared) ? declared : [declared];
+        for (const h of hooks) {
+          const kind = h?.type ?? "tool";
+          if (kind === "tool") {
+            warnings.push(
+              `${path}."${event}" uses a \`tool\` hook, but ${event} fires before the runtime exists, so no tool is registered yet. ` +
+                `Use \`type: script\` (and set \`hooks.allowScripts: true\`) for a hook at this point.`,
+            );
+          }
+        }
+      }
+      continue;
+    }
     if (!isWaterfallEvent(event) && !KNOWN_BROADCAST_EVENTS.includes(event as never)) {
       const known = listKnownEvents();
       const suggestion = known.find((k) => k.split(".")[1] === event.split(".")[1]);

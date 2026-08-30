@@ -132,6 +132,7 @@ Deep notes on each subsystem live under [`docs/`](./docs/):
 | Context assembly (proposal): tiering the request, record vs view, slot + composer registries | [docs/context-assembly-design.md](./docs/context-assembly-design.md) |
 | Choosing a cloud model, falling back off local vLLM: measured cost/cache, provider quirks, `scripts/tai-model.mjs` | [docs/model-fallbacks.md](./docs/model-fallbacks.md) |
 | Named agents, delegation, hooks, cron jobs, prompt expansion | [docs/agents-and-hooks.md](./docs/agents-and-hooks.md) |
+| Running TAI as a service (`tai start`/`stop`), the four lifecycle events, capability tiers, and the `script` handler | [docs/service-lifecycle.md](./docs/service-lifecycle.md) |
 | Background tasks, project tasks, pluggable backends, autopilot | [docs/tasks-and-autopilot.md](./docs/tasks-and-autopilot.md) |
 | Repo backend (forge seam): push branch + manage proposals (PR/MR), default `gh` impl, events | [docs/repo-backend.md](./docs/repo-backend.md) |
 | Tiered memory (recall, embeddings, promotion, sweep, HTTP/UI) | [docs/memory.md](./docs/memory.md) + design [docs/memory-tiers.md](./docs/memory-tiers.md) + storage-registry [docs/memory-storage-registry.md](./docs/memory-storage-registry.md) |

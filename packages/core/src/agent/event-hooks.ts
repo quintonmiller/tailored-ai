@@ -33,6 +33,13 @@ import type { AgentConfig, EventHook } from "../config.js";
 import { toolOutputText } from "../content/types.js";
 import { expandPrompt } from "../prompts/expand.js";
 import type { Tool, ToolContext } from "../tools/interface.js";
+import {
+  type HookTier,
+  isRefusableLifecycleEvent,
+  type LifecycleEvent,
+  lifecycleTier,
+  tierSatisfies,
+} from "./lifecycle.js";
 
 /**
  * One declaration site's hooks for one event.
@@ -108,22 +115,78 @@ export interface EventHookResult {
 
 export type EventHookHandler = (ctx: EventHookContext) => Promise<EventHookResult>;
 
+/**
+ * What has to exist for a handler to work.
+ *
+ * `process` — nothing but a running process and the config. A handler that
+ * spawns a program needs no more than this.
+ *
+ * `runtime` — the database, the tool registry and the event bus are up. A
+ * handler that invokes a tool needs all three.
+ *
+ * The tier exists because lifecycle hooks fire at moments when the runtime does
+ * not exist: `tai:init:start` runs after config is read and before anything is
+ * constructed. Without it, a `tool` hook declared there would resolve to a
+ * handler that cannot work, and `runEventHooks` would log "no handler" and
+ * continue — validating cleanly and doing nothing, which is the failure mode
+ * this codebase keeps paying for.
+ *
+ * Deliberately not a closed union of *action* types. Handler kinds are an open
+ * string so a plugin can register its own and core never learns its name; a
+ * plugin declares which tier it needs, and the check stays structural.
+ *
+ * Defined in `lifecycle.ts` and re-exported here, so a handler author imports
+ * the tier from the same module as `registerEventHookHandler`.
+ */
+export type { HookTier };
+export interface RegisterEventHookHandlerOptions {
+  /**
+   * What this handler needs. Defaults to `runtime`, which is the conservative
+   * answer: a handler that has not thought about it is assumed to need
+   * everything, so it is excluded from the early phases rather than run there
+   * and failing obscurely.
+   */
+  requires?: HookTier;
+}
+
 const handlers = new Map<string, EventHookHandler>();
+const handlerTiers = new Map<string, HookTier>();
 
 /**
  * Register a handler kind. Returns a disposer, so a plugin can undo itself on
  * reload — the contract every other registration in core now follows.
  */
-export function registerEventHookHandler(kind: string, handler: EventHookHandler): () => void {
+export function registerEventHookHandler(
+  kind: string,
+  handler: EventHookHandler,
+  opts: RegisterEventHookHandlerOptions = {},
+): () => void {
   handlers.set(kind, handler);
+  handlerTiers.set(kind, opts.requires ?? "runtime");
   return () => {
-    if (handlers.get(kind) === handler) handlers.delete(kind);
+    if (handlers.get(kind) === handler) {
+      handlers.delete(kind);
+      handlerTiers.delete(kind);
+    }
   };
 }
 
-/** Handler kinds available right now. Used to explain an unknown one. */
-export function listEventHookHandlers(): string[] {
-  return [...handlers.keys()].sort();
+/** What a registered kind needs, or undefined when nothing registered it. */
+export function eventHookHandlerTier(kind: string): HookTier | undefined {
+  return handlers.has(kind) ? (handlerTiers.get(kind) ?? "runtime") : undefined;
+}
+
+/**
+ * Handler kinds available right now. Used to explain an unknown one.
+ *
+ * `tier` narrows to the kinds that can actually run in that phase, so an error
+ * message at `tai:init:start` offers `script` rather than listing `tool` as
+ * though it were a choice.
+ */
+export function listEventHookHandlers(tier?: HookTier): string[] {
+  const kinds = [...handlers.keys()];
+  const usable = tier ? kinds.filter((k) => tierSatisfies(tier, handlerTiers.get(k) ?? "runtime")) : kinds;
+  return usable.sort();
 }
 
 /**
@@ -133,37 +196,42 @@ export function listEventHookHandlers(): string[] {
  * through the same path a plugin's does and cannot quietly depend on being
  * first.
  */
-registerEventHookHandler("tool", async (ctx) => {
-  const name = ctx.hook.tool;
-  if (!name) throw new Error("a `tool` hook needs a `tool:` name");
+registerEventHookHandler(
+  "tool",
+  async (ctx) => {
+    const name = ctx.hook.tool;
+    if (!name) throw new Error("a `tool` hook needs a `tool:` name");
 
-  const tool = ctx.tools.find((t) => t.name === name);
-  // Absent, not failed. See the note on the catch in `runEventHooks`.
-  if (!tool) return { skipped: `tool "${name}" is not registered` };
+    const tool = ctx.tools.find((t) => t.name === name);
+    // Absent, not failed. See the note on the catch in `runEventHooks`.
+    if (!tool) return { skipped: `tool "${name}" is not registered` };
 
-  const args: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(ctx.hook.args ?? {})) {
-    args[key] =
-      typeof value === "string" ? await expandPrompt(value, stringVars(ctx.payload), ctx.promptsConfig) : value;
-  }
+    const args: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(ctx.hook.args ?? {})) {
+      args[key] =
+        typeof value === "string" ? await expandPrompt(value, stringVars(ctx.payload), ctx.promptsConfig) : value;
+    }
 
-  // The agent's own limits, not the process's. A hook that called `exec` used
-  // to run outside the deployment's command rules, and one that called `write`
-  // outside the agent's file boundary — so the guard was more privileged than
-  // what it guarded. `workingDirectory` follows the boundary when there is one:
-  // a relative path in a hook's `args` should resolve where the agent works,
-  // not wherever the server happens to have been started.
-  const extras = ctx.toolContext ?? {};
-  const context: ToolContext = {
-    sessionId: ctx.sessionId,
-    workingDirectory: extras.workingDirectoryBoundary ?? process.cwd(),
-    env: {},
-    ...extras,
-  };
-  const result = await tool.execute(args, context);
-  if (result.success === false) throw new Error(result.error ?? "(no detail)");
-  return { output: toolOutputText(result.output) };
-});
+    // The agent's own limits, not the process's. A hook that called `exec` used
+    // to run outside the deployment's command rules, and one that called `write`
+    // outside the agent's file boundary — so the guard was more privileged than
+    // what it guarded. `workingDirectory` follows the boundary when there is one:
+    // a relative path in a hook's `args` should resolve where the agent works,
+    // not wherever the server happens to have been started.
+    const extras = ctx.toolContext ?? {};
+    const context: ToolContext = {
+      sessionId: ctx.sessionId,
+      workingDirectory: extras.workingDirectoryBoundary ?? process.cwd(),
+      env: {},
+      ...extras,
+    };
+    const result = await tool.execute(args, context);
+    if (result.success === false) throw new Error(result.error ?? "(no detail)");
+    return { output: toolOutputText(result.output) };
+  },
+  // Needs the tool registry, so it cannot run at `tai:init:start`.
+  { requires: "runtime" },
+);
 
 /**
  * Collect every config-declared event hook, across agents.
@@ -240,6 +308,15 @@ export interface RunEventHooksOptions {
   refusable: boolean;
   promptsConfig?: AgentConfig["prompts"];
   logPrefix?: string;
+  /**
+   * What exists at this point in the process. Defaults to `runtime`, so every
+   * existing caller — all of which dispatch from a live runtime — is unchanged.
+   *
+   * A lifecycle caller passes `process` for the phases where the runtime does
+   * not exist, and a hook needing more than that is refused with a reason
+   * rather than dispatched into a handler that cannot work.
+   */
+  tier?: HookTier;
 }
 
 /**
@@ -263,6 +340,20 @@ export async function runEventHooks(
     if (!matchesWhen(payload, hook.when)) continue;
 
     const kind = hook.type ?? "tool";
+
+    // Refuse a handler that needs more than this phase has. Reported loudly:
+    // the alternative is dispatching into a handler whose dependencies are
+    // absent, which fails somewhere far from the declaration that caused it.
+    const available = opts.tier ?? "runtime";
+    const required = handlerTiers.get(kind);
+    if (required && !tierSatisfies(available, required)) {
+      console.error(
+        `${prefix} hook type "${kind}" needs the ${required} to exist, and "${opts.event}" runs before it does — ` +
+          `usable here: ${listEventHookHandlers(available).join(", ") || "(none)"}`,
+      );
+      continue;
+    }
+
     const handler = handlers.get(kind);
     if (!handler) {
       // Absent, not failed — the distinction the catch below turns on. Nothing
@@ -330,4 +421,45 @@ function stringVars(payload: Record<string, unknown>): Record<string, string> {
     vars[key] = typeof value === "string" ? value : JSON.stringify(value);
   }
   return vars;
+}
+
+/**
+ * Run the hooks for one lifecycle event.
+ *
+ * Separate from {@link runEventHooks} only in what it decides for the caller:
+ * the tier and the refusability both follow from the event, so a host cannot
+ * get them out of step with each other.
+ *
+ * Lifecycle hooks are read from the **top-level** `hooks.on` alone. They belong
+ * to the process, and there is no agent to scope them to when `tai:init:start`
+ * fires — `validateConfig` says so rather than letting one bind under an agent
+ * and never run.
+ *
+ * A refusal is returned, never thrown: only `tai:init:start` can refuse, and
+ * its caller aborts the start. See {@link isRefusableLifecycleEvent}.
+ */
+export async function runLifecycleHooks(opts: {
+  event: LifecycleEvent;
+  config: AgentConfig;
+  /** Empty at the `process` phases, where no registry exists yet. */
+  tools?: Tool[];
+  sessionId?: string;
+  payload?: Record<string, unknown>;
+}): Promise<{ deny?: string }> {
+  const declared = opts.config.hooks?.on?.[opts.event];
+  if (!declared) return {};
+  const hooks = Array.isArray(declared) ? declared : [declared];
+  if (hooks.length === 0) return {};
+
+  return await runEventHooks({
+    event: opts.event,
+    hooks,
+    payload: opts.payload ?? {},
+    tools: opts.tools ?? [],
+    sessionId: opts.sessionId ?? "lifecycle",
+    refusable: isRefusableLifecycleEvent(opts.event),
+    tier: lifecycleTier(opts.event),
+    promptsConfig: opts.config.prompts,
+    logPrefix: "[lifecycle]",
+  });
 }

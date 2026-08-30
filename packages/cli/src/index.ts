@@ -32,11 +32,13 @@ import {
   type ProjectContext,
   type Room,
   RoomWatcher,
+  registerScriptHookHandler,
   registerUiProviderFactory,
   resolveAgent,
   resolveProjectFromCwd,
   resolveUiProvider,
   runAgentLoop,
+  runLifecycleHooks,
   ScheduleRunner,
   TaskWatcher,
   TypedEventBus,
@@ -414,8 +416,38 @@ async function runServer(
   }
   console.log("Listening for messages...");
 
+  // `tai:init:end` — channels are connected and a turn can run, so this means
+  // *ready* rather than *spawned*. Firing it when the process existed but
+  // nothing was listening would race the thing it is meant to follow. The
+  // runtime is up, so a hook here may invoke a tool.
+  {
+    const verdict = await runLifecycleHooks({
+      event: "tai:init:end",
+      config: runtime.getConfig(),
+      tools: await runtime.getTools(),
+    });
+    if (verdict.deny) {
+      // Cannot refuse — the runtime is already serving, so this would be a stop
+      // wearing a refusal's clothes. Reported so a hook that tried is visible.
+      console.warn(`[lifecycle] tai:init:end returned a refusal, which this phase ignores: ${verdict.deny}`);
+    }
+  }
+
   const shutdown = async () => {
     console.log("\nShutting down...");
+    // `tai:shutdown:start` — teardown has not begun, so the runtime is still up
+    // and a hook here can still call a tool. Failures are reported and never
+    // fatal: a hook that could veto a stop would make the instance
+    // unstoppable, which is worse than whatever it was protecting.
+    try {
+      await runLifecycleHooks({
+        event: "tai:shutdown:start",
+        config: runtime.getConfig(),
+        tools: await runtime.getTools(),
+      });
+    } catch (err) {
+      console.error(`[lifecycle] tai:shutdown:start failed: ${(err as Error).message}`);
+    }
     runtime.initiateShutdown();
     runtime.stopWatching();
     scheduler.stop();
@@ -430,6 +462,15 @@ async function runServer(
       await ch.disconnect();
     }
     await new Promise((r) => setTimeout(r, 500));
+    // `tai:shutdown:end` — teardown is done and the runtime is gone, but the
+    // process is still here, which is what makes this runnable at all. Script
+    // tier only. This is where a deployment releases something it acquired at
+    // `tai:init:start`.
+    try {
+      await runLifecycleHooks({ event: "tai:shutdown:end", config: runtime.getConfig() });
+    } catch (err) {
+      console.error(`[lifecycle] tai:shutdown:end failed: ${(err as Error).message}`);
+    }
     runtime.db.close();
     process.exit(0);
   };
@@ -672,6 +713,24 @@ async function main() {
     await runPluginCommand(argv.slice(1));
     return;
   }
+  if (argv[0] === "start" || argv[0] === "stop" || argv[0] === "restart" || argv[0] === "status") {
+    const { cmdRestart, cmdStart, cmdStatus, cmdStop } = await import("./commands/service.js");
+    const rest = argv.slice(1);
+    const cfgIdx = rest.findIndex((a) => a === "-c" || a === "--config");
+    const home = adoptHomeDir(cfgIdx >= 0 ? rest[cfgIdx + 1] : undefined);
+    // The serve argv the child is spawned with: everything after the verb, so
+    // `-c` and friends carry through to the process that actually runs.
+    const serveArgv = rest;
+    const code =
+      argv[0] === "start"
+        ? await cmdStart(home, serveArgv)
+        : argv[0] === "stop"
+          ? await cmdStop(home)
+          : argv[0] === "restart"
+            ? await cmdRestart(home, serveArgv)
+            : await cmdStatus(home);
+    process.exit(code);
+  }
   if (argv[0] === "deploy") {
     const { runDeployCommand } = await import("./commands/deploy.js");
     await runDeployCommand(argv.slice(1));
@@ -840,10 +899,32 @@ async function main() {
   // --- Load config and initialize ---
   const config = loadConfig(configPath);
 
+  // The `script` handler must exist before the first lifecycle hook runs, and
+  // `tai:init:start` is the first thing after this. It cannot be a plugin:
+  // plugins load later, and a handler that arrives after its event is a hook
+  // that silently never ran. Config is the gate instead — see
+  // `hooks.allowScripts`.
+  if (config.hooks?.allowScripts) {
+    registerScriptHookHandler();
+  }
+
   // Validate config and print warnings
   const configWarnings = validateConfig(config);
   for (const warning of configWarnings) {
     console.warn(`[config] Warning: ${warning}`);
+  }
+
+  // `tai:init:start` — the process is up, config has been read, and nothing
+  // else exists yet. The only phase whose hooks can refuse, and the refusal is
+  // the point: a TAI that starts against a dependency that is not there comes
+  // up looking healthy and fails on its first turn with an error that points
+  // somewhere other than the cause.
+  {
+    const verdict = await runLifecycleHooks({ event: "tai:init:start", config });
+    if (verdict.deny) {
+      console.error(`\n[lifecycle] tai:init:start refused the start: ${verdict.deny}`);
+      process.exit(1);
+    }
   }
 
   // Load declarative plugins. Plugins are resolved from the TAI-owned plugin
