@@ -1025,6 +1025,15 @@ async function main() {
       context: createPluginContext({ runtime, events }),
     });
     runtime.recordLoadedPlugins(loaded);
+    // These plugins load *after* the runtime built its tool set, so a
+    // `ctx.tools.register` call from one of them missed the single walk
+    // `createTools()` does in the constructor. Without this its tools would
+    // first appear on a reload — a registration that silently does nothing
+    // until something unrelated happens.
+    const added = runtime.applyPendingToolFactories();
+    if (added.length > 0) {
+      console.log(`[plugins] registered tools from runtime plugins: ${added.join(", ")}`);
+    }
     return loaded;
   };
 
