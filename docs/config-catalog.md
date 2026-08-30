@@ -56,13 +56,13 @@ Fields: **72** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `channels` | object | {} | 17 | 44 |
+| `channels` | object | {} | 17 | 46 |
 
 ### `commands`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `commands` | object | {} | 7 | 27 |
+| `commands` | object | {} | 7 | 28 |
 
 ### `context`
 
@@ -101,7 +101,7 @@ Fields: **72** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `plugins` | array | `[{"module":"builtin:agent-notifier"},{"module":"builtin:owne` | 24 | 73 |
+| `plugins` | array | `[{"module":"builtin:agent-notifier"},{"module":"builtin:owne` | 24 | 74 |
 
 ### `prompts`
 
@@ -133,8 +133,8 @@ Fields: **72** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `server.host` | string | `127.0.0.1` | 13 | 4 |
-| `server.port` | number | `3000` | 7 | 6 |
+| `server.host` | string | `127.0.0.1` | 14 | 5 |
+| `server.port` | number | `3000` | 8 | 7 |
 
 ### `suggestions`
 
