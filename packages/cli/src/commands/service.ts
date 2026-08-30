@@ -62,6 +62,30 @@ function logFile(homeDir: string): string {
   return resolve(homeDir, "logs", "agent.log");
 }
 
+/**
+ * Marker meaning "this stop is half of a restart".
+ *
+ * Written by {@link cmdRestart} before it stops, read by the serve process on
+ * its way down, cleared once the replacement is up. It exists because the
+ * shutdown hooks run *inside* the process being stopped, so the supervisor
+ * cannot tell them anything directly — by the time it knows a restart is
+ * happening, the thing that would listen is already going away.
+ *
+ * The distinction matters as soon as a `tai:shutdown:end` hook releases
+ * something expensive. Cycling a shared model server to restart an agent
+ * reloads tens of gigabytes for nothing, and `restart` is the most common
+ * operation during a config change. Core does not know what the hook releases;
+ * it reports why the process is stopping, and the hook decides.
+ */
+function restartMarker(homeDir: string): string {
+  return resolve(homeDir, "run", "restarting");
+}
+
+/** Why the process is going down. Read by the serve process for its hooks. */
+export function shutdownReason(homeDir: string): "restart" | "stop" {
+  return existsSync(restartMarker(homeDir)) ? "restart" : "stop";
+}
+
 /** The live pid for this home, or undefined when nothing is running. */
 export function readLivePid(homeDir: string): number | undefined {
   const file = pidFile(homeDir);
@@ -228,10 +252,23 @@ export async function cmdStatus(homeDir: string): Promise<number> {
 }
 
 export async function cmdRestart(homeDir: string, argv: string[]): Promise<number> {
-  const stopped = await cmdStop(homeDir);
-  if (stopped !== 0) return stopped;
-  await sleep(500);
-  return await cmdStart(homeDir, argv);
+  mkdirSync(dirname(restartMarker(homeDir)), { recursive: true });
+  writeFileSync(restartMarker(homeDir), String(Date.now()));
+  try {
+    const stopped = await cmdStop(homeDir);
+    if (stopped !== 0) return stopped;
+    await sleep(500);
+    return await cmdStart(homeDir, argv);
+  } finally {
+    // Cleared whatever happened. A marker left by a failed restart would make
+    // the *next* ordinary stop look like a restart, and a hook would then
+    // decline to release something nothing is coming back for.
+    try {
+      rmSync(restartMarker(homeDir));
+    } catch {
+      /* best effort */
+    }
+  }
 }
 
 function openLog(path: string): number {

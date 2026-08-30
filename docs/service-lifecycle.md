@@ -55,6 +55,34 @@ Only `tai:init:start` can refuse, and a refusal aborts the start:
 - **`tai:init:end` cannot refuse** because the runtime is already serving.
   Refusing there would be a stop wearing a refusal's clothes.
 
+## A shutdown knows whether it is a restart
+
+Both shutdown events carry `reason`, which reaches a script as `TAI_REASON`:
+
+| command | `TAI_REASON` |
+|---|---|
+| `tai stop` | `stop` |
+| `tai restart` | `restart` |
+
+It matters as soon as a `tai:shutdown:end` hook releases something expensive.
+Without it, `restart` releases a shared model server on the way down and reloads
+it on the way up — cycling tens of gigabytes to change a config line, on the
+most common operation there is. Measured before this existed: a `tai restart`
+restarted the model container every time.
+
+```bash
+[[ "${TAI_REASON:-stop}" == "restart" ]] && exit 0   # coming right back
+```
+
+Core does not know what the hook releases. It reports why the process is
+stopping, and the hook decides.
+
+Mechanically it is a marker file under `<home>/run/`, because the shutdown hooks
+run *inside* the process being stopped — by the time the supervisor knows a
+restart is happening, the thing that would listen is already going away. It is
+cleared in a `finally`, so a restart that fails halfway does not leave the next
+ordinary stop looking like a restart.
+
 ## Capability tiers
 
 What a hook can do depends on when it runs, so a handler declares what it needs

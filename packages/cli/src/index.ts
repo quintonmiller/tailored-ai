@@ -50,8 +50,9 @@ import { CliApprovalHandler } from "./approval.js";
 import { runPluginCommand } from "./commands/plugin.js";
 import { runProjectCommand } from "./commands/project.js";
 import { runResourcesCommand } from "./commands/resources.js";
+import { shutdownReason } from "./commands/service.js";
 import { runVaultCommand } from "./commands/vault.js";
-import { adoptHomeDir, isSetupDone, resolveHomePaths } from "./home.js";
+import { adoptHomeDir, isSetupDone, resolveHomeDir, resolveHomePaths } from "./home.js";
 import { printMediaForTerminal } from "./media-render.js";
 import { syncOutboundRegistry } from "./outbound-sync.js";
 import { PluginManager } from "./plugins/manager.js";
@@ -444,6 +445,7 @@ async function runServer(
         event: "tai:shutdown:start",
         config: runtime.getConfig(),
         tools: await runtime.getTools(),
+        payload: { reason: shutdownReason(resolveHomeDir()) },
       });
     } catch (err) {
       console.error(`[lifecycle] tai:shutdown:start failed: ${(err as Error).message}`);
@@ -467,7 +469,11 @@ async function runServer(
     // tier only. This is where a deployment releases something it acquired at
     // `tai:init:start`.
     try {
-      await runLifecycleHooks({ event: "tai:shutdown:end", config: runtime.getConfig() });
+      await runLifecycleHooks({
+        event: "tai:shutdown:end",
+        config: runtime.getConfig(),
+        payload: { reason: shutdownReason(resolveHomeDir()) },
+      });
     } catch (err) {
       console.error(`[lifecycle] tai:shutdown:end failed: ${(err as Error).message}`);
     }

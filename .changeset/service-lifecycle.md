@@ -58,3 +58,8 @@ opens stdin — writing to a child that exits without reading is #606.
 Only `tai:init:start` can refuse, and a refusal aborts the start. The shutdown
 events cannot: a hook able to veto a stop makes an instance unstoppable, which
 is worse than whatever it was protecting.
+
+Both shutdown events carry `reason` (`stop` or `restart`), reaching a script as
+`TAI_REASON`. Without it `tai restart` releases whatever `tai:shutdown:end`
+releases and immediately re-acquires it — measured cycling a 27B model server on
+every restart, which is the most common operation there is.
