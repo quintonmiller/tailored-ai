@@ -1,7 +1,7 @@
 /**
  * Built-in but *optional* tools — those whose construction is gated on a
- * config block (browser-mediator, trusted-actions). Each registers itself as a
- * ToolFactory on module import, the same shape an external plugin would use.
+ * config block. Each registers itself as a ToolFactory on module import, the
+ * same shape an external plugin would use.
  *
  * Moving these out of the hardcoded if-blocks in createTools / createMetaTools
  * dogfoods the tool-factory registry: if any of these stops working, the
@@ -11,7 +11,6 @@
  */
 
 import { BrowserMediatorTool } from "./browser-mediator-tool.js";
-import { CheckActionStatusTool, PurchaseItemTool, RequestActionTool, RequestReadTool } from "./request-action.js";
 import { registerToolFactory } from "./tool-factories.js";
 
 registerToolFactory("browser_mediator", (config, ctx) => {
@@ -31,20 +30,8 @@ registerToolFactory("browser_mediator", (config, ctx) => {
 // @tailored-ai/google-tools — import that package once at startup to register
 // them. They are excluded from core to keep the dependency surface lean.
 
-registerToolFactory("trusted_actions", (config) => {
-  const ta = config.trustedActions;
-  if (!ta?.enabled || !ta.url || !ta.sharedSecret) return [];
-  const taiBase = ta.callbackBaseUrl ?? `http://host.docker.internal:${config.server?.port ?? 3000}`;
-  const callbackUrl = `${taiBase.replace(/\/$/, "")}/api/trusted-actions/callback`;
-  const opts = {
-    url: ta.url,
-    sharedSecret: ta.sharedSecret,
-    callbackUrl,
-  };
-  return [
-    new RequestActionTool(opts),
-    new PurchaseItemTool(opts),
-    new RequestReadTool(opts),
-    new CheckActionStatusTool(opts),
-  ];
-});
+// The trusted-actions tools (request_action, purchase_item, request_read,
+// check_action_status) live in @tailored-ai/trusted-actions and register from
+// that package's plugin entry, beside the HTTP routes it already owns. They
+// are client code for one executor — a feature, not a seam — and core carried
+// them only because the package did not exist yet when they were written.

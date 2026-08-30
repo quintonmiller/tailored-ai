@@ -41,7 +41,7 @@ trustedActions:
   pollIntervalMs: 5000
 ```
 
-Restart TAI. The agent will now have `purchase_item`, `request_action`, and `check_action_status` tools.
+Restart TAI. The agent will now have `purchase_item`, `request_action`, `request_read`, and `check_action_status` tools. They are registered by `@tailored-ai/trusted-actions/plugin`, which the CLI auto-loads whenever `trustedActions.enabled` is set — no `plugins:` entry required.
 
 ### What setup-tai-executor.sh does
 

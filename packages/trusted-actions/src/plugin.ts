@@ -33,6 +33,7 @@ import {
   type TaiHttpRequest,
   type TaiHttpResponse,
 } from "@tailored-ai/core";
+import { CheckActionStatusTool, PurchaseItemTool, RequestActionTool, RequestReadTool } from "./tools.js";
 
 /** Base path the routes have always lived at. Kept for back-compat. */
 const BASE = "/api/trusted-actions";
@@ -199,6 +200,45 @@ export function buildTrustedActionsRoutes(runtime: NonNullable<PluginContext["ru
 }
 
 /**
+ * The agent-facing half: four tools that enqueue and poll approval-gated
+ * actions against the executor.
+ *
+ * These lived in `@tailored-ai/core` until now, which put client code for one
+ * executor — including a tool that buys things on Amazon — inside the kernel.
+ * The routes moved out for exactly that reason; the tools simply had not
+ * followed yet. Core now ships no knowledge of this integration.
+ *
+ * Same gate as before: the factory returns `[]` unless the executor is
+ * configured, so an install without one sees no tools, exactly as when core
+ * held the registration. And because the CLI already auto-loads this plugin
+ * whenever `trustedActions.enabled` is set, no deployment needs a config edit
+ * for the tools to keep appearing.
+ *
+ * Config is read at construction rather than per call, matching what core did.
+ * The routes next door read it live because they outlive a reload; a tool set
+ * is rebuilt on reload anyway.
+ */
+export function buildTrustedActionsTools(config: {
+  trustedActions?: { enabled?: boolean; url?: string; sharedSecret?: string; callbackBaseUrl?: string };
+  server?: { port?: number };
+}): Array<RequestActionTool | PurchaseItemTool | RequestReadTool | CheckActionStatusTool> {
+  const ta = config.trustedActions;
+  if (!ta?.enabled || !ta.url || !ta.sharedSecret) return [];
+  const taiBase = ta.callbackBaseUrl ?? `http://host.docker.internal:${config.server?.port ?? 3000}`;
+  const opts = {
+    url: ta.url,
+    sharedSecret: ta.sharedSecret,
+    callbackUrl: `${taiBase.replace(/\/$/, "")}${BASE}/callback`,
+  };
+  return [
+    new RequestActionTool(opts),
+    new PurchaseItemTool(opts),
+    new RequestReadTool(opts),
+    new CheckActionStatusTool(opts),
+  ];
+}
+
+/**
  * Plugin entry. Registers the trusted-actions HTTP routes through the seam.
  * No-op without a runtime (the routes need live config + the session DB).
  *
@@ -210,6 +250,7 @@ export function buildTrustedActionsRoutes(runtime: NonNullable<PluginContext["ru
 const plugin: Plugin = (ctx: PluginContext) => {
   if (!ctx.runtime) return;
   const disposers = buildTrustedActionsRoutes(ctx.runtime).map((route) => ctx.http.register(route));
+  disposers.push(ctx.tools.register("trusted_actions", buildTrustedActionsTools));
   return () => {
     for (const dispose of disposers) dispose();
   };

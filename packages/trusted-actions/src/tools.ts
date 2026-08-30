@@ -1,5 +1,5 @@
-import { toolOutputText } from "../content/types.js";
-import type { Tool, ToolContext, ToolResult } from "./interface.js";
+import type { Tool, ToolContext, ToolResult } from "@tailored-ai/core";
+import { toolOutputText } from "@tailored-ai/core";
 
 export interface TrustedActionsClientOptions {
   /** Base URL of the trusted-actions executor, e.g. http://localhost:3100 */
