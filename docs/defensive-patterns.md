@@ -27,6 +27,31 @@ Related: `pnpm run guard:local-refs` catches structural drift, not this.
 [#536](https://github.com/quintonmiller/tailored-ai/issues/536) proposes
 generating the catalog that would make an unread field mechanically visible.
 
+## A registry consulted only for validation
+
+The sibling of the pattern above, one level up: not a field nothing reads, but a
+*seam* nothing dispatches. A registry exists, a third party can register into
+it, config selects from it — and the only code path that consults it is the
+validator.
+
+This is worse than an absent seam, because every signal a plugin author has says
+it works. `TriggerKindRegistry` catalogs workflow trigger kinds, and
+`setExtraTriggerKinds` feeds the catalog to the workflow loader. So a
+plugin-registered kind passed validation, appeared in the UI picker, and was
+then filtered out of `WorkflowTriggerCoordinator.reconcile` against a hardcoded
+set — no warning, no error, no run
+([#609](https://github.com/quintonmiller/tailored-ai/issues/609)). The same
+shape had already shipped once for `tool_called`
+([#561](https://github.com/quintonmiller/tailored-ai/issues/561)), and
+`docs/modularity-plan.md` scored the seam fully pluggable throughout.
+
+**Rule:** registering a thing and running a thing are two questions, and passing
+the first says nothing about the second. When you add a registry, trace one
+entry from `register()` to the code that *invokes* it, and write the test at
+that end. A registry whose consumers are all validators is a catalog — which is
+a legitimate thing to build, but it must be named one, and anything that filters
+its entries against a separate hardcoded list has to say so out loud.
+
 ## Control flow inferred from model-facing strings
 
 Parsing what the model said to decide what the runtime does couples behaviour to
