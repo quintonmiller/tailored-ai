@@ -180,13 +180,25 @@ export {
   type EventHookContext,
   type EventHookHandler,
   type EventHookResult,
+  eventHookHandlerTier,
+  type HookTier,
   listEventHookHandlers,
   matchesWhen,
+  type RegisterEventHookHandlerOptions,
   type ResolvedEventHooks,
   registerEventHookHandler,
   resolveEventHooks,
   runEventHooks,
+  runLifecycleHooks,
 } from "./agent/event-hooks.js";
+export {
+  isLifecycleEvent,
+  isRefusableLifecycleEvent,
+  LIFECYCLE_EVENTS,
+  type LifecycleEvent,
+  lifecycleTier,
+  tierSatisfies,
+} from "./agent/lifecycle.js";
 export {
   type ChunkOptions,
   chunkText,
@@ -203,6 +215,7 @@ export {
   type SweepOptions,
   type SweepReport,
 } from "./agent/memory-promotion.js";
+export { DEFAULT_SCRIPT_HOOK_TIMEOUT_MS, payloadEnv, registerScriptHookHandler } from "./agent/script-hook.js";
 export {
   computeImportance,
   getSessionSummary,
