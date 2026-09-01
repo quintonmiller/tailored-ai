@@ -51,6 +51,31 @@ entry from `register()` to the code that *invokes* it, and write the test at
 that end. A registry whose consumers are all validators is a catalog — which is
 a legitimate thing to build, but it must be named one, and anything that filters
 its entries against a separate hardcoded list has to say so out loud.
+## A seam offered at a moment it cannot work
+
+The third member of the family above, and the hardest to see: the registry is
+real, the consumer does run it, but the *timing* means one class of caller
+always misses.
+
+`PluginContext` offers `ctx.tools.register` to every plugin. `createTools()`
+walks the factory registry once, in the `AgentRuntime` constructor. Registry-pass
+plugins load before that and are picked up; **runtime-pass plugins load after it
+by definition** — they load late precisely because they need `ctx.runtime` — so
+their tools reached the agent only on the next reload
+([#621](https://github.com/quintonmiller/tailored-ai/issues/621)). The seam was
+not missing and not unwired. It was offered at a moment when the thing that
+consumes it had already run.
+
+Nothing had hit it because no shipped plugin used that path; it surfaced when
+the first one was written.
+
+**Rule:** a registry consumed by a one-time walk has a deadline, and every
+context that hands out `register()` has to be on the right side of it. When you
+expose a registration seam, name the moment its entries are read and check each
+caller against it — a plugin that registers after the read is indistinguishable
+from one that never registered. Where the read is cheap and idempotent, running
+it again after late registration is usually better than documenting the
+deadline.
 
 ## Control flow inferred from model-facing strings
 

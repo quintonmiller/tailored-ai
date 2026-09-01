@@ -317,6 +317,58 @@ export class AgentRuntime {
   }
 
   /**
+   * Run the tool factories again and register anything that is new.
+   *
+   * `createTools()` walks the factory registry once, in the constructor. That
+   * is fine for factories registered on module import, which is how every
+   * built-in and every *registry*-pass plugin arrives — they are all in place
+   * before the runtime exists.
+   *
+   * It is not fine for a **runtime-context plugin**. Those load in a second
+   * pass, after the runtime is built, precisely because they need
+   * `ctx.runtime`. `PluginContext` offers them `ctx.tools.register` like
+   * everyone else, but by the time they call it the walk has already happened,
+   * so their tools reached the agent on the next reload and never at startup —
+   * a registration that validates, returns a disposer, and does nothing. Same
+   * class as #561 and #609.
+   *
+   * Call this after loading runtime plugins. It returns the names it added, so
+   * the caller can say what appeared rather than leaving it to be inferred.
+   *
+   * **Additive on purpose.** It does not rebuild the registry, because the
+   * registry also holds tools nobody's factory produces — `McpManager`
+   * registers discovered MCP tools directly into it — and a rebuild would drop
+   * those. Nor does it remove a tool whose config gate has since closed: this
+   * runs at startup, before any turn, where the only difference between the
+   * two walks is the factories that were not registered yet. Reacting to a
+   * config change is `reload()`'s job and stays there.
+   */
+  applyPendingToolFactories(): string[] {
+    const produced =
+      this._createTools(this._config, this.contextDir, this.configPath, {
+        db: this.db,
+        taskBackend: this._taskBackend,
+        taskBackendResolver: (projectId?: string | null) => this.getTaskBackendForProject(projectId),
+        getEmbedder: () => this._embedder,
+        getMemoryBackend: () => this.getMemoryBackend(),
+        timeProvider: this._timeProvider,
+        resolveOutbound: (id?: string) => this.resolveOutbound(id),
+        getOwnerId: (id?: string) => this.getOwnerId(id),
+        getNotificationGate: () => this.getNotificationGate(),
+        deliverAgentMessage: (to, from, body) => this.deliverAgentMessage(to, from, body),
+        events: this.events,
+      }) ?? [];
+    const existing = new Set(this._toolRegistry.list().map((t) => t.name));
+    const added: string[] = [];
+    for (const tool of produced) {
+      if (existing.has(tool.name)) continue;
+      this._toolRegistry.registerBuiltin(tool);
+      added.push(tool.name);
+    }
+    return added;
+  }
+
+  /**
    * Every tool an agent can end up holding, registry and meta together.
    *
    * `buildLoopOptions` appends meta tools AFTER resolving the agent, so
