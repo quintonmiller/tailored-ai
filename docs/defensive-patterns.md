@@ -77,6 +77,30 @@ from one that never registered. Where the read is cheap and idempotent, running
 it again after late registration is usually better than documenting the
 deadline.
 
+## A dependency read from the constructor, supplied at the call
+
+The fourth member of that family, and the one a test will actively hide.
+
+`BrowserMediatorTool` stored a `MediaStore` from its constructor config and
+checked `this.mediaStore` before attaching a screenshot. Nothing in production
+ever passed one: the tool is built by a factory from `config.tools.*`, and the
+store does not exist until the runtime does, which is later. The live store
+arrives per call, on `ToolContext.mediaStore` — the very argument the method
+already had in hand. So the branch that turns a screenshot into an image was
+never taken outside the tests that constructed the tool by hand with a store.
+`BrowserTool.screenshot()` had the same shape by a different route: it took
+`_context`, underscore and all, and returned a file path.
+
+The tests passed. They passed *because* they supplied the collaborator directly,
+which is exactly what no caller does.
+
+**Rule:** when a collaborator can arrive by two routes — constructed in, or
+passed per call — the code must read the one production actually fills, and a
+test must build the object the way the factory builds it. A constructor
+parameter that only tests populate is not a seam, it is a decoy. Prefer
+`this.x ?? context.x`, and write at least one test that omits the constructor
+argument entirely.
+
 ## Control flow inferred from model-facing strings
 
 Parsing what the model said to decide what the runtime does couples behaviour to

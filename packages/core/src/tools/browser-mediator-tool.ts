@@ -54,11 +54,16 @@ export class BrowserMediatorTool implements Tool {
 
   async execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     const r = await dispatchToMediator(this.mediator, args);
-    if (!r.ok || !r.media || !this.mediaStore) {
+    // The constructor store is a test seam. In production nothing passes one —
+    // the factory builds this tool from config, and the store only exists once
+    // the runtime does — so the live store arrives per call on the context.
+    // Reading only the constructor field is how this path stayed dead.
+    const store = this.mediaStore ?? context.mediaStore;
+    if (!r.ok || !r.media || !store) {
       return { success: r.ok, output: r.output, error: r.error };
     }
     try {
-      const ref = await this.mediaStore.put(r.media.bytes, {
+      const ref = await store.put(r.media.bytes, {
         mimeType: r.media.mimeType,
         name: "screenshot.png",
         sessionId: context.sessionId,

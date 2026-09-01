@@ -45,6 +45,20 @@ New modules worth knowing about: `core/src/content/{types,codec}.ts`,
 **P6 — optional, and genuinely optional.** Listed under *Phases*; nothing in
 P1-P5 is waiting on any of it.
 
+**Closed after the fact (2026-08-31):** both browser tools could produce media
+and neither did. `BrowserMediatorTool` checked a `MediaStore` held on a
+constructor field that only its tests set — the factory builds the tool from
+config, and the store does not exist until the runtime does — so `screenshot`
+always took the text branch. It now reads `ToolContext.mediaStore`, which the
+loop has been populating since P4. The built-in `browser` tool never had the
+path at all: it wrote a PNG and returned the filename. It now attaches the image
+too, and still writes the file and reports the path.
+
+This is the *fifth* instance of the failure mode the note below warns about, and
+the first where the wiring existed and the consumer read the wrong field. See
+`docs/defensive-patterns.md`, "A dependency read from the constructor, supplied
+at the call".
+
 **Also open**, from earlier phases: the SSE `tool_result` event still truncates
 to 1000 chars at two sites (`packages/server/src/index.ts:1178` and `:2447`) and
 carries text only, and `onToolResult` still hands subscribers the text
