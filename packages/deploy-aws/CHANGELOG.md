@@ -1,5 +1,53 @@
 # @tailored-ai/deploy-aws
 
+## 0.1.11
+
+### Patch Changes
+
+- Updated dependencies [9018bc8]
+- Updated dependencies [9dc9836]
+- Updated dependencies [e21c40e]
+- Updated dependencies [0651034]
+- Updated dependencies [5c6f252]
+- Updated dependencies [0b62d07]
+- Updated dependencies [38b808b]
+- Updated dependencies [662b23a]
+- Updated dependencies [f13cec6]
+- Updated dependencies [0c8e8c4]
+- Updated dependencies [390be8e]
+- Updated dependencies [bf2faf1]
+- Updated dependencies [b17aa82]
+- Updated dependencies [bf2faf1]
+- Updated dependencies [2c98cab]
+- Updated dependencies [b8e39ef]
+- Updated dependencies [49e6ce4]
+- Updated dependencies [02f9be2]
+- Updated dependencies [662b23a]
+- Updated dependencies [38b808b]
+- Updated dependencies [2c98cab]
+- Updated dependencies [afdfc82]
+- Updated dependencies [0594a2b]
+- Updated dependencies [325e5f2]
+- Updated dependencies [38b808b]
+- Updated dependencies [bf2faf1]
+- Updated dependencies [3d27ba5]
+- Updated dependencies [1d83122]
+- Updated dependencies [415ba15]
+- Updated dependencies [0594a2b]
+- Updated dependencies [a098702]
+- Updated dependencies [d4c4baa]
+- Updated dependencies [1537522]
+- Updated dependencies [0b90020]
+- Updated dependencies [6557b85]
+- Updated dependencies [bdacf8d]
+- Updated dependencies [2e7a342]
+- Updated dependencies [9190838]
+- Updated dependencies [2c98cab]
+- Updated dependencies [1d83122]
+- Updated dependencies [1537522]
+- Updated dependencies [e21c40e]
+  - @tailored-ai/core@0.1.11
+
 ## 0.1.10
 
 ### Patch Changes

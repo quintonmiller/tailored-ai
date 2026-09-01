@@ -1,5 +1,103 @@
 # @tailored-ai/provider-anthropic
 
+## 0.1.11
+
+### Patch Changes
+
+- 38b808b: Messages and tool results can carry media, not only text.
+
+  `Message.content` is now `string | MessageContent | null` and `ToolResult.output`
+  is `string | ToolOutput`. A plain string still means exactly what it did before,
+  so every text-only call site and all 398 tool-result construction sites are
+  unchanged; only code that _reads_ content had to say what it does about media.
+
+  The non-string arm is an object rather than a bare `ContentPart[]`, which looks
+  fussy and is the whole reason this was safe to land. Widening to
+  `string | ContentPart[] | null` first, as an experiment, produced exactly one
+  compile error across `packages/core` — not because the change was safe, but
+  because `string` and `Array` share `.length`, `.slice`, `.indexOf` and
+  `.includes`. `estimateTokens` would have kept returning a number, just the wrong
+  one: a count of parts instead of a count of characters. The compaction
+  transcript would have serialized `[object Object]` into a summarizer prompt.
+  Wrapping the arm in an object turned both into compile errors, twenty-five in
+  core, each one a real decision about what that site does when handed a picture.
+
+  `messageText()` and `toolOutputText()` give the text projection. They are
+  functions over the one source of truth rather than a second stored field, so
+  they cannot drift out of sync the way a cached projection would, and a caller
+  that only wants text now says so at the call site.
+
+  Media itself is stored by reference, never inline. A new `MediaStore` seam keeps
+  bytes out of conversation history — `capToolOutput` head/tail-slices its input
+  and would cut a base64 payload into something undecodable, and every vendor API
+  separates the reference from the payload for the same reason. The bundled disk
+  store addresses blobs by the sha256 of their bytes, which dedupes re-captures
+  and, more importantly, keeps the loop's stuck-model detector working: it
+  compares consecutive tool results verbatim, so a per-capture unique id would
+  have quietly disabled the guard. Third-party stores register through the same
+  registry the disk one uses.
+
+  Persistence needed no migration. The `messages.content` column stays a single
+  `TEXT` field; plain strings are stored verbatim, only media-carrying content is
+  JSON-encoded, and decoding validates every part before trusting it — so a live
+  database keeps working and a legacy message whose text merely looks like JSON is
+  not misread as structured content.
+
+  `estimateTokens` charges a flat per-image cost instead of the ~15 tokens an
+  image's text placeholder would have cost. A deliberate over-estimate:
+  over-counting evicts early, under-counting overflows the request, and only one
+  of those is recoverable.
+
+  Providers flatten media to a visible placeholder for now. A tool message's
+  content must be a string — vLLM rejects an `image_url` part on `role: "tool"`
+  even for a vision model — and resolving a stored reference needs the store,
+  which is async. The point is that the model is told an image was there. It is
+  never silently dropped and never JSON-stringified into the prompt.
+
+- Updated dependencies [9018bc8]
+- Updated dependencies [9dc9836]
+- Updated dependencies [e21c40e]
+- Updated dependencies [0651034]
+- Updated dependencies [5c6f252]
+- Updated dependencies [0b62d07]
+- Updated dependencies [38b808b]
+- Updated dependencies [662b23a]
+- Updated dependencies [f13cec6]
+- Updated dependencies [0c8e8c4]
+- Updated dependencies [390be8e]
+- Updated dependencies [bf2faf1]
+- Updated dependencies [b17aa82]
+- Updated dependencies [bf2faf1]
+- Updated dependencies [2c98cab]
+- Updated dependencies [b8e39ef]
+- Updated dependencies [49e6ce4]
+- Updated dependencies [02f9be2]
+- Updated dependencies [662b23a]
+- Updated dependencies [38b808b]
+- Updated dependencies [2c98cab]
+- Updated dependencies [afdfc82]
+- Updated dependencies [0594a2b]
+- Updated dependencies [325e5f2]
+- Updated dependencies [38b808b]
+- Updated dependencies [bf2faf1]
+- Updated dependencies [3d27ba5]
+- Updated dependencies [1d83122]
+- Updated dependencies [415ba15]
+- Updated dependencies [0594a2b]
+- Updated dependencies [a098702]
+- Updated dependencies [d4c4baa]
+- Updated dependencies [1537522]
+- Updated dependencies [0b90020]
+- Updated dependencies [6557b85]
+- Updated dependencies [bdacf8d]
+- Updated dependencies [2e7a342]
+- Updated dependencies [9190838]
+- Updated dependencies [2c98cab]
+- Updated dependencies [1d83122]
+- Updated dependencies [1537522]
+- Updated dependencies [e21c40e]
+  - @tailored-ai/core@0.1.11
+
 ## 0.1.10
 
 ### Patch Changes
