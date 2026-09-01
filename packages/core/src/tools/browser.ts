@@ -1,5 +1,6 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { mediaPart, textPart } from "../content/types.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
 
 export interface BrowserToolConfig {
@@ -43,7 +44,7 @@ export class BrowserTool implements Tool {
     this.timeoutMs = config.timeoutMs ?? 30000;
   }
 
-  async execute(args: Record<string, unknown>, _context: ToolContext): Promise<ToolResult> {
+  async execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     const action = args.action as string;
 
     try {
@@ -55,7 +56,7 @@ export class BrowserTool implements Tool {
         case "type":
           return await this.typeText(args.selector as string, args.text as string);
         case "screenshot":
-          return await this.screenshot(args.selector as string | undefined);
+          return await this.screenshot(args.selector as string | undefined, context);
         case "get_text":
           return await this.getText(args.selector as string | undefined);
         case "wait":
@@ -119,7 +120,7 @@ export class BrowserTool implements Tool {
     return { success: true, output: `Typed "${text}" into ${selector}.` };
   }
 
-  private async screenshot(selector?: string): Promise<ToolResult> {
+  private async screenshot(selector: string | undefined, context: ToolContext): Promise<ToolResult> {
     const page = await this.ensureBrowser();
 
     mkdirSync(resolve(this.screenshotDir), { recursive: true });
@@ -134,7 +135,28 @@ export class BrowserTool implements Tool {
       await page.screenshot({ path: filepath });
     }
 
-    return { success: true, output: `Screenshot saved: ${filepath}` };
+    // The file on disk stays: it is what `screenshotDir` is for, and an agent
+    // whose next move is a shell command still wants the path. What changes is
+    // that the picture also reaches the model, when there is a store to put it
+    // in. Without one — a deployment with media off — the path is all there is,
+    // and that is the behaviour this tool had for its whole life.
+    const store = context.mediaStore;
+    if (!store) return { success: true, output: `Screenshot saved: ${filepath}` };
+
+    try {
+      const ref = await store.put(readFileSync(filepath), {
+        mimeType: "image/png",
+        name: filename,
+        sessionId: context.sessionId,
+      });
+      return {
+        success: true,
+        output: { parts: [textPart(`Screenshot saved: ${filepath}`), mediaPart(ref)] },
+      };
+    } catch (err) {
+      // A screenshot we could not store still happened, and is still on disk.
+      return { success: true, output: `Screenshot saved: ${filepath} (not attached: ${(err as Error).message})` };
+    }
   }
 
   private async getText(selector?: string): Promise<ToolResult> {
