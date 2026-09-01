@@ -33,9 +33,31 @@ The HITL purchase flow has these moving parts now landed on `main`:
 | Spending caps | `packages/trusted-actions/src/caps/enforcer.ts` | `per_request | per_day | per_month`, each `number | null` |
 | Audit log | `packages/trusted-actions/src/audit/log.ts` | Hash-chained; tamper-detectable via `verifyAuditChain()` |
 | Playwright adapter | `packages/trusted-actions/src/adapters/purchase-amazon.ts` | Stealth headless Chromium + checkout flow |
-| TAI tools | `packages/core/src/tools/request-action.ts` | `purchase_item`, `request_action`, `check_action_status` |
+| TAI tools | `packages/trusted-actions/src/tools.ts` | `purchase_item`, `request_action`, `request_read`, `check_action_status` — registered by the same plugin entry as the routes |
 | TAI-side routes | `packages/trusted-actions/src/plugin.ts` | `/api/trusted-actions/*` on the TAI server — registered through core's HTTP route seam (see below) |
 | UI page | `packages/ui/src/pages/Actions.tsx` | Pending / Recent / All tabs, cancel button |
+
+### What the package registers on the TAI side
+
+Both halves of the TAI-side integration now ship here, registered by one plugin
+entry (`@tailored-ai/trusted-actions/plugin`):
+
+| | Seam | Registered as |
+|---|---|---|
+| Four agent tools | `ctx.tools` | `trusted_actions` tool factory |
+| Four HTTP routes | `ctx.http` | `/api/trusted-actions/*` |
+
+The tools lived in `@tailored-ai/core` until #616 and moved for the same reason
+the routes did: they are client code for one executor — including a tool that
+buys things on Amazon — which `CLAUDE.md` puts outside the kernel ("a feature
+that serves one use case does not belong here, even a popular one"). Core now
+ships no knowledge of this integration beyond the `trustedActions` config block
+that both halves read.
+
+**No config change is needed.** The CLI auto-loads this plugin whenever
+`trustedActions.enabled` is set, so the tools appear exactly when they did
+before. The factory keeps the same gate: nothing registers unless `url` and
+`sharedSecret` are both present.
 
 ### TAI-side HTTP routes (registered by the package)
 

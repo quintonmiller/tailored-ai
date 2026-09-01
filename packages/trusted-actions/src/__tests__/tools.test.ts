@@ -1,6 +1,6 @@
+import type { ToolContext } from "@tailored-ai/core";
 import { describe, expect, it, vi } from "vitest";
-import type { ToolContext } from "../tools/interface.js";
-import { CheckActionStatusTool, PurchaseItemTool, RequestActionTool } from "../tools/request-action.js";
+import { CheckActionStatusTool, PurchaseItemTool, RequestActionTool } from "../tools.js";
 
 const ctx: ToolContext = {
   sessionId: "test-session",
