@@ -23,7 +23,7 @@ gap.
 | Component | Interface | Registry | Config | Notes |
 |---|---|---|---|---|
 | Tools | ✅ | ✅ | ✅ | `Tool` interface, registry, `tools:` config block. |
-| Triggers | ✅ | ✅ | ✅ | `TriggerKindRegistry` populated from `BUILTIN_TRIGGER_KINDS`. |
+| Triggers | ✅ | ⚠️ | ✅ | `TriggerKindRegistry` catalogs kinds; nothing lets a plugin supply the *runner*. See below. |
 | Task backends | ✅ | ✅ | ✅ | `registerTaskBackendFactory`, shipped. |
 | Step executors | ✅ | ✅ | ✅ | `StepExecutorRegistry`; docs updated. |
 | Providers | ✅ | ✅ | ✅ | `registerProviderFactory`, shipped. |
@@ -33,6 +33,23 @@ gap.
 | Memory backends | ❌ | ❌ | ❌ | Three tiers baked into SQL schema and tool implementations. v0.3 candidate. |
 
 **Status as of 2026-05-30: waves 1-6 shipped. Memory backends (wave 7) deferred.**
+
+**Correction, 2026-08-30.** The Triggers row read all-green until now. It was
+scoring the wrong thing. `TriggerKindRegistry` is a catalog — its own docblock
+says "the actual scheduling/polling implementation still lives in the runtime
+subsystem that handles the kind" — and `plugin-context.ts` exposes no trigger
+surface at all, so a plugin can register a *kind* and never a *runner*.
+
+The result was worse than a plain gap: `loader.ts` accepts any catalogued kind
+via `setExtraTriggerKinds`, so a plugin's workflow validated, appeared in the
+UI picker, was filtered out at `trigger-coordinator.ts`, and never fired, with
+nothing said. #609 makes that drop warn; #61 is the contract that closes it.
+
+The lesson generalises past triggers, and is why this row is now ⚠️ rather than
+red: **a registry that is only consulted for validation will score green on
+these three columns while nothing runs.** "Can a third party register one?" is
+not the same question as "does registering one do anything?" — and only the
+second one is worth a ✅.
 
 ---
 

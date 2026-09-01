@@ -150,4 +150,105 @@ describe("WorkflowTriggerCoordinator", () => {
     for (const cb of listeners) cb();
     expect(pollers.email.register).toHaveBeenCalledOnce();
   });
+
+  /**
+   * #609. A plugin can register a trigger kind, the loader accepts it, the UI
+   * lists it — and `reconcile` filtered it out with nothing said, so the only
+   * symptom was that the workflow never ran. Same shape as #561.
+   *
+   * These assert the *warning*, not the firing: nothing dispatches a plugin
+   * kind until #61 lands. The point is that the gap is audible.
+   */
+  describe("a kind with no runner", () => {
+    const orphan = (): WorkflowTriggerDef => ({ kind: "smart_doorbell" }) as WorkflowTriggerDef;
+
+    it("warns, naming the workflow and the kind", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        new WorkflowTriggerCoordinator(makePollers()).reconcile(fakeRegistry([wf("doorbell", [orphan()])]));
+        const said = warn.mock.calls.flat().join(" ");
+        expect(said).toContain("doorbell");
+        expect(said).toContain("smart_doorbell");
+        expect(said).toContain("never fire");
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("warns once, not once per reconcile", () => {
+      // The load-bearing one. reconcile() runs on every registry change, and a
+      // per-tick warning is noise people learn to scroll past — which is the
+      // same outcome as silence.
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const co = new WorkflowTriggerCoordinator(makePollers());
+        const reg = fakeRegistry([wf("doorbell", [orphan()])]);
+        co.reconcile(reg);
+        co.reconcile(reg);
+        co.reconcile(reg);
+        expect(warn).toHaveBeenCalledOnce();
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("stays quiet for kinds something else runs", () => {
+      // cron, webhook and the rest fire from their own subsystems. Warning on
+      // those would train everyone to ignore the message.
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        new WorkflowTriggerCoordinator(makePollers()).reconcile(
+          fakeRegistry([
+            wf("a", [{ kind: "cron", schedule: "* * * * *" } as WorkflowTriggerDef]),
+            wf("b", [{ kind: "webhook" } as WorkflowTriggerDef]),
+            wf("c", [{ kind: "manual" } as WorkflowTriggerDef]),
+            wf("d", [{ kind: "tool_called", tool: "read" } as WorkflowTriggerDef]),
+            wf("e", [{ kind: "document_event" } as WorkflowTriggerDef]),
+            wf("f", [{ kind: "config_event" } as WorkflowTriggerDef]),
+          ]),
+        );
+        expect(warn).not.toHaveBeenCalled();
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("stays quiet for every kind it actually dispatches", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        new WorkflowTriggerCoordinator(makePollers()).reconcile(
+          fakeRegistry([wf("a", [rssTrig("u"), emailTrig("q")])]),
+        );
+        expect(warn).not.toHaveBeenCalled();
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("still registers the runnable triggers alongside an unrunnable one", () => {
+      // A bad kind must not cost the workflow its working triggers.
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const pollers = makePollers();
+        new WorkflowTriggerCoordinator(pollers).reconcile(fakeRegistry([wf("mixed", [orphan(), rssTrig("u")])]));
+        expect(pollers.rss.register).toHaveBeenCalledOnce();
+        expect(warn).toHaveBeenCalledOnce();
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("warns again when the workflow is fixed and then broken again", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const co = new WorkflowTriggerCoordinator(makePollers());
+        co.reconcile(fakeRegistry([wf("doorbell", [orphan()])]));
+        co.reconcile(fakeRegistry([wf("doorbell", [rssTrig("u")])]));
+        co.reconcile(fakeRegistry([wf("doorbell", [orphan()])]));
+        expect(warn).toHaveBeenCalledTimes(2);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
 });
