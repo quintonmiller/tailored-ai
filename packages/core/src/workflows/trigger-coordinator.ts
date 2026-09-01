@@ -43,9 +43,7 @@ export interface WorkflowTriggerCoordinatorPollers {
   homeAssistant: Pick<HomeAssistantPoller, "register" | "unregister">;
 }
 
-/** Trigger kinds the coordinator dispatches; anything else (cron, manual,
- *  webhook, tool_called, document_event, config_event) is handled
- *  elsewhere. */
+/** Trigger kinds the coordinator dispatches. */
 const POLLER_KINDS = new Set([
   "file_drop",
   "email_message",
@@ -58,9 +56,24 @@ const POLLER_KINDS = new Set([
   "home_assistant",
 ]);
 
+/**
+ * Kinds that fire, but not from here — a scheduler, the HTTP layer, or a bus
+ * subscriber owns each one. Listed so {@link WorkflowTriggerCoordinator} can
+ * tell "someone else runs this" from "nothing runs this", which is the whole
+ * point of the warning below.
+ */
+const RUN_ELSEWHERE_KINDS = new Set(["manual", "cron", "webhook", "tool_called", "document_event", "config_event"]);
+
 export class WorkflowTriggerCoordinator {
   /** workflowName → JSON signature of its pollable triggers. */
   private signatures = new Map<string, string>();
+  /**
+   * workflowName → the unrunnable kinds already reported for it. Separate from
+   * {@link signatures} on purpose: a workflow whose *only* trigger has no
+   * runner never enters `signatures` at all, so reusing that map would warn on
+   * every reconcile — and this reconciles on every registry change.
+   */
+  private warnedUnrunnable = new Map<string, string>();
   private unsubscribe?: () => void;
 
   constructor(private readonly pollers: WorkflowTriggerCoordinatorPollers) {}
@@ -73,8 +86,10 @@ export class WorkflowTriggerCoordinator {
   reconcile(registry: WorkflowRegistry): void {
     const current = new Map<string, WorkflowTriggerDef[]>();
     for (const wf of registry.list()) {
-      const pollable = (wf.definition.triggers ?? []).filter((t) => POLLER_KINDS.has(t.kind as string));
+      const triggers = wf.definition.triggers ?? [];
+      const pollable = triggers.filter((t) => POLLER_KINDS.has(t.kind as string));
       if (pollable.length > 0) current.set(wf.definition.name, pollable);
+      this.reportUnrunnable(wf.definition.name, triggers);
     }
 
     // 1. Unregister workflows that disappeared OR whose triggers changed.
@@ -121,12 +136,54 @@ export class WorkflowTriggerCoordinator {
   stopAll(): void {
     for (const name of this.signatures.keys()) this.unregisterAll(name);
     this.signatures.clear();
+    this.warnedUnrunnable.clear();
     this.unsubscribe?.();
   }
 
   /** Visible to tests. */
   list(): string[] {
     return [...this.signatures.keys()];
+  }
+
+  /**
+   * Say so when a trigger kind has no runner.
+   *
+   * The workflow loader accepts any kind the trigger *catalog* knows
+   * (`loader.ts` reads `setExtraTriggerKinds`, wired to the registry in
+   * `runtime.ts`), and the registry is open to plugins. But registering a kind
+   * only describes it — `resources/trigger-registry.ts` says as much: "the
+   * actual scheduling/polling implementation still lives in the runtime
+   * subsystem that handles the kind". Nothing lets a plugin supply that half
+   * yet (#61).
+   *
+   * So a plugin kind used to take this path: config validates, the UI lists
+   * it, `reconcile` filters it out, and nothing ever fires — no warning, no
+   * error. That is the failure this repo keeps rediscovering (#561 was the
+   * same shape for `tool_called`), and the only symptom is that behaviour
+   * never changes.
+   *
+   * This does not make the trigger work. It makes the gap audible, which is
+   * what stops it costing an afternoon to find. #61 is the fix.
+   */
+  private reportUnrunnable(workflowName: string, triggers: WorkflowTriggerDef[]): void {
+    const orphans = triggers
+      .map((t) => t.kind as string)
+      .filter((k) => !POLLER_KINDS.has(k) && !RUN_ELSEWHERE_KINDS.has(k));
+    if (orphans.length === 0) {
+      // Cleared, so a workflow edited to remove the bad kind and edited back
+      // warns again rather than staying quiet about a live problem.
+      this.warnedUnrunnable.delete(workflowName);
+      return;
+    }
+    const sig = JSON.stringify([...new Set(orphans)].sort());
+    // Once per workflow per change, not once per reconcile.
+    if (this.warnedUnrunnable.get(workflowName) === sig) return;
+    this.warnedUnrunnable.set(workflowName, sig);
+    for (const kind of new Set(orphans)) {
+      console.warn(
+        `[trigger-coordinator] workflow "${workflowName}" declares trigger kind "${kind}", which is registered but has no runner — it will never fire. Async trigger kinds from plugins are not dispatchable yet (see issue #61).`,
+      );
+    }
   }
 
   private unregisterAll(workflowName: string): void {
