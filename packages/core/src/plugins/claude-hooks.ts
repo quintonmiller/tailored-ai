@@ -30,6 +30,7 @@
 import { spawn } from "node:child_process";
 import { type EventHookResult, registerEventHookHandler } from "../agent/event-hooks.js";
 import type { Plugin, PluginMeta } from "../plugin-context.js";
+import { closeChildStdin } from "../shell.js";
 
 /** Claude Code's names for the two events TAI can honestly map. */
 const EVENT_NAMES: Record<string, string> = {
@@ -135,7 +136,7 @@ function runCommand(
       resolve({ code, stdout, stderr, timedOut, spawnFailed });
     });
 
-    child.stdin?.end(input);
+    closeChildStdin(child, input);
   });
 }
 

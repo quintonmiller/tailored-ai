@@ -11,11 +11,14 @@
  * So this is deliberately the smaller of the two. No dialect, no JSON protocol,
  * no stdin:
  *
- * - **The payload arrives as environment**, not on stdin. That is not only
- *   simpler — writing to a child's stdin is how #606 happens, where a program
- *   that exits without reading raises an unhandled `EPIPE` from inside the
- *   runtime. A hook that ignores its input is a normal hook, and it should not
- *   be able to fault the process that ran it.
+ * - **The payload arrives as environment**, not on stdin. Simpler, and it
+ *   removes a hazard rather than guarding one: writing to a child's stdin is
+ *   what #606 was, where a program that exited without reading raised an
+ *   unhandled `EPIPE` from inside the runtime. That pipe is now guarded at
+ *   every call site (`closeChildStdin` in `shell.ts`), so this is no longer the
+ *   only thing standing between an ordinary hook and a downed process — but a
+ *   pipe never opened still cannot break, and the `command` handler needs one
+ *   only because Claude Code's protocol puts the payload there.
  * - **The exit code is the verdict.** Non-zero is a refusal, and on a refusable
  *   event that stops what was about to happen. Anything richer belongs in the
  *   `command` handler, which has a dialect for it.

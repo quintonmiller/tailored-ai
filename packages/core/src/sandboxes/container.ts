@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
+import { closeChildStdin } from "../shell.js";
 import type {
   Mount,
   Sandbox,
@@ -183,7 +184,7 @@ function defaultRunner(bin: string): ContainerRunner {
       // stdin-reading command inside the container hang until the timeout.
       // `docker exec` without `-i` gets no stdin anyway, so closing it here
       // only removes a way for the wrapper itself to stall.
-      child.stdin?.end();
+      closeChildStdin(child);
     });
 }
 

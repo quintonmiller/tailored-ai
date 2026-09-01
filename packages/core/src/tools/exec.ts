@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { taiHomePath } from "../home.js";
+import { closeChildStdin } from "../shell.js";
 import { type CommandRules, type CommandRulesMode, checkCommandRules, mergeCommandRules } from "./command-allowlist.js";
 import { classifyCommand } from "./effect.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
@@ -210,7 +211,7 @@ export class ExecTool implements Tool {
       // while `ntn api v1/users/me | jq -r .name` hung for the full 30s.
       // `stdio` is not honoured by execFile (it owns the pipes to buffer
       // them), so close the stream on the returned child instead.
-      child.stdin?.end();
+      closeChildStdin(child);
     });
   }
 }

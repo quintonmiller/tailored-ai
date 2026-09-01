@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
+import { closeChildStdin } from "../shell.js";
 import type {
   Sandbox,
   SandboxExecOptions,
@@ -58,7 +59,7 @@ export class HostSandbox implements Sandbox {
       // This path is the one that actually runs in a live deployment:
       // `buildLoopOptions` gives every agent a sandbox, defaulting to host, so
       // `ExecTool` returns here and never reaches its own execFile call.
-      child.stdin?.end();
+      closeChildStdin(child);
 
       if (opts?.signal) {
         opts.signal.addEventListener("abort", () => child.kill("SIGTERM"), { once: true });
