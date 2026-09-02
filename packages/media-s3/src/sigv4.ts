@@ -148,7 +148,8 @@ function findHeader(headers: Record<string, string>, lower: string): string {
 export const EMPTY_SHA256 = sha256Hex("");
 
 export interface PresignParams extends SignParams {
-  /** Override the hashed payload. Defaults to the empty-body hash. */
+  /** Override the hashed payload. Defaults to `UNSIGNED-PAYLOAD`, which is
+   *  what S3 requires for a presigned URL. */
   payloadHash?: string;
   /** Seconds the link stays valid. AWS caps this at 7 days. */
   expiresIn: number;
@@ -188,11 +189,15 @@ export function presignUrl(p: PresignParams): string {
     canonicalQueryString,
     `host:${p.host}\n`,
     signedHeaders,
-    // The hash of the (absent) body, not the literal `UNSIGNED-PAYLOAD`.
-    // Both appear in AWS documentation and they sign differently, so this is
-    // pinned to what AWS's own signer emits — see the note in sigv4.test.ts.
-    // Getting it wrong yields SignatureDoesNotMatch on every link.
-    p.payloadHash ?? EMPTY_SHA256,
+    // `UNSIGNED-PAYLOAD`, not the hash of the empty body.
+    //
+    // Both appear in AWS documentation and they sign differently. The generic
+    // SigV4 signer in the AWS SDK (`@smithy/signature-v4`) emits the empty-body
+    // hash; S3 rejects that for a presigned GET with SignatureDoesNotMatch,
+    // which is why `@aws-sdk/s3-request-presigner` exists as a separate wrapper
+    // that sets `unsignedPayload`. Verified the only way that settles it: both
+    // variants against a live S3 server. See sigv4.test.ts.
+    p.payloadHash ?? "UNSIGNED-PAYLOAD",
   ].join("\n");
 
   const signature = hmac(

@@ -1,23 +1,31 @@
 /**
- * SigV4 against AWS's own implementation.
+ * SigV4, verified two different ways because one of them was not enough.
  *
- * This is hand-written auth code, so it does not ship on the strength of "it
- * looked right". Recording what *this* implementation outputs would only prove
- * it is consistent with itself, so every signature below was produced by
- * `@smithy/signature-v4` — the signer inside the AWS SDK — and pasted here.
+ * **Header signing** is pinned to `@smithy/signature-v4`, the signer inside the
+ * AWS SDK. Byte-for-byte identical, and separately confirmed by a live S3
+ * server accepting the PUT/GET/DELETE this store makes.
  *
- * That package is in this repo's tree transitively (via `provider-bedrock`) but
- * is deliberately *not* a dependency of this one: it is async, which is the
- * whole reason `sigv4.ts` exists. It was used as an oracle once, at authoring
- * time, and the constants are the record of that. Reproduce with:
+ * **Presigning is different, and this is the trap.** The generic SigV4 signer
+ * hashes the (absent) body; S3 wants the literal `UNSIGNED-PAYLOAD`. They sign
+ * differently, and S3 answers the wrong one with `SignatureDoesNotMatch` on
+ * every link. That is why `@aws-sdk/s3-request-presigner` exists as a separate
+ * wrapper rather than a call to `SignatureV4.presign`.
  *
- *     new SignatureV4({ service: "s3", region, credentials, sha256: Sha256,
- *                       uriEscapePath: false, applyChecksum: false })
- *       .presign(req, { signingDate, expiresIn: 86400 })
+ * This file previously asserted the generic signer's value, matched it exactly,
+ * and was wrong — every presigned URL 403'd the first time the store ran
+ * against a real bucket. A library that does not model S3's presign rule is not
+ * an oracle for S3's presign rule; only a live server settles it:
  *
- * The first version of this file guessed the constants from memory and both
- * were wrong — a good reminder that a vector you cannot reproduce is not a
- * vector.
+ *     sha256("")         -> 403 SignatureDoesNotMatch
+ *     UNSIGNED-PAYLOAD   -> 200
+ *
+ * So the presign tests below assert the *rule* (what goes in the canonical
+ * request) plus a regression vector. The vector's job is to detect change, not
+ * to establish correctness — correctness was established by the 200 above, and
+ * `store.test.ts` re-checks the rule structurally.
+ *
+ * An even earlier draft guessed its constants from memory and both were wrong.
+ * A vector you cannot reproduce is not a vector.
  */
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
@@ -89,37 +97,33 @@ describe("presignUrl", () => {
     now: new Date("2013-05-24T00:00:00Z"),
   };
 
-  it("matches AWS's signer for a plain presigned GET", () => {
+  it("signs UNSIGNED-PAYLOAD, which is what S3 accepts", () => {
+    // The rule, not a recorded number. Signing the empty-body hash instead
+    // produces a URL S3 answers with SignatureDoesNotMatch — this exact bug
+    // shipped once and was caught only by a live bucket.
+    const asLiteral = new URL(presignUrl({ ...base, payloadHash: "UNSIGNED-PAYLOAD" })).searchParams.get(
+      "X-Amz-Signature",
+    );
+    const asEmptyHash = new URL(presignUrl({ ...base, payloadHash: sha256Hex("") })).searchParams.get(
+      "X-Amz-Signature",
+    );
+    expect(asEmptyHash).not.toBe(asLiteral);
+    // The default must be the one S3 takes.
+    expect(new URL(presignUrl(base)).searchParams.get("X-Amz-Signature")).toBe(asLiteral);
+  });
+
+  it("regression vector: a plain presigned GET", () => {
+    // Detects change, not correctness. Correctness is the 200 in the header
+    // note above; this catches an accidental edit to the canonical request.
     expect(new URL(presignUrl(base)).searchParams.get("X-Amz-Signature")).toBe(
-      "13fc8027a56468fb415ec48e7f90beb819e5c6b2308109bb5fe2400f6b704a3a",
+      "3ed0be64024db54d5574a27da223529635c383f911f80e636f0ccc13890053d2",
     );
   });
 
-  it("matches AWS's signer for a nested key in another region", () => {
-    const url = presignUrl({ ...base, region: "us-west-2", path: "/media/ab/abc123.wav" });
-    expect(new URL(url).searchParams.get("X-Amz-Signature")).toBe(
-      "6c5f323321e199b0117bcdd3dca6c654e0ea6935f6b156c18667b92dd38de3d4",
-    );
-  });
-
-  it("matches AWS's signer when temporary credentials add a token", () => {
-    const url = presignUrl({
-      ...base,
-      credentials: { ...base.credentials, sessionToken: "FQoGZXIvYXdzEExampleToken==" },
-    });
-    expect(new URL(url).searchParams.get("X-Amz-Signature")).toBe(
-      "3672cdc0de3c1aa2d9104c2ead6206625b5fb55bf01781b4a6abfd0b4410f223",
-    );
-  });
-
-  it("hashes the empty body rather than signing the UNSIGNED-PAYLOAD literal", () => {
-    // Both appear in AWS documentation and they sign differently. Picking the
-    // wrong one yields SignatureDoesNotMatch on every link, and the first
-    // version of this file picked the wrong one.
-    const withLiteral = presignUrl({ ...base, payloadHash: "UNSIGNED-PAYLOAD" });
-    expect(new URL(withLiteral).searchParams.get("X-Amz-Signature")).not.toBe(
-      new URL(presignUrl(base)).searchParams.get("X-Amz-Signature"),
-    );
+  it("region and key are both inside the signature", () => {
+    const sig = (o: Parameters<typeof presignUrl>[0]) => new URL(presignUrl(o)).searchParams.get("X-Amz-Signature");
+    expect(sig(base)).not.toBe(sig({ ...base, region: "us-west-2" }));
+    expect(sig(base)).not.toBe(sig({ ...base, path: "/media/ab/abc123.wav" }));
   });
 
   it("carries every parameter S3 requires", () => {
