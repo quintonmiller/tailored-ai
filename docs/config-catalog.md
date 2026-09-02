@@ -89,7 +89,7 @@ Fields: **72** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `database.path` | string | `./agent.db` | 38 | 2 |
+| `database.path` | string | `./agent.db` | 41 | 2 |
 
 ### `mcp`
 
@@ -101,7 +101,7 @@ Fields: **72** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `plugins` | array | `[{"module":"builtin:agent-notifier"},{"module":"builtin:owne` | 24 | 77 |
+| `plugins` | array | `[{"module":"builtin:agent-notifier"},{"module":"builtin:owne` | 24 | 80 |
 
 ### `prompts`
 
@@ -133,7 +133,7 @@ Fields: **72** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `server.host` | string | `127.0.0.1` | 15 | 5 |
+| `server.host` | string | `127.0.0.1` | 17 | 5 |
 | `server.port` | number | `3000` | 8 | 7 |
 
 ### `suggestions`

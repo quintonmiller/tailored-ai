@@ -1,0 +1,42 @@
+{
+  "name": "@tailored-ai/media-s3",
+  "version": "0.1.10",
+  "description": "S3 media store for Tailored AI. Keeps generated and uploaded media in S3 (or any S3-compatible bucket) and hands surfaces a presigned link, so an attachment too big for a chat transport still arrives. Zero dependencies.",
+  "license": "MIT",
+  "author": "Quinton Miller",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/quintonmiller/tailored-ai.git",
+    "directory": "packages/media-s3"
+  },
+  "homepage": "https://github.com/quintonmiller/tailored-ai/tree/main/packages/media-s3#readme",
+  "bugs": "https://github.com/quintonmiller/tailored-ai/issues",
+  "keywords": ["ai", "agent", "tailored-ai", "s3", "media", "storage", "minio", "r2"],
+  "publishConfig": { "access": "public", "provenance": true },
+  "engines": { "node": ">=20.0.0" },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js", "default": "./dist/index.js" }
+  },
+  "files": ["dist/", "README.md", "LICENSE"],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@tailored-ai/core": "workspace:*",
+    "better-sqlite3": "^11.7.0"
+  },
+  "devDependencies": {
+    "@tailored-ai/core": "workspace:*",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.0",
+    "better-sqlite3": "^11.7.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.0.18"
+  }
+}
