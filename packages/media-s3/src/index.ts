@@ -23,7 +23,6 @@
  * `forcePathStyle`.
  */
 import type { AgentConfig, Plugin, PluginMeta } from "@tailored-ai/core";
-import { registerMediaStoreFactory } from "@tailored-ai/core";
 import { bridgeToCore, CoreTooOldError } from "./core-bridge.js";
 import { S3MediaStore } from "./store.js";
 
@@ -63,8 +62,16 @@ function credentialsFrom(cfg: S3MediaConfig) {
   return { accessKeyId, secretAccessKey, ...(sessionToken ? { sessionToken } : {}) };
 }
 
-const plugin: Plugin = () => {
-  return registerMediaStoreFactory("s3", ({ db, options }) => {
+const plugin: Plugin = (ctx) => {
+  // Through `ctx`, never through core's exported `registerMediaStoreFactory`.
+  //
+  // A plugin resolves `@tailored-ai/core` from its own node_modules, which is
+  // a different module instance — and therefore a different `Registry` object
+  // — from the one the runtime is using. Calling the imported function
+  // registers into a registry nobody reads: the plugin loads, logs that it
+  // loaded, and the store silently does not exist. `ctx` is the runtime's own
+  // registry, which is the entire reason it is handed to a plugin.
+  return ctx.mediaStores.register("s3", ({ db, options }) => {
     const cfg = options as S3MediaConfig;
     const region = cfg.region || process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION;
     const credentials = credentialsFrom(cfg);
