@@ -596,7 +596,15 @@ export { hydrateMedia } from "./media/hydrate.js";
 export type { MediaStore, PutMediaOptions, StoredMedia } from "./media/interface.js";
 export { MediaTooLargeError } from "./media/interface.js";
 export type { MediaRow } from "./media/queries.js";
-export { findExpiredMedia, listMediaRows, totalMediaBytes } from "./media/queries.js";
+export {
+  deleteMediaRow,
+  findExpiredMedia,
+  getMediaRow,
+  listMediaRows,
+  totalMediaBytes,
+  touchMedia,
+  upsertMediaRow,
+} from "./media/queries.js";
 export type { MediaStoreContext, MediaStoreFactory } from "./media/registry.js";
 export { listMediaStoreFactories, registerMediaStoreFactory, resolveMediaStore } from "./media/registry.js";
 export { SqliteRenditionCache } from "./media/rendition-cache.js";

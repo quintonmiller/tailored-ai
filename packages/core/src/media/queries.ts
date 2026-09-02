@@ -9,6 +9,22 @@
 import type Database from "better-sqlite3";
 import type { MediaRef } from "../content/types.js";
 
+/**
+ * Row helpers for the `media` table.
+ *
+ * Exported, not internal: a media store is a registry seam
+ * ({@link import("./registry.js").registerMediaStoreFactory}), and a store
+ * that cannot write this table cannot participate in the deployment. The
+ * retention sweep walks `media` and calls `MediaStore.delete`, `touchMedia`
+ * keeps a blob alive when a rendition of it is served, and the dashboard sums
+ * `bytes` — all of which see an out-of-tree store only if that store keeps its
+ * metadata here.
+ *
+ * The alternative is a store that invents its own table, which means its blobs
+ * are invisible to retention and grow without limit, and its schema drifts from
+ * core's on the next migration. Sharing the table is the contract; these are
+ * how a plugin holds up its end.
+ */
 export interface MediaRow {
   ref: MediaRef;
   path: string;
