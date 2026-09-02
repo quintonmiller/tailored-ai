@@ -166,21 +166,40 @@ export class SpeakTool implements Tool {
       return { speaker, text: line };
     });
 
-    const unvoiced = new Set<string>();
-    const turns = script.map((t) => {
-      const voice = pickString(callVoices[t.speaker]) ?? this.cfg.voices?.[t.speaker] ?? this.cfg.voice;
-      if (!voice) unvoiced.add(t.speaker);
-      return { text: t.text, voice };
-    });
+    const cast = new Set(script.map((t) => t.speaker));
 
-    // Every speaker sounding identical is the failure this catches. It is
-    // silent otherwise — the audio renders, and only a listener notices.
-    if (unvoiced.size > 0 && new Set(script.map((t) => t.speaker)).size > 1) {
-      throw new Error(
-        `no voice for ${[...unvoiced].map((s) => `"${s}"`).join(", ")}. ` +
-          `Pass \`voices\`, or every speaker gets the same voice and the dialogue is unlistenable.`,
-      );
+    // A named speaker resolves ONLY through a per-speaker map. The single
+    // `voice` is a fallback for one voice, and letting it cover a cast is how
+    // a dialogue renders with one narrator reading every part — audio that
+    // succeeds, and is useless, and is discoverable only by listening.
+    //
+    // This is not hypothetical: the first version fell back to `voice`, and
+    // against the ordinary config (a default `voice` plus a `voices` map) a
+    // model that invented its own speaker names got a monologue and a success.
+    const voiceFor = (speaker: string): string | undefined =>
+      pickString(callVoices[speaker]) ?? this.cfg.voices?.[speaker];
+
+    if (cast.size > 1) {
+      const unmapped = [...cast].filter((s) => !voiceFor(s));
+      if (unmapped.length > 0) {
+        const known = Object.keys(this.cfg.voices ?? {});
+        throw new Error(
+          `no voice for ${unmapped.map((s) => `"${s}"`).join(", ")}, and a ${cast.size}-speaker script ` +
+            `needs one each or everybody sounds the same. ` +
+            (known.length
+              ? `Either name these speakers in \`voices\` (e.g. {"${unmapped[0]}": "<a voice id>"}), ` +
+                `or reuse the configured speakers: ${known.join(", ")}.`
+              : `Pass \`voices\`, e.g. {"${unmapped[0]}": "<a voice id>"}.`),
+        );
+      }
     }
+
+    const turns = script.map((t) => ({
+      text: t.text,
+      // One speaker: the single `voice` is the right fallback, since there is
+      // nobody to be confused with.
+      voice: cast.size > 1 ? voiceFor(t.speaker) : (voiceFor(t.speaker) ?? this.cfg.voice),
+    }));
 
     return { turns, label: "dialogue" };
   }
