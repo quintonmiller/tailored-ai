@@ -46,6 +46,7 @@ pnpm monorepo with first-party runtime packages, plugins, and docs:
 | `@tailored-ai/provider-deepseek` | `packages/provider-deepseek/` | DeepSeek model provider plugin (OpenAI-compatible) | `@tailored-ai/core` peer |
 | `@tailored-ai/deploy-aws` | `packages/deploy-aws/` | AWS deploy target plugin (`tai deploy up aws-ec2`) | `@tailored-ai/core` peer |
 | `@tailored-ai/trusted-actions` | `packages/trusted-actions/` | HITL executor for approval-gated actions | `@tailored-ai/core` |
+| `@tailored-ai/speech` | `packages/speech/` | Text-to-speech tools (`speak`), pluggable TTS providers | `@tailored-ai/core` peer |
 | `@tailored-ai/site` | `packages/site/` | Next.js docs site | private |
 | `@tailored-ai/integration-tests` | `packages/integration-tests/` | End-to-end CLI/plugin/server smoke scenarios | private |
 | `@tailored-ai/evals` | `packages/evals/` | Scenario benchmark: real invocation message → live model → score | private |
@@ -143,6 +144,7 @@ Deep notes on each subsystem live under [`docs/`](./docs/):
 | Schedules: agents booking their own future wakes (`schedule` tool, poll tick, room vs session targets) | [docs/schedules.md](./docs/schedules.md) |
 | Workflow engine | [docs/workflows.md](./docs/workflows.md) |
 | Skills: SKILL.md install + enable per agent (CLI + UI) | [docs/skills.md](./docs/skills.md) |
+| Speech synthesis: the `speak` tool, provider seam, local-vs-hosted survey, dialogue concatenation | [docs/speech.md](./docs/speech.md) |
 | Dashboard widgets: declarative Board seam (core registry + `/api/dashboard` + UI renderers) | [docs/dashboard-widgets.md](./docs/dashboard-widgets.md) |
 | Trusted-actions HITL gateway (Amazon purchases) — setup, runbook, threat model, roadmap | [docs/trusted-actions.md](./docs/trusted-actions.md) + [runbook](./docs/trusted-actions-runbook.md) + [threats](./docs/trusted-actions-threats.md) + [roadmap](./docs/trusted-actions-roadmap.md) |
 | Browser mediator — flexible browser surface with vault refs + workflow learning (6-phase build) | [docs/browser-mediator-design.md](./docs/browser-mediator-design.md) |

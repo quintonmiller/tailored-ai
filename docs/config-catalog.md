@@ -35,7 +35,7 @@ Fields: **72** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `agents` | object | {} | 34 | 94 |
+| `agents` | object | {} | 34 | 95 |
 
 ### `autopilot`
 
@@ -48,7 +48,7 @@ Fields: **72** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `briefing.enabled` | boolean | `false` | 37 | 1 |
+| `briefing.enabled` | boolean | `false` | 38 | 1 |
 | `briefing.prompt` | string | `You are the user's personal assistant. Write a brief, fri…` | 26 | 1 |
 | `briefing.ttlMinutes` | number | `30` | 1 | 1 |
 
@@ -76,7 +76,7 @@ Fields: **72** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `cron.enabled` | boolean | `false` | 37 | 4 |
+| `cron.enabled` | boolean | `false` | 38 | 4 |
 | `cron.jobs` | array | `[]` | 6 | 6 |
 
 ### `custom_tools`
@@ -101,7 +101,7 @@ Fields: **72** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `plugins` | array | `[{"module":"builtin:agent-notifier"},{"module":"builtin:owne` | 24 | 75 |
+| `plugins` | array | `[{"module":"builtin:agent-notifier"},{"module":"builtin:owne` | 24 | 76 |
 
 ### `prompts`
 
@@ -115,14 +115,14 @@ Fields: **72** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `providers.openai_compatible.baseUrl` | string | `http://localhost:11434/v1` | 21 | **0** |
+| `providers.openai_compatible.baseUrl` | string | `http://localhost:11434/v1` | 23 | **0** |
 | `providers.openai_compatible.defaultModel` | string | `""` | 17 | **0** |
 
 ### `schedules`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `schedules.enabled` | boolean | `true` | 37 | 1 |
+| `schedules.enabled` | boolean | `true` | 38 | 1 |
 | `schedules.maxDeferrals` | number | `3` | 1 | **0** |
 | `schedules.maxHorizonDays` | number | `365` | 2 | 1 |
 | `schedules.maxPerAgent` | number | `20` | 1 | 1 |
@@ -133,7 +133,7 @@ Fields: **72** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `server.host` | string | `127.0.0.1` | 14 | 5 |
+| `server.host` | string | `127.0.0.1` | 15 | 5 |
 | `server.port` | number | `3000` | 8 | 7 |
 
 ### `suggestions`
@@ -141,7 +141,7 @@ Fields: **72** · with no read site found: **0**
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
 | `suggestions.count` | number | `4` | 11 | 1 |
-| `suggestions.enabled` | boolean | `false` | 37 | 1 |
+| `suggestions.enabled` | boolean | `false` | 38 | 1 |
 | `suggestions.prompt` | string | `You are the user's personal assistant. From the state bel…` | 26 | 1 |
 | `suggestions.ttlMinutes` | number | `15` | 1 | 1 |
 
@@ -156,7 +156,7 @@ Fields: **72** · with no read site found: **0**
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
 | `taskWatcher.debounceMs` | number | `5000` | 1 | **0** |
-| `taskWatcher.enabled` | boolean | `false` | 37 | **0** |
+| `taskWatcher.enabled` | boolean | `false` | 38 | **0** |
 | `taskWatcher.maxStallRetries` | number | `1` | 2 | 1 |
 | `taskWatcher.prompt` | string | `Task {{action}}: {{task_title}} ({{task_id}}), status: {{…` | 26 | **0** |
 | `taskWatcher.triggers` | array | `["created","updated"]` | 8 | **0** |
@@ -165,38 +165,38 @@ Fields: **72** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `time.provider` | string | `system` | 41 | 4 |
+| `time.provider` | string | `system` | 43 | 4 |
 
 ### `tools`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `tools.ask_user.enabled` | boolean | `true` | 37 | 1 |
+| `tools.ask_user.enabled` | boolean | `true` | 38 | 1 |
 | `tools.ask_user.inboxFile` | string | `inbox.md` | 2 | 1 |
-| `tools.collections.enabled` | boolean | `true` | 37 | 1 |
-| `tools.documents.enabled` | boolean | `true` | 37 | 1 |
-| `tools.edit.enabled` | boolean | `true` | 37 | 1 |
-| `tools.exec.enabled` | boolean | `true` | 37 | **0** |
-| `tools.extract_document.enabled` | boolean | `false` | 37 | 1 |
-| `tools.facts.enabled` | boolean | `true` | 37 | 1 |
-| `tools.memory.enabled` | boolean | `true` | 37 | 1 |
+| `tools.collections.enabled` | boolean | `true` | 38 | 1 |
+| `tools.documents.enabled` | boolean | `true` | 38 | 1 |
+| `tools.edit.enabled` | boolean | `true` | 38 | 1 |
+| `tools.exec.enabled` | boolean | `true` | 38 | **0** |
+| `tools.extract_document.enabled` | boolean | `false` | 38 | 1 |
+| `tools.facts.enabled` | boolean | `true` | 38 | 1 |
+| `tools.memory.enabled` | boolean | `true` | 38 | 1 |
 | `tools.projects.directory` | string | `./data/projects` | 4 | 2 |
-| `tools.projects.enabled` | boolean | `true` | 37 | 1 |
-| `tools.read.enabled` | boolean | `true` | 37 | 1 |
+| `tools.projects.enabled` | boolean | `true` | 38 | 1 |
+| `tools.read.enabled` | boolean | `true` | 38 | 1 |
 | `tools.recall.defaultTtlDays` | number | `14` | 2 | 1 |
-| `tools.recall.enabled` | boolean | `true` | 37 | 1 |
-| `tools.room.enabled` | boolean | `true` | 37 | 1 |
-| `tools.tasks.enabled` | boolean | `true` | 37 | 1 |
-| `tools.web_fetch.enabled` | boolean | `true` | 37 | 1 |
-| `tools.web_search.apiKey` | string | `""` | 20 | 1 |
-| `tools.web_search.enabled` | boolean | `false` | 37 | 2 |
+| `tools.recall.enabled` | boolean | `true` | 38 | 1 |
+| `tools.room.enabled` | boolean | `true` | 38 | 1 |
+| `tools.tasks.enabled` | boolean | `true` | 38 | 1 |
+| `tools.web_fetch.enabled` | boolean | `true` | 38 | 1 |
+| `tools.web_search.apiKey` | string | `""` | 22 | 1 |
+| `tools.web_search.enabled` | boolean | `false` | 38 | 2 |
 | `tools.web_search.maxResults` | number | `5` | 2 | 1 |
-| `tools.web_search.provider` | string | `brave` | 41 | **0** |
-| `tools.write.enabled` | boolean | `true` | 37 | 1 |
+| `tools.web_search.provider` | string | `brave` | 43 | **0** |
+| `tools.write.enabled` | boolean | `true` | 38 | 1 |
 
 ### `webhooks`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `webhooks.enabled` | boolean | `false` | 37 | 1 |
+| `webhooks.enabled` | boolean | `false` | 38 | 1 |
 | `webhooks.routes` | array | `[]` | 2 | 1 |

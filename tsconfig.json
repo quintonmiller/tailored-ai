@@ -5,6 +5,7 @@
     { "path": "packages/google-tools" },
     { "path": "packages/server" },
     { "path": "packages/cli" },
-    { "path": "packages/trusted-actions" }
+    { "path": "packages/trusted-actions" },
+    { "path": "packages/speech" }
   ]
 }
