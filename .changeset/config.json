@@ -16,7 +16,8 @@
       "@tailored-ai/provider-openai",
       "@tailored-ai/provider-deepseek",
       "@tailored-ai/deploy-aws",
-      "@tailored-ai/trusted-actions"
+      "@tailored-ai/trusted-actions",
+      "@tailored-ai/speech"
     ]
   ],
   "linked": [],
