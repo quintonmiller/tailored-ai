@@ -7,7 +7,8 @@
  * already the discriminant. An agent that has learned the single-speaker
  * form learns the dialogue form by adding a field.
  */
-import { mediaPart, type Tool, type ToolContext, type ToolResult, textPart } from "@tailored-ai/core";
+import type { Tool, ToolContext, ToolResult } from "@tailored-ai/core";
+import { mediaPart, textPart } from "./content.js";
 import {
   AUDIO_MIME,
   type AudioFormat,
