@@ -176,6 +176,65 @@ describe("dialogue", () => {
     expect(provider.calls).toHaveLength(0);
   });
 
+  it("refuses unmapped speakers even when a default voice exists — the shipping config", async () => {
+    // The regression that got here: `voice` set, `voices` set, and a model
+    // that invented its own speaker names. Falling back to `voice` gave three
+    // turns in one voice and a cheerful success. The default voice is present
+    // in every real config, so this is the ordinary case, not the edge.
+    const { store } = fakeStore();
+    const r = await tool({ voice: "af_bella", voices: { host: "af_bella", guest: "am_adam" } }).execute(
+      {
+        script: [
+          { speaker: "sam", text: "one" },
+          { speaker: "riley", text: "two" },
+        ],
+      },
+      ctx(store),
+    );
+
+    expect(r.success).toBe(false);
+    expect(provider.calls).toHaveLength(0);
+    expect(r.error).toMatch(/"sam", "riley"/);
+    // The message has to be actionable in the same turn, so it names the
+    // speakers the config already knows about.
+    expect(r.error).toContain("host, guest");
+  });
+
+  it("accepts a script whose speakers are all mapped at call time", async () => {
+    const { store } = fakeStore();
+    const r = await tool({ voice: "af_bella", voices: { host: "af_bella" } }).execute(
+      {
+        script: [
+          { speaker: "sam", text: "one" },
+          { speaker: "riley", text: "two" },
+        ],
+        voices: { sam: "af_bella", riley: "am_adam" },
+      },
+      ctx(store),
+    );
+
+    expect(r.success).toBe(true);
+    expect(provider.calls.map((c) => c.utterances[0].voice)).toEqual(["af_bella", "am_adam"]);
+  });
+
+  it("still lets a single-speaker script fall back to the default voice", async () => {
+    // One voice cannot be confused with another, so the fallback is right here
+    // and only here.
+    const { store } = fakeStore();
+    const r = await tool({ voice: "af_bella" }).execute(
+      {
+        script: [
+          { speaker: "narrator", text: "Once upon a time." },
+          { speaker: "narrator", text: "The end." },
+        ],
+      },
+      ctx(store),
+    );
+
+    expect(r.success).toBe(true);
+    expect(provider.calls.map((c) => c.utterances[0].voice)).toEqual(["af_bella", "af_bella"]);
+  });
+
   it("allows one speaker with no voice map, since there is nobody to confuse them with", async () => {
     const { store } = fakeStore();
     const r = await tool().execute({ script: [{ speaker: "narrator", text: "Once upon a time." }] }, ctx(store));
