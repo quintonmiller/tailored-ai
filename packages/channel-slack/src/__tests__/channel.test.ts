@@ -130,6 +130,9 @@ function buildRuntimeStub(): AgentRuntime {
     // A deployment with no media configured — the common case, and the one
     // where outbound delivery must still work exactly as it did before.
     getMediaStore: () => undefined,
+    // The send path reads `media.delivery` to decide attach-vs-link. An empty
+    // config is the default (`auto`), which is what these tests assert.
+    getConfig: () => ({}),
     // Real, in-memory: the reply path reads the message record to find what
     // media the turn produced, and a stub that cannot be queried would make
     // this suite pass for the wrong reason.

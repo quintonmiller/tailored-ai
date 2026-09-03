@@ -181,3 +181,46 @@ describe("attachmentName", () => {
     expect(attachmentName(ref({ name: undefined, mimeType: "image/x-fictional" }))).toMatch(/\.fictional$/);
   });
 });
+
+describe("media.delivery preference", () => {
+  const audio = ref({ mimeType: "audio/mpeg", bytes: 3 * 1024 * 1024, name: "episode.mp3" });
+  const parts = { parts: [{ type: "media" as const, media: audio }] };
+  const linkFor = () => "https://example.invalid/episode.mp3";
+
+  it("attaches a file that fits when no preference is set", () => {
+    const out = renderForSurface(parts, RICH, { linkFor });
+    expect(out.attachments).toHaveLength(1);
+    expect(out.text).not.toContain("https://example.invalid");
+  });
+
+  it("links a file that fits when the deployment prefers a link", () => {
+    const out = renderForSurface(parts, RICH, { linkFor, prefer: "link" });
+    expect(out.attachments).toHaveLength(0);
+    expect(out.text).toContain("https://example.invalid/episode.mp3");
+  });
+
+  it("still attaches when a link is preferred but none resolves", () => {
+    // The preference must never downgrade delivery to a bare placeholder.
+    const out = renderForSurface(parts, RICH, { prefer: "link" });
+    expect(out.attachments).toHaveLength(1);
+  });
+
+  it("still attaches when a link is preferred but the surface has no links", () => {
+    const out = renderForSurface(parts, { ...RICH, links: false }, { linkFor, prefer: "link" });
+    expect(out.attachments).toHaveLength(1);
+  });
+
+  it("prefer:attach leaves the ladder alone, cap and all", () => {
+    const huge = {
+      parts: [{ type: "media" as const, media: ref({ mimeType: "audio/mpeg", bytes: 40 * 1024 * 1024 }) }],
+    };
+    const out = renderForSurface(huge, RICH, { linkFor, prefer: "attach" });
+    expect(out.attachments).toHaveLength(0);
+    expect(out.text).toContain("https://example.invalid");
+  });
+
+  it("does not emit the same media twice when linking", () => {
+    const out = renderForSurface({ parts: [...parts.parts, ...parts.parts] }, RICH, { linkFor, prefer: "link" });
+    expect(out.text.match(/example\.invalid/g) ?? []).toHaveLength(1);
+  });
+});

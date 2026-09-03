@@ -983,6 +983,18 @@ export interface AgentConfig {
      * rather than embed. Unset means surfaces read bytes instead.
      */
     urlBase?: string;
+    /**
+     * Whether a surface should attach bytes it *could* attach, or prefer a
+     * link. `auto` (the default) attaches whatever fits and links past the cap.
+     * `link` prefers a link whenever one resolves, which is what a deployment
+     * wants for something durable — a generated podcast is more useful as a URL
+     * you can open on a phone and keep than as a chat attachment.
+     *
+     * Only ever a preference: a link that cannot be produced falls back to
+     * attaching, because preferring a link we do not have would turn a
+     * deliverable file into a bare placeholder.
+     */
+    delivery?: "auto" | "attach" | "link";
     /** What to do when a model declares it cannot take media. */
     onUnsupported?: "degrade" | "skip-rung" | "error";
     /**
