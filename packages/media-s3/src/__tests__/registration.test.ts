@@ -17,7 +17,7 @@
  * happened the first time this package was pointed at a live deployment.
  */
 import { describe, expect, it } from "vitest";
-import plugin, { meta } from "../index.js";
+import plugin, { meta, validateConfig } from "../index.js";
 
 /** Stands in for the runtime's PluginContext, recording what it is handed. */
 function fakeContext() {
@@ -66,5 +66,42 @@ describe("plugin registration", () => {
     // registration would take the whole runtime down over a missing bucket.
     const { ctx } = fakeContext();
     expect(() => plugin(ctx)).not.toThrow();
+  });
+});
+
+describe("validateConfig reads where the runtime actually delivers settings", () => {
+  const good = {
+    bucket: "b",
+    region: "us-west-2",
+    accessKeyId: "AKIAEXAMPLE",
+    secretAccessKey: "s3cret",
+  };
+
+  it("is quiet when a correct config puts settings under options", () => {
+    // The regression that mattered: this deployment was told "every media
+    // write will fail" on every boot while writes worked perfectly.
+    const w = validateConfig({ media: { store: "s3", options: good } } as never);
+    expect(w).toEqual([]);
+  });
+
+  it("still accepts the legacy top-level shape this plugin's README taught", () => {
+    const w = validateConfig({ media: { store: "s3", ...good } } as never);
+    expect(w).toEqual([]);
+  });
+
+  it("still complains when the settings are genuinely absent", () => {
+    const w = validateConfig({ media: { store: "s3", options: {} } } as never);
+    expect(w.join(" ")).toContain("bucket");
+  });
+
+  it("options wins over a stale top-level value", () => {
+    const w = validateConfig({
+      media: { store: "s3", bucket: "", options: good },
+    } as never);
+    expect(w).toEqual([]);
+  });
+
+  it("says nothing at all for another store", () => {
+    expect(validateConfig({ media: { store: "disk" } } as never)).toEqual([]);
   });
 });
