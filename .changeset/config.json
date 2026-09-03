@@ -18,7 +18,8 @@
       "@tailored-ai/deploy-aws",
       "@tailored-ai/trusted-actions",
       "@tailored-ai/speech",
-      "@tailored-ai/media-s3"
+      "@tailored-ai/media-s3",
+      "@tailored-ai/media-r2"
     ]
   ],
   "linked": [],

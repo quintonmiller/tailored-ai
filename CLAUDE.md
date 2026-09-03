@@ -48,6 +48,7 @@ pnpm monorepo with first-party runtime packages, plugins, and docs:
 | `@tailored-ai/trusted-actions` | `packages/trusted-actions/` | HITL executor for approval-gated actions | `@tailored-ai/core` |
 | `@tailored-ai/speech` | `packages/speech/` | Text-to-speech tools (`speak`), pluggable TTS providers | `@tailored-ai/core` peer |
 | `@tailored-ai/media-s3` | `packages/media-s3/` | S3 (and S3-compatible) media store, presigned links | `@tailored-ai/core` peer |
+| `@tailored-ai/media-r2` | `packages/media-r2/` | Cloudflare R2 media store — no egress fees, optional public links | `@tailored-ai/media-s3` |
 | `@tailored-ai/site` | `packages/site/` | Next.js docs site | private |
 | `@tailored-ai/integration-tests` | `packages/integration-tests/` | End-to-end CLI/plugin/server smoke scenarios | private |
 | `@tailored-ai/evals` | `packages/evals/` | Scenario benchmark: real invocation message → live model → score | private |

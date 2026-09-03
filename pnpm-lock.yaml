@@ -243,6 +243,31 @@ importers:
 
   packages/integration-tests: {}
 
+  packages/media-r2:
+    dependencies:
+      '@tailored-ai/media-s3':
+        specifier: workspace:*
+        version: link:../media-s3
+    devDependencies:
+      '@tailored-ai/core':
+        specifier: workspace:*
+        version: link:../core
+      '@types/better-sqlite3':
+        specifier: ^7.6.12
+        version: 7.6.13
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.19.11
+      better-sqlite3:
+        specifier: ^11.7.0
+        version: 11.10.0
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.18
+        version: 4.0.18(@types/node@22.19.11)(jiti@2.6.1)(jsdom@26.1.0)(lightningcss@1.30.2)(tsx@4.21.0)(yaml@2.8.2)
+
   packages/media-s3:
     devDependencies:
       '@tailored-ai/core':
