@@ -16,6 +16,7 @@
  * prompt and config, not code.
  */
 
+import { collectTurnMedia, turnStartId } from "../media/turn.js";
 import type { NotificationGateLike } from "../notifications/dedup.js";
 import { resolveGate } from "../notifications/dedup.js";
 import { extractLeadingAddressees, renderTranscriptLine } from "../rooms/envelope.js";
@@ -391,6 +392,10 @@ export class RoomTool implements Tool {
     const ref = formatRoomRef(room.ref);
     const backend = requireRoomBackend(room.ref.backend);
 
+    // Read the watermark before posting: `collectTurnMedia` looks at rows
+    // written after it, and this tool call itself becomes such a row.
+    const turnStart = context.db ? turnStartId(context.db, context.sessionId) : 0;
+
     const identities = this.opts.identities();
     const speaker = identities.labelForAgent(agentName);
 
@@ -433,11 +438,20 @@ export class RoomTool implements Tool {
         windowHours: this.windowFor(urgency),
       },
       async () => {
+        // `OutboundRoomMessage.media` has existed, been documented, and been
+        // honoured by backends since rooms shipped — and nothing ever put
+        // anything in it here. So an agent that generated a podcast and then
+        // posted about it sent the sentence and left the audio behind, and the
+        // render ladder had no ref to turn into a link. The agent could see the
+        // file existed and could not make it arrive; one worked around it by
+        // typing the `[audio: … #id]` placeholder into its own message body.
+        const media = context.db ? collectTurnMedia(context.db, context.sessionId, turnStart) : [];
         const posted = await backend.post(room.ref.id, {
           body: spoken,
           speaker,
           to: finalTo,
           notify: args.notify === true,
+          ...(media.length > 0 ? { media } : {}),
         });
         sent = true;
         if (posted) postedId = posted.id;

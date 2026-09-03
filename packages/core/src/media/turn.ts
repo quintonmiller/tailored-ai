@@ -39,6 +39,25 @@ export function latestMessageId(db: Database.Database, sessionId: string): numbe
   return row?.id ?? 0;
 }
 
+/**
+ * Where the current turn began: the id of the newest `user` message.
+ *
+ * {@link latestMessageId} is captured *before* a turn by whoever is running it.
+ * A tool executing mid-turn has no such foresight — it arrives after the fact
+ * and still needs to know what this turn produced. Every turn starts with a
+ * user message (a real one, or the prompt a room wake synthesises), so the last
+ * one is the boundary.
+ *
+ * Returns 0 for a session with no user message, which collects everything —
+ * over-collecting, like a stale watermark, is the safe direction.
+ */
+export function turnStartId(db: Database.Database, sessionId: string): number {
+  const row = db.prepare("SELECT MAX(id) AS id FROM messages WHERE session_id = ? AND role = 'user'").get(sessionId) as
+    | { id: number | null }
+    | undefined;
+  return row?.id ?? 0;
+}
+
 export interface CollectTurnMediaOptions {
   /** Stop after this many distinct items. Default 8; the surface caps again. */
   limit?: number;
