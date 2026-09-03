@@ -623,7 +623,7 @@ export {
 } from "./media/renditions.js";
 export { sniffMedia, UnknownMediaTypeError } from "./media/sniff.js";
 export type { CollectTurnMediaOptions } from "./media/turn.js";
-export { collectTurnMedia, latestMessageId } from "./media/turn.js";
+export { collectTurnMedia, latestMessageId, turnStartId } from "./media/turn.js";
 export type {
   ListQuery as MemoryListQuery,
   MemoryBackend,

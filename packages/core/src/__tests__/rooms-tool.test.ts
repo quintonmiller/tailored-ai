@@ -1282,3 +1282,71 @@ describe("room tool — archiving", () => {
     expect(res.output).not.toContain("old news");
   });
 });
+
+describe("post carries the media this turn produced", () => {
+  /** Records what actually reaches the backend, which is the whole question. */
+  class CapturingBackend extends LocalRoomBackend {
+    readonly id = "capture";
+    sent: Array<{ body: string; media?: { id: string }[] }> = [];
+    async post(roomId: string, message: Parameters<LocalRoomBackend["post"]>[1]) {
+      this.sent.push({ body: message.body, media: message.media?.map((m) => ({ id: m.id })) });
+      return super.post(roomId, message);
+    }
+  }
+
+  const AUDIO = "a".repeat(64);
+  let cap: CapturingBackend;
+
+  /** A tool message carrying media, the way `speak` writes one. */
+  const writeToolMediaMessage = (mediaId: string) => {
+    db.prepare("INSERT INTO sessions (id, key, model, provider) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO NOTHING").run(
+      "session-1",
+      "session-1",
+      "m",
+      "p",
+    );
+    db.prepare("INSERT INTO messages (session_id, role, content) VALUES (?, 'user', ?)").run(
+      "session-1",
+      "make me a recording",
+    );
+    db.prepare("INSERT INTO messages (session_id, role, content) VALUES (?, 'tool', ?)").run(
+      "session-1",
+      JSON.stringify({
+        __tai_content: 1,
+        parts: [
+          { type: "text", text: "Recorded dialogue." },
+          { type: "media", media: { id: mediaId, mimeType: "audio/wav", bytes: 1024, name: "dialogue.wav" } },
+        ],
+      }),
+    );
+  };
+
+  beforeEach(async () => {
+    cap = new CapturingBackend(db, store);
+    registerRoomBackend(cap);
+    defaultBackend = "capture";
+    await createRoom("studio");
+  });
+  afterEach(() => unregisterRoomBackend("capture"));
+
+  it("hands the backend the audio the turn produced", async () => {
+    writeToolMediaMessage(AUDIO);
+    await post("studio", "Here is the episode.");
+    const last = cap.sent.at(-1);
+    expect(last?.media?.map((m) => m.id)).toEqual([AUDIO]);
+  });
+
+  it("sends no media field when the turn produced none", async () => {
+    await post("studio", "Just talking.");
+    expect(cap.sent.at(-1)?.media).toBeUndefined();
+  });
+
+  it("does not re-attach media from an earlier turn", async () => {
+    writeToolMediaMessage(AUDIO);
+    await post("studio", "Here is the episode.");
+    // A new user message starts a new turn; the old audio must not ride along.
+    db.prepare("INSERT INTO messages (session_id, role, content) VALUES (?, 'user', ?)").run("session-1", "thanks");
+    await post("studio", "You're welcome.");
+    expect(cap.sent.at(-1)?.media).toBeUndefined();
+  });
+});
