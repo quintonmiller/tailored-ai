@@ -14,10 +14,15 @@
  *       - "@tailored-ai/media-s3"
  *     media:
  *       store: s3
- *       bucket: my-tai-media
- *       region: us-west-2
- *       accessKeyId: ${AWS_ACCESS_KEY_ID}
- *       secretAccessKey: ${AWS_SECRET_ACCESS_KEY}
+ *       options:              # the runtime forwards this bag to the factory
+ *         bucket: my-tai-media
+ *         region: us-west-2
+ *         accessKeyId: ${AWS_ACCESS_KEY_ID}
+ *         secretAccessKey: ${AWS_SECRET_ACCESS_KEY}
+ *
+ * Store settings go under `options`. Core hoists only `dir`, `maxBytes` and
+ * `urlBase` from the top level; anything else a store invents is not forwarded,
+ * so a `bucket:` written beside `store:` never reaches this plugin.
  *
  * Works against anything that speaks S3 — MinIO, R2, B2 — with `endpoint` and
  * `forcePathStyle`.
@@ -116,8 +121,30 @@ export const meta: PluginMeta = {
  * somebody sends, which is the worst moment to find out.
  */
 export function validateConfig(config: AgentConfig): string[] {
-  const media = config.media as (S3MediaConfig & { store?: string; urlBase?: string }) | undefined;
-  if (media?.store !== "s3") return [];
+  const block = config.media as { store?: string; urlBase?: string; options?: unknown } | undefined;
+  if (block?.store !== "s3") return [];
+
+  // Read where the runtime actually delivers our settings. The store factory is
+  // handed `media.options` verbatim, so validating the top level meant a
+  // correctly configured deployment was told "every media write will fail" on
+  // every boot while writes worked fine. A validator that cries wolf is worse
+  // than no validator: it trains you to skim the startup log.
+  //
+  // The top level is still consulted as a fallback, because that is where this
+  // plugin's own docs used to put these keys, and silently ignoring a setting
+  // somebody copied from the README is the other half of the same failure.
+  const opts = (block.options ?? {}) as S3MediaConfig;
+  const legacy = block as unknown as S3MediaConfig;
+  const media: S3MediaConfig & { urlBase?: string } = {
+    bucket: opts.bucket ?? legacy.bucket,
+    region: opts.region ?? legacy.region,
+    accessKeyId: opts.accessKeyId ?? legacy.accessKeyId,
+    secretAccessKey: opts.secretAccessKey ?? legacy.secretAccessKey,
+    sessionToken: opts.sessionToken ?? legacy.sessionToken,
+    endpoint: opts.endpoint ?? legacy.endpoint,
+    urlExpiresIn: opts.urlExpiresIn ?? legacy.urlExpiresIn,
+    urlBase: block.urlBase,
+  };
 
   const warnings: string[] = [];
   if (!media.bucket) warnings.push("media.store is s3 but media.bucket is empty");
