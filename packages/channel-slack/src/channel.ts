@@ -224,7 +224,11 @@ export class SlackChannel implements Channel, OutboundNotifier {
     // the ladder skips the placeholder because it believes the file is going
     // to be uploaded, and then nothing uploads it.
     const caps = store ? this.capabilities : { ...this.capabilities, attachments: false, inlineMedia: false };
-    const rendered = renderForSurface(content, caps, { linkFor: (m) => store?.urlFor?.(m.id) });
+    const delivery = this.runtime.getConfig().media?.delivery;
+    const rendered = renderForSurface(content, caps, {
+      linkFor: (m) => store?.urlFor?.(m.id),
+      prefer: delivery === "link" || delivery === "attach" ? delivery : undefined,
+    });
     for (const warning of rendered.warnings) console.warn(`[slack] ${warning}`);
 
     for (const chunk of splitMessage(rendered.text)) {

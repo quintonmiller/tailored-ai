@@ -44,6 +44,12 @@ export interface RenderOptions {
    */
   linkFor?: (media: MediaRef) => string | undefined;
   /**
+   * Prefer a link over an attachment even when the bytes would fit. Honoured
+   * only when a link actually resolves; otherwise the ladder proceeds as
+   * normal, so this can never make delivery worse.
+   */
+  prefer?: "attach" | "link";
+  /**
    * Largest number of items to attach. A tool that screenshots in a loop can
    * produce dozens, and a transport that accepts them will happily post
    * dozens. The overflow is reported as a warning, never silently trimmed.
@@ -105,6 +111,19 @@ function renderMediaPart(
   state: LadderState,
 ): string | undefined {
   const { media, alt } = part;
+
+  // A deployment may prefer a link even for bytes that would fit — see
+  // `media.delivery`. Checked before the size test, and only taken when a URL
+  // is genuinely available, so the preference can never downgrade delivery to
+  // a bare placeholder.
+  if (opts.prefer === "link" && caps.links) {
+    const preferred = media.url ?? opts.linkFor?.(media);
+    if (preferred) {
+      if (state.seen.has(media.id)) return undefined;
+      state.seen.add(media.id);
+      return `${mediaPlaceholder(media, alt)} ${preferred}`;
+    }
+  }
 
   // Rung 1 and 2: the transport takes the bytes. Inline and attachment are the
   // same delivery here and differ only in how the transport chooses to show it,

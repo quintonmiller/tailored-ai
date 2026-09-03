@@ -31,6 +31,7 @@ phase, plus the docs. Nothing merged to `main` yet.
 | P4 | `InboundMessage`; Discord `attachments[]`; Slack `files[]` **and its file-only-message bug fixed**; `POST /api/media`, `GET /api/media/:id`, `mediaIds` on `/api/chat`; **the store finally constructed and wired into the runtime** |
 | P5a | One sanitizing `renderMarkdown`; a server CSP; media rendered in user, assistant and tool-result bubbles; composer picker / paste / drop |
 | P5b | `SurfaceCapabilities` (required) on `Channel` **and** `OutboundNotifier`; one shared `renderForSurface` ladder; Discord `files:`, Slack `files.uploadV2`, the CLI's placeholder + `file://`; `collectTurnMedia` as the producer |
+| P5c | `media.delivery` — a deployment can prefer a link over an attachment for bytes that *would* fit, honoured by Discord and Slack |
 
 New modules worth knowing about: `core/src/content/{types,codec}.ts`,
 `core/src/media/{interface,disk,registry,queries,sniff,hydrate,turn}.ts`,
@@ -39,6 +40,39 @@ New modules worth knowing about: `core/src/content/{types,codec}.ts`,
 `ui/src/lib/{content,markdown}.ts`,
 `ui/src/components/{MediaAttachments,Composer}.tsx`,
 `cli/src/media-render.ts`.
+
+### `media.delivery` — attach or link, when both are possible
+
+The ladder answers "can this surface take the bytes?" and attaches whenever the
+answer is yes. That is the right default and the wrong answer for durable
+artifacts: a generated podcast under Discord's 8 MB cap arrives as an attachment
+you have to download again on every device, when what you wanted was a URL.
+
+`media.delivery` names the preference:
+
+| Value | Behaviour |
+|---|---|
+| `auto` (default) | Today's ladder. Attach what fits, link past the cap. |
+| `attach` | Explicitly the default; useful to pin it against a future change. |
+| `link` | Prefer a link whenever one resolves, even for bytes that would fit. |
+
+Two properties make this safe to set and hard to misuse.
+
+**It is a preference, never a demotion.** `link` is honoured only when a URL
+actually resolves — the surface supports links *and* `linkFor` returns one. With
+no store URL, or on a link-less surface, the ladder proceeds exactly as before
+and the file still attaches. The setting can never turn a deliverable file into
+a bare placeholder, which is the failure it would otherwise invite.
+
+**It is read by every surface that renders.** Discord and Slack both consult it.
+A rendering preference honoured by one transport and silently ignored by another
+is the same disease as a config key nothing reads — see
+[defensive-patterns.md](./defensive-patterns.md).
+
+Worth knowing: preferring a link does not skip the upload. The bytes are already
+in the store by the time rendering happens; `link` only changes what the message
+carries. What it *does* avoid is `loadAttachments` pulling those bytes back out
+of object storage and pushing them to the transport a second time.
 
 ### What is left
 
