@@ -15,8 +15,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { chatWithFallback, type ModelCandidate } from "../agent/loop.js";
 import type { MediaRef } from "../content/types.js";
-import { mediaPart, textPart } from "../content/types.js";
-import type { PartialCapabilities } from "../providers/capabilities.js";
+import { contentParts, mediaPart, textPart } from "../content/types.js";
+import { adaptForCapabilities, type PartialCapabilities, resolveCapabilities } from "../providers/capabilities.js";
 import type { AIProvider, ChatParams, ChatResponse, Message } from "../providers/interface.js";
 
 const png: MediaRef = { id: "c".repeat(64), mimeType: "image/png", bytes: 64, name: "shot.png" };
@@ -177,5 +177,71 @@ describe("warnings", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe("follow-up media does not split a tool-call block", () => {
+  // The provider shape that triggers it: takes media, but not inside a tool
+  // result, and documents the follow-up-user-turn workaround.
+  const FOLLOWUP: PartialCapabilities = {
+    input: ["text/*", "image/*"],
+    inputBytes: { supported: true },
+    // supported: the provider takes this media — just not in tool position,
+    // which is what `mode: "follow-up"` describes.
+    toolResultMedia: { supported: true, mode: "follow-up" },
+  };
+
+  /** One assistant turn opening two tool calls; the first returns media. */
+  const twoCallTurn: Message[] = [
+    { role: "user", content: "check both" },
+    {
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        { id: "call_a", name: "screenshot", arguments: "{}" },
+        { id: "call_b", name: "read", arguments: "{}" },
+      ],
+    },
+    { role: "tool", toolCallId: "call_a", content: { parts: [textPart("shot"), mediaPart(png)] } },
+    { role: "tool", toolCallId: "call_b", content: "plain text result" },
+  ];
+
+  const adapt = (msgs: Message[]) =>
+    adaptForCapabilities(msgs, resolveCapabilities(FOLLOWUP), { onUnsupported: "degrade", onUnknown: "degrade" });
+
+  it("keeps every tool result adjacent to the assistant that called it", () => {
+    const { messages } = adapt(twoCallTurn);
+    const roles = messages.map((m) => m.role);
+    const assistantAt = roles.indexOf("assistant");
+    // Everything between the assistant and the last tool result must be a tool
+    // message — this is the adjacency DeepSeek and OpenAI enforce.
+    const lastTool = roles.lastIndexOf("tool");
+    const between = roles.slice(assistantAt + 1, lastTool + 1);
+    expect(between.every((r) => r === "tool")).toBe(true);
+  });
+
+  it("answers both tool calls, so nothing is orphaned", () => {
+    const { messages } = adapt(twoCallTurn);
+    const answered = messages.filter((m) => m.role === "tool").map((m) => m.toolCallId);
+    expect(answered).toEqual(["call_a", "call_b"]);
+  });
+
+  it("still delivers the media, after the block rather than inside it", () => {
+    const { messages } = adapt(twoCallTurn);
+    const last = messages.at(-1);
+    expect(last?.role).toBe("user");
+    const parts = contentParts(last?.content);
+    expect(parts.some((p) => p.type === "media")).toBe(true);
+    expect(parts.some((p) => p.type === "text" && p.text.includes("not sent by the user"))).toBe(true);
+  });
+
+  it("a single-call turn behaves as before", () => {
+    const one: Message[] = [
+      { role: "user", content: "check" },
+      { role: "assistant", content: "", toolCalls: [{ id: "call_a", name: "screenshot", arguments: "{}" }] },
+      { role: "tool", toolCallId: "call_a", content: { parts: [textPart("shot"), mediaPart(png)] } },
+    ];
+    const roles = adapt(one).messages.map((m) => m.role);
+    expect(roles).toEqual(["user", "assistant", "tool", "user"]);
   });
 });
