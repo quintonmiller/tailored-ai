@@ -6,6 +6,11 @@
  * table, and reimplementing that SQL here would duplicate a schema that core
  * migrates.
  *
+ * Exported from the package index as well as used internally, because a
+ * sibling store — `@tailored-ai/media-r2` — needs the same five functions and
+ * the same version check, and duplicating either would mean two places to get
+ * the diagnostic wrong.
+ *
  * So they are reached through a **namespace import** rather than named imports.
  * The difference matters. A named import of something the resolved core does
  * not export fails at *link* time:

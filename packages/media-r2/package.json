@@ -1,0 +1,45 @@
+{
+  "name": "@tailored-ai/media-r2",
+  "version": "0.1.10",
+  "description": "Cloudflare R2 media store for Tailored AI. R2's S3 API with the account endpoint, region and addressing already right, plus optional public-domain links. Zero egress fees.",
+  "license": "MIT",
+  "author": "Quinton Miller",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/quintonmiller/tailored-ai.git",
+    "directory": "packages/media-r2"
+  },
+  "homepage": "https://github.com/quintonmiller/tailored-ai/tree/main/packages/media-r2#readme",
+  "bugs": "https://github.com/quintonmiller/tailored-ai/issues",
+  "keywords": ["ai", "agent", "tailored-ai", "cloudflare", "r2", "media", "storage"],
+  "publishConfig": { "access": "public", "provenance": true },
+  "engines": { "node": ">=20.0.0" },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js", "default": "./dist/index.js" }
+  },
+  "files": ["dist/", "README.md", "LICENSE"],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@tailored-ai/media-s3": "workspace:*"
+  },
+  "peerDependencies": {
+    "@tailored-ai/core": "workspace:*",
+    "better-sqlite3": "^11.7.0"
+  },
+  "devDependencies": {
+    "@tailored-ai/core": "workspace:*",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.0",
+    "better-sqlite3": "^11.7.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.0.18"
+  }
+}

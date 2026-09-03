@@ -7,6 +7,7 @@
     { "path": "packages/cli" },
     { "path": "packages/trusted-actions" },
     { "path": "packages/speech" },
-    { "path": "packages/media-s3" }
+    { "path": "packages/media-s3" },
+    { "path": "packages/media-r2" }
   ]
 }

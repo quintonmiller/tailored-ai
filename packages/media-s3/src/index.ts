@@ -26,7 +26,7 @@ import type { AgentConfig, Plugin, PluginMeta } from "@tailored-ai/core";
 import { bridgeToCore, CoreTooOldError } from "./core-bridge.js";
 import { S3MediaStore } from "./store.js";
 
-export { CoreTooOldError } from "./core-bridge.js";
+export { bridgeToCore, type CoreBridge, CoreTooOldError, extensionFor } from "./core-bridge.js";
 export { S3Client, type S3ClientOptions, S3Error } from "./s3.js";
 export type { Credentials } from "./sigv4.js";
 export { EMPTY_SHA256, presignUrl, sha256Hex, signRequest, uriEncode } from "./sigv4.js";
