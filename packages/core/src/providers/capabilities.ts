@@ -28,7 +28,7 @@
  * ModelCapabilities.input}; only genuinely distinct mechanisms get a leaf.
  */
 
-import { contentParts, type MessageContent, mediaPlaceholder } from "../content/types.js";
+import { type ContentPart, contentParts, type MessageContent, mediaPlaceholder } from "../content/types.js";
 import type { Message } from "./interface.js";
 
 /**
@@ -189,8 +189,30 @@ export function adaptForCapabilities(
 ): AdaptResult {
   const notes: string[] = [];
   const out: Message[] = [];
+  // Media lifted out of tool results, waiting for the tool block to close.
+  let pendingFollowUps: Extract<ContentPart, { type: "media" }>[] = [];
+
+  const flushFollowUps = () => {
+    if (pendingFollowUps.length === 0) return;
+    out.push({
+      role: "user",
+      content: {
+        parts: [
+          {
+            type: "text",
+            text: "[Attached below: media returned by the preceding tool call, not sent by the user.]",
+          },
+          ...pendingFollowUps,
+        ],
+      },
+    });
+    pendingFollowUps = [];
+  };
 
   for (const msg of messages) {
+    // A non-tool message closes the block, so anything held back goes first.
+    if (msg.role !== "tool") flushFollowUps();
+
     const parts = contentParts(msg.content);
     const media = parts.filter((p) => p.type === "media");
     if (media.length === 0) {
@@ -237,19 +259,17 @@ export function adaptForCapabilities(
         // untrusted content should NOT go. The marker is what keeps its origin
         // visible to the model rather than laundering it into something the
         // user appears to have said.
+        //
+        // Deferred rather than emitted here. An assistant turn may open several
+        // tool calls, and every `tool` answering it has to follow it with
+        // nothing in between: emitting the user turn straight after the first
+        // media-bearing result splits the block and orphans the rest. Strict
+        // providers reject the whole request for it — DeepSeek with
+        // "insufficient tool messages following tool_calls message" — so a
+        // single screenshot in a multi-call turn failed every rung of the
+        // fallback chain and landed on the most expensive one.
         out.push(flatten(msg));
-        out.push({
-          role: "user",
-          content: {
-            parts: [
-              {
-                type: "text",
-                text: "[Attached below: media returned by the preceding tool call, not sent by the user.]",
-              },
-              ...media,
-            ],
-          },
-        });
+        pendingFollowUps.push(...media);
         notes.push("media moved out of the tool result into a following user turn (provider takes text there)");
         continue;
       }
@@ -258,6 +278,7 @@ export function adaptForCapabilities(
     out.push(msg);
   }
 
+  flushFollowUps();
   return { messages: out, notes };
 }
 
