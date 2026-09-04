@@ -2025,6 +2025,8 @@ export class RoomWatcher {
       this.runtime.getResolvableTools(),
       undefined,
       this.runtime.contextDir,
+      undefined,
+      this.runtime.buildResolveOptions(),
     );
     const session = findOrCreateSession(
       this.runtime.db,

@@ -91,6 +91,7 @@ function makeRuntime(agents: string[] = ["coder"], over: RuntimeOverrides = {}):
     getOwnerId: () => undefined,
     isAgentsPaused: (kind: "human" | "autonomous") => over.paused?.(kind) ?? false,
     getResolvableTools: () => [],
+    buildResolveOptions: () => ({}),
     buildLoopOptions: () => ({ toolContextExtras: {} }),
   } as unknown as AgentRuntime;
 }

@@ -239,6 +239,8 @@ export class TaskWatcher {
       this.runtime.getResolvableTools(),
       undefined,
       this.runtime.contextDir,
+      undefined,
+      this.runtime.buildResolveOptions(),
     );
 
     const templateVars: Record<string, string> = {
