@@ -41,6 +41,9 @@ export interface SpeakToolConfig {
   voices?: Record<string, string>;
 }
 
+/** A header block is a handful of lines, not a scene. Past this it is dialogue. */
+const MAX_MATTER_LINES = 10;
+
 const DEFAULT_MAX_CHARS = 4000;
 const DEFAULT_FORMAT: AudioFormat = "mp3";
 
@@ -103,8 +106,9 @@ export class SpeakTool implements Tool {
 
     let turns: Utterance[];
     let label: string;
+    let note: string | undefined;
     try {
-      ({ turns, label } = this.plan(args));
+      ({ turns, label, note } = this.plan(args));
     } catch (err) {
       return fail((err as Error).message);
     }
@@ -138,7 +142,7 @@ export class SpeakTool implements Tool {
       });
       return {
         success: true,
-        output: { parts: [textPart(summarize(label, turns, bytes)), mediaPart(ref)] },
+        output: { parts: [textPart(summarize(label, turns, bytes) + (note ?? "")), mediaPart(ref)] },
       };
     } catch (err) {
       return fail(`audio was generated but could not be stored: ${(err as Error).message}`);
@@ -146,7 +150,7 @@ export class SpeakTool implements Tool {
   }
 
   /** Resolve the two input shapes into one ordered list of utterances. */
-  private plan(args: Record<string, unknown>): { turns: Utterance[]; label: string } {
+  private plan(args: Record<string, unknown>): { turns: Utterance[]; label: string; note?: string } {
     const text = typeof args.text === "string" ? args.text.trim() : "";
     let rawScript = Array.isArray(args.script) ? (args.script as unknown[]) : undefined;
     const scriptFile = pickString(args.scriptFile);
@@ -174,9 +178,39 @@ export class SpeakTool implements Tool {
             (parsed.skipped.length ? `; ${parsed.skipped.length} line(s) matched nothing.` : "."),
         );
       }
-      rawScript = parsed.turns as unknown[];
-      if (parsed.skipped.length > 0) {
-        skippedNote = ` (${parsed.skipped.length} non-dialogue line(s) skipped)`;
+      // A script is usually wrapped in a header and a footer — "Cast: ...",
+      // "Setting: ...", "Notes for TTS: ..." — and every one of those lines is
+      // shaped exactly like dialogue. Nothing in the text tells them apart, so
+      // three things together do: they sit at an EDGE, there are FEW, and
+      // nobody cast them. All three are required, because each alone is wrong:
+      // a character can speak the first line, a character can be left uncast by
+      // mistake, and a script can open with several short exchanges.
+      //
+      // Both ends are trimmed, because writers put notes at both ends. What
+      // stops a genuinely miscast character from vanishing here is not refusal
+      // but visibility: every dropped line is named in the result, so an agent
+      // that sees "skipped: MARA" knows it forgot a voice, while one that sees
+      // "skipped: Notes for TTS" knows the trim was right.
+      //
+      // From a real 141-line script whose cast parsed as GM, REX, MARA ... plus
+      // "Setting", "Tone", "Running gag" and a trailing "Notes for TTS".
+      const cast = isRecord(args.voices) ? (args.voices as Record<string, unknown>) : {};
+      const isCast = (sp: string) => Boolean(pickString(cast[sp]) ?? this.cfg.voices?.[sp]);
+      const all = parsed.turns;
+      let head = 0;
+      while (head < all.length && !isCast(all[head].speaker)) head++;
+      let tail = 0;
+      while (tail < all.length - head && !isCast(all[all.length - 1 - tail].speaker)) tail++;
+      const trimmable = (n: number) => n > 0 && n <= MAX_MATTER_LINES && n / all.length <= 0.25;
+      const dropHead = trimmable(head) ? head : 0;
+      const dropTail = trimmable(tail) ? tail : 0;
+      const turns = all.slice(dropHead, all.length - dropTail);
+      rawScript = turns as unknown[];
+      const trimmed = [...all.slice(0, dropHead), ...all.slice(all.length - dropTail)];
+      const dropped = parsed.skipped.length + trimmed.length;
+      if (dropped > 0) {
+        const names = [...new Set(trimmed.map((t) => t.speaker))];
+        skippedNote = ` (${dropped} non-dialogue line(s) skipped${names.length ? `: ${names.join(", ")}` : ""})`;
       }
     }
 
@@ -235,7 +269,9 @@ export class SpeakTool implements Tool {
     }));
 
     if (skippedNote) console.warn(`[speak] ${scriptFile}${skippedNote}`);
-    return { turns, label: "dialogue" };
+    // The note goes back to the caller, not just to the operator log. Trimming
+    // a line the agent meant to keep is only safe if the agent is told which.
+    return { turns, label: "dialogue", note: skippedNote || undefined };
   }
 
   /**

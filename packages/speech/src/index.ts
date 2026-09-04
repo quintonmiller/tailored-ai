@@ -47,10 +47,13 @@ export {
 } from "./provider.js";
 export { concatWav, isWav, wavDurationMs } from "./wav.js";
 
+/** The provider this plugin registers itself. */
+const BUILT_IN_PROVIDER = "openai_compatible";
+
 const plugin: Plugin = (ctx) => {
   const disposers: Array<() => void> = [];
 
-  disposers.push(registerSpeechProvider("openai_compatible", (opts) => new OpenAICompatibleSpeech(opts)));
+  disposers.push(registerSpeechProvider(BUILT_IN_PROVIDER, (opts) => new OpenAICompatibleSpeech(opts)));
 
   disposers.push(
     ctx.tools.register("speak", (config) => {
@@ -83,8 +86,13 @@ export function validateConfig(config: AgentConfig): string[] {
   if (!cfg?.enabled) return [];
 
   const warnings: string[] = [];
-  const providerId = cfg.provider ?? "openai_compatible";
-  const known = listSpeechProviders();
+  const providerId = cfg.provider ?? BUILT_IN_PROVIDER;
+  // `validateConfig` runs BEFORE this plugin's own `register()`, so the
+  // registry is always empty of the provider registered a few lines above —
+  // reading it alone reported "have: none" on every boot of a working install.
+  // The provider this plugin is about to register counts as known; anything
+  // else must already be there, which is what catches a typo'd id.
+  const known = [...new Set([...listSpeechProviders(), BUILT_IN_PROVIDER])];
   if (!known.includes(providerId)) {
     warnings.push(
       `tools.speak.provider "${providerId}" is not registered (have: ${known.join(", ") || "none"}); ` +
@@ -92,7 +100,7 @@ export function validateConfig(config: AgentConfig): string[] {
     );
   }
 
-  if (providerId === "openai_compatible") {
+  if (providerId === BUILT_IN_PROVIDER) {
     const baseUrl = typeof cfg.baseUrl === "string" ? cfg.baseUrl : undefined;
     // Absent baseUrl means OpenAI itself, which will 401 without a key. A
     // local server needs no key, so the check is only meaningful for the
