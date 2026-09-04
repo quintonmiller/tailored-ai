@@ -280,3 +280,86 @@ describe("the Discord rooms backend", () => {
     expect(posted).not.toBeNull();
   });
 });
+
+describe("oversized media does not sink the whole post", () => {
+  const CHANNEL2 = "chan-oversize";
+
+  /** A store whose `urlFor` resolves, the way a real S3-backed one does. */
+  function storeWithUrls(bytes = 32) {
+    return {
+      get: async () => ({ bytes: Buffer.alloc(bytes), mimeType: "audio/wav" }),
+      urlFor: (id: string) => `https://example.invalid/${id.slice(0, 8)}.wav`,
+      put: async () => ({ id: "x".repeat(64), mimeType: "audio/wav", bytes }),
+    } as unknown as MediaStore;
+  }
+
+  function backendWith(store: MediaStore, delivery?: "auto" | "attach" | "link") {
+    const sent: Array<Record<string, unknown>> = [];
+    const webhook = {
+      send: vi.fn(async (p: Record<string, unknown>) => {
+        sent.push(p);
+        return { id: "m1", author: { id: "w" } };
+      }),
+    };
+    const b = new DiscordRoomBackend(
+      { channels: { fetch: async () => ({ id: CHANNEL2 }) }, user: { id: "bot" } } as unknown as Client,
+      {
+        mediaStore: () => store,
+        ...(delivery ? { delivery: () => delivery } : {}),
+      },
+    );
+    return { b, sent, webhook };
+  }
+
+  const huge = { id: "a".repeat(64), mimeType: "audio/wav", bytes: 21_000_000, name: "dialogue.wav" } as MediaRef;
+  const small = { id: "b".repeat(64), mimeType: "audio/wav", bytes: 1_000, name: "clip.wav" } as MediaRef;
+
+  it("links a file past the upload limit instead of attaching it", async () => {
+    const { b, sent, webhook } = backendWith(storeWithUrls());
+    await (b as unknown as { postAsParticipant: Function }).postAsParticipant(webhook, CHANNEL2, {
+      body: "here is the episode",
+      speaker: "writer",
+      media: [huge],
+    });
+    const payload = sent.at(-1)!;
+    expect(payload.files ?? []).toHaveLength(0);
+    expect(String(payload.content)).toContain("https://example.invalid/");
+  });
+
+  it("still attaches something that fits", async () => {
+    const { b, sent, webhook } = backendWith(storeWithUrls(1000));
+    await (b as unknown as { postAsParticipant: Function }).postAsParticipant(webhook, CHANNEL2, {
+      body: "small one",
+      speaker: "writer",
+      media: [small],
+    });
+    expect(((sent.at(-1)!.files as unknown[]) ?? []).length).toBe(1);
+  });
+
+  it("prefers a link for anything when the deployment asks for links", async () => {
+    const { b, sent, webhook } = backendWith(storeWithUrls(1000), "link");
+    await (b as unknown as { postAsParticipant: Function }).postAsParticipant(webhook, CHANNEL2, {
+      body: "small one",
+      speaker: "writer",
+      media: [small],
+    });
+    const payload = sent.at(-1)!;
+    expect(payload.files ?? []).toHaveLength(0);
+    expect(String(payload.content)).toContain("https://example.invalid/");
+  });
+
+  it("keeps the text when a huge file has no link to offer", async () => {
+    // The failure this prevents: the post 413s and the words are lost too.
+    const noUrl = { get: async () => ({ bytes: Buffer.alloc(4), mimeType: "audio/wav" }) } as unknown as MediaStore;
+    const { b, sent, webhook } = backendWith(noUrl);
+    await (b as unknown as { postAsParticipant: Function }).postAsParticipant(webhook, CHANNEL2, {
+      body: "here is the episode",
+      speaker: "writer",
+      media: [huge],
+    });
+    const payload = sent.at(-1)!;
+    expect(payload.files ?? []).toHaveLength(0);
+    expect(String(payload.content)).toContain("here is the episode");
+    expect(String(payload.content)).toContain("too large to attach");
+  });
+});

@@ -22,7 +22,7 @@ import {
   type TextChannel,
   WebhookClient,
 } from "discord.js";
-import type { MediaRef } from "../content/types.js";
+import { type MediaRef, mediaPlaceholder } from "../content/types.js";
 import type { MediaStore } from "../media/interface.js";
 import { formatEnvelope, parseEnvelope } from "../rooms/envelope.js";
 import type { RoomStore } from "../rooms/store.js";
@@ -102,6 +102,13 @@ function splitForDiscord(text: string, limit = MAX_MESSAGE_LENGTH): string[] {
   return chunks;
 }
 
+/**
+ * Conservative floor for a Discord upload. The real ceiling depends on the
+ * guild's boost tier, and guessing high means the post fails outright rather
+ * than degrading to a link.
+ */
+const ROOM_MAX_UPLOAD = 8 * 1024 * 1024;
+
 export interface DiscordRoomBackendOptions {
   /** Guild to create rooms in. Required only when the bot is in several. */
   guildId?: string;
@@ -131,6 +138,11 @@ export interface DiscordRoomBackendOptions {
    * captured reference would pin whatever was true at connect time.
    */
   mediaStore?: () => MediaStore | undefined;
+  /**
+   * `media.delivery`, resolved per call. `link` prefers a URL over an upload
+   * even for media that would fit — see the note on {@link ROOM_MAX_UPLOAD}.
+   */
+  delivery?: () => "auto" | "attach" | "link" | undefined;
   /**
    * Known identity labels, so `[note] ...` in a human's message stays body text
    * instead of inventing a speaker. Wire this to `IdentityResolver.isKnown`.
@@ -465,8 +477,9 @@ export class DiscordRoomBackend implements RoomBackend {
     // message does not show its attachment above the text that introduces it.
     // An attachment-only post still sends: `chunks` is empty when there is no
     // text, and dropping the message would lose the one thing it carried.
-    const files = await this.loadFiles(message.media);
-    const chunks = splitForDiscord(text);
+    const { attach, lines } = this.partitionMedia(message.media);
+    const files = await this.loadFiles(attach);
+    const chunks = splitForDiscord(lines.length > 0 ? `${text}\n${lines.join("\n")}` : text);
     // Same rule as the prefixed path: last non-empty chunk, seeded with the
     // final index so an attachment-only post still has somewhere to ride.
     const fileIdx = chunks.reduce((acc, chunk, i) => (chunk ? i : acc), chunks.length - 1);
@@ -515,9 +528,11 @@ export class DiscordRoomBackend implements RoomBackend {
     // doesn't ping the recipient twice.
     const envelopeOverhead = wire.length - message.body.trim().length;
     const bodyBudget = MAX_MESSAGE_LENGTH - envelopeOverhead - 8;
-    const parts = splitForDiscord(message.body.trim(), Math.max(bodyBudget, 200));
+    const { attach, lines } = this.partitionMedia(message.media);
+    const bodyWithLinks = lines.length > 0 ? `${message.body.trim()}\n${lines.join("\n")}` : message.body.trim();
+    const parts = splitForDiscord(bodyWithLinks, Math.max(bodyBudget, 200));
 
-    const files = await this.loadFiles(message.media);
+    const files = await this.loadFiles(attach);
     // The last NON-EMPTY part, so a long message does not show its attachment
     // above the text that introduces it. Indexes are preserved rather than
     // filtered because chunk 0 alone carries the addressee — re-indexing past
@@ -751,6 +766,44 @@ export class DiscordRoomBackend implements RoomBackend {
   }
 
   /** Read refs back out of the store as files Discord can upload. */
+  /**
+   * Split media into what Discord will actually take and what has to be a link.
+   *
+   * The room path used to upload everything it was handed. That was harmless
+   * while nothing handed it anything, and became a total failure the moment
+   * something did: a 21 MB generated recording is past Discord's limit, the
+   * upload 413s, and because the files ride a chunk of the *message*, the whole
+   * post fails — so the agent loses the text as well as the audio, and every
+   * later post in the same turn fails the same way.
+   *
+   * Same ladder the channel path already applies: attach what fits, link what
+   * does not, and honour a deployment that prefers links outright.
+   */
+  private partitionMedia(refs: MediaRef[] | undefined): { attach: MediaRef[]; lines: string[] } {
+    const attach: MediaRef[] = [];
+    const lines: string[] = [];
+    if (!refs?.length) return { attach, lines };
+    const store = this.opts.mediaStore?.();
+    const preferLink = this.opts.delivery?.() === "link";
+    for (const ref of refs) {
+      const url = store?.urlFor?.(ref.id);
+      const tooBig = ref.bytes > ROOM_MAX_UPLOAD;
+      if ((preferLink || tooBig) && url) {
+        lines.push(`${mediaPlaceholder(ref)} ${url}`);
+        continue;
+      }
+      if (tooBig) {
+        // No link to offer. Say so rather than failing the post: the text is
+        // worth more than the silence, and "it exists but you cannot have it"
+        // is diagnosable where a 413 is not.
+        lines.push(`${mediaPlaceholder(ref)} (${ref.bytes} bytes — too large to attach and no link available)`);
+        continue;
+      }
+      attach.push(ref);
+    }
+    return { attach, lines };
+  }
+
   private async loadFiles(refs: MediaRef[] | undefined): Promise<{ attachment: Buffer; name: string }[]> {
     if (!refs?.length) return [];
     const store = this.opts.mediaStore?.();
