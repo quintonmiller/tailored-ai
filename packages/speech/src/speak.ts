@@ -7,6 +7,7 @@
  * already the discriminant. An agent that has learned the single-speaker
  * form learns the dialogue form by adding a field.
  */
+import { readFileSync } from "node:fs";
 import type { Tool, ToolContext, ToolResult } from "@tailored-ai/core";
 import { mediaPart, textPart } from "./content.js";
 import {
@@ -17,6 +18,7 @@ import {
   SpeechProviderError,
   type Utterance,
 } from "./provider.js";
+import { parseScript } from "./script-file.js";
 import { concatWav, isWav, wavDurationMs } from "./wav.js";
 
 export interface SpeakToolConfig {
@@ -50,7 +52,7 @@ interface ScriptTurn {
 export class SpeakTool implements Tool {
   name = "speak";
   description =
-    "Turn text into audio and attach it. Pass `text` for one voice, or `script` (a list of {speaker, text}) for a dialogue such as a podcast.";
+    "Turn text into audio and attach it. Pass `text` for one voice, `script` (a list of {speaker, text}) for a dialogue, or `scriptFile` to read a long script off disk and only map the voices.";
   parameters = {
     type: "object",
     properties: {
@@ -67,6 +69,11 @@ export class SpeakTool implements Tool {
           },
           required: ["speaker", "text"],
         },
+      },
+      scriptFile: {
+        type: "string",
+        description:
+          "Path to a script file to read instead of passing `script` inline. Lines are `SPEAKER: what they say`; anything else (act headings, notes) is skipped. Use this for anything long — you supply the voices, not the text.",
       },
       voice: { type: "string", description: "Voice id for `text`. Defaults to the configured voice." },
       voices: {
@@ -141,10 +148,36 @@ export class SpeakTool implements Tool {
   /** Resolve the two input shapes into one ordered list of utterances. */
   private plan(args: Record<string, unknown>): { turns: Utterance[]; label: string } {
     const text = typeof args.text === "string" ? args.text.trim() : "";
-    const rawScript = Array.isArray(args.script) ? (args.script as unknown[]) : undefined;
+    let rawScript = Array.isArray(args.script) ? (args.script as unknown[]) : undefined;
+    const scriptFile = pickString(args.scriptFile);
 
-    if (text && rawScript?.length) {
-      throw new Error("pass `text` or `script`, not both.");
+    if (text && (rawScript?.length || scriptFile)) {
+      throw new Error("pass `text`, `script` or `scriptFile` — not more than one.");
+    }
+    if (rawScript?.length && scriptFile) {
+      throw new Error("pass `script` or `scriptFile`, not both.");
+    }
+
+    let skippedNote = "";
+    if (scriptFile) {
+      let source: string;
+      try {
+        source = readFileSync(scriptFile, "utf8");
+      } catch (err) {
+        throw new Error(`could not read ${scriptFile}: ${(err as Error).message}`);
+      }
+      const parsed = parseScript(source);
+      if (parsed.turns.length === 0) {
+        throw new Error(
+          `${scriptFile} has no dialogue lines. Each spoken line must look like ` +
+            `"SPEAKER: what they say"` +
+            (parsed.skipped.length ? `; ${parsed.skipped.length} line(s) matched nothing.` : "."),
+        );
+      }
+      rawScript = parsed.turns as unknown[];
+      if (parsed.skipped.length > 0) {
+        skippedNote = ` (${parsed.skipped.length} non-dialogue line(s) skipped)`;
+      }
     }
 
     if (text) {
@@ -153,7 +186,7 @@ export class SpeakTool implements Tool {
     }
 
     if (!rawScript?.length) {
-      throw new Error("nothing to say — pass `text`, or `script` with at least one turn.");
+      throw new Error("nothing to say — pass `text`, `script` with at least one turn, or `scriptFile`.");
     }
 
     const callVoices = isRecord(args.voices) ? (args.voices as Record<string, unknown>) : {};
@@ -201,6 +234,7 @@ export class SpeakTool implements Tool {
       voice: cast.size > 1 ? voiceFor(t.speaker) : (voiceFor(t.speaker) ?? this.cfg.voice),
     }));
 
+    if (skippedNote) console.warn(`[speak] ${scriptFile}${skippedNote}`);
     return { turns, label: "dialogue" };
   }
 

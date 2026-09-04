@@ -6,6 +6,9 @@
  * money is spent, and whether a dialogue actually ends up with different
  * voices in it. The provider is a seam precisely so this is testable.
  */
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   registerSpeechProvider,
@@ -290,7 +293,7 @@ describe("refusals", () => {
   it("refuses text and script together rather than guessing", async () => {
     const { store } = fakeStore();
     const r = await tool({ voice: "v" }).execute({ text: "hi", script: [{ speaker: "a", text: "b" }] }, ctx(store));
-    expect(r.error).toMatch(/not both/);
+    expect(r.error).toMatch(/not more than one/);
   });
 
   it("refuses an empty call", async () => {
@@ -323,5 +326,51 @@ describe("joining is exact", () => {
     // The fake fills each turn with its call index, so a dropped or reordered
     // turn changes the bytes.
     expect(puts[0].bytes.equals(concatWav([wavOf(480, 1), wavOf(480, 2)]))).toBe(true);
+  });
+});
+
+describe("scriptFile", () => {
+  const write = (body: string) => {
+    const dir = mkdtempSync(join(tmpdir(), "speak-"));
+    const file = join(dir, "show.txt");
+    writeFileSync(file, body);
+    return file;
+  };
+
+  it("renders a script read off disk, with only the voices supplied", async () => {
+    const file = write(
+      "ACT 1 - THE JOB\nGM: You are in a back room.\nREX: So what's the job?\nGM: The case is warm.\n",
+    );
+    const { store } = fakeStore();
+    const r = await tool({ voices: { GM: "v1", REX: "v2" } }).execute({ scriptFile: file }, ctx(store));
+    expect(r.success).toBe(true);
+    expect(provider.calls.map((c) => c.utterances[0].text)).toEqual([
+      "You are in a back room.",
+      "So what's the job?",
+      "The case is warm.",
+    ]);
+  });
+
+  it("refuses a file with no dialogue rather than recording silence", async () => {
+    const file = write("Just some notes.\nNothing spoken.\n");
+    const { store } = fakeStore();
+    const r = await tool().execute({ scriptFile: file }, ctx(store));
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/no dialogue lines/);
+  });
+
+  it("says which file it could not read", async () => {
+    const { store } = fakeStore();
+    const r = await tool().execute({ scriptFile: "/nope/missing.txt" }, ctx(store));
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/could not read \/nope\/missing\.txt/);
+  });
+
+  it("still refuses an uncast speaker, the same as an inline script", async () => {
+    const file = write("GM: hello.\nMYSTERY: who am I?\n");
+    const { store } = fakeStore();
+    const r = await tool({ voices: { GM: "v1" } }).execute({ scriptFile: file }, ctx(store));
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/MYSTERY/);
   });
 });
