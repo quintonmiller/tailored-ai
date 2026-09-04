@@ -1,0 +1,28 @@
+{
+  // The browser half of this package.
+  //
+  // Separate from `tsconfig.json` because it compiles for a different machine:
+  // the viewer runs in a browser with `DOM` and no Node globals, while `src/`
+  // runs in Node with no `document`. One config covering both would have to
+  // widen `lib` until `document` was in scope on the server, which is exactly
+  // the mistake this file exists to prevent.
+  //
+  // Not `composite`, and it emits nothing — `esbuild` does the bundling and
+  // `tsc` is here purely to check. That split is deliberate: esbuild is fast and
+  // strips types without checking them, so without this pass a type error would
+  // ship silently.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "types": [],
+    "noEmit": true,
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "allowImportingTsExtensions": true
+  },
+  "include": ["viewer/broadcast/src/**/*"]
+}

@@ -47,15 +47,34 @@ export function readWorkerResult(
   dir: string,
   exitCode: number | null,
   tail = "",
+  death: { signal?: NodeJS.Signals | null; stderr?: string } = {},
 ): { result: ScenarioResult } | { error: string } {
   let raw: string;
   try {
     raw = readFileSync(join(dir, RESULT_FILENAME), "utf8");
   } catch {
-    // No result file at all: the worker died before it got that far. Its last
-    // few lines of output are usually the only account of why.
-    const why = tail.trim() ? `; last output: ${tail.trim().split("\n").slice(-3).join(" / ")}` : "";
-    return { error: `worker produced no result (exit ${exitCode})${why}` };
+    // No result file at all: the worker died before it got that far.
+    //
+    // How it died comes first, because `exit null` on its own is unreadable —
+    // it means "killed by a signal" and names neither the signal nor the
+    // sender, which is how two difficulty-10 scenarios failed identically in
+    // every arm of a benchmark for months without anybody being able to say
+    // why. A SIGKILL is the harness's own backstop; a SIGABRT is almost always
+    // V8 giving up on the heap.
+    const how = death.signal ? `killed by ${death.signal}` : `exit ${exitCode}`;
+
+    // Stderr before stdout, because that is where a dying process explains
+    // itself — "FATAL ERROR: … JavaScript heap out of memory", an uncaught
+    // throw, a native crash. Stdout at that moment is whatever routine logging
+    // happened to be last, which is why the old message could only ever report
+    // the agent-migration notice printed at startup.
+    const last = (text: string) => text.trim().split("\n").slice(-3).join(" / ");
+    const why = death.stderr?.trim()
+      ? `; stderr: ${last(death.stderr)}`
+      : tail.trim()
+        ? `; last output: ${last(tail)}`
+        : "";
+    return { error: `worker produced no result (${how})${why}` };
   }
 
   let parsed: ScenarioResult & { error?: string };

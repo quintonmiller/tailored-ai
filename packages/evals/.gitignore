@@ -13,3 +13,6 @@ results/*
 !results/history/*.json
 dist/
 tsconfig.tsbuildinfo
+
+# Built by `pnpm run build:viewer`; the source of truth is viewer/broadcast/src/.
+viewer/broadcast/dist/

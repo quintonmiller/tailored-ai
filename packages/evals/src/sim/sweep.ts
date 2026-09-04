@@ -13,7 +13,7 @@
  * and the bankruptcy rate are what separate them.
  */
 
-import { createSimulation, type Policy, type SimMetrics } from "./types.js";
+import { createSimulation, DEFAULT_REPORT, type Policy, type SimMetrics, type SimulationReport } from "./types.js";
 
 export interface SweepResult {
   policy: string;
@@ -37,8 +37,15 @@ export interface SweepResult {
  * horizon ends before the repayment. Cadence is what buys a horizon long enough
  * to be honest at a number of turns a model run can afford.
  */
-export function runPolicy(simulation: string, policy: Policy, seed: number, days?: number, stride = 1): SimMetrics {
-  const sim = createSimulation(simulation, { seed, ...(days === undefined ? {} : { days }) });
+export function runPolicy(
+  simulation: string,
+  policy: Policy,
+  seed: number,
+  days?: number,
+  stride = 1,
+  options: Record<string, unknown> = {},
+): SimMetrics {
+  const sim = createSimulation(simulation, { seed, ...(days === undefined ? {} : { days }), ...options });
   // Act, then close the day, exactly as a team would. A policy that acts after
   // the day has advanced would be deciding on tomorrow's information.
   let guard = 0;
@@ -46,11 +53,24 @@ export function runPolicy(simulation: string, policy: Policy, seed: number, days
     policy.act(sim);
     for (let i = 0; i < Math.max(1, stride) && !sim.done; i++) sim.advance();
   }
-  return sim.metrics();
+  // The objective is stamped alongside the metrics so a ladder can always be
+  // ranked without the reporter knowing what this particular world calls money.
+  return { ...sim.metrics(), objective: sim.objective() };
 }
 
-export function sweep(simulation: string, policy: Policy, seeds: number[], days?: number, stride = 1): SweepResult {
-  return { policy: policy.name, seeds, runs: seeds.map((seed) => runPolicy(simulation, policy, seed, days, stride)) };
+export function sweep(
+  simulation: string,
+  policy: Policy,
+  seeds: number[],
+  days?: number,
+  stride = 1,
+  options: Record<string, unknown> = {},
+): SweepResult {
+  return {
+    policy: policy.name,
+    seeds,
+    runs: seeds.map((seed) => runPolicy(simulation, policy, seed, days, stride, options)),
+  };
 }
 
 function quantile(values: number[], q: number): number {
@@ -71,14 +91,15 @@ export interface Summary {
   p90: number;
   worst: number;
   stdev: number;
-  bankruptcyRate: number;
-  serviceLevel: number;
+  /** Whatever else this simulation asked to be shown, already reduced. */
+  extra: Array<{ label: string; value: number; kind: "mean" | "rate" }>;
 }
 
-export function summarise(result: SweepResult, key = "enterpriseValue"): Summary {
-  const values = result.runs.map((m) => m[key] ?? 0);
+export function summarise(result: SweepResult, report: SimulationReport = DEFAULT_REPORT): Summary {
+  const values = result.runs.map((m) => m[report.key] ?? 0);
   const mean = values.reduce((a, b) => a + b, 0) / Math.max(1, values.length);
   const variance = values.reduce((sum, v) => sum + (v - mean) ** 2, 0) / Math.max(1, values.length);
+  const n = Math.max(1, result.runs.length);
   return {
     policy: result.policy,
     runs: values.length,
@@ -88,17 +109,18 @@ export function summarise(result: SweepResult, key = "enterpriseValue"): Summary
     p90: quantile(values, 0.9),
     worst: Math.min(...values),
     stdev: Math.sqrt(variance),
-    bankruptcyRate: result.runs.filter((m) => m.bankrupt === 1).length / Math.max(1, result.runs.length),
-    serviceLevel: result.runs.reduce((sum, m) => sum + (m.serviceLevel ?? 0), 0) / Math.max(1, result.runs.length),
+    extra: (report.columns ?? []).map((column) => ({
+      label: column.label,
+      kind: column.kind,
+      value:
+        column.kind === "rate"
+          ? result.runs.filter((m) => (m[column.key] ?? 0) !== 0).length / n
+          : result.runs.reduce((sum, m) => sum + (m[column.key] ?? 0), 0) / n,
+    })),
   };
 }
 
-const usd = (n: number) => {
-  const abs = Math.abs(n);
-  if (abs >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
-  if (abs >= 1_000) return `$${Math.round(n / 1_000)}K`;
-  return `$${Math.round(n)}`;
-};
+const plain = (n: number) => Math.round(n).toLocaleString("en-US");
 
 /**
  * The table that makes a number mean something.
@@ -107,12 +129,24 @@ const usd = (n: number) => {
  * order somebody would reason about it: what does nothing sensible, what a
  * competent setup does, what attention adds.
  */
-export function formatSweep(summaries: Summary[]): string {
+export function formatSweep(summaries: Summary[], report: SimulationReport = DEFAULT_REPORT): string {
+  const show = report.format ?? plain;
   const width = Math.max(...summaries.map((s) => s.policy.length), 12);
-  const header = `  ${"policy".padEnd(width)}  ${"mean".padStart(9)}  ${"median".padStart(9)}  ${"P10".padStart(9)}  ${"worst".padStart(9)}  ${"service".padStart(7)}  ${"bankrupt".padStart(8)}`;
-  const rows = summaries.map(
-    (s) =>
-      `  ${s.policy.padEnd(width)}  ${usd(s.mean).padStart(9)}  ${usd(s.median).padStart(9)}  ${usd(s.p10).padStart(9)}  ${usd(s.worst).padStart(9)}  ${`${(s.serviceLevel * 100).toFixed(1)}%`.padStart(7)}  ${`${(s.bankruptcyRate * 100).toFixed(0)}%`.padStart(8)}`,
+  const extras = summaries[0]?.extra ?? [];
+  const extraWidth = extras.map((e) => Math.max(e.label.length, 8));
+  const header = [
+    `  ${"policy".padEnd(width)}`,
+    ...["mean", "median", "P10", "worst"].map((h) => h.padStart(11)),
+    ...extras.map((e, i) => e.label.padStart(extraWidth[i])),
+  ].join("  ");
+  const rows = summaries.map((s) =>
+    [
+      `  ${s.policy.padEnd(width)}`,
+      ...[s.mean, s.median, s.p10, s.worst].map((v) => show(v).padStart(11)),
+      ...s.extra.map((e, i) =>
+        (e.kind === "rate" ? `${(e.value * 100).toFixed(0)}%` : e.value.toFixed(1)).padStart(extraWidth[i]),
+      ),
+    ].join("  "),
   );
   return [header, ...rows].join("\n");
 }

@@ -20,7 +20,7 @@
   rooms:
     - name: ops
       incoming:
-        - { speaker: quinton, to: [nova], body: "all quiet?" }
+        - { speaker: robin, to: [nova], body: "all quiet?" }
     - name: design
       seen:
         - { speaker: dana, body: "the mango palette is signed off" }
@@ -40,7 +40,7 @@
   rooms:
     - name: ops
       incoming:
-        - { speaker: quinton, to: [nova], body: "all quiet?" }
+        - { speaker: robin, to: [nova], body: "all quiet?" }
     - name: design
       seen:
         - { speaker: dana, body: "the mango palette is signed off" }
@@ -57,7 +57,7 @@
   rooms:
     - name: ops
       incoming:
-        - { speaker: quinton, to: [nova], body: "all quiet?" }
+        - { speaker: robin, to: [nova], body: "all quiet?" }
   wake: { room: ops }
   expect:
     - prompt_not_contains: "You are in more than one room"
@@ -70,7 +70,7 @@
   rooms:
     - name: ops
       incoming:
-        - { speaker: quinton, to: [nova], body: "all quiet?" }
+        - { speaker: robin, to: [nova], body: "all quiet?" }
     - name: design
       seen:
         - { speaker: dana, body: "the mango palette is signed off" }
@@ -94,7 +94,7 @@
   rooms:
     - name: ops
       incoming:
-        - { speaker: quinton, to: [nova], body: "anything moving in the design room?" }
+        - { speaker: robin, to: [nova], body: "anything moving in the design room?" }
     - name: design
       purpose: Product design chat.
       seen:
@@ -122,7 +122,7 @@
   rooms:
     - name: ops
       incoming:
-        - { speaker: quinton, to: [nova], body: "anything moving in the design room?" }
+        - { speaker: robin, to: [nova], body: "anything moving in the design room?" }
     - name: design
       purpose: Product design chat.
       seen:
@@ -156,9 +156,9 @@
     - name: ops
       purpose: Deploys and incidents.
       seen:
-        - { speaker: quinton, body: "release is blocked on the {{token:artifact}} export, nothing else outstanding" }
+        - { speaker: robin, body: "release is blocked on the {{token:artifact}} export, nothing else outstanding" }
       incoming:
-        - { speaker: quinton, to: [nova], body: "are we clear to ship?" }
+        - { speaker: robin, to: [nova], body: "are we clear to ship?" }
     - name: design
       seen:
         - { speaker: dana, body: "{{token:artifact}} export is done and merged as of 14:30" }

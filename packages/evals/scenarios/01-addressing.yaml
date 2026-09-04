@@ -22,9 +22,9 @@
     - name: ops
       purpose: Deploys and incidents.
       seen:
-        - { speaker: quinton, body: "morning" }
+        - { speaker: robin, body: "morning" }
       incoming:
-        - { speaker: quinton, to: [nova], body: "did the staging deploy finish?" }
+        - { speaker: robin, to: [nova], body: "did the staging deploy finish?" }
     - name: design
       purpose: Product design chat.
       seen:
@@ -47,9 +47,9 @@
     - name: ops
       purpose: Deploys and incidents.
       seen:
-        - { speaker: quinton, body: "morning" }
+        - { speaker: robin, body: "morning" }
       incoming:
-        - speaker: quinton
+        - speaker: robin
           to: [nova]
           body: "tell dana over in design that the icon export is unblocked now"
     - name: design
@@ -72,7 +72,7 @@
     - name: ops
       purpose: Deploys and incidents.
       incoming:
-        - { speaker: quinton, to: [nova], body: "what's our rollback command again?" }
+        - { speaker: robin, to: [nova], body: "what's our rollback command again?" }
     - name: design
       purpose: Product design chat.
       seen:
@@ -99,10 +99,10 @@
     - name: ops
       purpose: Deploys and incidents.
       seen:
-        - { speaker: quinton, to: [nova], body: "what time is the {{token:oldtopic}} standup?" }
+        - { speaker: robin, to: [nova], body: "what time is the {{token:oldtopic}} standup?" }
         - { speaker: nova, body: "9:30, same as always." }
       incoming:
-        - { speaker: quinton, to: [nova], body: "and who's running the {{token:newtopic}} retro on friday?" }
+        - { speaker: robin, to: [nova], body: "and who's running the {{token:newtopic}} retro on friday?" }
   wake: { room: ops }
   expect:
     - replies: true
@@ -118,7 +118,7 @@
     - name: ops
       purpose: Deploys and incidents.
       incoming:
-        - { speaker: quinton, body: "does anyone remember why we pinned node 20?" }
+        - { speaker: robin, body: "does anyone remember why we pinned node 20?" }
   wake: { room: ops }
   expect:
     - replies: true

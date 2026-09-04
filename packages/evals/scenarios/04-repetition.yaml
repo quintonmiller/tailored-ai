@@ -111,14 +111,14 @@
     - name: ops
       purpose: Deploys and incidents.
       seen:
-        - { speaker: quinton, to: [nova], body: "where are we with the index rebuild?" }
+        - { speaker: robin, to: [nova], body: "where are we with the index rebuild?" }
         - speaker: nova
           body: >
             The index rebuild is about two thirds through. I've done the orders
             and line_items tables, the customers table is running now, and I'll
             pick up the archive tables after that. No errors so far.
       incoming:
-        - { speaker: quinton, to: [nova], body: "different question — is the nightly backup still running at 2am?" }
+        - { speaker: robin, to: [nova], body: "different question — is the nightly backup still running at 2am?" }
   wake: { room: ops }
   expect:
     - replies: true

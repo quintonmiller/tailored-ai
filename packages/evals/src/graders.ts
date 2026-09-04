@@ -568,10 +568,17 @@ async function gradeOne(
         `no baseline policy "${policy}" for simulation "${sim.name}" — known: [${Object.keys(simulationPolicies(sim.name)).join(", ")}]`,
       );
     }
-    // Re-run on the run's own seed and horizon, so the comparison is against
-    // identical weather rather than against a number remembered from a sweep on
-    // a different build of the economy. Costs a few milliseconds and no model.
-    const baseline = runPolicy(sim.name, factory(), sim.seed, sim.days, sim.daysPerRound ?? 1)[metric] ?? 0;
+    // Re-run on the run's own seed, horizon *and options*, so the comparison is
+    // against identical weather rather than against a number remembered from a
+    // sweep on a different build of the economy. Costs a few milliseconds and
+    // no model.
+    //
+    // The options matter as much as the seed: `the-endless-descent` starts its
+    // party on floor 31, and a baseline replayed without that starts on floor 1
+    // and plays a different game entirely. The same omission has now been found
+    // and fixed in three separate replay sites.
+    const baseline =
+      runPolicy(sim.name, factory(), sim.seed, sim.days, sim.daysPerRound ?? 1, sim.options ?? {})[metric] ?? 0;
     const mine = sim.metrics[metric] ?? 0;
     if (mine >= baseline + by) return ok("beats_baseline");
     return no(

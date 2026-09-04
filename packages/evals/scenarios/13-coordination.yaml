@@ -37,7 +37,7 @@
     - name: ops
       purpose: Deploys and incidents.
       incoming:
-        - { speaker: quinton, to: [nova], body: "did the staging deploy finish?" }
+        - { speaker: robin, to: [nova], body: "did the staging deploy finish?" }
   wake:
     - { room: ops, agent: nova }
     - { room: ops, agent: dana }
@@ -67,7 +67,7 @@
     - name: ops
       purpose: Deploys and incidents.
       incoming:
-        - { speaker: quinton, to: [dana], body: "dana, is the new icon set ready to ship?" }
+        - { speaker: robin, to: [dana], body: "dana, is the new icon set ready to ship?" }
   wake:
     - { room: ops, agent: nova }
     - { room: ops, agent: dana }
@@ -94,7 +94,7 @@
     - name: ops
       purpose: Deploys and incidents.
       incoming:
-        - { speaker: quinton, body: "morning all — anything blocking the release?" }
+        - { speaker: robin, body: "morning all — anything blocking the release?" }
   wake:
     - { room: ops, agent: nova }
     - { room: ops, agent: dana }
@@ -128,7 +128,7 @@
     - name: ops
       purpose: Deploys and incidents.
       incoming:
-        - { speaker: quinton, body: "before we ship: is staging green, and are the new icons final?" }
+        - { speaker: robin, body: "before we ship: is staging green, and are the new icons final?" }
   wake:
     - { room: ops, agent: nova }
     - { room: ops, agent: dana }
@@ -172,7 +172,7 @@
     - name: ops
       purpose: Deploys and incidents.
       incoming:
-        - speaker: quinton
+        - speaker: robin
           body: "nova, which version is live on staging right now? dana, once nova has it, draft the one-line release note."
   wake:
     - { room: ops, agent: nova }
