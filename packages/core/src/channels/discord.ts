@@ -456,6 +456,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
 
     const discordConfig = getDiscordConfig(this.runtime.getConfig());
     const backend = new DiscordRoomBackend(this.client, {
+      delivery: () => this.runtime.getConfig().media?.delivery,
       guildId: discordConfig?.guildId,
       allowedGuilds: discordConfig?.allowedGuilds,
       // Where retired rooms get filed. Unset leaves channels where they are.
