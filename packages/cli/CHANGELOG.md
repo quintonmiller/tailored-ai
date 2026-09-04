@@ -1,5 +1,202 @@
 # @tailored-ai/cli
 
+## 0.1.11
+
+### Patch Changes
+
+- 38b808b: Agents can send media out to Discord, Slack, and the terminal, not only receive it.
+
+  Inbound media has worked since the attachment support landed: an agent could be
+  shown a screenshot on Discord and describe it. Sending one _back_ was
+  unrepresentable, because `Channel.send` took a string. So an agent asked to
+  screenshot a page could see the result and talk about it, while the person who
+  asked to look at it got only prose.
+
+  `Channel.send` and `OutboundNotifier.send` now take `string | MessageContent`.
+  Both had to widen: `OutboundNotifier` is the interface every production caller
+  actually resolves through, and widening only `Channel` would have shipped a
+  parameter nothing could ever pass — the failure mode this workstream has already
+  hit twice.
+
+  Surfaces declare what they can show through a required `SurfaceCapabilities`,
+  modelled on `RoomCapabilities`. Required rather than optional on purpose: an
+  optional capability field is one nobody fills in and nobody reads, which is how
+  `AIProvider.supportsTools` spent its entire life. Surfaces with nothing to
+  declare spread `TEXT_ONLY_SURFACE` and are then honestly described rather than
+  merely undescribed. The message-length limits move in too — they were a
+  `MAX_MESSAGE_LENGTH` constant copy-pasted into two `splitMessage`
+  implementations, which is one fact recorded twice with nothing keeping the
+  copies honest.
+
+  One shared `renderForSurface()` applies the degradation ladder — attachment,
+  then link, then text placeholder — so three transports cannot each decide
+  differently what to do with a file too large to upload. It enforces the rule the
+  media design states outright: a part that does not reach the reader leaves a
+  warning or a placeholder, never nothing. Writing the test for that caught a real
+  defect in this change, where a deployment with no media store configured
+  produced neither an upload nor a placeholder: the ladder had been told the
+  surface could attach, so it skipped the placeholder, and then nothing uploaded
+  the file. Both transports now report what they cannot do _before_ rendering
+  rather than after.
+
+  The media a channel sends comes from the message record, read back with
+  `collectTurnMedia()` against a watermark taken before the turn. That is the same
+  source the web UI already renders from, so a channel and the UI cannot disagree
+  about what a turn produced, and it avoids widening `runAgentLoop`'s return type
+  across eighteen call sites — most of which only ever want text — to serve three
+  surfaces. Only `tool` and `assistant` rows are read, so an inbound photo is
+  never echoed back at the person who just sent it, and results are deduped by
+  content hash: an agent that screenshots an unchanged screen three times has one
+  blob and sends one file.
+
+  Discord uploads through `files:` on the last text chunk, so attachments never
+  float above the prose explaining them. Slack posts text then uploads through
+  `files.uploadV2`, and an upload failure is logged rather than thrown — the text
+  has already been posted, and throwing would report the whole reply as failed
+  when most of it arrived. The CLI prints a placeholder and a `file://` path to
+  stderr, keeping stdout exactly the answer for anyone redirecting it. Terminal
+  inline images are deliberately not attempted: emitting an iTerm2 escape sequence
+  to a terminal that does not understand it dumps kilobytes of base64 into the
+  user's scrollback.
+
+  `MediaStore` gains an optional `localPathFor()` for surfaces that can open a
+  path. Optional because a store backed by S3 genuinely has none, and returning a
+  fabricated path would be worse than returning nothing.
+
+- a098702: A runtime plugin's tools now reach the agent at startup, not on the next reload.
+
+  `PluginContext` offers `ctx.tools.register` to every plugin, but `createTools()`
+  walks the tool-factory registry exactly once, in the `AgentRuntime` constructor.
+  Registry-pass plugins load before that walk. **Runtime-pass plugins load after
+  it by definition** — they load late precisely because they need `ctx.runtime` —
+  so a tool they registered went into the factory registry with nothing left to
+  read it. The plugin loaded, `register` returned a disposer, nothing warned, and
+  the tool first appeared if and when something unrelated triggered a reload.
+
+  Same class as #561 and #609: a registration that validates and does nothing.
+
+  `AgentRuntime.applyPendingToolFactories()` re-runs the factories and registers
+  what is not already present, returning the names it added; the CLI calls it
+  after loading runtime plugins and logs what appeared.
+
+  **Additive rather than a rebuild**, for a specific reason: the tool registry
+  also holds tools no factory produced — `McpManager` registers discovered MCP
+  tools straight into it — and rebuilding would silently drop every one. It also
+  does not remove a tool whose config gate has since closed; this runs at startup
+  before any turn, where the only difference between the two walks is the
+  factories that were not registered yet. Reacting to config changes stays
+  `reload()`'s job.
+
+  No behaviour change for any current install: no shipped plugin registers a tool
+  from the runtime pass today. The path had never had a user, which is why the
+  gap survived — it was found writing the first one (#616).
+
+- 6557b85: TAI can run itself as a service, and hook the moments it starts and stops.
+
+  `tai` only ran in the foreground, so anything that had to survive a closed
+  terminal needed a supervisor written per deployment. `tai start` / `stop` /
+  `restart` / `status` now do that, with pid and log files under the home
+  directory — so `TAI_HOME` (or `-c`) selects the instance and no registry of
+  instances exists anywhere.
+
+  **Four lifecycle events, declared in the existing `hooks.on`:**
+
+  ```yaml
+  hooks:
+    allowScripts: true
+    on:
+      tai:init:start: # config read, nothing built yet
+        - type: script
+          options: { command: ~/bin/pre-start.sh }
+      tai:shutdown:end: # teardown done, before exit
+        - type: script
+          options: { command: ~/bin/post-stop.sh }
+  ```
+
+  They fire **inside** the TAI process. That is the thing an earlier design got
+  wrong: "before start" is before the _runtime_, not before TAI, and treating the
+  two as the same led to a proposal for a separate mechanism in the supervising
+  CLI. It would have cost something concrete — a shutdown hook in its own
+  short-lived process cannot call a tool, where `tai:shutdown:start` fires with
+  the runtime still up and can.
+
+  **Capability tiers, because what a hook can do depends on when it runs.**
+  `tai:init:start` and `tai:shutdown:end` have no runtime, so no tool is
+  registered. A handler declares what it needs and an event declares what it
+  offers:
+
+  ```ts
+  registerEventHookHandler("tool", handler, { requires: "runtime" });
+  ```
+
+  Not a closed union of action types: handler kinds stay an open string so a
+  plugin can register its own, and core still never learns their names. Without
+  this a `tool` hook at `tai:init:start` would bind cleanly and never run —
+  `runEventHooks` treats an unregistered kind as _absent, not failed_ — which is
+  the exact silent-inert shape this codebase keeps paying for. It is now a
+  `validateConfig` warning and a refusal at dispatch.
+
+  **A `script` handler in core**, registered only when `hooks.allowScripts` is
+  true. It has to be core rather than a plugin because `tai:init:start` fires
+  before plugins load; it has to be gated because it hands config the ability to
+  run arbitrary programs, and "do not enable the plugin" cannot gate something
+  that must exist before plugins. It passes the payload as environment and never
+  opens stdin — writing to a child that exits without reading is #606.
+
+  Only `tai:init:start` can refuse, and a refusal aborts the start. The shutdown
+  events cannot: a hook able to veto a stop makes an instance unstoppable, which
+  is worse than whatever it was protecting.
+
+  Both shutdown events carry `reason` (`stop` or `restart`), reaching a script as
+  `TAI_REASON`. Without it `tai restart` releases whatever `tai:shutdown:end`
+  releases and immediately re-acquires it — measured cycling a 27B model server on
+  every restart, which is the most common operation there is.
+
+- Updated dependencies [9018bc8]
+- Updated dependencies [9dc9836]
+- Updated dependencies [e21c40e]
+- Updated dependencies [0651034]
+- Updated dependencies [5c6f252]
+- Updated dependencies [0b62d07]
+- Updated dependencies [38b808b]
+- Updated dependencies [662b23a]
+- Updated dependencies [f13cec6]
+- Updated dependencies [0c8e8c4]
+- Updated dependencies [390be8e]
+- Updated dependencies [bf2faf1]
+- Updated dependencies [b17aa82]
+- Updated dependencies [bf2faf1]
+- Updated dependencies [2c98cab]
+- Updated dependencies [b8e39ef]
+- Updated dependencies [49e6ce4]
+- Updated dependencies [02f9be2]
+- Updated dependencies [662b23a]
+- Updated dependencies [38b808b]
+- Updated dependencies [2c98cab]
+- Updated dependencies [afdfc82]
+- Updated dependencies [0594a2b]
+- Updated dependencies [325e5f2]
+- Updated dependencies [38b808b]
+- Updated dependencies [bf2faf1]
+- Updated dependencies [3d27ba5]
+- Updated dependencies [1d83122]
+- Updated dependencies [415ba15]
+- Updated dependencies [0594a2b]
+- Updated dependencies [a098702]
+- Updated dependencies [d4c4baa]
+- Updated dependencies [1537522]
+- Updated dependencies [0b90020]
+- Updated dependencies [6557b85]
+- Updated dependencies [bdacf8d]
+- Updated dependencies [2e7a342]
+- Updated dependencies [9190838]
+- Updated dependencies [2c98cab]
+- Updated dependencies [1d83122]
+- Updated dependencies [1537522]
+- Updated dependencies [e21c40e]
+  - @tailored-ai/core@0.1.11
+  - @tailored-ai/server@0.1.11
+
 ## 0.1.10
 
 ### Patch Changes

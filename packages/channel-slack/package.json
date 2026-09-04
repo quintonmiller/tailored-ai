@@ -1,6 +1,6 @@
 {
   "name": "@tailored-ai/channel-slack",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "Slack channel for Tailored AI agents. Importing the package registers Slack as a channel factory; the runtime starts it when channels.slack.enabled is true.",
   "license": "MIT",
   "author": "Quinton Miller",

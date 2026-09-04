@@ -1,6 +1,6 @@
 {
   "name": "@tailored-ai/provider-openrouter",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "OpenRouter model provider for Tailored AI agents. Ships as a register(ctx) plugin — install with `tai plugin install @tailored-ai/provider-openrouter`, list under `plugins:`, and select with `agent.defaultProvider: openrouter`.",
   "license": "MIT",
   "author": "Quinton Miller",

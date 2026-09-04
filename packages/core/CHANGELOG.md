@@ -1,5 +1,1323 @@
 # @tailored-ai/core
 
+## 0.1.11
+
+### Patch Changes
+
+- 9018bc8: Drive another coding agent over a real session, not a subprocess call.
+
+  `claude_code` shells out to the `claude` binary with a prompt string. That is
+  one-shot by construction: no session to continue, nothing streaming back while
+  it works, no way to answer a permission prompt, no way to know why it stopped.
+  Every one of those is something the Agent Client Protocol defines and a
+  subprocess call cannot carry.
+
+  The new `coding_agent` tool speaks ACP. It opens a session, sends the prompt,
+  reads the streamed message chunks, answers permission requests according to
+  policy, and reports the protocol's stop reason.
+
+  In core rather than in a plugin for the reason `mcp/` is: a protocol-level
+  capability, the `openai_compatible` of agent-driving. What keeps that honest is
+  that **core knows the protocol and never a vendor** — no built-in agent list, no
+  default command, and no agent's name in `DEFAULT_CONFIG`. `tools.coding_agent.agents`
+  is the only thing that decides what runs, exactly as `mcp.servers` is.
+  `@agentclientprotocol/sdk` is an optional dependency, dynamically imported, with
+  only structural types crossing the boundary so core compiles without it.
+
+  **Permission requests default to `deny`.** An agent asks precisely when it is
+  about to write a file or run a command, and an unattended path saying yes on the
+  owner's behalf is the failure this codebase keeps producing — a subagent is a
+  way to get it at one remove. The refusal is reported in the tool result along
+  with the key that changes it, so a first run says what to do rather than
+  returning a mysteriously short answer. The answer is chosen by option _kind_
+  rather than position, and prefers one-shot over standing in both directions: a
+  standing grant is a policy decision and nothing here is entitled to make one.
+
+  The session runs inside the calling turn's `workingDirectoryBoundary` when it
+  has one, so a subagent is not a hole through a containment the parent turn is
+  subject to.
+
+  **A policy is not a sandbox, and the docs say so.** Verified against both real
+  adapters: told to write a file under `permissions: deny`, Claude Code asked, was
+  refused and wrote nothing; Codex never asked and wrote it, having auto-approved
+  internally ("risk: low"). The handshake is cooperative by design — ACP lets an
+  agent ask, it does not oblige it to — so `deny` is a preference expressed to a
+  cooperating agent rather than containment. Running the agent under the sandbox
+  seam is the durable answer and is tracked separately.
+
+  `claude_code` is untouched. Superseding it is a separate decision.
+
+- 9dc9836: Add `agent.defaults` — deployment-wide fallbacks for every per-agent field.
+
+  A setting whose right value is the same for every agent had to be written on
+  every agent, and the ones added later silently kept core's default. The omission
+  is invisible: the agent resolves fine and takes a value nobody chose.
+  `roomSessionScope` is the worked example — in a 32-agent deployment 27 set it to
+  `shared` and 5 said nothing, and one of those five was the agent whose whole
+  value is remembering a subsystem. A direct message to it opened a session
+  holding none of what it had learned, and it answered by reading back an
+  unrelated block of injected state.
+
+  Precedence is `agents.<name>.<field>` → `agent.defaults.<field>` → the legacy
+  deployment-wide field where one exists → core's default, so a deployment can
+  migrate onto the new block without editing every agent first. Applies to agents
+  from `config.yaml` and from the agent registry alike.
+
+  Identity fields (`tools`, `skills`, `instructions`, `model`, `provider`,
+  `models`, `description`, `contextDir`, `online`) are rejected with a validation
+  warning that names the reason, rather than silently ignored.
+
+- e21c40e: Benchmark: a scenario can hand the agent an `answer` tool that says whether it
+  is right, with a bounded number of attempts (3 by default).
+
+  Every other grader in the package scores a run after it is over, so what gets
+  measured is the agent's _first_ answer. Converging — try, be told no, do
+  something different — is a separate capability and the one most real work
+  consists of, since tests, CI, validators and people all work that way.
+
+  It is also the only instrument that can see what a model does after being told
+  it fabricated. The state-loss scenarios show it inventing a value with complete
+  confidence in 18 runs out of 18, and nothing in a transcript separates that from
+  knowing. Handing back `false` splits three continuations that currently look
+  identical: go and look, concede, or invent a second value. `guesses` records the
+  whole sequence, because the count is a score and the sequence is the finding.
+
+  `acceptsUnknown` lets a scenario treat "I don't know" as correct where the fact
+  is genuinely unrecoverable, which is what makes this fit the hardest rows rather
+  than trivialising them: the measurement becomes how many fabrications precede
+  the concession.
+
+  An oracle leaks information, so a scenario may only use one where the answer
+  space is large — a witness code, a clock time — or where the expected answer is
+  a concession. Three attempts against a binary is brute force, not a test.
+
+  Measured over 12 runs. When the model reaches the tool it concedes: four
+  submissions, all "unknown", all on the first attempt, zero invented values — the
+  opposite of the hypothesis these rows were written to test. Asked the same
+  question without an oracle it states a specific time with total confidence, so
+  the difference is not what it knows but whether the turn offers a shape in which
+  not knowing is sayable.
+
+  The rows still score 33%, because the other eight runs never reached the tool.
+  They spent the round budget re-reading an empty `core_memory` until the
+  repeated-call detector ended the turn (#528), and three then emitted the
+  `answer` call as raw markup in the reply rather than making it (#529) — markup
+  containing an invented time, so the fabrication was real and never got to the
+  tool that would have rejected it.
+
+- 0651034: A tool call can be followed, and an approval leaves a record.
+
+  Two gaps from comparing TAI's hook surface to Claude Code's (#573). Both are
+  additive — no behaviour changes, only things that were happening invisibly
+  become visible.
+
+  **`toolUseId` and `cwd` on the tool events.** `agent.pre_tool_use` and
+  `agent.post_tool_use` carried a tool name and nothing tying them together, so
+  two `exec` calls in one turn were indistinguishable to a subscriber and the most
+  natural question there is — did the call I approved do what it said it would? —
+  could not be asked. Both now carry the provider's own call id, and the approval
+  events carry the same one. `cwd` comes along at the same site, because a hook
+  otherwise has to guess where the call runs.
+
+  **The approval path emits.** `requestApprovalWithTimeout` used to run start to
+  finish without the bus hearing anything, so a deployment could not log its own
+  approvals, notice an agent hitting the same one repeatedly, or see that it was
+  blocked on one nobody had answered. Two broadcasts now bracket it:
+  `approval.requested` before the approver is asked, and `approval.settled` after.
+
+  `settled` fires for every call that needed approval, and its `outcome` has three
+  values rather than two. `unattended` means the call needed a person on a path
+  that has none — cron, a room wake, the task watcher — and whether it then ran is
+  `permissions.noHandlerAction`, whose effect was previously visible only as a
+  one-time warning in a log rather than per call. A record covering only the
+  approvals somebody answered would have been silent about exactly the calls
+  nobody saw, which is the audit half of #545.
+
+  `timedOut` is carried separately from the outcome for the same reason: with
+  `timeoutAction: auto_approve`, a call nobody looked at returns `approved` and
+  reads exactly like a considered yes. Recovering that from the reason string
+  would be parsing our own prose, so `requestApprovalWithTimeout` now returns the
+  fact alongside the response.
+
+- 5c6f252: A hook script that ignores its input can no longer take the runtime down.
+
+  Writing to a child's stdin when the child has already exited raises `EPIPE`,
+  and an `EPIPE` on a stream with no `error` listener is an **uncaught
+  exception** — it does not reject the surrounding promise, it kills the process.
+  So a hook program that exits without reading its payload, which is a completely
+  ordinary hook, could fault the agent that ran it (#606).
+
+  This was not theoretical. It shows up as an intermittent failure of the core
+  test suite — roughly one run in two on a loaded machine, `Vitest caught 1
+unhandled error`, always from `claude-hooks.ts` — which is the mild version of
+  the same race. In a deployment it kills the agent instead.
+
+  `closeChildStdin` in `shell.ts` now owns the operation. It attaches an error
+  listener before writing, stays silent on `EPIPE` and `ERR_STREAM_DESTROYED`
+  (the expected shapes of "the child is already gone"), logs anything else once,
+  and never throws.
+
+  **The child's exit code survives.** A hook that runs, ignores stdin and exits 2
+  has refused the tool call; losing that verdict to a plumbing error on the input
+  pipe would be a worse bug than the crash. The `close` handler resolves exactly
+  as before.
+
+  Applied at all four sites that close a child's stdin, not just the one observed
+  failing — `plugins/claude-hooks.ts`, `sandboxes/host.ts`,
+  `sandboxes/container.ts` and `tools/exec.ts`. The other three pass no payload so
+  their window is far narrower, but the operation is identical and none of them
+  had a listener either.
+
+- 0b62d07: A hook can be a program.
+
+  `builtin:claude-hooks` registers the `command` handler on the seam the previous
+  change opened: run a program, hand it the event as JSON on stdin, read its
+  answer off stdout and its exit code. Exit 2 refuses with stderr as the reason;
+  `permissionDecision: "deny"` refuses with a written one; `updatedInput` rewrites
+  the call; anything else is advisory and `denyIf` can still match it.
+
+  **What this is for, stated honestly, because the obvious pitch is wrong.** It is
+  not portability. Claude Code's tools are `Bash`, `Read`, `Write`, `Edit`; TAI's
+  are `exec`, `read`, `write`, `edit`. Matchers are exact, so `"matcher": "Bash"` —
+  the commonest example in the wild — matches nothing here, and a borrowed script
+  would run and gate nothing, which is worse than failing. TAI deliberately does
+  _not_ rename `exec` to `Bash` on the way out: manufacturing that compatibility
+  would send the script's own logic after the wrong thing.
+
+  What it delivers is that a hook can be written in any language. Their JSON shape
+  is used because it is documented and already implemented by several others, and
+  there is no reason to invent a third one.
+
+  **Seeded disabled.** Every other hook can only reach a tool the deployment
+  already registered and enabled — a real boundary, and this removes it by handing
+  config the ability to run arbitrary programs with the agent's privileges. That
+  should be a decision somebody made, not a default they inherited. The
+  environment is scrubbed of `*_API_KEY`, `*_TOKEN`, `*_SECRET`, `AWS_*`,
+  `OPENAI_*`, `ANTHROPIC_*` and `OTEL_*` — not a boundary, since the hook runs as
+  the agent, but hygiene against a credential riding along into a subprocess.
+
+  One deliberate divergence from their contract: a `command` whose binary does not
+  exist **refuses** on a refusable event, where Claude Code treats a broken hook
+  as advisory. An unregistered _tool_ is skipped because the deployment may have
+  disabled that plugin elsewhere and an unrelated call should not pay for it; a
+  `command` is named right there in the hook, so its absence is unambiguous and
+  the check this call was supposed to get did not happen.
+
+  Also completes `updatedInput`'s counterpart in core: an `EventHookResult` may
+  now return `args`, and a rewrite is carried forward so later hooks in the chain
+  review the call as it now stands rather than as first asked.
+
+- 38b808b: Messages and tool results can carry media, not only text.
+
+  `Message.content` is now `string | MessageContent | null` and `ToolResult.output`
+  is `string | ToolOutput`. A plain string still means exactly what it did before,
+  so every text-only call site and all 398 tool-result construction sites are
+  unchanged; only code that _reads_ content had to say what it does about media.
+
+  The non-string arm is an object rather than a bare `ContentPart[]`, which looks
+  fussy and is the whole reason this was safe to land. Widening to
+  `string | ContentPart[] | null` first, as an experiment, produced exactly one
+  compile error across `packages/core` — not because the change was safe, but
+  because `string` and `Array` share `.length`, `.slice`, `.indexOf` and
+  `.includes`. `estimateTokens` would have kept returning a number, just the wrong
+  one: a count of parts instead of a count of characters. The compaction
+  transcript would have serialized `[object Object]` into a summarizer prompt.
+  Wrapping the arm in an object turned both into compile errors, twenty-five in
+  core, each one a real decision about what that site does when handed a picture.
+
+  `messageText()` and `toolOutputText()` give the text projection. They are
+  functions over the one source of truth rather than a second stored field, so
+  they cannot drift out of sync the way a cached projection would, and a caller
+  that only wants text now says so at the call site.
+
+  Media itself is stored by reference, never inline. A new `MediaStore` seam keeps
+  bytes out of conversation history — `capToolOutput` head/tail-slices its input
+  and would cut a base64 payload into something undecodable, and every vendor API
+  separates the reference from the payload for the same reason. The bundled disk
+  store addresses blobs by the sha256 of their bytes, which dedupes re-captures
+  and, more importantly, keeps the loop's stuck-model detector working: it
+  compares consecutive tool results verbatim, so a per-capture unique id would
+  have quietly disabled the guard. Third-party stores register through the same
+  registry the disk one uses.
+
+  Persistence needed no migration. The `messages.content` column stays a single
+  `TEXT` field; plain strings are stored verbatim, only media-carrying content is
+  JSON-encoded, and decoding validates every part before trusting it — so a live
+  database keeps working and a legacy message whose text merely looks like JSON is
+  not misread as structured content.
+
+  `estimateTokens` charges a flat per-image cost instead of the ~15 tokens an
+  image's text placeholder would have cost. A deliberate over-estimate:
+  over-counting evicts early, under-counting overflows the request, and only one
+  of those is recoverable.
+
+  Providers flatten media to a visible placeholder for now. A tool message's
+  content must be a string — vLLM rejects an `image_url` part on `role: "tool"`
+  even for a vision model — and resolving a stored reference needs the store,
+  which is async. The point is that the model is told an image was there. It is
+  never silently dropped and never JSON-stringified into the prompt.
+
+- 662b23a: A plugin can change what a turn puts in front of the model.
+
+  `agent.context_slots` is the first waterfall core declares, and the first thing
+  dispatched on the agent loop's bus. A subscriber receives the slot list a turn
+  is about to render and returns the list it should render instead — dropping,
+  adding, reordering or capping — alongside the turn's agent, session, project and
+  user message.
+
+  ```ts
+  bus.onWaterfall("agent.context_slots", async (payload, next) =>
+    next({
+      ...payload,
+      slots: payload.slots.filter((s) => s.id !== "expensive"),
+    })
+  );
+  ```
+
+  Two deliberate properties.
+
+  **The list arrives before anything renders.** A subscriber can stop a slot
+  running, not merely discard what it produced — which matters for a slot that is
+  expensive or that reads something the subscriber already knows is unavailable.
+  The tests assert this by watching whether `render` was called, not only whether
+  its text arrived.
+
+  **An empty chain returns what it was handed**, so a turn with a bus and no
+  subscribers assembles a byte-identical prompt to one with no bus at all. That is
+  asserted directly rather than assumed, and it is what makes the seam safe to
+  land ahead of any consumer.
+
+  `renderContextSlots` is the first consumer because it is already a pure function
+  over a slot list, so a subscriber needs to know nothing about how the system
+  prompt is composed — the property #417 is after. Until now the waterfall
+  dispatch mode had no core consumer at all, because the loop had nothing to
+  dispatch on.
+
+- f13cec6: Irreversible tool calls are refused when the request fits more than one target.
+
+  Tools declare what a call does — `Tool.effect` is `read` | `write` |
+  `irreversible`, a constant or a function of the arguments, so `exec` classifies
+  per command and `git status` costs nothing. Undeclared is `read`, so nothing
+  changes until a tool opts in.
+
+  Before running an irreversible call the loop asks the model to enumerate what
+  the request could be referring to. Two or more candidates and the call is not
+  run; the agent gets a tool result naming them, which it can act on in the same
+  turn rather than a stopped turn. Skipped when a human just approved the call —
+  they saw it — and switched off with `permissions.checkDerivability: false`.
+
+  Measured on the local 27B model, n=12 per arm, a request to delete "the old
+  backup bucket" with two equally-old buckets in the conversation:
+
+  |                  | asks before acting |
+  | ---------------- | ------------------ |
+  | without the gate | 8/12               |
+  | with the gate    | **12/12**          |
+
+  Fisher exact p=0.09. The four failures are the shape worth knowing about: asked
+  to delete one bucket, the agent deleted both — "Both buckets are gone." An
+  ambiguous singular resolved by acting on everything that matched.
+
+  The gate does not fire on a reference the conversation pins down: with two
+  staging buckets, one introduced as "from the old account", it lets the delete
+  through — and 36 out of 36 destructive commands in that scenario targeted that
+  bucket, never the other. That is inference, not guessing, and a check that
+  refused it would have traded a rare wrong delete for an agent that can do
+  nothing irreversible unattended.
+
+- 0c8e8c4: Benchmark: extend the difficulty scale to 7 levels, and stop witness values from
+  colliding with each other.
+
+  The scale ran to five until the top of it stopped being the top. On the
+  2026-08-12 cohort level 5 scored 83% and level 4 scored 69% — the hardest tier
+  was easier than the one below it, and seven of the ten level-5 scenarios passed
+  every run. A scale whose last rung is cleared has no ceiling in view: it can
+  report that things are fine and cannot report where they stop, which is the one
+  question the benchmark exists to answer. 90% at the top is the same message as
+  100%, said more quietly.
+
+  The fix is not to relabel the rows that pass — that is the circularity the scale
+  was written to avoid. Levels 6 (`compound`) and 7 (`misleading`) name kinds of
+  demand the first five never described, with fifteen scenarios against 5-7 in
+  `scenarios/16-ceiling.yaml`.
+
+  Those two were still guesses, and level 7 came out at 87%. Levels 8-10 stop
+  guessing and stack instead: each is the one demand the set has measured this
+  model failing — a fact evicted from the history window comes back invented —
+  plus one more independent thing that must go right. One scenario each, in
+  `scenarios/17-limit.yaml`. They score 0%, 0% and 17% at six repeats, so the
+  scale finally has a bottom: the model will not say "I no longer have that", and
+  at level 9 it invents a threshold and schedules work against the comparison.
+
+  Separately, and independent of the scale: `mintTokens` now guarantees that no
+  witness value in a run contains another. Distinctness was not enough, because
+  every reply assertion is a substring match — `3rd` is a substring of `23rd`, and
+  a scenario asserting "mentions the new date, not the withdrawn one" failed an
+  agent that answered correctly. Fourteen of the 756 ordered day-pairs are
+  containments, so this fired on roughly 2% of runs of any scenario carrying two
+  of them, always in the direction that invents a capability gap. It also made the
+  discrimination suite fail on a healthy scenario about one run in eight.
+
+- 390be8e: Benchmark: `does_not_call_with` accepts a list on either side, and the
+  tool-pressure scenario that used it now measures lookups rather than any
+  contact with a memory tool.
+
+  `does-not-search-memory-for-what-it-was-just-told` asserted
+  `does_not_call: [recall, facts, memory, core_memory]`, which also forbids
+  _writing_. The base prompt tells every agent to save durable facts, so an agent
+  that answered correctly from the conversation and then filed what it learned
+  scored as a failure for following its instructions. At n=12 the scenario sat at
+  6/12 and read as a bimodal capability gap; it was one assertion counting two
+  different acts.
+
+  Spelling the lookup-only version one tool/action pair at a time is twenty
+  entries, so `does_not_call_with` now takes a list for `tool` and for any `where`
+  value, meaning "any of these".
+
+  Re-measured at n=12: 10/12, and both remaining failures are real lookups
+  (`recall(action=query)`, `facts(action=get)`) rather than saves.
+
+- bf2faf1: The event bus gains an around-middleware dispatch mode.
+
+  `emit` lets a subscriber observe and `emitAsync` lets it veto by returning
+  `false`. Neither lets it **change** what happens, so every feature that wants to
+  shape an agent request has to live inside `runAgentLoop` rather than beside it —
+  which is most of what #417 is about.
+
+  `bus.onWaterfall(event, handler)` and `bus.waterfall(event, payload)` add the
+  missing mode. A listener receives `(payload, next)`, may transform the payload,
+  and either calls `next(payload)` to delegate or returns its own value to
+  short-circuit and own the outcome. `{ prepend: true }` is there for the rare
+  listener that must run before ordinary registrations.
+
+  Waterfall events are declared in `RuntimeWaterfallMap`, separate from
+  `RuntimeEventMap`, so the dispatch mode is part of an event's contract: a
+  waterfall event can never be `emit`ed by accident and a broadcast event can
+  never be handed a `next` it does not expect. The map is extended by declaration
+  merging, so a plugin can declare and dispatch its own waterfall without a core
+  release.
+
+  Failure behaviour follows the rules the bus already had. A throwing listener is
+  logged and skipped, and the chain continues with the payload that listener was
+  handed — one bad subscriber must not break the operation it was only observing.
+  A listener that returns nothing is treated as a pass-through rather than as an
+  instruction to truncate: if it delegated, its downstream result stands; if not,
+  the chain carries on without it. A dispatch runs the snapshot of the chain it
+  started with, so registering mid-dispatch behaves the way it does for `emit`.
+
+  **Core declares no waterfall events yet.** The obvious first one — transforming
+  an agent request before the model sees it — turns out to be blocked on the agent
+  loop having no bus to dispatch on, which is a prerequisite worth landing on its
+  own rather than smuggling in here. The mechanism is useful to plugins today
+  regardless, since the map is theirs to extend.
+
+- b17aa82: What runs a hook is a registry.
+
+  `hooks.on` could do one thing: invoke a registered tool. That is the right
+  default and the wrong ceiling — a hook that calls an HTTP endpoint, runs a
+  program, or speaks somebody's wire protocol had nowhere to live except a fork of
+  the runner.
+
+  `registerEventHookHandler(kind, handler)` opens it. A hook's `type` selects the
+  handler and `options` carries whatever that handler needs, opaque to core — the
+  same open-selector-plus-options-bag shape `tasks.backend` and `sandbox.backend`
+  use, so no built-in is privileged over a plugin. Core registers `tool` through
+  the same call rather than special-casing it, so the built-in cannot quietly
+  depend on being first.
+
+  A handler returns `output` for `denyIf` to match against, or `deny` directly
+  when its dialect has its own refusal vocabulary — an exit code, a decision
+  field — rather than encoding a refusal back into text for a regex to find.
+
+  **A handler that spawns a process is deliberately not here.** It hands config
+  the ability to run arbitrary code with the agent's privileges, and that is a
+  decision someone should make by installing a plugin, not one inherited from the
+  module every deployment loads. This is the seam that makes such a plugin
+  possible without core knowing it exists.
+
+  Also sharpens a distinction the runner was making implicitly. A target that is
+  _absent_ — an unregistered tool, a `type` nobody claimed — is logged and skipped,
+  because a disabled plugin should not take an unrelated operation down. A hook
+  that _ran and threw_ still refuses on a refusable event: a check with an unknown
+  verdict has not passed. A hook that was never wired never had a verdict to lose.
+
+  Existing `hooks.on` entries are unchanged: no `type` means `tool`, which is what
+  they already did.
+
+- bf2faf1: Generated config and tool catalogs, verified in CI.
+
+  Two failure modes recur here and neither is caught by tests: a config key that
+  parses, documents, and is never read (#335 is two of them), and hand-maintained
+  inventories that drift from the code. Both are mechanically checkable.
+
+  `pnpm run gen:catalogs` writes `docs/config-catalog.md` from `DEFAULT_CONFIG`
+  and `docs/tool-catalog.md` from the tool-factory registry. `pnpm run
+verify:catalogs` runs both with `--check` and fails when a committed catalog is
+  stale, so a config field or tool added without regenerating is caught in CI
+  rather than months later. Both import the compiled modules rather than
+  re-parsing TypeScript, so the catalogs describe what actually ships; the CI step
+  runs after the build for that reason.
+
+  The config catalog carries two read-site signals per field — the leaf key, and
+  the stricter dotted path — and flags only fields where both are silent, because
+  a list that is mostly false positives is a list nobody reads twice. Optional
+  chaining had to be tolerated in the strict matcher: `config.tools.memory?.enabled`
+  is the dominant access pattern, and a literal dotted match reported nearly
+  everything as unread.
+
+  The tool catalog reads each factory's **real** config gate out of the factory
+  body rather than assuming `tools.<id>`. That distinction matters: `schedule` is
+  gated by `config.schedules.enabled`, and a catalog that guessed would report it
+  as missing a default it never wanted. Six factories currently have a gate with
+  no entry in `DEFAULT_CONFIG` — they exist but are invisible in a fresh
+  `config.yaml`, which is right for an optional integration and wrong for anything
+  else. The list is there to be reviewed, not assumed broken.
+
+- 2c98cab: Stop the history window reopening mid-turn and handing back messages the model
+  was told were dropped.
+
+  The per-round history budget is `maxHistoryTokens` minus the system prompt, the
+  tail, and the tool schemas. It is recomputed every round because the tool set
+  can change mid-turn, which is correct as a ceiling and was wrong as a floor:
+  withdrawing a tool stops its schema being charged, the budget jumps by thousands
+  of tokens, and the next trim keeps messages the previous one evicted.
+
+  Measured on the scenario benchmark. With a 2,500-token budget against ~4,800
+  tokens of tool schemas, the history budget was zero, so nineteen rounds showed
+  the model `[System: 68 earlier messages … are no longer shown]` and it spent its
+  whole round budget searching memory tools for a fact it had been told was gone.
+  On the last round the repeated-call check withdrew the final tool, the schemas
+  left the budget, and all 73 messages came back — no marker, no explanation. The
+  model read the fact and reported it.
+
+  `trimHistoryWithStart()` now returns where the surviving history begins and the
+  loop holds that index as a floor for the rest of the turn. Both trim paths and
+  the smaller-rung refit honour it. The floor never empties the history, and
+  callers that pass none — every caller outside the loop — behave exactly as
+  before. Across turns the window still reopens; only within a turn does "no
+  longer shown" have to keep meaning that.
+
+- b8e39ef: Config-declared hooks reach the whole bus, not two fixed points.
+
+  `hooks.beforeRun` and `hooks.afterRun` see the start and end of a turn.
+  Everything else — a tool about to run, a room turn ending, a schedule firing —
+  took writing a plugin, which is a different job with a different audience. A
+  deployment that wanted "check this before my coder runs `exec`" had to ship
+  TypeScript.
+
+  `hooks.on` binds the same kind of hook to any runtime event:
+
+  ```yaml
+  agents:
+    coder:
+      hooks:
+        on:
+          agent.pre_tool_use:
+            - when: { tool: exec }
+              tool: policy_check
+              denyIf: "BLOCK"
+  ```
+
+  The event names are **TAI's own** — `RuntimeEventMap` and
+  `RuntimeWaterfallMap`, the same catalog plugins subscribe to. That is the whole
+  reason to build it this way rather than adopting someone else's schema: a typo
+  becomes a `validateConfig` warning naming the near miss, instead of a hook that
+  parses, validates and never fires. A compile-time assertion keeps the runtime
+  list and the type map from drifting, and caught five missing events the moment
+  it was added.
+
+  Three decisions worth knowing. `denyIf` refuses on events that _can_ be refused
+  and is a warning on ones that cannot, so it never looks like a control it is
+  not. A policy hook that errors refuses by default — a check that could not run
+  has not passed, and the refusal names the hook and the error rather than being a
+  mystery. And `when` matches exactly unless wrapped in slashes, because these
+  gate tool execution and an unanchored pattern quietly matching a neighbouring
+  tool name is the wrong kind of surprise.
+
+  A hook is still a call to a registered tool with the runtime's context. It
+  cannot spawn a process: that hands config arbitrary code execution with the
+  agent's privileges, which is a deliberate decision rather than a side effect of
+  adding a handler type.
+
+  Delivered by `builtin:config-hooks`, enabled by default and free when unused —
+  it subscribes only to events some agent actually names. Existing `beforeRun` /
+  `afterRun` blocks are untouched, and cron job hooks keep the turn-only shape
+  since a scheduled run has no business opening a subscription.
+
+- 49e6ce4: Fix two ways a config-declared hook was not what it looked like.
+
+  **Most events bound a hook that never fired.** Dispatch scoped by
+  `payload.agent`, and only 10 of the 34 bindable event names carry that field.
+  The other 24 passed `validateConfig`, logged nothing, and did nothing. Four of
+  them — `agent.completed`, `agent.dispatched`, `agent.stalled`,
+  `task.needs_human` — name the agent right there in the payload under
+  `agentName`, and the scoping did not look. The remaining twenty name no agent at
+  all, because a task transition or a proposal opening happens to a deployment
+  rather than to an agent, and there was nowhere to declare a hook that was not an
+  agent's.
+
+  Three parts, because a partial fix here is a worse lie than the bug:
+
+  - Both spellings are read, and normalised before matching, so `when: { agent: … }`
+    means one thing across the catalog instead of depending on which word a given
+    event happens to use.
+  - A top-level `hooks.on` declares the deployment's own hooks, which fire on every
+    occurrence. Deliberately only `on` — `beforeRun`/`afterRun` are points in _an
+    agent's_ turn and mean nothing without one. Deployment hooks run first, so an
+    agent's hook cannot preempt a rule the operator set for everyone.
+  - `validateConfig` now warns when a hook is declared under an agent on an event
+    that names none, and points at the top level as the fix. The classification is
+    a compile-time guard against `RuntimeEventMap`, the same shape that already
+    pins the broadcast list, so a new event arrives classified or fails the build.
+
+  The irony is on the record: `hooks.on` keys off TAI's own event catalog
+  specifically so that a mistake is a warning rather than a hook that silently
+  never fires. It caught the typo and shipped a fresh instance of the same disease
+  underneath it.
+
+  **A hook was more privileged than the agent it guarded.** A tool invoked from a
+  hook got a context built from scratch — no `workingDirectoryBoundary`, no
+  `execRules`, and `workingDirectory` set to the server process's cwd rather than
+  where the agent works. So a hook calling `exec` ran outside the deployment's
+  command allowlist, and one calling `write` could leave a worktree boundary that
+  confined the agent whose calls it was there to police. That is the wrong way
+  round: a guard that outranks what it guards can be used to escape the
+  confinement it exists to enforce.
+
+  The cause was that "the context an agent's tools run with" was assembled in two
+  places and they disagreed. There is now one builder on the runtime, used by both
+  the loop and the hook path, so a field added to it cannot reach one caller and
+  miss the other. This is the second time that exact split has produced a
+  security-relevant no-op — the first is recorded in `config-schema.ts`, where
+  `fileBoundary` never reached `toolContextExtras` and three agents ran with a
+  declared filesystem confinement that did nothing.
+
+- 02f9be2: The stall detector catches cycles, not just immediate repeats.
+
+  `runAgentLoop` compared each round's tool calls to the round before it, so it
+  saw one shape of loop — the same call three times running — and missed
+  `A → B → A → B`, which reset the counter every round and ran to `maxToolRounds`
+  instead.
+
+  That is the more common shape. One benchmark scenario produced both in a single
+  batch: one run looped on a single call with an invented id and was caught,
+  another alternated two tools six times and was not.
+
+  `detectCycle` now examines the tail of the round history for a repeating block
+  of period 1-3, and `LoopStop { kind: "repeated-calls", period }` says which it
+  found. A period-1 cycle still needs three repetitions; longer cycles need two,
+  because a period-3 cycle repeated three times is nine rounds and most
+  deployments cap below that.
+
+  Round signatures still combine the calls with their results, so polling that
+  repeats its calls while its answers move is not a stall.
+
+  A turn stopped for cycling is now asked once more with the tools withheld, the
+  way a turn stopped by the round limit has been since #470. Stopping a cycle
+  early is worth doing, but it must not cost the turn its answer: a looping agent
+  has usually already read what it needed and is circling over how to act on it.
+
+- 662b23a: The agent loop can be reached from outside it.
+
+  `runAgentLoop` had no event bus. It neither took one nor read one, and that
+  absence is why the loop keeps absorbing features that belong beside it:
+  `prompt.ts`, `context.ts`, `memory-inject.ts`, `chat-live-state.ts`,
+  `watcher.ts` and `load-skill.ts` each append their own block _from inside_,
+  because there was no way to subscribe to "a request is being assembled" and hand
+  one back.
+
+  `AgentLoopOptions.events` now carries an `EventBus`, populated by
+  `runtime.buildLoopOptions()` from `runtime.events` — so `delegate`, the schedule
+  runner, autopilot and the exploratory worker all get it without a line changing
+  at any of their call sites.
+
+  Optional, deliberately. The benchmark harness and most tests build their loop
+  options by hand, and a loop built without a runtime should dispatch to nobody
+  rather than refuse to run.
+
+  Nothing dispatches on it yet. That is the point of landing it alone: the seam
+  changes no behaviour and can be reviewed as a seam, while the first consumer —
+  a waterfall over prompt-slot assembly, which is what makes the dispatch mode
+  added earlier reach a real request — changes what a model reads and should be
+  reviewed on its own evidence.
+
+- 38b808b: Fix four places where media-carrying content was silently coerced to a string.
+
+  The worst was live and user-visible. The agent loop's stall detector builds a
+  per-round signature from `results.map((r) => r.output).join("|")`. Since media
+  support widened `ToolResult.output` to `string | ToolOutput`, `join` stringified
+  the object arm to `[object Object]` — so **every** media-carrying tool result
+  compared equal to every other. A browser agent screenshotting two different
+  pages read as making no progress, and the loop took its screenshot tool away
+  mid-turn. The projection carries the content hash precisely so this works:
+  identical bytes still compare equal, different bytes no longer do.
+
+  Three quieter ones, all the same shape:
+
+  - A rewind preview read `messages.content` straight from the column, so anyone
+    who had attached an image saw `{"__tai_content":true,…}` quoted back at them
+    instead of an excerpt of what they said.
+  - Cron's `last_response` template variable read the same column the same way,
+    pasting the encoded JSON into the next prompt — tokens spent teaching the
+    model our storage format.
+  - A failing `tool_call` workflow step raised
+    `tool_call "x" failed: [object Object]` when the tool returned media instead
+    of an error string.
+
+  Worth naming the pattern rather than just the four sites. The original sweep
+  looked for `${...}` interpolation, because that is the coercion everyone
+  pictures. But `Array.prototype.join`, `String()`, and reading a TEXT column
+  without decoding it are the same hazard in different clothes, and none of them
+  is a compile error — TypeScript is happy to stringify an object anywhere a
+  string is merely conventional. When a widened type flows through a codebase,
+  grep for the operations that coerce, not for the syntax that usually does.
+
+- 2c98cab: Let a deployment choose what a model is shown when a picture arrives.
+
+  An image reaching an agent had two possible fates: hydrated to bytes and sent as
+  an image part, or flattened to its text placeholder because the model declared
+  it cannot take pictures. Both chosen by capability, never by preference — and
+  there are real reasons to prefer something else. Image tokens are expensive, a
+  screenshot of a terminal is mostly text, a small local model may read OCR output
+  better than the picture, and sometimes a path is all an agent needs because its
+  next move is a shell command.
+
+  A rendition answers one question — given a reference, what does the model
+  receive — and answers it in `ContentPart`s, which are already a union of text
+  and media. That union is why one interface covers behaviours that look
+  unrelated: OCR returns a text part, a resize returns a media part, and "a
+  thumbnail plus a handle the agent can spend for the full image" returns both.
+
+  Core ships the seam and no strategy. `registerMediaRenditionFactory` and
+  `ctx.mediaRenditions` are the door; `media.renditions` names recipes,
+  `media.rendition` sets the deployment default, and `agents.<name>.mediaRendition`
+  overrides it. Results are cached in `media_renditions` by (blob, recipe) — both
+  halves content-derived, so an entry never goes stale — because the history is
+  re-sent every round and an OCR pass is seconds. `ToolContext.mediaStore` is new
+  so a plugin can register the tool that hands a picture back.
+
+  Renditions run once per round, before hydration and before trimming. Before
+  hydration because a rendition can mint bytes that did not exist when the round
+  began; before trimming because a rendition changes size, and trimming the
+  original would evict real turns to make room for bytes about to be replaced.
+  They shape the request and never the record: the session keeps the original, so
+  turning a rendition off gives the pictures back.
+
+  Two fixes fell out. Retention swept on `last_seen_at` and only a `put` refreshed
+  it, so once a rendition existed the original stopped being touched and was the
+  first blob deleted — breaking the one case that depends on the original
+  outliving its cheap copy, a week later, on the request it exists to serve;
+  serving a rendition now touches its parent. And `registerMediaStoreFactory`
+  returned `void`, dropping the disposer the registry already handed it, which
+  made a media-store plugin the one kind that could not be unregistered.
+
+  Configure nothing and nothing changes.
+
+- afdfc82: `recall` and `facts` say what they are not for.
+
+  Both described what they hold and never what they don't, so a model reached for
+  them to answer a question whose answer was one message up. Measured on a 27B
+  local model, five runs per scenario:
+
+  | scenario                                | before | after | memory calls |
+  | --------------------------------------- | ------ | ----- | ------------ |
+  | the answer is in the previous message   | 1/5    | 5/5   | 7 → 0        |
+  | nothing in the conversation mentions it | 0/5    | 3/5   | 10 → 3       |
+  | the answer really is in memory          | 5/5    | 5/5   | 10 → 16      |
+
+  The third row is the one that decided it. Narrowing a tool description risks the
+  model abandoning the tool altogether — "an instruction that offers a way out gets
+  taken" — so legitimate memory use had to be measured too. It went up, not down:
+  the descriptions discriminate rather than suppress.
+
+  `tool-selection` holds at 27/27 with every scenario unchanged.
+
+  `memory` and `core_memory` are deliberately untouched, so a model that merely
+  switched tools would show as a switch rather than a win.
+
+- 0594a2b: Inline images on the OpenAI-compatible provider, so tool-returned media reaches
+  a model that can see.
+
+  The provider declared `toolResultMedia: { supported: true, mode: "follow-up" }`,
+  and `adaptForCapabilities` honoured it by moving a tool result's image onto a
+  following user turn — which `toOpenAIMessages` then flattened to a text
+  placeholder along with everything else. Every layer reported success and no
+  image ever reached a model on the default provider, the one every local gateway
+  speaks. A request carrying a 960×720 screenshot billed 244 prompt tokens.
+
+  `toOpenAIMessages` now takes the hydrated `ChatParams.media` map and emits
+  `image_url` parts on user and assistant turns. A `tool` message stays a flat
+  string, which is not an oversight: vLLM rejects an image part there
+  (vllm-project/vllm#43203) even for a vision model that accepts the identical
+  part on a user turn. A ref whose bytes are missing still degrades to its
+  placeholder, and a text-only request is unchanged.
+
+- 325e5f2: The out-of-rounds answer stops thinking and starts answering.
+
+  A turn that exhausts its tool rounds gets one more request with the tools
+  withheld, so prose is the only thing the model can produce. That call inherited
+  the turn's thinking setting — and on a reasoning model it spent the whole
+  `maxTokens` budget on a reasoning trace, returned empty `content`, and fell back
+  to `[Agent stopped: max tool rounds reached]`: the exact marker the path exists
+  to replace.
+
+  Measured on the benchmark's `notices-a-truncated-tool-result` against a 27B
+  local model at the reference deployment's `maxTokens: 8192`, five runs each:
+
+  |        | pass | output tokens | wall clock |
+  | ------ | ---- | ------------- | ---------- |
+  | before | 2/5  | 874 – 9,329   | 697s       |
+  | after  | 4/5  | 669 – 1,525   | 236s       |
+
+  Every failing run before the change landed just above the 8,192-token cap. None
+  of them said anything.
+
+  Nothing is left to reason about at that point — everything the answer reports is
+  already in the messages above it — so the call now sets `thinking: "off"`. The
+  remaining failure is the model genuinely misreading a truncation marker, which
+  is the behaviour the scenario is for.
+
+  An empty answer now also logs why (finish reason, reasoning length, output
+  tokens). Previously a turn ending on the marker looked identical whether the
+  model was never asked, refused, or burned its budget before writing a word.
+
+- 38b808b: Agents can send media out to Discord, Slack, and the terminal, not only receive it.
+
+  Inbound media has worked since the attachment support landed: an agent could be
+  shown a screenshot on Discord and describe it. Sending one _back_ was
+  unrepresentable, because `Channel.send` took a string. So an agent asked to
+  screenshot a page could see the result and talk about it, while the person who
+  asked to look at it got only prose.
+
+  `Channel.send` and `OutboundNotifier.send` now take `string | MessageContent`.
+  Both had to widen: `OutboundNotifier` is the interface every production caller
+  actually resolves through, and widening only `Channel` would have shipped a
+  parameter nothing could ever pass — the failure mode this workstream has already
+  hit twice.
+
+  Surfaces declare what they can show through a required `SurfaceCapabilities`,
+  modelled on `RoomCapabilities`. Required rather than optional on purpose: an
+  optional capability field is one nobody fills in and nobody reads, which is how
+  `AIProvider.supportsTools` spent its entire life. Surfaces with nothing to
+  declare spread `TEXT_ONLY_SURFACE` and are then honestly described rather than
+  merely undescribed. The message-length limits move in too — they were a
+  `MAX_MESSAGE_LENGTH` constant copy-pasted into two `splitMessage`
+  implementations, which is one fact recorded twice with nothing keeping the
+  copies honest.
+
+  One shared `renderForSurface()` applies the degradation ladder — attachment,
+  then link, then text placeholder — so three transports cannot each decide
+  differently what to do with a file too large to upload. It enforces the rule the
+  media design states outright: a part that does not reach the reader leaves a
+  warning or a placeholder, never nothing. Writing the test for that caught a real
+  defect in this change, where a deployment with no media store configured
+  produced neither an upload nor a placeholder: the ladder had been told the
+  surface could attach, so it skipped the placeholder, and then nothing uploaded
+  the file. Both transports now report what they cannot do _before_ rendering
+  rather than after.
+
+  The media a channel sends comes from the message record, read back with
+  `collectTurnMedia()` against a watermark taken before the turn. That is the same
+  source the web UI already renders from, so a channel and the UI cannot disagree
+  about what a turn produced, and it avoids widening `runAgentLoop`'s return type
+  across eighteen call sites — most of which only ever want text — to serve three
+  surfaces. Only `tool` and `assistant` rows are read, so an inbound photo is
+  never echoed back at the person who just sent it, and results are deduped by
+  content hash: an agent that screenshots an unchanged screen three times has one
+  blob and sends one file.
+
+  Discord uploads through `files:` on the last text chunk, so attachments never
+  float above the prose explaining them. Slack posts text then uploads through
+  `files.uploadV2`, and an upload failure is logged rather than thrown — the text
+  has already been posted, and throwing would report the whole reply as failed
+  when most of it arrived. The CLI prints a placeholder and a `file://` path to
+  stderr, keeping stdout exactly the answer for anyone redirecting it. Terminal
+  inline images are deliberately not attempted: emitting an iTerm2 escape sequence
+  to a terminal that does not understand it dumps kilobytes of base64 into the
+  user's scrollback.
+
+  `MediaStore` gains an optional `localPathFor()` for surfaces that can open a
+  path. Optional because a store backed by S3 genuinely has none, and returning a
+  fabricated path would be worse than returning nothing.
+
+- bf2faf1: Every registration hands back its inverse, and the plugin loader keeps it.
+
+  Plugin teardown was one sledgehammer: `reload()` calls `events.clear()` and
+  re-runs every plugin. That is complete for bus subscriptions and nothing at all
+  for the rest of what a plugin owns, because nothing tracked it. The same defect
+  shipped as #58 (duplicate channel listeners after a config reload) and #65
+  (trigger pollers that hot reload never reconciled), and `HttpRouteRegistry`
+  still documents it in its own comment: the registry "survives `reload()` because
+  Hono can't unmount routes once added."
+
+  `Registry<T>.register()` now returns a `Disposer`, and so do all ten
+  `register*Factory` functions, `StepExecutorRegistry.registerFactory`, and every
+  `PluginContext` registry view. The disposer removes **only the entry that call
+  made**: if something re-registered the same id afterwards, that entry belongs to
+  whoever registered it, and disposing an older one must not silently delete it.
+  Calling a disposer twice is a no-op.
+
+  `loadPlugins` collects the disposers per entry and composes them onto
+  `LoadedPlugin.stop`, so unloading a plugin is the inverse of loading it. The
+  plugin's own returned disposer runs first — it may still need what it registered
+  while shutting down — and the registrations then come out last-in-first-out. A
+  throwing disposer is logged and the rest still run, because teardown that gives
+  up halfway leaves a half-removed plugin nothing will retry.
+
+  Source-compatible: a caller that ignores the return value behaves exactly as
+  before. Side-effect plugins are unchanged — they register at module scope with
+  no context, so nothing observes what they added and there is nothing to hand
+  back.
+
+- 3d27ba5: The loop says what it assembled.
+
+  Nothing outside `runAgentLoop` could see what a model was actually shown. The
+  system prompt is composed from a dozen contributors, the history is trimmed to a
+  budget, tool schemas are a separate request field, and by the time all of that
+  is one `ChatParams` object it exists only for the duration of a provider call.
+  "Why did it say that" was answerable by reading code and guessing.
+
+  `agent.request_assembled` is emitted once per request that reaches a provider,
+  carrying the request itself plus what the loop knows and the request does not:
+  which round and phase, which fallback rung sent it and whether that rung
+  answered, the history length the request was trimmed from, and what each context
+  slot contributed — including whether its own budget cut it short.
+
+  **A faithful copy, not a projection.** Rebuilding the request later from session
+  state would be cheaper and would be wrong: `paramsFor` re-trims the history for
+  each fallback rung, so which messages went out depends on which rung answered,
+  and a reconstruction could not know that. It would confidently produce the head
+  rung's request instead, and authoritative-and-wrong is worse than absent. The
+  test asserts object identity rather than deep equality, so a shaping step
+  inserted between the record and the wire fails the build.
+
+  Emitted after the request was sent, in a `finally` around the provider call, so
+  an observer can neither see a request that did not go out nor change one that
+  did. That is why it is a broadcast rather than a waterfall: a subscriber able to
+  rewrite this would make the record a lie.
+
+  Core emits and stores nothing — retention, redaction and format are opinions and
+  belong to a subscriber. `renderContextSlots` also now returns a per-slot
+  breakdown (`id`, `refresh`, `chars`, `truncated`) alongside the two blocks it
+  already placed, which is the cheap half of asking where a request's size comes
+  from.
+
+- 1d83122: The room roster says what each participant does, and a room turn must not invent
+  results.
+
+  **A name cannot be routed to.** A lead told to get a manifest filed worked out
+  correctly that the hatch was shut, and then asked the _owner_ to unlock it —
+  while sharing a room with an agent described as "Power and access. Runs
+  `breaker` and `unlock` on the vault". It could not have known: the prompt read
+  `Known participants: rus, vay, quinton.` and the word "unlock" appeared nowhere
+  in it. TAI already has these descriptions — they are what `delegate` routes on —
+  and never showed them to the agents who share a room with each other. Rendered
+  as `label — description`, first line only, truncated at 120 characters so a
+  verbose agent cannot push the transcript out of the window.
+
+  **And room turns are now told to state only what a tool actually returned.** In
+  a room a fabrication does not stay with the agent that made it: it becomes the
+  next agent's input and then the report to the owner. Three agents asked to read
+  a file and file its id produced a complete, confident transcript — "the ID is
+  VAULT-001" / "Filed." / "Done." — having made zero tool calls, with the file
+  untouched. Phrased as a prohibition rather than "say so if you cannot", which is
+  the shape a small model over-applies into declining work it could have done.
+
+  Together with the loop change in this release, a three-agent orchestration
+  benchmark row went from 0/6 to 5/6, and mean state transitions per run from 0.0
+  to 4.8.
+
+- 415ba15: Room turns now report why they ended, on a new `room.turn_ended` event.
+
+  Every other place that runs an agent loop asks it why it stopped. The task
+  watcher does, and routes a stall to `StallGuard`. The exploratory worker does.
+  The room watcher did not, and a stalled room turn was therefore a fact that
+  existed nowhere: the loop gets one tools-withheld call so it can explain itself,
+  so it returns ordinary prose, and in a room that prose is posted like any other
+  message. Measured on a 237-run benchmark cohort, all 12 stalls came back as
+  prose and not one carried an `[Agent stopped: …]` marker — so anything matching
+  that string was matching nothing.
+
+  `room.turn_ended` fires for every turn, including one that ended by throwing,
+  and carries the structured `LoopStop`, the rooms it covered, why the agent woke,
+  whether anything was posted, and a short `stallReason` when it got stuck. A
+  stall also logs a warning naming the agent and the room. What to do about it —
+  retry, mark the message, say so in the room — stays a plugin's opinion, the way
+  `agent.stalled` leaves it to `StallGuard`.
+
+- 0594a2b: Rooms carry attachments, in and out.
+
+  A room was text and only text: `RoomMessage.body` was a plain string, and the
+  Discord rooms backend built every inbound message from `msg.content` without
+  ever looking at `msg.attachments`. Dropping a screenshot into a room channel
+  therefore reached nobody — and said so to nobody, because the text still
+  arrived. An image posted with no caption produced an empty message, so the
+  agent saw nothing at all.
+
+  The DM and @mention paths had none of this problem, which made it invisible: the
+  same picture in a DM worked. The split was that registering a room makes the
+  mention path stand down for that channel, and the rooms path that replaces it
+  was written before media existed.
+
+  `RoomMessage.media` and `OutboundRoomMessage.media` now carry `MediaRef`s, and
+  `RoomCapabilities.media` says whether a transport has the concept — a required
+  field, so every backend has to answer rather than inherit a default. Both
+  built-in backends support it: the local one stores refs in a new nullable column
+  (`ALTER TABLE` is metadata-only, so no existing row is rewritten), and Discord
+  captures attachments into the media store on the way in and uploads them on the
+  way out.
+
+  Capture happens in `fetchSince` and nowhere else, because every path that builds
+  a transcript an agent will read goes through it — the push listener only decides
+  whether to wake someone — and messages with no attachment pay nothing. Bytes are
+  fetched at read time rather than referenced: a Discord attachment URL expires
+  well before an agent wakes on a backlog and follows it.
+
+  Outbound, files ride the last non-empty chunk of a split message, so a long post
+  does not show its picture above the text that introduces it, and an
+  attachment-only post still sends. On the way in, each attachment is also named
+  in the transcript against its own line — that is what says which message an
+  image belongs to, and it is what survives once the history budget evicts the
+  picture itself.
+
+  A wake carries at most `MAX_WAKE_MEDIA` (4) images, newest first, skipping the
+  agent's own posts and deduplicating by content address. The loop prices a media
+  part at 1,500 tokens, so an uncapped room that took twenty screenshots between
+  wakes would spend its whole history budget on pictures and evict the
+  conversation explaining them.
+
+- a098702: A runtime plugin's tools now reach the agent at startup, not on the next reload.
+
+  `PluginContext` offers `ctx.tools.register` to every plugin, but `createTools()`
+  walks the tool-factory registry exactly once, in the `AgentRuntime` constructor.
+  Registry-pass plugins load before that walk. **Runtime-pass plugins load after
+  it by definition** — they load late precisely because they need `ctx.runtime` —
+  so a tool they registered went into the factory registry with nothing left to
+  read it. The plugin loaded, `register` returned a disposer, nothing warned, and
+  the tool first appeared if and when something unrelated triggered a reload.
+
+  Same class as #561 and #609: a registration that validates and does nothing.
+
+  `AgentRuntime.applyPendingToolFactories()` re-runs the factories and registers
+  what is not already present, returning the names it added; the CLI calls it
+  after loading runtime plugins and logs what appeared.
+
+  **Additive rather than a rebuild**, for a specific reason: the tool registry
+  also holds tools no factory produced — `McpManager` registers discovered MCP
+  tools straight into it — and rebuilding would silently drop every one. It also
+  does not remove a tool whose config gate has since closed; this runs at startup
+  before any turn, where the only difference between the two walks is the
+  factories that were not registered yet. Reacting to config changes stays
+  `reload()`'s job.
+
+  No behaviour change for any current install: no shipped plugin registers a tool
+  from the runtime pass today. The path had never had a user, which is why the
+  gap survived — it was found writing the first one (#616).
+
+- d4c4baa: Benchmark scenarios carry a difficulty, and the report is scored by it.
+
+  Every scenario declares `difficulty: 1-5` — reflex, routine, composed,
+  conflicting, frontier — graded on what the turn demands of the model, never on
+  what it currently scores. `--difficulty 4`, `4+`, `2-3` or `3,5` runs a slice,
+  and composes with `--filter`.
+
+  The overall score averages a regression tripwire against a scenario written to
+  find the ceiling, so it moves for the wrong reasons and cannot say where the
+  wall is. The rollup by level can, and running one level is what makes the
+  find-the-ceiling loop affordable: a full cohort is ~23 minutes of GPU, most of
+  it re-confirming rows that have passed every time for a month.
+
+  The level is an annotation, excluded from the scenario digest and fingerprints
+  like `intent` and `knownGap`, so re-grading costs no re-baseline.
+
+  Also adds `posts_by: {agent, matches}`. On a room scenario `reply` is every post
+  joined, so `reply_matches` passes when _either_ agent produced the text — which
+  makes the multi-agent handoff question ("did the second agent use what the first
+  one found") true by construction the moment the first agent speaks. Without a
+  per-agent read, that class of scenario cannot be graded at all.
+
+- 1537522: Benchmark: scenarios are now checked for whether their assertions can fail, and
+  a stalled turn no longer counts as a reply.
+
+  `replies: true` was `reply.trim().length > 0`, which accepted
+  `[Agent stopped: …]` — and accepted the more common case too, where a turn that
+  ran out of rounds returns ordinary prose with no marker at all. The eval harness
+  now records the structured `LoopStop` and `replies` consults it, so a stall
+  fails on either setting: `replies: false` asserts the agent _chose_ not to
+  speak, which a turn that went in circles did not.
+
+  New `scenario-discrimination.test.ts` replays every scenario's assertions
+  against outcomes that are known bad — said nothing, returned a stop marker — and
+  fails any scenario that accepts one. It found 16 of 79. Fifteen were the
+  `replies` bug; the sixteenth was prohibition-only and now declares its expected
+  silence.
+
+- 0b90020: Benchmark: a scenario can say what the agent already knows.
+
+  The suite could seed a conversation (`history:`), tool output (`toolResults:`)
+  and simulation state (`world:`), but not memory. Every run builds its home with
+  `mkdtempSync` and nothing ever wrote a note, so the notes database was empty at
+  turn one — which means `injectMemory`, had anyone set it, would have injected an
+  empty corpus, and any experiment comparing recall against injection would have
+  scored the cost of an empty query rather than the value of a memory. The result
+  would have looked like a clean null and meant nothing.
+
+  `memory:` seeds notes before the turn. A bare string is a plain note; the object
+  form takes `tags`, `importance`, `pinned` and `agent`. Notes are left unowned
+  unless a seed names an agent, since an unowned note is visible to every agent —
+  which is what a scenario means by "the agent knows this", and what a room
+  scenario with more than one agent needs.
+
+  Seed with a witness and the assertion stops being a proxy: the fact exists only
+  in memory, so a reply containing it proves retrieval rather than confabulation.
+
+  `--inject-memory` selects the arm. `injectMemory` defaults to `false` in core
+  and no published run has ever set it, so being handed your memory is an arm
+  nobody has run rather than the baseline. The same scenarios run both ways, and
+  the delta between the two runs is the result; the report records which arm
+  produced it.
+
+- 6557b85: TAI can run itself as a service, and hook the moments it starts and stops.
+
+  `tai` only ran in the foreground, so anything that had to survive a closed
+  terminal needed a supervisor written per deployment. `tai start` / `stop` /
+  `restart` / `status` now do that, with pid and log files under the home
+  directory — so `TAI_HOME` (or `-c`) selects the instance and no registry of
+  instances exists anywhere.
+
+  **Four lifecycle events, declared in the existing `hooks.on`:**
+
+  ```yaml
+  hooks:
+    allowScripts: true
+    on:
+      tai:init:start: # config read, nothing built yet
+        - type: script
+          options: { command: ~/bin/pre-start.sh }
+      tai:shutdown:end: # teardown done, before exit
+        - type: script
+          options: { command: ~/bin/post-stop.sh }
+  ```
+
+  They fire **inside** the TAI process. That is the thing an earlier design got
+  wrong: "before start" is before the _runtime_, not before TAI, and treating the
+  two as the same led to a proposal for a separate mechanism in the supervising
+  CLI. It would have cost something concrete — a shutdown hook in its own
+  short-lived process cannot call a tool, where `tai:shutdown:start` fires with
+  the runtime still up and can.
+
+  **Capability tiers, because what a hook can do depends on when it runs.**
+  `tai:init:start` and `tai:shutdown:end` have no runtime, so no tool is
+  registered. A handler declares what it needs and an event declares what it
+  offers:
+
+  ```ts
+  registerEventHookHandler("tool", handler, { requires: "runtime" });
+  ```
+
+  Not a closed union of action types: handler kinds stay an open string so a
+  plugin can register its own, and core still never learns their names. Without
+  this a `tool` hook at `tai:init:start` would bind cleanly and never run —
+  `runEventHooks` treats an unregistered kind as _absent, not failed_ — which is
+  the exact silent-inert shape this codebase keeps paying for. It is now a
+  `validateConfig` warning and a refusal at dispatch.
+
+  **A `script` handler in core**, registered only when `hooks.allowScripts` is
+  true. It has to be core rather than a plugin because `tai:init:start` fires
+  before plugins load; it has to be gated because it hands config the ability to
+  run arbitrary programs, and "do not enable the plugin" cannot gate something
+  that must exist before plugins. It passes the payload as environment and never
+  opens stdin — writing to a child that exits without reading is #606.
+
+  Only `tai:init:start` can refuse, and a refusal aborts the start. The shutdown
+  events cannot: a hook able to veto a stop makes an instance unstoppable, which
+  is worse than whatever it was protecting.
+
+  Both shutdown events carry `reason` (`stop` or `restart`), reaching a script as
+  `TAI_REASON`. Without it `tai restart` releases whatever `tai:shutdown:end`
+  releases and immediately re-acquires it — measured cycling a 27B model server on
+  every restart, which is the most common operation there is.
+
+- bdacf8d: `summarizeOnTrim` defaults to true.
+
+  A trimmed turn used to leave a marker saying N messages were dropped. It now
+  leaves a summary of what they said. Set `summarizeOnTrim: false` per agent to
+  keep the old behaviour.
+
+  Measured on the scenario benchmark against a 27B local model, three pairs — the
+  same question through both paths, differing only in the flag:
+
+  | pair                      | marker | summarised | input tokens/run | rounds    |
+  | ------------------------- | ------ | ---------- | ---------------- | --------- |
+  | the fact under discussion | 2/3    | 3/3        | 23,483 → 7,469   | 3.3 → 2.0 |
+  | a peripheral fact         | 3/3    | 3/3        | 43,423 → 7,470   | 7.0 → 2.0 |
+  | the room path             | 3/3    | 3/3        | 11,835 → 3,342   | 4.0 → 2.0 |
+
+  Correctness never worse, cost three to six times lower on every axis. A twelve-run
+  measurement of the first pair gave 6/12 against 12/12, Fisher exact p=0.014.
+
+  The extra provider call reads like a price and is not one. The marker path is
+  cheaper by one request and far more expensive by the turn: an agent told only
+  that something is missing spends rounds hunting for it, and on the peripheral-fact
+  pair only answered at all because it exhausted its tool rounds and the
+  out-of-rounds path handed the history back. The summarising call is bounded to a
+  3,000-character transcript, so it cannot grow with the history it replaces.
+
+- 2e7a342: The loop says when a tool is about to run, and when one did.
+
+  `executeToolCall` ran an ordered chain of gates — skill allowlist, validation,
+  approval, derivability, execute — and nothing extensible attached to any of it.
+  The runtime bus declared 28 events and not one was at tool level. Three separate
+  pieces of work were blocked on that same absence: an approval stage any tool can
+  use, a hook dialect with `PreToolUse` to bridge, and a workflow trigger that
+  fires on a tool call.
+
+  `agent.pre_tool_use` is a **waterfall**, because refusing is the weaker of the
+  two useful answers. A subscriber can set `deny` — the text goes back to the
+  model in place of the tool's output — or replace `args`, which is the difference
+  between a guard that says no and one that says "not like that": narrow a path,
+  drop a flag, cap a limit. The tool name is deliberately not replaceable, since
+  swapping it would leave the model's own record of what it called wrong.
+
+  Two placement decisions, both asserted rather than assumed. It dispatches
+  **before the approval gate**, so a rewrite reaches the human who approves it
+  rather than a human approving one call while another runs. And **before
+  validation**, so whatever actually executes is what got validated — a subscriber
+  is not more trusted than the model. What must stay authoritative after a human
+  says yes stays where it already is, inside the tools: `exec`'s allowlist, the
+  path boundary, the sandbox.
+
+  `agent.post_tool_use` is a broadcast — the call has happened. Only calls that
+  ran reach it, which is what lets a subscriber count executions rather than
+  intentions, and `args` is what the tool was given, so a rewrite is visible there.
+
+  **Fixes a live bug as the first consumer.** `tool_called` has been a declared
+  workflow trigger, validated by the loader and advertised through the trigger
+  registry the UI reads as "Fires when a specific tool is invoked" — with nothing
+  dispatching it. A deployment could write the config, watch it validate, and get
+  no warning, no error and no run. It could not be fixed alone: every other
+  trigger kind has a poller, and this one needed to know when a tool ran.
+
+  `builtin:tool-called-trigger` now delivers it, enabled by default — the promise
+  was already made to deployments relying on it, and a fix they had to switch on
+  would leave them where they were.
+
+- 9190838: Say so when a workflow trigger kind has no runner.
+
+  A plugin can register a trigger kind, and until now every signal said that
+  worked. `TriggerKindRegistry` accepted it, `setExtraTriggerKinds` fed it to the
+  workflow loader, so the workflow file validated and the UI picker listed it.
+  Then `WorkflowTriggerCoordinator.reconcile` filtered it out against a hardcoded
+  set of the nine built-in pollers and moved on — no warning, no error, no run.
+  The only symptom was that the workflow never fired.
+
+  That is the same shape as #561, where `tool_called` was a declared kind nothing
+  dispatched, and it is the failure this codebase keeps rediscovering: something
+  that validates cleanly and silently does nothing.
+
+  The coordinator now reports it. A trigger kind that is neither dispatched here
+  nor run elsewhere (`cron`, `manual`, `webhook`, `tool_called`, `document_event`,
+  `config_event` each have their own subsystem) warns once, naming the workflow,
+  the kind, and the issue tracking the fix. Once per workflow per change, not once
+  per reconcile — this runs on every registry change, and a per-tick warning is
+  noise people learn to scroll past, which is the same outcome as silence.
+
+  **This does not make plugin triggers work.** Nothing dispatches one until #61
+  lands the executable trigger factory contract. What changes is that the gap is
+  audible instead of costing an afternoon to find. A workflow's runnable triggers
+  still register normally alongside an unrunnable one.
+
+  `docs/modularity-plan.md` scored triggers fully pluggable on all three columns
+  throughout. That row is corrected, with the reason: a registry consulted only by
+  the validator will score green while nothing runs. The general rule is now in
+  `docs/defensive-patterns.md`, next to its sibling "config that parses but is
+  never read".
+
+- 2c98cab: Add a `vllm_effort` thinking dialect, so a template that reads
+  `chat_template_kwargs.reasoning_effort` can be asked for something other than
+  its default.
+
+  The existing `vllm` dialect sends `enable_thinking` only — an on/off switch,
+  which is all older Qwen templates read. Newer ones also take an effort rung, and
+  their default is the _top_ one. Without a dialect that can name a rung, such a
+  model can only ever be run at its most expensive setting: measured on Qwen3.8,
+  that is roughly twice the output tokens of `medium`.
+
+  It is a new dialect rather than an addition to `vllm` because a template that
+  does not declare the kwarg either ignores it or raises, so sending effort to
+  every vLLM endpoint would break endpoints that work today. `effortTemplateMap`
+  also translates core's `high` to the template's `xhigh` — the templates that
+  read this kwarg accept `low`/`medium`/`xhigh` and reject anything else with a
+  400, so forwarding `high` unchanged would fail every request.
+
+  Select it with `providers.<id>.thinkingDialect: vllm_effort`. The eval CLI takes
+  it as `--thinking-dialect vllm_effort --thinking medium`.
+
+- 1d83122: Withdraw a looping tool instead of ending the turn.
+
+  The cycle detector ended the turn outright. That is right when the cycle is the
+  whole turn and wrong when it is one blind alley inside a turn with work still
+  available. Measured: a model asked for a fact that had left its history window
+  called an empty `core_memory` three times, tripped the detector, and the turn
+  ended — with rounds still on the budget and a tool it had never touched in the
+  list. Two of six runs happened to try that tool first and passed; four looped
+  first and lost the turn.
+
+  The looping tools are now withdrawn for the rest of the turn and the loop
+  continues. Every tool in the detected cycle goes, not just the one named in the
+  last round: on `A → B → A → B` the final round names B alone, and leaving A in
+  place costs two more rounds to reach the same place. With nothing else to offer
+  the turn still stops, which is the pre-existing behaviour.
+
+  Withdrawing rather than persuading, because persuading was tried three ways and
+  none of them moved the number: an empty result that said "reading again returns
+  this", a note at the moment of the repeat that the call was identical, and an
+  outright refusal of the third call with an explanation. The refusal was worst —
+  the model kept calling into it five to seven times. A tool that is not offered
+  is the one thing it cannot call.
+
+- 1537522: Benchmark: witness assertions, per-agent execution records, and `regrade`.
+
+  Most assertions were proxies — "the reply is non-empty" standing in for "the
+  agent answered". A proxy holds until the agent takes a path the author did not
+  picture, and then reports the wrong answer in whichever direction is
+  convenient: a stalled turn scored 3/3 for returning plausible prose, and a
+  correct agent scored 0/3 for looking at a bucket before deleting it.
+
+  A scenario can now mint unguessable values per run (`tokens:`, referenced as
+  `{{token:name}}`) and stub a tool to emit one only for the right input. If the
+  value reaches the reply, the work happened — it cannot be guessed, confabulated,
+  or produced by a turn that stalled.
+
+  Supporting pieces: `toolResults` accepts argument-conditional rules; every tool
+  execution is recorded with the agent that ran it, so `calls_by` can ask which
+  agent did the work and can tell a refused call from one that ran; and
+  `regrade <report.json>` re-scores a finished run against today's assertions with
+  no model calls, skipping — never failing — checks whose inputs the report did
+  not keep.
+
+- e21c40e: Benchmark: scenarios can carry a world — a state machine the agent's tool calls
+  drive — and be graded on whether they reached a goal state rather than on what
+  they said.
+
+  Every stub before this was a pure function of the call, so nothing could be
+  locked, nothing had to be unlocked first, and order of operations was not
+  expressible. A scenario could ask "did you make the right call" and never "did
+  you work out what the right calls were". `world:` adds state, `requires` guards
+  that refuse and say what they are waiting for, `sets` mutations that persist
+  across agents, and `by` so a transition belongs to one specialist. The win
+  condition is `world_state`, a claim about the machine and never about the
+  transcript: any route that reaches the state passes.
+
+  The first three scenarios found something a text assertion cannot see. A lead
+  directing two specialists produced a complete, confident room transcript —
+  "I read the manifest, the ID is VAULT-001" / "Filed" / "Done" — having made
+  zero tool calls, with the world untouched. One agent's fabrication became the
+  next agent's input and then the report to the owner. Every existing assertion in
+  the package would have scored it as success.
+
+  - @tailored-ai/browser-mediator@0.1.11
+
 ## 0.1.10
 
 ### Patch Changes
