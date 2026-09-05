@@ -22,6 +22,12 @@ import { parseScript } from "./script-file.js";
 import { concatWav, isWav, wavDurationMs } from "./wav.js";
 
 export interface SpeakToolConfig {
+  /**
+   * Silence inserted between turns of a multi-voice script, in milliseconds.
+   * A dialogue joined with no gap runs at the pace of an argument; a real
+   * conversation breathes between speakers.
+   */
+  gapMs?: number;
   enabled?: boolean;
   /** Registry id of the provider. Open string — see provider.ts. */
   provider?: string;
@@ -43,6 +49,13 @@ export interface SpeakToolConfig {
 
 /** A header block is a handful of lines, not a scene. Past this it is dialogue. */
 const MAX_MATTER_LINES = 10;
+
+/**
+ * A beat between speakers. Measured against a real episode that had none: no
+ * pause exceeded 0.8s across 12.5 minutes, which is exhausting to listen to.
+ * Long enough to hear a speaker change, short enough not to drag.
+ */
+const DEFAULT_GAP_MS = 350;
 
 const DEFAULT_MAX_CHARS = 4000;
 const DEFAULT_FORMAT: AudioFormat = "mp3";
@@ -318,7 +331,7 @@ export class SpeakTool implements Tool {
       }
       rendered.push(out.bytes);
     }
-    return { bytes: concatWav(rendered), mimeType: AUDIO_MIME.wav };
+    return { bytes: concatWav(rendered, this.cfg.gapMs ?? DEFAULT_GAP_MS), mimeType: AUDIO_MIME.wav };
   }
 }
 

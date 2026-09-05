@@ -147,8 +147,11 @@ describe("dialogue", () => {
 
     expect(mediaParts(r.output)).toHaveLength(1);
     expect(puts).toHaveLength(1);
-    // Three 480-byte turns, one header.
-    expect(puts[0].bytes.byteLength).toBe(44 + 480 * 3);
+    // Three 480-byte turns, one header, and two 350ms beats between them —
+    // the gap is part of the output now, because dialogue joined edge to edge
+    // is exhausting to listen to.
+    const gapBytes = Math.round((24000 * 350) / 1000) * 2;
+    expect(puts[0].bytes.byteLength).toBe(44 + 480 * 3 + gapBytes * 2);
     expect(textOf(r.output)).toContain("3 turns");
   });
 
@@ -325,7 +328,7 @@ describe("joining is exact", () => {
     );
     // The fake fills each turn with its call index, so a dropped or reordered
     // turn changes the bytes.
-    expect(puts[0].bytes.equals(concatWav([wavOf(480, 1), wavOf(480, 2)]))).toBe(true);
+    expect(puts[0].bytes.equals(concatWav([wavOf(480, 1), wavOf(480, 2)], 350))).toBe(true);
   });
 });
 
