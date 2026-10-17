@@ -1,9 +1,12 @@
 # Guardrails
 
-A guardrail is a mechanical check an agent's outgoing message has to pass
-before it is sent. A message that fails is **not delivered**; the reason is
+A guardrail is a mechanical check an agent's message has to pass before it is
+posted to a room. A message that fails is **not delivered**; the reason is
 handed back to the agent as a correction, and it gets one attempt to say the
 thing properly.
+
+Today that covers every way an agent posts to a room. A direct reply in a
+channel conversation, the web UI or the CLI is **not checked yet**.
 
 ## What this is for
 
@@ -60,8 +63,10 @@ shape `tasks.backend` and `sandbox.backend` use. Core does not know any
 guardrail's option names, so a plugin's guardrail validates exactly as well as
 the built-in one.
 
-`surfaces` narrows where a rule applies. Core uses `room` for a room post and
-`reply` for a direct channel reply; omit it and the rule applies to both.
+`surfaces` narrows where a rule applies. Core checks one surface today, `room`:
+every post that reaches a room. Omit it and the rule applies to every surface
+that is checked. It is an open string so that a later surface, or one a plugin
+adds, can be scoped the same way.
 
 ```yaml
       - use: text
@@ -115,7 +120,8 @@ a correction it can act on: what was wrong and what to do instead.
 
 ## Where they run
 
-Three points — every way a message reaches a room:
+Three points — every way a message reaches a room. Nothing outside a room is
+checked yet:
 
 1. **The correction ladder**, alongside the existing checks for malformed
    output. A guardrail failure becomes the turn's one correction round, so the

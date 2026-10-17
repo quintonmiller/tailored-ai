@@ -2,7 +2,7 @@
 "@tailored-ai/core": patch
 ---
 
-Guardrails: a mechanical check an agent's outgoing message has to pass.
+Guardrails: a mechanical check an agent's room post has to pass.
 
 Instructions are advice, and a busy prompt dilutes them — an agent told plainly
 to keep a certain kind of reply short will still write four paragraphs. A
@@ -21,6 +21,8 @@ rather than the message being silently swallowed and the turn lost.
   blanket length cap is nearly always wrong, but one scoped to a kind of
   message is not.
 - `registerGuardrail` for plugins; `check` may be async.
+- Checked on every way an agent posts to a room. A direct reply in a channel
+  conversation, the web UI or the CLI is not checked yet.
 - Fails open. Unlike hooks, nothing downstream depends on a guardrail having
   run, and an agent silenced by a bug in a quality check is worse than the
   drift it was watching for.

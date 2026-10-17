@@ -40,8 +40,8 @@ export interface GuardrailContext {
   /** The agent that wrote it. */
   agent: string;
   /**
-   * What kind of send this is. Core uses `room` for a room post and `reply`
-   * for a direct channel reply; a plugin may introduce its own.
+   * What kind of send this is. Core checks only room posts today, as `room`;
+   * a direct channel reply is not checked. A plugin may introduce its own.
    */
   surface: string;
   /** Room ref or channel id, when there is one. */

@@ -117,7 +117,7 @@ A workable agent needs `description`, `tools`, and usually nothing else.
 | `skipGlobalContext` | `false` | Load only this agent's context dir. |
 | `fileBoundary` | — | Hard filesystem confinement for file/exec tools. |
 | `hooks` | — | `beforeRun` / `afterRun`, each `{tool, args?, skipIf?, onError?}` |
-| `guardrails` | — | `[{use, surfaces?, options?}]` checks an outgoing message must pass; a failure goes back to the agent as a correction. |
+| `guardrails` | — | `[{use, surfaces?, options?}]` checks a room post must pass; a failure goes back to the agent as a correction. |
 | `online` | — | Always-on exploratory config. |
 
 ### Personas are not a config field

@@ -259,9 +259,10 @@ export interface AgentDefinition {
    */
   summarizeOnTrim?: boolean;
   /**
-   * Checks this agent's outgoing messages have to pass before they are sent.
-   * A failure is handed back to the agent as a correction, not silently
-   * dropped, so it gets one chance to say the thing properly.
+   * Checks this agent's room posts have to pass before they are sent. A
+   * failure is handed back to the agent as a correction, not silently dropped,
+   * so it gets one chance to say the thing properly. Direct channel replies
+   * are not checked yet.
    */
   guardrails?: GuardrailSpec[];
   /**

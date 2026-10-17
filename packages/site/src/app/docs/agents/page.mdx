@@ -90,7 +90,7 @@ In Discord and the web UI, the agent switcher does the same thing.
 | `memoryInjectBudgetTokens` | `800` | Token budget for the injected memory block. |
 | `budgetWarnings` | `false` | Inject "X% of maxToolRounds used" reminders so the model can commit progress. Useful for coding agents. |
 | `hooks` | empty | `beforeRun` and `afterRun` tool calls. See [Hooks](/docs/hooks). |
-| `guardrails` | — | Checks this agent's outgoing messages must pass: `[{ use, surfaces?, options? }]`. A failure is not delivered; the reason is handed back to the agent as a correction and it gets one retry. See [Guardrails](https://github.com/quintonmiller/tailored-ai/blob/main/docs/guardrails.md). |
+| `guardrails` | — | Checks this agent's room posts must pass (direct replies are not checked yet): `[{ use, surfaces?, options? }]`. A failure is not delivered; the reason is handed back to the agent as a correction and it gets one retry. See [Guardrails](https://github.com/quintonmiller/tailored-ai/blob/main/docs/guardrails.md). |
 | `online` | empty | Run this agent on a cadence in the background. See below. |
 | `systemPrompt` | empty | Replace the base prompt, reorder layers, or inject custom layers. See below. |
 
