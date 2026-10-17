@@ -63,6 +63,7 @@ const DEFAULT_FORMAT: AudioFormat = "mp3";
 interface ScriptTurn {
   speaker: string;
   text: string;
+  direction?: string;
 }
 
 export class SpeakTool implements Tool {
@@ -82,6 +83,11 @@ export class SpeakTool implements Tool {
           properties: {
             speaker: { type: "string", description: "Who is talking, e.g. `host`. Any label; reused across turns." },
             text: { type: "string", description: "What they say." },
+            direction: {
+              type: "string",
+              description:
+                "Optional — how to say it, in words: `wry`, `tired, under his breath`, `sudden and loud`. Use it where the line would otherwise land flat; a direction on every line is noise.",
+            },
           },
           required: ["speaker", "text"],
         },
@@ -89,7 +95,7 @@ export class SpeakTool implements Tool {
       scriptFile: {
         type: "string",
         description:
-          "Path to a script file to read instead of passing `script` inline. Lines are `SPEAKER: what they say`; anything else (act headings, notes) is skipped. Use this for anything long — you supply the voices, not the text.",
+          "Path to a script file to read instead of passing `script` inline. Lines are `SPEAKER: what they say`; anything else (act headings, notes) is skipped. A delivery direction goes in a parenthesis before the colon — `GM (flat, a count not a threat): The ledger's missing a page.` Use this for anything long — you supply the voices, not the text.",
       },
       voice: { type: "string", description: "Voice id for `text`. Defaults to the configured voice." },
       voices: {
@@ -202,10 +208,10 @@ export class SpeakTool implements Tool {
       // Both ends are trimmed, because writers put notes at both ends. What
       // stops a genuinely miscast character from vanishing here is not refusal
       // but visibility: every dropped line is named in the result, so an agent
-      // that sees "skipped: MARA" knows it forgot a voice, while one that sees
+      // that sees "skipped: JUNO" knows it forgot a voice, while one that sees
       // "skipped: Notes for TTS" knows the trim was right.
       //
-      // From a real 141-line script whose cast parsed as GM, REX, MARA ... plus
+      // From a real 141-line script whose cast parsed as its characters plus
       // "Setting", "Tone", "Running gag" and a trailing "Notes for TTS".
       const cast = isRecord(args.voices) ? (args.voices as Record<string, unknown>) : {};
       const isCast = (sp: string) => Boolean(pickString(cast[sp]) ?? this.cfg.voices?.[sp]);
@@ -243,7 +249,8 @@ export class SpeakTool implements Tool {
       const line = pickString(raw.text);
       if (!speaker) throw new Error(`script[${i}] is missing a speaker.`);
       if (!line) throw new Error(`script[${i}] (${speaker}) has no text.`);
-      return { speaker, text: line };
+      const direction = pickString(raw.direction);
+      return direction ? { speaker, text: line, direction } : { speaker, text: line };
     });
 
     const cast = new Set(script.map((t) => t.speaker));
@@ -279,6 +286,7 @@ export class SpeakTool implements Tool {
       // One speaker: the single `voice` is the right fallback, since there is
       // nobody to be confused with.
       voice: cast.size > 1 ? voiceFor(t.speaker) : (voiceFor(t.speaker) ?? this.cfg.voice),
+      ...(t.direction ? { direction: t.direction } : {}),
     }));
 
     if (skippedNote) console.warn(`[speak] ${scriptFile}${skippedNote}`);

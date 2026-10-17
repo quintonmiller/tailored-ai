@@ -17,6 +17,15 @@
 export interface ParsedTurn {
   speaker: string;
   text: string;
+  /**
+   * How to say it — "wry", "tired, under his breath", "sudden and loud".
+   * Written in a parenthesis before the colon: `GM (flat, a count not a
+   * threat): The ledger's missing a page.`
+   *
+   * Optional because most lines do not need one, and a direction on every
+   * line is a script that has stopped trusting its own words.
+   */
+  direction?: string;
 }
 
 export interface ParsedScript {
@@ -35,7 +44,13 @@ export interface ParsedScript {
 // Bounded deliberately: without a length cap any sentence containing a colon
 // ("The rule is simple: don't open the case") parses as a speaker named
 // "The rule is simple", which then fails casting with a baffling message.
-const LINE = /^([A-Za-z][A-Za-z0-9 _'.-]{0,31}?)\s*:\s*(\S.*)$/;
+//
+// An optional parenthesis between the name and the colon is a delivery
+// direction. It sits there rather than inside the text because everything
+// after the colon belongs to the engine, and a parenthesis there already
+// means something: Kokoro reads it aloud, Breeze performs it as a vocal event
+// (`(laugh)`, `(sigh)`). Before the colon it belongs to us and is unambiguous.
+const LINE = /^([A-Za-z][A-Za-z0-9 _'.-]{0,31}?)\s*(?:\(([^)]{1,80})\))?\s*:\s*(\S.*)$/;
 
 export function parseScript(source: string): ParsedScript {
   const turns: ParsedTurn[] = [];
@@ -52,7 +67,8 @@ export function parseScript(source: string): ParsedScript {
       continue;
     }
     const speaker = m[1].trim();
-    const text = m[2].trim();
+    const direction = m[2]?.trim() || undefined;
+    const text = m[3].trim();
     if (!speaker || !text) {
       skipped.push(line);
       continue;
@@ -60,11 +76,15 @@ export function parseScript(source: string): ParsedScript {
     // Consecutive lines from one speaker are one utterance: a paragraph break
     // in a script is not a pause worth re-priming the voice for, and joining
     // them keeps prosody continuous across it.
+    //
+    // Unless the direction changed. "GM (flat): ..." followed by "GM (louder,
+    // stepping in): ..." is two deliveries, and joining them would render the
+    // second in the first's voice — silently, since the text still reads fine.
     const last = turns.at(-1);
-    if (last && last.speaker === speaker) {
+    if (last && last.speaker === speaker && last.direction === direction) {
       last.text = `${last.text} ${text}`;
     } else {
-      turns.push({ speaker, text });
+      turns.push(direction ? { speaker, text, direction } : { speaker, text });
     }
     if (!seen.has(speaker)) {
       seen.add(speaker);

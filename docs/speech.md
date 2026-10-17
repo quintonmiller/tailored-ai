@@ -77,6 +77,50 @@ Hosted, **Gemini 2.5 TTS** renders two speakers natively in one request. It is
 the shortest path to native multi-speaker without a local GPU, and it needs a
 provider of its own because the wire format is not OpenAI's.
 
+## Saying how, not just what
+
+A turn takes an optional `direction` — plain words describing the delivery:
+
+```
+GM (flat, a count not a threat): The ledger's missing a page.
+GM (louder, stepping in): Give it to me.
+REX: I check the door (again) before I answer.
+```
+
+It rides to the provider as `instructions`, the field OpenAI's TTS and Breeze
+both take per utterance, and is left out of the request entirely for providers
+that would not know what to do with it. Breeze calls this *voice direction*:
+the reference voice keeps its identity and the instruction steers tone, pace
+and delivery.
+
+The parenthesis sits *before* the colon, and the position is load-bearing.
+Everything after the colon belongs to the engine, and what a parenthesis means
+there depends on which engine is running: Kokoro reads it out, and Breeze
+treats it as a **vocal event** — `(laugh)`, `(sigh)`, `(cough)`,
+`(clears throat)` are performed rather than spoken. So a direction written
+inside the line is either read to the listener or silently reinterpreted, and
+neither is what the writer meant. Before the colon it is unambiguous.
+
+That also makes vocal events a feature of the text rather than of this tool:
+
+```
+OTTO (tired, not looking up): (sigh) Fine. I'll do it.
+```
+
+Nothing in `speak` needs to know about them — they travel as text — but a
+script written for Kokoro and rendered on Breeze will perform its parentheses,
+and one written for Breeze and rendered on Kokoro will read them aloud.
+
+This is the one lever that stops a multi-voice recording sounding like several
+people reading at one pitch, so it is worth using where a line would otherwise
+land flat — and worth leaving off everywhere else. A direction on every line is
+a script that has stopped trusting its own words.
+
+One consequence for the parser: consecutive lines from the same speaker are
+still merged into a single utterance, but no longer across a change of
+direction. Merging two deliveries renders the second in the first's voice, and
+because the text still reads correctly, nothing but listening reveals it.
+
 ## Why concatenation, and what it costs
 
 Rendering each turn separately and joining the audio is the portable approach:
