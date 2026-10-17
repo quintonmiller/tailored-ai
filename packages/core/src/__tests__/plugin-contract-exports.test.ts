@@ -10,6 +10,10 @@ import { describe, expect, it } from "vitest";
 import type {
   ChannelFactory,
   EmbeddingFactory,
+  Guardrail,
+  GuardrailContext,
+  GuardrailFactory,
+  GuardrailVerdict,
   MemoryBackend,
   MemoryBackendFactory,
   MemoryContent,
@@ -158,5 +162,27 @@ describe("plugin contract — public register* helpers", () => {
 
   it("loadPlugins is exported", () => {
     expect(typeof core.loadPlugins).toBe("function");
+  });
+});
+
+describe("plugin contract — guardrails", () => {
+  it("a plugin can write a guardrail and register it from the barrel", () => {
+    const factory: GuardrailFactory = (options) => ({
+      id: "no-shouting",
+      check(text: string, ctx: GuardrailContext): GuardrailVerdict {
+        const limit = Number(options.maxCaps ?? 3);
+        const caps = (text.match(/[A-Z]/g) ?? []).length;
+        return caps > limit ? { ok: false, reason: `${ctx.agent} shouted` } : { ok: true };
+      },
+    });
+    const guard: Guardrail = factory({ maxCaps: 1 });
+    const dispose = core.registerGuardrail("no-shouting", factory);
+    try {
+      expect(core.guardrailRegistry.has("no-shouting")).toBe(true);
+      expect(guard.check("HELLO", { agent: "a", surface: "room" })).toEqual({ ok: false, reason: "a shouted" });
+    } finally {
+      dispose();
+    }
+    expect(core.guardrailRegistry.has("no-shouting")).toBe(false);
   });
 });

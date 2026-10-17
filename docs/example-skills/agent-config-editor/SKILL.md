@@ -118,6 +118,7 @@ A workable agent needs `description`, `tools`, and usually nothing else.
 | `globalContext` | — | `{include, exclude}` globs on file names: take some global context files, not all or none. |
 | `fileBoundary` | — | Hard filesystem confinement for file/exec tools. |
 | `hooks` | — | `beforeRun` / `afterRun`, each `{tool, args?, skipIf?, onError?}` |
+| `guardrails` | — | `[{use, surfaces?, options?}]` checks a room post must pass; a failure goes back to the agent as a correction. |
 | `online` | — | Always-on exploratory config. |
 
 ### Personas are not a config field

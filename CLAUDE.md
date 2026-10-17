@@ -141,6 +141,7 @@ Deep notes on each subsystem live under [`docs/`](./docs/):
 | Tiered memory (recall, embeddings, promotion, sweep, HTTP/UI) | [docs/memory.md](./docs/memory.md) + design [docs/memory-tiers.md](./docs/memory-tiers.md) + storage-registry [docs/memory-storage-registry.md](./docs/memory-storage-registry.md) |
 | Sandboxes (host/docker/podman) and `git worktree` helpers | [docs/sandboxes-and-worktrees.md](./docs/sandboxes-and-worktrees.md) |
 | Chat output tags (`<task/>`, `<proposal>`, `<ask>`, etc.) | [docs/chat-tags.md](./docs/chat-tags.md) |
+| Guardrails: a mechanical check a room post must pass, refused back to the agent as a correction | [docs/guardrails.md](./docs/guardrails.md) |
 | Notifications: repeat suppression for unsolicited messages (`NotificationGate`) | [docs/notifications.md](./docs/notifications.md) |
 | Rooms: shared multi-agent conversations (backend seam, envelopes, subscriptions, wake policy, image/file attachments) | [docs/rooms.md](./docs/rooms.md) + archiving design [docs/rooms-archive-design.md](./docs/rooms-archive-design.md) |
 | Schedules: agents booking their own future wakes (`schedule` tool, poll tick, room vs session targets) | [docs/schedules.md](./docs/schedules.md) |

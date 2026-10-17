@@ -71,6 +71,15 @@ export {
 } from "./channels/registry.js";
 export type { RenderOptions, SurfaceRendering } from "./channels/render.js";
 export { attachmentName, DEFAULT_MAX_ATTACHMENTS, renderForSurface } from "./channels/render.js";
+export { checkGuardrails, resetGuardrailCache } from "./guardrails/check.js";
+export { guardrailRegistry, registerGuardrail } from "./guardrails/registry.js";
+export type {
+  Guardrail,
+  GuardrailContext,
+  GuardrailFactory,
+  GuardrailSpec,
+  GuardrailVerdict,
+} from "./guardrails/types.js";
 export { connectMcpServer, type McpConnection, mcpToolName } from "./mcp/client.js";
 export { type McpHost, McpManager } from "./mcp/manager.js";
 export type { ExpandOptions } from "./prompts/expand.js";

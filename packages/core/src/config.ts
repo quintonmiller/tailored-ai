@@ -10,6 +10,7 @@ import { AGENT_DEFINITION_KEYS, findShapeIssues } from "./config-schema.js";
 import type { GlobalContextFilter } from "./context.js";
 import { type DashboardWidget, validateDashboardWidget } from "./dashboard/index.js";
 import { isAgentScopedEvent, isWaterfallEvent, KNOWN_BROADCAST_EVENTS, listKnownEvents } from "./events.js";
+import type { GuardrailSpec } from "./guardrails/types.js";
 import type { ThinkingLevel } from "./providers/interface.js";
 import { DEFAULT_SUGGESTIONS_PROMPT } from "./suggestions.js";
 import { META_TOOL_NAMES } from "./tools/tool-factories.js";
@@ -263,6 +264,13 @@ export interface AgentDefinition {
    * summary is what keeps the fact.
    */
   summarizeOnTrim?: boolean;
+  /**
+   * Checks this agent's room posts have to pass before they are sent. A
+   * failure is handed back to the agent as a correction, not silently dropped,
+   * so it gets one chance to say the thing properly. Direct channel replies
+   * are not checked yet.
+   */
+  guardrails?: GuardrailSpec[];
   /**
    * When true, task-watcher dispatches to this agent run in an isolated git
    * worktree on a per-task branch (`agent/<task_id>-<slug>`). The watcher
