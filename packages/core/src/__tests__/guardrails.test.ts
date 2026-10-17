@@ -21,7 +21,7 @@ import { checkGuardrails, resetGuardrailCache } from "../guardrails/check.js";
 import { guardrailRegistry, registerGuardrail } from "../guardrails/registry.js";
 import type { GuardrailSpec } from "../guardrails/types.js";
 
-const ctx = { agent: "player-marine", surface: "room", destination: "local:table" };
+const ctx = { agent: "narrator", surface: "room", destination: "local:table" };
 const text = (options: Record<string, unknown>): GuardrailSpec[] => [{ use: "text", options }];
 
 beforeEach(() => resetGuardrailCache());
@@ -168,7 +168,7 @@ describe("config actually reaches the checker", () => {
 
   it("resolveAgent surfaces an agent's own guardrails", () => {
     const specs: GuardrailSpec[] = [{ use: "text", options: { maxChars: 700 } }];
-    const resolved = resolveAgent("marine", config({ marine: { instructions: "x", guardrails: specs } }), []);
+    const resolved = resolveAgent("narrator", config({ narrator: { instructions: "x", guardrails: specs } }), []);
     expect(resolved.guardrails).toEqual(specs);
   });
 
