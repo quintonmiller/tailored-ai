@@ -1350,3 +1350,61 @@ describe("post carries the media this turn produced", () => {
     expect(cap.sent.at(-1)?.media).toBeUndefined();
   });
 });
+
+describe("room tool — guardrails", () => {
+  // The gap this closes: the watcher checks an agent's guardrails on the reply
+  // it is about to post, and an agent that posts by calling this tool never
+  // goes through that path. In the deployment that found it, every table
+  // message was a tool post — so the guardrails parsed, resolved, and never
+  // ran once. The live proof was a message containing a denied word reaching
+  // the room while the same text, handed to `checkGuardrails` directly, was
+  // refused.
+  const guarded = (agentName: string, guardrails: unknown): ToolContext =>
+    ({
+      sessionId: "session-1",
+      workingDirectory: "/tmp",
+      env: {},
+      agentName,
+      db,
+      workingMemory: new Map<string, string>(),
+      guardrails,
+    }) as ToolContext;
+
+  const DENY_CITY = [{ use: "text", options: { deny: ["\\bBrightwater\\b"], message: "Do not name the city." } }];
+
+  it("refuses a post that breaks a rule, and sends nothing", async () => {
+    await createRoom("table");
+
+    const res = await tool.execute(
+      { action: "post", room: "table", body: "Brightwater is twelve thousand floors." },
+      guarded("narrator", DENY_CITY),
+    );
+
+    expect(res.success).toBe(false);
+    expect(res.error).toContain("Do not name the city.");
+    // The refusal has to leave the agent a way forward — it is still mid-turn.
+    expect(res.error).toContain("say it again");
+    expect(messageCount()).toBe(0);
+  });
+
+  it("posts the same message once it is within the rule", async () => {
+    await createRoom("table");
+
+    const res = await tool.execute(
+      { action: "post", room: "table", body: "The city is twelve thousand floors." },
+      guarded("narrator", DENY_CITY),
+    );
+
+    expect(res.success).toBe(true);
+    expect(contents()).toEqual(["[narrator] The city is twelve thousand floors."]);
+  });
+
+  it("posts normally when the agent has no guardrails", async () => {
+    await createRoom("table");
+
+    const res = await post("table", "Brightwater is twelve thousand floors.", "narrator");
+
+    expect(res.success).toBe(true);
+    expect(messageCount()).toBe(1);
+  });
+});

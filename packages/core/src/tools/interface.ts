@@ -37,6 +37,19 @@ export interface ToolContext {
   exploratoryRunId?: string;
   /** Name of the agent currently running. Used as the author on tool-initiated records (comments, etc.). */
   agentName?: string;
+  /**
+   * The running agent's guardrails, for tools that send a message on its
+   * behalf.
+   *
+   * The room watcher checks an agent's guardrails on the reply it is about to
+   * post, which covers an agent that answers in plain text. It does not cover
+   * an agent that posts by calling the room tool: that text never passes
+   * through `deliverReply`, so before this existed it reached the room
+   * unchecked. A deployment whose agents are told to post through the tool —
+   * which is the only way to address someone with `to` — had guardrails that
+   * parsed, resolved, and never ran.
+   */
+  guardrails?: import("../guardrails/types.js").GuardrailSpec[];
   db?: import("better-sqlite3").Database;
   /**
    * The media store, for tools that hand blobs back.

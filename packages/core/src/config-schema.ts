@@ -325,6 +325,20 @@ export const AgentDefinitionSchema = z.object({
   skipGlobalContext: z.boolean().optional(),
   summarizeOnTrim: z.boolean().optional(),
   worktree: z.boolean().optional(),
+  // `use` is an open string and `options` is passthrough, so a plugin's
+  // guardrail validates exactly as well as the built-in one. Naming the
+  // built-in's option keys here would make core the authority on a shape it
+  // has no business knowing, and every third-party guardrail would then fail
+  // validation for using its own.
+  guardrails: z
+    .array(
+      z.object({
+        use: z.string(),
+        surfaces: z.array(z.string()).optional(),
+        options: z.record(z.string(), z.unknown()).optional(),
+      }),
+    )
+    .optional(),
   taskPreamble: z.string().optional(),
   injectMemory: z.boolean().optional(),
   budgetWarnings: z.boolean().optional(),

@@ -1311,6 +1311,10 @@ export class AgentRuntime {
       // where it is supposed to work rather than the whole filesystem.
       ...(resolved.fileBoundary ? { workingDirectoryBoundary: resolved.fileBoundary } : {}),
       ...(resolved.execRules ? { execRules: resolved.execRules } : {}),
+      // A tool that sends a message on the agent's behalf has to apply the
+      // same rules the watcher applies to a plain reply, or the agent can
+      // route around its own guardrails by choosing to call a tool.
+      ...(resolved.guardrails ? { guardrails: resolved.guardrails } : {}),
     };
   }
 

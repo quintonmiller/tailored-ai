@@ -16,6 +16,7 @@
  * prompt and config, not code.
  */
 
+import { checkGuardrails } from "../guardrails/check.js";
 import { collectTurnMedia, turnStartId } from "../media/turn.js";
 import type { NotificationGateLike } from "../notifications/dedup.js";
 import { resolveGate } from "../notifications/dedup.js";
@@ -389,6 +390,18 @@ export class RoomTool implements Tool {
     if (!body) return fail("body is required for post.");
 
     const room = this.requireLiveRoom(args, "be posted to");
+
+    // The same rules the watcher applies to a plain-text reply.
+    //
+    // Refused as a tool failure rather than dropped, because here the agent is
+    // still mid-turn and can say it again properly — which is what a guardrail
+    // is for. `deliverReply` can only drop, having no round left to spend.
+    const refusal = await checkGuardrails(context.guardrails, body, {
+      agent: agentName,
+      surface: "room",
+      destination: formatRoomRef(room.ref),
+    });
+    if (refusal) return fail(`${refusal} Nothing has been sent — say it again, within the rule.`);
     const ref = formatRoomRef(room.ref);
     const backend = requireRoomBackend(room.ref.backend);
 

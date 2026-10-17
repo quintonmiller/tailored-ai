@@ -25,6 +25,8 @@ import { estimateTokens, isStallStop, type LoopStop, runAgentLoop, stallReasonOf
 import { findOrCreateSession } from "../agent/session.js";
 import { type MediaRef, mediaPlaceholder } from "../content/types.js";
 import type { Subscription } from "../events.js";
+import { checkGuardrails } from "../guardrails/check.js";
+import type { GuardrailSpec } from "../guardrails/types.js";
 import { collectTurnMedia, latestMessageId } from "../media/turn.js";
 import { PASSTHROUGH_GATE } from "../notifications/dedup.js";
 import type { AgentRuntime } from "../runtime.js";
@@ -2128,6 +2130,21 @@ export class RoomWatcher {
     // output is spent asking which room it was for.
     const passed = rooms.some((ref) => workingMemory.get(`room:passed:${ref}`) === "true");
     const spokeThroughTool = rooms.some((ref) => workingMemory.get(roomPostedKey(ref)) === "true");
+
+    // A fourth thing that goes wrong at the end of a turn: the message is
+    // well-formed and against the house rules. Checked only when this reply is
+    // the thing that will actually be posted — an agent that already spoke
+    // through the room tool has sent different text, and one that passed is
+    // sending none.
+    const guardrailReason =
+      !passed && !spokeThroughTool && reply.trim().length > 0
+        ? await checkGuardrails(resolved.guardrails, reply, {
+            agent: sub.agent,
+            surface: "room",
+            destination: rooms[0],
+          })
+        : undefined;
+
     const correction = looksLikeUninvokedPass(reply)
       ? batch
         ? this.batchCorrection(batch, "Your last message was posted as text rather than made as a tool call.")
@@ -2141,11 +2158,26 @@ export class RoomWatcher {
           : "Your last message came out as raw tool-call markup rather than a tool call, so nothing was sent. Say what you wanted to say as plain text — you are already in the room, and a reply does not need a tool call."
         : batch && reply.trim().length > 0 && !spokeThroughTool && !passed
           ? this.batchCorrection(batch, "A message needs one of them, so nothing has been sent yet.")
-          : passed && changed.length > 0
-            ? `You changed ${changed.join(", ")} since your last message but chose to say nothing. Are you sure? Reply with a short update if it is worth reporting, or pass again if it genuinely is not.`
-            : undefined;
+          : guardrailReason
+            ? // Below the malformed-output branches on purpose: a reply that is
+              // not a message yet cannot be judged on what kind of message it is.
+              `${guardrailReason} Nothing has been sent — say it again, within the rule.`
+            : passed && changed.length > 0
+              ? `You changed ${changed.join(", ")} since your last message but chose to say nothing. Are you sure? Reply with a short update if it is worth reporting, or pass again if it genuinely is not.`
+              : undefined;
 
     if (correction) {
+      // A guardrail that fires and is then satisfied on the retry used to
+      // leave no trace anywhere: only the still-failing drop logged. So
+      // "no guardrail lines in the log" read as "no guardrail has ever
+      // fired", when it equally meant "every firing was corrected" — and
+      // there was no way to tell which. A rule doing its job is worth one
+      // line; a rule that is quietly inert is worth knowing about.
+      if (guardrailReason && correction.startsWith(guardrailReason)) {
+        console.warn(
+          `[rooms] ${sub.agent}'s message was refused by its guardrails in ${sub.roomRef}; asking for it again. ${guardrailReason}`,
+        );
+      }
       for (const ref of rooms) workingMemory.delete(`room:passed:${ref}`);
       try {
         reply = await runAgentLoop(correction, {
@@ -2204,6 +2236,7 @@ export class RoomWatcher {
         workingMemory,
         messages ?? [],
         collectTurnMedia(this.runtime.db, session.id, watermark),
+        resolved.guardrails,
       );
     }
     // Attached underneath the reply, so the room reads as conversation and
@@ -2483,6 +2516,7 @@ export class RoomWatcher {
     workingMemory: Map<string, string>,
     seen: RoomMessage[],
     produced: MediaRef[] = [],
+    guardrails?: GuardrailSpec[],
   ): Promise<RoomMessage | null> {
     const body = (reply ?? "").trim();
     // Media only ever rides a reply that HAS a reply. Unlike a DM, silence is
@@ -2509,6 +2543,31 @@ export class RoomWatcher {
     // The agent explicitly chose to stay quiet. Posting its closing thought
     // anyway would make `pass` decorative.
     if (workingMemory.get(`room:passed:${sub.roomRef}`) === "true") return null;
+
+    // Still against the rules after its correction round. Dropped the same way
+    // raw tool-call markup is: the agent has had its one chance to say this
+    // properly, and posting it anyway would make the guardrail decorative. The
+    // warning matters — a room that simply goes quiet gives nobody a reason to
+    // suspect a rule, so the reason and the text both have to be findable.
+    //
+    // Below the two checks above on purpose. An agent that already posted
+    // through the room tool, or that passed, still returns trailing prose that
+    // nothing will send; judging it here logged "did not pass its guardrails,
+    // so it was not posted" about text that was never going to be posted, and
+    // named a correction round that had not happened. Observed on the first
+    // live firing of a guardrail in this deployment, and it sent the
+    // investigation after the wrong message.
+    const stillFailing = await checkGuardrails(guardrails, body, {
+      agent: sub.agent,
+      surface: "room",
+      destination: sub.roomRef,
+    });
+    if (stillFailing) {
+      console.warn(
+        `[rooms] ${sub.agent}'s message did not pass its guardrails after a correction, so it was not posted to ${sub.roomRef}. ${stillFailing} Text: ${body.slice(0, 200)}`,
+      );
+      return null;
+    }
 
     const ref = parseRoomRef(sub.roomRef);
     if (!ref) return null;

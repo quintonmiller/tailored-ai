@@ -139,6 +139,7 @@ export interface ResolvedAgent {
   summarizeOnTrim: boolean;
   /** True when this agent's task-watcher dispatches run in an isolated worktree. */
   worktree: boolean;
+  guardrails: import("../guardrails/types.js").GuardrailSpec[] | undefined;
   /** Per-agent task-watcher dispatch preamble template (unexpanded). Empty when unset. */
   taskPreamble: string;
   injectMemory: boolean;
@@ -230,6 +231,7 @@ export function resolveAgent(
     skipGlobalContext: dep.skipGlobalContext ?? false,
     summarizeOnTrim: dep.summarizeOnTrim ?? true,
     worktree: dep.worktree ?? false,
+    guardrails: dep.guardrails,
     taskPreamble: dep.taskPreamble ?? "",
     injectMemory: dep.injectMemory ?? false,
     mediaRendition: dep.mediaRendition,
@@ -314,6 +316,7 @@ export function resolveAgent(
     skipGlobalContext: agent?.skipGlobalContext ?? defaults.skipGlobalContext,
     summarizeOnTrim: agent?.summarizeOnTrim ?? defaults.summarizeOnTrim,
     worktree: agent?.worktree ?? defaults.worktree,
+    guardrails: agent?.guardrails ?? defaults.guardrails,
     taskPreamble: agent?.taskPreamble ?? defaults.taskPreamble,
     injectMemory: agent?.injectMemory ?? defaults.injectMemory,
     mediaRendition: agent?.mediaRendition ?? defaults.mediaRendition,
