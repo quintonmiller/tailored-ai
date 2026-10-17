@@ -327,6 +327,8 @@ export class DiscordChannel implements Channel, OutboundNotifier {
       this.runtime.getResolvableTools(),
       undefined,
       this.runtime.contextDir,
+      undefined,
+      this.runtime.buildResolveOptions(),
     );
     const scope = resolved.roomSessionScope;
     const key = makeRoomSessionKey(formatRoomRef(room.ref), agent, scope);
@@ -362,6 +364,8 @@ export class DiscordChannel implements Channel, OutboundNotifier {
       this.runtime.getResolvableTools(),
       undefined,
       this.runtime.contextDir,
+      undefined,
+      this.runtime.buildResolveOptions(),
     );
     const scope = resolved.roomSessionScope;
     const key = makeRoomSessionKey(formatRoomRef(room.ref), agent, scope);
@@ -1427,6 +1431,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
       undefined,
       this.runtime.contextDir,
       this.runtime.kbDir,
+      this.runtime.buildResolveOptions(),
     );
 
     // 1. System prompt (base + extra instructions)

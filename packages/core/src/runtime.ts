@@ -1081,7 +1081,15 @@ export class AgentRuntime {
       throw new Error(`No agent named "${to}".`);
     }
 
-    const resolved = resolveAgent(to, config, this.getResolvableTools(), undefined, this.contextDir);
+    const resolved = resolveAgent(
+      to,
+      config,
+      this.getResolvableTools(),
+      undefined,
+      this.contextDir,
+      undefined,
+      this.buildResolveOptions(),
+    );
     // The recipient's own session, so a direct line accumulates rather than
     // starting cold every time — which is what made `delegate` unsuitable for
     // anything resembling an ongoing conversation.
@@ -1335,8 +1343,15 @@ export class AgentRuntime {
     return this.toolContextExtrasFor(resolved, agentName);
   }
 
-  /** Skill/agent lookups `resolveAgent` needs, in one place for its two callers. */
-  private buildResolveOptions(): ResolveAgentOptions {
+  /**
+   * Skill/agent lookups `resolveAgent` needs, in one place for every caller.
+   *
+   * Public because the room watcher, the task watcher and the Discord channel
+   * all resolve agents too, and omitting this leaves a progressive agent with
+   * an empty skill catalog — it cannot discover a skill it was not told about
+   * by name.
+   */
+  buildResolveOptions(): ResolveAgentOptions {
     return {
       resolveSkill: (id: string) => this._skillRegistry.get(id),
       describeSkill: (id: string) => {

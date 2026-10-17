@@ -44,6 +44,7 @@ function makeRuntime(opts: { paused?: boolean; maxWakesPerHour?: number } = {}):
     getOwnerId: () => undefined,
     isAgentsPaused: () => opts.paused === true,
     getResolvableTools: () => [],
+    buildResolveOptions: () => ({}),
     getAgentDefinition: (name: string) => (config.agents as Record<string, unknown>)[name],
     contextDir: "/tmp/ctx",
     buildLoopOptions: ({ agentName }: { agentName?: string }) => ({ toolContextExtras: { agentName } }),

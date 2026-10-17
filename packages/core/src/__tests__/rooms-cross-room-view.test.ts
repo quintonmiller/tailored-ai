@@ -51,6 +51,7 @@ function makeRuntime(crossRoomView?: Record<string, unknown>): AgentRuntime {
     getOwnerId: () => "1234",
     isAgentsPaused: () => false,
     getResolvableTools: () => [],
+    buildResolveOptions: () => ({}),
     getAgentDefinition: (name: string) => (config.agents as Record<string, unknown>)[name],
     contextDir: "/tmp/ctx",
     buildLoopOptions: ({ agentName }: { agentName?: string }) => ({ toolContextExtras: { agentName } }),

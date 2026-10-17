@@ -52,6 +52,7 @@ function makeRuntime(): AgentRuntime {
     getOwnerId: () => undefined,
     isAgentsPaused: () => false,
     getResolvableTools: () => [],
+    buildResolveOptions: () => ({}),
     getAgentDefinition: (name: string) => (config.agents as Record<string, unknown>)[name],
     contextDir: "/tmp/ctx",
     buildLoopOptions: ({ agentName }: { agentName?: string }) => ({

@@ -84,6 +84,7 @@ function makeRuntime(agents: Record<string, AgentDef>): any {
     getConfig: () => config,
     getTools: () => [],
     getResolvableTools: () => [],
+    buildResolveOptions: () => ({}),
     getAgentDefinition: (name: string) => agents[name],
     getWorktreeAgentNames: () =>
       Object.entries(agents)
