@@ -1,6 +1,7 @@
 # World state — Design
 
-> Status: design, accepted. First of three linked designs: this one (what
+> Status: design, accepted. **Phase 1 is implemented**: see [world-state.md](./world-state.md)
+> for what works today. First of three linked designs: this one (what
 > agents know, structured), [agent interfaces](./agent-interfaces-design.md)
 > (how they show it), and [live sessions](./live-sessions-design.md) (how they
 > stay present while it changes).

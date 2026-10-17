@@ -15,7 +15,7 @@ call site. A field with **0 in both** is the one to go and look at: a field
 nothing consumes is indistinguishable from a working feature, because the only
 symptom is that behaviour never changed (#335).
 
-Fields: **72** · with no read site found: **0**
+Fields: **74** · with no read site found: **0**
 
 ## Every field
 
@@ -35,7 +35,7 @@ Fields: **72** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `agents` | object | {} | 34 | 95 |
+| `agents` | object | {} | 34 | 98 |
 
 ### `autopilot`
 
@@ -89,7 +89,7 @@ Fields: **72** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `database.path` | string | `./agent.db` | 42 | 2 |
+| `database.path` | string | `./agent.db` | 43 | 2 |
 
 ### `mcp`
 
@@ -101,7 +101,7 @@ Fields: **72** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `plugins` | array | `[{"module":"builtin:agent-notifier"},{"module":"builtin:owne` | 24 | 81 |
+| `plugins` | array | `[{"module":"builtin:agent-notifier"},{"module":"builtin:owne` | 24 | 83 |
 
 ### `prompts`
 
@@ -136,6 +136,12 @@ Fields: **72** · with no read site found: **0**
 | `server.host` | string | `127.0.0.1` | 17 | 5 |
 | `server.port` | number | `3000` | 8 | 7 |
 
+### `state`
+
+| Field | Type | Default | Reads | Path |
+| --- | --- | --- | --- | --- |
+| `state.backend` | string | `sqlite` | 22 | 3 |
+
 ### `suggestions`
 
 | Field | Type | Default | Reads | Path |
@@ -149,7 +155,7 @@ Fields: **72** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `tasks.backend` | string | `native` | 20 | 5 |
+| `tasks.backend` | string | `native` | 22 | 5 |
 
 ### `taskWatcher`
 
@@ -165,7 +171,7 @@ Fields: **72** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `time.provider` | string | `system` | 43 | 4 |
+| `time.provider` | string | `system` | 44 | 4 |
 
 ### `tools`
 
@@ -186,12 +192,13 @@ Fields: **72** · with no read site found: **0**
 | `tools.recall.defaultTtlDays` | number | `14` | 2 | 1 |
 | `tools.recall.enabled` | boolean | `true` | 38 | 1 |
 | `tools.room.enabled` | boolean | `true` | 38 | 1 |
+| `tools.state.enabled` | boolean | `true` | 38 | 3 |
 | `tools.tasks.enabled` | boolean | `true` | 38 | 1 |
 | `tools.web_fetch.enabled` | boolean | `true` | 38 | 1 |
 | `tools.web_search.apiKey` | string | `""` | 22 | 1 |
 | `tools.web_search.enabled` | boolean | `false` | 38 | 2 |
 | `tools.web_search.maxResults` | number | `5` | 2 | 1 |
-| `tools.web_search.provider` | string | `brave` | 43 | **0** |
+| `tools.web_search.provider` | string | `brave` | 44 | **0** |
 | `tools.write.enabled` | boolean | `true` | 38 | 1 |
 
 ### `webhooks`

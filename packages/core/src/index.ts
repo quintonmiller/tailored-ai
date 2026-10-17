@@ -140,6 +140,38 @@ export type {
 } from "./sandboxes/interface.js";
 export { PodmanSandbox, type PodmanSandboxOptions } from "./sandboxes/podman.js";
 export { type ActiveSandbox, globalSandboxRegistry, SandboxRegistry } from "./sandboxes/registry.js";
+export {
+  type Actor,
+  type FieldCondition,
+  type HistoryOptions,
+  type JsonSchema,
+  registerStateProvider,
+  registerStateType,
+  type Source,
+  SqliteStateProvider,
+  type StateCaller,
+  type StateChange,
+  type StateConfig,
+  StateConflictError,
+  StateError,
+  type StateOp,
+  type StateProvider,
+  type StateProviderContext,
+  type StateProviderFactory,
+  type StatePutInput,
+  type StateQuery,
+  type StateQueryInput,
+  type StateRecord,
+  type StateRef,
+  type StateScopeKind,
+  StateService,
+  type StateTypeDef,
+  type StateTypeView,
+  type StateWrite,
+  type StateWriteResult,
+  stateProviderRegistry,
+  stateTypeRegistry,
+} from "./state/index.js";
 export { type BeadsBackendOptions, type BeadsRunner, BeadsTaskBackend } from "./tasks/beads.js";
 export { type BeansBackendOptions, type BeansRunner, BeansTaskBackend } from "./tasks/beans.js";
 export {

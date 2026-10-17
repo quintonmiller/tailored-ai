@@ -12,6 +12,8 @@ import { type DashboardWidget, validateDashboardWidget } from "./dashboard/index
 import { isAgentScopedEvent, isWaterfallEvent, KNOWN_BROADCAST_EVENTS, listKnownEvents } from "./events.js";
 import type { GuardrailSpec } from "./guardrails/types.js";
 import type { ThinkingLevel } from "./providers/interface.js";
+import type { JsonSchema, StateTypeDef } from "./state/types.js";
+import { unsupportedKeywords } from "./state/validate.js";
 import { DEFAULT_SUGGESTIONS_PROMPT } from "./suggestions.js";
 import { META_TOOL_NAMES } from "./tools/tool-factories.js";
 
@@ -1340,6 +1342,10 @@ export interface AgentConfig {
     collections?: {
       enabled: boolean;
     };
+    /** The `state` tool. Offered only when at least one state type exists. */
+    state?: {
+      enabled: boolean;
+    };
     documents?: {
       enabled: boolean;
     };
@@ -1407,6 +1413,24 @@ export interface AgentConfig {
      * folded into this bag at load time (see `migrateTaskBackendConfig`).
      */
     options?: Record<string, unknown>;
+  };
+  /**
+   * World state: typed records agents, people and plugins share, with every
+   * change announced as `state.changed`. See `docs/world-state.md`.
+   */
+  state?: {
+    /**
+     * Where records are kept, resolved through the state-provider registry.
+     * The built-in `sqlite` provider registers exactly like a plugin's would.
+     */
+    backend?: string;
+    /** The selected provider's own options. Opaque to core. */
+    options?: Record<string, unknown>;
+    /**
+     * The types this deployment uses. A plugin can declare types too; one
+     * declared here wins over a plugin's of the same name.
+     */
+    types?: StateTypeDef[];
   };
   /**
    * Forge integration for pushing branches and opening proposals
@@ -1936,6 +1960,7 @@ export const DEFAULT_CONFIG: AgentConfig = {
     recall: { enabled: true, defaultTtlDays: 14 },
     projects: { enabled: true, directory: "./data/projects" },
     collections: { enabled: true },
+    state: { enabled: true },
     room: { enabled: true },
     documents: { enabled: true },
     extract_document: { enabled: false },
@@ -1961,6 +1986,9 @@ export const DEFAULT_CONFIG: AgentConfig = {
   },
   tasks: {
     backend: "native",
+  },
+  state: {
+    backend: "sqlite",
   },
   briefing: {
     enabled: false,
@@ -2082,6 +2110,7 @@ const KNOWN_TOP_LEVEL_CONFIG_KEY_MAP: Record<keyof AgentConfig, true> = {
   permissions: true,
   prompts: true,
   tasks: true,
+  state: true,
   repo: true,
   security: true,
   sandboxes: true,
@@ -2173,6 +2202,59 @@ function editDistance(a: string, b: string): number {
  * @param agentScoped whether these are declared under an agent, which decides
  * if an event that names no agent can reach them.
  */
+/**
+ * A state type that parses and then does something other than what it says:
+ * a schema keyword core does not enforce, a pattern that will not compile, a
+ * name nothing can address. Each reads as working and quietly is not.
+ */
+function stateTypeWarnings(types: StateTypeDef[] | undefined): string[] {
+  const warnings: string[] = [];
+  const seen = new Set<string>();
+  for (const [i, def] of (types ?? []).entries()) {
+    const where = `state.types[${i}]`;
+    if (!def || typeof def.name !== "string" || !/^[a-z][a-z0-9_]{0,62}$/.test(def.name)) {
+      warnings.push(
+        `${where}: name must be lowercase snake_case (letters, digits, underscores, starting with a letter), got ${JSON.stringify(def?.name)}.`,
+      );
+      continue;
+    }
+    if (seen.has(def.name)) warnings.push(`${where}: "${def.name}" is declared more than once; the last one wins.`);
+    seen.add(def.name);
+    const schema = def.schema;
+    if (schema) {
+      if (schema.type !== undefined && schema.type !== "object") {
+        warnings.push(`state type "${def.name}": a record's data is an object, so schema.type must be "object".`);
+      }
+      const unsupported = unsupportedKeywords(schema);
+      if (unsupported.length) {
+        warnings.push(
+          `state type "${def.name}": schema keyword(s) not enforced, so records are not checked against them: ${unsupported.join(", ")}.`,
+        );
+      }
+      for (const pattern of schemaPatterns(schema)) {
+        try {
+          new RegExp(pattern, "u");
+        } catch {
+          warnings.push(
+            `state type "${def.name}": pattern ${JSON.stringify(pattern)} does not compile, so it checks nothing.`,
+          );
+        }
+      }
+    }
+    if (def.title && schema?.properties && !(def.title in schema.properties)) {
+      warnings.push(`state type "${def.name}": title "${def.title}" is not one of its fields.`);
+    }
+  }
+  return warnings;
+}
+
+function schemaPatterns(schema: JsonSchema): string[] {
+  const out = typeof schema.pattern === "string" ? [schema.pattern] : [];
+  for (const sub of Object.values(schema.properties ?? {})) out.push(...schemaPatterns(sub));
+  if (schema.items) out.push(...schemaPatterns(schema.items));
+  return out;
+}
+
 function eventHookWarnings(
   on: Record<string, EventHook | EventHook[]> | undefined,
   path: string,
@@ -2690,6 +2772,7 @@ export function validateConfig(config: AgentConfig): string[] {
     warnings.push(...eventHookWarnings(agent?.hooks?.on, `agents.${name}.hooks.on`, true));
   }
   warnings.push(...eventHookWarnings(config.hooks?.on, "hooks.on", false));
+  warnings.push(...stateTypeWarnings(config.state?.types));
 
   // Rooms: a subscription naming an agent that doesn't exist, or a ref in the
   // wrong shape, means an agent silently never wakes — the failure mode this

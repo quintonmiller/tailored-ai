@@ -1,0 +1,231 @@
+/**
+ * World state: the structured, typed, observable layer agents share.
+ *
+ * See `docs/world-state-design.md`. In short: a record is typed data with a
+ * scope and a version; every write records who made it and through what; a
+ * provider stores records and core does everything around storage —
+ * validation, access, events — so any provider gets those for free.
+ */
+import type { Disposer } from "../registry.js";
+
+/** Who made a change. */
+export interface Actor {
+  kind: "agent" | "user" | "plugin" | "system";
+  name: string;
+}
+
+/**
+ * Through what a change was made. Recorded beside the actor from the first
+ * version because a later layer needs to tell a value the user typed from one
+ * an agent copied out of a web page, and that cannot be recovered afterwards
+ * from data that never wrote it down.
+ */
+export interface Source {
+  tool?: string;
+  surface?: string;
+  interfaceId?: string;
+}
+
+export interface StateRef {
+  type: string;
+  id: string;
+}
+
+export interface StateRecord {
+  type: string;
+  id: string;
+  /**
+   * Memory's scope tokens: `global`, `agent:<name>`, `project:<id>`, plus
+   * `room:<ref>`. One token per record.
+   */
+  scope: string;
+  data: Record<string, unknown>;
+  /** Starts at 1 and goes up by one on every write, including a delete. */
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  updatedBy: Actor;
+  source?: Source;
+}
+
+/**
+ * A condition on one data field. A bare value means equality (`null` matches
+ * a missing field too); an object combines comparisons, all of which must hold.
+ */
+export type FieldCondition =
+  | string
+  | number
+  | boolean
+  | null
+  | {
+      in?: (string | number | boolean | null)[];
+      ne?: string | number | boolean | null;
+      gt?: string | number;
+      gte?: string | number;
+      lt?: string | number;
+      lte?: string | number;
+    };
+
+export interface StateQuery {
+  type: string;
+  /** Only records in one of these scopes. Undefined means every scope. */
+  scopes?: string[];
+  /** Field path (`status`, `owner.name`) to condition. Every entry must hold. */
+  where?: Record<string, FieldCondition>;
+  /** `updatedAt`, `createdAt`, `id`, or a data field path. Default `updatedAt` descending. */
+  orderBy?: { field: string; direction?: "asc" | "desc" };
+  limit?: number;
+  offset?: number;
+}
+
+export interface StateWrite {
+  type: string;
+  id: string;
+  scope: string;
+  data: Record<string, unknown>;
+  actor: Actor;
+  source?: Source;
+}
+
+export type StateOp = "create" | "update" | "delete";
+
+/** One entry in a record's history, and the payload of `state.changed`. */
+export interface StateChange {
+  type: string;
+  id: string;
+  scope: string;
+  op: StateOp;
+  before?: Record<string, unknown>;
+  after?: Record<string, unknown>;
+  version: number;
+  actor: Actor;
+  source?: Source;
+  at: string;
+}
+
+export interface HistoryOptions {
+  limit?: number;
+}
+
+/** What a provider hands back from a write, so core can describe the change. */
+export interface StateWriteResult {
+  record: StateRecord;
+  /** The live record this write replaced. Absent for a create (including re-creating a deleted one). */
+  previous?: StateRecord;
+}
+
+/**
+ * Storage for records. Verb-shaped on purpose, following the memory registry:
+ * a backend should not have to speak TAI's vocabulary to plug in.
+ *
+ * A provider stores and retrieves. Validation, access checks, scope rules and
+ * change events all happen in core before or after these calls, so a provider
+ * written against this contract gets them without implementing any.
+ */
+export interface StateProvider {
+  readonly id: string;
+  /** A live record, or null when absent or deleted. */
+  get(ref: StateRef): Promise<StateRecord | null>;
+  /** Live records only. */
+  query(q: StateQuery): Promise<StateRecord[]>;
+  /**
+   * Create or replace. `expectedVersion` makes the write conditional: `0`
+   * means the record must not exist yet, any other number means the live
+   * record must be at exactly that version. A mismatch throws
+   * {@link StateConflictError}. Undefined writes unconditionally.
+   */
+  put(write: StateWrite, expectedVersion?: number): Promise<StateWriteResult>;
+  /**
+   * Remove a live record, keeping the removal in its history. Returns the
+   * record as it stood, or null if there was nothing to delete.
+   */
+  delete?(ref: StateRef, actor: Actor, source?: Source): Promise<StateRecord | null>;
+  /** Most recent first. */
+  history?(ref: StateRef, opts?: HistoryOptions): Promise<StateChange[]>;
+  /** Erase a record and its history outright. An admin action, never the default delete. */
+  purge?(ref: StateRef): Promise<boolean>;
+  /** For data that changes outside TAI. Core re-emits what this reports as `state.changed`. */
+  watch?(emit: (change: StateChange) => void): Disposer;
+  close?(): Promise<void>;
+}
+
+/** The subset of JSON Schema core validates. Other keywords are reported, not trusted. */
+export interface JsonSchema {
+  type?: JsonSchemaType | JsonSchemaType[];
+  enum?: unknown[];
+  const?: unknown;
+  properties?: Record<string, JsonSchema>;
+  required?: string[];
+  additionalProperties?: boolean;
+  items?: JsonSchema;
+  minimum?: number;
+  maximum?: number;
+  minLength?: number;
+  maxLength?: number;
+  minItems?: number;
+  maxItems?: number;
+  pattern?: string;
+  description?: string;
+  title?: string;
+  default?: unknown;
+  [keyword: string]: unknown;
+}
+
+export type JsonSchemaType = "string" | "number" | "integer" | "boolean" | "object" | "array" | "null";
+
+/**
+ * Where a new record of a type lands when the writer does not name a scope:
+ * the room it is talking in, its own private scope, the current project, or
+ * shared by everyone.
+ */
+export type StateScopeKind = "global" | "room" | "agent" | "project";
+
+export interface StateTypeDef {
+  /** Open string, lowercase snake_case. Core keeps no list of known types. */
+  name: string;
+  /** Shown to agents. Says what a record of this type is for. */
+  description?: string;
+  /** Validated on every write. Omitted means any object. */
+  schema?: JsonSchema;
+  scope?: StateScopeKind;
+  /** Field used to name a record in a list. */
+  title?: string;
+  /** A provider for this type only, instead of the store-wide `state.backend`. */
+  provider?: string;
+  /** Options for that provider. Opaque to core. */
+  providerOptions?: Record<string, unknown>;
+  /**
+   * Agent names, `*` for every agent, and `user` for a person through the UI
+   * or HTTP API. Omitted means everyone, agents and people alike.
+   */
+  access?: { read?: string[]; write?: string[] };
+}
+
+/** A version mismatch on a conditional write. */
+export class StateConflictError extends Error {
+  constructor(
+    readonly ref: StateRef,
+    readonly expected: number,
+    readonly actual: number,
+  ) {
+    super(
+      actual === 0
+        ? `${ref.type}/${ref.id} does not exist, but the write expected version ${expected}.`
+        : expected === 0
+          ? `${ref.type}/${ref.id} already exists (version ${actual}).`
+          : `${ref.type}/${ref.id} is at version ${actual}, but the write expected version ${expected}.`,
+    );
+    this.name = "StateConflictError";
+  }
+}
+
+/**
+ * Anything a caller did wrong: an unknown type, invalid data, a scope it cannot
+ * see. The message is written to be handed to an agent as a correction.
+ */
+export class StateError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StateError";
+  }
+}
