@@ -435,6 +435,8 @@ Inverted today in two places:
   warning at `context.warnTokens`, configured above the actual size, **so it
   never fires.** An opt-out that one agent in twenty-nine uses is a default
   pointing the wrong way.
+  An agent can now take a subset — `globalContext: { include, exclude }` — rather
+  than all or nothing, but that is opt-in too, so the default has not moved.
 - Notes, facts and pinned preferences are **not agent-scoped**. `notes` has an
   `agent` column the injection path never filters on; `facts` has none at all.
   Any agent with `injectMemory` reads every other agent's notes and narrates

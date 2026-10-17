@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import type { AgentConfig, AgentDefinition, AgentHook, ModelEntry } from "../config.js";
+import type { GlobalContextFilter } from "../context.js";
 import type { ThinkingLevel } from "../providers/interface.js";
 import type { SkillDefinition } from "../resources/skill.js";
 import type { Tool } from "../tools/interface.js";
@@ -136,6 +137,7 @@ export interface ResolvedAgent {
   nudgeOnText: number;
   nudgeMessage: string;
   skipGlobalContext: boolean;
+  globalContext: GlobalContextFilter | undefined;
   summarizeOnTrim: boolean;
   /** True when this agent's task-watcher dispatches run in an isolated worktree. */
   worktree: boolean;
@@ -228,6 +230,7 @@ export function resolveAgent(
     nudgeOnText: dep.nudgeOnText ?? 0,
     nudgeMessage: dep.nudgeMessage ?? "",
     skipGlobalContext: dep.skipGlobalContext ?? false,
+    globalContext: dep.globalContext,
     summarizeOnTrim: dep.summarizeOnTrim ?? true,
     worktree: dep.worktree ?? false,
     taskPreamble: dep.taskPreamble ?? "",
@@ -312,6 +315,7 @@ export function resolveAgent(
     nudgeOnText: agent?.nudgeOnText ?? defaults.nudgeOnText,
     nudgeMessage: agent?.nudgeMessage ?? defaults.nudgeMessage,
     skipGlobalContext: agent?.skipGlobalContext ?? defaults.skipGlobalContext,
+    globalContext: agent?.globalContext ?? defaults.globalContext,
     summarizeOnTrim: agent?.summarizeOnTrim ?? defaults.summarizeOnTrim,
     worktree: agent?.worktree ?? defaults.worktree,
     taskPreamble: agent?.taskPreamble ?? defaults.taskPreamble,

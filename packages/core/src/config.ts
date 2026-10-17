@@ -7,6 +7,7 @@ import type { PermissionsConfig } from "./approval.js";
 import { DEFAULT_AUTOPILOT_TASK_PROMPT } from "./autopilot/task-prompt.js";
 import { DEFAULT_BRIEFING_PROMPT } from "./briefing.js";
 import { AGENT_DEFINITION_KEYS, findShapeIssues } from "./config-schema.js";
+import type { GlobalContextFilter } from "./context.js";
 import { type DashboardWidget, validateDashboardWidget } from "./dashboard/index.js";
 import { isAgentScopedEvent, isWaterfallEvent, KNOWN_BROADCAST_EVENTS, listKnownEvents } from "./events.js";
 import type { ThinkingLevel } from "./providers/interface.js";
@@ -235,6 +236,11 @@ export interface AgentDefinition {
   nudgeMessage?: string;
   /** When true, only load agent-specific context files (skip global context). */
   skipGlobalContext?: boolean;
+  /**
+   * Narrow which global context files this agent gets, instead of taking all
+   * of them or none. `skipGlobalContext` still wins and drops the lot.
+   */
+  globalContext?: GlobalContextFilter;
   /**
    * Summarize dropped history instead of leaving a marker saying it is gone.
    * Defaults to **true**.

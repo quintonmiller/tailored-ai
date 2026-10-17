@@ -85,6 +85,7 @@ In Discord and the web UI, the agent switcher does the same thing.
 | `nudgeOnText` | `0` | Re-prompt up to N times if the model responds with text instead of a tool call. Useful for small local models. |
 | `nudgeMessage` | generic | Text used when re-prompting. |
 | `skipGlobalContext` | `false` | Only load this agent's `contextDir`. Reduces prompt size. |
+| `globalContext` | — | Narrow which global context files this agent gets: `{ include: [...], exclude: [...] }`, shell-style globs on the file name. `include` is applied first, then `exclude`. `skipGlobalContext` still wins and drops all of them. |
 | `summarizeOnTrim` | `false` | When compaction drops messages, summarise them instead of silent discard. |
 | `injectMemory` | `false` | Prepend a `[Relevant memory]` block built from recall hits to the system prompt. |
 | `memoryInjectBudgetTokens` | `800` | Token budget for the injected memory block. |

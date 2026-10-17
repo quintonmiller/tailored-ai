@@ -18,6 +18,7 @@ import {
   type ToolOutput,
   toolOutputText,
 } from "../content/types.js";
+import type { GlobalContextFilter } from "../context.js";
 import { loadAllContext, loadContextFiles } from "../context.js";
 import { recordTokenUsage } from "../db/autopilot-queries.js";
 import { getCoreMemory, renderCoreMemory } from "../db/core-memory-queries.js";
@@ -515,6 +516,8 @@ export interface AgentLoopOptions {
   nudgeMessage?: string;
   /** When true, only load agent-specific context files (skip global). */
   skipGlobalContext?: boolean;
+  /** Narrow which global context files load, rather than all or nothing. */
+  globalContext?: GlobalContextFilter;
   /** When true, summarize dropped history instead of silently discarding it. Uses an extra provider call. */
   summarizeOnTrim?: boolean;
   /**
@@ -1620,7 +1623,7 @@ async function _runAgentLoopInner(userMessage: string | InboundMessage, opts: Ag
     // Load only agent-specific context files (skip global context to reduce prompt size)
     contextContent = await loadContextFiles(agentContextDir);
   } else if (contextDir) {
-    contextContent = await loadAllContext(contextDir, agentContextDir);
+    contextContent = await loadAllContext(contextDir, agentContextDir, opts.globalContext);
   }
   warnIfContextIsLarge(contextContent, opts.toolContextExtras?.agentName as string | undefined, opts.contextWarnTokens);
   const catalogBlock = renderSkillCatalog(opts.skillCatalog);

@@ -115,6 +115,7 @@ A workable agent needs `description`, `tools`, and usually nothing else.
 | `nudgeOnText` | `0` | Re-prompt when the model answers with prose. |
 | `summarizeOnTrim` | `false` | Summarize dropped history. |
 | `skipGlobalContext` | `false` | Load only this agent's context dir. |
+| `globalContext` | — | `{include, exclude}` globs on file names: take some global context files, not all or none. |
 | `fileBoundary` | — | Hard filesystem confinement for file/exec tools. |
 | `hooks` | — | `beforeRun` / `afterRun`, each `{tool, args?, skipIf?, onError?}` |
 | `online` | — | Always-on exploratory config. |

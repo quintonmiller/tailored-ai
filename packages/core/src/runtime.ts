@@ -1454,6 +1454,7 @@ export class AgentRuntime {
       nudgeOnText: resolved.nudgeOnText,
       nudgeMessage: resolved.nudgeMessage,
       skipGlobalContext: resolved.skipGlobalContext,
+      globalContext: resolved.globalContext,
       summarizeOnTrim: resolved.summarizeOnTrim,
       injectMemory: resolved.injectMemory,
       memoryInjectBudgetTokens: resolved.memoryInjectBudgetTokens,
