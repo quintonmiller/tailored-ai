@@ -231,6 +231,10 @@ export async function loadPlugins(
         mod?.meta && typeof mod.meta === "object" && !Array.isArray(mod.meta) ? (mod.meta as PluginMeta) : undefined;
       // Optional plugin-owned config validation (#229). Warnings only — a
       // throwing or misbehaving validator never blocks the load.
+      //
+      // Note the order: this runs BEFORE `register()`, so a validator must not
+      // consult a registry that its own plugin populates — it will always look
+      // empty. Validate the config against what is knowable from the config.
       let warnings: string[] | undefined;
       if (typeof mod?.validateConfig === "function") {
         try {

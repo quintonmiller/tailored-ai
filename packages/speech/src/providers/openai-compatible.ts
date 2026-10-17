@@ -78,6 +78,10 @@ export class OpenAICompatibleSpeech implements SpeechProvider {
           model: this.opts.model ?? DEFAULTS.model,
           input: utterance.text,
           voice: utterance.voice ?? this.opts.voice ?? DEFAULTS.voice,
+          // The field OpenAI's TTS calls `instructions`, and the one Breeze
+          // takes per utterance. Omitted entirely when unset: a server that
+          // does not know the field is happier not seeing it.
+          ...(utterance.direction ? { instructions: utterance.direction } : {}),
           response_format: req.format,
           ...(this.opts.speed !== undefined ? { speed: this.opts.speed } : {}),
         }),

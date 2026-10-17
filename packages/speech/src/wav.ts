@@ -63,7 +63,20 @@ function parseWav(bytes: Buffer): WavParts {
  * rates joined regardless would play the second at the wrong pitch and speed
  * — audible, obviously wrong, and impossible to trace back to here.
  */
-export function concatWav(files: Buffer[]): Buffer {
+/**
+ * Join rendered turns, optionally leaving a beat of silence between them.
+ *
+ * Without a gap the result is relentless: measured on a real episode, twelve
+ * and a half minutes of dialogue contained no pause longer than eight tenths
+ * of a second, and ran at 219 words per minute against an audiobook norm near
+ * 150. Every speaker change landed immediately on the last syllable of the
+ * one before, which reads as an argument rather than a conversation.
+ *
+ * The silence is written in the source's own format — same sample rate, same
+ * width, same channel count — because the format check above exists precisely
+ * to stop mismatched audio being spliced together.
+ */
+export function concatWav(files: Buffer[], gapMs = 0): Buffer {
   if (files.length === 0) throw new Error("nothing to join");
   const parsed = files.map(parseWav);
   const [first, ...rest] = parsed;
@@ -76,7 +89,22 @@ export function concatWav(files: Buffer[]): Buffer {
     }
   }
 
-  const data = Buffer.concat(parsed.map((p) => p.data));
+  // `fmt `: channels at byte 2, sample rate at 4, bits per sample at 14.
+  const channels = first.fmt.readUInt16LE(2);
+  const sampleRate = first.fmt.readUInt32LE(4);
+  const bitsPerSample = first.fmt.readUInt16LE(14);
+  const frameBytes = (bitsPerSample / 8) * channels;
+  const gapBytes = gapMs > 0 ? Math.round((sampleRate * gapMs) / 1000) * frameBytes : 0;
+  // 8-bit PCM is unsigned with a midpoint of 128; everything wider is signed,
+  // where silence is zero. Filling 8-bit with zeroes is full-scale noise.
+  const silence = gapBytes > 0 ? Buffer.alloc(gapBytes, bitsPerSample === 8 ? 128 : 0) : null;
+
+  const pieces: Buffer[] = [];
+  for (const [i, part] of parsed.entries()) {
+    if (silence && i > 0) pieces.push(silence);
+    pieces.push(part.data);
+  }
+  const data = Buffer.concat(pieces);
   const header = Buffer.from(first.header); // copy: the source is a view
 
   // Rewrite the two sizes the header got wrong the moment we appended.

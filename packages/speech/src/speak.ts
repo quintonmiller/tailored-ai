@@ -7,6 +7,7 @@
  * already the discriminant. An agent that has learned the single-speaker
  * form learns the dialogue form by adding a field.
  */
+import { readFileSync } from "node:fs";
 import type { Tool, ToolContext, ToolResult } from "@tailored-ai/core";
 import { mediaPart, textPart } from "./content.js";
 import {
@@ -17,9 +18,16 @@ import {
   SpeechProviderError,
   type Utterance,
 } from "./provider.js";
+import { parseScript } from "./script-file.js";
 import { concatWav, isWav, wavDurationMs } from "./wav.js";
 
 export interface SpeakToolConfig {
+  /**
+   * Silence inserted between turns of a multi-voice script, in milliseconds.
+   * A dialogue joined with no gap runs at the pace of an argument; a real
+   * conversation breathes between speakers.
+   */
+  gapMs?: number;
   enabled?: boolean;
   /** Registry id of the provider. Open string — see provider.ts. */
   provider?: string;
@@ -39,18 +47,29 @@ export interface SpeakToolConfig {
   voices?: Record<string, string>;
 }
 
+/** A header block is a handful of lines, not a scene. Past this it is dialogue. */
+const MAX_MATTER_LINES = 10;
+
+/**
+ * A beat between speakers. Measured against a real episode that had none: no
+ * pause exceeded 0.8s across 12.5 minutes, which is exhausting to listen to.
+ * Long enough to hear a speaker change, short enough not to drag.
+ */
+const DEFAULT_GAP_MS = 350;
+
 const DEFAULT_MAX_CHARS = 4000;
 const DEFAULT_FORMAT: AudioFormat = "mp3";
 
 interface ScriptTurn {
   speaker: string;
   text: string;
+  direction?: string;
 }
 
 export class SpeakTool implements Tool {
   name = "speak";
   description =
-    "Turn text into audio and attach it. Pass `text` for one voice, or `script` (a list of {speaker, text}) for a dialogue such as a podcast.";
+    "Turn text into audio and attach it. Pass `text` for one voice, `script` (a list of {speaker, text}) for a dialogue, or `scriptFile` to read a long script off disk and only map the voices.";
   parameters = {
     type: "object",
     properties: {
@@ -64,9 +83,19 @@ export class SpeakTool implements Tool {
           properties: {
             speaker: { type: "string", description: "Who is talking, e.g. `host`. Any label; reused across turns." },
             text: { type: "string", description: "What they say." },
+            direction: {
+              type: "string",
+              description:
+                "Optional — how to say it, in words: `wry`, `tired, under his breath`, `sudden and loud`. Use it where the line would otherwise land flat; a direction on every line is noise.",
+            },
           },
           required: ["speaker", "text"],
         },
+      },
+      scriptFile: {
+        type: "string",
+        description:
+          "Path to a script file to read instead of passing `script` inline. Lines are `SPEAKER: what they say`; anything else (act headings, notes) is skipped. A delivery direction goes in a parenthesis before the colon — `GM (flat, a count not a threat): The ledger's missing a page.` Use this for anything long — you supply the voices, not the text.",
       },
       voice: { type: "string", description: "Voice id for `text`. Defaults to the configured voice." },
       voices: {
@@ -96,8 +125,9 @@ export class SpeakTool implements Tool {
 
     let turns: Utterance[];
     let label: string;
+    let note: string | undefined;
     try {
-      ({ turns, label } = this.plan(args));
+      ({ turns, label, note } = this.plan(args));
     } catch (err) {
       return fail((err as Error).message);
     }
@@ -131,7 +161,7 @@ export class SpeakTool implements Tool {
       });
       return {
         success: true,
-        output: { parts: [textPart(summarize(label, turns, bytes)), mediaPart(ref)] },
+        output: { parts: [textPart(summarize(label, turns, bytes) + (note ?? "")), mediaPart(ref)] },
       };
     } catch (err) {
       return fail(`audio was generated but could not be stored: ${(err as Error).message}`);
@@ -139,12 +169,68 @@ export class SpeakTool implements Tool {
   }
 
   /** Resolve the two input shapes into one ordered list of utterances. */
-  private plan(args: Record<string, unknown>): { turns: Utterance[]; label: string } {
+  private plan(args: Record<string, unknown>): { turns: Utterance[]; label: string; note?: string } {
     const text = typeof args.text === "string" ? args.text.trim() : "";
-    const rawScript = Array.isArray(args.script) ? (args.script as unknown[]) : undefined;
+    let rawScript = Array.isArray(args.script) ? (args.script as unknown[]) : undefined;
+    const scriptFile = pickString(args.scriptFile);
 
-    if (text && rawScript?.length) {
-      throw new Error("pass `text` or `script`, not both.");
+    if (text && (rawScript?.length || scriptFile)) {
+      throw new Error("pass `text`, `script` or `scriptFile` — not more than one.");
+    }
+    if (rawScript?.length && scriptFile) {
+      throw new Error("pass `script` or `scriptFile`, not both.");
+    }
+
+    let skippedNote = "";
+    if (scriptFile) {
+      let source: string;
+      try {
+        source = readFileSync(scriptFile, "utf8");
+      } catch (err) {
+        throw new Error(`could not read ${scriptFile}: ${(err as Error).message}`);
+      }
+      const parsed = parseScript(source);
+      if (parsed.turns.length === 0) {
+        throw new Error(
+          `${scriptFile} has no dialogue lines. Each spoken line must look like ` +
+            `"SPEAKER: what they say"` +
+            (parsed.skipped.length ? `; ${parsed.skipped.length} line(s) matched nothing.` : "."),
+        );
+      }
+      // A script is usually wrapped in a header and a footer — "Cast: ...",
+      // "Setting: ...", "Notes for TTS: ..." — and every one of those lines is
+      // shaped exactly like dialogue. Nothing in the text tells them apart, so
+      // three things together do: they sit at an EDGE, there are FEW, and
+      // nobody cast them. All three are required, because each alone is wrong:
+      // a character can speak the first line, a character can be left uncast by
+      // mistake, and a script can open with several short exchanges.
+      //
+      // Both ends are trimmed, because writers put notes at both ends. What
+      // stops a genuinely miscast character from vanishing here is not refusal
+      // but visibility: every dropped line is named in the result, so an agent
+      // that sees "skipped: JUNO" knows it forgot a voice, while one that sees
+      // "skipped: Notes for TTS" knows the trim was right.
+      //
+      // From a real 141-line script whose cast parsed as its characters plus
+      // "Setting", "Tone", "Running gag" and a trailing "Notes for TTS".
+      const cast = isRecord(args.voices) ? (args.voices as Record<string, unknown>) : {};
+      const isCast = (sp: string) => Boolean(pickString(cast[sp]) ?? this.cfg.voices?.[sp]);
+      const all = parsed.turns;
+      let head = 0;
+      while (head < all.length && !isCast(all[head].speaker)) head++;
+      let tail = 0;
+      while (tail < all.length - head && !isCast(all[all.length - 1 - tail].speaker)) tail++;
+      const trimmable = (n: number) => n > 0 && n <= MAX_MATTER_LINES && n / all.length <= 0.25;
+      const dropHead = trimmable(head) ? head : 0;
+      const dropTail = trimmable(tail) ? tail : 0;
+      const turns = all.slice(dropHead, all.length - dropTail);
+      rawScript = turns as unknown[];
+      const trimmed = [...all.slice(0, dropHead), ...all.slice(all.length - dropTail)];
+      const dropped = parsed.skipped.length + trimmed.length;
+      if (dropped > 0) {
+        const names = [...new Set(trimmed.map((t) => t.speaker))];
+        skippedNote = ` (${dropped} non-dialogue line(s) skipped${names.length ? `: ${names.join(", ")}` : ""})`;
+      }
     }
 
     if (text) {
@@ -153,7 +239,7 @@ export class SpeakTool implements Tool {
     }
 
     if (!rawScript?.length) {
-      throw new Error("nothing to say — pass `text`, or `script` with at least one turn.");
+      throw new Error("nothing to say — pass `text`, `script` with at least one turn, or `scriptFile`.");
     }
 
     const callVoices = isRecord(args.voices) ? (args.voices as Record<string, unknown>) : {};
@@ -163,7 +249,8 @@ export class SpeakTool implements Tool {
       const line = pickString(raw.text);
       if (!speaker) throw new Error(`script[${i}] is missing a speaker.`);
       if (!line) throw new Error(`script[${i}] (${speaker}) has no text.`);
-      return { speaker, text: line };
+      const direction = pickString(raw.direction);
+      return direction ? { speaker, text: line, direction } : { speaker, text: line };
     });
 
     const cast = new Set(script.map((t) => t.speaker));
@@ -199,9 +286,13 @@ export class SpeakTool implements Tool {
       // One speaker: the single `voice` is the right fallback, since there is
       // nobody to be confused with.
       voice: cast.size > 1 ? voiceFor(t.speaker) : (voiceFor(t.speaker) ?? this.cfg.voice),
+      ...(t.direction ? { direction: t.direction } : {}),
     }));
 
-    return { turns, label: "dialogue" };
+    if (skippedNote) console.warn(`[speak] ${scriptFile}${skippedNote}`);
+    // The note goes back to the caller, not just to the operator log. Trimming
+    // a line the agent meant to keep is only safe if the agent is told which.
+    return { turns, label: "dialogue", note: skippedNote || undefined };
   }
 
   /**
@@ -248,7 +339,7 @@ export class SpeakTool implements Tool {
       }
       rendered.push(out.bytes);
     }
-    return { bytes: concatWav(rendered), mimeType: AUDIO_MIME.wav };
+    return { bytes: concatWav(rendered, this.cfg.gapMs ?? DEFAULT_GAP_MS), mimeType: AUDIO_MIME.wav };
   }
 }
 

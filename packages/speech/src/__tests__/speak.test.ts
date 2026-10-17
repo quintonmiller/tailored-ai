@@ -6,6 +6,9 @@
  * money is spent, and whether a dialogue actually ends up with different
  * voices in it. The provider is a seam precisely so this is testable.
  */
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   registerSpeechProvider,
@@ -144,8 +147,11 @@ describe("dialogue", () => {
 
     expect(mediaParts(r.output)).toHaveLength(1);
     expect(puts).toHaveLength(1);
-    // Three 480-byte turns, one header.
-    expect(puts[0].bytes.byteLength).toBe(44 + 480 * 3);
+    // Three 480-byte turns, one header, and two 350ms beats between them —
+    // the gap is part of the output now, because dialogue joined edge to edge
+    // is exhausting to listen to.
+    const gapBytes = Math.round((24000 * 350) / 1000) * 2;
+    expect(puts[0].bytes.byteLength).toBe(44 + 480 * 3 + gapBytes * 2);
     expect(textOf(r.output)).toContain("3 turns");
   });
 
@@ -290,7 +296,7 @@ describe("refusals", () => {
   it("refuses text and script together rather than guessing", async () => {
     const { store } = fakeStore();
     const r = await tool({ voice: "v" }).execute({ text: "hi", script: [{ speaker: "a", text: "b" }] }, ctx(store));
-    expect(r.error).toMatch(/not both/);
+    expect(r.error).toMatch(/not more than one/);
   });
 
   it("refuses an empty call", async () => {
@@ -322,6 +328,139 @@ describe("joining is exact", () => {
     );
     // The fake fills each turn with its call index, so a dropped or reordered
     // turn changes the bytes.
-    expect(puts[0].bytes.equals(concatWav([wavOf(480, 1), wavOf(480, 2)]))).toBe(true);
+    expect(puts[0].bytes.equals(concatWav([wavOf(480, 1), wavOf(480, 2)], 350))).toBe(true);
+  });
+});
+
+describe("scriptFile", () => {
+  const write = (body: string) => {
+    const dir = mkdtempSync(join(tmpdir(), "speak-"));
+    const file = join(dir, "show.txt");
+    writeFileSync(file, body);
+    return file;
+  };
+
+  it("renders a script read off disk, with only the voices supplied", async () => {
+    const file = write(
+      "ACT 1 - THE JOB\nGM: You are in a back room.\nREX: So what's the job?\nGM: The case is warm.\n",
+    );
+    const { store } = fakeStore();
+    const r = await tool({ voices: { GM: "v1", REX: "v2" } }).execute({ scriptFile: file }, ctx(store));
+    expect(r.success).toBe(true);
+    expect(provider.calls.map((c) => c.utterances[0].text)).toEqual([
+      "You are in a back room.",
+      "So what's the job?",
+      "The case is warm.",
+    ]);
+  });
+
+  it("refuses a file with no dialogue rather than recording silence", async () => {
+    const file = write("Just some notes.\nNothing spoken.\n");
+    const { store } = fakeStore();
+    const r = await tool().execute({ scriptFile: file }, ctx(store));
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/no dialogue lines/);
+  });
+
+  it("says which file it could not read", async () => {
+    const { store } = fakeStore();
+    const r = await tool().execute({ scriptFile: "/nope/missing.txt" }, ctx(store));
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/could not read \/nope\/missing\.txt/);
+  });
+
+  it("still refuses an uncast speaker, the same as an inline script", async () => {
+    const file = write("GM: hello.\nMYSTERY: who am I?\n");
+    const { store } = fakeStore();
+    const r = await tool({ voices: { GM: "v1" } }).execute({ scriptFile: file }, ctx(store));
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/MYSTERY/);
+  });
+});
+
+describe("a script file's header block is not dialogue", () => {
+  const withHeader = [
+    "CRUMB — D&D One-Shot — v2",
+    "Cast: GM (deadpan), REX (blaster specialist)",
+    "Setting: Corvath, a megacity in three layers",
+    "Notes for TTS: keep the GM dry",
+    "",
+    "GM: You are in a back room off a noodle bar.",
+    "REX: So what's the job?",
+    "GM: The case is warm.",
+    "REX: And the pay?",
+    "GM: Four thousand credits.",
+    "REX: For a delivery.",
+    "GM: For a delivery.",
+    "REX: Nobody pays that for a delivery.",
+    "GM: Sully is watching your hands.",
+    "REX: Fine. We take it.",
+    "GM: The case is still warm.",
+    "REX: Don't say that.",
+  ].join("\n");
+
+  const write = (body: string) => {
+    const dir = mkdtempSync(join(tmpdir(), "speak-"));
+    const f = join(dir, "show.txt");
+    writeFileSync(f, body);
+    return f;
+  };
+
+  it("renders only the cast, not Cast/Setting/Notes lines", async () => {
+    const { store } = fakeStore();
+    const r = await tool({ voices: { GM: "v1", REX: "v2" } }).execute(
+      { scriptFile: write(withHeader), voices: { GM: "v1", REX: "v2" } },
+      ctx(store),
+    );
+    expect(r.success).toBe(true);
+    const spoken = provider.calls.map((c) => c.utterances[0].text);
+    expect(spoken[0]).toBe("You are in a back room off a noodle bar.");
+    expect(spoken.some((t) => t.includes("Corvath"))).toBe(false);
+    expect(spoken.some((t) => t.includes("deadpan"))).toBe(false);
+  });
+
+  it("trims a trailing notes block too, and names every line it dropped", async () => {
+    // Writers put notes at both ends. The trailing block is the one that bit a
+    // real 141-line script: the head trimmed, the tail did not, and the whole
+    // render was refused over "Notes for TTS".
+    const bothEnds = [
+      "Cast: GM, REX",
+      "Setting: Corvath",
+      "GM: You are in a back room off a noodle bar.",
+      "REX: So what's the job?",
+      "GM: The case is warm.",
+      "REX: And the pay?",
+      "GM: Four thousand credits.",
+      "REX: For a delivery.",
+      "Notes for TTS: keep the GM dry",
+    ].join("\n");
+    const { store } = fakeStore();
+    const r = await tool({ voices: { GM: "v1", REX: "v2" } }).execute(
+      { scriptFile: write(bothEnds), voices: { GM: "v1", REX: "v2" } },
+      ctx(store),
+    );
+    expect(r.success).toBe(true);
+    const spoken = provider.calls.map((c) => c.utterances[0].text);
+    expect(spoken.some((t) => t.includes("Corvath"))).toBe(false);
+    expect(spoken.some((t) => t.includes("keep the GM dry"))).toBe(false);
+    expect(spoken[spoken.length - 1]).toBe("For a delivery.");
+    // Naming them is what keeps a genuinely miscast character from vanishing
+    // quietly: the agent reads back exactly which lines were not spoken.
+    expect(textOf(r.output)).toContain("Cast");
+    expect(textOf(r.output)).toContain("Setting");
+    expect(textOf(r.output)).toContain("Notes for TTS");
+  });
+
+  it("still refuses when most of the script is uncast — that is a miscast, not a header", async () => {
+    // Four uncast speakers against one cast line: dropping them silently would
+    // record a fraction of the show and call it done.
+    const mostlyUncast = ["ALPHA: one", "BETA: two", "GAMMA: three", "DELTA: four", "GM: five"].join("\n");
+    const { store } = fakeStore();
+    const r = await tool({ voices: { GM: "v1" } }).execute(
+      { scriptFile: write(mostlyUncast), voices: { GM: "v1" } },
+      ctx(store),
+    );
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/ALPHA|BETA|GAMMA|DELTA/);
   });
 });

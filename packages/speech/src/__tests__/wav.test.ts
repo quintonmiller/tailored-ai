@@ -119,3 +119,63 @@ function split(bytes: Buffer): { data: Buffer; dataSize: number } {
   }
   throw new Error("no data chunk in output");
 }
+
+describe("joining with a gap between turns", () => {
+  // Silence written in the source's own format; frames are (bits/8 * channels).
+  const wav = (samples: number[], { rate = 24000, bits = 16, channels = 1 } = {}) => {
+    const bytesPer = (bits / 8) * channels;
+    const data = Buffer.alloc(samples.length * bytesPer);
+    samples.forEach((v, i) => {
+      if (bits === 16) data.writeInt16LE(v, i * bytesPer);
+      else data.writeUInt8(v, i * bytesPer);
+    });
+    const fmt = Buffer.alloc(16);
+    fmt.writeUInt16LE(1, 0);
+    fmt.writeUInt16LE(channels, 2);
+    fmt.writeUInt32LE(rate, 4);
+    fmt.writeUInt32LE(rate * bytesPer, 8);
+    fmt.writeUInt16LE(bytesPer, 12);
+    fmt.writeUInt16LE(bits, 14);
+    const head = Buffer.alloc(44);
+    head.write("RIFF", 0);
+    head.writeUInt32LE(36 + data.length, 4);
+    head.write("WAVE", 8);
+    head.write("fmt ", 12);
+    head.writeUInt32LE(16, 16);
+    fmt.copy(head, 20);
+    head.write("data", 36);
+    head.writeUInt32LE(data.length, 40);
+    return Buffer.concat([head, data]);
+  };
+
+  it("inserts silence between turns but not before the first or after the last", () => {
+    const a = wav([1, 1]);
+    const b = wav([2, 2]);
+    const joined = concatWav([a, b], 1000); // 1s at 24kHz mono 16-bit = 48000 bytes
+    const body = joined.subarray(44);
+    expect(body.byteLength).toBe(4 + 48000 + 4);
+    expect(body.readInt16LE(0)).toBe(1);
+    expect(body.readInt16LE(4)).toBe(0); // gap begins
+    expect(body.readInt16LE(4 + 48000)).toBe(2); // second turn follows
+  });
+
+  it("defaults to no gap, so existing callers are unchanged", () => {
+    const joined = concatWav([wav([1, 1]), wav([2, 2])]);
+    expect(joined.subarray(44).byteLength).toBe(8);
+  });
+
+  it("fills 8-bit silence with 128, not 0 — zero is full-scale noise there", () => {
+    const joined = concatWav([wav([1], { bits: 8 }), wav([2], { bits: 8 })], 1000);
+    const body = joined.subarray(44);
+    expect(body.readUInt8(1)).toBe(128);
+  });
+
+  it("scales the gap with sample rate and channel count", () => {
+    const stereo = concatWav(
+      [wav([1, 1], { rate: 48000, channels: 2 }), wav([2, 2], { rate: 48000, channels: 2 })],
+      500,
+    );
+    // 0.5s at 48kHz stereo 16-bit = 48000 * 0.5 * 4 bytes
+    expect(stereo.subarray(44).byteLength).toBe(8 + 96000 + 8);
+  });
+});

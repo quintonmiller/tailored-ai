@@ -56,7 +56,7 @@ Fields: **72** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `channels` | object | {} | 17 | 46 |
+| `channels` | object | {} | 17 | 47 |
 
 ### `commands`
 

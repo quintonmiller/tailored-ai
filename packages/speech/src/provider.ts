@@ -19,6 +19,14 @@ export interface Utterance {
    * string, and a normalising layer over them would be fiction.
    */
   voice?: string;
+  /**
+   * How to say it, in words — "wry", "tired, under his breath". Passed to
+   * providers that accept a per-utterance delivery instruction (OpenAI's TTS
+   * and Breeze both do) and ignored by those that do not, which is why it is
+   * advisory rather than part of the contract: a provider that drops it still
+   * says the line.
+   */
+  direction?: string;
 }
 
 export type AudioFormat = "mp3" | "wav" | "opus" | "flac" | "aac" | "pcm";
