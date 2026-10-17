@@ -323,6 +323,12 @@ export const AgentDefinitionSchema = z.object({
   nudgeOnText: z.number().optional(),
   nudgeMessage: z.string().optional(),
   skipGlobalContext: z.boolean().optional(),
+  globalContext: z
+    .object({
+      include: z.array(z.string()).optional(),
+      exclude: z.array(z.string()).optional(),
+    })
+    .optional(),
   summarizeOnTrim: z.boolean().optional(),
   worktree: z.boolean().optional(),
   taskPreamble: z.string().optional(),

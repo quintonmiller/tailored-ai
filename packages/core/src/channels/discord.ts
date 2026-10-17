@@ -1443,7 +1443,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     if (resolved.skipGlobalContext && resolved.contextDir) {
       contextContent = await loadContextFiles(resolved.contextDir);
     } else {
-      contextContent = await loadAllContext(this.runtime.contextDir, resolved.contextDir);
+      contextContent = await loadAllContext(this.runtime.contextDir, resolved.contextDir, resolved.globalContext);
     }
     const contextTokens = contextContent ? estimateTokens({ role: "system", content: contextContent }) : 0;
 
