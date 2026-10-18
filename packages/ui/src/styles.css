@@ -8607,7 +8607,8 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 @media (prefers-reduced-motion: reduce) { .iface-progress-bar span { transition: none; } }
 
 /* --- Talk page (live sessions) --- */
-.talk-page { padding: 24px; max-width: 760px; width: 100%; margin: 0 auto; }
+/* Room at the bottom so the last row (the typing box) clears the floating chat button. */
+.talk-page { padding: 24px 24px 88px; max-width: 760px; width: 100%; margin: 0 auto; }
 .talk-page h2 { font-size: 16px; color: var(--text-dim); font-weight: 500; margin: 0; }
 .talk-start { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
 .talk-start label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-dim); }
@@ -8647,7 +8648,12 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
   .talk-listening .talk-dot, .talk-speaking .talk-dot { animation: none; }
   .talk-button { transition: none; }
 }
-.talk-avatar { height: clamp(220px, 42vh, 420px); border-radius: var(--radius); background: radial-gradient(ellipse at 50% 85%, var(--bg-surface), transparent 70%); }
-/* The figure is cut at the hips; fade it out there instead of ending on a hard edge. */
-.talk-avatar canvas { display: block; width: 100%; height: 100%; mask-image: linear-gradient(to bottom, #000 75%, transparent); }
+.talk-stage { position: relative; }
+.talk-avatar { height: clamp(280px, 52vh, 520px); cursor: grab; touch-action: none; }
+.talk-avatar:active { cursor: grabbing; }
+.talk-avatar canvas { display: block; width: 100%; height: 100%; }
+.talk-view { position: absolute; top: 8px; right: 8px; display: flex; gap: 2px; margin: 0; min-width: 0; padding: 2px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.talk-view button { font-family: var(--font); font-size: 12px; padding: 4px 10px; border: 0; border-radius: calc(var(--radius) - 2px); background: transparent; color: var(--text-dim); cursor: pointer; }
+.talk-view button[aria-pressed="true"] { background: var(--bg); color: var(--text); }
+.talk-view button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .talk-avatar-problem { font-size: 12px; color: var(--text-dim); margin: 0; }
