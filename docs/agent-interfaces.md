@@ -65,8 +65,16 @@ UI shows the reason ("This question has expired.").
   drawn the moment the tool runs during a live turn. A component that was
   updated shows once, as it is now. Answered, closed and expired components
   are drawn finished, with the answer.
-- **Discord, Slack and rooms:** the text form, posted with the agent's reply
-  (a room turn that says nothing, or passes, posts nothing), for example:
+- **Discord:** drawn with Discord's own controls, each component in a
+  message of its own under the agent's reply. A choice is a row of buttons,
+  with "Something else" opening a text box when it allows free text; a
+  confirm is a green and a grey button; a card is an embed with its buttons;
+  a form is a button that opens a pop-up form. Clicking rewrites the message
+  to show the answer and who gave it, with the controls disabled, and the
+  agent carries on in the same conversation as if you had typed the answer.
+  See [Answering on Discord](#answering-on-discord).
+- **Slack and rooms:** the text form, posted with the agent's reply (a room
+  turn that says nothing, or passes, posts nothing), for example:
 
   ```
   [choice c-1a2b3c] Ship today or Monday?
@@ -76,12 +84,41 @@ UI shows the reason ("This question has expired.").
   ```
 
   Answering is replying in words; the agent reads it like any other message.
-  Native Discord buttons are the next phase.
 - **The model** reads the text form in place of the component, so it knows
   exactly what it asked and how it was put.
 
 The text form is written by core when the component is created, never by the
 model, and is stored with it, so it reads the same everywhere.
+
+## Answering on Discord
+
+**Who can answer.** The answer becomes the next message in the conversation
+that asked, so it has to come from that conversation's person:
+
+- In a conversation with one person (a DM, or an @mention in a server), only
+  that person. Anyone else who clicks is told the question was asked of
+  someone else.
+- In a conversation nobody on Discord owns, such as a scheduled run or an
+  agent woken by a [subscription](./world-state.md#waking-agents-on-a-change),
+  only the owner set in `channels.discord.owner`. A DM is seen only by the
+  person it was sent to, so there they can always answer.
+- `channels.discord.allowedGuilds` applies, as it does to messages.
+
+**When a click is refused.** The question stays open, so you can click again:
+
+- The agent is still working on your previous message.
+- Agents are paused with `scope: all`.
+
+**Limits.** A form with more than five fields, more than a Discord pop-up
+holds, is posted as its text form, and answered by replying in words. Pop-up
+fields hold only text, so a number, a yes/no or a pick from a list is checked
+when you send it, and a value that does not fit is refused with the reason.
+
+**Updates and closing.** An `update` posts the component again; buttons on
+the earlier message still work and answer the current version. A component
+the agent closed, or one that expired, keeps its buttons, and a click on it
+says why it no longer takes answers. Editing the posted message in place
+arrives with live updates.
 
 ## HTTP API
 

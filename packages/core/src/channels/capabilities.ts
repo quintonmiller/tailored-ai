@@ -40,6 +40,12 @@ export interface SurfaceCapabilities {
    * means it takes anything it is given.
    */
   mimeTypes?: string[];
+  /**
+   * Interface component kinds the transport draws natively — buttons, a
+   * select menu, a pop-up form. Absent means none: every component is posted
+   * as the text form core wrote for it.
+   */
+  components?: readonly string[];
 }
 
 /**

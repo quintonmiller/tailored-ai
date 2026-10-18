@@ -755,6 +755,7 @@ export interface SurfaceCapabilities {
   maxMessageLength: number;
   maxBytes?: number;
   mimeTypes?: string[];
+  components?: string[];     // interface kinds drawn natively (agent-interfaces.md)
 }
 ```
 

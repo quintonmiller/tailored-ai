@@ -18,13 +18,15 @@ import { executeHooks } from "../agent/hooks.js";
 import { estimateTokens, runAgentLoop } from "../agent/loop.js";
 import { BASE_SYSTEM_PROMPT } from "../agent/prompt.js";
 import { countTurns, rewindSession, undoRewind } from "../agent/rewind.js";
-import { findOrCreateSession, resetSession } from "../agent/session.js";
+import { findOrCreateSession, resetSession, type Session } from "../agent/session.js";
 import { slashCommandRegistry } from "../commands/registry.js";
 import { executeCommand, isCommand } from "../commands.js";
 import type { MediaRef, MessageContent } from "../content/types.js";
 import { loadAllContext, loadContextFiles } from "../context.js";
-import { getSessionMessages } from "../db/queries.js";
+import { getSession, getSessionMessages } from "../db/queries.js";
 import { createProjectTask, queryProjectTasks } from "../db/task-queries.js";
+import { interfaceStoreFor } from "../interfaces/index.js";
+import type { ComponentRecord } from "../interfaces/store.js";
 import { collectTurnComponents, collectTurnMedia, latestMessageId } from "../media/turn.js";
 import type { ProjectRef } from "../projects/resolve.js";
 import { IdentityResolver } from "../rooms/identities.js";
@@ -33,8 +35,13 @@ import { formatRoomRef, type Room } from "../rooms/types.js";
 import { makeRoomSessionKey } from "../rooms/watcher.js";
 import type { AgentRuntime } from "../runtime.js";
 import type { SurfaceCapabilities } from "./capabilities.js";
-import { DiscordApprovalHandler } from "./discord-approval.js";
-import { type AuthorizationPolicy, authorizeInteraction, type InteractionIdentity } from "./discord-authorization.js";
+import { DiscordApprovalHandler, type SendApprovalEmbed } from "./discord-approval.js";
+import {
+  type AuthDecision,
+  type AuthorizationPolicy,
+  authorizeInteraction,
+  type InteractionIdentity,
+} from "./discord-authorization.js";
 import {
   buildCloneAgentCommand,
   type CloneAgentDeps,
@@ -42,6 +49,14 @@ import {
   handleCloneAgentCommand,
 } from "./discord-clone-agent.js";
 import { getDiscordConfig } from "./discord-config.js";
+import {
+  buildComponentMessage,
+  DISCORD_COMPONENT_KINDS,
+  type DiscordComponentMessage,
+  handleInterfaceInteraction,
+  type InterfaceInteractionDeps,
+  isInterfaceCustomId,
+} from "./discord-interfaces.js";
 import {
   buildMemoryCommand,
   handleMemoryAutocomplete,
@@ -102,8 +117,11 @@ export function dedupeCommandNames(commands: SlashCommandBuilder[]): SlashComman
   return kept;
 }
 
-/** What discord.js accepts from us: text, files, or both. */
-type DiscordPayload = { content?: string; files?: { attachment: Buffer; name: string }[] };
+/** What discord.js accepts from us: text, files, or a component's embed and controls. */
+type DiscordPayload = {
+  content?: string;
+  files?: { attachment: Buffer; name: string }[];
+} & Partial<DiscordComponentMessage>;
 
 export class DiscordChannel implements Channel, OutboundNotifier {
   /** Room capability, present only while the gateway is connected. */
@@ -127,6 +145,9 @@ export class DiscordChannel implements Channel, OutboundNotifier {
    * costs a link where an upload would have worked; guessing high costs a
    * rejected API call and a message that never arrives. The recoverable failure
    * is the right one to choose.
+   *
+   * Components are drawn as buttons, a select menu or a pop-up form; see
+   * `discord-interfaces.ts`.
    */
   readonly capabilities: SurfaceCapabilities = {
     inlineMedia: true,
@@ -134,6 +155,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     links: true,
     maxMessageLength: MAX_MESSAGE_LENGTH,
     maxBytes: 8 * 1024 * 1024,
+    components: DISCORD_COMPONENT_KINDS,
   };
 
   private client: Client;
@@ -202,6 +224,17 @@ export class DiscordChannel implements Channel, OutboundNotifier {
             resetAgentSession: () => ({ cleared: 0, scope: "room" as const }),
             rewindAgentSession: async () => ({ scope: "room" as const, remaining: 0 }),
           });
+        });
+        return;
+      }
+      // A click on a component the agent sent. Routed by custom id, so a
+      // question answered after a restart still finds its record.
+      if (
+        (interaction.isButton() || interaction.isStringSelectMenu() || interaction.isModalSubmit()) &&
+        isInterfaceCustomId(interaction.customId)
+      ) {
+        handleInterfaceInteraction(interaction, this.interfaceDeps()).catch((err) => {
+          console.error("[discord] Interface answer error:", (err as Error).message);
         });
         return;
       }
@@ -543,12 +576,16 @@ export class DiscordChannel implements Channel, OutboundNotifier {
   }
 
   /**
-   * Text first, then the files.
+   * Text first, then the files, then each component as its own message.
    *
    * Discord will take `content` and `files` in one call, but only the *last*
    * text chunk can carry them — attaching to the first would float the images
    * above the prose that explains them whenever a long reply is split. So the
    * split happens first and the attachments ride the final chunk.
+   *
+   * A component gets a message to itself because answering it rewrites that
+   * message — controls disabled, the answer stated — and the reply text above
+   * it must survive that.
    */
   private async deliver(
     content: string | MessageContent,
@@ -571,14 +608,21 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     const files = await this.loadAttachments(rendered.attachments);
     const chunks = rendered.text ? splitMessage(rendered.text) : [];
 
-    if (chunks.length === 0) {
-      if (files.length > 0) await post({ files }, true);
-      return;
+    const payloads: DiscordPayload[] = chunks.map((content, i) =>
+      i === chunks.length - 1 && files.length > 0 ? { content, files } : { content },
+    );
+    if (chunks.length === 0 && files.length > 0) payloads.push({ files });
+    for (const spec of rendered.components ?? []) {
+      // Null when Discord cannot hold this one — a form longer than a pop-up
+      // takes. Its text form still asks the question.
+      const drawn = buildComponentMessage(spec);
+      if (drawn) payloads.push(drawn);
+      else {
+        console.warn(`[discord] ${spec.kind} ${spec.id} does not fit Discord's controls; posted its text form`);
+        payloads.push(...splitMessage(spec.fallback).map((content) => ({ content })));
+      }
     }
-    for (let i = 0; i < chunks.length; i++) {
-      const last = i === chunks.length - 1;
-      await post(last && files.length > 0 ? { content: chunks[i], files } : { content: chunks[i] }, i === 0);
-    }
+    for (let i = 0; i < payloads.length; i++) await post(payloads[i], i === 0);
   }
 
   /** Post an already-rendered payload, bypassing the ladder it has been through. */
@@ -877,71 +921,195 @@ export class DiscordChannel implements Channel, OutboundNotifier {
         config.agent.defaultProvider,
         project?.id ?? null,
       );
-      const hooks = this.runtime.resolveHooks({ agentName });
-      const logPrefix = `[discord] [${msg.author.username}]`;
-
-      // --- beforeRun hooks ---
-      if (hooks.beforeRun.length > 0) {
-        const { skipped } = await executeHooks(hooks.beforeRun, this.runtime.getTools(), {}, session.id, logPrefix);
-        if (skipped) return;
-      }
-
-      const loopOpts = this.runtime.buildLoopOptions({ session, agentName, project });
-      const approvalHandler = loopOpts.permissions
-        ? new DiscordApprovalHandler((opts) => msg.reply(opts), msg.author.id)
-        : undefined;
-
-      const media = await this.storeAttachments(msg);
-      // Watermark before the turn, so what the turn produces can be told apart
-      // from what was already in the session.
-      const watermark = latestMessageId(this.runtime.db, session.id);
-      const response = await runAgentLoop(media.length ? { text: content, media } : content, {
-        ...loopOpts,
-        approvalHandler,
-        ...this.runtime.defaultLoopObservers({ prefix: logPrefix }),
-      });
-
-      // --- afterRun hooks ---
-      if (hooks.afterRun.length > 0) {
-        await executeHooks(
-          hooks.afterRun,
-          this.runtime.getTools(),
-          { response: response ?? "" },
-          session.id,
-          logPrefix,
-        );
-      }
-
-      // Media the turn produced — a screenshot a tool took, a chart it drew.
-      // The web UI shows these in its tool-result bubbles; Discord has no such
-      // bubble, so without this the person who asked to *see* something gets
-      // only a description of it.
-      const produced = collectTurnMedia(this.runtime.db, session.id, watermark);
-      // Components the turn's tools sent. Drawn as their text form by the
-      // render ladder, since Discord buttons are not wired yet.
-      const components = collectTurnComponents(this.runtime.db, session.id, watermark);
-      if (!response && produced.length === 0 && components.length === 0) return;
-
       // Reply to the original message so the answer keeps its thread, then use
       // the plain send for the rest. Only the reply needs `msg.reply`; the
       // continuation is an ordinary post, and both go through `deliver` so the
       // ladder and the attachment rules apply identically.
-      const outbound: MessageContent = {
-        parts: [
-          ...(response ? [{ type: "text" as const, text: response }] : []),
-          ...produced.map((media) => ({ type: "media" as const, media })),
-          ...components.map((component) => ({ type: "component" as const, component })),
-        ],
-      };
-      await this.deliver(outbound, (payload, first) =>
-        first ? msg.reply(payload) : this.rawSend(msg.channelId, payload),
-      );
-      console.log(
-        `[discord] Replied to ${msg.author.username}: "${(response ?? "").slice(0, 80)}"` +
-          (produced.length > 0 ? ` (+${produced.length} media)` : ""),
-      );
+      await this.runTurn({
+        session,
+        agentName,
+        project,
+        input: content,
+        media: () => this.storeAttachments(msg),
+        logPrefix: `[discord] [${msg.author.username}]`,
+        approve: { send: (opts) => msg.reply(opts), userId: msg.author.id },
+        post: (payload, first) => (first ? msg.reply(payload) : this.rawSend(msg.channelId, payload)),
+      });
     } finally {
       stopTyping();
+    }
+  }
+
+  /**
+   * One agent turn in a session, with what it says delivered to Discord: the
+   * hooks around the run, the media and components its tools produced, and
+   * the approval prompt when a tool needs one.
+   */
+  private async runTurn(t: {
+    session: Session;
+    agentName?: string;
+    project?: ProjectRef | null;
+    input: string;
+    /** Media travelling with the input, fetched only once the hooks let the turn run. */
+    media?: () => Promise<MediaRef[]>;
+    logPrefix: string;
+    approve: { send: SendApprovalEmbed; userId: string };
+    post: (payload: DiscordPayload, first: boolean) => Promise<unknown>;
+  }): Promise<void> {
+    const { session, agentName, project, logPrefix } = t;
+    const hooks = this.runtime.resolveHooks({ agentName });
+
+    // --- beforeRun hooks ---
+    if (hooks.beforeRun.length > 0) {
+      const { skipped } = await executeHooks(hooks.beforeRun, this.runtime.getTools(), {}, session.id, logPrefix);
+      if (skipped) return;
+    }
+
+    const loopOpts = this.runtime.buildLoopOptions({ session, agentName, project });
+    const approvalHandler = loopOpts.permissions
+      ? new DiscordApprovalHandler(t.approve.send, t.approve.userId)
+      : undefined;
+
+    const media = (await t.media?.()) ?? [];
+    // Watermark before the turn, so what the turn produces can be told apart
+    // from what was already in the session.
+    const watermark = latestMessageId(this.runtime.db, session.id);
+    const response = await runAgentLoop(media.length ? { text: t.input, media } : t.input, {
+      ...loopOpts,
+      approvalHandler,
+      ...this.runtime.defaultLoopObservers({ prefix: logPrefix }),
+    });
+
+    // --- afterRun hooks ---
+    if (hooks.afterRun.length > 0) {
+      await executeHooks(hooks.afterRun, this.runtime.getTools(), { response: response ?? "" }, session.id, logPrefix);
+    }
+
+    // Media the turn produced — a screenshot a tool took, a chart it drew.
+    // The web UI shows these in its tool-result bubbles; Discord has no such
+    // bubble, so without this the person who asked to *see* something gets
+    // only a description of it.
+    const produced = collectTurnMedia(this.runtime.db, session.id, watermark);
+    // Components the turn's tools sent, drawn as buttons by `deliver`.
+    const components = collectTurnComponents(this.runtime.db, session.id, watermark);
+    if (!response && produced.length === 0 && components.length === 0) return;
+
+    const outbound: MessageContent = {
+      parts: [
+        ...(response ? [{ type: "text" as const, text: response }] : []),
+        ...produced.map((media) => ({ type: "media" as const, media })),
+        ...components.map((component) => ({ type: "component" as const, component })),
+      ],
+    };
+    await this.deliver(outbound, t.post);
+    console.log(
+      `${logPrefix} Replied: "${(response ?? "").slice(0, 80)}"` +
+        (produced.length > 0 ? ` (+${produced.length} media)` : "") +
+        (components.length > 0 ? ` (+${components.length} components)` : ""),
+    );
+  }
+
+  /** What a click on a component needs from this channel. */
+  private interfaceDeps(): InterfaceInteractionDeps {
+    return {
+      store: interfaceStoreFor(this.runtime.db),
+      events: this.runtime.events,
+      authorize: (interaction, record) =>
+        this.authorizeAnswer(record, interaction.user.id, interaction.guildId ?? undefined),
+      unavailable: (record) => {
+        if (this.runtime.isAgentsPaused("human")) return this.pausedNotice();
+        if (this.processing.has(this.interfaceSessionKey(record))) {
+          return "I'm still working on your previous message. Answer again once I've replied.";
+        }
+        return undefined;
+      },
+      continueWith: (record, reply, where) => this.continueInterface(record, reply, where),
+    };
+  }
+
+  /**
+   * Who may answer a component. The answer becomes the next message in the
+   * component's conversation, so it is that conversation's person: the user a
+   * Discord session belongs to, or — for a conversation nobody on Discord owns,
+   * a scheduled run or a subscription wake — the deployment owner. A DM is
+   * seen only by its recipient, so anyone who can click there may answer.
+   */
+  private authorizeAnswer(record: ComponentRecord, userId: string, guildId: string | undefined): AuthDecision {
+    const policy = this.authorizationPolicy();
+    // Only the server allowlist applies from the command rules; "interface"
+    // is not a command and is never owner-only by name.
+    const server = authorizeInteraction(
+      { commandName: "interface", userId, guildId },
+      { allowedGuilds: policy.allowedGuilds },
+    );
+    if (!server.ok) return server;
+    const key = getSession(this.runtime.db, record.sessionId)?.key;
+    const owner = key ? this.runtime.parseSessionKey(key) : undefined;
+    if (owner?.channelId === "discord") {
+      return owner.userId === userId ? { ok: true } : { ok: false, reason: "This question was asked of someone else." };
+    }
+    if (!guildId) return { ok: true };
+    if (!policy.owner) {
+      return {
+        ok: false,
+        reason:
+          "Only the deployment owner can answer this, and `channels.discord.owner` is not set. Set it to your Discord user id.",
+      };
+    }
+    return policy.owner === userId ? { ok: true } : { ok: false, reason: "Only the deployment owner can answer this." };
+  }
+
+  /** The key the "already processing" guard uses for a component's conversation. */
+  private interfaceSessionKey(record: ComponentRecord): string {
+    return getSession(this.runtime.db, record.sessionId)?.key ?? record.sessionId;
+  }
+
+  /**
+   * A component's answer, carried on as the person's next message in the
+   * conversation that asked, with the agent's reply posted where the click
+   * happened.
+   */
+  private async continueInterface(
+    record: ComponentRecord,
+    reply: string,
+    where: { channelId: string; userId: string },
+  ): Promise<void> {
+    const channel = await this.client.channels.fetch(where.channelId);
+    if (!channel?.isTextBased() || !("send" in channel)) return;
+    const row = getSession(this.runtime.db, record.sessionId);
+    if (!row) {
+      await channel.send({ content: "That conversation no longer exists, so the answer has nowhere to go." });
+      return;
+    }
+    const key = row.key ?? row.id;
+    // Checked before the answer was recorded too; this covers a message that
+    // arrived while the click was being acknowledged.
+    if (this.processing.has(key)) {
+      await channel.send({
+        content: `Your answer is recorded (${reply}), but I was busy. Send it again as a message.`,
+      });
+      return;
+    }
+    this.processing.add(key);
+    const stopTyping = this.indicateWorking(where.channelId);
+    try {
+      await this.runTurn({
+        session: { id: row.id, model: row.model, provider: row.provider, projectId: row.project_id },
+        // The interface tool records an unnamed agent as "default"; resolving
+        // that name would throw unless an agent is really called that.
+        agentName: record.agent === "default" && !this.agentNames().includes("default") ? undefined : record.agent,
+        project: row.project_id ? (this.runtime.getProjectByName(row.project_id) ?? null) : null,
+        input: reply,
+        logPrefix: `[discord] [answer ${record.spec.id}]`,
+        approve: { send: (opts) => channel.send(opts), userId: where.userId },
+        post: (payload) => channel.send(payload),
+      });
+    } catch (err) {
+      console.error(`[discord] Error continuing after answer to ${record.spec.id}:`, err);
+      await channel.send({ content: "Sorry, I encountered an error processing your answer." }).catch(() => {});
+    } finally {
+      stopTyping();
+      this.processing.delete(key);
     }
   }
 

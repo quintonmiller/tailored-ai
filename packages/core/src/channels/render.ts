@@ -16,6 +16,7 @@
  */
 
 import {
+  type ComponentSpec,
   type ContentPart,
   contentParts,
   type MediaRef,
@@ -34,6 +35,12 @@ export interface SurfaceRendering {
    * Callers log these; they are the audit trail that a lossy rung was taken.
    */
   warnings: string[];
+  /**
+   * Components the transport draws itself, in part order — only those whose
+   * kind is in {@link SurfaceCapabilities.components}. Absent when there are
+   * none. Every other component is already in `text` as its text form.
+   */
+  components?: ComponentSpec[];
 }
 
 export interface RenderOptions {
@@ -71,6 +78,7 @@ export function renderForSurface(
   const segments: string[] = [];
   const attachments: MediaRef[] = [];
   const warnings: string[] = [];
+  const components: ComponentSpec[] = [];
   // Deduped because content addressing makes repeats common and identical: an
   // agent that screenshots an unchanged screen three times has one blob, and
   // posting it three times is noise, not fidelity.
@@ -81,11 +89,13 @@ export function renderForSurface(
       if (part.text) segments.push(part.text);
       continue;
     }
-    // No transport draws components natively yet, so every one gets the text
-    // form core wrote for it: numbered options, "reply yes or no". The web UI
-    // draws them from stored messages and never comes through here.
+    // A kind the transport draws goes to the caller to draw; anything else
+    // gets the text form core wrote for it: numbered options, "reply yes or
+    // no". The web UI draws them from stored messages and never comes through
+    // here.
     if (part.type === "component") {
-      segments.push(part.component.fallback);
+      if (caps.components?.includes(part.component.kind)) components.push(part.component);
+      else segments.push(part.component.fallback);
       continue;
     }
     const rendered = renderMediaPart(part, caps, opts, {
@@ -97,7 +107,12 @@ export function renderForSurface(
     if (rendered) segments.push(rendered);
   }
 
-  return { text: segments.join("\n\n").trim(), attachments, warnings };
+  return {
+    text: segments.join("\n\n").trim(),
+    attachments,
+    warnings,
+    ...(components.length ? { components } : {}),
+  };
 }
 
 interface LadderState {
