@@ -547,6 +547,7 @@ Nobody types a tier name, names a built-in layer, or thinks about cache breakpoi
 | Ordering among slots | core (registration order; config slots after registered ones) |
 | Staying inside budget | core truncates at `budgetTokens` and **says** it truncated |
 | A slot that throws or returns nothing | skipped, warned once, turn continues |
+| A slot that reads a store | `render` may return a promise; the agent loop awaits it (`renderContextSlotsAsync`). The synchronous `renderContextSlots` skips such a slot and says so |
 
 That last row matters: `buildChatLiveState` already degrades section-by-section in a `try/catch`, and that behaviour belongs to the framework rather than being re-implemented — and re-forgotten — by every contributor.
 

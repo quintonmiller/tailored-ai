@@ -61,6 +61,7 @@ import { RoomStore } from "./rooms/store.js";
 import { formatRoomRef, parseRoomRef } from "./rooms/types.js";
 import { createSandbox } from "./sandboxes/factory.js";
 import { globalSandboxRegistry } from "./sandboxes/registry.js";
+import { stateContextSlot } from "./state/context-slot.js";
 import { StateService } from "./state/service.js";
 import { createTaskBackend } from "./tasks/factory.js";
 import type { TaskBackend } from "./tasks/interface.js";
@@ -1517,6 +1518,10 @@ export class AgentRuntime {
       // Read per turn, not captured: config is hot-reloadable, and a slot the
       // operator has just added should appear on the next turn.
       promptSlots: config.prompt?.slots,
+      // Pinned state queries, read per turn like every other slot.
+      contextSlots: resolved.stateContext?.length
+        ? [stateContextSlot(() => this.getStateService(), resolved.stateContext)]
+        : undefined,
       // Handed to the loop so a subscriber can reach a turn from outside it.
       // Filled in here rather than at each call site so every caller that goes
       // through the runtime gets it without changing — the loop's own option is

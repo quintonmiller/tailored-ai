@@ -180,6 +180,22 @@ export type JsonSchemaType = "string" | "number" | "integer" | "boolean" | "obje
  */
 export type StateScopeKind = "global" | "room" | "agent" | "project";
 
+/**
+ * A query pinned to an agent's prompt: the records it matches render behind
+ * the history every turn, so the agent sees what is true now without asking.
+ */
+export interface StateContextQuery {
+  type: string;
+  /** Field path to condition, as in a `state` tool query. Every entry must hold. */
+  where?: Record<string, FieldCondition>;
+  /** A field to sort by; a leading `-` sorts descending. Default: most recently updated first. */
+  orderBy?: string;
+  /** Most records shown. Default 10. */
+  limit?: number;
+  /** Only this scope. Omitted means every scope the agent can see. */
+  scope?: string;
+}
+
 export interface StateTypeDef {
   /** Open string, lowercase snake_case. Core keeps no list of known types. */
   name: string;

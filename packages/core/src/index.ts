@@ -16,12 +16,14 @@ export type {
   RenderedSlot,
   RenderedSlots,
   SlotRefresh,
+  SlotText,
 } from "./agent/context-slots.js";
 export {
   clearContextSlots,
   listContextSlots,
   registerContextSlot,
   renderContextSlots,
+  renderContextSlotsAsync,
   unregisterContextSlot,
 } from "./agent/context-slots.js";
 export type { ResolvedHooks } from "./agent/hooks.js";

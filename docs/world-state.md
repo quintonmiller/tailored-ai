@@ -54,6 +54,55 @@ The tool is not offered while no type exists, so a deployment that does not
 use world state pays nothing for it in the prompt. `tools.state.enabled: false`
 withholds it everywhere.
 
+## Pinning state to an agent's prompt
+
+An agent can see some records without asking for them. List queries under its
+`state.context`, and the records they match render into its prompt on every
+turn, as they are at that moment:
+
+```yaml
+agents:
+  planner:
+    state:
+      context:
+        - { type: plan, where: { status: active }, limit: 5 }
+        - { type: note, orderBy: -updatedAt }
+```
+
+The planner's prompt then carries a block like this, behind the conversation:
+
+```
+## Current state
+
+plan where {"status":"active"}:
+1 plan record(s):
+- trip "Lisbon trip" (version 3, global): {"name":"Lisbon trip","status":"active"}
+
+note by -updatedAt:
+No note records match.
+```
+
+- **What a query takes:** `type`, plus optional `where` (as in a `state`
+  tool query), `orderBy` (a field, `-` in front for newest or largest first),
+  `limit` (default 10) and `scope`.
+- **What it shows:** exactly what the agent could read with the tool: its own
+  scope, the rooms the turn is about, the current project, and `global`.
+  "No records match" is shown too, so the agent knows without checking.
+- **Size:** a query that hits its `limit` says there may be more, and the
+  whole block is capped at about 2,000 tokens, with a note when it is cut.
+- **Errors:** a query that fails, such as one naming a type that does not
+  exist or one the agent may not read, is left out and logged once. The rest
+  still render.
+- **Every agent:** set it under `agent.defaults.state.context`. An agent's
+  own list replaces the default list rather than adding to it.
+
+Pinned records cost prompt space on every turn, so pin what the agent acts on
+and leave the rest to the tool. What pinning saves is the lookup: measured on
+a local 27B model, an agent with its plans pinned answered "which plans are
+active?" from the block with no tool call, before and after the records
+changed mid-conversation, where the same agent unpinned queried every time.
+Both answered correctly.
+
 ## Scopes
 
 Each record has one scope: `global`, `agent:<name>`, `room:<ref>` or

@@ -1,4 +1,5 @@
-import { WAKE_ROOMS_KEY } from "../rooms/watcher.js";
+import { WAKE_ROOMS_KEY } from "../rooms/keys.js";
+import { formatRecordList, parseOrderBy } from "../state/format.js";
 import type { StateCaller, StateService, StateTypeView } from "../state/service.js";
 import { type FieldCondition, StateConflictError, StateError, type StateRecord } from "../state/types.js";
 import { summarizeFields } from "../state/validate.js";
@@ -6,8 +7,6 @@ import type { Tool, ToolContext, ToolResult } from "./interface.js";
 
 /** A query's default page. Small, because every record lands in the prompt. */
 const DEFAULT_LIMIT = 20;
-/** Past this, one record's data is cut short in a list and the agent is told to `get` it. */
-const MAX_RECORD_CHARS = 1_000;
 
 /**
  * World state for an agent: one tool, six actions.
@@ -97,10 +96,10 @@ export class StateTool implements Tool {
             type,
             ...(scope ? { scope } : {}),
             ...(where ? { where: where as Record<string, FieldCondition> } : {}),
-            ...orderArg(args.orderBy),
+            ...parseOrderBy(args.orderBy),
             limit: typeof args.limit === "number" && args.limit > 0 ? Math.floor(args.limit) : DEFAULT_LIMIT,
           });
-          return ok(formatList(type, records, title));
+          return ok(formatRecordList(type, records, title));
         }
         case "put": {
           const data = objectArg(args.data, "data");
@@ -169,14 +168,6 @@ function objectArg(value: unknown, name: string): Record<string, unknown> | unde
   return value as Record<string, unknown>;
 }
 
-function orderArg(value: unknown): { orderBy?: { field: string; direction: "asc" | "desc" } } {
-  if (typeof value !== "string" || !value.trim()) return {};
-  const raw = value.trim();
-  return raw.startsWith("-")
-    ? { orderBy: { field: raw.slice(1), direction: "desc" } }
-    : { orderBy: { field: raw, direction: "asc" } };
-}
-
 function formatTypes(views: StateTypeView[]): string {
   if (views.length === 0) return "There are no state types you can use.";
   const where: Record<string, string> = {
@@ -203,18 +194,6 @@ function formatRecord(record: StateRecord): string {
     `${record.type}/${record.id} (version ${record.version}, scope ${record.scope}, updated ${record.updatedAt} by ${by})\n` +
     JSON.stringify(record.data)
   );
-}
-
-function formatList(type: string, records: StateRecord[], title: string | undefined): string {
-  if (records.length === 0) return `No ${type} records match.`;
-  const lines = records.map((r) => {
-    const name = title && typeof r.data[title] === "string" ? ` "${r.data[title]}"` : "";
-    let data = JSON.stringify(r.data);
-    if (data.length > MAX_RECORD_CHARS)
-      data = `${data.slice(0, MAX_RECORD_CHARS)}… (cut short; get it by id for all of it)`;
-    return `- ${r.id}${name} (version ${r.version}, ${r.scope}): ${data}`;
-  });
-  return `${records.length} ${type} record(s):\n${lines.join("\n")}`;
 }
 
 function ok(output: string): ToolResult {

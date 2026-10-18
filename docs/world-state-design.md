@@ -1,6 +1,6 @@
 # World state — Design
 
-> Status: design, accepted. **Phases 1 and 2 are implemented**: see [world-state.md](./world-state.md)
+> Status: design, accepted. **Phases 1 to 3 are implemented**: see [world-state.md](./world-state.md)
 > for what works today. First of three linked designs: this one (what
 > agents know, structured), [agent interfaces](./agent-interfaces-design.md)
 > (how they show it), and [live sessions](./live-sessions-design.md) (how they
@@ -321,7 +321,7 @@ One migration per PR, each removing something:
 |---|---|---|
 | 1 | Contract, registry, SQLite provider, `state.changed`, `state` tool, read API | the foundation — **done** |
 | 2 | Subscriptions: dispatcher, five delivery modes, room and session delivery | "notify these agents, this way" — **done** |
-| 3 | Context slot for pinned queries | state in the prompt instead of transcripts |
+| 3 | Context slot for pinned queries | state in the prompt instead of transcripts — **done** |
 | 4 | Migrate collections | a use-case table in core |
 | 5 | `TaskBackend` adapter | tasks visible as state |
 | 6 | Migrate facts | a second fixed table |
