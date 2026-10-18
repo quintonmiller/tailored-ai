@@ -108,6 +108,17 @@ export class InterfaceTool implements Tool {
         case "close": {
           const record = this.own(store, args.id, agent);
           const note = typeof args.note === "string" && args.note.trim() ? args.note.trim() : undefined;
+          // Tidying up after an answer is what a careful agent does, and measured
+          // on a local model it did so two runs in three. The goal — no more
+          // answers — already holds, so it succeeds and says what the answer was,
+          // rather than costing a round on an error for doing the right thing.
+          if (record.status === "answered") {
+            const answer = describeAnswer(record);
+            return {
+              success: true,
+              output: `${record.spec.kind} ${record.spec.id} was already answered${answer ? ` (${answer})` : ""}; it takes no more answers.`,
+            };
+          }
           if (!store.close(record.spec.id, note)) {
             return fail(`${record.spec.kind} ${record.spec.id} is already ${record.status}.`);
           }
@@ -132,10 +143,22 @@ export class InterfaceTool implements Tool {
   }
 }
 
+/** What was chosen, read from the record: the action's label, or the free text a choice allowed. */
+function describeAnswer(record: {
+  spec: { actions?: { id: string; label?: string }[] };
+  response?: { actionId: string; value?: unknown };
+}): string | undefined {
+  const response = record.response;
+  if (!response) return undefined;
+  if (typeof response.value === "string") return `"${response.value}"`;
+  const label = record.spec.actions?.find((a) => a.id === response.actionId)?.label;
+  return label ? `"${label}"` : undefined;
+}
+
 function sentNote(kind: string, id: string, actions: { effect: { kind: string } }[] | undefined): string {
   if (!actions?.length) return `Sent ${kind} ${id}.`;
   return actions.some((a) => a.effect.kind === "reply")
-    ? `Sent ${kind} ${id}. The answer will come back as the person's next message.`
+    ? `Sent ${kind} ${id}. The answer will come back as the person's next message, and the ${kind} closes itself once answered.`
     : `Sent ${kind} ${id}. Clicks are announced as interface.action.`;
 }
 
