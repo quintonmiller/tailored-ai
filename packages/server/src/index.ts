@@ -65,6 +65,8 @@ import {
   InterfaceError,
   interfaceStoreFor,
   isCommand,
+  type LiveSession,
+  LiveSessionError,
   Lockfile,
   listCollections,
   listDocuments,
@@ -100,6 +102,7 @@ import {
   respondToComponent,
   runAgentLoop,
   runMemorySweep,
+  runVoiceTurn,
   SESSION_SUMMARY_TAG,
   type StateCaller,
   type StateChange,
@@ -107,6 +110,7 @@ import {
   StateError,
   type Suggestions,
   setSecret,
+  startLiveSession,
   summarizeSession,
   TaiRegistrySource,
   type TaskQueryFilter,
@@ -121,6 +125,7 @@ import {
   updateProjectTask,
   updateRawConfig,
   updateSessionMeta,
+  type VoiceTurnInput,
   validateWorkflow,
   type WorkflowEngine,
   type WorkflowTrigger,
@@ -1844,6 +1849,93 @@ export function createServer(opts: ServerOptions) {
       if (err instanceof InterfaceError) return c.json({ error: err.message }, 409);
       throw err;
     }
+  });
+
+  // --- Live sessions (docs/live-sessions.md) ---
+  //
+  // The web transport: push-to-talk over plain HTTP. The browser records an
+  // utterance and posts it; the reply streams back as server-sent events —
+  // the transcript, the text as it is written, and the audio a sentence at a
+  // time, so playback starts before the reply is done.
+
+  const liveJson = (s: LiveSession) => ({
+    id: s.id,
+    ...(s.agent ? { agent: s.agent } : {}),
+    transport: s.transport,
+    startedAt: s.startedAt,
+    turns: s.turns,
+    limits: s.limits,
+    ...(s.endedAt ? { endedAt: s.endedAt, endReason: s.endReason } : {}),
+  });
+
+  app.post("/api/live/sessions", async (c) => {
+    const body = await c.req.json<{ agent?: string }>().catch(() => ({}) as { agent?: string });
+    try {
+      const session = startLiveSession(runtime, {
+        ...(typeof body.agent === "string" && body.agent ? { agent: body.agent } : {}),
+        transport: "web",
+      });
+      return c.json(liveJson(session), 201);
+    } catch (err) {
+      if (err instanceof LiveSessionError) return c.json({ error: err.message }, 409);
+      throw err;
+    }
+  });
+
+  app.get("/api/live/sessions/:id", (c) => {
+    const session = runtime.getLiveSessions().get(c.req.param("id"));
+    return session ? c.json(liveJson(session)) : c.json({ error: "No such live session" }, 404);
+  });
+
+  app.delete("/api/live/sessions/:id", (c) => {
+    const session = runtime.getLiveSessions().end(c.req.param("id"), "it was ended");
+    return session ? c.json(liveJson(session)) : c.json({ error: "No such live session" }, 404);
+  });
+
+  // One turn: the body is the recorded audio (its Content-Type says the
+  // format), or `{"text": "..."}` for something typed into the call.
+  app.post("/api/live/sessions/:id/turn", async (c) => {
+    const id = c.req.param("id");
+    let session: LiveSession;
+    try {
+      session = runtime.getLiveSessions().beginTurn(id);
+    } catch (err) {
+      if (err instanceof LiveSessionError) return c.json({ error: err.message }, 409);
+      throw err;
+    }
+    // A spoken turn is the person's own, so only `scope: all` stops it — and says why.
+    if (runtime.isAgentsPaused("human")) return c.json(pausedPayload(runtime), 503);
+    const type = c.req.header("content-type") ?? "";
+    let input: VoiceTurnInput;
+    if (type.startsWith("application/json")) {
+      const body = await c.req.json<{ text?: string }>().catch(() => ({}) as { text?: string });
+      input = { text: typeof body.text === "string" ? body.text : "" };
+    } else {
+      const bytes = Buffer.from(await c.req.arrayBuffer());
+      if (bytes.length === 0) return c.json({ error: "Send the recorded audio as the request body." }, 400);
+      input = { audio: { bytes, mimeType: type || "audio/webm" } };
+    }
+    return streamSSE(c, async (stream) => {
+      const send = (event: string, data: unknown) =>
+        stream.writeSSE({ event, data: JSON.stringify(data) }).catch(() => {});
+      try {
+        const result = await runVoiceTurn(
+          runtime,
+          session,
+          input,
+          {
+            transcript: (text) => send("transcript", { text }),
+            text: (delta) => send("text", { delta }),
+            audio: (a) =>
+              send("audio", { seq: a.seq, text: a.text, mimeType: a.mimeType, data: a.bytes.toString("base64") }),
+          },
+          c.req.raw.signal,
+        );
+        await send("done", { transcript: result.transcript, reply: result.reply, timings: result.timings });
+      } catch (err) {
+        await send("error", { message: (err as Error).message });
+      }
+    });
   });
 
   // --- World state (docs/world-state.md) ---
