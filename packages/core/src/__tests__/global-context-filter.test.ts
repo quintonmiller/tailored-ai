@@ -64,7 +64,7 @@ describe("loadAllContext honours the filter", () => {
   beforeEach(async () => {
     base = await mkdtemp(join(tmpdir(), "ctx-filter-"));
     globalDir = join(base, "global");
-    agentDir = join(base, "agents", "game-master");
+    agentDir = join(base, "agents", "reviewer");
     const { mkdir } = await import("node:fs/promises");
     await mkdir(globalDir, { recursive: true });
     await mkdir(agentDir, { recursive: true });
