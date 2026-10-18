@@ -9,7 +9,8 @@
 import type { ActionSpec } from "../content/types.js";
 import type { EventBus } from "../events.js";
 import type { StateService } from "../state/service.js";
-import { StateConflictError, StateError, type StateRecord } from "../state/types.js";
+import { type FieldCondition, StateConflictError, StateError, type StateRecord } from "../state/types.js";
+import { checkOf } from "./bind.js";
 import { InterfaceError } from "./kinds.js";
 import type { ComponentRecord, InterfaceStore } from "./store.js";
 
@@ -52,6 +53,11 @@ export async function respondToComponent(
           : "This was closed by the agent.",
     );
   }
+  // Ticking an item on a list: flips the list's `check` field on that record.
+  if (record.spec.query && input.actionId.startsWith(CHECK_PREFIX)) {
+    return tick(record, input.actionId.slice(CHECK_PREFIX.length), input.by, opts);
+  }
+
   const action = record.spec.actions?.find((a) => a.id === input.actionId);
   if (!action) throw new InterfaceError(`This ${record.spec.kind} has no action "${input.actionId}".`);
 
@@ -101,6 +107,49 @@ export async function respondToComponent(
     return { effect: "event" };
   }
   return { effect: "reply", reply };
+}
+
+/** The action id a tick on a list item arrives as: `check:<record id>`. */
+export const CHECK_PREFIX = "check:";
+
+/**
+ * A tick on a list item. Only a record the list's query still matches can be
+ * ticked, so a stale or hand-made action id cannot reach some other record of
+ * the type. The component stays open, like any state button.
+ */
+async function tick(
+  record: ComponentRecord,
+  recordId: string,
+  by: string,
+  opts: RespondOptions,
+): Promise<RespondResult> {
+  const query = record.spec.query;
+  const check = checkOf(record.spec.props);
+  if (!query || !check) throw new InterfaceError("This list has nothing to tick.");
+  if (!opts.state) throw new InterfaceError("This list changes state, and state is not available here.");
+  const reader = { actor: { kind: "system" as const, name: "interfaces" } };
+  const matches = await opts.state.query(reader, {
+    type: query.type,
+    ...(query.where ? { where: query.where as Record<string, FieldCondition> } : {}),
+    limit: 500,
+  });
+  const target = matches.find((r) => r.id === recordId && (!query.scopes || query.scopes.includes(r.scope)));
+  if (!target) throw new InterfaceError("That item is no longer on this list.");
+  const next = target.data[check.field] === check.on ? check.off : check.on;
+  try {
+    const written = await opts.state.patch(
+      {
+        actor: { kind: "user", name: by },
+        source: { ...(opts.surface ? { surface: opts.surface } : {}), interfaceId: record.spec.id },
+      },
+      { type: query.type, id: recordId },
+      { [check.field]: next },
+    );
+    return { effect: "state", record: written };
+  } catch (err) {
+    if (err instanceof StateConflictError || err instanceof StateError) throw new InterfaceError(err.message);
+    throw err;
+  }
 }
 
 /**

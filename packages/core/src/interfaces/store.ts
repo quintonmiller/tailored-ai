@@ -119,6 +119,14 @@ export class InterfaceStore {
       .all(id, surface) as ComponentPost[];
   }
 
+  /** Open lists showing records of this world-state type. */
+  listsOf(type: string): ComponentRecord[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM interface_components WHERE status = 'open' AND json_extract(spec, '$.query.type') = ?`)
+      .all(type) as Row[];
+    return rows.map((r) => this.toRecord(r)).filter((r) => r.status === "open");
+  }
+
   /** Open components showing this world-state record. */
   boundTo(type: string, id: string): ComponentRecord[] {
     const rows = this.db

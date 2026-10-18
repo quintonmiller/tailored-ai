@@ -39,6 +39,8 @@ export interface ComponentSpec {
   expiresAt?: string;
   /** The world-state record it shows, kept current as the record changes. */
   bind?: { type: string; id: string };
+  /** The world-state query a list shows, kept current as records of its type change. */
+  query?: { type: string; where?: Record<string, unknown>; limit?: number; scopes?: string[] };
 }
 
 export type ContentPart =

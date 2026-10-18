@@ -233,6 +233,7 @@ function interaction(customId: string, over: Partial<FakeInteraction> = {}): Fak
     isModalSubmit: () => i.kind === "modal",
     isFromMessage: () => true,
     reply: async (r: { content: string }) => void i.replies.push(r),
+    followUp: async (r: { content: string }) => void i.replies.push(r),
     update: async (u: Json) => void i.updates.push(u),
     showModal: async (m: { toJSON(): Json }) => void i.modals.push(m.toJSON()),
   });
@@ -264,8 +265,11 @@ describe("handleInterfaceInteraction", () => {
     expect(click.updates[0].content).toBe("**Which day?**\n✅ Tue — <@u1>");
     expect(continued).toEqual([{ reply: "Tue", where: { channelId: "chan1", userId: "u1" } }]);
 
+    // A late click finishes the message (in case it was drawn before the
+    // answer) and says why, privately.
     const late = interaction(`iface:${c.id}:a:option-1`, { user: { id: "u1" } });
     await handle(late, d);
+    expect(late.updates[0].content).toBe("**Which day?**\n✅ Tue — <@u1>");
     expect(late.replies[0].content).toBe("This has already been answered.");
     expect(continued).toHaveLength(1);
   });
@@ -359,6 +363,84 @@ describe("handleInterfaceInteraction", () => {
     await handle(interaction(`iface:${c.id}:a:a1`), d);
     expect(announced).toMatchObject([{ componentId: c.id, name: "snooze", by: "discord:u1" }]);
     expect(continued).toEqual([]);
+  });
+});
+
+describe("lists on Discord", () => {
+  const listSpec = (items: { id: string; label: string; checked?: boolean }[], extra: Record<string, unknown> = {}) =>
+    buildComponent({
+      kind: "list",
+      props: { title: "Chores", items, check: { field: "done" }, ...extra },
+      query: { type: "chore", scopes: ["global"] },
+    });
+
+  it("draws one tick button per item, ticked ones green, and counts what does not fit", () => {
+    const items = Array.from({ length: 23 }, (_, i) => ({ id: `c${i}`, label: `Chore ${i}`, checked: i === 1 }));
+    const spec = listSpec(items, { more: 2 });
+    const msg = buildComponentMessage(spec)!;
+    expect(msg.content).toBe("**Chores**\n…and 5 more.");
+    const rows = rowsOf(msg);
+    expect(rows.flat()).toHaveLength(20);
+    expect(rows[0][0]).toMatchObject({ label: "☐ Chore 0", style: 2, custom_id: `iface:${spec.id}:c:c0` });
+    expect(rows[0][1]).toMatchObject({ label: "☑ Chore 1", style: 3 });
+  });
+
+  it("lists items as lines when nothing can be ticked, and says when nothing matches", () => {
+    const plain = buildComponent({
+      kind: "list",
+      props: { title: "Chores", items: [{ id: "a", label: "Dishes" }] },
+      query: { type: "chore" },
+    });
+    expect(buildComponentMessage(plain)).toEqual({ content: "**Chores**\n• Dishes", components: [] });
+    expect(buildComponentMessage(listSpec([]))?.content).toBe("**Chores**\nNothing matches.");
+  });
+
+  it("flips the field on a tick and redraws the list from a fresh query", async () => {
+    const stateDb = new Database(":memory:");
+    const state = new StateService({
+      getConfig: () => ({
+        state: {
+          backend: "sqlite",
+          types: [
+            {
+              name: "chore",
+              title: "name",
+              schema: { type: "object", properties: { name: { type: "string" }, done: { type: "boolean" } } },
+            },
+          ],
+        },
+      }),
+      db: stateDb,
+    });
+    await state.put(
+      { actor: { kind: "system", name: "t" } },
+      { type: "chore", id: "dishes", scope: "global", data: { name: "Do the dishes", done: false } },
+    );
+    const spec = listSpec([{ id: "dishes", label: "Do the dishes", checked: false }]);
+    store.create(spec, "planner", "s1");
+    const unavailable = vi.fn(() => "busy");
+    const { d } = deps({ state, unavailable });
+    const click = interaction(`iface:${spec.id}:c:dishes`);
+    await handle(click, d);
+
+    expect(unavailable).not.toHaveBeenCalled();
+    expect(rowsOf(click.updates[0])[0][0]).toMatchObject({ label: "☑ Do the dishes", style: 3, disabled: false });
+    expect(
+      (await state.get({ actor: { kind: "system", name: "t" } }, { type: "chore", id: "dishes" }))?.data.done,
+    ).toBe(true);
+    expect(store.get(spec.id)?.status).toBe("open");
+    await state.close();
+  });
+
+  it("finishes the message when a click finds the component expired, and says so privately", async () => {
+    const c = send("confirm", { summary: "Go?" }, { expiresInMinutes: 1 });
+    const expiredStore = new InterfaceStore(new Database(":memory:"), () => new Date(Date.now() + 5 * 60_000));
+    expiredStore.create(c, "planner", "s1");
+    const { d } = deps({ store: expiredStore });
+    const click = interaction(`iface:${c.id}:a:confirm`);
+    await handle(click, d);
+    expect(click.updates[0].content).toBe("**Go?**\nExpired");
+    expect(click.replies[0].content).toBe("This question has expired.");
   });
 });
 
@@ -697,6 +779,42 @@ describe("DiscordChannel", () => {
       await state.delete(system, { type: "plan", id: "trip" });
       await settle(80);
       expect(edits[1].payload.content).toBe("This record was deleted.");
+    });
+
+    it("redraws a posted list when a record of its type appears", async () => {
+      const { priv, edits, runtime } = makeChannel();
+      const store = interfaceStoreFor(db);
+      const state = runtime.getStateService();
+      const system = { actor: { kind: "system" as const, name: "test" } };
+      await state.put(system, {
+        type: "plan",
+        id: "trip",
+        scope: "global",
+        data: { name: "Lisbon trip", status: "draft" },
+      });
+      const spec = buildComponent({
+        kind: "list",
+        props: {
+          title: "Plans",
+          items: [{ id: "trip", label: "Lisbon trip", checked: false }],
+          check: { field: "status", on: "done", off: "draft" },
+        },
+        query: { type: "plan", scopes: ["global"] },
+      });
+      store.create(spec, "default", "s1");
+      store.addPost(spec.id, { surface: "discord", channel: "chan1", message: "m-list" });
+      priv.watchInterfaces();
+
+      await settle(5); // a later creation time, so "oldest first" is not decided by the id tiebreak
+      await state.put(system, {
+        type: "plan",
+        id: "move",
+        scope: "global",
+        data: { name: "Move house", status: "done" },
+      });
+      await settle(40);
+      expect(edits).toHaveLength(1);
+      expect(rowsOf(edits[0].payload)[0].map((b: Json) => b.label)).toEqual(["☐ Lisbon trip", "☑ Move house"]);
     });
 
     it("stops editing once it disconnects", async () => {

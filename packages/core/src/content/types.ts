@@ -100,6 +100,12 @@ export interface ComponentSpec {
    * as it was when the component was sent.
    */
   bind?: { type: string; id: string };
+  /**
+   * The world-state query a list shows: every record of `type` matching
+   * `where`, up to `limit`, among the scopes its agent could see when it sent
+   * it. Redrawn from a fresh query whenever a record of that type changes.
+   */
+  query?: { type: string; where?: Record<string, unknown>; limit?: number; scopes?: string[] };
 }
 
 export type ContentPart =

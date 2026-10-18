@@ -1,5 +1,13 @@
 import { useEffect, useState } from "react";
-import { type ComponentState, type ComponentStatus, fetchInterfaces, fetchStateRecord, respondInterface } from "../api";
+import {
+  type ComponentState,
+  type ComponentStatus,
+  fetchInterfaces,
+  fetchStateRecord,
+  fetchStateRecords,
+  respondInterface,
+  type StateRecordInfo,
+} from "../api";
 import type { ActionSpec, ComponentSpec } from "../lib/content.js";
 import { stateTitleField, subscribeComponentChanges, subscribeStateChanges } from "../lib/state-events";
 import { useChatStore } from "./ChatContext";
@@ -59,6 +67,7 @@ function InterfaceComponent({ spec, state }: { spec: ComponentSpec; state?: Comp
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<string | null>(null);
   const bound = useBoundRecord(spec.bind);
+  const listed = useListItems(spec);
 
   // "Done" after a state button fades on its own; the card itself shows the change.
   useEffect(() => {
@@ -101,7 +110,13 @@ function InterfaceComponent({ spec, state }: { spec: ComponentSpec; state?: Comp
         </div>
       )}
       <Body
-        spec={bound.data ? { ...spec, props: boundView(spec.props, bound.data, bound.titleField) } : spec}
+        spec={
+          listed
+            ? { ...spec, props: listed }
+            : bound.data
+              ? { ...spec, props: boundView(spec.props, bound.data, bound.titleField) }
+              : spec
+        }
         open={open}
         act={act}
       />
@@ -155,6 +170,71 @@ function useBoundRecord(bind: ComponentSpec["bind"]) {
   return { data, titleField, set: setData };
 }
 
+/**
+ * A list's props from a fresh read of its query, kept current: re-read
+ * whenever the state stream reports a change to a record of its type.
+ * `undefined` for anything that is not a list, or before the first read.
+ */
+function useListItems(spec: ComponentSpec): Record<string, unknown> | undefined {
+  const [props, setProps] = useState<Record<string, unknown> | undefined>(undefined);
+  const query = spec.query;
+  const key = query ? JSON.stringify(query) : "";
+  const base = spec.props;
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `key` stands for the query
+  useEffect(() => {
+    if (!query) return;
+    let cancelled = false;
+    const limit = Math.min(Math.max(1, query.limit ?? 10), 50);
+    const load = () =>
+      // Oldest first, as core orders a list, so a tick does not move the item.
+      Promise.all([
+        fetchStateRecords(query.type, 500, { where: query.where, orderBy: "createdAt" }),
+        stateTitleField(query.type),
+      ])
+        .then(([res, titleField]) => {
+          if (!cancelled) setProps(listView(base, res.records, limit, query.scopes, titleField));
+        })
+        // Unreadable now: keep drawing the items it was sent with.
+        .catch(() => {});
+    load();
+    const off = subscribeStateChanges((c) => {
+      if (c.type === query.type) load();
+    });
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, [key]);
+
+  return props;
+}
+
+/** A list's props from its records. Mirrors `listProps` in core's `interfaces/bind.ts`. */
+function listView(
+  props: Record<string, unknown>,
+  records: StateRecordInfo[],
+  limit: number,
+  scopes: string[] | undefined,
+  titleField: string | undefined,
+): Record<string, unknown> {
+  const visible = scopes ? records.filter((r) => scopes.includes(r.scope)) : records;
+  const check = props.check as { field?: string; on?: unknown } | undefined;
+  const on = check?.on ?? true;
+  return {
+    ...props,
+    items: visible.slice(0, limit).map((r) => {
+      const named = titleField ? r.data[titleField] : undefined;
+      return {
+        id: r.id,
+        label: typeof named === "string" && named.trim() ? named : r.id,
+        ...(check?.field ? { checked: r.data[check.field] === on } : {}),
+      };
+    }),
+    more: Math.max(0, visible.length - limit),
+  };
+}
+
 /** A bound card's props from its record. Mirrors `boundCardProps` in core's `interfaces/bind.ts`. */
 function boundView(
   props: Record<string, unknown>,
@@ -206,6 +286,45 @@ function Body({ spec, open, act }: { spec: ComponentSpec; open: boolean; act: Ac
           {actions.length > 0 && <Buttons actions={actions} open={open} act={act} />}
         </>
       );
+    case "list": {
+      const items = (Array.isArray(p.items) ? p.items : []) as { id: string; label: string; checked?: boolean }[];
+      const ticks = p.check !== undefined;
+      return (
+        <>
+          <div className="iface-card-title">{str(p.title)}</div>
+          {items.length === 0 ? (
+            <div className="iface-details">Nothing matches.</div>
+          ) : (
+            <ul className="iface-list">
+              {items.map((item) => (
+                <li key={item.id}>
+                  {ticks ? (
+                    <label className="iface-list-item">
+                      <input
+                        type="checkbox"
+                        checked={item.checked === true}
+                        disabled={!open}
+                        onChange={() =>
+                          act({
+                            id: `check:${item.id}`,
+                            label: item.label,
+                            effect: { kind: "state", ref: { type: spec.query?.type ?? "", id: item.id }, patch: {} },
+                          })
+                        }
+                      />
+                      <span>{item.label}</span>
+                    </label>
+                  ) : (
+                    <span>{item.label}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          {typeof p.more === "number" && p.more > 0 && <div className="iface-details">…and {p.more} more.</div>}
+        </>
+      );
+    }
     default:
       // A kind a plugin added that this UI has no renderer for: the text form
       // core wrote is still a complete question.

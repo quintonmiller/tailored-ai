@@ -32,6 +32,8 @@ export interface ComponentKind {
   fallback(props: Record<string, unknown>, actions: ActionSpec[]): string;
   /** Whether it can be bound to a world-state record and show it. */
   bindable?: boolean;
+  /** Whether it shows the records a world-state query matches, and needs one. */
+  queryable?: boolean;
 }
 
 export const componentKindRegistry = new Registry<ComponentKind>("component-kind");
@@ -69,6 +71,8 @@ export interface BuildComponentInput {
   id?: string;
   /** The world-state record it shows; only for a kind that is `bindable`. */
   bind?: { type: string; id: string };
+  /** The world-state query it shows; required by a kind that is `queryable`, refused by any other. */
+  query?: { type: string; where?: Record<string, unknown>; limit?: number; scopes?: string[] };
 }
 
 /**
@@ -94,6 +98,14 @@ export function buildComponent(input: BuildComponentInput, now: Date = new Date(
   if (input.bind && !kind.bindable) {
     throw new InterfaceError(`A ${input.kind} cannot show a record; \`bind\` is for a card.`);
   }
+  if (kind.queryable && !input.query) {
+    throw new InterfaceError(
+      `A ${input.kind} shows records: give \`bind\` with the record type, e.g. {"type": "task"}.`,
+    );
+  }
+  if (input.query && !kind.queryable) {
+    throw new InterfaceError(`A ${input.kind} cannot show a list of records; send a list.`);
+  }
   const actions = input.actions?.length ? agentActions(input.actions, input.bind) : kind.defaultActions(input.props);
   const spec: ComponentSpec = {
     id: input.id ?? `c-${randomBytes(3).toString("hex")}`,
@@ -105,6 +117,7 @@ export function buildComponent(input: BuildComponentInput, now: Date = new Date(
       ? { expiresAt: new Date(now.getTime() + input.expiresInMinutes * 60_000).toISOString() }
       : {}),
     ...(input.bind ? { bind: { type: input.bind.type, id: input.bind.id } } : {}),
+    ...(input.query ? { query: input.query } : {}),
   };
   spec.fallback = `[${spec.kind} ${spec.id}] ${kind.fallback(input.props, actions)}`;
   return spec;
@@ -143,6 +156,9 @@ function isRef(v: unknown): v is { type: string; id: string } {
 }
 
 const reply: ActionEffect = { kind: "reply" };
+
+/** Most items a list holds; the rest are counted in `more`. */
+export const MAX_LIST_ITEMS = 50;
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 
@@ -285,6 +301,55 @@ const card: ComponentKind = {
     ].join("\n"),
 };
 
-for (const kind of [choice, form, confirm, card]) {
+/**
+ * The records a query matches, as a checklist. The items are filled by core
+ * from the query, never by the agent, and refreshed whenever a record of the
+ * type changes. With `check`, ticking an item flips that field on the record:
+ * `on` when it is not on, `off` when it is.
+ */
+const listKind: ComponentKind = {
+  kind: "list",
+  description: "The records a state query matches, kept current; with `check`, ticking one flips a field.",
+  schema: {
+    type: "object",
+    required: ["title", "items"],
+    additionalProperties: false,
+    properties: {
+      title: { type: "string", minLength: 1 },
+      items: {
+        type: "array",
+        maxItems: MAX_LIST_ITEMS,
+        items: {
+          type: "object",
+          required: ["id", "label"],
+          additionalProperties: false,
+          properties: { id: { type: "string" }, label: { type: "string" }, checked: { type: "boolean" } },
+        },
+      },
+      check: {
+        type: "object",
+        required: ["field"],
+        additionalProperties: false,
+        properties: { field: { type: "string", minLength: 1 }, on: {}, off: {} },
+      },
+      more: { type: "integer", minimum: 0 },
+    },
+  },
+  defaultActions: () => [],
+  queryable: true,
+  fallback: (props) => {
+    const check = props.check !== undefined;
+    const items = list(props.items) as Record<string, unknown>[];
+    return [
+      str(props.title),
+      ...(items.length
+        ? items.map((i) => (check ? `- [${i.checked ? "x" : " "}] ${str(i.label)}` : `- ${str(i.label)}`))
+        : ["(nothing matches)"]),
+      ...(typeof props.more === "number" && props.more > 0 ? [`…and ${props.more} more.`] : []),
+    ].join("\n");
+  },
+};
+
+for (const kind of [choice, form, confirm, card, listKind]) {
   if (!componentKindRegistry.has(kind.kind)) componentKindRegistry.register(kind.kind, kind);
 }
