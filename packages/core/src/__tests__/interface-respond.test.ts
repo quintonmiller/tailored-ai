@@ -38,21 +38,24 @@ const answer = (id: string, actionId: string, value?: unknown) =>
   respondToComponent(store, events, { id, actionId, ...(value !== undefined ? { value } : {}), by: "owner" });
 
 describe("respondToComponent", () => {
-  it("turns a choice into the option's words, and records it once", () => {
+  it("turns a choice into the option's words, and records it once", async () => {
     const c = send("choice", { question: "Which day?", options: ["Monday", "Tuesday"] });
-    expect(answer(c.id, "option-2")).toEqual({ effect: "reply", reply: "Tuesday" });
+    expect(await answer(c.id, "option-2")).toEqual({ effect: "reply", reply: "Tuesday" });
     expect(store.get(c.id)?.status).toBe("answered");
     expect(store.get(c.id)?.response).toMatchObject({ actionId: "option-2", by: "owner" });
-    expect(() => answer(c.id, "option-1")).toThrow("This has already been answered.");
+    await expect(answer(c.id, "option-1")).rejects.toThrow("This has already been answered.");
   });
 
-  it("passes a free-text answer through, and asks for text when there is none", () => {
+  it("passes a free-text answer through, and asks for text when there is none", async () => {
     const c = send("choice", { question: "Where?", options: ["Home", "Office"], allowText: true });
-    expect(() => answer(c.id, "text", "  ")).toThrow("Say something in the text box first.");
-    expect(answer(c.id, "text", "The café on Main St")).toEqual({ effect: "reply", reply: "The café on Main St" });
+    await expect(answer(c.id, "text", "  ")).rejects.toThrow("Say something in the text box first.");
+    expect(await answer(c.id, "text", "The café on Main St")).toEqual({
+      effect: "reply",
+      reply: "The café on Main St",
+    });
   });
 
-  it("writes a form's answers as labelled lines, and names missing required fields", () => {
+  it("writes a form's answers as labelled lines, and names missing required fields", async () => {
     const f = send("form", {
       title: "Booking",
       fields: [
@@ -60,20 +63,20 @@ describe("respondToComponent", () => {
         { name: "notes", label: "Notes" },
       ],
     });
-    expect(() => answer(f.id, "submit", { notes: "late arrival" })).toThrow("Fill in: Guests.");
-    expect(answer(f.id, "submit", { guests: 2, notes: "late arrival" })).toEqual({
+    await expect(answer(f.id, "submit", { notes: "late arrival" })).rejects.toThrow("Fill in: Guests.");
+    expect(await answer(f.id, "submit", { guests: 2, notes: "late arrival" })).toEqual({
       effect: "reply",
       reply: "Booking\nGuests: 2\nNotes: late arrival",
     });
   });
 
-  it("announces an event action instead of replying", () => {
+  it("announces an event action instead of replying", async () => {
     const card = send(
       "card",
       { title: "Disk 95% full" },
       { actions: [{ label: "Page me", effect: "event", name: "escalate" }] },
     );
-    expect(answer(card.id, "a1")).toEqual({ effect: "event" });
+    expect(await answer(card.id, "a1")).toEqual({ effect: "event" });
     expect(announced).toEqual([
       {
         componentId: card.id,
@@ -88,19 +91,19 @@ describe("respondToComponent", () => {
     ]);
   });
 
-  it("refuses an answer to a closed or expired component, or with an action it does not have", () => {
+  it("refuses an answer to a closed or expired component, or with an action it does not have", async () => {
     const closed = send("confirm", { summary: "Go?" });
     store.close(closed.id, "decided without you");
-    expect(() => answer(closed.id, "confirm")).toThrow("This was closed by the agent.");
+    await expect(answer(closed.id, "confirm")).rejects.toThrow("This was closed by the agent.");
 
     const timed = send("confirm", { summary: "Go?" }, { expiresInMinutes: 10 });
     clock = new Date(clock.getTime() + 11 * 60_000);
     expect(store.get(timed.id)?.status).toBe("expired");
-    expect(() => answer(timed.id, "confirm")).toThrow("This question has expired.");
+    await expect(answer(timed.id, "confirm")).rejects.toThrow("This question has expired.");
 
     const fresh = send("confirm", { summary: "Go?" });
-    expect(() => answer(fresh.id, "maybe")).toThrow('This confirm has no action "maybe".');
-    expect(() => answer("c-nope", "confirm")).toThrow(InterfaceError);
+    await expect(answer(fresh.id, "maybe")).rejects.toThrow('This confirm has no action "maybe".');
+    await expect(answer("c-nope", "confirm")).rejects.toThrow(InterfaceError);
   });
 });
 

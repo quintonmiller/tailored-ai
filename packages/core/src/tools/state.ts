@@ -137,13 +137,22 @@ export class StateTool implements Tool {
 }
 
 function callerFrom(context: ToolContext): StateCaller {
+  return agentStateCaller(context, "state");
+}
+
+/**
+ * The agent behind a tool call, as world state sees it: its name, the rooms
+ * the turn is about, and its project, all from the tool context rather than
+ * an argument, so an agent cannot read as someone else.
+ */
+export function agentStateCaller(context: ToolContext, tool: string): StateCaller {
   const rooms = (context.workingMemory?.get(WAKE_ROOMS_KEY) ?? "")
     .split(",")
     .map((r) => r.trim())
     .filter(Boolean);
   return {
     actor: { kind: "agent", name: context.agentName ?? "default" },
-    source: { tool: "state" },
+    source: { tool },
     rooms,
     projectId: context.projectId ?? null,
   };

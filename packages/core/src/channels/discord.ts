@@ -1014,6 +1014,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     return {
       store: interfaceStoreFor(this.runtime.db),
       events: this.runtime.events,
+      state: this.runtime.getStateService(),
       authorize: (interaction, record) =>
         this.authorizeAnswer(record, interaction.user.id, interaction.guildId ?? undefined),
       unavailable: (record) => {

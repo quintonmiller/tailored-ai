@@ -152,3 +152,102 @@ describe("InterfaceComponents", () => {
     expect(container.textContent).toContain("Rate the hotel from 1 to 5.");
   });
 });
+
+describe("bound cards and state buttons", () => {
+  class FakeEventSource {
+    static last: FakeEventSource | undefined;
+    listeners = new Map<string, ((ev: { data: string }) => void)[]>();
+    constructor(readonly url: string) {
+      FakeEventSource.last = this;
+    }
+    addEventListener(event: string, fn: (ev: { data: string }) => void) {
+      this.listeners.set(event, [...(this.listeners.get(event) ?? []), fn]);
+    }
+    emit(event: string, data: unknown) {
+      for (const fn of this.listeners.get(event) ?? []) fn({ data: JSON.stringify(data) });
+    }
+    close() {}
+  }
+
+  const bound: ComponentSpec = {
+    id: "c-9",
+    kind: "card",
+    props: { title: "Lisbon trip", fields: [{ label: "status", value: "draft" }] },
+    actions: [
+      {
+        id: "a1",
+        label: "Start",
+        effect: { kind: "state", ref: { type: "plan", id: "trip" }, patch: { status: "active" } },
+      },
+    ],
+    bind: { type: "plan", id: "trip" },
+    fallback: "[card c-9] Lisbon trip",
+  };
+  const record = (status: string, version: number) => ({
+    type: "plan",
+    id: "trip",
+    scope: "global",
+    data: { name: "Lisbon trip", status },
+    version,
+    createdAt: "",
+    updatedAt: "",
+    updatedBy: { kind: "user", name: "owner" },
+  });
+
+  beforeEach(() => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST") {
+          posted.push({ url, body: JSON.parse(String(init.body)) });
+          return new Response(JSON.stringify({ effect: "state", record: record("active", 2) }));
+        }
+        if (url === "/api/state/types")
+          return new Response(JSON.stringify({ types: [{ name: "plan", title: "name", canWrite: true }] }));
+        if (url === "/api/state/plan/trip") return new Response(JSON.stringify(record("draft", 1)));
+        return new Response(JSON.stringify({ components: [{ id: "c-9", kind: "card", status: "open", spec: bound }] }));
+      }),
+    );
+  });
+
+  const fields = () =>
+    [...container.querySelectorAll(".iface-card-field")].map(
+      (f) => `${f.querySelector("dt")?.textContent}=${f.querySelector("dd")?.textContent}`,
+    );
+
+  it("shows the record as it is now, and follows it as it changes", async () => {
+    await render([bound]);
+    await act(async () => {});
+    expect(fields()).toEqual(["status=draft"]);
+    expect(FakeEventSource.last?.url).toBe("/api/state/events");
+
+    await act(async () =>
+      FakeEventSource.last?.emit("change", {
+        type: "plan",
+        id: "trip",
+        op: "update",
+        version: 3,
+        after: { name: "Lisbon trip", status: "done" },
+      }),
+    );
+    expect(fields()).toEqual(["status=done"]);
+
+    await act(async () => FakeEventSource.last?.emit("change", { type: "plan", id: "trip", op: "delete", version: 4 }));
+    expect(container.textContent).toContain("This record was deleted.");
+  });
+
+  it("writes on click without sending anything to the chat, and stays clickable", async () => {
+    await render([bound]);
+    await act(async () => {});
+    await act(async () => {
+      button("Start").click();
+    });
+
+    expect(posted).toEqual([{ url: "/api/interfaces/c-9/respond", body: { actionId: "a1" } }]);
+    expect(send).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Done: Start");
+    expect(fields()).toEqual(["status=active"]);
+    expect(button("Start").disabled).toBe(false);
+  });
+});

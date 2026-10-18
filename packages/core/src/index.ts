@@ -84,6 +84,7 @@ export type {
 } from "./guardrails/types.js";
 export {
   type AgentAction,
+  boundCardProps,
   buildComponent,
   type ComponentKind,
   type ComponentRecord,
@@ -93,6 +94,7 @@ export {
   InterfaceError,
   InterfaceStore,
   interfaceStoreFor,
+  type RespondOptions,
   type RespondResult,
   registerComponentKind,
   respondToComponent,

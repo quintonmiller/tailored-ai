@@ -60,7 +60,11 @@ export interface MediaRef {
  * A third effect, writing to world state directly with no model turn, arrives
  * with state binding. See `docs/agent-interfaces-design.md`.
  */
-export type ActionEffect = { kind: "reply" } | { kind: "event"; name?: string };
+export type ActionEffect =
+  | { kind: "reply" }
+  | { kind: "event"; name?: string }
+  /** Writes `patch` to a world-state record as the person who clicked. No model turn; the component stays open. */
+  | { kind: "state"; ref: { type: string; id: string }; patch: Record<string, unknown> };
 
 export interface ActionSpec {
   /** Stable within its component; a response names it. */
@@ -90,6 +94,12 @@ export interface ComponentSpec {
   fallback: string;
   /** ISO time after which responses are refused and surfaces draw it disabled. */
   expiresAt?: string;
+  /**
+   * The world-state record this component shows. A surface that can redraws
+   * it from the record whenever the record changes; the props hold the record
+   * as it was when the component was sent.
+   */
+  bind?: { type: string; id: string };
 }
 
 export type ContentPart =

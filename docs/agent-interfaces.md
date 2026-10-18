@@ -35,9 +35,10 @@ agent with an explicit `tools:` list gets it only by naming it.
 | `confirm` | `summary`, `details?`, `confirmLabel?`, `denyLabel?` | yes and no, or the labels given |
 | `card` | `title`, `body?`, `fields?` (`label`, `value`) | whatever the agent passes as `actions` |
 
-A card's `actions` are `{label, effect?, name?}`. Every other kind's buttons
-come from its props, and `actions` is refused there, since replacing them
-would break the answer.
+A card's `actions` are `{label, effect?, name?, patch?, ref?}`. Every other
+kind's buttons come from its props, and `actions` is refused there, since
+replacing them would break the answer. Buttons put inside `props` instead of
+beside it are moved to where they belong.
 
 A bad request comes back to the agent as a correction naming the field, the
 same way a world-state write does.
@@ -54,10 +55,58 @@ Each button has an effect:
   bus, naming the component, the action, its `name`, and the agent that sent
   it. Route it with [subscriptions](./world-state.md#waking-agents-on-a-change)
   or `hooks.on`.
+- **`state`**: the click writes `patch` to a [world-state](./world-state.md)
+  record, as the person who clicked. No model turn runs. See
+  [Cards that show a record](#cards-that-show-a-record).
 
 A component takes **one** answer. A second click, an answer after the agent
 closed it, or one after `expiresInMinutes` has passed is refused, and the web
-UI shows the reason ("This question has expired.").
+UI shows the reason ("This question has expired."). State buttons are the
+exception: they don't answer, so they can be clicked again and again until
+the component is closed or expires.
+
+## Cards that show a record
+
+A card can be bound to a world-state record with `bind`. It then shows the
+record instead of fixed text, and its buttons can change the record directly:
+
+```
+interface(action: "send", kind: "card",
+          bind: { type: "plan", id: "trip" },
+          actions: [{ label: "Start", effect: "state", patch: { status: "active" } },
+                    { label: "Done", effect: "state", patch: { status: "done" } }])
+```
+
+- **What it shows:** the record's title field (the type's `title`) as the
+  title, and every other field as a line. A type without a title field uses
+  the agent's `props.title`. `props.body` stays as the agent wrote it. Fields
+  the agent gives are left out, and it is told so, since the record supplies
+  them; a local model copied the record into `fields` on every run, and a
+  refusal cost it a round each time.
+- **Who can bind what:** the record is read as the agent, so a card can only
+  show what the agent's own `state` tool could read. A record it can't see is
+  refused, with the same sentence the tool would give.
+- **Staying current:** in the web UI the card follows the record live:
+  whoever changes it, through the tool, the State page, another card or a
+  plugin, the card redraws. A deleted record says so. On Discord, a click
+  redraws the card from the record as the click left it. A change made
+  elsewhere reaches a Discord card the next time someone clicks it; editing
+  posted messages when the record changes is still to come.
+- **State buttons:** `patch` is written to the bound record, or to the
+  button's own `ref: {type, id}` when it names one. The write is recorded as
+  the person who clicked (`owner` in the web UI, `discord:<id>` on Discord),
+  with the component's id as its source, and goes through the type's schema
+  like any other write; a patch that doesn't fit is refused with the reason.
+  Any agent subscribed to that record's changes hears about it through its
+  subscription, with the delivery mode the subscription chose.
+- **What the agent is told:** the tool's reply says the state buttons write
+  directly and nothing comes back, so the agent doesn't wait for an answer.
+  Unlike a `reply` button, a state button runs no agent, so a click works
+  even while the agent is busy or agents are paused.
+
+A surface that can't draw buttons shows the card's text form with the record
+as it was when sent, and "Options: Start, Done." The person replies in words,
+and the agent can make the change with its `state` tool.
 
 ## Where it shows up
 
@@ -117,8 +166,12 @@ when you send it, and a value that does not fit is refused with the reason.
 **Updates and closing.** An `update` posts the component again; buttons on
 the earlier message still work and answer the current version. A component
 the agent closed, or one that expired, keeps its buttons, and a click on it
-says why it no longer takes answers. Editing the posted message in place
-arrives with live updates.
+says why it no longer takes answers. Editing the posted message in place is
+still to come.
+
+**State buttons** on a bound card write the record and redraw the card in
+place, with its buttons still live. They don't wait on the agent, so they
+work while it is busy.
 
 ## HTTP API
 
@@ -126,7 +179,7 @@ arrives with live updates.
 |---|---|
 | `GET /api/interfaces?ids=a,b` | state of several components: `open`, `answered`, `closed` or `expired`, with the answer |
 | `GET /api/interfaces/:id` | one component's state |
-| `POST /api/interfaces/:id/respond` | `{actionId, value?}`. Returns `{effect: "reply", reply}` for the chat to send, or `{effect: "event"}`. `409` with a reason when it no longer takes answers |
+| `POST /api/interfaces/:id/respond` | `{actionId, value?}`. Returns `{effect: "reply", reply}` for the chat to send, `{effect: "event"}`, or `{effect: "state", record}` with the record as the click left it. `409` with a reason when it no longer takes answers or the write doesn't fit |
 
 ## Adding a kind
 

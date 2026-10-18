@@ -280,7 +280,7 @@ registerToolFactory("interface", (config, ctx) => {
   if (config.tools.interface?.enabled === false) return [];
   const db = ctx.db;
   if (!db) return [];
-  return [new InterfaceTool(() => interfaceStoreFor(db))];
+  return [new InterfaceTool(() => interfaceStoreFor(db), ctx.getStateService)];
 });
 
 registerToolFactory("documents", (config, ctx) => {

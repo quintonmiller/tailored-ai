@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 import { InterfaceStore } from "./store.js";
 
+export { boundCardProps } from "./bind.js";
 export {
   type AgentAction,
   type BuildComponentInput,
@@ -10,7 +11,7 @@ export {
   InterfaceError,
   registerComponentKind,
 } from "./kinds.js";
-export { type RespondInput, type RespondResult, respondToComponent } from "./respond.js";
+export { type RespondInput, type RespondOptions, type RespondResult, respondToComponent } from "./respond.js";
 export {
   type ComponentRecord,
   type ComponentResponse,

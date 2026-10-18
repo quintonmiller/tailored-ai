@@ -49,6 +49,16 @@ function buildConfig(): AgentConfig {
     webhooks: { enabled: false, routes: [] },
     custom_tools: {},
     commands: {},
+    state: {
+      backend: "sqlite",
+      types: [
+        {
+          name: "plan",
+          title: "name",
+          schema: { type: "object", properties: { name: { type: "string" }, status: { type: "string" } } },
+        },
+      ],
+    },
   };
 }
 
@@ -147,6 +157,31 @@ describe("/api/interfaces", () => {
     const res = await call(`/api/interfaces/${card.id}/respond`, { actionId: "a1" });
     expect(res).toEqual({ status: 200, json: { effect: "event" } });
     expect(seen).toEqual([expect.objectContaining({ componentId: card.id, name: "escalate", agent: "planner" })]);
+  });
+
+  it("writes a state button's patch as the owner, and keeps the component open", async () => {
+    await runtime
+      .getStateService()
+      .put(
+        { actor: { kind: "system", name: "test" } },
+        { type: "plan", id: "trip", scope: "global", data: { name: "Trip", status: "draft" } },
+      );
+    const card = send(
+      "card",
+      { title: "Trip" },
+      {
+        bind: { type: "plan", id: "trip" },
+        actions: [{ label: "Start", effect: "state", patch: { status: "active" } }],
+      },
+    );
+    const res = await call(`/api/interfaces/${card.id}/respond`, { actionId: "a1" });
+    expect(res.status).toBe(200);
+    expect(res.json).toMatchObject({
+      effect: "state",
+      record: { id: "trip", version: 2, data: { status: "active" }, updatedBy: { kind: "user", name: "owner" } },
+    });
+    expect(interfaceStoreFor(db).get(card.id)?.status).toBe("open");
+    expect((await call(`/api/interfaces/${card.id}/respond`, { actionId: "a1" })).status).toBe(200);
   });
 
   it("answers 404 for a component that does not exist and 400 without an action", async () => {
