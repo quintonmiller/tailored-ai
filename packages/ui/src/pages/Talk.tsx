@@ -218,7 +218,9 @@ export function Talk() {
         </div>
       </div>
       {error && <div className="config-error">{error}</div>}
-      {avatar && <Avatar url={avatar} state={phase} loudness={player.loudness} />}
+      {avatar && (
+        <Avatar url={avatar} state={phase} loudness={player.loudness} engaged={!!session && !session.endedAt} />
+      )}
       {!session ? (
         <div className="talk-start">
           <label>

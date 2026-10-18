@@ -1,7 +1,9 @@
 /**
  * How the avatar moves on its own: it breathes, glances about, blinks, and
  * takes a pose for each moment of a spoken turn: leaning in while you talk,
- * looking up and away while it thinks, nodding along with its own voice.
+ * looking up and away while it thinks, nodding along with its own voice. It
+ * walks with a stride that follows the ground it covers, and once it stops
+ * at a spot it does what the spot is for: sits, types, looks out, browses.
  *
  * Nothing here asks the model for anything. The moments come from the turn the
  * Talk page is already following, and the mouth from the loudness of the
@@ -10,6 +12,7 @@
  * Pure (time in, pose out) so it is tested without a GPU; the stage only
  * copies the numbers onto the model.
  */
+import type { Activity } from "./scene";
 
 /** The moment of a spoken turn the body is showing. The Talk page's own phases. */
 export type BodyState = "idle" | "listening" | "thinking" | "speaking";
@@ -23,6 +26,10 @@ export const POSE_BONES = [
   "rightUpperArm",
   "leftLowerArm",
   "rightLowerArm",
+  "leftUpperLeg",
+  "rightUpperLeg",
+  "leftLowerLeg",
+  "rightLowerLeg",
 ] as const;
 export type PoseBone = (typeof POSE_BONES)[number];
 
@@ -36,6 +43,20 @@ export interface Pose {
   expressions: { blink: number; aa: number };
   /** Where the eyes point, as an offset from the viewer: right and up, roughly in head heights. */
   gaze: [x: number, y: number];
+  /** How far down into a seat it has settled, 0–1; the stage moves the body onto the seat by this much. */
+  seated: number;
+  /** The bob of a walking step, in metres. */
+  lift: number;
+}
+
+/** What the body is doing besides talking. */
+export interface BodyInput {
+  /** Metres walked since the last step; it drives the stride. */
+  walked: number;
+  /** Metres per step, from the figure's size. */
+  stride: number;
+  /** What it does where it stands, once it has stopped walking. */
+  activity?: Activity;
 }
 
 /** Standing at ease: arms down from the T-pose every model is rigged in. */
@@ -48,10 +69,16 @@ const REST: Record<PoseBone, Rotation> = {
   rightUpperArm: [0, 0, 1.2],
   leftLowerArm: [0, -0.15, 0],
   rightLowerArm: [0, 0.15, 0],
+  leftUpperLeg: [0, 0, 0],
+  rightUpperLeg: [0, 0, 0],
+  leftLowerLeg: [0, 0, 0],
+  rightLowerLeg: [0, 0, 0],
 };
 
+type Offsets = Partial<Record<PoseBone, Rotation>>;
+
 /** Each moment's offset from rest. */
-const MOMENTS: Record<BodyState, { bones: Partial<Record<PoseBone, Rotation>>; gaze: [number, number] }> = {
+const MOMENTS: Record<BodyState, { bones: Offsets; gaze: [number, number] }> = {
   idle: { bones: {}, gaze: [0, 0] },
   // Leaning in with the head a little on one side: attending to you.
   listening: { bones: { spine: [0.05, 0, 0], head: [0.05, 0, 0.09] }, gaze: [0, 0] },
@@ -60,8 +87,39 @@ const MOMENTS: Record<BodyState, { bones: Partial<Record<PoseBone, Rotation>>; g
   speaking: { bones: { head: [0.02, 0, 0] }, gaze: [0, 0] },
 };
 
+/** What each activity does to the body, on top of rest. */
+const ACTIVITIES: Record<Activity, Offsets> = {
+  // Thighs level, shins down, leaning back a touch, hands toward the lap.
+  sit: {
+    leftUpperLeg: [-1.45, 0, 0],
+    rightUpperLeg: [-1.45, 0, 0],
+    leftLowerLeg: [1.4, 0, 0],
+    rightLowerLeg: [1.4, 0, 0],
+    spine: [-0.05, 0, 0],
+    leftUpperArm: [-0.35, 0, 0.2],
+    rightUpperArm: [-0.35, 0, -0.2],
+  },
+  // Arms out to the keyboard, elbows bent, looking down at the screen.
+  type: {
+    leftUpperArm: [-0.85, 0, 0.5],
+    rightUpperArm: [-0.85, 0, -0.5],
+    leftLowerArm: [0, -0.9, 0],
+    rightLowerArm: [0, 0.9, 0],
+    head: [0.18, 0, 0],
+    spine: [0.06, 0, 0],
+  },
+  // Chin up a little, looking out.
+  look: { head: [-0.07, 0.08, 0], spine: [-0.02, 0, 0] },
+  // Head tilted to read the spines, one hand up to the shelf.
+  browse: { head: [0.04, 0, 0.12], rightUpperArm: [-0.7, 0, -0.65], rightLowerArm: [0, 0.4, 0] },
+};
+
 /** Seconds for the body to settle into a new moment. */
 const SETTLE_SECONDS = 0.35;
+/** Starting and stopping a walk. */
+const WALK_SECONDS = 0.12;
+/** Sitting down, standing up, raising the hands to type. */
+const ACTIVITY_SECONDS = 0.45;
 /** A blink, start to finish. */
 const BLINK_SECONDS = 0.16;
 /** The mouth opens faster than it closes, as a jaw does. */
@@ -71,10 +129,14 @@ const MOUTH_CLOSE_SECONDS = 0.07;
 const REDUCED_DRIFT = 0.25;
 
 const STATES = Object.keys(MOMENTS) as BodyState[];
+const ACTIVITY_NAMES = Object.keys(ACTIVITIES) as Activity[];
 
 export class Motion {
   private last: number | undefined;
   private readonly weights: Record<BodyState, number> = { idle: 1, listening: 0, thinking: 0, speaking: 0 };
+  private readonly doing: Record<Activity, number> = { sit: 0, type: 0, look: 0, browse: 0 };
+  private walking = 0;
+  private gait = 0;
   private mouth = 0;
   private nextBlink: number | undefined;
   private blinkStart = Number.NEGATIVE_INFINITY;
@@ -86,27 +148,39 @@ export class Motion {
     this.random = opts.random ?? Math.random;
   }
 
-  /** Advance to `t` seconds. `state` is the turn's moment, `loudness` the voice's level now, 0–1. */
-  step(t: number, state: BodyState, loudness: number): Pose {
+  /**
+   * Advance to `t` seconds. `state` is the turn's moment, `loudness` the
+   * voice's level now (0–1), `body` the walking and the activity.
+   */
+  step(t: number, state: BodyState, loudness: number, body: BodyInput = { walked: 0, stride: 1 }): Pose {
     const dt = this.last === undefined ? 0 : Math.max(0, t - this.last);
     this.last = t;
+    const ease = (seconds: number) => 1 - Math.exp(-dt / seconds);
 
     // Every moment eases toward 1 (the current one) or 0, at the same rate, so
     // the weights keep summing to 1 and a change of moment is a blend.
-    const settle = 1 - Math.exp(-dt / SETTLE_SECONDS);
+    const settle = ease(SETTLE_SECONDS);
     for (const s of STATES) this.weights[s] += ((s === state ? 1 : 0) - this.weights[s]) * settle;
+
+    const moving = body.walked > 1e-5;
+    this.walking += ((moving ? 1 : 0) - this.walking) * ease(WALK_SECONDS);
+    // Half a cycle per step, so each foot lands once a stride.
+    this.gait += (body.walked / Math.max(0.05, body.stride)) * Math.PI;
+    const act = ease(ACTIVITY_SECONDS);
+    for (const a of ACTIVITY_NAMES) this.doing[a] += ((a === body.activity && !moving ? 1 : 0) - this.doing[a]) * act;
 
     const level = state === "speaking" ? clamp01(loudness) : 0;
     const tau = level > this.mouth ? MOUTH_OPEN_SECONDS : MOUTH_CLOSE_SECONDS;
-    this.mouth += (level - this.mouth) * (dt > 0 ? 1 - Math.exp(-dt / tau) : 0);
+    this.mouth += (level - this.mouth) * (dt > 0 ? ease(tau) : 0);
 
     const bones = {} as Record<PoseBone, Rotation>;
     for (const bone of POSE_BONES) {
       const r: Rotation = [...REST[bone]];
-      for (const s of STATES) {
-        const offset = MOMENTS[s].bones[bone];
-        if (offset) for (let i = 0; i < 3; i++) r[i] += offset[i] * this.weights[s];
-      }
+      const add = (offset: Rotation | undefined, weight: number) => {
+        if (offset) for (let i = 0; i < 3; i++) r[i] += offset[i] * weight;
+      };
+      for (const s of STATES) add(MOMENTS[s].bones[bone], this.weights[s]);
+      for (const a of ACTIVITY_NAMES) add(ACTIVITIES[a][bone], this.doing[a]);
       bones[bone] = r;
     }
 
@@ -122,14 +196,38 @@ export class Motion {
     // Nodding along with its own voice: down on the loud syllables.
     bones.head[0] += 0.05 * this.mouth * d;
     bones.head[1] += 0.02 * Math.sin(2 * Math.PI * 0.9 * t) * this.weights.speaking * d;
+    // Busy hands at the keyboard, and eyes along the shelf.
+    bones.leftLowerArm[0] += 0.05 * Math.sin(t * 13) * this.doing.type;
+    bones.rightLowerArm[0] += 0.05 * Math.sin(t * 13 + 1.7) * this.doing.type;
+    bones.head[1] += 0.15 * Math.sin(t * 0.6) * this.doing.browse * d;
+
+    // The walk: legs swing opposite each other, each knee bends as its leg
+    // comes forward, arms swing against the legs, and the body bobs.
+    const w = this.walking;
+    const s = Math.sin(this.gait);
+    const c = Math.cos(this.gait);
+    bones.leftUpperLeg[0] -= 0.5 * s * w;
+    bones.rightUpperLeg[0] += 0.5 * s * w;
+    bones.leftLowerLeg[0] += 0.7 * Math.max(0, c) * w;
+    bones.rightLowerLeg[0] += 0.7 * Math.max(0, -c) * w;
+    bones.leftUpperArm[0] += 0.35 * s * w;
+    bones.rightUpperArm[0] -= 0.35 * s * w;
+    bones.spine[1] += 0.05 * s * w;
+    bones.head[1] -= 0.03 * s * w;
 
     const gaze: [number, number] = [0, 0];
-    for (const s of STATES) {
-      gaze[0] += MOMENTS[s].gaze[0] * this.weights[s];
-      gaze[1] += MOMENTS[s].gaze[1] * this.weights[s];
+    for (const st of STATES) {
+      gaze[0] += MOMENTS[st].gaze[0] * this.weights[st];
+      gaze[1] += MOMENTS[st].gaze[1] * this.weights[st];
     }
 
-    return { bones, expressions: { blink: this.blink(t), aa: clamp01(this.mouth * 1.1) }, gaze };
+    return {
+      bones,
+      expressions: { blink: this.blink(t), aa: clamp01(this.mouth * 1.1) },
+      gaze,
+      seated: this.doing.sit,
+      lift: 0.012 * Math.abs(c) * w,
+    };
   }
 
   /** Every two to six seconds, a quick close and open. */
