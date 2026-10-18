@@ -18,6 +18,7 @@ import { Memory } from "./pages/Memory";
 import { Projects } from "./pages/Projects";
 import { Resources } from "./pages/Resources";
 import { Sandboxes } from "./pages/Sandboxes";
+import { State } from "./pages/State";
 import { Tasks } from "./pages/Tasks";
 import { Tools } from "./pages/Tools";
 import { WorkflowAnalytics } from "./pages/WorkflowAnalytics";
@@ -38,6 +39,7 @@ type Route =
   | { page: "workflow-runs"; runId?: string }
   | { page: "workflow-analytics" }
   | { page: "sandboxes" }
+  | { page: "state"; stateType?: string; stateId?: string }
   | { page: "resources" }
   | { page: "memory" }
   | { page: "actions" }
@@ -53,6 +55,7 @@ const BUILD_PAGES = new Set<Route["page"]>([
   "workflow-runs",
   "workflow-analytics",
   "memory",
+  "state",
   "tools",
   "projects",
 ]);
@@ -133,6 +136,14 @@ function parseHash(): Route {
   }
   if (hash.startsWith("/sandboxes")) {
     return { page: "sandboxes" };
+  }
+  if (hash.startsWith("/state")) {
+    const parts = hash.split("?")[0].split("/");
+    return {
+      page: "state",
+      stateType: parts[2] ? decodeURIComponent(parts[2]) : undefined,
+      stateId: parts[3] ? decodeURIComponent(parts[3]) : undefined,
+    };
   }
   if (hash.startsWith("/resources")) {
     return { page: "resources" };
@@ -319,6 +330,7 @@ function AppShell({
           {route.page === "workflow-runs" && <WorkflowRuns runId={route.runId} />}
           {route.page === "workflow-analytics" && <WorkflowAnalytics />}
           {route.page === "sandboxes" && <Sandboxes />}
+          {route.page === "state" && <State type={route.stateType} id={route.stateId} />}
           {route.page === "resources" && <Resources />}
           {route.page === "memory" && <Memory />}
           {route.page === "actions" && <Approvals initialTab="actions" />}

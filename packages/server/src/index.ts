@@ -102,6 +102,8 @@ import {
   runMemorySweep,
   SESSION_SUMMARY_TAG,
   type StateCaller,
+  type StateChange,
+  StateConflictError,
   StateError,
   type Suggestions,
   setSecret,
@@ -125,7 +127,7 @@ import {
   writeRawConfigPath,
   writeRawConfigText,
 } from "@tailored-ai/core";
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { streamSSE } from "hono/streaming";
 import YAML from "yaml";
@@ -1816,16 +1818,55 @@ export function createServer(opts: ServerOptions) {
 
   // --- World state (docs/world-state.md) ---
   //
-  // Read-only for now: agents write through the `state` tool, and the UI's
-  // writes arrive with the interface work. A person through the API sees every
-  // scope, so these routes go through the same service as an agent, just
-  // without the scope narrowing an agent gets.
+  // A person through the API sees every scope, so these routes go through the
+  // same service as an agent, just without the scope narrowing an agent gets.
+  // Writes are the person's: recorded as the owner, through http.
 
   const stateCaller: StateCaller = { actor: { kind: "user", name: "owner" }, source: { surface: "http" } };
   const stateFailure = (err: unknown) =>
-    err instanceof StateError
-      ? ({ body: { error: err.message }, status: 400 } as const)
-      : ({ body: { error: `State is unavailable: ${(err as Error).message}` }, status: 500 } as const);
+    err instanceof StateConflictError
+      ? ({ body: { error: err.message }, status: 409 } as const)
+      : err instanceof StateError
+        ? ({ body: { error: err.message }, status: 400 } as const)
+        : ({ body: { error: `State is unavailable: ${(err as Error).message}` }, status: 500 } as const);
+
+  // Every change, for the streams below. The runtime clears its bus on each
+  // reload, so the forwarder subscribes again after one; the browsers
+  // listening keep their streams and never notice.
+  const stateListeners = new Set<(change: StateChange) => void>();
+  const forwardStateChanges = () => {
+    runtime.events.on("state.changed", (change) => {
+      for (const listener of stateListeners) listener(change);
+    });
+  };
+  forwardStateChanges();
+  runtime.onReload(forwardStateChanges);
+
+  // Registered before `/api/state/:type`, which would otherwise read "events"
+  // as a type name.
+  app.get("/api/state/events", (c) => {
+    const type = c.req.query("type");
+    return streamSSE(c, async (stream) => {
+      const listener = (change: StateChange) => {
+        if (type && change.type !== type) return;
+        stream.writeSSE({ event: "change", data: JSON.stringify(change) }).catch(() => {});
+      };
+      stateListeners.add(listener);
+      // A comment-only ping keeps proxies from closing a quiet stream.
+      const ping = setInterval(() => stream.writeSSE({ event: "ping", data: "" }).catch(() => {}), 25_000);
+      try {
+        await stream.writeSSE({ event: "ready", data: "{}" });
+        await new Promise<void>((resolve) => {
+          if (c.req.raw.signal.aborted) return resolve();
+          c.req.raw.signal.addEventListener("abort", () => resolve());
+          stream.onAbort(() => resolve());
+        });
+      } finally {
+        clearInterval(ping);
+        stateListeners.delete(listener);
+      }
+    });
+  });
 
   app.get("/api/state/types", (c) => {
     const types = runtime.getStateService().listTypes(stateCaller);
@@ -1871,6 +1912,85 @@ export function createServer(opts: ServerOptions) {
     } catch (err) {
       const { body, status } = stateFailure(err);
       return c.json(body, status);
+    }
+  });
+
+  const stateBody = async (c: Context) =>
+    (await c.req.json<Record<string, unknown>>().catch(() => null)) as Record<string, unknown> | null;
+  const isObject = (v: unknown): v is Record<string, unknown> =>
+    typeof v === "object" && v !== null && !Array.isArray(v);
+  const versionOf = (v: unknown) => (typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : undefined);
+
+  // Create. `id` is optional; one is generated when it is left out.
+  app.post("/api/state/:type", async (c) => {
+    const { type } = c.req.param();
+    const body = await stateBody(c);
+    if (!body || !isObject(body.data)) return c.json({ error: "Send `data`: the record, as an object." }, 400);
+    try {
+      const record = await runtime.getStateService().put(
+        stateCaller,
+        {
+          type,
+          ...(typeof body.id === "string" && body.id ? { id: body.id } : {}),
+          ...(typeof body.scope === "string" && body.scope ? { scope: body.scope } : {}),
+          data: body.data,
+        },
+        // A create must not replace a record that already has this id.
+        typeof body.id === "string" && body.id ? 0 : undefined,
+      );
+      return c.json(record, 201);
+    } catch (err) {
+      const { body: error, status } = stateFailure(err);
+      return c.json(error, status);
+    }
+  });
+
+  // Replace a record's data. `expectedVersion` refuses the write if someone changed it since.
+  app.put("/api/state/:type/:id", async (c) => {
+    const { type, id } = c.req.param();
+    const body = await stateBody(c);
+    if (!body || !isObject(body.data)) return c.json({ error: "Send `data`: the whole record, as an object." }, 400);
+    try {
+      const record = await runtime
+        .getStateService()
+        .put(
+          stateCaller,
+          { type, id, ...(typeof body.scope === "string" && body.scope ? { scope: body.scope } : {}), data: body.data },
+          versionOf(body.expectedVersion),
+        );
+      return c.json(record);
+    } catch (err) {
+      const { body: error, status } = stateFailure(err);
+      return c.json(error, status);
+    }
+  });
+
+  // Change some fields; a field set to null is removed.
+  app.patch("/api/state/:type/:id", async (c) => {
+    const { type, id } = c.req.param();
+    const body = await stateBody(c);
+    if (!body || !isObject(body.changes)) return c.json({ error: "Send `changes`: the fields to change." }, 400);
+    try {
+      const record = await runtime
+        .getStateService()
+        .patch(stateCaller, { type, id }, body.changes, versionOf(body.expectedVersion));
+      return c.json(record);
+    } catch (err) {
+      const { body: error, status } = stateFailure(err);
+      return c.json(error, status);
+    }
+  });
+
+  // Delete. The record's history is kept.
+  app.delete("/api/state/:type/:id", async (c) => {
+    const { type, id } = c.req.param();
+    try {
+      const removed = await runtime.getStateService().delete(stateCaller, { type, id });
+      if (!removed) return c.json({ error: `No ${type} record with id "${id}"` }, 404);
+      return c.json(removed);
+    } catch (err) {
+      const { body: error, status } = stateFailure(err);
+      return c.json(error, status);
     }
   });
 

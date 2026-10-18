@@ -1,6 +1,6 @@
 # World state — Design
 
-> Status: design, accepted. **Phases 1 to 3 are implemented**: see [world-state.md](./world-state.md)
+> Status: design, accepted. **Phases 1 to 3 and 7 are implemented**: see [world-state.md](./world-state.md)
 > for what works today. First of three linked designs: this one (what
 > agents know, structured), [agent interfaces](./agent-interfaces-design.md)
 > (how they show it), and [live sessions](./live-sessions-design.md) (how they
@@ -325,7 +325,7 @@ One migration per PR, each removing something:
 | 4 | Migrate collections | a use-case table in core |
 | 5 | `TaskBackend` adapter | tasks visible as state |
 | 6 | Migrate facts | a second fixed table |
-| 7 | State page, SSE stream | the UI half; needed by bound interfaces |
+| 7 | State page, SSE stream | the UI half; needed by bound interfaces — **done** |
 
 ## Decisions
 
