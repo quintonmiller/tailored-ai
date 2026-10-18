@@ -28,6 +28,24 @@ const choice: ComponentSpec = {
   fallback: "[choice c-1] Which day?",
 };
 
+/** jsdom has no EventSource; this one lets a test push events, found by URL. */
+class FakeEventSource {
+  listeners = new Map<string, ((ev: { data: string }) => void)[]>();
+  constructor(readonly url: string) {
+    streams.set(url, this);
+  }
+  addEventListener(event: string, fn: (ev: { data: string }) => void) {
+    this.listeners.set(event, [...(this.listeners.get(event) ?? []), fn]);
+  }
+  emit(event: string, data: unknown) {
+    for (const fn of this.listeners.get(event) ?? []) fn({ data: JSON.stringify(data) });
+  }
+  close() {
+    if (streams.get(this.url) === this) streams.delete(this.url);
+  }
+}
+const streams = new Map<string, FakeEventSource>();
+
 let root: Root;
 let container: HTMLDivElement;
 let serverState: Record<string, unknown>[] = [];
@@ -44,6 +62,7 @@ beforeEach(() => {
   respondStatus = 200;
   posted.length = 0;
   send.mockReset();
+  vi.stubGlobal("EventSource", FakeEventSource);
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
@@ -153,22 +172,49 @@ describe("InterfaceComponents", () => {
   });
 });
 
-describe("bound cards and state buttons", () => {
-  class FakeEventSource {
-    static last: FakeEventSource | undefined;
-    listeners = new Map<string, ((ev: { data: string }) => void)[]>();
-    constructor(readonly url: string) {
-      FakeEventSource.last = this;
-    }
-    addEventListener(event: string, fn: (ev: { data: string }) => void) {
-      this.listeners.set(event, [...(this.listeners.get(event) ?? []), fn]);
-    }
-    emit(event: string, data: unknown) {
-      for (const fn of this.listeners.get(event) ?? []) fn({ data: JSON.stringify(data) });
-    }
-    close() {}
-  }
+describe("live changes", () => {
+  it("redraws a component answered elsewhere, or updated by its agent, as the change arrives", async () => {
+    await render([choice]);
+    expect(button("Monday").disabled).toBe(false);
 
+    await act(async () =>
+      streams.get("/api/interfaces/events")?.emit("component", {
+        id: "c-1",
+        kind: "choice",
+        status: "open",
+        spec: { ...choice, props: { question: "Which day works?", options: ["Monday", "Tuesday"] } },
+      }),
+    );
+    expect(container.textContent).toContain("Which day works?");
+
+    await act(async () =>
+      streams.get("/api/interfaces/events")?.emit("component", {
+        id: "c-1",
+        kind: "choice",
+        status: "answered",
+        spec: choice,
+        response: { actionId: "option-2", by: "discord:42", at: "" },
+      }),
+    );
+    expect(button("Monday").disabled).toBe(true);
+    expect(container.textContent).toContain("Tuesday");
+  });
+
+  it("ignores changes to components that are not on screen", async () => {
+    await render([choice]);
+    await act(async () =>
+      streams.get("/api/interfaces/events")?.emit("component", {
+        id: "c-other",
+        kind: "choice",
+        status: "closed",
+        spec: { ...choice, id: "c-other" },
+      }),
+    );
+    expect(button("Monday").disabled).toBe(false);
+  });
+});
+
+describe("bound cards and state buttons", () => {
   const bound: ComponentSpec = {
     id: "c-9",
     kind: "card",
@@ -195,7 +241,6 @@ describe("bound cards and state buttons", () => {
   });
 
   beforeEach(() => {
-    vi.stubGlobal("EventSource", FakeEventSource);
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init?: RequestInit) => {
@@ -220,10 +265,10 @@ describe("bound cards and state buttons", () => {
     await render([bound]);
     await act(async () => {});
     expect(fields()).toEqual(["status=draft"]);
-    expect(FakeEventSource.last?.url).toBe("/api/state/events");
+    expect(streams.has("/api/state/events")).toBe(true);
 
     await act(async () =>
-      FakeEventSource.last?.emit("change", {
+      streams.get("/api/state/events")?.emit("change", {
         type: "plan",
         id: "trip",
         op: "update",
@@ -233,7 +278,9 @@ describe("bound cards and state buttons", () => {
     );
     expect(fields()).toEqual(["status=done"]);
 
-    await act(async () => FakeEventSource.last?.emit("change", { type: "plan", id: "trip", op: "delete", version: 4 }));
+    await act(async () =>
+      streams.get("/api/state/events")?.emit("change", { type: "plan", id: "trip", op: "delete", version: 4 }),
+    );
     expect(container.textContent).toContain("This record was deleted.");
   });
 

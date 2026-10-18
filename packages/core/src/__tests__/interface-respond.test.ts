@@ -7,7 +7,7 @@
  * `event` answer is announced for subscriptions and hooks.
  */
 import Database from "better-sqlite3";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { type RuntimeEventPayload, TypedEventBus } from "../events.js";
 import { buildComponent, InterfaceError } from "../interfaces/kinds.js";
 import { respondToComponent } from "../interfaces/respond.js";
@@ -108,6 +108,51 @@ describe("respondToComponent", () => {
 });
 
 describe("InterfaceStore", () => {
+  it("remembers where a surface posted a component, once per message", () => {
+    const c = send("confirm", { summary: "Go?" });
+    const post = { surface: "discord", channel: "chan1", message: "m1" };
+    store.addPost(c.id, post);
+    store.addPost(c.id, post);
+    store.addPost(c.id, { ...post, message: "m2" });
+    store.addPost(c.id, { surface: "slack", channel: "C1", message: "1.2" });
+    expect(store.posts(c.id, "discord").map((p) => p.message)).toEqual(["m1", "m2"]);
+    expect(store.posts(c.id, "slack")).toEqual([{ surface: "slack", channel: "C1", message: "1.2" }]);
+  });
+
+  it("tells listeners about each change after it is made, and keeps going when one throws", () => {
+    const seen: string[] = [];
+    store.onChange(() => {
+      throw new Error("a broken surface");
+    });
+    const off = store.onChange((r) => seen.push(`${r.spec.id}:${r.status}`));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const a = send("confirm", { summary: "Go?" });
+    store.update({ ...a, props: { summary: "Go now?" } });
+    store.respond(a.id, { actionId: "confirm", by: "owner", at: clock.toISOString() });
+    const b = send("confirm", { summary: "Stop?" });
+    store.close(b.id);
+    store.close(b.id); // already closed: no change, no call
+    off();
+    store.update({ ...a, props: { summary: "unheard" } });
+
+    expect(seen).toEqual([`${a.id}:open`, `${a.id}:answered`, `${b.id}:closed`]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("a broken surface"));
+    warn.mockRestore();
+  });
+
+  it("finds the open components bound to a record, leaving out closed and expired ones", () => {
+    const bound = (extra: Record<string, unknown> = {}) =>
+      send("card", { title: "Trip" }, { bind: { type: "plan", id: "trip" }, ...extra });
+    const open = bound();
+    const closed = bound();
+    store.close(closed.id);
+    bound({ expiresInMinutes: 5 });
+    send("card", { title: "Other" }, { bind: { type: "plan", id: "other" } });
+    clock = new Date(clock.getTime() + 10 * 60_000);
+    expect(store.boundTo("plan", "trip").map((r) => r.spec.id)).toEqual([open.id]);
+  });
+
   it("updates only an open component, and keeps the note a close leaves", () => {
     const c = send("confirm", { summary: "Go?" });
     const changed = { ...c, props: { summary: "Go now?" } };

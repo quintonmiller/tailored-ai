@@ -191,3 +191,45 @@ describe("/api/interfaces", () => {
     expect((await call(`/api/interfaces/${c.id}/respond`, {})).status).toBe(400);
   });
 });
+
+describe("GET /api/interfaces/events", () => {
+  it("streams a component each time it changes, wherever the change came from", async () => {
+    const choice = send("choice", { question: "Which day?", options: ["Mon", "Tue"] });
+    const abort = new AbortController();
+    const res = await app.fetch(new Request("http://t/api/interfaces/events", { signal: abort.signal }));
+    const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+    const decoder = new TextDecoder();
+    const events: Record<string, unknown>[] = [];
+    let buffer = "";
+    let acted = false;
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline && events.length < 2) {
+      const { value } = await Promise.race([
+        reader.read(),
+        new Promise<{ value: undefined }>((r) => setTimeout(() => r({ value: undefined }), 200)),
+      ]);
+      if (value) buffer += decoder.decode(value, { stream: true });
+      for (let end = buffer.indexOf("\n\n"); end >= 0; end = buffer.indexOf("\n\n")) {
+        const frame = buffer.slice(0, end);
+        buffer = buffer.slice(end + 2);
+        const event = /^event: (.*)$/m.exec(frame)?.[1];
+        const data = /^data: (.*)$/m.exec(frame)?.[1];
+        if (event === "ready" && !acted) {
+          acted = true;
+          // An answer through this server, then a close by the agent (as the tool does).
+          await call(`/api/interfaces/${choice.id}/respond`, { actionId: "option-2" });
+          const other = send("confirm", { summary: "Go?" });
+          interfaceStoreFor(db).close(other.id, "too late");
+        }
+        if (event === "component" && data) events.push(JSON.parse(data));
+      }
+    }
+    abort.abort();
+    await reader.cancel().catch(() => {});
+    expect(events.map((e) => [e.kind, e.status])).toEqual([
+      ["choice", "answered"],
+      ["confirm", "closed"],
+    ]);
+    expect(events[0]).toMatchObject({ id: choice.id, response: { actionId: "option-2", by: "owner" } });
+  });
+});

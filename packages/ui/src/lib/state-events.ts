@@ -5,7 +5,7 @@
  * only a handful of connections per origin, so cards share one EventSource,
  * opened for the first listener and closed after the last.
  */
-import { fetchStateTypes, type StateChangeInfo } from "../api";
+import { type ComponentState, fetchStateTypes, type StateChangeInfo } from "../api";
 
 type Listener = (change: StateChangeInfo) => void;
 
@@ -31,6 +31,39 @@ export function subscribeStateChanges(listener: Listener): () => void {
     if (listeners.size === 0 && source) {
       source.close();
       source = null;
+    }
+  };
+}
+
+type ComponentListener = (component: ComponentState) => void;
+
+const componentListeners = new Set<ComponentListener>();
+let componentSource: EventSource | null = null;
+
+/**
+ * Every change to a component the agent sent — answered on any surface,
+ * updated, closed — shared by everything on the page, the same way state
+ * changes are.
+ */
+export function subscribeComponentChanges(listener: ComponentListener): () => void {
+  componentListeners.add(listener);
+  if (!componentSource) {
+    componentSource = new EventSource("/api/interfaces/events");
+    componentSource.addEventListener("component", (ev) => {
+      let component: ComponentState;
+      try {
+        component = JSON.parse((ev as MessageEvent).data) as ComponentState;
+      } catch {
+        return;
+      }
+      for (const l of componentListeners) l(component);
+    });
+  }
+  return () => {
+    componentListeners.delete(listener);
+    if (componentListeners.size === 0 && componentSource) {
+      componentSource.close();
+      componentSource = null;
     }
   };
 }

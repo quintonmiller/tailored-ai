@@ -80,18 +80,59 @@ export function buildAnsweredMessage(
   spec: ComponentSpec,
   answer: { actionId?: string; label: string },
 ): DiscordComponentMessage | null {
-  return draw(spec, answer);
+  return draw(spec, { actionId: answer.actionId, line: `✅ ${answer.label}` });
+}
+
+/**
+ * How a component's message should look now, from its stored record: live
+ * while it is open (with `props` in place of the stored ones, for a bound
+ * card redrawn from its record), finished once it is answered, closed or
+ * expired. A click and a redraw from elsewhere both go through here, so the
+ * same state always looks the same.
+ */
+export function messageFor(record: ComponentRecord, props?: Record<string, unknown>): DiscordComponentMessage | null {
+  const spec = props ? { ...record.spec, props } : record.spec;
+  switch (record.status) {
+    case "open":
+      return buildComponentMessage(spec);
+    case "answered": {
+      const response = record.response;
+      const label =
+        typeof response?.value === "string"
+          ? response.value
+          : response?.value !== undefined
+            ? "Sent"
+            : (spec.actions?.find((a) => a.id === response?.actionId)?.label ?? response?.actionId ?? "Answered");
+      return buildAnsweredMessage(spec, { actionId: response?.actionId, label: `${label} — ${who(response?.by)}` });
+    }
+    case "closed":
+      return draw(spec, { line: record.note ? `Closed: ${record.note}` : "Closed" });
+    case "expired":
+      return draw(spec, { line: "Expired" });
+  }
+}
+
+/** A finished message for a bound card whose record is gone. */
+export function buildRecordGoneMessage(spec: ComponentSpec): DiscordComponentMessage | null {
+  return draw(spec, { line: "This record was deleted." });
+}
+
+/** Who answered, as Discord shows it: a mention for a Discord user, the plain name otherwise. */
+function who(by: string | undefined): string {
+  if (!by) return "someone";
+  return by.startsWith("discord:") ? `<@${by.slice("discord:".length)}>` : by;
 }
 
 function draw(
   spec: ComponentSpec,
-  answered: { actionId?: string; label: string } | null,
+  finished: { actionId?: string; line: string } | null,
 ): DiscordComponentMessage | null {
   if (spec.id.length > MAX_COMPONENT_ID || spec.id.includes(":")) return null;
   const p = spec.props;
   const actions = spec.actions ?? [];
-  const done = answered !== null;
-  const footer = answered ? `\n✅ ${answered.label}` : "";
+  const done = finished !== null;
+  const footer = finished ? `\n${finished.line}` : "";
+  const answered = finished;
 
   switch (spec.kind) {
     case "choice": {
@@ -349,7 +390,8 @@ export async function handleInterfaceInteraction(
       by: `discord:${interaction.user.id}`,
     });
     const label = shown ?? record.spec.actions?.find((a) => a.id === actionId)?.label ?? actionId;
-    const finished = buildAnsweredMessage(record.spec, { actionId, label: `${label} — <@${interaction.user.id}>` });
+    const answered = deps.store.get(record.spec.id);
+    const finished = answered ? messageFor(answered) : null;
 
     if (
       finished &&
