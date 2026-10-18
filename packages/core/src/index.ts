@@ -99,6 +99,7 @@ export {
   registerComponentKind,
   respondToComponent,
 } from "./interfaces/index.js";
+export * from "./live/index.js";
 export { connectMcpServer, type McpConnection, mcpToolName } from "./mcp/client.js";
 export { type McpHost, McpManager } from "./mcp/manager.js";
 export type { ExpandOptions } from "./prompts/expand.js";

@@ -29,6 +29,8 @@ import {
 } from "./db/runtime-settings-queries.js";
 import { type EventBus, TypedEventBus } from "./events.js";
 import { HttpRouteRegistry } from "./http/registry.js";
+import { LiveSessions } from "./live/session.js";
+import { voiceMode } from "./live/voice-mode.js";
 import type { MediaStore } from "./media/interface.js";
 import { listMediaStoreFactories, resolveMediaStore } from "./media/registry.js";
 import { SqliteRenditionCache } from "./media/rendition-cache.js";
@@ -157,6 +159,7 @@ export class AgentRuntime {
    * gets a new provider rather than reusing the old one.
    */
   private _stateService: StateService | undefined;
+  private readonly _liveSessions = new LiveSessions();
   /**
    * Typed pub/sub bus for runtime lifecycle events — the foundation of
    * the platform vision (`docs/platform-vision.md`). Internal subsystems
@@ -483,6 +486,25 @@ export class AgentRuntime {
   }
 
   /** World state: typed records shared by agents, people and plugins. See `docs/world-state.md`. */
+  /** The live sessions this runtime holds. See `docs/live-sessions.md`. */
+  getLiveSessions(): LiveSessions {
+    return this._liveSessions;
+  }
+
+  /** An agent's `voice:` settings, resolved the way the rest of the agent is. */
+  voiceModeFor(agentName?: string): AgentDefinition["voice"] {
+    const resolved = resolveAgent(
+      agentName,
+      this._config,
+      [],
+      undefined,
+      this.contextDir,
+      this.kbDir,
+      this.buildResolveOptions(),
+    );
+    return resolved.voice;
+  }
+
   getStateService(): StateService {
     if (!this._stateService) {
       this._stateService = new StateService({
@@ -1417,6 +1439,12 @@ export class AgentRuntime {
      * `resolved.tools` and is unaffected by this flag.
      */
     includeMetaTools?: boolean;
+    /**
+     * `voice`: the agent as it talks in a live session — its `voice:` prompt
+     * and tools, reasoning off, short replies, no injected memory. Same
+     * identity and history; a smaller, faster turn.
+     */
+    mode?: "voice";
   }): AgentLoopOptions {
     const agentName = opts.agentName ?? opts.profileName;
     const config = this._config;
@@ -1458,7 +1486,7 @@ export class AgentRuntime {
     // callers that build options by hand on the old path.
     const headCandidate = this.resolveModelChain(resolved.models, agentName)[0];
     const agentProvider = headCandidate?.provider ?? this.resolveAgentProvider(resolved.provider, agentName);
-    return {
+    const built: AgentLoopOptions = {
       provider: agentProvider,
       session: this.alignSessionToAgent(opts.session, resolved),
       db: this.db,
@@ -1556,6 +1584,7 @@ export class AgentRuntime {
         this.resolveAgentProvider(resolved.provider, agentName),
       getModelChain: () => this.resolveModelChain(resolved.models, agentName),
     };
+    return opts.mode === "voice" ? voiceMode(built, resolved.voice) : built;
   }
 
   /**

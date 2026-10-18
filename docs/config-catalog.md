@@ -15,7 +15,7 @@ call site. A field with **0 in both** is the one to go and look at: a field
 nothing consumes is indistinguishable from a working feature, because the only
 symptom is that behaviour never changed (#335).
 
-Fields: **75** · with no read site found: **0**
+Fields: **79** · with no read site found: **0**
 
 ## Every field
 
@@ -23,8 +23,8 @@ Fields: **75** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `agent.defaultProvider` | string | `openai_compatible` | 12 | 12 |
-| `agent.extraInstructions` | string | `""` | 2 | 2 |
+| `agent.defaultProvider` | string | `openai_compatible` | 13 | 13 |
+| `agent.extraInstructions` | string | `""` | 3 | 2 |
 | `agent.maxContextTokens` | number | `32768` | 3 | 1 |
 | `agent.maxHistoryTokens` | number | `20000` | 3 | 3 |
 | `agent.maxToolOutputChars` | number | `32000` | 4 | 2 |
@@ -48,7 +48,7 @@ Fields: **75** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `briefing.enabled` | boolean | `false` | 38 | 1 |
+| `briefing.enabled` | boolean | `false` | 39 | 1 |
 | `briefing.prompt` | string | `You are the user's personal assistant. Write a brief, fri…` | 26 | 1 |
 | `briefing.ttlMinutes` | number | `30` | 1 | 1 |
 
@@ -76,7 +76,7 @@ Fields: **75** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `cron.enabled` | boolean | `false` | 38 | 4 |
+| `cron.enabled` | boolean | `false` | 39 | 4 |
 | `cron.jobs` | array | `[]` | 6 | 6 |
 
 ### `custom_tools`
@@ -90,6 +90,15 @@ Fields: **75** · with no read site found: **0**
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
 | `database.path` | string | `./agent.db` | 43 | 2 |
+
+### `live`
+
+| Field | Type | Default | Reads | Path |
+| --- | --- | --- | --- | --- |
+| `live.enabled` | boolean | `false` | 39 | 1 |
+| `live.limits.idleMinutes` | number | `10` | 4 | 2 |
+| `live.limits.maxMinutes` | number | `30` | 2 | 2 |
+| `live.limits.maxTurns` | number | `200` | 3 | 2 |
 
 ### `mcp`
 
@@ -115,14 +124,14 @@ Fields: **75** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `providers.openai_compatible.baseUrl` | string | `http://localhost:11434/v1` | 23 | **0** |
+| `providers.openai_compatible.baseUrl` | string | `http://localhost:11434/v1` | 24 | **0** |
 | `providers.openai_compatible.defaultModel` | string | `""` | 17 | **0** |
 
 ### `schedules`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `schedules.enabled` | boolean | `true` | 38 | 1 |
+| `schedules.enabled` | boolean | `true` | 39 | 1 |
 | `schedules.maxDeferrals` | number | `3` | 1 | **0** |
 | `schedules.maxHorizonDays` | number | `365` | 2 | 1 |
 | `schedules.maxPerAgent` | number | `20` | 1 | 1 |
@@ -147,7 +156,7 @@ Fields: **75** · with no read site found: **0**
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
 | `suggestions.count` | number | `4` | 11 | 1 |
-| `suggestions.enabled` | boolean | `false` | 38 | 1 |
+| `suggestions.enabled` | boolean | `false` | 39 | 1 |
 | `suggestions.prompt` | string | `You are the user's personal assistant. From the state bel…` | 26 | 1 |
 | `suggestions.ttlMinutes` | number | `15` | 1 | 1 |
 
@@ -162,7 +171,7 @@ Fields: **75** · with no read site found: **0**
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
 | `taskWatcher.debounceMs` | number | `5000` | 1 | **0** |
-| `taskWatcher.enabled` | boolean | `false` | 38 | **0** |
+| `taskWatcher.enabled` | boolean | `false` | 39 | **0** |
 | `taskWatcher.maxStallRetries` | number | `1` | 2 | 1 |
 | `taskWatcher.prompt` | string | `Task {{action}}: {{task_title}} ({{task_id}}), status: {{…` | 26 | **0** |
 | `taskWatcher.triggers` | array | `["created","updated"]` | 8 | **0** |
@@ -171,40 +180,40 @@ Fields: **75** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `time.provider` | string | `system` | 45 | 4 |
+| `time.provider` | string | `system` | 46 | 4 |
 
 ### `tools`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `tools.ask_user.enabled` | boolean | `true` | 38 | 1 |
+| `tools.ask_user.enabled` | boolean | `true` | 39 | 1 |
 | `tools.ask_user.inboxFile` | string | `inbox.md` | 2 | 1 |
-| `tools.collections.enabled` | boolean | `true` | 38 | 1 |
-| `tools.documents.enabled` | boolean | `true` | 38 | 1 |
-| `tools.edit.enabled` | boolean | `true` | 38 | 1 |
-| `tools.exec.enabled` | boolean | `true` | 38 | **0** |
-| `tools.extract_document.enabled` | boolean | `false` | 38 | 1 |
-| `tools.facts.enabled` | boolean | `true` | 38 | 1 |
-| `tools.interface.enabled` | boolean | `true` | 38 | 1 |
-| `tools.memory.enabled` | boolean | `true` | 38 | 1 |
+| `tools.collections.enabled` | boolean | `true` | 39 | 1 |
+| `tools.documents.enabled` | boolean | `true` | 39 | 1 |
+| `tools.edit.enabled` | boolean | `true` | 39 | 1 |
+| `tools.exec.enabled` | boolean | `true` | 39 | **0** |
+| `tools.extract_document.enabled` | boolean | `false` | 39 | 1 |
+| `tools.facts.enabled` | boolean | `true` | 39 | 1 |
+| `tools.interface.enabled` | boolean | `true` | 39 | 1 |
+| `tools.memory.enabled` | boolean | `true` | 39 | 1 |
 | `tools.projects.directory` | string | `./data/projects` | 4 | 2 |
-| `tools.projects.enabled` | boolean | `true` | 38 | 1 |
-| `tools.read.enabled` | boolean | `true` | 38 | 1 |
+| `tools.projects.enabled` | boolean | `true` | 39 | 1 |
+| `tools.read.enabled` | boolean | `true` | 39 | 1 |
 | `tools.recall.defaultTtlDays` | number | `14` | 2 | 1 |
-| `tools.recall.enabled` | boolean | `true` | 38 | 1 |
-| `tools.room.enabled` | boolean | `true` | 38 | 1 |
-| `tools.state.enabled` | boolean | `true` | 38 | 3 |
-| `tools.tasks.enabled` | boolean | `true` | 38 | 1 |
-| `tools.web_fetch.enabled` | boolean | `true` | 38 | 1 |
-| `tools.web_search.apiKey` | string | `""` | 22 | 1 |
-| `tools.web_search.enabled` | boolean | `false` | 38 | 2 |
+| `tools.recall.enabled` | boolean | `true` | 39 | 1 |
+| `tools.room.enabled` | boolean | `true` | 39 | 1 |
+| `tools.state.enabled` | boolean | `true` | 39 | 3 |
+| `tools.tasks.enabled` | boolean | `true` | 39 | 1 |
+| `tools.web_fetch.enabled` | boolean | `true` | 39 | 1 |
+| `tools.web_search.apiKey` | string | `""` | 23 | 1 |
+| `tools.web_search.enabled` | boolean | `false` | 39 | 2 |
 | `tools.web_search.maxResults` | number | `5` | 2 | 1 |
-| `tools.web_search.provider` | string | `brave` | 45 | **0** |
-| `tools.write.enabled` | boolean | `true` | 38 | 1 |
+| `tools.web_search.provider` | string | `brave` | 46 | **0** |
+| `tools.write.enabled` | boolean | `true` | 39 | 1 |
 
 ### `webhooks`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `webhooks.enabled` | boolean | `false` | 38 | 1 |
+| `webhooks.enabled` | boolean | `false` | 39 | 1 |
 | `webhooks.routes` | array | `[]` | 2 | 1 |

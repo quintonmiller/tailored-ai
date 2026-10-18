@@ -164,6 +164,8 @@ export interface ResolvedAgent {
   systemPrompt: SystemPromptOverride | undefined;
   /** World-state queries pinned to the prompt (`state.context`). Undefined means none. */
   stateContext?: StateContextQuery[];
+  /** How the agent talks in a live session (`voice:`). Undefined means the defaults. */
+  voice?: AgentDefinition["voice"];
 }
 
 /** @deprecated Use ResolvedAgent instead. */
@@ -342,6 +344,7 @@ export function resolveAgent(
     ),
     // Whole list, not merged: an agent that pins its own queries means those.
     stateContext: agent?.state?.context ?? dep.state?.context,
+    voice: agent?.voice ?? dep.voice,
   };
 
   // Derive contextDir when an agent is active
