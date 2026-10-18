@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { AUTH_TOKEN_ENV_VAR, mergeEnvLines, resolveHeadlessDraft, runHeadlessInit } from "../setup-headless.js";
 
 /** Env vars resolveHeadlessDraft consults; cleared between tests so a value
@@ -197,8 +197,17 @@ describe("runHeadlessInit", () => {
 // as a container crash-loop with the real cause buried in startup logs — so
 // run the generated file through core's actual loader here.
 describe("generated config survives a real load", () => {
+  // Importing core is most of this suite's time: the first test used to pay
+  // for it inside its own 5 s budget, and on a loaded CI runner the cold import
+  // alone ran past it. Paying it once here, under a budget of its own, leaves
+  // each test timing only the load it is about.
+  let core: typeof import("@tailored-ai/core");
+  beforeAll(async () => {
+    core = await import("@tailored-ai/core");
+  }, 60_000);
+
   it("loads and validates without warnings on a loopback bind", async () => {
-    const { loadConfig, validateConfig } = await import("@tailored-ai/core");
+    const { loadConfig, validateConfig } = core;
     const res = await runHeadlessInit({ homeDir: home, model: "qwen3", baseUrl: "http://localhost:11434/v1" });
     const cfg = loadConfig(res.configPath);
     expect(cfg.server.host).toBe("127.0.0.1");
@@ -208,7 +217,7 @@ describe("generated config survives a real load", () => {
   });
 
   it("resolves the auth token through env interpolation on an exposed bind", async () => {
-    const { loadConfig, validateConfig } = await import("@tailored-ai/core");
+    const { loadConfig, validateConfig } = core;
     const res = await runHeadlessInit({ homeDir: home, model: "m", host: "0.0.0.0" });
     // The container's entrypoint exports .env before starting the server;
     // emulate that so `authToken: ${TAI_AUTH_TOKEN}` resolves.
@@ -220,7 +229,7 @@ describe("generated config survives a real load", () => {
   });
 
   it("warns about the exposed bind when the token env var never made it in", async () => {
-    const { loadConfig, validateConfig } = await import("@tailored-ai/core");
+    const { loadConfig, validateConfig } = core;
     const res = await runHeadlessInit({ homeDir: home, model: "m", host: "0.0.0.0" });
     // `${TAI_AUTH_TOKEN}` interpolates to "" when unset, which is falsy — the
     // config looks authenticated but is not. The warning has to fire.
