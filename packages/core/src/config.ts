@@ -1482,6 +1482,12 @@ export interface AgentConfig {
     /** Text-to-speech: a registered stage (default `openai_compatible`), its options, and the default voice. */
     tts?: { provider?: string; options?: Record<string, unknown>; voice?: string };
     limits?: { maxMinutes?: number; idleMinutes?: number; maxTurns?: number };
+    /**
+     * A body for the agent on the Talk page: a VRM model file, drawn and
+     * animated in the browser. A relative path resolves under
+     * `<TAI_HOME>/avatars/`. Unset, the page shows no avatar.
+     */
+    avatar?: { model?: string };
   };
   /**
    * Forge integration for pushing branches and opening proposals

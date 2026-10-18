@@ -3,7 +3,7 @@
  * reply back as it streams — what was heard, the words, and the audio a
  * sentence at a time — and end it.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -64,9 +64,11 @@ let runtime: AgentRuntime;
 let app: ReturnType<typeof createServer>["app"];
 let tmpDir: string;
 let originalHome: string | undefined;
+let originalTaiHome: string | undefined;
 
-function setup(live = true) {
+function setup(live = true, avatar?: { model: string }) {
   const cfg = buildConfig(live);
+  if (avatar && cfg.live) cfg.live.avatar = avatar;
   runtime = new AgentRuntime(
     {
       configPath: join(tmpDir, "config.yaml"),
@@ -84,6 +86,7 @@ function setup(live = true) {
 
 beforeEach(() => {
   originalHome = process.env.HOME;
+  originalTaiHome = process.env.TAI_HOME;
   tmpDir = mkdtempSync(join(tmpdir(), "live-routes-"));
   process.env.HOME = tmpDir;
   db = initDatabase(":memory:");
@@ -102,6 +105,8 @@ afterEach(() => {
   db.close();
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
+  if (originalTaiHome === undefined) delete process.env.TAI_HOME;
+  else process.env.TAI_HOME = originalTaiHome;
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -185,5 +190,56 @@ describe("/api/live/sessions", () => {
     const after = await turn(id, new Uint8Array([1]), "audio/webm");
     expect(after.status).toBe(409);
     expect((await json("GET", "/api/live/sessions/nope")).status).toBe(404);
+  });
+});
+
+describe("/api/live/avatar", () => {
+  const model = Buffer.from("glTF-model-bytes");
+
+  async function get(path: string, headers: Record<string, string> = {}) {
+    return app.fetch(new Request(`http://t${path}`, { headers }));
+  }
+
+  it("tells the Talk page there is no avatar when none is set", async () => {
+    expect((await json("GET", "/api/live")).json).toEqual({});
+    const res = await json("GET", "/api/live/avatar");
+    expect(res.status).toBe(404);
+    expect(res.json.error).toBe("No avatar is configured. Set live.avatar.model to a VRM file.");
+  });
+
+  it("serves the configured model file, revalidated so a swapped file shows up", async () => {
+    const file = join(tmpDir, "bot.vrm");
+    writeFileSync(file, model);
+    setup(true, { model: file });
+    expect((await json("GET", "/api/live")).json).toEqual({ avatar: "/api/live/avatar" });
+
+    const res = await get("/api/live/avatar");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("model/gltf-binary");
+    expect(res.headers.get("Cache-Control")).toBe("no-cache");
+    expect(Buffer.from(await res.arrayBuffer())).toEqual(model);
+    const etag = res.headers.get("ETag") ?? "";
+    expect(etag).toMatch(/^"[0-9a-f]+-[0-9a-f]+"$/);
+
+    const again = await get("/api/live/avatar", { "If-None-Match": etag });
+    expect(again.status).toBe(304);
+  });
+
+  it("finds a bare file name in the instance's avatars folder", async () => {
+    process.env.TAI_HOME = tmpDir;
+    mkdirSync(join(tmpDir, "avatars"));
+    writeFileSync(join(tmpDir, "avatars", "bot.vrm"), model);
+    setup(true, { model: "bot.vrm" });
+    const res = await get("/api/live/avatar");
+    expect(res.status).toBe(200);
+    expect(Buffer.from(await res.arrayBuffer())).toEqual(model);
+  });
+
+  it("names the missing file, without the path to it", async () => {
+    process.env.TAI_HOME = tmpDir;
+    setup(true, { model: "gone.vrm" });
+    const res = await json("GET", "/api/live/avatar");
+    expect(res.status).toBe(404);
+    expect(res.json.error).toBe("The avatar file gone.vrm is missing.");
   });
 });

@@ -1,3 +1,4 @@
+export { avatarModelPath } from "./avatar.js";
 export { SentenceSplitter, speakable } from "./sentences.js";
 export { type LiveSession, LiveSessionError, type LiveSessionLimits, LiveSessions } from "./session.js";
 export {

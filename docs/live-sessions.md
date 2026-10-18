@@ -7,9 +7,10 @@ stage, but none is needed. The design, with the measurements behind it, is in
 [live-sessions-design.md](./live-sessions-design.md).
 
 > **Status:** phase 1 works end to end: push-to-talk in the web UI, speech-to-text,
-> an agent turn in voice mode, and the reply spoken a sentence at a time.
-> Interrupting the agent mid-reply, hands-free voice detection and Discord
-> voice come later.
+> an agent turn in voice mode, and the reply spoken a sentence at a time, with
+> an optional avatar that moves on its own. Interrupting the agent mid-reply,
+> hands-free voice detection, gestures the agent chooses, and Discord voice
+> come later.
 
 ## Setting it up
 
@@ -91,10 +92,40 @@ Anything that changes each turn (live state, recalled memory, pinned state)
 goes after the conversation, where it doesn't break the cache. If you
 customise `systemPrompt.order`, keep those layers in the tail.
 
+## An avatar
+
+Give the agent a body on the Talk page: a 3D model that breathes and blinks,
+leans in while you talk, looks up and away while it thinks, and moves its
+mouth with its voice.
+
+```yaml
+live:
+  avatar:
+    model: robot.vrm   # under <TAI_HOME>/avatars/, or an absolute path
+```
+
+The model is a [VRM](https://vrm.dev/en/) file, the open format for humanoid
+avatars. Any VRM works without setup, because the skeleton, mouth shapes and
+blink follow one standard. Make one in VRoid Studio, or start from a
+collection published under CC0, such as 100Avatars. Many models, free ones
+included, carry licences that limit sharing the file, so keep yours in your
+own instance.
+
+None of this asks the model for anything. The moments come from the turn the
+page is already following, and the mouth from the loudness of the audio, so
+the avatar adds no tokens and no delay. It is drawn in the browser with
+three.js, loaded only when an avatar is set, and it moves far less when the
+browser asks for reduced motion.
+
+Gestures and expressions the agent picks itself, written inline in its reply,
+come next.
+
 ## HTTP API
 
 | route | does |
 |---|---|
+| `GET /api/live` | what the Talk page needs before a session: `{avatar?}`, the URL of the avatar's model file when one is set |
+| `GET /api/live/avatar` | the avatar's model file (`model/gltf-binary`), revalidated by `ETag`; `404` with the reason when none is set or the file is missing |
 | `POST /api/live/sessions` | start: `{agent?}`; `201` with the session and its limits; `409` when live sessions are off |
 | `GET /api/live/sessions/:id` | the session, with `endedAt` and `endReason` once it has ended |
 | `DELETE /api/live/sessions/:id` | end it |

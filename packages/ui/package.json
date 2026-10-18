@@ -9,15 +9,18 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@pixiv/three-vrm": "^3.5.5",
     "@xyflow/react": "^12.10.2",
     "dompurify": "^3.4.14",
     "marked": "^17.0.1",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "three": "^0.186.1"
   },
   "devDependencies": {
     "@types/react": "^19.1.6",
     "@types/react-dom": "^19.1.6",
+    "@types/three": "^0.186.0",
     "@vitejs/plugin-react": "^4.5.2",
     "jsdom": "^26.1.0",
     "typescript": "^5.7.0",

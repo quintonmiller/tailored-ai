@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchAgents } from "../api";
+import { Avatar } from "../avatar/Avatar";
+import { decodeEnvelope, loudnessAt } from "../avatar/envelope";
+import type { BodyState } from "../avatar/motion";
 
 /**
  * Talk to an agent out loud: push-to-talk over the live session routes.
@@ -23,7 +26,8 @@ interface Line {
   text: string;
 }
 
-type Phase = "idle" | "listening" | "thinking" | "speaking";
+/** The avatar shows the same moments the button does. */
+type Phase = BodyState;
 
 export function Talk() {
   const [agents, setAgents] = useState<string[]>([]);
@@ -39,11 +43,20 @@ export function Talk() {
   const stream = useRef<MediaStream | null>(null);
   const recorder = useRef<MediaRecorder | null>(null);
   const chunks = useRef<Blob[]>([]);
-  const player = useAudioQueue((busy) => setPhase((p) => (busy ? "speaking" : p === "speaking" ? "idle" : p)));
+  // The configured avatar's model file, if there is one.
+  const [avatar, setAvatar] = useState<string | null>(null);
+  const player = useAudioQueue(
+    (busy) => setPhase((p) => (busy ? "speaking" : p === "speaking" ? "idle" : p)),
+    avatar !== null,
+  );
 
   useEffect(() => {
     fetchAgents()
       .then((a) => setAgents(Object.keys(a).sort()))
+      .catch(() => {});
+    fetch("/api/live")
+      .then((res) => (res.ok ? (res.json() as Promise<{ avatar?: unknown }>) : null))
+      .then((body) => setAvatar(typeof body?.avatar === "string" ? body.avatar : null))
       .catch(() => {});
   }, []);
 
@@ -205,6 +218,7 @@ export function Talk() {
         </div>
       </div>
       {error && <div className="config-error">{error}</div>}
+      {avatar && <Avatar url={avatar} state={phase} loudness={player.loudness} />}
       {!session ? (
         <div className="talk-start">
           <label>
@@ -314,13 +328,21 @@ async function readEvents(
   }
 }
 
-/** Plays audio chunks one after another, in the order they arrive. */
-function useAudioQueue(onBusy: (busy: boolean) => void) {
+/**
+ * Plays audio chunks one after another, in the order they arrive. With
+ * `measure` on, it also decodes each chunk's loudness over time, so an avatar's
+ * mouth can follow the voice.
+ */
+function useAudioQueue(onBusy: (busy: boolean) => void, measure: boolean) {
   const queue = useRef<string[]>([]);
-  const current = useRef<HTMLAudioElement | null>(null);
+  const current = useRef<{ url: string; audio: HTMLAudioElement } | null>(null);
   const busy = useRef(false);
   const notify = useRef(onBusy);
   notify.current = onBusy;
+  const measuring = useRef(measure);
+  measuring.current = measure;
+  // Per chunk: its envelope once decoded, null if it couldn't be.
+  const envelopes = useRef(new Map<string, Float32Array | null>());
 
   const next = useCallback(() => {
     const url = queue.current.shift();
@@ -333,9 +355,10 @@ function useAudioQueue(onBusy: (busy: boolean) => void) {
     busy.current = true;
     notify.current(true);
     const audio = new Audio(url);
-    current.current = audio;
+    current.current = { url, audio };
     audio.onended = () => {
       URL.revokeObjectURL(url);
+      envelopes.current.delete(url);
       next();
     };
     audio.play().catch(() => next());
@@ -344,16 +367,34 @@ function useAudioQueue(onBusy: (busy: boolean) => void) {
   return useRef({
     push(base64: string, mimeType: string) {
       const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-      queue.current.push(URL.createObjectURL(new Blob([bytes], { type: mimeType })));
+      const url = URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+      if (measuring.current) {
+        void decodeEnvelope(bytes).then((envelope) => {
+          // A chunk already played, or cut off, needs no envelope.
+          if (queue.current.includes(url) || current.current?.url === url) envelopes.current.set(url, envelope);
+        });
+      }
+      queue.current.push(url);
       if (!busy.current) next();
     },
     /** Stop speaking: the person has started talking. */
     stop() {
-      current.current?.pause();
+      current.current?.audio.pause();
       for (const url of queue.current.splice(0)) URL.revokeObjectURL(url);
+      envelopes.current.clear();
       busy.current = false;
       current.current = null;
       notify.current(false);
+    },
+    /** How loud the voice is right now, 0–1. Read every frame by the avatar. */
+    loudness(): number {
+      const playing = current.current;
+      if (!playing) return 0;
+      const t = playing.audio.currentTime || 0;
+      const envelope = envelopes.current.get(playing.url);
+      if (envelope) return loudnessAt(envelope, t);
+      // Not decoded (yet, or at all): a steady flap still reads as talking.
+      return 0.3 + 0.25 * Math.sin(t * 18);
     },
   }).current;
 }
