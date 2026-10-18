@@ -14,6 +14,7 @@ import {
   createMetaTools,
   createPluginContext,
   createProvider,
+  createSubscriptionDelivery,
   createTools,
   createWorkflowEngine,
   ExploratoryWorker,
@@ -40,6 +41,7 @@ import {
   runAgentLoop,
   runLifecycleHooks,
   ScheduleRunner,
+  SubscriptionDispatcher,
   TaskWatcher,
   TypedEventBus,
   validateConfig,
@@ -250,6 +252,18 @@ async function runServer(
   const schedules = new ScheduleRunner({ runtime, getRoomWatcher: () => roomWatcher });
   schedules.start();
 
+  // Wakes agents on the runtime events they subscribe to (`subscriptions:`).
+  // After rooms for the schedule runner's reason: a room delivery needs the
+  // watcher, resolved lazily.
+  const subscriptions = new SubscriptionDispatcher({
+    events: runtime.events,
+    getConfig: () => runtime.getConfig(),
+    db: runtime.db,
+    delivery: createSubscriptionDelivery({ runtime, getRoomWatcher: () => roomWatcher }),
+    isPaused: () => runtime.isAgentsPaused("autonomous"),
+  });
+  subscriptions.start();
+
   // Hot-reload: the lifecycle manager reconciles the channel set against
   // the new config. The outbound registry then re-syncs off whatever the
   // manager produced — for every channel, not just Discord.
@@ -257,6 +271,9 @@ async function runServer(
     scheduler.restart();
     // Picks up a changed tickSeconds, and the `enabled` kill-switch.
     schedules.restart();
+    // The reload cleared the bus and the context slots this listens on and
+    // renders into; restarting re-reads `subscriptions:` too.
+    subscriptions.restart();
 
     // runtime.reload() calls events.clear(), which drops the builtin
     // plugins' subscriptions (a latent pre-#142 bug — the hardcoded
@@ -453,6 +470,7 @@ async function runServer(
     runtime.initiateShutdown();
     runtime.stopWatching();
     scheduler.stop();
+    subscriptions.stop();
     taskWatcher.stop();
     await disposeRuntimePlugins();
     autopilot.stop();

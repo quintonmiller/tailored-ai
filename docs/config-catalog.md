@@ -35,7 +35,7 @@ Fields: **74** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `agents` | object | {} | 34 | 98 |
+| `agents` | object | {} | 34 | 101 |
 
 ### `autopilot`
 
@@ -171,7 +171,7 @@ Fields: **74** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `time.provider` | string | `system` | 44 | 4 |
+| `time.provider` | string | `system` | 45 | 4 |
 
 ### `tools`
 
@@ -198,7 +198,7 @@ Fields: **74** · with no read site found: **0**
 | `tools.web_search.apiKey` | string | `""` | 22 | 1 |
 | `tools.web_search.enabled` | boolean | `false` | 38 | 2 |
 | `tools.web_search.maxResults` | number | `5` | 2 | 1 |
-| `tools.web_search.provider` | string | `brave` | 44 | **0** |
+| `tools.web_search.provider` | string | `brave` | 45 | **0** |
 | `tools.write.enabled` | boolean | `true` | 38 | 1 |
 
 ### `webhooks`

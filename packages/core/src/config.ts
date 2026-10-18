@@ -12,8 +12,11 @@ import { type DashboardWidget, validateDashboardWidget } from "./dashboard/index
 import { isAgentScopedEvent, isWaterfallEvent, KNOWN_BROADCAST_EVENTS, listKnownEvents } from "./events.js";
 import type { GuardrailSpec } from "./guardrails/types.js";
 import type { ThinkingLevel } from "./providers/interface.js";
+import { parseEvery } from "./schedules/when.js";
 import type { JsonSchema, StateTypeDef } from "./state/types.js";
 import { unsupportedKeywords } from "./state/validate.js";
+import { parseWindow, subscriptionKey } from "./subscriptions/keys.js";
+import type { EventSubscriptionConfig } from "./subscriptions/types.js";
 import { DEFAULT_SUGGESTIONS_PROMPT } from "./suggestions.js";
 import { META_TOOL_NAMES } from "./tools/tool-factories.js";
 
@@ -1433,6 +1436,13 @@ export interface AgentConfig {
     types?: StateTypeDef[];
   };
   /**
+   * Which agents hear about which runtime events, and how: woken at once,
+   * queued, batched, digested on a schedule, or recorded for their next turn.
+   * Rooms' own subscriptions (`rooms.subscriptions`) answer the same question
+   * for room messages. See `docs/world-state.md`.
+   */
+  subscriptions?: EventSubscriptionConfig[];
+  /**
    * Forge integration for pushing branches and opening proposals
    * (pull/merge requests). Slice 4 of the platform vision — see
    * `docs/repo-backend.md`. Opt-in: with `backend` unset, core does not
@@ -2111,6 +2121,7 @@ const KNOWN_TOP_LEVEL_CONFIG_KEY_MAP: Record<keyof AgentConfig, true> = {
   prompts: true,
   tasks: true,
   state: true,
+  subscriptions: true,
   repo: true,
   security: true,
   sandboxes: true,
@@ -2244,6 +2255,80 @@ function stateTypeWarnings(types: StateTypeDef[] | undefined): string[] {
     if (def.title && schema?.properties && !(def.title in schema.properties)) {
       warnings.push(`state type "${def.name}": title "${def.title}" is not one of its fields.`);
     }
+  }
+  return warnings;
+}
+
+/**
+ * A subscription that parses and then never delivers anything: an agent that
+ * does not exist, an event nothing emits, a batch with no window, a digest with
+ * no schedule. Each would sit in config looking active.
+ */
+function subscriptionWarnings(config: AgentConfig): string[] {
+  const warnings: string[] = [];
+  const seen = new Set<string>();
+  const declaredRoomNames = new Set((config.rooms?.rooms ?? []).map((r) => r?.name).filter(Boolean));
+  for (const [i, sub] of (config.subscriptions ?? []).entries()) {
+    const label = `subscriptions[${i}]${sub?.agent ? ` (${sub.agent} on ${sub.on ?? "?"})` : ""}`;
+    if (!sub?.agent) {
+      warnings.push(`${label}: missing "agent"`);
+      continue;
+    }
+    if (config.agents && !config.agents[sub.agent]) {
+      warnings.push(`${label}: unknown agent "${sub.agent}" — it will never be woken`);
+    }
+    if (!sub.on) {
+      warnings.push(`${label}: missing "on", the event to listen for`);
+      continue;
+    }
+    if (isWaterfallEvent(sub.on)) {
+      warnings.push(`${label}: "${sub.on}" is a waterfall event a hook can refuse, not one an agent can be woken by.`);
+      continue;
+    }
+    if (!KNOWN_BROADCAST_EVENTS.includes(sub.on as never)) {
+      // Nearest by edit distance among events that can wake anyone: matching on
+      // the second segment alone offers `schedule.created` for `tasks.created`.
+      const suggestion = nearestKey(sub.on, new Set<string>(KNOWN_BROADCAST_EVENTS));
+      warnings.push(
+        `${label}: "${sub.on}" is not a runtime event, so this subscription will never fire.` +
+          (suggestion ? ` Did you mean "${suggestion}"?` : ""),
+      );
+    }
+    const deliver = sub.deliver ?? "queue";
+    if (deliver === "batch") {
+      if (!sub.window) warnings.push(`${label}: deliver "batch" needs a "window", e.g. "5m"; it will not run.`);
+      else if (!parseWindow(sub.window)) {
+        warnings.push(`${label}: window "${sub.window}" is not a duration like "5m" or "30 seconds"; it will not run.`);
+      }
+    } else if (sub.window) {
+      warnings.push(`${label}: "window" only applies to deliver "batch" and is ignored here.`);
+    }
+    if (deliver === "digest") {
+      if (!sub.every)
+        warnings.push(`${label}: deliver "digest" needs "every", e.g. "weekdays at 9am"; it will not run.`);
+      else {
+        try {
+          parseEvery(sub.every);
+        } catch {
+          warnings.push(`${label}: every "${sub.every}" is not a schedule this understands; it will not run.`);
+        }
+      }
+    } else if (sub.every) {
+      warnings.push(`${label}: "every" only applies to deliver "digest" and is ignored here.`);
+    }
+    if (sub.target && sub.target !== "session") {
+      const room = sub.target.room;
+      if (!room) warnings.push(`${label}: target needs "room"`);
+      else if (!declaredRoomNames.has(room) && !/^[^:]+:.+$/.test(room)) {
+        warnings.push(
+          `${label}: target room "${room}" is neither a room declared in rooms.rooms nor a <backend>:<id> ref`,
+        );
+      }
+    }
+    const key = subscriptionKey(sub);
+    if (seen.has(key))
+      warnings.push(`${label}: duplicates an earlier subscription, so the agent hears everything twice.`);
+    seen.add(key);
   }
   return warnings;
 }
@@ -2773,6 +2858,7 @@ export function validateConfig(config: AgentConfig): string[] {
   }
   warnings.push(...eventHookWarnings(config.hooks?.on, "hooks.on", false));
   warnings.push(...stateTypeWarnings(config.state?.types));
+  warnings.push(...subscriptionWarnings(config));
 
   // Rooms: a subscription naming an agent that doesn't exist, or a ref in the
   // wrong shape, means an agent silently never wakes — the failure mode this
