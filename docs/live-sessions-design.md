@@ -1,6 +1,7 @@
 # Live sessions — Design
 
-> Status: sketch, accepted; numbers pending a measurement spike. Third of three
+> Status: sketch, accepted; measured on the reference hardware 2026-10-18 (see
+> [Step 0](#step-0-what-the-spike-measured)). Third of three
 > linked designs: [world state](./world-state-design.md), [agent
 > interfaces](./agent-interfaces-design.md), and this one. Supersedes the
 > cloud-realtime shape in
@@ -23,18 +24,20 @@ something up rather than depending on the cloud.
 The reference hardware is one 32 GB GPU and 30 GB of system RAM, already
 running a 27B language model.
 
-### What that hardware has to work with
+### What that hardware does
 
-| Stage | Local candidate | What we know |
+Measured with every stage running at once (details in
+[Step 0](#step-0-what-the-spike-measured)):
+
+| Stage | What runs | Measured |
 |---|---|---|
-| Speech-to-text | faster-whisper | `small` int8 already runs on CPU on the reference hardware, deliberately off the GPU; larger models fit on the GPU in a few GB |
-| Language model | Qwen 27B, 4-bit | ~20 GiB resident, prefix caching on |
-| Text-to-speech | Kokoro (82M) | ~35–100× faster than real time on a mid GPU, under 1 GiB |
-| Text-to-speech | Breeze | **ruled out**: renders at 1.7× slower than real time, so it cannot keep up with a conversation |
+| Speech-to-text | faster-whisper `small`, fp16, on the GPU | **71–123 ms** for 2–6 s of speech; +1.1 GB VRAM. On the CPU (int8) the same clips took 1.6–2.5 s, the whole budget on their own |
+| Language model | Qwen3.8 27B, NVFP4, reasoning off | first token **22–34 ms** with the prompt prefix cached; ~55 tokens/s; ~23 GB resident |
+| Text-to-speech | Kokoro (82M), on the CPU | first sentence in **~200 ms**, 8–11× faster than real time, no VRAM |
+| Text-to-speech | Breeze | **ruled out**: renders slower than real time, so it cannot keep up with a conversation |
 
-The language model is the slow stage and the one everything else has to fit
-around. The numbers that decide the design are **not measured yet**, which is
-why the first step is a spike, below.
+No stage is the bottleneck. The number that decides whether this works is
+whether the prompt prefix is cached, below.
 
 ## The shape: a pipeline, not one speech model
 
@@ -57,6 +60,25 @@ them (a different STT model, a cloud TTS) without touching the rest.
 | **The voice agent is not the full agent.** A slim prompt, two or three tools, reasoning off, short replies | a 27B model with a full prompt and forty tools cannot answer in two seconds | see below |
 | **Kokoro's stock voices**, no cloning | the local cloning engines tried so far are too slow for live use | faster cloning models |
 | **English first** | small whisper models are weakest outside English | larger STT model if VRAM allows |
+| **No vision during a call.** The vision tower comes off while a session is live | it costs ~4 GB; with it on, the language model and speech-to-text leave under 1 GB free | a smaller vision tower, or a bigger card |
+
+### The rule the numbers impose: a stable prompt prefix
+
+Time to the first token, by how much of the prompt the server has cached:
+
+| Prompt | Prefix not cached | Prefix cached |
+|---|---|---|
+| ~2k tokens | 468 ms | 25 ms |
+| ~8k tokens | 864 ms | 28 ms |
+| ~16k tokens | 1,818 ms | 34 ms |
+
+A cached prefix makes prompt size almost free; an uncached one costs up to the
+whole budget. So the voice agent's prompt must keep everything that does not
+change (system prompt, persona, tool schemas) at the front and byte-identical
+from turn to turn, with the conversation after it. Anything that rewrites the
+top of the prompt each turn — a clock in the system prompt, injected memory,
+a reordered tool list — turns every exchange into a cold one. Voice mode has
+to guarantee this, and a test should prove it.
 
 ### Fast talker, slow thinker
 
@@ -82,12 +104,15 @@ With a pipeline, one exchange is: a transcript in, a normal agent turn, text
 out. That reuses the agent loop, its tools, limits, guardrails and history,
 instead of a separate component calling tools from outside a turn.
 
-This changes the dependency on
-[#600](https://github.com/quintonmiller/tailored-ai/issues/600). The
-cloud-realtime shape needed tools invoked outside a turn with the agent's
-identity; this one may not. Whether a full loop turn is fast enough is one of
-the things the spike measures. If it is not, #600 comes back as the way to run
-a lighter turn.
+The spike settled whether that is fast enough. Through TAI's own `/api/chat`,
+a full agent turn reached its first word in a median of **58 ms** (483 ms on
+the first turn, while the cache filled), against 22–34 ms for a bare model
+call. The whole loop — prompt assembly, history, the database — adds about
+25–35 ms.
+
+So [#600](https://github.com/quintonmiller/tailored-ai/issues/600) is not a
+dependency for voice. The cloud-realtime shape needed tools invoked outside a
+turn; the local pipeline runs ordinary turns, and they are fast enough.
 
 ## The session
 
@@ -115,27 +140,51 @@ interface LiveSession {
 
 ### Sharing the GPU
 
-While a session is live, speech-to-text and Kokoro stay resident beside the
-language model, and anything else that wants the card (image generation, a slow
-TTS render) waits. A simple session-scoped lock is enough for v1; a general GPU
-scheduler is a separate idea.
+While a session is live, speech-to-text (1.1 GB) stays resident beside the
+language model, Kokoro runs on the CPU and needs no VRAM, the vision tower is
+off, and anything else that wants the card (image generation, a slow TTS
+render) waits. Measured: ~28 GB of 32.6 GB in use with all of it running,
+including ~4 GB the desktop holds. A simple session-scoped lock is enough for
+v1; a general GPU scheduler is a separate idea.
 
-## Step 0: the spike
+## Step 0: what the spike measured
 
-Before any of this is built, one script on the reference hardware, with all
-three models resident at once, measures:
+Run 2026-10-18 on the reference hardware, every stage resident at once: the
+language model in NInfer without the vision tower, faster-whisper on the GPU,
+Kokoro in its CPU container.
 
-1. VRAM in use and KV cache left for the language model,
-2. speech-to-text latency from end of speech to final transcript,
-3. language model time to first token with a slim voice prompt, prefix cache
-   warm and cold, and tokens per second,
-4. text-to-speech time to first audio for one sentence,
-5. the overhead of running one exchange as a full agent loop turn versus a bare
-   model call.
+| Measured | Result |
+|---|---|
+| VRAM | ~28 GB of 32.6 GB in use, of which ~4 GB is the desktop |
+| Speech-to-text, end of speech to transcript | 71 ms (1.9 s clip), 123 ms (4.5 s), 122 ms (5.7 s); transcripts exact |
+| Language model, first token | 22 ms cached, 53 ms not, on a tiny prompt; see the prefix table above for real sizes |
+| Language model, speed | ~55 tokens/s; a two-sentence reply in 160–195 ms |
+| Text-to-speech, first sentence | ~200 ms for a short sentence, ~565 ms for a long one |
+| A full TAI turn vs a bare call | 58 ms vs 22–34 ms to the first word |
 
-**Target:** under 1.5 seconds from the end of your sentence to the first audio
-of the reply, at the median, for a short answer. If the spike misses it, the
-table of sacrifices grows before any code is written.
+### The budget, end of your sentence to first audio
+
+| Step | Time |
+|---|---|
+| Noticing you stopped (silence before the turn ends) | ~500 ms: a setting, and the largest single item |
+| Speech-to-text | ~100 ms |
+| Agent turn, to the end of its first sentence (~15 tokens) | ~60 ms to the first token + ~220 ms |
+| Text-to-speech of that sentence | ~200 ms |
+| **Total** | **~1.1 s**, against a 1.5 s target |
+
+With the prompt prefix not cached, add ~0.45 s for a 2k-token prompt: ~1.55 s,
+a miss. That is why the stable prefix is a rule rather than an optimisation.
+
+### What these numbers do not cover
+
+- Speech-to-text was given clean, synthetic speech. A real microphone in a room
+  is noisier, slower to detect the end of, and less accurate.
+- One machine, one model, and a slim agent with one tool (2.0–2.3k prompt
+  tokens). A bigger tool set lengthens the prompt, which costs little while the
+  prefix stays cached.
+- The model server failed its first start on a CUDA graph memory allowance and
+  succeeded on retry. That is startup, not per turn, but a session cannot
+  assume the model is already up.
 
 ## Where it lives
 
@@ -149,7 +198,7 @@ table of sacrifices grows before any code is written.
 
 | # | Slice |
 |---|---|
-| 0 | Measurement spike on the reference hardware |
+| 0 | Measurement spike on the reference hardware — **done**, see Step 0 |
 | 1 | Session model, web transport, push-to-talk, STT → turn → TTS, no barge-in |
 | 2 | Voice activity detection replaces push-to-talk; barge-in with headphones |
 | 3 | Fast talker / slow thinker: background delegation, results spoken and shown as components |
