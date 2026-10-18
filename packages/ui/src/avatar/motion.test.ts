@@ -83,4 +83,54 @@ describe("Motion", () => {
     const thinking = run(new Motion({ random: steady, reducedMotion: true }), "thinking", 2);
     expect(thinking.bones.head[1]).toBeGreaterThan(0.15);
   });
+
+  it("swings its legs against each other, and its arms against its legs, while it walks", () => {
+    const motion = new Motion({ random: steady });
+    const swings: number[][] = [];
+    for (let t = 0; t < 2; t += 1 / 60) {
+      const p = motion.step(t, "idle", 0, { walked: 0.5 / 60, stride: 0.45 });
+      swings.push([p.bones.leftUpperLeg[0], p.bones.rightUpperLeg[0], p.bones.leftUpperArm[0]]);
+    }
+    const late = swings.slice(30);
+    const range = (i: number) => Math.max(...late.map((s) => s[i])) - Math.min(...late.map((s) => s[i]));
+    expect(range(0)).toBeGreaterThan(0.5);
+    for (const [left, right, arm] of late) {
+      expect(Math.sign(left)).not.toBe(Math.sign(right) || Math.sign(left) * -1);
+      if (Math.abs(left) > 0.2) expect(Math.sign(arm)).toBe(-Math.sign(left));
+    }
+  });
+
+  it("stands with straight legs once it stops walking", () => {
+    const motion = new Motion({ random: steady });
+    for (let t = 0; t < 1; t += 1 / 60) motion.step(t, "idle", 0, { walked: 0.01, stride: 0.45 });
+    const still = run(motion, "idle", 1, 0, 1);
+    expect(Math.abs(still.bones.leftUpperLeg[0])).toBeLessThan(0.01);
+    expect(still.lift).toBeLessThan(0.001);
+  });
+
+  it("sits down at a seat: thighs level, knees bent, settled onto it", () => {
+    const motion = new Motion({ random: steady });
+    let pose = motion.step(0, "idle", 0, { walked: 0, stride: 0.45, activity: "sit" });
+    for (let t = 0; t < 3; t += 1 / 60) pose = motion.step(t, "idle", 0, { walked: 0, stride: 0.45, activity: "sit" });
+    expect(pose.seated).toBeGreaterThan(0.95);
+    expect(pose.bones.leftUpperLeg[0]).toBeLessThan(-1.3);
+    expect(pose.bones.leftLowerLeg[0]).toBeGreaterThan(1.3);
+  });
+
+  it("doesn't start an activity while still walking", () => {
+    const motion = new Motion({ random: steady });
+    let pose = motion.step(0, "idle", 0);
+    for (let t = 0; t < 2; t += 1 / 60)
+      pose = motion.step(t, "idle", 0, { walked: 0.01, stride: 0.45, activity: "sit" });
+    expect(pose.seated).toBeLessThan(0.01);
+  });
+
+  it("reaches for the keyboard and looks down at the desk", () => {
+    const motion = new Motion({ random: steady });
+    const rest = run(new Motion({ random: steady }), "idle", 2);
+    let pose = motion.step(0, "idle", 0);
+    for (let t = 0; t < 2; t += 1 / 60) pose = motion.step(t, "idle", 0, { walked: 0, stride: 0.45, activity: "type" });
+    expect(pose.bones.leftUpperArm[0]).toBeLessThan(rest.bones.leftUpperArm[0] - 0.6);
+    expect(pose.bones.head[0]).toBeGreaterThan(rest.bones.head[0] + 0.1);
+  });
 });

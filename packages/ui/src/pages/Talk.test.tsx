@@ -239,8 +239,11 @@ describe("Talk page", () => {
     const now = () => stage.calls[0].input();
     expect(now().state).toBe("idle");
     expect(now().loudness()).toBe(0);
+    // No session yet: free to wander the room.
+    expect(now().engaged).toBe(false);
 
     await startSession();
+    expect(now().engaged).toBe(true);
     const talk = container.querySelector(".talk-button") as HTMLButtonElement;
     talk.setPointerCapture = () => {};
     await act(async () => {

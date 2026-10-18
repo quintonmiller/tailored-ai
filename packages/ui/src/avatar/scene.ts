@@ -4,8 +4,9 @@
  * so it needs no model files and matches the low-poly look of most VRM
  * avatars.
  *
- * Spots are named, never just coordinates: when an agent later moves around
- * the room, it says "the couch", and the stage works out where that is.
+ * Spots are named, never just coordinates: the avatar walks between them,
+ * and when an agent moves it later, it says "the couch" and the stage works
+ * out where that is. Each spot can come with something to do there.
  *
  * Units are metres. +X is to the viewer's right, +Z toward the viewer, and
  * the back and left walls close the room. A `facing` of 0° looks toward the
@@ -34,13 +35,21 @@ export interface Prop {
   facing: number;
   /** Height above the floor, for things on a wall or a table. */
   elevation?: number;
+  /** The spot to walk to when someone clicks this. */
+  spot?: string;
 }
+
+/** What the avatar does once it gets to a spot. */
+export type Activity = "sit" | "type" | "look" | "browse";
 
 export interface Spot {
   id: string;
   name: string;
   at: [number, number];
   facing: number;
+  activity?: Activity;
+  /** For `sit`: where the seat is and how high, so the avatar settles onto it. */
+  seat?: { at: [number, number]; height: number };
 }
 
 export interface Room {
@@ -58,23 +67,38 @@ export const DEFAULT_ROOM: Room = {
   depth: 3.6,
   height: 2.5,
   props: [
-    { id: "rug", name: "the rug", kind: "rug", at: [0.1, 0.25], facing: 0 },
-    { id: "couch", name: "the couch", kind: "couch", at: [-0.85, -1.38], facing: 0 },
+    { id: "rug", name: "the rug", kind: "rug", at: [0.1, 0.25], facing: 0, spot: "middle" },
+    { id: "couch", name: "the couch", kind: "couch", at: [-0.85, -1.38], facing: 0, spot: "couch" },
     { id: "picture", name: "the picture", kind: "picture", at: [-0.85, -1.79], facing: 0, elevation: 1.55 },
     { id: "lamp", name: "the floor lamp", kind: "lamp", at: [0.25, -1.5], facing: 0 },
-    { id: "desk", name: "the desk", kind: "desk", at: [1.35, -1.47], facing: 0 },
-    { id: "laptop", name: "the laptop", kind: "laptop", at: [1.35, -1.5], facing: 0, elevation: 0.76 },
-    { id: "chair", name: "the desk chair", kind: "chair", at: [1.35, -0.95], facing: 160 },
-    { id: "window", name: "the window", kind: "window", at: [-2.09, -0.45], facing: 90, elevation: 1.0 },
-    { id: "bookshelf", name: "the bookshelf", kind: "bookshelf", at: [-1.9, 0.95], facing: 90 },
+    { id: "desk", name: "the desk", kind: "desk", at: [1.35, -1.47], facing: 0, spot: "desk" },
+    { id: "laptop", name: "the laptop", kind: "laptop", at: [1.35, -1.5], facing: 0, elevation: 0.76, spot: "desk" },
+    { id: "chair", name: "the desk chair", kind: "chair", at: [0.72, -0.9], facing: 200, spot: "desk" },
+    {
+      id: "window",
+      name: "the window",
+      kind: "window",
+      at: [-2.09, -0.45],
+      facing: 90,
+      elevation: 1.0,
+      spot: "window",
+    },
+    { id: "bookshelf", name: "the bookshelf", kind: "bookshelf", at: [-1.9, 0.95], facing: 90, spot: "bookshelf" },
     { id: "plant", name: "the plant", kind: "plant", at: [-1.78, -1.48], facing: 0 },
   ],
   spots: [
     { id: "middle", name: "the middle of the room", at: [0.15, 0.35], facing: 20 },
-    { id: "couch", name: "by the couch", at: [-0.85, -0.75], facing: 10 },
-    { id: "desk", name: "at the desk", at: [0.7, -1.0], facing: 150 },
-    { id: "window", name: "at the window", at: [-1.5, -0.45], facing: -90 },
-    { id: "bookshelf", name: "by the bookshelf", at: [-1.35, 0.95], facing: -90 },
+    {
+      id: "couch",
+      name: "on the couch",
+      at: [-0.85, -0.72],
+      facing: 0,
+      activity: "sit",
+      seat: { at: [-0.85, -1.25], height: 0.47 },
+    },
+    { id: "desk", name: "at the desk", at: [1.35, -0.98], facing: 180, activity: "type" },
+    { id: "window", name: "at the window", at: [-1.55, -0.45], facing: -90, activity: "look" },
+    { id: "bookshelf", name: "by the bookshelf", at: [-1.4, 0.95], facing: -90, activity: "browse" },
   ],
   start: "middle",
 };
@@ -96,6 +120,10 @@ export function roomProblems(room: Room): string[] {
     }
   }
   if (!spotById(room, room.start)) problems.push(`The starting spot "${room.start}" does not exist.`);
+  for (const prop of room.props)
+    if (prop.spot && !spotById(room, prop.spot)) problems.push(`"${prop.id}" leads to a spot that does not exist.`);
+  for (const spot of room.spots)
+    if (spot.activity === "sit" && !spot.seat) problems.push(`"${spot.id}" is for sitting but has no seat.`);
   return problems;
 }
 
@@ -138,6 +166,20 @@ export function lightingFor(hour: number): Lighting {
 
 /** Where the camera starts: above and to the right, the whole room in frame. */
 export const ROOM_VIEW = { azimuth: 0.42, elevation: 0.5, fov: 35 };
+
+/**
+ * The camera angles that look in through the room's open sides (radians,
+ * 0 from the front). Swinging past them would put a wall between you and
+ * the room.
+ */
+export const OPEN_SIDES: [number, number] = [-0.25, 1.25];
+
+/** `angle` if it falls in `range`, otherwise whichever end of it is the shorter turn away. */
+export function nearestWithin(angle: number, [lo, hi]: [number, number]): number {
+  const a = lo + ((((angle - lo) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI));
+  if (a <= hi) return a;
+  return a - hi < lo + 2 * Math.PI - a ? hi : lo;
+}
 
 /**
  * How far back the camera sits to fit the room at this aspect ratio: a narrow

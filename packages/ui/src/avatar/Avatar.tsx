@@ -13,17 +13,29 @@ function savedView(): StageView {
 }
 
 /**
- * The agent's body on the Talk page, standing in a small room: it breathes,
- * leans in while you talk, looks away while it thinks, and moves its mouth
- * with its voice. Drag to look around, or switch to a close-up. The 3D code
+ * The agent's body on the Talk page, in a small room: it breathes, leans in
+ * while you talk, looks away while it thinks, and moves its mouth with its
+ * voice. Between sessions it wanders the room; click furniture to send it
+ * there. Drag to look around, or switch to a close-up. The 3D code
  * loads only when this renders, so a page without an avatar never downloads
  * it.
  */
-export function Avatar({ url, state, loudness }: { url: string; state: BodyState; loudness: () => number }) {
+export function Avatar({
+  url,
+  state,
+  loudness,
+  engaged,
+}: {
+  url: string;
+  state: BodyState;
+  loudness: () => number;
+  /** A session is under way: the avatar stays put and faces you instead of wandering. */
+  engaged: boolean;
+}) {
   const host = useRef<HTMLDivElement>(null);
   // The stage reads these every frame; a ref keeps that from re-rendering React.
-  const live = useRef({ state, loudness });
-  live.current = { state, loudness };
+  const live = useRef({ state, loudness, engaged });
+  live.current = { state, loudness, engaged };
   const stage = useRef<Stage | null>(null);
   const [view, setView] = useState<StageView>(savedView);
   const viewRef = useRef(view);
@@ -65,7 +77,12 @@ export function Avatar({ url, state, loudness }: { url: string; state: BodyState
   if (problem) return <p className="talk-avatar-problem">Couldn't show the avatar: {problem}</p>;
   return (
     <div className="talk-stage">
-      <div className="talk-avatar" ref={host} aria-hidden="true" title="Drag to look around" />
+      <div
+        className="talk-avatar"
+        ref={host}
+        aria-hidden="true"
+        title="Drag to look around. Click furniture to send it there."
+      />
       <fieldset className="talk-view" aria-label="Avatar view">
         {(["room", "close"] as const).map((v) => (
           <button key={v} type="button" aria-pressed={view === v} onClick={() => choose(v)}>

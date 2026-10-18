@@ -116,8 +116,19 @@ and a floor lamp. It is lit for the time of day: daylight through the window,
 the lamp on in the evening, the lamp alone at night. Drag to look around the
 room, or press **Close up** to frame the head and torso. The page remembers
 the choice. The furniture is built from simple shapes, so there are no files
-to download, and every piece and spot in the room has a name. When the agent
-later moves around, it will say "by the couch", never coordinates.
+to download.
+
+The avatar moves around the room on its own. Between sessions it wanders:
+it sits on the couch, types at the desk, looks out of the window, browses
+the bookshelf, and stays a while at each. When you start a session it walks
+back to the middle to face you, and stays there until the session ends.
+Click a piece of furniture to send it there yourself. The close-up follows
+it as it goes.
+
+Every piece of furniture and every spot in the room has a name, and the
+avatar walks between spots by way of the middle of the room, so it never
+cuts through furniture. When the agent moves it later, it will name a spot
+("on the couch"), never coordinates.
 
 None of this asks the model for anything. The moments come from the turn the
 page is already following, and the mouth from the loudness of the audio, so

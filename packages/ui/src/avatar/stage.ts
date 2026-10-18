@@ -1,7 +1,9 @@
 /**
  * The 3D half of the avatar: a small room, lit for the time of day, with a
- * VRM model standing in it and moving every frame by the pose {@link Motion}
- * computes. Drag to look around; the close-up view frames the head and torso.
+ * VRM model in it, moving every frame by the pose {@link Motion} computes.
+ * It walks between the room's spots on its own while nobody is talking to
+ * it, comes back to the middle when a session starts, and goes where you
+ * click. Drag to look around; the close-up view follows the head and torso.
  * Imported only when an avatar is configured, so three.js stays out of the
  * main bundle.
  *
@@ -13,20 +15,36 @@ import { type VRM, VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { Director, route, Walker } from "./locomotion";
 import { type BodyState, Motion, POSE_BONES, type Pose } from "./motion";
 import { type BuiltProp, buildProp, buildShell, disposeTree } from "./props";
-import { DEFAULT_ROOM, type Lighting, lightingFor, ROOM_VIEW, type Room, roomDistance, spotById } from "./scene";
+import {
+  DEFAULT_ROOM,
+  type Lighting,
+  lightingFor,
+  nearestWithin,
+  OPEN_SIDES,
+  ROOM_VIEW,
+  type Room,
+  roomDistance,
+  spotById,
+} from "./scene";
 
 /** The whole room, or the avatar's head and torso. */
 export type StageView = "room" | "close";
 
 export interface Stage {
   setView(view: StageView): void;
+  /** Walk to a spot in the room, by id. False when there is no such spot. */
+  walkTo(spot: string): boolean;
   dispose(): void;
 }
 
-/** Read every frame: the turn's moment, and the voice's loudness right now (0–1). */
-export type StageInput = () => { state: BodyState; loudness: () => number };
+/**
+ * Read every frame: the turn's moment, the voice's loudness right now (0–1),
+ * and whether a session is under way, which keeps the avatar from wandering.
+ */
+export type StageInput = () => { state: BodyState; loudness: () => number; engaged: boolean };
 
 /** Seconds to move between views. */
 const VIEW_SECONDS = 0.8;
@@ -80,24 +98,30 @@ export async function createStage(
   const scene = new THREE.Scene();
   scene.add(buildShell(room));
   const glows: Partial<Record<string, BuiltProp>> = {};
+  // Furniture that leads somewhere when clicked.
+  const clickable: THREE.Object3D[] = [];
   let lampAt: THREE.Vector3 | undefined;
   for (const prop of room.props) {
     const built = buildProp(prop.kind);
     built.group.position.set(prop.at[0], prop.elevation ?? 0, prop.at[1]);
     built.group.rotation.y = rad(prop.facing);
     scene.add(built.group);
+    if (prop.spot) {
+      built.group.userData.spot = prop.spot;
+      clickable.push(built.group);
+    }
     if (built.glow) glows[prop.kind] = built;
     if (prop.kind === "lamp") lampAt = new THREE.Vector3(prop.at[0], 1.45, prop.at[1]);
   }
 
   // The body is a group around the model, so placing and turning it leaves
   // the model's own VRM 0.x turn alone.
-  const spot = spotById(room, room.start) ?? room.spots[0];
+  const start = spotById(room, room.start) ?? room.spots[0];
   const body = new THREE.Group();
   body.add(vrm.scene);
-  if (spot) {
-    body.position.set(spot.at[0], 0, spot.at[1]);
-    body.rotation.y = rad(spot.facing);
+  if (start) {
+    body.position.set(start.at[0], 0, start.at[1]);
+    body.rotation.y = rad(start.facing);
   }
   scene.add(body);
 
@@ -138,6 +162,35 @@ export async function createStage(
   const hipsY =
     vrm.humanoid.getNormalizedBoneNode("hips")?.getWorldPosition(new THREE.Vector3()).y ??
     bounds.min.y + (bounds.max.y - bounds.min.y) / 2;
+  // What the close-up frames, measured up from the body's feet.
+  const torso = (bounds.max.y + hipsY) / 2;
+
+  // Walking: speed and stride in proportion to the legs, so a small robot
+  // pads along and a tall figure strides.
+  const walker = new Walker(
+    { x: body.position.x, z: body.position.z, facing: body.rotation.y },
+    Math.max(0.3, hipsY * 1.35),
+  );
+  const stride = Math.max(0.15, hipsY * 1.1);
+  const director = new Director(room);
+  /** The spot it is at, or walking to. */
+  let current: string | undefined = start?.id;
+  /** A walk asked for while seated: it stands up first. */
+  let pending: string | undefined;
+  let seated = 0;
+  const go = (id: string) => {
+    const to = spotById(room, id);
+    if (!to) return false;
+    director.sent();
+    if (seated > 0.05) {
+      pending = id;
+      return true;
+    }
+    pending = undefined;
+    walker.go(route(room, walker.busy ? undefined : current, id), rad(to.facing));
+    current = id;
+    return true;
+  };
 
   const camera = new THREE.PerspectiveCamera(ROOM_VIEW.fov, 1, 0.05, 60);
   const controls = new OrbitControls(camera, renderer.domElement);
@@ -151,12 +204,14 @@ export async function createStage(
       const vfov = rad(ROOM_VIEW.fov);
       const hfov = 2 * Math.atan(Math.tan(vfov / 2) * camera.aspect);
       const distance = Math.max(span / 2 / Math.tan(vfov / 2), (span * 0.9) / 2 / Math.tan(hfov / 2));
-      const target = new THREE.Vector3(body.position.x, (top + hipsY) / 2, body.position.z);
-      const facing = body.rotation.y;
+      const target = new THREE.Vector3(body.position.x, body.position.y + torso, body.position.z);
+      // In front of its face when that side of the room is open; at a desk or
+      // a shelf it faces a wall, so the camera takes the nearest open angle.
+      const azimuth = nearestWithin(body.rotation.y, OPEN_SIDES);
       return {
         target,
-        position: new THREE.Vector3().setFromSphericalCoords(distance, Math.PI / 2 - 0.08, facing).add(target),
-        azimuth: [facing - 0.9, facing + 0.9],
+        position: new THREE.Vector3().setFromSphericalCoords(distance, Math.PI / 2 - 0.08, azimuth).add(target),
+        azimuth: OPEN_SIDES,
         polar: [1.1, 1.75],
       };
     }
@@ -167,8 +222,7 @@ export async function createStage(
       position: new THREE.Vector3()
         .setFromSphericalCoords(distance, Math.PI / 2 - ROOM_VIEW.elevation, ROOM_VIEW.azimuth)
         .add(target),
-      // Swinging past the open sides would put a wall between you and the room.
-      azimuth: [-0.25, 1.25],
+      azimuth: OPEN_SIDES,
       polar: [0.55, 1.3],
     };
   };
@@ -207,6 +261,41 @@ export async function createStage(
   scene.add(gaze);
   if (vrm.lookAt) vrm.lookAt.target = gaze;
 
+  // A click (not a drag) on furniture sends the avatar to its spot; the
+  // pointer says so on hover.
+  const canvas = renderer.domElement;
+  const ray = new THREE.Raycaster();
+  const spotAt = (e: PointerEvent): string | undefined => {
+    const r = canvas.getBoundingClientRect();
+    ray.setFromCamera(
+      new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1),
+      camera,
+    );
+    for (const hit of ray.intersectObjects(clickable, true)) {
+      for (let o: THREE.Object3D | null = hit.object; o; o = o.parent)
+        if (typeof o.userData.spot === "string") return o.userData.spot;
+    }
+    return undefined;
+  };
+  let downAt: [number, number] | null = null;
+  const onDown = (e: PointerEvent) => {
+    downAt = [e.clientX, e.clientY];
+  };
+  const onUp = (e: PointerEvent) => {
+    const moved = downAt ? Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) : Infinity;
+    downAt = null;
+    if (moved > 6) return;
+    const id = spotAt(e);
+    if (id) go(id);
+  };
+  const onHover = (e: PointerEvent) => {
+    if (downAt || e.pointerType !== "mouse") return;
+    canvas.style.cursor = spotAt(e) ? "pointer" : "";
+  };
+  canvas.addEventListener("pointerdown", onDown);
+  canvas.addEventListener("pointerup", onUp);
+  canvas.addEventListener("pointermove", onHover);
+
   const motion = new Motion(opts);
   const started = performance.now();
   let last = started;
@@ -231,9 +320,37 @@ export async function createStage(
       hour = hourNow();
       light(lightingFor(hour));
     }
-    const { state, loudness } = input();
-    const pose = motion.step(t, state, loudness());
+    const { state, loudness, engaged } = input();
+    const here = walker.busy || pending ? undefined : current;
+    const next = director.decide(t, here, engaged);
+    if (next) go(next);
+    if (pending && seated <= 0.05) go(pending);
+    const walked = pending ? 0 : walker.step(dt);
+    const spot = current ? spotById(room, current) : undefined;
+    const pose = motion.step(t, state, loudness(), {
+      walked,
+      stride,
+      ...(here && spot?.activity ? { activity: spot.activity } : {}),
+    });
+    seated = pose.seated;
     apply(vrm, pose, flip);
+    // Settling onto a seat moves the body back onto it and to its height.
+    let { x, z } = walker.place;
+    let y = pose.lift;
+    if (spot?.seat && seated > 0) {
+      x += (spot.seat.at[0] - x) * seated;
+      z += (spot.seat.at[1] - z) * seated;
+      y += (spot.seat.height + 0.03 - hipsY) * seated;
+    }
+    body.position.set(x, y, z);
+    body.rotation.y = walker.place.facing;
+    // The close-up keeps the torso in frame wherever the avatar goes, from
+    // the angle the person last left the view at.
+    if (view === "close" && !tween) {
+      const follow = new THREE.Vector3(x, y + torso, z).sub(controls.target).multiplyScalar(1 - Math.exp(-dt / 0.25));
+      controls.target.add(follow);
+      camera.position.add(follow);
+    }
     // The eyes look at you, wherever you have turned the view to.
     const head = Math.max(0.05, bounds.max.y - hipsY) * 0.5;
     gaze.position.set(
@@ -267,9 +384,13 @@ export async function createStage(
         started: performance.now(),
       };
     },
+    walkTo: go,
     dispose() {
       renderer.setAnimationLoop(null);
       observer.disconnect();
+      canvas.removeEventListener("pointerdown", onDown);
+      canvas.removeEventListener("pointerup", onUp);
+      canvas.removeEventListener("pointermove", onHover);
       controls.dispose();
       VRMUtils.deepDispose(vrm.scene);
       disposeTree(scene);

@@ -4,7 +4,16 @@
  * narrow frame.
  */
 import { describe, expect, it } from "vitest";
-import { DEFAULT_ROOM, lightingFor, type Room, roomDistance, roomProblems, spotById } from "./scene";
+import {
+  DEFAULT_ROOM,
+  lightingFor,
+  nearestWithin,
+  OPEN_SIDES,
+  type Room,
+  roomDistance,
+  roomProblems,
+  spotById,
+} from "./scene";
 
 describe("the default room", () => {
   it("has no problems, and the avatar starts at a real spot", () => {
@@ -13,7 +22,7 @@ describe("the default room", () => {
   });
 
   it("names every prop and spot the way a person would say it", () => {
-    for (const item of [...DEFAULT_ROOM.props, ...DEFAULT_ROOM.spots]) expect(item.name).toMatch(/^(the|by|at) /);
+    for (const item of [...DEFAULT_ROOM.props, ...DEFAULT_ROOM.spots]) expect(item.name).toMatch(/^(the|by|at|on) /);
   });
 });
 
@@ -31,6 +40,20 @@ describe("roomProblems", () => {
       '"a" is used twice.',
       '"a" is outside the room.',
       'The starting spot "nowhere" does not exist.',
+    ]);
+  });
+});
+
+describe("roomProblems, for spots and what leads to them", () => {
+  it("names furniture that leads nowhere, and a seat-less place to sit", () => {
+    const room: Room = {
+      ...DEFAULT_ROOM,
+      props: [{ id: "stool", name: "the stool", kind: "chair", at: [0, 0], facing: 0, spot: "perch" }],
+      spots: [{ id: "middle", name: "the middle", at: [0, 0], facing: 0, activity: "sit" }],
+    };
+    expect(roomProblems(room)).toEqual([
+      '"stool" leads to a spot that does not exist.',
+      '"middle" is for sitting but has no seat.',
     ]);
   });
 });
@@ -63,5 +86,21 @@ describe("roomDistance", () => {
 
   it("is never closer than the room's height needs", () => {
     expect(roomDistance(DEFAULT_ROOM, 10)).toBeCloseTo(roomDistance(DEFAULT_ROOM, 20), 5);
+  });
+});
+
+describe("nearestWithin", () => {
+  it("keeps an angle that looks in through an open side", () => {
+    expect(nearestWithin(0.3, OPEN_SIDES)).toBeCloseTo(0.3);
+  });
+
+  it("swings a view that would be behind a wall to the nearest open angle", () => {
+    // Facing the desk on the back wall, or the shelf on the left wall.
+    expect(nearestWithin((145 * Math.PI) / 180, OPEN_SIDES)).toBe(OPEN_SIDES[1]);
+    expect(nearestWithin(-Math.PI / 2, OPEN_SIDES)).toBe(OPEN_SIDES[0]);
+  });
+
+  it("reads angles the long way round the same as the short way", () => {
+    expect(nearestWithin(0.3 + 2 * Math.PI, OPEN_SIDES)).toBeCloseTo(0.3);
   });
 });
