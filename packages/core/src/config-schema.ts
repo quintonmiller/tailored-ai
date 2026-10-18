@@ -299,6 +299,7 @@ const LiveConfigSchema = z.object({
   limits: z
     .object({ maxMinutes: z.number().optional(), idleMinutes: z.number().optional(), maxTurns: z.number().optional() })
     .optional(),
+  avatar: z.object({ model: z.string().optional() }).optional(),
 });
 type _LiveConfigMatches = AssertTrue<Identical<z.infer<typeof LiveConfigSchema>, NonNullable<AgentConfig["live"]>>>;
 

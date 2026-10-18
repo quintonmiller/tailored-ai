@@ -6,7 +6,21 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { StageInput } from "../avatar/stage";
 import { Talk } from "./Talk";
+
+// The 3D stage needs WebGL, which jsdom lacks; what the page hands it is the contract.
+const stage = vi.hoisted(() => ({
+  calls: [] as { url: string; input: StageInput }[],
+  fail: null as string | null,
+}));
+vi.mock("../avatar/stage", () => ({
+  createStage: async (_host: HTMLElement, url: string, input: StageInput) => {
+    if (stage.fail) throw new Error(stage.fail);
+    stage.calls.push({ url, input });
+    return { dispose: () => {} };
+  },
+}));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -16,6 +30,7 @@ const played: string[] = [];
 const posted: { url: string; type: string | null; body: unknown }[] = [];
 let turnChunks: string[] = [];
 let turnStatus = 200;
+let liveInfo: Record<string, unknown> = {};
 
 /** A response whose body arrives in the given chunks. */
 function streamed(chunks: string[], status = 200): Response {
@@ -53,6 +68,9 @@ beforeEach(() => {
   played.length = 0;
   posted.length = 0;
   turnStatus = 200;
+  liveInfo = {};
+  stage.calls.length = 0;
+  stage.fail = null;
   const audio = btoa("mp3-bytes");
   turnChunks = [
     'event: transcript\ndata: {"text":"water the plants"}\n\n',
@@ -90,6 +108,7 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url === "/api/agents") return new Response(JSON.stringify({ talker: {} }));
+      if (url === "/api/live") return new Response(JSON.stringify(liveInfo));
       if (url === "/api/live/sessions") {
         return new Response(
           JSON.stringify({
@@ -130,6 +149,13 @@ async function render() {
 
 const button = (text: string) =>
   [...container.querySelectorAll("button")].find((b) => b.textContent?.includes(text)) as HTMLButtonElement;
+
+/** The stage is imported on demand; give that import a moment to land. */
+async function loadStage() {
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 20));
+  });
+}
 
 async function startSession() {
   await act(async () => button("Start talking").click());
@@ -180,6 +206,50 @@ describe("Talk page", () => {
     await act(async () => button("Send").click());
     for (let i = 0; i < 4; i++) await act(async () => {});
     expect(posted[0]).toMatchObject({ type: "application/json", body: { text: "what's on today?" } });
+  });
+
+  it("draws no avatar when none is configured", async () => {
+    await render();
+    expect(container.querySelector(".talk-avatar")).toBeNull();
+    expect(stage.calls).toHaveLength(0);
+  });
+
+  it("draws the configured avatar, showing each moment of the turn and the voice's loudness", async () => {
+    liveInfo = { avatar: "/api/live/avatar" };
+    await render();
+    await loadStage();
+    expect(container.querySelector(".talk-avatar")).not.toBeNull();
+    expect(stage.calls.map((c) => c.url)).toEqual(["/api/live/avatar"]);
+    const now = () => stage.calls[0].input();
+    expect(now().state).toBe("idle");
+    expect(now().loudness()).toBe(0);
+
+    await startSession();
+    const talk = container.querySelector(".talk-button") as HTMLButtonElement;
+    talk.setPointerCapture = () => {};
+    await act(async () => {
+      talk.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    });
+    expect(now().state).toBe("listening");
+    await act(async () => {
+      talk.dispatchEvent(new Event("pointerup", { bubbles: true }));
+    });
+    for (let i = 0; i < 4; i++) await act(async () => {});
+    // The reply's audio is playing, and never ended: the body is speaking, mouth moving.
+    expect(now().state).toBe("speaking");
+    expect(now().loudness()).toBeGreaterThan(0);
+  });
+
+  it("says why when the avatar can't be drawn, and the page still works", async () => {
+    liveInfo = { avatar: "/api/live/avatar" };
+    stage.fail = "the file is not a VRM model";
+    await render();
+    await loadStage();
+    expect(container.querySelector(".talk-avatar-problem")?.textContent).toBe(
+      "Couldn't show the avatar: the file is not a VRM model",
+    );
+    await startSession();
+    expect((container.querySelector(".talk-button") as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("says why when the session can no longer take a turn", async () => {

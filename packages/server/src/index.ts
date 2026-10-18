@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { readdir, readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { readdir, readFile, stat } from "node:fs/promises";
+import { basename, join, resolve } from "node:path";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import {
@@ -10,6 +10,7 @@ import {
   type AutopilotSettings,
   type AutopilotWorker,
   addTaskComment,
+  avatarModelPath,
   type Briefing,
   BUDGETED_TOKEN_SOURCES,
   type CollectionListFilter,
@@ -443,7 +444,9 @@ export function createServer(opts: ServerOptions) {
             "script-src 'self'",
             "style-src 'self' 'unsafe-inline'",
             "font-src 'self' data:",
-            "connect-src 'self'",
+            // blob: because the 3D loader reads a model's embedded textures
+            // back through fetch() from blob URLs it made itself.
+            "connect-src 'self' blob:",
             // Nothing here should ever frame another origin, or be framed.
             "frame-src 'none'",
             "frame-ancestors 'none'",
@@ -1866,6 +1869,22 @@ export function createServer(opts: ServerOptions) {
     turns: s.turns,
     limits: s.limits,
     ...(s.endedAt ? { endedAt: s.endedAt, endReason: s.endReason } : {}),
+  });
+
+  // What the Talk page needs before a session starts: whether there is an avatar to draw.
+  app.get("/api/live", (c) => c.json(avatarModelPath(runtime.getConfig().live) ? { avatar: "/api/live/avatar" } : {}));
+
+  // The avatar's model file, revalidated on every load so a swapped file shows up.
+  app.get("/api/live/avatar", async (c) => {
+    const path = avatarModelPath(runtime.getConfig().live);
+    if (!path) return c.json({ error: "No avatar is configured. Set live.avatar.model to a VRM file." }, 404);
+    const info = await stat(path).catch(() => null);
+    if (!info?.isFile()) return c.json({ error: `The avatar file ${basename(path)} is missing.` }, 404);
+    const etag = `"${info.size.toString(16)}-${Math.floor(info.mtimeMs).toString(16)}"`;
+    c.header("ETag", etag);
+    c.header("Cache-Control", "no-cache");
+    if (c.req.header("If-None-Match") === etag) return c.body(null, 304);
+    return c.body(await readFile(path), 200, { "Content-Type": "model/gltf-binary" });
   });
 
   app.post("/api/live/sessions", async (c) => {
