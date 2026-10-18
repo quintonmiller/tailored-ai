@@ -1,6 +1,6 @@
 # Agent interfaces — Design
 
-> Status: design, accepted. **Phase 1 is implemented**: see
+> Status: design, accepted. **Phases 1 and 3 are implemented**: see
 > [agent-interfaces.md](./agent-interfaces.md) for what works today. Second of
 > three linked designs: [world state](./world-state-design.md), this one, and
 > [live sessions](./live-sessions-design.md).
@@ -64,7 +64,7 @@ and, later, voice.
 
 | Kind | Props | Discord | Plain text |
 |---|---|---|---|
-| `choice` | question, options, allowText | buttons (≤5) or a select menu | numbered options, "reply with a number" |
+| `choice` | question, options, allowText | buttons (up to 20), past that a select menu | numbered options, "reply with a number" |
 | `form` | title, fields (the workflow input schema: text, number, boolean, select, date) | a button that opens a modal (≤5 fields) | one question at a time |
 | `confirm` | summary, details, confirm/deny labels | approve / deny buttons | "reply yes or no" |
 | `card` | title, body (markdown), fields, media | embed | heading, body, `label: value` lines |
@@ -122,8 +122,9 @@ Defaults: `reply` for `choice`, `form` and `confirm`; `state` for checkboxes on
 a bound `list`.
 
 **Who can respond.** A response is accepted only from someone allowed to talk
-to that agent on that surface (Discord's existing authorisation check, the web
-UI's bearer auth). The responder is recorded as the actor, which is provenance
+to that agent on that surface: on Discord, the person the conversation belongs
+to, or the deployment owner for a conversation nobody on Discord owns; in the
+web UI, whoever passes its bearer auth. The responder is recorded as the actor, which is provenance
 like any other state write.
 
 ## Updating what was sent
@@ -206,7 +207,7 @@ Each one deletes a one-off system:
 |---|---|
 | 1 | Component part, kind registry with text fallback, persistence, `interface` tool, web renderers for `choice`, `form`, `confirm`, `card`, `reply` and `event` effects — **done** |
 | 2 | `<ask>` compiles to components |
-| 3 | Discord renderers and response routing |
+| 3 | Discord renderers and response routing — **done** |
 | 4 | State binding, `state` effect, live updates (needs world state phases 1 and 7) |
 | 5 | Approvals and workflow forms migrate |
 | 6 | `list`, `table`, `progress` |
@@ -216,9 +217,10 @@ Each one deletes a one-off system:
 
 Settled in review:
 
-1. **A message carries any number of components.** The Discord renderer splits
-   across messages when Discord's limits on rows and buttons require it, and
-   records a warning when it does.
+1. **A message carries any number of components.** The Discord renderer posts
+   each component as a message of its own, because answering one rewrites
+   that message. A component past Discord's limits (a form longer than a
+   pop-up holds) is posted as its text form, with a warning in the log.
 2. **A response after expiry is rejected**, with a note saying the question
    expired.
 3. **A `reply` response wakes the agent the way a message does**, not through

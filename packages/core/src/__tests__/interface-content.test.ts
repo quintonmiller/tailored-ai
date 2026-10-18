@@ -70,4 +70,16 @@ describe("component content", () => {
     expect(rendered.text).toBe(`Here you go:\n\n${choice.fallback}`);
     expect(rendered.attachments).toEqual([]);
   });
+
+  it("goes to the caller to draw on a surface that draws its kind, and as text where it does not", () => {
+    const confirm: ComponentSpec = { ...choice, id: "c-4d5e6f", kind: "confirm", fallback: "[confirm c-4d5e6f] Sure?" };
+    const caps = { ...TEXT_ONLY_SURFACE, components: ["choice"] };
+    const rendered = renderForSurface(
+      { parts: [textPart("Two things:"), componentPart(choice), componentPart(confirm)] },
+      caps,
+    );
+    expect(rendered.components).toEqual([choice]);
+    expect(rendered.text).toBe(`Two things:\n\n${confirm.fallback}`);
+    expect(renderForSurface("plain", caps)).not.toHaveProperty("components");
+  });
 });
