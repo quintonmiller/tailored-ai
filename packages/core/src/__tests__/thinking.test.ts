@@ -19,10 +19,11 @@ import {
 const params: ChatParams = { model: "m", messages: [] };
 
 describe("generic thinking mappers (#254)", () => {
-  it("reasoningEffortThinkingMap passes low/medium/high, omits off/auto", () => {
+  it("reasoningEffortThinkingMap passes low/medium/high, sends off as none, omits auto", () => {
     expect(reasoningEffortThinkingMap("low", params)).toEqual({ reasoning_effort: "low" });
     expect(reasoningEffortThinkingMap("high", params)).toEqual({ reasoning_effort: "high" });
-    expect(reasoningEffortThinkingMap("off", params)).toBeUndefined();
+    // Off must reach the server: omitting it left the server's default (thinking on) in force.
+    expect(reasoningEffortThinkingMap("off", params)).toEqual({ reasoning_effort: "none" });
     expect(reasoningEffortThinkingMap("auto", params)).toBeUndefined();
   });
 

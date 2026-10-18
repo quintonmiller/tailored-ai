@@ -85,16 +85,18 @@ describe("OpenAIChatProvider request shaping", () => {
     expect(body.reasoning_effort).toBe("low");
   });
 
-  it("a per-call thinking level beats the default; off/auto add nothing (#254)", async () => {
+  it("a per-call thinking level beats the default; off is none, auto adds nothing (#254)", async () => {
     const fetchSpy = vi.fn(async () => jsonResponse(CHAT_RESPONSE));
     vi.stubGlobal("fetch", fetchSpy);
     const provider = new OpenAIChatProvider({ apiKey: "k", defaultThinking: "low" });
     await provider.chat({ model: "gpt-5-mini", messages: [{ role: "user", content: "Hi" }], thinking: "high" });
     await provider.chat({ model: "gpt-5-mini", messages: [{ role: "user", content: "Hi" }], thinking: "off" });
-    const body0 = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
-    const body1 = JSON.parse((fetchSpy.mock.calls[1][1] as RequestInit).body as string);
-    expect(body0.reasoning_effort).toBe("high");
-    expect(body1.reasoning_effort).toBeUndefined();
+    await provider.chat({ model: "gpt-5-mini", messages: [{ role: "user", content: "Hi" }], thinking: "auto" });
+    const body = (i: number) => JSON.parse((fetchSpy.mock.calls[i][1] as RequestInit).body as string);
+    expect(body(0).reasoning_effort).toBe("high");
+    // Off has to reach the API; sending nothing left reasoning at its default.
+    expect(body(1).reasoning_effort).toBe("none");
+    expect(body(2).reasoning_effort).toBeUndefined();
   });
 });
 

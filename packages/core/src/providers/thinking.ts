@@ -23,14 +23,19 @@ export function isThinkingLevel(value: unknown): value is ThinkingLevel {
 
 /**
  * OpenAI's `reasoning_effort` knob (o-series, gpt-5): `low`/`medium`/`high`
- * map straight through; `off`/`auto` add nothing (the API has no off switch —
- * pick a non-reasoning model instead — and no explicit auto, which is its
- * default). The protocol convention OpenRouter and others also accept.
+ * map straight through, and `off` is `none`, which current reasoning models
+ * and local OpenAI-wire servers (NInfer among them) honour. Without it, `off`
+ * sent nothing and the server's default — thinking on — won, silently: an
+ * agent configured not to think spent hundreds of tokens thinking before
+ * every reply. `auto` adds nothing, as it is the API's default. A model that
+ * rejects `none` is learned by the OpenAI plugin's effort ladder, which then
+ * omits the field. The protocol convention OpenRouter and others also accept.
  */
 export const reasoningEffortThinkingMap: ThinkingMapper = (level) => {
   if (level === "low" || level === "medium" || level === "high") {
     return { reasoning_effort: level };
   }
+  if (level === "off") return { reasoning_effort: "none" };
   return undefined;
 };
 
