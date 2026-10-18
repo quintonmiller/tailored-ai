@@ -30,9 +30,11 @@ import {
 } from "discord.js";
 import type { ActionSpec, ComponentSpec } from "../content/types.js";
 import type { EventBus } from "../events.js";
+import { boundCardProps } from "../interfaces/bind.js";
 import { InterfaceError } from "../interfaces/kinds.js";
 import { respondToComponent } from "../interfaces/respond.js";
 import type { ComponentRecord, InterfaceStore } from "../interfaces/store.js";
+import type { StateService } from "../state/service.js";
 
 /** The kinds this module draws. Declared on the channel's surface capabilities. */
 export const DISCORD_COMPONENT_KINDS: readonly string[] = ["choice", "confirm", "card", "form"];
@@ -256,6 +258,8 @@ export interface InterfaceInteractionDeps {
    * recorded, so a refused click leaves the question open to try again.
    */
   unavailable?: (record: ComponentRecord) => string | undefined;
+  /** Where a `state` button writes. Without it, such a button is refused with a reason. */
+  state?: StateService;
   /** Run the conversation's next turn with the answer as the person's message, and post what the agent says. */
   continueWith: (record: ComponentRecord, reply: string, where: { channelId: string; userId: string }) => Promise<void>;
 }
@@ -286,6 +290,12 @@ export async function handleInterfaceInteraction(
   }
   if (record.status !== "open") {
     await ephemeral(closedReason(record));
+    return;
+  }
+  // A state button runs no agent, so a busy or paused agent does not stop it.
+  const action = parsed.op === "a" ? record.spec.actions?.find((a) => a.id === parsed.actionId) : undefined;
+  if (action?.effect.kind === "state") {
+    await pressStateButton(interaction, deps, record, action);
     return;
   }
   const busy = deps.unavailable?.(record);
@@ -332,7 +342,7 @@ export async function handleInterfaceInteraction(
       shown = String(value);
     }
     if (!actionId) return;
-    const result = respondToComponent(deps.store, deps.events, {
+    const result = await respondToComponent(deps.store, deps.events, {
       id: record.spec.id,
       actionId,
       value,
@@ -357,6 +367,43 @@ export async function handleInterfaceInteraction(
   } catch (err) {
     if (err instanceof InterfaceError) {
       await ephemeral(err.message);
+      return;
+    }
+    throw err;
+  }
+}
+
+/**
+ * A button that writes state. The component stays open, so the message is
+ * redrawn rather than finished: a bound card from the record as the click
+ * left it, anything else unchanged with a quiet confirmation.
+ */
+async function pressStateButton(
+  interaction: InterfaceInteraction,
+  deps: InterfaceInteractionDeps,
+  record: ComponentRecord,
+  action: ActionSpec,
+): Promise<void> {
+  try {
+    const result = await respondToComponent(
+      deps.store,
+      deps.events,
+      { id: record.spec.id, actionId: action.id, by: `discord:${interaction.user.id}` },
+      { ...(deps.state ? { state: deps.state } : {}), surface: "discord" },
+    );
+    const bind = record.spec.bind;
+    if (result.effect === "state" && bind && interaction.isButton()) {
+      const props = boundCardProps(record.spec.props, result.record, deps.state?.getType(bind.type)?.title);
+      const redrawn = buildComponentMessage({ ...record.spec, props });
+      if (redrawn) {
+        await interaction.update(redrawn);
+        return;
+      }
+    }
+    await interaction.reply({ content: `Done: ${action.label ?? action.id}`, flags: MessageFlags.Ephemeral });
+  } catch (err) {
+    if (err instanceof InterfaceError) {
+      await interaction.reply({ content: err.message, flags: MessageFlags.Ephemeral });
       return;
     }
     throw err;

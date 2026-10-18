@@ -17,7 +17,10 @@ export interface MediaRef {
   url?: string;
 }
 
-export type ActionEffect = { kind: "reply" } | { kind: "event"; name?: string };
+export type ActionEffect =
+  | { kind: "reply" }
+  | { kind: "event"; name?: string }
+  | { kind: "state"; ref: { type: string; id: string }; patch: Record<string, unknown> };
 
 export interface ActionSpec {
   id: string;
@@ -34,6 +37,8 @@ export interface ComponentSpec {
   /** The text form core wrote; what to show for a kind this UI cannot draw. */
   fallback: string;
   expiresAt?: string;
+  /** The world-state record it shows, kept current as the record changes. */
+  bind?: { type: string; id: string };
 }
 
 export type ContentPart =

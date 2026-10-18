@@ -1,7 +1,10 @@
 import { componentPart, textPart } from "../content/types.js";
-import { type AgentAction, buildComponent, InterfaceError } from "../interfaces/kinds.js";
+import { boundCardProps } from "../interfaces/bind.js";
+import { type AgentAction, buildComponent, componentKindRegistry, InterfaceError } from "../interfaces/kinds.js";
 import type { InterfaceStore } from "../interfaces/store.js";
+import type { StateService } from "../state/service.js";
 import type { Tool, ToolContext, ToolResult } from "./interface.js";
+import { agentStateCaller } from "./state.js";
 
 /**
  * Lets an agent send something interactive instead of plain text.
@@ -40,7 +43,12 @@ export class InterfaceTool implements Tool {
       actions: {
         type: "array",
         items: { type: "object" },
-        description: 'card only: buttons, each {label, effect?: "reply" | "event", name?}.',
+        description:
+          'card only: buttons, each {label, effect?: "reply" | "event" | "state", name?, patch?}. A state button writes `patch` to the bound record when clicked.',
+      },
+      bind: {
+        type: "object",
+        description: "card: show a state record {type, id}; the card stays current as the record changes.",
       },
       id: { type: "string", description: "update and close: the component's id." },
       expiresInMinutes: { type: "number", description: "send: stop taking answers after this many minutes." },
@@ -49,7 +57,10 @@ export class InterfaceTool implements Tool {
     required: ["action"],
   };
 
-  constructor(private readonly getStore: () => InterfaceStore) {}
+  constructor(
+    private readonly getStore: () => InterfaceStore,
+    private readonly getState?: () => StateService,
+  ) {}
 
   async execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
     const store = this.getStore();
@@ -60,19 +71,28 @@ export class InterfaceTool implements Tool {
         case "send": {
           const kind = typeof args.kind === "string" ? args.kind.trim() : "";
           if (!kind) return fail('send needs a `kind`: "choice", "form", "confirm" or "card".');
-          const props = objectArg(args.props, "props");
+          const bind = refArg(args.bind);
+          let props = objectArg(args.props, "props") ?? (bind ? {} : undefined);
           if (!props) return fail("send needs `props` for the component.");
+          const lifted = liftActions(props, args.actions);
+          props = lifted.props;
+          const ignoredFields = Boolean(bind) && props.fields !== undefined;
+          if (bind) props = await this.boundProps(kind, props, bind, context);
           const spec = buildComponent({
             kind,
             props,
-            ...(args.actions !== undefined ? { actions: actionsArg(args.actions) } : {}),
+            ...(bind ? { bind } : {}),
+            ...(lifted.actions !== undefined ? { actions: actionsArg(lifted.actions) } : {}),
             ...(typeof args.expiresInMinutes === "number" ? { expiresInMinutes: args.expiresInMinutes } : {}),
           });
           store.create(spec, agent, context.sessionId);
           return {
             success: true,
             output: {
-              parts: [textPart(sentNote(spec.kind, spec.id, spec.actions)), componentPart(spec)],
+              parts: [
+                textPart(sentNote(spec.kind, spec.id, spec.actions) + (ignoredFields ? FIELDS_FROM_RECORD : "")),
+                componentPart(spec),
+              ],
               structured: { componentId: spec.id },
             },
           };
@@ -86,13 +106,20 @@ export class InterfaceTool implements Tool {
               `${record.spec.id} is a ${record.spec.kind}; an update cannot change its kind. Send a new one instead.`,
             );
           }
-          const props = objectArg(args.props, "props");
+          const bind = refArg(args.bind) ?? record.spec.bind;
+          let props =
+            objectArg(args.props, "props") ??
+            (bind ? (record.spec.props.body ? { body: record.spec.props.body } : {}) : undefined);
           if (!props) return fail("update needs `props`: the component's props as they should now be.");
+          const lifted = liftActions(props, args.actions);
+          props = lifted.props;
+          if (bind) props = await this.boundProps(record.spec.kind, props, bind, context);
           const spec = buildComponent({
             kind: record.spec.kind,
             id: record.spec.id,
             props,
-            ...(args.actions !== undefined ? { actions: actionsArg(args.actions) } : {}),
+            ...(bind ? { bind } : {}),
+            ...(lifted.actions !== undefined ? { actions: actionsArg(lifted.actions) } : {}),
             ...(typeof args.expiresInMinutes === "number" ? { expiresInMinutes: args.expiresInMinutes } : {}),
           });
           if (!spec.expiresAt && record.spec.expiresAt) spec.expiresAt = record.spec.expiresAt;
@@ -133,6 +160,25 @@ export class InterfaceTool implements Tool {
     }
   }
 
+  /** A bound card's props, filled from the record as the agent can see it now. */
+  private async boundProps(
+    kind: string,
+    props: Record<string, unknown>,
+    bind: { type: string; id: string },
+    context: ToolContext,
+  ): Promise<Record<string, unknown>> {
+    if (!componentKindRegistry.get(kind)?.bindable) {
+      throw new InterfaceError(`A ${kind} cannot show a record; \`bind\` is for a card.`);
+    }
+    const state = this.getState?.();
+    if (!state) throw new InterfaceError("World state is not set up here, so a card cannot show a record.");
+    const record = await state.get(agentStateCaller(context, "interface"), bind).catch((err: Error) => {
+      throw new InterfaceError(err.message);
+    });
+    if (!record) throw new InterfaceError(`There is no ${bind.type} record "${bind.id}" you can see.`);
+    return boundCardProps(props, record, state.getType(bind.type)?.title);
+  }
+
   private own(store: InterfaceStore, id: unknown, agent: string) {
     if (typeof id !== "string" || !id.trim()) throw new InterfaceError("Say which component with `id`.");
     const record = store.get(id.trim());
@@ -157,9 +203,43 @@ function describeAnswer(record: {
 
 function sentNote(kind: string, id: string, actions: { effect: { kind: string } }[] | undefined): string {
   if (!actions?.length) return `Sent ${kind} ${id}.`;
-  return actions.some((a) => a.effect.kind === "reply")
-    ? `Sent ${kind} ${id}. The answer will come back as the person's next message, and the ${kind} closes itself once answered.`
-    : `Sent ${kind} ${id}. Clicks are announced as interface.action.`;
+  const effects = new Set(actions.map((a) => a.effect.kind));
+  const notes = [`Sent ${kind} ${id}.`];
+  if (effects.has("reply")) {
+    notes.push(`The answer will come back as the person's next message, and the ${kind} closes itself once answered.`);
+  } else if (effects.has("event")) {
+    notes.push("Clicks are announced as interface.action.");
+  }
+  // Said outright, so the agent does not wait for a reply that never comes.
+  if (effects.has("state")) notes.push("Its state buttons write the record directly; no message comes back to you.");
+  return notes.join(" ");
+}
+
+const FIELDS_FROM_RECORD = " It shows the record's own fields, so the fields you gave were left out.";
+
+/**
+ * Buttons put inside `props` instead of beside it, which a local model did
+ * two runs in three. Lifted rather than refused: the intent is unambiguous,
+ * and on a bound card the props are rebuilt, so left in place they would
+ * vanish and the card would go out with no buttons.
+ */
+function liftActions(
+  props: Record<string, unknown>,
+  actions: unknown,
+): { props: Record<string, unknown>; actions: unknown } {
+  if (actions !== undefined || props.actions === undefined) return { props, actions };
+  const { actions: inner, ...rest } = props;
+  return { props: rest, actions: inner };
+}
+
+/** A `{type, id}` reference, accepted as an object or the JSON text small models often send. */
+function refArg(value: unknown): { type: string; id: string } | undefined {
+  const ref = objectArg(value, "bind");
+  if (!ref) return undefined;
+  if (typeof ref.type !== "string" || !ref.type || typeof ref.id !== "string" || !ref.id) {
+    throw new InterfaceError('`bind` needs a record\'s `type` and `id`, e.g. {"type": "plan", "id": "trip"}.');
+  }
+  return { type: ref.type, id: ref.id };
 }
 
 /** Small models often send an object argument as a JSON string; accept that. */

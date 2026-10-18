@@ -1803,12 +1803,17 @@ export function createServer(opts: ServerOptions) {
       .catch(() => ({}) as { actionId?: string; value?: unknown });
     if (!body.actionId) return c.json({ error: "actionId is required" }, 400);
     try {
-      const result = respondToComponent(store, runtime.events, {
-        id,
-        actionId: body.actionId,
-        ...("value" in body ? { value: body.value } : {}),
-        by: "owner",
-      });
+      const result = await respondToComponent(
+        store,
+        runtime.events,
+        {
+          id,
+          actionId: body.actionId,
+          ...("value" in body ? { value: body.value } : {}),
+          by: "owner",
+        },
+        { state: runtime.getStateService(), surface: "web" },
+      );
       return c.json(result);
     } catch (err) {
       if (err instanceof InterfaceError) return c.json({ error: err.message }, 409);

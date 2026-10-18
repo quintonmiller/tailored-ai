@@ -218,7 +218,10 @@ export function fetchInterfaces(ids: string[]): Promise<{ components: (Component
   return jsonFetch(`/api/interfaces?ids=${ids.map(encodeURIComponent).join(",")}`);
 }
 
-export type RespondResult = { effect: "reply"; reply: string } | { effect: "event" };
+export type RespondResult =
+  | { effect: "reply"; reply: string }
+  | { effect: "event" }
+  | { effect: "state"; record: StateRecordInfo };
 
 /**
  * Answer a component. Unlike `jsonFetch`, a refusal keeps the server's own
@@ -1874,6 +1877,10 @@ export function fetchStateTypes(): Promise<{ types: StateTypeInfo[] }> {
 
 export function fetchStateRecords(type: string, limit = 200): Promise<{ records: StateRecordInfo[] }> {
   return jsonFetch(`/api/state/${encodeURIComponent(type)}?limit=${limit}`);
+}
+
+export function fetchStateRecord(type: string, id: string): Promise<StateRecordInfo> {
+  return jsonFetch(`/api/state/${encodeURIComponent(type)}/${encodeURIComponent(id)}`);
 }
 
 export function fetchStateHistory(type: string, id: string): Promise<{ changes: StateChangeInfo[] }> {

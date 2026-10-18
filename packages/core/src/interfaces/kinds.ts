@@ -30,6 +30,8 @@ export interface ComponentKind {
   customActions?: boolean;
   /** How it reads where it cannot be drawn, including to the model. */
   fallback(props: Record<string, unknown>, actions: ActionSpec[]): string;
+  /** Whether it can be bound to a world-state record and show it. */
+  bindable?: boolean;
 }
 
 export const componentKindRegistry = new Registry<ComponentKind>("component-kind");
@@ -49,9 +51,13 @@ export class InterfaceError extends Error {
 /** A button the agent asks for on a card. Ids and effects are filled in by core. */
 export interface AgentAction {
   label: string;
-  effect?: "reply" | "event";
+  effect?: "reply" | "event" | "state";
   /** For an `event` effect: a name subscribers can match on. */
   name?: string;
+  /** For a `state` effect: the fields to write. */
+  patch?: Record<string, unknown>;
+  /** For a `state` effect: the record to write. Defaults to the one the component is bound to. */
+  ref?: { type: string; id: string };
 }
 
 export interface BuildComponentInput {
@@ -61,6 +67,8 @@ export interface BuildComponentInput {
   expiresInMinutes?: number;
   /** Set when updating, so the component keeps its identity. */
   id?: string;
+  /** The world-state record it shows; only for a kind that is `bindable`. */
+  bind?: { type: string; id: string };
 }
 
 /**
@@ -83,7 +91,10 @@ export function buildComponent(input: BuildComponentInput, now: Date = new Date(
       `A ${input.kind}'s buttons come from its props; \`actions\` is for a card. Leave it out, or send a card.`,
     );
   }
-  const actions = input.actions?.length ? agentActions(input.actions) : kind.defaultActions(input.props);
+  if (input.bind && !kind.bindable) {
+    throw new InterfaceError(`A ${input.kind} cannot show a record; \`bind\` is for a card.`);
+  }
+  const actions = input.actions?.length ? agentActions(input.actions, input.bind) : kind.defaultActions(input.props);
   const spec: ComponentSpec = {
     id: input.id ?? `c-${randomBytes(3).toString("hex")}`,
     kind: input.kind,
@@ -93,20 +104,42 @@ export function buildComponent(input: BuildComponentInput, now: Date = new Date(
     ...(input.expiresInMinutes && input.expiresInMinutes > 0
       ? { expiresAt: new Date(now.getTime() + input.expiresInMinutes * 60_000).toISOString() }
       : {}),
+    ...(input.bind ? { bind: { type: input.bind.type, id: input.bind.id } } : {}),
   };
   spec.fallback = `[${spec.kind} ${spec.id}] ${kind.fallback(input.props, actions)}`;
   return spec;
 }
 
-function agentActions(actions: AgentAction[]): ActionSpec[] {
+function agentActions(actions: AgentAction[], bind: { type: string; id: string } | undefined): ActionSpec[] {
   return actions.map((a, i) => {
     if (typeof a?.label !== "string" || !a.label.trim()) {
       throw new InterfaceError(`actions[${i}] needs a "label": the text on the button.`);
     }
-    const effect: ActionEffect =
-      a.effect === "event" ? { kind: "event", ...(a.name ? { name: a.name } : {}) } : { kind: "reply" };
-    return { id: `a${i + 1}`, label: a.label.trim(), effect };
+    return { id: `a${i + 1}`, label: a.label.trim(), effect: actionEffect(a, i, bind) };
   });
+}
+
+function actionEffect(a: AgentAction, i: number, bind: { type: string; id: string } | undefined): ActionEffect {
+  if (a.effect === "event") return { kind: "event", ...(a.name ? { name: a.name } : {}) };
+  if (a.effect !== "state") return { kind: "reply" };
+  const patch = a.patch;
+  if (typeof patch !== "object" || patch === null || Array.isArray(patch) || Object.keys(patch).length === 0) {
+    throw new InterfaceError(
+      `actions[${i}] ("${a.label}") changes state, so it needs a "patch": the fields to write, e.g. {"status": "done"}.`,
+    );
+  }
+  const ref = isRef(a.ref) ? a.ref : bind;
+  if (!ref) {
+    throw new InterfaceError(
+      `actions[${i}] ("${a.label}") changes state but names no record. Bind the card to one with \`bind\`, or give the button a "ref": {type, id}.`,
+    );
+  }
+  return { kind: "state", ref: { type: ref.type, id: ref.id }, patch };
+}
+
+function isRef(v: unknown): v is { type: string; id: string } {
+  const r = v as { type?: unknown; id?: unknown } | null;
+  return typeof r?.type === "string" && r.type !== "" && typeof r?.id === "string" && r.id !== "";
 }
 
 const reply: ActionEffect = { kind: "reply" };
@@ -239,6 +272,7 @@ const card: ComponentKind = {
   },
   defaultActions: () => [],
   customActions: true,
+  bindable: true,
   fallback: (props, actions) =>
     [
       str(props.title),

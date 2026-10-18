@@ -33,6 +33,7 @@ import { buildComponent, InterfaceError } from "../interfaces/kinds.js";
 import { type ComponentRecord, InterfaceStore } from "../interfaces/store.js";
 import type { AIProvider } from "../providers/interface.js";
 import { AgentRuntime } from "../runtime.js";
+import { StateService } from "../state/service.js";
 
 let store: InterfaceStore;
 let events: TypedEventBus;
@@ -357,6 +358,68 @@ describe("handleInterfaceInteraction", () => {
     await handle(interaction(`iface:${c.id}:a:a1`), d);
     expect(announced).toMatchObject([{ componentId: c.id, name: "snooze", by: "discord:u1" }]);
     expect(continued).toEqual([]);
+  });
+});
+
+describe("state buttons on Discord", () => {
+  it("write as the person who clicked, redraw a bound card from the record, and run even while the agent is busy", async () => {
+    const stateDb = new Database(":memory:");
+    const state = new StateService({
+      getConfig: () => ({
+        state: {
+          backend: "sqlite",
+          types: [
+            {
+              name: "plan",
+              title: "name",
+              schema: { type: "object", properties: { name: { type: "string" }, status: { type: "string" } } },
+            },
+          ],
+        },
+      }),
+      db: stateDb,
+    });
+    await state.put(
+      { actor: { kind: "system", name: "test" } },
+      { type: "plan", id: "trip", scope: "global", data: { name: "Lisbon trip", status: "draft" } },
+    );
+    const c = send(
+      "card",
+      { title: "Lisbon trip", fields: [{ label: "status", value: "draft" }] },
+      {
+        bind: { type: "plan", id: "trip" },
+        actions: [{ label: "Start", effect: "state", patch: { status: "active" } }],
+      },
+    );
+    const unavailable = vi.fn(() => "I'm still working on your previous message.");
+    const { d, continued } = deps({ state, unavailable });
+    const click = interaction(`iface:${c.id}:a:a1`);
+    await handle(click, d);
+
+    expect(unavailable).not.toHaveBeenCalled();
+    expect(click.replies).toEqual([]);
+    expect(click.updates[0].embeds[0].toJSON().fields).toEqual([{ name: "status", value: "active", inline: true }]);
+    expect(rowsOf(click.updates[0])[0][0]).toMatchObject({ label: "Start", disabled: false });
+    expect(store.get(c.id)?.status).toBe("open");
+    expect(continued).toEqual([]);
+    const [latest] = await state.history({ actor: { kind: "system", name: "test" } }, { type: "plan", id: "trip" });
+    expect(latest).toMatchObject({
+      actor: { kind: "user", name: "discord:u1" },
+      source: { surface: "discord", interfaceId: c.id },
+    });
+    await state.close();
+  });
+
+  it("says why when there is no state to write to", async () => {
+    const c = send(
+      "card",
+      { title: "T" },
+      { bind: { type: "plan", id: "trip" }, actions: [{ label: "Go", effect: "state", patch: { a: 1 } }] },
+    );
+    const { d } = deps();
+    const click = interaction(`iface:${c.id}:a:a1`);
+    await handle(click, d);
+    expect(click.replies[0].content).toBe("This button changes state, and state is not available here.");
   });
 });
 

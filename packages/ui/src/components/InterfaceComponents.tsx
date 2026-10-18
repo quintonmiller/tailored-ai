@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { type ComponentState, type ComponentStatus, fetchInterfaces, respondInterface } from "../api";
+import { type ComponentState, type ComponentStatus, fetchInterfaces, fetchStateRecord, respondInterface } from "../api";
 import type { ActionSpec, ComponentSpec } from "../lib/content.js";
+import { stateTitleField, subscribeStateChanges } from "../lib/state-events";
 import { useChatStore } from "./ChatContext";
 
 /**
@@ -49,6 +50,15 @@ function InterfaceComponent({ spec, state }: { spec: ComponentSpec; state?: Comp
   const [answer, setAnswer] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
+  const bound = useBoundRecord(spec.bind);
+
+  // "Done" after a state button fades on its own; the card itself shows the change.
+  useEffect(() => {
+    if (!done) return;
+    const timer = setTimeout(() => setDone(null), 2500);
+    return () => clearTimeout(timer);
+  }, [done]);
 
   const expired = spec.expiresAt !== undefined && Date.parse(spec.expiresAt) <= Date.now();
   const status: ComponentStatus = answer !== null ? "answered" : (state?.status ?? (expired ? "expired" : "open"));
@@ -60,6 +70,12 @@ function InterfaceComponent({ spec, state }: { spec: ComponentSpec; state?: Comp
     setError(null);
     try {
       const result = await respondInterface(spec.id, action.id, value);
+      if (result.effect === "state") {
+        // Not an answer: the component stays open for the next click.
+        setDone(`Done: ${action.label ?? action.id}`);
+        if (spec.bind) bound.set(result.record.data);
+        return;
+      }
       setAnswer(shown ?? action.label ?? action.id);
       if (result.effect === "reply") store.send(result.reply);
     } catch (err) {
@@ -77,8 +93,18 @@ function InterfaceComponent({ spec, state }: { spec: ComponentSpec; state?: Comp
           <span className="ask-label">{header}</span>
         </div>
       )}
-      <Body spec={spec} open={open} act={act} />
+      <Body
+        spec={bound.data ? { ...spec, props: boundView(spec.props, bound.data, bound.titleField) } : spec}
+        open={open}
+        act={act}
+      />
+      {bound.data === null && <div className="iface-details">This record was deleted.</div>}
       <Status status={status} answer={answer ?? answeredLabel(spec, state)} note={state?.note} />
+      {done && (
+        <div className="iface-status" role="status">
+          {done}
+        </div>
+      )}
       {error && (
         <div className="iface-error" role="alert">
           {error}
@@ -89,6 +115,55 @@ function InterfaceComponent({ spec, state }: { spec: ComponentSpec; state?: Comp
 }
 
 type Act = (action: ActionSpec, value?: unknown, shown?: string) => void;
+
+/**
+ * The record a bound card shows, kept current: fetched once, then replaced by
+ * every change the state stream reports for it. `null` once it is deleted;
+ * `undefined` for a card that is not bound, or before the first read.
+ */
+function useBoundRecord(bind: ComponentSpec["bind"]) {
+  const [data, setData] = useState<Record<string, unknown> | null | undefined>(undefined);
+  const [titleField, setTitleField] = useState<string | undefined>(undefined);
+  const type = bind?.type;
+  const id = bind?.id;
+
+  useEffect(() => {
+    if (!type || !id) return;
+    let cancelled = false;
+    fetchStateRecord(type, id)
+      .then((r) => !cancelled && setData(r.data))
+      // Unreadable now: keep drawing it as it was sent.
+      .catch(() => {});
+    stateTitleField(type).then((t) => !cancelled && setTitleField(t));
+    const off = subscribeStateChanges((c) => {
+      if (c.type !== type || c.id !== id) return;
+      setData(c.op === "delete" ? null : (c.after ?? null));
+    });
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, [type, id]);
+
+  return { data, titleField, set: setData };
+}
+
+/** A bound card's props from its record. Mirrors `boundCardProps` in core's `interfaces/bind.ts`. */
+function boundView(
+  props: Record<string, unknown>,
+  data: Record<string, unknown>,
+  titleField: string | undefined,
+): Record<string, unknown> {
+  const named = titleField ? data[titleField] : undefined;
+  return {
+    ...props,
+    title: typeof named === "string" && named.trim() ? named : props.title,
+    fields: Object.entries(data)
+      .filter(([key]) => key !== titleField)
+      .slice(0, 20)
+      .map(([key, value]) => ({ label: key, value: typeof value === "string" ? value : JSON.stringify(value) })),
+  };
+}
 
 function Body({ spec, open, act }: { spec: ComponentSpec; open: boolean; act: Act }) {
   const p = spec.props;

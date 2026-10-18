@@ -8,6 +8,8 @@
  */
 import type { ActionSpec } from "../content/types.js";
 import type { EventBus } from "../events.js";
+import type { StateService } from "../state/service.js";
+import { StateConflictError, StateError, type StateRecord } from "../state/types.js";
 import { InterfaceError } from "./kinds.js";
 import type { ComponentRecord, InterfaceStore } from "./store.js";
 
@@ -20,13 +22,25 @@ export interface RespondInput {
   by: string;
 }
 
-export type RespondResult = { effect: "reply"; reply: string } | { effect: "event" };
+export type RespondResult =
+  | { effect: "reply"; reply: string }
+  | { effect: "event" }
+  /** The record as the click left it. */
+  | { effect: "state"; record: StateRecord };
 
-export function respondToComponent(
+export interface RespondOptions {
+  /** Where `state` actions write. Without it a `state` action is refused. */
+  state?: StateService;
+  /** The surface the click came from, recorded on the state change: `web`, `discord`. */
+  surface?: string;
+}
+
+export async function respondToComponent(
   store: InterfaceStore,
   events: EventBus | undefined,
   input: RespondInput,
-): RespondResult {
+  opts: RespondOptions = {},
+): Promise<RespondResult> {
   const record = store.get(input.id);
   if (!record) throw new InterfaceError(`There is no component with id "${input.id}".`);
   if (record.status !== "open") {
@@ -40,6 +54,27 @@ export function respondToComponent(
   }
   const action = record.spec.actions?.find((a) => a.id === input.actionId);
   if (!action) throw new InterfaceError(`This ${record.spec.kind} has no action "${input.actionId}".`);
+
+  // A state button is not an answer: it writes, and the component stays open
+  // for the next click, the way a checkbox does.
+  if (action.effect.kind === "state") {
+    if (!opts.state) throw new InterfaceError("This button changes state, and state is not available here.");
+    try {
+      const written = await opts.state.patch(
+        {
+          actor: { kind: "user", name: input.by },
+          source: { ...(opts.surface ? { surface: opts.surface } : {}), interfaceId: record.spec.id },
+        },
+        action.effect.ref,
+        action.effect.patch,
+      );
+      return { effect: "state", record: written };
+    } catch (err) {
+      // Worded for the person who clicked: the record is gone, or the write does not fit.
+      if (err instanceof StateConflictError || err instanceof StateError) throw new InterfaceError(err.message);
+      throw err;
+    }
+  }
 
   const reply = replyText(record, action, input.value);
   const recorded = store.respond(input.id, {
