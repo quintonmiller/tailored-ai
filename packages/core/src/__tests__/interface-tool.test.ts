@@ -40,7 +40,7 @@ describe("interface tool", () => {
     expect(res.success).toBe(true);
     expect(output.parts[0]).toEqual({
       type: "text",
-      text: `Sent choice ${id}. The answer will come back as the person's next message.`,
+      text: `Sent choice ${id}. The answer will come back as the person's next message, and the choice closes itself once answered.`,
     });
     expect(output.parts[1]).toMatchObject({ type: "component", component: { id, kind: "choice" } });
     expect(store.get(id)).toMatchObject({ agent: "planner", sessionId: "s1", status: "open" });
@@ -83,6 +83,17 @@ describe("interface tool", () => {
     );
     expect((await tool.execute({ action: "close", id }, ctx())).error).toBe(`choice ${id} is already closed.`);
     expect(store.get(id)?.note).toBe("decided");
+  });
+
+  it("treats closing an answered component as done, and says what the answer was", async () => {
+    const { id } = await sendChoice();
+    store.respond(id, { actionId: "option-2", by: "owner", at: new Date().toISOString() });
+    const res = await tool.execute({ action: "close", id, note: "Answered: no" }, ctx());
+    expect(res).toEqual({
+      success: true,
+      output: `choice ${id} was already answered ("no"); it takes no more answers.`,
+    });
+    expect(store.get(id)?.status).toBe("answered");
   });
 
   it("hands back a bad request as a correction", async () => {
