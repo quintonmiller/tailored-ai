@@ -87,8 +87,70 @@ hooks:
         args: { message: "plan {{id}} changed" }
 ```
 
-Waking an agent on a change, with a choice of immediate, queued, batched,
-digested or recorded delivery, is the next phase.
+## Waking agents on a change
+
+`subscriptions:` says which agents hear about which events, and when. It works
+for any runtime event, not only `state.changed`:
+
+```yaml
+subscriptions:
+  # every plan change in the last five minutes, in one turn
+  - agent: planner
+    on: state.changed
+    when: { type: plan, op: update }    # the hooks.on matcher: exact, or /regex/
+    deliver: batch
+    window: 5m
+    instructions: Reconcile the calendar with the plan.
+
+  # a morning summary of new tasks, posted in a room
+  - agent: assistant
+    on: task.created
+    deliver: digest
+    every: weekdays at 7am               # an interval, a phrase, or cron
+    target: { room: standup }
+
+  # never woken for these, but shown them on its next turn
+  - agent: researcher
+    on: state.changed
+    when: { type: source }
+    deliver: record
+```
+
+| `deliver` | when the agent hears |
+|---|---|
+| `immediate` | a turn now |
+| `queue` (default) | a turn after `rooms.batchSeconds`, so a burst of events becomes one turn |
+| `batch` | a turn `window` after the first event, with everything that arrived in between. Later events do not push it back |
+| `digest` | a turn on the `every` schedule, with whatever accumulated; nothing accumulated, no turn |
+| `record` | no turn of its own: the events appear in the agent's next turn, whatever woke it, under "Since your last turn" |
+
+Each event reaches the agent as one line written when it happened, such as
+`plan/trip updated by a person (web): status: draft → active`, plus the
+subscription's `instructions`.
+
+**Where the turn runs.** `target: session` (the default) runs it in the agent's
+own `subscriptions:<agent>` session; a reply there reaches nobody unless the
+agent sends it somewhere, and the prompt says so. `target: { room: <name or
+ref> }` runs it in that room, through the room's own turn order and hourly
+ceiling, and the agent can `pass`.
+
+**Brakes.**
+- An agent is not told about changes it made itself, unless the subscription
+  sets `includeOwn: true`.
+- Session wakes share the rooms' hourly ceiling (`rooms.maxWakesPerHour`), per
+  agent; room wakes use the room's.
+- A wake refused by a ceiling or by pausing agents is held and retried every
+  minute for up to an hour, then dropped with a warning.
+
+**Nothing waiting is lost.** Pending events are stored, so a restart re-arms
+every batch and digest on its original schedule. Changing a subscription so
+that it receives different events, or delivers them somewhere else, discards
+what was waiting for the old one, with a warning.
+
+`validateConfig` names a subscription that would never deliver anything: an
+unknown agent, an event nothing emits (with the nearest real one), a batch with
+no `window`, a digest with no usable `every`, or a room that is neither declared
+nor a `backend:id` ref.
 
 ## HTTP API
 

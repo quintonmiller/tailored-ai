@@ -172,6 +172,20 @@ export {
   stateProviderRegistry,
   stateTypeRegistry,
 } from "./state/index.js";
+export {
+  createSubscriptionDelivery,
+  DELIVERY_MODES,
+  type DeliveredEvent,
+  type DeliveryMode,
+  type DeliveryOutcome,
+  describeEvent,
+  type EventSubscriptionConfig,
+  type EventWakeContext,
+  type SubscriptionDelivery,
+  SubscriptionDispatcher,
+  type SubscriptionDispatcherOptions,
+  type SubscriptionTarget,
+} from "./subscriptions/index.js";
 export { type BeadsBackendOptions, type BeadsRunner, BeadsTaskBackend } from "./tasks/beads.js";
 export { type BeansBackendOptions, type BeansRunner, BeansTaskBackend } from "./tasks/beans.js";
 export {

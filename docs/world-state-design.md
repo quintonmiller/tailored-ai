@@ -1,6 +1,6 @@
 # World state — Design
 
-> Status: design, accepted. **Phase 1 is implemented**: see [world-state.md](./world-state.md)
+> Status: design, accepted. **Phases 1 and 2 are implemented**: see [world-state.md](./world-state.md)
 > for what works today. First of three linked designs: this one (what
 > agents know, structured), [agent interfaces](./agent-interfaces-design.md)
 > (how they show it), and [live sessions](./live-sessions-design.md) (how they
@@ -201,7 +201,7 @@ subscriptions:
     on: state.changed
     when: { scope: global }
     deliver: digest
-    schedule: "0 7 * * *"
+    every: "day at 7am"                    # or "every 2 hours", or cron
 
   # never wake for it, but see it on the next turn
   - agent: researcher
@@ -213,9 +213,9 @@ subscriptions:
 | `deliver` | what happens |
 |---|---|
 | `immediate` | wake now, skipping the batching delay. Still respects pause and the hourly ceiling |
-| `queue` | join the agent's wake queue with the normal delay, collapsing with other triggers |
-| `batch` | hold for `window`, then deliver everything that accumulated in one turn |
-| `digest` | deliver on `schedule` (cron) or `every` (interval) |
+| `queue` | wake after the rooms' batching delay (`rooms.batchSeconds`), so a burst becomes one turn |
+| `batch` | hold for `window` from the first event, then deliver everything that accumulated in one turn |
+| `digest` | deliver what accumulated on the `every` schedule: an interval, a phrase, or cron |
 | `record` | never wake; the events are waiting in the agent's inbox on its next turn |
 
 `target` decides where the woken turn runs and where its reply goes, using the
@@ -226,20 +226,30 @@ The wake carries the events rendered compactly ("plan *Trip* updated by the
 user from the web: step 3 done"), plus an optional `instructions` line from the
 subscription.
 
-### Built on what exists
+### Built on what exists, and what it deliberately is not
 
 - **Matching** is the `hooks.on` matcher, so the same `when` syntax, the same
-  validation, and a typo in an event name is a `validateConfig` warning rather
-  than a subscription that never fires.
-- **Delivery** is a new built-in event-hook handler kind, `wake`, so it
-  registers through the same registry as every other handler.
-- **Queueing** is the existing per-agent `WakeQueue`, generalised: entries are
-  keyed by a source (a room ref today, any event source tomorrow) instead of a
-  room ref only, and triggers become an open string. Room subscriptions keep
-  their config and become one source among several.
-- **Runaway protection** is the existing per-agent ceiling. A subscription does
-  not see changes its own agent made unless it sets `includeOwn: true`, so an
-  agent reacting to a plan by editing the plan does not wake itself forever.
+  event catalog, and a typo in an event name is a `validateConfig` warning
+  (with the nearest real event) rather than a subscription that never fires.
+- **Timing belongs to a dispatcher, not to the rooms' wake queue.** This
+  changed during implementation. An event wake is like a scheduled wake: it
+  carries its own payload, and its delivery mode has already decided when it
+  should happen. Folding it into the message queue would either drop the
+  events or second-guess the mode, the same reason `runScheduledWake` does not
+  go through the queue either. So `queue` collapses a burst of *events*, not
+  events together with room messages.
+- **Room delivery reuses the room's brakes.** A room target goes through the
+  watcher's `runEventWake`, which shares `runScheduledWake`'s tail: the room's
+  turn order, the in-flight guard, the hourly ceiling, `pass`.
+- **Session delivery** runs in the agent's own `subscriptions:<agent>`
+  session, the way a cron job does, under an hourly ceiling the size of a
+  room's (`rooms.maxWakesPerHour`), counted per agent.
+- **Nothing waiting is lost.** Pending events live in SQLite: a restart re-arms
+  every batch and digest on its original schedule, and a delivery refused by a
+  ceiling or a pause is put back and retried each minute for up to an hour.
+- **Runaway protection.** A subscription does not see changes its own agent
+  made unless it sets `includeOwn: true`, so an agent reacting to a plan by
+  editing the plan does not wake itself forever.
 
 ## How agents use it
 
@@ -301,7 +311,7 @@ One migration per PR, each removing something:
 
 | Tier | Owns |
 |---|---|
-| Core | the record model, `StateProvider` contract and registry, validation, access, events, `state` tool, HTTP API, context slot, `wake` handler, generalised wake queue |
+| Core | the record model, `StateProvider` contract and registry, validation, access, events, `state` tool, HTTP API, context slot, the subscription dispatcher |
 | Built-in plugin | the SQLite provider; the `TaskBackend` adapter |
 | Deployment | its own types, subscriptions and context queries |
 
@@ -309,8 +319,8 @@ One migration per PR, each removing something:
 
 | # | Slice | Removes or enables |
 |---|---|---|
-| 1 | Contract, registry, SQLite provider, `state.changed`, `state` tool, read API | the foundation |
-| 2 | Subscriptions: `wake` handler, generalised wake queue, five delivery modes | "notify these agents, this way" |
+| 1 | Contract, registry, SQLite provider, `state.changed`, `state` tool, read API | the foundation — **done** |
+| 2 | Subscriptions: dispatcher, five delivery modes, room and session delivery | "notify these agents, this way" — **done** |
 | 3 | Context slot for pinned queries | state in the prompt instead of transcripts |
 | 4 | Migrate collections | a use-case table in core |
 | 5 | `TaskBackend` adapter | tasks visible as state |

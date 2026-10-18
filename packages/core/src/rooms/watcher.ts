@@ -31,6 +31,8 @@ import { collectTurnMedia, latestMessageId } from "../media/turn.js";
 import { PASSTHROUGH_GATE } from "../notifications/dedup.js";
 import type { AgentRuntime } from "../runtime.js";
 import { describeBooking, lateLine, recurringLine, type WakeContext } from "../schedules/wake-context.js";
+import { renderEventLines } from "../subscriptions/describe.js";
+import type { DeliveryOutcome, EventWakeContext } from "../subscriptions/types.js";
 import { runtimeTimeProvider, systemTimeZone } from "../time/provider.js";
 import { addresses, extractLeadingAddressees, renderTranscriptLine } from "./envelope.js";
 import { enrichRoomMessage, IdentityResolver } from "./identities.js";
@@ -64,7 +66,7 @@ export function roomPostedKey(roomRef: string): string {
 }
 
 /** Why an agent was woken. Surfaced in the activity record. */
-export type WakeReason = "named" | "loose-question" | "all" | "check-in" | "asked" | "scheduled";
+export type WakeReason = "named" | "loose-question" | "all" | "check-in" | "asked" | "scheduled" | "event";
 
 /**
  * What became of a wake the agent booked for itself.
@@ -365,6 +367,8 @@ export function describeWakeReason(reason: WakeReason): string {
       return "asked for a status update";
     case "scheduled":
       return "a wake it scheduled for itself";
+    case "event":
+      return "something it subscribes to happened";
   }
 }
 
@@ -1139,6 +1143,52 @@ export class RoomWatcher {
     let outcome: ScheduledWakeOutcome = "ran";
     await this.onRoomTurn(roomRef, `scheduled:${agent} ${roomRef}`, async () => {
       outcome = await this.runPrompted(sub, prompt, label, "scheduled", fresh);
+    });
+    return outcome;
+  }
+
+  /**
+   * Events a subscription delivers into a room.
+   *
+   * Shares `runScheduledWake`'s tail — `onRoomTurn` → `runPrompted` — so it
+   * gets the room's turn order, the in-flight guard, the hourly wake ceiling,
+   * `pass` and repeat suppression. Not routed through the `WakeQueue` for the
+   * same reason a scheduled wake is not: the events are the reason for the
+   * turn, and the subscription's delivery mode has already decided its timing.
+   *
+   * `room` may be a name or a ref, since it comes straight from config.
+   */
+  async runEventWake(agent: string, room: string, ctx: EventWakeContext): Promise<DeliveryOutcome> {
+    if (this.runtime.isAgentsPaused("autonomous")) return "at-ceiling";
+
+    const target = this.store.getRoomByRef(room) ?? this.store.getRoomByName(room);
+    if (!target || target.archivedAt) return "gone";
+    const roomRef = formatRoomRef(target.ref);
+    const sub = this.store.getSubscription(agent, roomRef);
+    if (!sub) return "gone";
+
+    const identities = this.identities();
+    const label = identities.labelForAgent(agent);
+    const fresh = await this.fetchBacklog(sub);
+    const transcript = this.renderTranscript(fresh, agent, label, identities);
+
+    this.wakeReasons.set(`${agent} ${roomRef}`, "event");
+    const prompt = [
+      `Room "${target.name}". You are ${label}. ${this.today()}`,
+      "Something you subscribe to happened. Nobody has asked you anything.",
+      "",
+      ...renderEventLines(ctx),
+      ...(target.purpose ? ["", `Purpose: ${target.purpose}`] : []),
+      ...(sub.role ? [`Your role here: ${sub.role}`] : []),
+      "",
+      ...describeSinceLastTurn(transcript),
+      'Act on it if it needs anything said here. If it does not, call room(action="pass").',
+    ].join("\n");
+
+    console.log(`[subscriptions] waking ${agent} in ${roomRef} for ${ctx.events.length} event(s)`);
+    let outcome: DeliveryOutcome = "ran";
+    await this.onRoomTurn(roomRef, `event:${agent} ${roomRef}`, async () => {
+      outcome = await this.runPrompted(sub, prompt, label, "event", fresh);
     });
     return outcome;
   }

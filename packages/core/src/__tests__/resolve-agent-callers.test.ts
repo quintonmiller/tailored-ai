@@ -17,7 +17,13 @@ import { describe, expect, it } from "vitest";
  * instead, which is what a new call site will trip over.
  */
 describe("every resolveAgent caller passes the resolve options", () => {
-  const files = ["rooms/watcher.ts", "task-watcher.ts", "channels/discord.ts", "runtime.ts"];
+  const files = [
+    "rooms/watcher.ts",
+    "task-watcher.ts",
+    "channels/discord.ts",
+    "runtime.ts",
+    "subscriptions/delivery.ts",
+  ];
 
   for (const rel of files) {
     it(rel, () => {

@@ -293,6 +293,23 @@ const StateConfigSchema = z.object({
 });
 type _StateConfigMatches = AssertTrue<Identical<z.infer<typeof StateConfigSchema>, NonNullable<AgentConfig["state"]>>>;
 
+/** One event subscription. `on` and `when` stay open: event names are checked by `validateConfig` against the catalog. */
+const EventSubscriptionSchema = z.object({
+  agent: z.string(),
+  on: z.string(),
+  when: z.record(z.string()).optional(),
+  deliver: z.enum(["immediate", "queue", "batch", "digest", "record"]).optional(),
+  window: z.string().optional(),
+  every: z.string().optional(),
+  target: z.union([z.literal("session"), z.object({ room: z.string() })]).optional(),
+  instructions: z.string().optional(),
+  includeOwn: z.boolean().optional(),
+});
+const SubscriptionsConfigSchema = z.array(EventSubscriptionSchema);
+type _SubscriptionsConfigMatches = AssertTrue<
+  Identical<z.infer<typeof SubscriptionsConfigSchema>, NonNullable<AgentConfig["subscriptions"]>>
+>;
+
 /**
  * Two closed sub-blocks of `memory:`. Not the whole block — the rest is larger
  * and can follow — but these are all scalars, which is where a quoted number
@@ -631,6 +648,10 @@ export function findShapeIssues(config: AgentConfig): string[] {
   if (config.tasks != null) {
     found.push(...shapeIssues("tasks", TasksConfigSchema, config.tasks));
     found.push(...shapeIssues("state", StateConfigSchema, config.state));
+    // No default exists for this block, so absent is normal, not missing.
+    if (config.subscriptions !== undefined) {
+      found.push(...shapeIssues("subscriptions", SubscriptionsConfigSchema, config.subscriptions));
+    }
   }
 
   if (config.memory?.embeddings != null) {
