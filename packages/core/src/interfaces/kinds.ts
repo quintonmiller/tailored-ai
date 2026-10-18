@@ -350,6 +350,110 @@ const listKind: ComponentKind = {
   },
 };
 
-for (const kind of [choice, form, confirm, card, listKind]) {
+/**
+ * How far along something is: a number out of a maximum, or a list of steps
+ * with the current one marked. Sent once and moved along with `update`, which
+ * redraws it in place everywhere it was posted.
+ */
+const progress: ComponentKind = {
+  kind: "progress",
+  description: "How far along a job is: a value out of a max, or named steps with the current one marked.",
+  schema: {
+    type: "object",
+    required: ["label"],
+    additionalProperties: false,
+    properties: {
+      label: { type: "string", minLength: 1 },
+      value: { type: "number", minimum: 0 },
+      max: { type: "number", minimum: 1 },
+      steps: { type: "array", minItems: 1, maxItems: 20, items: { type: "string", minLength: 1 } },
+      done: { type: "integer", minimum: 0 },
+      note: { type: "string" },
+    },
+  },
+  defaultActions: () => [],
+  fallback: (props) => [str(props.label), ...progressLines(props), ...(props.note ? [str(props.note)] : [])].join("\n"),
+};
+
+/**
+ * A progress component's lines in plain text: "3 of 6 (50%)", or each step
+ * marked done, current or still to come. Shared by every surface's text form.
+ */
+export function progressLines(props: Record<string, unknown>): string[] {
+  return progressText(props);
+}
+
+/**
+ * How many of a progress component's steps are finished: `done`, or else a
+ * `value` sent alongside the steps, which is how a local model counted them
+ * one run in three.
+ */
+export function stepsDone(props: Record<string, unknown>): number {
+  if (typeof props.done === "number") return props.done;
+  if (typeof props.value === "number") return Math.floor(props.value);
+  return 0;
+}
+
+function progressText(props: Record<string, unknown>): string[] {
+  const steps = list(props.steps).map(str);
+  if (steps.length) {
+    const at = stepsDone(props);
+    return steps.map((s, i) => `${i < at ? "✓" : i === at ? "→" : "·"} ${s}`);
+  }
+  if (typeof props.value === "number") {
+    const max = typeof props.max === "number" ? props.max : 100;
+    const pct = Math.max(0, Math.min(100, Math.round((props.value / max) * 100)));
+    return [max === 100 ? `${pct}%` : `${props.value} of ${max} (${pct}%)`];
+  }
+  return ["Working…"];
+}
+
+/**
+ * The records a query matches as rows and columns. Filled and refreshed by
+ * core like a list; read-only.
+ */
+const table: ComponentKind = {
+  kind: "table",
+  description: "The records a state query matches, as rows and columns, kept current.",
+  schema: {
+    type: "object",
+    required: ["title", "columns", "rows"],
+    additionalProperties: false,
+    properties: {
+      title: { type: "string", minLength: 1 },
+      columns: { type: "array", maxItems: 12, items: { type: "string" } },
+      rows: {
+        type: "array",
+        maxItems: MAX_LIST_ITEMS,
+        items: {
+          type: "object",
+          required: ["id", "cells"],
+          additionalProperties: false,
+          properties: { id: { type: "string" }, cells: { type: "array", items: { type: "string" } } },
+        },
+      },
+      more: { type: "integer", minimum: 0 },
+    },
+  },
+  defaultActions: () => [],
+  queryable: true,
+  fallback: (props) => {
+    const columns = list(props.columns).map(str);
+    const rows = (list(props.rows) as Record<string, unknown>[]).map((r) => list(r.cells).map(str));
+    return [
+      str(props.title),
+      ...(rows.length
+        ? [
+            `| ${columns.join(" | ")} |`,
+            `|${columns.map(() => "---").join("|")}|`,
+            ...rows.map((c) => `| ${c.join(" | ")} |`),
+          ]
+        : ["(nothing matches)"]),
+      ...(typeof props.more === "number" && props.more > 0 ? [`…and ${props.more} more.`] : []),
+    ].join("\n");
+  },
+};
+
+for (const kind of [choice, form, confirm, card, listKind, progress, table]) {
   if (!componentKindRegistry.has(kind.kind)) componentKindRegistry.register(kind.kind, kind);
 }

@@ -26,7 +26,7 @@ interface(action: "send", kind: "choice",
 The tool is on by default; `tools.interface.enabled: false` withholds it. An
 agent with an explicit `tools:` list gets it only by naming it.
 
-## The five kinds
+## The seven kinds
 
 | kind | props | buttons |
 |---|---|---|
@@ -35,6 +35,8 @@ agent with an explicit `tools:` list gets it only by naming it.
 | `confirm` | `summary`, `details?`, `confirmLabel?`, `denyLabel?` | yes and no, or the labels given |
 | `card` | `title`, `body?`, `fields?` (`label`, `value`) | whatever the agent passes as `actions` |
 | `list` | `title?`, `check?` (`field`, `on?`, `off?`); the items come from `bind` | one tick box per item with `check` |
+| `table` | `title?`, `columns?`; the rows come from `bind` | none |
+| `progress` | `label`, then `value` and `max?` (default 100), or `steps` and `done` (how many are finished); `note?` | none |
 
 A card's `actions` are `{label, effect?, name?, patch?, ref?}`. Every other
 kind's buttons come from its props, and `actions` is refused there, since
@@ -142,6 +144,37 @@ interface(action: "send", kind: "list",
 
 A surface that can't draw it shows the text form, `- [x] Do the dishes`, as
 the list was when sent.
+
+## Tables
+
+A table is a list's read-only cousin: the records a query matches as rows and
+columns, filled and kept current by core the same way, with the same scopes.
+
+```
+interface(action: "send", kind: "table",
+          props: { title: "Bills due", columns: ["payee", "amount", "due"] },
+          bind: { type: "bill", where: { paid: false } })
+```
+
+Without `columns`, a table shows the type's title field and then the other
+fields its records hold, up to six. The web UI draws an HTML table; Discord
+draws a monospace block with the columns lined up, leaving off (and counting)
+rows that would make the message too long; the text form is a pipe table.
+
+## Progress
+
+A progress component says how far along a job is. Send it once, then move it
+with `update`: every surface it was posted on redraws in place.
+
+```
+interface(action: "send", kind: "progress", props: { label: "Importing photos", value: 0, max: 120 })
+interface(action: "update", id: "c-1a2b3c", props: { label: "Importing photos", value: 90, max: 120 })
+interface(action: "update", id: "c-4d5e6f", props: { label: "Trip", steps: ["Book", "Pack", "Go"], done: 1 })
+```
+
+The web UI draws a bar, or the steps with the done ones green and the current
+one bold. Discord draws `▓▓▓▓▓▓▓░░░ 90 of 120 (75%)`, or `✓ Book / → Pack /
+· Go`. With neither a value nor steps it reads "Working…".
 
 ## Where it shows up
 

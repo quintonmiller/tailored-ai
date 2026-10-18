@@ -444,6 +444,52 @@ describe("lists on Discord", () => {
   });
 });
 
+describe("progress and tables on Discord", () => {
+  it("draws progress as a bar with the count, or as marked steps", () => {
+    const counted = buildComponent({ kind: "progress", props: { label: "Import", value: 3, max: 6, note: "Photos" } });
+    expect(buildComponentMessage(counted)).toEqual({
+      content: "**Import**\n`▓▓▓▓▓░░░░░` 3 of 6 (50%)\nPhotos",
+      components: [],
+    });
+    const stepped = buildComponent({
+      kind: "progress",
+      props: { label: "Trip", steps: ["Book", "Pack", "Go"], done: 2 },
+    });
+    expect(buildComponentMessage(stepped)?.content).toBe("**Trip**\n✓ Book\n✓ Pack\n→ Go");
+  });
+
+  it("draws a table as an aligned monospace block, leaving off and counting rows that do not fit", () => {
+    const small = buildComponent({
+      kind: "table",
+      props: {
+        title: "Bills",
+        columns: ["payee", "amount"],
+        rows: [
+          { id: "p", cells: ["Power co", "84.2"] },
+          { id: "w", cells: ["Water", "31"] },
+        ],
+      },
+      query: { type: "bill" },
+    });
+    expect(buildComponentMessage(small)?.content).toBe(
+      "**Bills**\n```\npayee     amount\n────────  ──────\nPower co  84.2\nWater     31\n```",
+    );
+
+    const rows = Array.from({ length: 50 }, (_, i) => ({
+      id: `r${i}`,
+      cells: ["x".repeat(24), "y".repeat(24), String(i)],
+    }));
+    const big = buildComponent({
+      kind: "table",
+      props: { title: "Big", columns: ["a", "b", "n"], rows, more: 3 },
+      query: { type: "bill" },
+    });
+    const content = buildComponentMessage(big)?.content ?? "";
+    expect(content.length).toBeLessThanOrEqual(2000);
+    expect(content).toMatch(/…and \d+ more\.$/);
+  });
+});
+
 describe("state buttons on Discord", () => {
   it("write as the person who clicked, redraw a bound card from the record, and run even while the agent is busy", async () => {
     const stateDb = new Database(":memory:");
@@ -815,6 +861,32 @@ describe("DiscordChannel", () => {
       await settle(40);
       expect(edits).toHaveLength(1);
       expect(rowsOf(edits[0].payload)[0].map((b: Json) => b.label)).toEqual(["☐ Lisbon trip", "☑ Move house"]);
+    });
+
+    it("redraws a posted table when one of its records changes", async () => {
+      const { priv, edits, runtime } = makeChannel();
+      const store = interfaceStoreFor(db);
+      const state = runtime.getStateService();
+      const system = { actor: { kind: "system" as const, name: "test" } };
+      await state.put(system, {
+        type: "plan",
+        id: "trip",
+        scope: "global",
+        data: { name: "Lisbon trip", status: "draft" },
+      });
+      const spec = buildComponent({
+        kind: "table",
+        props: { title: "Plans", columns: ["name", "status"], rows: [{ id: "trip", cells: ["Lisbon trip", "draft"] }] },
+        query: { type: "plan", scopes: ["global"] },
+      });
+      store.create(spec, "default", "s1");
+      store.addPost(spec.id, { surface: "discord", channel: "chan1", message: "m-table" });
+      priv.watchInterfaces();
+
+      await state.patch(system, { type: "plan", id: "trip" }, { status: "active" });
+      await settle(40);
+      expect(edits).toHaveLength(1);
+      expect(edits[0].payload.content).toContain("Lisbon trip  active");
     });
 
     it("stops editing once it disconnects", async () => {
