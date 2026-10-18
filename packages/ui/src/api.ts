@@ -1825,3 +1825,92 @@ export function runExploratoryAgent(name: string): Promise<{ ok: boolean; run: E
     method: "POST",
   }).then((r) => r.json());
 }
+
+// --- World state (docs/world-state.md) ---
+
+export interface StateActor {
+  kind: "agent" | "user" | "plugin" | "system";
+  name: string;
+}
+
+export interface StateTypeInfo {
+  name: string;
+  description?: string;
+  scope?: "global" | "room" | "agent" | "project";
+  /** The field that names a record, shown beside its id. */
+  title?: string;
+  schema?: Record<string, unknown>;
+  canWrite: boolean;
+}
+
+export interface StateRecordInfo {
+  type: string;
+  id: string;
+  scope: string;
+  data: Record<string, unknown>;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  updatedBy: StateActor;
+  source?: { tool?: string; surface?: string; interfaceId?: string };
+}
+
+export interface StateChangeInfo {
+  type: string;
+  id: string;
+  scope: string;
+  op: "create" | "update" | "delete";
+  before?: Record<string, unknown>;
+  after?: Record<string, unknown>;
+  version: number;
+  actor: StateActor;
+  source?: { tool?: string; surface?: string; interfaceId?: string };
+  at: string;
+}
+
+export function fetchStateTypes(): Promise<{ types: StateTypeInfo[] }> {
+  return jsonFetch("/api/state/types");
+}
+
+export function fetchStateRecords(type: string, limit = 200): Promise<{ records: StateRecordInfo[] }> {
+  return jsonFetch(`/api/state/${encodeURIComponent(type)}?limit=${limit}`);
+}
+
+export function fetchStateHistory(type: string, id: string): Promise<{ changes: StateChangeInfo[] }> {
+  return jsonFetch(`/api/state/${encodeURIComponent(type)}/${encodeURIComponent(id)}/history?limit=50`);
+}
+
+/** A write, keeping the server's own sentence on refusal: it names the field, or the version that moved. */
+async function stateWrite<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  const json = (await res.json().catch(() => ({}))) as { error?: string };
+  if (!res.ok) throw new Error(json.error ?? `${res.status} ${res.statusText}`);
+  return json as T;
+}
+
+export function createStateRecord(
+  type: string,
+  input: { id?: string; scope?: string; data: Record<string, unknown> },
+): Promise<StateRecordInfo> {
+  return stateWrite("POST", `/api/state/${encodeURIComponent(type)}`, input);
+}
+
+export function replaceStateRecord(
+  type: string,
+  id: string,
+  data: Record<string, unknown>,
+  expectedVersion: number,
+): Promise<StateRecordInfo> {
+  return stateWrite("PUT", `/api/state/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, {
+    data,
+    expectedVersion,
+  });
+}
+
+export function deleteStateRecord(type: string, id: string): Promise<StateRecordInfo> {
+  return stateWrite("DELETE", `/api/state/${encodeURIComponent(type)}/${encodeURIComponent(id)}`);
+}

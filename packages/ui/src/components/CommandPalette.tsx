@@ -43,6 +43,7 @@ const NAV_PAGES: Item[] = [
   { kind: "page", title: "Memory", href: "#/memory" },
   { kind: "page", title: "Resources", href: "#/resources" },
   { kind: "page", title: "Sandboxes", href: "#/sandboxes" },
+  { kind: "page", title: "State", href: "#/state" },
   { kind: "page", title: "Approvals", href: "#/approvals" },
   { kind: "page", title: "Help", href: "#/help" },
 ];

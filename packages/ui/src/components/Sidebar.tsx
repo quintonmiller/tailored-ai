@@ -33,6 +33,7 @@ type PageKey =
   | "workflow-runs"
   | "workflow-analytics"
   | "sandboxes"
+  | "state"
   | "resources"
   | "memory"
   | "actions"
@@ -209,6 +210,7 @@ export function Sidebar({ page, onNavigate }: { page: PageKey; onNavigate?: () =
           onNavigate={onNavigate}
         />
         <SideLink href="#/memory" label="Memory" active={page === "memory"} onNavigate={onNavigate} />
+        <SideLink href="#/state" label="State" active={page === "state"} onNavigate={onNavigate} />
         <SideLink href="#/resources" label="Resources" active={page === "resources"} onNavigate={onNavigate} />
         <SideLink href="#/sandboxes" label="Sandboxes" active={page === "sandboxes"} onNavigate={onNavigate} />
         <SideLink

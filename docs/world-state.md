@@ -201,16 +201,40 @@ unknown agent, an event nothing emits (with the nearest real one), a batch with
 no `window`, a digest with no usable `every`, or a room that is neither declared
 nor a `backend:id` ref.
 
+## The State page
+
+**State** in the web UI's sidebar lists every type and its records. Open a
+record to see its data, who changed it last and through what, and its
+history. A change from anywhere (an agent's tool call, a subscription, a
+plugin, another browser) appears as it happens, and the changed row is
+briefly highlighted.
+
+Edit a record as JSON, or delete it. A save carries the version you opened,
+so if an agent changed the record while you were editing, the save is
+refused rather than overwriting the agent's change. The page warns you as
+soon as that happens. Your edits are recorded as yours: actor `user`
+`owner`, source `http`.
+
 ## HTTP API
 
-Read-only for now, behind the usual bearer auth:
+Behind the usual bearer auth. A person through the API sees every scope.
 
-| route | returns |
+| route | does |
 |---|---|
 | `GET /api/state/types` | every type, with `canWrite` |
 | `GET /api/state/:type` | records; `?where=<json>&orderBy=-field&limit=&offset=&scope=` |
 | `GET /api/state/:type/:id` | one record, or 404 |
 | `GET /api/state/:type/:id/history` | its changes, most recent first |
+| `GET /api/state/events` | a server-sent event stream: a `change` event carrying each `state.changed` payload as it happens; `?type=` narrows it to one type |
+| `POST /api/state/:type` | create: `{id?, scope?, data}`; `201` with the record. An `id` that exists is `409` |
+| `PUT /api/state/:type/:id` | replace the data: `{data, scope?, expectedVersion?}` |
+| `PATCH /api/state/:type/:id` | change some fields: `{changes, expectedVersion?}`; a field set to `null` is removed |
+| `DELETE /api/state/:type/:id` | delete; the history is kept. `404` if there is no such record |
+
+A write that does not fit the type is `400`, with the sentence an agent would
+get. A write whose `expectedVersion` is out of date is `409`. Because
+`/api/state/types` and `/api/state/events` are routes, a type named `types`
+or `events` cannot be listed over HTTP; pick another name.
 
 ## Replacing the store
 

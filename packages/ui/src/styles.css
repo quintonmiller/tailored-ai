@@ -8312,3 +8312,267 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
   outline: 2px dashed var(--accent);
   outline-offset: -4px;
 }
+
+/* --- State page (world state) --- */
+.state-page {
+  padding: 24px;
+  max-width: 1200px;
+  width: 100%;
+  margin: 0 auto;
+}
+.state-page h2 {
+  font-size: 16px;
+  color: var(--text-dim);
+  font-weight: 500;
+  margin: 0;
+}
+.state-live {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.state-live::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+  background: var(--text-dim);
+}
+.state-live-live::before { background: var(--green); }
+.state-live-lost::before { background: var(--amber); }
+.state-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+.state-types {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  position: sticky;
+  top: 12px;
+}
+.state-type {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  color: var(--text);
+  text-decoration: none;
+}
+.state-type:hover { background: var(--bg-hover); }
+.state-type.active { background: var(--bg-surface); box-shadow: inset 2px 0 0 var(--accent); }
+.state-type-name { font-size: 13px; }
+.state-type-desc {
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.state-main {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.state-main-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+.state-main-header h3,
+.state-record h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.state-meta-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.state-chip {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.state-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.state-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.state-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.state-table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--text-dim);
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.state-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.state-table tbody tr:last-child td { border-bottom: none; }
+.state-table tbody tr { cursor: pointer; transition: background-color 0.6s ease; }
+.state-table tbody tr:hover { background: var(--bg-hover); }
+.state-table tbody tr.active { background: var(--bg-surface); }
+.state-table tbody tr.fresh { background: rgba(108, 138, 255, 0.16); transition: none; }
+.state-table a { color: var(--accent); text-decoration: none; }
+.state-table .num,
+.state-history .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.state-page .dim { color: var(--text-dim); }
+.state-record {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  padding: 14px 16px;
+}
+.state-json {
+  margin: 0;
+  padding: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre;
+}
+.state-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.state-json-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--font);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 10px 12px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  resize: vertical;
+}
+.state-json-input:focus,
+.state-new-fields input:focus {
+  outline: 2px solid var(--accent-dim);
+  outline-offset: 1px;
+}
+.state-new-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+}
+.state-new-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.state-new-fields input {
+  font-family: var(--font);
+  font-size: 12px;
+  padding: 6px 8px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.state-warning {
+  font-size: 12px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--amber);
+  color: var(--amber);
+}
+.state-subhead {
+  margin: 6px 0 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-dim);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.state-history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.state-history li {
+  display: grid;
+  grid-template-columns: 64px 40px minmax(80px, auto) 72px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+}
+.state-history-fields {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.state-op {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.state-op-create { color: var(--green); }
+.state-op-update { color: var(--accent); }
+.state-op-delete { color: var(--red); }
+@media (max-width: 760px) {
+  .state-page { padding: 16px; }
+  .state-layout { grid-template-columns: minmax(0, 1fr); }
+  .state-types { position: static; flex-direction: row; overflow-x: auto; }
+  .state-type-desc { display: none; }
+  .state-history li { grid-template-columns: 56px 36px minmax(0, 1fr); }
+  .state-history li > :nth-child(n + 4) { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .state-table tbody tr { transition: none; }
+}
