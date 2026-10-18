@@ -25,7 +25,7 @@ import type { MediaRef, MessageContent } from "../content/types.js";
 import { loadAllContext, loadContextFiles } from "../context.js";
 import { getSession, getSessionMessages } from "../db/queries.js";
 import { createProjectTask, queryProjectTasks } from "../db/task-queries.js";
-import { boundCardProps } from "../interfaces/bind.js";
+import { boundCardProps, listProps } from "../interfaces/bind.js";
 import { interfaceStoreFor } from "../interfaces/index.js";
 import type { ComponentPost, ComponentRecord } from "../interfaces/store.js";
 import { collectTurnComponents, collectTurnMedia, latestMessageId } from "../media/turn.js";
@@ -59,6 +59,7 @@ import {
   handleInterfaceInteraction,
   type InterfaceInteractionDeps,
   isInterfaceCustomId,
+  LIST_READER,
   messageFor,
 } from "./discord-interfaces.js";
 import {
@@ -311,9 +312,20 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     this.runtime.onReload(watchState);
   }
 
-  /** Redraw every posted card bound to the record that changed. */
+  /** Redraw every posted card bound to the record that changed, and every list of its type. */
   private redrawBound(change: StateChange): void {
     const store = interfaceStoreFor(this.runtime.db);
+    for (const record of store.listsOf(change.type)) {
+      const posts = store.posts(record.spec.id, "discord");
+      const query = record.spec.query;
+      if (posts.length === 0 || !query) continue;
+      listProps(this.runtime.getStateService(), LIST_READER, record.spec.props, query)
+        .then((props) => {
+          const message = messageFor(record, props);
+          if (message) for (const post of posts) this.editPost(post, message);
+        })
+        .catch((err) => console.warn(`[discord] could not redraw list ${record.spec.id}: ${(err as Error).message}`));
+    }
     for (const record of store.boundTo(change.type, change.id)) {
       const posts = store.posts(record.spec.id, "discord");
       if (posts.length === 0) continue;

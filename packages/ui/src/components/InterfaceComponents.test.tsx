@@ -298,3 +298,78 @@ describe("bound cards and state buttons", () => {
     expect(button("Start").disabled).toBe(false);
   });
 });
+
+describe("lists", () => {
+  const listSpec: ComponentSpec = {
+    id: "c-list",
+    kind: "list",
+    props: {
+      title: "Chores",
+      items: [{ id: "dishes", label: "Do the dishes", checked: false }],
+      check: { field: "done" },
+    },
+    query: { type: "chore", scopes: ["global"] },
+    fallback: "[list c-list] Chores",
+  };
+  let records: Record<string, unknown>[];
+  const record = (id: string, name: string, done: boolean, scope = "global") => ({
+    type: "chore",
+    id,
+    scope,
+    data: { name, done },
+    version: 1,
+    createdAt: "",
+    updatedAt: "",
+    updatedBy: { kind: "user", name: "owner" },
+  });
+
+  beforeEach(() => {
+    records = [record("dishes", "Do the dishes", false), record("secret", "Not for this list", false, "agent:other")];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST") {
+          posted.push({ url, body: JSON.parse(String(init.body)) });
+          return new Response(JSON.stringify({ effect: "state", record: record("dishes", "Do the dishes", true) }));
+        }
+        if (url === "/api/state/types") {
+          return new Response(JSON.stringify({ types: [{ name: "chore", title: "name", canWrite: true }] }));
+        }
+        if (url.startsWith("/api/state/chore?")) return new Response(JSON.stringify({ records }));
+        return new Response(
+          JSON.stringify({ components: [{ id: "c-list", kind: "list", status: "open", spec: listSpec }] }),
+        );
+      }),
+    );
+  });
+
+  const boxes = () =>
+    [...container.querySelectorAll(".iface-list-item")].map(
+      (l) => `${(l.querySelector("input") as HTMLInputElement).checked ? "x" : " "} ${l.textContent}`,
+    );
+
+  it("shows the query's records in the list's scopes, oldest first, and ticks one through the server", async () => {
+    await render([listSpec]);
+    await act(async () => {});
+    const listed = (fetch as unknown as { mock: { calls: [string][] } }).mock.calls.map((c) => c[0]);
+    expect(listed.some((u) => u.startsWith("/api/state/chore?") && u.includes("orderBy=createdAt"))).toBe(true);
+    expect(boxes()).toEqual(["  Do the dishes"]);
+
+    await act(async () => {
+      (container.querySelector(".iface-list-item input") as HTMLInputElement).click();
+    });
+    expect(posted).toEqual([{ url: "/api/interfaces/c-list/respond", body: { actionId: "check:dishes" } }]);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("re-reads the list when a record of its type changes", async () => {
+    await render([listSpec]);
+    await act(async () => {});
+    records = [record("dishes", "Do the dishes", true), record("bins", "Take out the bins", false)];
+    await act(async () =>
+      streams.get("/api/state/events")?.emit("change", { type: "chore", id: "bins", op: "create", version: 1 }),
+    );
+    await act(async () => {});
+    expect(boxes()).toEqual(["x Do the dishes", "  Take out the bins"]);
+  });
+});

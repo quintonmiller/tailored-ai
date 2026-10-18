@@ -1,5 +1,5 @@
 import { componentPart, textPart } from "../content/types.js";
-import { boundCardProps } from "../interfaces/bind.js";
+import { boundCardProps, checkOf, type ListQuery, listProps } from "../interfaces/bind.js";
 import { type AgentAction, buildComponent, componentKindRegistry, InterfaceError } from "../interfaces/kinds.js";
 import type { InterfaceStore } from "../interfaces/store.js";
 import type { StateService } from "../state/service.js";
@@ -33,12 +33,12 @@ export class InterfaceTool implements Tool {
       kind: {
         type: "string",
         description:
-          "send: choice (a question with options), form (fields to fill in), confirm (yes or no), or card (something to look at, with optional buttons).",
+          "send: choice (a question with options), form (fields to fill in), confirm (yes or no), card (something to look at, with optional buttons), or list (state records as a checklist).",
       },
       props: {
         type: "object",
         description:
-          "choice {question, options[], allowText?}. form {title, fields[{name, label?, type?: text|number|boolean|select|date, required?, options?}], submitLabel?}. confirm {summary, details?, confirmLabel?, denyLabel?}. card {title, body?, fields?[{label, value}]}.",
+          "choice {question, options[], allowText?}. form {title, fields[{name, label?, type?: text|number|boolean|select|date, required?, options?}], submitLabel?}. confirm {summary, details?, confirmLabel?, denyLabel?}. card {title, body?, fields?[{label, value}]}. list {title?, check?: {field, on?, off?}} (ticking flips field).",
       },
       actions: {
         type: "array",
@@ -48,7 +48,8 @@ export class InterfaceTool implements Tool {
       },
       bind: {
         type: "object",
-        description: "card: show a state record {type, id}; the card stays current as the record changes.",
+        description:
+          "card: show a state record {type, id}. list: show the records {type, where?, limit?} match. Both stay current as records change.",
       },
       id: { type: "string", description: "update and close: the component's id." },
       expiresInMinutes: { type: "number", description: "send: stop taking answers after this many minutes." },
@@ -71,17 +72,21 @@ export class InterfaceTool implements Tool {
         case "send": {
           const kind = typeof args.kind === "string" ? args.kind.trim() : "";
           if (!kind) return fail('send needs a `kind`: "choice", "form", "confirm" or "card".');
-          const bind = refArg(args.bind);
-          let props = objectArg(args.props, "props") ?? (bind ? {} : undefined);
+          const listed = componentKindRegistry.get(kind)?.queryable === true;
+          const bind = listed ? undefined : refArg(args.bind);
+          let props = objectArg(args.props, "props") ?? (bind || listed ? {} : undefined);
           if (!props) return fail("send needs `props` for the component.");
           const lifted = liftActions(props, args.actions);
-          props = lifted.props;
+          props = liftCheck(lifted.props, args.check);
           const ignoredFields = Boolean(bind) && props.fields !== undefined;
           if (bind) props = await this.boundProps(kind, props, bind, context);
+          let query: ListQuery | undefined;
+          if (listed) ({ props, query } = await this.listed(props, queryArg(args.bind), context));
           const spec = buildComponent({
             kind,
             props,
             ...(bind ? { bind } : {}),
+            ...(query ? { query } : {}),
             ...(lifted.actions !== undefined ? { actions: actionsArg(lifted.actions) } : {}),
             ...(typeof args.expiresInMinutes === "number" ? { expiresInMinutes: args.expiresInMinutes } : {}),
           });
@@ -90,7 +95,10 @@ export class InterfaceTool implements Tool {
             success: true,
             output: {
               parts: [
-                textPart(sentNote(spec.kind, spec.id, spec.actions) + (ignoredFields ? FIELDS_FROM_RECORD : "")),
+                textPart(
+                  sentNote(spec.kind, spec.id, spec.actions, checkOf(spec.props)) +
+                    (ignoredFields ? FIELDS_FROM_RECORD : ""),
+                ),
                 componentPart(spec),
               ],
               structured: { componentId: spec.id },
@@ -106,19 +114,29 @@ export class InterfaceTool implements Tool {
               `${record.spec.id} is a ${record.spec.kind}; an update cannot change its kind. Send a new one instead.`,
             );
           }
-          const bind = refArg(args.bind) ?? record.spec.bind;
-          let props =
-            objectArg(args.props, "props") ??
-            (bind ? (record.spec.props.body ? { body: record.spec.props.body } : {}) : undefined);
+          const listed = record.spec.query !== undefined;
+          const bind = listed ? undefined : (refArg(args.bind) ?? record.spec.bind);
+          const kept = listed
+            ? { title: record.spec.props.title, ...(record.spec.props.check ? { check: record.spec.props.check } : {}) }
+            : record.spec.props.body
+              ? { body: record.spec.props.body }
+              : {};
+          let props = objectArg(args.props, "props") ?? (bind || listed ? kept : undefined);
           if (!props) return fail("update needs `props`: the component's props as they should now be.");
           const lifted = liftActions(props, args.actions);
-          props = lifted.props;
+          props = liftCheck(lifted.props, args.check);
           if (bind) props = await this.boundProps(record.spec.kind, props, bind, context);
+          let query: ListQuery | undefined;
+          if (listed) {
+            const given = args.bind !== undefined ? queryArg(args.bind) : (record.spec.query as ListQuery);
+            ({ props, query } = await this.listed(props, given, context));
+          }
           const spec = buildComponent({
             kind: record.spec.kind,
             id: record.spec.id,
             props,
             ...(bind ? { bind } : {}),
+            ...(query ? { query } : {}),
             ...(lifted.actions !== undefined ? { actions: actionsArg(lifted.actions) } : {}),
             ...(typeof args.expiresInMinutes === "number" ? { expiresInMinutes: args.expiresInMinutes } : {}),
           });
@@ -158,6 +176,31 @@ export class InterfaceTool implements Tool {
       if (err instanceof InterfaceError) return fail(err.message);
       throw err;
     }
+  }
+
+  /**
+   * A list's items, filled from its query as the agent can see it now, and
+   * the query to keep: with the scopes the agent could see, so a redraw later
+   * never shows it more than it could read.
+   */
+  private async listed(
+    props: Record<string, unknown>,
+    query: ListQuery,
+    context: ToolContext,
+  ): Promise<{ props: Record<string, unknown>; query: ListQuery }> {
+    const state = this.getState?.();
+    if (!state) throw new InterfaceError("World state is not set up here, so a list cannot show records.");
+    const caller = agentStateCaller(context, "interface");
+    const check = props.check as { field?: unknown } | undefined;
+    if (check !== undefined && (typeof check !== "object" || typeof check.field !== "string" || !check.field)) {
+      throw new InterfaceError('`check` needs the `field` a tick flips, e.g. {"field": "done"}.');
+    }
+    const filled = await listProps(state, caller, props, query).catch((err: Error) => {
+      throw new InterfaceError(err.message);
+    });
+    const { scopes: _ignored, ...asked } = query;
+    const scopes = state.visibleScopes(caller);
+    return { props: filled, query: { ...asked, ...(scopes ? { scopes } : {}) } };
   }
 
   /** A bound card's props, filled from the record as the agent can see it now. */
@@ -201,7 +244,15 @@ function describeAnswer(record: {
   return label ? `"${label}"` : undefined;
 }
 
-function sentNote(kind: string, id: string, actions: { effect: { kind: string } }[] | undefined): string {
+function sentNote(
+  kind: string,
+  id: string,
+  actions: { effect: { kind: string } }[] | undefined,
+  check?: { field: string },
+): string {
+  // Said outright, so the agent does not wait for an answer that never comes.
+  if (check)
+    return `Sent ${kind} ${id}. Ticking an item flips its ${check.field} directly; no message comes back to you.`;
   if (!actions?.length) return `Sent ${kind} ${id}.`;
   const effects = new Set(actions.map((a) => a.effect.kind));
   const notes = [`Sent ${kind} ${id}.`];
@@ -230,6 +281,28 @@ function liftActions(
   if (actions !== undefined || props.actions === undefined) return { props, actions };
   const { actions: inner, ...rest } = props;
   return { props: rest, actions: inner };
+}
+
+/** A `check` given beside `props` instead of inside it is moved in, as buttons are. */
+function liftCheck(props: Record<string, unknown>, check: unknown): Record<string, unknown> {
+  if (check === undefined || props.check !== undefined) return props;
+  return { ...props, check: typeof check === "string" ? objectArg(check, "check") : check };
+}
+
+/** A list's `{type, where?, limit?}`, accepted as an object or JSON text. */
+function queryArg(value: unknown): ListQuery {
+  const q = objectArg(value, "bind");
+  if (!q || typeof q.type !== "string" || !q.type) {
+    throw new InterfaceError(
+      'A list shows records: give `bind` with the record type, e.g. {"type": "task", "where": {"done": false}}.',
+    );
+  }
+  const where = q.where === undefined ? undefined : objectArg(q.where, "bind.where");
+  return {
+    type: q.type,
+    ...(where ? { where } : {}),
+    ...(typeof q.limit === "number" && q.limit > 0 ? { limit: Math.floor(q.limit) } : {}),
+  };
 }
 
 /** A `{type, id}` reference, accepted as an object or the JSON text small models often send. */

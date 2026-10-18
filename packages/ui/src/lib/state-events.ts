@@ -70,13 +70,23 @@ export function subscribeComponentChanges(listener: ComponentListener): () => vo
 
 let titles: Promise<Map<string, string | undefined>> | null = null;
 
-/** The field that names a type's records, fetched once per page load. */
-export function stateTitleField(type: string): Promise<string | undefined> {
-  titles ??= fetchStateTypes()
+function loadTitles(): Promise<Map<string, string | undefined>> {
+  titles = fetchStateTypes()
     .then((res) => new Map(res.types.map((t) => [t.name, t.title])))
     .catch(() => {
       titles = null;
       return new Map();
     });
-  return titles.then((m) => m.get(type));
+  return titles;
+}
+
+/**
+ * The field that names a type's records. The types are fetched once and kept;
+ * a type they do not know (declared since, by a config reload or a plugin)
+ * fetches them again.
+ */
+export async function stateTitleField(type: string): Promise<string | undefined> {
+  const known = await (titles ?? loadTitles());
+  if (known.has(type)) return known.get(type);
+  return (await loadTitles()).get(type);
 }

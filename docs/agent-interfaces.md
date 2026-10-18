@@ -26,7 +26,7 @@ interface(action: "send", kind: "choice",
 The tool is on by default; `tools.interface.enabled: false` withholds it. An
 agent with an explicit `tools:` list gets it only by naming it.
 
-## The four kinds
+## The five kinds
 
 | kind | props | buttons |
 |---|---|---|
@@ -34,6 +34,7 @@ agent with an explicit `tools:` list gets it only by naming it.
 | `form` | `title`, `fields` (1–10: `name`, `label?`, `type?` text/number/boolean/select/date, `required?`, `options?`), `submitLabel?` | send |
 | `confirm` | `summary`, `details?`, `confirmLabel?`, `denyLabel?` | yes and no, or the labels given |
 | `card` | `title`, `body?`, `fields?` (`label`, `value`) | whatever the agent passes as `actions` |
+| `list` | `title?`, `check?` (`field`, `on?`, `off?`); the items come from `bind` | one tick box per item with `check` |
 
 A card's `actions` are `{label, effect?, name?, patch?, ref?}`. Every other
 kind's buttons come from its props, and `actions` is refused there, since
@@ -107,6 +108,41 @@ A surface that can't draw buttons shows the card's text form with the record
 as it was when sent, and "Options: Start, Done." The person replies in words,
 and the agent can make the change with its `state` tool.
 
+## Lists that show records
+
+A list shows every [world-state](./world-state.md) record a query matches, as
+a checklist that stays current. With `check`, ticking an item flips a field on
+that record, with no model turn:
+
+```
+interface(action: "send", kind: "list",
+          props: { title: "Chores", check: { field: "done" } },
+          bind: { type: "chore", where: { room: "kitchen" }, limit: 10 })
+```
+
+- **The items:** one per matching record, labelled by the type's title field
+  (or the id), oldest first so a tick never moves an item. `limit` defaults
+  to 10 and stops at 50; past it the list says how many more there are.
+- **Who sees what:** the query runs as the agent, and the list keeps the
+  scopes the agent could see when it sent it. However often it is redrawn,
+  it never shows a record the agent could not have read.
+- **Ticking:** an item is ticked when its `check.field` holds `on` (default
+  `true`). A tick writes `on`, or `off` (default `false`) when it was already
+  on, as the person who ticked, through the type's schema. For a status field
+  give both: `check: { field: "status", on: "done", off: "open" }`. Only a
+  record the list's query still matches can be ticked.
+- **Staying current:** any change to a record of the type, from anywhere,
+  re-reads the list: an item ticked elsewhere, a record created, one that no
+  longer matches. In the web UI and every Discord message it was posted as.
+- **On Discord:** one button per item, "☑" and green when ticked, "☐" when
+  not, at most 20; the rest are counted. Without `check`, a list is lines of
+  text.
+- **What the agent is told:** the tool's reply says ticks flip the field
+  directly and nothing comes back, so the agent doesn't wait for an answer.
+
+A surface that can't draw it shows the text form, `- [x] Do the dishes`, as
+the list was when sent.
+
 ## Where it shows up
 
 - **Web UI:** under the agent's reply, lifted out of the folded tool log, and
@@ -173,8 +209,8 @@ edits that message when the component changes:
 - A component the agent closes shows "Closed", with its note.
 - A bound card follows its record.
 
-An expired component keeps its buttons until someone clicks one; the click
-says it has expired.
+An expired component keeps its buttons until someone clicks one; that click
+finishes the message ("Expired") and says why, privately.
 
 **State buttons** on a bound card write the record and redraw the card in
 place, with its buttons still live. They don't wait on the agent, so they

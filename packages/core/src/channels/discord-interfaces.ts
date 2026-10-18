@@ -30,14 +30,14 @@ import {
 } from "discord.js";
 import type { ActionSpec, ComponentSpec } from "../content/types.js";
 import type { EventBus } from "../events.js";
-import { boundCardProps } from "../interfaces/bind.js";
+import { boundCardProps, listProps } from "../interfaces/bind.js";
 import { InterfaceError } from "../interfaces/kinds.js";
-import { respondToComponent } from "../interfaces/respond.js";
+import { CHECK_PREFIX, respondToComponent } from "../interfaces/respond.js";
 import type { ComponentRecord, InterfaceStore } from "../interfaces/store.js";
 import type { StateService } from "../state/service.js";
 
 /** The kinds this module draws. Declared on the channel's surface capabilities. */
-export const DISCORD_COMPONENT_KINDS: readonly string[] = ["choice", "confirm", "card", "form"];
+export const DISCORD_COMPONENT_KINDS: readonly string[] = ["choice", "confirm", "card", "form", "list"];
 
 const PREFIX = "iface";
 const MAX_BUTTONS = 20; // four rows of five, leaving a row for "Something else"
@@ -47,6 +47,7 @@ const MAX_TEXT = 1900; // a message holds 2000; the rest is the answer line
 // A custom id holds 100 characters, and this module's ids carry the component
 // id between colons. Generated ids are `c-` and six hex digits.
 const MAX_COMPONENT_ID = 60;
+const MAX_CUSTOM_ID = 100;
 
 export interface DiscordComponentMessage {
   content?: string;
@@ -54,7 +55,7 @@ export interface DiscordComponentMessage {
   components: ActionRowBuilder<MessageActionRowComponentBuilder>[];
 }
 
-type Op = "a" | "s" | "f" | "t" | "m" | "mt";
+type Op = "a" | "s" | "f" | "t" | "m" | "mt" | "c";
 
 export function interfaceCustomId(componentId: string, op: Op, actionId?: string): string {
   return actionId ? `${PREFIX}:${componentId}:${op}:${actionId}` : `${PREFIX}:${componentId}:${op}`;
@@ -66,7 +67,7 @@ export function isInterfaceCustomId(customId: string): boolean {
 
 export function parseInterfaceCustomId(customId: string): { componentId: string; op: Op; actionId?: string } | null {
   const [prefix, componentId, op, ...rest] = customId.split(":");
-  if (prefix !== PREFIX || !componentId || !["a", "s", "f", "t", "m", "mt"].includes(op)) return null;
+  if (prefix !== PREFIX || !componentId || !["a", "s", "f", "t", "m", "mt", "c"].includes(op)) return null;
   return { componentId, op: op as Op, ...(rest.length ? { actionId: rest.join(":") } : {}) };
 }
 
@@ -205,6 +206,34 @@ function draw(
         .setDisabled(done);
       return { content: `**${clip(str(p.title), MAX_TEXT)}**${footer}`, components: [row([open])] };
     }
+    case "list": {
+      const items = (Array.isArray(p.items) ? p.items : []) as Record<string, unknown>[];
+      const ticks = p.check !== undefined;
+      const shown = ticks ? items.slice(0, MAX_BUTTONS) : items;
+      const hidden = items.length - shown.length + (typeof p.more === "number" && p.more > 0 ? p.more : 0);
+      const lines = [
+        `**${str(p.title)}**`,
+        ...(ticks ? [] : shown.map((i) => `• ${str(i.label)}`)),
+        ...(items.length === 0 ? ["Nothing matches."] : []),
+        ...(hidden > 0 ? [`…and ${hidden} more.`] : []),
+      ];
+      const content = `${clip(lines.join("\n"), MAX_TEXT)}${footer}`;
+      if (!ticks) return { content, components: [] };
+      const buttons = shown.map((i) => {
+        const customId = interfaceCustomId(spec.id, "c", str(i.id));
+        return (
+          new ButtonBuilder()
+            .setCustomId(customId.slice(0, MAX_CUSTOM_ID))
+            .setLabel(clip(`${i.checked ? "☑" : "☐"} ${str(i.label)}`, 80))
+            .setStyle(i.checked ? ButtonStyle.Success : ButtonStyle.Secondary)
+            // A record id too long for a custom id is shown but cannot be ticked here.
+            .setDisabled(done || customId.length > MAX_CUSTOM_ID)
+        );
+      });
+      const rows: ActionRowBuilder<MessageActionRowComponentBuilder>[] = [];
+      for (let i = 0; i < buttons.length; i += 5) rows.push(row(buttons.slice(i, i + 5)));
+      return { content, components: rows };
+    }
     default:
       return null;
   }
@@ -330,7 +359,19 @@ export async function handleInterfaceInteraction(
     return;
   }
   if (record.status !== "open") {
-    await ephemeral(closedReason(record));
+    // Finish the message too: an expiry writes nothing, so this click is the
+    // first chance to show it.
+    const finished = messageFor(record);
+    if (finished && (interaction.isButton() || interaction.isStringSelectMenu())) {
+      await interaction.update(finished);
+      await interaction.followUp({ content: closedReason(record), flags: MessageFlags.Ephemeral });
+    } else {
+      await ephemeral(closedReason(record));
+    }
+    return;
+  }
+  if (parsed.op === "c" && parsed.actionId && interaction.isButton()) {
+    await tickListItem(interaction, deps, record, parsed.actionId);
     return;
   }
   // A state button runs no agent, so a busy or paused agent does not stop it.
@@ -451,6 +492,39 @@ async function pressStateButton(
     throw err;
   }
 }
+
+/** A tick on a list item: flips the record's field, then redraws the list from a fresh query. */
+async function tickListItem(
+  interaction: ButtonInteraction,
+  deps: InterfaceInteractionDeps,
+  record: ComponentRecord,
+  recordId: string,
+): Promise<void> {
+  try {
+    await respondToComponent(
+      deps.store,
+      deps.events,
+      { id: record.spec.id, actionId: `${CHECK_PREFIX}${recordId}`, by: `discord:${interaction.user.id}` },
+      { ...(deps.state ? { state: deps.state } : {}), surface: "discord" },
+    );
+    const props =
+      deps.state && record.spec.query
+        ? await listProps(deps.state, LIST_READER, record.spec.props, record.spec.query)
+        : undefined;
+    const redrawn = messageFor(record, props);
+    if (redrawn) await interaction.update(redrawn);
+    else await interaction.reply({ content: "Done.", flags: MessageFlags.Ephemeral });
+  } catch (err) {
+    if (err instanceof InterfaceError) {
+      await interaction.reply({ content: err.message, flags: MessageFlags.Ephemeral });
+      return;
+    }
+    throw err;
+  }
+}
+
+/** Who reads a list's records to redraw it. The list's own scopes keep it to what its agent could see. */
+export const LIST_READER = { actor: { kind: "system" as const, name: "interfaces" } };
 
 function closedReason(record: ComponentRecord): string {
   return record.status === "expired"

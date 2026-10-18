@@ -1875,8 +1875,14 @@ export function fetchStateTypes(): Promise<{ types: StateTypeInfo[] }> {
   return jsonFetch("/api/state/types");
 }
 
-export function fetchStateRecords(type: string, limit = 200): Promise<{ records: StateRecordInfo[] }> {
-  return jsonFetch(`/api/state/${encodeURIComponent(type)}?limit=${limit}`);
+export function fetchStateRecords(
+  type: string,
+  limit = 200,
+  opts: { where?: Record<string, unknown>; orderBy?: string } = {},
+): Promise<{ records: StateRecordInfo[] }> {
+  const filter = opts.where ? `&where=${encodeURIComponent(JSON.stringify(opts.where))}` : "";
+  const order = opts.orderBy ? `&orderBy=${encodeURIComponent(opts.orderBy)}` : "";
+  return jsonFetch(`/api/state/${encodeURIComponent(type)}?limit=${limit}${filter}${order}`);
 }
 
 export function fetchStateRecord(type: string, id: string): Promise<StateRecordInfo> {

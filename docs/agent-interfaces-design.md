@@ -1,6 +1,6 @@
 # Agent interfaces — Design
 
-> Status: design, accepted. **Phases 1, 3 and 4 (single-record binding) are implemented**: see
+> Status: design, accepted. **Phases 1, 3 and 4, and the `list` kind from 6, are implemented**: see
 > [agent-interfaces.md](./agent-interfaces.md) for what works today. Second of
 > three linked designs: [world state](./world-state-design.md), this one, and
 > [live sessions](./live-sessions-design.md).
@@ -208,9 +208,9 @@ Each one deletes a one-off system:
 | 1 | Component part, kind registry with text fallback, persistence, `interface` tool, web renderers for `choice`, `form`, `confirm`, `card`, `reply` and `event` effects — **done** |
 | 2 | `<ask>` compiles to components |
 | 3 | Discord renderers and response routing — **done** |
-| 4 | State binding, `state` effect, live updates (needs world state phases 1 and 7) — **done for single-record `bind`**: the `state` effect, bound cards, and live redraws of posted components in the web UI and Discord; query binding (`bind: {type, where}`) still to come |
+| 4 | State binding, `state` effect, live updates (needs world state phases 1 and 7) — **done**: the `state` effect, cards bound to a record, lists bound to a query, and live redraws of posted components in the web UI and Discord |
 | 5 | Approvals and workflow forms migrate |
-| 6 | `list`, `table`, `progress` |
+| 6 | `list`, `table`, `progress` — **`list` done** (a query as a checklist; ticking flips a field) |
 | 7 | Slack renderers in `channel-slack` |
 
 ## Decisions
