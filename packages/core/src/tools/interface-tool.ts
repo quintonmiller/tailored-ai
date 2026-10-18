@@ -1,5 +1,5 @@
 import { componentPart, textPart } from "../content/types.js";
-import { boundCardProps, checkOf, type ListQuery, listProps } from "../interfaces/bind.js";
+import { boundCardProps, checkOf, type ListQuery, queriedProps } from "../interfaces/bind.js";
 import { type AgentAction, buildComponent, componentKindRegistry, InterfaceError } from "../interfaces/kinds.js";
 import type { InterfaceStore } from "../interfaces/store.js";
 import type { StateService } from "../state/service.js";
@@ -33,12 +33,12 @@ export class InterfaceTool implements Tool {
       kind: {
         type: "string",
         description:
-          "send: choice (a question with options), form (fields to fill in), confirm (yes or no), card (something to look at, with optional buttons), or list (state records as a checklist).",
+          "send: choice (a question with options), form (fields to fill in), confirm (yes or no), card (something to look at, with optional buttons), list (state records as a checklist), table (state records as rows), or progress (how far along a job is; move it with update).",
       },
       props: {
         type: "object",
         description:
-          "choice {question, options[], allowText?}. form {title, fields[{name, label?, type?: text|number|boolean|select|date, required?, options?}], submitLabel?}. confirm {summary, details?, confirmLabel?, denyLabel?}. card {title, body?, fields?[{label, value}]}. list {title?, check?: {field, on?, off?}} (ticking flips field).",
+          "choice {question, options[], allowText?}. form {title, fields[{name, label?, type?: text|number|boolean|select|date, required?, options?}], submitLabel?}. confirm {summary, details?, confirmLabel?, denyLabel?}. card {title, body?, fields?[{label, value}]}. list {title?, check?: {field, on?, off?}} (ticking flips field). table {title?, columns?[]}. progress {label, value?, max?, note?} or {label, steps[], done?: how many steps are finished, note?}.",
       },
       actions: {
         type: "array",
@@ -49,7 +49,7 @@ export class InterfaceTool implements Tool {
       bind: {
         type: "object",
         description:
-          "card: show a state record {type, id}. list: show the records {type, where?, limit?} match. Both stay current as records change.",
+          "card: show a state record {type, id}. list, table: show the records {type, where?, limit?} match. All stay current as records change.",
       },
       id: { type: "string", description: "update and close: the component's id." },
       expiresInMinutes: { type: "number", description: "send: stop taking answers after this many minutes." },
@@ -77,11 +77,11 @@ export class InterfaceTool implements Tool {
           let props = objectArg(args.props, "props") ?? (bind || listed ? {} : undefined);
           if (!props) return fail("send needs `props` for the component.");
           const lifted = liftActions(props, args.actions);
-          props = liftCheck(lifted.props, args.check);
+          props = liftStep(liftCheck(lifted.props, args.check));
           const ignoredFields = Boolean(bind) && props.fields !== undefined;
           if (bind) props = await this.boundProps(kind, props, bind, context);
           let query: ListQuery | undefined;
-          if (listed) ({ props, query } = await this.listed(props, queryArg(args.bind), context));
+          if (listed) ({ props, query } = await this.listed(kind, props, queryArg(args.bind), context));
           const spec = buildComponent({
             kind,
             props,
@@ -117,19 +117,23 @@ export class InterfaceTool implements Tool {
           const listed = record.spec.query !== undefined;
           const bind = listed ? undefined : (refArg(args.bind) ?? record.spec.bind);
           const kept = listed
-            ? { title: record.spec.props.title, ...(record.spec.props.check ? { check: record.spec.props.check } : {}) }
+            ? {
+                title: record.spec.props.title,
+                ...(record.spec.props.check ? { check: record.spec.props.check } : {}),
+                ...(record.spec.query && record.spec.kind === "table" ? { columns: record.spec.props.columns } : {}),
+              }
             : record.spec.props.body
               ? { body: record.spec.props.body }
               : {};
           let props = objectArg(args.props, "props") ?? (bind || listed ? kept : undefined);
           if (!props) return fail("update needs `props`: the component's props as they should now be.");
           const lifted = liftActions(props, args.actions);
-          props = liftCheck(lifted.props, args.check);
+          props = liftStep(liftCheck(lifted.props, args.check));
           if (bind) props = await this.boundProps(record.spec.kind, props, bind, context);
           let query: ListQuery | undefined;
           if (listed) {
             const given = args.bind !== undefined ? queryArg(args.bind) : (record.spec.query as ListQuery);
-            ({ props, query } = await this.listed(props, given, context));
+            ({ props, query } = await this.listed(record.spec.kind, props, given, context));
           }
           const spec = buildComponent({
             kind: record.spec.kind,
@@ -184,6 +188,7 @@ export class InterfaceTool implements Tool {
    * never shows it more than it could read.
    */
   private async listed(
+    kind: string,
     props: Record<string, unknown>,
     query: ListQuery,
     context: ToolContext,
@@ -195,7 +200,7 @@ export class InterfaceTool implements Tool {
     if (check !== undefined && (typeof check !== "object" || typeof check.field !== "string" || !check.field)) {
       throw new InterfaceError('`check` needs the `field` a tick flips, e.g. {"field": "done"}.');
     }
-    const filled = await listProps(state, caller, props, query).catch((err: Error) => {
+    const filled = await queriedProps(state, caller, kind, props, query).catch((err: Error) => {
       throw new InterfaceError(err.message);
     });
     const { scopes: _ignored, ...asked } = query;
@@ -281,6 +286,16 @@ function liftActions(
   if (actions !== undefined || props.actions === undefined) return { props, actions };
   const { actions: inner, ...rest } = props;
   return { props: rest, actions: inner };
+}
+
+/**
+ * A progress component's `step` read as `done`, the steps finished: the name
+ * a model reaches for first, and unambiguous once it is said which it means.
+ */
+function liftStep(props: Record<string, unknown>): Record<string, unknown> {
+  if (props.step === undefined || props.done !== undefined) return props;
+  const { step, ...rest } = props;
+  return { ...rest, done: step };
 }
 
 /** A `check` given beside `props` instead of inside it is moved in, as buttons are. */

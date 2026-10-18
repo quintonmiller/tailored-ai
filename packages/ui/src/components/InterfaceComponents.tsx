@@ -180,6 +180,7 @@ function useListItems(spec: ComponentSpec): Record<string, unknown> | undefined 
   const query = spec.query;
   const key = query ? JSON.stringify(query) : "";
   const base = spec.props;
+  const kind = spec.kind;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: `key` stands for the query
   useEffect(() => {
@@ -193,7 +194,9 @@ function useListItems(spec: ComponentSpec): Record<string, unknown> | undefined 
         stateTitleField(query.type),
       ])
         .then(([res, titleField]) => {
-          if (!cancelled) setProps(listView(base, res.records, limit, query.scopes, titleField));
+          if (cancelled) return;
+          const view = kind === "table" ? tableView : listView;
+          setProps(view(base, res.records, limit, query.scopes, titleField));
         })
         // Unreadable now: keep drawing the items it was sent with.
         .catch(() => {});
@@ -208,6 +211,32 @@ function useListItems(spec: ComponentSpec): Record<string, unknown> | undefined 
   }, [key]);
 
   return props;
+}
+
+/** A table's props from its records. Mirrors `tableProps` in core's `interfaces/bind.ts`. */
+function tableView(
+  props: Record<string, unknown>,
+  records: StateRecordInfo[],
+  limit: number,
+  scopes: string[] | undefined,
+  titleField: string | undefined,
+): Record<string, unknown> {
+  const visible = scopes ? records.filter((r) => scopes.includes(r.scope)) : records;
+  const shown = visible.slice(0, limit);
+  const given = Array.isArray(props.columns) ? (props.columns as unknown[]).filter((c) => typeof c === "string") : [];
+  let columns = given as string[];
+  if (!columns.length) {
+    const seen: string[] = titleField ? [titleField] : [];
+    for (const r of shown) for (const k of Object.keys(r.data)) if (!seen.includes(k)) seen.push(k);
+    columns = seen.slice(0, 6);
+  }
+  const text = (v: unknown) => (v === undefined || v === null ? "" : typeof v === "string" ? v : JSON.stringify(v));
+  return {
+    ...props,
+    columns,
+    rows: shown.map((r) => ({ id: r.id, cells: columns.map((c) => text(r.data[c])) })),
+    more: Math.max(0, visible.length - limit),
+  };
 }
 
 /** A list's props from its records. Mirrors `listProps` in core's `interfaces/bind.ts`. */
@@ -325,11 +354,91 @@ function Body({ spec, open, act }: { spec: ComponentSpec; open: boolean; act: Ac
         </>
       );
     }
+    case "progress":
+      return <Progress props={p} />;
+    case "table": {
+      const columns = (Array.isArray(p.columns) ? p.columns : []).map(str);
+      const rows = (Array.isArray(p.rows) ? p.rows : []) as { id: string; cells: string[] }[];
+      return (
+        <>
+          <div className="iface-card-title">{str(p.title)}</div>
+          {rows.length === 0 ? (
+            <div className="iface-details">Nothing matches.</div>
+          ) : (
+            <div className="iface-table-wrap">
+              <table className="iface-table">
+                <thead>
+                  <tr>
+                    {columns.map((c) => (
+                      <th key={c}>{c}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r) => (
+                    <tr key={r.id}>
+                      {columns.map((c, i) => (
+                        <td key={c}>{r.cells[i] ?? ""}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {typeof p.more === "number" && p.more > 0 && <div className="iface-details">…and {p.more} more.</div>}
+        </>
+      );
+    }
     default:
       // A kind a plugin added that this UI has no renderer for: the text form
       // core wrote is still a complete question.
       return <div className="ask-prompt">{spec.fallback}</div>;
   }
+}
+
+/** A bar for a value out of a maximum, or the steps with the current one marked. */
+function Progress({ props }: { props: Record<string, unknown> }) {
+  const steps = Array.isArray(props.steps) ? props.steps.map(str) : [];
+  // Mirrors `stepsDone` in core: `done`, or a `value` sent alongside the steps.
+  const at =
+    typeof props.done === "number" ? props.done : typeof props.value === "number" ? Math.floor(props.value) : 0;
+  const max = typeof props.max === "number" ? props.max : 100;
+  const pct =
+    typeof props.value === "number" ? Math.max(0, Math.min(100, Math.round((props.value / max) * 100))) : null;
+  return (
+    <>
+      <div className="iface-card-title">{str(props.label)}</div>
+      {steps.length > 0 ? (
+        <ol className="iface-steps">
+          {steps.map((s, i) => (
+            <li key={s} className={i < at ? "done" : i === at ? "current" : ""}>
+              <span aria-hidden="true">{i < at ? "✓" : i === at ? "→" : "·"}</span> {s}
+            </li>
+          ))}
+        </ol>
+      ) : pct !== null ? (
+        <div className="iface-progress">
+          <div
+            className="iface-progress-bar"
+            role="progressbar"
+            aria-valuenow={pct}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label={str(props.label)}
+          >
+            <span style={{ width: `${pct}%` }} />
+          </div>
+          <span className="iface-progress-text">
+            {max === 100 ? `${pct}%` : `${String(props.value)} of ${max} (${pct}%)`}
+          </span>
+        </div>
+      ) : (
+        <div className="iface-details">Working…</div>
+      )}
+      {props.note ? <div className="iface-details">{str(props.note)}</div> : null}
+    </>
+  );
 }
 
 function Choice({

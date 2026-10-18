@@ -373,3 +373,71 @@ describe("lists", () => {
     expect(boxes()).toEqual(["x Do the dishes", "  Take out the bins"]);
   });
 });
+
+describe("progress and tables", () => {
+  it("draws progress as a bar with its count, and steps with the current one marked", async () => {
+    const counted: ComponentSpec = {
+      id: "c-p1",
+      kind: "progress",
+      props: { label: "Import", value: 3, max: 6 },
+      fallback: "[progress c-p1] Import",
+    };
+    const stepped: ComponentSpec = {
+      id: "c-p2",
+      kind: "progress",
+      props: { label: "Trip", steps: ["Book", "Pack", "Go"], done: 1 },
+      fallback: "[progress c-p2] Trip",
+    };
+    await render([counted, stepped]);
+    const bar = container.querySelector("[role=progressbar]") as HTMLElement;
+    expect(bar.getAttribute("aria-valuenow")).toBe("50");
+    expect(container.textContent).toContain("3 of 6 (50%)");
+    expect([...container.querySelectorAll(".iface-steps li")].map((li) => li.className)).toEqual([
+      "done",
+      "current",
+      "",
+    ]);
+  });
+
+  it("draws a table from its live query, re-read when a record of its type changes", async () => {
+    let records = [
+      {
+        type: "bill",
+        id: "power",
+        scope: "global",
+        data: { payee: "Power co", amount: 84.2 },
+        version: 1,
+        createdAt: "",
+        updatedAt: "",
+        updatedBy: { kind: "user", name: "owner" },
+      },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "/api/state/types")
+          return new Response(JSON.stringify({ types: [{ name: "bill", title: "payee", canWrite: true }] }));
+        if (url.startsWith("/api/state/bill?")) return new Response(JSON.stringify({ records }));
+        return new Response(JSON.stringify({ components: [] }));
+      }),
+    );
+    const table: ComponentSpec = {
+      id: "c-t",
+      kind: "table",
+      props: { title: "Bills", columns: ["payee", "amount"], rows: [] },
+      query: { type: "bill", scopes: ["global"] },
+      fallback: "[table c-t] Bills",
+    };
+    await render([table]);
+    await act(async () => {});
+    const cells = () => [...container.querySelectorAll(".iface-table tbody tr")].map((tr) => tr.textContent);
+    expect(cells()).toEqual(["Power co84.2"]);
+
+    records = [{ ...records[0], data: { payee: "Power co", amount: 90 } }];
+    await act(async () =>
+      streams.get("/api/state/events")?.emit("change", { type: "bill", id: "power", op: "update", version: 2 }),
+    );
+    await act(async () => {});
+    expect(cells()).toEqual(["Power co90"]);
+  });
+});

@@ -30,14 +30,22 @@ import {
 } from "discord.js";
 import type { ActionSpec, ComponentSpec } from "../content/types.js";
 import type { EventBus } from "../events.js";
-import { boundCardProps, listProps } from "../interfaces/bind.js";
-import { InterfaceError } from "../interfaces/kinds.js";
+import { boundCardProps, queriedProps } from "../interfaces/bind.js";
+import { InterfaceError, progressLines } from "../interfaces/kinds.js";
 import { CHECK_PREFIX, respondToComponent } from "../interfaces/respond.js";
 import type { ComponentRecord, InterfaceStore } from "../interfaces/store.js";
 import type { StateService } from "../state/service.js";
 
 /** The kinds this module draws. Declared on the channel's surface capabilities. */
-export const DISCORD_COMPONENT_KINDS: readonly string[] = ["choice", "confirm", "card", "form", "list"];
+export const DISCORD_COMPONENT_KINDS: readonly string[] = [
+  "choice",
+  "confirm",
+  "card",
+  "form",
+  "list",
+  "progress",
+  "table",
+];
 
 const PREFIX = "iface";
 const MAX_BUTTONS = 20; // four rows of five, leaving a row for "Something else"
@@ -233,6 +241,23 @@ function draw(
       const rows: ActionRowBuilder<MessageActionRowComponentBuilder>[] = [];
       for (let i = 0; i < buttons.length; i += 5) rows.push(row(buttons.slice(i, i + 5)));
       return { content, components: rows };
+    }
+    case "progress": {
+      const lines = progressLines(p);
+      const counted = typeof p.value === "number" && !Array.isArray(p.steps);
+      const body = counted
+        ? `\`${bar(p.value as number, typeof p.max === "number" ? p.max : 100)}\` ${lines[0]}`
+        : lines.join("\n");
+      const note = p.note ? `\n${str(p.note)}` : "";
+      return { content: `${clip(`**${str(p.label)}**\n${body}${note}`, MAX_TEXT)}${footer}`, components: [] };
+    }
+    case "table": {
+      const columns = (Array.isArray(p.columns) ? p.columns : []).map(str);
+      const rows = ((Array.isArray(p.rows) ? p.rows : []) as Record<string, unknown>[]).map((r) =>
+        (Array.isArray(r.cells) ? r.cells : []).map(str),
+      );
+      const extra = typeof p.more === "number" && p.more > 0 ? p.more : 0;
+      return { content: `${monospaceTable(str(p.title), columns, rows, extra)}${footer}`, components: [] };
     }
     default:
       return null;
@@ -509,7 +534,7 @@ async function tickListItem(
     );
     const props =
       deps.state && record.spec.query
-        ? await listProps(deps.state, LIST_READER, record.spec.props, record.spec.query)
+        ? await queriedProps(deps.state, LIST_READER, record.spec.kind, record.spec.props, record.spec.query)
         : undefined;
     const redrawn = messageFor(record, props);
     if (redrawn) await interaction.update(redrawn);
@@ -525,6 +550,42 @@ async function tickListItem(
 
 /** Who reads a list's records to redraw it. The list's own scopes keep it to what its agent could see. */
 export const LIST_READER = { actor: { kind: "system" as const, name: "interfaces" } };
+
+/** A ten-cell bar for a value out of a maximum. */
+function bar(value: number, max: number): string {
+  const filled = Math.max(0, Math.min(10, Math.round((value / max) * 10)));
+  return `${"▓".repeat(filled)}${"░".repeat(10 - filled)}`;
+}
+
+/** Widest a table cell is drawn before it is cut short. */
+const MAX_CELL = 24;
+
+/**
+ * A table as a monospace block, columns padded to line up. Rows that would
+ * push the message past Discord's length are left off and counted.
+ */
+function monospaceTable(title: string, columns: string[], rows: string[][], more: number): string {
+  if (rows.length === 0) return `**${title}**\nNothing matches.`;
+  const cell = (s: string) => clip(s.replace(/\s+/g, " "), MAX_CELL);
+  const widths = columns.map((c, i) => Math.max(cell(c).length, ...rows.map((r) => cell(r[i] ?? "").length)));
+  const line = (cells: string[]) =>
+    cells
+      .map((c, i) => cell(c).padEnd(widths[i]))
+      .join("  ")
+      .trimEnd();
+  const head = [line(columns), widths.map((w) => "─".repeat(w)).join("  ")];
+  const lines = [...head];
+  let shown = 0;
+  for (const r of rows) {
+    const next = line(r);
+    // Room for the fences, the title and a "more" line.
+    if (title.length + lines.join("\n").length + next.length + 60 > MAX_TEXT) break;
+    lines.push(next);
+    shown++;
+  }
+  const hidden = rows.length - shown + more;
+  return `**${clip(title, 200)}**\n\`\`\`\n${lines.join("\n")}\n\`\`\`${hidden > 0 ? `\n…and ${hidden} more.` : ""}`;
+}
 
 function closedReason(record: ComponentRecord): string {
   return record.status === "expired"
