@@ -20,6 +20,7 @@ import { getRoomBackend, listRoomBackends, registerRoomBackend } from "../rooms/
 import { RoomStore } from "../rooms/store.js";
 import { ScheduleStore } from "../schedules/store.js";
 import { createEgressPolicy } from "../security/egress-policy.js";
+import { stateTypeRegistry } from "../state/registry.js";
 import { createTaskBackend } from "../tasks/factory.js";
 import { AskUserTool } from "./ask-user.js";
 import { BrowserTool } from "./browser.js";
@@ -40,6 +41,7 @@ import { ReadTool } from "./read.js";
 import { RecallTool } from "./recall.js";
 import { RoomTool } from "./room.js";
 import { ScheduleTool } from "./schedule.js";
+import { StateTool } from "./state.js";
 import { TaskQueryTool, TasksTool } from "./tasks.js";
 import { registerToolFactory } from "./tool-factories.js";
 import { WebFetchTool } from "./web-fetch.js";
@@ -261,6 +263,15 @@ registerToolFactory("collections", (config, ctx) => {
   if (config.tools.collections?.enabled === false) return [];
   if (!ctx.db) return [];
   return [new CollectionsTool(ctx.db)];
+});
+
+registerToolFactory("state", (config, ctx) => {
+  if (config.tools.state?.enabled === false) return [];
+  if (!ctx.getStateService) return [];
+  // A tool with nothing to store still costs every agent its schema in the
+  // prompt, so it is offered only once at least one type exists.
+  if (!config.state?.types?.length && stateTypeRegistry.list().length === 0) return [];
+  return [new StateTool(ctx.getStateService)];
 });
 
 registerToolFactory("documents", (config, ctx) => {

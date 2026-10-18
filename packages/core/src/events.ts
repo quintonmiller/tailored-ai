@@ -253,6 +253,17 @@ export interface RuntimeEventMap {
     notesWritten: number;
   };
 
+  /**
+   * A world-state record was created, changed or deleted — by an agent, a
+   * person, a plugin, or a provider reporting a change made outside TAI.
+   * Carries the record before and after, the actor, and what it came through,
+   * so a subscriber can react without reading the record back.
+   *
+   * Names an `actor` rather than an `agent`: a change can come from a person
+   * or the system, so this belongs to the deployment, not to one agent.
+   */
+  "state.changed": import("./state/types.js").StateChange;
+
   "schedule.created": {
     id: string;
     agent: string;
@@ -1005,6 +1016,7 @@ export const KNOWN_BROADCAST_EVENTS = [
   "schedule.created",
   "schedule.fired",
   "session.compacted",
+  "state.changed",
   "task.commented",
   "task.created",
   "task.dispatch_requested",

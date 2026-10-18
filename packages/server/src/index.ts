@@ -36,6 +36,7 @@ import {
   ensureExploratoryState,
   executeCommand,
   executeHooks,
+  type FieldCondition,
   FileLogStore,
   FileResourceSource,
   type FormEvent,
@@ -96,6 +97,8 @@ import {
   runAgentLoop,
   runMemorySweep,
   SESSION_SUMMARY_TAG,
+  type StateCaller,
+  StateError,
   type Suggestions,
   setSecret,
   summarizeSession,
@@ -1745,6 +1748,80 @@ export function createServer(opts: ServerOptions) {
     const deleted = deleteCollection(runtime.db, id);
     if (!deleted) return c.json({ error: "Collection not found" }, 404);
     return c.json({ ok: true });
+  });
+
+  // --- World state (docs/world-state.md) ---
+  //
+  // Read-only for now: agents write through the `state` tool, and the UI's
+  // writes arrive with the interface work. A person through the API sees every
+  // scope, so these routes go through the same service as an agent, just
+  // without the scope narrowing an agent gets.
+
+  const stateCaller: StateCaller = { actor: { kind: "user", name: "owner" }, source: { surface: "http" } };
+  const stateFailure = (err: unknown) =>
+    err instanceof StateError
+      ? ({ body: { error: err.message }, status: 400 } as const)
+      : ({ body: { error: `State is unavailable: ${(err as Error).message}` }, status: 500 } as const);
+
+  app.get("/api/state/types", (c) => {
+    const types = runtime.getStateService().listTypes(stateCaller);
+    return c.json({ types: types.map(({ def, canWrite }) => ({ ...def, canWrite })) });
+  });
+
+  app.get("/api/state/:type", async (c) => {
+    const { type } = c.req.param();
+    try {
+      const whereRaw = c.req.query("where");
+      const where = whereRaw ? (JSON.parse(whereRaw) as Record<string, FieldCondition>) : undefined;
+      const orderRaw = c.req.query("orderBy");
+      const limitRaw = c.req.query("limit");
+      const offsetRaw = c.req.query("offset");
+      const records = await runtime.getStateService().query(stateCaller, {
+        type,
+        ...(c.req.query("scope") ? { scope: c.req.query("scope") } : {}),
+        ...(where ? { where } : {}),
+        ...(orderRaw
+          ? {
+              orderBy: orderRaw.startsWith("-")
+                ? { field: orderRaw.slice(1), direction: "desc" as const }
+                : { field: orderRaw, direction: "asc" as const },
+            }
+          : {}),
+        ...(limitRaw ? { limit: Math.max(1, Math.min(500, Number.parseInt(limitRaw, 10) || 50)) } : {}),
+        ...(offsetRaw ? { offset: Math.max(0, Number.parseInt(offsetRaw, 10) || 0) } : {}),
+      });
+      return c.json({ records });
+    } catch (err) {
+      if (err instanceof SyntaxError) return c.json({ error: "where must be JSON" }, 400);
+      const { body, status } = stateFailure(err);
+      return c.json(body, status);
+    }
+  });
+
+  app.get("/api/state/:type/:id", async (c) => {
+    const { type, id } = c.req.param();
+    try {
+      const record = await runtime.getStateService().get(stateCaller, { type, id });
+      if (!record) return c.json({ error: `No ${type} record with id "${id}"` }, 404);
+      return c.json(record);
+    } catch (err) {
+      const { body, status } = stateFailure(err);
+      return c.json(body, status);
+    }
+  });
+
+  app.get("/api/state/:type/:id/history", async (c) => {
+    const { type, id } = c.req.param();
+    try {
+      const limitRaw = c.req.query("limit");
+      const changes = await runtime
+        .getStateService()
+        .history(stateCaller, { type, id }, limitRaw ? { limit: Number.parseInt(limitRaw, 10) || 50 } : undefined);
+      return c.json({ changes });
+    } catch (err) {
+      const { body, status } = stateFailure(err);
+      return c.json(body, status);
+    }
   });
 
   // --- Facts ---

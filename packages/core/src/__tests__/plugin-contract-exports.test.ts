@@ -186,3 +186,48 @@ describe("plugin contract — guardrails", () => {
     expect(core.guardrailRegistry.has("no-shouting")).toBe(false);
   });
 });
+
+describe("plugin contract — world state", () => {
+  it("a plugin can register a state provider and a type, and both go away when disposed", async () => {
+    const ctx = core.createPluginContext({});
+    const store = new Map<string, core.StateRecord>();
+    const provider: core.StateProvider = {
+      id: "memory",
+      async get(ref) {
+        return store.get(`${ref.type}/${ref.id}`) ?? null;
+      },
+      async query(q) {
+        return [...store.values()].filter((r) => r.type === q.type);
+      },
+      async put(write) {
+        const previous = store.get(`${write.type}/${write.id}`);
+        const at = new Date(0).toISOString();
+        const record: core.StateRecord = {
+          type: write.type,
+          id: write.id,
+          scope: write.scope,
+          data: write.data,
+          version: (previous?.version ?? 0) + 1,
+          createdAt: previous?.createdAt ?? at,
+          updatedAt: at,
+          updatedBy: write.actor,
+        };
+        store.set(`${write.type}/${write.id}`, record);
+        return previous ? { record, previous } : { record };
+      },
+    };
+    const disposeProvider = ctx.stateProviders.register("memory", () => provider);
+    const disposeType = ctx.stateTypes.register({ name: "bookmark", provider: "memory" });
+    try {
+      const service = new core.StateService({ getConfig: () => ({ state: { backend: "sqlite" } }) });
+      const caller: core.StateCaller = { actor: { kind: "plugin", name: "bookmarks" } };
+      await service.put(caller, { type: "bookmark", id: "tai", data: { url: "https://example.com" } });
+      expect(store.get("bookmark/tai")?.data).toEqual({ url: "https://example.com" });
+    } finally {
+      disposeProvider();
+      disposeType();
+    }
+    expect(core.stateProviderRegistry.has("memory")).toBe(false);
+    expect(core.stateTypeRegistry.has("bookmark")).toBe(false);
+  });
+});

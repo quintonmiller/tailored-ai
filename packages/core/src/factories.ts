@@ -51,6 +51,7 @@ export interface CreateToolsOptions {
    *  action routes through `backend.query` instead of calling SQLite
    *  directly. Phase 2 wiring; Phase 3 will route the other actions too. */
   getMemoryBackend?: () => Promise<import("./memory/interface.js").MemoryBackend>;
+  getStateService?: () => import("./state/service.js").StateService;
   /** Runtime-owned clock and timezone used by civil-time tools. */
   timeProvider?: import("./time/provider.js").ResolvedTimeProvider;
   /** Notify hook fired after a successful task mutation. Wires the tasks
@@ -110,6 +111,7 @@ export function createTools(
     taskBackendResolver: opts?.taskBackendResolver,
     getEmbedder: opts?.getEmbedder,
     getMemoryBackend: opts?.getMemoryBackend,
+    getStateService: opts?.getStateService,
     timeProvider: opts?.timeProvider,
     notifyTaskEvent: opts?.notifyTaskEvent,
     events: opts?.events,

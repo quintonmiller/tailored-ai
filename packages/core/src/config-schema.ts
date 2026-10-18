@@ -79,6 +79,7 @@ import type {
   ModelEntry,
   OnlineAgentConfig,
 } from "./config.js";
+import type { JsonSchema } from "./state/types.js";
 import type { CommandRules } from "./tools/command-allowlist.js";
 
 /**
@@ -267,6 +268,30 @@ const TasksConfigSchema = z.object({
   options: z.record(z.unknown()).optional(),
 });
 type _TasksConfigMatches = AssertTrue<Identical<z.infer<typeof TasksConfigSchema>, NonNullable<AgentConfig["tasks"]>>>;
+
+/**
+ * One world-state type. `schema` is a JSON Schema and stays open here: the
+ * record validator enforces the parts it supports, and `validateConfig` names
+ * the parts it does not, which is more useful than rejecting the whole type.
+ */
+const StateTypeSchema = z.object({
+  name: z.string(),
+  description: z.string().optional(),
+  schema: z.custom<JsonSchema>((v) => typeof v === "object" && v !== null && !Array.isArray(v)).optional(),
+  scope: z.enum(["global", "room", "agent", "project"]).optional(),
+  title: z.string().optional(),
+  provider: z.string().optional(),
+  providerOptions: z.record(z.unknown()).optional(),
+  access: z.object({ read: z.array(z.string()).optional(), write: z.array(z.string()).optional() }).optional(),
+});
+
+/** `state.backend` selects a registered provider; `options` is that provider's own opaque bag. */
+const StateConfigSchema = z.object({
+  backend: z.string().optional(),
+  options: z.record(z.unknown()).optional(),
+  types: z.array(StateTypeSchema).optional(),
+});
+type _StateConfigMatches = AssertTrue<Identical<z.infer<typeof StateConfigSchema>, NonNullable<AgentConfig["state"]>>>;
 
 /**
  * Two closed sub-blocks of `memory:`. Not the whole block — the rest is larger
@@ -605,6 +630,7 @@ export function findShapeIssues(config: AgentConfig): string[] {
 
   if (config.tasks != null) {
     found.push(...shapeIssues("tasks", TasksConfigSchema, config.tasks));
+    found.push(...shapeIssues("state", StateConfigSchema, config.state));
   }
 
   if (config.memory?.embeddings != null) {

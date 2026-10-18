@@ -61,6 +61,7 @@ import { RoomStore } from "./rooms/store.js";
 import { formatRoomRef, parseRoomRef } from "./rooms/types.js";
 import { createSandbox } from "./sandboxes/factory.js";
 import { globalSandboxRegistry } from "./sandboxes/registry.js";
+import { StateService } from "./state/service.js";
 import { createTaskBackend } from "./tasks/factory.js";
 import type { TaskBackend } from "./tasks/interface.js";
 import { type ResolvedTimeProvider, resolveTimeProvider } from "./time/provider.js";
@@ -97,6 +98,7 @@ export interface RuntimeOptions {
       taskBackendResolver?: import("./tools/tasks.js").TaskBackendResolver;
       getEmbedder?: () => import("./providers/embedding.js").EmbeddingProvider | undefined;
       getMemoryBackend?: () => Promise<MemoryBackend>;
+      getStateService?: () => StateService;
       /** Runtime-owned clock and timezone used by civil-time tools. */
       timeProvider?: ResolvedTimeProvider;
       /** Runtime event bus, threaded through so the tasks tool (and any
@@ -147,6 +149,13 @@ export class AgentRuntime {
    * concurrent callers so we don't double-construct.
    */
   private _memoryBackend: Promise<MemoryBackend> | undefined;
+  /**
+   * World state. Built on first use and kept across reloads: it reads its
+   * config on every call, so a reload changes types without rebuilding it,
+   * and it keeps one provider per backend and options, so a backend change
+   * gets a new provider rather than reusing the old one.
+   */
+  private _stateService: StateService | undefined;
   /**
    * Typed pub/sub bus for runtime lifecycle events — the foundation of
    * the platform vision (`docs/platform-vision.md`). Internal subsystems
@@ -244,6 +253,7 @@ export class AgentRuntime {
         taskBackendResolver: (projectId?: string | null) => this.getTaskBackendForProject(projectId),
         getEmbedder: () => this._embedder,
         getMemoryBackend: () => this.getMemoryBackend(),
+        getStateService: () => this.getStateService(),
         timeProvider: this._timeProvider,
         resolveOutbound: (id?: string) => this.resolveOutbound(id),
         getOwnerId: (id?: string) => this.getOwnerId(id),
@@ -351,6 +361,7 @@ export class AgentRuntime {
         taskBackendResolver: (projectId?: string | null) => this.getTaskBackendForProject(projectId),
         getEmbedder: () => this._embedder,
         getMemoryBackend: () => this.getMemoryBackend(),
+        getStateService: () => this.getStateService(),
         timeProvider: this._timeProvider,
         resolveOutbound: (id?: string) => this.resolveOutbound(id),
         getOwnerId: (id?: string) => this.getOwnerId(id),
@@ -468,6 +479,18 @@ export class AgentRuntime {
       this._memoryBackend = resolveMemoryBackend(this);
     }
     return this._memoryBackend;
+  }
+
+  /** World state: typed records shared by agents, people and plugins. See `docs/world-state.md`. */
+  getStateService(): StateService {
+    if (!this._stateService) {
+      this._stateService = new StateService({
+        getConfig: () => this.getConfig(),
+        db: this.db,
+        events: this.events,
+      });
+    }
+    return this._stateService;
   }
   /** Returns the configured embedding provider, or undefined when embeddings are disabled. */
   getEmbedder(): import("./providers/embedding.js").EmbeddingProvider | undefined {
@@ -696,6 +719,7 @@ export class AgentRuntime {
           taskBackendResolver: (projectId?: string | null) => this.getTaskBackendForProject(projectId),
           getEmbedder: () => embedder,
           getMemoryBackend: () => this.getMemoryBackend(),
+          getStateService: () => this.getStateService(),
           timeProvider,
           resolveOutbound: (id?: string) => this.resolveOutbound(id),
           getOwnerId: (id?: string) => this.getOwnerId(id),

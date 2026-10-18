@@ -42,6 +42,8 @@ import type { StepExecutorFactory } from "./resources/step-executor-registry.js"
 import type { AgentRuntime } from "./runtime.js";
 import type { SandboxFactory } from "./sandboxes/factory.js";
 import { registerSandboxFactory } from "./sandboxes/factory.js";
+import { registerStateProvider, registerStateType, type StateProviderFactory } from "./state/registry.js";
+import type { StateTypeDef } from "./state/types.js";
 import type { TaskBackendFactory } from "./tasks/factory.js";
 import { registerTaskBackendFactory } from "./tasks/factory.js";
 import type { TimeProviderFactory } from "./time/provider.js";
@@ -82,6 +84,14 @@ export interface EmbeddingRegistryView {
 
 export interface MemoryBackendRegistryView {
   register(id: string, factory: MemoryBackendFactory): Disposer;
+}
+
+export interface StateProviderRegistryView {
+  register(id: string, factory: StateProviderFactory): Disposer;
+}
+
+export interface StateTypeRegistryView {
+  register(def: StateTypeDef): Disposer;
 }
 
 export interface MediaStoreRegistryView {
@@ -135,6 +145,10 @@ export interface PluginContext {
   providers: ProviderRegistryView;
   embeddings: EmbeddingRegistryView;
   memoryBackends: MemoryBackendRegistryView;
+  /** Where world-state records are kept. A Postgres or hosted store registers here. See `docs/world-state.md`. */
+  stateProviders: StateProviderRegistryView;
+  /** World-state types a plugin brings. A type of the same name in `state.types` wins. */
+  stateTypes: StateTypeRegistryView;
   /**
    * Where media bytes live. An S3 or GCS store registers here.
    *
@@ -439,6 +453,8 @@ export function createPluginContext(opts: CreatePluginContextOptions = {}): Plug
     providers: { register: collecting(registerProviderFactory) },
     embeddings: { register: collecting(registerEmbeddingFactory) },
     memoryBackends: { register: collecting(registerMemoryBackendFactory) },
+    stateProviders: { register: collecting(registerStateProvider) },
+    stateTypes: { register: collecting(registerStateType) },
     mediaStores: { register: collecting(registerMediaStoreFactory) },
     mediaRenditions: { register: collecting(registerMediaRenditionFactory) },
     taskBackends: { register: collecting(registerTaskBackendFactory) },
