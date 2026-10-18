@@ -97,8 +97,11 @@ No note records match.
   own list replaces the default list rather than adding to it.
 
 Pinned records cost prompt space on every turn, so pin what the agent acts on
-and leave the rest to the tool. Pinning is also the reliable way to give a
-small local model state: there is no tool call for it to skip.
+and leave the rest to the tool. What pinning saves is the lookup: measured on
+a local 27B model, an agent with its plans pinned answered "which plans are
+active?" from the block with no tool call, before and after the records
+changed mid-conversation, where the same agent unpinned queried every time.
+Both answered correctly.
 
 ## Scopes
 
