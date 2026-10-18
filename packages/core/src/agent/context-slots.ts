@@ -36,7 +36,12 @@ export interface ContextSlotContext {
   sessionId: string;
   /** What the agent was asked this turn. */
   userMessage: string;
+  /** Rooms this turn is about, as formatted refs (`discord:123`), when it is a room wake. */
+  rooms?: string[];
 }
+
+/** What a slot renders: text, or nothing this turn. */
+export type SlotText = string | null | undefined;
 
 export type SlotRefresh = "reload" | "turn";
 
@@ -59,8 +64,12 @@ export interface ContextSlot {
   agents?: string[];
   /** Heading rendered above the content. Omitted renders the content bare. */
   title?: string;
-  /** Return null (or "") to render nothing this turn. */
-  render(ctx: ContextSlotContext): string | null | undefined;
+  /**
+   * Return null (or "") to render nothing this turn. May return a promise —
+   * a slot that reads a store does — which the agent loop awaits; see
+   * {@link renderContextSlotsAsync}.
+   */
+  render(ctx: ContextSlotContext): SlotText | Promise<SlotText>;
 }
 
 const slots = new Map<string, ContextSlot>();
@@ -157,29 +166,67 @@ export function renderContextSlots(
   ctx: ContextSlotContext,
   registered: ContextSlot[] = listContextSlots(),
 ): RenderedSlots {
-  const parts: Record<SlotRefresh, string[]> = { reload: [], turn: [] };
-  const rendered: RenderedSlot[] = [];
-
+  const assembly = new SlotAssembly();
   for (const slot of registered) {
     if (!appliesTo(slot, ctx.agent)) continue;
-    let text: string | null | undefined;
+    let text: SlotText | Promise<SlotText>;
     try {
       text = slot.render(ctx);
     } catch (err) {
-      if (!warned.has(slot.id)) {
-        warned.add(slot.id);
-        console.warn(`[context-slots] Slot "${slot.id}" threw and was skipped: ${(err as Error).message}`);
-      }
+      warnThrew(slot, err);
       continue;
     }
-    if (!text) continue;
+    if (isPromise(text)) {
+      // Swallow the eventual rejection; this caller is not waiting for it.
+      text.catch(() => {});
+      warnOnce(
+        slot.id,
+        `[context-slots] Slot "${slot.id}" renders asynchronously and was skipped by a synchronous render. The agent loop awaits it.`,
+      );
+      continue;
+    }
+    assembly.add(slot, text);
+  }
+  return assembly.done();
+}
+
+/**
+ * {@link renderContextSlots} for slots that may render asynchronously: each
+ * one is awaited in turn, so the order and placement are exactly the
+ * synchronous version's. This is what the agent loop uses.
+ */
+export async function renderContextSlotsAsync(
+  ctx: ContextSlotContext,
+  registered: ContextSlot[] = listContextSlots(),
+): Promise<RenderedSlots> {
+  const assembly = new SlotAssembly();
+  for (const slot of registered) {
+    if (!appliesTo(slot, ctx.agent)) continue;
+    let text: SlotText;
+    try {
+      text = await slot.render(ctx);
+    } catch (err) {
+      warnThrew(slot, err);
+      continue;
+    }
+    assembly.add(slot, text);
+  }
+  return assembly.done();
+}
+
+class SlotAssembly {
+  private parts: Record<SlotRefresh, string[]> = { reload: [], turn: [] };
+  private rendered: RenderedSlot[] = [];
+
+  add(slot: ContextSlot, text: SlotText): void {
+    if (!text) return;
     const trimmedText = text.trim();
     const body = capSlot(trimmedText, slot.budgetTokens);
     const part = slot.title ? `## ${slot.title}\n\n${body}` : body;
-    parts[slot.refresh].push(part);
+    this.parts[slot.refresh].push(part);
     // capSlot only ever shortens, so a length difference is exact truncation
     // detection without comparing the strings themselves.
-    rendered.push({
+    this.rendered.push({
       id: slot.id,
       refresh: slot.refresh,
       chars: part.length,
@@ -187,11 +234,28 @@ export function renderContextSlots(
     });
   }
 
-  return {
-    reload: parts.reload.length > 0 ? `\n\n${parts.reload.join("\n\n")}\n` : "",
-    turn: parts.turn.length > 0 ? `\n\n${parts.turn.join("\n\n")}\n` : "",
-    rendered,
-  };
+  done(): RenderedSlots {
+    const { reload, turn } = this.parts;
+    return {
+      reload: reload.length > 0 ? `\n\n${reload.join("\n\n")}\n` : "",
+      turn: turn.length > 0 ? `\n\n${turn.join("\n\n")}\n` : "",
+      rendered: this.rendered,
+    };
+  }
+}
+
+function warnThrew(slot: ContextSlot, err: unknown): void {
+  warnOnce(slot.id, `[context-slots] Slot "${slot.id}" threw and was skipped: ${(err as Error).message}`);
+}
+
+function warnOnce(id: string, message: string): void {
+  if (warned.has(id)) return;
+  warned.add(id);
+  console.warn(message);
+}
+
+function isPromise(value: unknown): value is Promise<SlotText> {
+  return typeof (value as { then?: unknown } | null)?.then === "function";
 }
 
 /**

@@ -79,7 +79,7 @@ import type {
   ModelEntry,
   OnlineAgentConfig,
 } from "./config.js";
-import type { JsonSchema } from "./state/types.js";
+import type { FieldCondition, JsonSchema } from "./state/types.js";
 import type { CommandRules } from "./tools/command-allowlist.js";
 
 /**
@@ -399,6 +399,25 @@ export const AgentDefinitionSchema = z.object({
   skillLoading: z.enum(["eager", "progressive"]).optional(),
   online: OnlineAgentConfigSchema.optional(),
   systemPrompt: SystemPromptOverrideSchema.optional(),
+  state: z
+    .object({
+      context: z
+        .array(
+          z.object({
+            type: z.string(),
+            // Conditions stay open here, as in a `state` tool query; the
+            // provider checks them when the query runs.
+            where: z
+              .custom<Record<string, FieldCondition>>((v) => typeof v === "object" && v !== null && !Array.isArray(v))
+              .optional(),
+            orderBy: z.string().optional(),
+            limit: z.number().optional(),
+            scope: z.string().optional(),
+          }),
+        )
+        .optional(),
+    })
+    .optional(),
 });
 type _AgentDefinitionMatches = AssertTrue<Identical<z.infer<typeof AgentDefinitionSchema>, AgentDefinition>>;
 

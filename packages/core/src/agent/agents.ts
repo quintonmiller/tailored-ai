@@ -4,6 +4,7 @@ import type { AgentConfig, AgentDefinition, AgentHook, ModelEntry } from "../con
 import type { GlobalContextFilter } from "../context.js";
 import type { ThinkingLevel } from "../providers/interface.js";
 import type { SkillDefinition } from "../resources/skill.js";
+import type { StateContextQuery } from "../state/types.js";
 import type { Tool } from "../tools/interface.js";
 import { EMPTY_HOOKS, mergeHooks, normalizeHooks, type ResolvedHooks } from "./hooks.js";
 import { mergeSystemPromptOverrides, type SystemPromptOverride } from "./system-prompt.js";
@@ -161,6 +162,8 @@ export interface ResolvedAgent {
   skillCatalog: SkillCatalogEntry[];
   /** System-prompt composition override. Undefined means use defaults. */
   systemPrompt: SystemPromptOverride | undefined;
+  /** World-state queries pinned to the prompt (`state.context`). Undefined means none. */
+  stateContext?: StateContextQuery[];
 }
 
 /** @deprecated Use ResolvedAgent instead. */
@@ -337,6 +340,8 @@ export function resolveAgent(
       mergeSystemPromptOverrides(config.agent.systemPrompt, dep.systemPrompt),
       agent?.systemPrompt,
     ),
+    // Whole list, not merged: an agent that pins its own queries means those.
+    stateContext: agent?.state?.context ?? dep.state?.context,
   };
 
   // Derive contextDir when an agent is active

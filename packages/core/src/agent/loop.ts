@@ -42,13 +42,14 @@ import type {
   ToolCall,
   ToolSchema,
 } from "../providers/interface.js";
+import { WAKE_ROOMS_KEY } from "../rooms/keys.js";
 import { effectOf } from "../tools/effect.js";
 import type { Tool, ToolContext } from "../tools/interface.js";
 import { type ActiveSkillState, createActiveSkillState } from "./active-skill.js";
 import type { SkillCatalogEntry } from "./agents.js";
 import { buildChatLiveState, renderChatLiveState } from "./chat-live-state.js";
 import type { ConfigDeclaredSlot } from "./context-slots.js";
-import { listContextSlots, renderContextSlots, slotsFromConfig } from "./context-slots.js";
+import { type ContextSlot, listContextSlots, renderContextSlotsAsync, slotsFromConfig } from "./context-slots.js";
 import { refuseIfAmbiguous } from "./derivability.js";
 import { buildMemoryBlockWithMeta } from "./memory-inject.js";
 import type { Session } from "./session.js";
@@ -722,6 +723,12 @@ export interface AgentLoopOptions {
    * re-reads it per turn, so an edit lands without a restart.
    */
   promptSlots?: ConfigDeclaredSlot[];
+  /**
+   * Slots for this run only, on top of the registered ones — an agent's
+   * pinned state queries, built per agent by the runtime. They go through the
+   * same waterfall and budget as any other slot.
+   */
+  contextSlots?: ContextSlot[];
   /**
    * The runtime's event bus, for anything that wants to observe or transform a
    * turn from outside the loop.
@@ -1702,17 +1709,23 @@ async function _runAgentLoopInner(userMessage: string | InboundMessage, opts: Ag
   // narrowing and any per-call extras.
   // Plugin- and config-contributed blocks. Rendered here, placed by core: the
   // contributor said only whether its content changes between turns.
+  const wakeRooms = (opts.toolContextExtras?.workingMemory?.get(WAKE_ROOMS_KEY) ?? "")
+    .split(",")
+    .map((r) => r.trim())
+    .filter(Boolean);
   const slotContext = {
     agent: agentNameForCore,
     projectId: session.projectId ?? null,
     sessionId: session.id,
     userMessage: inboundText(userMessage),
+    ...(wakeRooms.length ? { rooms: wakeRooms } : {}),
   };
   // Registered slots plus whatever config declares. Config ones are rebuilt
   // per turn so a `file:` edit lands without a restart.
   const declaredSlots = [
     ...listContextSlots(),
     ...slotsFromConfig(opts.promptSlots, (path) => readFileSync(path, "utf8")),
+    ...(opts.contextSlots ?? []),
   ];
   // The first core waterfall, and the first thing on the loop's bus. Handed the
   // list *before* rendering so a subscriber can stop an expensive slot running
@@ -1724,7 +1737,7 @@ async function _runAgentLoopInner(userMessage: string | InboundMessage, opts: Ag
   const slots = opts.events
     ? (await opts.events.waterfall("agent.context_slots", { ...slotContext, slots: declaredSlots })).slots
     : declaredSlots;
-  const slotBlocks = renderContextSlots(slotContext, slots);
+  const slotBlocks = await renderContextSlotsAsync(slotContext, slots);
 
   const resolvedBase = resolveBase(opts.systemPrompt, { selfModifying: opts.selfModifying });
   const customLayers = resolveCustomLayers(opts.systemPrompt?.custom);

@@ -13,7 +13,7 @@ import { isAgentScopedEvent, isWaterfallEvent, KNOWN_BROADCAST_EVENTS, listKnown
 import type { GuardrailSpec } from "./guardrails/types.js";
 import type { ThinkingLevel } from "./providers/interface.js";
 import { parseEvery } from "./schedules/when.js";
-import type { JsonSchema, StateTypeDef } from "./state/types.js";
+import type { JsonSchema, StateContextQuery, StateTypeDef } from "./state/types.js";
 import { unsupportedKeywords } from "./state/validate.js";
 import { parseWindow, subscriptionKey } from "./subscriptions/keys.js";
 import type { EventSubscriptionConfig } from "./subscriptions/types.js";
@@ -379,6 +379,13 @@ export interface AgentDefinition {
    * layers. See docs/agents.md.
    */
   systemPrompt?: import("./agent/system-prompt.js").SystemPromptOverride;
+  /**
+   * World state this agent works with. `context` pins queries whose matching
+   * records render into the prompt every turn. See `docs/world-state.md`.
+   */
+  state?: {
+    context?: StateContextQuery[];
+  };
 }
 
 /**

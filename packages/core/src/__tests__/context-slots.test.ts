@@ -16,6 +16,7 @@ import {
   listContextSlots,
   registerContextSlot,
   renderContextSlots,
+  renderContextSlotsAsync,
   resetContextSlotWarnings,
   slotsFromConfig,
   unregisterContextSlot,
@@ -230,5 +231,38 @@ describe("config-declared slots", () => {
   it("renders a title as a heading", () => {
     const built = slotsFromConfig([{ id: "a", refresh: "turn", title: "On call", content: "alex" }], read);
     expect(renderContextSlots(ctx, built).turn).toContain("## On call");
+  });
+});
+
+describe("asynchronous slots", () => {
+  const later = (text: string) => () => new Promise<string>((resolve) => setTimeout(() => resolve(text), 5));
+
+  it("are awaited by the async render, in order with the synchronous ones", async () => {
+    const out = await renderContextSlotsAsync(ctx, [
+      slot({ id: "a", refresh: "turn", render: later("ASYNC-A") }),
+      slot({ id: "b", refresh: "turn", render: () => "SYNC-B" }),
+      slot({ id: "c", refresh: "reload", render: later("ASYNC-C"), title: "Standing" }),
+    ]);
+    expect(out.turn).toBe("\n\nASYNC-A\n\nSYNC-B\n");
+    expect(out.reload).toBe("\n\n## Standing\n\nASYNC-C\n");
+    expect(out.rendered.map((r) => r.id)).toEqual(["a", "b", "c"]);
+  });
+
+  it("are skipped when rejected, like a slot that throws, and the rest still render", async () => {
+    const out = await renderContextSlotsAsync(ctx, [
+      slot({ id: "bad", refresh: "turn", render: () => Promise.reject(new Error("store down")) }),
+      slot({ id: "ok", refresh: "turn", render: () => "fine" }),
+    ]);
+    expect(out.turn).toBe("\n\nfine\n");
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Slot "bad" threw and was skipped: store down'));
+  });
+
+  it("are skipped by the synchronous render, which says why", () => {
+    const out = renderContextSlots(ctx, [
+      slot({ id: "slow", refresh: "turn", render: later("never") }),
+      slot({ id: "ok", refresh: "turn", render: () => "fine" }),
+    ]);
+    expect(out.turn).toBe("\n\nfine\n");
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Slot "slow" renders asynchronously'));
   });
 });

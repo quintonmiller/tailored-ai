@@ -36,16 +36,13 @@ import type { DeliveryOutcome, EventWakeContext } from "../subscriptions/types.j
 import { runtimeTimeProvider, systemTimeZone } from "../time/provider.js";
 import { addresses, extractLeadingAddressees, renderTranscriptLine } from "./envelope.js";
 import { enrichRoomMessage, IdentityResolver } from "./identities.js";
+import { WAKE_ROOMS_KEY } from "./keys.js";
 import { getRoomBackend, listRoomBackends, onRoomBackendChange } from "./registry.js";
 import type { RoomStore, RoomSubscription } from "./store.js";
 import { formatRoomRef, parseRoomRef, type Room, type RoomMessage } from "./types.js";
 import { type WakeEntry, WakeQueue, type WakeTrigger } from "./wake-queue.js";
 
-/**
- * Working-memory key naming the rooms a turn was woken for, comma-separated.
- * Read by the `room` tool so `pass` with no argument can scope itself.
- */
-export const WAKE_ROOMS_KEY = "room:wake-rooms";
+export { WAKE_ROOMS_KEY } from "./keys.js";
 
 /**
  * Prefix for the per-room marker meaning "the agent already posted here through
