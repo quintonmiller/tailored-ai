@@ -187,6 +187,31 @@ a miss. That is why the stable prefix is a rule rather than an optimisation.
   succeeded on retry. That is startup, not per turn, but a session cannot
   assume the model is already up.
 
+## A body
+
+A session can show the agent with a body: on the Talk page, a VRM avatar in
+a small room. It is built in three layers, cheapest first, and each works
+without the next:
+
+1. **Body language from the turn, no model involved.** The avatar breathes and
+   blinks, leans in while the person talks, looks away while the agent
+   thinks, and moves its mouth with the loudness of the audio. Between
+   sessions it wanders the room. This costs no tokens and no latency.
+   *Done.*
+2. **Cues the agent writes.** The surface declares what its body can do; the
+   agent writes `<wave/>` or `<go to="the couch"/>` inline; the turn takes
+   them out and streams each with the sentence it comes before. These are
+   inline cues and not tool calls, for two reasons. A local model writes tool
+   calls after its text, so the gesture would land after the words. And
+   every tool call costs another model round. *Done; the measurement is in
+   [live-sessions.md](./live-sessions.md#cues-the-agent-moves-its-own-body).*
+3. **A scene held in world state.** Where the avatar stands, what it holds,
+   and the state of things in the room become records that other agents and
+   other surfaces see, and that a click can change without a model turn.
+   Moves with consequences, such as picking something up, are checked
+   against those records before the body plays them. *Not started:* today
+   the room is the page's own data.
+
 ## Where it lives
 
 | Tier | Owns |

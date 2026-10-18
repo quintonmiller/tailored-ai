@@ -11,6 +11,7 @@ import { runAgentLoop } from "../agent/loop.js";
 import { loadSession, newSession } from "../agent/session.js";
 import { type AgentConfig, DEFAULT_CONFIG } from "../config.js";
 import type { AgentRuntime } from "../runtime.js";
+import { type Body, type Cue, type CuePiece, CueReader, withoutCues } from "./cues.js";
 import { SentenceSplitter, speakable } from "./sentences.js";
 import { type LiveSession, LiveSessionError } from "./session.js";
 import { type SpeechToText, speechToTextRegistry, type TextToSpeech, textToSpeechRegistry } from "./stages.js";
@@ -25,12 +26,20 @@ export interface VoiceTurnInput {
 /** What a transport hears as the turn happens, so it can play the reply while the rest is still being written. */
 export interface VoiceTurnSink {
   transcript?(text: string): void;
+  /** The reply as it is written, without its cues. */
   text?(delta: string): void;
   audio?(chunk: { seq: number; text: string; bytes: Buffer; mimeType: string }): void;
+  /**
+   * A cue, with the `seq` of the sentence it comes before: play it as that
+   * audio starts. A cue after the last sentence has the next seq, so it plays
+   * once the speech is done, or at once when there was none.
+   */
+  cue?(cue: Cue & { seq: number }): void;
 }
 
 export interface VoiceTurnResult {
   transcript: string;
+  /** The reply as the person hears and reads it: its cues taken out. History keeps them, so the agent sees its own. */
   reply: string;
   /** Where the time went, in ms from the start of the turn. */
   timings: { sttMs?: number; firstTextMs?: number; firstAudioMs?: number; totalMs: number };
@@ -42,7 +51,7 @@ export interface VoiceTurnResult {
  */
 export function startLiveSession(
   runtime: Pick<AgentRuntime, "getConfig" | "getLiveSessions" | "db" | "getModel">,
-  input: { agent?: string; transport: string },
+  input: { agent?: string; transport: string; body?: Body },
 ): LiveSession {
   const config = runtime.getConfig();
   if (!config.live?.enabled) {
@@ -57,6 +66,7 @@ export function startLiveSession(
   const conversation = newSession(runtime.db, runtime.getModel(), config.agent.defaultProvider);
   return runtime.getLiveSessions().start({
     ...(input.agent ? { agent: input.agent } : {}),
+    ...(input.body ? { body: input.body } : {}),
     transport: input.transport,
     sessionId: conversation.id,
     limits: {
@@ -109,7 +119,12 @@ export async function runVoiceTurn(
 
   const session = loadSession(runtime.db, live.sessionId);
   if (!session) throw new Error("This live session's conversation is gone.");
-  const opts = runtime.buildLoopOptions({ session, agentName: live.agent, mode: "voice" });
+  const opts = runtime.buildLoopOptions({
+    session,
+    agentName: live.agent,
+    mode: "voice",
+    ...(live.body ? { body: live.body } : {}),
+  });
   const voice = runtime.voiceModeFor(live.agent)?.voice ?? configuredVoice;
 
   // Speech runs one sentence at a time, in order, while the model keeps
@@ -117,14 +132,31 @@ export async function runVoiceTurn(
   const splitter = new SentenceSplitter();
   let chain: Promise<void> = Promise.resolve();
   let seq = 0;
+  // Sentences handed to speech so far: a cue belongs to the next one.
+  let queued = 0;
   let streamed = false;
   const speak = (sentence: string) => {
     if (!sentence) return;
+    queued++;
     chain = chain.then(async () => {
       const audio = await tts.synthesize(sentence, { ...(voice ? { voice } : {}), ...(signal ? { signal } : {}) });
       timings.firstAudioMs ??= since();
       sink.audio?.({ seq: seq++, text: sentence, ...audio });
     });
+  };
+
+  // Cues come out before anything is spoken or shown; with no body there are
+  // none to look for, and the text passes through untouched.
+  const reader = live.body ? new CueReader(live.body) : undefined;
+  const take = (pieces: CuePiece[], into: SentenceSplitter) => {
+    for (const piece of pieces) {
+      if ("cue" in piece) {
+        sink.cue?.({ ...piece.cue, seq: queued });
+        continue;
+      }
+      sink.text?.(piece.text);
+      for (const sentence of into.push(piece.text)) speak(sentence);
+    }
   };
 
   const reply = await runAgentLoop(transcript, {
@@ -133,19 +165,24 @@ export async function runVoiceTurn(
     onTextDelta: (delta) => {
       streamed = true;
       timings.firstTextMs ??= since();
-      sink.text?.(delta);
-      for (const sentence of splitter.push(delta)) speak(sentence);
+      take(reader ? reader.push(delta) : [{ text: delta }], splitter);
     },
   });
 
   // A provider that does not stream hands the whole reply over at the end.
-  if (streamed) speak(splitter.flush());
-  else {
+  if (streamed) {
+    if (reader) take(reader.flush(), splitter);
+    speak(splitter.flush());
+  } else {
     timings.firstTextMs ??= since();
-    sink.text?.(reply);
     const whole = new SentenceSplitter();
-    for (const sentence of [...whole.push(`${reply} `), whole.flush()]) speak(speakable(sentence));
+    take(reader ? [...reader.push(reply), ...reader.flush()] : [{ text: reply }], whole);
+    speak(speakable(whole.flush()));
   }
   await chain;
-  return { transcript, reply, timings: { ...timings, totalMs: since() } };
+  return {
+    transcript,
+    reply: live.body ? withoutCues(live.body, reply) : reply,
+    timings: { ...timings, totalMs: since() },
+  };
 }

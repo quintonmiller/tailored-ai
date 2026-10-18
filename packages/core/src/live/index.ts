@@ -1,4 +1,14 @@
 export { avatarModelPath } from "./avatar.js";
+export {
+  type AimedMove,
+  type Body,
+  bodyInstructions,
+  type Cue,
+  type CuePiece,
+  CueReader,
+  parseBody,
+  withoutCues,
+} from "./cues.js";
 export { SentenceSplitter, speakable } from "./sentences.js";
 export { type LiveSession, LiveSessionError, type LiveSessionLimits, LiveSessions } from "./session.js";
 export {
@@ -23,4 +33,9 @@ export {
   type VoiceTurnResult,
   type VoiceTurnSink,
 } from "./turn.js";
-export { DEFAULT_VOICE_INSTRUCTIONS, DEFAULT_VOICE_MAX_TOKENS, voiceMode } from "./voice-mode.js";
+export {
+  DEFAULT_VOICE_INSTRUCTIONS,
+  DEFAULT_VOICE_INSTRUCTIONS_WITH_BODY,
+  DEFAULT_VOICE_MAX_TOKENS,
+  voiceMode,
+} from "./voice-mode.js";
