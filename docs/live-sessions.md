@@ -94,9 +94,9 @@ customise `systemPrompt.order`, keep those layers in the tail.
 
 ## An avatar
 
-Give the agent a body on the Talk page: a 3D model that breathes and blinks,
-leans in while you talk, looks up and away while it thinks, and moves its
-mouth with its voice.
+Give the agent a body on the Talk page: a 3D model, standing in a small room,
+that breathes and blinks, leans in while you talk, looks up and away while it
+thinks, and moves its mouth with its voice.
 
 ```yaml
 live:
@@ -110,6 +110,14 @@ blink follow one standard. Make one in VRoid Studio, or start from a
 collection published under CC0, such as 100Avatars. Many models, free ones
 included, carry licences that limit sharing the file, so keep yours in your
 own instance.
+
+The room is furnished: a couch, a desk with a laptop, a bookshelf, a window
+and a floor lamp. It is lit for the time of day: daylight through the window,
+the lamp on in the evening, the lamp alone at night. Drag to look around the
+room, or press **Close up** to frame the head and torso. The page remembers
+the choice. The furniture is built from simple shapes, so there are no files
+to download, and every piece and spot in the room has a name. When the agent
+later moves around, it will say "by the couch", never coordinates.
 
 None of this asks the model for anything. The moments come from the turn the
 page is already following, and the mouth from the loudness of the audio, so

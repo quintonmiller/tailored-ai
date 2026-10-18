@@ -6,19 +6,20 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { StageInput } from "../avatar/stage";
+import type { StageInput, StageView } from "../avatar/stage";
 import { Talk } from "./Talk";
 
 // The 3D stage needs WebGL, which jsdom lacks; what the page hands it is the contract.
 const stage = vi.hoisted(() => ({
-  calls: [] as { url: string; input: StageInput }[],
+  calls: [] as { url: string; input: StageInput; view?: StageView }[],
+  views: [] as StageView[],
   fail: null as string | null,
 }));
 vi.mock("../avatar/stage", () => ({
-  createStage: async (_host: HTMLElement, url: string, input: StageInput) => {
+  createStage: async (_host: HTMLElement, url: string, input: StageInput, opts: { view?: StageView }) => {
     if (stage.fail) throw new Error(stage.fail);
-    stage.calls.push({ url, input });
-    return { dispose: () => {} };
+    stage.calls.push({ url, input, view: opts.view });
+    return { dispose: () => {}, setView: (v: StageView) => stage.views.push(v) };
   },
 }));
 
@@ -70,7 +71,9 @@ beforeEach(() => {
   turnStatus = 200;
   liveInfo = {};
   stage.calls.length = 0;
+  stage.views.length = 0;
   stage.fail = null;
+  localStorage.clear();
   const audio = btoa("mp3-bytes");
   turnChunks = [
     'event: transcript\ndata: {"text":"water the plants"}\n\n',
@@ -238,6 +241,25 @@ describe("Talk page", () => {
     // The reply's audio is playing, and never ended: the body is speaking, mouth moving.
     expect(now().state).toBe("speaking");
     expect(now().loudness()).toBeGreaterThan(0);
+  });
+
+  it("shows the room, switches to a close-up, and remembers the choice next time", async () => {
+    liveInfo = { avatar: "/api/live/avatar" };
+    await render();
+    await loadStage();
+    expect(stage.calls[0].view).toBe("room");
+    const pressed = () => container.querySelector('.talk-view [aria-pressed="true"]')?.textContent;
+    expect(pressed()).toBe("Room");
+    await act(async () => button("Close up").click());
+    expect(stage.views).toEqual(["close"]);
+    expect(pressed()).toBe("Close up");
+
+    act(() => root.unmount());
+    root = createRoot(container);
+    await render();
+    await loadStage();
+    expect(stage.calls[1].view).toBe("close");
+    expect(pressed()).toBe("Close up");
   });
 
   it("says why when the avatar can't be drawn, and the page still works", async () => {
