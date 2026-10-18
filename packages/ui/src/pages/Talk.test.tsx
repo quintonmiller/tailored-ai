@@ -14,9 +14,12 @@ const stage = vi.hoisted(() => ({
   calls: [] as { url: string; input: StageInput; view?: StageView }[],
   views: [] as StageView[],
   fail: null as string | null,
+  /** Every createStage call, made or failed: what loadStage waits on. */
+  attempts: 0,
 }));
 vi.mock("../avatar/stage", () => ({
   createStage: async (_host: HTMLElement, url: string, input: StageInput, opts: { view?: StageView }) => {
+    stage.attempts++;
     if (stage.fail) throw new Error(stage.fail);
     stage.calls.push({ url, input, view: opts.view });
     return { dispose: () => {}, setView: (v: StageView) => stage.views.push(v) };
@@ -73,6 +76,7 @@ beforeEach(() => {
   stage.calls.length = 0;
   stage.views.length = 0;
   stage.fail = null;
+  stage.attempts = 0;
   localStorage.clear();
   const audio = btoa("mp3-bytes");
   turnChunks = [
@@ -153,10 +157,19 @@ async function render() {
 const button = (text: string) =>
   [...container.querySelectorAll("button")].find((b) => b.textContent?.includes(text)) as HTMLButtonElement;
 
-/** The stage is imported on demand; give that import a moment to land. */
-async function loadStage() {
+/**
+ * The stage is imported on demand. Wait until the page has asked for this
+ * many stages, made or failed: a fixed sleep is too short on a slow runner,
+ * and a late stage then lands in the next test.
+ */
+async function loadStage(count = 1) {
   await act(async () => {
-    await new Promise((r) => setTimeout(r, 20));
+    await vi.waitFor(
+      () => {
+        if (stage.attempts < count) throw new Error("the stage has not loaded yet");
+      },
+      { timeout: 3000, interval: 10 },
+    );
   });
 }
 
@@ -257,7 +270,7 @@ describe("Talk page", () => {
     act(() => root.unmount());
     root = createRoot(container);
     await render();
-    await loadStage();
+    await loadStage(2);
     expect(stage.calls[1].view).toBe("close");
     expect(pressed()).toBe("Close up");
   });
