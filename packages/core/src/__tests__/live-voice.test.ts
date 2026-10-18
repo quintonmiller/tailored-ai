@@ -37,6 +37,15 @@ describe("SentenceSplitter", () => {
     expect(s.flush()).toBe("Anything else");
   });
 
+  it("holds a short sentence that ends the stream so far, rather than saying it alone", () => {
+    const s = new SentenceSplitter();
+    expect(s.push("Sure thing. ")).toEqual([]);
+    expect(s.push("I noted the plants. ")).toEqual(["Sure thing. I noted the plants."]);
+    const t = new SentenceSplitter();
+    expect(t.push("Okay. ")).toEqual([]);
+    expect(t.flush()).toBe("Okay.");
+  });
+
   it("reads markdown, links and emoji as speech would", () => {
     expect(speakable("**Done!** See [the doc](https://x.y) 🎉\n- first")).toBe("Done! See the doc first");
   });

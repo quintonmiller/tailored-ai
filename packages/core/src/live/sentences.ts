@@ -19,8 +19,9 @@ export class SentenceSplitter {
       const end = sentenceEnd(this.buffer);
       if (end < 0) break;
       const sentence = this.buffer.slice(0, end).trim();
-      if (sentence.length < MIN_SENTENCE_CHARS && end < this.buffer.length) {
-        // Too short to speak alone: look for the next boundary after this one.
+      if (sentence.length < MIN_SENTENCE_CHARS) {
+        // Too short to speak alone: wait for the next boundary (or the flush),
+        // even when it is the last thing streamed so far.
         const next = sentenceEnd(this.buffer, end);
         if (next < 0) break;
         done.push(speakable(this.buffer.slice(0, next)));

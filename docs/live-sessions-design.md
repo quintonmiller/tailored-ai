@@ -1,8 +1,8 @@
 # Live sessions — Design
 
 > Status: sketch, accepted; measured on the reference hardware 2026-10-18 (see
-> [Step 0](#step-0-what-the-spike-measured)). Phase 1's core half is
-> implemented: see [live-sessions.md](./live-sessions.md). Third of three
+> [Step 0](#step-0-what-the-spike-measured)). Phase 1 is implemented: see
+> [live-sessions.md](./live-sessions.md). Third of three
 > linked designs: [world state](./world-state-design.md), [agent
 > interfaces](./agent-interfaces-design.md), and this one. Supersedes the
 > cloud-realtime shape in
@@ -200,7 +200,7 @@ a miss. That is why the stable prefix is a rule rather than an optimisation.
 | # | Slice |
 |---|---|
 | 0 | Measurement spike on the reference hardware — **done**, see Step 0 |
-| 1 | Session model, web transport, push-to-talk, STT → turn → TTS, no barge-in — **core done** (stages, voice mode, spoken turn, limits); web transport next |
+| 1 | Session model, web transport, push-to-talk, STT → turn → TTS, no barge-in — **done** |
 | 2 | Voice activity detection replaces push-to-talk; barge-in with headphones |
 | 3 | Fast talker / slow thinker: background delegation, results spoken and shown as components |
 | 4 | Transcript into history, rolling summary, notes into state |

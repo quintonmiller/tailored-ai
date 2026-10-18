@@ -6,9 +6,10 @@ on your local model, then text-to-speech. A cloud service can stand in for any
 stage, but none is needed. The design, with the measurements behind it, is in
 [live-sessions-design.md](./live-sessions-design.md).
 
-> **Status:** the core pieces are in: the speech stages, voice mode, and the
-> spoken turn. The web transport (a push-to-talk page) is next; until it lands,
-> nothing in the UI starts a session.
+> **Status:** phase 1 works end to end: push-to-talk in the web UI, speech-to-text,
+> an agent turn in voice mode, and the reply spoken a sentence at a time.
+> Interrupting the agent mid-reply, hands-free voice detection and Discord
+> voice come later.
 
 ## Setting it up
 
@@ -36,6 +37,24 @@ live:
 `stt.provider` and `tts.provider` default to `openai_compatible`. A plugin can
 register another stage (`registerSpeechToText`, `registerTextToSpeech`) and
 name it there. `apiKey` in a stage's options is sent as a bearer token.
+
+## Talking in the web UI
+
+Open **Talk** in the sidebar, pick an agent and press **Start talking**. Allow
+the microphone when the browser asks. Then:
+
+- Hold the button, or Space, while you speak, and let go to send.
+- What you said appears, then the agent's reply as it is written, and its
+  voice plays a sentence at a time while the rest is still being made.
+- Holding the button again while it speaks cuts it off. Barge-in that works
+  hands-free comes in a later phase.
+- No microphone? Type into the box under the button: it is the same turn.
+- Under the button: how long hearing you took, and how long until the first
+  word.
+
+Measured on the reference machine, with speech-to-text on the CPU: first word
+about 1.7 s after you let go. Speech-to-text on the GPU saves about half a
+second of that.
 
 ## Voice mode
 
@@ -71,6 +90,15 @@ prompt and tool list byte-identical from turn to turn, and a test checks it.
 Anything that changes each turn (live state, recalled memory, pinned state)
 goes after the conversation, where it doesn't break the cache. If you
 customise `systemPrompt.order`, keep those layers in the tail.
+
+## HTTP API
+
+| route | does |
+|---|---|
+| `POST /api/live/sessions` | start: `{agent?}`; `201` with the session and its limits; `409` when live sessions are off |
+| `GET /api/live/sessions/:id` | the session, with `endedAt` and `endReason` once it has ended |
+| `DELETE /api/live/sessions/:id` | end it |
+| `POST /api/live/sessions/:id/turn` | one turn. The body is the recorded audio (its `Content-Type` names the format), or `{"text": "..."}`. The reply is a server-sent stream: `transcript` `{text}`, `text` `{delta}` as the reply is written, `audio` `{seq, text, mimeType, data}` (base64, one per sentence, in order), then `done` `{transcript, reply, timings}`, or `error` `{message}`. `409` once the session has ended |
 
 ## Limits
 

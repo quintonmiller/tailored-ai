@@ -17,6 +17,8 @@ export const DEFAULT_VOICE_INSTRUCTIONS = [
   "Answer in one to three short spoken sentences.",
   "Everything you write is read aloud, so use no lists, headings, markdown, links or emoji.",
   "If something will take a while, say so in a few words.",
+  // Measured: with no tools, the agent promised "I'll remind you" every run.
+  "Only offer to do what your tools let you do; for anything else, say plainly that you can't do it from here.",
 ].join(" ");
 
 /** Longest spoken reply, in tokens, when the agent names none. Two or three sentences fit well inside it. */
