@@ -4,6 +4,7 @@ import { contentMedia, contentText, type MessageContent } from "../lib/content.j
 import { renderMarkdown } from "../lib/markdown.js";
 import { AskCard, extractAsks } from "./asks";
 import { ChipBody } from "./chips";
+import { InterfaceComponents } from "./InterfaceComponents";
 import { MediaAttachments } from "./MediaAttachments.js";
 import { extractProposals, ProposalCard } from "./proposals";
 
@@ -12,7 +13,7 @@ const COMPACT_TRUNCATE_LENGTH = 120;
 const COMPACT_TRUNCATE_LINES = 2;
 
 export function MessageBubble(props: { message: Message }) {
-  const { role, content, toolCalls, toolLog, recalled, reasoning } = props.message;
+  const { role, content, toolCalls, toolLog, recalled, reasoning, components } = props.message;
 
   // Assistant carrier with a collapsed tool log (preferred path post-grouping).
   // Work summary goes ABOVE the final response so the response stays the
@@ -24,6 +25,7 @@ export function MessageBubble(props: { message: Message }) {
         <ToolLogPanel entries={toolLog} />
         {reasoning && <ThinkingDisclosure reasoning={reasoning} />}
         {content && <AssistantBubble content={content} />}
+        {components?.length ? <InterfaceComponents specs={components} /> : null}
       </>
     );
   }

@@ -18,6 +18,7 @@ import {
   type CronScheduler,
   checkBudget,
   compactSession,
+  componentSpecs,
   countChunks,
   createCollection,
   createDocument,
@@ -61,6 +62,8 @@ import {
   globalSandboxRegistry,
   HttpResourceSource,
   hashManifest,
+  InterfaceError,
+  interfaceStoreFor,
   isCommand,
   Lockfile,
   listCollections,
@@ -94,6 +97,7 @@ import {
   resetSession,
   resolveDashboardWidgets,
   resolveWorkflowsDir,
+  respondToComponent,
   runAgentLoop,
   runMemorySweep,
   SESSION_SUMMARY_TAG,
@@ -1175,11 +1179,16 @@ export function createServer(opts: ServerOptions) {
               data: JSON.stringify({ name, args }),
             });
           },
-          onToolResult: (name, output) => {
+          onToolResult: (name, output, full) => {
             stream.writeSSE({
               event: "tool_result",
               data: JSON.stringify({ name, output: output.slice(0, 1000) }),
             });
+            // Each component as its own event, so the UI can draw it before
+            // the turn finishes.
+            for (const component of componentSpecs(full)) {
+              stream.writeSSE({ event: "component", data: JSON.stringify(component) });
+            }
           },
           onActivity: (desc) => {
             const prev = activityRegistry.get(session.id);
@@ -1748,6 +1757,61 @@ export function createServer(opts: ServerOptions) {
     const deleted = deleteCollection(runtime.db, id);
     if (!deleted) return c.json({ error: "Collection not found" }, 404);
     return c.json({ ok: true });
+  });
+
+  // --- Agent interfaces (docs/agent-interfaces.md) ---
+  //
+  // A component's state, and a person answering one. A `reply` answer comes
+  // back as text for the chat to send as the person's next message, the way an
+  // <ask> button always has; an `event` answer is announced on the bus.
+
+  const toComponentJson = (r: ReturnType<ReturnType<typeof interfaceStoreFor>["get"]>) =>
+    r
+      ? {
+          id: r.spec.id,
+          kind: r.spec.kind,
+          status: r.status,
+          spec: r.spec,
+          ...(r.response ? { response: r.response } : {}),
+          ...(r.note ? { note: r.note } : {}),
+        }
+      : null;
+
+  app.get("/api/interfaces", (c) => {
+    const ids = (c.req.query("ids") ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 100);
+    const records = interfaceStoreFor(runtime.db).list(ids);
+    return c.json({ components: records.map(toComponentJson) });
+  });
+
+  app.get("/api/interfaces/:id", (c) => {
+    const json = toComponentJson(interfaceStoreFor(runtime.db).get(c.req.param("id")));
+    return json ? c.json(json) : c.json({ error: "No such component" }, 404);
+  });
+
+  app.post("/api/interfaces/:id/respond", async (c) => {
+    const id = c.req.param("id");
+    const store = interfaceStoreFor(runtime.db);
+    if (!store.get(id)) return c.json({ error: "No such component" }, 404);
+    const body = await c.req
+      .json<{ actionId?: string; value?: unknown }>()
+      .catch(() => ({}) as { actionId?: string; value?: unknown });
+    if (!body.actionId) return c.json({ error: "actionId is required" }, 400);
+    try {
+      const result = respondToComponent(store, runtime.events, {
+        id,
+        actionId: body.actionId,
+        ...("value" in body ? { value: body.value } : {}),
+        by: "owner",
+      });
+      return c.json(result);
+    } catch (err) {
+      if (err instanceof InterfaceError) return c.json({ error: err.message }, 409);
+      throw err;
+    }
   });
 
   // --- World state (docs/world-state.md) ---
@@ -2518,11 +2582,14 @@ export function createServer(opts: ServerOptions) {
                   data: JSON.stringify({ name, args }),
                 });
               },
-              onToolResult: (name, output) => {
+              onToolResult: (name, output, full) => {
                 stream.writeSSE({
                   event: "tool_result",
                   data: JSON.stringify({ name, output: output.slice(0, 1000) }),
                 });
+                for (const component of componentSpecs(full)) {
+                  stream.writeSSE({ event: "component", data: JSON.stringify(component) });
+                }
               },
             });
 

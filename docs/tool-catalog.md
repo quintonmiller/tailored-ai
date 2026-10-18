@@ -11,7 +11,7 @@ This is the *registered* set, not the set any one agent sees: a factory returns
 `[]` when its config gate is off or unconfigured, and an agent's `tools:` allowlist
 narrows further.
 
-Registered factories: **25** · meta-tools always injected: **8**
+Registered factories: **26** · meta-tools always injected: **8**
 
 ## No default for the config gate
 
@@ -46,6 +46,7 @@ not assumed broken.
 | `exec` | `tools.exec` | yes | `packages/core/src/tools/builtin.ts` |
 | `extract_document` | `tools.extract_document` | yes | `packages/core/src/tools/builtin.ts` |
 | `facts` | `tools.facts` | yes | `packages/core/src/tools/builtin.ts` |
+| `interface` | `tools.interface` | yes | `packages/core/src/tools/builtin.ts` |
 | `md_to_pdf` | `tools.md_to_pdf` | **none** | `packages/core/src/tools/builtin.ts` |
 | `memory` | `tools.memory` | yes | `packages/core/src/tools/builtin.ts` |
 | `notify_owner` | `tools.notify_owner` | **none** | `packages/core/src/tools/builtin.ts` |

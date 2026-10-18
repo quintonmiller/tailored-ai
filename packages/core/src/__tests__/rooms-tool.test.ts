@@ -1336,6 +1336,25 @@ describe("post carries the media this turn produced", () => {
     expect(last?.media?.map((m) => m.id)).toEqual([AUDIO]);
   });
 
+  it("posts the text form of a component the turn sent, since no room can draw one", async () => {
+    writeToolMediaMessage(AUDIO);
+    db.prepare("INSERT INTO messages (session_id, role, content) VALUES (?, 'tool', ?)").run(
+      "session-1",
+      JSON.stringify({
+        __tai_content: 1,
+        parts: [
+          { type: "text", text: "Sent choice c-1." },
+          {
+            type: "component",
+            component: { id: "c-1", kind: "choice", props: {}, fallback: "[choice c-1] Ship it?\n1. yes\n2. no" },
+          },
+        ],
+      }),
+    );
+    await post("studio", "Quick question for you.");
+    expect(cap.sent.at(-1)?.body).toBe("Quick question for you.\n\n[choice c-1] Ship it?\n1. yes\n2. no");
+  });
+
   it("sends no media field when the turn produced none", async () => {
     await post("studio", "Just talking.");
     expect(cap.sent.at(-1)?.media).toBeUndefined();

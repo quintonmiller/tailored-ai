@@ -29,6 +29,7 @@ import type { SlashCommandDescriptor, SlashCommandRegistryView } from "./command
 import { slashCommandRegistry } from "./commands/registry.js";
 import { type EventBus, TypedEventBus } from "./events.js";
 import { createHttpRegistryView, type HttpRegistryView, HttpRouteRegistry } from "./http/registry.js";
+import { type ComponentKind, registerComponentKind } from "./interfaces/kinds.js";
 import { type MediaStoreFactory, registerMediaStoreFactory } from "./media/registry.js";
 import { type MediaRenditionFactory, registerMediaRenditionFactory } from "./media/renditions.js";
 import type { MemoryBackendFactory } from "./memory/registry.js";
@@ -94,6 +95,10 @@ export interface StateTypeRegistryView {
   register(def: StateTypeDef): Disposer;
 }
 
+export interface ComponentKindRegistryView {
+  register(kind: ComponentKind): Disposer;
+}
+
 export interface MediaStoreRegistryView {
   register(id: string, factory: MediaStoreFactory): Disposer;
 }
@@ -149,6 +154,8 @@ export interface PluginContext {
   stateProviders: StateProviderRegistryView;
   /** World-state types a plugin brings. A type of the same name in `state.types` wins. */
   stateTypes: StateTypeRegistryView;
+  /** Interface component kinds an agent can send. See `docs/agent-interfaces.md`. */
+  componentKinds: ComponentKindRegistryView;
   /**
    * Where media bytes live. An S3 or GCS store registers here.
    *
@@ -455,6 +462,7 @@ export function createPluginContext(opts: CreatePluginContextOptions = {}): Plug
     memoryBackends: { register: collecting(registerMemoryBackendFactory) },
     stateProviders: { register: collecting(registerStateProvider) },
     stateTypes: { register: collecting(registerStateType) },
+    componentKinds: { register: collecting(registerComponentKind) },
     mediaStores: { register: collecting(registerMediaStoreFactory) },
     mediaRenditions: { register: collecting(registerMediaRenditionFactory) },
     taskBackends: { register: collecting(registerTaskBackendFactory) },

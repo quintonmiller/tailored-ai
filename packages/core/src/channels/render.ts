@@ -81,6 +81,13 @@ export function renderForSurface(
       if (part.text) segments.push(part.text);
       continue;
     }
+    // No transport draws components natively yet, so every one gets the text
+    // form core wrote for it: numbered options, "reply yes or no". The web UI
+    // draws them from stored messages and never comes through here.
+    if (part.type === "component") {
+      segments.push(part.component.fallback);
+      continue;
+    }
     const rendered = renderMediaPart(part, caps, opts, {
       seen,
       attachments,

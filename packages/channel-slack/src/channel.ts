@@ -10,6 +10,7 @@ import type {
 } from "@tailored-ai/core";
 import {
   attachmentName,
+  collectTurnComponents,
   collectTurnMedia,
   executeHooks,
   latestMessageId,
@@ -347,11 +348,15 @@ export class SlackChannel implements Channel, OutboundNotifier {
     }
 
     const produced = collectTurnMedia(this.runtime.db, session.id, watermark);
-    if (!response && produced.length === 0) return undefined;
+    // Components the turn's tools sent; the render ladder posts their text
+    // form, since Slack blocks are not wired yet.
+    const components = collectTurnComponents(this.runtime.db, session.id, watermark);
+    if (!response && produced.length === 0 && components.length === 0) return undefined;
     return {
       parts: [
         ...(response ? [{ type: "text" as const, text: response }] : []),
         ...produced.map((m) => ({ type: "media" as const, media: m })),
+        ...components.map((component) => ({ type: "component" as const, component })),
       ],
     };
   }

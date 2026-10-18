@@ -17,7 +17,29 @@ export interface MediaRef {
   url?: string;
 }
 
-export type ContentPart = { type: "text"; text: string } | { type: "media"; media: MediaRef; alt?: string };
+export type ActionEffect = { kind: "reply" } | { kind: "event"; name?: string };
+
+export interface ActionSpec {
+  id: string;
+  label?: string;
+  effect: ActionEffect;
+}
+
+/** An interface an agent sent. Mirrors `ComponentSpec` in core's `content/types.ts`. */
+export interface ComponentSpec {
+  id: string;
+  kind: string;
+  props: Record<string, unknown>;
+  actions?: ActionSpec[];
+  /** The text form core wrote; what to show for a kind this UI cannot draw. */
+  fallback: string;
+  expiresAt?: string;
+}
+
+export type ContentPart =
+  | { type: "text"; text: string }
+  | { type: "media"; media: MediaRef; alt?: string }
+  | { type: "component"; component: ComponentSpec };
 
 export interface MessageContent {
   parts: ContentPart[];
@@ -41,6 +63,12 @@ export function contentText(content: string | MessageContent | null | undefined)
 export function contentMedia(content: string | MessageContent | null | undefined): MediaRef[] {
   if (!content || typeof content === "string") return [];
   return content.parts.flatMap((p) => (p.type === "media" ? [p.media] : []));
+}
+
+/** Components in a content value, in order. */
+export function contentComponents(content: string | MessageContent | null | undefined): ComponentSpec[] {
+  if (!content || typeof content === "string") return [];
+  return content.parts.flatMap((p) => (p.type === "component" ? [p.component] : []));
 }
 
 export function isImage(ref: MediaRef): boolean {

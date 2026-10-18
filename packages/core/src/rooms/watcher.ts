@@ -23,11 +23,11 @@ import { resolveAgent } from "../agent/agents.js";
 import { registerContextSlot, unregisterContextSlot } from "../agent/context-slots.js";
 import { estimateTokens, isStallStop, type LoopStop, runAgentLoop, stallReasonOf } from "../agent/loop.js";
 import { findOrCreateSession } from "../agent/session.js";
-import { type MediaRef, mediaPlaceholder } from "../content/types.js";
+import { type ComponentSpec, type MediaRef, mediaPlaceholder } from "../content/types.js";
 import type { Subscription } from "../events.js";
 import { checkGuardrails } from "../guardrails/check.js";
 import type { GuardrailSpec } from "../guardrails/types.js";
-import { collectTurnMedia, latestMessageId } from "../media/turn.js";
+import { collectTurnComponents, collectTurnMedia, latestMessageId, withComponentText } from "../media/turn.js";
 import { PASSTHROUGH_GATE } from "../notifications/dedup.js";
 import type { AgentRuntime } from "../runtime.js";
 import { describeBooking, lateLine, recurringLine, type WakeContext } from "../schedules/wake-context.js";
@@ -2289,6 +2289,7 @@ export class RoomWatcher {
         messages ?? [],
         collectTurnMedia(this.runtime.db, session.id, watermark),
         resolved.guardrails,
+        collectTurnComponents(this.runtime.db, session.id, watermark),
       );
     }
     // Attached underneath the reply, so the room reads as conversation and
@@ -2569,6 +2570,7 @@ export class RoomWatcher {
     seen: RoomMessage[],
     produced: MediaRef[] = [],
     guardrails?: GuardrailSpec[],
+    components: ComponentSpec[] = [],
   ): Promise<RoomMessage | null> {
     const body = (reply ?? "").trim();
     // Media only ever rides a reply that HAS a reply. Unlike a DM, silence is
@@ -2656,7 +2658,10 @@ export class RoomWatcher {
         // person will read when they look; if an agent actually needs them it
         // says so through `room(action="post", notify=true)`.
         posted = await backend.post(ref.id, {
-          body: spoken,
+          // Components ride a reply the way media does, as their text form:
+          // no room transport draws them. Appended here, after the guardrail
+          // check, so a long form cannot trip a rule about the agent's words.
+          body: withComponentText(spoken, components),
           speaker: label,
           to,
           notify: false,

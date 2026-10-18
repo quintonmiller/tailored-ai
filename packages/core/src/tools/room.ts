@@ -17,7 +17,7 @@
  */
 
 import { checkGuardrails } from "../guardrails/check.js";
-import { collectTurnMedia, turnStartId } from "../media/turn.js";
+import { collectTurnComponents, collectTurnMedia, turnStartId, withComponentText } from "../media/turn.js";
 import type { NotificationGateLike } from "../notifications/dedup.js";
 import { resolveGate } from "../notifications/dedup.js";
 import { extractLeadingAddressees, renderTranscriptLine } from "../rooms/envelope.js";
@@ -459,8 +459,9 @@ export class RoomTool implements Tool {
         // file existed and could not make it arrive; one worked around it by
         // typing the `[audio: … #id]` placeholder into its own message body.
         const media = context.db ? collectTurnMedia(context.db, context.sessionId, turnStart) : [];
+        const components = context.db ? collectTurnComponents(context.db, context.sessionId, turnStart) : [];
         const posted = await backend.post(room.ref.id, {
-          body: spoken,
+          body: withComponentText(spoken, components),
           speaker,
           to: finalTo,
           notify: args.notify === true,

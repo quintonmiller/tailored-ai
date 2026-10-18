@@ -542,7 +542,12 @@ export interface AgentLoopOptions {
    */
   getModelChain?: () => ModelCandidate[];
   onToolCall?: (name: string, args: Record<string, unknown>) => void;
-  onToolResult?: (name: string, result: string) => void;
+  /**
+   * `result` is the text projection; `output` is the result itself, for a
+   * surface that draws parts as they arrive (an interface component, say)
+   * rather than waiting to read them back from the stored messages.
+   */
+  onToolResult?: (name: string, result: string, output?: string | ToolOutput) => void;
   /** Fires with a short description when the agent emits reasoning text before tool calls. Fires null when the loop ends. */
   onActivity?: (description: string | null) => void;
   /** Fires after each provider.chat() with token counts from the response. */
@@ -2241,8 +2246,9 @@ async function _runAgentLoopBody(
               .map((m) => `${m.role}: ${messageText(m.content)}`)
               .filter((line) => line.length > 6),
         });
-        // Surfaces still receive text; parts reach them in the render phase.
-        opts.onToolResult?.(call.name, toolOutputText(outcome.output));
+        // Surfaces receive the text projection, and the parts for any that draw
+        // them as they arrive.
+        opts.onToolResult?.(call.name, toolOutputText(outcome.output), outcome.output);
         return { call, ...outcome };
       }),
     );

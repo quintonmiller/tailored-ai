@@ -159,6 +159,12 @@ function multimodalContent(msg: Message, media?: ReadonlyMap<string, Buffer>): O
       if (part.text) out.push({ type: "text", text: part.text });
       continue;
     }
+    // `adaptForCapabilities` turns components into text before a request is
+    // built; this is the floor under it, so no request ever carries one raw.
+    if (part.type === "component") {
+      out.push({ type: "text", text: part.component.fallback });
+      continue;
+    }
     const { media: ref, alt } = part;
     const isImage = mediaKind(ref.mimeType) === "image";
     // A ref carrying its own URL is the provider's to fetch, so the bytes were

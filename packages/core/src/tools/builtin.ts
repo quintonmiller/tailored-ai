@@ -14,6 +14,7 @@
 
 import { resolve } from "node:path";
 import { DEFAULT_CONFIG } from "../config.js";
+import { interfaceStoreFor } from "../interfaces/index.js";
 import { IdentityResolver } from "../rooms/identities.js";
 import { LocalRoomBackend } from "../rooms/local.js";
 import { getRoomBackend, listRoomBackends, registerRoomBackend } from "../rooms/registry.js";
@@ -33,6 +34,7 @@ import { EditTool } from "./edit.js";
 import { ExecTool } from "./exec.js";
 import { ExtractDocumentTool } from "./extract-document.js";
 import { FactsTool } from "./facts.js";
+import { InterfaceTool } from "./interface-tool.js";
 import { MdToPdfTool } from "./md-to-pdf.js";
 import { MemoryTool } from "./memory.js";
 import { NotifyOwnerTool } from "./notify-owner.js";
@@ -272,6 +274,13 @@ registerToolFactory("state", (config, ctx) => {
   // prompt, so it is offered only once at least one type exists.
   if (!config.state?.types?.length && stateTypeRegistry.list().length === 0) return [];
   return [new StateTool(ctx.getStateService)];
+});
+
+registerToolFactory("interface", (config, ctx) => {
+  if (config.tools.interface?.enabled === false) return [];
+  const db = ctx.db;
+  if (!db) return [];
+  return [new InterfaceTool(() => interfaceStoreFor(db))];
 });
 
 registerToolFactory("documents", (config, ctx) => {

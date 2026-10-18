@@ -1,4 +1,4 @@
-import type { MediaRef, MessageContent } from "./lib/content.js";
+import type { ComponentSpec, MediaRef, MessageContent } from "./lib/content.js";
 export interface SessionRow {
   id: string;
   key: string | null;
@@ -77,6 +77,10 @@ export interface Message {
   // The model's reasoning/thinking trace (#254), when it emitted one. Rendered
   // as a collapsible "Thinking" disclosure; never sent back to the server.
   reasoning?: string;
+  // UI-only: interface components the turn's tool calls sent, lifted out of
+  // the folded tool log so they render under the reply. Populated by
+  // groupTurns() for history and by the streaming loop for a live turn.
+  components?: ComponentSpec[];
 }
 
 export interface HealthInfo {
@@ -196,6 +200,40 @@ export function fetchSessions(opts?: { project?: string | "global" | null }): Pr
 
 export function fetchMessages(sessionId: string): Promise<Message[]> {
   return jsonFetch(`/api/sessions/${sessionId}/messages`);
+}
+
+export type ComponentStatus = "open" | "answered" | "closed" | "expired";
+
+export interface ComponentState {
+  id: string;
+  kind: string;
+  status: ComponentStatus;
+  spec: ComponentSpec;
+  response?: { actionId: string; value?: unknown; by: string; at: string };
+  note?: string;
+}
+
+/** Current state of several components at once: whether each is still open, and what was answered. */
+export function fetchInterfaces(ids: string[]): Promise<{ components: (ComponentState | null)[] }> {
+  return jsonFetch(`/api/interfaces?ids=${ids.map(encodeURIComponent).join(",")}`);
+}
+
+export type RespondResult = { effect: "reply"; reply: string } | { effect: "event" };
+
+/**
+ * Answer a component. Unlike `jsonFetch`, a refusal keeps the server's own
+ * sentence ("This question has expired."), because that is what the person
+ * needs to see.
+ */
+export async function respondInterface(id: string, actionId: string, value?: unknown): Promise<RespondResult> {
+  const res = await fetch(`/api/interfaces/${encodeURIComponent(id)}/respond`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(value === undefined ? { actionId } : { actionId, value }),
+  });
+  const body = (await res.json().catch(() => ({}))) as { error?: string } & Partial<RespondResult>;
+  if (!res.ok) throw new Error(body.error ?? `${res.status} ${res.statusText}`);
+  return body as RespondResult;
 }
 
 export function updateSession(
@@ -1443,7 +1481,8 @@ export interface ChatEvent {
     | "error"
     | "activity"
     | "approval_request"
-    | "memory_recalled";
+    | "memory_recalled"
+    | "component";
   data: Record<string, unknown>;
 }
 

@@ -231,3 +231,23 @@ describe("plugin contract — world state", () => {
     expect(core.stateTypeRegistry.has("bookmark")).toBe(false);
   });
 });
+
+describe("plugin contract — interface component kinds", () => {
+  it("a plugin can add a kind through its context, and it goes away when disposed", () => {
+    const ctx = core.createPluginContext({});
+    const dispose = ctx.componentKinds.register({
+      kind: "rating",
+      description: "Rate something out of five.",
+      schema: { type: "object", required: ["subject"], properties: { subject: { type: "string" } } },
+      defaultActions: () => [{ id: "r5", label: "5", effect: { kind: "reply" } }],
+      fallback: (props) => `Rate ${String(props.subject)}.`,
+    });
+    try {
+      const spec = core.buildComponent({ kind: "rating", id: "r-1", props: { subject: "the hotel" } });
+      expect(spec.fallback).toBe("[rating r-1] Rate the hotel.");
+    } finally {
+      dispose();
+    }
+    expect(core.componentKindRegistry.has("rating")).toBe(false);
+  });
+});

@@ -15,7 +15,7 @@ import {
   type ToolLogEntry,
   updateSession,
 } from "../api";
-import type { MediaRef } from "../lib/content.js";
+import type { ComponentSpec, MediaRef } from "../lib/content.js";
 import { describeError, useToast } from "./Toast";
 
 export interface PendingApproval {
@@ -171,6 +171,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
       let finalTools: ToolLogEntry[] = [];
       let recalled: { count: number; sources: string[]; pinned?: string[] } | undefined;
+      // Components the turn's tools sent, by id so an update replaces in place.
+      const components = new Map<string, ComponentSpec>();
 
       abortRef.current = sendChat(
         text,
@@ -186,6 +188,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
             case "activity":
               setActivityDesc((event.data.description as string | null | undefined) ?? null);
               break;
+            case "component": {
+              const spec = event.data as unknown as ComponentSpec;
+              if (spec?.id) components.set(spec.id, spec);
+              break;
+            }
             case "memory_recalled": {
               recalled = {
                 count: (event.data.count as number) ?? 0,
@@ -262,9 +269,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                   toolLog: finalTools.length > 0 ? finalTools : undefined,
                   recalled,
                   reasoning: (event.data.reasoning as string | undefined) || undefined,
+                  ...(components.size > 0 ? { components: [...components.values()] } : {}),
                 },
               ]);
               recalled = undefined;
+              components.clear();
               break;
             }
             case "error": {
