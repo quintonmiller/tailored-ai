@@ -7410,6 +7410,61 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
   font-style: italic;
 }
 
+/* Agent interfaces: components an agent sent. Built on the ask card's look so
+   a choice and an <ask> read as the same kind of thing. */
+.iface {
+  margin: 8px 0;
+  padding: 10px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.iface .ask-prompt { margin-bottom: 0; }
+.iface-done { opacity: 0.75; }
+.iface .ask-choice:disabled { cursor: default; opacity: 0.6; }
+.iface-details {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+}
+.iface-card-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.iface-card-fields {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 0;
+  font-size: 12px;
+}
+.iface-card-field { display: contents; }
+.iface-card-field dt { color: var(--text-dim); }
+.iface-card-field dd { margin: 0; color: var(--text); font-variant-numeric: tabular-nums; }
+.iface-form { display: flex; flex-direction: column; gap: 8px; }
+.iface-field { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+.iface-field label { color: var(--text-dim); }
+.iface-field input[type="text"],
+.iface-field input[type="number"],
+.iface-field input[type="date"],
+.iface-field select {
+  padding: 6px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+}
+.iface-field input[type="checkbox"] { align-self: flex-start; }
+.iface-form .ask-send { align-self: flex-start; }
+.iface-error { font-size: 12px; color: var(--red); }
+.iface button:focus-visible,
+.iface input:focus-visible,
+.iface select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 /* Pinned memory tier (DUX9) */
 .memory-section-label {
   font-size: 11px;

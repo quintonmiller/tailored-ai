@@ -1346,6 +1346,10 @@ export interface AgentConfig {
     state?: {
       enabled: boolean;
     };
+    /** The `interface` tool: choices, forms, confirmations and cards an agent can send. */
+    interface?: {
+      enabled: boolean;
+    };
     documents?: {
       enabled: boolean;
     };
@@ -1961,6 +1965,7 @@ export const DEFAULT_CONFIG: AgentConfig = {
     projects: { enabled: true, directory: "./data/projects" },
     collections: { enabled: true },
     state: { enabled: true },
+    interface: { enabled: true },
     room: { enabled: true },
     documents: { enabled: true },
     extract_document: { enabled: false },

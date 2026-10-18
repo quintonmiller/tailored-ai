@@ -22,7 +22,7 @@
 
 import type Database from "better-sqlite3";
 import { decodeMessageContent } from "../content/codec.js";
-import { type MediaRef, mediaRefs } from "../content/types.js";
+import { type ComponentSpec, componentSpecs, type MediaRef, mediaRefs } from "../content/types.js";
 
 /**
  * Highest message id in a session, or 0 when it has none.
@@ -100,4 +100,36 @@ export function collectTurnMedia(
     }
   }
   return out;
+}
+
+/**
+ * Interface components tool messages wrote after `afterId`: each one once, in
+ * the order it was first sent, as its latest version — an `update` replaces
+ * the earlier one rather than posting the question twice.
+ *
+ * Read from the record for the same reason media is. A surface that cannot
+ * draw a component still has to show it, and a component lives in a tool
+ * result, which a channel otherwise never posts.
+ */
+export function collectTurnComponents(db: Database.Database, sessionId: string, afterId: number): ComponentSpec[] {
+  const rows = db
+    .prepare(
+      `SELECT content FROM messages
+        WHERE session_id = ? AND id > ? AND role = 'tool'
+          AND rewound_batch IS NULL AND compacted_batch IS NULL
+        ORDER BY id ASC`,
+    )
+    .all(sessionId, afterId) as { content: string | null }[];
+  const byId = new Map<string, ComponentSpec>();
+  for (const row of rows) {
+    for (const spec of componentSpecs(decodeMessageContent(row.content))) byId.set(spec.id, spec);
+  }
+  return [...byId.values()];
+}
+
+/** A reply with the text form of each component appended, for a surface that posts text. */
+export function withComponentText(body: string, components: readonly ComponentSpec[]): string {
+  if (components.length === 0) return body;
+  const forms = components.map((c) => c.fallback).join("\n\n");
+  return body ? `${body}\n\n${forms}` : forms;
 }

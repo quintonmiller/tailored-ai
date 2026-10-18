@@ -182,6 +182,18 @@ function verdict(state: SupportState, policy: MediaPolicy): "send" | "degrade" |
  * `stripOrphanedToolMessages` have already run against the real history, so
  * they never see the synthesized message and cannot split it from its pair.
  */
+/** A message with its component parts replaced by text parts, or the same message when it has none. */
+function componentsAsText(msg: Message): Message {
+  if (typeof msg.content !== "object" || msg.content === null) return msg;
+  if (!msg.content.parts.some((p) => p.type === "component")) return msg;
+  return {
+    ...msg,
+    content: {
+      parts: msg.content.parts.map((p) => (p.type === "component" ? { type: "text", text: p.component.fallback } : p)),
+    },
+  };
+}
+
 export function adaptForCapabilities(
   messages: readonly Message[],
   caps: ModelCapabilities,
@@ -209,9 +221,15 @@ export function adaptForCapabilities(
     pendingFollowUps = [];
   };
 
-  for (const msg of messages) {
+  for (const original of messages) {
     // A non-tool message closes the block, so anything held back goes first.
-    if (msg.role !== "tool") flushFollowUps();
+    if (original.role !== "tool") flushFollowUps();
+
+    // No model draws an interface component, so each becomes the text form
+    // core wrote for it, before media is considered. A rendering, never
+    // persisted, like everything else this function produces.
+    const msg = componentsAsText(original);
+    if (msg !== original) notes.push("interface components shown to the model as their text form");
 
     const parts = contentParts(msg.content);
     const media = parts.filter((p) => p.type === "media");

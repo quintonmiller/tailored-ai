@@ -1,5 +1,5 @@
 import type { Message, ToolLogEntry, ToolLogToolEntry } from "./api";
-import { contentText } from "./lib/content.js";
+import { type ComponentSpec, contentComponents, contentText } from "./lib/content.js";
 
 /**
  * Collapse a flat message stream into "turns". A turn is the span from a
@@ -27,6 +27,9 @@ export function groupTurns(messages: Message[]): Message[] {
 
     // Build the work log from everything except the final-text carrier itself.
     const log: ToolLogEntry[] = [];
+    // Components a tool sent this turn, by id: an update replaces the earlier
+    // version in place, so the reply shows each component once, as it is now.
+    const components = new Map<string, ComponentSpec>();
     for (let i = 0; i < span.length; i++) {
       const m = span[i];
       if (m.role === "assistant") {
@@ -40,16 +43,18 @@ export function groupTurns(messages: Message[]): Message[] {
         }
       } else if (m.role === "tool") {
         attachToolResult(log, m.toolCallId, contentText(m.content));
+        for (const c of contentComponents(m.content)) components.set(c.id, c);
       }
     }
 
     const finalMsg = lastTextIdx >= 0 ? span[lastTextIdx] : null;
+    const lifted = components.size > 0 ? { components: [...components.values()] } : {};
     if (finalMsg) {
-      out.push({ ...finalMsg, toolLog: log.length > 0 ? log : finalMsg.toolLog });
+      out.push({ ...finalMsg, toolLog: log.length > 0 ? log : finalMsg.toolLog, ...lifted });
     } else if (log.length > 0) {
       // Span had no closing text — emit a content-less carrier so the work
       // log is still visible (e.g. an interrupted turn).
-      out.push({ role: "assistant", content: null, toolLog: log });
+      out.push({ role: "assistant", content: null, toolLog: log, ...lifted });
     }
     span = [];
   }

@@ -15,7 +15,7 @@ call site. A field with **0 in both** is the one to go and look at: a field
 nothing consumes is indistinguishable from a working feature, because the only
 symptom is that behaviour never changed (#335).
 
-Fields: **74** · with no read site found: **0**
+Fields: **75** · with no read site found: **0**
 
 ## Every field
 
@@ -185,6 +185,7 @@ Fields: **74** · with no read site found: **0**
 | `tools.exec.enabled` | boolean | `true` | 38 | **0** |
 | `tools.extract_document.enabled` | boolean | `false` | 38 | 1 |
 | `tools.facts.enabled` | boolean | `true` | 38 | 1 |
+| `tools.interface.enabled` | boolean | `true` | 38 | 1 |
 | `tools.memory.enabled` | boolean | `true` | 38 | 1 |
 | `tools.projects.directory` | string | `./data/projects` | 4 | 2 |
 | `tools.projects.enabled` | boolean | `true` | 38 | 1 |

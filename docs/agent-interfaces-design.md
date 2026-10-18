@@ -1,7 +1,8 @@
 # Agent interfaces — Design
 
-> Status: design, accepted. Second of three linked designs:
-> [world state](./world-state-design.md), this one, and
+> Status: design, accepted. **Phase 1 is implemented**: see
+> [agent-interfaces.md](./agent-interfaces.md) for what works today. Second of
+> three linked designs: [world state](./world-state-design.md), this one, and
 > [live sessions](./live-sessions-design.md).
 
 ## Goal
@@ -203,7 +204,7 @@ Each one deletes a one-off system:
 
 | # | Slice |
 |---|---|
-| 1 | Component part, kind registry with text fallback, persistence, `interface` tool, web renderers for `choice`, `form`, `confirm`, `card`, `reply` and `event` effects |
+| 1 | Component part, kind registry with text fallback, persistence, `interface` tool, web renderers for `choice`, `form`, `confirm`, `card`, `reply` and `event` effects — **done** |
 | 2 | `<ask>` compiles to components |
 | 3 | Discord renderers and response routing |
 | 4 | State binding, `state` effect, live updates (needs world state phases 1 and 7) |

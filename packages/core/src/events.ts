@@ -264,6 +264,25 @@ export interface RuntimeEventMap {
    */
   "state.changed": import("./state/types.js").StateChange;
 
+  /**
+   * A person used an interactive element on a component an agent sent, and
+   * the action's effect is `event`. Names the agent that sent the component,
+   * so a hook or subscription can be scoped to it. A `reply` action is not
+   * announced here: it continues the conversation as a message instead.
+   */
+  "interface.action": {
+    componentId: string;
+    kind: string;
+    actionId: string;
+    label?: string;
+    /** The action's `name`, when the agent gave it one to match on. */
+    name?: string;
+    value?: unknown;
+    agent: string;
+    sessionId: string;
+    by: string;
+  };
+
   "schedule.created": {
     id: string;
     agent: string;
@@ -999,6 +1018,7 @@ export const KNOWN_BROADCAST_EVENTS = [
   "approval.settled",
   "digest.ready",
   "form.completed",
+  "interface.action",
   "question.asked",
   "repo.check.completed",
   "repo.proposal.closed",
@@ -1074,6 +1094,7 @@ export const AGENT_SCOPED_EVENTS = [
   "agent.stalled",
   "approval.requested",
   "approval.settled",
+  "interface.action",
   "room.membership_changed",
   "room.turn_ended",
   "room.woke",

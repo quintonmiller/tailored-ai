@@ -80,6 +80,21 @@ export type {
   GuardrailSpec,
   GuardrailVerdict,
 } from "./guardrails/types.js";
+export {
+  type AgentAction,
+  buildComponent,
+  type ComponentKind,
+  type ComponentRecord,
+  type ComponentResponse,
+  type ComponentStatus,
+  componentKindRegistry,
+  InterfaceError,
+  InterfaceStore,
+  interfaceStoreFor,
+  type RespondResult,
+  registerComponentKind,
+  respondToComponent,
+} from "./interfaces/index.js";
 export { connectMcpServer, type McpConnection, mcpToolName } from "./mcp/client.js";
 export { type McpHost, McpManager } from "./mcp/manager.js";
 export type { ExpandOptions } from "./prompts/expand.js";
@@ -360,8 +375,19 @@ export { ConfigWriteRejected, updateRawConfig, writeRawConfigText } from "./conf
 export { decodeMessageContent, encodeMessageContent } from "./content/codec.js";
 // Media (docs/media-design.md): content parts, the text projection, the
 // content-addressed store seam and its bundled disk implementation.
-export type { ContentPart, MediaKind, MediaRef, MessageContent, ToolOutput } from "./content/types.js";
+export type {
+  ActionEffect,
+  ActionSpec,
+  ComponentSpec,
+  ContentPart,
+  MediaKind,
+  MediaRef,
+  MessageContent,
+  ToolOutput,
+} from "./content/types.js";
 export {
+  componentPart,
+  componentSpecs,
   contentParts,
   hasMedia,
   mediaKind,
@@ -664,7 +690,13 @@ export {
 } from "./media/renditions.js";
 export { sniffMedia, UnknownMediaTypeError } from "./media/sniff.js";
 export type { CollectTurnMediaOptions } from "./media/turn.js";
-export { collectTurnMedia, latestMessageId, turnStartId } from "./media/turn.js";
+export {
+  collectTurnComponents,
+  collectTurnMedia,
+  latestMessageId,
+  turnStartId,
+  withComponentText,
+} from "./media/turn.js";
 export type {
   ListQuery as MemoryListQuery,
   MemoryBackend,

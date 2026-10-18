@@ -25,7 +25,7 @@ import type { MediaRef, MessageContent } from "../content/types.js";
 import { loadAllContext, loadContextFiles } from "../context.js";
 import { getSessionMessages } from "../db/queries.js";
 import { createProjectTask, queryProjectTasks } from "../db/task-queries.js";
-import { collectTurnMedia, latestMessageId } from "../media/turn.js";
+import { collectTurnComponents, collectTurnMedia, latestMessageId } from "../media/turn.js";
 import type { ProjectRef } from "../projects/resolve.js";
 import { IdentityResolver } from "../rooms/identities.js";
 import { getRoomBackend, registerRoomBackend, unregisterRoomBackend } from "../rooms/registry.js";
@@ -917,7 +917,10 @@ export class DiscordChannel implements Channel, OutboundNotifier {
       // bubble, so without this the person who asked to *see* something gets
       // only a description of it.
       const produced = collectTurnMedia(this.runtime.db, session.id, watermark);
-      if (!response && produced.length === 0) return;
+      // Components the turn's tools sent. Drawn as their text form by the
+      // render ladder, since Discord buttons are not wired yet.
+      const components = collectTurnComponents(this.runtime.db, session.id, watermark);
+      if (!response && produced.length === 0 && components.length === 0) return;
 
       // Reply to the original message so the answer keeps its thread, then use
       // the plain send for the rest. Only the reply needs `msg.reply`; the
@@ -927,6 +930,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
         parts: [
           ...(response ? [{ type: "text" as const, text: response }] : []),
           ...produced.map((media) => ({ type: "media" as const, media })),
+          ...components.map((component) => ({ type: "component" as const, component })),
         ],
       };
       await this.deliver(outbound, (payload, first) =>

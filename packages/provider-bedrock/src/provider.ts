@@ -107,6 +107,12 @@ function toConverseBlocks(
       pushText(part.text);
       continue;
     }
+    // Core turns interface components into text before a request is built;
+    // this keeps a stray one from ever reaching the API raw.
+    if (part.type === "component") {
+      pushText(part.component.fallback);
+      continue;
+    }
     const bytes = media?.get(part.media.id);
     const format = converseImageFormat(part.media.mimeType);
     if (bytes && format) {

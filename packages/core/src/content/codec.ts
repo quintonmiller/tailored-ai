@@ -19,7 +19,14 @@
  * before trusting it.
  */
 
-import { type ContentPart, isMessageContent, type MediaRef, type MessageContent, messageText } from "./types.js";
+import {
+  type ComponentSpec,
+  type ContentPart,
+  isMessageContent,
+  type MediaRef,
+  type MessageContent,
+  messageText,
+} from "./types.js";
 
 /**
  * Discriminator written into every encoded row.
@@ -49,7 +56,7 @@ export function encodeMessageContent(content: string | MessageContent | null | u
   // A parts array holding nothing but text is stored as plain text: it reads
   // the same to every consumer, keeps the column greppable, and avoids
   // encoding rows that gain nothing from it.
-  if (!content.parts.some((p) => p.type === "media")) {
+  if (content.parts.every((p) => p.type === "text")) {
     return messageText(content);
   }
   const payload: EncodedContent = { [ENCODED_MARKER]: 1, parts: content.parts };
@@ -84,7 +91,21 @@ function isValidPart(part: unknown): part is ContentPart {
   const p = part as Record<string, unknown>;
   if (p.type === "text") return typeof p.text === "string";
   if (p.type === "media") return isValidMediaRef(p.media);
+  if (p.type === "component") return isValidComponent(p.component);
   return false;
+}
+
+function isValidComponent(spec: unknown): spec is ComponentSpec {
+  if (typeof spec !== "object" || spec === null) return false;
+  const c = spec as Record<string, unknown>;
+  return (
+    typeof c.id === "string" &&
+    c.id.length > 0 &&
+    typeof c.kind === "string" &&
+    typeof c.fallback === "string" &&
+    typeof c.props === "object" &&
+    c.props !== null
+  );
 }
 
 function isValidMediaRef(ref: unknown): ref is MediaRef {

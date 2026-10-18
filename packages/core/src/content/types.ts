@@ -49,7 +49,53 @@ export interface MediaRef {
   url?: string;
 }
 
-export type ContentPart = { type: "text"; text: string } | { type: "media"; media: MediaRef; alt?: string };
+/**
+ * What an interactive element does when someone uses it.
+ *
+ * - `reply` — the response continues the conversation as the person's next
+ *   message, which is what `<ask>` has always done.
+ * - `event` — the response is announced as `interface.action` on the runtime
+ *   bus, where subscriptions and hooks route it.
+ *
+ * A third effect, writing to world state directly with no model turn, arrives
+ * with state binding. See `docs/agent-interfaces-design.md`.
+ */
+export type ActionEffect = { kind: "reply" } | { kind: "event"; name?: string };
+
+export interface ActionSpec {
+  /** Stable within its component; a response names it. */
+  id: string;
+  label?: string;
+  effect: ActionEffect;
+}
+
+/**
+ * An interface an agent sent: a question with choices, a form, a
+ * confirmation, a card. Data, not code — each surface owns how a kind is
+ * drawn, and every kind has a text form that works anywhere.
+ */
+export interface ComponentSpec {
+  /** Stable across updates, so a surface can replace what it drew and a response can find it. */
+  id: string;
+  /** Open string selecting a renderer: `choice`, `form`, `confirm`, `card`, or a plugin's. */
+  kind: string;
+  /** Validated against the kind's schema when the component is created. */
+  props: Record<string, unknown>;
+  actions?: ActionSpec[];
+  /**
+   * How the component reads where it cannot be drawn: on a text-only surface,
+   * and to the model. Written by core from the props when the component is
+   * created, never by the model, and stored so it is the same everywhere.
+   */
+  fallback: string;
+  /** ISO time after which responses are refused and surfaces draw it disabled. */
+  expiresAt?: string;
+}
+
+export type ContentPart =
+  | { type: "text"; text: string }
+  | { type: "media"; media: MediaRef; alt?: string }
+  | { type: "component"; component: ComponentSpec };
 
 /**
  * The non-string arm of {@link import("../providers/interface.js").Message}'s
@@ -104,6 +150,10 @@ export function mediaPart(media: MediaRef, alt?: string): ContentPart {
   return alt === undefined ? { type: "media", media } : { type: "media", media, alt };
 }
 
+export function componentPart(component: ComponentSpec): ContentPart {
+  return { type: "component", component };
+}
+
 /**
  * How a media part reads on a surface that cannot show it.
  *
@@ -122,7 +172,9 @@ export function mediaPlaceholder(media: MediaRef, alt?: string): string {
 /** Flatten parts to text. The one place a projection is defined. */
 export function partsToText(parts: readonly ContentPart[]): string {
   return parts
-    .map((p) => (p.type === "text" ? p.text : mediaPlaceholder(p.media, p.alt)))
+    .map((p) =>
+      p.type === "text" ? p.text : p.type === "media" ? mediaPlaceholder(p.media, p.alt) : p.component.fallback,
+    )
     .filter((s) => s.length > 0)
     .join("\n");
 }
@@ -176,6 +228,12 @@ export function toolOutputParts(output: string | ToolOutput | null | undefined):
 export function hasMedia(content: string | MessageContent | ToolOutput | null | undefined): boolean {
   if (content === null || content === undefined || typeof content === "string") return false;
   return content.parts.some((p) => p.type === "media");
+}
+
+/** Every component in a content value, in order. */
+export function componentSpecs(content: string | MessageContent | ToolOutput | null | undefined): ComponentSpec[] {
+  if (content === null || content === undefined || typeof content === "string") return [];
+  return content.parts.flatMap((p) => (p.type === "component" ? [p.component] : []));
 }
 
 /** Every media ref referenced by a content value, in order. */
