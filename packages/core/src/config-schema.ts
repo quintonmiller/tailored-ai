@@ -285,6 +285,23 @@ const StateTypeSchema = z.object({
   access: z.object({ read: z.array(z.string()).optional(), write: z.array(z.string()).optional() }).optional(),
 });
 
+/** `live:` — the speech stages are open strings resolved through their registries; their options are opaque. */
+const LiveConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  stt: z.object({ provider: z.string().optional(), options: z.record(z.unknown()).optional() }).optional(),
+  tts: z
+    .object({
+      provider: z.string().optional(),
+      options: z.record(z.unknown()).optional(),
+      voice: z.string().optional(),
+    })
+    .optional(),
+  limits: z
+    .object({ maxMinutes: z.number().optional(), idleMinutes: z.number().optional(), maxTurns: z.number().optional() })
+    .optional(),
+});
+type _LiveConfigMatches = AssertTrue<Identical<z.infer<typeof LiveConfigSchema>, NonNullable<AgentConfig["live"]>>>;
+
 /** `state.backend` selects a registered provider; `options` is that provider's own opaque bag. */
 const StateConfigSchema = z.object({
   backend: z.string().optional(),
@@ -399,6 +416,14 @@ export const AgentDefinitionSchema = z.object({
   skillLoading: z.enum(["eager", "progressive"]).optional(),
   online: OnlineAgentConfigSchema.optional(),
   systemPrompt: SystemPromptOverrideSchema.optional(),
+  voice: z
+    .object({
+      instructions: z.string().optional(),
+      tools: z.array(z.string()).optional(),
+      voice: z.string().optional(),
+      maxTokens: z.number().optional(),
+    })
+    .optional(),
   state: z
     .object({
       context: z
@@ -668,6 +693,7 @@ export function findShapeIssues(config: AgentConfig): string[] {
     found.push(...shapeIssues("tasks", TasksConfigSchema, config.tasks));
     found.push(...shapeIssues("state", StateConfigSchema, config.state));
     // No default exists for this block, so absent is normal, not missing.
+    if (config.live !== undefined) found.push(...shapeIssues("live", LiveConfigSchema, config.live));
     if (config.subscriptions !== undefined) {
       found.push(...shapeIssues("subscriptions", SubscriptionsConfigSchema, config.subscriptions));
     }

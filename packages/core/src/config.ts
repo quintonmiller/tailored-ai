@@ -386,6 +386,22 @@ export interface AgentDefinition {
   state?: {
     context?: StateContextQuery[];
   };
+  /**
+   * How this agent talks in a live session. Voice is a mode on the agent, not
+   * a separate one: it keeps the agent's identity and swaps in a slim prompt
+   * and tool set, because a spoken reply has a couple of seconds, not
+   * twenty. See `docs/live-sessions.md`.
+   */
+  voice?: {
+    /** Replaces the agent's instructions while it talks. Unset: a short spoken-style guide, then its own instructions. */
+    instructions?: string;
+    /** The tools it keeps while it talks. Unset: none. */
+    tools?: string[];
+    /** Text-to-speech voice. Unset: `live.tts.voice`. */
+    voice?: string;
+    /** Longest reply, in tokens. */
+    maxTokens?: number;
+  };
 }
 
 /**
@@ -1454,6 +1470,20 @@ export interface AgentConfig {
    */
   subscriptions?: EventSubscriptionConfig[];
   /**
+   * Live sessions: talking with an agent out loud. The speech stages are
+   * registries with OpenAI-compatible defaults, so a local faster-whisper or
+   * Kokoro server, or a hosted one, is a config line. See
+   * `docs/live-sessions.md`.
+   */
+  live?: {
+    enabled?: boolean;
+    /** Speech-to-text: a registered stage (default `openai_compatible`) and its own options. */
+    stt?: { provider?: string; options?: Record<string, unknown> };
+    /** Text-to-speech: a registered stage (default `openai_compatible`), its options, and the default voice. */
+    tts?: { provider?: string; options?: Record<string, unknown>; voice?: string };
+    limits?: { maxMinutes?: number; idleMinutes?: number; maxTurns?: number };
+  };
+  /**
    * Forge integration for pushing branches and opening proposals
    * (pull/merge requests). Slice 4 of the platform vision — see
    * `docs/repo-backend.md`. Opt-in: with `backend` unset, core does not
@@ -1899,6 +1929,10 @@ export const DEFAULT_CONFIG: AgentConfig = {
     port: 3000,
     host: "127.0.0.1",
   },
+  live: {
+    enabled: false,
+    limits: { maxMinutes: 30, idleMinutes: 10, maxTurns: 200 },
+  },
   database: {
     path: "./agent.db",
   },
@@ -2104,6 +2138,7 @@ export function mergeProjectOverlay(
  */
 const KNOWN_TOP_LEVEL_CONFIG_KEY_MAP: Record<keyof AgentConfig, true> = {
   compaction: true,
+  live: true,
   media: true,
   prompt: true,
   server: true,
