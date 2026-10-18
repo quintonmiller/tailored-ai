@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { type ComponentState, type ComponentStatus, fetchInterfaces, fetchStateRecord, respondInterface } from "../api";
 import type { ActionSpec, ComponentSpec } from "../lib/content.js";
-import { stateTitleField, subscribeStateChanges } from "../lib/state-events";
+import { stateTitleField, subscribeComponentChanges, subscribeStateChanges } from "../lib/state-events";
 import { useChatStore } from "./ChatContext";
 
 /**
@@ -29,15 +29,22 @@ export function InterfaceComponents({ specs }: { specs: ComponentSpec[] }) {
       // Drawing it open is the right failure: the server refuses a stale answer
       // with a sentence the component then shows.
       .catch(() => {});
+    // Then live: an answer on Discord, an update or a close by the agent.
+    const inView = new Set(ids.split(","));
+    const off = subscribeComponentChanges((c) => {
+      if (inView.has(c.id)) setStates((prev) => ({ ...prev, [c.id]: c }));
+    });
     return () => {
       cancelled = true;
+      off();
     };
   }, [ids]);
 
   return (
     <>
       {specs.map((spec) => (
-        <InterfaceComponent key={spec.id} spec={spec} state={states[spec.id]} />
+        // The server's copy is the latest: an update replaces the props.
+        <InterfaceComponent key={spec.id} spec={states[spec.id]?.spec ?? spec} state={states[spec.id]} />
       ))}
     </>
   );

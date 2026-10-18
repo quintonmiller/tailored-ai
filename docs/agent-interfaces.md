@@ -86,12 +86,11 @@ interface(action: "send", kind: "card",
 - **Who can bind what:** the record is read as the agent, so a card can only
   show what the agent's own `state` tool could read. A record it can't see is
   refused, with the same sentence the tool would give.
-- **Staying current:** in the web UI the card follows the record live:
-  whoever changes it, through the tool, the State page, another card or a
-  plugin, the card redraws. A deleted record says so. On Discord, a click
-  redraws the card from the record as the click left it. A change made
-  elsewhere reaches a Discord card the next time someone clicks it; editing
-  posted messages when the record changes is still to come.
+- **Staying current:** whoever changes the record (through the tool, the
+  State page, another card or a plugin), the card redraws, in the web UI and
+  in every Discord message it was posted as. A deleted record says so, and
+  its buttons stop. On Discord a burst of changes becomes one edit, which
+  keeps a busy record inside Discord's edit rate limit.
 - **State buttons:** `patch` is written to the bound record, or to the
   button's own `ref: {type, id}` when it names one. The write is recorded as
   the person who clicked (`owner` in the web UI, `discord:<id>` on Discord),
@@ -113,7 +112,9 @@ and the agent can make the change with its `state` tool.
 - **Web UI:** under the agent's reply, lifted out of the folded tool log, and
   drawn the moment the tool runs during a live turn. A component that was
   updated shows once, as it is now. Answered, closed and expired components
-  are drawn finished, with the answer.
+  are drawn finished, with the answer. A component already on screen
+  changes as it happens: answered on Discord, updated or closed by its
+  agent.
 - **Discord:** drawn with Discord's own controls, each component in a
   message of its own under the agent's reply. A choice is a row of buttons,
   with "Something else" opening a text box when it allows free text; a
@@ -163,11 +164,17 @@ holds, is posted as its text form, and answered by replying in words. Pop-up
 fields hold only text, so a number, a yes/no or a pick from a list is checked
 when you send it, and a value that does not fit is refused with the reason.
 
-**Updates and closing.** An `update` posts the component again; buttons on
-the earlier message still work and answer the current version. A component
-the agent closed, or one that expired, keeps its buttons, and a click on it
-says why it no longer takes answers. Editing the posted message in place is
-still to come.
+**Staying current.** TAI remembers each message it posted a component as, and
+edits that message when the component changes:
+
+- An agent's `update` redraws the message in place rather than posting a copy.
+- An answer given anywhere, in the web UI or another Discord message, shows on
+  every copy with its controls disabled.
+- A component the agent closes shows "Closed", with its note.
+- A bound card follows its record.
+
+An expired component keeps its buttons until someone clicks one; the click
+says it has expired.
 
 **State buttons** on a bound card write the record and redraw the card in
 place, with its buttons still live. They don't wait on the agent, so they
@@ -179,6 +186,7 @@ work while it is busy.
 |---|---|
 | `GET /api/interfaces?ids=a,b` | state of several components: `open`, `answered`, `closed` or `expired`, with the answer |
 | `GET /api/interfaces/:id` | one component's state |
+| `GET /api/interfaces/events` | a server-sent stream: a `component` event, shaped like the state route's, each time a component changes (answered anywhere, updated, closed) |
 | `POST /api/interfaces/:id/respond` | `{actionId, value?}`. Returns `{effect: "reply", reply}` for the chat to send, `{effect: "event"}`, or `{effect: "state", record}` with the record as the click left it. `409` with a reason when it no longer takes answers or the write doesn't fit |
 
 ## Adding a kind

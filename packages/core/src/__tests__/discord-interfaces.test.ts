@@ -29,6 +29,7 @@ import { type ComponentSpec, componentPart, textPart } from "../content/types.js
 import { getSessionMessages } from "../db/queries.js";
 import { initDatabase } from "../db/schema.js";
 import { type RuntimeEventPayload, TypedEventBus } from "../events.js";
+import { interfaceStoreFor } from "../interfaces/index.js";
 import { buildComponent, InterfaceError } from "../interfaces/kinds.js";
 import { type ComponentRecord, InterfaceStore } from "../interfaces/store.js";
 import type { AIProvider } from "../providers/interface.js";
@@ -460,6 +461,16 @@ describe("DiscordChannel", () => {
       workflows: { directory: "./workflows" },
       projects: { enabled: false, directory: "./data/projects" },
       tasks: { backend: "native" as const },
+      state: {
+        backend: "sqlite",
+        types: [
+          {
+            name: "plan",
+            title: "name",
+            schema: { type: "object", properties: { name: { type: "string" }, status: { type: "string" } } },
+          },
+        ],
+      },
     } as never;
     const runtime = new AgentRuntime(
       {
@@ -475,18 +486,32 @@ describe("DiscordChannel", () => {
     );
     const channel = new DiscordChannel({ runtime });
     const sent: Json[] = [];
+    const edits: { message: string; payload: Json }[] = [];
+    let nextMessage = 1;
     const discordChannel = {
       isTextBased: () => true,
-      send: async (p: Json) => void sent.push(p),
+      send: async (p: Json) => {
+        sent.push(p);
+        return { id: `m${nextMessage++}`, channelId: "chan1" };
+      },
       sendTyping: async () => {},
+      messages: {
+        fetch: async (id: string) => ({ edit: async (payload: Json) => void edits.push({ message: id, payload }) }),
+      },
     };
     (channel as unknown as { client: { channels: { fetch: unknown } } }).client.channels.fetch = async () =>
       discordChannel;
-    return { channel, runtime, sent, priv: channel as unknown as Private };
+    const priv = channel as unknown as Private;
+    priv.editDelayMs = 0;
+    return { channel, runtime, sent, edits, priv };
   }
 
   interface Private {
-    deliver(content: unknown, post: (payload: Json, first: boolean) => Promise<unknown>): Promise<void>;
+    deliver(
+      content: unknown,
+      post: (payload: Json, first: boolean) => Promise<unknown>,
+      channelId?: string,
+    ): Promise<void>;
     authorizeAnswer(record: ComponentRecord, userId: string, guildId: string | undefined): AuthDecision;
     continueInterface(
       record: ComponentRecord,
@@ -494,6 +519,8 @@ describe("DiscordChannel", () => {
       where: { channelId: string; userId: string },
     ): Promise<void>;
     processing: Set<string>;
+    watchInterfaces(): void;
+    editDelayMs: number;
   }
 
   function record(sessionKey: string | null): ComponentRecord {
@@ -574,5 +601,115 @@ describe("DiscordChannel", () => {
     await priv.continueInterface(r, "Tue", { channelId: "chan1", userId: "u1" });
     expect(sent[0].content).toContain("Send it again as a message.");
     expect(getSessionMessages(db, r.sessionId)).toEqual([]);
+  });
+
+  describe("keeping posted components current", () => {
+    const settle = (ms = 10) => new Promise((r) => setTimeout(r, ms));
+    const choice = () => buildComponent({ kind: "choice", props: { question: "Which day?", options: ["Mon", "Tue"] } });
+    const postFrom = (sent: Json[]) => async (payload: Json) => {
+      sent.push(payload);
+      return { id: `posted-${sent.length}`, channelId: "chan1" };
+    };
+
+    it("remembers where a component went, and redraws that message when the agent updates it", async () => {
+      const { priv, edits } = makeChannel();
+      const store = interfaceStoreFor(db);
+      const spec = choice();
+      store.create(spec, "default", "s1");
+      const posted: Json[] = [];
+      await priv.deliver({ parts: [componentPart(spec)] }, postFrom(posted), "chan1");
+      expect(store.posts(spec.id, "discord")).toEqual([{ surface: "discord", channel: "chan1", message: "posted-1" }]);
+
+      const updated = buildComponent({
+        kind: "choice",
+        id: spec.id,
+        props: { question: "Which day works?", options: ["Mon", "Tue", "Wed"] },
+      });
+      await priv.deliver({ parts: [textPart("Changed it."), componentPart(updated)] }, postFrom(posted), "chan1");
+      await settle();
+      expect(posted.map((p) => p.content)).toEqual(["**Which day?**", "Changed it."]);
+      expect(edits).toEqual([
+        { message: "posted-1", payload: expect.objectContaining({ content: "**Which day works?**" }) },
+      ]);
+    });
+
+    it("redraws a posted component answered on another surface, or closed by its agent", async () => {
+      const { priv, edits } = makeChannel();
+      const store = interfaceStoreFor(db);
+      const answered = choice();
+      const closed = choice();
+      for (const [spec, message] of [
+        [answered, "m-a"],
+        [closed, "m-c"],
+      ] as const) {
+        store.create(spec, "default", "s1");
+        store.addPost(spec.id, { surface: "discord", channel: "chan1", message });
+      }
+      priv.watchInterfaces();
+
+      store.respond(answered.id, { actionId: "option-2", by: "owner", at: "2026-10-18T00:00:00Z" });
+      store.close(closed.id, "decided without you");
+      await settle();
+
+      expect(edits.map((e) => [e.message, e.payload.content])).toEqual([
+        ["m-a", "**Which day?**\n✅ Tue — owner"],
+        ["m-c", "**Which day?**\nClosed: decided without you"],
+      ]);
+      expect(
+        edits.every((e) =>
+          rowsOf(e.payload)
+            .flat()
+            .every((b: Json) => b.disabled),
+        ),
+      ).toBe(true);
+    });
+
+    it("redraws a bound card when its record changes, once for a burst, and says when the record is gone", async () => {
+      const { priv, edits, runtime } = makeChannel();
+      const store = interfaceStoreFor(db);
+      const state = runtime.getStateService();
+      const system = { actor: { kind: "system" as const, name: "test" } };
+      await state.put(system, {
+        type: "plan",
+        id: "trip",
+        scope: "global",
+        data: { name: "Lisbon trip", status: "draft" },
+      });
+      const spec = buildComponent({
+        kind: "card",
+        props: { title: "Lisbon trip", fields: [{ label: "status", value: "draft" }] },
+        bind: { type: "plan", id: "trip" },
+      });
+      store.create(spec, "default", "s1");
+      store.addPost(spec.id, { surface: "discord", channel: "chan1", message: "m-card" });
+      priv.editDelayMs = 30;
+      priv.watchInterfaces();
+
+      await state.patch(system, { type: "plan", id: "trip" }, { status: "active" });
+      await state.patch(system, { type: "plan", id: "trip" }, { status: "done" });
+      await settle(80);
+      expect(edits).toHaveLength(1);
+      expect(edits[0].payload.embeds[0].toJSON()).toMatchObject({
+        title: "Lisbon trip",
+        fields: [{ name: "status", value: "done", inline: true }],
+      });
+
+      await state.delete(system, { type: "plan", id: "trip" });
+      await settle(80);
+      expect(edits[1].payload.content).toBe("This record was deleted.");
+    });
+
+    it("stops editing once it disconnects", async () => {
+      const { channel, priv, edits } = makeChannel();
+      const store = interfaceStoreFor(db);
+      const spec = choice();
+      store.create(spec, "default", "s1");
+      store.addPost(spec.id, { surface: "discord", channel: "chan1", message: "m-1" });
+      priv.watchInterfaces();
+      await channel.disconnect();
+      store.close(spec.id);
+      await settle();
+      expect(edits).toEqual([]);
+    });
   });
 });

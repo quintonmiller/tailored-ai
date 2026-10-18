@@ -25,8 +25,9 @@ import type { MediaRef, MessageContent } from "../content/types.js";
 import { loadAllContext, loadContextFiles } from "../context.js";
 import { getSession, getSessionMessages } from "../db/queries.js";
 import { createProjectTask, queryProjectTasks } from "../db/task-queries.js";
+import { boundCardProps } from "../interfaces/bind.js";
 import { interfaceStoreFor } from "../interfaces/index.js";
-import type { ComponentRecord } from "../interfaces/store.js";
+import type { ComponentPost, ComponentRecord } from "../interfaces/store.js";
 import { collectTurnComponents, collectTurnMedia, latestMessageId } from "../media/turn.js";
 import type { ProjectRef } from "../projects/resolve.js";
 import { IdentityResolver } from "../rooms/identities.js";
@@ -34,6 +35,7 @@ import { getRoomBackend, registerRoomBackend, unregisterRoomBackend } from "../r
 import { formatRoomRef, type Room } from "../rooms/types.js";
 import { makeRoomSessionKey } from "../rooms/watcher.js";
 import type { AgentRuntime } from "../runtime.js";
+import type { StateChange } from "../state/types.js";
 import type { SurfaceCapabilities } from "./capabilities.js";
 import { DiscordApprovalHandler, type SendApprovalEmbed } from "./discord-approval.js";
 import {
@@ -51,11 +53,13 @@ import {
 import { getDiscordConfig } from "./discord-config.js";
 import {
   buildComponentMessage,
+  buildRecordGoneMessage,
   DISCORD_COMPONENT_KINDS,
   type DiscordComponentMessage,
   handleInterfaceInteraction,
   type InterfaceInteractionDeps,
   isInterfaceCustomId,
+  messageFor,
 } from "./discord-interfaces.js";
 import {
   buildMemoryCommand,
@@ -164,6 +168,12 @@ export class DiscordChannel implements Channel, OutboundNotifier {
   private userAgents = new Map<string, string>();
   private registeredCommandsHash = "";
   private disconnected = false;
+  /** Unsubscribes from component changes; set while connected. */
+  private stopWatchingInterfaces: (() => void) | undefined;
+  /** Edits waiting out the coalescing delay, by message id. */
+  private pendingEdits = new Map<string, ReturnType<typeof setTimeout>>();
+  /** How long a burst of changes to one posted component is gathered into a single edit. */
+  private editDelayMs = 500;
   /** Serializes command syncs; concurrent overwrites registered everything twice. */
   private commandSync: Promise<void> = Promise.resolve();
 
@@ -272,11 +282,97 @@ export class DiscordChannel implements Channel, OutboundNotifier {
       });
     });
 
+    this.watchInterfaces();
+
     await this.client.login(token);
+  }
+
+  /**
+   * Keep posted components current. A component changes when it is answered
+   * anywhere, updated or closed by its agent, or — for a bound card — when
+   * its record changes; each posted message is edited to match.
+   *
+   * The store's listener survives a config reload. The runtime's bus does
+   * not, so the state listener subscribes again after each one.
+   */
+  private watchInterfaces(): void {
+    const store = interfaceStoreFor(this.runtime.db);
+    this.stopWatchingInterfaces = store.onChange((record) => {
+      if (this.disconnected) return;
+      const message = messageFor(record);
+      if (message) for (const post of store.posts(record.spec.id, "discord")) this.editPost(post, message);
+    });
+    const watchState = () => {
+      this.runtime.events.on("state.changed", (change) => {
+        if (!this.disconnected) this.redrawBound(change);
+      });
+    };
+    watchState();
+    this.runtime.onReload(watchState);
+  }
+
+  /** Redraw every posted card bound to the record that changed. */
+  private redrawBound(change: StateChange): void {
+    const store = interfaceStoreFor(this.runtime.db);
+    for (const record of store.boundTo(change.type, change.id)) {
+      const posts = store.posts(record.spec.id, "discord");
+      if (posts.length === 0) continue;
+      const titleField = this.runtime.getStateService().getType(change.type)?.title;
+      const message =
+        change.op === "delete" || !change.after
+          ? buildRecordGoneMessage(record.spec)
+          : messageFor(
+              record,
+              boundCardProps(
+                record.spec.props,
+                {
+                  type: change.type,
+                  id: change.id,
+                  scope: change.scope,
+                  data: change.after,
+                  version: change.version,
+                  createdAt: change.at,
+                  updatedAt: change.at,
+                  updatedBy: change.actor,
+                },
+                titleField,
+              ),
+            );
+      if (message) for (const post of posts) this.editPost(post, message);
+    }
+  }
+
+  /**
+   * Edit one posted message, coalescing a burst: several changes inside the
+   * delay become one edit with the last of them, which keeps a busy record
+   * inside Discord's edit rate limit.
+   */
+  private editPost(post: ComponentPost, message: DiscordComponentMessage): void {
+    const pending = this.pendingEdits.get(post.message);
+    if (pending) clearTimeout(pending);
+    this.pendingEdits.set(
+      post.message,
+      setTimeout(() => {
+        this.pendingEdits.delete(post.message);
+        this.applyEdit(post, message).catch((err) => {
+          console.warn(`[discord] could not update a posted component (${post.message}): ${(err as Error).message}`);
+        });
+      }, this.editDelayMs),
+    );
+  }
+
+  private async applyEdit(post: ComponentPost, message: DiscordComponentMessage): Promise<void> {
+    const channel = await this.client.channels.fetch(post.channel);
+    if (!channel?.isTextBased() || !("messages" in channel)) return;
+    const posted = await channel.messages.fetch(post.message);
+    await posted.edit(message);
   }
 
   async disconnect(): Promise<void> {
     this.disconnected = true;
+    this.stopWatchingInterfaces?.();
+    for (const timer of this.pendingEdits.values()) clearTimeout(timer);
+    this.pendingEdits.clear();
     // Unregister before destroying the client: a room backend holding a dead
     // client would fail every call with a confusing discord.js error instead
     // of the registry's "no backend connected". Only drop the registry entry
@@ -567,7 +663,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
   async send(channelId: string, content: string | MessageContent): Promise<void> {
     const channel = await this.client.channels.fetch(channelId);
     if (!channel?.isTextBased() || !("send" in channel)) return;
-    await this.deliver(content, (payload) => channel.send(payload));
+    await this.deliver(content, (payload) => channel.send(payload), channelId);
   }
 
   async sendDM(userId: string, content: string | MessageContent): Promise<void> {
@@ -590,6 +686,8 @@ export class DiscordChannel implements Channel, OutboundNotifier {
   private async deliver(
     content: string | MessageContent,
     post: (payload: DiscordPayload, first: boolean) => Promise<unknown>,
+    /** The channel being posted to, when known: a component already posted there is edited in place. */
+    channelId?: string,
   ): Promise<void> {
     const store = this.runtime.getMediaStore();
     // Without a store there are no bytes to upload, so the surface genuinely
@@ -608,28 +706,44 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     const files = await this.loadAttachments(rendered.attachments);
     const chunks = rendered.text ? splitMessage(rendered.text) : [];
 
-    const payloads: DiscordPayload[] = chunks.map((content, i) =>
-      i === chunks.length - 1 && files.length > 0 ? { content, files } : { content },
-    );
-    if (chunks.length === 0 && files.length > 0) payloads.push({ files });
+    const payloads: { payload: DiscordPayload; component?: string }[] = chunks.map((content, i) => ({
+      payload: i === chunks.length - 1 && files.length > 0 ? { content, files } : { content },
+    }));
+    if (chunks.length === 0 && files.length > 0) payloads.push({ payload: { files } });
+    const components = interfaceStoreFor(this.runtime.db);
     for (const spec of rendered.components ?? []) {
       // Null when Discord cannot hold this one — a form longer than a pop-up
       // takes. Its text form still asks the question.
       const drawn = buildComponentMessage(spec);
-      if (drawn) payloads.push(drawn);
-      else {
+      if (!drawn) {
         console.warn(`[discord] ${spec.kind} ${spec.id} does not fit Discord's controls; posted its text form`);
-        payloads.push(...splitMessage(spec.fallback).map((content) => ({ content })));
+        payloads.push(...splitMessage(spec.fallback).map((content) => ({ payload: { content } })));
+        continue;
+      }
+      // An agent's update to a component already posted here redraws that
+      // message instead of posting a second copy.
+      const here = channelId ? components.posts(spec.id, "discord").filter((p) => p.channel === channelId) : [];
+      if (here.length > 0) {
+        for (const p of here) this.editPost(p, drawn);
+        continue;
+      }
+      payloads.push({ payload: drawn, component: spec.id });
+    }
+    for (let i = 0; i < payloads.length; i++) {
+      const sent = await post(payloads[i].payload, i === 0);
+      const component = payloads[i].component;
+      const message = sent as { id?: unknown; channelId?: unknown } | undefined;
+      if (component && typeof message?.id === "string" && typeof message.channelId === "string") {
+        components.addPost(component, { surface: "discord", channel: message.channelId, message: message.id });
       }
     }
-    for (let i = 0; i < payloads.length; i++) await post(payloads[i], i === 0);
   }
 
   /** Post an already-rendered payload, bypassing the ladder it has been through. */
-  private async rawSend(channelId: string, payload: DiscordPayload): Promise<void> {
+  private async rawSend(channelId: string, payload: DiscordPayload): Promise<DiscordMessage | undefined> {
     const channel = await this.client.channels.fetch(channelId);
-    if (!channel?.isTextBased() || !("send" in channel)) return;
-    await channel.send(payload);
+    if (!channel?.isTextBased() || !("send" in channel)) return undefined;
+    return channel.send(payload);
   }
 
   /**
@@ -934,6 +1048,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
         logPrefix: `[discord] [${msg.author.username}]`,
         approve: { send: (opts) => msg.reply(opts), userId: msg.author.id },
         post: (payload, first) => (first ? msg.reply(payload) : this.rawSend(msg.channelId, payload)),
+        channelId: msg.channelId,
       });
     } finally {
       stopTyping();
@@ -955,6 +1070,8 @@ export class DiscordChannel implements Channel, OutboundNotifier {
     logPrefix: string;
     approve: { send: SendApprovalEmbed; userId: string };
     post: (payload: DiscordPayload, first: boolean) => Promise<unknown>;
+    /** Where the reply goes, so a component the turn updates is edited there rather than posted again. */
+    channelId: string;
   }): Promise<void> {
     const { session, agentName, project, logPrefix } = t;
     const hooks = this.runtime.resolveHooks({ agentName });
@@ -1001,7 +1118,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
         ...components.map((component) => ({ type: "component" as const, component })),
       ],
     };
-    await this.deliver(outbound, t.post);
+    await this.deliver(outbound, t.post, t.channelId);
     console.log(
       `${logPrefix} Replied: "${(response ?? "").slice(0, 80)}"` +
         (produced.length > 0 ? ` (+${produced.length} media)` : "") +
@@ -1104,6 +1221,7 @@ export class DiscordChannel implements Channel, OutboundNotifier {
         logPrefix: `[discord] [answer ${record.spec.id}]`,
         approve: { send: (opts) => channel.send(opts), userId: where.userId },
         post: (payload) => channel.send(payload),
+        channelId: where.channelId,
       });
     } catch (err) {
       console.error(`[discord] Error continuing after answer to ${record.spec.id}:`, err);

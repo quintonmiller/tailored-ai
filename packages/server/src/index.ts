@@ -1789,6 +1789,31 @@ export function createServer(opts: ServerOptions) {
     return c.json({ components: records.map(toComponentJson) });
   });
 
+  // Every change to a component — answered on any surface, updated or closed
+  // by its agent — as it happens, so a chat already showing it can redraw it.
+  // The store's listener survives config reloads, unlike the runtime's bus.
+  // Registered before `/api/interfaces/:id`, which would read "events" as an id.
+  app.get("/api/interfaces/events", (c) => {
+    const store = interfaceStoreFor(runtime.db);
+    return streamSSE(c, async (stream) => {
+      const off = store.onChange((record) => {
+        stream.writeSSE({ event: "component", data: JSON.stringify(toComponentJson(record)) }).catch(() => {});
+      });
+      const ping = setInterval(() => stream.writeSSE({ event: "ping", data: "" }).catch(() => {}), 25_000);
+      try {
+        await stream.writeSSE({ event: "ready", data: "{}" });
+        await new Promise<void>((resolve) => {
+          if (c.req.raw.signal.aborted) return resolve();
+          c.req.raw.signal.addEventListener("abort", () => resolve());
+          stream.onAbort(() => resolve());
+        });
+      } finally {
+        clearInterval(ping);
+        off();
+      }
+    });
+  });
+
   app.get("/api/interfaces/:id", (c) => {
     const json = toComponentJson(interfaceStoreFor(runtime.db).get(c.req.param("id")));
     return json ? c.json(json) : c.json({ error: "No such component" }, 404);
