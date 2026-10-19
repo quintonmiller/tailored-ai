@@ -27,6 +27,7 @@ import { arrivalAt, doorFrame, doorLight, doorReached, doorTo } from "./doors";
 import { Figure, loadModel } from "./figure";
 import type { Obstacle } from "./locomotion";
 import type { BodyState } from "./motion";
+import { nearestUse, type Use } from "./pick";
 import { buildDoor, buildProp, buildShell, disposeTree } from "./props";
 import {
   DEFAULT_ROOM,
@@ -188,7 +189,7 @@ function hangPhoto(picture: THREE.Group, kind: string, media: string) {
 }
 
 /** Things that hang on a wall, so they are never in the way of a walk. */
-const WALL_KINDS = new Set(["window", "picture", "clock", "shelf", "board", "painting", "poster", "pegboard"]);
+const WALL_KINDS = new Set(["window", "picture", "clock", "shelf", "board", "painting", "poster", "pegboard", "sign"]);
 /** Things flat on the floor, walked over. */
 const FLAT_KINDS = new Set(["rug", "round_rug"]);
 /** Lamps that light the room after dark, and how high their bulb is above where they stand. */
@@ -293,13 +294,11 @@ export async function createStage(
   // Things that just appeared, growing into place.
   const appearing: { group: THREE.Group; started: number; scale: number }[] = [];
   // The doors, each with the light by it that says what the agent behind it is doing.
-  let doorLights: { occupant: string; light: THREE.MeshStandardMaterial }[] = [];
+  let doorLights: { occupant: string; light: THREE.MeshBasicMaterial }[] = [];
   const lightDoors = () => {
     for (const d of doorLights) {
       const { color, glow } = doorLight(activities[d.occupant]?.doing);
-      d.light.color.setHex(color);
-      d.light.emissive.setHex(color);
-      d.light.emissiveIntensity = glow;
+      d.light.color.setHex(color).multiplyScalar(glow);
     }
   };
 
@@ -364,6 +363,7 @@ export async function createStage(
       const built = buildDoor(door, {
         freestanding: door.wall === "front" || door.wall === "right",
         trim: room.walls,
+        height: room.height,
       });
       const { at, facing } = doorFrame(room, door);
       built.group.position.set(at[0], 0, at[1]);
@@ -392,7 +392,7 @@ export async function createStage(
 
   // Come in through a door: just inside it, facing in, at no spot.
   const cameIn = doorTo(room, opts.arriveFrom);
-  const arrival = cameIn ? arrivalAt(room, cameIn) : undefined;
+  const arrival = cameIn ? arrivalAt(room, cameIn, obstacles) : undefined;
   const start: Spot | undefined = arrival
     ? { id: "", name: "", place: "", at: arrival.at, facing: (arrival.facing * 180) / Math.PI }
     : ((opts.still?.spot ? spotById(room, opts.still.spot) : undefined) ?? spotById(room, room.start) ?? room.spots[0]);
@@ -614,50 +614,24 @@ export async function createStage(
   // pointer says so on hover.
   const canvas = renderer.domElement;
   const ray = new THREE.Raycaster();
-  const spotAt = (e: PointerEvent): string | undefined => {
-    const r = canvas.getBoundingClientRect();
-    ray.setFromCamera(
-      new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1),
-      camera,
-    );
-    for (const hit of ray.intersectObjects(clickable, true)) {
-      for (let o: THREE.Object3D | null = hit.object; o; o = o.parent)
-        if (typeof o.userData.spot === "string") return o.userData.spot;
-    }
-    return undefined;
-  };
   /**
-   * What the thing under the pointer does when clicked, if it is made to be
-   * used; on a board's face, the note or column the pointer is on as well.
+   * The nearest clickable thing under the pointer, and what it is for: a
+   * door, a use (a kiosk, a board) or a spot to go to. On a board's face, the
+   * note or column the pointer is on as well.
    */
-  const actionAt = (e: PointerEvent): { action: string; on?: BoardSpot } | undefined => {
+  const pick = (e: PointerEvent): (Use & { on?: BoardSpot }) | undefined => {
     const r = canvas.getBoundingClientRect();
     ray.setFromCamera(
       new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1),
       camera,
     );
-    for (const hit of ray.intersectObjects(clickable, true)) {
-      for (let o: THREE.Object3D | null = hit.object; o; o = o.parent) {
-        if (typeof o.userData.action !== "string") continue;
-        const board = boards.find((b) => b.screen.face === hit.object);
-        if (!board || !hit.uv) return { action: o.userData.action };
-        const { width, height } = board.screen.canvas;
-        return { action: o.userData.action, on: boardAtUv(width, height, tasks, hit.uv.x, hit.uv.y) };
-      }
-    }
-    return undefined;
-  };
-  /** The door under the pointer, if any. */
-  const doorAt = (e: PointerEvent): RoomDoor | undefined => {
-    const r = canvas.getBoundingClientRect();
-    ray.setFromCamera(
-      new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1),
-      camera,
-    );
-    for (const hit of ray.intersectObjects(clickable, true)) {
-      for (let o: THREE.Object3D | null = hit.object; o; o = o.parent) if (o.userData.door) return o.userData.door;
-    }
-    return undefined;
+    const found = nearestUse(ray.intersectObjects(clickable, true));
+    if (!found) return undefined;
+    const { hit, use } = found;
+    const board = use.action ? boards.find((b) => b.screen.face === hit.object) : undefined;
+    if (!board || !hit.uv) return use;
+    const { width, height } = board.screen.canvas;
+    return { ...use, on: boardAtUv(width, height, tasks, hit.uv.x, hit.uv.y) };
   };
   /** Where on the floor the pointer is, for a visitor to walk to. */
   const floorAt = (e: PointerEvent): [number, number] | undefined => {
@@ -703,18 +677,16 @@ export async function createStage(
       opts.onPick?.(who, { x: e.clientX, y: e.clientY });
       return;
     }
-    const used = opts.onUse ? actionAt(e) : undefined;
-    if (used) {
-      opts.onUse?.(used.action, used.on);
+    const it = pick(e);
+    if (it?.action && opts.onUse) {
+      opts.onUse(it.action, it.on);
       return;
     }
-    const door = opts.onDoor ? doorAt(e) : undefined;
-    if (door) {
-      leave(door);
+    if (it?.door && opts.onDoor) {
+      leave(it.door);
       return;
     }
-    const id = spotAt(e);
-    if (id) go(id);
+    if (it?.spot) go(it.spot);
     else if (opts.visitor && travel === "walk") {
       const to = floorAt(e);
       if (to) me.goTo(room, to, obstacles);
@@ -722,8 +694,9 @@ export async function createStage(
   };
   const onHover = (e: PointerEvent) => {
     if (downAt || e.pointerType !== "mouse") return;
+    const it = pick(e);
     canvas.style.cursor =
-      (opts.onPick && agentAt(e)) || spotAt(e) || (opts.onUse && actionAt(e)) || (opts.onDoor && doorAt(e))
+      (opts.onPick && agentAt(e)) || it?.spot || (it?.action && opts.onUse) || (it?.door && opts.onDoor)
         ? "pointer"
         : "";
   };
@@ -1001,15 +974,19 @@ export async function createStage(
     return { fwd, right: new THREE.Vector3(-fwd.z, 0, fwd.x) };
   };
 
+  /** The way the held keys push your body this frame, walking; undefined when none are held. */
+  let pushing: [number, number] | undefined;
   /** One frame of a visit: move by the held keys, at a run while Shift is held. */
   function visit(dt: number) {
     const { right: r, forward: f, up: u, running } = heldMove(held);
     const speed = travelSpeed(travel, running) * dt;
+    pushing = undefined;
     if (travel === "walk") {
       if (r || f) {
         const { fwd, right } = heading();
         const v = fwd.multiplyScalar(f).add(right.multiplyScalar(r)).normalize().multiplyScalar(speed);
         me.steer(v.x, v.z, room, obstacles);
+        pushing = [v.x, v.z];
       }
     } else if (r || f || u) {
       const look = controls.target.clone().sub(camera.position).normalize();
@@ -1034,8 +1011,9 @@ export async function createStage(
     const p = me.walker.place;
     const moved: [number, number, number] = [p.x - lastAt[0], 0, p.z - lastAt[1]];
     lastAt = [p.x, p.z];
-    // Walked into a door: through it.
-    const through = travel === "walk" && !leaving ? doorReached(room, [p.x, p.z], [moved[0], moved[2]]) : undefined;
+    // Walked into a door, or pressing on toward it where the wall stopped you: through it.
+    const through =
+      travel === "walk" && !leaving ? doorReached(room, [p.x, p.z], [moved[0], moved[2]], pushing) : undefined;
     if (through) leave(through);
     if (tween || travel !== "walk") return;
     const head = me.head();
@@ -1266,7 +1244,7 @@ export async function createStage(
       const door = doorTo(room, from);
       const first = spotById(room, room.start) ?? room.spots[0];
       const to = door
-        ? arrivalAt(room, door)
+        ? arrivalAt(room, door, obstacles)
         : { at: first?.at ?? ([0, 0] as [number, number]), facing: rad(first?.facing ?? 0) };
       me.placeAt(to.at, to.facing);
       lastAt = [to.at[0], to.at[1]];

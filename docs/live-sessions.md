@@ -275,9 +275,11 @@ stand, a tall bookcase won't go in front of a window, and only the back and
 left walls are walls: the front and right are open to the camera. Seats put
 near a TV or a fire turn to face it. When nothing fits, the tool says why, and
 the agent can move or remove something and try again. Exact `x` and `z`, in
-metres from the middle, work too. Every room has a door, and the floor in
-front of it is kept clear: nothing goes there or hangs over it, `look` says
-where the door is, and "near the door" puts something beside it.
+metres from the middle, work too. Every room keeps a spot for a door, and the
+floor in front of it is kept clear, as far in as you come through it: nothing
+new goes there or hangs over it. `look` says where the door is, or, for a place
+alone in an area of its own, that it has no door yet. "Near the door" puts
+something beside it, back to its wall where there's room, never in the way in.
 
 What can be added: seats (couch, armchair, beanbag, bed, chair, stool),
 tables (desk, table, round table, coffee table, side table, sideboard), a
@@ -379,9 +381,11 @@ places**. A wing with one place opens straight off the lobby. More, and they
 are behind a hall: a long room with doors down both sides, benches and plants
 down the middle, lamps for the evening, and a sign with its name by the
 entrance. A hall holds up to 14 doors, read left to right, at the back and
-then facing them at the front. Past that, a door at the far end leads on to
-the next hall. Halls are cut where the first letter changes, so each covers a
-run of the alphabet ("Residences A–F", "Residences G–M"), and a new agent only
+then facing them at the front. A wing with more than that has several halls,
+each covering a run of the alphabet ("Residences A–F", "Residences G–M"), and
+the lobby's door leads to a foyer with a door to each of them. So any home is
+three doors from the lobby at most: into the foyer, into its hall, into the
+home. Halls are cut where the first letter changes, so a new agent only
 changes the hall its name falls in, unless that hall was full.
 
 A door on the back or left wall is a door in the wall, with a name plate over
@@ -389,14 +393,18 @@ it: the agent's name, the room's `#name`, or where a hall leads. On the open
 front and right sides, where the wall is cut away so the camera can see in,
 the door is cut away too: a low gate with the plate across it, readable from
 either side, that never stands between you and the room. A door to a home has
-a light by its plate that says what that agent is doing, from its `activity`
-record: green working, blue thinking or talking, amber waiting on you, red
-stuck, white idle, and dim violet asleep. You can see who needs you from the
-hall, before you knock.
+a light by its dark plate, and a lit strip along it, that says what that agent
+is doing, from its `activity` record: green working, blue thinking or talking,
+amber waiting on you, red stuck, white idle, and dim violet asleep. You can see
+who needs you from the hall, before you knock.
 
-**Walk into a door**, or click it, to go through. The picture fades, the place
-behind it loads, and you're standing just inside the matching door, facing
-into the room. Your body, and walking or flying, carry on as they were. You
+**Walk into a door**, or click it, to go through. Up against the wall in
+front of a door, keep pressing toward it. The picture fades, the place behind
+it loads, and you're standing just inside the matching door, facing into the
+room: a little further in through a gate, so its plate doesn't hide you, and
+past anything that stands just inside. Your body, and walking or flying, carry
+on as they were. A click goes to whatever is nearest under the pointer, so a
+chair in front of a door is still a chair. You
 stop on the threshold: a key you held through the door waits until you let it
 go, since the view faces the same way on the other side and holding `W` would
 otherwise walk you straight back out. Everyone stays in their own place: you
@@ -409,8 +417,8 @@ visit: you come out of that door on the other side, in your own body.
 `room` action takes `area` ("the summer house"), and so does `new`. Places in
 the same area are joined to each other and not to the main building: two by a
 door from one straight into the other, three or more round a hall of their own
-("Summer house hall"). A place alone in its area has no door at all. Between
-areas, you use the map, which still goes anywhere. An agent can build itself a
+("Summer house hall"). A place alone in its area has no door at all, and the
+map says so. Between areas, you use the map, which still goes anywhere. An agent can build itself a
 summer house with two rooms this way, or move its home out to a cabin with
 the places it made there. `area` "main" puts a place back in the main
 building.
@@ -433,8 +441,11 @@ is still redrawn as rooms improve. A place's door goes wherever its room keeps
 a clear stretch of the back or left wall, at the end nearest the open side,
 which is where the rooms the world starts with keep their doorway. A room
 whose walls an agent has filled gets its door as a gate at the open front or
-right instead. Halls are `hall:<area>:<wing>-<n>` in the main building
-(`hall:main:homes-1`) and `hall:<area>:<n>` elsewhere.
+right instead. Since the door depends on what is in the room, the page asks
+for it again after each change, and moves it if it moved. Halls are
+`hall:<area>:<wing>-<n>` in the main building (`hall:main:homes-1`) and
+`hall:<area>:<n>` elsewhere; a wing's foyer is `hall:main:<wing>-foyer`, and
+an area's own `hall:<area>:foyer`.
 
 #### Who you are talking to
 

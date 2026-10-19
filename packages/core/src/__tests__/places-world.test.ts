@@ -8,10 +8,13 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  DOOR_APPROACH,
   DOORWAY,
   doorOf,
   doorProblems,
+  doorwayFloor,
   findPlacement,
+  footprintOf,
   KINDS,
   LIMITS,
   type Place,
@@ -183,8 +186,8 @@ describe("the main building", () => {
 
   it("holds at most a hall's worth of doors in each hall, cut where the first letter changes, named by its letters", () => {
     const world = layWorld(big());
-    const residences = world.halls.filter((h) => h.id.startsWith("hall:main:homes-"));
-    const meetings = world.halls.filter((h) => h.id.startsWith("hall:main:rooms-"));
+    const residences = world.halls.filter((h) => /^hall:main:homes-\d+$/.test(h.id));
+    const meetings = world.halls.filter((h) => /^hall:main:rooms-\d+$/.test(h.id));
     expect(residences.length).toBeGreaterThanOrEqual(4);
     expect(meetings.length).toBe(2);
     for (const h of world.halls) {
@@ -198,10 +201,40 @@ describe("the main building", () => {
     expect(residences.map((h) => h.name)).toEqual(
       residences.map((h) => `Residences ${letter(h.rooms[0])}–${letter(h.rooms.at(-1) as never)}`),
     );
-    // Each hall leads on to the next, and back to the one before.
-    for (const [i, h] of residences.entries()) {
-      expect(h.entrance?.to).toBe(i ? residences[i - 1].id : LOBBY);
-      expect(h.onward?.to).toBe(residences[i + 1]?.id);
+    // In front of them, a foyer off the lobby with a door to each, in order; each hall's way back is to it.
+    const foyer = world.halls.find((h) => h.id === "hall:main:homes-foyer");
+    expect(foyer).toMatchObject({ name: "Residences", entrance: { to: LOBBY } });
+    expect(foyer?.rooms.map((r) => [r.to, r.label, r.kind])).toEqual(residences.map((h) => [h.id, h.name, "hall"]));
+    expect(world.lobby[0]).toEqual({ to: "hall:main:homes-foyer", label: "Residences", kind: "hall" });
+    for (const h of residences) {
+      expect(h.entrance?.to).toBe("hall:main:homes-foyer");
+      expect(h.onward).toBeUndefined();
+    }
+  });
+
+  it("puts every place three doors from the lobby at most, with a hundred and more agents", () => {
+    const depth = (world: World) => {
+      const doors = allDoors(world);
+      const seen = new Map([[LOBBY, 0]]);
+      const queue = [LOBBY];
+      while (queue.length) {
+        const here = queue.shift() as string;
+        for (const d of doors.get(here) ?? [])
+          if (!seen.has(d.to)) {
+            seen.set(d.to, (seen.get(here) as number) + 1);
+            queue.push(d.to);
+          }
+      }
+      return seen;
+    };
+    const crowd = [
+      ...Array.from({ length: 120 }, (_, i) => home(`${"abcdefghijklmnopqrstuvwxyz"[i % 26]}gent-${i}`)),
+      ...Array.from({ length: 60 }, (_, i) => room(`${"abcdefghijklmnopqrstuvwxyz"[i % 26]}-room-${i}`)),
+    ];
+    for (const places of [big(), crowd]) {
+      const world = layWorld(places);
+      const steps = depth(world);
+      for (const p of places) expect(steps.get(p.id), p.id).toBeLessThanOrEqual(3);
     }
   });
 
@@ -210,6 +243,28 @@ describe("the main building", () => {
     const reached = reach(world, LOBBY);
     for (const p of big()) expect(reached.has(p.id), p.id).toBe(true);
     for (const h of world.halls) expect(reached.has(h.id), h.id).toBe(true);
+    const doors = allDoors(world);
+    for (const [here, list] of doors)
+      for (const d of list)
+        expect(
+          doors.get(d.to)?.some((back) => back.to === here),
+          `${here} -> ${d.to}`,
+        ).toBe(true);
+  });
+
+  it("carries a foyer on into the next when there are more halls than a foyer has doors", () => {
+    const places = Array.from({ length: 250 }, (_, i) => home(`agent-${String(i).padStart(3, "0")}`));
+    const world = layWorld(places);
+    const foyers = world.halls.filter((h) => h.id.startsWith("hall:main:homes-foyer"));
+    expect(foyers.map((f) => [f.id, f.name])).toEqual([
+      ["hall:main:homes-foyer", "Residences"],
+      ["hall:main:homes-foyer-2", "Residences 2"],
+    ]);
+    expect(foyers[0].onward?.to).toBe(foyers[1].id);
+    expect(foyers[1].entrance?.to).toBe(foyers[0].id);
+    for (const f of foyers) expect(f.rooms.length).toBeLessThanOrEqual(HALL_DOORS);
+    const reached = reach(world, LOBBY);
+    for (const p of places) expect(reached.has(p.id), p.id).toBe(true);
     const doors = allDoors(world);
     for (const [here, list] of doors)
       for (const d of list)
@@ -235,7 +290,7 @@ describe("the main building", () => {
     const full = layWorld([...big(), home("historian-two")]);
     const fullAt = where(full);
     const into = full.halls.find((h) => h.rooms.some((r) => r.to === "home:historian-two"));
-    const homes = before.halls.filter((h) => h.id.startsWith("hall:main:homes-"));
+    const homes = before.halls.filter((h) => /^hall:main:homes-\d+$/.test(h.id));
     for (const h of homes.slice(
       0,
       homes.findIndex((o) => o.id === into?.id),
@@ -267,6 +322,7 @@ describe("the main building", () => {
     const many = Array.from({ length: 30 }, (_, i) => home(`scout-${String(i).padStart(2, "0")}`));
     const world = layWorld([home("archivist"), ...many]);
     expect(world.halls.map((h) => [h.name, h.rooms.length])).toEqual([
+      ["Residences", 3],
       ["Residences A–S", 14],
       ["Residences S 1", 14],
       ["Residences S 2", 3],
@@ -450,6 +506,45 @@ describe("a room's own door", () => {
     expect(doorProblems(place, [door as never])).toEqual([]);
     // Nothing was ever put on the door itself.
     expect(place.props.some((p) => p.on === "doorway-hold")).toBe(false);
+  });
+
+  it("puts what is asked for near the door beside it, never on the floor where you come in", () => {
+    // The floor a thing covers, as [minX, maxX, minZ, maxZ], turned the way it faces.
+    const box = (kind: string, at: [number, number], facing: number) => {
+      const [w, d] = footprintOf({ kind });
+      const f = (facing * Math.PI) / 180;
+      const hx = (Math.abs(Math.cos(f)) * w + Math.abs(Math.sin(f)) * d) / 2;
+      const hz = (Math.abs(Math.sin(f)) * w + Math.abs(Math.cos(f)) * d) / 2;
+      return [at[0] - hx, at[0] + hx, at[1] - hz, at[1] + hz];
+    };
+    let beside = 0;
+    let placed = 0;
+    for (const place of homes.slice(0, 40)) {
+      const door = doorOf(place) as NonNullable<ReturnType<typeof doorOf>>;
+      const floor = doorwayFloor(place, door, DOOR_APPROACH.wall);
+      const way = [
+        floor.at[0] - floor.size[0] / 2,
+        floor.at[0] + floor.size[0] / 2,
+        floor.at[1] - floor.size[1] / 2,
+        floor.at[1] + floor.size[1] / 2,
+      ];
+      for (const kind of ["armchair", "plant", "bookshelf", "lamp", "side_table"]) {
+        const got = findPlacement(withDoorwayHeld(place), { kind }, { near: "the door" });
+        if (typeof got === "string") continue;
+        placed++;
+        const [x0, x1, z0, z1] = box(kind, got.at, got.facing);
+        const inWay = x0 < way[1] - 0.01 && x1 > way[0] + 0.01 && z0 < way[3] - 0.01 && z1 > way[2] + 0.01;
+        expect(inWay, `${place.name}: ${kind} at ${got.at}`).toBe(false);
+        // Beside: off to one side of the way in, along the door's wall, rather than out past the end of it.
+        const off =
+          door.wall === "back"
+            ? x1 <= way[0] + 0.01 || x0 >= way[1] - 0.01
+            : z1 <= way[2] + 0.01 || z0 >= way[3] - 0.01;
+        if (off) beside++;
+      }
+    }
+    expect(placed).toBeGreaterThan(150);
+    expect(beside / placed).toBeGreaterThan(0.9);
   });
 
   it("leaves a room alone in its area without a door, and a room the building doesn't know without one too", () => {

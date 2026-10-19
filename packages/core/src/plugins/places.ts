@@ -632,11 +632,39 @@ const say = (item: PlaceItem, place: Place) => `${item.name}, ${whereWords(place
 /** What a sign says: the name it was given, without "the". */
 const signWords = (name: string | undefined) => (name ?? "Welcome").replace(/^(the|a|an)\s+/i, "").slice(0, 40);
 
+/**
+ * Whether the building gives a place a door (see `layWorld`): everything in
+ * the main building has one; a place in an area of its own only once
+ * something else is in that area with it. Asked as the plugin, which lays
+ * out the building: an agent can't see other agents' homes, only whether one
+ * is next door.
+ */
+async function hasDoor(
+  service: StateService,
+  id: string,
+  place: Place,
+  hasBody: (agent: string | undefined) => boolean,
+): Promise<boolean> {
+  const area = areaId(place.area);
+  if (area === MAIN) return true;
+  const elsewhere = await service
+    .query(PLUGIN_CALLER, { type: PLACE_TYPE, where: { area: { ne: null } }, limit: 500 })
+    .catch(() => [] as Awaited<ReturnType<StateService["query"]>>);
+  return elsewhere.some(
+    (r) =>
+      r.id !== id &&
+      (r.id.startsWith(SHARED) || (r.id.startsWith("home:") && hasBody(r.id.slice("home:".length)))) &&
+      areaId(String((r.data as unknown as Place).area ?? "")) === area,
+  );
+}
+
 /** Which area a place is in, and where its door is, for the agent looking round it. */
-function whereaboutsWords(place: Place): string {
+function whereaboutsWords(place: Place, door: boolean): string {
   const area = place.area && areaId(place.area) !== MAIN ? place.area : MAIN_NAME;
-  const door = doorOf(place);
-  return `It is in ${area}.${door ? ` Its door is ${doorWords(place, door)}; nothing can stand in front of it.` : ""}`;
+  const slot = doorOf(place);
+  if (!door)
+    return `It is in ${area}, the only place there, so it has no door yet: the map is the way in.${slot ? ` The floor ${doorWords(place, slot)} is kept clear for one.` : ""}`;
+  return `It is in ${area}.${slot ? ` Its door is ${doorWords(place, slot)}; nothing can stand in front of it.` : ""}`;
 }
 
 export interface Outcome {
@@ -971,7 +999,8 @@ export class PlaceTool implements Tool {
         const others = await whoIsIn(service, caller, id, this.hasBody, agent);
         const where = id === homeId(agent) ? "You are at home." : `You are in ${place.name}, a shared place.`;
         const company = others.length ? ` Also here: ${others.join(", ")}.` : "";
-        return { success: true, output: `${where}${company} ${whereaboutsWords(place)}\n\n${describe(place)}` };
+        const door = await hasDoor(service, id, place, this.hasBody);
+        return { success: true, output: `${where}${company} ${whereaboutsWords(place, door)}\n\n${describe(place)}` };
       }
       if (action === "undo") {
         const { id } = await readCurrent(service, caller, agent);

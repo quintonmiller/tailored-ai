@@ -784,14 +784,14 @@ function placeOnFloor(place: Place, placing: Placing, where: Where): Placement |
     return got ?? `There's no room for it near (${anchor[0]}, ${anchor[1]}).`;
   }
 
-  const alongWall = (wall: Wall, target?: number) => {
+  const alongWall = (wall: Wall, target?: number, within?: number) => {
     const facing = facingFrom(place, where.facing, [0, 0]) ?? WALL_FACING[wall];
     const span = wall === "back" || wall === "front" ? place.width : place.depth;
     // Its back to the wall, so its depth is what stands out from it, whichever wall.
     const inset = d / 2 + 0.02;
     const points: [number, number][] = [];
     const centre = target ?? 0;
-    for (let s = 0; s <= span; s += 0.05) {
+    for (let s = 0; s <= Math.min(span, within ?? span); s += 0.05) {
       for (const a of s === 0 ? [centre] : [centre + s, centre - s]) {
         const p: [number, number] =
           wall === "back"
@@ -829,30 +829,49 @@ function placeOnFloor(place: Place, placing: Placing, where: Where): Placement |
 
   if (near) {
     const item = "kind" in near ? (near as PlaceItem) : undefined;
+    // Near the door is beside it: back to its wall if there is room, else either side of the way in, and only
+    // then past the far end of it. The way in itself is held clear (`withDoorwayHeld`).
+    const doorWall = item?.id === DOOR_HOLD && !where.side ? heldWall(place, item) : undefined;
+    if (doorWall) {
+      const along = doorWall === "back" || doorWall === "front" ? near.at[0] : near.at[1];
+      const got = alongWall(doorWall, along, BESIDE_DOOR);
+      if (got) return got;
+    }
     const nearFacing = near.facing;
     const seatToFocus = !!kind?.use && kind.use.activity === "sit" && !!item && !!KINDS[item.kind]?.focus;
-    const sides: Side[] = where.side ? [where.side] : ["left", "right", "front", "behind"];
+    const all: Side[] = ["left", "right", "front", "behind"];
+    const tiers: Side[][] = where.side
+      ? [[where.side]]
+      : doorWall
+        ? [doorWall === "back" || doorWall === "front" ? ["left", "right"] : ["front", "behind"], all]
+        : [all];
+    const facingAt = (at: [number, number]) =>
+      explicit(at) ?? (seatToFocus ? towards(at, near.at) : doorWall ? WALL_FACING[doorWall] : nearFacing);
     let best: { at: [number, number]; facing: number; dist: number } | undefined;
-    for (const side of sides) {
-      const [dx, dz] = SIDE_DIR[side];
-      const [nw, nd] = item ? footprintOf(item) : [0.3, 0.3];
-      const gap = dx !== 0 ? nw / 2 + w / 2 + 0.06 : nd / 2 + d / 2 + 0.06;
-      const points: [number, number][] = [];
-      for (let out = 0; out <= 1.6; out += 0.05) {
-        for (let lateral = 0; lateral <= 0.8; lateral += 0.05) {
-          for (const l of lateral === 0 ? [0] : [lateral, -lateral]) {
-            const lx = dx !== 0 ? dx * (gap + out) : l;
-            const lz = dz !== 0 ? dz * (gap + out) : l;
-            points.push(offset(near.at, nearFacing, lx, lz));
+    // The nearest place in the first tier of sides that has room at all.
+    for (const sides of tiers) {
+      for (const side of sides) {
+        const [dx, dz] = SIDE_DIR[side];
+        const [nw, nd] = item ? footprintOf(item) : [0.3, 0.3];
+        const gap = dx !== 0 ? nw / 2 + w / 2 + 0.06 : nd / 2 + d / 2 + 0.06;
+        const points: [number, number][] = [];
+        for (let out = 0; out <= 1.6; out += 0.05) {
+          for (let lateral = 0; lateral <= 0.8; lateral += 0.05) {
+            for (const l of lateral === 0 ? [0] : [lateral, -lateral]) {
+              const lx = dx !== 0 ? dx * (gap + out) : l;
+              const lz = dz !== 0 ? dz * (gap + out) : l;
+              points.push(offset(near.at, nearFacing, lx, lz));
+            }
           }
+          if (points.length > 2000) break;
         }
-        if (points.length > 2000) break;
+        const got = tryAt(points, facingAt);
+        if (got) {
+          const dist = Math.hypot(got.at[0] - near.at[0], got.at[1] - near.at[1]);
+          if (!best || dist < best.dist) best = { ...got, dist };
+        }
       }
-      const got = tryAt(points, (at) => explicit(at) ?? (seatToFocus ? towards(at, near.at) : nearFacing));
-      if (got) {
-        const dist = Math.hypot(got.at[0] - near.at[0], got.at[1] - near.at[1]);
-        if (!best || dist < best.dist) best = { ...got, dist };
-      }
+      if (best) break;
     }
     if (best) return { at: best.at, facing: best.facing };
     return `There's no room for it ${where.side ? `on the ${where.side} of` : "near"} ${"name" in near ? near.name : "there"}.`;
@@ -1235,10 +1254,41 @@ export function doorOf(place: Place): DoorSlot | undefined {
   return best(["back", "left"]) ?? best(["front", "right"]);
 }
 
-/** The floor in front of a door: as wide as the doorway with a little to spare, and `DOORWAY.depth` deep. */
-export function doorwayFloor(place: Place, door: DoorSlot): { at: [number, number]; size: [number, number] } {
+/**
+ * How far into the room the `place` tool keeps the floor in front of a door
+ * clear of anything new: room to come in and stand clear of the doorway, and
+ * to walk up to the door square on. Deeper at the open front and right, where
+ * you come in further so the gate's plate doesn't hide you. The page puts you
+ * inside these (see `ARRIVE_IN` in the UI's `doors.ts`). Never more than half
+ * the room, so a small one still has floor to furnish. The rooms the world
+ * starts with only keep `DOORWAY.depth`, so they need no reflowing.
+ */
+export const DOOR_APPROACH = { wall: 1.6, open: 2.2 };
+
+/** The id of the block that holds a doorway while something is placed, and its name, so "near the door" finds it. */
+export const DOOR_HOLD = "doorway-hold";
+/** How far along its wall from a door "near the door" looks before trying anywhere round it. */
+const BESIDE_DOOR = 2.5;
+
+/** The side of the room a door's hold stands against: the door's side. */
+function heldWall(place: Place, hold: PlaceItem): Wall | undefined {
+  const [w, d] = footprintOf(hold);
+  const at = (a: number, b: number) => Math.abs(a - b) < 0.02;
+  if (at(hold.at[1] - d / 2, -place.depth / 2)) return "back";
+  if (at(hold.at[0] - w / 2, -place.width / 2)) return "left";
+  if (at(hold.at[1] + d / 2, place.depth / 2)) return "front";
+  if (at(hold.at[0] + w / 2, place.width / 2)) return "right";
+  return undefined;
+}
+
+/** The floor in front of a door: as wide as the doorway with a little to spare, and `depth` deep. */
+export function doorwayFloor(
+  place: Place,
+  door: DoorSlot,
+  depth: number = DOORWAY.depth,
+): { at: [number, number]; size: [number, number] } {
   const span = DOORWAY.width + 0.2;
-  const d = DOORWAY.depth;
+  const d = depth;
   switch (door.wall) {
     case "back":
       return { at: [door.along, round(-place.depth / 2 + d / 2)], size: [span, d] };
@@ -1253,17 +1303,24 @@ export function doorwayFloor(place: Place, door: DoorSlot): { at: [number, numbe
 
 /**
  * The room with its doorway held, for finding where something goes: a block
- * as tall as the room stands in front of the door, so nothing is put in the
- * way, over it, or where someone would have to stand to use it. It is called
- * "the door", so "near the door" finds it. What is found is put in the room
- * as it is, without the block.
+ * as tall as the room stands on the floor in front of the door, out as far as
+ * its approach (`DOOR_APPROACH`), so nothing is put in the way, over it, or
+ * where someone comes in or walks up to it. It is called "the door", so "near
+ * the door" finds it and puts things beside it. What is found is put in the
+ * room as it is, without the block.
  */
 export function withDoorwayHeld(place: Place, door: DoorSlot | undefined = doorOf(place)): Place {
   if (!door) return place;
-  const { at, size } = doorwayFloor(place, door);
+  const open = door.wall === "front" || door.wall === "right";
+  const across = door.wall === "back" || door.wall === "front" ? place.depth : place.width;
+  const { at, size } = doorwayFloor(
+    place,
+    door,
+    Math.min(open ? DOOR_APPROACH.open : DOOR_APPROACH.wall, round(across / 2)),
+  );
   // A shape with no top, so nothing is ever put on it.
   const hold: PlaceItem = {
-    id: "doorway-hold",
+    id: DOOR_HOLD,
     name: "the door",
     kind: "ball",
     at,

@@ -34,7 +34,7 @@ const stage = vi.hoisted(() => ({
   cues: [] as string[],
   insets: [] as number[],
   /** Every room the stage was shown, first to last. */
-  rooms: [] as { name?: string; props: { name: string }[]; doors?: { to: string }[] }[],
+  rooms: [] as { name?: string; props: { name: string }[]; doors?: { to: string; along: number }[] }[],
   /** Who else the stage was told is in the room, each time. */
   company: [] as string[][],
   /** What the stage was told each agent is doing, each time. */
@@ -119,6 +119,8 @@ class FakeEventSource {
 /** Where the agent is, and who else is there with a body, as the server says. */
 let placeId = "home:talker";
 let company: { agent: string; name: string; avatar: string; animations: string[] }[] = [];
+/** Where the door of the agent's own place is, as the server says. */
+let homeDoorAlong = 1;
 /** The agents as configured: which run on their own. */
 let agentsInfo: Record<string, { online?: { enabled?: boolean } }> = {};
 /** The last thing each agent said, as the server's speech records say. */
@@ -270,6 +272,7 @@ beforeEach(() => {
   ownAgents = [];
   placeId = "home:talker";
   company = [];
+  homeDoorAlong = 1;
   stage.mounted = 0;
   vi.stubGlobal("EventSource", FakeEventSource);
   localStorage.clear();
@@ -386,7 +389,7 @@ beforeEach(() => {
             version: 1,
             place: home,
             company,
-            doors: [{ wall: "back", along: 1, to: "hall:main:homes-1", label: "Residences", kind: "hall" }],
+            doors: [{ wall: "back", along: homeDoorAlong, to: "hall:main:homes-1", label: "Residences", kind: "hall" }],
           }),
         );
       if (init?.method === "DELETE") {
@@ -516,7 +519,19 @@ describe("the chat page's scene", () => {
     await act(async () =>
       FakeEventSource.last?.emit("change", { type: "place", id: "home:talker", op: "update", after: rearranged }),
     );
+    await settle();
+    // Its door stayed where it was, so the room stands as changed, not drawn again from the server's answer.
     expect(stage.rooms.at(-1)?.props.map((p) => p.name)).toEqual(["the reading chair", "the lamp"]);
+    const drawn = stage.rooms.length;
+    expect(stage.rooms.at(-1)?.doors?.map((d) => d.along)).toEqual([1]);
+    // A change that moves the door (something cleared from the end of a wall): the door moves with it.
+    homeDoorAlong = 2.5;
+    await act(async () =>
+      FakeEventSource.last?.emit("change", { type: "place", id: "home:talker", op: "update", after: home }),
+    );
+    await settle();
+    expect(stage.rooms.length).toBeGreaterThan(drawn);
+    expect(stage.rooms.at(-1)?.doors?.map((d) => d.along)).toEqual([2.5]);
   });
 
   it("shows who else is in the room, and the agent knows they are there", async () => {

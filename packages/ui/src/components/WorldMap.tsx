@@ -208,8 +208,10 @@ export function WorldMap({
       {problem && <p className="world-map-problem">{problem}</p>}
       {grouped && where && (
         <p className="world-map-area-here">
-          You're in {known.find((a) => a.id === areaOf(where))?.name ?? "the main building"}. Doors lead round it; other
-          areas are a click away here.
+          You're in {known.find((a) => a.id === areaOf(where))?.name ?? "the main building"}.{" "}
+          {places.filter((p) => areaOf(p) === areaOf(where)).length > 1
+            ? "Doors lead round it; other areas are a click away here."
+            : "Nothing else is there yet, so it has no doors; other areas are a click away here."}
         </p>
       )}
       <div className="world-map-body">

@@ -67,24 +67,39 @@ export function useRoom(agent: string, enabled: boolean): SceneInfo {
     if (!enabled) return;
     let gone = false;
     let id: string | undefined;
-    const load = () =>
-      fetch(`/api/ext/builtin:places/${encodeURIComponent(agent || "default")}`)
+    // Only the latest answer counts: an older one arriving late would show the room as it was. A whole answer
+    // still owed when a later ask is for the doors alone is taken whole.
+    let asked = 0;
+    let owed = false;
+    /** Ask for the place; `ifDoorsMoved`, only take the answer when its doors aren't where they were. */
+    const load = (ifDoorsMoved = false) => {
+      const n = ++asked;
+      if (!ifDoorsMoved) owed = true;
+      const doorsOnly = ifDoorsMoved && !owed;
+      return fetch(`/api/ext/builtin:places/${encodeURIComponent(agent || "default")}`)
         .then((res) => (res.ok ? (res.json() as Promise<PlaceInfo>) : null))
         .then((body) => {
-          if (gone) return;
+          if (gone || n !== asked) return;
+          owed = false;
           id = body?.id;
-          setScene({ room: roomOf(body), company: companyOf(body), ...(id ? { id } : {}), ...areaOf(body) });
+          const next = { room: roomOf(body), company: companyOf(body), ...(id ? { id } : {}), ...areaOf(body) };
+          setScene((s) => (doorsOnly && sameDoors(s.room.doors, next.room.doors) ? s : next));
         })
         .catch(() => {
-          if (!gone) setScene({ room: DEFAULT_ROOM, company: [] });
+          if (!gone && n === asked && !doorsOnly) setScene({ room: DEFAULT_ROOM, company: [] });
         });
+    };
     void load();
     const off = subscribeStateChanges((change) => {
       // Someone came or went, maybe this agent itself: where it is and who is there are asked again.
       if (change.type === "whereabouts") void load();
       if (change.type !== "place" || !id || change.id !== id) return;
       if (change.op === "delete" || !change.after || resized(change)) void load();
-      else setScene((s) => ({ ...s, room: { ...(change.after as unknown as Room), doors: s.room.doors } }));
+      else {
+        // Shown as changed at once; and since where its door goes depends on what is in it, asked again for that.
+        setScene((s) => ({ ...s, room: { ...(change.after as unknown as Room), doors: s.room.doors } }));
+        void load(true);
+      }
     });
     return () => {
       gone = true;
@@ -109,6 +124,11 @@ export function roomOf(info: PlaceInfo | null | undefined): Room {
 }
 
 const areaOf = (info: PlaceInfo | null | undefined) => (info?.area ? { area: info.area } : {});
+
+/** Whether two lists of doors are the same doors in the same places. */
+export function sameDoors(a: RoomDoor[] | undefined, b: RoomDoor[] | undefined): boolean {
+  return JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
+}
 
 /** A change that can move a place's doors (made anew, a new size, another area): worth asking for them again. */
 function resized(change: { op: string; before?: Record<string, unknown>; after?: Record<string, unknown> }): boolean {
@@ -330,15 +350,26 @@ export function useScene(id: string | null): SceneInfo | null {
       return;
     }
     let gone = false;
-    const load = () =>
-      fetch(`/api/ext/builtin:places/scene/${encodeURIComponent(id)}`)
+    // As for the agent's own place (`useRoom`): the latest answer only, and a whole one if one is owed.
+    let asked = 0;
+    let owed = false;
+    /** Ask for the place; `ifDoorsMoved`, only take the answer when its doors aren't where they were. */
+    const load = (ifDoorsMoved = false) => {
+      const n = ++asked;
+      if (!ifDoorsMoved) owed = true;
+      const doorsOnly = ifDoorsMoved && !owed;
+      return fetch(`/api/ext/builtin:places/scene/${encodeURIComponent(id)}`)
         .then((res) => (res.ok ? (res.json() as Promise<PlaceInfo>) : null))
         .then((body) => {
-          if (!gone) setScene({ room: roomOf(body), company: companyOf(body), id, ...areaOf(body) });
+          if (gone || n !== asked) return;
+          owed = false;
+          const next = { room: roomOf(body), company: companyOf(body), id, ...areaOf(body) };
+          setScene((s) => (doorsOnly && s && sameDoors(s.room.doors, next.room.doors) ? s : next));
         })
         .catch(() => {
-          if (!gone) setScene({ room: DEFAULT_ROOM, company: [], id });
+          if (!gone && n === asked && !doorsOnly) setScene({ room: DEFAULT_ROOM, company: [], id });
         });
+    };
     void load();
     const off = subscribeStateChanges((change) => {
       if (change.type === "whereabouts") void load();
@@ -351,7 +382,10 @@ export function useScene(id: string | null): SceneInfo | null {
         void load();
       if (change.type !== "place" || change.id !== id) return;
       if (change.op === "delete" || !change.after || resized(change)) void load();
-      else setScene((s) => (s ? { ...s, room: { ...(change.after as unknown as Room), doors: s.room.doors } } : s));
+      else {
+        setScene((s) => (s ? { ...s, room: { ...(change.after as unknown as Room), doors: s.room.doors } } : s));
+        void load(true);
+      }
     });
     return () => {
       gone = true;

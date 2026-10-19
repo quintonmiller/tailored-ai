@@ -6,10 +6,11 @@
  * three wings: the residences (a door per agent's home), the meeting rooms (a
  * door per room agents talk in), and the shared places. A wing with one place
  * opens straight off the lobby; more, and they are behind a hall, a door per
- * place, up to `HALL_DOORS` in a hall before the next hall carries on from the
- * end of it. Halls are cut at a change of first letter where they can be, so
- * each covers a run of the alphabet ("Residences A–F") and adding someone only
- * changes the hall they join.
+ * place, up to `HALL_DOORS` in a hall. A wing with more than a hall's worth
+ * has several halls, each covering a run of the alphabet ("Residences A–F"),
+ * and a foyer in front of them with a door to each, so every place is three
+ * doors from the lobby at most. Halls are cut at a change of first letter
+ * where they can be, so adding someone only changes the hall they join.
  *
  * A home or a shared place can say it is somewhere else (`area`, set with the
  * `place` tool): "the summer house". The places of such an area are joined to
@@ -60,7 +61,11 @@ export interface Link {
   occupant?: string;
 }
 
-/** A hall: the door you come in by, the door on to the next hall, and a door for each place. */
+/**
+ * A hall: the door you come in by, a door for each place, and in the rare
+ * foyer with more halls than doors, the door on to the next foyer. A foyer is
+ * a hall whose doors lead to halls.
+ */
 export interface Hall {
   id: string;
   name: string;
@@ -192,9 +197,27 @@ export function layWorld(places: WorldPlace[]): World {
   }
   const hallLink = (h: Hall): Link => ({ to: h.id, label: plate(h.name), kind: "hall" });
 
+  /** Halls in a row, each with a door on to the next and back to the one before; the first comes in from `from`. */
+  const chain = (row: Hall[], from: Link | undefined) => {
+    for (const [i, h] of row.entries()) {
+      const before = row[i - 1];
+      const after = row[i + 1];
+      if (before) h.entrance = hallLink(before);
+      else if (from) h.entrance = from;
+      if (after) h.onward = hallLink(after);
+    }
+  };
+  const keep = (h: Hall) => {
+    areaOf.set(h.id, h.area);
+    halls.push(h);
+  };
+
   /**
-   * A run of places behind halls, the first hall's entrance coming from `from`.
-   * Each place's door leads back to its hall. Returns the link to the first hall.
+   * A run of places behind halls, the way in coming from `from`. A hall's
+   * worth is one hall. More, and the places are cut into halls by letter, with
+   * a foyer in front that has a door to each hall, so none is further than
+   * foyer, hall, door. Each place's door leads back to its hall. Returns the
+   * link to the way in.
    */
   const corridor = (area: string, key: string, title: string, links: Link[], from: Link | undefined): Link => {
     const groups = packHalls(links, (l) => letterOf(l.label));
@@ -212,17 +235,32 @@ export function layWorld(places: WorldPlace[]): World {
       const same = names.filter((n) => n === names[i]);
       if (same.length > 1) h.name = `${names[i]} ${names.slice(0, i + 1).filter((n) => n === names[i]).length}`;
     }
-    for (const [i, h] of made.entries()) {
-      const before = made[i - 1];
-      const after = made[i + 1];
-      if (before) h.entrance = hallLink(before);
-      else if (from) h.entrance = from;
-      if (after) h.onward = hallLink(after);
-      for (const room of h.rooms) doors.set(room.to, hallLink(h));
-      areaOf.set(h.id, area);
-      halls.push(h);
+    for (const h of made) for (const room of h.rooms) doors.set(room.to, hallLink(h));
+    if (made.length === 1) {
+      chain(made, from);
+      keep(made[0]);
+      return hallLink(made[0]);
     }
-    return hallLink(made[0]);
+    // The foyer: a door to each hall. Past a foyer's worth of halls, the next foyer carries on from its far end.
+    const foyerId = key ? `hall:${area}:${key}-foyer` : `hall:${area}:foyer`;
+    const foyers = packHalls(made.map(hallLink), () => "").map(
+      (rooms, i): Hall => ({
+        id: i ? `${foyerId}-${i + 1}` : foyerId,
+        name: i ? `${title} ${i + 1}` : title,
+        area,
+        rooms,
+      }),
+    );
+    chain(foyers, from);
+    for (const f of foyers) {
+      keep(f);
+      for (const room of f.rooms) {
+        const hall = made.find((h) => h.id === room.to) as Hall;
+        hall.entrance = hallLink(f);
+      }
+    }
+    for (const h of made) keep(h);
+    return hallLink(foyers[0]);
   };
 
   // The main building: the lobby, and a wing off it for each kind of place.

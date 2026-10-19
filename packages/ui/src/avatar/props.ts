@@ -772,9 +772,12 @@ function drawPlate(canvas: HTMLCanvasElement, label: string, ground: string, ink
   ctx.fillText(label, canvas.width / 2, canvas.height * 0.54, canvas.width * 0.92);
 }
 
-/** A door's panel and plate colours, by what it opens on: a home's warm wood, a meeting room's slate, glass to a hall. */
+/**
+ * A door's panel and plate colours, by what it opens on: a home's warm wood, a meeting room's slate, glass to a
+ * hall. A home's plate is dark, so the light beside it shows in any of its colours, amber too.
+ */
 const DOOR_LOOKS: Record<RoomDoor["kind"], { panel?: number; plate: string; ink: string }> = {
-  home: { panel: 0x8a5a3b, plate: "#c9a24a", ink: "#2a1d0c" },
+  home: { panel: 0x8a5a3b, plate: "#3a2a1f", ink: "#f2e4c4" },
   shared: { panel: 0x5f7f5a, plate: "#e4dcc6", ink: "#23301f" },
   room: { panel: 0x4f6278, plate: "#2f3a4a", ink: "#f3efe6" },
   hall: { plate: "#24303f", ink: "#eef1fa" },
@@ -790,31 +793,36 @@ let glass: THREE.MeshStandardMaterial | undefined;
  * name plate over it and a mat in front. At an open side of the room the wall
  * is cut away, so the door is too: a low gate of two posts with the plate
  * across them, readable from either side, that never stands between the
- * camera and the room. A home's door has a light by its plate that the stage
- * colours by what its agent is doing.
+ * camera and the room. A home's door has a light by its plate, and a lit strip
+ * along it, that the stage colours by what its agent is doing. In a room lower
+ * than a door and its plate (`height`), the door is made shorter to fit.
  */
 export function buildDoor(
   door: Pick<RoomDoor, "label" | "kind" | "occupant">,
-  opts: { freestanding: boolean; trim?: string },
-): { group: THREE.Group; light?: THREE.MeshStandardMaterial } {
+  opts: { freestanding: boolean; trim?: string; height: number },
+): { group: THREE.Group; light?: THREE.MeshBasicMaterial } {
   const g = new THREE.Group();
   const look = DOOR_LOOKS[door.kind] ?? DOOR_LOOKS.room;
   const trim = hex(opts.trim, 0xf2efe8);
+  // How tall the frame is, under the plate and the top of the wall.
+  const tall = Math.min(2.25, opts.height - 0.46);
+  const k = tall / 2.25;
   // How high the plate is, and which faces of it can be seen.
-  const plateY = opts.freestanding ? 0.9 : 2.5;
+  const plateY = opts.freestanding ? 0.9 : Math.min(2.5, opts.height - 0.2);
   const faces = opts.freestanding ? [1, -1] : [1];
   if (opts.freestanding) {
     for (const x of [-0.66, 0.66]) box(g, 0.1, 1.06, 0.12, trim, x, 0.53, 0.06);
     // A sill across the opening, where the cut-away wall would meet the floor.
     box(g, 1.22, 0.03, 0.12, tint(trim, -0.2), 0, 0.015, 0.06).castShadow = false;
   } else {
-    for (const x of [-0.66, 0.66]) box(g, 0.1, 2.25, 0.14, trim, x, 1.125, 0.07);
-    box(g, 1.42, 0.12, 0.14, trim, 0, 2.24, 0.07);
+    for (const x of [-0.66, 0.66]) box(g, 0.1, tall, 0.14, trim, x, tall / 2, 0.07);
+    box(g, 1.42, 0.12, 0.14, trim, 0, tall - 0.01, 0.07);
     if (look.panel !== undefined) {
-      box(g, 1.2, 2.16, 0.05, look.panel, 0, 1.08, 0.06);
+      box(g, 1.2, tall - 0.09, 0.05, look.panel, 0, (tall - 0.09) / 2, 0.06);
       // Two sunk panels and a handle, so it reads as a door and not a board.
-      for (const y of [0.6, 1.55]) box(g, 0.92, 0.7, 0.012, tint(look.panel, -0.18), 0, y, 0.09).castShadow = false;
-      cylinder(g, 0.035, 0.035, 0.08, 0xd4b264, 0.46, 1.02, 0.12, 10).rotation.x = Math.PI / 2;
+      for (const y of [0.6, 1.55])
+        box(g, 0.92, 0.7 * k, 0.012, tint(look.panel, -0.18), 0, y * k, 0.09).castShadow = false;
+      cylinder(g, 0.035, 0.035, 0.08, 0xd4b264, 0.46, 1.02 * k, 0.12, 10).rotation.x = Math.PI / 2;
     } else {
       glass ??= new THREE.MeshStandardMaterial({
         color: 0xbcd6e8,
@@ -824,10 +832,10 @@ export function buildDoor(
         metalness: 0.1,
         depthWrite: false,
       });
-      const pane = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.16, 0.03), glass);
-      pane.position.set(0, 1.08, 0.06);
+      const pane = new THREE.Mesh(new THREE.BoxGeometry(1.2, tall - 0.09, 0.03), glass);
+      pane.position.set(0, (tall - 0.09) / 2, 0.06);
       g.add(pane);
-      box(g, 1.2, 0.06, 0.05, trim, 0, 1.05, 0.06);
+      box(g, 1.2, 0.06, 0.05, trim, 0, 1.05 * k, 0.06);
     }
   }
   // The plate: a backing, and the words on each face that can be seen. A long name gets a wider plate, up to
@@ -854,17 +862,30 @@ export function buildDoor(
   // A mat in front, so a door is found by where it meets the floor as well.
   box(g, 1.3, 0.014, 0.55, 0x4a4038, 0, 0.007, 0.45).castShadow = false;
   if (!door.occupant) return { group: g };
-  const light = glowing(0xd8dde6);
-  // Beside the plate on a wall; on top of a gate's post, seen from all round.
-  const bulb = solid(
-    new THREE.SphereGeometry(0.06, 12, 8),
-    light,
-    opts.freestanding ? -0.66 : -wide / 2 - 0.12,
-    opts.freestanding ? plateY + 0.24 : plateY,
-    opts.freestanding ? 0.06 : 0.11,
-  );
-  bulb.castShadow = false;
-  g.add(bulb);
+  // Drawn in its own colour, untouched by the lights or the tone mapping, so it stays that colour at night too.
+  const light = new THREE.MeshBasicMaterial({ color: 0xe6eaf0, toneMapped: false });
+  // A bulb beside the plate on a wall, on top of a gate's post seen from all round; and a strip along the plate,
+  // under it on a wall and over it on a gate.
+  const lit = [
+    solid(
+      new THREE.SphereGeometry(0.08, 14, 10),
+      light,
+      opts.freestanding ? -0.66 : -wide / 2 - 0.14,
+      opts.freestanding ? plateY + 0.26 : plateY,
+      opts.freestanding ? 0.06 : 0.11,
+    ),
+    solid(
+      new THREE.BoxGeometry(opts.freestanding ? Math.max(1.42, wide + 0.06) : wide + 0.06, 0.04, 0.05),
+      light,
+      0,
+      opts.freestanding ? plateY + 0.18 : plateY - 0.18,
+      0.07,
+    ),
+  ];
+  for (const mesh of lit) {
+    mesh.castShadow = false;
+    g.add(mesh);
+  }
   return { group: g, light };
 }
 
