@@ -4,22 +4,21 @@
  * It walks between the room's spots on its own while nobody is talking to
  * it, comes back to the middle when a session starts, and goes where you
  * click. Drag to look around; the close-up view follows the head and torso.
- * Imported only when an avatar is configured, so three.js stays out of the
- * main bundle.
+ * Other agents in the same room appear too, each with its own body, and
+ * wander on their own. Imported only when an avatar is configured, so
+ * three.js stays out of the main bundle.
  *
  * VRM is the open format for humanoid avatars: a glTF file whose skeleton,
  * mouth shapes and blink follow one standard, so any VRM model works here
  * without per-model setup.
  */
-import { type VRM, VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
+import { type VRM, VRMUtils } from "@pixiv/three-vrm";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { type ClipLibrary, type ClipRole, loadClipLibrary, rolesFor } from "./clips";
 import type { Cue } from "./cues";
-import { armClearance, bodyPoints } from "./fit";
-import { Director, findPath, type Obstacle, route, turnBetween, Walker } from "./locomotion";
-import { type BodyState, Motion, POSE_BONES, type Pose } from "./motion";
+import { Figure, loadModel } from "./figure";
+import type { Obstacle } from "./locomotion";
+import type { BodyState } from "./motion";
 import { buildProp, buildShell, disposeTree } from "./props";
 import {
   DEFAULT_ROOM,
@@ -31,12 +30,22 @@ import {
   ROOM_VIEW,
   type Room,
   roomDistance,
+  type Spot,
   spotById,
   spotFor,
 } from "./scene";
 
 /** The whole room, or the avatar's head and torso. */
 export type StageView = "room" | "close";
+
+/** Another agent in the same room: who, what to call it, and its body. */
+export interface Companion {
+  agent: string;
+  /** What the agent you are talking to calls it: "the planner". */
+  name: string;
+  url: string;
+  animations: string[];
+}
 
 export interface Stage {
   setView(view: StageView): void;
@@ -46,11 +55,14 @@ export interface Stage {
   walkTo(spot: string): boolean;
   /**
    * Do what a cue from the agent says: a gesture, `go` to a place, or `look`
-   * or `point` at something. One the room can't make sense of is ignored.
+   * or `point` at something, or someone else in the room. One the room can't
+   * make sense of is ignored.
    */
   cue(cue: { name: string; target?: string }): void;
   /** Show the room as it is now: what is new appears, what is gone goes, and the avatar stays where it can. */
   setRoom(room: Room): void;
+  /** Who else is in the room: new arrivals appear at a free spot, and those who left go. */
+  setCompany(company: Companion[]): void;
   dispose(): void;
 }
 
@@ -75,6 +87,40 @@ const rad = (degrees: number) => (degrees * Math.PI) / 180;
 /** Things that hang on a wall, so they are never in the way of a walk. */
 const WALL_KINDS = new Set(["window", "picture", "clock", "shelf"]);
 
+/** A small label that floats over a companion's head, so you can tell who is who. */
+function nameTag(name: string): THREE.Sprite {
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+  const font = "600 44px system-ui, sans-serif";
+  if (ctx) ctx.font = font;
+  const width = Math.ceil((ctx?.measureText(name).width ?? name.length * 24) + 48);
+  canvas.width = width;
+  canvas.height = 72;
+  if (ctx) {
+    ctx.font = font;
+    ctx.fillStyle = "rgba(20, 22, 32, 0.72)";
+    ctx.beginPath();
+    ctx.roundRect(0, 0, width, 72, 36);
+    ctx.fill();
+    ctx.fillStyle = "#f2f4fa";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(name, width / 2, 38);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true }));
+  sprite.scale.set((0.16 * width) / 72, 0.16, 1);
+  sprite.renderOrder = 10;
+  return sprite;
+}
+
+const bare = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/^(the|a|an)\s+/, "")
+    .trim();
+
 export async function createStage(
   host: HTMLElement,
   url: string,
@@ -98,6 +144,8 @@ export async function createStage(
     still?: { spot?: string; gesture?: string };
     /** Called once, when a still stage is worth photographing. */
     onReady?: () => void;
+    /** Who else is in the room from the start. */
+    company?: Companion[];
   } = {},
 ): Promise<Stage> {
   let room = opts.room ?? DEFAULT_ROOM;
@@ -110,26 +158,11 @@ export async function createStage(
 
   let vrm: VRM;
   try {
-    const loader = new GLTFLoader();
-    loader.register((parser) => new VRMLoaderPlugin(parser));
-    const gltf = await loader.loadAsync(url);
-    const loaded = gltf.userData.vrm as VRM | undefined;
-    if (!loaded) throw new Error("the file is not a VRM model");
-    vrm = loaded;
+    vrm = await loadModel(url);
   } catch (err) {
     renderer.dispose();
     throw err;
   }
-  VRMUtils.removeUnnecessaryVertices(vrm.scene);
-  VRMUtils.combineSkeletons(vrm.scene);
-  // VRM 0.x models face the other way; this turns them to face +Z like 1.0 ones.
-  VRMUtils.rotateVRM0(vrm);
-  // Poses are written in the VRM 1.0 frame; a 0.x model's normalized bones
-  // have their X and Z axes the other way round.
-  const flip = vrm.meta.metaVersion === "0" ? -1 : 1;
-  vrm.scene.traverse((o) => {
-    if ((o as THREE.Mesh).isMesh) o.castShadow = true;
-  });
 
   const scene = new THREE.Scene();
   // Everything a close-up camera must not sit inside or look through.
@@ -198,20 +231,52 @@ export async function createStage(
   };
   furnish();
 
-  // The body is a group around the model, so placing and turning it leaves
-  // the model's own VRM 0.x turn alone.
   const start =
     (opts.still?.spot ? spotById(room, opts.still.spot) : undefined) ?? spotById(room, room.start) ?? room.spots[0];
   // A photo holds still. A selfie faces the camera, sitting down if the spot is a seat.
   const selfie = !!opts.still && opts.view === "close";
   const stillActivity = opts.still && !(selfie && start?.activity !== "sit") ? start?.activity : undefined;
-  const body = new THREE.Group();
-  body.add(vrm.scene);
-  if (start) {
-    body.position.set(start.at[0], 0, start.at[1]);
-    body.rotation.y = selfie && start.activity !== "sit" ? 0.5 : rad(start.facing);
-  }
-  scene.add(body);
+  const me = new Figure(vrm, room, start, {
+    reducedMotion: opts.reducedMotion,
+    animations: opts.animations,
+    agentChooses: !!opts.chooseIdle,
+    ...(selfie && start && start.activity !== "sit" ? { facing: 0.5 } : {}),
+    // Which motion is playing, for anyone inspecting the page: "code" until animation files take over.
+    onClips: () => {
+      host.dataset.motion = "clips";
+    },
+  });
+  scene.add(me.body, me.gaze);
+  host.dataset.motion = "code";
+
+  // Other agents in the room, by agent; and those still loading.
+  const companions = new Map<string, Figure & { name?: string }>();
+  const arriving = new Set<string>();
+  let wanted: Companion[] = [];
+
+  /** Spots someone stands at or is walking to, except `who`. */
+  const taken = (who?: Figure): Set<string> => {
+    const out = new Set<string>();
+    for (const f of [me, ...companions.values()]) if (f !== who && f.current) out.add(f.current);
+    return out;
+  };
+  /** A spot nobody has, other than the middle, which the agent you talk to comes back to. */
+  const freeSpot = (who?: Figure): Spot | undefined => {
+    const busy = taken(who);
+    const open = room.spots.filter((s) => !busy.has(s.id));
+    const away = open.filter((s) => s.id !== room.start);
+    const pool = away.length ? away : open;
+    return pool[Math.floor(Math.random() * pool.length)];
+  };
+  /** The agent you talk to goes somewhere; anyone already there makes room. */
+  const go = (id: string) => {
+    for (const c of companions.values()) {
+      if (c.current !== id) continue;
+      const elsewhere = freeSpot(c);
+      if (elsewhere && elsewhere.id !== id) c.go(room, elsewhere.id, obstacles);
+    }
+    return me.go(room, id, obstacles);
+  };
 
   const sky = new THREE.HemisphereLight();
   const sun = new THREE.DirectionalLight();
@@ -253,52 +318,6 @@ export async function createStage(
   let hour = hourNow();
   light(lightingFor(hour));
 
-  // The avatar's own proportions, for the close-up.
-  body.updateMatrixWorld(true);
-  const bounds = new THREE.Box3().setFromObject(body);
-  const hipsY =
-    vrm.humanoid.getNormalizedBoneNode("hips")?.getWorldPosition(new THREE.Vector3()).y ??
-    bounds.min.y + (bounds.max.y - bounds.min.y) / 2;
-  // What the close-up frames, measured up from the body's feet.
-  const torso = (bounds.max.y + hipsY) / 2;
-
-  // Walking: speed and stride in proportion to the legs, so a small robot
-  // pads along and a tall figure strides.
-  const walker = new Walker(
-    { x: body.position.x, z: body.position.z, facing: body.rotation.y },
-    Math.max(0.3, hipsY * 1.35),
-  );
-  const stride = Math.max(0.15, hipsY * 1.1);
-  /** How much room it needs to pass between things: half its width, near enough. */
-  const bodyRadius = Math.min(0.3, Math.max(0.16, ((bounds.max.x - bounds.min.x) / 2) * 0.8));
-  const director = new Director(room, Math.random, !!opts.chooseIdle);
-  /** Where the spot it stands at was, so a moved couch takes it along. */
-  let currentAt: [number, number] | undefined = start?.at;
-  let asking = false;
-  /** The spot it is at, or walking to. */
-  let current: string | undefined = start?.id;
-  /** A walk asked for while seated: it stands up first. */
-  let pending: string | undefined;
-  let seated = 0;
-  const go = (id: string) => {
-    const to = spotById(room, id);
-    if (!to) return false;
-    director.sent();
-    if (seated > 0.05) {
-      pending = id;
-      return true;
-    }
-    pending = undefined;
-    // Round the furniture from where it stands; with nothing in the room, the old way through the middle.
-    const way = obstacles.length
-      ? findPath(room, [walker.place.x, walker.place.z], to.at, obstacles, bodyRadius)
-      : route(room, walker.busy ? undefined : current, id);
-    walker.go(way, rad(to.facing));
-    current = id;
-    currentAt = to.at;
-    return true;
-  };
-
   const camera = new THREE.PerspectiveCamera(ROOM_VIEW.fov, 1, 0.05, 60);
   const controls = new OrbitControls(camera, renderer.domElement);
   // Dragging turns the view. The wheel is left to scroll the page.
@@ -331,17 +350,17 @@ export async function createStage(
 
   const framing = (view: StageView): Framing => {
     if (view === "close") {
-      const top = bounds.max.y;
-      const span = (top - hipsY) * 1.25;
+      const top = me.bounds.max.y;
+      const span = (top - me.hipsY) * 1.25;
       const vfov = rad(ROOM_VIEW.fov);
       const hfov = 2 * Math.atan(Math.tan(vfov / 2) * visibleAspect());
       // A selfie stands back a little further than the chat page's close-up, so the room shows behind.
       const distance =
         Math.max(span / 2 / Math.tan(vfov / 2), (span * 0.9) / 2 / Math.tan(hfov / 2)) * (selfie ? 1.5 : 1);
-      const target = new THREE.Vector3(body.position.x, body.position.y + torso, body.position.z);
+      const target = me.head();
       // In front of its face when that side of the room is open; at a desk or
       // a shelf it faces a wall, so the camera takes the nearest open angle.
-      const { azimuth, distance: near } = clearShot(target, distance, nearestWithin(body.rotation.y, OPEN_SIDES));
+      const { azimuth, distance: near } = clearShot(target, distance, nearestWithin(me.body.rotation.y, OPEN_SIDES));
       return {
         target,
         position: new THREE.Vector3().setFromSphericalCoords(near, Math.PI / 2 - 0.08, azimuth).add(target),
@@ -409,10 +428,6 @@ export async function createStage(
   resize();
   settle(framing(view));
 
-  const gaze = new THREE.Object3D();
-  scene.add(gaze);
-  if (vrm.lookAt) vrm.lookAt.target = gaze;
-
   // A click (not a drag) on furniture sends the avatar to its spot; the
   // pointer says so on hover.
   const canvas = renderer.domElement;
@@ -448,41 +463,8 @@ export async function createStage(
   canvas.addEventListener("pointerup", onUp);
   canvas.addEventListener("pointermove", onHover);
 
-  const motion = new Motion(opts);
-  // Swing the arms out just far enough that the hands clear this body.
-  const points = bodyPoints(vrm);
-  const probe = new Motion({ reducedMotion: true });
-  motion.armClearance = armClearance(vrm, points, (extra) => {
-    vrm.humanoid.resetNormalizedPose();
-    probe.armClearance = extra;
-    apply(vrm, probe.step(0, "idle", 0), flip);
-    vrm.update(0);
-  });
-  const hipsNode = vrm.humanoid.getNormalizedBoneNode("hips");
-
-  // Animation files, when configured, take over the base pose once they load;
-  // until then, and if they can't, the code-driven motion carries on.
-  let clips: ClipPlayer | undefined;
   let disposed = false;
-  /** The animation files have loaded, or failed to: a still stage waits for this. */
-  let clipsSettled = !opts.animations?.length;
-  if (opts.animations?.length) {
-    loadClipLibrary(opts.animations, vrm)
-      .then((library) => {
-        if (disposed) return;
-        const player = clipPlayer(library, vrm);
-        if (!player) return;
-        motion.armClearance = armClearance(vrm, points, (extra) => player.sample("idle", extra, flip));
-        if (player.walkSpeed) walker.speed = player.walkSpeed;
-        clips = player;
-        host.dataset.motion = "clips";
-      })
-      .catch(() => {})
-      .finally(() => {
-        clipsSettled = true;
-      });
-  }
-  let lastWalkAt = Number.NEGATIVE_INFINITY;
+  let asking = false;
   let readyFired = false;
   let settleFrom: number | undefined;
   let gestureAt: number | undefined;
@@ -491,30 +473,16 @@ export async function createStage(
   controls.addEventListener("start", () => {
     lastDragAt = clock;
   });
-  // Which motion is playing, for anyone inspecting the page: "code" until animation files take over.
-  host.dataset.motion = "code";
   const started = performance.now();
   let last = started;
   /** The stage's clock, in seconds, as of the last frame: when a cue's move starts. */
   let clock = 0;
 
-  // Looking or pointing at something: the head turns toward it, and the whole
-  // body turns first when it is too far round for a head, or to point.
-  const aim = (target: string, point: boolean) => {
-    const where = lookTarget(room, target);
-    if (!where) return;
-    const from = new THREE.Vector3(body.position.x, body.position.y + torso, body.position.z);
-    const to = "viewer" in where ? camera.position.clone() : new THREE.Vector3(...where.at);
-    const yaw = turnBetween(walker.place.facing, Math.atan2(to.x - from.x, to.z - from.z));
-    const pitch = Math.atan2(to.y - from.y, Math.hypot(to.x - from.x, to.z - from.z));
-    const free = seated < 0.05 && !walker.busy && !pending;
-    if (free && (point || Math.abs(yaw) > 0.9)) {
-      walker.go([], walker.place.facing + yaw);
-      motion.look(0, pitch, clock);
-    } else {
-      motion.look(yaw, pitch, clock);
-    }
-    if (point) motion.gesture("point", clock);
+  /** Someone else in the room, by what the agent calls them. */
+  const companionNamed = (target: string): Figure | undefined => {
+    const t = bare(target);
+    for (const [agent, c] of companions) if (bare(c.name ?? agent) === t || bare(agent) === t) return c;
+    return undefined;
   };
 
   function handleCue(c: { name: string; target?: string }) {
@@ -522,12 +490,78 @@ export async function createStage(
       const spot = c.target ? spotFor(room, c.target) : undefined;
       if (spot) go(spot.id);
     } else if (c.name === "look" || c.name === "point") {
-      if (c.target) aim(c.target, c.name === "point");
+      if (!c.target) return;
+      const who = companionNamed(c.target);
+      if (who) {
+        me.aim(who.head(), c.name === "point", clock);
+        return;
+      }
+      const where = lookTarget(room, c.target);
+      if (!where) return;
+      me.aim("viewer" in where ? camera.position.clone() : new THREE.Vector3(...where.at), c.name === "point", clock);
     } else {
-      // A nod or a head shake from the files when there is one; the rest by code.
-      if (!clips?.shot(c.name as ClipRole, clock)) motion.gesture(c.name, clock);
+      me.gesture(c.name, clock);
     }
   }
+
+  /** Bring the company in line with who should be here. */
+  const meet = (company: Companion[]) => {
+    wanted = company;
+    const ids = new Set(company.map((c) => c.agent));
+    for (const [agent, fig] of companions) {
+      if (ids.has(agent)) continue;
+      fig.dispose();
+      companions.delete(agent);
+    }
+    for (const c of company) {
+      const fig = companions.get(c.agent);
+      if (fig) {
+        fig.name = c.name;
+        continue;
+      }
+      if (arriving.has(c.agent)) continue;
+      arriving.add(c.agent);
+      loadModel(c.url)
+        .then((model) => {
+          arriving.delete(c.agent);
+          const still = wanted.find((w) => w.agent === c.agent);
+          if (disposed || !still) {
+            VRMUtils.deepDispose(model.scene);
+            return;
+          }
+          const figure = new Figure(model, room, freeSpot(), {
+            reducedMotion: opts.reducedMotion,
+            animations: still.animations,
+          }) as Figure & { name?: string };
+          figure.name = still.name;
+          const tag = nameTag(still.name);
+          tag.position.y = figure.bounds.max.y + 0.14;
+          figure.body.add(tag);
+          scene.add(figure.body, figure.gaze);
+          companions.set(c.agent, figure);
+        })
+        .catch(() => {
+          arriving.delete(c.agent);
+        });
+    }
+  };
+  meet(opts.company ?? []);
+
+  /** The room changed under a figure: its spot gone, or moved with its furniture. */
+  const reseat = (f: Figure, home: () => string | undefined) => {
+    f.director.setRoom(room);
+    if (f.pending && !spotById(room, f.pending)) f.pending = undefined;
+    const spot = f.current ? spotById(room, f.current) : undefined;
+    if (!spot) {
+      f.current = undefined;
+      const to = home();
+      if (to) f.go(room, to, obstacles);
+    } else if (f.currentAt && Math.hypot(spot.at[0] - f.currentAt[0], spot.at[1] - f.currentAt[1]) > 0.05) {
+      // A walk from a spot to itself goes nowhere: from here, as if between spots.
+      f.current = undefined;
+      f.go(room, spot.id, obstacles);
+    }
+  };
 
   renderer.setAnimationLoop((now: number) => {
     // A photo's frame, once ready, holds: the screenshot is of that moment, not a later one.
@@ -557,8 +591,8 @@ export async function createStage(
       light(lightingFor(hour));
     }
     const { state, loudness, engaged } = input();
-    const here = walker.busy || pending ? undefined : current;
-    const next = asking || opts.still ? undefined : director.decide(t, here, engaged);
+    const here = me.here;
+    const next = asking || opts.still ? undefined : me.director.decide(t, here, engaged, taken(me));
     if (typeof next === "string") go(next);
     else if (next && opts.chooseIdle) {
       // The agent picks what it does with the quiet; if it can't be asked, a random spot.
@@ -570,77 +604,46 @@ export async function createStage(
           if (!disposed) for (const c of cues) handleCue(c);
         })
         .catch(() => {
-          const others = room.spots.filter((s) => s.id !== here);
-          const pick = others[Math.floor(Math.random() * others.length)];
+          const pick = freeSpot(me);
           if (pick && !disposed) go(pick.id);
         })
         .finally(() => {
           asking = false;
-          director.sent();
+          me.director.sent();
         });
     }
-    if (pending && seated <= 0.05) go(pending);
-    const walked = pending ? 0 : walker.step(dt);
+    me.step(
+      room,
+      obstacles,
+      t,
+      dt,
+      { state, loudness: loudness() },
+      camera.position,
+      opts.still ? { activity: stillActivity } : undefined,
+    );
     // Arrived somewhere: the close-up finds its best angle again, unless the
     // person turned the view themselves a moment ago.
-    if (wasBusy && !walker.busy && view === "close" && !tween && t - lastDragAt > 8) moveCamera(framing("close"));
-    wasBusy = walker.busy;
-    const spot = current ? spotById(room, current) : undefined;
-    /** What it is doing at its spot, if anything: a still selfie stands unless it is sitting. */
-    const doing = opts.still ? stillActivity : here ? spot?.activity : undefined;
-    if (walked > 0) lastWalkAt = t;
-    const pose = motion.step(t, state, loudness(), {
-      walked,
-      stride,
-      ...(doing ? { activity: doing } : {}),
-      ...(clips ? { clips: clips.covers } : {}),
-    });
-    seated = pose.seated;
-    if (clips) {
-      // The files play the base: walking, sitting, arms folded at the window,
-      // talking, or idle. The code-driven moves go on top.
-      const role: ClipRole =
-        t - lastWalkAt < 0.2
-          ? "walk"
-          : doing === "sit"
-            ? state === "speaking"
-              ? "sitTalk"
-              : "sit"
-            : doing === "look"
-              ? "foldArms"
-              : state === "speaking"
-                ? "talk"
-                : "idle";
-      clips.update(role, t, dt);
-      overlay(vrm, pose, flip);
-    } else {
-      apply(vrm, pose, flip);
-    }
-    // Settling onto a seat moves the body back onto it and to its height.
-    let { x, z } = walker.place;
-    let y = pose.lift;
-    if (spot?.seat && seated > 0) {
-      x += (spot.seat.at[0] - x) * seated;
-      z += (spot.seat.at[1] - z) * seated;
-      // From where the hips are now: a sitting clip lowers them itself.
-      y += (spot.seat.height + 0.03 - (hipsNode?.position.y ?? hipsY)) * seated;
-    }
-    body.position.set(x, y, z);
-    body.rotation.y = walker.place.facing;
+    if (wasBusy && !me.walker.busy && view === "close" && !tween && t - lastDragAt > 8) moveCamera(framing("close"));
+    wasBusy = me.walker.busy;
     // The close-up keeps the torso in frame wherever the avatar goes, from
     // the angle the person last left the view at.
     if (view === "close" && !tween) {
-      const follow = new THREE.Vector3(x, y + torso, z).sub(controls.target).multiplyScalar(1 - Math.exp(-dt / 0.25));
+      const follow = me
+        .head()
+        .sub(controls.target)
+        .multiplyScalar(1 - Math.exp(-dt / 0.25));
       controls.target.add(follow);
       camera.position.add(follow);
     }
-    // The eyes look at you, wherever you have turned the view to.
-    const head = Math.max(0.05, bounds.max.y - hipsY) * 0.5;
-    gaze.position.set(
-      camera.position.x + pose.gaze[0] * head,
-      camera.position.y + pose.gaze[1] * head,
-      camera.position.z,
-    );
+    // The others wander on their own, and keep an eye on the agent you are talking to.
+    const meHead = me.head();
+    for (const c of companions.values()) {
+      if (!opts.still) {
+        const move = c.director.decide(t, c.here, false, taken(c));
+        if (typeof move === "string") c.go(room, move, obstacles);
+      }
+      c.step(room, obstacles, t, dt, { state: "idle", loudness: 0 }, meHead);
+    }
     for (const w of warm)
       if (w.fire && lit)
         w.light.intensity = (lit.lamp.on ? 1.8 : 0.9) * (0.85 + 0.15 * Math.sin(t * 9) * Math.sin(t * 3.7));
@@ -653,9 +656,9 @@ export async function createStage(
       if (k >= 1) appearing.splice(i, 1);
     }
     if (opts.still && !readyFired) {
-      // Animation files that never answer don't hold the photo forever.
-      if (!clipsSettled && t > 15) clipsSettled = true;
-      if (clipsSettled && settleFrom === undefined) settleFrom = t;
+      // Everyone in the picture, settled: animation files that never answer don't hold it forever.
+      const settled = [me, ...companions.values()].every((f) => f.clipsSettled) && arriving.size === 0;
+      if (settleFrom === undefined && (settled || t > 15)) settleFrom = t;
       // Time to sit down and settle; then the gesture, caught near its peak.
       if (settleFrom !== undefined && t - settleFrom > 1.6) {
         if (opts.still.gesture && gestureAt === undefined) {
@@ -668,7 +671,6 @@ export async function createStage(
         }
       }
     }
-    vrm.update(dt);
     renderer.render(scene, camera);
   });
 
@@ -696,164 +698,25 @@ export async function createStage(
       furnish(new Set(next.props.filter((p) => !before.has(p.id)).map((p) => p.id)));
       if (lit) light(lit);
       fitShadows();
-      director.setRoom(room);
-      if (pending && !spotById(room, pending)) pending = undefined;
-      // Its spot went away, or moved with its furniture: go there again, or back to the start.
-      const spot = current ? spotById(room, current) : undefined;
-      if (!spot) {
-        current = undefined;
-        if (spotById(room, room.start)) go(room.start);
-      } else if (currentAt && Math.hypot(spot.at[0] - currentAt[0], spot.at[1] - currentAt[1]) > 0.05) {
-        // A walk from a spot to itself goes nowhere: from here, as if between spots.
-        current = undefined;
-        go(spot.id);
-      }
+      reseat(me, () => (spotById(room, room.start) ? room.start : undefined));
+      for (const c of companions.values()) reseat(c, () => freeSpot(c)?.id);
       if (resized && !tween) moveCamera(framing(view));
     },
+    setCompany: meet,
     dispose() {
       disposed = true;
-      clips?.dispose();
       renderer.setAnimationLoop(null);
       observer.disconnect();
       canvas.removeEventListener("pointerdown", onDown);
       canvas.removeEventListener("pointerup", onUp);
       canvas.removeEventListener("pointermove", onHover);
       controls.dispose();
-      VRMUtils.deepDispose(vrm.scene);
+      me.dispose();
+      for (const c of companions.values()) c.dispose();
+      companions.clear();
       disposeTree(scene);
       renderer.dispose();
       renderer.domElement.remove();
     },
   };
-}
-
-/** Plays the animation files' base pose, crossfading between roles, with one-off clips over it. */
-interface ClipPlayer {
-  /** What the files cover, so the code-driven motion leaves it alone. */
-  covers: { walk: boolean; activities: ("sit" | "look")[] };
-  /** The walking speed the walk clip was made for, in metres per second, so the feet don't slide. */
-  walkSpeed?: number;
-  update(role: ClipRole, t: number, dt: number): void;
-  /** Play a one-off over the base: true when the files have one for this role. */
-  shot(role: ClipRole, t: number): boolean;
-  /** Pose the model as a role looks partway through, arms swung out by `extra`, for fitting. */
-  sample(role: ClipRole, extra: number, flip: number): void;
-  dispose(): void;
-}
-
-const FADE = 0.35;
-
-function clipPlayer(library: ClipLibrary, vrm: VRM): ClipPlayer | undefined {
-  const roles = rolesFor(library.names());
-  if (!roles.idle) return undefined;
-  const mixer = new THREE.AnimationMixer(vrm.scene);
-  const clipFor = (role: ClipRole) => {
-    const name = roles[role] ?? roles.idle;
-    return name ? library.clip(name) : undefined;
-  };
-  const actionFor = (role: ClipRole, loop: boolean) => {
-    const clip = clipFor(role);
-    if (!clip) return undefined;
-    const action = mixer.clipAction(clip);
-    action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
-    action.clampWhenFinished = !loop;
-    return action;
-  };
-  let base: THREE.AnimationAction | undefined;
-  let baseRole: ClipRole | undefined;
-  let oneOff: { action: THREE.AnimationAction; ends: number } | undefined;
-  const fadeTo = (next: THREE.AnimationAction, from: THREE.AnimationAction | undefined, seconds: number) => {
-    next.reset().play();
-    if (from && from !== next) next.crossFadeFrom(from, seconds, false);
-    else next.fadeIn(seconds);
-  };
-  const walkSpeed = (clipFor("walk")?.userData as { speed?: number } | undefined)?.speed;
-  return {
-    covers: {
-      walk: !!roles.walk,
-      activities: [...(roles.sit ? (["sit"] as const) : []), ...(roles.foldArms ? (["look"] as const) : [])],
-    },
-    ...(walkSpeed && walkSpeed > 0.1 ? { walkSpeed } : {}),
-    update(role, t, dt) {
-      if (oneOff && t >= oneOff.ends) {
-        if (base) fadeTo(base, oneOff.action, FADE);
-        oneOff = undefined;
-      }
-      if (role !== baseRole) {
-        const next = actionFor(role, true);
-        if (next && next !== base) {
-          if (!oneOff) fadeTo(next, base, FADE);
-          base = next;
-        }
-        baseRole = role;
-      }
-      // Bones the files don't move keep only what goes on top: clear them each frame.
-      for (const bone of POSE_BONES) vrm.humanoid.getNormalizedBoneNode(bone)?.quaternion.identity();
-      mixer.update(dt);
-    },
-    shot(role, t) {
-      if (!roles[role] || !["nod", "shake", "dance"].includes(role)) return false;
-      const action = actionFor(role, false);
-      if (!action) return false;
-      fadeTo(action, oneOff?.action ?? base, 0.2);
-      oneOff = { action, ends: t + action.getClip().duration - 0.3 };
-      return true;
-    },
-    sample(role, extra, flip) {
-      const clip = clipFor(role);
-      vrm.humanoid.resetNormalizedPose();
-      if (clip) {
-        // Left as it is: stopping a mixer can put the bones back as they were.
-        const probe = new THREE.AnimationMixer(vrm.scene);
-        probe.clipAction(clip).play();
-        probe.setTime(clip.duration / 2);
-      }
-      for (const [bone, sign] of [
-        ["leftUpperArm", 1],
-        ["rightUpperArm", -1],
-      ] as const) {
-        const node = vrm.humanoid.getNormalizedBoneNode(bone);
-        node?.quaternion.multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, sign * extra * flip)));
-      }
-      vrm.update(0);
-    },
-    dispose() {
-      mixer.stopAllAction();
-      mixer.uncacheRoot(vrm.scene);
-    },
-  };
-}
-
-/**
- * Code-driven offsets on top of what the files posed, each bone turned a
- * little further in its own frame. Then any bones an arm gesture has taken
- * over are blended toward the gesture's own pose.
- */
-function overlay(vrm: VRM, pose: Pose, flip: number) {
-  const q = new THREE.Quaternion();
-  const e = new THREE.Euler();
-  for (const bone of POSE_BONES) {
-    const [x, y, z] = pose.bones[bone];
-    if (!x && !y && !z) continue;
-    vrm.humanoid.getNormalizedBoneNode(bone)?.quaternion.multiply(q.setFromEuler(e.set(x * flip, y, z * flip)));
-  }
-  if (pose.owned) {
-    for (const [bone, r] of Object.entries(pose.owned.bones)) {
-      if (!r) continue;
-      const node = vrm.humanoid.getNormalizedBoneNode(bone as (typeof POSE_BONES)[number]);
-      node?.quaternion.slerp(q.setFromEuler(e.set(r[0] * flip, r[1], r[2] * flip)), pose.owned.weight);
-    }
-  }
-  vrm.expressionManager?.setValue("blink", pose.expressions.blink);
-  vrm.expressionManager?.setValue("aa", pose.expressions.aa);
-}
-
-function apply(vrm: VRM, pose: Pose, flip: number) {
-  for (const bone of POSE_BONES) {
-    const node = vrm.humanoid.getNormalizedBoneNode(bone);
-    const [x, y, z] = pose.bones[bone];
-    node?.rotation.set(x * flip, y, z * flip);
-  }
-  vrm.expressionManager?.setValue("blink", pose.expressions.blink);
-  vrm.expressionManager?.setValue("aa", pose.expressions.aa);
 }

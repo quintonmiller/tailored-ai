@@ -3,6 +3,7 @@ import { Avatar, type AvatarControls } from "../avatar/Avatar";
 import type { Cue } from "../avatar/cues";
 import type { BodyState } from "../avatar/motion";
 import { bodyFor, DEFAULT_ROOM, type Room } from "../avatar/scene";
+import type { Companion } from "../avatar/stage";
 import { subscribeStateChanges } from "../lib/state-events";
 import { useVoice } from "./voice";
 
@@ -44,35 +45,51 @@ function remember(key: string, on: boolean) {
  * change with its `place` tool, redrawn the moment it does. The built-in
  * room until it arrives, and when the server keeps none.
  */
-export function useRoom(agent: string, enabled: boolean): Room {
-  const [room, setRoom] = useState<Room>(DEFAULT_ROOM);
+export function useRoom(agent: string, enabled: boolean): { room: Room; company: Companion[] } {
+  const [scene, setScene] = useState<{ room: Room; company: Companion[] }>({ room: DEFAULT_ROOM, company: [] });
   useEffect(() => {
     if (!enabled) return;
     let gone = false;
     let id: string | undefined;
     const load = () =>
       fetch(`/api/ext/builtin:places/${encodeURIComponent(agent || "default")}`)
-        .then((res) => (res.ok ? (res.json() as Promise<{ id?: string; place?: Room }>) : null))
+        .then((res) => (res.ok ? (res.json() as Promise<PlaceInfo>) : null))
         .then((body) => {
           if (gone) return;
           id = body?.id;
-          setRoom(body?.place ?? DEFAULT_ROOM);
+          setScene({ room: body?.place ?? DEFAULT_ROOM, company: companyOf(body) });
         })
         .catch(() => {
-          if (!gone) setRoom(DEFAULT_ROOM);
+          if (!gone) setScene({ room: DEFAULT_ROOM, company: [] });
         });
     void load();
     const off = subscribeStateChanges((change) => {
+      // Someone came or went, maybe this agent itself: where it is and who is there are asked again.
+      if (change.type === "whereabouts") void load();
       if (change.type !== "place" || !id || change.id !== id) return;
       if (change.op === "delete" || !change.after) void load();
-      else setRoom(change.after as unknown as Room);
+      else setScene((s) => ({ ...s, room: change.after as unknown as Room }));
     });
     return () => {
       gone = true;
       off();
     };
   }, [agent, enabled]);
-  return room;
+  return scene;
+}
+
+/** What the server says about the place an agent is in. */
+export interface PlaceInfo {
+  id?: string;
+  place?: Room;
+  company?: { agent: string; name?: string; avatar?: string; animations?: string[] }[];
+}
+
+/** The others in the place, as the stage takes them; anyone without a body file is left out. */
+export function companyOf(info: PlaceInfo | null | undefined): Companion[] {
+  return (info?.company ?? []).flatMap((c) =>
+    c.avatar ? [{ agent: c.agent, name: c.name ?? c.agent, url: c.avatar, animations: c.animations ?? [] }] : [],
+  );
 }
 
 interface LiveInfo {
@@ -124,9 +141,16 @@ export function useChatStage({ agent, sessionKey, sending, panelOpen, onSpoken, 
     return () => q.removeEventListener?.("change", on);
   }, []);
 
-  const room = useRoom(agent, has3d);
-  // What the body can do in this room: its moves, and the things it can go to, look at and point at.
-  const body = useMemo(() => bodyFor(room), [room]);
+  const { room, company } = useRoom(agent, has3d);
+  // What the body can do in this room: its moves, the things it can go to, look at and point at, and who is with it.
+  const body = useMemo(
+    () =>
+      bodyFor(
+        room,
+        company.map((c) => c.name),
+      ),
+    [room, company],
+  );
 
   const controls = useRef<AvatarControls | null>(null);
   // The conversation a voice session talks in. A new chat gets a key on its
@@ -244,6 +268,7 @@ export function useChatStage({ agent, sessionKey, sending, panelOpen, onSpoken, 
         controls={controls}
         insetRight={panelOpen && wide ? PANEL_WIDTH : 0}
         room={room}
+        company={company}
         {...(info.enabled ? { chooseIdle } : {})}
       />
     ) : null;

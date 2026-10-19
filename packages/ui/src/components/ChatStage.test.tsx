@@ -22,6 +22,8 @@ const stage = vi.hoisted(() => ({
   insets: [] as number[],
   /** Every room the stage was shown, first to last. */
   rooms: [] as { name?: string; props: { name: string }[] }[],
+  /** Who else the stage was told is in the room, each time. */
+  company: [] as string[][],
   /** Stages on screen now: what render() waits for, instead of a fixed sleep a slow runner outlasts. */
   mounted: 0,
 }));
@@ -41,6 +43,7 @@ vi.mock("../avatar/stage", () => ({
       setView: () => {},
       setInsets: ({ right }: { right: number }) => stage.insets.push(right),
       setRoom: (room: { name?: string; props: { name: string }[] }) => stage.rooms.push(room),
+      setCompany: (company: { agent: string }[]) => stage.company.push(company.map((c) => c.agent)),
       cue: (c: { name: string; target?: string }) => stage.cues.push(c.target ? `${c.name}:${c.target}` : c.name),
     };
   },
@@ -63,6 +66,10 @@ class FakeEventSource {
   }
   close() {}
 }
+
+/** Where the agent is, and who else is there with a body, as the server says. */
+let placeId = "home:talker";
+let company: { agent: string; name: string; avatar: string; animations: string[] }[] = [];
 
 /** The agent's own room, as the server keeps it. */
 const home = {
@@ -142,6 +149,9 @@ beforeEach(() => {
   stage.cues.length = 0;
   stage.insets.length = 0;
   stage.rooms.length = 0;
+  stage.company.length = 0;
+  placeId = "home:talker";
+  company = [];
   stage.mounted = 0;
   vi.stubGlobal("EventSource", FakeEventSource);
   localStorage.clear();
@@ -181,7 +191,7 @@ beforeEach(() => {
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url.startsWith("/api/live?")) return new Response(JSON.stringify(liveInfo));
       if (url === "/api/ext/builtin:places/talker")
-        return new Response(JSON.stringify({ type: "place", id: "home:talker", version: 1, place: home }));
+        return new Response(JSON.stringify({ type: "place", id: placeId, version: 1, place: home, company }));
       if (init?.method === "DELETE") {
         deleted.push(url);
         return new Response("{}");
@@ -299,6 +309,21 @@ describe("the chat page's scene", () => {
       FakeEventSource.last?.emit("change", { type: "place", id: "home:talker", op: "update", after: rearranged }),
     );
     expect(stage.rooms.at(-1)?.props.map((p) => p.name)).toEqual(["the reading chair", "the lamp"]);
+  });
+
+  it("shows who else is in the room, and the agent knows they are there", async () => {
+    placeId = "shared:lounge";
+    company = [{ agent: "planner", name: "planner", avatar: "/api/live/avatar?agent=planner", animations: [] }];
+    await render();
+    expect(stage.company.at(-1)).toEqual(["planner"]);
+    const body = extras.at(-1)?.body as { looks: string; aimed: { verb: string; targets: string[] }[] };
+    expect(body.looks).toMatch(/with planner/);
+    expect(body.aimed.find((a) => a.verb === "look")?.targets).toContain("planner");
+    // Someone leaves: the room is asked again, and they go.
+    company = [];
+    await act(async () => FakeEventSource.last?.emit("change", { type: "whereabouts", id: "planner", op: "delete" }));
+    await settle();
+    expect(stage.company.at(-1)).toEqual([]);
   });
 
   it("has no 3D view for an agent without a body, but can still talk", async () => {
