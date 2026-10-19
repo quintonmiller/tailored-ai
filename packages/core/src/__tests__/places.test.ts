@@ -14,14 +14,18 @@ import {
   PlaceTool,
   readCurrent,
   readHome,
+  roomPlaceId,
+  scene,
   WHEREABOUTS_TYPE,
   whereIs,
   whoIsIn,
+  worldMap,
 } from "../plugins/places.js";
 import type { Shot } from "../plugins/places-camera.js";
 import {
   defaultPlace,
   findPlacement,
+  meetingRoom,
   type Place,
   type PlaceItem,
   parseColor,
@@ -440,6 +444,81 @@ describe("shared places", () => {
     await tool.execute({ action: "new", name: "lounge" }, as("host"));
     await state.delete(owner, { type: PLACE_TYPE, id: "shared:lounge" });
     expect(await whereIs(state, owner, "host")).toBe(homeId("host"));
+  });
+});
+
+describe("the map, and any place on it", () => {
+  const types = [
+    { name: PLACE_TYPE, scope: "agent" as const },
+    { name: WHEREABOUTS_TYPE, scope: "global" as const },
+  ];
+  const owner: StateCaller = { actor: { kind: "user", name: "owner" } };
+  const bodies = new Set(["host", "guest", "other"]);
+  const hasBody = (agent: string | undefined) => bodies.has(agent ?? "default");
+  const rooms = [{ ref: "local:trip", name: "trip", purpose: "Plan the trip", members: ["host", "guest", "nobody"] }];
+  let state: StateService;
+  let tool: PlaceTool;
+  const as = (agentName: string) => ({ agentName }) as ToolContext;
+  beforeEach(() => {
+    state = new StateService({
+      getConfig: () => ({ state: { backend: "sqlite", types } }),
+      db: new Database(":memory:"),
+    });
+    tool = new PlaceTool(() => state, hasBody);
+  });
+
+  it("lists every home, every shared place and every room, with who is in each", async () => {
+    await tool.execute({ action: "new", name: "lounge" }, as("host"));
+    await tool.execute({ action: "go", to: "lounge" }, as("guest"));
+    const map = await worldMap(state, owner, ["host", "guest", "other", "bodiless"], rooms, hasBody);
+    expect(map.map((p) => [p.id, p.kind, p.agents])).toEqual([
+      ["home:host", "home", []],
+      ["home:guest", "home", []],
+      ["home:other", "home", ["other"]],
+      ["shared:lounge", "shared", ["guest", "host"]],
+      // A room shows its members wherever their bodies are; one without a body isn't drawn.
+      ["room:local:trip", "room", ["guest", "host"]],
+    ]);
+    expect(map.find((p) => p.kind === "room")).toMatchObject({ name: "trip", purpose: "Plan the trip" });
+  });
+
+  it("has a body at home when the place it went to is gone", async () => {
+    await tool.execute({ action: "new", name: "lounge" }, as("host"));
+    await state.delete(owner, { type: PLACE_TYPE, id: "shared:lounge" });
+    const map = await worldMap(state, owner, ["host"], [], hasBody);
+    expect(map).toEqual([{ id: "home:host", name: "host's room", kind: "home", owner: "host", agents: ["host"] }]);
+  });
+
+  it("shows a room of conversation as a meeting room, a seat for each member with a body", async () => {
+    const found = await scene(state, owner, roomPlaceId("local:trip"), rooms, hasBody);
+    expect(found?.agents).toEqual(["guest", "host"]);
+    expect(found?.place.name).toBe("trip");
+    expect(found?.place.props.filter((p) => p.kind === "armchair")).toHaveLength(2);
+    expect(placeProblems(found?.place as Place)).toEqual([]);
+  });
+
+  it("shows a home and a shared place as they are, with who is there", async () => {
+    await tool.execute({ action: "new", name: "lounge" }, as("host"));
+    expect((await scene(state, owner, "shared:lounge", rooms, hasBody))?.agents).toEqual(["host"]);
+    const home = await scene(state, owner, homeId("other"), rooms, hasBody);
+    expect(home).toMatchObject({ id: "home:other", agents: ["other"], place: { name: "other's room" } });
+  });
+
+  it("finds nothing for a place that isn't there", async () => {
+    expect(await scene(state, owner, "shared:attic", rooms, hasBody)).toBeNull();
+    expect(await scene(state, owner, "room:local:gone", rooms, hasBody)).toBeNull();
+    expect(await scene(state, owner, homeId("bodiless"), rooms, hasBody)).toBeNull();
+  });
+
+  it("seats any number of members without anything overlapping, wider as it fills", () => {
+    let last = 0;
+    for (const n of [0, 1, 2, 3, 5, 8, 12, 16]) {
+      const room = meetingRoom("standup", n);
+      expect(placeProblems(room), `${n} seats`).toEqual([]);
+      expect(room.props.filter((p) => p.kind === "armchair")).toHaveLength(Math.max(2, n));
+      expect(room.width).toBeGreaterThanOrEqual(last);
+      last = room.width;
+    }
   });
 });
 

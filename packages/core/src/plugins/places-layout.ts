@@ -240,6 +240,93 @@ export function defaultPlace(name = "your room"): Place {
   });
 }
 
+/**
+ * A room for a conversation several agents share: a long table with a seat
+ * for each, a window, a plant, a picture on the back wall. Wider the more
+ * seats it has. Seats face the table, half on each side.
+ */
+export function meetingRoom(name: string, seats: number): Place {
+  const n = Math.max(2, Math.min(16, Math.floor(seats)));
+  const perSide = Math.ceil(n / 2);
+  const spacing = 1.0;
+  const tables = Math.max(1, Math.ceil((perSide * spacing) / 1.2));
+  const tableRow = tables * 1.2;
+  const width = round(Math.max(4.6, Math.max(perSide * spacing, tableRow) + 2.2));
+  const depth = 4.2;
+  const tableZ = -0.2;
+  const props: PlaceItem[] = [
+    { id: "rug", name: "the rug", kind: "rug", at: [0, tableZ], facing: 0, scale: Math.min(1.6, 0.8 + tables * 0.4) },
+  ];
+  for (let i = 0; i < tables; i++) {
+    const x = round(-tableRow / 2 + 0.6 + i * 1.2);
+    props.push({
+      id: `table-${i + 1}`,
+      name: tables > 1 ? `table ${i + 1}` : "the table",
+      kind: "table",
+      at: [x, tableZ],
+      facing: 0,
+    });
+  }
+  for (let i = 0; i < n; i++) {
+    const far = i % 2 === 0;
+    const k = Math.floor(i / 2);
+    const row = far ? perSide : n - perSide;
+    const x = round((k - (row - 1) / 2) * spacing);
+    // Far side faces +Z, toward the table and the camera; the near side faces back.
+    props.push({
+      id: `seat-${i + 1}`,
+      name: `seat ${i + 1}`,
+      kind: "armchair",
+      at: [x, far ? round(tableZ - 1.25) : round(tableZ + 1.25)],
+      facing: far ? 0 : 180,
+    });
+  }
+  props.push(
+    {
+      id: "window",
+      name: "the window",
+      kind: "window",
+      at: [round(-width / 2 + 0.01), -0.4],
+      facing: 90,
+      elevation: 1.0,
+    },
+    {
+      id: "picture",
+      name: "the picture",
+      kind: "picture",
+      at: [0, round(-depth / 2 + 0.02)],
+      facing: 0,
+      elevation: 1.55,
+    },
+    {
+      id: "plant",
+      name: "the plant",
+      kind: "plant",
+      at: [round(width / 2 - 0.35), round(-depth / 2 + 0.35)],
+      facing: 0,
+    },
+  );
+  return withSpots({
+    name,
+    width,
+    depth,
+    height: 2.6,
+    walls: "#dfe4ea",
+    floor: "carpet",
+    props,
+    spots: [
+      {
+        id: "head",
+        name: "at the head of the table",
+        place: "the head of the table",
+        at: [round(tableRow / 2 + 0.55), tableZ],
+        facing: -90,
+      },
+    ],
+    start: "head",
+  });
+}
+
 // --------------------------------------------------------------------------
 // Geometry
 // --------------------------------------------------------------------------
