@@ -119,12 +119,56 @@ export function buildShell(room: Room): THREE.Group {
 export interface BuiltProp {
   group: THREE.Group;
   glow?: THREE.MeshStandardMaterial;
+  /** A face the stage draws on: a task board's tasks. */
+  screen?: { canvas: HTMLCanvasElement; texture: THREE.CanvasTexture };
 }
 
 /** How a prop looks beyond its kind: the colour of its main part, and the basic shapes' size. */
 export interface PropLook {
   color?: string;
   size?: [number, number, number];
+  /** Words it shows, for a kiosk or a board. */
+  label?: string;
+}
+
+/** A canvas to draw on, and the texture that shows it, lit from within so it reads at night. */
+function canvasFace(
+  w: number,
+  h: number,
+  px: number,
+): { canvas: HTMLCanvasElement; texture: THREE.CanvasTexture; material: THREE.MeshStandardMaterial } {
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(w * px);
+  canvas.height = Math.round(h * px);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const material = new THREE.MeshStandardMaterial({
+    map: texture,
+    emissiveMap: texture,
+    emissive: 0xffffff,
+    emissiveIntensity: 0.45,
+    roughness: 0.9,
+  });
+  return { canvas, texture, material };
+}
+
+/** A kiosk's screen: its label, large, on a dark glass. */
+function drawKiosk(canvas: HTMLCanvasElement, label: string) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const g = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  g.addColorStop(0, "#26304a");
+  g.addColorStop(1, "#151a2a");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#7f9cff";
+  ctx.font = `700 ${Math.round(canvas.height * 0.42)}px system-ui, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("+", canvas.width / 2, canvas.height * 0.34);
+  ctx.fillStyle = "#eef1fa";
+  ctx.font = `600 ${Math.round(canvas.height * 0.17)}px system-ui, sans-serif`;
+  ctx.fillText(label, canvas.width / 2, canvas.height * 0.74, canvas.width * 0.9);
 }
 
 function legs(g: THREE.Group, w: number, d: number, h: number, color: number, thick = 0.04) {
@@ -351,6 +395,65 @@ export function buildProp(kind: PropKind, look: PropLook = {}): BuiltProp {
       sun.castShadow = false;
       return { group: g };
     }
+    case "board": {
+      // A whiteboard in an aluminium frame; the stage writes the tasks on it.
+      box(g, 1.4, 0.9, 0.04, 0x9aa1ab, 0, 0.45, 0).castShadow = false;
+      const face = canvasFace(1.32, 0.82, 640);
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.32, 0.82), face.material);
+      mesh.position.set(0, 0.45, 0.022);
+      g.add(mesh);
+      box(g, 1.2, 0.03, 0.06, 0x9aa1ab, 0, 0.0, 0.03).castShadow = false;
+      return { group: g, screen: { canvas: face.canvas, texture: face.texture } };
+    }
+    case "kiosk": {
+      box(g, 0.56, 0.06, 0.46, 0x3a3f4b, 0, 0.03, 0);
+      box(g, 0.14, 0.9, 0.14, main(0x5b6475), 0, 0.5, -0.04);
+      // A screen tipped back toward whoever walks up, its label lit.
+      const face = canvasFace(0.56, 0.38, 520);
+      drawKiosk(face.canvas, look.label ?? "");
+      const screen = new THREE.Group();
+      screen.position.set(0, 1.05, 0);
+      screen.rotation.x = -0.55;
+      const back = solid(new THREE.BoxGeometry(0.6, 0.42, 0.05), paint(0x2a2e38), 0, 0, -0.03);
+      const glass = new THREE.Mesh(new THREE.PlaneGeometry(0.56, 0.38), face.material);
+      glass.position.z = 0.0;
+      screen.add(back, glass);
+      g.add(screen);
+      return { group: g };
+    }
+    case "palm": {
+      // A trunk of rings leaning a little, and fronds fanning out from the top.
+      for (let i = 0; i < 6; i++) {
+        const ring = cylinder(
+          g,
+          0.07 - i * 0.006,
+          0.08 - i * 0.006,
+          0.25,
+          i % 2 ? 0x8a6a45 : 0x9b7a50,
+          i * 0.025,
+          0.125 + i * 0.24,
+          0,
+          7,
+        );
+        ring.rotation.z = -0.06;
+      }
+      for (let i = 0; i < 7; i++) {
+        const a = (i / 7) * Math.PI * 2;
+        const frond = solid(new THREE.BoxGeometry(0.75, 0.025, 0.2), paint(i % 2 ? 0x4f9a45 : 0x3f8a3a), 0, 0, 0);
+        frond.position.set(0.15 + Math.cos(a) * 0.32, 1.6 - 0.08, Math.sin(a) * 0.32);
+        frond.rotation.set(0, -a, -0.45);
+        g.add(frond);
+      }
+      return { group: g };
+    }
+    case "umbrella": {
+      cylinder(g, 0.2, 0.22, 0.06, 0x8f949c, 0, 0.03, 0, 12);
+      cylinder(g, 0.022, 0.022, 1.95, 0xe6e2da, 0, 0.98, 0, 6);
+      const canopy = solid(new THREE.ConeGeometry(0.75, 0.38, 10, 1, true), paint(main(0xe85d4a)), 0, 1.86, 0);
+      (canopy.material as THREE.MeshStandardMaterial).side = THREE.DoubleSide;
+      g.add(canopy);
+      return { group: g };
+    }
     case "clock": {
       const rim = cylinder(g, 0.18, 0.18, 0.04, main(0x3b2f2a), 0, 0.18, 0.02, 20);
       rim.rotation.x = Math.PI / 2;
@@ -569,14 +672,18 @@ export function disposeHeld(root: THREE.Object3D) {
   });
 }
 
-/** Free every geometry and material under `root`. */
+/** Free every geometry and material under `root`, and the pictures drawn for boards and kiosks. */
 export function disposeTree(root: THREE.Object3D) {
+  const free = (m: THREE.Material) => {
+    (m as THREE.MeshStandardMaterial).map?.dispose();
+    m.dispose();
+  };
   root.traverse((o) => {
     const mesh = o as THREE.Mesh;
     mesh.geometry?.dispose();
     const m = mesh.material;
-    if (Array.isArray(m)) for (const x of m) x.dispose();
-    else m?.dispose();
+    if (Array.isArray(m)) for (const x of m) free(x);
+    else if (m) free(m);
   });
   materials.clear();
 }

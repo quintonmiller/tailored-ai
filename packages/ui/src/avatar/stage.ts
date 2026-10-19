@@ -20,6 +20,7 @@
 import { type VRM, VRMUtils } from "@pixiv/three-vrm";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { type BoardTask, drawBoard } from "./boards";
 import type { Cue } from "./cues";
 import { type AgentActivity, type Behavior, behaviorFor, heldFor, hueFor, sameBehavior, stationSpot } from "./doing";
 import { Figure, loadModel } from "./figure";
@@ -106,6 +107,8 @@ export interface Stage {
   setSpeech(speech: Record<string, Line>): void;
   /** A visitor walks their body, or flies the camera. */
   setTravel(travel: Travel): void;
+  /** The tasks every board in the room shows. */
+  setTasks(tasks: BoardTask[]): void;
   dispose(): void;
 }
 
@@ -176,6 +179,8 @@ export async function createStage(
     visitor?: boolean;
     /** The agent the visitor is standing next to, when it changes; undefined when none is. */
     onNear?: (agent: string | undefined) => void;
+    /** Something made to be used was clicked: a kiosk, a task board. Its action. */
+    onUse?: (action: string) => void;
   } = {},
 ): Promise<Stage> {
   let room = opts.room ?? DEFAULT_ROOM;
@@ -206,6 +211,15 @@ export async function createStage(
   let furniture = new THREE.Group();
   // What stands on the floor in the way: walks go round these.
   let obstacles: Obstacle[] = [];
+  // Boards on the walls, each drawn with the tasks; and what they show.
+  let boards: { label: string; screen: NonNullable<ReturnType<typeof buildProp>["screen"]> }[] = [];
+  let tasks: BoardTask[] = [];
+  const drawBoards = () => {
+    for (const b of boards) {
+      drawBoard(b.screen.canvas, b.label, tasks);
+      b.screen.texture.needsUpdate = true;
+    }
+  };
   // Things that just appeared, growing into place.
   const appearing: { group: THREE.Group; started: number; scale: number }[] = [];
 
@@ -215,13 +229,15 @@ export async function createStage(
     scenery.length = 0;
     clickable.length = 0;
     glows = [];
+    boards = [];
     const shell = buildShell(room);
     furniture.add(shell);
     scenery.push(shell);
     const lights: { at: THREE.Vector3; fire: boolean }[] = [];
     obstacles = [];
     for (const prop of room.props) {
-      const built = buildProp(prop.kind, { color: prop.color, size: prop.size });
+      const built = buildProp(prop.kind, { color: prop.color, size: prop.size, label: prop.label });
+      if (built.screen) boards.push({ label: prop.label ?? "Tasks", screen: built.screen });
       built.group.position.set(prop.at[0], prop.elevation ?? 0, prop.at[1]);
       built.group.rotation.y = rad(prop.facing);
       const scale = prop.size ? 1 : (prop.scale ?? 1);
@@ -233,10 +249,9 @@ export async function createStage(
       }
       furniture.add(built.group);
       scenery.push(built.group);
-      if (prop.spot) {
-        built.group.userData.spot = prop.spot;
-        clickable.push(built.group);
-      }
+      if (prop.spot) built.group.userData.spot = prop.spot;
+      if (prop.action) built.group.userData.action = prop.action;
+      if (prop.spot || prop.action) clickable.push(built.group);
       if (built.glow) glows.push({ kind: prop.kind, glow: built.glow });
       if (prop.kind === "lamp")
         lights.push({ at: new THREE.Vector3(prop.at[0], 1.45 * scale, prop.at[1]), fire: false });
@@ -250,6 +265,7 @@ export async function createStage(
       }
     }
     scene.add(furniture);
+    drawBoards();
     for (const w of warm) scene.remove(w.light);
     warm.length = 0;
     for (const l of lights.slice(0, 4)) {
@@ -486,6 +502,19 @@ export async function createStage(
     }
     return undefined;
   };
+  /** What the thing under the pointer does when clicked, if it is made to be used. */
+  const actionAt = (e: PointerEvent): string | undefined => {
+    const r = canvas.getBoundingClientRect();
+    ray.setFromCamera(
+      new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1),
+      camera,
+    );
+    for (const hit of ray.intersectObjects(clickable, true)) {
+      for (let o: THREE.Object3D | null = hit.object; o; o = o.parent)
+        if (typeof o.userData.action === "string") return o.userData.action;
+    }
+    return undefined;
+  };
   /** Where on the floor the pointer is, for a visitor to walk to. */
   const floorAt = (e: PointerEvent): [number, number] | undefined => {
     const r = canvas.getBoundingClientRect();
@@ -529,6 +558,11 @@ export async function createStage(
       opts.onPick?.(who, { x: e.clientX, y: e.clientY });
       return;
     }
+    const action = opts.onUse ? actionAt(e) : undefined;
+    if (action) {
+      opts.onUse?.(action);
+      return;
+    }
     const id = spotAt(e);
     if (id) go(id);
     else if (opts.visitor && travel === "walk") {
@@ -538,7 +572,7 @@ export async function createStage(
   };
   const onHover = (e: PointerEvent) => {
     if (downAt || e.pointerType !== "mouse") return;
-    canvas.style.cursor = (opts.onPick && agentAt(e)) || spotAt(e) ? "pointer" : "";
+    canvas.style.cursor = (opts.onPick && agentAt(e)) || spotAt(e) || (opts.onUse && actionAt(e)) ? "pointer" : "";
   };
   // A visitor's keys: held keys move them every frame, unless they are typing.
   let travel: Travel = "walk";
@@ -978,6 +1012,10 @@ export async function createStage(
       activities = next;
       show(self, me);
       for (const [agent, c] of companions) show(agent, c);
+    },
+    setTasks(next) {
+      tasks = next;
+      drawBoards();
     },
     setTravel(next) {
       if (!opts.visitor || next === travel) return;

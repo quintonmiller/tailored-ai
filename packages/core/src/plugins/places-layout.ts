@@ -38,7 +38,15 @@ export interface PlaceItem {
   scale?: number;
   /** For the basic shapes: width, height, depth. */
   size?: [number, number, number];
+  /** Words it shows: a kiosk's screen, a board's heading. */
+  label?: string;
+  /** What clicking it does on the page, for things made to be used: a kiosk, a task board. */
+  action?: PlaceAction;
 }
+
+/** What a thing in a place does when someone clicks it on the page. */
+export type PlaceAction = "new-agent" | "new-task" | "new-room" | "tasks";
+export const PLACE_ACTIONS: PlaceAction[] = ["new-agent", "new-task", "new-room", "tasks"];
 
 export interface PlaceSpot {
   id: string;
@@ -171,6 +179,13 @@ export const KINDS: Record<string, Kind> = {
     use: { activity: "look", offset: 0.54 },
   },
   picture: { noun: "picture", mount: "wall", footprint: [0.9, 0.04], height: 0.6, elevation: 1.55 },
+  /** A board on the wall the page fills with tasks. */
+  board: { noun: "task board", mount: "wall", footprint: [1.4, 0.05], height: 0.9, elevation: 1.05 },
+  /** A stand with a screen that does something when clicked. */
+  kiosk: { noun: "kiosk", mount: "floor", footprint: [0.6, 0.5], height: 1.25 },
+  palm: { round: true, noun: "palm", mount: "floor", footprint: [0.5, 0.5], height: 1.9 },
+  // Its canopy is overhead: things go under it, and so do people.
+  umbrella: { round: true, noun: "beach umbrella", mount: "floor", footprint: [1.4, 1.4], height: 2.0, walkable: true },
   clock: { noun: "clock", mount: "wall", footprint: [0.36, 0.05], height: 0.36, elevation: 1.8 },
   shelf: { noun: "shelf", mount: "wall", footprint: [0.9, 0.22], height: 0.05, elevation: 1.25, surface: 0.05 },
   laptop: { noun: "laptop", mount: "on", footprint: [0.34, 0.24], height: 0.25 },
@@ -245,7 +260,49 @@ export function defaultPlace(name = "your room"): Place {
  * for each, a window, a plant, a picture on the back wall. Wider the more
  * seats it has. Seats face the table, half on each side.
  */
-export function meetingRoom(name: string, seats: number): Place {
+/**
+ * How a room for a purpose looks, picked by the words in its name and purpose:
+ * a trip by the sea, a workshop, a studio, a tavern, a library. A room whose
+ * words match none is plain.
+ */
+export interface Theme {
+  id: string;
+  words: RegExp;
+  walls: string;
+  floor: Floor;
+  floorColor?: string;
+}
+
+export const THEMES: Theme[] = [
+  {
+    id: "beach",
+    words: /\b(beach|vacation|holiday|trip|travel|surf|island|tropic|seaside)/i,
+    walls: "#cfe8f0",
+    floor: "tile",
+    floorColor: "#e6d3a3",
+  },
+  {
+    id: "tavern",
+    words: /\b(d&d|dnd|campaign|quest|tavern|dungeon|adventure|rpg)/i,
+    walls: "#6e4e38",
+    floor: "wood",
+  },
+  { id: "studio", words: /\b(podcast|music|audio|studio|record|episode)/i, walls: "#3d3648", floor: "carpet" },
+  {
+    id: "workshop",
+    words: /\b(code|coder|coding|dev|engineer|build|deploy|bug|ops|review|repo)/i,
+    walls: "#d3d7dc",
+    floor: "concrete",
+  },
+  { id: "library", words: /\b(research|study|read|book|library|learn|notes)/i, walls: "#e8dfcf", floor: "wood" },
+];
+
+/** The theme the words of a room's name and purpose call for, if any. */
+export function themeFor(words: string): Theme | undefined {
+  return THEMES.find((t) => t.words.test(words));
+}
+
+export function meetingRoom(name: string, seats: number, purpose = ""): Place {
   const n = Math.max(2, Math.min(16, Math.floor(seats)));
   const perSide = Math.ceil(n / 2);
   const spacing = 1.0;
@@ -281,6 +338,7 @@ export function meetingRoom(name: string, seats: number): Place {
       facing: far ? 0 : 180,
     });
   }
+  const theme = themeFor(`${name} ${purpose}`);
   props.push(
     {
       id: "window",
@@ -290,19 +348,23 @@ export function meetingRoom(name: string, seats: number): Place {
       facing: 90,
       elevation: 1.0,
     },
+    // The room's tasks on the back wall.
     {
-      id: "picture",
-      name: "the picture",
-      kind: "picture",
-      at: [0, round(-depth / 2 + 0.02)],
+      id: "board",
+      name: "the task board",
+      kind: "board",
+      at: [0, round(-depth / 2 + 0.03)],
       facing: 0,
-      elevation: 1.55,
+      elevation: 1.05,
+      label: "Tasks",
+      action: "tasks",
     },
     {
       id: "plant",
-      name: "the plant",
-      kind: "plant",
-      at: [round(width / 2 - 0.35), round(-depth / 2 + 0.35)],
+      // By the sea, a palm.
+      name: theme?.id === "beach" ? "the palm" : "the plant",
+      kind: theme?.id === "beach" ? "palm" : "plant",
+      at: [round(width / 2 - 0.4), round(-depth / 2 + 0.4)],
       facing: 0,
     },
     // Lamps, back left and on the right wall, clear of the camera at the open front: a room with none is dark after sunset.
@@ -315,13 +377,34 @@ export function meetingRoom(name: string, seats: number): Place {
       facing: 0,
     },
   );
+  if (theme?.id === "beach")
+    props.push({
+      id: "umbrella",
+      name: "the beach umbrella",
+      kind: "umbrella",
+      at: [round(-width / 2 + 0.8), round(depth / 2 - 0.8)],
+      facing: 0,
+      color: "#e85d4a",
+    });
+  if (theme?.id === "tavern")
+    for (let i = 0; i < tables; i++)
+      props.push({
+        id: `candle-${i + 1}`,
+        name: tables > 1 ? `candle ${i + 1}` : "the candle",
+        kind: "candle",
+        at: [round(-tableRow / 2 + 0.6 + i * 1.2), tableZ],
+        facing: 0,
+        elevation: 0.75,
+        on: `table-${i + 1}`,
+      });
   return withSpots({
     name,
     width,
     depth,
     height: 2.6,
-    walls: "#dfe4ea",
-    floor: "carpet",
+    walls: theme?.walls ?? "#dfe4ea",
+    floor: theme?.floor ?? "carpet",
+    ...(theme?.floorColor ? { floorColor: theme.floorColor } : {}),
     props,
     spots: [
       {
@@ -333,6 +416,85 @@ export function meetingRoom(name: string, seats: number): Place {
       },
     ],
     start: "head",
+  });
+}
+
+/** The lobby's id on the map. */
+export const LOBBY = "lobby";
+
+/**
+ * Where everyone starts: kiosks to make a new agent, a new task or a new room,
+ * a board of every open task, and somewhere to sit.
+ */
+export function lobby(): Place {
+  const width = 7;
+  const depth = 5;
+  const kiosk = (id: string, x: number, label: string, action: PlaceAction): PlaceItem => ({
+    id,
+    name: `the ${label.toLowerCase()} kiosk`,
+    kind: "kiosk",
+    at: [x, round(-depth / 2 + 0.6)],
+    facing: 0,
+    label,
+    action,
+  });
+  return withSpots({
+    name: "the lobby",
+    width,
+    depth,
+    height: 2.8,
+    walls: "#e4e1ec",
+    floor: "tile",
+    floorColor: "#cfd3dc",
+    props: [
+      { id: "rug", name: "the rug", kind: "rug", at: [0, 0.4], facing: 0, scale: 1.4 },
+      kiosk("kiosk-agent", -1.9, "New agent", "new-agent"),
+      kiosk("kiosk-task", 0, "New task", "new-task"),
+      kiosk("kiosk-room", 1.9, "New room", "new-room"),
+      {
+        id: "board",
+        name: "the task board",
+        kind: "board",
+        at: [round(width / 2 - 0.03), -0.3],
+        facing: -90,
+        elevation: 1.05,
+        label: "Open tasks",
+        action: "tasks",
+      },
+      {
+        id: "window",
+        name: "the window",
+        kind: "window",
+        at: [round(-width / 2 + 0.01), -0.6],
+        facing: 90,
+        elevation: 1.0,
+      },
+      { id: "couch", name: "the couch", kind: "couch", at: [round(-width / 2 + 0.45), 0.85], facing: 90 },
+      {
+        id: "plant",
+        name: "the plant",
+        kind: "plant",
+        at: [round(width / 2 - 0.4), round(-depth / 2 + 0.4)],
+        facing: 0,
+      },
+      {
+        id: "plant-2",
+        name: "the other plant",
+        kind: "plant",
+        at: [round(-width / 2 + 0.4), round(-depth / 2 + 0.4)],
+        facing: 0,
+      },
+      { id: "lamp", name: "the lamp", kind: "lamp", at: [round(width / 2 - 0.35), round(depth / 2 - 0.9)], facing: 0 },
+      {
+        id: "lamp-2",
+        name: "the other lamp",
+        kind: "lamp",
+        at: [round(-width / 2 + 0.35), round(depth / 2 - 0.35)],
+        facing: 0,
+      },
+    ],
+    spots: [{ id: "middle", name: "in the middle", place: "the middle of the lobby", at: [0, 0.6], facing: 180 }],
+    start: "middle",
   });
 }
 
@@ -1219,6 +1381,8 @@ export const PLACE_SCHEMA = {
           color: { type: "string", pattern: "^#[0-9a-f]{6}$" },
           scale: { type: "number", minimum: LIMITS.scale[0], maximum: LIMITS.scale[1] },
           size: { type: "array", items: { type: "number" }, minItems: 3, maxItems: 3 },
+          label: { type: "string", maxLength: 40 },
+          action: { type: "string", enum: PLACE_ACTIONS },
         },
       },
     },

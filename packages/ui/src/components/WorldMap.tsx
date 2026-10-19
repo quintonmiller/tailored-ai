@@ -6,13 +6,14 @@ import { subscribeStateChanges } from "../lib/state-events";
 export interface MapPlace {
   id: string;
   name: string;
-  kind: "home" | "shared" | "room";
+  kind: "lobby" | "home" | "shared" | "room";
   agents: string[];
   owner?: string;
   purpose?: string;
 }
 
 const SECTIONS: { kind: MapPlace["kind"]; title: string }[] = [
+  { kind: "lobby", title: "Start here" },
   { kind: "room", title: "Rooms" },
   { kind: "shared", title: "Shared places" },
   { kind: "home", title: "Homes" },
@@ -140,8 +141,13 @@ export function WorldMap({
                         {p.id === here && <span className="world-map-here">you are here</span>}
                       </span>
                       {p.purpose && <span className="world-map-purpose">{p.purpose}</span>}
+                      {p.kind === "lobby" && (
+                        <span className="world-map-purpose">Make a new agent, task or room; see every open task</span>
+                      )}
                       <span className="world-map-agents">
-                        {p.agents.length === 0 && <span className="world-map-nobody">nobody here</span>}
+                        {p.agents.length === 0 && p.kind !== "lobby" && (
+                          <span className="world-map-nobody">nobody here</span>
+                        )}
                         {p.agents.map((a) => {
                           const doing = activities[a]?.doing;
                           const mark = doing ? MARKS[doing] : undefined;

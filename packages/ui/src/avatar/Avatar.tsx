@@ -1,4 +1,5 @@
 import { type MutableRefObject, type ReactNode, useEffect, useRef, useState } from "react";
+import type { BoardTask } from "./boards";
 import type { Cue } from "./cues";
 import type { AgentActivity } from "./doing";
 import type { BodyState } from "./motion";
@@ -58,6 +59,8 @@ export function Avatar({
   onNear,
   tools,
   overlay,
+  tasks,
+  onUse,
 }: {
   url: string;
   /** Animation libraries for the avatar; it moves by code until they load. */
@@ -102,6 +105,10 @@ export function Avatar({
   tools?: ReactNode;
   /** Something laid over the whole stage, like a map. */
   overlay?: ReactNode;
+  /** What the task boards on the walls show. */
+  tasks?: BoardTask[];
+  /** A kiosk or a board was clicked: what it does. */
+  onUse?: (action: string) => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   // The stage reads these every frame; a ref keeps that from re-rendering React.
@@ -144,6 +151,13 @@ export function Avatar({
   menuRef.current = menuFor;
   const picking = !!menuFor;
   const [picked, setPicked] = useState<{ agent: string; x: number; y: number } | null>(null);
+  const tasksRef = useRef(tasks);
+  tasksRef.current = tasks;
+  useEffect(() => {
+    if (tasks) stage.current?.setTasks(tasks);
+  }, [tasks]);
+  const onUseRef = useRef(onUse);
+  onUseRef.current = onUse;
   const nearRef = useRef(onNear);
   nearRef.current = onNear;
   const [travel, setTravel] = useState<Travel>("walk");
@@ -176,6 +190,7 @@ export function Avatar({
           ...(companyRef.current?.length ? { company: companyRef.current } : {}),
           ...(agentRef.current ? { agent: agentRef.current } : {}),
           ...(visitor ? { visitor: true, onNear: (who: string | undefined) => nearRef.current?.(who) } : {}),
+          onUse: (action: string) => onUseRef.current?.(action),
           ...(picking
             ? {
                 onPick: (who: string, at: { x: number; y: number }) => {
@@ -214,6 +229,7 @@ export function Avatar({
         s.setCompany(companyRef.current ?? []);
         if (activitiesRef.current) s.setActivities(activitiesRef.current);
         if (speechRef.current) s.setSpeech(speechRef.current);
+        if (tasksRef.current) s.setTasks(tasksRef.current);
       })
       .catch((err: unknown) => {
         if (gone) return;

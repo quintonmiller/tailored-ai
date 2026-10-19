@@ -25,6 +25,7 @@ import type { Shot } from "../plugins/places-camera.js";
 import {
   defaultPlace,
   findPlacement,
+  lobby,
   meetingRoom,
   type Place,
   type PlaceItem,
@@ -32,6 +33,7 @@ import {
   placeProblems,
   resize,
   spotOf,
+  themeFor,
 } from "../plugins/places-layout.js";
 import "../state/builtin.js";
 import { type StateCaller, StateService } from "../state/service.js";
@@ -472,6 +474,8 @@ describe("the map, and any place on it", () => {
     await tool.execute({ action: "go", to: "lounge" }, as("guest"));
     const map = await worldMap(state, owner, ["host", "guest", "other", "bodiless"], rooms, hasBody);
     expect(map.map((p) => [p.id, p.kind, p.agents])).toEqual([
+      // Where everyone starts.
+      ["lobby", "lobby", []],
       ["home:host", "home", []],
       ["home:guest", "home", []],
       ["home:other", "home", ["other"]],
@@ -486,7 +490,9 @@ describe("the map, and any place on it", () => {
     await tool.execute({ action: "new", name: "lounge" }, as("host"));
     await state.delete(owner, { type: PLACE_TYPE, id: "shared:lounge" });
     const map = await worldMap(state, owner, ["host"], [], hasBody);
-    expect(map).toEqual([{ id: "home:host", name: "host's room", kind: "home", owner: "host", agents: ["host"] }]);
+    expect(map.filter((p) => p.kind !== "lobby")).toEqual([
+      { id: "home:host", name: "host's room", kind: "home", owner: "host", agents: ["host"] },
+    ]);
   });
 
   it("shows a room of conversation as a meeting room, a seat for each member with a body", async () => {
@@ -502,6 +508,38 @@ describe("the map, and any place on it", () => {
     expect((await scene(state, owner, "shared:lounge", rooms, hasBody))?.agents).toEqual(["host"]);
     const home = await scene(state, owner, homeId("other"), rooms, hasBody);
     expect(home).toMatchObject({ id: "home:other", agents: ["other"], place: { name: "other's room" } });
+  });
+
+  it("shows the lobby: kiosks to make an agent, a task or a room, and a board of open tasks", async () => {
+    const found = await scene(state, owner, "lobby", rooms, hasBody);
+    expect(found?.agents).toEqual([]);
+    const actions = found?.place.props.flatMap((p) => (p.action ? [[p.kind, p.label, p.action]] : []));
+    expect(actions).toEqual([
+      ["kiosk", "New agent", "new-agent"],
+      ["kiosk", "New task", "new-task"],
+      ["kiosk", "New room", "new-room"],
+      ["board", "Open tasks", "tasks"],
+    ]);
+    expect(placeProblems(lobby())).toEqual([]);
+  });
+
+  it("dresses a room for its purpose, and gives every room a task board", async () => {
+    expect(themeFor("vacation planning")?.id).toBe("beach");
+    expect(themeFor("standup")).toBeUndefined();
+    const beach = meetingRoom("summer", 4, "Plan the family vacation");
+    expect(beach).toMatchObject({ walls: "#cfe8f0", floor: "tile", floorColor: "#e6d3a3" });
+    expect(beach.props.map((p) => p.kind)).toEqual(expect.arrayContaining(["palm", "umbrella", "board"]));
+    const tavern = meetingRoom("the-campaign", 5, "A D&D campaign");
+    expect(tavern.props.filter((p) => p.kind === "candle").every((c) => c.on?.startsWith("table-"))).toBe(true);
+    const plain = meetingRoom("standup", 3);
+    expect(plain.props.some((p) => p.kind === "palm")).toBe(false);
+    expect(plain.props.find((p) => p.kind === "board")).toMatchObject({ action: "tasks" });
+    for (const theme of ["vacation", "dnd campaign", "podcast", "code review", "research", "standup"])
+      for (const n of [2, 5, 9]) expect(placeProblems(meetingRoom(theme, n)), `${theme} ${n}`).toEqual([]);
+    // A room of conversation is dressed by its purpose, not only its name.
+    const weekend = [{ ref: "local:weekend", name: "weekend", purpose: "Plan the family vacation", members: ["host"] }];
+    const found = await scene(state, owner, roomPlaceId("local:weekend"), weekend, hasBody);
+    expect(found?.place.props.some((p) => p.kind === "palm")).toBe(true);
   });
 
   it("finds nothing for a place that isn't there", async () => {
