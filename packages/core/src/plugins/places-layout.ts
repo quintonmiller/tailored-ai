@@ -90,6 +90,9 @@ export interface PlacePhoto {
 /** Photos a place keeps: the newest, enough for a few pictures on the walls. */
 export const PHOTOS_KEPT = 6;
 
+/** What a photo hangs in, in this order: pictures first, then paintings. The page draws them there (`stage.ts`). */
+export const PHOTO_FRAMES = ["picture", "painting"];
+
 /** What a kind of thing is like: how big, where it goes, and what you can do at it. */
 export interface Kind {
   noun: string;
@@ -220,20 +223,53 @@ export const KINDS: Record<string, Kind> = {
     shaped: true,
     surface: 0.5,
   },
+  round_rug: { round: true, noun: "round rug", mount: "floor", footprint: [1.8, 1.8], height: 0.03, walkable: true },
+  sideboard: {
+    noun: "sideboard",
+    mount: "floor",
+    footprint: [1.6, 0.45],
+    height: 0.8,
+    surface: 0.8,
+    wallward: true,
+  },
+  // Drawn 1.2 m across; kept to the square inside the circle, so seats round it can come as close as they would to a real one.
+  round_table: {
+    round: true,
+    noun: "round table",
+    mount: "floor",
+    footprint: [1.0, 1.0],
+    height: 0.75,
+    surface: 0.75,
+  },
+  stool: { round: true, noun: "stool", mount: "floor", footprint: [0.4, 0.4], height: 0.5, use: sit(0.38, 0, 0.5) },
+  easel: { noun: "easel", mount: "floor", footprint: [0.7, 0.6], height: 1.7, use: { activity: "look", offset: 0.75 } },
+  tall_plant: { round: true, noun: "tall plant", mount: "floor", footprint: [0.5, 0.5], height: 1.7 },
+  cactus: { round: true, noun: "cactus", mount: "floor", footprint: [0.32, 0.32], height: 0.9 },
+  painting: { noun: "painting", mount: "wall", footprint: [1.2, 0.04], height: 0.8, elevation: 1.4 },
+  poster: { noun: "poster", mount: "wall", footprint: [0.6, 0.02], height: 0.85, elevation: 1.3 },
+  pegboard: { noun: "pegboard", mount: "wall", footprint: [1.2, 0.06], height: 0.75, elevation: 1.2 },
+  table_lamp: { round: true, noun: "table lamp", mount: "on", footprint: [0.22, 0.22], height: 0.45 },
 };
 
 export const LIMITS = {
-  width: [2.5, 8] as const,
-  depth: [2.5, 8] as const,
-  height: [2.2, 3.5] as const,
+  // Room enough for a lobby, the biggest room there is, and a meeting room for sixteen.
+  width: [2.5, 16] as const,
+  depth: [2.5, 12] as const,
+  height: [2.2, 4] as const,
   scale: [0.5, 2] as const,
   /** Each side of a basic shape. */
   side: [0.05, 2.5] as const,
-  items: 60,
+  // A home starts with thirty or so, and its owner should have as many again to add.
+  items: 100,
 };
 
-/** The room a new place starts as: the one the avatar first lived in. */
-export function defaultPlace(name = "your room"): Place {
+/**
+ * The room every home started as, before homes were drawn from a seed (see
+ * `places-rooms.ts`): small, and the same for everyone. Kept so a home nobody
+ * has changed since can be recognised and given a room of its own, and as a
+ * small fixed room to test placement in.
+ */
+export function firstHome(name = "your room"): Place {
   return withSpots({
     name,
     width: 4.2,
@@ -265,249 +301,6 @@ export function defaultPlace(name = "your room"): Place {
     spots: [
       { id: "middle", name: "the middle of the room", place: "the middle of the room", at: [0.15, 0.35], facing: 20 },
     ],
-    start: "middle",
-  });
-}
-
-/**
- * A room for a conversation several agents share: a long table with a seat
- * for each, a window, a plant, a picture on the back wall. Wider the more
- * seats it has. Seats face the table, half on each side.
- */
-/**
- * How a room for a purpose looks, picked by the words in its name and purpose:
- * a trip by the sea, a workshop, a studio, a tavern, a library. A room whose
- * words match none is plain.
- */
-export interface Theme {
-  id: string;
-  words: RegExp;
-  walls: string;
-  floor: Floor;
-  floorColor?: string;
-}
-
-export const THEMES: Theme[] = [
-  {
-    id: "beach",
-    words: /\b(beach|vacation|holiday|trip|travel|surf|island|tropic|seaside)/i,
-    walls: "#cfe8f0",
-    floor: "tile",
-    floorColor: "#e6d3a3",
-  },
-  {
-    id: "tavern",
-    words: /\b(d&d|dnd|campaign|quest|tavern|dungeon|adventure|rpg)/i,
-    walls: "#6e4e38",
-    floor: "wood",
-  },
-  { id: "studio", words: /\b(podcast|music|audio|studio|record|episode)/i, walls: "#3d3648", floor: "carpet" },
-  {
-    id: "workshop",
-    words: /\b(code|coder|coding|dev|engineer|build|deploy|bug|ops|review|repo)/i,
-    walls: "#d3d7dc",
-    floor: "concrete",
-  },
-  { id: "library", words: /\b(research|study|read|book|library|learn|notes)/i, walls: "#e8dfcf", floor: "wood" },
-];
-
-/** The theme the words of a room's name and purpose call for, if any. */
-export function themeFor(words: string): Theme | undefined {
-  return THEMES.find((t) => t.words.test(words));
-}
-
-export function meetingRoom(name: string, seats: number, purpose = ""): Place {
-  const n = Math.max(2, Math.min(16, Math.floor(seats)));
-  const perSide = Math.ceil(n / 2);
-  const spacing = 1.0;
-  const tables = Math.max(1, Math.ceil((perSide * spacing) / 1.2));
-  const tableRow = tables * 1.2;
-  const width = round(Math.max(4.6, Math.max(perSide * spacing, tableRow) + 2.2));
-  const depth = 4.2;
-  const tableZ = -0.2;
-  const props: PlaceItem[] = [
-    { id: "rug", name: "the rug", kind: "rug", at: [0, tableZ], facing: 0, scale: Math.min(1.6, 0.8 + tables * 0.4) },
-  ];
-  for (let i = 0; i < tables; i++) {
-    const x = round(-tableRow / 2 + 0.6 + i * 1.2);
-    props.push({
-      id: `table-${i + 1}`,
-      name: tables > 1 ? `table ${i + 1}` : "the table",
-      kind: "table",
-      at: [x, tableZ],
-      facing: 0,
-    });
-  }
-  for (let i = 0; i < n; i++) {
-    const far = i % 2 === 0;
-    const k = Math.floor(i / 2);
-    const row = far ? perSide : n - perSide;
-    const x = round((k - (row - 1) / 2) * spacing);
-    // Far side faces +Z, toward the table and the camera; the near side faces back.
-    props.push({
-      id: `seat-${i + 1}`,
-      name: `seat ${i + 1}`,
-      kind: "armchair",
-      at: [x, far ? round(tableZ - 1.25) : round(tableZ + 1.25)],
-      facing: far ? 0 : 180,
-    });
-  }
-  const theme = themeFor(`${name} ${purpose}`);
-  props.push(
-    {
-      id: "window",
-      name: "the window",
-      kind: "window",
-      at: [round(-width / 2 + 0.01), -0.4],
-      facing: 90,
-      elevation: 1.0,
-    },
-    // The room's tasks on the back wall.
-    {
-      id: "board",
-      name: "the task board",
-      kind: "board",
-      at: [0, round(-depth / 2 + 0.03)],
-      facing: 0,
-      elevation: 1.05,
-      label: "Tasks",
-      action: "tasks",
-    },
-    {
-      id: "plant",
-      // By the sea, a palm.
-      name: theme?.id === "beach" ? "the palm" : "the plant",
-      kind: theme?.id === "beach" ? "palm" : "plant",
-      at: [round(width / 2 - 0.4), round(-depth / 2 + 0.4)],
-      facing: 0,
-    },
-    // Lamps, back left and on the right wall, clear of the camera at the open front: a room with none is dark after sunset.
-    { id: "lamp", name: "the lamp", kind: "lamp", at: [round(-width / 2 + 0.3), round(-depth / 2 + 0.3)], facing: 0 },
-    {
-      id: "lamp-2",
-      name: "the other lamp",
-      kind: "lamp",
-      at: [round(width / 2 - 0.3), round(-depth / 2 + 1.1)],
-      facing: 0,
-    },
-  );
-  if (theme?.id === "beach")
-    props.push({
-      id: "umbrella",
-      name: "the beach umbrella",
-      kind: "umbrella",
-      at: [round(-width / 2 + 0.8), round(depth / 2 - 0.8)],
-      facing: 0,
-      color: "#e85d4a",
-    });
-  if (theme?.id === "tavern")
-    for (let i = 0; i < tables; i++)
-      props.push({
-        id: `candle-${i + 1}`,
-        name: tables > 1 ? `candle ${i + 1}` : "the candle",
-        kind: "candle",
-        at: [round(-tableRow / 2 + 0.6 + i * 1.2), tableZ],
-        facing: 0,
-        elevation: 0.75,
-        on: `table-${i + 1}`,
-      });
-  return withSpots({
-    name,
-    width,
-    depth,
-    height: 2.6,
-    walls: theme?.walls ?? "#dfe4ea",
-    floor: theme?.floor ?? "carpet",
-    ...(theme?.floorColor ? { floorColor: theme.floorColor } : {}),
-    props,
-    spots: [
-      {
-        id: "head",
-        name: "at the head of the table",
-        place: "the head of the table",
-        at: [round(tableRow / 2 + 0.55), tableZ],
-        facing: -90,
-      },
-    ],
-    start: "head",
-  });
-}
-
-/** The lobby's id on the map. */
-export const LOBBY = "lobby";
-
-/**
- * Where everyone starts: kiosks to make a new agent, a new task or a new room,
- * a board of every open task, and somewhere to sit.
- */
-export function lobby(): Place {
-  const width = 7;
-  const depth = 5;
-  const kiosk = (id: string, x: number, label: string, action: PlaceAction): PlaceItem => ({
-    id,
-    name: `the ${label.toLowerCase()} kiosk`,
-    kind: "kiosk",
-    at: [x, round(-depth / 2 + 0.6)],
-    facing: 0,
-    label,
-    action,
-  });
-  return withSpots({
-    name: "the lobby",
-    width,
-    depth,
-    height: 2.8,
-    walls: "#e4e1ec",
-    floor: "tile",
-    floorColor: "#cfd3dc",
-    props: [
-      { id: "rug", name: "the rug", kind: "rug", at: [0, 0.4], facing: 0, scale: 1.4 },
-      kiosk("kiosk-agent", -1.9, "New agent", "new-agent"),
-      kiosk("kiosk-task", 0, "New task", "new-task"),
-      kiosk("kiosk-room", 1.9, "New room", "new-room"),
-      {
-        id: "board",
-        name: "the task board",
-        kind: "board",
-        at: [round(width / 2 - 0.03), -0.3],
-        facing: -90,
-        elevation: 1.05,
-        label: "Open tasks",
-        action: "tasks",
-      },
-      {
-        id: "window",
-        name: "the window",
-        kind: "window",
-        at: [round(-width / 2 + 0.01), -0.6],
-        facing: 90,
-        elevation: 1.0,
-      },
-      { id: "couch", name: "the couch", kind: "couch", at: [round(-width / 2 + 0.45), 0.85], facing: 90 },
-      {
-        id: "plant",
-        name: "the plant",
-        kind: "plant",
-        at: [round(width / 2 - 0.4), round(-depth / 2 + 0.4)],
-        facing: 0,
-      },
-      {
-        id: "plant-2",
-        name: "the other plant",
-        kind: "plant",
-        at: [round(-width / 2 + 0.4), round(-depth / 2 + 0.4)],
-        facing: 0,
-      },
-      { id: "lamp", name: "the lamp", kind: "lamp", at: [round(width / 2 - 0.35), round(depth / 2 - 0.9)], facing: 0 },
-      {
-        id: "lamp-2",
-        name: "the other lamp",
-        kind: "lamp",
-        at: [round(-width / 2 + 0.35), round(depth / 2 - 0.35)],
-        facing: 0,
-      },
-    ],
-    spots: [{ id: "middle", name: "in the middle", place: "the middle of the lobby", at: [0, 0.6], facing: 180 }],
     start: "middle",
   });
 }
@@ -625,7 +418,9 @@ function tucks(
   rb: Rect,
 ) {
   const under = (chair: typeof a, table: typeof b, rt: Rect) =>
-    chair.kind === "chair" && (table.kind === "desk" || table.kind === "table") && !contains(rt, chair.at);
+    (chair.kind === "chair" || chair.kind === "stool") &&
+    (table.kind === "desk" || table.kind === "table" || table.kind === "round_table") &&
+    !contains(rt, chair.at);
   return under(a, b, rb) || under(b, a, ra);
 }
 
@@ -704,10 +499,16 @@ export function findItem(place: Place, words: string): PlaceItem | undefined {
   );
 }
 
-/** The spot words refer to: its place ("the couch"), its name ("on the couch") or its id. */
+/**
+ * The spot words refer to: its place ("the couch"), its name ("on the couch")
+ * or its id. What a spot is called wins over an id, so "the beanbag 2" is the
+ * one called that even when another's id is "beanbag-2".
+ */
 export function findSpot(place: Place, words: string): PlaceSpot | undefined {
   const t = bare(words);
-  return place.spots.find((s) => [s.place, s.name, s.id].some((n) => bare(n) === t));
+  return (
+    place.spots.find((s) => [s.place, s.name].some((n) => bare(n) === t)) ?? place.spots.find((s) => bare(s.id) === t)
+  );
 }
 
 // --------------------------------------------------------------------------
@@ -804,6 +605,23 @@ function useFits(place: Place, placing: Placing, rect: Rect, ignore: Set<string>
   return true;
 }
 
+/** Whether a floor thing fits at exactly this point, turned this way: what a room drawn from a seed checks each piece with. */
+export function fitsOnFloor(place: Place, placing: Placing, at: [number, number], facing: number): boolean {
+  const [w, d] = footprintOf(placing);
+  return floorFits(place, placing, { at, hw: w / 2, hd: d / 2, facing: KINDS[placing.kind]?.round ? 0 : facing });
+}
+
+/** Whether a wall thing fits on this wall, this far along it (its middle) and this high up. */
+export function fitsOnWall(
+  place: Place,
+  placing: Placing,
+  wall: "back" | "left",
+  along: number,
+  elevation: number,
+): boolean {
+  return wallItemFits(place, placing, wall, along, elevation);
+}
+
 /** Points around `[x, z]`, nearest first, out to `reach` metres. */
 function* around([x, z]: [number, number], reach = 3.2, step = 0.08): Generator<[number, number]> {
   yield [round(x), round(z)];
@@ -864,7 +682,8 @@ function wallItemFits(place: Place, placing: Placing, wall: Wall, along: number,
   return useFits(place, placing, { at, hw: w / 2, hd: 0.04, facing: WALL_FACING[wall] }, ignore);
 }
 
-function wallPoint(place: Place, wall: Wall, along: number): [number, number] {
+/** Where on the floor plan a wall thing hangs: this far along the back or left wall. */
+export function wallPoint(place: Place, wall: Wall, along: number): [number, number] {
   return wall === "back"
     ? [round(along), round(-place.depth / 2 + 0.01)]
     : [round(-place.width / 2 + 0.01), round(along)];
@@ -1042,8 +861,9 @@ function placeOnFloor(place: Place, placing: Placing, where: Where): Placement |
       if (got) return got;
     }
   }
+  // Anywhere in the room, out to its corners, nearest the middle first.
   const got = tryAt(
-    around([0, 0], 3.5),
+    around([0, 0], Math.max(3.5, Math.hypot(place.width, place.depth) / 2)),
     (at) => explicit(at) ?? (kind?.use?.activity === "sit" ? towards(at, [0, 0.6]) : 0),
   );
   return got ?? "The room is too full for it. Remove something, or make the room bigger.";
@@ -1210,6 +1030,151 @@ export function placeProblems(place: Place): string[] {
   if (!place.spots.some((s) => s.id === place.start))
     problems.push(`The starting spot "${place.start}" doesn't exist.`);
   return problems;
+}
+
+// --------------------------------------------------------------------------
+// Getting about
+// --------------------------------------------------------------------------
+
+/** Half a body's width: how far from furniture a walk keeps. */
+const BODY = 0.2;
+
+/**
+ * The spots nobody can walk to from where everyone starts. The floor is a
+ * grid, each piece of furniture grown by half a body's width, as the page
+ * finds its way; the piece a spot belongs to keeps its true size, since a
+ * spot can be close to it. A spot boxed in by furniture is one an agent is
+ * sent to and never reaches. `only` checks just the spots with these ids.
+ */
+export function unreachable(place: Place, only?: string[]): PlaceSpot[] {
+  const start = place.spots.find((s) => s.id === place.start);
+  if (!start) return [];
+  const cell = 0.1;
+  const cols = Math.max(1, Math.ceil(place.width / cell));
+  const rows = Math.max(1, Math.ceil(place.depth / cell));
+  // Each piece as it stands, turned: a chair set at an angle leaves the floor in front of it free.
+  const boxes = place.props.filter(blocks).map(rectOf);
+  const inside = (r: Rect, point: [number, number], grow: number) => contains(r, point, grow - 1e-9);
+  const centre = (i: number, j: number): [number, number] => [
+    -place.width / 2 + (i + 0.5) * cell,
+    -place.depth / 2 + (j + 0.5) * cell,
+  ];
+  const cellOf = ([x, z]: [number, number]) => [
+    Math.min(cols - 1, Math.max(0, Math.floor((x + place.width / 2) / cell))),
+    Math.min(rows - 1, Math.max(0, Math.floor((z + place.depth / 2) / cell))),
+  ];
+  // How many pieces, grown, cover each cell.
+  const covered = new Uint8Array(cols * rows);
+  for (let j = 0; j < rows; j++)
+    for (let i = 0; i < cols; i++) {
+      const c = centre(i, j);
+      for (const b of boxes) if (inside(b, c, BODY)) covered[j * cols + i]++;
+    }
+  const stuck: PlaceSpot[] = [];
+  for (const spot of place.spots) {
+    if (spot.id === start.id || (only && !only.includes(spot.id))) continue;
+    // Furniture the walk starts or ends beside keeps its own size.
+    const near = boxes.filter((b) => inside(b, spot.at, BODY) || inside(b, start.at, BODY));
+    const open = (i: number, j: number) => {
+      const c = centre(i, j);
+      let n = covered[j * cols + i];
+      for (const b of near) {
+        if (inside(b, c, 0)) return false;
+        if (inside(b, c, BODY)) n--;
+      }
+      return n === 0;
+    };
+    const [si, sj] = cellOf(start.at);
+    const [gi, gj] = cellOf(spot.at);
+    const seen = new Uint8Array(cols * rows);
+    seen[sj * cols + si] = 1;
+    const queue: number[] = [sj * cols + si];
+    let found = false;
+    while (queue.length && !found) {
+      const n = queue.pop() as number;
+      const i = n % cols;
+      const j = (n - i) / cols;
+      for (const [ni, nj] of [
+        [i + 1, j],
+        [i - 1, j],
+        [i, j + 1],
+        [i, j - 1],
+      ]) {
+        if (ni < 0 || nj < 0 || ni >= cols || nj >= rows || seen[nj * cols + ni]) continue;
+        if (ni === gi && nj === gj) {
+          found = true;
+          break;
+        }
+        if (!open(ni, nj)) continue;
+        seen[nj * cols + ni] = 1;
+        queue.push(nj * cols + ni);
+      }
+    }
+    if (!found && !(si === gi && sj === gj)) stuck.push(spot);
+  }
+  return stuck;
+}
+
+// --------------------------------------------------------------------------
+// Doorways
+// --------------------------------------------------------------------------
+
+/**
+ * What a doorway needs: this much wall with nothing on it, and this much
+ * floor in front of it with nothing standing there. The rooms the world
+ * starts with each keep at least one such stretch clear (see
+ * `places-rooms.ts`), so a door can go in later without moving anything.
+ */
+export const DOORWAY = { width: 1.6, depth: 1.0 };
+
+/** A clear stretch of a solid wall: which wall, where its middle is along it (x on the back wall, z on the left), and how long it is. */
+export interface Doorway {
+  wall: "back" | "left";
+  along: number;
+  width: number;
+}
+
+/**
+ * Every stretch of the back and left walls wide enough for a doorway, widest
+ * first: nothing hangs there, and nothing stands on the floor in front of it.
+ * Rugs don't count, since they can be walked over. A room an agent has
+ * filled may have none.
+ */
+export function doorways(place: Place): Doorway[] {
+  const found: Doorway[] = [];
+  // Kept back from the corners, so a door never meets the other wall or the open side.
+  const end = 0.3;
+  for (const wall of ["back", "left"] as const) {
+    const span = wall === "back" ? place.width : place.depth;
+    const taken: [number, number][] = [];
+    for (const item of place.props) {
+      if (item.on) continue;
+      if (KINDS[item.kind]?.mount === "wall") {
+        if (wallOf(place, item) !== wall) continue;
+        const along = wall === "back" ? item.at[0] : item.at[1];
+        const [w] = footprintOf(item);
+        taken.push([along - w / 2, along + w / 2]);
+        continue;
+      }
+      if (!blocks(item)) continue;
+      const points = corners(rectOf(item));
+      const out = Math.min(...points.map(([x, z]) => (wall === "back" ? z + place.depth / 2 : x + place.width / 2)));
+      if (out >= DOORWAY.depth) continue;
+      const alongs = points.map(([x, z]) => (wall === "back" ? x : z));
+      taken.push([Math.min(...alongs), Math.max(...alongs)]);
+    }
+    taken.sort((a, b) => a[0] - b[0]);
+    let from = -span / 2 + end;
+    const free: [number, number][] = [];
+    for (const [a, b] of taken) {
+      if (a > from) free.push([from, a]);
+      from = Math.max(from, b);
+    }
+    if (span / 2 - end > from) free.push([from, span / 2 - end]);
+    for (const [a, b] of free)
+      if (b - a >= DOORWAY.width - 1e-6) found.push({ wall, along: round((a + b) / 2), width: round(b - a) });
+  }
+  return found.sort((a, b) => b.width - a.width);
 }
 
 // --------------------------------------------------------------------------

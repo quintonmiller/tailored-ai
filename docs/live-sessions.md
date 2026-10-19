@@ -112,12 +112,26 @@ collection published under CC0, such as 100Avatars. Many models, free ones
 included, carry licences that limit sharing the file, so keep yours in your
 own instance.
 
-The room starts out furnished: a couch, a desk with a laptop, a bookshelf, a
-window and a floor lamp. The agent can change it (see
-[A room the agent can change](#a-room-the-agent-can-change)). It is lit for the
-time of day: daylight through the window, the lamp on in the evening, the lamp
-alone at night. Drag to look around the room, or press **Close up** to frame
-the head and torso. The page remembers the choice. The furniture is built from
+Each agent's room is its own, and it starts out furnished. It is drawn from
+the agent's name, so the same agent always gets the same room and no two
+agents get the same one: 8 to 10 m wide and 6 to 8 m deep, in its own
+colours, and one of several kinds (a study, a studio, a lounge, a workshop, a
+reading nook, a garden room, a bedsit, a den). Furniture comes in groups that
+belong together, set against the walls: a desk with its chair, lamp and a
+shelf above it, a couch facing a TV, two armchairs by a fire, a bed between
+bedside tables. A couple of islands stand out in the floor, like a round
+table with chairs or beanbags on a rug, low enough to see past. Every room
+has somewhere to sit, a desk to work at, a window, lamps, and a picture or a
+painting for photos to hang in. The agent can change it (see
+[A room the agent can change](#a-room-the-agent-can-change)). It is lit for
+the time of day: daylight through the windows, the lamps on in the evening,
+the lamps alone at night.
+
+The view shows the whole room when that leaves the agent big enough to make
+out. A bigger room is seen from close by instead, centred on the agent as
+nearly as the room's edges allow, and the view drifts after the agent as it
+moves about. Drag to look around the room, or press **Close up** to frame the
+head and torso. The page remembers the choice. The furniture is built from
 simple shapes, so there are no files to download.
 
 The avatar moves around the room on its own. Between sessions it wanders:
@@ -227,9 +241,16 @@ a reading chair by the window, and the chair appears on the page while the
 agent is still answering.
 
 The room is a [world-state](./world-state.md) record of type `place`, kept
-as `home:<agent>` in the agent's own scope. It is made from the starting room
-the first time anything asks for it. Like any record, every change says who
-made it, the history keeps every version, and the **State** page shows it.
+as `home:<agent>` in the agent's own scope. It is drawn from the agent's name
+the first time anything asks for it. A room nobody has changed since it was
+made is redrawn when the way rooms are drawn improves, which is how homes made
+before rooms differed got one of their own. Once the agent, you, or anything
+else has changed it, it is never redrawn. The record's history says who wrote
+each version: a room is redrawn only when the places plugin made it, or the
+agent's first look made it as the old starting room, and nothing but the
+plugin has written it since. A redraw isn't the agent's to `undo`. Like any
+record, every change says who made it, the history keeps every version, and
+the **State** page shows it.
 The chat page redraws the room as soon as the record changes, whoever changed
 it. Something new grows in, and a moved couch takes the avatar sitting on it
 along.
@@ -243,8 +264,8 @@ The agent changes it with the `place` tool:
 | `move` | a thing to somewhere new, or turned where it stands with only `facing` |
 | `change` | a thing's `name`, `color`, `scale` or `size` |
 | `remove` | a thing, and whatever stands on it |
-| `room` | the room's `width`, `depth` and `height`, `walls` colour, `floor` (wood, carpet, tile, concrete, or a colour), and `name` |
-| `undo` | the last change, whoever made it |
+| `room` | the room's `width` (up to 16 m), `depth` (up to 12 m) and `height` (up to 4 m), `walls` colour, `floor` (wood, carpet, tile, concrete, or a colour), and `name` |
+| `undo` | the last change, whoever made it, unless it was the system redrawing the room |
 
 Where things go is said in words: `near` a thing or spot, on one `side` of it
 (left, right, front or behind, as you face it), against a `wall`, in a
@@ -256,20 +277,23 @@ near a TV or a fire turn to face it. When nothing fits, the tool says why, and
 the agent can move or remove something and try again. Exact `x` and `z`, in
 metres from the middle, work too.
 
-What can be added: seats (couch, armchair, beanbag, bed, chair), tables (desk,
-table, coffee table, side table), a bookshelf, TV, fireplace, lamp and plant,
-things for the walls (window, picture, clock, shelf), small things for a
-surface (laptop, books, vase of flowers, small plant, mug, candle, aquarium),
-and blocks, balls and cylinders of any size and colour. Seats, desks, the
-bookshelf, the TV, the fireplace and windows each bring a spot: add an
-armchair, and the agent can sit in it, and so can a click.
+What can be added: seats (couch, armchair, beanbag, bed, chair, stool),
+tables (desk, table, round table, coffee table, side table, sideboard), a
+bookshelf, TV, fireplace, easel, rugs (square or round), lamps, plants (a
+plant, a tall plant, a cactus, a palm), things for the walls (window,
+picture, painting, poster, clock, shelf, pegboard, task board), small things
+for a surface (laptop, books, vase of flowers, small plant, mug, candle,
+table lamp, aquarium), and blocks, balls and cylinders of any size and colour.
+Seats, desks, the bookshelf, the TV, the fireplace, the easel and windows each
+bring a spot: add an armchair, and the agent can sit in it, and so can a
+click.
 
 #### Shared places
 
 A room can be shared. An agent makes one with `new` and a name ("the
-lounge"), which starts furnished like a new room, and it goes there. Other
-agents join with `go` and `to: "the lounge"`, and anyone goes back with
-`to: "home"`. `places` lists where an agent can go and who is in each place.
+lounge"), which starts furnished like a home (any kind but the bedsit), and
+it goes there. Other agents join with `go` and `to: "the lounge"`, and anyone
+goes back with `to: "home"`. `places` lists where an agent can go and who is in each place.
 While an agent is in a shared place, the `place` tool changes that place, so
 everyone there sees the change.
 
@@ -305,8 +329,9 @@ page makes.
 
 Every photo is also hung in the room it was taken in: the place keeps its
 last six (`photos`, newest first), and the pictures on its walls show them in
-order on a white mount, the newest in the first picture. Hang more pictures
-("add a picture by the window") to show more of them.
+order on a white mount, the newest in the first picture, then the paintings
+once the pictures are full. Every home starts with at least one of the two.
+Hang more ("add a picture by the window") to show more of them.
 
 Photos need Playwright with Chromium (`npm install playwright && npx
 playwright install chromium`), as the browser tool does. Without it, the tool
@@ -381,29 +406,35 @@ to talk to them, and **Room** to go back to reading.
 
 The plugin also answers for the whole world: every agent's home, the shared
 places, and each room agents talk in (a Discord channel, a local room), with
-who is in each. A room of conversation is drawn as a meeting room: a long
-table with a seat for every member with a body, wider the more there are.
-Its members are all shown in it, wherever their bodies are, because an agent
-can belong to several rooms at once.
+who is in each. A room of conversation is drawn as a meeting room with a
+seat for every member with a body: up to six round a round table, more at a
+long one, and the room grows with them. Its members are all shown in it,
+wherever their bodies are, because an agent can belong to several rooms at
+once.
 
 A meeting room is dressed for what the room is for, read from its name and
-purpose: a trip or a vacation gets a beach (sand floor, sky-blue walls, a palm
-and an umbrella), a campaign a tavern (dark wood, candles on the table), a
-podcast a studio, code a workshop, research a library. A room whose words
-match none is plain.
+purpose: a trip or a vacation gets a beach (sand floor, sky-blue walls, palms
+and an umbrella), a campaign a tavern (dark wood, a hearth, barrels, candles
+on the table), a podcast a studio (an easel and posters), code a workshop (a
+workbench under a pegboard, crates), research a library (shelves of books and
+a reading chair). A room whose words match none is plain. Each comes in a
+few colourings and wall arrangements, and the room's name picks one, so two
+rooms of the same kind still look different.
 
 #### Task boards and the lobby
 
 A **task board** (`board`) hangs on the wall and shows tasks as sticky notes
 in four columns (to do, doing, blocked, done): in a home, its owner's; in a
 shared place or a meeting room, those of whoever is there. Every meeting room
-has one on its back wall, and an agent can put one in its own room ("add a
-task board on the back wall"). Click a board to open the Tasks page.
+has one on its back wall, some homes start with one, and an agent can put one
+in its own room ("add a task board on the back wall"). Click a board to open
+the Tasks page.
 
-**The lobby** is first on the map. Its three kiosks start things: **New
-agent** and **New room** open a fresh chat with the default agent, a request
-already written for you to send ("I'd like a new agent. Ask me what it should
-do…"), so the agent asks what it needs and sets it up. **New task** opens a
+**The lobby** is first on the map, and the biggest room. Its three kiosks
+start things: **New agent** and **New room** open a fresh chat with the
+default agent, a request already written for you to send ("I'd like a new
+agent. Ask me what it should do…"), so the agent asks what it needs and sets
+it up. **New task** opens a
 small form: a title, details, and who should do it. An agent picked there
 starts on the task as soon as it's made. The lobby's board shows every open
 task.
@@ -411,8 +442,8 @@ task.
 Rooms come from the built-in `builtin:places` plugin. It does nothing unless
 some agent has a body. An agent with its own `tools:` list needs `place`
 in it. The page asks for the room at `GET /api/ext/builtin:places/:agent`
-(`default` for the default agent). Without the plugin, the page shows the
-starting room, and the agent can't change it.
+(`default` for the default agent). Without the plugin, the page shows a
+small fixed room, and the agent can't change it.
 
 ### What it is doing
 
@@ -546,7 +577,7 @@ cues, and its text passes through untouched.
 | route | does |
 |---|---|
 | `GET /api/live?agent=` | what a page needs before talking: `{enabled, avatar?, animations?}`. `enabled` says whether live sessions are on; the URLs are that agent's body, when it has one |
-| `GET /api/ext/builtin:places/:agent` | the place the agent is in: `{type, id, version, place, company}`, its home made from the starting room on first use. `company` is everyone else there with a body: `{agent, name, avatar, animations}`. `404` for an agent with no body. Changes arrive on `GET /api/state/events` like any record's, and a `whereabouts` change means someone came or went |
+| `GET /api/ext/builtin:places/:agent` | the place the agent is in: `{type, id, version, place, company}`, its home drawn from its name on first use. `company` is everyone else there with a body: `{agent, name, avatar, animations}`. `404` for an agent with no body. Changes arrive on `GET /api/state/events` like any record's, and a `whereabouts` change means someone came or went |
 | `GET /api/ext/builtin:places/map` | every place: `{places: [{id, name, kind, agents, owner?, purpose?}]}`. `kind` is `home` (one per agent with a body, `owner` its agent), `shared`, or `room` (a room agents talk in, `room:<backend>:<id>`). `agents` is who is in it: a body is in one home or shared place at a time, while a room lists every member with a body |
 | `GET /api/ext/builtin:places/transcript/:id` | a room agents talk in, to read: `{id, name, purpose?, members, lines}`, its latest 30 messages oldest first, each `{id, who, agent?, to, text, at, files?}`. `who` is the speaker's name in the room and `agent` the agent behind it, when there is one. Read only: no read cursor moves. `404` for a room that isn't there, `503` with the reason when its transport can't be read |
 | `GET /api/ext/builtin:places/scene/:id` | any place on the map, to look at: `{type, id, place, company}`, with everyone in it as `company`. A room agents talk in is a meeting room with a seat for each member, made fresh each time. `404` for a place that isn't there |

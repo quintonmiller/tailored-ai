@@ -72,6 +72,19 @@ function tint(color: number, by: number): number {
 }
 
 /**
+ * Many boxes of one size and colour as one mesh, drawn in a single call: the
+ * planks and tiles of a floor, which in a big room run to hundreds.
+ */
+function tiles(group: THREE.Group, w: number, h: number, d: number, color: number, at: [number, number, number][]) {
+  if (!at.length) return;
+  const mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(w, h, d), paint(color), at.length);
+  const m = new THREE.Matrix4();
+  for (const [i, [x, y, z]] of at.entries()) mesh.setMatrixAt(i, m.makeTranslation(x, y, z));
+  mesh.receiveShadow = true;
+  group.add(mesh);
+}
+
+/**
  * The floor and the two walls that close the room, as a diorama: a slab you
  * can see the edge of, and walls that let the window's light through, so the
  * room is lit as if the glass were real.
@@ -88,20 +101,42 @@ export function buildShell(room: Room): THREE.Group {
   if (floor === "wood") {
     const planks = room.floorColor ? [base, tint(base, -0.08)] : WOOD;
     const plank = 0.3;
-    for (let i = 0, x = -w / 2; x < w / 2 - 0.01; i++, x += plank) {
-      const pw = Math.min(plank, w / 2 - x);
-      box(shell, pw - 0.006, 0.02, d - 0.004, planks[i % 2], x + pw / 2, 0.01, 0).castShadow = false;
-    }
+    const whole = Math.floor((w + 0.001) / plank);
+    for (const k of [0, 1])
+      tiles(
+        shell,
+        plank - 0.006,
+        0.02,
+        d - 0.004,
+        planks[k],
+        Array.from({ length: whole }, (_, i) => i)
+          .filter((i) => i % 2 === k)
+          .map((i) => [-w / 2 + (i + 0.5) * plank, 0.01, 0]),
+      );
+    // What is left at the right edge, narrower.
+    const rest = w - whole * plank;
+    if (rest > 0.01)
+      box(shell, rest - 0.006, 0.02, d - 0.004, planks[whole % 2], w / 2 - rest / 2, 0.01, 0).castShadow = false;
   } else if (floor === "tile") {
     const size = 0.4;
-    for (let i = 0, x = -w / 2; x < w / 2 - 0.01; i++, x += size) {
-      for (let j = 0, z = -d / 2; z < d / 2 - 0.01; j++, z += size) {
+    const cols = Math.ceil(w / size - 0.001);
+    const rows = Math.ceil(d / size - 0.001);
+    // Whole tiles in two colours, one mesh each; the part tiles along the right and front edges as boxes of their own.
+    const whole: [number, number, number][][] = [[], []];
+    for (let i = 0; i < cols; i++)
+      for (let j = 0; j < rows; j++) {
+        const x = -w / 2 + i * size;
+        const z = -d / 2 + j * size;
         const tw = Math.min(size, w / 2 - x);
         const td = Math.min(size, d / 2 - z);
-        const color = (i + j) % 2 ? base : tint(base, -0.08);
-        box(shell, tw - 0.008, 0.02, td - 0.008, color, x + tw / 2, 0.01, z + td / 2).castShadow = false;
+        if (tw > size - 0.001 && td > size - 0.001) whole[(i + j) % 2].push([x + tw / 2, 0.01, z + td / 2]);
+        else {
+          const color = (i + j) % 2 ? base : tint(base, -0.08);
+          box(shell, tw - 0.008, 0.02, td - 0.008, color, x + tw / 2, 0.01, z + td / 2).castShadow = false;
+        }
       }
-    }
+    tiles(shell, size - 0.008, 0.02, size - 0.008, tint(base, -0.08), whole[0]);
+    tiles(shell, size - 0.008, 0.02, size - 0.008, base, whole[1]);
   } else {
     box(shell, w, 0.02, d, base, 0, 0.01, 0).castShadow = false;
   }
@@ -540,6 +575,145 @@ export function buildProp(kind: PropKind, look: PropLook = {}): BuiltProp {
       box(g, 0.5, 0.03, 0.2, 0xd9c7a0, 0, 0.055, 0);
       return { group: g, glow: water };
     }
+    case "round_rug": {
+      const edge = main(0x5a7f7f);
+      for (const [r, y, color] of [
+        [0.9, 0.026, edge],
+        [0.8, 0.028, tint(edge, 0.5)],
+        [0.42, 0.03, tint(edge, 0.15)],
+      ] as const)
+        cylinder(g, r, r, 0.012, color, 0, y, 0, 28).castShadow = false;
+      return { group: g };
+    }
+    case "sideboard": {
+      const wood = main(0x8a5a3b);
+      box(g, 1.56, 0.62, 0.42, wood, 0, 0.45, 0);
+      box(g, 1.64, 0.04, 0.46, tint(wood, -0.12), 0, 0.78, 0);
+      // Three doors, picked out by their gaps, and a knob each.
+      for (const x of [-0.52, 0, 0.52]) {
+        box(g, 0.49, 0.54, 0.012, tint(wood, 0.08), x, 0.45, 0.212);
+        box(g, 0.03, 0.03, 0.02, 0xd9c7a0, x + 0.18, 0.5, 0.222);
+      }
+      legs(g, 1.46, 0.34, 0.14, tint(wood, -0.3), 0.04);
+      return { group: g };
+    }
+    case "round_table": {
+      const top = main(0xa87650);
+      cylinder(g, 0.6, 0.6, 0.045, top, 0, 0.73, 0, 24);
+      cylinder(g, 0.05, 0.06, 0.7, tint(top, -0.3), 0, 0.36, 0, 8);
+      cylinder(g, 0.3, 0.32, 0.04, tint(top, -0.3), 0, 0.02, 0, 16);
+      return { group: g };
+    }
+    case "stool": {
+      const seat = main(0x8a5a3b);
+      cylinder(g, 0.2, 0.19, 0.05, seat, 0, 0.48, 0, 14);
+      for (const a of [0, 2.09, 4.19]) {
+        const leg = box(g, 0.035, 0.48, 0.035, tint(seat, -0.3), Math.sin(a) * 0.13, 0.23, Math.cos(a) * 0.13);
+        leg.rotation.set(Math.cos(a) * 0.12, 0, -Math.sin(a) * 0.12);
+      }
+      cylinder(g, 0.135, 0.135, 0.02, tint(seat, -0.3), 0, 0.2, 0, 10);
+      return { group: g };
+    }
+    case "easel": {
+      const wood = 0xb08a5e;
+      // Two front legs splayed, one behind, a ledge, and a canvas with paint on it, facing whoever stands in front.
+      for (const side of [-1, 1]) {
+        const leg = box(g, 0.04, 1.7, 0.04, wood, side * 0.22, 0.84, 0.08);
+        leg.rotation.set(-0.1, 0, side * -0.1);
+      }
+      const rear = box(g, 0.04, 1.6, 0.04, wood, 0, 0.78, -0.22);
+      rear.rotation.x = 0.26;
+      box(g, 0.6, 0.04, 0.08, wood, 0, 0.72, 0.12);
+      const canvas = new THREE.Group();
+      canvas.position.set(0, 1.08, 0.1);
+      canvas.rotation.x = -0.1;
+      box(canvas, 0.62, 0.66, 0.025, 0xf6f1e3, 0, 0, 0);
+      box(canvas, 0.3, 0.22, 0.004, main(0x4f81bd), -0.1, 0.12, 0.014);
+      box(canvas, 0.22, 0.3, 0.004, 0xe6a23c, 0.12, -0.08, 0.015);
+      const sun = cylinder(canvas, 0.07, 0.07, 0.004, 0xc0504d, 0.16, 0.18, 0.016, 12);
+      sun.rotation.x = Math.PI / 2;
+      g.add(canvas);
+      return { group: g };
+    }
+    case "tall_plant": {
+      cylinder(g, 0.22, 0.17, 0.42, main(0xd9c7a0), 0, 0.21, 0, 12);
+      cylinder(g, 0.2, 0.2, 0.02, 0x4a3426, 0, 0.41, 0, 12);
+      cylinder(g, 0.02, 0.03, 1.0, 0x6b4a33, 0, 0.9, 0, 5);
+      // Broad leaves climbing the stem, each turned a little further round.
+      for (let i = 0; i < 7; i++) {
+        const a = i * 2.3;
+        const y = 0.75 + i * 0.14;
+        const r = 0.18 - i * 0.012;
+        const leaf = solid(
+          new THREE.IcosahedronGeometry(r, 0),
+          paint(i % 2 ? 0x3f7a3e : 0x4c8c4a),
+          Math.sin(a) * 0.14,
+          y,
+          Math.cos(a) * 0.14,
+        );
+        leaf.scale.set(1, 0.7, 1);
+        g.add(leaf);
+      }
+      return { group: g };
+    }
+    case "cactus": {
+      cylinder(g, 0.15, 0.12, 0.24, main(0xc56b3c), 0, 0.12, 0, 10);
+      const green = 0x5f8f4a;
+      cylinder(g, 0.08, 0.09, 0.6, green, 0, 0.53, 0, 8);
+      cylinder(g, 0.08, 0.08, 0.02, green, 0, 0.84, 0, 8);
+      for (const side of [-1, 1]) {
+        cylinder(g, 0.045, 0.045, 0.14, green, side * 0.12, 0.5 + side * 0.06, 0, 6).rotation.z = Math.PI / 2;
+        cylinder(g, 0.045, 0.045, 0.2, green, side * 0.18, 0.6 + side * 0.06, 0, 6);
+      }
+      return { group: g };
+    }
+    case "painting": {
+      // An abstract canvas in a thin frame: blocks of colour round the picked one.
+      const color = main(0xc0504d);
+      box(g, 1.2, 0.8, 0.04, 0x2f2a26, 0, 0.4, 0).castShadow = false;
+      box(g, 1.12, 0.72, 0.01, 0xf2ece0, 0, 0.4, 0.022).castShadow = false;
+      for (const [w, h, x, y, c] of [
+        [0.5, 0.42, -0.26, 0.48, color],
+        [0.4, 0.26, 0.28, 0.24, tint(color, 0.45)],
+        [0.3, 0.3, 0.32, 0.56, 0x3b4a5a],
+        [0.6, 0.06, -0.2, 0.16, 0xd4a72c],
+      ] as const)
+        box(g, w, h, 0.006, c, x, y, 0.028).castShadow = false;
+      return { group: g };
+    }
+    case "poster": {
+      const color = main(0x4f81bd);
+      box(g, 0.6, 0.85, 0.012, color, 0, 0.425, 0).castShadow = false;
+      const ring = cylinder(g, 0.18, 0.18, 0.006, tint(color, 0.6), 0, 0.55, 0.01, 20);
+      ring.rotation.x = Math.PI / 2;
+      ring.castShadow = false;
+      box(g, 0.44, 0.05, 0.006, 0xf6f1e3, 0, 0.22, 0.01).castShadow = false;
+      box(g, 0.3, 0.03, 0.006, 0xf6f1e3, 0, 0.14, 0.01).castShadow = false;
+      return { group: g };
+    }
+    case "pegboard": {
+      box(g, 1.2, 0.75, 0.03, main(0xc8a27a), 0, 0.375, 0).castShadow = false;
+      // A hammer, a wrench, a saw and a coil of tape, hung up.
+      box(g, 0.03, 0.3, 0.03, 0x8a5a3b, -0.4, 0.38, 0.03);
+      box(g, 0.14, 0.05, 0.04, 0x5f6f7f, -0.4, 0.52, 0.03);
+      const wrench = box(g, 0.035, 0.32, 0.015, 0x9aa1ab, -0.12, 0.38, 0.03);
+      wrench.rotation.z = 0.3;
+      box(g, 0.38, 0.12, 0.008, 0xc0c4ca, 0.22, 0.48, 0.025);
+      box(g, 0.1, 0.06, 0.03, 0xc0392b, 0.44, 0.48, 0.03);
+      const tape = cylinder(g, 0.06, 0.06, 0.04, 0xf2c14e, 0.3, 0.2, 0.035, 12);
+      tape.rotation.x = Math.PI / 2;
+      return { group: g };
+    }
+    case "table_lamp": {
+      cylinder(g, 0.08, 0.09, 0.03, main(0x3b4a5a), 0, 0.015, 0, 12);
+      cylinder(g, 0.012, 0.012, 0.24, 0x2f2f33, 0, 0.15, 0, 6);
+      const shade = glowing(0xf3e3c3);
+      shade.side = THREE.DoubleSide;
+      const mesh = solid(new THREE.CylinderGeometry(0.07, 0.11, 0.16, 12, 1, true), shade, 0, 0.34, 0);
+      mesh.castShadow = false;
+      g.add(mesh);
+      return { group: g, glow: shade };
+    }
     case "block": {
       const [w, h, d] = look.size ?? [0.5, 0.5, 0.5];
       box(g, w, h, d, main(0xc9a0dc), 0, h / 2, 0);
@@ -672,7 +846,7 @@ export function disposeHeld(root: THREE.Object3D) {
   });
 }
 
-/** Free every geometry and material under `root`, and the pictures drawn for boards and kiosks. */
+/** Free every geometry and material under `root`, the pictures drawn for boards and kiosks, and floors' instances. */
 export function disposeTree(root: THREE.Object3D) {
   const free = (m: THREE.Material) => {
     (m as THREE.MeshStandardMaterial).map?.dispose();
@@ -680,6 +854,8 @@ export function disposeTree(root: THREE.Object3D) {
   };
   root.traverse((o) => {
     const mesh = o as THREE.Mesh;
+    // A floor's instances keep a buffer of their own, freed only with the mesh.
+    if ((o as THREE.InstancedMesh).isInstancedMesh) (o as THREE.InstancedMesh).dispose();
     mesh.geometry?.dispose();
     const m = mesh.material;
     if (Array.isArray(m)) for (const x of m) free(x);
