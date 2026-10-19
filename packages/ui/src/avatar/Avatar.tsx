@@ -2,11 +2,14 @@ import { type MutableRefObject, type ReactNode, useEffect, useRef, useState } fr
 import type { BoardSpot, BoardTask } from "./boards";
 import type { Cue } from "./cues";
 import type { AgentActivity } from "./doing";
+import { doorWords } from "./doors";
 import type { BodyState } from "./motion";
-import type { Room, RoomDoor } from "./scene";
+import { lightsFor, type Room, type RoomDoor } from "./scene";
 import type { Companion, Line, Stage, StageView, Travel } from "./stage";
 
 const VIEW_KEY = "tai.talk.avatarView";
+/** Pixels a door's label may need to the right of the pointer: nearer the edge of what can be seen, it goes left. */
+const DOOR_TIP_ROOM = 240;
 
 /** One thing the menu on an agent's body offers. */
 export interface AgentAction {
@@ -197,6 +200,8 @@ export function Avatar({
   // biome-ignore lint/correctness/useExhaustiveDependencies: the room and its place arrive together; the room says when.
   useEffect(() => {
     if (!room || !stage.current) return;
+    // Lit as the place it is, before it is shown: the lobby and the halls stay bright after dark.
+    stage.current.setLights(lightsFor(place));
     const moved = shownPlace.current !== undefined && place !== shownPlace.current;
     if (visitor && moved) stage.current.enter(room, arriveRef.current);
     else stage.current.setRoom(room, moved);
@@ -206,6 +211,8 @@ export function Avatar({
   animationsRef.current = animations;
   const animationsKey = animations.join("\n");
   const [problem, setProblem] = useState<string | null>(null);
+  // Where the door under the pointer goes, and where on the stage the pointer is.
+  const [doorTip, setDoorTip] = useState<{ words: string; x: number; y: number } | null>(null);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new animation list rebuilds the stage; the effect reads it through a ref.
   useEffect(() => {
@@ -231,7 +238,14 @@ export function Avatar({
               }
             : {}),
           onUse: (action: string, on?: BoardSpot) => onUseRef.current?.(action, on),
-          ...(doors ? { onDoor: (door: RoomDoor) => doorRef.current?.(door) } : {}),
+          ...(doors
+            ? {
+                onDoor: (door: RoomDoor) => doorRef.current?.(door),
+                onDoorHover: (door: RoomDoor | undefined, at?: { x: number; y: number }) =>
+                  setDoorTip(door && at ? { words: doorWords(door), x: at.x, y: at.y } : null),
+              }
+            : {}),
+          lights: lightsFor(placeRef.current),
           ...(arriveRef.current ? { arriveFrom: arriveRef.current } : {}),
           ...(picking
             ? {
@@ -267,6 +281,7 @@ export function Avatar({
         if (controlsRef.current) controlsRef.current.current = { cue: (c) => s.cue(c) };
         s.setInsets({ right: insetRef.current });
         // The room, or who is in it, may have arrived or changed while the stage was loading.
+        s.setLights(lightsFor(placeRef.current));
         if (roomRef.current) s.setRoom(roomRef.current);
         shownPlace.current = placeRef.current;
         s.setCompany(companyRef.current ?? []);
@@ -284,6 +299,7 @@ export function Avatar({
       gone = true;
       stage.current?.dispose();
       stage.current = null;
+      setDoorTip(null);
       if (controlsRef.current) controlsRef.current.current = null;
     };
   }, [url, animationsKey, choosing, picking, visitor, doors]);
@@ -319,6 +335,16 @@ export function Avatar({
           onClose={() => setPicked(null)}
         />
       )}
+      {doorTip && (
+        <div
+          // Near the right of what can be seen, on the pointer's left, so the chat panel doesn't cover it.
+          className={`door-tip${doorTip.x > (host.current?.clientWidth ?? 0) - insetRight - DOOR_TIP_ROOM ? " left" : ""}`}
+          aria-hidden="true"
+          style={{ left: doorTip.x, top: doorTip.y }}
+        >
+          {doorTip.words}
+        </div>
+      )}
       {tools && <div className="talk-tools">{tools}</div>}
       {overlay}
       {visitor && (
@@ -340,7 +366,7 @@ export function Avatar({
           </fieldset>
           <p className="talk-keys">
             {travel === "walk"
-              ? "WASD or arrows to walk · Shift to run · click the floor to go there · drag to look"
+              ? "WASD or arrows to walk · Shift to run · click the floor to go there · drag to look · wheel to zoom"
               : "WASD to fly · Shift for speed · E up, Q down · drag to turn · wheel to zoom"}
           </p>
         </>

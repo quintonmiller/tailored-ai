@@ -761,8 +761,40 @@ describe("the map, and any place on it", () => {
     await state.delete(owner, { type: PLACE_TYPE, id: "shared:lounge" });
     const map = await worldMap(state, owner, ["host"], [], hasBody);
     expect(map.filter((p) => p.kind !== "lobby")).toEqual([
-      { id: "home:host", name: "host's room", kind: "home", owner: "host", agents: ["host"], area: "main" },
+      {
+        id: "home:host",
+        name: "host's room",
+        kind: "home",
+        owner: "host",
+        agents: ["host"],
+        area: "main",
+        via: "lobby",
+      },
     ]);
+  });
+
+  it("says what each place is reached through, so the page can say where you are", async () => {
+    await tool.execute({ action: "new", name: "lounge" }, as("host"));
+    await tool.execute({ action: "new", name: "porch", area: "the summer house" }, as("host"));
+    await tool.execute({ action: "room", area: "the summer house" }, as("other"));
+    // Enough homes for the residences to need a foyer in front of their halls.
+    const many = Array.from({ length: 20 }, (_, i) => `agent-${String.fromCharCode(97 + i)}`);
+    const everyone = new Set(["host", "guest", "other", ...many]);
+    const map = await worldMap(state, owner, [...everyone], rooms, (a) => everyone.has(a ?? "default"));
+    const via = Object.fromEntries(map.map((p) => [p.id, p.via]));
+    // The way in has nothing before it.
+    expect(via.lobby).toBeUndefined();
+    // Off the lobby: the residences' foyer, and a wing of one place, straight off it.
+    expect(via["hall:main:homes-foyer"]).toBe("lobby");
+    expect(via["shared:lounge"]).toBe("lobby");
+    expect(via["room:local:trip"]).toBe("lobby");
+    // A hall behind the foyer, and a home behind its hall.
+    expect(via["hall:main:homes-1"]).toBe("hall:main:homes-foyer");
+    expect(via["home:host"]).toMatch(/^hall:main:homes-\d$/);
+    expect(via["home:agent-t"]).toMatch(/^hall:main:homes-\d$/);
+    // Another area's two places are each other's way in.
+    expect(via["shared:porch"]).toBe("home:other");
+    expect(via["home:other"]).toBe("shared:porch");
   });
 
   it("puts a place in an area of its own, joined to the others there by doors and to the main building by the map", async () => {

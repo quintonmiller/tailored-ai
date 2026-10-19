@@ -1,9 +1,25 @@
 /**
  * Getting round on a visit: the speed for the keys you hold, the walk the
- * body plays at a pace and how fast, and a camera that keeps up.
+ * body plays at a pace and how fast, and a camera that keeps up and zooms.
  */
 import { describe, expect, it } from "vitest";
-import { FLY_SPEED, gait, heldMove, keepUp, RUN_FACTOR, travelSpeed, WALK_SPEED } from "./travel";
+import {
+  clampReach,
+  ease,
+  FLY_SPEED,
+  followDistance,
+  gait,
+  heldMove,
+  keepUp,
+  pinchReach,
+  REACH,
+  RUN_FACTOR,
+  travelSpeed,
+  WALK_SPEED,
+  wheelPixels,
+  wheelReach,
+  widestReach,
+} from "./travel";
 
 describe("heldMove", () => {
   it("adds up the keys held, and opposite keys cancel", () => {
@@ -84,5 +100,77 @@ describe("keepUp", () => {
     }
     // A second and a half later it is as good as there.
     expect(aim[0]).toBeGreaterThan(1.99);
+  });
+});
+
+describe("the walking camera's reach", () => {
+  const lobby = { width: 14, depth: 10 };
+  const home = { width: 6, depth: 5 };
+
+  it("starts wide enough to see a good part of the room, and opens out to the whole of a big one", () => {
+    expect(REACH.start).toBeGreaterThanOrEqual(4);
+    expect(widestReach(lobby)).toBe(8);
+    // A small room is never wider than the start; a huge one stops at the widest there is.
+    expect(widestReach(home)).toBe(REACH.start);
+    expect(widestReach({ width: 60, depth: 40 })).toBe(REACH.far);
+  });
+
+  it("keeps a reach between close behind you and the widest worth seeing", () => {
+    expect(clampReach(0.2, 8)).toBe(REACH.near);
+    expect(clampReach(30, 8)).toBe(8);
+    expect(clampReach(5, 8)).toBe(5);
+    // A room too small for even the closest view still lets you come in close.
+    expect(clampReach(5, 0.5)).toBe(REACH.near);
+  });
+
+  it("takes in more as the wheel turns toward you, less away, by the same share each notch", () => {
+    const out = wheelReach(4, 100, 12);
+    const back = wheelReach(out, -100, 12);
+    expect(out).toBeGreaterThan(4);
+    expect(back).toBeCloseTo(4, 9);
+    // Two half notches are one notch, so a trackpad's small steps add up to the same.
+    expect(wheelReach(wheelReach(4, 50, 12), 50, 12)).toBeCloseTo(out, 9);
+    expect(wheelReach(4, 10_000, 8)).toBe(8);
+    expect(wheelReach(4, -10_000, 8)).toBe(REACH.near);
+  });
+
+  it("counts a wheel that turns in lines or pages in pixels", () => {
+    expect(wheelPixels({ deltaY: 100, deltaMode: 0 })).toBe(100);
+    expect(wheelPixels({ deltaY: 3, deltaMode: 1 })).toBe(99);
+    expect(wheelPixels({ deltaY: -1, deltaMode: 2 })).toBe(-400);
+  });
+
+  it("comes in as fingers spread and goes out as they pinch", () => {
+    expect(pinchReach(4, 100, 200, 12)).toBe(2);
+    expect(pinchReach(4, 200, 100, 12)).toBe(8);
+    expect(pinchReach(4, 0, 100, 12)).toBe(4);
+  });
+
+  it("frames the reach in the part of the stage that can be seen, so a narrow strip backs off further", () => {
+    const fov = 35;
+    const tan = Math.tan((fov * Math.PI) / 360);
+    // Wider than tall: the height is the narrower way.
+    expect(followDistance(4, 1.6, fov)).toBeCloseTo(4 / tan, 9);
+    // Half the stage under the chat: narrower than tall, so the width decides, and it backs off.
+    const narrow = followDistance(4, 0.8, fov);
+    expect(narrow).toBeCloseTo(4 / (tan * 0.8), 9);
+    expect(narrow).toBeGreaterThan(followDistance(4, 1.6, fov));
+    // Either way, 4 m either side of you fills the narrower way of what can be seen.
+    expect(narrow * tan * 0.8).toBeCloseTo(4, 9);
+  });
+
+  it("eases toward a new distance over a fraction of a second, without overshooting", () => {
+    let d = 10;
+    const first = ease(d, 20, 1 / 60, 0.18);
+    expect(first).toBeGreaterThan(10);
+    expect(first).toBeLessThan(11);
+    for (let i = 0; i < 60; i++) {
+      d = ease(d, 20, 1 / 60, 0.18);
+      expect(d).toBeLessThanOrEqual(20);
+    }
+    // Within a few centimetres after a second, and settled exactly soon after, rather than creeping forever.
+    expect(d).toBeGreaterThan(19.9);
+    for (let i = 0; i < 60; i++) d = ease(d, 20, 1 / 60, 0.18);
+    expect(d).toBe(20);
   });
 });

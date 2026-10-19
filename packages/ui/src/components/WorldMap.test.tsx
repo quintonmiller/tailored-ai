@@ -1,6 +1,7 @@
 /**
- * The map: every place, grouped, with who is in each and a mark for anyone
- * waiting on you; filtered as you type; one click to go.
+ * The map: who is busy, every agent, the rooms and places, other areas, and
+ * the lobby and halls last; a mark for anyone waiting on you; filtered as you
+ * type, Enter to go to the first; one click to go.
  */
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -50,63 +51,89 @@ function render(over: Partial<Parameters<typeof WorldMap>[0]> = {}) {
 const tiles = () => [...container.querySelectorAll(".world-map-place")] as HTMLButtonElement[];
 
 describe("WorldMap", () => {
-  it("groups rooms, shared places and homes, says who is in each, and where you are", () => {
+  const sections = () => [...container.querySelectorAll("h3")].map((h) => h.textContent);
+  const people = () => [...container.querySelectorAll(".world-map-who")] as HTMLButtonElement[];
+  const type = (text: string) =>
+    act(() => {
+      const input = container.querySelector("input") as HTMLInputElement;
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      set?.call(input, text);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+  it("leads with who is busy and every agent, then the rooms and shared places, and says where you are", () => {
     render();
-    expect([...container.querySelectorAll("h3")].map((h) => h.textContent)).toEqual([
-      "Busy now",
-      "Rooms",
-      "Shared places",
-      "Homes",
-    ]);
+    expect(sections()).toEqual(["Busy now", "Agents", "Meeting rooms", "Shared places"]);
     expect(tiles().map((t) => t.querySelector(".world-map-name")?.textContent)).toEqual([
       "#trip",
       "the loungeyou are here",
-      "planner's room",
     ]);
     expect(tiles()[0].textContent).toMatch(/Plan the trip/);
-    expect(tiles()[2].textContent).toMatch(/nobody here/);
     expect(tiles()[1].getAttribute("aria-current")).toBe("location");
-    // Someone waiting on you is marked.
+    // Someone waiting on you is marked where they are.
     expect(container.querySelector(".world-map-agent.doing-waiting")?.textContent).toMatch(/!writer/);
+    // An agent is listed by name, with what it is doing, whether or not anyone is at home.
+    expect(people().map((p) => p.textContent)).toEqual(["planneridle"]);
   });
 
-  it("puts the lobby first, as where to start", () => {
-    render({ places: [{ id: "lobby", name: "the lobby", kind: "lobby", agents: [] }, ...places] });
-    // After who is busy, which is always first.
-    expect([...container.querySelectorAll("h3")].map((h) => h.textContent).slice(0, 2)).toEqual([
-      "Busy now",
-      "Start here",
-    ]);
-    expect(tiles()[0].textContent).toMatch(/Make a new agent, task or room/);
-    expect(tiles()[0].textContent).not.toMatch(/nobody here/);
+  it("takes you into an agent's home, or to where its body is when that is somewhere else", () => {
+    const { onGo } = render({
+      activities: { planner: { agent: "planner", doing: "working", what: "searching the web" } },
+    });
+    const planner = people()[0];
+    expect(planner.classList.contains("doing-working")).toBe(true);
+    expect(planner.textContent).toBe("plannerworking");
+    act(() => planner.click());
+    expect(onGo).toHaveBeenLastCalledWith("home:planner");
+    // Its body is in the lounge, with the writer.
+    const away = container.querySelector(".world-map-away") as HTMLButtonElement;
+    expect(away.textContent).toBe("in the lounge");
+    act(() => away.click());
+    expect(onGo).toHaveBeenLastCalledWith("shared:lounge");
   });
 
-  it("groups places by area when some are elsewhere, the one you are in first, and lists the halls", () => {
+  it("keeps the lobby in view, and folds the halls away until asked for", () => {
     render({
       places: [
+        { id: "lobby", name: "the lobby", kind: "lobby", agents: [] },
+        { id: "hall:main:homes-1", name: "Residences", kind: "hall", agents: [], via: "lobby" },
+        ...places,
+      ],
+    });
+    expect(sections()).toEqual(["Busy now", "Agents", "Meeting rooms", "Shared places", "Lobby"]);
+    const lobby = tiles().find((t) => t.classList.contains("world-map-lobby"));
+    expect(lobby?.textContent).toMatch(/Make a new agent, task or room/);
+    expect(lobby?.textContent).not.toMatch(/nobody here/);
+    const fold = container.querySelector(".world-map-fold") as HTMLButtonElement;
+    expect(fold.getAttribute("aria-expanded")).toBe("false");
+    expect(fold.textContent).toMatch(/Halls\s*1/);
+    expect(container.querySelector(".world-map-hall")).toBeNull();
+    act(() => fold.click());
+    // A hall has nobody living in it to list.
+    expect(container.querySelector(".world-map-hall")?.textContent).toBe("Residences");
+  });
+
+  it("puts other areas in a section of their own, with what is in each, and goes in by the way in", () => {
+    const { onGo } = render({
+      places: [
         { id: "lobby", name: "the lobby", kind: "lobby", agents: [], area: "main" },
-        { id: "hall:main:homes-1", name: "Residences", kind: "hall", agents: [], area: "main" },
         { ...places[0], area: "main" },
         { id: "shared:porch", name: "the summer porch", kind: "shared", agents: [], area: "summer-house" },
         { id: "shared:kitchen", name: "the summer kitchen", kind: "shared", agents: ["writer"], area: "summer-house" },
       ],
       areas: [
-        { id: "main", name: "the main building", places: ["lobby", "hall:main:homes-1", "home:planner"] },
+        { id: "main", name: "the main building", places: ["lobby", "home:planner"] },
         { id: "summer-house", name: "the summer house", places: ["shared:kitchen", "shared:porch"] },
       ],
       here: "shared:porch",
     });
-    expect([...container.querySelectorAll("h2")].map((h) => h.textContent)).toEqual([
-      "The summer houseyou are here",
-      "The main building",
-    ]);
-    expect(container.querySelector(".world-map-area-here")?.textContent).toMatch(
-      /You're in the summer house\. Doors lead round it/,
-    );
-    const main = container.querySelectorAll(".world-map-area")[1];
-    expect([...main.querySelectorAll("h3")].map((h) => h.textContent)).toEqual(["Start here", "Homes", "Halls"]);
-    // A hall has nobody living in it to list.
-    expect(main.querySelector(".world-map-hall")?.textContent).not.toMatch(/nobody here/);
+    expect(sections()).toEqual(["Busy now", "Agents", "Other areas", "Lobby"]);
+    const area = container.querySelector(".world-map-area-go") as HTMLButtonElement;
+    expect(area.textContent).toBe("Summer houseyou are herethe summer porch · the summer kitchen");
+    act(() => area.click());
+    expect(onGo).toHaveBeenCalledWith("shared:kitchen");
+    // Doors lead round it, so there's nothing to explain.
+    expect(container.querySelector(".world-map-area-here")).toBeNull();
   });
 
   it("says a place alone in its area has no doors, rather than doors that lead nowhere", () => {
@@ -123,12 +150,11 @@ describe("WorldMap", () => {
     });
     const banner = container.querySelector(".world-map-area-here")?.textContent;
     expect(banner).toMatch(/You're in the den\. Nothing else is there yet, so it has no doors/);
-    expect(banner).not.toMatch(/Doors lead/);
   });
 
-  it("shows no areas while everything is in the main building", () => {
+  it("has no other areas while everything is in the main building", () => {
     render({ areas: [{ id: "main", name: "the main building", places: [] }] });
-    expect(container.querySelector("h2")).toBeNull();
+    expect(sections()).not.toContain("Other areas");
     expect(container.querySelector(".world-map-area-here")).toBeNull();
   });
 
@@ -138,17 +164,31 @@ describe("WorldMap", () => {
     expect(onGo).toHaveBeenCalledWith("room:local:trip");
   });
 
-  it("finds a place by its name or by who is in it", () => {
-    render();
+  it("finds agents, rooms and places as you type, opens the halls for a match, and Enter goes to the first", () => {
+    const { onGo } = render({
+      places: [{ id: "hall:main:rooms-1", name: "Meeting rooms", kind: "hall", agents: [] }, ...places],
+    });
     const input = container.querySelector("input") as HTMLInputElement;
-    const type = (text: string) =>
-      act(() => {
-        const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-        set?.call(input, text);
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-      });
-    type("writer");
-    expect(tiles().map((t) => t.querySelector(".world-map-name")?.textContent)).toEqual(["the loungeyou are here"]);
+    const enter = () => act(() => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    // Nothing typed: Enter goes nowhere.
+    enter();
+    expect(onGo).not.toHaveBeenCalled();
+    type("plan");
+    expect(people().map((p) => p.textContent)).toEqual(["planneridle"]);
+    // A room found by what it is for, after the agent; the first is marked, for Enter.
+    expect(tiles().map((t) => t.querySelector(".world-map-name")?.textContent)).toEqual(["#trip"]);
+    expect(people()[0].classList.contains("first")).toBe(true);
+    // Busy now steps aside while you search.
+    expect(sections()).not.toContain("Busy now");
+    enter();
+    expect(onGo).toHaveBeenLastCalledWith("home:planner");
+    type("#tri");
+    expect(people()).toHaveLength(0);
+    enter();
+    expect(onGo).toHaveBeenLastCalledWith("room:local:trip");
+    type("meeting");
+    expect(container.querySelector(".world-map-fold")?.getAttribute("aria-expanded")).toBe("true");
+    expect(container.querySelector(".world-map-hall")?.textContent).toBe("Meeting rooms");
     type("zzz");
     expect(tiles()).toHaveLength(0);
     expect(container.textContent).toMatch(/Nothing matches/);
@@ -181,9 +221,9 @@ describe("WorldMap", () => {
   it("marks where something is happening, and puts it first", () => {
     render({
       places: [
-        { id: "home:writer", name: "writer's room", kind: "home", owner: "writer", agents: ["writer"] },
-        { id: "home:planner", name: "planner's room", kind: "home", owner: "planner", agents: ["planner"] },
-        { id: "home:reader", name: "reader's room", kind: "home", owner: "reader", agents: ["reader", "planner2"] },
+        { id: "room:local:quiet", name: "quiet", kind: "room", agents: ["writer"] },
+        { id: "room:local:think", name: "think", kind: "room", agents: ["planner"] },
+        { id: "room:local:stuck", name: "stuck", kind: "room", agents: ["reader", "planner2"] },
       ],
       activities: {
         planner: { agent: "planner", doing: "thinking", what: "thinking" },
@@ -191,18 +231,14 @@ describe("WorldMap", () => {
         planner2: { agent: "planner2", doing: "working", what: "coding" },
       },
     });
-    const homes = tiles().filter((t) => t.classList.contains("world-map-home"));
+    const rooms = tiles().filter((t) => t.classList.contains("world-map-room"));
     // Stuck before thinking, both before the quiet one.
-    expect(homes.map((t) => t.querySelector(".world-map-name")?.textContent)).toEqual([
-      "reader's room",
-      "planner's room",
-      "writer's room",
-    ]);
-    expect(homes[0].classList.contains("busy")).toBe(true);
+    expect(rooms.map((t) => t.querySelector(".world-map-name")?.textContent)).toEqual(["#stuck", "#think", "#quiet"]);
+    expect(rooms[0].classList.contains("busy")).toBe(true);
     // One is stuck and one working: the mark says so, rather than two stuck.
-    expect(homes[0].querySelector(".world-map-mark")?.textContent).toBe("stuck · 1 more busy");
-    expect(homes[1].querySelector(".world-map-mark")?.textContent).toBe("thinking");
-    expect(homes[2].querySelector(".world-map-mark")).toBeNull();
+    expect(rooms[0].querySelector(".world-map-mark")?.textContent).toBe("stuck · 1 more busy");
+    expect(rooms[1].querySelector(".world-map-mark")?.textContent).toBe("thinking");
+    expect(rooms[2].querySelector(".world-map-mark")).toBeNull();
   });
 
   it("says when nobody is busy, and that a quiet room has members", () => {

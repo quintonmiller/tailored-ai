@@ -12,6 +12,7 @@ import {
   farFor,
   GESTURES,
   lightingFor,
+  lightsFor,
   lookTarget,
   MIN_ASPECT,
   nearestWithin,
@@ -90,6 +91,35 @@ describe("lightingFor", () => {
 
   it("treats the small hours as night", () => {
     expect(lightingFor(3)).toEqual(lightingFor(23));
+  });
+
+  it("keeps a public place bright after dark, where a home stays cosy, and lights both alike by day", () => {
+    const brightness = (l: ReturnType<typeof lightingFor>) => l.sun.intensity + l.sky.intensity;
+    const hall = lightingFor(23, "public");
+    const home = lightingFor(23, "home");
+    expect(brightness(hall)).toBeGreaterThan(brightness(home) * 2.5);
+    // Nearly as bright as day, in warm white rather than moonlight blue.
+    expect(brightness(hall)).toBeGreaterThan(brightness(lightingFor(11)) * 0.85);
+    expect(hall.sky.color & 0xff).toBeGreaterThan(0xd0);
+    expect(hall.sky.color >> 16).toBeGreaterThan(0xf0);
+    // The windows still say it is night.
+    expect(hall.window).toEqual(home.window);
+    expect(lightingFor(18, "public").window).toEqual(lightingFor(18).window);
+    expect(lightingFor(18, "public").sun.intensity).toBeGreaterThan(lightingFor(18).sun.intensity);
+    expect(lightingFor(11, "public")).toEqual(lightingFor(11));
+    expect(lightingFor(23)).toEqual(home);
+  });
+});
+
+describe("lightsFor", () => {
+  it("lights the lobby, the halls and the meeting rooms as public places, and every other place as a home", () => {
+    expect(lightsFor("lobby")).toBe("public");
+    expect(lightsFor("hall:main:homes-2")).toBe("public");
+    expect(lightsFor("hall:summer-house:1")).toBe("public");
+    expect(lightsFor("room:local:trip")).toBe("public");
+    expect(lightsFor("home:planner")).toBe("home");
+    expect(lightsFor("shared:lounge")).toBe("home");
+    expect(lightsFor(undefined)).toBe("home");
   });
 });
 

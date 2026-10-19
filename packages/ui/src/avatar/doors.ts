@@ -166,3 +166,72 @@ export function doorLight(doing: AgentActivity["doing"] | undefined): { color: n
       return { color: 0xe6eaf0, glow: 0.45 };
   }
 }
+
+/** Where a door goes, in words for a pointer over it: "to Residences E–N", "to analyst's home", "to #budget". */
+export function doorWords(door: Pick<RoomDoor, "kind" | "label" | "occupant">): string {
+  if (door.kind === "lobby") return "to the lobby";
+  if (door.kind === "home") {
+    const who = door.occupant ?? door.label;
+    return `to ${who === "default" ? "the default agent" : who}'s home`;
+  }
+  return `to ${door.label}`;
+}
+
+/** How large words on a plate may be, as a share of its height: one line, two lines, and the least either may be. */
+const PLATE = { one: 0.58, two: 0.4, least: 0.22 };
+/** How much of a plate's width words may take: a margin either side. */
+const PLATE_WIDTH = 0.9;
+/** A name on one line smaller than this share of the plate's height reads better on two. */
+const ONE_LINE_AT_LEAST = 0.42;
+
+/**
+ * Where a name breaks across two lines: after a hyphen, an underscore, a dot
+ * or a space, or between a word and a capital, wherever leaves the two lines
+ * most even. In a name with none of those, in the middle, with a hyphen.
+ */
+export function plateBreak(label: string): [string, string] {
+  const at: number[] = [];
+  for (let i = 1; i < label.length; i++) {
+    const before = label[i - 1];
+    const here = label[i];
+    if (
+      "-_.".includes(before) ||
+      (here === " " && i < label.length - 1) ||
+      (/[a-z]/.test(before) && /[A-Z]/.test(here))
+    )
+      at.push(i);
+  }
+  if (!at.length) {
+    const mid = Math.ceil(label.length / 2);
+    return [`${label.slice(0, mid)}-`, label.slice(mid)];
+  }
+  // The break whose longer line is shortest; between two as good, the later, so the top line is the fuller.
+  const longer = (i: number) => Math.max(i, label.length - i);
+  const best = at.reduce((a, b) => (longer(b) <= longer(a) ? b : a));
+  return [label.slice(0, best).trimEnd(), label.slice(best).trimStart()];
+}
+
+/**
+ * How a name goes on a plate `width` by `height` pixels: on one line as large
+ * as fits; a name too long for that at a size worth reading goes on two lines,
+ * broken where it breaks best (`plateBreak`), when they can be larger; and the
+ * words are never smaller than a floor, past which they are squeezed rather
+ * than cut off. `measure` says how wide some words are at a size of 1.
+ */
+export function fitPlate(
+  label: string,
+  measure: (text: string) => number,
+  width: number,
+  height: number,
+): { lines: string[]; size: number } {
+  const room = width * PLATE_WIDTH;
+  const largest = (text: string, most: number) => Math.min(height * most, room / Math.max(1e-6, measure(text)));
+  const one = largest(label, PLATE.one);
+  if (one >= height * ONE_LINE_AT_LEAST || label.length < 4)
+    return { lines: [label], size: Math.max(one, height * PLATE.least) };
+  const lines = plateBreak(label);
+  const two = Math.min(...lines.map((l) => largest(l, PLATE.two)));
+  return two > one
+    ? { lines, size: Math.max(two, height * PLATE.least) }
+    : { lines: [label], size: Math.max(one, height * PLATE.least) };
+}

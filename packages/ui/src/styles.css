@@ -8712,6 +8712,47 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .world-map-busy-what { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .world-map-busy-where { font-size: 11px; color: var(--text-dim); white-space: nowrap; }
 .world-map-quiet { margin: 0; font-size: 12px; color: var(--text-dim); }
+/* Every agent, two to a row, coloured by what it is doing; a click goes home, "in …" to where its body is. */
+.world-map-people ul { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 4px 6px; }
+.world-map-person { display: flex; flex-direction: column; min-width: 0; background: var(--bg); border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); }
+.world-map-person:has(.world-map-who:hover, .world-map-who:focus-visible) { border-color: var(--accent); }
+.world-map-who { display: grid; grid-template-columns: 10px 1fr; align-items: center; column-gap: 6px; width: 100%; padding: 5px 8px 4px; text-align: left; font-family: var(--font); background: transparent; color: var(--text); border: 0; border-radius: inherit; cursor: pointer; }
+.world-map-who:focus-visible { outline: none; }
+.world-map-who[aria-current="location"] { box-shadow: inset 0 0 0 1px var(--accent); }
+.world-map-who-name { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.world-map-who-doing { grid-column: 2; font-size: 11px; color: var(--text-dim); }
+.world-map-state { width: 10px; height: 10px; border-radius: 50%; background: #6b7286; }
+.world-map-who.doing-waiting .world-map-state { background: #f5c542; }
+.world-map-who.doing-stuck .world-map-state { background: #f08a4b; }
+.world-map-who.doing-working .world-map-state { background: #6fcf8f; }
+.world-map-who.doing-thinking .world-map-state,
+.world-map-who.doing-talking .world-map-state { background: #6fb3ff; }
+.world-map-who.doing-asleep .world-map-state { background: #9d8cff; }
+.world-map-who.doing-waiting .world-map-who-doing { color: #f5c542; }
+.world-map-who.doing-stuck .world-map-who-doing { color: #f08a4b; }
+.world-map-away { align-self: flex-start; margin: 0 0 5px 24px; padding: 0; font-family: var(--font); font-size: 11px; color: var(--accent); background: transparent; border: 0; cursor: pointer; text-align: left; overflow-wrap: anywhere; }
+.world-map-away:hover, .world-map-away:focus-visible { text-decoration: underline; outline: none; }
+/* What Enter goes to while searching. */
+.world-map-place.first, .world-map-who.first { box-shadow: inset 0 0 0 1px var(--accent); }
+.world-map-place.first .world-map-name::after, .world-map-who.first .world-map-who-name::after { content: " ↵"; font-weight: 400; color: var(--accent); }
+/* The lobby and the halls, folded away: a way through rather than somewhere to be. */
+.world-map-halls { display: flex; flex-direction: column; gap: 6px; }
+.world-map-fold { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; padding: 2px 0; font-family: var(--font); font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); background: transparent; border: 0; cursor: pointer; }
+.world-map-fold:hover, .world-map-fold:focus-visible { color: var(--text); outline: none; }
+.world-map-count { font-weight: 500; letter-spacing: 0; padding: 0 6px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); }
+
+/* Where you are, from the area down, under the stage's tools: each step goes there. */
+.talk-tools-break { flex-basis: 100%; height: 0; }
+.world-trail { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 3px 9px; font-family: var(--font); font-size: 11px; color: var(--text-dim); background: color-mix(in srgb, var(--bg-surface) 82%, transparent); border: 1px solid var(--border); border-radius: var(--radius); backdrop-filter: blur(6px); }
+.world-trail-step { display: inline-flex; align-items: center; gap: 2px; min-width: 0; }
+.world-trail-sep { padding: 0 3px; opacity: 0.7; }
+.world-trail button { padding: 0; font: inherit; color: var(--text-dim); background: transparent; border: 0; cursor: pointer; }
+.world-trail button:hover, .world-trail button:focus-visible { color: var(--accent); text-decoration: underline; outline: none; }
+.world-trail [aria-current="location"] { color: var(--text); font-weight: 600; }
+
+/* Where the door under the pointer goes, beside the pointer. */
+.door-tip { position: absolute; z-index: 5; transform: translate(14px, 16px); padding: 4px 9px; font-family: var(--font); font-size: 12px; font-weight: 600; color: #1d1a12; background: #ffd98a; border-radius: var(--radius); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); pointer-events: none; white-space: nowrap; }
+.door-tip.left { transform: translate(calc(-100% - 10px), 16px); }
 
 /* Making a task from the room. */
 .new-task { position: absolute; top: 44px; left: 8px; z-index: 6; width: min(340px, calc(100% - 16px)); display: flex; flex-direction: column; gap: 8px; padding: 10px 12px 12px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4); font-family: var(--font); }
@@ -8880,9 +8921,11 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .chat-input-bar[hidden] { display: none; }
 /* In the narrow panel the message box gives way, so Send stays on screen beside Talk. */
 .chat-with-stage > .chat-input-bar input { min-width: 0; }
-/* The keys hint stays out from under the panel, wrapping when it has to. */
+/* The keys hint and the stage's buttons stay out from under the panel, wrapping when they have to. */
 @media (min-width: 720px) {
   .chat-with-stage:not(.chat-panel-hidden) .talk-stage.fill .talk-keys { max-width: calc(100% - 472px); white-space: normal; }
+  .chat-with-stage:not(.chat-panel-hidden) .talk-stage.fill .talk-tools,
+  .chat-side-open .talk-stage.fill .talk-tools { max-width: calc(100% - 472px); }
 }
 .chat-room-note { margin: 0; padding: 12px 16px; font-family: var(--font); font-size: 12px; color: var(--text-dim); background: color-mix(in srgb, var(--bg-surface) 88%, transparent); backdrop-filter: blur(10px); border-top: 1px solid var(--border); }
 /* With the panel hidden, the scene has the page; the bar to type or talk stays. */

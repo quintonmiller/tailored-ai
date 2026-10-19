@@ -10,6 +10,7 @@ import type { Companion } from "../avatar/stage";
 import { nameOf, newChatKey } from "../lib/conversations";
 import { subscribeStateChanges } from "../lib/state-events";
 import { countTasks, LIVE_STATUSES } from "../lib/tasks";
+import { trailTo } from "../lib/wayfinding";
 import { NEW_ROOM_ASK, NewRoom } from "./NewRoom";
 import { NewTask } from "./NewTask";
 import { useVoice } from "./voice";
@@ -566,8 +567,9 @@ export function useChatStage({
   const showing = loading ? last.current : { visiting, scene: visiting ? (visited as SceneInfo) : own };
   last.current = showing;
   const { room, company, id: placeId } = showing.scene;
-  // The map also says where an agent's body is, for its card.
-  const map = useWorldMap((mapOpen || panel?.kind === "agent") && showStage);
+  // The map says where you are, for the trail over the stage, and where an agent's body is, for its card.
+  const map = useWorldMap(showStage);
+  const trail = useMemo(() => trailTo(placeId, map.places, map.areas), [placeId, map.places, map.areas]);
   const [voicesOn, setVoicesOn] = useState(() => saved(VOICES_KEY, false));
   const hearLine = useVoicesNearby(voicesOn && !!visiting);
   const board = useBoardTasks(showStage);
@@ -742,8 +744,10 @@ export function useChatStage({
     if (!showStage) return;
     const toggle = (e: KeyboardEvent) => {
       const typing = (e.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable='true']");
-      if (e.code === "KeyM" && !typing && !e.metaKey && !e.ctrlKey && !e.altKey)
-        setPanel((open) => (open?.kind === "map" ? null : { kind: "map" }));
+      if (e.code !== "KeyM" || typing || e.metaKey || e.ctrlKey || e.altKey) return;
+      // The map's search takes the focus as it opens: the M that opened it isn't typed into it.
+      e.preventDefault();
+      setPanel((open) => (open?.kind === "map" ? null : { kind: "map" }));
     };
     window.addEventListener("keydown", toggle);
     return () => window.removeEventListener("keydown", toggle);
@@ -850,6 +854,11 @@ export function useChatStage({
   );
   // Homes, shared places and meeting rooms are agents' to change; the lobby and the halls are the building's.
   const changeable = !!placeId && /^(home|shared|room):/.test(placeId);
+  // Going somewhere: to the agent you came from is back with it.
+  const go = (id: string) => {
+    setVisiting(id === own.id ? null : id);
+    setPanel(null);
+  };
   const tools = (
     <>
       <button
@@ -909,13 +918,29 @@ export function useChatStage({
           Talk to {near}
         </button>
       )}
+      {trail.length > 0 && <span className="talk-tools-break" aria-hidden="true" />}
+      {trail.length > 0 && (
+        <nav className="world-trail" aria-label="Where you are">
+          {trail.map((step, i) => (
+            <span key={`${i}:${step.id}`} className="world-trail-step">
+              {i > 0 && (
+                <span className="world-trail-sep" aria-hidden="true">
+                  ›
+                </span>
+              )}
+              {step.id === placeId ? (
+                <span aria-current={i === trail.length - 1 ? "location" : undefined}>{step.label}</span>
+              ) : (
+                <button type="button" title={`Go to ${step.label}`} onClick={() => go(step.id)}>
+                  {step.label}
+                </button>
+              )}
+            </span>
+          ))}
+        </nav>
+      )}
     </>
   );
-  // Going somewhere: to the agent you came from is back with it.
-  const go = (id: string) => {
-    setVisiting(id === own.id ? null : id);
-    setPanel(null);
-  };
   let overlay: ReactNode;
   if (panel?.kind === "map")
     overlay = (
