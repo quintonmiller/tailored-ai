@@ -308,8 +308,8 @@ What can be added: seats (couch, armchair, beanbag, bed, chair, stool),
 tables (desk, table, round table, coffee table, side table, sideboard), a
 bookshelf, TV, fireplace, easel, rugs (square or round), lamps, plants (a
 plant, a tall plant, a cactus, a palm), things for the walls (window,
-picture, painting, poster, clock, shelf, pegboard, task board, and a sign
-that shows its name), a bench, small things for a surface (laptop, books,
+picture, painting, poster, clock, shelf, pegboard, task board, screen,
+calendar, and a sign that shows its name), a bench, small things for a surface (laptop, books,
 vase of flowers, small plant, mug, candle, table lamp, aquarium), and blocks,
 balls and cylinders of any size and colour.
 Seats, desks, the bookshelf, the TV, the fireplace, the easel and windows each
@@ -846,7 +846,8 @@ made and wait for your go-ahead, because rooms go on your default room
 transport, and on Discord that is a new channel in your server. **Write the
 message** puts it in the chat. **New task** opens a small form: a title,
 details, and who should do it, saying as the card does whether the agent you
-pick is woken to start on it. The lobby's board shows every open task.
+pick is woken to start on it. The lobby's board shows every open task, and
+its big screen and calendar are below.
 
 The card asks `GET /api/task-watcher` whether the watcher is on and which
 changes it reacts to (`created`, `updated`), as the server runs it now. Every
@@ -858,6 +859,56 @@ some agent has a body. An agent with its own `tools:` list needs `place`
 in it. The page asks for the room at `GET /api/ext/builtin:places/:agent`
 (`default` for the default agent). Without the plugin, the page shows a
 small fixed room, and the agent can't change it.
+
+#### Screens and calendars
+
+The lobby has a big **screen** over its kiosks. It shows your dashboard, the
+one on the **Board** page, a widget at a time: the first five a screen can
+draw (the clock, system status, task lists, recent agent activity, a number,
+a list, a note, links), turning to the next every 15 seconds. Embeds, and the
+widgets made to be clicked and typed into, stay on the Board. Dots in the
+corner say which page is up. **Click the screen** to open the whole dashboard
+in a panel, drawn by the Board's own widgets and scrolled to the one that was
+on screen. A task in it opens its card in the world, not the Tasks page.
+**Open the Board page** at the bottom is there for changing the layout.
+
+An agent can hang a screen in its own room ("add a screen on the back wall").
+There it shows what the agent is up to: what it is doing now (with what it
+did last and when it next wakes, while it rests), the open tasks on its list,
+and what is coming up for it. A click opens what the page on screen is about:
+the agent's card, its tasks, or its calendar. A screen in a shared place or a
+meeting room shows the dashboard.
+
+Every home has a **calendar** on the wall, by the desk where there is room.
+It shows its owner's day: today's date, the wakes still to come this week,
+day by day, and what it got done today. A wake is one the agent booked with
+the `schedule` tool, a cron job that runs as it, or its next turn when it
+runs on its own; the dot before each says which (blue booked, purple cron,
+grey its own turn). What got done is the tasks it finished today and the
+last thing it did. The lobby's calendar, across from the task board, is
+everyone's: the next wakes in time order, each with whose it is. Anywhere
+else, a calendar shows the wakes of whoever is there. While agents are
+paused, it says nothing wakes until you resume them.
+
+**Click a calendar** for the whole list. Each wake says when, what kind it
+is, whose it is, what it will do (a booked wake's note in full, a cron job's
+prompt), how often it comes round, and where a booked wake wakes the agent:
+in a room, or in its own conversation. **Whose** switches between one agent
+and everyone. Click an agent's name to go to it, where its body is, and a
+task it finished to open its card.
+
+A home nobody has changed gets its calendar the next time anything asks for
+the room, the way homes are redrawn (see
+[A room the agent can change](#a-room-the-agent-can-change)). A home someone
+has changed keeps what it has, and its agent can add a calendar with the
+`place` tool. A wall too full for a calendar of the usual size gets a smaller
+one.
+
+Screens and calendars ask the server again once a minute, and only while one
+hangs where you are or its panel is open. They are drawn again only when
+what they show changes, or when a screen turns to its next page. A calendar
+reads `GET /api/schedules`, `GET /api/cron` and `GET /api/exploratory/agents`;
+a screen reads `GET /api/dashboard` and each widget's own endpoint.
 
 #### What needs you
 
@@ -1144,6 +1195,8 @@ cues, and its text passes through untouched.
 | `GET /api/ext/builtin:places/map` | every place, and the areas they are in: `{places: [{id, name, kind, agents, area, owner?, purpose?, members?, via?, with?}], areas: [{id, name, places}]}`. `kind` is `lobby`, `hall`, `home` (one per agent with a body, `owner` its agent), `shared`, or `room` (a room agents talk in, `room:<backend>:<id>`). `purpose` is the one its agents gave the place, or a room's own. `agents` is who is in it: a body is in one place at a time, its home, a shared place, or a room's meeting room while it talks there or after going in to change it. A room also lists `members`, every member with a body. `with` maps each agent there that came to see another there, having messaged it directly, to that agent. `area` is the area's id, `main` for the main building; `areas` lists the main building first, each area's places its way in first. `via` is the place its way in is through: the hall its door opens off, the hall or foyer before a hall, or the lobby; in an area of two places, which open on each other, the other one. There is none for the lobby, another area's first hall, or a place alone in its area. The page's "where you are" trail is read from it |
 | `GET /api/ext/builtin:places/transcript/:id` | a room agents talk in, to read: `{id, name, purpose?, members, lines}`, its latest 30 messages oldest first, each `{id, who, agent?, to, text, at, files?}`. `who` is the speaker's name in the room and `agent` the agent behind it, when there is one. Read only: no read cursor moves. `404` for a room that isn't there, `503` with the reason when its transport can't be read |
 | `GET /api/ext/builtin:places/scene/:id` | any place on the map, to look at: `{type, id, place, company, doors, area}`, with everyone in it as `company` (each `with` the agent there it came to see, as for `:agent`). A room agents talk in is a meeting room with a seat for each member, its `company` the members there now, drawn fresh until a member changes it and from its record after that; a hall is a corridor with a door for each place off it, always drawn fresh. `place` carries `theme`, `purpose` and `changes` (`[{who, what, at}]`, newest first) when it has them. `doors` is `[{wall, along, to, label, kind, occupant?}]`: the side it is on (`back`, `left`, `front` or `right`), its middle along that side in metres (x on the back and front, z on the left and right), the place it opens on, its plate, what kind of place that is, and for a home the agent whose activity its light shows. `404` for a place that isn't there |
+| `GET /api/schedules?agent=&limit=` | the wakes agents booked with the `schedule` tool that are still to come, soonest first: `{schedules: [{id, agent, note, kind, every, next_run_at, starts_at, ends_at, target_kind, target, run_count, last_run_at, created_at}]}`. `kind` is `once` or `repeat`, and `every` the words a repeat was booked with; times are ISO instants; `target_kind` is `room` (its `target` a room ref) or `session`. `agent` gives one agent's; `limit` is 100 unless asked, at most 500. Read only: booking and cancelling stay the agent's |
+| `GET /api/cron` | the cron jobs: `{enabled, jobs: [{name, schedule, task, agent, enabled, last_run, next_run, …}]}`. `next_run` is when the job next runs, in the runtime's timezone, as an ISO instant; null while cron is off, for a job switched off, or for one that isn't in the config |
 | `GET /api/live/avatar?agent=` | the avatar's model file (`model/gltf-binary`), revalidated by `ETag`; `404` with the reason when none is set or the file is missing |
 | `GET /api/live/animations/:index?agent=` | one of the configured animation libraries, by its position in `live.avatar.animations`. Nothing else under the folder is reachable |
 | `POST /api/live/say` | a line in an agent's voice: `{agent?, text}` → the audio, from the live text-to-speech stage with the agent's `voice.voice` (else `live.tts.voice`). Markdown is stripped first. `400` for an empty line or one over 400 characters, `409` when live sessions are off, `502` when the voice can't be made |

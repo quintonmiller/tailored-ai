@@ -48,6 +48,8 @@ import {
   doorProblems,
   findPlacement,
   firstHome,
+  footprintOf,
+  heightOf,
   PLACE_SCHEMA,
   type Place,
   type PlaceItem,
@@ -1246,6 +1248,23 @@ describe("the map, and any place on it", () => {
       ["board", "Open tasks", "tasks"],
     ]);
     expect(placeProblems(lobby())).toEqual([]);
+  });
+
+  it("puts a big screen in the lobby above the kiosks, with the board and a calendar either side", () => {
+    const { props, depth } = lobby();
+    const wall = (kind: string) => props.find((p) => p.kind === kind) as PlaceItem;
+    const screen = wall("screen");
+    const kiosks = props.filter((p) => p.kind === "kiosk");
+    // On the back wall, in the middle, hanging clear above the kiosks so it is seen past them.
+    expect(screen).toMatchObject({ at: [0, -depth / 2 + 0.01], scale: 1.6 });
+    expect(screen.elevation).toBeGreaterThan(Math.max(...kiosks.map((k) => heightOf(k))));
+    expect(screen.elevation + heightOf(screen)).toBeLessThan(lobby().height);
+    // The calendar across from the board, on the same wall, and no smaller: it is everyone's.
+    const [calendar, board] = [wall("calendar"), wall("board")];
+    expect(calendar.at[0]).toBeLessThan(-footprintOf(screen)[0] / 2);
+    expect(board.at[0]).toBeGreaterThan(footprintOf(screen)[0] / 2);
+    expect(calendar.at[1]).toBe(board.at[1]);
+    expect(footprintOf(calendar)[0]).toBeGreaterThanOrEqual(footprintOf(board)[0]);
   });
 
   it("dresses a room for its purpose, and gives every room a task board", async () => {

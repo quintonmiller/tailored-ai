@@ -35,7 +35,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `agents` | object | {} | 38 | 115 |
+| `agents` | object | {} | 38 | 116 |
 
 ### `autopilot`
 
@@ -48,7 +48,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `briefing.enabled` | boolean | `false` | 42 | 1 |
+| `briefing.enabled` | boolean | `false` | 44 | 1 |
 | `briefing.prompt` | string | `You are the user's personal assistant. Write a brief, fri…` | 26 | 1 |
 | `briefing.ttlMinutes` | number | `30` | 1 | 1 |
 
@@ -76,7 +76,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `cron.enabled` | boolean | `false` | 42 | 4 |
+| `cron.enabled` | boolean | `false` | 44 | 4 |
 | `cron.jobs` | array | `[]` | 6 | 6 |
 
 ### `custom_tools`
@@ -95,7 +95,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `live.enabled` | boolean | `false` | 42 | 2 |
+| `live.enabled` | boolean | `false` | 44 | 2 |
 | `live.limits.idleMinutes` | number | `10` | 4 | 2 |
 | `live.limits.maxMinutes` | number | `30` | 2 | 2 |
 | `live.limits.maxTurns` | number | `200` | 3 | 2 |
@@ -131,7 +131,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `schedules.enabled` | boolean | `true` | 42 | 1 |
+| `schedules.enabled` | boolean | `true` | 44 | 1 |
 | `schedules.maxDeferrals` | number | `3` | 1 | **0** |
 | `schedules.maxHorizonDays` | number | `365` | 2 | 1 |
 | `schedules.maxPerAgent` | number | `20` | 1 | 1 |
@@ -155,8 +155,8 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `suggestions.count` | number | `4` | 13 | 1 |
-| `suggestions.enabled` | boolean | `false` | 42 | 1 |
+| `suggestions.count` | number | `4` | 15 | 1 |
+| `suggestions.enabled` | boolean | `false` | 44 | 1 |
 | `suggestions.prompt` | string | `You are the user's personal assistant. From the state bel…` | 26 | 1 |
 | `suggestions.ttlMinutes` | number | `15` | 1 | 1 |
 
@@ -171,7 +171,7 @@ Fields: **79** · with no read site found: **0**
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
 | `taskWatcher.debounceMs` | number | `5000` | 1 | **0** |
-| `taskWatcher.enabled` | boolean | `false` | 42 | **0** |
+| `taskWatcher.enabled` | boolean | `false` | 44 | **0** |
 | `taskWatcher.maxStallRetries` | number | `1` | 2 | 1 |
 | `taskWatcher.prompt` | string | `Task {{action}}: {{task_title}} ({{task_id}}), status: {{…` | 26 | **0** |
 | `taskWatcher.triggers` | array | `["created","updated"]` | 8 | **0** |
@@ -180,40 +180,40 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `time.provider` | string | `system` | 48 | 4 |
+| `time.provider` | string | `system` | 49 | 4 |
 
 ### `tools`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `tools.ask_user.enabled` | boolean | `true` | 42 | 1 |
+| `tools.ask_user.enabled` | boolean | `true` | 44 | 1 |
 | `tools.ask_user.inboxFile` | string | `inbox.md` | 2 | 1 |
-| `tools.collections.enabled` | boolean | `true` | 42 | 1 |
-| `tools.documents.enabled` | boolean | `true` | 42 | 1 |
-| `tools.edit.enabled` | boolean | `true` | 42 | 1 |
-| `tools.exec.enabled` | boolean | `true` | 42 | **0** |
-| `tools.extract_document.enabled` | boolean | `false` | 42 | 1 |
-| `tools.facts.enabled` | boolean | `true` | 42 | 1 |
-| `tools.interface.enabled` | boolean | `true` | 42 | 1 |
-| `tools.memory.enabled` | boolean | `true` | 42 | 1 |
+| `tools.collections.enabled` | boolean | `true` | 44 | 1 |
+| `tools.documents.enabled` | boolean | `true` | 44 | 1 |
+| `tools.edit.enabled` | boolean | `true` | 44 | 1 |
+| `tools.exec.enabled` | boolean | `true` | 44 | **0** |
+| `tools.extract_document.enabled` | boolean | `false` | 44 | 1 |
+| `tools.facts.enabled` | boolean | `true` | 44 | 1 |
+| `tools.interface.enabled` | boolean | `true` | 44 | 1 |
+| `tools.memory.enabled` | boolean | `true` | 44 | 1 |
 | `tools.projects.directory` | string | `./data/projects` | 4 | 2 |
-| `tools.projects.enabled` | boolean | `true` | 42 | 1 |
-| `tools.read.enabled` | boolean | `true` | 42 | 1 |
+| `tools.projects.enabled` | boolean | `true` | 44 | 1 |
+| `tools.read.enabled` | boolean | `true` | 44 | 1 |
 | `tools.recall.defaultTtlDays` | number | `14` | 2 | 1 |
-| `tools.recall.enabled` | boolean | `true` | 42 | 1 |
-| `tools.room.enabled` | boolean | `true` | 42 | 1 |
-| `tools.state.enabled` | boolean | `true` | 42 | 4 |
-| `tools.tasks.enabled` | boolean | `true` | 42 | 1 |
-| `tools.web_fetch.enabled` | boolean | `true` | 42 | 1 |
+| `tools.recall.enabled` | boolean | `true` | 44 | 1 |
+| `tools.room.enabled` | boolean | `true` | 44 | 1 |
+| `tools.state.enabled` | boolean | `true` | 44 | 4 |
+| `tools.tasks.enabled` | boolean | `true` | 44 | 1 |
+| `tools.web_fetch.enabled` | boolean | `true` | 44 | 1 |
 | `tools.web_search.apiKey` | string | `""` | 23 | 1 |
-| `tools.web_search.enabled` | boolean | `false` | 42 | 2 |
+| `tools.web_search.enabled` | boolean | `false` | 44 | 2 |
 | `tools.web_search.maxResults` | number | `5` | 2 | 1 |
-| `tools.web_search.provider` | string | `brave` | 48 | **0** |
-| `tools.write.enabled` | boolean | `true` | 42 | 1 |
+| `tools.web_search.provider` | string | `brave` | 49 | **0** |
+| `tools.write.enabled` | boolean | `true` | 44 | 1 |
 
 ### `webhooks`
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `webhooks.enabled` | boolean | `false` | 42 | 1 |
+| `webhooks.enabled` | boolean | `false` | 44 | 1 |
 | `webhooks.routes` | array | `[]` | 2 | 1 |

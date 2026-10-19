@@ -200,8 +200,10 @@ actually ran), `schedule.cancelled`.
   A nonexistent spring-forward wall time is rejected rather than silently
   shifted. Interval mode is elapsed time, so its wall-clock display moves by an
   hour across a transition by design.
-- **No operator surface yet.** `list` and `cancel` are agent-facing only; there
-  is no HTTP route, CLI command or dashboard widget. Inspect the table directly
-  until there is. The one place a booked wake shows is an idle agent's
-  `activity` record, whose `next` is its soonest wake (see
-  [what it is doing](./live-sessions.md#what-it-is-doing)).
+- **Read-only for operators.** `GET /api/schedules` lists every wake still to
+  come, soonest first (`?agent=` for one agent's), and the calendars in the 3D
+  world draw it (see
+  [screens and calendars](./live-sessions.md#screens-and-calendars)). An idle
+  agent's `activity` record also carries its soonest wake as `next`.
+  Cancelling is agent-facing only: there is no HTTP route or CLI command to
+  cancel a wake.

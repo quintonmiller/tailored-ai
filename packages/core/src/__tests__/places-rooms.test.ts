@@ -93,7 +93,22 @@ describe("homes drawn from a seed", () => {
           h.props.some((p) => PHOTO_FRAMES.includes(p.kind)),
           label,
         ).toBe(true);
+        // A calendar of its owner's day.
+        expect(
+          h.props.some((p) => p.kind === "calendar"),
+          label,
+        ).toBe(true);
       }
+  });
+
+  it("hang the calendar by the desk, where there is wall for it", () => {
+    let near = 0;
+    for (const h of homes) {
+      const calendar = h.props.find((p) => p.kind === "calendar");
+      const desk = h.props.find((p) => p.id === h.spots.find((s) => s.activity === "type")?.item);
+      if (calendar && desk && Math.hypot(calendar.at[0] - desk.at[0], calendar.at[1] - desk.at[1]) < 2) near++;
+    }
+    expect(near / homes.length).toBeGreaterThan(0.75);
   });
 
   it("keep everything tall by the back and left walls, so nothing tall stands between the camera and the room", () => {

@@ -114,6 +114,13 @@ export class ScheduleStore {
       .all(agent) as ScheduleRow[];
   }
 
+  /** Live schedules for every agent, soonest first, at most `limit`: what a page showing everyone's wakes reads. */
+  listPending(limit = 100): ScheduleRow[] {
+    return this.db
+      .prepare("SELECT * FROM agent_schedules WHERE status = 'pending' ORDER BY next_run_at LIMIT ?")
+      .all(limit) as ScheduleRow[];
+  }
+
   countForAgent(agent: string): number {
     const row = this.db
       .prepare("SELECT COUNT(*) AS n FROM agent_schedules WHERE agent = ? AND status = 'pending'")

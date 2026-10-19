@@ -62,6 +62,15 @@ widgets get a minimal `{id, type, order, span, rowSpan}` override so the resolve
 merge preserves their core-owned title/options. So a hand-edited `dashboard.widgets`
 and a drag-edited one are the same shape — you can keep editing either way.
 
+## In the 3D world
+
+The lobby's big screen shows the first five widgets a screen can draw
+(`status`, `clock`, `tasks`, `activity`, `metric`, `list`, `markdown`,
+`links`), a page every 15 seconds, and clicking it opens the whole Board in a
+panel without leaving the world. A widget's place on the screen is its place
+on the Board, so reorder the Board to change what the lobby shows. See
+[screens and calendars](./live-sessions.md#screens-and-calendars).
+
 ## Built-in renderer types
 
 | `type` | Renders | Key `options` |

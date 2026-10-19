@@ -62,7 +62,9 @@ export type PropKind =
   | "pegboard"
   | "table_lamp"
   | "bench"
-  | "sign";
+  | "sign"
+  | "screen"
+  | "calendar";
 
 export interface Prop {
   id: string;
@@ -86,7 +88,10 @@ export interface Prop {
   size?: [number, number, number];
   /** Words it shows: a kiosk's screen, a board's heading. */
   label?: string;
-  /** What clicking it does on the page: make an agent, a task or a room, or see the tasks. */
+  /**
+   * What clicking it does on the page: make an agent, a task or a room, or see
+   * the tasks. A screen and a calendar open what they show without being told.
+   */
   action?: string;
 }
 

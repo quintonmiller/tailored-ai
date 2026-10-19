@@ -30,6 +30,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { nameOf } from "../lib/conversations";
 import { aboutLines, asleepWords } from "../lib/did";
 import { type BoardSpot, type BoardTask, boardAtUv, drawBoard } from "./boards";
+import { type CalendarView, drawCalendar } from "./calendar";
 import type { Cue } from "./cues";
 import { type AgentActivity, type Behavior, behaviorFor, heldFor, hueFor, sameBehavior, stationSpot } from "./doing";
 import { arrivalAt, doorFrame, doorLight, doorReached, doorTo, threshold } from "./doors";
@@ -69,6 +70,7 @@ import {
   spotFor,
   spreadLights,
 } from "./scene";
+import { drawScreen, pageAt, type ScreenCard } from "./screens";
 import { blockers, FADED, FADED_WALL, type Solid, TALL, type Vec3, type Wall, wallOf, wallsBehind } from "./sight";
 import {
   clampReach,
@@ -100,6 +102,9 @@ export interface Line {
   at: string;
   to?: string[];
 }
+
+/** Where on something made to be used a click landed: a note or a column on a board, or the page a screen is on. */
+export type UseSpot = BoardSpot | { card: string };
 
 /** A line older than this when it arrives was said before anyone was looking: no bubble. */
 const STALE_LINE_MS = 15_000;
@@ -157,6 +162,10 @@ export interface Stage {
   setTravel(travel: Travel): void;
   /** The tasks every board in the room shows. */
   setTasks(tasks: BoardTask[]): void;
+  /** The pages every screen in the room goes through, one every quarter of a minute. */
+  setScreen(cards: ScreenCard[]): void;
+  /** What every calendar in the room shows. */
+  setCalendar(view: CalendarView): void;
   /** Light the place as a home, cosy after dark, or as a public place (the lobby, a hall), bright at any hour. */
   setLights(lights: Lights): void;
   /**
@@ -250,7 +259,21 @@ function hangPhoto(picture: THREE.Group, kind: string, media: string) {
 }
 
 /** Things that hang on a wall, so they are never in the way of a walk. */
-const WALL_KINDS = new Set(["window", "picture", "clock", "shelf", "board", "painting", "poster", "pegboard", "sign"]);
+const WALL_KINDS = new Set([
+  "window",
+  "picture",
+  "clock",
+  "shelf",
+  "board",
+  "painting",
+  "poster",
+  "pegboard",
+  "sign",
+  "screen",
+  "calendar",
+]);
+/** What a click on a thing does when the room doesn't say: a screen and a calendar open what they show. */
+const USES: Partial<Record<string, string>> = { screen: "screen", calendar: "calendar" };
 /** Things flat on the floor, walked over. */
 const FLAT_KINDS = new Set(["rug", "round_rug"]);
 /** Lamps that light the room after dark, and how high their bulb is above where they stand. */
@@ -326,8 +349,11 @@ export async function createStage(
     visitor?: boolean;
     /** The agent the visitor is standing next to, when it changes; undefined when none is. */
     onNear?: (agent: string | undefined) => void;
-    /** Something made to be used was clicked: a kiosk, a task board. Its action, and on a board what was hit. */
-    onUse?: (action: string, on?: BoardSpot) => void;
+    /**
+     * Something made to be used was clicked: a kiosk, a task board, a screen, a
+     * calendar. Its action; on a board, what was hit; on a screen, the page up.
+     */
+    onUse?: (action: string, on?: UseSpot) => void;
     /** A visitor is within earshot of an agent as it starts saying something: who, what, and how near (0–1, 1 beside it). */
     onLine?: (agent: string, text: string, nearness: number) => void;
     /** Someone went through a door (walked into it, or clicked it): the page brings the place behind it. */
@@ -400,14 +426,43 @@ export async function createStage(
     fadeable = [];
   };
   // Boards on the walls, each drawn with the tasks; and what they show.
-  let boards: { label: string; screen: NonNullable<ReturnType<typeof buildProp>["screen"]> }[] = [];
+  type Face = NonNullable<ReturnType<typeof buildProp>["screen"]>;
+  let boards: { label: string; screen: Face }[] = [];
   let tasks: BoardTask[] = [];
+  // Screens, each on the page the clock says, and calendars; what they show, and what was last drawn, so the same
+  // again isn't drawn twice.
+  let screens: Face[] = [];
+  let calendars: Face[] = [];
+  let cards: ScreenCard[] = [];
+  let cardsKey = "[]";
+  let shownPage = -1;
+  let shownMinute = -1;
+  let calendar: CalendarView | undefined;
+  let calendarKey = "";
   // What each agent is doing: every body shows its own, and the light by a home's door its owner's.
   let activities: Record<string, AgentActivity> = {};
   const drawBoards = () => {
     for (const b of boards) {
       drawBoard(b.screen.canvas, b.label, tasks);
       b.screen.texture.needsUpdate = true;
+    }
+  };
+  /** Draw the screens on the page that is up now; a clock on it shows this minute. */
+  const drawScreens = () => {
+    const now = Date.now();
+    shownPage = pageAt(now, cards.length);
+    shownMinute = cards[shownPage]?.clock ? Math.floor(now / 60_000) : -1;
+    for (const s of screens) {
+      drawScreen(s.canvas, cards[shownPage], shownPage, cards.length);
+      s.texture.needsUpdate = true;
+    }
+  };
+  // Until the page says what is on them (and in a photo, where it never does), calendars show today and nothing booked.
+  const drawCalendars = () => {
+    const view = calendar ?? { title: "", now: Date.now(), wakes: [], done: [], names: false };
+    for (const c of calendars) {
+      drawCalendar(c.canvas, view);
+      c.texture.needsUpdate = true;
     }
   };
   // Things that just appeared, growing into place.
@@ -448,6 +503,8 @@ export async function createStage(
     clickable.length = 0;
     glows = [];
     boards = [];
+    screens = [];
+    calendars = [];
     const shell = buildShell(room);
     furniture.add(shell);
     scenery.push(shell);
@@ -466,8 +523,12 @@ export async function createStage(
         if (photo) hung.set(prop.id, photo.media);
       }
     for (const prop of room.props) {
-      const built = buildProp(prop.kind, { color: prop.color, size: prop.size, label: prop.label });
-      if (built.screen) boards.push({ label: prop.label ?? "Tasks", screen: built.screen });
+      const built = buildProp(prop.kind, { color: prop.color, size: prop.size, label: prop.label, scale: prop.scale });
+      if (built.screen) {
+        if (prop.kind === "screen") screens.push(built.screen);
+        else if (prop.kind === "calendar") calendars.push(built.screen);
+        else boards.push({ label: prop.label ?? "Tasks", screen: built.screen });
+      }
       const photo = hung.get(prop.id);
       if (photo) hangPhoto(built.group, prop.kind, photo);
       built.group.position.set(prop.at[0], prop.elevation ?? 0, prop.at[1]);
@@ -485,9 +546,10 @@ export async function createStage(
       if (wall) fadeable.push({ group: built.group, wall, level: 1 });
       furniture.add(built.group);
       scenery.push(built.group);
+      const action = prop.action ?? USES[prop.kind];
       if (prop.spot) built.group.userData.spot = prop.spot;
-      if (prop.action) built.group.userData.action = prop.action;
-      if (prop.spot || prop.action) clickable.push(built.group);
+      if (action) built.group.userData.action = action;
+      if (prop.spot || action) clickable.push(built.group);
       if (built.glow) glows.push({ kind: prop.kind, glow: built.glow });
       const bulb = BULBS[prop.kind];
       if (bulb !== undefined)
@@ -548,6 +610,8 @@ export async function createStage(
     // Somewhere to stand by a plant, the task board, a sideboard: worked out once what is in the way is known.
     room = { ...given, spots: [...given.spots, ...idleSpots(given, obstacles)] };
     drawBoards();
+    drawScreens();
+    drawCalendars();
     warm.length = 0;
     // A big room's lamps reach further, so the light still meets in the middle.
     lampReach = Math.max(5, Math.hypot(room.width, room.depth) / 2.2);
@@ -1069,7 +1133,7 @@ export async function createStage(
    * door, a use (a kiosk, a board) or a spot to go to. On a board's face, the
    * note or column the pointer is on as well.
    */
-  const pick = (e: At): (Use & { on?: BoardSpot }) | undefined => {
+  const pick = (e: At): (Use & { on?: UseSpot }) | undefined => {
     const r = canvas.getBoundingClientRect();
     ray.setFromCamera(
       new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1),
@@ -1078,6 +1142,9 @@ export async function createStage(
     const found = nearestUse(ray.intersectObjects(clickable, true));
     if (!found) return undefined;
     const { hit, use } = found;
+    // On a screen, the page that is up: a click opens what it shows.
+    const card = cards[shownPage];
+    if (use.action && card && screens.some((s) => s.face === hit.object)) return { ...use, on: { card: card.id } };
     const board = use.action ? boards.find((b) => b.screen.face === hit.object) : undefined;
     if (!board || !hit.uv) return use;
     const { width, height } = board.screen.canvas;
@@ -1809,6 +1876,12 @@ export async function createStage(
       hour = hourNow();
       light(lightingFor(hour, lights));
     }
+    // The screens turn to the next page as the clock comes round to it, and a clock on one keeps the time.
+    if (screens.length) {
+      const wall = Date.now();
+      const page = pageAt(wall, cards.length);
+      if (page !== shownPage || (cards[page]?.clock && Math.floor(wall / 60_000) !== shownMinute)) drawScreens();
+    }
     const { state, loudness, engaged } = input();
     // A photo's frame is posed at the gesture's best moment exactly, however late this frame came.
     const peak = PEAK[opts.still?.gesture ?? ""] ?? 0.7;
@@ -2105,6 +2178,20 @@ export async function createStage(
     setTasks(next) {
       tasks = next;
       drawBoards();
+    },
+    setScreen(next) {
+      const key = JSON.stringify(next);
+      if (key === cardsKey) return;
+      cards = next;
+      cardsKey = key;
+      drawScreens();
+    },
+    setCalendar(next) {
+      const key = JSON.stringify(next);
+      if (key === calendarKey) return;
+      calendar = next;
+      calendarKey = key;
+      drawCalendars();
     },
     setLights(next) {
       if (next === lights) return;
