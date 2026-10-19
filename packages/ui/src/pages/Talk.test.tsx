@@ -11,7 +11,7 @@ import { Talk } from "./Talk";
 
 // The 3D stage needs WebGL, which jsdom lacks; what the page hands it is the contract.
 const stage = vi.hoisted(() => ({
-  calls: [] as { url: string; input: StageInput; view?: StageView }[],
+  calls: [] as { url: string; input: StageInput; view?: StageView; animations?: string[] }[],
   views: [] as StageView[],
   /** The agent's cues the page passed on, in the order the avatar was told. */
   cues: [] as string[],
@@ -20,10 +20,15 @@ const stage = vi.hoisted(() => ({
   attempts: 0,
 }));
 vi.mock("../avatar/stage", () => ({
-  createStage: async (_host: HTMLElement, url: string, input: StageInput, opts: { view?: StageView }) => {
+  createStage: async (
+    _host: HTMLElement,
+    url: string,
+    input: StageInput,
+    opts: { view?: StageView; animations?: string[] },
+  ) => {
     stage.attempts++;
     if (stage.fail) throw new Error(stage.fail);
-    stage.calls.push({ url, input, view: opts.view });
+    stage.calls.push({ url, input, view: opts.view, animations: opts.animations });
     return {
       dispose: () => {},
       setView: (v: StageView) => stage.views.push(v),
@@ -238,6 +243,13 @@ describe("Talk page", () => {
     await act(async () => button("Send").click());
     for (let i = 0; i < 4; i++) await act(async () => {});
     expect(posted[0]).toMatchObject({ type: "application/json", body: { text: "what's on today?" } });
+  });
+
+  it("hands the avatar its animation libraries", async () => {
+    liveInfo = { avatar: "/api/live/avatar", animations: ["/api/live/animations/0"] };
+    await render();
+    await loadStage();
+    expect(stage.calls[0].animations).toEqual(["/api/live/animations/0"]);
   });
 
   it("draws no avatar when none is configured", async () => {

@@ -130,6 +130,44 @@ avatar walks between spots by way of the middle of the room, so it never
 cuts through furniture. When the agent moves it later, it will name a spot
 ("on the couch"), never coordinates.
 
+### Animation files
+
+Code-driven motion is the fallback. For real movement, give the avatar
+animation libraries: glTF files of humanoid animation from any rig.
+
+```yaml
+live:
+  avatar:
+    model: robot.vrm
+    animations:
+      - animations/library-1.glb   # paths as for model
+      - animations/library-2.glb
+```
+
+Each clip is adapted to the avatar the first time it plays. Bones are matched
+by name for the common rigs (Rigify, Unreal mannequin, Mixamo). Each bone's
+movement away from the library's T-pose becomes the same movement on the
+avatar, corrected where a limb points differently at rest. Clips are chosen
+by their usual names: an idle, a talking idle, a walk, sitting and talking
+while seated, arms folded, a head shake and a dance. A moment with no clip
+keeps the code-driven motion. Gestures with no clip, such as a wave, a point,
+a hand to the chin or a shrug, take over the arm while they play, so a wave
+isn't stacked on whatever the talking clip had the arm doing. Walking speed
+follows the walk clip's own pace, so the feet don't slide.
+
+Free libraries exist. Quaternius's Universal Animation Library is CC0, with
+glTF versions. As with models, keep the files in your own instance.
+
+Whatever plays, the avatar's arms are fitted to its body. A pose made for a
+slim figure puts a stocky figure's hands through its hips, so the stage
+measures how wide the body is at hand height and swings the arms out just
+far enough to clear it.
+
+The close-up looks for a clear view. When the avatar arrives somewhere, the
+close-up finds its best angle again, unless you turned the view yourself in
+the last few seconds. It never puts a wall or a shelf between you and the
+avatar.
+
 None of this asks the model for anything. The moments come from the turn the
 page is already following, and the mouth from the loudness of the audio, so
 the avatar adds no tokens and no delay. It is drawn in the browser with
@@ -187,8 +225,9 @@ cues, and its text passes through untouched.
 
 | route | does |
 |---|---|
-| `GET /api/live` | what the Talk page needs before a session: `{avatar?}`, the URL of the avatar's model file when one is set |
+| `GET /api/live` | what the Talk page needs before a session: `{avatar?, animations?}`, the URLs of the avatar's model file and its animation libraries when set |
 | `GET /api/live/avatar` | the avatar's model file (`model/gltf-binary`), revalidated by `ETag`; `404` with the reason when none is set or the file is missing |
+| `GET /api/live/animations/:index` | one of the configured animation libraries, by its position in `live.avatar.animations`. Nothing else under the folder is reachable |
 | `POST /api/live/sessions` | start: `{agent?, body?}`; `201` with the session and its limits; `400` when the body is not one that can go in a prompt (names must be short plain words); `409` when live sessions are off. `body` is `{looks?, gestures, aimed?}`, where each `aimed` move is `{verb, prep, does, targets}`, e.g. `{"verb": "go", "prep": "to", "does": "walk somewhere", "targets": ["the couch"]}` |
 | `GET /api/live/sessions/:id` | the session, with `endedAt` and `endReason` once it has ended |
 | `DELETE /api/live/sessions/:id` | end it |

@@ -47,6 +47,8 @@ export function Talk() {
   const chunks = useRef<Blob[]>([]);
   // The configured avatar's model file, if there is one.
   const [avatar, setAvatar] = useState<string | null>(null);
+  // Its animation libraries, if any are configured.
+  const [animations, setAnimations] = useState<string[]>([]);
   // The avatar's moves the agent asks for, each played as its sentence starts.
   const avatarControls = useRef<AvatarControls | null>(null);
   const timeline = useRef(new CueTimeline((cue) => avatarControls.current?.cue(cue)));
@@ -64,8 +66,11 @@ export function Talk() {
       .then((a) => setAgents(Object.keys(a).sort()))
       .catch(() => {});
     fetch("/api/live")
-      .then((res) => (res.ok ? (res.json() as Promise<{ avatar?: unknown }>) : null))
-      .then((body) => setAvatar(typeof body?.avatar === "string" ? body.avatar : null))
+      .then((res) => (res.ok ? (res.json() as Promise<{ avatar?: unknown; animations?: unknown }>) : null))
+      .then((body) => {
+        setAvatar(typeof body?.avatar === "string" ? body.avatar : null);
+        setAnimations(Array.isArray(body?.animations) ? body.animations.filter((a) => typeof a === "string") : []);
+      })
       .catch(() => {});
   }, []);
 
@@ -242,6 +247,7 @@ export function Talk() {
       {avatar && (
         <Avatar
           url={avatar}
+          animations={animations}
           state={phase}
           loudness={player.loudness}
           engaged={!!session && !session.endedAt}

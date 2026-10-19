@@ -155,7 +155,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `suggestions.count` | number | `4` | 11 | 1 |
+| `suggestions.count` | number | `4` | 12 | 1 |
 | `suggestions.enabled` | boolean | `false` | 40 | 1 |
 | `suggestions.prompt` | string | `You are the user's personal assistant. From the state bel…` | 26 | 1 |
 | `suggestions.ttlMinutes` | number | `15` | 1 | 1 |

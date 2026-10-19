@@ -105,6 +105,15 @@ describe("CueReader", () => {
     expect(read("*wav", "es* Hello.")).toBe("[wave] Hello.");
   });
 
+  it("finishes a cue the model stopped writing at the very end of the reply", () => {
+    expect(read('Sure. <look at="you')).toBe("Sure. [look→you]");
+    expect(read("Hello. <wav")).toBe("Hello. [wave]");
+  });
+
+  it("never speaks what is left of markup the reply ended inside", () => {
+    expect(read("Done. <b")).toBe("Done. ");
+  });
+
   it("speaks an asterisk that never closes", () => {
     expect(read("Five * three is fifteen.")).toBe("Five * three is fifteen.");
   });

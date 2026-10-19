@@ -4,7 +4,7 @@
  */
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { avatarModelPath } from "../live/avatar.js";
+import { avatarAnimationPaths, avatarModelPath } from "../live/avatar.js";
 
 let original: string | undefined;
 beforeEach(() => {
@@ -30,5 +30,19 @@ describe("avatarModelPath", () => {
 
   it("looks for a relative path in the instance's avatars folder", () => {
     expect(avatarModelPath({ avatar: { model: "bot.vrm" } })).toBe(join("/srv/tai-home", "avatars", "bot.vrm"));
+  });
+});
+
+describe("avatarAnimationPaths", () => {
+  it("resolves each library the way the model is resolved, in order", () => {
+    expect(avatarAnimationPaths({ avatar: { model: "bot.vrm", animations: ["anim/a.glb", "/libs/b.glb"] } })).toEqual([
+      join("/srv/tai-home", "avatars", "anim/a.glb"),
+      "/libs/b.glb",
+    ]);
+  });
+
+  it("has none without a model to play them on, or none configured", () => {
+    expect(avatarAnimationPaths({ avatar: { animations: ["a.glb"] } })).toEqual([]);
+    expect(avatarAnimationPaths({ avatar: { model: "bot.vrm" } })).toEqual([]);
   });
 });

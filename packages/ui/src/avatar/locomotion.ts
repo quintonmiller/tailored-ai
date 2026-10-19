@@ -42,10 +42,13 @@ export class Walker {
   private legs: [number, number][] = [];
   private finalFacing: number | undefined;
 
-  /** `speed` in metres per second: a small figure walks slower than a tall one. */
+  /**
+   * `speed` in metres per second: a small figure walks slower than a tall
+   * one. Changed once a walk clip loads, to the pace it was made for.
+   */
   constructor(
     start: Place,
-    private readonly speed: number,
+    public speed: number,
   ) {
     this.place = { ...start };
   }

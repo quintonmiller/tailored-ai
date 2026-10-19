@@ -47,6 +47,13 @@ export interface Pose {
   seated: number;
   /** The bob of a walking step, in metres. */
   lift: number;
+  /**
+   * With animation files playing: bones an arm gesture takes over, posed in
+   * full rather than as offsets, and how far it has taken them (0–1). The
+   * stage blends from the files' pose to these, so a wave is a wave and not
+   * a wave stacked on whatever the arm was doing.
+   */
+  owned?: { bones: Partial<Record<PoseBone, Rotation>>; weight: number };
 }
 
 /** What the body is doing besides talking. */
@@ -57,6 +64,13 @@ export interface BodyInput {
   stride: number;
   /** What it does where it stands, once it has stopped walking. */
   activity?: Activity;
+  /**
+   * Set when animation files play the base pose. The pose returned is then
+   * only what goes on top of them: the moments of the turn, gestures, looks,
+   * and the activities the files don't cover. No rest pose, walk cycle or
+   * breathing, which the files have.
+   */
+  clips?: { walk: boolean; activities: Activity[] };
 }
 
 /** Standing at ease: arms down from the T-pose every model is rigged in. */
@@ -120,10 +134,11 @@ const ACTIVITIES: Record<Activity, Offsets> = {
  * seconds in. Each eases in and out, so it starts and ends from whatever the
  * body was doing.
  */
-const GESTURE_MOVES: Record<string, { seconds: number; pose: (u: number) => Offsets }> = {
+const GESTURE_MOVES: Record<string, { seconds: number; pose: (u: number) => Offsets; owns?: PoseBone[] }> = {
   // Right arm up and out, the forearm swinging side to side.
   wave: {
     seconds: 1.8,
+    owns: ["rightUpperArm", "rightLowerArm"],
     pose: (u) => ({ rightUpperArm: [0, 0, -2.1], rightLowerArm: [0, 0, -0.5 + 0.4 * Math.sin(2 * Math.PI * 2.5 * u)] }),
   },
   // Two dips of the head.
@@ -132,6 +147,7 @@ const GESTURE_MOVES: Record<string, { seconds: number; pose: (u: number) => Offs
   // Arms out from the sides, elbows bent, head tipped.
   shrug: {
     seconds: 1.1,
+    owns: ["leftUpperArm", "rightUpperArm", "leftLowerArm", "rightLowerArm"],
     pose: () => ({
       leftUpperArm: [0, 0, 0.45],
       rightUpperArm: [0, 0, -0.45],
@@ -144,6 +160,7 @@ const GESTURE_MOVES: Record<string, { seconds: number; pose: (u: number) => Offs
   // Hand to chin, eyes up and aside.
   think: {
     seconds: 2.2,
+    owns: ["rightUpperArm", "rightLowerArm"],
     pose: () => ({ rightUpperArm: [-0.9, 0, -0.75], rightLowerArm: [0, 1.5, 0], head: [-0.12, 0.18, 0.05] }),
   },
   bow: {
@@ -156,7 +173,11 @@ const GESTURE_MOVES: Record<string, { seconds: number; pose: (u: number) => Offs
     }),
   },
   // Right arm out straight ahead; the stage turns the body to face the target first.
-  point: { seconds: 2.2, pose: () => ({ rightUpperArm: [-1.35, 0, -1.0], rightLowerArm: [0, -0.15, 0] }) },
+  point: {
+    seconds: 2.2,
+    owns: ["rightUpperArm", "rightLowerArm"],
+    pose: () => ({ rightUpperArm: [-1.35, 0, -1.0], rightLowerArm: [0, -0.15, 0] }),
+  },
 };
 
 /** Seconds a look at something is held. */
@@ -199,6 +220,11 @@ export class Motion {
   private nextBlink: number | undefined;
   private blinkStart = Number.NEGATIVE_INFINITY;
   private moves: { name: string; at: number }[] = [];
+  /**
+   * Extra outward swing for the upper arms, in radians, so the hands clear a
+   * body wider than the arms were posed for. Measured per model by the stage.
+   */
+  armClearance = 0;
   private gazeAt: { yaw: number; pitch: number; at: number } | undefined;
   private readonly drift: number;
   private readonly random: () => number;
@@ -245,24 +271,29 @@ export class Motion {
     const tau = level > this.mouth ? MOUTH_OPEN_SECONDS : MOUTH_CLOSE_SECONDS;
     this.mouth += (level - this.mouth) * (dt > 0 ? ease(tau) : 0);
 
+    const clips = body.clips;
     const bones = {} as Record<PoseBone, Rotation>;
     for (const bone of POSE_BONES) {
-      const r: Rotation = [...REST[bone]];
+      const r: Rotation = clips ? [0, 0, 0] : [...REST[bone]];
       const add = (offset: Rotation | undefined, weight: number) => {
         if (offset) for (let i = 0; i < 3; i++) r[i] += offset[i] * weight;
       };
       for (const s of STATES) add(MOMENTS[s].bones[bone], this.weights[s]);
-      for (const a of ACTIVITY_NAMES) add(ACTIVITIES[a][bone], this.doing[a]);
+      for (const a of ACTIVITY_NAMES) if (!clips?.activities.includes(a)) add(ACTIVITIES[a][bone], this.doing[a]);
       bones[bone] = r;
     }
+    bones.leftUpperArm[2] += this.armClearance;
+    bones.rightUpperArm[2] -= this.armClearance;
 
     // Idle life, on periods that don't line up, so it never visibly loops.
     const d = this.drift;
-    const breath = Math.sin((2 * Math.PI * t) / 4.2);
-    bones.chest[0] += 0.015 * breath * d;
-    bones.leftUpperArm[2] -= 0.02 * breath * d;
-    bones.rightUpperArm[2] += 0.02 * breath * d;
-    bones.spine[2] += 0.01 * Math.sin((2 * Math.PI * t) / 7.3) * d;
+    if (!clips) {
+      const breath = Math.sin((2 * Math.PI * t) / 4.2);
+      bones.chest[0] += 0.015 * breath * d;
+      bones.leftUpperArm[2] -= 0.02 * breath * d;
+      bones.rightUpperArm[2] += 0.02 * breath * d;
+      bones.spine[2] += 0.01 * Math.sin((2 * Math.PI * t) / 7.3) * d;
+    }
     bones.head[1] += (0.04 * Math.sin((2 * Math.PI * t) / 9.1) + 0.02 * Math.sin((2 * Math.PI * t) / 3.7)) * d;
     bones.head[0] += 0.015 * Math.sin((2 * Math.PI * t) / 6.1) * d;
     // Nodding along with its own voice: down on the loud syllables.
@@ -275,7 +306,7 @@ export class Motion {
 
     // The walk: legs swing opposite each other, each knee bends as its leg
     // comes forward, arms swing against the legs, and the body bobs.
-    const w = this.walking;
+    const w = clips?.walk ? 0 : this.walking;
     const s = Math.sin(this.gait);
     const c = Math.cos(this.gait);
     bones.leftUpperLeg[0] -= 0.5 * s * w;
@@ -289,15 +320,29 @@ export class Motion {
 
     // Gestures and looks the agent asked for, layered on top.
     this.moves = this.moves.filter((m) => t - m.at <= GESTURE_MOVES[m.name].seconds);
+    const owned: Partial<Record<PoseBone, Rotation>> = {};
+    let ownWeight = 0;
     for (const m of this.moves) {
       const move = GESTURE_MOVES[m.name];
       const weight = envelope(t - m.at, move.seconds);
       const pose = move.pose(t - m.at);
+      const takes = clips ? (move.owns ?? []) : [];
+      if (takes.length) ownWeight = Math.max(ownWeight, weight);
       for (const bone of POSE_BONES) {
         const o = pose[bone];
-        if (o) for (let i = 0; i < 3; i++) bones[bone][i] += o[i] * weight;
+        if (!o) continue;
+        if (takes.includes(bone)) {
+          // Posed from rest in full; the stage blends to it by the weight.
+          const full = owned[bone] ?? [...REST[bone]];
+          for (let i = 0; i < 3; i++) full[i] += o[i];
+          owned[bone] = full;
+        } else {
+          for (let i = 0; i < 3; i++) bones[bone][i] += o[i] * weight;
+        }
       }
     }
+    if (owned.leftUpperArm) owned.leftUpperArm[2] += this.armClearance;
+    if (owned.rightUpperArm) owned.rightUpperArm[2] -= this.armClearance;
     if (this.gazeAt) {
       const weight = envelope(t - this.gazeAt.at, LOOK_SECONDS);
       bones.head[1] += this.gazeAt.yaw * weight;
@@ -317,6 +362,7 @@ export class Motion {
       gaze,
       seated: this.doing.sit,
       lift: 0.012 * Math.abs(c) * w,
+      ...(ownWeight > 0 ? { owned: { bones: owned, weight: ownWeight } } : {}),
     };
   }
 

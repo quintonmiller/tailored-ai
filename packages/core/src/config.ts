@@ -1487,7 +1487,15 @@ export interface AgentConfig {
      * animated in the browser. A relative path resolves under
      * `<TAI_HOME>/avatars/`. Unset, the page shows no avatar.
      */
-    avatar?: { model?: string };
+    avatar?: {
+      model?: string;
+      /**
+       * Animation libraries (glTF, any humanoid rig) the avatar plays: idles,
+       * walking, sitting, gestures. Paths as for `model`. Unset, the avatar
+       * moves by code alone.
+       */
+      animations?: string[];
+    };
   };
   /**
    * Forge integration for pushing branches and opening proposals
