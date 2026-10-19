@@ -1,8 +1,9 @@
-import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Avatar, type AvatarControls } from "../avatar/Avatar";
 import type { Cue } from "../avatar/cues";
 import type { BodyState } from "../avatar/motion";
-import { bodyFor, DEFAULT_ROOM } from "../avatar/scene";
+import { bodyFor, DEFAULT_ROOM, type Room } from "../avatar/scene";
+import { subscribeStateChanges } from "../lib/state-events";
 import { useVoice } from "./voice";
 
 /**
@@ -36,6 +37,42 @@ function remember(key: string, on: boolean) {
   } catch {
     // A convenience: without storage the choice resets next time.
   }
+}
+
+/**
+ * The agent's room as the server keeps it, a `place` record the agent can
+ * change with its `place` tool, redrawn the moment it does. The built-in
+ * room until it arrives, and when the server keeps none.
+ */
+export function useRoom(agent: string, enabled: boolean): Room {
+  const [room, setRoom] = useState<Room>(DEFAULT_ROOM);
+  useEffect(() => {
+    if (!enabled) return;
+    let gone = false;
+    let id: string | undefined;
+    const load = () =>
+      fetch(`/api/ext/builtin:places/${encodeURIComponent(agent || "default")}`)
+        .then((res) => (res.ok ? (res.json() as Promise<{ id?: string; place?: Room }>) : null))
+        .then((body) => {
+          if (gone) return;
+          id = body?.id;
+          setRoom(body?.place ?? DEFAULT_ROOM);
+        })
+        .catch(() => {
+          if (!gone) setRoom(DEFAULT_ROOM);
+        });
+    void load();
+    const off = subscribeStateChanges((change) => {
+      if (change.type !== "place" || !id || change.id !== id) return;
+      if (change.op === "delete" || !change.after) void load();
+      else setRoom(change.after as unknown as Room);
+    });
+    return () => {
+      gone = true;
+      off();
+    };
+  }, [agent, enabled]);
+  return room;
 }
 
 interface LiveInfo {
@@ -87,6 +124,10 @@ export function useChatStage({ agent, sessionKey, sending, panelOpen, onSpoken, 
     return () => q.removeEventListener?.("change", on);
   }, []);
 
+  const room = useRoom(agent, has3d);
+  // What the body can do in this room: its moves, and the things it can go to, look at and point at.
+  const body = useMemo(() => bodyFor(room), [room]);
+
   const controls = useRef<AvatarControls | null>(null);
   // The conversation a voice session talks in. A new chat gets a key on its
   // first spoken turn; the chat adopts it, so what is typed next joins it.
@@ -103,7 +144,7 @@ export function useChatStage({ agent, sessionKey, sending, panelOpen, onSpoken, 
   const voice = useVoice({
     agent: agent || undefined,
     sessionKey: keyFor,
-    body: showStage ? bodyFor(DEFAULT_ROOM) : undefined,
+    body: showStage ? body : undefined,
     measure: showStage,
     onCue: (cue) => controls.current?.cue(cue),
     onHeard: (text) => {
@@ -122,9 +163,9 @@ export function useChatStage({ agent, sessionKey, sending, panelOpen, onSpoken, 
   // Typed turns move the body too, while it is on screen: same cues as talking.
   useEffect(() => {
     if (!setTurnExtras) return;
-    setTurnExtras(showStage ? { body: bodyFor(DEFAULT_ROOM), onCue: (cue) => controls.current?.cue(cue) } : {});
+    setTurnExtras(showStage ? { body, onCue: (cue) => controls.current?.cue(cue) } : {});
     return () => setTurnExtras({});
-  }, [showStage, setTurnExtras]);
+  }, [showStage, setTurnExtras, body]);
 
   // Another conversation on the page, or a new chat: the voice session is for the old one.
   const end = voice.end;
@@ -181,13 +222,13 @@ export function useChatStage({ agent, sessionKey, sending, panelOpen, onSpoken, 
       const res = await fetch("/api/live/idle", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...(agent ? { agent } : {}), body: bodyFor(DEFAULT_ROOM), here, hour }),
+        body: JSON.stringify({ ...(agent ? { agent } : {}), body, here, hour }),
       });
       if (!res.ok) throw new Error(`idle choice failed (${res.status})`);
       const data = (await res.json()) as { cues?: Cue[] };
       return Array.isArray(data.cues) ? data.cues : [];
     },
-    [agent],
+    [agent, body],
   );
 
   const state: BodyState = voice.phase !== "idle" ? voice.phase : sending ? "thinking" : "idle";
@@ -202,6 +243,7 @@ export function useChatStage({ agent, sessionKey, sending, panelOpen, onSpoken, 
         engaged={busy || conversing}
         controls={controls}
         insetRight={panelOpen && wide ? PANEL_WIDTH : 0}
+        room={room}
         {...(info.enabled ? { chooseIdle } : {})}
       />
     ) : null;

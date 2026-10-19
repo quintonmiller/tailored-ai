@@ -122,10 +122,16 @@ export class Director {
   private wasEngaged = false;
 
   constructor(
-    private readonly room: Room,
+    private room: Room,
     private readonly random: () => number = Math.random,
     private readonly agentChooses = false,
   ) {}
+
+  /** The room changed: its spots are what it picks from now. */
+  setRoom(room: Room) {
+    this.room = room;
+    this.leaveAt = undefined;
+  }
 
   /**
    * Called every frame. `here` is the spot it is standing at (undefined while

@@ -445,6 +445,7 @@ describe("migrateDefaultPlugins — seed missing builtin: entries", () => {
       "builtin:room-announcer",
       "builtin:tool-called-trigger",
       "builtin:config-hooks",
+      "builtin:places",
       // then the disabled set
       ...DEFAULT_DISABLED_PLUGIN_MODULES,
     ]);
@@ -767,6 +768,7 @@ describe("loadConfig — default host", () => {
       "builtin:room-announcer",
       "builtin:tool-called-trigger",
       "builtin:config-hooks",
+      "builtin:places",
       ...DEFAULT_DISABLED_PLUGIN_MODULES,
     ]);
     // The disabled stall-guard is preserved as-is (durable off switch).

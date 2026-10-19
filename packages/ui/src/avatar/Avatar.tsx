@@ -1,6 +1,7 @@
 import { type MutableRefObject, useEffect, useRef, useState } from "react";
 import type { Cue } from "./cues";
 import type { BodyState } from "./motion";
+import type { Room } from "./scene";
 import type { Stage, StageView } from "./stage";
 
 const VIEW_KEY = "tai.talk.avatarView";
@@ -36,6 +37,7 @@ export function Avatar({
   fill = false,
   insetRight = 0,
   chooseIdle,
+  room,
 }: {
   url: string;
   /** Animation libraries for the avatar; it moves by code until they load. */
@@ -52,6 +54,8 @@ export function Avatar({
   insetRight?: number;
   /** Ask the agent what it does with a quiet moment; without it, the avatar wanders at random. */
   chooseIdle?: (here: string | undefined, hour: number) => Promise<Cue[]>;
+  /** The room it lives in; a new one is shown as it changes, without rebuilding the stage. */
+  room?: Room;
 }) {
   const host = useRef<HTMLDivElement>(null);
   // The stage reads these every frame; a ref keeps that from re-rendering React.
@@ -71,6 +75,11 @@ export function Avatar({
   useEffect(() => {
     stage.current?.setInsets({ right: insetRight });
   }, [insetRight]);
+  const roomRef = useRef(room);
+  roomRef.current = room;
+  useEffect(() => {
+    if (room) stage.current?.setRoom(room);
+  }, [room]);
   const animationsRef = useRef(animations);
   animationsRef.current = animations;
   const animationsKey = animations.join("\n");
@@ -89,6 +98,7 @@ export function Avatar({
           reducedMotion,
           view: viewRef.current,
           animations: animationsRef.current,
+          ...(roomRef.current ? { room: roomRef.current } : {}),
           // Through the ref: the page's latest way to ask, without rebuilding the stage.
           ...(choosing
             ? {
@@ -105,6 +115,8 @@ export function Avatar({
         }
         stage.current = s;
         s.setInsets({ right: insetRef.current });
+        // The room may have arrived, or changed, while the stage was loading.
+        if (roomRef.current) s.setRoom(roomRef.current);
         if (controlsRef.current) controlsRef.current.current = { cue: (c) => s.cue(c) };
       })
       .catch((err: unknown) => {
