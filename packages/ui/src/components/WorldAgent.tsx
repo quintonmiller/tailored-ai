@@ -58,6 +58,7 @@ export function WorldAgent({
   onVisit,
   onSendHome,
   onTasks,
+  onRedoRoom,
   onClose,
 }: {
   agent: string;
@@ -79,6 +80,8 @@ export function WorldAgent({
   onVisit?: () => void;
   onSendHome?: () => Promise<void>;
   onTasks: () => void;
+  /** Ask it, in a chat with the words written, to make its room show what it has been working on. */
+  onRedoRoom?: () => void;
   onClose: () => void;
 }) {
   const [own, setOwn] = useState<{ agent: ExploratoryAgent | undefined; allOn: boolean } | null>(null);
@@ -220,6 +223,16 @@ export function WorldAgent({
         {onVisit && (
           <button type="button" className="talk-tool" onClick={onVisit}>
             Go to it
+          </button>
+        )}
+        {onRedoRoom && (
+          <button
+            type="button"
+            className="talk-tool"
+            title="Ask it to make its room reflect what it has been working on"
+            onClick={onRedoRoom}
+          >
+            Redo its room
           </button>
         )}
         {where && !where.home && onSendHome && (

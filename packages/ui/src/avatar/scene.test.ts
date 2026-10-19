@@ -19,6 +19,7 @@ import {
   ROOM_TARGET,
   ROOM_VIEW,
   type Room,
+  roomChanges,
   roomDistance,
   roomFocus,
   roomProblems,
@@ -279,5 +280,28 @@ describe("bodyFor with company", () => {
   it("keeps the description short when the room is crowded", () => {
     const many = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel"];
     expect(bodyFor(DEFAULT_ROOM, many).looks.length).toBeLessThanOrEqual(80);
+  });
+});
+
+describe("what a change did to a room's things", () => {
+  it("grows in what is new or made over, and glides what only moved or turned from where it stood", () => {
+    const before = DEFAULT_ROOM;
+    const [first, second, third, fourth] = before.props;
+    const after: Room = {
+      ...before,
+      props: [
+        { ...first, at: [first.at[0] + 0.5, first.at[1]] },
+        { ...second, color: "#112233" },
+        { ...third, facing: third.facing + 90 },
+        fourth,
+        { id: "new-lamp", name: "the new lamp", kind: "lamp", at: [0, 0], facing: 0 },
+      ],
+    };
+    const { fresh, moved } = roomChanges(before, after);
+    expect([...fresh].sort()).toEqual([second.id, "new-lamp"].sort());
+    expect([...moved.keys()].sort()).toEqual([first.id, third.id].sort());
+    // Where it was, to glide from.
+    expect(moved.get(first.id)?.at).toEqual(first.at);
+    expect(roomChanges(before, before)).toEqual({ fresh: new Set(), moved: new Map() });
   });
 });

@@ -8800,6 +8800,14 @@ body.chat-dock-docked-right .app { padding-right: var(--chat-dock-width, 30vw); 
 .world-agent-said { font-style: italic; }
 .world-agent-when, .world-agent-run { color: var(--text-dim); }
 .world-agent-actions { padding-top: 10px; border-top: 1px solid var(--border); }
+/* A place's card: what agents changed in it lately, newest first. */
+.world-changes h3 { margin: 0 0 6px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-dim); }
+.world-changes ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.world-changes li { display: grid; grid-template-columns: 12px 1fr auto; align-items: start; gap: 8px; font-size: 12px; line-height: 1.45; }
+.world-changes .world-agent-dot { width: 8px; height: 8px; margin-top: 5px; }
+.world-change-what { min-width: 0; overflow-wrap: anywhere; color: var(--text); }
+.world-change-what strong { font-weight: 600; }
+.world-changes time { font-size: 11px; line-height: 17px; color: var(--text-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .world-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; line-height: 1.5; color: var(--text); }
 .world-steps li::marker { color: var(--text-dim); }
 .talk-avatar-problem { font-size: 12px; color: var(--text-dim); margin: 0; }

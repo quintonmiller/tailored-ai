@@ -37,9 +37,11 @@ import {
   type PlaceItem,
   type PlaceSpot,
   type Placing,
+  placeProblems,
   removeItem,
   unreachable,
   wallPoint,
+  withDoorwayHeld,
   withSpots,
 } from "./places-layout.js";
 
@@ -1011,6 +1013,66 @@ export function themeFor(words: string): Theme | undefined {
   return THEMES.find((t) => t.words.test(words));
 }
 
+/** A place with no theme: chosen, so no guess dresses it again. */
+export const NO_THEME = "none";
+
+/**
+ * The theme someone asked for: one by its id ("beach"), "none" for plain, or
+ * one its words call for ("the seaside" is the beach). Undefined when the
+ * words name none of them.
+ */
+export function themeNamed(words: string): Theme | typeof NO_THEME | undefined {
+  const asked = words
+    .trim()
+    .toLowerCase()
+    .replace(/^(the|a|an)\s+/, "");
+  if (/^(none|plain|no theme|nothing|no)$/.test(asked)) return NO_THEME;
+  return THEMES.find((t) => t.id === asked || `${t.id}s` === asked) ?? themeFor(asked);
+}
+
+/** What each theme brings with it when a room someone has furnished is given it: one thing that says so. */
+const SIGNS_OF: Record<string, string> = {
+  beach: "palm",
+  tavern: "fireplace",
+  studio: "easel",
+  workshop: "pegboard",
+  library: "bookshelf",
+};
+
+/**
+ * A room someone has furnished, given a theme: repainted in one of the
+ * theme's colourings (the room's name picks which), and with the one thing
+ * that says what it is, when it has none and there is room. Everything
+ * already in it stays where it is. "none" repaints it plain.
+ */
+export function retheme(place: Place, theme: Theme | typeof NO_THEME): { place: Place; added?: PlaceItem } {
+  const id = theme === NO_THEME ? NO_THEME : theme.id;
+  const palette = pick(seeded(`${place.name}\n${id}`), theme === NO_THEME ? PLAIN : theme.palettes);
+  const { floorColor: _old, ...rest } = place;
+  const painted: Place = {
+    ...rest,
+    walls: palette.walls,
+    floor: palette.floor,
+    ...(palette.floorColor ? { floorColor: palette.floorColor } : {}),
+    theme: id,
+  };
+  const kind = SIGNS_OF[id];
+  if (!kind || painted.props.some((p) => p.kind === kind)) return { place: painted };
+  const spot = findPlacement(withDoorwayHeld(painted), { kind }, {});
+  if (typeof spot === "string") return { place: painted };
+  const added: PlaceItem = {
+    id: newId(painted, kind),
+    name: newName(painted, kind),
+    kind,
+    at: spot.at,
+    facing: spot.facing,
+    ...(spot.elevation !== undefined ? { elevation: spot.elevation } : {}),
+  };
+  const next = withSpots({ ...painted, props: [...painted.props, added] });
+  // Something that would leave a spot out of reach isn't worth the theme: the colours alone say it.
+  return placeProblems(next).length ? { place: painted } : { place: next, added };
+}
+
 /**
  * What a meeting room puts on its walls, by theme, in a few arrangements the
  * room's name picks between: the task board always, in the middle of the back
@@ -1050,9 +1112,11 @@ const DRESSING: Record<string, { back: GroupId[]; left: GroupId[] }[]> = {
  * The task board hangs on the back wall, and the room is dressed for what it
  * is for (see `THEMES`).
  */
-export function meetingRoom(name: string, seats: number, purpose = ""): Place {
+export function meetingRoom(name: string, seats: number, purpose = "", chosen?: string): Place {
   const n = Math.max(2, Math.min(16, Math.floor(seats)));
-  const theme = themeFor(`${name} ${purpose}`);
+  // A theme someone chose beats the one the words call for; "none" is a choice too.
+  const theme =
+    chosen === NO_THEME ? undefined : (THEMES.find((t) => t.id === chosen) ?? themeFor(`${name} ${purpose}`));
   const rand = seeded(`${name}\n${purpose}`);
   const palette = pick(rand, theme?.palettes ?? PLAIN);
   const dressing = pick(rand, DRESSING[theme?.id ?? "plain"]);
@@ -1190,7 +1254,7 @@ export function meetingRoom(name: string, seats: number, purpose = ""): Place {
       facing: 0,
       color: "#e85d4a",
     });
-  return build({
+  const room = build({
     name,
     width,
     depth,
@@ -1206,6 +1270,8 @@ export function meetingRoom(name: string, seats: number, purpose = ""): Place {
     flips: () => rand() < 0.5,
     after,
   });
+  // The look it is dressed in, so whoever changes it later knows; a plain room nobody chose says nothing.
+  return theme ? { ...room, theme: theme.id } : chosen === NO_THEME ? { ...room, theme: NO_THEME } : room;
 }
 
 // --------------------------------------------------------------------------

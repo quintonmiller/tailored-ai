@@ -131,6 +131,51 @@ export interface Room {
   photos?: { media: string; what: string; at: string }[];
   /** Doors to other places, as the server lays the building out; none when the room stands on its own. */
   doors?: RoomDoor[];
+  /** The look it was dressed in ("beach", "library"), or "none"; chosen or guessed from its name. */
+  theme?: string;
+  /** What it is for, in a line. */
+  purpose?: string;
+  /** What agents did to it lately with their place tool, newest first. */
+  changes?: RoomChange[];
+}
+
+/** One change to a room: "planner added the bookshelf", and when. */
+export interface RoomChange {
+  who: string;
+  /** A few words that follow the agent's name. */
+  what: string;
+  at: string;
+}
+
+/**
+ * What a change to a room did to its things, so the stage can show it
+ * happening: what is new or made over (another colour, size or label) grows
+ * in, and what only moved or turned glides there from where it stood.
+ */
+export function roomChanges(before: Room, after: Room): { fresh: Set<string>; moved: Map<string, Prop> } {
+  const was = new Map(before.props.map((p) => [p.id, p]));
+  const fresh = new Set<string>();
+  const moved = new Map<string, Prop>();
+  for (const prop of after.props) {
+    const old = was.get(prop.id);
+    if (
+      !old ||
+      old.kind !== prop.kind ||
+      old.color !== prop.color ||
+      old.scale !== prop.scale ||
+      old.label !== prop.label ||
+      String(old.size) !== String(prop.size)
+    )
+      fresh.add(prop.id);
+    else if (
+      old.at[0] !== prop.at[0] ||
+      old.at[1] !== prop.at[1] ||
+      (old.elevation ?? 0) !== (prop.elevation ?? 0) ||
+      old.facing !== prop.facing
+    )
+      moved.set(prop.id, old);
+  }
+  return { fresh, moved };
 }
 
 /**
