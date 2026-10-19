@@ -9,6 +9,7 @@ export {
   parseBody,
   withoutCues,
 } from "./cues.js";
+export { chooseIdle, type IdleMoment } from "./idle.js";
 export { SentenceSplitter, speakable } from "./sentences.js";
 export { type LiveSession, LiveSessionError, type LiveSessionLimits, LiveSessions } from "./session.js";
 export {

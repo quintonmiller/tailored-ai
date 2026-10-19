@@ -16,6 +16,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { type ClipLibrary, type ClipRole, loadClipLibrary, rolesFor } from "./clips";
+import type { Cue } from "./cues";
 import { armClearance, bodyPoints } from "./fit";
 import { Director, route, turnBetween, Walker } from "./locomotion";
 import { type BodyState, Motion, POSE_BONES, type Pose } from "./motion";
@@ -80,6 +81,11 @@ export async function createStage(
     hour?: number;
     /** Animation libraries to play; the avatar moves by code until they load, and if they can't. */
     animations?: string[];
+    /**
+     * Ask the agent what it does with a quiet moment: where it is, as the room
+     * names it, and the local hour. Without one, it wanders at random.
+     */
+    chooseIdle?: (here: string | undefined, hour: number) => Promise<Cue[]>;
   } = {},
 ): Promise<Stage> {
   const room = opts.room ?? DEFAULT_ROOM;
@@ -195,7 +201,8 @@ export async function createStage(
     Math.max(0.3, hipsY * 1.35),
   );
   const stride = Math.max(0.15, hipsY * 1.1);
-  const director = new Director(room);
+  const director = new Director(room, Math.random, !!opts.chooseIdle);
+  let asking = false;
   /** The spot it is at, or walking to. */
   let current: string | undefined = start?.id;
   /** A walk asked for while seated: it stands up first. */
@@ -423,6 +430,18 @@ export async function createStage(
     if (point) motion.gesture("point", clock);
   };
 
+  function handleCue(c: { name: string; target?: string }) {
+    if (c.name === "go") {
+      const spot = c.target ? spotFor(room, c.target) : undefined;
+      if (spot) go(spot.id);
+    } else if (c.name === "look" || c.name === "point") {
+      if (c.target) aim(c.target, c.name === "point");
+    } else {
+      // A nod or a head shake from the files when there is one; the rest by code.
+      if (!clips?.shot(c.name as ClipRole, clock)) motion.gesture(c.name, clock);
+    }
+  }
+
   renderer.setAnimationLoop((now: number) => {
     const t = (now - started) / 1000;
     clock = t;
@@ -447,8 +466,27 @@ export async function createStage(
     }
     const { state, loudness, engaged } = input();
     const here = walker.busy || pending ? undefined : current;
-    const next = director.decide(t, here, engaged);
-    if (next) go(next);
+    const next = asking ? undefined : director.decide(t, here, engaged);
+    if (typeof next === "string") go(next);
+    else if (next && opts.chooseIdle) {
+      // The agent picks what it does with the quiet; if it can't be asked, a random spot.
+      asking = true;
+      const at = here ? spotById(room, here)?.name : undefined;
+      opts
+        .chooseIdle(at, new Date().getHours())
+        .then((cues) => {
+          if (!disposed) for (const c of cues) handleCue(c);
+        })
+        .catch(() => {
+          const others = room.spots.filter((s) => s.id !== here);
+          const pick = others[Math.floor(Math.random() * others.length)];
+          if (pick && !disposed) go(pick.id);
+        })
+        .finally(() => {
+          asking = false;
+          director.sent();
+        });
+    }
     if (pending && seated <= 0.05) go(pending);
     const walked = pending ? 0 : walker.step(dt);
     // Arrived somewhere: the close-up finds its best angle again, unless the
@@ -525,17 +563,7 @@ export async function createStage(
       resize();
     },
     walkTo: go,
-    cue(c) {
-      if (c.name === "go") {
-        const spot = c.target ? spotFor(room, c.target) : undefined;
-        if (spot) go(spot.id);
-      } else if (c.name === "look" || c.name === "point") {
-        if (c.target) aim(c.target, c.name === "point");
-      } else {
-        // A nod or a head shake from the files when there is one; the rest by code.
-        if (!clips?.shot(c.name as ClipRole, clock)) motion.gesture(c.name, clock);
-      }
-    },
+    cue: handleCue,
     dispose() {
       disposed = true;
       clips?.dispose();

@@ -35,6 +35,7 @@ export function Avatar({
   controls,
   fill = false,
   insetRight = 0,
+  chooseIdle,
 }: {
   url: string;
   /** Animation libraries for the avatar; it moves by code until they load. */
@@ -49,6 +50,8 @@ export function Avatar({
   fill?: boolean;
   /** Pixels of the right side covered by something laid over the scene; the camera frames what is left. */
   insetRight?: number;
+  /** Ask the agent what it does with a quiet moment; without it, the avatar wanders at random. */
+  chooseIdle?: (here: string | undefined, hour: number) => Promise<Cue[]>;
 }) {
   const host = useRef<HTMLDivElement>(null);
   // The stage reads these every frame; a ref keeps that from re-rendering React.
@@ -60,6 +63,9 @@ export function Avatar({
   viewRef.current = view;
   const controlsRef = useRef(controls);
   controlsRef.current = controls;
+  const chooseRef = useRef(chooseIdle);
+  chooseRef.current = chooseIdle;
+  const choosing = !!chooseIdle;
   const insetRef = useRef(insetRight);
   insetRef.current = insetRight;
   useEffect(() => {
@@ -83,6 +89,13 @@ export function Avatar({
           reducedMotion,
           view: viewRef.current,
           animations: animationsRef.current,
+          // Through the ref: the page's latest way to ask, without rebuilding the stage.
+          ...(choosing
+            ? {
+                chooseIdle: (here: string | undefined, hour: number) =>
+                  chooseRef.current?.(here, hour) ?? Promise.resolve([]),
+              }
+            : {}),
         }),
       )
       .then((s) => {
@@ -103,7 +116,7 @@ export function Avatar({
       stage.current = null;
       if (controlsRef.current) controlsRef.current.current = null;
     };
-  }, [url, animationsKey]);
+  }, [url, animationsKey, choosing]);
 
   const choose = (next: StageView) => {
     setView(next);

@@ -12,15 +12,25 @@ import type { StageInput } from "../avatar/stage";
 import { type ChatStageOptions, TalkButton, useChatStage } from "./ChatStage";
 
 const stage = vi.hoisted(() => ({
-  calls: [] as { url: string; input: StageInput; animations?: string[] }[],
+  calls: [] as {
+    url: string;
+    input: StageInput;
+    animations?: string[];
+    chooseIdle?: (here: string | undefined, hour: number) => Promise<unknown>;
+  }[],
   cues: [] as string[],
   insets: [] as number[],
   /** Stages on screen now: what render() waits for, instead of a fixed sleep a slow runner outlasts. */
   mounted: 0,
 }));
 vi.mock("../avatar/stage", () => ({
-  createStage: async (_host: HTMLElement, url: string, input: StageInput, opts: { animations?: string[] }) => {
-    stage.calls.push({ url, input, animations: opts.animations });
+  createStage: async (
+    _host: HTMLElement,
+    url: string,
+    input: StageInput,
+    opts: { animations?: string[]; chooseIdle?: (here: string | undefined, hour: number) => Promise<unknown> },
+  ) => {
+    stage.calls.push({ url, input, animations: opts.animations, chooseIdle: opts.chooseIdle });
     stage.mounted++;
     return {
       dispose: () => {
@@ -137,6 +147,10 @@ beforeEach(() => {
           return new Response(JSON.stringify({ error: "Live sessions are off." }), { status: sessionStatus });
         return new Response(JSON.stringify({ id: `live-${posts.length}`, conversation: "conv-1" }), { status: 201 });
       }
+      if (url === "/api/live/idle") {
+        posts.push({ url, body: JSON.parse(String(init?.body)) });
+        return new Response(JSON.stringify({ cues: [{ name: "go", target: "the window" }] }));
+      }
       if (url.endsWith("/turn")) {
         posts.push({ url, body: "audio" });
         return streamed(turnChunks);
@@ -251,6 +265,21 @@ describe("the chat page's scene", () => {
     await render({ sending: true });
     await render({ sending: false });
     expect(stage.calls[0].input().engaged).toBe(true);
+  });
+
+  it("lets the agent choose what its body does with a quiet moment", async () => {
+    await render();
+    const cues = await stage.calls[0].chooseIdle?.("on the couch", 21);
+    expect(cues).toEqual([{ name: "go", target: "the window" }]);
+    const asked = posts.find((p) => p.url === "/api/live/idle")?.body as Record<string, unknown>;
+    expect(asked).toMatchObject({ agent: "talker", here: "on the couch", hour: 21 });
+    expect((asked.body as { gestures: string[] }).gestures).toContain("wave");
+  });
+
+  it("leaves the avatar to wander on its own when live sessions are off", async () => {
+    liveInfo = { enabled: false, avatar: "/api/live/avatar?agent=talker" };
+    await render();
+    expect(stage.calls[0].chooseIdle).toBeUndefined();
   });
 
   it("turns the 3D view off, and remembers that next time", async () => {

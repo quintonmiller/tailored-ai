@@ -3,7 +3,7 @@
  * after turning to face the way, and when to wander or come back.
  */
 import { describe, expect, it } from "vitest";
-import { Director, route, turnBetween, Walker } from "./locomotion";
+import { ASK, Director, route, turnBetween, Walker } from "./locomotion";
 import { DEFAULT_ROOM, spotById } from "./scene";
 
 const at = (id: string) => spotById(DEFAULT_ROOM, id)?.at;
@@ -116,5 +116,17 @@ describe("Director", () => {
     d.decide(0, "middle", false);
     d.sent();
     expect(d.decide(60, "desk", false)).toBeUndefined();
+  });
+});
+
+describe("Director, when the agent chooses", () => {
+  it("asks the agent every few minutes instead of picking a spot, and never during a conversation", () => {
+    const d = new Director(DEFAULT_ROOM, () => 0.5, true);
+    expect(d.decide(0, "middle", false)).toBeUndefined();
+    expect(d.decide(60, "middle", false)).toBeUndefined();
+    expect(d.decide(200, "middle", false)).toBe(ASK);
+    d.sent();
+    expect(d.decide(201, "middle", true)).toBeUndefined();
+    expect(d.decide(900, "middle", true)).toBeUndefined();
   });
 });

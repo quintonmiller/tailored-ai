@@ -23,8 +23,8 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `agent.defaultProvider` | string | `openai_compatible` | 13 | 13 |
-| `agent.extraInstructions` | string | `""` | 4 | 2 |
+| `agent.defaultProvider` | string | `openai_compatible` | 14 | 14 |
+| `agent.extraInstructions` | string | `""` | 5 | 2 |
 | `agent.maxContextTokens` | number | `32768` | 3 | 1 |
 | `agent.maxHistoryTokens` | number | `20000` | 3 | 3 |
 | `agent.maxToolOutputChars` | number | `32000` | 4 | 2 |
@@ -180,7 +180,7 @@ Fields: **79** · with no read site found: **0**
 
 | Field | Type | Default | Reads | Path |
 | --- | --- | --- | --- | --- |
-| `time.provider` | string | `system` | 46 | 4 |
+| `time.provider` | string | `system` | 47 | 4 |
 
 ### `tools`
 
@@ -208,7 +208,7 @@ Fields: **79** · with no read site found: **0**
 | `tools.web_search.apiKey` | string | `""` | 23 | 1 |
 | `tools.web_search.enabled` | boolean | `false` | 40 | 2 |
 | `tools.web_search.maxResults` | number | `5` | 2 | 1 |
-| `tools.web_search.provider` | string | `brave` | 46 | **0** |
+| `tools.web_search.provider` | string | `brave` | 47 | **0** |
 | `tools.write.enabled` | boolean | `true` | 40 | 1 |
 
 ### `webhooks`

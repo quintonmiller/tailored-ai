@@ -1,5 +1,6 @@
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { Avatar, type AvatarControls } from "../avatar/Avatar";
+import type { Cue } from "../avatar/cues";
 import type { BodyState } from "../avatar/motion";
 import { bodyFor, DEFAULT_ROOM } from "../avatar/scene";
 import { useVoice } from "./voice";
@@ -173,6 +174,22 @@ export function useChatStage({ agent, sessionKey, sending, panelOpen, onSpoken, 
     return () => clearTimeout(quiet);
   }, [busy]);
 
+  // A quiet moment, while the page is in view: the agent chooses what it does.
+  const chooseIdle = useCallback(
+    async (here: string | undefined, hour: number): Promise<Cue[]> => {
+      if (document.visibilityState === "hidden") return [];
+      const res = await fetch("/api/live/idle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...(agent ? { agent } : {}), body: bodyFor(DEFAULT_ROOM), here, hour }),
+      });
+      if (!res.ok) throw new Error(`idle choice failed (${res.status})`);
+      const data = (await res.json()) as { cues?: Cue[] };
+      return Array.isArray(data.cues) ? data.cues : [];
+    },
+    [agent],
+  );
+
   const state: BodyState = voice.phase !== "idle" ? voice.phase : sending ? "thinking" : "idle";
   const stage: ReactNode =
     showStage && info.avatar ? (
@@ -185,6 +202,7 @@ export function useChatStage({ agent, sessionKey, sending, panelOpen, onSpoken, 
         engaged={busy || conversing}
         controls={controls}
         insetRight={panelOpen && wide ? PANEL_WIDTH : 0}
+        {...(info.enabled ? { chooseIdle } : {})}
       />
     ) : null;
 
