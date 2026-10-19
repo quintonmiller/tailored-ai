@@ -12,8 +12,10 @@ import {
   applyAction,
   bodyAt,
   buildWorld,
+  goingToSee,
   homeId,
   mayChange,
+  messageTo,
   onlyMembers,
   PLACE_TYPE,
   PlaceTool,
@@ -23,10 +25,12 @@ import {
   roomPlaceId,
   scene,
   TRANSCRIPT_LINES,
+  together,
   transcript,
   VISIT_SCHEMA,
   VISIT_TYPE,
   visitOf,
+  visitWith,
   WHEREABOUTS_TYPE,
   whereIs,
   whoIsIn,
@@ -709,6 +713,229 @@ describe("bodies going where the talk is", () => {
     expect(visitOf(record, now + QUIET)).toBeUndefined();
     expect(visitOf({ place: trip }, now)).toBeUndefined();
     expect(visitOf(undefined, now)).toBeUndefined();
+  });
+});
+
+describe("going to see an agent you message", () => {
+  const types = [
+    { name: PLACE_TYPE, scope: "agent" as const },
+    { name: WHEREABOUTS_TYPE, scope: "global" as const },
+    { name: VISIT_TYPE, scope: "global" as const, provider: "memory", schema: VISIT_SCHEMA as never },
+  ];
+  const owner: StateCaller = { actor: { kind: "user", name: "owner" } };
+  const bodies = new Set(["host", "guest", "other", "third"]);
+  const hasBody = (agent: string | undefined) => bodies.has(agent ?? "default");
+  const rooms = [{ ref: "local:trip", name: "trip", members: ["host", "guest"] }];
+  const trip = roomPlaceId("local:trip");
+  const QUIET = 10 * 60_000;
+  const DM_QUIET = 5 * 60_000;
+  let state: StateService;
+  let presence: Presence;
+  let sleeping: Set<string>;
+  const visit = async (agent: string) => state.get(owner, { type: VISIT_TYPE, id: agent });
+  const at = (agent: string) => bodyAt(state, owner, agent, rooms);
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-19T02:00:00Z"));
+    state = new StateService({
+      getConfig: () => ({ state: { backend: "sqlite", types } }),
+      db: new Database(":memory:"),
+    });
+    sleeping = new Set();
+    presence = new Presence({
+      state: () => state,
+      hasBody,
+      quietMs: QUIET,
+      dmQuietMs: DM_QUIET,
+      livesIn: (agent) => whereIs(state, owner, agent, rooms),
+      asleep: (agent) => sleeping.has(agent),
+    });
+  });
+  afterEach(() => vi.useRealTimers());
+
+  describe("who goes where", () => {
+    const home = (agent: string) => ({ at: homeId(agent) });
+    const rule = (from: string, to: string, where: Record<string, ReturnType<typeof home>>, asleep = false) =>
+      goingToSee(from, to, { from: where[from] ?? home(from), to: where[to] ?? home(to), hasBody, asleep });
+
+    it("sends the sender to where the other's body is, to stand with it", () => {
+      expect(rule("host", "guest", {})).toEqual({ agent: "host", place: homeId("guest"), with: "guest" });
+      // Wherever its own visit has taken it: a meeting it is talking in, or someone it went to see.
+      const atTable = { guest: { at: trip, visit: { place: trip } } };
+      expect(rule("host", "guest", atTable)).toEqual({ agent: "host", place: trip, with: "guest" });
+      const calling = { guest: { at: homeId("other"), visit: { place: homeId("other"), with: "other" } } };
+      expect(rule("host", "guest", calling)).toEqual({ agent: "host", place: homeId("other"), with: "guest" });
+      // Gone to see one agent, it goes on to the next one it messages.
+      const out = { host: { at: homeId("other"), visit: { place: homeId("other"), with: "other" } } };
+      expect(rule("host", "guest", out)).toEqual({ agent: "host", place: homeId("guest"), with: "guest" });
+    });
+
+    it("keeps two already together where they are, whoever writes next", () => {
+      const visiting = { host: { at: homeId("guest"), visit: { place: homeId("guest"), with: "guest" } } };
+      // The visitor writes again: it stays a while longer.
+      expect(rule("host", "guest", visiting)).toEqual({ agent: "host", place: homeId("guest"), with: "guest" });
+      // The one it came to see writes back: the visitor stays a while longer, and nobody walks anywhere.
+      expect(rule("guest", "host", visiting)).toEqual({ agent: "host", place: homeId("guest"), with: "guest" });
+      // In the same meeting already: nobody moves.
+      const meeting = { host: { at: trip, visit: { place: trip } }, guest: { at: trip, visit: { place: trip } } };
+      expect(rule("host", "guest", meeting)).toBeUndefined();
+    });
+
+    it("moves nobody for a message to itself, or between agents without both a body", () => {
+      expect(rule("host", "host", {})).toBeUndefined();
+      expect(rule("host", "bodiless", {})).toBeUndefined();
+      expect(rule("bodiless", "host", {})).toBeUndefined();
+    });
+
+    it("leaves a paused sender asleep at home, and one talking at a meeting in its seat", () => {
+      expect(rule("host", "guest", {}, true)).toBeUndefined();
+      expect(rule("host", "guest", { host: { at: trip, visit: { place: trip } } })).toBeUndefined();
+    });
+  });
+
+  it("finds who a tool call messages directly, by name or by label, before it is sent", () => {
+    const known = {
+      agentFor: (label: string) => ({ guest: "guest", Guesty: "guest", host: "host" })[label],
+      desks: { other: "others-desk" },
+    };
+    expect(messageTo("room", { action: "dm", agent: "guest", body: "hi" }, "host", known)).toBe("guest");
+    expect(messageTo("room", { action: "dm", to: "Guesty", body: "hi" }, "host", known)).toBe("guest");
+    // Nothing to say, nobody named, someone unknown, itself, another action, another tool.
+    expect(messageTo("room", { action: "dm", agent: "guest", body: " " }, "host", known)).toBeUndefined();
+    expect(messageTo("room", { action: "dm", body: "hi" }, "host", known)).toBeUndefined();
+    expect(messageTo("room", { action: "dm", agent: "stranger", body: "hi" }, "host", known)).toBeUndefined();
+    expect(messageTo("room", { action: "dm", agent: "host", body: "hi" }, "host", known)).toBeUndefined();
+    expect(messageTo("room", { action: "post", agent: "guest", body: "hi" }, "host", known)).toBeUndefined();
+    expect(messageTo("delegate", { action: "dm", agent: "guest", body: "hi" }, "host", known)).toBeUndefined();
+    // Sent on to a desk room, it is said in that room: the body goes there to say it instead.
+    const desk = { ...known, agentFor: () => "other" };
+    expect(messageTo("room", { action: "dm", agent: "other", body: "hi" }, "host", desk)).toBeUndefined();
+  });
+
+  it("stands the sender in the other's home, out of its own, and says who it is with", async () => {
+    expect(await presence.meet("host", "guest")).toBe(true);
+    expect(await visit("host")).toMatchObject({ data: { place: homeId("guest"), with: "guest" } });
+    expect(visitWith((await visit("host"))?.data)).toBe("guest");
+    expect(await at("host")).toBe(homeId("guest"));
+    // Where it lives is untouched.
+    expect(await whereIs(state, owner, "host", rooms)).toBe(homeId("host"));
+    expect(await whoIsIn(state, owner, homeId("guest"), hasBody, undefined, rooms)).toEqual(["guest", "host"]);
+    expect(await whoIsIn(state, owner, homeId("host"), hasBody, undefined, rooms)).toEqual([]);
+    expect(await scene(state, owner, homeId("guest"), rooms, hasBody)).toMatchObject({
+      agents: ["guest", "host"],
+      with: { host: "guest" },
+    });
+    const map = await worldMap(state, owner, ["host", "guest", "other"], rooms, hasBody);
+    expect(map.find((p) => p.id === homeId("guest"))).toMatchObject({
+      agents: ["guest", "host"],
+      with: { host: "guest" },
+    });
+    expect(map.find((p) => p.id === homeId("host"))).toMatchObject({ agents: [] });
+    expect(map.find((p) => p.id === homeId("host"))?.with).toBeUndefined();
+  });
+
+  it("walks back after its own, shorter quiet spell, and the sweep clears the visit", async () => {
+    await presence.meet("host", "guest");
+    vi.setSystemTime(Date.now() + DM_QUIET - 1000);
+    expect(await at("host")).toBe(homeId("guest"));
+    vi.setSystemTime(Date.now() + 2000);
+    expect(await at("host")).toBe(homeId("host"));
+    await presence.sweep();
+    expect(await visit("host")).toBeNull();
+  });
+
+  it("keeps two talking back and forth together, without walking either to and fro", async () => {
+    await presence.meet("host", "guest");
+    const first = await visit("host");
+    // The answer comes, and the one it came to see writes back a while later: the visitor stays on.
+    await presence.meet("host", "guest");
+    vi.setSystemTime(Date.now() + 3 * 60_000);
+    expect(await presence.meet("guest", "host")).toBe(false);
+    await presence.settled();
+    expect(await visit("guest")).toBeNull();
+    const later = await visit("host");
+    expect(later?.version).toBeGreaterThan(first?.version ?? 0);
+    expect(Date.parse(String(later?.data.until))).toBe(Date.now() + DM_QUIET);
+    // Long after the first message, not long after the last: still together.
+    vi.setSystemTime(Date.now() + DM_QUIET - 1000);
+    await presence.sweep();
+    expect(await at("host")).toBe(homeId("guest"));
+    expect(await at("guest")).toBe(homeId("guest"));
+  });
+
+  it("stands several who message the same agent round it, each with it", async () => {
+    await presence.meet("host", "guest");
+    await presence.meet("other", "guest");
+    await presence.meet("third", "guest");
+    expect(await whoIsIn(state, owner, homeId("guest"), hasBody, undefined, rooms)).toEqual([
+      "guest",
+      "host",
+      "other",
+      "third",
+    ]);
+    expect((await scene(state, owner, homeId("guest"), rooms, hasBody))?.with).toEqual({
+      host: "guest",
+      other: "guest",
+      third: "guest",
+    });
+  });
+
+  it("follows the other to the meeting it is talking in, and goes home once the other leaves", async () => {
+    await presence.visit("guest", "local:trip");
+    await presence.meet("host", "guest");
+    expect(await visit("host")).toMatchObject({ data: { place: trip, with: "guest" } });
+    // The guest goes home after its meeting: the visit ends at the next sweep, as nobody it came to see is there.
+    vi.setSystemTime(Date.now() + DM_QUIET - 60_000);
+    await state.delete(owner, { type: VISIT_TYPE, id: "guest" });
+    await presence.sweep();
+    expect(await visit("host")).toBeNull();
+    expect(await at("host")).toBe(homeId("host"));
+  });
+
+  it("goes home to sleep once paused", async () => {
+    await presence.meet("host", "guest");
+    await presence.sweep();
+    expect(await at("host")).toBe(homeId("guest"));
+    sleeping.add("host");
+    await presence.sweep();
+    expect(await visit("host")).toBeNull();
+    // Paused, it doesn't set off again.
+    expect(await presence.meet("host", "guest")).toBe(false);
+    expect(await visit("host")).toBeNull();
+  });
+
+  it("isn't pulled out of a meeting it is talking in, and a meeting it speaks at ends a visit to someone", async () => {
+    await presence.visit("host", "local:trip");
+    expect(await presence.meet("host", "guest")).toBe(false);
+    expect(await visit("host")).toMatchObject({ data: { place: trip } });
+    expect(visitWith((await visit("host"))?.data)).toBeUndefined();
+    // Gone to see someone, it says something in a room: it goes to that room's table, with nobody in particular.
+    await state.delete(owner, { type: VISIT_TYPE, id: "host" });
+    await presence.meet("host", "guest");
+    await presence.visit("host", "local:trip");
+    expect(await visit("host")).toMatchObject({ data: { place: trip } });
+    expect(visitWith((await visit("host"))?.data)).toBeUndefined();
+  });
+
+  it("calls off a visit for a message that didn't go through, and only that one", async () => {
+    await presence.meet("host", "guest");
+    await presence.part("host", "other");
+    expect(await at("host")).toBe(homeId("guest"));
+    await presence.part("host", "guest");
+    expect(await visit("host")).toBeNull();
+    // A room visit is never called off for a message.
+    await presence.visit("host", "local:trip");
+    await presence.part("host", "guest");
+    expect(await at("host")).toBe(trip);
+  });
+
+  it("names only pairs who are both there", () => {
+    const seen = new Map([
+      ["host", "guest"],
+      ["other", "third"],
+    ]);
+    expect(together(seen, ["guest", "host", "other"])).toEqual({ host: "guest" });
+    expect(together(seen, ["host"])).toBeUndefined();
   });
 });
 

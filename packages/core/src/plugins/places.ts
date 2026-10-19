@@ -269,19 +269,25 @@ export const WHEREABOUTS_TYPE = "whereabouts";
 const SHARED = "shared:";
 
 /**
- * A body visiting the meeting room of a room it is talking in (see
- * {@link Presence}): one record per agent, naming the room's place and when
- * the visit ends. Kept in memory, apart from whereabouts, since it lasts
- * minutes: where the agent lives is never written for it, and a restart ends
- * every visit.
+ * A body visiting somewhere for a while (see {@link Presence}): the meeting
+ * room of a room it is talking in, or wherever an agent it messaged directly
+ * is, standing `with` it. One record per agent, naming the place and when the
+ * visit ends. Kept in memory, apart from whereabouts, since it lasts minutes:
+ * where the agent lives is never written for it, and a restart ends every
+ * visit.
  */
 export const VISIT_TYPE = "visit";
 
-/** The meeting room a visit record has a body in now; nothing once the visit has ended. */
+/** The place a visit record has a body in now; nothing once the visit has ended. */
 export function visitOf(data: Record<string, unknown> | undefined, now: number): string | undefined {
   const place = typeof data?.place === "string" ? data.place : undefined;
   const until = typeof data?.until === "string" ? Date.parse(data.until) : Number.NaN;
   return place && Number.isFinite(until) && until > now ? place : undefined;
+}
+
+/** The agent a visit record went to see, for a direct message; nobody for a meeting room. */
+export function visitWith(data: Record<string, unknown> | undefined): string | undefined {
+  return typeof data?.with === "string" && data.with ? data.with : undefined;
 }
 
 /** The rooms agents talk in, and who has a body: what a meeting room needs to be found and drawn. */
@@ -364,9 +370,38 @@ export async function bodyAt(
   return visitOf(visit?.data, Date.now()) ?? whereIs(service, caller, agent, rooms);
 }
 
+/** Every body on a visit to see someone, by agent, and who it went to see: the visits direct messages started, while they last. */
+async function seeing(service: StateService, caller: StateCaller): Promise<Map<string, string>> {
+  const visits = await service
+    .query(caller, { type: VISIT_TYPE, limit: 500 })
+    .catch(() => [] as Awaited<ReturnType<StateService["query"]>>);
+  const now = Date.now();
+  return new Map(
+    visits.flatMap((v) => {
+      const partner = visitWith(v.data);
+      return partner && visitOf(v.data, now) ? [[v.id, partner] as [string, string]] : [];
+    }),
+  );
+}
+
 /**
- * Every body that has gone somewhere, and where it is now: a meeting room it
- * is visiting, or where it went. Whereabouts naming a meeting room stand only
+ * Of the bodies in one place, those that came to see someone else there, by
+ * who they came to see: what the page needs to stand each by the one it is
+ * talking to, and the map to say who is talking with whom. One whose partner
+ * has gone elsewhere is left out: its visit ends at the next sweep.
+ */
+export function together(seen: Map<string, string>, here: string[]): Record<string, string> | undefined {
+  const there = new Set(here);
+  const pairs = here.flatMap((agent) => {
+    const partner = seen.get(agent);
+    return partner && there.has(partner) ? [[agent, partner] as [string, string]] : [];
+  });
+  return pairs.length ? Object.fromEntries(pairs) : undefined;
+}
+
+/**
+ * Every body that has gone somewhere, and where it is now: a place it is
+ * visiting, or where it went. Whereabouts naming a meeting room stand only
  * for a member of its room (one who went in to change it); without the rooms
  * to check against, they don't.
  */
@@ -512,6 +547,8 @@ export interface MapPlace {
    * open on each other, the other one. None for the lobby, another area's first hall, or a place alone in its area.
    */
   via?: string;
+  /** Those here to see someone else here, by who they came to see: an agent visiting one it messaged directly. */
+  with?: Record<string, string>;
 }
 
 /** A room of conversation's place id. */
@@ -608,6 +645,7 @@ export async function worldMap(
   const sharedIds = new Set(shared.map((p) => p.id));
   const roomIds = new Set(rooms.map((r) => roomPlaceId(r.ref)));
   const gone = await goneTo(service, caller, rooms);
+  const seen = await seeing(service, caller);
   const purposeOf = await purposes(service, caller);
   const purpose = (id: string, fallback?: string) => {
     const p = purposeOf.get(id) || fallback;
@@ -627,6 +665,12 @@ export async function worldMap(
     const from = world.halls.find((h) => h.id === id)?.entrance?.to ?? world.doors.get(id)?.to;
     return from ? { via: from } : {};
   };
+  // Who is in a place, and who of them came to see whom there.
+  const inIt = (id: string) => {
+    const agents = (inside.get(id) ?? []).sort();
+    const pairs = together(seen, agents);
+    return { agents, ...(pairs ? { with: pairs } : {}) };
+  };
   return [
     { id: LOBBY, name: "the lobby", kind: "lobby" as const, agents: [], area: MAIN },
     ...world.halls.map((h) => ({
@@ -642,7 +686,7 @@ export async function worldMap(
       name: a === "default" ? "the default agent's room" : `${a}'s room`,
       kind: "home" as const,
       owner: a,
-      agents: (inside.get(homeId(a)) ?? []).sort(),
+      ...inIt(homeId(a)),
       area: area(homeId(a)),
       ...purpose(homeId(a)),
       ...via(homeId(a)),
@@ -651,7 +695,7 @@ export async function worldMap(
       id: p.id,
       name: p.name,
       kind: "shared" as const,
-      agents: (inside.get(p.id) ?? []).sort(),
+      ...inIt(p.id),
       area: area(p.id),
       ...purpose(p.id),
       ...via(p.id),
@@ -660,7 +704,7 @@ export async function worldMap(
       id: roomPlaceId(r.ref),
       name: r.name,
       kind: "room" as const,
-      agents: (inside.get(roomPlaceId(r.ref)) ?? []).sort(),
+      ...inIt(roomPlaceId(r.ref)),
       members: r.members.filter((m) => hasBody(m)).sort(),
       area: MAIN,
       // The purpose its members gave its meeting room, over the room's own.
@@ -675,7 +719,8 @@ export async function worldMap(
  * building, its doors. A room of conversation is a meeting room with a seat
  * for each member, and in it the members there now, drawn fresh until one of
  * them changes it and kept from then on; a hall is a corridor with a door for
- * each place off it, always drawn fresh.
+ * each place off it, always drawn fresh. Anyone in it who came to see someone
+ * else there is named in `with`.
  */
 export async function scene(
   service: StateService,
@@ -684,9 +729,11 @@ export async function scene(
   rooms: TalkRoom[],
   hasBody: (agent: string | undefined) => boolean,
   world?: World,
-): Promise<{ id: string; place: Place; agents: string[]; doors: PlaceDoor[] } | null> {
+): Promise<{ id: string; place: Place; agents: string[]; doors: PlaceDoor[]; with?: Record<string, string> } | null> {
   const found = await sceneOf(service, caller, id, rooms, hasBody, world);
-  return found && { ...found, doors: world ? doorsIn(id, found.place, world) : [] };
+  if (!found) return null;
+  const pairs = found.agents.length > 1 ? together(await seeing(service, caller), found.agents) : undefined;
+  return { ...found, doors: world ? doorsIn(id, found.place, world) : [], ...(pairs ? { with: pairs } : {}) };
 }
 
 async function sceneOf(
@@ -733,18 +780,66 @@ async function sceneOf(
 
 /** How long a body stays in a meeting room after it last said something or was woken there, unless plugin config says. */
 export const QUIET_MINUTES = 10;
+/** How long a body stays with an agent it messaged directly after their last exchange, unless plugin config says. */
+export const DM_QUIET_MINUTES = 5;
 /** A visit isn't written again for every message: only once it has run down this far. */
 const VISIT_REFRESH_MS = 60_000;
 
+/** Where an agent's body is now, and the visit that has it there, if it is on one. */
+export interface BodyWhere {
+  at: string;
+  visit?: { place: string; with?: string };
+}
+
 /**
- * Agents' bodies going to the meeting room of a room they are talking in.
- * Saying something in a room, an agent with a body goes there: its `visit`
- * record names the room's place, with an `until` a quiet spell away. Each
- * thing it says there, and each time the room wakes it while it is there,
- * moves `until` on; being woken alone moves nobody, so an agent that reads a
- * room and keeps quiet stays where it was. Once `until` passes, the body is
- * back where it lives (see {@link visitOf}), and {@link sweep} removes the
- * record, so a page watching visits sees it go.
+ * Who goes where when one agent messages another directly: the sender goes
+ * to wherever the recipient's body is, to stand with it. Two already in the
+ * same place stay put, and whichever came to see the other stays a while
+ * longer, so a conversation that goes back and forth keeps them together
+ * rather than sending them to and fro. Nobody moves for a message to itself,
+ * or when either has no body. A paused sender sleeps at home, and one talking
+ * in a meeting room keeps its seat at the table: each messages from where it
+ * is. Undefined when nobody's visit changes; otherwise whose, to where, and
+ * with whom.
+ */
+export function goingToSee(
+  from: string,
+  to: string,
+  at: {
+    from: BodyWhere;
+    to: BodyWhere;
+    hasBody: (agent: string | undefined) => boolean;
+    /** The sender is paused or switched off. */
+    asleep?: boolean;
+  },
+): { agent: string; place: string; with: string } | undefined {
+  if (from === to || !at.hasBody(from) || !at.hasBody(to)) return undefined;
+  if (at.from.at === at.to.at) {
+    if (at.from.visit?.with === to) return { agent: from, place: at.from.at, with: to };
+    if (at.to.visit?.with === from) return { agent: to, place: at.to.at, with: from };
+    return undefined;
+  }
+  if (at.asleep) return undefined;
+  // A visit with nobody in particular is a meeting it is talking in: that outranks a direct message.
+  if (at.from.visit && !at.from.visit.with) return undefined;
+  return { agent: from, place: at.to.at, with: to };
+}
+
+/**
+ * Agents' bodies going where the talk is. Saying something in a room, an
+ * agent with a body goes to that room's meeting room: its `visit` record
+ * names the room's place, with an `until` a quiet spell away. Each thing it
+ * says there, and each time the room wakes it while it is there, moves
+ * `until` on; being woken alone moves nobody, so an agent that reads a room
+ * and keeps quiet stays where it was.
+ *
+ * Messaging another agent directly, it goes to see it (see
+ * {@link goingToSee}): the visit names the place the other's body is in and
+ * who it is `with`, until a shorter quiet spell. That visit also ends once the
+ * other has gone somewhere else, or the visitor is paused.
+ *
+ * Once a visit ends, the body is back where it lives (see {@link visitOf}),
+ * and {@link sweep} removes the record, so a page watching visits sees it go.
  */
 export class Presence {
   private readonly chains = new Map<string, Promise<void>>();
@@ -754,6 +849,12 @@ export class Presence {
       state: () => StateService;
       hasBody: (agent: string | undefined) => boolean;
       quietMs: number;
+      /** How long a visit to see someone lasts after their last exchange; `quietMs` when not given. */
+      dmQuietMs?: number;
+      /** Where an agent lives (see {@link whereIs}): what a body is back at once its visit ends. */
+      livesIn?: (agent: string) => Promise<string>;
+      /** Whether an agent is paused or switched off, so it sleeps at home. */
+      asleep?: (agent: string) => boolean;
       now?: () => number;
     },
   ) {}
@@ -765,13 +866,44 @@ export class Presence {
   /** An agent said something in a room: its body goes to the meeting room, or stays a while longer. */
   visit(agent: string, roomRef: string): Promise<void> {
     if (!this.opts.hasBody(agent)) return Promise.resolve();
-    return this.inTurn(agent, () => this.go(agent, roomPlaceId(roomRef), true));
+    return this.inTurn(agent, () => this.go(agent, roomPlaceId(roomRef), true).then(() => {}));
   }
 
   /** A room woke an agent: a body already in its meeting room stays a while longer; one anywhere else stays there. */
   stay(agent: string, roomRef: string): Promise<void> {
     if (!this.opts.hasBody(agent)) return Promise.resolve();
-    return this.inTurn(agent, () => this.go(agent, roomPlaceId(roomRef), false));
+    return this.inTurn(agent, () => this.go(agent, roomPlaceId(roomRef), false).then(() => {}));
+  }
+
+  /**
+   * One agent messaged another directly: the sender goes to see it, or two
+   * already together stay a while longer (see {@link goingToSee}). Resolves
+   * to whether the sender set off somewhere it wasn't already visiting.
+   */
+  meet(from: string, to: string): Promise<boolean> {
+    let went = false;
+    return this.inTurn(from, async () => {
+      const step = goingToSee(from, to, {
+        from: await this.where(from),
+        to: await this.where(to),
+        hasBody: this.opts.hasBody,
+        asleep: !!this.opts.asleep?.(from),
+      });
+      if (step?.agent === from) went = await this.go(from, step.place, true, to);
+      // The other came to see the sender, and stays a while longer: in its own turn, so its own visits keep their order.
+      else if (step)
+        void this.inTurn(step.agent, () => this.go(step.agent, step.place, false, step.with).then(() => {}));
+    }).then(() => went);
+  }
+
+  /** A direct message that didn't go through: a visit it set off on ends, and the body goes back. */
+  part(from: string, to: string): Promise<void> {
+    return this.inTurn(from, async () => {
+      const service = this.opts.state();
+      const ref = { type: VISIT_TYPE, id: from };
+      const found = await service.get(PRESENCE_CALLER, ref);
+      if (found && visitWith(found.data) === to) await service.delete(PRESENCE_CALLER, ref);
+    });
   }
 
   /** One agent's visit changes in order, so a quick second message never writes under the first, nor a sweep over it. */
@@ -783,54 +915,115 @@ export class Presence {
     return done;
   }
 
-  private async go(agent: string, id: string, arrive: boolean): Promise<void> {
+  /** Where an agent's body is now: a visit it is on, or where it lives. */
+  private async where(agent: string): Promise<BodyWhere> {
+    const found = await this.opts
+      .state()
+      .get(PRESENCE_CALLER, { type: VISIT_TYPE, id: agent })
+      .catch(() => null);
+    const place = visitOf(found?.data, this.now());
+    if (place) {
+      const partner = visitWith(found?.data);
+      return { at: place, visit: { place, ...(partner ? { with: partner } : {}) } };
+    }
+    const lives = this.opts.livesIn ?? ((a: string) => whereIs(this.opts.state(), PRESENCE_CALLER, a));
+    return { at: await lives(agent) };
+  }
+
+  /**
+   * Visit a place, `with` an agent when it went to see one. Arriving, the body
+   * goes there, or stays a while longer if it is already on this visit;
+   * otherwise only this very visit is kept on. Resolves to whether the body
+   * set off on a visit it wasn't already on.
+   */
+  private async go(agent: string, id: string, arrive: boolean, partner?: string): Promise<boolean> {
     const service = this.opts.state();
     const ref = { type: VISIT_TYPE, id: agent };
     const found = await service.get(PRESENCE_CALLER, ref);
     const now = this.now();
-    const current = visitOf(found?.data, now);
-    if (current !== id && !arrive) return;
+    const same = visitOf(found?.data, now) === id && visitWith(found?.data) === partner;
+    if (!same && !arrive) return false;
+    const quietMs = partner ? (this.opts.dmQuietMs ?? this.opts.quietMs) : this.opts.quietMs;
     const until = typeof found?.data.until === "string" ? Date.parse(found.data.until) : Number.NaN;
-    if (current === id && until - now > this.opts.quietMs - VISIT_REFRESH_MS) return;
+    if (same && until - now > quietMs - VISIT_REFRESH_MS) return false;
     try {
       await service.put(
         PRESENCE_CALLER,
-        { ...ref, scope: "global", data: { place: id, until: new Date(now + this.opts.quietMs).toISOString() } },
+        {
+          ...ref,
+          scope: "global",
+          data: { place: id, until: new Date(now + quietMs).toISOString(), ...(partner ? { with: partner } : {}) },
+        },
         found?.version ?? 0,
       );
     } catch (err) {
       // Ended a moment ago, by the place tool or the page: that stands until it next says something.
       if (!(err instanceof StateConflictError)) throw err;
+      return false;
     }
+    return !same;
   }
 
-  /** End the visits that have gone quiet: each body back where it lives. */
+  /** Whether a visit is over: it has run out, or, gone to see someone, the visitor is asleep or the other has gone. */
+  private async over(agent: string, data: Record<string, unknown>): Promise<boolean> {
+    const place = visitOf(data, this.now());
+    if (!place) return true;
+    const partner = visitWith(data);
+    if (!partner) return false;
+    if (this.opts.asleep?.(agent)) return true;
+    return (await this.where(partner)).at !== place;
+  }
+
+  /** End the visits that are over: each body back where it lives. */
   async sweep(): Promise<void> {
-    const now = this.now();
     const visits = await this.opts
       .state()
       .query(PRESENCE_CALLER, { type: VISIT_TYPE, limit: 500 })
       .catch(() => []);
-    await Promise.all(visits.filter((r) => !visitOf(r.data, now)).map((r) => this.inTurn(r.id, () => this.end(r.id))));
+    const over = await Promise.all(visits.map((r) => this.over(r.id, r.data)));
+    await Promise.all(visits.filter((_, i) => over[i]).map((r) => this.inTurn(r.id, () => this.end(r.id))));
   }
 
-  /** End one visit that had gone quiet, looked at again first: one that went on meanwhile goes on. */
+  /** End one visit that was over, looked at again first: one that went on meanwhile goes on. */
   private async end(agent: string): Promise<void> {
     const service = this.opts.state();
     const ref = { type: VISIT_TYPE, id: agent };
     const found = await service.get(PRESENCE_CALLER, ref);
-    if (found && !visitOf(found.data, this.now())) await service.delete(PRESENCE_CALLER, ref);
+    if (found && (await this.over(agent, found.data))) await service.delete(PRESENCE_CALLER, ref);
   }
 
-  /** Resolves once every visit asked for so far is written. */
+  /** Resolves once every visit asked for so far is written, including those one visit leads to. */
   async settled(): Promise<void> {
-    await Promise.all([...this.chains.values()]);
+    for (;;) {
+      const now = [...this.chains.values()];
+      await Promise.all(now);
+      const after = [...this.chains.values()];
+      if (after.length === now.length && after.every((c, i) => c === now[i])) return;
+    }
   }
 }
 
 const PRESENCE_CALLER: StateCaller = { actor: { kind: "plugin", name: "places" }, source: { surface: "events" } };
 
-/** A body the place tool moves leaves any meeting room it was visiting: where it went stands. */
+/**
+ * The agent a tool call messages directly, as the call is made: a `room` dm
+ * to another agent, by its name or its label in rooms (`agentFor`). Not one
+ * sent on to a desk, which is said in a room, where the body goes to say it
+ * instead; nor one the room tool would refuse (no words, nobody, itself).
+ */
+export function messageTo(
+  tool: string,
+  args: Record<string, unknown>,
+  from: string,
+  known: { agentFor: (label: string) => string | undefined; desks?: Record<string, string> },
+): string | undefined {
+  if (tool !== "room" || args.action !== "dm" || !String(args.body ?? "").trim()) return undefined;
+  const label = String(args.agent ?? args.to ?? args.member ?? "").trim();
+  const to = label ? known.agentFor(label) : undefined;
+  return to && to !== from && !(known.desks?.[to] ?? known.desks?.[label]) ? to : undefined;
+}
+
+/** A body the place tool moves leaves any place it was visiting: where it went stands. */
 async function endVisit(service: StateService, agent: string): Promise<void> {
   await service.delete(PRESENCE_CALLER, { type: VISIT_TYPE, id: agent }).catch(() => null);
 }
@@ -838,7 +1031,11 @@ async function endVisit(service: StateService, agent: string): Promise<void> {
 export const VISIT_SCHEMA = {
   type: "object",
   required: ["place", "until"],
-  properties: { place: { type: "string", maxLength: 128 }, until: { type: "string" } },
+  properties: {
+    place: { type: "string", maxLength: 128 },
+    until: { type: "string" },
+    with: { type: "string", maxLength: 128 },
+  },
 } as const;
 
 const slug = (name: string) =>
@@ -1668,7 +1865,7 @@ const plugin: Plugin = (ctx) => {
   ctx.stateTypes.register({
     name: VISIT_TYPE,
     description:
-      "An agent's body visiting the meeting room of a room it is talking in, until a quiet spell ends it. Kept by the places plugin; gone on restart. People can end one; agents move with the place tool.",
+      "An agent's body visiting somewhere for a while: the meeting room of a room it is talking in, or an agent it messaged directly (`with`), until a quiet spell ends it. Kept by the places plugin; gone on restart. People can end one; agents move with the place tool.",
     scope: "global",
     title: "place",
     provider: "memory",
@@ -1754,7 +1951,7 @@ const plugin: Plugin = (ctx) => {
           type: PLACE_TYPE,
           id: found.id,
           place: found.place,
-          company: found.agents.map(bodyOf),
+          company: found.agents.map((a) => ({ ...bodyOf(a), ...(found.with?.[a] ? { with: found.with[a] } : {}) })),
           doors: found.doors,
           area: world.areaOf.get(found.id) ?? MAIN,
         },
@@ -1787,8 +1984,10 @@ const plugin: Plugin = (ctx) => {
       const service = runtime.getStateService();
       const rooms = talkRooms();
       const { id, place, version } = await readCurrent(service, PLUGIN_CALLER, agent, { rooms, hasBody });
-      // Everyone else whose body is here, with what the page needs to draw them.
-      const company = (await whoIsIn(service, PLUGIN_CALLER, id, hasBody, agent, rooms)).map(bodyOf);
+      // Everyone else whose body is here, with what the page needs to draw them, and who any of them came to see.
+      const others = await whoIsIn(service, PLUGIN_CALLER, id, hasBody, agent, rooms);
+      const pairs = others.length ? together(await seeing(service, PLUGIN_CALLER), [...others, agent]) : undefined;
+      const company = others.map((a) => ({ ...bodyOf(a), ...(pairs?.[a] ? { with: pairs[a] } : {}) }));
       const world = await buildWorld(service, PLUGIN_CALLER, agentNames(), rooms, hasBody);
       const doors = doorsIn(id, place, world);
       return { json: { type: PLACE_TYPE, id, version, place, company, doors, area: world.areaOf.get(id) ?? MAIN } };
@@ -1797,19 +1996,76 @@ const plugin: Plugin = (ctx) => {
 
   // What the plugin leaves running, each stopped when it is unloaded.
   const stops: (() => void)[] = [];
-  const cfg = (ctx.config ?? {}) as { quietMinutes?: number; tend?: unknown };
+  const cfg = (ctx.config ?? {}) as { quietMinutes?: number; dmQuietMinutes?: number; tend?: unknown };
 
-  // Bodies go where the talk is: to a room's meeting room while they talk there, home after a quiet spell.
+  /** Why an agent is asleep in the world: the global pause, or an online agent's own switch; null when it is awake. */
+  const asleep = (agent: string) => {
+    const online = agent !== "default" && !!runtime.getConfig().agents?.[agent]?.online?.enabled;
+    return whyAsleep({
+      paused: runtime.isAgentsPaused("autonomous"),
+      own: online ? getExploratoryState(runtime.db, agent) : null,
+      now: new Date(),
+    });
+  };
+
+  const messages = (tool: string, args: Record<string, unknown>, from: string) => {
+    const known = identities();
+    return messageTo(tool, args, from, {
+      agentFor: (label) => known.agentForLabel(label) ?? (agentNames().includes(label) ? label : undefined),
+      desks: runtime.getConfig().rooms?.desks,
+    });
+  };
+
+  // Bodies go where the talk is: to a room's meeting room while they talk there, to an agent they message
+  // directly, and home after a quiet spell. A message to itself, or to an agent with no body, moves nobody.
   const quietMinutes = typeof cfg.quietMinutes === "number" ? cfg.quietMinutes : QUIET_MINUTES;
-  if (quietMinutes > 0) {
-    const presence = new Presence({ state: () => runtime.getStateService(), hasBody, quietMs: quietMinutes * 60_000 });
-    const subs = [
-      ctx.events.on("room.woke", (e) => void presence.stay(e.agent, e.roomRef)),
-      ctx.events.on("room.message", (e) => {
-        // Only an agent has a body to go with; a label that isn't an agent's name is a person.
-        if (e.speaker && agentNames().includes(e.speaker)) void presence.visit(e.speaker, e.roomRef);
-      }),
-    ];
+  // Bodies kept still in rooms stay still for direct messages too, unless that is set on its own.
+  const dmQuietMinutes =
+    typeof cfg.dmQuietMinutes === "number" ? cfg.dmQuietMinutes : quietMinutes > 0 ? DM_QUIET_MINUTES : 0;
+  if (quietMinutes > 0 || dmQuietMinutes > 0) {
+    const presence = new Presence({
+      state: () => runtime.getStateService(),
+      hasBody,
+      quietMs: quietMinutes * 60_000,
+      dmQuietMs: dmQuietMinutes * 60_000,
+      livesIn: (agent) => whereIs(runtime.getStateService(), PLUGIN_CALLER, agent, talkRooms()),
+      asleep: (agent) => !!asleep(agent),
+    });
+    const subs: { dispose(): void }[] = [];
+    if (quietMinutes > 0)
+      subs.push(
+        ctx.events.on("room.woke", (e) => void presence.stay(e.agent, e.roomRef)),
+        ctx.events.on("room.message", (e) => {
+          // Only an agent has a body to go with; a label that isn't an agent's name is a person.
+          if (e.speaker && agentNames().includes(e.speaker)) void presence.visit(e.speaker, e.roomRef);
+        }),
+      );
+    if (dmQuietMinutes > 0) {
+      // A body sets off as the message is sent, so it is there for the answer; the exchange done, it stays a while.
+      // One that set off for a message that then failed goes back.
+      const sent = new Map<string, { from: string; to: string; went: Promise<boolean> }>();
+      subs.push(
+        ctx.events.onWaterfall("agent.pre_tool_use", async (p, next) => {
+          const out = await next(p);
+          const from = out.agent || "default";
+          const to = out.deny ? undefined : messages(out.tool, out.args, from);
+          if (to) sent.set(out.toolUseId, { from, to, went: presence.meet(from, to) });
+          return out;
+        }),
+        ctx.events.on("agent.post_tool_use", (e) => {
+          const call = sent.get(e.toolUseId);
+          if (!call) return;
+          sent.delete(e.toolUseId);
+          if (!e.success) void call.went.then((went) => (went ? presence.part(call.from, call.to) : undefined));
+        }),
+        // Every exchange, whoever sent it: from a plugin as much as the room tool.
+        ctx.events.on("agent.messaged", (e) => {
+          if (e.via === "dm") void presence.meet(e.from, e.to);
+        }),
+        // Paused, a body out visiting goes home to sleep.
+        ctx.events.on("agents.pause_changed", () => void presence.sweep()),
+      );
+    }
     void presence.sweep();
     const timer = setInterval(() => void presence.sweep(), SWEEP_MS);
     timer.unref?.();
@@ -1841,13 +2097,8 @@ const plugin: Plugin = (ctx) => {
       agents: () => agentNames().filter((a) => hasBody(a)),
       unready: (agent) => {
         // The switches that put an agent to sleep in the world: the global pause, and an online agent's own.
-        const online = agent !== "default" && !!runtime.getConfig().agents?.[agent]?.online?.enabled;
-        const asleep = whyAsleep({
-          paused: runtime.isAgentsPaused("autonomous"),
-          own: online ? getExploratoryState(runtime.db, agent) : null,
-          now: new Date(),
-        });
-        if (asleep) return asleep;
+        const why = asleep(agent);
+        if (why) return why;
         return resolve(agent).tools.some((t) => t.name === "place")
           ? null
           : "it has no place tool (name place in its tools)";
@@ -1894,7 +2145,7 @@ const plugin: Plugin = (ctx) => {
   };
 };
 
-/** How often visits that have gone quiet are ended, so a page sees the body go home. */
+/** How often visits that are over are ended, so a page sees the body go home. */
 const SWEEP_MS = 20_000;
 
 export default plugin;

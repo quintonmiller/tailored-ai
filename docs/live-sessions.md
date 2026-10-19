@@ -382,11 +382,15 @@ for the main building), and the hall to the hall.
 pressing first: waiting on you, then stuck, then talking, working and
 thinking. Each line says what it is doing and where its body is ("writing
 code · in the commons", "has a question for you · in #trip"); click it to go
-straight there. When nobody is busy it says so, which tells you a quiet world
-is idle rather than broken. It steps aside while you search. Among the rooms
-and places, those where something is happening come first, with a coloured
-edge and a word for the most pressing thing there and how many are doing it,
-then how many others are busy ("waiting on you · 2 more busy", "2 working").
+straight there. An agent that went to see one it messaged is talking with it
+for as long as it stays ("talking with editor · in editor's room"), and its
+empty home says where it went ("nobody here · writer is out, talking with
+editor, in editor's room"). When nobody is busy it says so, which tells you a
+quiet world is idle rather than broken. It steps aside while you search.
+Among the rooms and places, those where something is happening come first,
+with a coloured edge and a word for the most pressing thing there and how
+many are doing it, then how many others are busy ("waiting on you · 2 more
+busy", "2 working").
 
 You arrive in your own body ("you"), in a colour of its own. **Walk** with
 WASD or the arrow keys, which move you the way the camera faces, at a brisk
@@ -417,7 +421,8 @@ the chat to that agent. Click any agent for its menu as usual.
 **Voices** (off until you switch it on) speaks what agents say near you: as
 a line starts in an agent's bubble within a few metres of you, the page asks
 `POST /api/live/say` for it in that agent's voice and plays it, quieter the
-further you stand, one line at a time. It is off by default because each line
+further you stand, one line at a time. That includes both halves of a direct
+message, said where the two agents meet. It is off by default because each line
 is a text-to-speech render, which may run on your GPU. **Back to** returns to
 the agent's own view. While you visit, your body is
 yours: the agent's turns still run, but its cues have nothing to move.
@@ -571,29 +576,67 @@ in its own room with you while you talk, even while its body is at a
 meeting. The map, **Busy now** and anyone visiting see it at the table, and
 if you go to that meeting room you'll find it there too.
 
-A visit is a `visit` record, one per agent, naming the room's place and an
-`until`. It lives in the built-in `memory` state provider, apart from the
-`whereabouts` record that says where the agent lives, so a visit never
-changes where it lives, leaves no history behind, and ends on restart. The
-plugin clears visits that have run out every 20 seconds, so a page watching
+Direct messages work the same way. When an agent messages another directly
+(the `room` tool's `dm`), its body sets off as the message goes, to wherever
+the other agent's body is: its home, or a meeting it is at, or wherever its
+own visit has taken it. It walks in through that place's door, stands next
+to the other agent, and the two turn to face each other. The message and the
+answer show in bubbles over their heads there, and with **Voices** on you
+hear both as you stand near. A seated agent gets up to talk to its visitor,
+unless it is at a meeting table, where everyone keeps their seat, or asleep.
+Several agents messaging the same one stand round it, each in a spot of its
+own. If you're in the sender's home, you see it get up and leave through its
+door. The map lists it in **Busy now** as "talking with editor · in
+editor's room", and its empty home says where it went.
+
+After a quiet spell (5 minutes since their last exchange) the visitor walks
+back. A conversation that goes back and forth keeps them together. When the
+one it came to see answers with a message of its own, nobody walks anywhere,
+and the visitor stays a while longer. A visit also ends early if the other
+agent goes somewhere else (to a meeting, say), or if the visitor is paused.
+Some messages move nobody:
+
+- a message an agent sends itself, or one between agents that don't both
+  have bodies;
+- a message from an agent that is talking at a meeting: it keeps its seat
+  at the table and messages from there, since the meeting comes first.
+  Saying something at a meeting ends a visit to someone and takes it to the
+  table;
+- a message from a paused agent: it sleeps at home and messages from there;
+- a message sent on to a desk room (`rooms.desks`): it is said in that room,
+  so the body goes to that room's meeting room instead.
+
+A message that fails to go through calls the walk off, and the body goes
+back. The agent you are chatting with is still the exception on your own
+page. If it messages someone, it stays in its room with you, on the phone,
+and anyone visiting the other agent sees it arrive there. If someone messages
+it, they come into your view and stand with it.
+
+A visit is a `visit` record, one per agent, naming the place, an `until`, and
+for a direct message who it is `with`. It lives in the built-in `memory`
+state provider, apart from the `whereabouts` record that says where the agent
+lives. So a visit never changes where it lives, leaves no history behind, and
+ends on restart. Every 20 seconds the plugin clears visits that have run out,
+and visits whose agent went somewhere else or was paused, so a page watching
 sees the body go. The `place` tool still works on the place the agent lives
-in (its home, a shared place, or a meeting room it went into) while its
-body is at a meeting, and moving
-with the `place` tool ends the visit. Sending it home from the menu ends the
-visit early too; its next message brings it back. Change the quiet spell, or
-turn this off with `0`:
+in (its home, a shared place, or a meeting room it went into) while its body
+is away, and moving with the `place` tool ends the visit. Sending it home
+from the menu ends the visit early too; its next message brings it back.
+Change either quiet spell, or turn bodies moving off with `0`:
 
 ```yaml
 plugins:
   - module: builtin:places
     config:
-      quietMinutes: 5        # 0: bodies stay put while their agents talk
+      quietMinutes: 5        # meeting rooms; 0: bodies stay put while their agents talk
+      dmQuietMinutes: 2      # direct messages; 0: senders stay home. Off too when quietMinutes is 0, unless set
 ```
 
 A body that turns up while you are there walks in through the room's door
-and on to a free seat; one that goes walks out through it. Whoever is
-already there when you arrive is simply about. The same goes for anyone
-coming or going anywhere else: a visitor to a home comes in at its door.
+and on to a free seat, or to whoever it came to see; one that goes walks out
+through it, standing up first if it was seated. Whoever is already there when
+you arrive is simply about. The same goes for anyone coming or going
+anywhere else: a visitor to a home comes in at its door.
 
 A meeting room is dressed for what the room is for, read from its name and
 purpose: a trip or a vacation gets a beach (sand floor, sky-blue walls, palms
@@ -987,10 +1030,10 @@ cues, and its text passes through untouched.
 | route | does |
 |---|---|
 | `GET /api/live?agent=` | what a page needs before talking: `{enabled, avatar?, animations?}`. `enabled` says whether live sessions are on; the URLs are that agent's body, when it has one |
-| `GET /api/ext/builtin:places/:agent` | the place the agent is in: `{type, id, version, place, company, doors, area}`, its home drawn from its name on first use. `doors` and `area` are as for `scene/:id`. `company` is everyone else there with a body: `{agent, name, avatar, animations}`. `404` for an agent with no body. Changes arrive on `GET /api/state/events` like any record's, and a `whereabouts` or `visit` change means someone came or went |
-| `GET /api/ext/builtin:places/map` | every place, and the areas they are in: `{places: [{id, name, kind, agents, area, owner?, purpose?, members?, via?}], areas: [{id, name, places}]}`. `kind` is `lobby`, `hall`, `home` (one per agent with a body, `owner` its agent), `shared`, or `room` (a room agents talk in, `room:<backend>:<id>`). `purpose` is the one its agents gave the place, or a room's own. `agents` is who is in it: a body is in one place at a time, its home, a shared place, or a room's meeting room while it talks there or after going in to change it. A room also lists `members`, every member with a body. `area` is the area's id, `main` for the main building; `areas` lists the main building first, each area's places its way in first. `via` is the place its way in is through: the hall its door opens off, the hall or foyer before a hall, or the lobby; in an area of two places, which open on each other, the other one. There is none for the lobby, another area's first hall, or a place alone in its area. The page's "where you are" trail is read from it |
+| `GET /api/ext/builtin:places/:agent` | the place the agent is in: `{type, id, version, place, company, doors, area}`, its home drawn from its name on first use. `doors` and `area` are as for `scene/:id`. `company` is everyone else there with a body: `{agent, name, avatar, animations, with?}`, `with` naming the agent there it came to see, for one that messaged it directly. `404` for an agent with no body. Changes arrive on `GET /api/state/events` like any record's, and a `whereabouts` or `visit` change means someone came or went |
+| `GET /api/ext/builtin:places/map` | every place, and the areas they are in: `{places: [{id, name, kind, agents, area, owner?, purpose?, members?, via?, with?}], areas: [{id, name, places}]}`. `kind` is `lobby`, `hall`, `home` (one per agent with a body, `owner` its agent), `shared`, or `room` (a room agents talk in, `room:<backend>:<id>`). `purpose` is the one its agents gave the place, or a room's own. `agents` is who is in it: a body is in one place at a time, its home, a shared place, or a room's meeting room while it talks there or after going in to change it. A room also lists `members`, every member with a body. `with` maps each agent there that came to see another there, having messaged it directly, to that agent. `area` is the area's id, `main` for the main building; `areas` lists the main building first, each area's places its way in first. `via` is the place its way in is through: the hall its door opens off, the hall or foyer before a hall, or the lobby; in an area of two places, which open on each other, the other one. There is none for the lobby, another area's first hall, or a place alone in its area. The page's "where you are" trail is read from it |
 | `GET /api/ext/builtin:places/transcript/:id` | a room agents talk in, to read: `{id, name, purpose?, members, lines}`, its latest 30 messages oldest first, each `{id, who, agent?, to, text, at, files?}`. `who` is the speaker's name in the room and `agent` the agent behind it, when there is one. Read only: no read cursor moves. `404` for a room that isn't there, `503` with the reason when its transport can't be read |
-| `GET /api/ext/builtin:places/scene/:id` | any place on the map, to look at: `{type, id, place, company, doors, area}`, with everyone in it as `company`. A room agents talk in is a meeting room with a seat for each member, its `company` the members there now, drawn fresh until a member changes it and from its record after that; a hall is a corridor with a door for each place off it, always drawn fresh. `place` carries `theme`, `purpose` and `changes` (`[{who, what, at}]`, newest first) when it has them. `doors` is `[{wall, along, to, label, kind, occupant?}]`: the side it is on (`back`, `left`, `front` or `right`), its middle along that side in metres (x on the back and front, z on the left and right), the place it opens on, its plate, what kind of place that is, and for a home the agent whose activity its light shows. `404` for a place that isn't there |
+| `GET /api/ext/builtin:places/scene/:id` | any place on the map, to look at: `{type, id, place, company, doors, area}`, with everyone in it as `company` (each `with` the agent there it came to see, as for `:agent`). A room agents talk in is a meeting room with a seat for each member, its `company` the members there now, drawn fresh until a member changes it and from its record after that; a hall is a corridor with a door for each place off it, always drawn fresh. `place` carries `theme`, `purpose` and `changes` (`[{who, what, at}]`, newest first) when it has them. `doors` is `[{wall, along, to, label, kind, occupant?}]`: the side it is on (`back`, `left`, `front` or `right`), its middle along that side in metres (x on the back and front, z on the left and right), the place it opens on, its plate, what kind of place that is, and for a home the agent whose activity its light shows. `404` for a place that isn't there |
 | `GET /api/live/avatar?agent=` | the avatar's model file (`model/gltf-binary`), revalidated by `ETag`; `404` with the reason when none is set or the file is missing |
 | `GET /api/live/animations/:index?agent=` | one of the configured animation libraries, by its position in `live.avatar.animations`. Nothing else under the folder is reachable |
 | `POST /api/live/say` | a line in an agent's voice: `{agent?, text}` → the audio, from the live text-to-speech stage with the agent's `voice.voice` (else `live.tts.voice`). Markdown is stripped first. `400` for an empty line or one over 400 characters, `409` when live sessions are off, `502` when the voice can't be made |

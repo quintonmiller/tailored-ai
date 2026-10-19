@@ -44,6 +44,33 @@ const BUSY_WORDS: Partial<Record<AgentActivity["doing"], string>> = {
   thinking: "thinking",
 };
 
+/**
+ * What an agent in a place is doing, as the map tells it: what its activity
+ * says when that is something; otherwise, come to see someone there, talking
+ * with them, for as long as it stays.
+ */
+export function doingHere(
+  place: MapPlace,
+  agent: string,
+  activities: Record<string, AgentActivity>,
+): AgentActivity | undefined {
+  const own = activities[agent];
+  if (own && URGENCY[own.doing] !== undefined) return own;
+  const partner = place.with?.[agent];
+  return partner ? { agent, doing: "talking", what: `talking with ${nameOf(partner)}`, with: partner } : own;
+}
+
+/** Where a home's owner has gone, when its body is somewhere else: "talking with writer, in writer's room", "in #trip". */
+export function awayWords(home: MapPlace, places: MapPlace[]): string | undefined {
+  const owner = home.owner;
+  if (!owner || home.agents.includes(owner)) return undefined;
+  const there = places.find((p) => p.id !== home.id && p.agents.includes(owner));
+  if (!there) return undefined;
+  const where = there.kind === "room" ? `#${there.name}` : there.name;
+  const partner = there.with?.[owner];
+  return partner ? `talking with ${nameOf(partner)}, in ${where}` : `in ${where}`;
+}
+
 /** Someone busy, what at, and the place their body is in. */
 export interface Busy {
   agent: string;
@@ -54,6 +81,7 @@ export interface Busy {
 /**
  * Everyone busy, with the place their body is in, so you can go straight to
  * them: waiting on you first, then stuck, then talking, working and thinking.
+ * One gone to see an agent it messaged is talking with it while it stays.
  * Only bodies on the map: an agent without one is nowhere to go to.
  */
 export function busyAgents(places: MapPlace[], activities: Record<string, AgentActivity>): Busy[] {
@@ -61,7 +89,7 @@ export function busyAgents(places: MapPlace[], activities: Record<string, AgentA
   const seen = new Set<string>();
   for (const place of places)
     for (const agent of place.agents) {
-      const activity = activities[agent];
+      const activity = doingHere(place, agent, activities);
       if (seen.has(agent) || !activity || URGENCY[activity.doing] === undefined) continue;
       seen.add(agent);
       out.push({ agent, activity, place });
@@ -80,7 +108,7 @@ export function busyMark(
   activities: Record<string, AgentActivity>,
 ): { doing: AgentActivity["doing"]; count: number; others: number } | undefined {
   const busy = place.agents.flatMap((a) => {
-    const doing = activities[a]?.doing;
+    const doing = doingHere(place, a, activities)?.doing;
     return doing && URGENCY[doing] !== undefined ? [doing] : [];
   });
   if (!busy.length) return undefined;
@@ -227,6 +255,7 @@ export function WorldMap({
 
   const tile = (p: MapPlace) => {
     const mark = busyMark(p, activities);
+    const away = p.kind === "home" ? awayWords(p, places) : undefined;
     return (
       <li key={p.id}>
         <button
@@ -250,11 +279,13 @@ export function WorldMap({
                 <span className="world-map-nobody">
                   {p.kind === "room" && p.members?.length
                     ? `quiet · ${p.members.length === 1 ? "1 member" : `${p.members.length} members`}`
-                    : "nobody here"}
+                    : away
+                      ? `nobody here · ${nameOf(p.owner ?? "")} is out, ${away}`
+                      : "nobody here"}
                 </span>
               )}
               {p.agents.map((a) => {
-                const doing = activities[a]?.doing;
+                const doing = doingHere(p, a, activities)?.doing;
                 const mark = doing ? MARKS[doing] : undefined;
                 return (
                   <span key={a} className={`world-map-agent${doing ? ` doing-${doing}` : ""}`}>

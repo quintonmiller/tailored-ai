@@ -85,6 +85,8 @@ export class Figure {
   currentAt: [number, number] | undefined;
   /** A walk asked for while seated: it stands up first. */
   pending: string | undefined;
+  /** A point on the floor it was sent to while seated: it stands up first, then goes. */
+  private headed: [number, number] | undefined;
   seated = 0;
   clips: ClipPlayer | undefined;
   /** The animation files have loaded, or failed to. */
@@ -208,7 +210,12 @@ export class Figure {
 
   /** The spot it is standing at, while it isn't walking anywhere. */
   get here(): string | undefined {
-    return this.walker.busy || this.pending ? undefined : this.current;
+    return this.moving ? undefined : this.current;
+  }
+
+  /** Walking, turning, or getting up to go somewhere. */
+  get moving(): boolean {
+    return this.walker.busy || !!this.pending || !!this.headed;
   }
 
   /** Walk to a spot, round the furniture; seated, it stands first. False when there is no such spot. */
@@ -216,6 +223,7 @@ export class Figure {
     const to = spotById(room, id);
     if (!to) return false;
     this.director.sent();
+    this.headed = undefined;
     if (this.seated > 0.05) {
       this.pending = id;
       return true;
@@ -239,6 +247,7 @@ export class Figure {
   steer(dx: number, dz: number, room: Room, obstacles: Obstacle[]) {
     if (!dx && !dz) return;
     this.pending = undefined;
+    this.headed = undefined;
     this.current = undefined;
     const p = this.walker.place;
     const [x, z] = slide(room, [p.x, p.z], [dx, dz], obstacles, this.radius);
@@ -253,6 +262,7 @@ export class Figure {
   /** Stand somewhere at once, facing `facing` radians, at no spot: coming in through a door. */
   placeAt(at: [number, number], facing: number) {
     this.pending = undefined;
+    this.headed = undefined;
     this.current = undefined;
     this.currentAt = undefined;
     this.walker.jump(at, facing);
@@ -260,10 +270,16 @@ export class Figure {
     this.body.rotation.y = facing;
   }
 
-  /** Walk to a point on the floor, round the furniture, and face the way it walked. */
+  /** Walk to a point on the floor, round the furniture, and face the way it walked; seated, it stands first. */
   goTo(room: Room, to: [number, number], obstacles: Obstacle[]) {
     this.director.sent();
     this.pending = undefined;
+    if (this.seated > 0.05) {
+      // Still on its seat until it has stood: the seat holds it while it gets up.
+      this.headed = to;
+      return;
+    }
+    this.headed = undefined;
     this.current = undefined;
     const from: [number, number] = [this.walker.place.x, this.walker.place.z];
     const way = findPath(room, from, to, obstacles, this.radius);
@@ -290,6 +306,23 @@ export class Figure {
       this.motion.look(yaw, pitch, clock);
     }
     if (point) this.motion.gesture("point", clock);
+  }
+
+  /**
+   * Face someone it is talking to: the whole body turns to them where it
+   * stands, the eyes meeting theirs; seated or on its way somewhere, the head
+   * turns as far as it can.
+   */
+  face(at: THREE.Vector3, clock: number) {
+    const from = this.head();
+    const yaw = turnBetween(this.walker.place.facing, Math.atan2(at.x - from.x, at.z - from.z));
+    const pitch = Math.atan2(at.y - from.y, Math.hypot(at.x - from.x, at.z - from.z));
+    if (this.seated < 0.05 && !this.walker.busy && !this.pending) {
+      if (Math.abs(yaw) > 0.05) this.walker.go([], this.walker.place.facing + yaw);
+      this.motion.look(0, pitch, clock);
+    } else {
+      this.motion.look(yaw, pitch, clock);
+    }
   }
 
   /**
@@ -378,7 +411,8 @@ export class Figure {
     doing?: { activity: Activity | undefined },
   ): { walked: number } {
     if (this.pending && this.seated <= 0.05) this.go(room, this.pending, obstacles);
-    const walked = (this.pending ? 0 : this.walker.step(dt)) + this.steered;
+    if (this.headed && this.seated <= 0.05) this.goTo(room, this.headed, obstacles);
+    const walked = (this.pending || this.headed ? 0 : this.walker.step(dt)) + this.steered;
     this.steered = 0;
     const here = this.here;
     const spot = this.current ? spotById(room, this.current) : undefined;
