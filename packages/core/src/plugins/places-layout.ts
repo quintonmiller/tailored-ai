@@ -74,7 +74,21 @@ export interface Place {
   spots: PlaceSpot[];
   /** Where the avatar stands when the page opens, and the hub its walks go through. */
   start: string;
+  /** Photos taken here, newest first: the pictures on the walls show them, in order. */
+  photos?: PlacePhoto[];
 }
+
+/** A photo taken in a place, kept in the media store. */
+export interface PlacePhoto {
+  /** Its id in the media store. */
+  media: string;
+  /** What it is of: "a selfie", "the lounge". */
+  what: string;
+  at: string;
+}
+
+/** Photos a place keeps: the newest, enough for a few pictures on the walls. */
+export const PHOTOS_KEPT = 6;
 
 /** What a kind of thing is like: how big, where it goes, and what you can do at it. */
 export interface Kind {
@@ -1363,6 +1377,19 @@ export const PLACE_SCHEMA = {
     floor: { type: "string", enum: FLOORS },
     floorColor: { type: "string", pattern: "^#[0-9a-f]{6}$" },
     start: { type: "string" },
+    photos: {
+      type: "array",
+      maxItems: PHOTOS_KEPT,
+      items: {
+        type: "object",
+        required: ["media", "what", "at"],
+        properties: {
+          media: { type: "string", maxLength: 128 },
+          what: { type: "string", maxLength: 80 },
+          at: { type: "string" },
+        },
+      },
+    },
     props: {
       type: "array",
       maxItems: LIMITS.items,

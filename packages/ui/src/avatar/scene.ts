@@ -109,6 +109,8 @@ export interface Room {
   walls?: string;
   floor?: Floor;
   floorColor?: string;
+  /** Photos taken here, newest first, by their media id: the pictures on the walls show them. */
+  photos?: { media: string; what: string; at: string }[];
 }
 
 export const DEFAULT_ROOM: Room = {
