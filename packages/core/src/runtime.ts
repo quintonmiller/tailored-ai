@@ -121,6 +121,12 @@ export interface RuntimeOptions {
   createEmbedder?: (config: AgentConfig) => import("./providers/embedding.js").EmbeddingProvider | undefined;
 }
 
+/** The server's own address, and the headers that let this process read from it. */
+export interface SelfAccess {
+  baseUrl: string;
+  headers: Record<string, string>;
+}
+
 export class AgentRuntime {
   readonly configPath: string;
   readonly db: Database.Database;
@@ -213,6 +219,8 @@ export class AgentRuntime {
    * server iterates this once after building its app. See http/registry.ts.
    */
   private _httpRoutes: HttpRouteRegistry = new HttpRouteRegistry();
+  /** How code in this process reaches the HTTP server in front of it; set by the server once it listens. */
+  private _selfAccess: SelfAccess | undefined;
   private _activeProject: ProjectContext | null = null;
   /**
    * Live outbound notifiers keyed by channel id (`notifier.id`). Populated by
@@ -595,6 +603,22 @@ export class AgentRuntime {
    */
   getHttpRoutes(): HttpRouteRegistry {
     return this._httpRoutes;
+  }
+
+  /**
+   * How code inside this process can read from the HTTP server it runs
+   * behind: the server's own address, and headers that let a GET or HEAD
+   * through its auth. Set by the server once it is listening; undefined
+   * without one (the CLI, tests). For rendering the bundled UI in a headless
+   * browser, as the places camera does. Keep the headers in this process:
+   * send them to nothing but `baseUrl`.
+   */
+  getSelfAccess(): SelfAccess | undefined {
+    return this._selfAccess;
+  }
+
+  setSelfAccess(access: SelfAccess | undefined): void {
+    this._selfAccess = access;
   }
   get generation(): number {
     return this._generation;

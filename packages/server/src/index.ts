@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
@@ -21,6 +21,7 @@ import {
   CueReader,
   checkBudget,
   chooseIdle,
+  collectTurnMedia,
   compactSession,
   componentSpecs,
   countChunks,
@@ -73,6 +74,7 @@ import {
   type LiveSession,
   LiveSessionError,
   Lockfile,
+  latestMessageId,
   listCollections,
   listDocuments,
   listExploratoryRuns,
@@ -223,6 +225,9 @@ export function isHttps(forwardedProto: string | undefined, url: string): boolea
     return false;
   }
 }
+
+/** The header this process's own reads carry: see `renderToken`. */
+const RENDER_HEADER = "x-tai-render";
 
 /**
  * Constant-time compare for bearer tokens. Buffers of different length
@@ -478,9 +483,25 @@ export function createServer(opts: ServerOptions) {
     .list()
     .filter((r) => r.auth === "none")
     .map((r) => ({ method: r.method, regex: routePathToRegex(r.mountPath) }));
+  // Reads by this process itself, such as the places camera rendering the UI
+  // in a headless browser. Random per start, held only in memory, and good
+  // for GET and HEAD alone: it can show a page, never change anything.
+  const renderToken = randomBytes(32).toString("hex");
+  {
+    // Where this process finds the server: bound to every interface is reachable on loopback.
+    const { host, port } = runtime.getConfig().server;
+    const self = !host || host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
+    runtime.setSelfAccess({
+      baseUrl: `http://${self.includes(":") ? `[${self}]` : self}:${port}`,
+      headers: { [RENDER_HEADER]: renderToken },
+    });
+  }
   app.use("/api/*", async (c, next) => {
     const method = c.req.method;
     if (method === "OPTIONS") return next();
+    if ((method === "GET" || method === "HEAD") && safeBearerEquals(c.req.header(RENDER_HEADER) ?? "", renderToken)) {
+      return next();
+    }
 
     if (authExemptMatchers.some((m) => m.method === method && m.regex.test(c.req.path))) {
       return next();
@@ -1189,6 +1210,8 @@ export function createServer(opts: ServerOptions) {
         }
 
         const baseOpts = runtime.buildLoopOptions({ session, agentName, ...(shown ? { body: shown } : {}) });
+        // Where this turn starts in the history: what its tools make after it goes out with the reply.
+        const watermark = latestMessageId(runtime.db, session.id);
         // Cues come out of the text before it is shown, and go to the page's body.
         const reader = shown ? new CueReader(shown) : undefined;
         let streamed = false;
@@ -1287,6 +1310,9 @@ export function createServer(opts: ServerOptions) {
           .find((m) => m.role === "assistant")?.reasoning;
         // A provider that doesn't stream hands the cues over with the whole reply.
         if (reader) pieces(streamed ? reader.flush() : [...reader.push(response), ...reader.flush()], streamed);
+        // Pictures the turn's tools made, a photo or a screenshot, go with the
+        // reply, as they do on Discord, instead of only inside the tool log.
+        const produced = collectTurnMedia(runtime.db, session.id, watermark);
         await stream.writeSSE({
           event: "response",
           data: JSON.stringify({
@@ -1294,6 +1320,7 @@ export function createServer(opts: ServerOptions) {
             reasoning: lastReasoning,
             sessionId: session.id,
             sessionKey: replyKey,
+            ...(produced.length ? { media: produced } : {}),
           }),
         });
       } catch (err) {

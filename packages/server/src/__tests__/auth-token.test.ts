@@ -132,6 +132,43 @@ describe("server.authToken", () => {
   });
 });
 
+describe("the server's own reads", () => {
+  function boot(cfg: AgentConfig) {
+    const configPath = join(tmpDir, "config.yaml");
+    writeFileSync(configPath, YAML.stringify({}), "utf-8");
+    const runtime = new AgentRuntime(
+      {
+        configPath,
+        db,
+        contextDir: join(tmpDir, "context"),
+        kbDir: join(tmpDir, "kb"),
+        createTools: () => [],
+        createProvider: () => ({ provider: fakeProvider(), model: "fake" }),
+      },
+      () => cfg,
+      cfg,
+    );
+    return { app: createServer({ runtime }).app, access: runtime.getSelfAccess() };
+  }
+
+  it("let a GET through with the header the runtime was given, and never a write", async () => {
+    for (const server of [{ authToken: "secret-token" }, { proxyAuth: { enabled: true, password: "pw" } }]) {
+      const { app, access } = boot(buildConfig(server));
+      expect(access?.baseUrl).toBe("http://127.0.0.1:0");
+      const [name] = Object.keys(access?.headers ?? {});
+      expect((await callRaw(app, "GET", "/api/health", access?.headers)).status).toBe(200);
+      expect((await callRaw(app, "GET", "/api/health", { [name]: "guessed" })).status).toBe(401);
+      expect((await callRaw(app, "POST", "/api/sessions/foo/clear", access?.headers)).status).toBe(401);
+    }
+  });
+
+  it("is a different header every start", () => {
+    const first = boot(buildConfig({ authToken: "secret-token" })).access;
+    const second = boot(buildConfig({ authToken: "secret-token" })).access;
+    expect(first?.headers).not.toEqual(second?.headers);
+  });
+});
+
 describe("server.apiKey (legacy)", () => {
   it("when set without authToken, GETs are still open", async () => {
     const app = bootApp(buildConfig({ apiKey: "legacy-key" }));

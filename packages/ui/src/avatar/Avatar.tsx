@@ -38,6 +38,10 @@ export function Avatar({
   insetRight = 0,
   chooseIdle,
   room,
+  still,
+  onReady,
+  onProblem,
+  view: fixedView,
 }: {
   url: string;
   /** Animation libraries for the avatar; it moves by code until they load. */
@@ -56,13 +60,21 @@ export function Avatar({
   chooseIdle?: (here: string | undefined, hour: number) => Promise<Cue[]>;
   /** The room it lives in; a new one is shown as it changes, without rebuilding the stage. */
   room?: Room;
+  /** Hold still for a photo, at a spot, striking a gesture; the view toggle is hidden. */
+  still?: { spot?: string; gesture?: string };
+  /** A still avatar is ready to photograph. */
+  onReady?: () => void;
+  /** It couldn't be shown, and why. */
+  onProblem?: (reason: string) => void;
+  /** Show this view and offer no toggle, instead of the one the person last chose. */
+  view?: StageView;
 }) {
   const host = useRef<HTMLDivElement>(null);
   // The stage reads these every frame; a ref keeps that from re-rendering React.
   const live = useRef({ state, loudness, engaged });
   live.current = { state, loudness, engaged };
   const stage = useRef<Stage | null>(null);
-  const [view, setView] = useState<StageView>(savedView);
+  const [view, setView] = useState<StageView>(() => fixedView ?? savedView());
   const viewRef = useRef(view);
   viewRef.current = view;
   const controlsRef = useRef(controls);
@@ -75,6 +87,8 @@ export function Avatar({
   useEffect(() => {
     stage.current?.setInsets({ right: insetRight });
   }, [insetRight]);
+  const stillRef = useRef({ still, onReady, onProblem });
+  stillRef.current = { still, onReady, onProblem };
   const roomRef = useRef(room);
   roomRef.current = room;
   useEffect(() => {
@@ -99,6 +113,9 @@ export function Avatar({
           view: viewRef.current,
           animations: animationsRef.current,
           ...(roomRef.current ? { room: roomRef.current } : {}),
+          ...(stillRef.current.still
+            ? { still: stillRef.current.still, onReady: () => stillRef.current.onReady?.() }
+            : {}),
           // Through the ref: the page's latest way to ask, without rebuilding the stage.
           ...(choosing
             ? {
@@ -120,7 +137,10 @@ export function Avatar({
         if (controlsRef.current) controlsRef.current.current = { cue: (c) => s.cue(c) };
       })
       .catch((err: unknown) => {
-        if (!gone) setProblem(err instanceof Error ? err.message : String(err));
+        if (gone) return;
+        const reason = err instanceof Error ? err.message : String(err);
+        setProblem(reason);
+        stillRef.current.onProblem?.(reason);
       });
     return () => {
       gone = true;
@@ -149,13 +169,15 @@ export function Avatar({
         aria-hidden="true"
         title="Drag to look around. Click furniture to send it there."
       />
-      <fieldset className="talk-view" aria-label="Avatar view">
-        {(["room", "close"] as const).map((v) => (
-          <button key={v} type="button" aria-pressed={view === v} onClick={() => choose(v)}>
-            {v === "room" ? "Room" : "Close up"}
-          </button>
-        ))}
-      </fieldset>
+      {!fixedView && (
+        <fieldset className="talk-view" aria-label="Avatar view">
+          {(["room", "close"] as const).map((v) => (
+            <button key={v} type="button" aria-pressed={view === v} onClick={() => choose(v)}>
+              {v === "room" ? "Room" : "Close up"}
+            </button>
+          ))}
+        </fieldset>
+      )}
     </div>
   );
 }

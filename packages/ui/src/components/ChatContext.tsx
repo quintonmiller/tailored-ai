@@ -293,6 +293,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                   recalled,
                   reasoning: (event.data.reasoning as string | undefined) || undefined,
                   ...(components.size > 0 ? { components: [...components.values()] } : {}),
+                  ...(Array.isArray(event.data.media) && event.data.media.length
+                    ? { turnMedia: event.data.media as MediaRef[] }
+                    : {}),
                 },
               ]);
               recalled = undefined;

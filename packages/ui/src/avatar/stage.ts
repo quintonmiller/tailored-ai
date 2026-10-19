@@ -88,6 +88,13 @@ export async function createStage(
      * names it, and the local hour. Without one, it wanders at random.
      */
     chooseIdle?: (here: string | undefined, hour: number) => Promise<Cue[]>;
+    /**
+     * Hold still for a photo: no wandering, at this spot (its start otherwise),
+     * striking this gesture. A selfie that isn't sitting turns to the camera.
+     */
+    still?: { spot?: string; gesture?: string };
+    /** Called once, when a still stage is worth photographing. */
+    onReady?: () => void;
   } = {},
 ): Promise<Stage> {
   let room = opts.room ?? DEFAULT_ROOM;
@@ -182,12 +189,16 @@ export async function createStage(
 
   // The body is a group around the model, so placing and turning it leaves
   // the model's own VRM 0.x turn alone.
-  const start = spotById(room, room.start) ?? room.spots[0];
+  const start =
+    (opts.still?.spot ? spotById(room, opts.still.spot) : undefined) ?? spotById(room, room.start) ?? room.spots[0];
+  // A photo holds still. A selfie faces the camera, sitting down if the spot is a seat.
+  const selfie = !!opts.still && opts.view === "close";
+  const stillActivity = opts.still && !(selfie && start?.activity !== "sit") ? start?.activity : undefined;
   const body = new THREE.Group();
   body.add(vrm.scene);
   if (start) {
     body.position.set(start.at[0], 0, start.at[1]);
-    body.rotation.y = rad(start.facing);
+    body.rotation.y = selfie && start.activity !== "sit" ? 0.5 : rad(start.facing);
   }
   scene.add(body);
 
@@ -307,7 +318,9 @@ export async function createStage(
       const span = (top - hipsY) * 1.25;
       const vfov = rad(ROOM_VIEW.fov);
       const hfov = 2 * Math.atan(Math.tan(vfov / 2) * visibleAspect());
-      const distance = Math.max(span / 2 / Math.tan(vfov / 2), (span * 0.9) / 2 / Math.tan(hfov / 2));
+      // A selfie stands back a little further than the chat page's close-up, so the room shows behind.
+      const distance =
+        Math.max(span / 2 / Math.tan(vfov / 2), (span * 0.9) / 2 / Math.tan(hfov / 2)) * (selfie ? 1.5 : 1);
       const target = new THREE.Vector3(body.position.x, body.position.y + torso, body.position.z);
       // In front of its face when that side of the room is open; at a desk or
       // a shelf it faces a wall, so the camera takes the nearest open angle.
@@ -434,6 +447,8 @@ export async function createStage(
   // until then, and if they can't, the code-driven motion carries on.
   let clips: ClipPlayer | undefined;
   let disposed = false;
+  /** The animation files have loaded, or failed to: a still stage waits for this. */
+  let clipsSettled = !opts.animations?.length;
   if (opts.animations?.length) {
     loadClipLibrary(opts.animations, vrm)
       .then((library) => {
@@ -445,9 +460,15 @@ export async function createStage(
         clips = player;
         host.dataset.motion = "clips";
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        clipsSettled = true;
+      });
   }
   let lastWalkAt = Number.NEGATIVE_INFINITY;
+  let readyFired = false;
+  let settleFrom: number | undefined;
+  let gestureAt: number | undefined;
   let wasBusy = false;
   let lastDragAt = Number.NEGATIVE_INFINITY;
   controls.addEventListener("start", () => {
@@ -492,6 +513,11 @@ export async function createStage(
   }
 
   renderer.setAnimationLoop((now: number) => {
+    // A photo's frame, once ready, holds: the screenshot is of that moment, not a later one.
+    if (readyFired && opts.still) {
+      renderer.render(scene, camera);
+      return;
+    }
     const t = (now - started) / 1000;
     clock = t;
     const dt = Math.min(0.1, (now - last) / 1000);
@@ -515,7 +541,7 @@ export async function createStage(
     }
     const { state, loudness, engaged } = input();
     const here = walker.busy || pending ? undefined : current;
-    const next = asking ? undefined : director.decide(t, here, engaged);
+    const next = asking || opts.still ? undefined : director.decide(t, here, engaged);
     if (typeof next === "string") go(next);
     else if (next && opts.chooseIdle) {
       // The agent picks what it does with the quiet; if it can't be asked, a random spot.
@@ -543,11 +569,13 @@ export async function createStage(
     if (wasBusy && !walker.busy && view === "close" && !tween && t - lastDragAt > 8) moveCamera(framing("close"));
     wasBusy = walker.busy;
     const spot = current ? spotById(room, current) : undefined;
+    /** What it is doing at its spot, if anything: a still selfie stands unless it is sitting. */
+    const doing = opts.still ? stillActivity : here ? spot?.activity : undefined;
     if (walked > 0) lastWalkAt = t;
     const pose = motion.step(t, state, loudness(), {
       walked,
       stride,
-      ...(here && spot?.activity ? { activity: spot.activity } : {}),
+      ...(doing ? { activity: doing } : {}),
       ...(clips ? { clips: clips.covers } : {}),
     });
     seated = pose.seated;
@@ -557,11 +585,11 @@ export async function createStage(
       const role: ClipRole =
         t - lastWalkAt < 0.2
           ? "walk"
-          : here && spot?.activity === "sit"
+          : doing === "sit"
             ? state === "speaking"
               ? "sitTalk"
               : "sit"
-            : here && spot?.activity === "look"
+            : doing === "look"
               ? "foldArms"
               : state === "speaking"
                 ? "talk"
@@ -606,6 +634,22 @@ export async function createStage(
       const e = 1 + 2.2 * (k - 1) ** 3 + 1.2 * (k - 1) ** 2;
       a.group.scale.setScalar(a.scale * Math.max(0.01, e));
       if (k >= 1) appearing.splice(i, 1);
+    }
+    if (opts.still && !readyFired) {
+      // Animation files that never answer don't hold the photo forever.
+      if (!clipsSettled && t > 15) clipsSettled = true;
+      if (clipsSettled && settleFrom === undefined) settleFrom = t;
+      // Time to sit down and settle; then the gesture, caught near its peak.
+      if (settleFrom !== undefined && t - settleFrom > 1.6) {
+        if (opts.still.gesture && gestureAt === undefined) {
+          handleCue({ name: opts.still.gesture });
+          gestureAt = t;
+        }
+        if (gestureAt === undefined || t - gestureAt > 0.7) {
+          readyFired = true;
+          opts.onReady?.();
+        }
+      }
     }
     vrm.update(dt);
     renderer.render(scene, camera);

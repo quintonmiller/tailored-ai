@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import type { MemoryRecall, Message, ToolLogEntry, ToolLogToolEntry } from "../api";
-import { contentMedia, contentText, type MessageContent } from "../lib/content.js";
+import { contentMedia, contentText, type MediaRef, type MessageContent } from "../lib/content.js";
 import { renderMarkdown } from "../lib/markdown.js";
 import { AskCard, extractAsks } from "./asks";
 import { ChipBody } from "./chips";
@@ -13,7 +13,7 @@ const COMPACT_TRUNCATE_LENGTH = 120;
 const COMPACT_TRUNCATE_LINES = 2;
 
 export function MessageBubble(props: { message: Message }) {
-  const { role, content, toolCalls, toolLog, recalled, reasoning, components } = props.message;
+  const { role, content, toolCalls, toolLog, recalled, reasoning, components, turnMedia } = props.message;
 
   // Assistant carrier with a collapsed tool log (preferred path post-grouping).
   // Work summary goes ABOVE the final response so the response stays the
@@ -24,7 +24,13 @@ export function MessageBubble(props: { message: Message }) {
         {recalled && <RecalledChip recalled={recalled} />}
         <ToolLogPanel entries={toolLog} />
         {reasoning && <ThinkingDisclosure reasoning={reasoning} />}
-        {content && <AssistantBubble content={content} />}
+        {content ? (
+          <AssistantBubble content={content} extraMedia={turnMedia} />
+        ) : turnMedia?.length ? (
+          <div className="message-bubble assistant">
+            <MediaAttachments media={turnMedia} />
+          </div>
+        ) : null}
         {components?.length ? <InterfaceComponents specs={components} /> : null}
       </>
     );
@@ -68,7 +74,7 @@ export function MessageBubble(props: { message: Message }) {
       <>
         {recalled && <RecalledChip recalled={recalled} />}
         {reasoning && <ThinkingDisclosure reasoning={reasoning} />}
-        <AssistantBubble content={content} />
+        <AssistantBubble content={content} extraMedia={turnMedia} />
       </>
     );
   }
@@ -263,9 +269,14 @@ function truncateCompact(content: string): string {
   return content;
 }
 
-function AssistantBubble(props: { content: string | MessageContent }) {
+function AssistantBubble(props: { content: string | MessageContent; extraMedia?: MediaRef[] }) {
   const text = contentText(props.content);
-  const media = contentMedia(props.content);
+  // Its own pictures, then the ones its tools made this turn, each once.
+  const media = useMemo(() => {
+    const own = contentMedia(props.content);
+    const seen = new Set(own.map((m) => m.id));
+    return [...own, ...(props.extraMedia ?? []).filter((m) => !seen.has(m.id))];
+  }, [props.content, props.extraMedia]);
   const { stripped, proposals, asks } = useMemo(() => {
     const a = extractAsks(text);
     const p = extractProposals(a.content);

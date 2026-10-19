@@ -65,3 +65,38 @@ describe("groupTurns with components", () => {
     expect(grouped.at(-1)?.components).toBeUndefined();
   });
 });
+
+describe("groupTurns with pictures", () => {
+  const photo = (id: string, toolCallId: string): Message => ({
+    role: "tool",
+    toolCallId,
+    content: {
+      parts: [
+        { type: "text", text: "A selfie. It goes out with your reply." },
+        { type: "media", media: { id, mimeType: "image/png", bytes: 100, name: "selfie.png" } },
+      ],
+    },
+  });
+
+  it("shows what the turn's tools made with the reply, once each, as Discord attaches it", () => {
+    const grouped = groupTurns([
+      { role: "user", content: "Send me a selfie" },
+      callTool("t1"),
+      photo("img-1", "t1"),
+      callTool("t2"),
+      photo("img-1", "t2"),
+      callTool("t3"),
+      photo("img-2", "t3"),
+      { role: "assistant", content: "Here I am!" },
+    ]);
+    expect(grouped.at(-1)?.turnMedia?.map((m) => m.id)).toEqual(["img-1", "img-2"]);
+  });
+
+  it("leaves a turn without pictures alone", () => {
+    const grouped = groupTurns([
+      { role: "user", content: "Hi" },
+      { role: "assistant", content: "Hello" },
+    ]);
+    expect(grouped.at(-1)?.turnMedia).toBeUndefined();
+  });
+});

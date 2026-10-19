@@ -1,5 +1,5 @@
 import type { Message, ToolLogEntry, ToolLogToolEntry } from "./api";
-import { type ComponentSpec, contentComponents, contentText } from "./lib/content.js";
+import { type ComponentSpec, contentComponents, contentMedia, contentText, type MediaRef } from "./lib/content.js";
 
 /**
  * Collapse a flat message stream into "turns". A turn is the span from a
@@ -30,6 +30,8 @@ export function groupTurns(messages: Message[]): Message[] {
     // Components a tool sent this turn, by id: an update replaces the earlier
     // version in place, so the reply shows each component once, as it is now.
     const components = new Map<string, ComponentSpec>();
+    // Pictures the tools made, once each: they show with the reply.
+    const media = new Map<string, MediaRef>();
     for (let i = 0; i < span.length; i++) {
       const m = span[i];
       if (m.role === "assistant") {
@@ -44,11 +46,15 @@ export function groupTurns(messages: Message[]): Message[] {
       } else if (m.role === "tool") {
         attachToolResult(log, m.toolCallId, contentText(m.content));
         for (const c of contentComponents(m.content)) components.set(c.id, c);
+        for (const ref of contentMedia(m.content)) media.set(ref.id, ref);
       }
     }
 
     const finalMsg = lastTextIdx >= 0 ? span[lastTextIdx] : null;
-    const lifted = components.size > 0 ? { components: [...components.values()] } : {};
+    const lifted = {
+      ...(components.size > 0 ? { components: [...components.values()] } : {}),
+      ...(media.size > 0 ? { turnMedia: [...media.values()] } : {}),
+    };
     if (finalMsg) {
       out.push({ ...finalMsg, toolLog: log.length > 0 ? log : finalMsg.toolLog, ...lifted });
     } else if (log.length > 0) {

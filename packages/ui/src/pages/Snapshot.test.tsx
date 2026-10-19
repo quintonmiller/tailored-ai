@@ -1,0 +1,87 @@
+/**
+ * The page the server's camera photographs: the stage alone, holding still
+ * where it was asked to, saying when the frame is ready or why it can't be.
+ */
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Snapshot } from "./Snapshot";
+
+const stage = vi.hoisted(() => ({
+  opts: [] as { view?: string; still?: { spot?: string; gesture?: string }; room?: { name?: string } }[],
+}));
+vi.mock("../avatar/stage", () => ({
+  createStage: async (
+    _host: HTMLElement,
+    _url: string,
+    _input: unknown,
+    opts: {
+      view?: string;
+      still?: { spot?: string; gesture?: string };
+      room?: { name?: string };
+      onReady?: () => void;
+    },
+  ) => {
+    stage.opts.push(opts);
+    setTimeout(() => opts.onReady?.(), 0);
+    return { dispose() {}, setView() {}, setInsets() {}, setRoom() {}, cue() {} };
+  },
+}));
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+let root: Root;
+let container: HTMLDivElement;
+let live: Record<string, unknown>;
+
+beforeEach(() => {
+  stage.opts.length = 0;
+  live = { enabled: true, avatar: "/api/live/avatar?agent=guide" };
+  container = document.createElement("div");
+  document.body.appendChild(container);
+  root = createRoot(container);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url.startsWith("/api/live")) return new Response(JSON.stringify(live));
+      if (url === "/api/ext/builtin:places/guide")
+        return new Response(JSON.stringify({ place: { name: "guide's room", props: [], spots: [], start: "middle" } }));
+      return new Response("{}", { status: 404 });
+    }),
+  );
+});
+
+afterEach(() => {
+  act(() => root.unmount());
+  container.remove();
+  vi.unstubAllGlobals();
+});
+
+async function open(hash: string) {
+  window.location.hash = hash;
+  await act(async () => root.render(<Snapshot />));
+  for (let i = 0; i < 5; i++) await act(async () => new Promise((r) => setTimeout(r, 10)));
+}
+
+const frame = () => container.querySelector("[data-snapshot]") as HTMLElement;
+
+describe("the snapshot page", () => {
+  it("holds the avatar still where it was asked, in the agent's room, and says when it's ready", async () => {
+    await open("/snapshot?agent=guide&view=selfie&spot=couch&gesture=wave");
+    expect(stage.opts[0]).toMatchObject({
+      view: "close",
+      still: { spot: "couch", gesture: "wave" },
+      room: { name: "guide's room" },
+    });
+    expect(frame().dataset.snapshot).toBe("ready");
+    // Nothing to click in a photo.
+    expect(container.querySelector(".talk-view")).toBeNull();
+  });
+
+  it("says why when there's nothing to photograph", async () => {
+    live = { enabled: true };
+    await open("/snapshot?agent=guide");
+    expect(frame().dataset.snapshot).toBe("failed");
+    expect(frame().textContent).toMatch(/guide has no avatar/);
+  });
+});

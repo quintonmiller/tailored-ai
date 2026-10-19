@@ -10,10 +10,16 @@
  * history, the State page can show and edit it, and the chat page redraws it
  * the moment it changes.
  *
+ * The tool also takes photos: the room, or a selfie, rendered by the bundled
+ * UI in a headless browser (see `places-camera.ts`). A photo comes back as an
+ * image, so it goes out with the agent's reply on any surface that shows one,
+ * Discord included.
+ *
  * Free when unused: with no avatar configured, it registers nothing. An agent
  * with its own `tools:` list needs `place` named in it, like any tool.
  */
 import type { AgentConfig } from "../config.js";
+import { mediaPart, textPart } from "../content/types.js";
 import type { TaiHttpRequest, TaiHttpResponse } from "../http/registry.js";
 import { resolveAvatar } from "../live/avatar.js";
 import type { Plugin, PluginMeta } from "../plugin-context.js";
@@ -22,6 +28,7 @@ import type { StateCaller, StateService } from "../state/service.js";
 import { StateConflictError, StateError } from "../state/types.js";
 import type { Tool, ToolContext, ToolResult } from "../tools/interface.js";
 import { agentStateCaller } from "../tools/state.js";
+import { PlaceCamera, type Shot } from "./places-camera.js";
 import {
   colorWord,
   defaultPlace,
@@ -30,6 +37,7 @@ import {
   type Floor,
   findItem,
   findPlacement,
+  findSpot,
   footprintOf,
   KINDS,
   LIMITS,
@@ -106,7 +114,7 @@ export async function readHome(
 // The tool's arguments
 // --------------------------------------------------------------------------
 
-const ACTIONS = ["look", "add", "move", "change", "remove", "room", "undo"] as const;
+const ACTIONS = ["look", "add", "move", "change", "remove", "room", "undo", "photo"] as const;
 type Action = (typeof ACTIONS)[number];
 
 const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
@@ -422,7 +430,7 @@ const fail = (error: string): ToolResult => ({ success: false, output: "", error
 export class PlaceTool implements Tool {
   name = "place";
   description =
-    "Look at or change the 3D room your body lives in: add, move, restyle or remove things, or resize and repaint the room. Start with look.";
+    "Look at or change the 3D room your body lives in: add, move, restyle or remove things, resize and repaint the room, or take a photo or selfie to send. Start with look.";
   parameters = {
     type: "object",
     properties: {
@@ -430,7 +438,7 @@ export class PlaceTool implements Tool {
         type: "string",
         enum: [...ACTIONS],
         description:
-          "look: the room, its things and what you can add. add / move / change / remove a thing. room: size, walls, floor. undo: the last change.",
+          "look: the room, its things and what you can add. add / move / change / remove a thing. room: size, walls, floor. undo: the last change. photo: a picture to send.",
       },
       item: { type: "string", description: "move, change, remove: the thing, by name or id." },
       kind: { type: "string", description: "add: what to add, e.g. armchair, rug, bookshelf, lamp, vase, block." },
@@ -461,6 +469,9 @@ export class PlaceTool implements Tool {
       height: { type: "number", description: "room: ceiling height in metres." },
       walls: { type: "string", description: "room: the walls' colour." },
       floor: { type: "string", description: "room: wood, carpet, tile or concrete." },
+      view: { type: "string", enum: ["room", "selfie"], description: "photo: the whole room, or a selfie." },
+      at: { type: "string", description: "photo: where you are in it, a spot like the couch." },
+      gesture: { type: "string", description: 'photo: a gesture to make, e.g. "wave".' },
     },
     required: ["action"],
   };
@@ -468,6 +479,8 @@ export class PlaceTool implements Tool {
   constructor(
     private readonly getService: () => StateService,
     private readonly hasBody: (agent: string | undefined) => boolean,
+    /** Takes a photo; without one, `photo` says photos aren't available. */
+    private readonly camera?: (shot: Shot) => Promise<Buffer>,
   ) {}
 
   async execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
@@ -477,6 +490,7 @@ export class PlaceTool implements Tool {
     const caller = agentStateCaller(context, "place");
     const ref = { type: PLACE_TYPE, id: homeId(agent) };
     try {
+      if (text(args.action)?.toLowerCase() === "photo") return await this.photo(args, context, agent);
       if (text(args.action)?.toLowerCase() === "undo") {
         await readHome(service, caller, agent);
         const [last] = await service.history(caller, ref, { limit: 1 });
@@ -505,6 +519,34 @@ export class PlaceTool implements Tool {
       throw err;
     }
   }
+
+  /** A picture of the room, or a selfie, kept in the media store so it can go out with the reply. */
+  private async photo(args: Record<string, unknown>, context: ToolContext, agent: string): Promise<ToolResult> {
+    if (!this.camera) return fail("Photos aren't available here.");
+    const store = context.mediaStore;
+    if (!store) return fail("There's nowhere to keep a photo (no media store), so none can be sent.");
+    const { place } = await readHome(this.getService(), agentStateCaller(context, "place"), agent);
+    const view = text(args.view)?.toLowerCase() === "selfie" ? "selfie" : "room";
+    const at = text(args.at);
+    const spot = at ? findSpot(place, at) : undefined;
+    if (at && !spot)
+      return fail(`There's no spot called "${at}". You can be at: ${place.spots.map((s) => s.place).join(", ")}.`);
+    const gesture = text(args.gesture)?.toLowerCase();
+    let png: Buffer;
+    try {
+      png = await this.camera({ agent, view, ...(spot ? { spot: spot.id } : {}), ...(gesture ? { gesture } : {}) });
+    } catch (err) {
+      return fail((err as Error).message);
+    }
+    const ref = await store.put(png, { mimeType: "image/png", name: `${view}.png`, sessionId: context.sessionId });
+    const what = view === "selfie" ? "A selfie" : `A photo of ${place.name}`;
+    return {
+      success: true,
+      output: {
+        parts: [textPart(`${what}${spot ? `, ${spot.name}` : ""}. It goes out with your reply.`), mediaPart(ref)],
+      },
+    };
+  }
 }
 
 // --------------------------------------------------------------------------
@@ -520,6 +562,7 @@ const plugin: Plugin = (ctx) => {
   const runtime = ctx.runtime;
   if (!runtime || !anyAvatar(runtime.getConfig())) return;
   const hasBody = hasBodyIn(runtime);
+  const camera = new PlaceCamera(() => runtime.getSelfAccess());
 
   ctx.stateTypes.register({
     name: PLACE_TYPE,
@@ -531,7 +574,7 @@ const plugin: Plugin = (ctx) => {
 
   ctx.tools.register("place", (config, tctx) => {
     if (!anyAvatar(config) || !tctx.getStateService) return [];
-    return [new PlaceTool(tctx.getStateService, hasBody)];
+    return [new PlaceTool(tctx.getStateService, hasBody, (shot) => camera.take(shot))];
   });
 
   // Plugin routes are namespaced by module, so this is GET /api/ext/builtin:places/:agent.
