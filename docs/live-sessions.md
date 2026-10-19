@@ -330,6 +330,27 @@ involved, and when it started. Open the State page to watch them change.
 | `asleep` | it has nothing to do and agents are paused, or it's an online agent switched off or paused on the Agents page |
 | `idle` | none of the above |
 
+The chat page draws it on every body in the room:
+
+- **Working**, it holds what the tool looks like: a camera up to its eyes, a
+  book or a tablet in front of its chest, a magnifier out ahead. It reads in a
+  free seat and codes at a free desk, where it puts the laptop down to type.
+- **Thinking**, a thought cloud floats over it and it looks up and away.
+- **Talking** to an agent in the same room, the two turn to face each other
+  under speech bubbles; to one who isn't there, it's on the phone.
+- **Waiting** on you, an amber `!` hangs over it and it waves once. **Stuck**,
+  an orange `?`, and a shrug.
+- **Asleep**, it finds a seat if one is free, drops its chin, shuts its eyes
+  and Zs drift up.
+
+A tag over each head says what it is doing ("searching the web · hotels near
+Alfama") under its name; the agent you are talking to shows the status alone.
+While it works, thinks or waits it stays put instead of wandering, and comes
+back to you when you talk to it. Each named agent's body is also turned round
+the colour wheel by an amount that comes from its name, so several agents
+sharing one model are told apart at a glance; the default agent keeps the
+model's own colours.
+
 Everything comes off the event bus — turns starting and ending, tool calls,
 approvals, stalls, the pause switch — so nothing here runs a model or slows a
 turn. A quick call that settles back within a quarter of a second isn't

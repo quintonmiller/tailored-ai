@@ -12,6 +12,7 @@
  * Pure (time in, pose out) so it is tested without a GPU; the stage only
  * copies the numbers onto the model.
  */
+import type { Hold } from "./doing";
 import type { Activity } from "./scene";
 
 /** The moment of a spoken turn the body is showing. The Talk page's own phases. */
@@ -180,6 +181,24 @@ const GESTURE_MOVES: Record<string, { seconds: number; pose: (u: number) => Offs
   },
 };
 
+/**
+ * Holding something in the right hand, posed from rest in full: up to the
+ * eyes (a camera), at the ear (a phone call), in front of the chest (a book,
+ * a tablet), or out ahead (a magnifier). The head looks at what it holds.
+ */
+const HOLDS: Record<Hold, { arm: Offsets; head: Rotation }> = {
+  // The arm down first (z), then swung forward (x); the elbow bends it up (lower y).
+  up: { arm: { rightUpperArm: [-1.35, 0, 0.25], rightLowerArm: [0, 1.55, 0] }, head: [0, 0, 0] },
+  // Out to the side and twisted, as the hand-to-chin gesture is, so the elbow folds up toward the head.
+  ear: { arm: { rightUpperArm: [-1.2, 0, -0.9], rightLowerArm: [0, 2.15, 0] }, head: [0, 0, -0.08] },
+  chest: { arm: { rightUpperArm: [-0.85, 0, 0.2], rightLowerArm: [0, 1.5, 0] }, head: [0.28, 0, 0] },
+  out: { arm: { rightUpperArm: [-1.45, 0, 0.25], rightLowerArm: [0, 0.3, 0] }, head: [0.22, 0, 0] },
+};
+const HOLD_BONES = ["rightUpperArm", "rightLowerArm"] as const;
+
+/** Asleep: chin down, a little slumped. */
+const ASLEEP: Offsets = { head: [0.42, 0, 0.12], neck: [0.08, 0, 0], spine: [0.08, 0, 0] };
+
 /** Seconds a look at something is held. */
 const LOOK_SECONDS = 2.5;
 
@@ -199,6 +218,8 @@ const SETTLE_SECONDS = 0.35;
 const WALK_SECONDS = 0.12;
 /** Sitting down, standing up, raising the hands to type. */
 const ACTIVITY_SECONDS = 0.45;
+/** Nodding off, and waking. */
+const SLEEP_SECONDS = 1.2;
 /** A blink, start to finish. */
 const BLINK_SECONDS = 0.16;
 /** The mouth opens faster than it closes, as a jaw does. */
@@ -220,6 +241,12 @@ export class Motion {
   private nextBlink: number | undefined;
   private blinkStart = Number.NEGATIVE_INFINITY;
   private moves: { name: string; at: number }[] = [];
+  private holding: Hold | undefined;
+  /** The hold last shown, kept while it fades out. */
+  private held: Hold | undefined;
+  private holdWeight = 0;
+  private sleeping = false;
+  private sleep = 0;
   /**
    * Extra outward swing for the upper arms, in radians, so the hands clear a
    * body wider than the arms were posed for. Measured per model by the stage.
@@ -239,6 +266,17 @@ export class Motion {
     if (!GESTURE_MOVES[name]) return false;
     this.moves = [...this.moves.filter((m) => m.name !== name), { name, at }];
     return true;
+  }
+
+  /** Hold something in the right hand, or nothing. */
+  hold(how: Hold | undefined) {
+    this.holding = how;
+    if (how) this.held = how;
+  }
+
+  /** Nod off, or wake up. */
+  doze(asleep: boolean) {
+    this.sleeping = asleep;
   }
 
   /** Turn the head toward something for a moment: `yaw` to the figure's left, `pitch` up, in radians. */
@@ -266,6 +304,9 @@ export class Motion {
     this.gait += (body.walked / Math.max(0.05, body.stride)) * Math.PI;
     const act = ease(ACTIVITY_SECONDS);
     for (const a of ACTIVITY_NAMES) this.doing[a] += ((a === body.activity && !moving ? 1 : 0) - this.doing[a]) * act;
+
+    this.holdWeight += ((this.holding ? 1 : 0) - this.holdWeight) * act;
+    this.sleep += ((this.sleeping ? 1 : 0) - this.sleep) * ease(SLEEP_SECONDS);
 
     const level = state === "speaking" ? clamp01(loudness) : 0;
     const tau = level > this.mouth ? MOUTH_OPEN_SECONDS : MOUTH_CLOSE_SECONDS;
@@ -341,6 +382,25 @@ export class Motion {
         }
       }
     }
+    // What it holds, unless a gesture has the arm: posed in full over the files, as an offset over code.
+    const hold = this.held && this.holdWeight > 0.001 ? HOLDS[this.held] : undefined;
+    if (hold) {
+      for (const bone of HOLD_BONES) {
+        const o = hold.arm[bone];
+        if (!o || owned[bone]) continue;
+        if (clips) {
+          owned[bone] = [REST[bone][0] + o[0], REST[bone][1] + o[1], REST[bone][2] + o[2]];
+        } else {
+          for (let i = 0; i < 3; i++) bones[bone][i] += o[i] * this.holdWeight;
+        }
+      }
+      if (clips) ownWeight = Math.max(ownWeight, this.holdWeight);
+      for (let i = 0; i < 3; i++) bones.head[i] += hold.head[i] * this.holdWeight;
+    }
+    if (this.sleep > 0.001) {
+      for (const [bone, o] of Object.entries(ASLEEP) as [PoseBone, Rotation][])
+        for (let i = 0; i < 3; i++) bones[bone][i] += o[i] * this.sleep;
+    }
     if (owned.leftUpperArm) owned.leftUpperArm[2] += this.armClearance;
     if (owned.rightUpperArm) owned.rightUpperArm[2] -= this.armClearance;
     if (this.gazeAt) {
@@ -358,7 +418,7 @@ export class Motion {
 
     return {
       bones,
-      expressions: { blink: this.blink(t), aa: clamp01(this.mouth * 1.1) },
+      expressions: { blink: Math.max(this.blink(t), this.sleep), aa: clamp01(this.mouth * 1.1) },
       gaze,
       seated: this.doing.sit,
       lift: 0.012 * Math.abs(c) * w,

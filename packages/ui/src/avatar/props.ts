@@ -458,6 +458,117 @@ export function buildProp(kind: PropKind, look: PropLook = {}): BuiltProp {
   }
 }
 
+/**
+ * Something small to hold, sized for a grown-up hand, built flat with its
+ * face up (+Y) and its length along Z: the figure turns it to how it is held.
+ * A camera is the exception, built as it is held, lens forward (+Z). Each has
+ * materials of its own, so letting it go frees nothing the room still uses.
+ */
+export function buildHeld(kind: string): THREE.Group {
+  const g = new THREE.Group();
+  // A faint glow of its own colour, so it still reads in the shadow of a big head at night.
+  const own = (color: number, glow = 0.12) =>
+    new THREE.MeshStandardMaterial({
+      color,
+      roughness: 0.7,
+      flatShading: true,
+      emissive: color,
+      emissiveIntensity: glow,
+    });
+  const add = (geometry: THREE.BufferGeometry, material: THREE.Material, x: number, y: number, z: number) => {
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(x, y, z);
+    mesh.castShadow = true;
+    g.add(mesh);
+    return mesh;
+  };
+  const slab = (w: number, h: number, d: number, color: number, x = 0, y = 0, z = 0, glow = 0) =>
+    add(new THREE.BoxGeometry(w, h, d), own(color, glow), x, y, z);
+  switch (kind) {
+    case "camera": {
+      slab(0.13, 0.08, 0.06, 0x2b2d33);
+      slab(0.035, 0.02, 0.03, 0x2b2d33, -0.035, 0.05, 0);
+      const lens = add(new THREE.CylinderGeometry(0.028, 0.03, 0.05, 14), own(0x15161a), 0.01, 0, 0.05);
+      lens.rotation.x = Math.PI / 2;
+      add(new THREE.CylinderGeometry(0.018, 0.018, 0.005, 14), own(0x5b8fd6, 0.4), 0.01, 0, 0.077).rotation.x =
+        Math.PI / 2;
+      break;
+    }
+    case "phone":
+      slab(0.07, 0.01, 0.145, 0x1d1f24);
+      slab(0.062, 0.002, 0.13, 0x6fb3ff, 0, 0.006, 0, 0.6);
+      break;
+    case "laptop":
+    case "tablet":
+      slab(0.2, 0.012, 0.27, 0x3a3d45);
+      slab(0.185, 0.002, 0.25, 0x9fd0ff, 0, 0.007, 0, 0.5);
+      break;
+    case "book": {
+      // Open: two pages in a shallow V on a coloured cover.
+      slab(0.3, 0.012, 0.22, 0xb5523b);
+      for (const side of [-1, 1]) {
+        const page = slab(0.14, 0.012, 0.2, 0xf4efe2, side * 0.072, 0.014, 0);
+        page.rotation.z = side * -0.12;
+      }
+      break;
+    }
+    case "notebook":
+      slab(0.16, 0.014, 0.22, 0x3e6e8e);
+      slab(0.15, 0.003, 0.21, 0xfaf7ee, 0, 0.009, 0);
+      for (let i = 0; i < 6; i++) slab(0.012, 0.016, 0.012, 0xb8bcc4, -0.078, 0.004, -0.09 + i * 0.036);
+      break;
+    case "clipboard":
+      slab(0.2, 0.01, 0.28, 0xa8794f);
+      slab(0.18, 0.003, 0.24, 0xfbfbf7, 0, 0.007, 0.012);
+      slab(0.08, 0.02, 0.03, 0xb0b4bb, 0, 0.012, -0.125);
+      break;
+    case "folder":
+      slab(0.22, 0.016, 0.3, 0xe2b94f);
+      slab(0.08, 0.016, 0.03, 0xe2b94f, -0.06, 0, -0.16);
+      break;
+    case "letter":
+      slab(0.2, 0.006, 0.12, 0xf6f1e4);
+      slab(0.03, 0.008, 0.03, 0xc0392b, 0, 0.004, 0);
+      break;
+    case "clock": {
+      const face = add(new THREE.CylinderGeometry(0.06, 0.06, 0.035, 18), own(0xd9534f), 0, 0, 0);
+      face.rotation.x = Math.PI / 2;
+      add(new THREE.CylinderGeometry(0.05, 0.05, 0.004, 18), own(0xfdfaf2), 0, 0, 0.019).rotation.x = Math.PI / 2;
+      for (const x of [-0.035, 0.035]) add(new THREE.SphereGeometry(0.02, 8, 6), own(0xd9534f), x, 0.06, 0);
+      // Flat, like the rest: lying with its face up.
+      g.rotation.x = -Math.PI / 2;
+      const flat = new THREE.Group();
+      flat.add(g);
+      return flat;
+    }
+    case "microphone":
+      add(new THREE.CylinderGeometry(0.014, 0.011, 0.14, 10), own(0x2b2d33), 0, 0, 0).rotation.x = Math.PI / 2;
+      add(new THREE.SphereGeometry(0.03, 12, 8), own(0x9aa0a8), 0, 0, 0.085);
+      break;
+    case "magnifier": {
+      add(new THREE.CylinderGeometry(0.012, 0.012, 0.11, 8), own(0x6b4a2f), 0, 0, -0.03).rotation.x = Math.PI / 2;
+      const ring = add(new THREE.TorusGeometry(0.05, 0.008, 6, 20), own(0xc9a227), 0, 0, 0.075);
+      ring.rotation.x = Math.PI / 2;
+      add(new THREE.CylinderGeometry(0.045, 0.045, 0.004, 20), own(0xcfe8ff, 0.15), 0, 0, 0.075);
+      break;
+    }
+    default:
+      return g;
+  }
+  return g;
+}
+
+/** Free a held thing's own geometry and materials. */
+export function disposeHeld(root: THREE.Object3D) {
+  root.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    mesh.geometry?.dispose();
+    const m = mesh.material;
+    if (Array.isArray(m)) for (const x of m) x.dispose();
+    else m?.dispose();
+  });
+}
+
 /** Free every geometry and material under `root`. */
 export function disposeTree(root: THREE.Object3D) {
   root.traverse((o) => {

@@ -193,6 +193,49 @@ describe("Motion", () => {
     expect(Math.abs(pose.bones.rightUpperArm[2])).toBeLessThan(0.05);
   });
 
+  it("holds something in front of its chest, looking down at it, and lets the arm fall when it lets go", () => {
+    const motion = new Motion({ random: steady, reducedMotion: true });
+    const rest = motion.step(0, "idle", 0);
+    motion.hold("chest");
+    let pose = rest;
+    for (let t = 0; t <= 2; t += 1 / 60) pose = motion.step(t, "idle", 0);
+    // The arm forward and the elbow bent, the head down: from rest, not just near it.
+    expect(pose.bones.rightUpperArm[0]).toBeLessThan(rest.bones.rightUpperArm[0] - 0.7);
+    expect(pose.bones.rightLowerArm[1]).toBeGreaterThan(rest.bones.rightLowerArm[1] + 1.2);
+    expect(pose.bones.head[0]).toBeGreaterThan(rest.bones.head[0] + 0.2);
+    // The other arm is its own.
+    for (let i = 0; i < 3; i++) expect(pose.bones.leftUpperArm[i]).toBeCloseTo(rest.bones.leftUpperArm[i], 1);
+    motion.hold(undefined);
+    for (let t = 2; t <= 4; t += 1 / 60) pose = motion.step(t, "idle", 0);
+    expect(pose.bones.rightUpperArm[0]).toBeCloseTo(rest.bones.rightUpperArm[0], 1);
+  });
+
+  it("with animation files playing, takes the arm over to hold something, unless a gesture has it", () => {
+    const motion = new Motion({ random: steady });
+    const clips = { walk: true, activities: [] };
+    motion.hold("up");
+    let pose = motion.step(0, "idle", 0, { walked: 0, stride: 0.45, clips });
+    for (let t = 0; t <= 2; t += 1 / 60) pose = motion.step(t, "idle", 0, { walked: 0, stride: 0.45, clips });
+    expect(pose.owned?.weight).toBeGreaterThan(0.95);
+    expect(pose.owned?.bones.rightUpperArm?.[0]).toBeCloseTo(-1.35, 1);
+    motion.gesture("wave", 2);
+    pose = motion.step(2.8, "idle", 0, { walked: 0, stride: 0.45, clips });
+    expect(pose.owned?.bones.rightUpperArm?.[2]).toBeCloseTo(-0.9, 1);
+  });
+
+  it("dozes: eyes shut, chin down; and wakes", () => {
+    const motion = new Motion({ random: steady, reducedMotion: true });
+    const awake = motion.step(0, "idle", 0);
+    motion.doze(true);
+    let pose = awake;
+    for (let t = 0; t <= 5; t += 1 / 60) pose = motion.step(t, "idle", 0);
+    expect(pose.expressions.blink).toBeGreaterThan(0.95);
+    expect(pose.bones.head[0]).toBeGreaterThan(awake.bones.head[0] + 0.3);
+    motion.doze(false);
+    for (let t = 5; t <= 10; t += 1 / 60) pose = motion.step(t, "idle", 0);
+    expect(pose.bones.head[0]).toBeLessThan(awake.bones.head[0] + 0.1);
+  });
+
   it("swings the arms out by the clearance the body needs", () => {
     const motion = new Motion({ random: steady, reducedMotion: true });
     motion.armClearance = 0.3;

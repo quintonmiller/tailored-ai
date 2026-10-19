@@ -24,6 +24,10 @@ const stage = vi.hoisted(() => ({
   rooms: [] as { name?: string; props: { name: string }[] }[],
   /** Who else the stage was told is in the room, each time. */
   company: [] as string[][],
+  /** What the stage was told each agent is doing, each time. */
+  activities: [] as Record<string, { doing: string }>[],
+  /** The agent each stage was made for. */
+  agents: [] as (string | undefined)[],
   /** Stages on screen now: what render() waits for, instead of a fixed sleep a slow runner outlasts. */
   mounted: 0,
 }));
@@ -32,9 +36,14 @@ vi.mock("../avatar/stage", () => ({
     _host: HTMLElement,
     url: string,
     input: StageInput,
-    opts: { animations?: string[]; chooseIdle?: (here: string | undefined, hour: number) => Promise<unknown> },
+    opts: {
+      animations?: string[];
+      chooseIdle?: (here: string | undefined, hour: number) => Promise<unknown>;
+      agent?: string;
+    },
   ) => {
     stage.calls.push({ url, input, animations: opts.animations, chooseIdle: opts.chooseIdle });
+    stage.agents.push(opts.agent);
     stage.mounted++;
     return {
       dispose: () => {
@@ -44,6 +53,7 @@ vi.mock("../avatar/stage", () => ({
       setInsets: ({ right }: { right: number }) => stage.insets.push(right),
       setRoom: (room: { name?: string; props: { name: string }[] }) => stage.rooms.push(room),
       setCompany: (company: { agent: string }[]) => stage.company.push(company.map((c) => c.agent)),
+      setActivities: (a: Record<string, { doing: string }>) => stage.activities.push(a),
       cue: (c: { name: string; target?: string }) => stage.cues.push(c.target ? `${c.name}:${c.target}` : c.name),
     };
   },
@@ -70,6 +80,8 @@ class FakeEventSource {
 /** Where the agent is, and who else is there with a body, as the server says. */
 let placeId = "home:talker";
 let company: { agent: string; name: string; avatar: string; animations: string[] }[] = [];
+/** What every agent is doing, as the server's activity records say. */
+let activityRecords: { id: string; data: { agent: string; doing: string; what: string } }[] = [];
 
 /** The agent's own room, as the server keeps it. */
 const home = {
@@ -150,6 +162,9 @@ beforeEach(() => {
   stage.insets.length = 0;
   stage.rooms.length = 0;
   stage.company.length = 0;
+  stage.activities.length = 0;
+  stage.agents.length = 0;
+  activityRecords = [];
   placeId = "home:talker";
   company = [];
   stage.mounted = 0;
@@ -190,6 +205,7 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {
       if (url.startsWith("/api/live?")) return new Response(JSON.stringify(liveInfo));
+      if (url.startsWith("/api/state/activity")) return new Response(JSON.stringify({ records: activityRecords }));
       if (url === "/api/ext/builtin:places/talker")
         return new Response(JSON.stringify({ type: "place", id: placeId, version: 1, place: home, company }));
       if (init?.method === "DELETE") {
@@ -324,6 +340,24 @@ describe("the chat page's scene", () => {
     await act(async () => FakeEventSource.last?.emit("change", { type: "whereabouts", id: "planner", op: "delete" }));
     await settle();
     expect(stage.company.at(-1)).toEqual([]);
+  });
+
+  it("shows what every agent is doing, and keeps up as that changes", async () => {
+    activityRecords = [{ id: "talker", data: { agent: "talker", doing: "thinking", what: "thinking" } }];
+    await render();
+    expect(stage.agents.at(-1)).toBe("talker");
+    expect(stage.activities.at(-1)?.talker?.doing).toBe("thinking");
+    const working = { agent: "planner", doing: "working", what: "taking a photo", look: "camera" };
+    await act(async () =>
+      FakeEventSource.last?.emit("change", { type: "activity", id: "planner", op: "update", after: working }),
+    );
+    expect(stage.activities.at(-1)).toMatchObject({ talker: { doing: "thinking" }, planner: { doing: "working" } });
+    // Other kinds of record are none of its business; a record that goes, goes.
+    const before = stage.activities.length;
+    await act(async () => FakeEventSource.last?.emit("change", { type: "plan", id: "x", op: "update", after: {} }));
+    expect(stage.activities.length).toBe(before);
+    await act(async () => FakeEventSource.last?.emit("change", { type: "activity", id: "planner", op: "delete" }));
+    expect(Object.keys(stage.activities.at(-1) ?? {})).toEqual(["talker"]);
   });
 
   it("has no 3D view for an agent without a body, but can still talk", async () => {
