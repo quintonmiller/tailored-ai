@@ -1709,7 +1709,16 @@ export class PlaceTool implements Tool {
         const company = others.length ? ` Also here: ${others.join(", ")}.` : "";
         const door = await hasDoor(service, id, place, this.hasBody);
         const shown = describe(shownPurpose(place, talk));
-        return { success: true, output: `${where}${company} ${whereaboutsWords(place, door)}\n\n${shown}` };
+        // A home someone changed keeps what it has, so one changed before homes had calendars has none: the agent
+        // is told how to hang one rather than having it hung for it.
+        const calendar =
+          id === homeId(agent) && !place.props.some((p) => p.kind === "calendar")
+            ? `\n\nYour home has no calendar yet. Add one (kind "calendar") and it shows your day: your next wakes and what you got done today.`
+            : "";
+        return {
+          success: true,
+          output: `${where}${company} ${whereaboutsWords(place, door)}\n\n${shown}${calendar}`,
+        };
       }
       if (action === "undo") {
         const { id } = await readCurrent(service, caller, agent, meetings);

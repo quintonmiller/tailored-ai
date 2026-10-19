@@ -277,6 +277,10 @@ export const KINDS: Record<string, Kind> = {
   bench: { noun: "bench", mount: "floor", footprint: [1.3, 0.42], height: 0.46, use: sit(0.45, 0.02, 0.44) },
   /** A plate on the wall that shows its words: a hall's name. */
   sign: { noun: "sign", mount: "wall", footprint: [1.4, 0.04], height: 0.36, elevation: 1.6 },
+  /** A flat screen on the wall: the page shows the dashboard on it, and in a home what its owner is up to. */
+  screen: { noun: "screen", mount: "wall", footprint: [1.6, 0.06], height: 0.92, elevation: 1.25 },
+  /** A calendar on the wall: the page fills it with its owner's day, and in the lobby everyone's next wakes. */
+  calendar: { noun: "calendar", mount: "wall", footprint: [1.0, 0.03], height: 1.0, elevation: 1.1 },
 };
 
 export const LIMITS = {

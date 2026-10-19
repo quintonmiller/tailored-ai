@@ -11,6 +11,8 @@
 import { type ReactNode, useEffect, useState } from "react";
 import { type DashboardWidgetSpec, fetchWidgetData } from "../api";
 import { renderMarkdown } from "../lib/markdown.js";
+import { whenMs } from "../lib/tasks";
+import { asArray, getPath } from "../lib/widget-data";
 
 export interface WidgetProps {
   widget: DashboardWidgetSpec;
@@ -18,15 +20,6 @@ export interface WidgetProps {
 export type WidgetRenderer = (props: WidgetProps) => ReactNode;
 
 // --- helpers ---------------------------------------------------------------
-
-/** Read a dotted path (`usage.input`) out of an arbitrary object. */
-function getPath(obj: unknown, path?: string): unknown {
-  if (!path) return obj;
-  return path.split(".").reduce<unknown>((acc, key) => {
-    if (acc && typeof acc === "object") return (acc as Record<string, unknown>)[key];
-    return undefined;
-  }, obj);
-}
 
 function opt<T>(w: DashboardWidgetSpec, key: string, fallback: T): T {
   const v = w.options?.[key];
@@ -57,19 +50,6 @@ function useWidgetData<T = unknown>(endpoint?: string, pollMs = 30000) {
   }, [endpoint, pollMs]);
 
   return { data, error, loading };
-}
-
-/** Coerce common list shapes ({items}, {tasks}, {runs}, {hits}, or a raw array). */
-function asArray(data: unknown, path?: string): unknown[] {
-  const picked = path ? getPath(data, path) : data;
-  if (Array.isArray(picked)) return picked;
-  if (picked && typeof picked === "object") {
-    for (const k of ["items", "tasks", "runs", "hits", "data", "notes"]) {
-      const v = (picked as Record<string, unknown>)[k];
-      if (Array.isArray(v)) return v;
-    }
-  }
-  return [];
 }
 
 function WidgetState({ loading, error }: { loading: boolean; error: string | null }) {
@@ -160,6 +140,8 @@ interface RunRow {
   created_at?: string;
   agent?: string;
   agentName?: string;
+  /** As `/api/exploratory/runs` names it. */
+  agent_name?: string;
   outcome?: string;
   status?: string;
 }
@@ -173,14 +155,17 @@ function ActivityWidget({ widget }: WidgetProps) {
   return (
     <ul className="widget-list">
       {rows.map((r, i) => {
-        const when = r.startedAt ?? r.started_at ?? r.created_at ?? "";
+        // The run store writes SQLite's UTC time without saying so: read as it is, it would be taken for local.
+        const when = whenMs(r.startedAt ?? r.started_at ?? r.created_at);
         const outcome = r.outcome ?? r.status ?? "";
         return (
           <li key={i} className="widget-run">
             <span className="widget-run-when">
-              {when ? new Date(when).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—"}
+              {Number.isFinite(when)
+                ? new Date(when).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                : "—"}
             </span>
-            <span className="widget-run-agent">{r.agent ?? r.agentName ?? "agent"}</span>
+            <span className="widget-run-agent">{r.agent ?? r.agentName ?? r.agent_name ?? "agent"}</span>
             {outcome && <span className={`widget-chip run-${outcome}`}>{outcome}</span>}
           </li>
         );

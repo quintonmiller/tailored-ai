@@ -1,11 +1,13 @@
 import { type CSSProperties, type MutableRefObject, type ReactNode, useEffect, useRef, useState } from "react";
-import type { BoardSpot, BoardTask } from "./boards";
+import type { BoardTask } from "./boards";
+import type { CalendarView } from "./calendar";
 import type { Cue } from "./cues";
 import { type AgentActivity, DOING_VARS } from "./doing";
 import { doorWords } from "./doors";
 import type { BodyState } from "./motion";
 import { lightsFor, type Room, type RoomDoor } from "./scene";
-import type { Companion, Line, Stage, StageView, Travel } from "./stage";
+import type { ScreenCard } from "./screens";
+import type { Companion, Line, Stage, StageView, Travel, UseSpot } from "./stage";
 
 const VIEW_KEY = "tai.talk.avatarView";
 /** Pixels a door's label may need to the right of the pointer: nearer the edge of what can be seen, it goes left. */
@@ -71,6 +73,8 @@ export function Avatar({
   tools,
   overlay,
   tasks,
+  screen,
+  calendar,
   onUse,
   onLine,
   place,
@@ -128,8 +132,15 @@ export function Avatar({
   overlay?: ReactNode;
   /** What the task boards on the walls show. */
   tasks?: BoardTask[];
-  /** A kiosk or a board was clicked: what it does, and on a board the note or column clicked. */
-  onUse?: (action: string, on?: BoardSpot) => void;
+  /** The pages the screens on the walls go through. */
+  screen?: ScreenCard[];
+  /** What the calendars on the walls show. */
+  calendar?: CalendarView;
+  /**
+   * A kiosk, a board, a screen or a calendar was clicked: what it does, and
+   * on a board the note or column clicked, on a screen the page that was up.
+   */
+  onUse?: (action: string, on?: UseSpot) => void;
   /** A visitor is near an agent as it starts saying something, nearness 0–1. */
   onLine?: (agent: string, text: string, nearness: number) => void;
   /**
@@ -197,6 +208,16 @@ export function Avatar({
   useEffect(() => {
     if (tasks) stage.current?.setTasks(tasks);
   }, [tasks]);
+  const screenRef = useRef(screen);
+  screenRef.current = screen;
+  useEffect(() => {
+    if (screen) stage.current?.setScreen(screen);
+  }, [screen]);
+  const calendarRef = useRef(calendar);
+  calendarRef.current = calendar;
+  useEffect(() => {
+    if (calendar) stage.current?.setCalendar(calendar);
+  }, [calendar]);
   const placeRef = useRef(place);
   placeRef.current = place;
   const onUseRef = useRef(onUse);
@@ -282,7 +303,7 @@ export function Avatar({
                 onLine: (who: string, text: string, nearness: number) => lineRef.current?.(who, text, nearness),
               }
             : {}),
-          onUse: (action: string, on?: BoardSpot) => onUseRef.current?.(action, on),
+          onUse: (action: string, on?: UseSpot) => onUseRef.current?.(action, on),
           ...(doors
             ? {
                 onDoor: (door: RoomDoor) => doorRef.current?.(door),
@@ -340,6 +361,8 @@ export function Avatar({
         if (activitiesRef.current) s.setActivities(activitiesRef.current);
         if (speechRef.current) s.setSpeech(speechRef.current);
         if (tasksRef.current) s.setTasks(tasksRef.current);
+        if (screenRef.current) s.setScreen(screenRef.current);
+        if (calendarRef.current) s.setCalendar(calendarRef.current);
         greetIn(s, placeRef.current);
       })
       .catch((err: unknown) => {

@@ -23,6 +23,7 @@ import {
   chooseIdle,
   collectTurnMedia,
   compactSession,
+  compileSchedule,
   componentSpecs,
   countChunks,
   createCollection,
@@ -49,6 +50,7 @@ import {
   findOrCreateSession,
   formatCompactResult,
   formatHits,
+  fromDbTime,
   GitResourceSource,
   generateBriefing,
   generateSuggestions,
@@ -91,6 +93,9 @@ import {
   loadSession,
   type MemoryFragment,
   NpmResourceSource,
+  nextOccurrence,
+  nextOwnTurn,
+  ownTurnsOf,
   type ProjectQueryFilter,
   parseBody,
   parseSkillMd,
@@ -112,7 +117,10 @@ import {
   respondToComponent,
   runAgentLoop,
   runMemorySweep,
+  runtimeTimeProvider,
   runVoiceTurn,
+  type ScheduleRow,
+  ScheduleStore,
   SESSION_SUMMARY_TAG,
   type StateCaller,
   type StateChange,
@@ -314,6 +322,26 @@ function fragmentToFact(fragment: MemoryFragment): Record<string, unknown> {
     project_id: typeof md.project_id === "string" ? md.project_id : null,
     created_at: typeof md.created_at === "string" ? md.created_at : null,
     updated_at: typeof md.updated_at === "string" ? md.updated_at : null,
+  };
+}
+
+/** A booked wake as `GET /api/schedules` gives it: its times as ISO instants, the way the rest of the API sends them. */
+function scheduleJson(row: ScheduleRow) {
+  const at = (t: string | null) => (t ? fromDbTime(t).toISOString() : null);
+  return {
+    id: row.id,
+    agent: row.agent,
+    note: row.note,
+    kind: row.kind,
+    every: row.kind === "repeat" ? row.source : null,
+    next_run_at: at(row.next_run_at),
+    starts_at: at(row.starts_at),
+    ends_at: at(row.ends_at),
+    target_kind: row.target_kind,
+    target: row.target,
+    run_count: row.run_count,
+    last_run_at: at(row.last_run_at),
+    created_at: at(row.created_at),
   };
 }
 
@@ -958,10 +986,29 @@ export function createServer(opts: ServerOptions) {
     const config = runtime.getConfig();
     const states = listExploratoryStates(runtime.db);
     const stateByName = new Map(states.map((s) => [s.agent_name, s]));
+    const timeZone = runtimeTimeProvider(runtime).timeZone();
+    const now = new Date();
     const agents = Object.entries(config.agents ?? {})
       .filter(([, def]) => def.online?.enabled)
       .map(([name, def]) => {
         const state = stateByName.get(name);
+        // When the worker next takes its turn, as the worker decides: within its hours, once the day's limit lifts.
+        // Null while it takes none (switched off, paused) or its hours never come. Running on their own being off
+        // for every agent is `enabled` below, and pausing every agent the pause routes': neither is counted here.
+        const own = ownTurnsOf(
+          {
+            enabled: state?.enabled ?? true,
+            paused_until: state?.paused_until ?? null,
+            last_tick_at: state?.last_tick_at ?? null,
+            current_interval_ms: state?.current_interval_ms ?? null,
+            runs_today: state?.runs_today ?? 0,
+            tokens_today_resets_at: state?.tokens_today_resets_at ?? null,
+          },
+          def.online ?? {},
+          timeZone,
+          now,
+        );
+        const next = own ? nextOwnTurn(own, now.getTime()) : undefined;
         return {
           name,
           enabled_in_config: true,
@@ -974,6 +1021,7 @@ export function createServer(opts: ServerOptions) {
           runs_today: state?.runs_today ?? 0,
           cadence: def.online?.cadence ?? null,
           budgets: def.online?.budgets ?? null,
+          next_turn_at: next !== undefined ? new Date(next).toISOString() : null,
         };
       });
     return c.json({
@@ -1498,18 +1546,34 @@ export function createServer(opts: ServerOptions) {
 
     const dbByName = new Map(dbRows.map((r) => [r.name, r]));
 
+    // When a job next runs, in the runtime's timezone as the scheduler runs it: none while cron is off, for a job
+    // switched off, or for a schedule that doesn't compile (the scheduler skips those too).
+    const timeZone = runtimeTimeProvider(runtime).timeZone();
+    const now = new Date();
+    const nextRun = (schedule: string, enabled: boolean): string | null => {
+      if (!config.cron.enabled || !enabled) return null;
+      try {
+        const cron = compileSchedule(schedule).cron;
+        return nextOccurrence({ mode: "cron", cron, source: schedule }, now, null, timeZone)?.toISOString() ?? null;
+      } catch {
+        return null;
+      }
+    };
+
     // Merge config jobs with DB rows — config is the source of truth for definitions,
     // DB provides runtime state (last_run, enabled overrides)
     const jobs = config.cron.jobs.map((job) => {
       const dbRow = dbByName.get(job.name);
+      const enabled = dbRow ? dbRow.enabled : job.enabled !== false ? 1 : 0;
       return {
         name: job.name,
         schedule: job.schedule,
         task: job.prompt,
         model: job.model ?? null,
         agent: job.agent ?? job.profile ?? null,
-        enabled: dbRow ? dbRow.enabled : job.enabled !== false ? 1 : 0,
+        enabled,
         last_run: dbRow?.last_run ?? null,
+        next_run: nextRun(job.schedule, !!enabled),
         delivery: job.delivery ?? null,
         in_db: !!dbRow,
       };
@@ -1526,6 +1590,8 @@ export function createServer(opts: ServerOptions) {
           agent: null,
           enabled: row.enabled,
           last_run: row.last_run,
+          // Not in the config, so the scheduler doesn't run it.
+          next_run: null,
           delivery: null,
           in_db: true,
         });
@@ -1536,6 +1602,19 @@ export function createServer(opts: ServerOptions) {
       enabled: config.cron.enabled,
       jobs,
     });
+  });
+
+  // What agents booked with the `schedule` tool and is still to come, soonest first; `?agent=` for one agent's.
+  // Read only: booking and cancelling stay the agent's, through its tool. Without this, the only booked wake a
+  // page could see was an idle agent's soonest (its `activity` record's `next`); the calendars in the 3D world
+  // show them all.
+  app.get("/api/schedules", (c) => {
+    const agent = c.req.query("agent") || undefined;
+    const asked = Number.parseInt(c.req.query("limit") || "100", 10);
+    const limit = Number.isFinite(asked) && asked > 0 ? Math.min(asked, 500) : 100;
+    const store = new ScheduleStore(runtime.db);
+    const rows = agent ? store.listForAgent(agent).slice(0, limit) : store.listPending(limit);
+    return c.json({ schedules: rows.map(scheduleJson) });
   });
 
   app.patch("/api/cron/:name", async (c) => {

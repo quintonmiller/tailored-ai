@@ -590,24 +590,53 @@ function clearWays(start: Place): Place {
   return place;
 }
 
-/** Something every home has: somewhere to sit, somewhere to work, a window, and a frame for the photos taken there. */
-type Need = "seat" | "desk" | "window" | "picture";
+/**
+ * Something every home has: somewhere to sit, somewhere to work, a window, a
+ * frame for the photos taken there, and a calendar of its owner's day.
+ */
+type Need = "seat" | "desk" | "window" | "picture" | "calendar";
 
-const NEEDS: Record<Need, { kind: string; has: (p: Place) => boolean }> = {
+interface Needed {
+  kind: string;
+  has: (p: Place) => boolean;
+  /** What it goes by, when it goes by something. */
+  near?: (p: Place) => string | undefined;
+  /** Smaller sizes to try, in turn, on a wall too full for a normal one. */
+  smaller?: number[];
+}
+
+const NEEDS: Record<Need, Needed> = {
   seat: { kind: "armchair", has: (p) => p.spots.some((s) => s.activity === "sit") },
   desk: { kind: "desk", has: (p) => p.spots.some((s) => s.activity === "type") },
   window: { kind: "window", has: (p) => p.props.some((i) => i.kind === "window") },
   picture: { kind: "picture", has: (p) => p.props.some((i) => PHOTO_FRAMES.includes(i.kind)) },
+  // By the desk, where a day is planned: on the wall nearest it, as close as there is room.
+  calendar: {
+    kind: "calendar",
+    has: (p) => p.props.some((i) => i.kind === "calendar"),
+    near: (p) => p.spots.find((s) => s.activity === "type")?.item,
+    smaller: [0.8, 0.6],
+  },
 };
 
-/** A room with what it needs: put wherever it fits, the way the `place` tool would, when the room has none. */
+/** A room with what it needs: put wherever it fits (near what it goes by), the way the `place` tool would, when the room has none. */
 function ensure(place: Place, need: Need): Place {
-  const { kind, has } = NEEDS[need];
+  const { kind, has, near, smaller = [] } = NEEDS[need];
   if (has(place)) return place;
-  const got = findPlacement(place, { kind }, {});
-  if (typeof got === "string") return place;
-  const item: PlaceItem = { id: newId(place, kind), name: newName(place, kind), kind, ...got };
-  return withSpots({ ...place, props: [...place.props, item] });
+  const by = near?.(place);
+  for (const scale of [1, ...smaller]) {
+    const got = findPlacement(place, { kind, ...(scale !== 1 ? { scale } : {}) }, by ? { near: by } : {});
+    if (typeof got === "string") continue;
+    const item: PlaceItem = {
+      id: newId(place, kind),
+      name: newName(place, kind),
+      kind,
+      ...got,
+      ...(scale !== 1 ? { scale } : {}),
+    };
+    return withSpots({ ...place, props: [...place.props, item] });
+  }
+  return place;
 }
 
 // --------------------------------------------------------------------------
@@ -937,7 +966,7 @@ export function homePlace(seed: string, name: string, kind?: string): Place {
     flips: () => rand() < 0.5,
     after,
     lampsAt,
-    needs: ["seat", "desk", "window", "picture"],
+    needs: ["seat", "desk", "window", "picture", "calendar"],
   });
 }
 
@@ -1295,8 +1324,9 @@ export const LOBBY_DOORS: DoorSlot[] = [
 /**
  * Where everyone starts, and the biggest room there is, with doorways kept
  * clear on both walls for the halls that lead off it: kiosks to make a new
- * agent, a new task or a new room, a board of every open task, a lounge by the
- * windows, and tables to sit at.
+ * agent, a new task or a new room, a big screen over them showing the
+ * dashboard, a board of every open task, a calendar of everyone's next wakes,
+ * a lounge by the windows, and tables to sit at.
  */
 export function lobby(): Place {
   const width = 14;
@@ -1334,9 +1364,31 @@ export function lobby(): Place {
       label: "Open tasks",
       action: "tasks",
     },
-    { kind: "tall_plant", at: [-3.05, round(back + 0.4)], facing: 0 },
-    { kind: "tall_plant", name: "the other tall plant", at: [3.05, round(back + 0.4)], facing: 0 },
-    { kind: "painting", at: [-3.9, back], facing: 0, wall: { side: "back", along: -3.9 }, color: look.accent },
+    // Over the kiosks, high enough to be seen past them from across the room: the dashboard, a page at a time.
+    {
+      id: "screen",
+      name: "the big screen",
+      kind: "screen",
+      at: [0, back],
+      facing: 0,
+      wall: { side: "back", along: 0 },
+      scale: 1.6,
+      elevation: 1.78,
+    },
+    // Close by the kiosks, clear of the wall beside them, so nothing tall stands in front of the board or the calendar.
+    { kind: "tall_plant", at: [-2.62, round(back + 0.4)], facing: 0 },
+    { kind: "tall_plant", name: "the other tall plant", at: [2.62, round(back + 0.4)], facing: 0 },
+    // Across from the board, big enough to read from across the room: when everyone next wakes.
+    {
+      id: "calendar",
+      name: "the calendar",
+      kind: "calendar",
+      at: [-3.7, back],
+      facing: 0,
+      wall: { side: "back", along: -3.7 },
+      scale: 1.5,
+      elevation: 1.45,
+    },
   ];
   const after: Placed[] = [
     ...island("dining", [3.4, 2.3], look, "cafe"),

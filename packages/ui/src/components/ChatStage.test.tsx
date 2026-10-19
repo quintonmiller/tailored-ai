@@ -10,7 +10,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { doingCss } from "../avatar/doing";
 import type { StageInput } from "../avatar/stage";
-import { type ChatStageOptions, companyOf, TalkButton, tasksFor, useChatStage } from "./ChatStage";
+import { type ChatStageOptions, companyOf, TalkButton, tasksFor, useChatStage, wakesFor } from "./ChatStage";
 
 const stage = vi.hoisted(() => ({
   calls: [] as {
@@ -30,6 +30,10 @@ const stage = vi.hoisted(() => ({
   onUse: undefined as ((action: string, on?: Record<string, string>) => void) | undefined,
   /** What the boards were told to show, each time. */
   tasks: [] as { id: string }[][],
+  /** The pages the screens were told to go through, each time. */
+  screens: [] as { id: string; title: string; rows?: { text: string }[] }[][],
+  /** What the calendars were told to show, each time. */
+  calendars: [] as { title: string; names: boolean; wakes: { key: string }[]; done: { key: string }[] }[],
   /** The last visitor stage's report of who you are standing next to. */
   onNear: undefined as ((agent: string | undefined) => void) | undefined,
   /** What the stage was told each agent last said, each time. */
@@ -110,6 +114,9 @@ vi.mock("../avatar/stage", () => ({
       setActivities: (a: Record<string, { doing: string }>) => stage.activities.push(a),
       setSpeech: (sp: Record<string, { text: string; at: string }>) => stage.speech.push(sp),
       setTasks: (t: { id: string }[]) => stage.tasks.push(t),
+      setScreen: (cards: { id: string; title: string }[]) => stage.screens.push(cards),
+      setCalendar: (view: { title: string; names: boolean; wakes: { key: string }[]; done: { key: string }[] }) =>
+        stage.calendars.push(view),
       setLights: (l: string) => stage.lights.push(l),
       cue: (c: { name: string; target?: string }) => stage.cues.push(c.target ? `${c.name}:${c.target}` : c.name),
     };
@@ -164,6 +171,14 @@ let watcherInfo = { enabled: true, triggers: ["created", "updated"] };
 let ownAgents: Record<string, unknown>[] = [];
 /** Places on the map besides the usual ones: an agent made since the page opened. */
 let mapExtra: Record<string, unknown>[] = [];
+/** Things on the agent's own walls besides the usual: a screen, a calendar. */
+let homeExtra: Record<string, unknown>[] = [];
+/** The wakes agents booked, as `GET /api/schedules` lists them. */
+let bookedRows: Record<string, unknown>[] = [];
+/** The dashboard's widgets, as `GET /api/dashboard` resolves them. */
+let dashboardWidgets: Record<string, unknown>[] = [];
+/** The dashboard can't be had: `GET /api/dashboard` fails. */
+let dashboardDown = false;
 
 /** The agent's own room, as the server keeps it. */
 const home = {
@@ -262,6 +277,12 @@ beforeEach(() => {
   stage.visitors.length = 0;
   stage.greeted.length = 0;
   stage.tasks.length = 0;
+  stage.screens.length = 0;
+  stage.calendars.length = 0;
+  homeExtra = [];
+  bookedRows = [];
+  dashboardWidgets = [];
+  dashboardDown = false;
   drafts.length = 0;
   replies.length = 0;
   chattedWith.length = 0;
@@ -421,6 +442,13 @@ beforeEach(() => {
       }
       if (url === "/api/projects/p1") return new Response(JSON.stringify({ id: "p1", title: "Lisbon trip" }));
       if (url === "/api/task-watcher") return new Response(JSON.stringify(watcherInfo));
+      if (url.startsWith("/api/schedules")) return new Response(JSON.stringify({ schedules: bookedRows }));
+      if (url === "/api/cron") return new Response(JSON.stringify({ enabled: false, jobs: [] }));
+      if (url === "/api/dashboard")
+        return dashboardDown
+          ? new Response(JSON.stringify({ error: "boom" }), { status: 500, statusText: "Internal Server Error" })
+          : new Response(JSON.stringify({ widgets: dashboardWidgets }));
+      if (url === "/api/health") return new Response(JSON.stringify({ status: "ok", model: "a-model", uptime: 600 }));
       if (url === "/api/exploratory/agents")
         return new Response(JSON.stringify({ enabled: true, activity: null, agents: ownAgents }));
       if (url.startsWith("/api/exploratory/runs")) return new Response(JSON.stringify({ runs: [] }));
@@ -434,7 +462,7 @@ beforeEach(() => {
             type: "place",
             id: placeId,
             version: 1,
-            place: home,
+            place: homeExtra.length ? { ...home, props: [...home.props, ...homeExtra] } : home,
             company,
             doors: [{ wall: "back", along: homeDoorAlong, to: "hall:main:homes-1", label: "Residences", kind: "hall" }],
           }),
@@ -1438,6 +1466,171 @@ describe("the chat page's scene", () => {
     expect(stage.calls[0].chooseIdle).toBeUndefined();
   });
 
+  const wall = (kind: string) => ({ id: kind, name: `the ${kind}`, kind, at: [0, -1.79], facing: 0, elevation: 1.2 });
+  const inHours = (h: number) => new Date(Date.now() + h * 3_600_000).toISOString();
+  const booking = (id: string, agent: string, hours: number, note: string) => ({
+    id,
+    agent,
+    note,
+    kind: "once",
+    every: null,
+    next_run_at: inHours(hours),
+    target_kind: "session",
+    target: "s1",
+  });
+
+  it("hangs its owner's day on a home's calendar, and opens the whole week from it", async () => {
+    homeExtra = [wall("calendar")];
+    bookedRows = [booking("b2", "planner", 3, "plan the route"), booking("b1", "talker", 2, "check the deploy")];
+    taskRows = taskRows.map((t) =>
+      t.id === "t1" ? { ...t, status: "done", updated_at: new Date().toISOString() } : t,
+    );
+    await render();
+    await settle(60);
+    const shown = stage.calendars.at(-1);
+    expect(shown).toMatchObject({ title: "talker's day", names: false });
+    expect(shown?.wakes.map((w) => w.key)).toEqual(["booked:b1"]);
+    expect(shown?.done.map((d) => d.key)).toEqual(["task:t1"]);
+    // Nothing on the walls asks for the dashboard.
+    expect(stage.screens).toEqual([]);
+
+    await act(async () => stage.onUse?.("calendar"));
+    await settle();
+    const panel = container.querySelector(".world-calendar-panel") as HTMLElement;
+    expect(panel.querySelector(".world-panel-title")?.textContent).toBe("talker's day");
+    expect(panel.textContent).toMatch(/check the deploy/);
+    expect(panel.textContent).toMatch(/wakes in its own conversation/);
+    expect(panel.textContent).not.toMatch(/plan the route/);
+    expect(panel.textContent).toMatch(/finished “Book flights”/);
+    // Everyone's, and off to one of them where its body is.
+    await fill(panel.querySelector("select") as HTMLSelectElement, "\u0000everyone");
+    expect(container.querySelector(".world-calendar-panel .world-panel-title")?.textContent).toBe(
+      "Everyone's next wakes",
+    );
+    expect(container.querySelector(".world-calendar-panel")?.textContent).toMatch(/plan the route/);
+    await press(buttonsIn(".world-calendar-panel .world-calendar-wake"), "planner");
+    await settle(60);
+    expect(container.querySelector(".world-calendar-panel")).toBeNull();
+    expect(stage.rooms.at(-1)?.name).toBe("planner's room");
+    expect(stage.greeted).toContain("planner");
+  });
+
+  it("goes through the dashboard on a screen anywhere but a home, and opens it in the world", async () => {
+    placeId = "shared:lounge";
+    homeExtra = [wall("screen")];
+    dashboardWidgets = [
+      { id: "system-status", type: "status", title: "System status" },
+      { id: "embed", type: "iframe", title: "Embed", options: { url: "https://example.com" } },
+      {
+        id: "needs-you",
+        type: "tasks",
+        title: "Needs you",
+        options: { endpoint: "/api/project-tasks?status=backlog" },
+      },
+    ];
+    await render();
+    await settle(80);
+    const pages = stage.screens.at(-1);
+    expect(pages?.map((c) => c.id)).toEqual(["system-status", "needs-you"]);
+    expect(pages?.[1].rows?.map((r) => r.text)).toEqual(["Book flights"]);
+
+    await act(async () => stage.onUse?.("screen", { card: "needs-you" }));
+    await settle(60);
+    const panel = container.querySelector(".world-dashboard-panel") as HTMLElement;
+    expect(panel.querySelector(".world-panel-title")?.textContent).toBe("On the big screen");
+    // Every widget, the Board's own renderers drawing them, the embed too.
+    expect([...panel.querySelectorAll("[data-widget-id]")].map((el) => (el as HTMLElement).dataset.widgetId)).toEqual([
+      "system-status",
+      "embed",
+      "needs-you",
+    ]);
+    // A task in one opens its card here, not the Tasks page.
+    const link = panel.querySelector('a[href="#/tasks/t1"]') as HTMLAnchorElement;
+    await act(async () => link.click());
+    await settle();
+    expect(container.querySelector(".world-task .world-panel-title")?.textContent).toBe("Book flights");
+    expect(window.location.hash).not.toMatch(/tasks/);
+  });
+
+  it("says why a screen shows no dashboard, on the screen and in the panel, rather than looking forever", async () => {
+    placeId = "shared:lounge";
+    homeExtra = [wall("screen")];
+    await render();
+    await settle(80);
+    expect(stage.screens.at(-1)).toEqual([{ id: "board", title: "Dashboard", empty: "Nothing on the Board yet." }]);
+    await act(async () => stage.onUse?.("screen", { card: "board" }));
+    await settle();
+    const panel = container.querySelector(".world-dashboard-panel") as HTMLElement;
+    expect(panel.textContent).toMatch(/Nothing on the Board yet/);
+    expect(panel.textContent).not.toMatch(/Looking/);
+  });
+
+  it("says the dashboard couldn't be had when it can't", async () => {
+    placeId = "shared:lounge";
+    homeExtra = [wall("screen")];
+    dashboardDown = true;
+    await render();
+    await settle(80);
+    expect(stage.screens.at(-1)?.[0]).toMatchObject({
+      empty: expect.stringMatching(/^Couldn't load the dashboard: 500/),
+    });
+    await act(async () => stage.onUse?.("screen", { card: "board" }));
+    await settle();
+    expect(container.querySelector(".world-dashboard-panel")?.textContent).toMatch(/Couldn't load the dashboard: 500/);
+  });
+
+  it("shows the wakes of whoever is in a shared place on its calendar, and opens the list on them", async () => {
+    placeId = "shared:lounge";
+    homeExtra = [wall("calendar")];
+    company = [{ agent: "planner", name: "planner", avatar: "/api/live/avatar?agent=planner", animations: [] }];
+    bookedRows = [booking("b1", "planner", 2, "plan the route"), booking("b2", "writer", 3, "send the draft")];
+    await render();
+    await settle(60);
+    const shown = stage.calendars.at(-1);
+    expect(shown?.title).toBe("Next wakes for who's here");
+    expect(shown?.wakes.map((w) => w.key)).toEqual(["booked:b1"]);
+    await act(async () => stage.onUse?.("calendar"));
+    await settle();
+    const panel = container.querySelector(".world-calendar-panel") as HTMLElement;
+    // The list the wall showed: the same people, under the same name.
+    expect(panel.querySelector(".world-panel-title")?.textContent).toBe("Next wakes for who's here");
+    expect(panel.textContent).toMatch(/plan the route/);
+    expect(panel.textContent).not.toMatch(/send the draft/);
+    await fill(panel.querySelector("select") as HTMLSelectElement, "\u0000everyone");
+    expect(container.querySelector(".world-calendar-panel")?.textContent).toMatch(/send the draft/);
+    // And back to who's here.
+    await fill(container.querySelector(".world-calendar-panel select") as HTMLSelectElement, "\u0000here");
+    expect(container.querySelector(".world-calendar-panel .world-panel-title")?.textContent).toBe(
+      "Next wakes for who's here",
+    );
+    expect(container.querySelector(".world-calendar-panel")?.textContent).not.toMatch(/send the draft/);
+  });
+
+  it("shows what a home's owner is up to on a screen there, each page opening its own thing", async () => {
+    homeExtra = [wall("screen")];
+    activityRecords = [{ id: "talker", data: { agent: "talker", doing: "working", what: "writing code" } }];
+    bookedRows = [booking("b1", "talker", 2, "check the deploy")];
+    await render();
+    await settle(60);
+    const pages = stage.screens.at(-1);
+    expect(pages?.map((c) => [c.id, c.title])).toEqual([
+      ["now", "talker, now"],
+      ["tasks", "talker's tasks"],
+      ["next", "Coming up"],
+    ]);
+    expect(pages?.[2].rows?.map((r) => r.text)).toEqual(["check the deploy"]);
+    await act(async () => stage.onUse?.("screen", { card: "tasks" }));
+    await settle();
+    expect(container.querySelector(".world-list-panel .world-panel-title")?.textContent).toBe("talker's tasks");
+    await act(async () => stage.onUse?.("screen", { card: "next" }));
+    await settle();
+    expect(container.querySelector(".world-calendar-panel .world-panel-title")?.textContent).toBe("talker's day");
+    await act(async () => stage.onUse?.("screen", { card: "now" }));
+    await settle();
+    expect(container.querySelector(".world-panel-title")?.textContent).toMatch(/talker/);
+    expect(container.querySelector(".world-calendar-panel")).toBeNull();
+  });
+
   it("turns the 3D view off, and remembers that next time", async () => {
     await render();
     await act(async () => (container.querySelector(".toggle-3d") as HTMLButtonElement).click());
@@ -1539,6 +1732,17 @@ describe("talking on the chat page", () => {
     });
     await settle();
     expect(posts.some((p) => p.url.endsWith("/turn"))).toBe(true);
+  });
+});
+
+describe("wakesFor", () => {
+  const wake = (key: string, agent: string) => ({ key, agent, at: 0, kind: "booked" as const, what: key });
+  const wakes = [wake("a", "planner"), wake("b", "writer"), wake("c", "default")];
+  it("shows everyone's in the lobby, the owner's at home, and those of whoever is there elsewhere", () => {
+    expect(wakesFor("lobby", [], wakes).map((w) => w.key)).toEqual(["a", "b", "c"]);
+    expect(wakesFor("home:writer", ["planner"], wakes).map((w) => w.key)).toEqual(["b"]);
+    expect(wakesFor("shared:lounge", ["planner", "default"], wakes).map((w) => w.key)).toEqual(["a", "c"]);
+    expect(wakesFor(undefined, ["planner"], wakes)).toEqual([]);
   });
 });
 

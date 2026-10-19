@@ -96,6 +96,34 @@ describe("homes drawn from a seed", () => {
       }
   });
 
+  // Every seed, every preset: a wall too full for a calendar is rare, a few homes in a few thousand, so a handful
+  // of seeds would never meet one.
+  it("always have a calendar of their owner's day, whatever the preset", { timeout: 60_000 }, () => {
+    for (const h of homes)
+      expect(
+        h.props.some((p) => p.kind === "calendar"),
+        h.name,
+      ).toBe(true);
+    for (const preset of PRESETS)
+      for (const seed of seeds) {
+        const h = homePlace(seed, "a room", preset.id);
+        expect(
+          h.props.some((p) => p.kind === "calendar"),
+          `${preset.id} ${seed}`,
+        ).toBe(true);
+      }
+  });
+
+  it("hang the calendar by the desk, where there is wall for it", () => {
+    let near = 0;
+    for (const h of homes) {
+      const calendar = h.props.find((p) => p.kind === "calendar");
+      const desk = h.props.find((p) => p.id === h.spots.find((s) => s.activity === "type")?.item);
+      if (calendar && desk && Math.hypot(calendar.at[0] - desk.at[0], calendar.at[1] - desk.at[1]) < 2) near++;
+    }
+    expect(near / homes.length).toBeGreaterThan(0.75);
+  });
+
   it("keep everything tall by the back and left walls, so nothing tall stands between the camera and the room", () => {
     for (const h of homes)
       for (const p of h.props) {

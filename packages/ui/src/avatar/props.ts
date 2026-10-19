@@ -159,7 +159,10 @@ export function buildShell(room: Room): THREE.Group {
 export interface BuiltProp {
   group: THREE.Group;
   glow?: THREE.MeshStandardMaterial;
-  /** A face the stage draws on, a task board's tasks, and the mesh showing it, to tell where a click lands. */
+  /**
+   * A face the stage draws on (a task board's tasks, a screen's page, a
+   * calendar's day), and the mesh showing it, to tell where a click lands.
+   */
   screen?: { canvas: HTMLCanvasElement; texture: THREE.CanvasTexture; face: THREE.Mesh };
 }
 
@@ -169,7 +172,14 @@ export interface PropLook {
   size?: [number, number, number];
   /** Words it shows, for a kiosk or a board. */
   label?: string;
+  /** How much bigger it is drawn: a face drawn on is made sharper to match, so its words read as well up close. */
+  scale?: number;
 }
+
+/** Pixels a metre of a screen's or a calendar's face is drawn at, before it is made bigger. */
+const FACE_PX = 600;
+/** How much sharper a face bigger than normal gets, at most: past this the texture costs more than it shows. */
+const SHARPEST = 1.6;
 
 /** How brightly a canvas face lights itself, so it reads at night; and a door's plate while the pointer is on it. */
 const FACE_GLOW = 0.45;
@@ -447,6 +457,34 @@ export function buildProp(kind: PropKind, look: PropLook = {}): BuiltProp {
       mesh.position.set(0, 0.45, 0.022);
       g.add(mesh);
       box(g, 1.2, 0.03, 0.06, 0x9aa1ab, 0, 0.0, 0.03).castShadow = false;
+      return { group: g, screen: { canvas: face.canvas, texture: face.texture, face: mesh } };
+    }
+    case "screen": {
+      // A flat screen in a thin black bezel, a hand's width off the wall: the stage draws pages on it.
+      const sharp = Math.min(SHARPEST, Math.max(1, look.scale ?? 1));
+      box(g, 1.6, 0.92, 0.05, main(0x16181d), 0, 0.46, 0.025).castShadow = false;
+      const face = canvasFace(1.52, 0.84, FACE_PX * sharp);
+      // Lit from within more than paper is, as a screen is.
+      face.material.emissiveIntensity = 0.85;
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.52, 0.84), face.material);
+      mesh.position.set(0, 0.46, 0.051);
+      g.add(mesh);
+      return { group: g, screen: { canvas: face.canvas, texture: face.texture, face: mesh } };
+    }
+    case "calendar": {
+      // A paper calendar on a stiff backing, its pages bound along the top with a row of rings.
+      const sharp = Math.min(SHARPEST, Math.max(1, look.scale ?? 1));
+      box(g, 1.0, 1.0, 0.016, main(0x6b4a33), 0, 0.5, 0.008).castShadow = false;
+      const face = canvasFace(0.94, 0.9, FACE_PX * sharp);
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.94, 0.9), face.material);
+      mesh.position.set(0, 0.47, 0.018);
+      g.add(mesh);
+      box(g, 0.96, 0.05, 0.012, 0x3a3f4b, 0, 0.955, 0.02).castShadow = false;
+      for (let i = 0; i < 9; i++) {
+        const ring = cylinder(g, 0.011, 0.011, 0.05, 0xc9ced6, -0.4 + i * 0.1, 0.955, 0.03, 6);
+        ring.rotation.x = Math.PI / 2;
+        ring.castShadow = false;
+      }
       return { group: g, screen: { canvas: face.canvas, texture: face.texture, face: mesh } };
     }
     case "kiosk": {
