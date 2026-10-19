@@ -144,16 +144,6 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         // Stored id is stale (db reset, etc.) — drop it silently.
         setStoredChatSessionId(null);
       });
-    // Stored before keys were kept: find this conversation's key in the session list.
-    if (!storedKey)
-      fetchSessions()
-        .then((rows) => {
-          const key = rows.find((r) => r.id === stored)?.key;
-          if (!key) return;
-          setSessionKey((current) => current ?? key);
-          setStoredChatSessionId(stored, key);
-        })
-        .catch(() => {});
   }, []);
 
   const refreshSessions = useCallback(() => {
@@ -339,9 +329,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         selectedAgent || undefined,
         media?.map((m) => m.id),
         turnExtras.current.body,
+        // No key for the conversation on screen (restored from an older link):
+        // name it by id, so the message continues it instead of starting anew.
+        sessionKey ? undefined : sessionId,
       );
     },
-    [sending, sessionKey, selectedAgent, toast],
+    [sending, sessionKey, sessionId, selectedAgent, toast],
   );
 
   const interrupt = useCallback(() => {
