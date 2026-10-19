@@ -90,6 +90,9 @@ export interface PlacePhoto {
 /** Photos a place keeps: the newest, enough for a few pictures on the walls. */
 export const PHOTOS_KEPT = 6;
 
+/** What a photo hangs in, in this order: pictures first, then paintings. The page draws them there (`stage.ts`). */
+export const PHOTO_FRAMES = ["picture", "painting"];
+
 /** What a kind of thing is like: how big, where it goes, and what you can do at it. */
 export interface Kind {
   noun: string;
@@ -256,7 +259,8 @@ export const LIMITS = {
   scale: [0.5, 2] as const,
   /** Each side of a basic shape. */
   side: [0.05, 2.5] as const,
-  items: 60,
+  // A home starts with thirty or so, and its owner should have as many again to add.
+  items: 100,
 };
 
 /**

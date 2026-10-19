@@ -5,7 +5,7 @@
  * thing moves with it, and the tool keeps the room in world state.
  */
 import Database from "better-sqlite3";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initDatabase } from "../db/schema.js";
 import {
   anyAvatar,
@@ -35,7 +35,7 @@ import {
   resize,
   spotOf,
 } from "../plugins/places-layout.js";
-import { homePlace, lobby, meetingRoom, themeFor } from "../plugins/places-rooms.js";
+import { homePlace, LOBBY, lobby, meetingRoom, THEMES, themeFor } from "../plugins/places-rooms.js";
 import { IdentityResolver } from "../rooms/identities.js";
 import { LocalRoomBackend } from "../rooms/local.js";
 import { RoomStore } from "../rooms/store.js";
@@ -568,7 +568,12 @@ describe("the map, and any place on it", () => {
     expect(themeFor("vacation planning")?.id).toBe("beach");
     expect(themeFor("standup")).toBeUndefined();
     const beach = meetingRoom("summer", 4, "Plan the family vacation");
-    expect(beach).toMatchObject({ walls: "#cfe8f0", floor: "tile", floorColor: "#e6d3a3" });
+    const { walls, floor, floorColor } = beach;
+    expect(THEMES.find((t) => t.id === "beach")?.palettes).toContainEqual({
+      walls,
+      floor,
+      ...(floorColor ? { floorColor } : {}),
+    });
     expect(beach.props.map((p) => p.kind)).toEqual(expect.arrayContaining(["palm", "umbrella", "board"]));
     for (const n of [5, 9]) {
       const tavern = meetingRoom("the-campaign", n, "A D&D campaign");
@@ -586,6 +591,13 @@ describe("the map, and any place on it", () => {
     const weekend = [{ ref: "local:weekend", name: "weekend", purpose: "Plan the family vacation", members: ["host"] }];
     const found = await scene(state, owner, roomPlaceId("local:weekend"), weekend, hasBody);
     expect(found?.place.props.some((p) => p.kind === "palm")).toBe(true);
+  });
+
+  it("hands each caller its own copy of a room drawn once", async () => {
+    const first = await scene(state, owner, LOBBY, rooms, hasBody);
+    first?.place.props.splice(0);
+    const again = await scene(state, owner, LOBBY, rooms, hasBody);
+    expect(again?.place).toEqual(lobby());
   });
 
   it("finds nothing for a place that isn't there", async () => {
@@ -741,6 +753,58 @@ describe("homes made before rooms were drawn from a seed", () => {
     // Made again, the old way, after the person cleared it.
     await store(system, firstHome("assistant's room"));
     expect((await readHome(state, owner, "assistant")).place).toEqual(drawn());
+  });
+
+  it("keeps a first room the agent's first look made up to date, as long as nobody changes it", async () => {
+    await store(agent, firstHome("assistant's room"));
+    await readHome(state, owner, "assistant");
+    // The way rooms are drawn changes again.
+    await store(system, homePlace("some other seed", "assistant's room"), (await state.get(owner, ref))?.version);
+    expect((await readHome(state, owner, "assistant")).place).toEqual(drawn());
+  });
+
+  it("won't let an undo take back the system's redraw", async () => {
+    await store(system, firstHome("assistant's room"));
+    const tool = new PlaceTool(
+      () => state,
+      () => true,
+    );
+    const undone = await tool.execute({ action: "undo" }, { agentName: "assistant" } as ToolContext);
+    expect(undone.success).toBe(false);
+    expect(undone.error).toMatch(/nothing to undo/);
+    expect((await state.get(owner, ref))?.updatedBy).toEqual(system.actor);
+    expect((await readHome(state, owner, "assistant")).place).toEqual(drawn());
+  });
+
+  it("never writes a new home over one someone made a moment ago", async () => {
+    const own = { ...firstHome("assistant's room"), walls: "#334455" };
+    await store(agent, own);
+    // A reader that looked just before the agent's room was made, and found none.
+    let missed = false;
+    const racing = new Proxy(state, {
+      get(target, key) {
+        if (key === "get" && !missed) {
+          missed = true;
+          return async () => null;
+        }
+        const value = Reflect.get(target, key);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    expect((await readHome(racing, owner, "assistant")).place).toEqual(own);
+    expect((await state.get(owner, ref))?.data).toEqual(own);
+  });
+
+  it("reads one change of a home an agent has changed, not its whole history", async () => {
+    await store(system, firstHome("assistant's room"));
+    let place = (await readHome(state, owner, "assistant")).place;
+    for (const corner of ["front right", "back right", "front left"]) {
+      place = applyAction(place, { action: "add", kind: "plant", corner }).place as Place;
+      await store(agent, place, (await state.get(owner, ref))?.version);
+    }
+    const history = vi.spyOn(state, "history");
+    expect((await readHome(state, owner, "assistant")).place).toEqual(place);
+    expect(history.mock.calls.map((c) => c[2]?.limit)).toEqual([1]);
   });
 
   it("never replaces a room an agent wrote that isn't the first room, or one a person made", async () => {

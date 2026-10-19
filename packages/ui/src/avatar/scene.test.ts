@@ -8,15 +8,19 @@ import { describe, expect, it } from "vitest";
 import {
   bodyFor,
   DEFAULT_ROOM,
+  farFor,
   GESTURES,
   lightingFor,
   lookTarget,
+  MIN_ASPECT,
   nearestWithin,
   OPEN_SIDES,
+  ROOM_REACH,
   ROOM_TARGET,
   ROOM_VIEW,
   type Room,
   roomDistance,
+  roomFocus,
   roomProblems,
   spotById,
   spotFor,
@@ -101,11 +105,14 @@ describe("roomDistance", () => {
       DEFAULT_ROOM,
       { ...DEFAULT_ROOM, width: 8, depth: 8, height: 3 },
       { ...DEFAULT_ROOM, width: 10, depth: 6, height: 2.7 },
+      { ...DEFAULT_ROOM, width: 10, depth: 8, height: 3 },
       { ...DEFAULT_ROOM, width: 14, depth: 10, height: 3.2 },
+      { ...DEFAULT_ROOM, width: 16, depth: 12, height: 4 },
     ];
     for (const room of rooms)
-      for (const aspect of [0.6, 1, 1.8]) {
-        const camera = new THREE.PerspectiveCamera(ROOM_VIEW.fov, aspect, 0.05, 200);
+      for (const aspect of [MIN_ASPECT, 0.35, 0.6, 1, 1.8]) {
+        // The stage's own far plane: nothing of the room may lie past it, however narrow the frame.
+        const camera = new THREE.PerspectiveCamera(ROOM_VIEW.fov, aspect, 0.05, farFor(room));
         const target = new THREE.Vector3(...ROOM_TARGET);
         camera.position
           .setFromSphericalCoords(roomDistance(room, aspect), Math.PI / 2 - ROOM_VIEW.elevation, ROOM_VIEW.azimuth)
@@ -126,6 +133,7 @@ describe("roomDistance", () => {
         for (const c of corners) {
           expect(Math.abs(c.x), label).toBeLessThanOrEqual(1);
           expect(Math.abs(c.y), label).toBeLessThanOrEqual(1);
+          expect(Math.abs(c.z), label).toBeLessThanOrEqual(1);
         }
         // Snug: some corner comes close to an edge of the frame.
         expect(Math.max(...corners.flatMap((c) => [Math.abs(c.x), Math.abs(c.y)])), label).toBeGreaterThan(0.85);
@@ -136,6 +144,49 @@ describe("roomDistance", () => {
     expect(roomDistance({ ...DEFAULT_ROOM, width: 10, depth: 8 }, 1.5)).toBeGreaterThan(
       roomDistance(DEFAULT_ROOM, 1.5) * 1.5,
     );
+  });
+});
+
+describe("roomFocus", () => {
+  it("sees a small room whole, as before", () => {
+    for (const aspect of [1, 1.8])
+      expect(roomFocus(DEFAULT_ROOM, aspect, { x: 1.5, z: 1 })).toEqual({
+        target: ROOM_TARGET,
+        distance: roomDistance(DEFAULT_ROOM, aspect),
+      });
+  });
+
+  it("stays near enough in a big room to make out the agent, and keeps it in frame wherever it stands", () => {
+    const rooms = [
+      { ...DEFAULT_ROOM, width: 10, depth: 8, height: 3 },
+      { ...DEFAULT_ROOM, width: 14, depth: 10, height: 3.2 },
+      { ...DEFAULT_ROOM, width: 16, depth: 12, height: 4 },
+    ];
+    for (const room of rooms)
+      for (const aspect of [0.46, 1.1, 1.8]) {
+        expect(roomFocus(room, aspect, { x: 0, z: 0 }).distance).toBeLessThanOrEqual(ROOM_REACH);
+        const camera = new THREE.PerspectiveCamera(ROOM_VIEW.fov, aspect, 0.05, farFor(room));
+        for (let x = -room.width / 2 + 0.5; x <= room.width / 2 - 0.5; x += 1)
+          for (let z = -room.depth / 2 + 0.5; z <= room.depth / 2 - 0.5; z += 1) {
+            const { target, distance } = roomFocus(room, aspect, { x, z });
+            const aim = new THREE.Vector3(...target);
+            camera.position
+              .setFromSphericalCoords(distance, Math.PI / 2 - ROOM_VIEW.elevation, ROOM_VIEW.azimuth)
+              .add(aim);
+            camera.lookAt(aim);
+            camera.updateMatrixWorld();
+            const label = `${room.width}x${room.depth} at ${aspect}, agent at ${x}, ${z}`;
+            // Its feet and its head.
+            for (const y of [0, 1.6]) {
+              const p = new THREE.Vector3(x, y, z).project(camera);
+              expect(Math.abs(p.x), label).toBeLessThanOrEqual(1);
+              expect(Math.abs(p.y), label).toBeLessThanOrEqual(1);
+            }
+            // The view never slides off the room: what it looks at is always on the floor.
+            expect(Math.abs(target[0]), label).toBeLessThanOrEqual(room.width / 2);
+            expect(Math.abs(target[2]), label).toBeLessThanOrEqual(room.depth / 2);
+          }
+      }
   });
 });
 

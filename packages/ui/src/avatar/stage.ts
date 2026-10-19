@@ -29,15 +29,18 @@ import type { BodyState } from "./motion";
 import { buildProp, buildShell, disposeTree } from "./props";
 import {
   DEFAULT_ROOM,
+  farFor,
   type Lighting,
   lightingFor,
   lookTarget,
+  MIN_ASPECT,
   nearestWithin,
   OPEN_SIDES,
   ROOM_TARGET,
   ROOM_VIEW,
   type Room,
   roomDistance,
+  roomFocus,
   type Spot,
   spotById,
   spotFor,
@@ -126,29 +129,38 @@ const rad = (degrees: number) => (degrees * Math.PI) / 180;
  */
 const PEAK: Record<string, number> = { wave: 0.9, nod: 0.75, shake: 0.3 };
 
-/** The painted part of a picture, which a photo covers: its width, height and centre, in its own frame. */
-// In front of the painting's sun, which stands proud of it to 0.032.
-const ART = { width: 0.82, height: 0.52, y: 0.3, z: 0.036 };
+/**
+ * What a photo hangs in, in the order photos fill them (the server's
+ * `PHOTO_FRAMES` says the same), and the painted part of each, which a photo
+ * covers: its width, height and centre, in its own frame.
+ */
+const ARTS: Record<string, { width: number; height: number; y: number; z: number }> = {
+  // In front of the picture's sun, which stands proud of it to 0.032.
+  picture: { width: 0.82, height: 0.52, y: 0.3, z: 0.036 },
+  // In front of the painting's blocks of colour, which stand proud of it to 0.031.
+  painting: { width: 1.12, height: 0.72, y: 0.4, z: 0.035 },
+};
 
 /**
- * Hang a photo in a picture: a white mount over the painting, the photo on it,
- * as large as fits at its own shape. Loaded from the media store; a photo
- * that can't be had leaves the painting.
+ * Hang a photo in a picture or a painting: a white mount over the art, the
+ * photo on it, as large as fits at its own shape. Loaded from the media store;
+ * a photo that can't be had leaves the art.
  */
-function hangPhoto(picture: THREE.Group, media: string) {
+function hangPhoto(picture: THREE.Group, kind: string, media: string) {
+  const art = ARTS[kind];
   new THREE.TextureLoader().load(
     `/api/media/${encodeURIComponent(media)}`,
     (texture) => {
       texture.colorSpace = THREE.SRGBColorSpace;
       const image = texture.image as { width: number; height: number };
       const aspect = image.width / Math.max(1, image.height);
-      const room = { w: ART.width - 0.04, h: ART.height - 0.04 };
+      const room = { w: art.width - 0.04, h: art.height - 0.04 };
       const [w, h] = aspect > room.w / room.h ? [room.w, room.w / aspect] : [room.h * aspect, room.h];
       const mount = new THREE.Mesh(
-        new THREE.PlaneGeometry(ART.width, ART.height),
+        new THREE.PlaneGeometry(art.width, art.height),
         new THREE.MeshStandardMaterial({ color: 0xf6f3ec, roughness: 0.9 }),
       );
-      mount.position.set(0, ART.y, ART.z);
+      mount.position.set(0, art.y, art.z);
       const photo = new THREE.Mesh(
         new THREE.PlaneGeometry(w, h),
         new THREE.MeshStandardMaterial({
@@ -158,7 +170,7 @@ function hangPhoto(picture: THREE.Group, media: string) {
           emissiveIntensity: 0.2,
         }),
       );
-      photo.position.set(0, ART.y, ART.z + 0.002);
+      photo.position.set(0, art.y, art.z + 0.002);
       picture.add(mount, photo);
     },
     undefined,
@@ -274,13 +286,19 @@ export async function createStage(
     scenery.push(shell);
     const lights: { at: THREE.Vector3; fire: boolean }[] = [];
     obstacles = [];
-    // The photos taken here go in the pictures, newest in the first.
+    // The photos taken here go in the pictures, newest in the first, then in the paintings.
     const photos = [...(room.photos ?? [])];
+    const hung = new Map<string, string>();
+    for (const kind of Object.keys(ARTS))
+      for (const prop of room.props) {
+        const photo = prop.kind === kind ? photos.shift() : undefined;
+        if (photo) hung.set(prop.id, photo.media);
+      }
     for (const prop of room.props) {
       const built = buildProp(prop.kind, { color: prop.color, size: prop.size, label: prop.label });
       if (built.screen) boards.push({ label: prop.label ?? "Tasks", screen: built.screen });
-      const photo = prop.kind === "picture" ? photos.shift() : undefined;
-      if (photo) hangPhoto(built.group, photo.media);
+      const photo = hung.get(prop.id);
+      if (photo) hangPhoto(built.group, prop.kind, photo);
       built.group.position.set(prop.at[0], prop.elevation ?? 0, prop.at[1]);
       built.group.rotation.y = rad(prop.facing);
       const scale = prop.size ? 1 : (prop.scale ?? 1);
@@ -424,7 +442,7 @@ export async function createStage(
   let hour = hourNow();
   light(lightingFor(hour));
 
-  const camera = new THREE.PerspectiveCamera(ROOM_VIEW.fov, 1, 0.05, 60);
+  const camera = new THREE.PerspectiveCamera(ROOM_VIEW.fov, 1, 0.05, farFor(room));
   const controls = new OrbitControls(camera, renderer.domElement);
   // Dragging turns the view. The wheel is left to scroll the page.
   Object.assign(controls, { enableZoom: false, enablePan: false, enableDamping: true, rotateSpeed: 0.6 });
@@ -452,7 +470,7 @@ export async function createStage(
   /** Pixels on the right of the stage covered by something laid over it, like a chat panel. */
   let insetRight = 0;
   /** The shape of the part of the stage that can be seen: framing fits the room into that. */
-  const visibleAspect = () => Math.max(0.2, (host.clientWidth - insetRight) / Math.max(1, host.clientHeight));
+  const visibleAspect = () => Math.max(MIN_ASPECT, (host.clientWidth - insetRight) / Math.max(1, host.clientHeight));
 
   const framing = (view: StageView): Framing => {
     if (view === "close") {
@@ -474,9 +492,11 @@ export async function createStage(
         polar: [1.1, 1.75],
       };
     }
-    const target = new THREE.Vector3(...ROOM_TARGET);
+    // A photo shows the whole room; a visitor's camera stays near them; the chat page's view stays near the agent.
+    const focus = opts.visitor || opts.still ? undefined : roomFocus(room, visibleAspect(), me.walker.place);
+    const target = new THREE.Vector3(...(focus?.target ?? ROOM_TARGET));
     const whole = roomDistance(room, visibleAspect());
-    const distance = opts.visitor ? Math.min(whole, VISIT_DISTANCE) : whole;
+    const distance = focus?.distance ?? (opts.visitor ? Math.min(whole, VISIT_DISTANCE) : whole);
     return {
       target,
       position: new THREE.Vector3()
@@ -1001,6 +1021,14 @@ export async function createStage(
       controls.target.add(follow);
       camera.position.add(follow);
     }
+    // A room too big to see whole from near enough keeps the agent in view as it moves, slowly.
+    if (view === "room" && !tween && !opts.visitor && !opts.still) {
+      const follow = new THREE.Vector3(...roomFocus(room, visibleAspect(), me.walker.place).target)
+        .sub(controls.target)
+        .multiplyScalar(1 - Math.exp(-dt / 0.8));
+      controls.target.add(follow);
+      camera.position.add(follow);
+    }
     // The others wander on their own, and keep an eye on the agent you are talking to.
     const meHead = me.head();
     for (const c of companions.values()) {
@@ -1074,6 +1102,8 @@ export async function createStage(
       disposeTree(furniture);
       appearing.length = 0;
       room = next;
+      camera.far = farFor(room);
+      camera.updateProjectionMatrix();
       furnish(new Set(next.props.filter((p) => !before.has(p.id)).map((p) => p.id)));
       if (lit) light(lit);
       fitShadows();

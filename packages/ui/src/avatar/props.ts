@@ -846,7 +846,7 @@ export function disposeHeld(root: THREE.Object3D) {
   });
 }
 
-/** Free every geometry and material under `root`, and the pictures drawn for boards and kiosks. */
+/** Free every geometry and material under `root`, the pictures drawn for boards and kiosks, and floors' instances. */
 export function disposeTree(root: THREE.Object3D) {
   const free = (m: THREE.Material) => {
     (m as THREE.MeshStandardMaterial).map?.dispose();
@@ -854,6 +854,8 @@ export function disposeTree(root: THREE.Object3D) {
   };
   root.traverse((o) => {
     const mesh = o as THREE.Mesh;
+    // A floor's instances keep a buffer of their own, freed only with the mesh.
+    if ((o as THREE.InstancedMesh).isInstancedMesh) (o as THREE.InstancedMesh).dispose();
     mesh.geometry?.dispose();
     const m = mesh.material;
     if (Array.isArray(m)) for (const x of m) free(x);

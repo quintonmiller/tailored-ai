@@ -12,13 +12,18 @@ import {
   findPlacement,
   findSpot,
   firstHome,
+  footprintOf,
+  KINDS,
   LIMITS,
+  PHOTO_FRAMES,
+  PLACE_SCHEMA,
   type Place,
   placeProblems,
   unreachable,
   withSpots,
 } from "../plugins/places-layout.js";
-import { homePlace, lobby, meetingRoom, PRESETS, seeded, THEMES } from "../plugins/places-rooms.js";
+import { homePlace, lobby, meetingRoom, PRESETS, seeded, sharedPlace, THEMES } from "../plugins/places-rooms.js";
+import { validateAgainstSchema } from "../state/validate.js";
 
 const seeds = Array.from({ length: 120 }, (_, i) => `home:agent-${i}`);
 const homes = seeds.map((s) => homePlace(s, s));
@@ -83,7 +88,34 @@ describe("homes drawn from a seed", () => {
           h.props.filter((p) => ["lamp", "table_lamp", "fireplace"].includes(p.kind)).length,
           label,
         ).toBeGreaterThanOrEqual(2);
+        // Somewhere for the photos taken there to hang.
+        expect(
+          h.props.some((p) => PHOTO_FRAMES.includes(p.kind)),
+          label,
+        ).toBe(true);
       }
+  });
+
+  it("keep everything tall by the back and left walls, so nothing tall stands between the camera and the room", () => {
+    for (const h of homes)
+      for (const p of h.props) {
+        const kind = KINDS[p.kind];
+        if (kind?.mount !== "floor" || p.on || (p.size?.[1] ?? kind.height * (p.scale ?? 1)) <= 1.2) continue;
+        const reach = Math.max(...footprintOf(p)) / 2;
+        const fromWall = Math.min(p.at[1] + h.depth / 2, p.at[0] + h.width / 2) - reach;
+        expect(fromWall, `${h.name}: ${p.name} at ${p.at}`).toBeLessThan(0.7);
+      }
+  });
+
+  it("are drawn as any kind of home but a bedroom when shared", () => {
+    for (let i = 0; i < 60; i++) {
+      const place = sharedPlace(`shared:place-${i}`, `the place ${i}`);
+      expect(
+        place.props.some((p) => p.kind === "bed"),
+        place.name,
+      ).toBe(false);
+      expect(placeProblems(place), place.name).toEqual([]);
+    }
   });
 
   it("are furnished, not bare: a couple of dozen things or more", () => {
@@ -102,7 +134,13 @@ describe("every room the world starts with", () => {
       expect(p.width).toBeLessThanOrEqual(LIMITS.width[1]);
       expect(p.depth).toBeLessThanOrEqual(LIMITS.depth[1]);
       expect(p.props.length).toBeLessThanOrEqual(LIMITS.items);
+      // What the store accepts: a room it would refuse can never be kept or changed.
+      expect(validateAgainstSchema(PLACE_SCHEMA as never, p), p.name).toEqual([]);
     }
+  });
+
+  it("leaves an agent room to add as much again as a home starts with", () => {
+    for (const h of homes) expect(LIMITS.items - h.props.length, h.name).toBeGreaterThanOrEqual(h.props.length);
   });
 
   it("keeps a stretch of wall clear for a door, with floor in front of it", () => {
@@ -195,6 +233,23 @@ describe("meeting rooms", () => {
     const room = meetingRoom("standup", 9);
     for (const seat of room.props.filter((p) => p.id.startsWith("seat-")))
       expect(room.spots.find((s) => s.item === seat.id)).toMatchObject({ activity: "sit", place: seat.name });
+  });
+
+  it("differ from each other by name: colours and what is on the walls, themed or not", () => {
+    const names = Array.from({ length: 24 }, (_, i) => `room ${i + 1}`);
+    const signature = (p: Place) => p.props.map((i) => `${i.kind}@${i.at}`).join(" ");
+    const plain = names.map((n) => meetingRoom(n, 4));
+    expect(new Set(plain.map((p) => `${p.walls} ${p.floor} ${p.floorColor}`)).size).toBeGreaterThanOrEqual(8);
+    expect(new Set(plain.map((p) => [...new Set(p.props.map((i) => i.kind))].sort().join())).size).toBeGreaterThan(2);
+    expect(new Set(plain.map(signature)).size).toBeGreaterThan(names.length * 0.8);
+    for (const theme of THEMES) {
+      const rooms = names.map((n) => meetingRoom(`${n} ${theme.words.source.split("|")[1]}`, 4));
+      expect(new Set(rooms.map((p) => p.walls)).size, theme.id).toBeGreaterThan(1);
+      expect(
+        rooms.every((p) => theme.palettes.some((c) => c.walls === p.walls)),
+        theme.id,
+      ).toBe(true);
+    }
   });
 
   it("grow with the number of seats, and the lobby is bigger than any of them", () => {

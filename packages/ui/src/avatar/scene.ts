@@ -390,6 +390,49 @@ export function roomDistance(room: Room, aspect: number): number {
   return distance;
 }
 
+/** The narrowest the visible part of the stage is taken to be: a phone in portrait with a panel over it. */
+export const MIN_ASPECT = 0.2;
+
+/**
+ * The camera's far plane for a room: past the furthest the room view ever
+ * backs off for it, at the narrowest frame, and the room's own depth beyond
+ * that, so a big room in a narrow frame is never cut off.
+ */
+export function farFor(room: Room): number {
+  return Math.max(60, roomDistance(room, MIN_ASPECT) + Math.hypot(room.width, room.depth, room.height));
+}
+
+/** How far back the chat page's room view sits at most, however big the room: near enough to make out the agent. */
+export const ROOM_REACH = 12;
+
+/**
+ * Where the chat page's room view looks, and from how far. A room that fits
+ * within `ROOM_REACH` is seen whole, as before. A bigger one is seen from
+ * `ROOM_REACH`, as much of it as fits, centred on the agent as nearly as the
+ * room's edges allow, so the agent stays a readable size and the view never
+ * runs off the room. Dragging and the Map show the rest.
+ */
+export function roomFocus(
+  room: Room,
+  aspect: number,
+  agent: { x: number; z: number },
+): { target: [number, number, number]; distance: number } {
+  const whole = roomDistance(room, aspect);
+  if (whole <= ROOM_REACH) return { target: [...ROOM_TARGET], distance: whole };
+  // The share of the room out of view, which is how far off the middle the view may slide.
+  const slack = 1 - ROOM_REACH / whole;
+  const toward = (from: number, to: number, half: number) =>
+    from + Math.max(-half * slack, Math.min(half * slack, to - from));
+  return {
+    target: [
+      toward(ROOM_TARGET[0], agent.x, room.width / 2),
+      ROOM_TARGET[1],
+      toward(ROOM_TARGET[2], agent.z, room.depth / 2),
+    ],
+    distance: ROOM_REACH,
+  };
+}
+
 /**
  * Which lights to keep when a room has more than the frame rate allows: fires
  * first, since they burn by day too, then each next one as far as it can be

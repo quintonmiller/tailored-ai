@@ -63,7 +63,7 @@ import {
   whereWords,
   withSpots,
 } from "./places-layout.js";
-import { homePlace, LOBBY, lobby, meetingRoom } from "./places-rooms.js";
+import { homePlace, LOBBY, lobby, meetingRoom, sharedPlace } from "./places-rooms.js";
 
 export const PLACE_TYPE = "place";
 
@@ -113,21 +113,25 @@ export function isFirstHome(place: Place): boolean {
 
 /**
  * Whether a home is still as the system gave it: since the room was last
- * made, no agent, person or other plugin has changed it. Either this plugin
- * wrote every version since (it made the room, and maybe gave it a newer one
- * after), or the room is just as it was made, in the agent's name when its
- * first `place` call found no room, and is the first room exactly. What came
- * before a delete was another room. Anything else is someone's room and is
- * never replaced.
+ * made, no agent, person or other plugin has changed it. The room was made
+ * by this plugin, or in the agent's name when its first `place` call found
+ * no room (then it is the first room exactly), and this plugin wrote every
+ * version since, giving it a newer room. What came before a delete was
+ * another room. Anything else is someone's room and is never replaced.
  */
 async function untouched(service: StateService, record: StateRecord): Promise<boolean> {
-  const asMade = (actor: Actor) =>
-    byPlugin(actor) || (actor.kind === "agent" && isFirstHome(record.data as unknown as Place));
-  if (record.version === 1) return asMade(record.updatedBy);
+  const asMade = (actor: Actor, data: Record<string, unknown> | undefined) =>
+    byPlugin(actor) || (actor.kind === "agent" && !!data && isFirstHome(data as unknown as Place));
+  if (record.version === 1) return asMade(record.updatedBy, record.data);
   if (!byPlugin(record.updatedBy) && record.updatedBy.kind !== "agent") return false;
-  const changes = await service
-    .history(PLUGIN_CALLER, { type: record.type, id: record.id }, { limit: record.version })
-    .catch(() => undefined);
+  const ref = { type: record.type, id: record.id };
+  const history = (limit: number) => service.history(PLUGIN_CALLER, ref, { limit }).catch(() => undefined);
+  // An agent wrote last: untouched only if that write made the room, which the newest entry alone says.
+  if (!byPlugin(record.updatedBy)) {
+    const [last] = (await history(1)) ?? [];
+    return last?.op === "create" && asMade(last.actor, last.after);
+  }
+  const changes = await history(record.version);
   if (!changes) return false;
   // Newest first: everything written since the room was last made, which must be in the history.
   const since: StateChange[] = [];
@@ -136,10 +140,27 @@ async function untouched(service: StateService, record: StateRecord): Promise<bo
     if (change.op === "create") break;
   }
   const made = since.at(-1);
-  if (made?.op !== "create") return false;
-  if (since.length === 1) return asMade(made.actor);
-  return since.every((c) => byPlugin(c.actor));
+  if (made?.op !== "create" || !asMade(made.actor, made.after)) return false;
+  return since.slice(0, -1).every((c) => byPlugin(c.actor));
 }
+
+/**
+ * Rooms drawn from a seed, kept once drawn: drawing one takes milliseconds,
+ * and every read of a home, the lobby or a meeting room asks for one. Each
+ * caller gets its own copy.
+ */
+const drawn = new Map<string, Place>();
+function drawOnce(key: string, draw: () => Place): Place {
+  let place = drawn.get(key);
+  if (!place) {
+    if (drawn.size >= 256) drawn.clear();
+    place = draw();
+    drawn.set(key, place);
+  }
+  return structuredClone(place);
+}
+
+const drawHome = (id: string, name: string) => drawOnce(`home\n${id}\n${name}`, () => homePlace(id, name));
 
 /**
  * An agent's home: its own room, drawn from its id the first time anyone
@@ -159,14 +180,15 @@ export async function readHome(
     const fresh = await upgrade(service, found, name);
     return fresh ?? { place: found.data as unknown as Place, version: found.version };
   }
-  const place = homePlace(ref.id, name);
+  const place = drawHome(ref.id, name);
   try {
     // The system makes the room, whoever asked: so it is known to be untouched until someone changes it.
-    const made = await service.put(PLUGIN_CALLER, {
-      ...ref,
-      scope: `agent:${agent}`,
-      data: place as unknown as Record<string, unknown>,
-    });
+    // Only if there is still none (version 0): a room someone made a moment ago is never written over.
+    const made = await service.put(
+      PLUGIN_CALLER,
+      { ...ref, scope: `agent:${agent}`, data: place as unknown as Record<string, unknown> },
+      0,
+    );
     return { place, version: made.version };
   } catch (err) {
     // Someone else made it a moment ago: theirs stands.
@@ -183,7 +205,7 @@ async function upgrade(
   name: string,
 ): Promise<{ place: Place; version: number } | undefined> {
   const stored = record.data as unknown as Place;
-  const place = homePlace(record.id, typeof stored.name === "string" ? stored.name : name);
+  const place = drawHome(record.id, typeof stored.name === "string" ? stored.name : name);
   if (JSON.stringify(stored) === JSON.stringify(place)) return undefined;
   if (!(await untouched(service, record))) return undefined;
   try {
@@ -408,12 +430,16 @@ export async function scene(
   rooms: TalkRoom[],
   hasBody: (agent: string | undefined) => boolean,
 ): Promise<{ id: string; place: Place; agents: string[] } | null> {
-  if (id === LOBBY) return { id, place: lobby(), agents: [] };
+  if (id === LOBBY) return { id, place: drawOnce(LOBBY, lobby), agents: [] };
   if (id.startsWith("room:")) {
     const room = rooms.find((r) => roomPlaceId(r.ref) === id);
     if (!room) return null;
     const agents = room.members.filter((m) => hasBody(m)).sort();
-    return { id, place: meetingRoom(room.name, agents.length, room.purpose ?? ""), agents };
+    const purpose = room.purpose ?? "";
+    const place = drawOnce(`room\n${room.name}\n${agents.length}\n${purpose}`, () =>
+      meetingRoom(room.name, agents.length, purpose),
+    );
+    return { id, place, agents };
   }
   if (id.startsWith("home:")) {
     const owner = id.slice("home:".length);
@@ -830,7 +856,8 @@ export class PlaceTool implements Tool {
         const { id } = await readCurrent(service, caller, agent);
         const ref = { type: PLACE_TYPE, id };
         const [last] = await service.history(caller, ref, { limit: 1 });
-        if (!last?.before || last.op !== "update") return fail("There's nothing to undo.");
+        // The system giving an untouched home a newer room is not a change of anyone's to take back.
+        if (!last?.before || last.op !== "update" || byPlugin(last.actor)) return fail("There's nothing to undo.");
         await service.put(caller, { ...ref, data: last.before }, last.version);
         return {
           success: true,
@@ -923,7 +950,7 @@ export class PlaceTool implements Tool {
       type: PLACE_TYPE,
       id,
       scope: "global",
-      data: homePlace(id, named.slice(0, 80)) as unknown as Record<string, unknown>,
+      data: sharedPlace(id, named.slice(0, 80)) as unknown as Record<string, unknown>,
     });
     await service.put(caller, { type: WHEREABOUTS_TYPE, id: agent, scope: "global", data: { place: id } });
     return {

@@ -26,9 +26,11 @@ import {
   footprintOf,
   heightOf,
   KINDS,
+  LIMITS,
   newId,
   newName,
   normalizeFacing,
+  PHOTO_FRAMES,
   type Place,
   type PlaceAction,
   type PlaceItem,
@@ -585,13 +587,14 @@ function clearWays(start: Place): Place {
   return place;
 }
 
-/** Something every home has: somewhere to sit, somewhere to work, a window. */
-type Need = "seat" | "desk" | "window";
+/** Something every home has: somewhere to sit, somewhere to work, a window, and a frame for the photos taken there. */
+type Need = "seat" | "desk" | "window" | "picture";
 
 const NEEDS: Record<Need, { kind: string; has: (p: Place) => boolean }> = {
   seat: { kind: "armchair", has: (p) => p.spots.some((s) => s.activity === "sit") },
   desk: { kind: "desk", has: (p) => p.spots.some((s) => s.activity === "type") },
   window: { kind: "window", has: (p) => p.props.some((i) => i.kind === "window") },
+  picture: { kind: "picture", has: (p) => p.props.some((i) => PHOTO_FRAMES.includes(i.kind)) },
 };
 
 /** A room with what it needs: put wherever it fits, the way the `place` tool would, when the room has none. */
@@ -669,9 +672,9 @@ export interface Preset {
   id: string;
   back: Choice[];
   left: Choice[];
-  /** Two of these stand out in the floor, one each side of the middle. */
+  /** Two of these stand out in the floor, where `SPREADS` says. */
   islands: Island[];
-  /** What stands in the back left corner. */
+  /** What stands in a corner of the left wall, at its back or its front. */
   corner: string;
   palettes: Palette[];
 }
@@ -746,7 +749,11 @@ export const PRESETS: Preset[] = [
 /** What can stand out in the floor, away from the walls. */
 type Island = "chat" | "dining" | "rug" | "reading" | "worktable" | "play" | "greenery";
 
-/** Something standing out in the floor, round a middle point, all of it low enough to see past. */
+/**
+ * Something standing out in the floor, round a middle point. Islands stand
+ * between the camera and the walls, so all of it is low enough to see past:
+ * no floor lamps or tall plants.
+ */
 function island(kind: Island, [x, z]: [number, number], look: Look, key: string): Placed[] {
   const at = (dx: number, dz: number): [number, number] => [round(x + dx), round(z + dz)];
   const ring = (n: number, r: number, from = 0) =>
@@ -784,8 +791,8 @@ function island(kind: Island, [x, z]: [number, number], look: Look, key: string)
       return [
         { kind: "rug", at: at(0, 0), facing: 0, scale: 0.85, color: look.rug },
         { kind: "armchair", name: "the big armchair", at: at(-0.2, 0), facing: 40, color: look.fabric },
-        { kind: "lamp", name: "the standing lamp", at: at(-0.75, -0.45), facing: 0 },
         { key: `${key}:table`, kind: "side_table", at: at(0.55, -0.35), facing: 0, color: look.wood },
+        { kind: "table_lamp", on: `${key}:table`, at: at(0, 0), facing: 0 },
         { kind: "books", on: `${key}:table`, at: at(0, 0), facing: 0 },
       ];
     case "worktable":
@@ -814,13 +821,39 @@ function island(kind: Island, [x, z]: [number, number], look: Look, key: string)
     case "greenery":
       return [
         { kind: "round_rug", at: at(0, 0), facing: 0, scale: 0.8, color: "#9caf88" },
-        { kind: "tall_plant", at: at(-0.35, -0.2), facing: 0 },
-        { kind: "plant", at: at(0.35, -0.25), facing: 0 },
+        { kind: "plant", at: at(-0.35, -0.2), facing: 0 },
+        { kind: "plant", name: "the fern", at: at(0.35, -0.25), facing: 0 },
         { kind: "cactus", at: at(0.1, 0.35), facing: 0 },
         { kind: "stool", name: "the garden stool", at: at(-0.5, 0.45), facing: 30 },
       ];
   }
 }
+
+/**
+ * Where a home's two islands stand, as fractions of its width and depth from
+ * the middle, the seed picking one: side by side in front, one out to the
+ * right and one in front, one in the front middle and one at the right. All
+ * keep clear of the middle, where the avatar starts, and of the left wall's
+ * furniture.
+ */
+const SPREADS: [[number, number], [number, number]][] = [
+  [
+    [0.24, 0.22],
+    [-0.2, 0.27],
+  ],
+  [
+    [0.3, -0.02],
+    [-0.1, 0.3],
+  ],
+  [
+    [0.08, 0.32],
+    [0.32, 0.02],
+  ],
+  [
+    [-0.02, 0.3],
+    [0.33, -0.1],
+  ],
+];
 
 /** Fewer light sources than this and a room is dark after sunset: floor lamps go in wherever they fit. */
 const LAMPS = 3;
@@ -865,10 +898,14 @@ export function homePlace(seed: string, name: string, kind?: string): Place {
     rand,
     preset.islands.filter((i) => i !== first),
   );
+  const [one, two] = pick(rand, SPREADS);
+  // The corner piece stands at the back of the left wall, or at its front when the doorway isn't there.
+  const front = rand() < 0.5 && door.wall !== "left";
+  const cornerZ = front ? round(depth / 2 - 0.45) : round(-depth / 2 + 0.45);
   const after: Placed[] = [
-    { kind: preset.corner, at: [round(-width / 2 + 0.45), round(-depth / 2 + 0.45)], facing: 0 },
-    ...island(first, [round(width * 0.24), round(depth * 0.22)], look, "isle-1"),
-    ...island(second, [round(-width * 0.2), round(depth * 0.27)], look, "isle-2"),
+    { kind: preset.corner, at: [round(-width / 2 + 0.45), cornerZ], facing: 0 },
+    ...island(first, [round(width * one[0]), round(depth * one[1])], look, "isle-1"),
+    ...island(second, [round(width * two[0]), round(depth * two[1])], look, "isle-2"),
   ];
   // Where a lamp can go if the room is short of light: the corners on the left, then the back right.
   const lampsAt: [number, number][] = [
@@ -897,8 +934,16 @@ export function homePlace(seed: string, name: string, kind?: string): Place {
     flips: () => rand() < 0.5,
     after,
     lampsAt,
-    needs: ["seat", "desk", "window"],
+    needs: ["seat", "desk", "window", "picture"],
   });
+}
+
+/** What a shared place can be furnished as: any kind of home but the bedsit, with its bed. */
+const SHARED_PRESETS = PRESETS.filter((p) => p.id !== "bedsit").map((p) => p.id);
+
+/** A shared place, made with the `place` tool's `new`: furnished like a home, from its id, but never as a bedroom. */
+export function sharedPlace(seed: string, name: string): Place {
+  return homePlace(seed, name, pick(seeded(`${seed}\nshared`), SHARED_PRESETS));
 }
 
 // --------------------------------------------------------------------------
@@ -908,53 +953,94 @@ export function homePlace(seed: string, name: string, kind?: string): Place {
 /**
  * How a room for a purpose looks, picked by the words in its name and purpose:
  * a trip by the sea, a workshop, a studio, a tavern, a library. A room whose
- * words match none is plain.
+ * words match none is plain. Each comes in a few colourings, and the room's
+ * name picks one, so two rooms of a kind still differ.
  */
 export interface Theme {
   id: string;
   words: RegExp;
-  walls: string;
-  floor: Floor;
-  floorColor?: string;
+  palettes: Palette[];
 }
 
 export const THEMES: Theme[] = [
   {
     id: "beach",
     words: /\b(beach|vacation|holiday|trip|travel|surf|island|tropic|seaside)/i,
-    walls: "#cfe8f0",
-    floor: "tile",
-    floorColor: "#e6d3a3",
+    palettes: [
+      { walls: "#cfe8f0", floor: "tile", floorColor: "#e6d3a3" },
+      { walls: "#f3e9d2", floor: "wood", floorColor: "#d9b98c" },
+      { walls: "#d7efe6", floor: "tile", floorColor: "#efe0b9" },
+    ],
   },
   {
     id: "tavern",
     words: /\b(d&d|dnd|campaign|quest|tavern|dungeon|adventure|rpg)/i,
-    walls: "#6e4e38",
-    floor: "wood",
+    palettes: [
+      { walls: "#6e4e38", floor: "wood" },
+      { walls: "#5b4636", floor: "wood", floorColor: "#4a3424" },
+      { walls: "#8a7660", floor: "concrete", floorColor: "#6f655a" },
+    ],
   },
-  { id: "studio", words: /\b(podcast|music|audio|studio|record|episode)/i, walls: "#3d3648", floor: "carpet" },
+  {
+    id: "studio",
+    words: /\b(podcast|music|audio|studio|record|episode)/i,
+    palettes: [
+      { walls: "#3d3648", floor: "carpet" },
+      { walls: "#2f3a44", floor: "carpet", floorColor: "#4a4f5a" },
+      { walls: "#4a3a3a", floor: "wood", floorColor: "#5a4030" },
+    ],
+  },
   {
     id: "workshop",
     words: /\b(code|coder|coding|dev|engineer|build|deploy|bug|ops|review|repo)/i,
-    walls: "#d3d7dc",
-    floor: "concrete",
+    palettes: WORK,
   },
-  { id: "library", words: /\b(research|study|read|book|library|learn|notes)/i, walls: "#e8dfcf", floor: "wood" },
+  {
+    id: "library",
+    words: /\b(research|study|read|book|library|learn|notes)/i,
+    palettes: BOOKISH,
+  },
 ];
+
+/** A room that matches no theme is coloured like a home, from the cooler and lighter end. */
+const PLAIN: Palette[] = [{ walls: "#dfe4ea", floor: "carpet" }, ...COOL, ...BRIGHT, ...WARM];
 
 /** The theme the words of a room's name and purpose call for, if any. */
 export function themeFor(words: string): Theme | undefined {
   return THEMES.find((t) => t.words.test(words));
 }
 
-/** What a meeting room puts on its walls, by theme: the task board always, in the middle of the back wall. */
-const DRESSING: Record<string, { back: GroupId[]; left: GroupId[] }> = {
-  plain: { back: ["window", "board", "sideboard"], left: ["couch", "plants"] },
-  beach: { back: ["window", "board", "palms"], left: ["windows", "plants"] },
-  tavern: { back: ["books", "board", "crates"], left: ["hearth", "window"] },
-  studio: { back: ["easel", "board", "window"], left: ["couch", "plants"] },
-  workshop: { back: ["workbench", "board", "window"], left: ["books", "crates"] },
-  library: { back: ["books", "board", "books"], left: ["window", "reading"] },
+/**
+ * What a meeting room puts on its walls, by theme, in a few arrangements the
+ * room's name picks between: the task board always, in the middle of the back
+ * wall. Nothing deep, since the middle of the room is the table's.
+ */
+const DRESSING: Record<string, { back: GroupId[]; left: GroupId[] }[]> = {
+  plain: [
+    { back: ["window", "board", "sideboard"], left: ["couch", "plants"] },
+    { back: ["plants", "board", "windows"], left: ["sideboard", "window"] },
+    { back: ["books", "board", "window"], left: ["aquarium", "couch"] },
+  ],
+  beach: [
+    { back: ["window", "board", "palms"], left: ["windows", "plants"] },
+    { back: ["palms", "board", "windows"], left: ["couch", "palms"] },
+  ],
+  tavern: [
+    { back: ["books", "board", "crates"], left: ["hearth", "window"] },
+    { back: ["crates", "board", "hearth"], left: ["window", "books"] },
+  ],
+  studio: [
+    { back: ["easel", "board", "window"], left: ["couch", "plants"] },
+    { back: ["window", "board", "easel"], left: ["sideboard", "couch"] },
+  ],
+  workshop: [
+    { back: ["workbench", "board", "window"], left: ["books", "crates"] },
+    { back: ["window", "board", "workbench"], left: ["crates", "plants"] },
+  ],
+  library: [
+    { back: ["books", "board", "books"], left: ["window", "reading"] },
+    { back: ["window", "board", "books"], left: ["books", "reading"] },
+  ],
 };
 
 /**
@@ -967,6 +1053,8 @@ export function meetingRoom(name: string, seats: number, purpose = ""): Place {
   const n = Math.max(2, Math.min(16, Math.floor(seats)));
   const theme = themeFor(`${name} ${purpose}`);
   const rand = seeded(`${name}\n${purpose}`);
+  const palette = pick(rand, theme?.palettes ?? PLAIN);
+  const dressing = pick(rand, DRESSING[theme?.id ?? "plain"]);
   const look: Look = {
     fabric: pick(rand, FABRICS),
     fabric2: pick(rand, FABRICS),
@@ -987,7 +1075,13 @@ export function meetingRoom(name: string, seats: number, purpose = ""): Place {
     depth = round(Math.max(6.5, 2 * ring + 3.4));
     const tableZ = round(-depth / 2 + 1.5 + ring);
     centre.push(
-      { kind: "round_rug", at: [0, tableZ], facing: 0, scale: round((ring * 2 + 0.9) / 1.8), color: look.rug },
+      {
+        kind: "round_rug",
+        at: [0, tableZ],
+        facing: 0,
+        scale: round(Math.min(LIMITS.scale[1], (ring * 2 + 0.9) / 1.8)),
+        color: look.rug,
+      },
       { id: "table-1", key: "t:1", name: "the table", kind: "round_table", at: [0, tableZ], facing: 0, scale },
     );
     for (let i = 0; i < n; i++) {
@@ -1022,7 +1116,7 @@ export function meetingRoom(name: string, seats: number, purpose = ""): Place {
       kind: "rug",
       at: [0, tableZ],
       facing: 0,
-      scale: round(Math.min(2, (row + 1.6) / 2)),
+      scale: round(Math.min(LIMITS.scale[1], (row + 1.6) / 2)),
       color: look.rug,
     });
     for (let i = 0; i < tables; i++)
@@ -1095,13 +1189,12 @@ export function meetingRoom(name: string, seats: number, purpose = ""): Place {
       facing: 0,
       color: "#e85d4a",
     });
-  const dressing = DRESSING[theme?.id ?? "plain"];
   return build({
     name,
     width,
     depth,
     height: 2.8,
-    palette: theme ?? { walls: "#dfe4ea", floor: "carpet" },
+    palette,
     look,
     doors: [door],
     centre,
