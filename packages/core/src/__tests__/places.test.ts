@@ -355,6 +355,28 @@ describe("photos", () => {
     expect(parts[1]).toMatchObject({ type: "media", media: { id: "img-1" } });
   });
 
+  it("hangs each photo in the room it was taken in, newest first, keeping the last six", async () => {
+    const tool = new PlaceTool(
+      () => state,
+      () => true,
+      async () => Buffer.from("png"),
+    );
+    const store = memoryStore();
+    const ctx = { agentName: "assistant", sessionId: "s1", mediaStore: store } as unknown as ToolContext;
+    await tool.execute({ action: "photo", view: "selfie" }, ctx);
+    await tool.execute({ action: "photo" }, ctx);
+    const home = await readHome(state, { actor: { kind: "user", name: "owner" } }, "assistant");
+    expect(home.place.photos?.map((p) => [p.media, p.what])).toEqual([
+      ["img-2", "assistant's room"],
+      ["img-1", "a selfie"],
+    ]);
+    for (let i = 0; i < 6; i++) await tool.execute({ action: "photo" }, ctx);
+    const after = await readHome(state, { actor: { kind: "user", name: "owner" } }, "assistant");
+    expect(after.place.photos?.map((p) => p.media)).toEqual(["img-8", "img-7", "img-6", "img-5", "img-4", "img-3"]);
+    // The room is still what it was.
+    expect(after.place.props).toEqual(home.place.props);
+  });
+
   it("says why when it can't: no such spot, no camera, or the camera failed", async () => {
     const ctx = { agentName: "assistant", mediaStore: memoryStore() } as unknown as ToolContext;
     const working = new PlaceTool(

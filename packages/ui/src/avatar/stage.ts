@@ -139,6 +139,46 @@ const rad = (degrees: number) => (degrees * Math.PI) / 180;
  */
 const PEAK: Record<string, number> = { wave: 0.9, nod: 0.75, shake: 0.3 };
 
+/** The painted part of a picture, which a photo covers: its width, height and centre, in its own frame. */
+// In front of the painting's sun, which stands proud of it to 0.032.
+const ART = { width: 0.82, height: 0.52, y: 0.3, z: 0.036 };
+
+/**
+ * Hang a photo in a picture: a white mount over the painting, the photo on it,
+ * as large as fits at its own shape. Loaded from the media store; a photo
+ * that can't be had leaves the painting.
+ */
+function hangPhoto(picture: THREE.Group, media: string) {
+  new THREE.TextureLoader().load(
+    `/api/media/${encodeURIComponent(media)}`,
+    (texture) => {
+      texture.colorSpace = THREE.SRGBColorSpace;
+      const image = texture.image as { width: number; height: number };
+      const aspect = image.width / Math.max(1, image.height);
+      const room = { w: ART.width - 0.04, h: ART.height - 0.04 };
+      const [w, h] = aspect > room.w / room.h ? [room.w, room.w / aspect] : [room.h * aspect, room.h];
+      const mount = new THREE.Mesh(
+        new THREE.PlaneGeometry(ART.width, ART.height),
+        new THREE.MeshStandardMaterial({ color: 0xf6f3ec, roughness: 0.9 }),
+      );
+      mount.position.set(0, ART.y, ART.z);
+      const photo = new THREE.Mesh(
+        new THREE.PlaneGeometry(w, h),
+        new THREE.MeshStandardMaterial({
+          map: texture,
+          emissive: 0xffffff,
+          emissiveMap: texture,
+          emissiveIntensity: 0.2,
+        }),
+      );
+      photo.position.set(0, ART.y, ART.z + 0.002);
+      picture.add(mount, photo);
+    },
+    undefined,
+    () => {},
+  );
+}
+
 /** Things that hang on a wall, so they are never in the way of a walk. */
 const WALL_KINDS = new Set(["window", "picture", "clock", "shelf"]);
 
@@ -239,9 +279,13 @@ export async function createStage(
     scenery.push(shell);
     const lights: { at: THREE.Vector3; fire: boolean }[] = [];
     obstacles = [];
+    // The photos taken here go in the pictures, newest in the first.
+    const photos = [...(room.photos ?? [])];
     for (const prop of room.props) {
       const built = buildProp(prop.kind, { color: prop.color, size: prop.size, label: prop.label });
       if (built.screen) boards.push({ label: prop.label ?? "Tasks", screen: built.screen });
+      const photo = prop.kind === "picture" ? photos.shift() : undefined;
+      if (photo) hangPhoto(built.group, photo.media);
       built.group.position.set(prop.at[0], prop.elevation ?? 0, prop.at[1]);
       built.group.rotation.y = rad(prop.facing);
       const scale = prop.size ? 1 : (prop.scale ?? 1);

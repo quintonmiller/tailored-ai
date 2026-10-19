@@ -301,6 +301,11 @@ the server makes at start, keeps in memory, and accepts for reads only. The
 camera adds it to requests for the server and refuses every other request the
 page makes.
 
+Every photo is also hung in the room it was taken in: the place keeps its
+last six (`photos`, newest first), and the pictures on its walls show them in
+order on a white mount, the newest in the first picture. Hang more pictures
+("add a picture by the window") to show more of them.
+
 Photos need Playwright with Chromium (`npm install playwright && npx
 playwright install chromium`), as the browser tool does. Without it, the tool
 says so and the agent can pass that on.

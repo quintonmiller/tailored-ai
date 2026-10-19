@@ -48,9 +48,11 @@ import {
   moveItem,
   newId,
   newName,
+  PHOTOS_KEPT,
   PLACE_SCHEMA,
   type Place,
   type PlaceItem,
+  type PlacePhoto,
   type Placing,
   parseColor,
   placeProblems,
@@ -779,6 +781,22 @@ export class PlaceTool implements Tool {
     };
   }
 
+  /** Keep a photo on the place it was taken in, newest first. A write that loses a race is tried again once, then let go. */
+  private async hang(context: ToolContext, agent: string, photo: PlacePhoto): Promise<void> {
+    const service = this.getService();
+    const caller = agentStateCaller(context, "place");
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const { id, place, version, scope } = await readCurrent(service, caller, agent);
+        const photos = [photo, ...(place.photos ?? [])].slice(0, PHOTOS_KEPT);
+        await service.put(caller, { type: PLACE_TYPE, id, scope, data: { ...place, photos } as never }, version);
+        return;
+      } catch (err) {
+        if (!(err instanceof StateConflictError)) return;
+      }
+    }
+  }
+
   /** A picture of the room, or a selfie, kept in the media store so it can go out with the reply. */
   private async photo(args: Record<string, unknown>, context: ToolContext, agent: string): Promise<ToolResult> {
     if (!this.camera) return fail("Photos aren't available here.");
@@ -799,6 +817,12 @@ export class PlaceTool implements Tool {
     }
     const ref = await store.put(png, { mimeType: "image/png", name: `${view}.png`, sessionId: context.sessionId });
     const what = view === "selfie" ? "A selfie" : `A photo of ${place.name}`;
+    // Hung on the wall: the newest photos are what the pictures in the room show.
+    await this.hang(context, agent, {
+      media: ref.id,
+      what: view === "selfie" ? "a selfie" : place.name,
+      at: new Date().toISOString(),
+    });
     return {
       success: true,
       output: {
