@@ -7,11 +7,13 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initDatabase } from "../db/schema.js";
+import { TypedEventBus } from "../events.js";
 import {
   anyAvatar,
   applyAction,
   bodyAt,
   buildWorld,
+  followMessages,
   goingToSee,
   homeId,
   mayChange,
@@ -799,7 +801,12 @@ describe("going to see an agent you message", () => {
       desks: { other: "others-desk" },
     };
     expect(messageTo("room", { action: "dm", agent: "guest", body: "hi" }, "host", known)).toBe("guest");
-    expect(messageTo("room", { action: "dm", to: "Guesty", body: "hi" }, "host", known)).toBe("guest");
+    expect(messageTo("room", { action: "dm", to: ["Guesty"], body: "hi" }, "host", known)).toBe("guest");
+    expect(messageTo("room", { action: "DM", agent: "guest", body: "hi" }, "host", known)).toBe("guest");
+    // Arguments of a kind the loop turns back before the tool runs: nothing is sent, so nobody sets off.
+    expect(messageTo("room", { action: "dm", to: "guest", body: "hi" }, "host", known)).toBeUndefined();
+    expect(messageTo("room", { action: "dm", agent: ["guest"], body: "hi" }, "host", known)).toBeUndefined();
+    expect(messageTo("room", { action: "dm", agent: "guest", body: 42 }, "host", known)).toBeUndefined();
     // Nothing to say, nobody named, someone unknown, itself, another action, another tool.
     expect(messageTo("room", { action: "dm", agent: "guest", body: " " }, "host", known)).toBeUndefined();
     expect(messageTo("room", { action: "dm", body: "hi" }, "host", known)).toBeUndefined();
@@ -936,6 +943,134 @@ describe("going to see an agent you message", () => {
     ]);
     expect(together(seen, ["guest", "host", "other"])).toEqual({ host: "guest" });
     expect(together(seen, ["host"])).toBeUndefined();
+  });
+
+  describe("following the messages a turn sends", () => {
+    let events: TypedEventBus;
+    let subs: { dispose(): void }[];
+    const known = { agentFor: (label: string) => (bodies.has(label) ? label : undefined) };
+    const turn = (sessionId: string, agent: string) => ({ sessionId, agent, projectId: null });
+    let ids = 0;
+    /** A `room` dm from one agent to another, as the loop runs it: the waterfall, then what it says it did. */
+    async function dm(
+      from: string,
+      args: Record<string, unknown>,
+      outcome: "ran" | "failed" | "refused",
+      sessionId = `s-${from}`,
+    ) {
+      const call = { ...turn(sessionId, from), tool: "room", toolUseId: `call_${++ids}`, cwd: "/", args };
+      await events.waterfall("agent.pre_tool_use", call);
+      await presence.settled();
+      return () => {
+        if (outcome !== "refused")
+          events.emit("agent.post_tool_use", { ...call, output: "", success: outcome === "ran", durationMs: 1 });
+      };
+    }
+    const answered = (from: string, to: string) =>
+      events.emit("agent.messaged", { from, to, body: "hi", reply: "hello", via: "dm" });
+    const say = (to: string) => ({ action: "dm", agent: to, body: "hi" });
+    beforeEach(() => {
+      events = new TypedEventBus();
+      subs = followMessages(events, presence, (tool, args, from) => messageTo(tool, args, from, known));
+    });
+    afterEach(() => {
+      for (const s of subs) s.dispose();
+    });
+
+    it("sets the sender off as the message is sent, and keeps it there once answered", async () => {
+      events.emit("agent.turn_started", turn("s-host", "host"));
+      const through = await dm("host", say("guest"), "ran");
+      expect(await at("host")).toBe(homeId("guest"));
+      answered("host", "guest");
+      through();
+      events.emit("agent.turn_ended", turn("s-host", "host"));
+      await presence.settled();
+      expect(await visit("host")).toMatchObject({ data: { place: homeId("guest"), with: "guest" } });
+    });
+
+    it("calls the walk off for a message that failed", async () => {
+      const through = await dm("host", say("guest"), "failed");
+      expect(await at("host")).toBe(homeId("guest"));
+      through();
+      await presence.settled();
+      expect(await visit("host")).toBeNull();
+    });
+
+    it("calls the walk off once the turn ends, for a call turned back before it ran", async () => {
+      events.emit("agent.turn_started", turn("s-host", "host"));
+      const through = await dm("host", say("guest"), "refused");
+      through();
+      expect(await at("host")).toBe(homeId("guest"));
+      events.emit("agent.turn_ended", turn("s-host", "host"));
+      await presence.settled();
+      expect(await visit("host")).toBeNull();
+      // And a call the loop would turn back for its arguments never sets anyone off.
+      await dm("host", { action: "dm", to: "guest", body: "hi" }, "refused");
+      expect(await visit("host")).toBeNull();
+    });
+
+    it("waits for every turn in the session to end, as an answer can run in the sender's own", async () => {
+      events.emit("agent.turn_started", turn("s-host", "host"));
+      const through = await dm("host", say("guest"), "ran");
+      // The guest answers by messaging the host, whose answer runs in the host's session.
+      events.emit("agent.turn_started", turn("s-host", "host"));
+      events.emit("agent.turn_ended", turn("s-host", "host"));
+      await presence.settled();
+      expect(await at("host")).toBe(homeId("guest"));
+      answered("host", "guest");
+      through();
+      events.emit("agent.turn_ended", turn("s-host", "host"));
+      await presence.settled();
+      expect(await at("host")).toBe(homeId("guest"));
+    });
+
+    it("stays while an answer takes longer than the quiet spell", async () => {
+      const through = await dm("host", say("guest"), "ran");
+      for (let i = 0; i < 12; i++) {
+        vi.setSystemTime(Date.now() + 60_000);
+        await presence.sweep();
+        await presence.settled();
+      }
+      expect(await at("host")).toBe(homeId("guest"));
+      answered("host", "guest");
+      through();
+      await presence.settled();
+      vi.setSystemTime(Date.now() + DM_QUIET + 1000);
+      await presence.sweep();
+      expect(await visit("host")).toBeNull();
+    });
+
+    it("doesn't send the sender off again for an answer that comes after its visit ended", async () => {
+      const through = await dm("host", say("guest"), "ran");
+      // While answering, the guest goes to say something in a meeting: the host's visit ends.
+      await presence.visit("guest", "local:trip");
+      await presence.sweep();
+      expect(await at("host")).toBe(homeId("host"));
+      answered("host", "guest");
+      through();
+      await presence.settled();
+      expect(await visit("host")).toBeNull();
+    });
+
+    it("leaves the sender with the last it messaged when it sends two at once, without going back and forth", async () => {
+      const first = await dm("host", say("guest"), "ran");
+      const second = await dm("host", say("other"), "ran");
+      expect(await at("host")).toBe(homeId("other"));
+      answered("host", "guest");
+      first();
+      await presence.settled();
+      expect(await at("host")).toBe(homeId("other"));
+      answered("host", "other");
+      second();
+      await presence.settled();
+      expect(await visit("host")).toMatchObject({ data: { place: homeId("other"), with: "other" } });
+    });
+
+    it("goes to see the other when a message sent some other way is answered", async () => {
+      answered("host", "guest");
+      await presence.settled();
+      expect(await at("host")).toBe(homeId("guest"));
+    });
   });
 });
 

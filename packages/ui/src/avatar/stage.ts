@@ -27,6 +27,7 @@
 import { type VRM, VRMUtils } from "@pixiv/three-vrm";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { nameOf } from "../lib/conversations";
 import { aboutLines, asleepWords } from "../lib/did";
 import { type BoardSpot, type BoardTask, boardAtUv, drawBoard } from "./boards";
 import type { Cue } from "./cues";
@@ -609,10 +610,33 @@ export async function createStage(
   const standing = new Map<Figure, [number, number]>();
   const lookedAt = new Map<Figure, number>();
   const rekeep = () => {
+    const was = kept;
     kept = keeping(
       [...companions].map(([agent, c]): [string, string | undefined] => [agent, c.with]),
       new Set([self, ...companions.keys()]),
     );
+    // Company gone: nowhere it stands for them, and, standing at a spot, back to what it faces there. One that got
+    // up to meet its visitor is at no spot, and goes on to one once it has stopped (see `drift`).
+    for (const agent of was.keys()) {
+      const f = kept.has(agent) ? undefined : figureOf(agent);
+      if (!f || (f === me && opts.visitor)) continue;
+      standing.delete(f);
+      if (f.here && f.seated < 0.05 && !opts.still) f.go(room, f.here, obstacles);
+    }
+  };
+  /** At a spot with something to do there: a line said to it turns its head, not the whole of it. */
+  const busyAt = (f: Figure) => !!f.here && !!spotById(room, f.here)?.activity;
+  /**
+   * A body standing at no spot, with nobody to keep company and nothing to
+   * walk to, goes to a free one: the wandering, errands and asking what to do
+   * all start from a spot.
+   */
+  const drift = (f: Figure) => {
+    if (f.current !== undefined || f.moving) return;
+    const spot = freeSpot(f);
+    if (!spot) return;
+    if (f === me) go(spot.id);
+    else f.go(room, spot.id, obstacles);
   };
   /** Where `f` stands to talk to `partner`, coming from `from` (where it is, when not given): clear of everyone else. */
   const standFor = (f: Figure | undefined, partner: Figure, from?: [number, number]) => {
@@ -647,7 +671,7 @@ export async function createStage(
       const b = shows.get(f)?.behavior;
       if (!b?.stays || b.face === partnerAgent) joinUp(f, partner);
       else f.face(partner.head(), t);
-    } else f.face(partner.head(), t);
+    } else f.face(partner.head(), t, !visitor && !!shows.get(f)?.behavior.stays && busyAt(f));
   };
 
   /** The agent you talk to goes somewhere; anyone already there makes room. */
@@ -1168,8 +1192,8 @@ export async function createStage(
     for (const name of line.to ?? []) {
       const g = figureOf(name) ?? companionNamed(name);
       if (!g || g === f) continue;
-      if (!f.walker.busy) f.face(g.head(), at);
-      if (!g.walker.busy && !(g === me && opts.visitor)) g.face(f.head(), at);
+      if (!f.walker.busy) f.face(g.head(), at, busyAt(f));
+      if (!g.walker.busy && !(g === me && opts.visitor)) g.face(f.head(), at, busyAt(g));
     }
     // Round a meeting table, everyone turns to whoever is speaking.
     if (isMeeting(room))
@@ -1209,15 +1233,19 @@ export async function createStage(
     const behavior = behaviorFor(activity);
     const was = shows.get(f);
     const close = closeTo(agent) && !(f === me && opts.visitor);
+    // Come to see someone here, and with nothing else to say: talking with them, as the map has it.
+    const visiting = f === me ? undefined : companions.get(agent)?.with;
     const status = behavior.label
       ? close && activity?.doing === "asleep"
         ? `asleep · ${asleepWords(activity)}`
         : behavior.detail
           ? `${behavior.label} · ${behavior.detail}`
           : behavior.label
-      : close
-        ? (errands.get(f)?.errand.label ?? "idle")
-        : undefined;
+      : visiting
+        ? `talking with ${nameOf(visiting)}`
+        : close
+          ? (errands.get(f)?.errand.label ?? "idle")
+          : undefined;
     // The agent you talk to needs no name; the others always show theirs.
     f.label(f === me ? (opts.visitor ? "you" : undefined) : f.name, status, close ? aboutLines(activity) : []);
     if (was && sameBehavior(was.behavior, behavior)) return;
@@ -1323,7 +1351,6 @@ export async function createStage(
       const fig = companions.get(c.agent);
       if (fig) {
         fig.name = c.name;
-        show(c.agent, fig);
         // Here already, and now come to see someone here: over to them.
         if (fig.with !== c.with) {
           fig.with = c.with;
@@ -1331,6 +1358,7 @@ export async function createStage(
           const partner = c.with ? figureOf(c.with) : undefined;
           if (partner && !opts.still) joinUp(fig, partner);
         }
+        show(c.agent, fig);
         continue;
       }
       if (arriving.has(c.agent)) continue;
@@ -1554,6 +1582,7 @@ export async function createStage(
         });
     }
     if (!opts.still && !opts.visitor) attend(me, self, t, !engaged && !myCompany);
+    if (!opts.still && !opts.visitor && !myCompany && !engaged && !asking && !mine?.stays) drift(me);
     // Talking with you comes first; otherwise it turns to whoever came to see it.
     if (myCompany && !engaged) keepCompany(me, myCompany, false, t);
     if (opts.visitor) visit(dt);
@@ -1604,6 +1633,7 @@ export async function createStage(
         if (typeof move === "string") c.go(room, move, obstacles);
         attend(c, agent, t, !company);
         if (company) keepCompany(c, company, c.with === company, t);
+        else if (!theirs?.stays) drift(c);
       }
       const talking = c.speaking(t);
       c.step(
@@ -1692,7 +1722,7 @@ export async function createStage(
     companions.clear();
     standing.clear();
     lookedAt.clear();
-    rekeep();
+    kept = new Map();
     for (const d of departing.splice(0)) d.fig.dispose();
     placedAt = performance.now();
     placeGen++;

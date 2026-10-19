@@ -587,14 +587,19 @@ unless it is at a meeting table, where everyone keeps their seat, or asleep.
 Several agents messaging the same one stand round it, each in a spot of its
 own. If you're in the sender's home, you see it get up and leave through its
 door. The map lists it in **Busy now** as "talking with editor · in
-editor's room", and its empty home says where it went.
+editor's room", its empty home says where it went, and up close its tag says
+"talking with editor" too.
 
-After a quiet spell (5 minutes since their last exchange) the visitor walks
-back. A conversation that goes back and forth keeps them together. When the
-one it came to see answers with a message of its own, nobody walks anywhere,
-and the visitor stays a while longer. A visit also ends early if the other
-agent goes somewhere else (to a meeting, say), or if the visitor is paused.
-Some messages move nobody:
+The visitor stays for as long as the answer takes, however long that is.
+After a quiet spell (5 minutes since their last exchange) it walks back, and
+the one it came to see goes back to whatever it was doing. A conversation
+that goes back and forth keeps them together. When the one it came to see
+answers with a message of its own, nobody walks anywhere, and the visitor
+stays a while longer. A visit also ends early if the other agent goes
+somewhere else (to a meeting, say), or if the visitor is paused. Either way
+the answer, when it comes, doesn't send the visitor back. An agent that
+messages two others at once goes to see the second. Some messages move
+nobody:
 
 - a message an agent sends itself, or one between agents that don't both
   have bodies;
@@ -606,8 +611,10 @@ Some messages move nobody:
 - a message sent on to a desk room (`rooms.desks`): it is said in that room,
   so the body goes to that room's meeting room instead.
 
-A message that fails to go through calls the walk off, and the body goes
-back. The agent you are chatting with is still the exception on your own
+A message that doesn't go through calls the walk off, and the body goes
+back. That covers one that fails and one turned back before it is sent: say
+its arguments are the wrong kind (`to` given as a name, not a list) or a
+person refuses the approval. The agent you are chatting with is still the exception on your own
 page. If it messages someone, it stays in its room with you, on the phone,
 and anyone visiting the other agent sees it arrive there. If someone messages
 it, they come into your view and stand with it.

@@ -310,14 +310,15 @@ export class Figure {
 
   /**
    * Face someone it is talking to: the whole body turns to them where it
-   * stands, the eyes meeting theirs; seated or on its way somewhere, the head
-   * turns as far as it can.
+   * stands, the eyes meeting theirs; seated, on its way somewhere, or kept
+   * where it faces (`stay`: at something it is doing), the head turns as far
+   * as it can.
    */
-  face(at: THREE.Vector3, clock: number) {
+  face(at: THREE.Vector3, clock: number, stay = false) {
     const from = this.head();
     const yaw = turnBetween(this.walker.place.facing, Math.atan2(at.x - from.x, at.z - from.z));
     const pitch = Math.atan2(at.y - from.y, Math.hypot(at.x - from.x, at.z - from.z));
-    if (this.seated < 0.05 && !this.walker.busy && !this.pending) {
+    if (!stay && this.seated < 0.05 && !this.walker.busy && !this.pending) {
       if (Math.abs(yaw) > 0.05) this.walker.go([], this.walker.place.facing + yaw);
       this.motion.look(0, pitch, clock);
     } else {

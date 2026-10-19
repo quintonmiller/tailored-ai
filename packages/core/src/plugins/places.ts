@@ -32,6 +32,7 @@ import { findOrCreateSession } from "../agent/session.js";
 import type { AgentConfig } from "../config.js";
 import { mediaPart, textPart } from "../content/types.js";
 import { getExploratoryState } from "../db/exploratory-queries.js";
+import type { EventBus, Subscription } from "../events.js";
 import type { TaiHttpRequest, TaiHttpResponse } from "../http/registry.js";
 import { resolveAvatar } from "../live/avatar.js";
 import type { Plugin, PluginMeta } from "../plugin-context.js";
@@ -835,14 +836,19 @@ export function goingToSee(
  *
  * Messaging another agent directly, it goes to see it (see
  * {@link goingToSee}): the visit names the place the other's body is in and
- * who it is `with`, until a shorter quiet spell. That visit also ends once the
- * other has gone somewhere else, or the visitor is paused.
+ * who it is `with`, until a shorter quiet spell. Sent by a tool call, it sets
+ * off as the call is made ({@link sending}) and stays while the answer is
+ * awaited; a call that fails, or is turned back before it runs, calls the
+ * walk off. That visit also ends once the other has gone somewhere else, or
+ * the visitor is paused.
  *
  * Once a visit ends, the body is back where it lives (see {@link visitOf}),
  * and {@link sweep} removes the record, so a page watching visits sees it go.
  */
 export class Presence {
   private readonly chains = new Map<string, Promise<void>>();
+  /** Direct messages on their way, by the call sending each, until it is through: whether its sender set off. */
+  private readonly calls = new Map<string, { from: string; to: string; turn: string; went: Promise<boolean> }>();
 
   constructor(
     private readonly opts: {
@@ -881,6 +887,51 @@ export class Presence {
    * to whether the sender set off somewhere it wasn't already visiting.
    */
   meet(from: string, to: string): Promise<boolean> {
+    return this.see(from, to, true);
+  }
+
+  /**
+   * A tool call (`call`, in the turn `turn`) is sending one agent's direct
+   * message to another: the sender sets off to see it now, to be there for
+   * the answer, and stays for as long as the answer takes.
+   */
+  sending(call: string, from: string, to: string, turn: string): void {
+    this.calls.set(call, { from, to, turn, went: this.meet(from, to) });
+  }
+
+  /** The call is through: one that failed calls off the walk it set off on. */
+  sent(call: string, ok: boolean): Promise<void> {
+    const found = this.calls.get(call);
+    this.calls.delete(call);
+    if (!found || ok) return Promise.resolve();
+    return this.inTurn(found.from, async () => {
+      if (await found.went) await this.leave(found.from, found.to);
+    });
+  }
+
+  /**
+   * A turn ended. A call of its still waiting to be through was turned back
+   * before it ran (its arguments, an approval), which nothing reports: it
+   * sent nothing, so its walk is called off.
+   */
+  async turnEnded(turn: string): Promise<void> {
+    const refused = [...this.calls].filter(([, c]) => c.turn === turn).map(([call]) => call);
+    await Promise.all(refused.map((call) => this.sent(call, false)));
+  }
+
+  /**
+   * A direct message was answered. One a call here sent had its walk as it
+   * was sent: the two stay together a while longer if they still are, and
+   * nobody sets off now, so a visit that ended while the answer was awaited
+   * stays ended. One sent any other way goes to see the other now.
+   */
+  async answered(from: string, to: string): Promise<void> {
+    const ours = [...this.calls.values()].some((c) => c.from === from && c.to === to);
+    await this.see(from, to, !ours);
+  }
+
+  /** Who goes where for a message from one agent to another; arriving or not, as for {@link go}. */
+  private see(from: string, to: string, arrive: boolean): Promise<boolean> {
     let went = false;
     return this.inTurn(from, async () => {
       const step = goingToSee(from, to, {
@@ -889,7 +940,7 @@ export class Presence {
         hasBody: this.opts.hasBody,
         asleep: !!this.opts.asleep?.(from),
       });
-      if (step?.agent === from) went = await this.go(from, step.place, true, to);
+      if (step?.agent === from) went = await this.go(from, step.place, arrive, to);
       // The other came to see the sender, and stays a while longer: in its own turn, so its own visits keep their order.
       else if (step)
         void this.inTurn(step.agent, () => this.go(step.agent, step.place, false, step.with).then(() => {}));
@@ -898,12 +949,14 @@ export class Presence {
 
   /** A direct message that didn't go through: a visit it set off on ends, and the body goes back. */
   part(from: string, to: string): Promise<void> {
-    return this.inTurn(from, async () => {
-      const service = this.opts.state();
-      const ref = { type: VISIT_TYPE, id: from };
-      const found = await service.get(PRESENCE_CALLER, ref);
-      if (found && visitWith(found.data) === to) await service.delete(PRESENCE_CALLER, ref);
-    });
+    return this.inTurn(from, () => this.leave(from, to));
+  }
+
+  private async leave(from: string, to: string): Promise<void> {
+    const service = this.opts.state();
+    const ref = { type: VISIT_TYPE, id: from };
+    const found = await service.get(PRESENCE_CALLER, ref);
+    if (found && visitWith(found.data) === to) await service.delete(PRESENCE_CALLER, ref);
   }
 
   /** One agent's visit changes in order, so a quick second message never writes under the first, nor a sweep over it. */
@@ -974,8 +1027,9 @@ export class Presence {
     return (await this.where(partner)).at !== place;
   }
 
-  /** End the visits that are over: each body back where it lives. */
+  /** End the visits that are over: each body back where it lives. One waiting on an answer lasts until it comes. */
   async sweep(): Promise<void> {
+    for (const c of this.calls.values()) void this.see(c.from, c.to, false);
     const visits = await this.opts
       .state()
       .query(PRESENCE_CALLER, { type: VISIT_TYPE, limit: 500 })
@@ -1009,7 +1063,10 @@ const PRESENCE_CALLER: StateCaller = { actor: { kind: "plugin", name: "places" }
  * The agent a tool call messages directly, as the call is made: a `room` dm
  * to another agent, by its name or its label in rooms (`agentFor`). Not one
  * sent on to a desk, which is said in a room, where the body goes to say it
- * instead; nor one the room tool would refuse (no words, nobody, itself).
+ * instead; nor one that would be refused: arguments of the wrong kind, which
+ * the loop turns back before the tool runs (`to` is a list), or what the room
+ * tool would refuse (no words, nobody, itself). Arguments are read as the
+ * room tool reads them, so `to: ["editor"]` names editor.
  */
 export function messageTo(
   tool: string,
@@ -1017,10 +1074,56 @@ export function messageTo(
   from: string,
   known: { agentFor: (label: string) => string | undefined; desks?: Record<string, string> },
 ): string | undefined {
-  if (tool !== "room" || args.action !== "dm" || !String(args.body ?? "").trim()) return undefined;
-  const label = String(args.agent ?? args.to ?? args.member ?? "").trim();
-  const to = label ? known.agentFor(label) : undefined;
-  return to && to !== from && !(known.desks?.[to] ?? known.desks?.[label]) ? to : undefined;
+  if (tool !== "room") return undefined;
+  const { action, body, agent, to, member } = args;
+  const given = (v: unknown) => v !== undefined && v !== null;
+  if ([action, body, agent, member].some((v) => given(v) && typeof v !== "string")) return undefined;
+  if (given(to) && !Array.isArray(to)) return undefined;
+  if (String(action ?? "").toLowerCase() !== "dm" || !String(body ?? "").trim()) return undefined;
+  const label = String(agent ?? to ?? member ?? "").trim();
+  const name = label ? known.agentFor(label) : undefined;
+  return name && name !== from && !(known.desks?.[name] ?? known.desks?.[label]) ? name : undefined;
+}
+
+/**
+ * Bodies following direct messages, from the bus. A `room` dm sets its sender
+ * off as the call is made (`agent.pre_tool_use`), so it is there for the
+ * answer; the call's end settles it (`agent.post_tool_use`), and the turn's
+ * end calls off any call turned back before it ran, which reports nothing
+ * (`agent.turn_ended`). Each exchange answered (`agent.messaged`, from a
+ * plugin as much as the room tool) keeps the two together, and pausing sends
+ * visitors home to sleep. Calls are told apart by turn as well as id, as a
+ * model may number its calls the same way every time; and a turn is over
+ * once every turn running in its session is, as an answer can run in the
+ * very session the message came from.
+ */
+export function followMessages(
+  events: EventBus,
+  presence: Presence,
+  messages: (tool: string, args: Record<string, unknown>, from: string) => string | undefined,
+): Subscription[] {
+  const running = new Map<string, number>();
+  return [
+    events.onWaterfall("agent.pre_tool_use", async (p, next) => {
+      const out = await next(p);
+      const from = out.agent || "default";
+      const to = out.deny ? undefined : messages(out.tool, out.args, from);
+      if (to) presence.sending(`${out.sessionId}:${out.toolUseId}`, from, to, out.sessionId);
+      return out;
+    }),
+    events.on("agent.post_tool_use", (e) => void presence.sent(`${e.sessionId}:${e.toolUseId}`, e.success)),
+    events.on("agent.turn_started", (e) => void running.set(e.sessionId, (running.get(e.sessionId) ?? 0) + 1)),
+    events.on("agent.turn_ended", (e) => {
+      const left = (running.get(e.sessionId) ?? 1) - 1;
+      if (left > 0) return void running.set(e.sessionId, left);
+      running.delete(e.sessionId);
+      void presence.turnEnded(e.sessionId);
+    }),
+    events.on("agent.messaged", (e) => {
+      if (e.via === "dm") void presence.answered(e.from, e.to);
+    }),
+    events.on("agents.pause_changed", () => void presence.sweep()),
+  ];
 }
 
 /** A body the place tool moves leaves any place it was visiting: where it went stands. */
@@ -2008,13 +2111,12 @@ const plugin: Plugin = (ctx) => {
     });
   };
 
-  const messages = (tool: string, args: Record<string, unknown>, from: string) => {
-    const known = identities();
-    return messageTo(tool, args, from, {
-      agentFor: (label) => known.agentForLabel(label) ?? (agentNames().includes(label) ? label : undefined),
+  // Who a tool call messages directly. Asked of every call, so who is who is only worked out for a room dm.
+  const messages = (tool: string, args: Record<string, unknown>, from: string) =>
+    messageTo(tool, args, from, {
+      agentFor: (label) => identities().agentForLabel(label) ?? (agentNames().includes(label) ? label : undefined),
       desks: runtime.getConfig().rooms?.desks,
     });
-  };
 
   // Bodies go where the talk is: to a room's meeting room while they talk there, to an agent they message
   // directly, and home after a quiet spell. A message to itself, or to an agent with no body, moves nobody.
@@ -2031,7 +2133,7 @@ const plugin: Plugin = (ctx) => {
       livesIn: (agent) => whereIs(runtime.getStateService(), PLUGIN_CALLER, agent, talkRooms()),
       asleep: (agent) => !!asleep(agent),
     });
-    const subs: { dispose(): void }[] = [];
+    const subs: Subscription[] = [];
     if (quietMinutes > 0)
       subs.push(
         ctx.events.on("room.woke", (e) => void presence.stay(e.agent, e.roomRef)),
@@ -2040,32 +2142,7 @@ const plugin: Plugin = (ctx) => {
           if (e.speaker && agentNames().includes(e.speaker)) void presence.visit(e.speaker, e.roomRef);
         }),
       );
-    if (dmQuietMinutes > 0) {
-      // A body sets off as the message is sent, so it is there for the answer; the exchange done, it stays a while.
-      // One that set off for a message that then failed goes back.
-      const sent = new Map<string, { from: string; to: string; went: Promise<boolean> }>();
-      subs.push(
-        ctx.events.onWaterfall("agent.pre_tool_use", async (p, next) => {
-          const out = await next(p);
-          const from = out.agent || "default";
-          const to = out.deny ? undefined : messages(out.tool, out.args, from);
-          if (to) sent.set(out.toolUseId, { from, to, went: presence.meet(from, to) });
-          return out;
-        }),
-        ctx.events.on("agent.post_tool_use", (e) => {
-          const call = sent.get(e.toolUseId);
-          if (!call) return;
-          sent.delete(e.toolUseId);
-          if (!e.success) void call.went.then((went) => (went ? presence.part(call.from, call.to) : undefined));
-        }),
-        // Every exchange, whoever sent it: from a plugin as much as the room tool.
-        ctx.events.on("agent.messaged", (e) => {
-          if (e.via === "dm") void presence.meet(e.from, e.to);
-        }),
-        // Paused, a body out visiting goes home to sleep.
-        ctx.events.on("agents.pause_changed", () => void presence.sweep()),
-      );
-    }
+    if (dmQuietMinutes > 0) subs.push(...followMessages(ctx.events, presence, messages));
     void presence.sweep();
     const timer = setInterval(() => void presence.sweep(), SWEEP_MS);
     timer.unref?.();
