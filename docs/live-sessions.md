@@ -319,7 +319,12 @@ to zoom. **Fly** puts your body away and lets the camera go anywhere: WASD to
 move, `E` up, `Q` down, drag to turn. Agents look up as you come near, and
 wave if they're free; standing next to one offers **Talk to** it, which
 switches the chat to that agent. Click any agent for its menu as usual.
-**Back to** returns to the agent's own view. While you visit, your body is
+**Voices** (off until you switch it on) speaks what agents say near you: as
+a line starts in an agent's bubble within a few metres of you, the page asks
+`POST /api/live/say` for it in that agent's voice and plays it, quieter the
+further you stand, one line at a time. It is off by default because each line
+is a text-to-speech render, which may run on your GPU. **Back to** returns to
+the agent's own view. While you visit, your body is
 yours: the agent's turns still run, but its cues have nothing to move.
 
 #### Every place, and the rooms agents talk in
@@ -496,6 +501,7 @@ cues, and its text passes through untouched.
 | `GET /api/ext/builtin:places/scene/:id` | any place on the map, to look at: `{type, id, place, company}`, with everyone in it as `company`. A room agents talk in is a meeting room with a seat for each member, made fresh each time. `404` for a place that isn't there |
 | `GET /api/live/avatar?agent=` | the avatar's model file (`model/gltf-binary`), revalidated by `ETag`; `404` with the reason when none is set or the file is missing |
 | `GET /api/live/animations/:index?agent=` | one of the configured animation libraries, by its position in `live.avatar.animations`. Nothing else under the folder is reachable |
+| `POST /api/live/say` | a line in an agent's voice: `{agent?, text}` → the audio, from the live text-to-speech stage with the agent's `voice.voice` (else `live.tts.voice`). Markdown is stripped first. `400` for an empty line or one over 400 characters, `409` when live sessions are off, `502` when the voice can't be made |
 | `POST /api/live/idle` | what the agent does with a quiet moment: `{agent?, body, here?, hour?}` → `{cues}`. `429` within 45 s of the last ask for that agent; `400` for a body that can't go in a prompt |
 | `POST /api/live/sessions` | start: `{agent?, body?, sessionKey?}`. With `sessionKey`, its turns go into that chat's conversation, otherwise a fresh one; the session's `conversation` names it; `201` with the session and its limits; `400` when the body is not one that can go in a prompt (names must be short plain words); `409` when live sessions are off. `body` is `{looks?, gestures, aimed?}`, where each `aimed` move is `{verb, prep, does, targets}`, e.g. `{"verb": "go", "prep": "to", "does": "walk somewhere", "targets": ["the couch"]}` |
 | `GET /api/live/sessions/:id` | the session, with `endedAt` and `endReason` once it has ended |
