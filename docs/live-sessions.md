@@ -174,7 +174,12 @@ though they were looking at it. The voice style line changes with a body
 too: "only offer what your tools let you do" stopped it walking anywhere;
 "what your tools and your body let you do" did not.
 
-Cues need no configuration: the Talk page declares its body. A transport
+Cues need no configuration: the Talk page declares its body. The avatar
+offers six gestures (wave, nod, shake, shrug, think, bow), walking to any
+spot in its room, and looking or pointing at its furniture or at you. Asked
+to look at something behind it, or to point, it turns to face the thing
+first. A walk the agent asks for is the same walk as a click. During a
+session the avatar stays wherever the agent sent it. A transport
 with no body, such as Discord, declares none. Its agent is never told about
 cues, and its text passes through untouched.
 

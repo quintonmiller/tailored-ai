@@ -5,14 +5,18 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  bodyFor,
   DEFAULT_ROOM,
+  GESTURES,
   lightingFor,
+  lookTarget,
   nearestWithin,
   OPEN_SIDES,
   type Room,
   roomDistance,
   roomProblems,
   spotById,
+  spotFor,
 } from "./scene";
 
 describe("the default room", () => {
@@ -49,7 +53,7 @@ describe("roomProblems, for spots and what leads to them", () => {
     const room: Room = {
       ...DEFAULT_ROOM,
       props: [{ id: "stool", name: "the stool", kind: "chair", at: [0, 0], facing: 0, spot: "perch" }],
-      spots: [{ id: "middle", name: "the middle", at: [0, 0], facing: 0, activity: "sit" }],
+      spots: [{ id: "middle", name: "the middle", place: "the middle", at: [0, 0], facing: 0, activity: "sit" }],
     };
     expect(roomProblems(room)).toEqual([
       '"stool" leads to a spot that does not exist.',
@@ -102,5 +106,40 @@ describe("nearestWithin", () => {
 
   it("reads angles the long way round the same as the short way", () => {
     expect(nearestWithin(0.3 + 2 * Math.PI, OPEN_SIDES)).toBeCloseTo(0.3);
+  });
+});
+
+describe("bodyFor", () => {
+  const body = bodyFor(DEFAULT_ROOM);
+
+  it("offers the avatar's gestures, the spots to walk to, and things to look or point at", () => {
+    expect(body.gestures).toEqual([...GESTURES]);
+    const [go, look, point] = body.aimed;
+    expect(go).toMatchObject({ verb: "go", prep: "to", targets: DEFAULT_ROOM.spots.map((s) => s.place) });
+    expect(look.targets).toContain("you");
+    expect(look.targets).toContain("the window");
+    expect(point.targets).not.toContain("you");
+  });
+
+  it("uses only names the server accepts into a prompt: short plain words", () => {
+    const names = [body.looks, ...body.gestures, ...body.aimed.flatMap((m) => [m.does, ...m.targets])];
+    for (const n of names) expect(n).toMatch(/^[\p{L}\p{N}][\p{L}\p{N} '’-]{0,47}$/u);
+  });
+});
+
+describe("spotFor and lookTarget", () => {
+  it("finds the spot a go means, however it is named", () => {
+    expect(spotFor(DEFAULT_ROOM, "the couch")?.id).toBe("couch");
+    expect(spotFor(DEFAULT_ROOM, "Couch")?.id).toBe("couch");
+    expect(spotFor(DEFAULT_ROOM, "the laptop")?.id).toBe("desk");
+    expect(spotFor(DEFAULT_ROOM, "the middle")?.id).toBe("middle");
+    expect(spotFor(DEFAULT_ROOM, "the attic")).toBeUndefined();
+  });
+
+  it("knows the viewer and where things are, at the height of their middle", () => {
+    expect(lookTarget(DEFAULT_ROOM, "the user")).toEqual({ viewer: true });
+    expect(lookTarget(DEFAULT_ROOM, "you")).toEqual({ viewer: true });
+    expect(lookTarget(DEFAULT_ROOM, "the window")).toEqual({ at: [-2.09, 1.5, -0.45] });
+    expect(lookTarget(DEFAULT_ROOM, "the moon")).toBeUndefined();
   });
 });

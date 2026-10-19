@@ -45,6 +45,8 @@ export type Activity = "sit" | "type" | "look" | "browse";
 export interface Spot {
   id: string;
   name: string;
+  /** Where it is, as you would say it after "go to": "the couch". */
+  place: string;
   at: [number, number];
   facing: number;
   activity?: Activity;
@@ -87,24 +89,107 @@ export const DEFAULT_ROOM: Room = {
     { id: "plant", name: "the plant", kind: "plant", at: [-1.78, -1.48], facing: 0 },
   ],
   spots: [
-    { id: "middle", name: "the middle of the room", at: [0.15, 0.35], facing: 20 },
+    { id: "middle", name: "the middle of the room", place: "the middle of the room", at: [0.15, 0.35], facing: 20 },
     {
       id: "couch",
       name: "on the couch",
+      place: "the couch",
       at: [-0.85, -0.72],
       facing: 0,
       activity: "sit",
       seat: { at: [-0.85, -1.25], height: 0.47 },
     },
-    { id: "desk", name: "at the desk", at: [1.35, -0.98], facing: 180, activity: "type" },
-    { id: "window", name: "at the window", at: [-1.55, -0.45], facing: -90, activity: "look" },
-    { id: "bookshelf", name: "by the bookshelf", at: [-1.4, 0.95], facing: -90, activity: "browse" },
+    { id: "desk", name: "at the desk", place: "the desk", at: [1.35, -0.98], facing: 180, activity: "type" },
+    { id: "window", name: "at the window", place: "the window", at: [-1.55, -0.45], facing: -90, activity: "look" },
+    {
+      id: "bookshelf",
+      name: "by the bookshelf",
+      place: "the bookshelf",
+      at: [-1.4, 0.95],
+      facing: -90,
+      activity: "browse",
+    },
   ],
   start: "middle",
 };
 
 export function spotById(room: Room, id: string): Spot | undefined {
   return room.spots.find((s) => s.id === id);
+}
+
+/** The gestures the avatar can make, and so the ones the agent is offered. */
+export const GESTURES = ["wave", "nod", "shake", "shrug", "think", "bow"] as const;
+
+/** Words that mean the person watching, when the agent looks or points at them. */
+const VIEWER = new Set([
+  "you",
+  "me",
+  "the user",
+  "user",
+  "the person",
+  "person",
+  "them",
+  "the viewer",
+  "camera",
+  "the camera",
+]);
+
+/**
+ * What the avatar's body can do in this room, as a live session declares it:
+ * the agent is told these moves and names, and writes cues with them.
+ */
+export function bodyFor(room: Room) {
+  const things = [...new Set([...room.props.map((p) => p.name), ...room.spots.map((s) => s.place)])];
+  return {
+    looks: "a small figure in a cozy room",
+    gestures: [...GESTURES],
+    aimed: [
+      { verb: "go", prep: "to", does: "walk somewhere", targets: room.spots.map((s) => s.place) },
+      { verb: "look", prep: "at", does: "look at something", targets: ["you", ...things] },
+      { verb: "point", prep: "at", does: "point at something", targets: things },
+    ],
+  };
+}
+
+const bare = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/^(the|a|an|your|my)\s+/, "")
+    .trim();
+
+/** The spot a "go to" means: by its place, its name, its id, or a piece of furniture that leads there. */
+export function spotFor(room: Room, target: string): Spot | undefined {
+  const t = bare(target);
+  const direct = room.spots.find((s) => [s.place, s.name, s.id].some((n) => bare(n) === t));
+  if (direct) return direct;
+  const prop = room.props.find((p) => bare(p.name) === t || bare(p.name).includes(t) || t.includes(bare(p.name)));
+  if (prop?.spot) return spotById(room, prop.spot);
+  return room.spots.find((s) => bare(s.place).includes(t) || t.includes(bare(s.place)));
+}
+
+/**
+ * Where something to look or point at is: the viewer, a prop (at the height
+ * of its middle), or a spot. Undefined when it isn't in the room.
+ */
+export function lookTarget(
+  room: Room,
+  target: string,
+): { viewer: true } | { at: [number, number, number] } | undefined {
+  const t = bare(target);
+  if (VIEWER.has(t) || VIEWER.has(target.toLowerCase().trim())) return { viewer: true };
+  const prop = room.props.find((p) => bare(p.name) === t || bare(p.name).includes(t) || t.includes(bare(p.name)));
+  if (prop) {
+    const middle: Partial<Record<string, number>> = {
+      window: 0.5,
+      picture: 0.3,
+      lamp: 1.4,
+      bookshelf: 1.0,
+      plant: 0.6,
+    };
+    return { at: [prop.at[0], (prop.elevation ?? 0) + (middle[prop.kind] ?? 0.4), prop.at[1]] };
+  }
+  const spot = spotFor(room, target);
+  return spot ? { at: [spot.at[0], 0.5, spot.at[1]] } : undefined;
 }
 
 /** Problems with a room's layout, as sentences; empty when it is sound. */
