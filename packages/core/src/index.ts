@@ -165,6 +165,8 @@ export {
   type FieldCondition,
   type HistoryOptions,
   type JsonSchema,
+  type MemoryStateOptions,
+  MemoryStateProvider,
   registerStateProvider,
   registerStateType,
   type Source,

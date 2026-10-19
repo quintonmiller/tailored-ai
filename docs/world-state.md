@@ -259,6 +259,21 @@ state:
 A single type can live elsewhere with `provider:` and `providerOptions:` on the
 type, leaving the rest on the store-wide backend.
 
+Core registers a second provider, `memory`, for state that is only true while
+it lasts — what an agent is doing right now, who has a page open. Records live
+in the process: gone on restart and on a config reload, with only each
+record's latest changes kept (`providerOptions: { history: 50 }`, the default).
+Queries, versions and events behave exactly as they do against SQLite, so a
+type can move between the two without a reader noticing.
+
+```yaml
+state:
+  types:
+    - name: presence
+      scope: global
+      provider: memory
+```
+
 A provider only stores and retrieves (`get`, `query`, `put`, and optionally
 `delete`, `history`, `purge`, `watch`). Validation, access, scopes, versions
 and events are core's, so every provider gets them without implementing them.

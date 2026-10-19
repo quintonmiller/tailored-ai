@@ -288,6 +288,22 @@ system prompt is composed, which is the property
 [#417](https://github.com/quintonmiller/tailored-ai/issues/417) is after. See
 [#548](https://github.com/quintonmiller/tailored-ai/issues/548).
 
+#### `agent.turn_started` and `agent.turn_ended`
+
+Every turn, bracketed, from the loop itself — so whichever surface ran it (the
+web chat, Discord, a room wake, a schedule, a delegation) the pair is the same.
+
+```ts
+bus.on("agent.turn_started", (t) => status.set(t.agent, "thinking"));
+bus.on("agent.turn_ended", (t) => status.set(t.agent, t.error ? "failed" : "idle"));
+```
+
+Both carry `sessionId`, `agent` (when the turn has a name) and `projectId`.
+`turn_ended` adds `stop`, the same `LoopStop` the caller's `onStop` hears, and
+`error` when the turn threw. It fires for every `turn_started`, including the
+turns that threw, so a subscriber keeping a count never strands one open.
+Between the two, the tool events below say what the turn is doing.
+
 #### `agent.request_assembled`
 
 What the model was actually shown. Broadcast, once per request that reached a
