@@ -18,7 +18,9 @@ import { Chat } from "./Chat";
 
 let root: Root;
 let container: HTMLDivElement;
-const chatPosts: { sessionKey?: string }[] = [];
+const chatPosts: { sessionKey?: string; sessionId?: string }[] = [];
+/** Whether the fake server continues a conversation named by id, as the real one does. */
+let continuesById = true;
 const messageFetches: string[] = [];
 let sessionRows: unknown[] = [];
 
@@ -29,9 +31,9 @@ const history: Record<string, unknown[]> = {
   ],
 };
 
-/** The chat route's reply: it continues the conversation its key names, or starts a new one. */
-function reply(sessionKey: string | undefined): Response {
-  const continued = sessionKey === "web:kitchen";
+/** The chat route's reply: it continues the conversation its key or id names, or starts a new one. */
+function reply(sessionKey: string | undefined, sessionId: string | undefined): Response {
+  const continued = sessionKey === "web:kitchen" || (continuesById && sessionId === "sess-1");
   const id = continued ? "sess-1" : "sess-new";
   const key = continued ? "web:kitchen" : "web:fresh";
   history[id] = [...(history[id] ?? []), { role: "user", content: "Hey!" }, { role: "assistant", content: "Hello!" }];
@@ -49,6 +51,7 @@ beforeEach(() => {
   chatPosts.length = 0;
   messageFetches.length = 0;
   sessionRows = [];
+  continuesById = true;
   localStorage.clear();
   window.location.hash = "/chat";
   delete history["sess-new"];
@@ -60,7 +63,7 @@ beforeEach(() => {
       if (url === "/api/chat") {
         const body = JSON.parse(String(init?.body));
         chatPosts.push(body);
-        return reply(body.sessionKey);
+        return reply(body.sessionKey, body.sessionId);
       }
       const m = /^\/api\/sessions\/([^/]+)\/messages/.exec(url);
       if (m) {
@@ -148,17 +151,24 @@ describe("coming back to the chat", () => {
     expect(shown()).toContain("Hello!");
   });
 
-  it("finds the key of a conversation stored before keys were kept", async () => {
+  it("continues a conversation it has no key for, from storage or a link, by naming it", async () => {
     localStorage.setItem("tai.chat.activeSessionId", "sess-1");
-    sessionRows = [{ id: "sess-1", key: "web:kitchen", title: null, pinned: 0 }];
+    window.location.hash = "/chat?session=sess-1";
     await render();
     await send("Hey!");
-    expect(chatPosts[0]?.sessionKey).toBe("web:kitchen");
+    expect(chatPosts[0]).toMatchObject({ sessionId: "sess-1" });
+    expect(chatPosts[0]?.sessionKey).toBeUndefined();
+    await followUrl();
+    expect(routeProps().sessionId).toBe("sess-1");
+    expect(shown()).toContain("Earlier answer");
+    expect(shown()).toContain("Hello!");
+    // The reply's key is kept, so the next message names the conversation by it.
     expect(localStorage.getItem("tai.chat.activeSessionKey")).toBe("web:kitchen");
   });
 
   it("settles on the conversation a reply moved to, without bouncing back to the old one", async () => {
-    // A restored conversation whose key is unknown: the reply lands in a new one.
+    // A server that starts a new conversation anyway: the page must follow it, not bounce.
+    continuesById = false;
     localStorage.setItem("tai.chat.activeSessionId", "sess-1");
     await render();
     window.location.hash = "/chat?session=sess-1";

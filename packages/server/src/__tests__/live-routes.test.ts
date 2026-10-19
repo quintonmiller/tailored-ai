@@ -365,6 +365,26 @@ describe("typed turns on a page that shows the agent's body", () => {
     expect(status).toBe(400);
   });
 
+  it("continues the conversation a page names by id when it has no key for it", async () => {
+    const first = (await chat({})).events.find((e) => e.event === "response")?.data;
+    const again = (await chat({ sessionKey: undefined, sessionId: first.sessionId })).events.find(
+      (e) => e.event === "response",
+    )?.data;
+    expect(again.sessionId).toBe(first.sessionId);
+    expect(again.sessionKey).toBe("web:typed");
+  });
+
+  it("continues a conversation that has no key at all, and hands back none", async () => {
+    // A voice session opened without a chat key has a keyless conversation.
+    const start = await json("POST", "/api/live/sessions", { agent: "talker" });
+    const conversation = String(start.json.conversation);
+    const data = (await chat({ sessionKey: undefined, sessionId: conversation })).events.find(
+      (e) => e.event === "response",
+    )?.data;
+    expect(data.sessionId).toBe(conversation);
+    expect(data.sessionKey).toBeUndefined();
+  });
+
   it("leaves a reply alone when the page shows no body", async () => {
     reply = "Use <b>bold</b> sparingly.";
     const { events } = await chat({});

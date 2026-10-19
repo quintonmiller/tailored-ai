@@ -1541,12 +1541,15 @@ export function sendChat(
   mediaIds?: string[],
   /** What the page shows the agent with, so it can move that body while it answers. */
   agentBody?: unknown,
+  /** The conversation on the page, for when there is no key: the server continues it. */
+  sessionId?: string,
 ): AbortController {
   const controller = new AbortController();
   const body: Record<string, unknown> = { message, sessionKey };
   if (agent) body.agent = agent;
   if (mediaIds?.length) body.mediaIds = mediaIds;
   if (agentBody) body.body = agentBody;
+  if (!sessionKey && sessionId) body.sessionId = sessionId;
 
   fetch("/api/chat", {
     method: "POST",

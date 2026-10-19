@@ -60,6 +60,7 @@ import {
   getNote,
   getProject,
   getProjectTask,
+  getSession,
   getSessionMessages,
   getTokenUsageInWindow,
   getWorkflowRun,
@@ -85,6 +86,7 @@ import {
   listTasks,
   listWorkflowRuns,
   listWorkflowSteps,
+  loadSession,
   type MemoryFragment,
   NpmResourceSource,
   type ProjectQueryFilter,
@@ -1109,6 +1111,11 @@ export function createServer(opts: ServerOptions) {
       mediaIds?: string[];
       /** What the page shows the agent with: its cues come back as `cue` events. */
       body?: unknown;
+      /**
+       * The conversation the page is showing, when it has no key for it (one
+       * restored from an older link). It is continued, not replaced by a new one.
+       */
+      sessionId?: string;
     }>();
     const { message, sessionKey, agent, profile, mediaIds } = body;
     const agentName = agent ?? profile;
@@ -1136,8 +1143,17 @@ export function createServer(opts: ServerOptions) {
 
     const config = runtime.getConfig();
     const model = runtime.getModel();
-    const key = sessionKey ?? `web:${Date.now()}`;
-    const session = findOrCreateSession(runtime.db, key, model, config.agent.defaultProvider);
+    // Without a key, the page may still name the conversation it is showing:
+    // continue that one, by its key when it has one, or directly when not.
+    const named =
+      !sessionKey && typeof body.sessionId === "string" ? getSession(runtime.db, body.sessionId) : undefined;
+    const keyless = named !== undefined && !named.key;
+    const key = sessionKey ?? named?.key ?? `web:${Date.now()}`;
+    const session =
+      (keyless ? loadSession(runtime.db, named.id) : undefined) ??
+      findOrCreateSession(runtime.db, key, model, config.agent.defaultProvider);
+    // A keyless conversation has no key to hand back; the page keeps naming it by id.
+    const replyKey = keyless ? undefined : key;
     const hooks = runtime.resolveHooks({ agentName });
 
     // Create per-stream approval handler
@@ -1166,7 +1182,7 @@ export function createServer(opts: ServerOptions) {
           if (skipped) {
             await stream.writeSSE({
               event: "response",
-              data: JSON.stringify({ content: null, sessionId: session.id, sessionKey: key, skipped: true }),
+              data: JSON.stringify({ content: null, sessionId: session.id, sessionKey: replyKey, skipped: true }),
             });
             return;
           }
@@ -1277,7 +1293,7 @@ export function createServer(opts: ServerOptions) {
             content: shown && typeof response === "string" ? withoutCues(shown, response) : response,
             reasoning: lastReasoning,
             sessionId: session.id,
-            sessionKey: key,
+            sessionKey: replyKey,
           }),
         });
       } catch (err) {
