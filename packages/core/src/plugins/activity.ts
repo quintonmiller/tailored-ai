@@ -7,6 +7,8 @@
  * waiting on you, stuck, idle or asleep, in a few words a status line can show
  * ("searching the web", "talking to planner"), with a `look` the page can draw
  * — a prop to hold: a camera, a laptop, a book — and who else is involved.
+ * Waiting on you, it says on what — the approval request, or the task — so a
+ * page that shows the wait can answer it there.
  *
  * Everything comes off the event bus: turns starting and ending, tool calls,
  * approvals, questions for a person, stalls, the pause switch. Nothing here
@@ -82,6 +84,17 @@ export interface Activity {
   look?: string;
   /** Another agent it is dealing with. */
   with?: string;
+  /**
+   * Waiting for your OK: the approval request's id, which `GET /api/approvals`
+   * lists while it can be answered there (`POST /api/approvals/:id`).
+   */
+  request?: string;
+  /** Waiting on you about a task: its id. */
+  task?: string;
+  /** Waiting on an answer from you: the question in full, which `detail` cuts short. */
+  question?: string;
+  /** Waiting on an answer to a question it asked in a conversation: that conversation's session id. */
+  session?: string;
   /** When it started doing this. */
   since: string;
   /** Idle or asleep: the last thing it did, and when: a tool it used, or a turn it took without one. */
@@ -130,6 +143,17 @@ function words(v: unknown): string | undefined {
   const line = v.replace(/\s+/g, " ").trim();
   if (!line) return undefined;
   return line.length > DETAIL_CHARS ? `${line.slice(0, DETAIL_CHARS - 1)}…` : line;
+}
+
+/** Characters of a question kept whole: enough to answer it from, not a transcript. */
+const QUESTION_CHARS = 2000;
+
+/** A question as asked, for a page that answers it: its own line breaks kept, cut only when very long. */
+function whole(v: unknown): string | undefined {
+  if (typeof v !== "string") return undefined;
+  const text = v.trim();
+  if (!text) return undefined;
+  return text.length > QUESTION_CHARS ? `${text.slice(0, QUESTION_CHARS - 1)}…` : text;
 }
 
 function host(v: unknown): string | undefined {
@@ -242,10 +266,13 @@ interface Tracked {
   turns: Set<string>;
   /** The tool call in flight, by its id. */
   tool?: { id: string; name: string; look: Look };
-  /** A person is being asked to approve a call. */
-  approval?: string;
-  /** Something it asked a person, unanswered: shown until its next turn starts. */
-  asked?: { what: string; detail?: string };
+  /** A person is being asked to approve a call: which tool, and the request's id. */
+  approval?: { tool: string; request: string };
+  /**
+   * Something it asked a person, unanswered, and the task it is about when it
+   * is about one: shown until its next turn starts, or the task moves on.
+   */
+  asked?: { what: string; detail?: string; task?: string; question?: string; session?: string };
   /** Its last turn stalled or failed: shown until the next one starts. */
   stuck?: string;
   /** The agent whose message started the turn it is in. */
@@ -288,11 +315,39 @@ export class ActivityTracker {
         return out;
       }),
       on.on("agent.post_tool_use", (e) => this.toolEnded(e)),
-      on.on("approval.requested", (e) => this.change(nameOf(e.agent), (t) => (t.approval = e.tool))),
-      on.on("approval.settled", (e) => this.change(nameOf(e.agent), (t) => (t.approval = undefined))),
-      on.on("task.needs_human", (e) =>
-        this.change(nameOf(e.agentName), (t) => (t.asked = { what: "needs you", detail: words(e.message) })),
+      on.on("approval.requested", (e) =>
+        this.change(nameOf(e.agent), (t) => (t.approval = { tool: e.tool, request: e.requestId })),
       ),
+      // Only the request it is waiting on: a call on another path that nobody was asked about (`unattended`)
+      // leaves it waiting.
+      on.on("approval.settled", (e) =>
+        this.change(nameOf(e.agent), (t) => {
+          if (t.approval?.request === e.requestId) t.approval = undefined;
+        }),
+      ),
+      on.on("task.needs_human", (e) =>
+        this.change(nameOf(e.agentName), (t) => {
+          t.asked = { what: "needs you", detail: words(e.message), task: e.taskId, question: whole(e.message) };
+        }),
+      ),
+      // A question asked from a task run is about that task: the page can answer it there.
+      on.on("question.asked", (e) => {
+        const agent = e.taskId ? this.agentIn(e.sessionId) : undefined;
+        if (agent && e.taskId) {
+          const task = e.taskId;
+          this.change(agent, (t) => {
+            t.asked = { what: "has a question for you", detail: words(e.question), task, question: whole(e.question) };
+          });
+        }
+      }),
+      // The task it was waiting on you about moved on, out of blocked: answered, wherever that was done. Only a
+      // move out of blocked: a task that needs you without being blocked (the verify gate's, left done) moves
+      // to get there, and that move may reach this after the escalation it set off.
+      on.on("task.transitioned", (e) => {
+        if (e.from !== "blocked" || e.to === "blocked") return;
+        for (const [agent, t] of this.tracked)
+          if (t.asked?.task === e.taskId) this.change(agent, (u) => (u.asked = undefined));
+      }),
       on.on("agent.stalled", (e) => this.change(nameOf(e.agentName), (t) => (t.stuck = stuckWords(e.stallReason)))),
       // The room a turn is for, so a turn that uses no tool can say after whether it spoke there or only read it.
       on.on("room.woke", (e) => {
@@ -373,7 +428,14 @@ export class ActivityTracker {
   current(agent: string): Omit<Activity, "since"> {
     const t = this.tracked.get(agent);
     const base = { agent };
-    if (t?.approval) return { ...base, doing: "waiting", what: "waiting for your OK", tool: t.approval };
+    if (t?.approval)
+      return {
+        ...base,
+        doing: "waiting",
+        what: "waiting for your OK",
+        tool: t.approval.tool,
+        request: t.approval.request,
+      };
     if (t && t.turns.size > 0) {
       if (t.tool) {
         const { name, look } = t.tool;
@@ -390,8 +452,18 @@ export class ActivityTracker {
       if (t.from) return { ...base, doing: "talking", what: `talking to ${t.from}`, with: t.from };
       return { ...base, doing: "thinking", what: "thinking" };
     }
-    if (t?.asked)
-      return { ...base, doing: "waiting", what: t.asked.what, ...(t.asked.detail ? { detail: t.asked.detail } : {}) };
+    if (t?.asked) {
+      const { what, detail, task, question, session } = t.asked;
+      return {
+        ...base,
+        doing: "waiting",
+        what,
+        ...(detail ? { detail } : {}),
+        ...(task ? { task } : {}),
+        ...(question ? { question } : {}),
+        ...(session ? { session } : {}),
+      };
+    }
     if (t?.stuck) return { ...base, doing: "stuck", what: "stuck", detail: t.stuck };
     const next = this.opts.next?.(agent) ?? undefined;
     const ahead = next ? { next } : {};
@@ -401,6 +473,13 @@ export class ActivityTracker {
       return { ...base, doing: "asleep", what: "asleep", detail: why, ...(until ? { until } : {}), ...ahead };
     }
     return { ...base, doing: "idle", what: "idle", ...ahead };
+  }
+
+  /** The agent with a turn running in a session: whoever asked something from it. */
+  private agentIn(sessionId: string | undefined): string | undefined {
+    if (!sessionId) return undefined;
+    for (const [agent, t] of this.tracked) if (t.turns.has(sessionId)) return agent;
+    return undefined;
   }
 
   private track(agent: string): Tracked {
@@ -452,7 +531,13 @@ export class ActivityTracker {
     });
   }
 
-  private toolStarted(p: { agent?: string; tool: string; toolUseId: string; args: Record<string, unknown> }): void {
+  private toolStarted(p: {
+    sessionId: string;
+    agent?: string;
+    tool: string;
+    toolUseId: string;
+    args: Record<string, unknown>;
+  }): void {
     const agent = nameOf(p.agent);
     const look = this.lookOf(p.tool, p.args);
     // The agent on the other end of a dm or delegation will start a turn: it is talking too.
@@ -463,7 +548,15 @@ export class ActivityTracker {
       if (p.tool === "room" && (p.args.action === "post" || p.args.action === "update")) t.posted = true;
       t.last = { what: look.what, ...(look.look ? { look: look.look } : {}), at: this.now().toISOString() };
     });
-    if (p.tool === "ask_user") this.track(agent).asked = { what: "has a question for you", detail: look.detail };
+    // Asked in a conversation, which is where an answer to it goes; one asked from a task run is about the task
+    // (`question.asked`), which takes the conversation off again.
+    if (p.tool === "ask_user")
+      this.track(agent).asked = {
+        what: "has a question for you",
+        detail: look.detail,
+        question: whole(p.args.question),
+        session: p.sessionId,
+      };
   }
 
   private toolEnded(e: RuntimeEventPayload<"agent.post_tool_use">): void {
@@ -474,7 +567,13 @@ export class ActivityTracker {
       // A question sent as a choice, form or confirmation waits for the person, like ask_user.
       if (e.tool === "interface" && e.success && e.args.action === "send" && ASKS.has(String(e.args.kind))) {
         const props = (e.args.props ?? {}) as Record<string, unknown>;
-        t.asked = { what: "has a question for you", detail: words(props.question ?? props.title ?? props.summary) };
+        const asking = props.question ?? props.title ?? props.summary;
+        t.asked = {
+          what: "has a question for you",
+          detail: words(asking),
+          question: whole(asking),
+          session: e.sessionId,
+        };
       }
     });
     const look = this.lookOf(e.tool, e.args);
@@ -570,7 +669,19 @@ function stuckWords(reason: string | null | undefined): string {
 
 /** Two records that say the agent is doing the same thing. */
 function sameDoing(a: Omit<Activity, "since">, b: Omit<Activity, "since">): boolean {
-  const keys = ["agent", "doing", "what", "detail", "tool", "look", "with"] as const;
+  const keys = [
+    "agent",
+    "doing",
+    "what",
+    "detail",
+    "tool",
+    "look",
+    "with",
+    "request",
+    "task",
+    "question",
+    "session",
+  ] as const;
   return keys.every((k) => a[k] === b[k]);
 }
 
@@ -596,6 +707,10 @@ export const ACTIVITY_SCHEMA = {
     tool: { type: "string" },
     look: { type: "string" },
     with: { type: "string" },
+    request: { type: "string" },
+    task: { type: "string" },
+    question: { type: "string", maxLength: 2000 },
+    session: { type: "string" },
     since: { type: "string" },
     last: {
       type: "object",

@@ -276,6 +276,23 @@ describe("WorldMap", () => {
     expect(writer.classList.contains("doing-idle")).toBe(true);
   });
 
+  it("takes you to what someone waits on you for, when it can, and anyone else to where they are", () => {
+    const onNeed = vi.fn();
+    const { onGo } = render({
+      onNeed,
+      activities: {
+        writer: { agent: "writer", doing: "waiting", what: "has a question for you" },
+        planner: { agent: "planner", doing: "working", what: "searching the web" },
+      },
+    });
+    const busy = [...container.querySelectorAll(".world-map-busy")] as HTMLButtonElement[];
+    act(() => busy[0].click());
+    expect(onNeed).toHaveBeenCalledWith("writer");
+    expect(onGo).not.toHaveBeenCalled();
+    act(() => busy[1].click());
+    expect(onGo).toHaveBeenCalledWith("shared:lounge");
+  });
+
   it("marks where something is happening, and puts it first", () => {
     render({
       places: [
@@ -339,6 +356,23 @@ describe("busyAgents", () => {
       ["c", "talking", "room:local:trip"],
       ["a", "thinking", "home:a"],
     ]);
+  });
+
+  it("ranks those waiting on you as the Needs you list does: approvals first, then the longest wait", () => {
+    const wait = (agent: string, since: string, request?: string): AgentActivity => ({
+      agent,
+      doing: "waiting",
+      what: "waiting",
+      since,
+      ...(request ? { request } : {}),
+    });
+    const busy = busyAgents(map, {
+      a: wait("a", "2026-10-19T09:00:00Z"),
+      b: wait("b", "2026-10-19T08:00:00Z"),
+      c: wait("c", "2026-10-19T09:30:00Z", "r1"),
+      d: act("stuck"),
+    });
+    expect(busy.map((b) => b.agent)).toEqual(["c", "b", "a", "d"]);
   });
 
   it("marks a place by the most pressing thing happening there, counting only those doing it", () => {

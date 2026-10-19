@@ -205,14 +205,108 @@ describe("activity", () => {
     const approval = { sessionId: "s-planner", agent: "planner", projectId: null, tool: "exec", toolUseId: "x" };
     events.emit("approval.requested", { ...approval, requestId: "r", description: "rm" });
     expect(await doing("planner")).toBe("waiting | waiting for your OK");
-    events.emit("approval.settled", { ...approval, outcome: "approved", timedOut: false } as never);
+    events.emit("approval.settled", { ...approval, requestId: "r", outcome: "approved", timedOut: false } as never);
     expect(await doing("planner")).toBe("thinking | thinking");
   });
 
-  it("needs you when a task does", async () => {
+  it("says which approval it waits on, and stops only when that one is answered", async () => {
+    make();
+    started("planner");
+    const approval = { sessionId: "s-planner", agent: "planner", projectId: null, tool: "exec", toolUseId: "x" };
+    events.emit("approval.requested", { ...approval, requestId: "r1", description: "rm" });
+    expect(await activity("planner")).toMatchObject({ doing: "waiting", tool: "exec", request: "r1" });
+    // A call on a path with nobody to ask, or another request's answer, isn't this one's.
+    events.emit("approval.settled", { ...approval, outcome: "unattended", timedOut: false } as never);
+    events.emit("approval.settled", { ...approval, requestId: "r0", outcome: "approved", timedOut: false } as never);
+    expect(await activity("planner")).toMatchObject({ doing: "waiting", request: "r1" });
+    events.emit("approval.settled", { ...approval, requestId: "r1", outcome: "rejected", timedOut: false } as never);
+    const after = await activity("planner");
+    expect(after.doing).toBe("thinking");
+    expect(after.request).toBeUndefined();
+  });
+
+  it("needs you when a task does, and says which task", async () => {
     make();
     events.emit("task.needs_human", { taskId: "t", agentName: "writer", reason: "question", message: "Which tone?" });
     expect(await doing("writer")).toBe("waiting | needs you | Which tone?");
+    expect((await activity("writer")).task).toBe("t");
+  });
+
+  it("keeps a long question whole for a page to answer from, and its status line short", async () => {
+    make();
+    const question = `Which of these hotels?\n${"The one by the river, or the one up the hill. ".repeat(4)}`;
+    started("planner");
+    await tool("planner", "ask_user", { question });
+    ended("planner", { stop: { kind: "complete" } });
+    const a = await activity("planner");
+    expect(a.question).toBe(question.trim());
+    expect(a.detail?.length).toBeLessThan(question.length);
+  });
+
+  it("ties a question asked from a task run to the task", async () => {
+    make();
+    started("planner");
+    await tool("planner", "ask_user", { question: "Window or aisle?" }, false);
+    events.emit("question.asked", { question: "Window or aisle?", sessionId: "s-planner", taskId: "ptask_1" });
+    ended("planner", { stop: { kind: "complete" } });
+    expect(await activity("planner")).toMatchObject({
+      doing: "waiting",
+      what: "has a question for you",
+      detail: "Window or aisle?",
+      task: "ptask_1",
+    });
+  });
+
+  it("stops waiting once the task it asked about leaves blocked, wherever it was answered", async () => {
+    make();
+    events.emit("task.needs_human", { taskId: "t1", agentName: "writer", reason: "question", message: "Which tone?" });
+    // Another task moving, or this one staying blocked, changes nothing.
+    events.emit("task.transitioned", { taskId: "t2", from: "blocked", to: "backlog" });
+    events.emit("task.transitioned", { taskId: "t1", from: "in_progress", to: "blocked" });
+    expect((await activity("writer")).doing).toBe("waiting");
+    events.emit("task.transitioned", { taskId: "t1", from: "blocked", to: "backlog" });
+    const after = await activity("writer");
+    expect(after.doing).toBe("idle");
+    expect(after.task).toBeUndefined();
+  });
+
+  it("keeps waiting on a task that needs you without being blocked, whichever plugin hears its move first", async () => {
+    // As the verify gate does: a task reaching done with no verification is left done, for a person to check,
+    // and the escalation goes out from inside the move to done. Subscribed before the tracker, as it is in a
+    // deployment that had the gate before it had the tracker, the gate's escalation lands before the tracker
+    // hears the move that set it off.
+    events.on("task.transitioned", (e) => {
+      if (e.to !== "done") return;
+      events.emit("task.needs_human", {
+        taskId: e.taskId,
+        agentName: "writer",
+        reason: "verify",
+        message: `Task ${e.taskId} reached done without a recorded verification.`,
+      });
+    });
+    make();
+    events.emit("task.transitioned", { taskId: "t1", from: "in_progress", to: "done" });
+    expect(await activity("writer")).toMatchObject({ doing: "waiting", what: "needs you", task: "t1" });
+  });
+
+  it("says which conversation a question was asked in, where an answer to it goes, and none for a task's", async () => {
+    make();
+    started("planner");
+    await tool("planner", "ask_user", { question: "Window or aisle?" });
+    ended("planner", { stop: { kind: "complete" } });
+    expect(await activity("planner")).toMatchObject({ doing: "waiting", session: "s-planner" });
+    started("writer");
+    await tool("writer", "interface", { action: "send", kind: "choice", props: { question: "Which hotel?" } });
+    ended("writer", { stop: { kind: "complete" } });
+    expect(await activity("writer")).toMatchObject({ doing: "waiting", session: "s-writer" });
+    // Asked from a task run: answered on the task, not in the run's conversation.
+    started("planner");
+    await tool("planner", "ask_user", { question: "Train or plane?" }, false);
+    events.emit("question.asked", { question: "Train or plane?", sessionId: "s-planner", taskId: "ptask_2" });
+    ended("planner", { stop: { kind: "complete" } });
+    const onTask = await activity("planner");
+    expect(onTask).toMatchObject({ doing: "waiting", task: "ptask_2" });
+    expect(onTask.session).toBeUndefined();
   });
 
   it("is stuck after a turn that stalled or threw, until the next one", async () => {

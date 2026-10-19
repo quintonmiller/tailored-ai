@@ -35,6 +35,18 @@ export function latestWith(sessions: SessionRow[], agent: string): SessionRow | 
   return latest;
 }
 
+/**
+ * The conversation to answer an agent's question in: the one it asked in
+ * (`session`), when that is one of your web conversations with it. A question
+ * asked on another channel, or in a conversation this can't tell is with it,
+ * has none here: you answer in your chat with it as it stands.
+ */
+export function askedIn(sessions: SessionRow[], session: string | undefined, agent: string): SessionRow | undefined {
+  if (!session) return undefined;
+  const row = sessions.find((s) => s.id === session);
+  return row && agentOfKey(row.key) === agent ? row : undefined;
+}
+
 /** A session row with only what opening a conversation needs: its id and key. */
 export function rowFor(id: string, key: string | null): SessionRow {
   return {

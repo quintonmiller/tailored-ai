@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { type AgentActivity, hueFor } from "../avatar/doing";
 import { nameOf } from "../lib/conversations";
+import { byWait } from "../lib/needs";
 import { subscribeStateChanges } from "../lib/state-events";
 import { areaTitle, MAIN, type MapArea, type MapPlace, mapIndex, placeTitle } from "../lib/wayfinding";
 
@@ -71,7 +72,8 @@ export interface Busy {
  * Everyone busy, with the place their body is in, so you can go straight to
  * them: waiting on you first, then stuck, then talking, working and thinking.
  * One gone to see an agent it messaged is talking with it while it stays.
- * Only bodies on the map: an agent without one is nowhere to go to.
+ * Those waiting on you go in the order the world's "Needs you" lists them
+ * (`byWait`). Only bodies on the map: an agent without one is nowhere to go to.
  */
 export function busyAgents(places: MapPlace[], activities: Record<string, AgentActivity>): Busy[] {
   const out: Busy[] = [];
@@ -84,7 +86,9 @@ export function busyAgents(places: MapPlace[], activities: Record<string, AgentA
       out.push({ agent, activity, place });
     }
   const rank = (b: Busy) => URGENCY[b.activity.doing] ?? 9;
-  return out.sort((a, b) => rank(a) - rank(b) || a.agent.localeCompare(b.agent));
+  const waits = (a: Busy, b: Busy) =>
+    a.activity.doing === "waiting" && b.activity.doing === "waiting" ? byWait(a.activity, b.activity) : 0;
+  return out.sort((a, b) => rank(a) - rank(b) || waits(a, b) || a.agent.localeCompare(b.agent));
 }
 
 /**
@@ -199,6 +203,7 @@ export function WorldMap({
   here,
   activities,
   onGo,
+  onNeed,
   onClose,
 }: {
   places: MapPlace[];
@@ -209,6 +214,8 @@ export function WorldMap({
   here: string | undefined;
   activities: Record<string, AgentActivity>;
   onGo: (id: string) => void;
+  /** Go to an agent waiting on you, with what it waits on open: from "Busy now", as from the "Needs you" list. */
+  onNeed?: (agent: string) => void;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
@@ -345,7 +352,7 @@ export function WorldMap({
                       type="button"
                       className={`world-map-busy doing-${b.activity.doing}`}
                       aria-current={current(b.place.id)}
-                      onClick={() => onGo(b.place.id)}
+                      onClick={() => (b.activity.doing === "waiting" && onNeed ? onNeed(b.agent) : onGo(b.place.id))}
                     >
                       <span className="world-map-dot" aria-hidden="true">
                         {MARKS[b.activity.doing]}

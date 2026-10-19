@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fetchMessages, type SessionRow, setStoredChatSessionId } from "../api";
+import { fetchMessages, fetchSessions, type SessionRow, setStoredChatSessionId } from "../api";
 import { groupTurns } from "../chat-grouping";
+import { ApprovalArgs } from "../components/ApprovalArgs";
 import { useChatStore } from "../components/ChatContext";
 import { TalkButton, useChatStage } from "../components/ChatStage";
 import { ChatWith, RoomLines, RoomWith, useRoomTalk } from "../components/ChatWith";
@@ -10,7 +11,7 @@ import { SuggestionChips } from "../components/SuggestionChips";
 import { VoiceInputButton } from "../components/VoiceInputButton";
 import { useActiveProject } from "../hooks/useActiveProject";
 import type { MediaRef } from "../lib/content.js";
-import { agentOfKey, rowFor } from "../lib/conversations";
+import { agentOfKey, askedIn, rowFor } from "../lib/conversations";
 
 export function Chat(props: { sessionKey?: string; sessionId?: string }) {
   const store = useChatStore();
@@ -109,6 +110,29 @@ export function Chat(props: { sessionKey?: string; sessionId?: string }) {
       setReading(false);
       store.setSelectedAgent(name === "default" ? "" : name, { fresh: true });
       setInput(text);
+      setPanelOpen(true);
+    },
+    onReply: (name, session, text) => {
+      // An answer goes where the question is: the conversation it asked in, which has everything it was about.
+      setReading(false);
+      setInput(text);
+      setPanelOpen(true);
+      const who = name === "default" ? "" : name;
+      if (session && session === store.sessionId) return;
+      // Otherwise your chat with it as it stands, and while a reply is on its way, after it (the switch waits).
+      const asItStands = () => store.setSelectedAgent(who);
+      if (!session || store.sending) return asItStands();
+      fetchSessions({ limit: 500 })
+        .then((rows) => {
+          const row = askedIn(rows, session, who);
+          if (row) store.loadSession(row);
+          else asItStands();
+        })
+        .catch(asItStands);
+    },
+    chatApprovals: store.approvals.map((a) => a.requestId),
+    onShowChat: () => {
+      setReading(false);
       setPanelOpen(true);
     },
     onSpoken: (conversation, key) => {
@@ -612,52 +636,6 @@ function ApprovalPanel(props: {
           </div>
         ))}
       </div>
-    </div>
-  );
-}
-
-/** One arg value rendered compactly — strings inline, objects stringified. */
-function formatArgValue(v: unknown): { display: string; truncated: boolean } {
-  let s: string;
-  if (typeof v === "string") s = v;
-  else {
-    try {
-      s = JSON.stringify(v);
-    } catch {
-      s = String(v);
-    }
-  }
-  if (s.length > 140) return { display: `${s.slice(0, 140)}…`, truncated: true };
-  return { display: s, truncated: false };
-}
-
-/** Compact key: value list for a tool-call's args, with raw JSON on demand. */
-function ApprovalArgs({ args }: { args: Record<string, unknown> }) {
-  const entries = Object.entries(args);
-  if (entries.length === 0) return null;
-  let raw: string;
-  try {
-    raw = JSON.stringify(args, null, 2);
-  } catch {
-    raw = String(args);
-  }
-  const anyTruncated = entries.some(([, v]) => formatArgValue(v).truncated);
-  return (
-    <div className="chat-approval-args">
-      <dl className="chat-approval-arg-list">
-        {entries.map(([k, v]) => (
-          <div key={k} className="chat-approval-arg">
-            <dt>{k}</dt>
-            <dd>{formatArgValue(v).display}</dd>
-          </div>
-        ))}
-      </dl>
-      {(anyTruncated || entries.length > 1) && (
-        <details className="chat-approval-raw">
-          <summary>Raw JSON</summary>
-          <pre>{raw}</pre>
-        </details>
-      )}
     </div>
   );
 }

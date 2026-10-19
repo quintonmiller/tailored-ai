@@ -34,6 +34,7 @@ import type { Cue } from "./cues";
 import { type AgentActivity, type Behavior, behaviorFor, heldFor, hueFor, sameBehavior, stationSpot } from "./doing";
 import { arrivalAt, doorFrame, doorLight, doorReached, doorTo, threshold } from "./doors";
 import { Figure, loadModel } from "./figure";
+import { faceToFace, sideFor } from "./greet";
 import { chooseErrand, type Errand, errandAt, idleSpots, isMeeting, seeded } from "./idle";
 import type { Obstacle, Pick } from "./locomotion";
 import type { BodyState } from "./motion";
@@ -153,6 +154,12 @@ export interface Stage {
    * Everyone in the place you left stays there.
    */
   enter(room: Room, from: string | undefined): void;
+  /**
+   * Stand in front of an agent's body, facing it, at once: going straight to
+   * someone from a list. When its body isn't here yet, as soon as it is. For a
+   * visitor only: an agent's own view has no body of yours to move.
+   */
+  standBefore(agent: string): void;
   dispose(): void;
 }
 
@@ -583,6 +590,12 @@ export async function createStage(
   let placedAt = performance.now();
   let placeGen = 0;
   let wanted: Companion[] = [];
+  /**
+   * An agent you came to see whose body is still on its way: you stand in
+   * front of it once it is here. Only one this place is expecting, only while
+   * it still is (`meet`), and only until you set off on your own.
+   */
+  let greeting: string | undefined;
 
   /** Spots someone stands at or is walking to, except `who`. */
   const taken = (who?: Figure): Set<string> => {
@@ -1018,7 +1031,10 @@ export async function createStage(
     if (it?.spot) go(it.spot);
     else if (opts.visitor && travel === "walk") {
       const to = floorAt(e);
-      if (to) me.goTo(room, to, obstacles);
+      if (to) {
+        greeting = undefined;
+        me.goTo(room, to, obstacles);
+      }
     }
   };
   // Where the mouse is over the stage, so what is under it is looked at again as the view moves under a still pointer.
@@ -1107,6 +1123,7 @@ export async function createStage(
     // Shift alone does nothing in the page to keep from it, so it is only listened to.
     if (!run) e.preventDefault();
     if (!waiting.has(e.code)) held.add(e.code);
+    if (!run) greeting = undefined;
   };
   const onKeyUp = (e: KeyboardEvent) => {
     held.delete(e.code);
@@ -1326,6 +1343,8 @@ export async function createStage(
   const meet = (company: Companion[]) => {
     wanted = company;
     const ids = new Set(company.map((c) => c.agent));
+    // The agent you came to see has gone before its body got here: you aren't sent to it if it comes back later.
+    if (greeting && !ids.has(greeting)) greeting = undefined;
     const way = opts.still ? undefined : doorway();
     for (const [agent, fig] of companions) {
       if (ids.has(agent)) continue;
@@ -1393,6 +1412,8 @@ export async function createStage(
           companions.set(c.agent, figure);
           rekeep();
           show(c.agent, figure);
+          // The agent you came to see: you stand in front of it now that it is here.
+          if (greeting === c.agent) standBefore(c.agent);
           // In through the door, and on to whoever it came to see, or somewhere free.
           if (stand) standing.set(figure, stand.at);
           if (entrance && stand) figure.goTo(room, stand.at, obstacles);
@@ -1475,6 +1496,31 @@ export async function createStage(
 
   /** Where your body stood last frame, so the camera moves exactly as far as you did. */
   let lastAt: [number, number] = [me.walker.place.x, me.walker.place.z];
+
+  /** Face to face with an agent, at once, clear of the furniture: see `Stage.standBefore`. */
+  function standBefore(agent: string) {
+    if (!opts.visitor) return;
+    const f = companions.get(agent);
+    if (!f) {
+      // Not here and not coming (it left before you got here, or the map was behind): nobody to wait for.
+      greeting = wanted.some((c) => c.agent === agent) ? agent : undefined;
+      return;
+    }
+    greeting = undefined;
+    const p = f.walker.place;
+    const to = faceToFace(room, obstacles, [p.x, p.z], sideFor(p.facing, OPEN_SIDES));
+    me.placeAt(to.at, to.facing);
+    lastAt = [to.at[0], to.at[1]];
+    // The same view as on arriving anywhere, centred on where you now stand.
+    tween = null;
+    const shot = framing("room");
+    const shift = me.head().sub(shot.target);
+    shot.target.add(shift);
+    shot.position.add(shift);
+    settle(shot);
+    if (travel === "fly") turnAboutAhead();
+  }
+
   /**
    * The camera keeps the same angle on you, wherever you walk: it moves with
    * your body each frame, after the body has moved, so it never trails behind.
@@ -1726,6 +1772,7 @@ export async function createStage(
     for (const d of departing.splice(0)) d.fig.dispose();
     placedAt = performance.now();
     placeGen++;
+    greeting = undefined;
     noticed.clear();
     voices = [];
     if (near) {
@@ -1813,6 +1860,7 @@ export async function createStage(
       requestAnimationFrame(fadeIn);
     },
     setCompany: meet,
+    standBefore,
     setActivities(next) {
       activities = next;
       show(self, me);

@@ -14,6 +14,14 @@ export interface AgentActivity {
   tool?: string;
   look?: string;
   with?: string;
+  /** Waiting for your OK: the approval request's id, as `/api/approvals` lists it. */
+  request?: string;
+  /** Waiting on you about a task: its id. */
+  task?: string;
+  /** Waiting on an answer from you: the question in full, which `detail` cuts short. */
+  question?: string;
+  /** Waiting on an answer to a question it asked in a conversation: that conversation's session id. */
+  session?: string;
   since?: string;
   /** Idle or asleep: the last thing it did, in its status line's words, and when. */
   last?: { what: string; look?: string; at: string };
